@@ -31,10 +31,10 @@
 #include "utils/assert.hh"
 #include "utils/observable.hh"
 #include "utils/rolling_max_tracker.hh"
-#include "service/raft/raft_group0_client.hh"
+#include "service/raft/group0_fwd.hh"
 #include "types/types.hh"
 #include "db/consistency_level_type.hh"
-#include "db/config.hh"
+#include "db/consistency_level_restriction.hh"
 #include "utils/enum_option.hh"
 #include "service/storage_proxy_fwd.hh"
 #include "service/pager/query_plan.hh"
@@ -45,6 +45,7 @@ class chunked_string;
 
 namespace lang { class manager; }
 namespace service {
+class storage_service;
 class migration_manager;
 class query_state;
 class mapreduce_service;
@@ -83,23 +84,24 @@ class untyped_result_set_row;
  */
 struct internal_query_state;
 
-class prepared_statement_is_too_big : public std::exception {
-    sstring _msg;
-
+// An invalid_request_exception, so the client gets an InvalidRequest error
+// instead of a generic server error.
+class prepared_statement_is_too_big : public exceptions::invalid_request_exception {
 public:
     static constexpr int max_query_prefix = 100;
 
     prepared_statement_is_too_big(const sstring& query_string)
-        : _msg(seastar::format("Prepared statement is too big: {}", query_string.substr(0, max_query_prefix)))
-    {
+        : exceptions::invalid_request_exception(make_message(query_string))
+    { }
+
+private:
+    static sstring make_message(const sstring& query_string) {
+        sstring msg = seastar::format("Prepared statement is too big: {}", query_string.substr(0, max_query_prefix));
         // mark that we clipped the query string
         if (query_string.size() > max_query_prefix) {
-            _msg += "...";
+            msg += "...";
         }
-    }
-
-    virtual const char* what() const noexcept override {
-        return _msg.c_str();
+        return msg;
     }
 };
 

@@ -25,6 +25,7 @@
 #include "db/cluster_config_manager.hh"
 #include "db/cluster_config_registry.hh"
 #include "db/config.hh"
+#include "cql3/query_processor.hh"
 #include "exceptions/exceptions.hh"
 #include "replica/database.hh"
 #include "test/lib/cql_test_env.hh"
@@ -203,6 +204,39 @@ auto inject_text_test_option(cql_test_env& e) {
     });
 }
 
+}
+
+// An integer option may declare a valid_range: values outside it are rejected before anything
+// is stored, at every scope, while the bounds themselves are accepted.
+SEASTAR_TEST_CASE(test_cluster_config_registry_rejects_integer_value_out_of_range) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        db::cluster_config_registry::add_test_only_option_on_all_shards(e.get_feature_service(), db::cluster_config_registry::option{
+            .name = "test_ranged_option",
+            .scopes = db::cluster_config_registry::scope_set::of<db::cluster_config_registry::scope::cluster>(),
+            .default_value = int64_t(0),
+            .valid_range = db::cluster_config_registry::integer_range{.min = 0, .max = 100},
+        }).get();
+        auto clear_test_options = seastar::defer([] noexcept {
+            db::cluster_config_registry::clear_test_only_options_on_all_shards().get();
+        });
+
+        const auto* opt = db::cluster_config_registry::find("test_ranged_option");
+        BOOST_REQUIRE(opt != nullptr);
+        BOOST_REQUIRE(!db::cluster_config_registry::validate_value(*opt, "0"));
+        BOOST_REQUIRE(!db::cluster_config_registry::validate_value(*opt, "100"));
+        BOOST_REQUIRE(db::cluster_config_registry::validate_value(*opt, "-1"));
+        BOOST_REQUIRE(db::cluster_config_registry::validate_value(*opt, "101"));
+        // A value that does not parse is still reported as such, not as out of range.
+        BOOST_REQUIRE(db::cluster_config_registry::validate_value(*opt, "abc"));
+
+        BOOST_REQUIRE_NO_THROW(e.execute_cql("ALTER CLUSTER WITH test_ranged_option = 100").get());
+        BOOST_REQUIRE_THROW(
+            e.execute_cql("ALTER CLUSTER WITH test_ranged_option = -1").get(),
+            exceptions::invalid_request_exception);
+        BOOST_REQUIRE_THROW(
+            e.execute_cql("ALTER CLUSTER WITH test_ranged_option = 101").get(),
+            exceptions::invalid_request_exception);
+    });
 }
 
 // DESCRIBE echoes every effective value back both as a property right-hand side and inside
@@ -947,6 +981,91 @@ SEASTAR_TEST_CASE(test_callback_unregistered_during_invocation_is_swept_safely) 
         mgr.local().refresh().get();
         BOOST_REQUIRE_GE(a_invocations, 1u);
         BOOST_REQUIRE_EQUAL(b_invocations, 0u);
+    });
+}
+
+
+// A db::config-backed option (registry option_kind::db_config): an override is applied to
+// db::config on every shard with source ClusterConfig, a node-local API write is rejected
+// and a yaml reload is a no-op while it is in effect, a stored value outside the option's
+// rules is ignored, and removing the override restores the pre-cluster value and source.
+// tablets_per_shard_goal is consumed on the group0 leader for the whole cluster, so it is
+// registered at the CLUSTER scope only and the node-oriented forms are rejected.
+SEASTAR_TEST_CASE(test_db_config_backed_option_applies_to_db_config_and_restores_baseline) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        using config_source = utils::config_file::config_source;
+        auto& entry = e.db_config().tablets_per_shard_goal;
+        auto& mgr = e.cluster_config_manager();
+        const auto& topo = e.shared_token_metadata().local().get()->get_topology();
+        const sstring dc = topo.get_datacenter();
+        const sstring rack = topo.get_rack();
+        const auto node_uuid = topo.my_host_id().uuid();
+
+        auto value_on_every_shard = [&] (unsigned expected) {
+            for (unsigned shard = 0; shard < smp::count; ++shard) {
+                BOOST_REQUIRE_EQUAL(smp::submit_to(shard, [&] { return entry(); }).get(), expected);
+            }
+        };
+
+        // A distinguishable baseline, as if it came from scylla.yaml.
+        smp::invoke_on_all([&] { entry.restore(50, config_source::SettingsFile); }).get();
+
+        e.execute_cql("ALTER CLUSTER WITH tablets_per_shard_goal = 200").get();
+        mgr.local().refresh().get();
+        value_on_every_shard(200);
+        BOOST_REQUIRE(entry.source() == config_source::ClusterConfig);
+
+        // A node-local write (the REST API or UPDATE system.config) is refused while the override owns the value.
+        BOOST_REQUIRE_THROW(entry(7, config_source::API), std::invalid_argument);
+        value_on_every_shard(200);
+
+        // Only the CLUSTER scope is registered for this option.
+        for (auto stmt : {
+                seastar::format("ALTER DATACENTER \"{}\" WITH tablets_per_shard_goal = 300", dc),
+                seastar::format("ALTER RACK \"{}\" \"{}\" WITH tablets_per_shard_goal = 300", dc, rack),
+                seastar::format("ALTER NODE {} WITH tablets_per_shard_goal = 300", node_uuid)}) {
+            BOOST_REQUIRE_THROW(e.execute_cql(stmt).get(), exceptions::invalid_request_exception);
+        }
+
+        // The registry range matches the unsigned entry and excludes 0, so an accepted value always applies.
+        for (auto bad : {"0", "-1", "4294967296", "'fast'"}) {
+            BOOST_REQUIRE_THROW(e.execute_cql(seastar::format("ALTER CLUSTER WITH tablets_per_shard_goal = {}", bad)).get(),
+                    exceptions::invalid_request_exception);
+        }
+        value_on_every_shard(200);
+
+        // A later override does not re-capture the baseline.
+        e.execute_cql("ALTER CLUSTER WITH tablets_per_shard_goal = 300").get();
+        mgr.local().refresh().get();
+        value_on_every_shard(300);
+
+        // A stored value this node does not accept, as written by a binary with other rules
+        // during an upgrade, is ignored and the current override stays in effect.
+        for (auto bad : {"0", "4294967296", "fast"}) {
+            e.local_qp().execute_internal(seastar::format("UPDATE system_schema.scylla_clusters SET configs['tablets_per_shard_goal'] = '{}' "
+                    "WHERE cluster_name = 'cluster'", bad), cql3::query_processor::cache_internal::no).get();
+            mgr.local().refresh().get();
+            value_on_every_shard(300);
+            BOOST_REQUIRE(entry.source() == config_source::ClusterConfig);
+        }
+
+        // A yaml reload leaves an overridden entry alone and does not refresh the baseline:
+        // `= null` below restores 50, not 60.
+        e.db_config().read_from_yaml("tablets_per_shard_goal: 60\n",
+                [] (const sstring& opt, const sstring& msg, std::optional<utils::config_file::value_status>) {
+                    BOOST_FAIL(seastar::format("{}: {}", opt, msg));
+                });
+        value_on_every_shard(300);
+        BOOST_REQUIRE(entry.source() == config_source::ClusterConfig);
+
+        e.execute_cql("ALTER CLUSTER WITH tablets_per_shard_goal = null").get();
+        mgr.local().refresh().get();
+        value_on_every_shard(50);
+        BOOST_REQUIRE(entry.source() == config_source::SettingsFile);
+
+        // The node-local write works again once the override is gone.
+        entry(7, config_source::API);
+        BOOST_REQUIRE_EQUAL(entry(), 7u);
     });
 }
 

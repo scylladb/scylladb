@@ -12,6 +12,7 @@
 #include <optional>
 #include "reader_concurrency_semaphore.hh"
 #include "utils/serialized_action.hh"
+#include "utils/assert.hh"
 
 // The reader_concurrency_semaphore_group is a group of semaphores that shares a common pool of memory.
 // The total memory is divided based on the shared_pool_fraction parameter:
@@ -93,7 +94,7 @@ public:
     }
 
     ~reader_concurrency_semaphore_group() {
-        assert(_semaphores.empty());
+        SCYLLA_ASSERT(_semaphores.empty());
     }
     future<> adjust();
     future<> wait_adjust_complete();

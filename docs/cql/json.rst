@@ -107,14 +107,14 @@ arguments) as well as the format ScyllaDB will use when returning data for ``SEL
 The fromJson() Function
 ^^^^^^^^^^^^^^^^^^^^^^^
 
-The ``fromJson()`` function may be used similarly to ``INSERT JSON``, but for a single column value. It may only be used
+The ``fromJson()`` function (which can also be called ``from_json()``) may be used similarly to ``INSERT JSON``, but for a single column value. It may only be used
 in the ``VALUES`` clause of an ``INSERT`` statement or as one of the column values in an ``UPDATE``, ``DELETE``, or
 ``SELECT`` statement. For example, it cannot be used in the selection clause of a ``SELECT`` statement.
 
 The toJson() Function
 ^^^^^^^^^^^^^^^^^^^^^
 
-The ``toJson()`` function may be used similarly to ``SELECT JSON``, but for a single column value. It may only be used
+The ``toJson()`` function (which can also be called ``to_json()``) may be used similarly to ``SELECT JSON``, but for a single column value. It may only be used
 in the selection clause of a ``SELECT`` statement.
 
 

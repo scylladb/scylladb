@@ -81,7 +81,11 @@ async def test_cannot_add_new_node(manager: ScyllaClusterManager, raft_op_timeou
                            for srv in servers[:2]))
 
     logger.info("starting a sixth node with no quorum")
-    await manager.server_add(expected_error="raft operation \\[read_barrier\\] timed out, there is no raft quorum",
+    # Which stage of the group0 operation trips the timeout depends on what else the
+    # handling node has in flight: the read barrier when the operation runs alone, one of
+    # the group0 mutexes when it has to queue behind an operation that cannot commit
+    # without a quorum. All of them report the same reason, which is what this asserts.
+    await manager.server_add(expected_error=r"raft operation \[[^\]]*\] timed out, there is no raft quorum",
                              timeout=60)
 
     logger.info("done")
@@ -230,22 +234,26 @@ async def test_cannot_run_operations(manager: ScyllaClusterManager, raft_op_time
     # Do it here to prevent unexpected timeouts before quorum loss.
     await update_group0_raft_op_timeout(servers[0].server_id, manager, raft_op_timeout)
 
+    # Which stage of the group0 operation trips the timeout depends on what else the node
+    # has in flight: the read barrier when the operation runs alone, one of the group0
+    # mutexes when it has to queue behind an operation that cannot commit without a
+    # quorum. All of them report the same reason, which is what these assert.
     logger.info("attempting removenode for the second node")
     await manager.remove_node(servers[0].server_id, servers[1].server_id,
-                            expected_error="raft operation [read_barrier] timed out, there is no raft quorum",
+                            expected_error="timed out, there is no raft quorum",
                             timeout=60)
 
     logger.info("attempting decommission_node for the first node")
     await manager.decommission_node(servers[0].server_id,
-                                    expected_error="raft operation [read_barrier] timed out, there is no raft quorum",
+                                    expected_error="timed out, there is no raft quorum",
                                     timeout=60)
 
     logger.info("attempting rebuild_node for the first node")
     await manager.rebuild_node(servers[0].server_id,
-                            expected_error="raft operation [read_barrier] timed out, there is no raft quorum",
+                            expected_error="timed out, there is no raft quorum",
                             timeout=60)
 
-    with pytest.raises(Exception, match="raft operation \\[read_barrier\\] timed out, "
+    with pytest.raises(Exception, match=r"raft operation \[[^\]]*\] timed out, "
                                         "there is no raft quorum, total voters count 3, alive voters count 1"):
         await manager.get_cql().run_async(f'drop table {ks}.test_table', timeout=60)
 

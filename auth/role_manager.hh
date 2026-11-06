@@ -22,7 +22,7 @@
 #include "cql3/description.hh"
 #include "seastarx.hh"
 #include "exceptions/exceptions.hh"
-#include "service/raft/raft_group0_client.hh"
+#include "service/raft/group0_fwd.hh"
 
 namespace service {
 class query_state;

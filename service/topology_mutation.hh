@@ -142,11 +142,17 @@ public:
     topology_mutation_builder& drop_first_global_topology_request_ids(const std::vector<utils::UUID>& queue,
             const std::vector<utils::UUID>& ids);
     topology_mutation_builder& pause_rf_change_request(const utils::UUID&);
-    topology_mutation_builder& resume_rf_change_request(const std::unordered_set<utils::UUID>&, const utils::UUID&);
+    // Removes every id in `ids` from paused_rf_change_requests in a single overwrite.
+    // Several overwrites of one set at the same write timestamp merge into their union,
+    // so a pass which un-pauses more than one request must do it in one call.
+    topology_mutation_builder& resume_rf_change_requests(const std::unordered_set<utils::UUID>& current, const std::unordered_set<utils::UUID>& ids);
     topology_mutation_builder& start_rf_change_migrations(const utils::UUID&);
     topology_mutation_builder& finish_rf_change_migrations(const std::unordered_set<utils::UUID>&, const utils::UUID&);
     topology_mutation_builder& start_restore_request(const utils::UUID& req_id);
-    topology_mutation_builder& finish_restore_request(const std::unordered_set<utils::UUID>& current, const utils::UUID& req_id);
+    // Removes every id in `req_ids` from ongoing_restore_requests in a single overwrite.
+    // Several overwrites of one set at the same write timestamp merge into their union,
+    // so callers finishing more than one request in a pass must use this.
+    topology_mutation_builder& finish_restore_requests(const std::unordered_set<utils::UUID>& current, const std::unordered_set<utils::UUID>& req_ids);
     topology_node_mutation_builder& with_node(raft::server_id);
     canonical_mutation build() { return canonical_mutation{std::move(_m)}; }
 };
@@ -180,6 +186,9 @@ public:
     topology_request_tracking_mutation_builder& set_new_keyspace_rf_change_data(const sstring& ks_name, const std::map<sstring, sstring>& rf_per_dc);
     topology_request_tracking_mutation_builder& set_snapshot_tables_data(const std::unordered_set<table_id>&, const sstring& tag, bool);
     topology_request_tracking_mutation_builder& set_finalize_migration_data(const sstring& ks_name);
+    // `tables` maps each table which has no tablet map yet to its tablet count target, 0 for none.
+    topology_request_tracking_mutation_builder& set_prepare_migration_data(const sstring& ks_name,
+            const std::unordered_map<table_id, size_t>& tables);
     topology_request_tracking_mutation_builder& set_restore_tablets_data(const table_id& tid, const sstring& snapshot_name);
 
     canonical_mutation build() { return canonical_mutation{std::move(_m)}; }

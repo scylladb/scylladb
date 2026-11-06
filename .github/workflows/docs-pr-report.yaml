@@ -1,0 +1,26 @@
+# Copyright (C) 2026 ScyllaDB
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
+
+name: "Docs / Report PR"
+
+on:
+  workflow_run:
+    workflows: ["Docs / Build PR"]
+    types: [completed]
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: write
+
+concurrency:
+  group: docs-report-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+jobs:
+  report:
+    if: github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Update docs build comment
+        uses: scylladb/sphinx-scylladb-theme/.github/actions/docs-report@0d821fc4038ee9ad6363362c02035132489bf3f6

@@ -608,9 +608,9 @@ CREATE TABLE system.custom_indexes (
 - `index_type`: Type of the custom index, `vector` or `fulltext`
 - `node_status`: Connectivity of the search node from this node, e.g. `up`, `down`, `unknown`
 - `index_state`: State of the index on that node, one of `INITIALIZING`, `BOOTSTRAPPING`, `SERVING`. Null when this node could not determine the state, for example because the search node is unreachable or returned an unexpected response
-- `build_progress`: Percentage of the index build completed, in the range 0-100, only set while the index is being built
+- `build_progress`: Percentage of the index build completed, in the range 0-100, as reported by the search node
 - `size`: Number of items currently in the index on that node
-- `options`: Index options as stored in the schema, index-type specific, e.g. for a vector index the similarity function, quantization and HNSW tuning parameters
+- `options`: Options given in `CREATE INDEX`, as stored in the schema
 
 A host name resolving to several addresses yields one row per resolved node. A
 host that has not been resolved yet is reported once, with `address` set to the
@@ -619,7 +619,8 @@ and is not queried.
 
 **Note:** Reading this table issues a status request to every reachable
 configured search node, for every custom index in the schema. The time spent
-querying them is bound by the read timeout.
+querying them is bound by the read timeout; when it expires, the whole read fails
+with a timeout error. Use `SELECT ... USING TIMEOUT` to allow more time.
 
 Implemented by `custom_indexes_table` in `db/virtual_tables.cc`.
 
@@ -1557,6 +1558,7 @@ CREATE TABLE system.tablets (
     session uuid,
     stage text,
     transition text,
+    cancel boolean,
     sstables_repaired_at bigint,
     repair_incremental_mode text,
     PRIMARY KEY (table_id, last_token)
@@ -1602,6 +1604,10 @@ CREATE TYPE system.tablet_task_info (
 - `new_replicas`: What will be put in `replicas` after transition is done
 - `stage`: Current stage of tablet transition
 - `transition`: Type of transition (see below)
+- `session`: Identifies the session which the replicas of this tablet use for the current stage of
+  the transition. Cleared to make them abort whatever they started for it.
+- `cancel`: Set to make the topology coordinator roll the transition back; see
+  [Cancelling tablet transitions](topology-over-raft.md#cancelling-tablet-transitions).
 - `repair_time`: Last time the tablet was repaired
 - `sstables_repaired_at`: Tablet-level reference `repaired_at` value. When an SSTable's on-disk `repaired_at` value is less than or equal to `sstables_repaired_at`, the SSTable is considered repaired.
 - `repair_incremental_mode`: Mode for incremental repair (see below)

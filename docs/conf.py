@@ -5,7 +5,6 @@ import warnings
 from datetime import date
 
 from sphinx_scylladb_theme.utils import multiversion_regex_builder, fetch_multiversion_configuration
-from recommonmark.transform import AutoStructify
 
 sys.path.insert(0, os.path.abspath('./_ext'))
 sys.path.insert(0, os.path.abspath(".."))
@@ -103,7 +102,6 @@ notfound_urls_prefix = ""
 
 # -- Options for markdown extension
 scylladb_markdown_enable = True
-scylladb_markdown_recommonmark_versions = ['branch-5.1', 'branch-5.2', 'branch-5.4']
 suppress_warnings = ["myst.xref_missing"]
 
 # -- Options for sitemap extension

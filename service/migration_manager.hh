@@ -19,11 +19,12 @@
 #include "gms/feature.hh"
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include "schema/schema_fwd.hh"
-#include "service/storage_service.hh"
 #include "utils/pluggable.hh"
 #include "utils/serialized_action.hh"
-#include "service/raft/raft_group_registry.hh"
-#include "service/raft/raft_group0_client.hh"
+#include "service/raft/group0_fwd.hh"
+#include "service/raft/raft_timeout.hh"
+#include "inet_address_vectors.hh"
+#include <seastar/core/sharded.hh>
 #include "db/timeout_clock.hh"
 
 #include <vector>
@@ -44,9 +45,14 @@ namespace db {
 class system_keyspace;
 }
 
+namespace replica {
+class database;
+}
+
 namespace service {
 
 class storage_proxy;
+class storage_service;
 
 class migration_manager : public seastar::async_sharded_service<migration_manager>,
                             public gms::i_endpoint_state_change_subscriber,

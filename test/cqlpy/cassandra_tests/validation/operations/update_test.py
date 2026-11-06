@@ -1,5 +1,5 @@
 # This file was translated from the original Java test from the Apache
-# Cassandra source repository, as of commit 8d91b469afd3fcafef7ef85c10c8acc11703ba2d
+# Cassandra source repository, as of commit 4ab8bac4a51f8aef0d55b2497699e1291baeda4b
 #
 # The original Apache Cassandra license:
 #
@@ -157,6 +157,20 @@ def testUpdate(cql, test_keyspace, forceFlush):
         # "Invalid operator in where clause (clustering_1 > ?)"
         assertInvalid(cql, table,
                              "UPDATE %s SET value = ? WHERE partitionKey = ? AND clustering_1 > ?", 7, 0, 1)
+
+# The end of the Java testUpdate checks that the BETWEEN operator, which
+# Cassandra added in Cassandra 6.0, can't be used on a clustering column in
+# an UPDATE. We split it into a separate test, so that the rest of testUpdate
+# keeps running on older Cassandra and on Scylla.
+# Reproduces SCYLLADB-5153 (the BETWEEN operator)
+@pytest.mark.xfail(reason="SCYLLADB-5153")
+def testUpdateWithBetween(cql, test_keyspace, new_to_cassandra_6):
+    with create_table(cql, test_keyspace, "(partitionKey int, clustering_1 int, value int, PRIMARY KEY (partitionKey, clustering_1))") as table:
+        # Cassandra says "Slice restrictions are not supported on the
+        # clustering columns in UPDATE statements". Like for the ">" operator
+        # above, we don't check the message, because Scylla's will differ.
+        assertInvalid(cql, table,
+                             "UPDATE %s SET value = ? WHERE partitionKey = ? AND clustering_1 BETWEEN ? AND ?", 7, 0, 1, 2)
 
 def testUpdateWithContainsAndContainsKey(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int, b frozen<map<int, int>>, c int, PRIMARY KEY (a, b))") as table:

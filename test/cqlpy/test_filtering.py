@@ -14,7 +14,7 @@ import pytest
 import re
 from .util import new_test_table, new_type, user_type
 from cassandra.protocol import InvalidRequest
-from cassandra.query import UNSET_VALUE
+from cassandra.query import UNSET_VALUE, SimpleStatement
 
 # When filtering for "x > 0" or "x < 0", rows with an unset value for x
 # should not match the filter.
@@ -86,19 +86,34 @@ def table1(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, "a int, b int, PRIMARY KEY (a)") as table:
         yield table
 
-# Although the "!=" operator exists in the parser and might be allowed in
-# other places (e.g., LWT), it is *NOT* supported in WHERE clauses - not
-# for filtering, and also not in relations that don't need filtering
-# (on partition keys or tokens). It is not supported in either Cassandra or
-# Scylla, and there are no plans to add this support, so for now the test
-# verifies that at least we get the expected error.
-def test_operator_ne_not_supported(cql, table1):
-    with pytest.raises(InvalidRequest, match='Unsupported.*!='):
-        cql.execute(f'SELECT a FROM {table1} WHERE b != 0 ALLOW FILTERING')
-    with pytest.raises(InvalidRequest, match='Unsupported.*!='):
-        cql.execute(f'SELECT a FROM {table1} WHERE a != 0')
+# Cassandra 6 added support for the "!=" operator in WHERE clauses, for
+# filtering (CASSANDRA-18584). Before that, neither Cassandra nor Scylla
+# supported "!=" in WHERE (although it exists in the parser, and is allowed
+# in other places such as LWT conditions).
+# A "!=" restriction always requires filtering, even on a partition key
+# column. A row in which the column is null doesn't match "!=".
+# Reproduces #12911.
+@pytest.mark.xfail(reason="#12911")
+def test_operator_ne(cql, test_keyspace, new_to_cassandra_6):
+    with new_test_table(cql, test_keyspace, "a int, b int, PRIMARY KEY (a)") as table:
+        cql.execute(f'INSERT INTO {table} (a, b) VALUES (1, 1)')
+        cql.execute(f'INSERT INTO {table} (a, b) VALUES (2, 2)')
+        cql.execute(f'INSERT INTO {table} (a) VALUES (3)')
+        with pytest.raises(InvalidRequest, match='ALLOW FILTERING'):
+            cql.execute(f'SELECT a FROM {table} WHERE b != 0')
+        with pytest.raises(InvalidRequest, match='ALLOW FILTERING'):
+            cql.execute(f'SELECT a FROM {table} WHERE a != 0')
+        assert sorted(cql.execute(f'SELECT a FROM {table} WHERE b != 0 ALLOW FILTERING')) == [(1,), (2,)]
+        assert sorted(cql.execute(f'SELECT a FROM {table} WHERE b != 1 ALLOW FILTERING')) == [(2,)]
+        assert sorted(cql.execute(f'SELECT a FROM {table} WHERE a != 1 ALLOW FILTERING')) == [(2,), (3,)]
+
+# Even in Cassandra 6, which supports the "!=" operator in WHERE (see
+# test_operator_ne above), it is not supported on the token.
+def test_operator_ne_token_not_supported(cql, table1):
     with pytest.raises(InvalidRequest, match='Unsupported.*!='):
         cql.execute(f'SELECT a FROM {table1} WHERE token(a) != 0')
+    with pytest.raises(InvalidRequest, match='Unsupported.*!='):
+        cql.execute(f'SELECT a FROM {table1} WHERE token(a) != 0 ALLOW FILTERING')
 
 # Test that LIKE operator works fine as a filter when the filtered column
 # has descending order. Regression test for issue #10183, when it was
@@ -418,6 +433,29 @@ def test_filter_and_fetch_size(cql, test_keyspace, use_index, driver_bug_1):
         s.fetch_size = 3
         results = cql.execute(s)
         assert len(results.current_rows) == 3
+
+# Test filtering on a regular column, which is not selected, when only a
+# static column is selected. The result should have one row for each
+# clustering row that matches the filter, not one row for each partition,
+# also when the matches are in several partitions with different static
+# values and paging splits the results.
+# The similar case where a secondary index is used instead of filtering is
+# tested in test_static.py::test_static_column_via_regular_index_multiple_partitions
+def test_filter_regular_column_select_only_static(cql, test_keyspace):
+    schema = 'p int, c int, s int static, v int, PRIMARY KEY (p, c)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        insert = cql.prepare(f'INSERT INTO {table} (p, c, s, v) VALUES (?, ?, ?, ?)')
+        cql.execute(insert, [1, 1, 11, 1])
+        cql.execute(insert, [1, 2, 11, 2])
+        cql.execute(insert, [2, 3, 22, 3])
+        cql.execute(insert, [2, 4, 22, 4])
+        for fetch_size in [None, 1, 2]:
+            stmt = SimpleStatement(f'SELECT s FROM {table} WHERE v >= 2 ALLOW FILTERING', fetch_size=fetch_size)
+            assert sorted(cql.execute(stmt)) == [(11,), (22,), (22,)]
+            stmt = SimpleStatement(f'SELECT s FROM {table} WHERE v > 2 ALLOW FILTERING', fetch_size=fetch_size)
+            assert sorted(cql.execute(stmt)) == [(22,), (22,)]
+            stmt = SimpleStatement(f'SELECT s FROM {table} WHERE v >= 2 AND v <= 3 ALLOW FILTERING', fetch_size=fetch_size)
+            assert sorted(cql.execute(stmt)) == [(11,), (22,)]
 
 # token() function should either take all partition key components or none of them,
 # if the key(s) are specified, they should be listed in the partition key order

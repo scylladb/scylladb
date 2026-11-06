@@ -124,18 +124,19 @@ def kill_leaked_toxiproxy(host: Host, tp_port: int) -> None:
     """Kills toxiproxy-servers left behind on this subnet by a previous run.
 
     One still holds the port and its proxies, so ours would fail to bind and 'toxiproxy-cli create'
-    would fail with a confusing "proxy already exists". A run holds its subnet lock for as long as
-    it runs tests, so whatever we find on our subnet belongs to a run that is dead or already
-    tearing down: HostRegistry.cleanup() unlinks the lock file concurrently with the ldap
-    finalizer, so the subnet can be re-leased while an old server is still going away. Either way
-    it serves nobody, and reclaiming the port beats failing the whole session.
+    would fail with a confusing "proxy already exists". A run holds its subnet lock until its process
+    exits, so whatever we find on our subnet belongs to a run that is dead. It serves nobody, and
+    reclaiming the port beats failing the whole session. One left by another user is not ours to
+    kill; start_ldap then reports the port as taken. The one exception is a test.py older than the
+    socket lock on the same bare host: it leases the same addresses without seeing our lock, and
+    its live toxiproxy dies here.
     """
     cmdline = ['toxiproxy-server', '-host', str(host), '-port', str(tp_port)]
     leaked = [proc for proc in psutil.process_iter(['cmdline']) if proc.info['cmdline'] == cmdline]
     for proc in leaked:
         logging.warning('Killing toxiproxy-server %s leaked by a previous run on %s:%s',
                         proc.pid, host, tp_port)
-        with suppress(psutil.NoSuchProcess):
+        with suppress(psutil.NoSuchProcess, psutil.AccessDenied):
             proc.kill()
     psutil.wait_procs(leaked, timeout=10)
 

@@ -13,6 +13,7 @@
 #include "types/tuple.hh"
 #include "types/list.hh"
 #include "db/system_keyspace.hh"
+#include "gms/gossiper.hh"
 #include "schema/schema_builder.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
@@ -26,6 +27,7 @@
 #include "mutation/async_utils.hh"
 #include "compaction/compaction_manager.hh"
 #include "dht/fixed_shard.hh"
+#include "replica/compaction_group.hh"
 
 namespace replica {
 
@@ -97,11 +99,16 @@ schema_ptr make_tablets_schema() {
             .with_column("migration_task_info", tablet_task_info_type)
             .with_column("resize_task_info", tablet_task_info_type, column_kind::static_column)
             .with_column("base_table", uuid_type, column_kind::static_column)
-            .with_column("snapshot_name", utf8_type);
+            .with_column("snapshot_name", utf8_type)
+            .with_column("cancel", boolean_type);
 
     if (strongly_consistent_tables_enabled) {
         builder
-            .with_column("raft_group_id", uuid_type);
+            .with_column("raft_group_id", uuid_type)
+            // Set only while the tablet is being resized (split or merge): the ids of the Raft
+            // groups which will replace this tablet's group. The kind of the resize in progress
+            // is the one of the resize decision, in the static `resize_type` column.
+            .with_column("transition_raft_group_ids", list_type_impl::get_instance(uuid_type, false));
     }
 
     return builder
@@ -109,16 +116,22 @@ schema_ptr make_tablets_schema() {
             .build();
 }
 
-schema_ptr make_raft_schema(sstring name, bool is_group0) {
-    auto id = generate_legacy_id(db::system_keyspace::NAME, name);
-    auto builder = schema_builder(this_smp_shard_count(), db::system_keyspace::NAME, name, std::optional(id));
-    if (!is_group0) {
-        if (!strongly_consistent_tables_enabled) {
-            on_internal_error(tablet_logger, "Can't create raft table for strongly consistent tablets when the feature is disabled");
-        }
-        builder.with_column("shard", short_type, column_kind::partition_key);
+// Serializes the replacement Raft group ids into the frozen list stored in the
+// `transition_raft_group_ids` column.
+static data_value make_raft_group_id_list_value(const locator::raft_group_id_list& gids) {
+    auto list_type = list_type_impl::get_instance(uuid_type, false);
+    std::vector<data_value> values;
+    values.reserve(gids.size());
+    for (const auto& gid : gids) {
+        values.emplace_back(gid.uuid());
     }
-    builder
+    return make_list_value(list_type, std::move(values));
+}
+
+// Group 0's raft table: the log lives here, as a clustering row per index.
+schema_ptr make_group0_raft_schema(sstring name) {
+    auto id = generate_legacy_id(db::system_keyspace::NAME, name);
+    return schema_builder(this_smp_shard_count(), db::system_keyspace::NAME, name, std::optional(id))
         .with_column("group_id", timeuuid_type, column_kind::partition_key)
         // raft log part
         .with_column("index", long_type, column_kind::clustering_key)
@@ -130,21 +143,69 @@ schema_ptr make_raft_schema(sstring name, bool is_group0) {
         // id of the most recent persisted snapshot
         .with_column("snapshot_id", uuid_type, column_kind::static_column)
         .with_column("commit_idx", long_type, column_kind::static_column)
-
         .with_hash_version()
-        .set_caching_options(caching_options::get_disabled_caching_options());
+        .set_caching_options(caching_options::get_disabled_caching_options())
+        .set_comment("Persisted RAFT log, votes and snapshot info")
+        .build();
+}
 
-    if (is_group0) {
-        return builder
-            .set_comment("Persisted RAFT log, votes and snapshot info")
-            .build();
-    } else {
-        return builder
-            .set_comment("Persisted RAFT log, votes and snapshot info for strongly consistent tablets")
-            .with_partitioner(dht::fixed_shard_partitioner::classname)
-            .with_sharder(dht::fixed_shard_sharder::instance())
-            .build();
+// Per-group state for strongly consistent tablets, one row per (shard, group_id).
+// The raft log lives in the commitlog; this table holds what a group must
+// remember beyond the log.
+//
+// One record release writes the row at a single timestamp (see
+// raft_groups_storage::write_descriptor_and_purge_stale_truncations). A reader
+// sees a matching (idx, term) pair and a configuration that belongs to that index.
+//
+//   vote_term       term this node last voted in
+//   vote            server it voted for
+//   snapshot_idx    highest index that is committed, applied and safe to drop
+//                   from the log; a restart resumes from it
+//   snapshot_term   term at snapshot_idx, exact: raft reads it for the election
+//                   check (log::is_up_to_date, last_term() on an empty log) and
+//                   for log matching at the snapshot boundary (log::match_term)
+//   snapshot_config configuration at that index, current and previous, IDL-serialized
+//   truncations     time-ordered (segment_id, from, to) records: which indexes a
+//                   leader change discarded from which segment, so replay can drop
+//                   superseded entry copies without consulting terms. Frozen, so
+//                   one release sets the whole history as one cell
+//   start_resize,   the resize markers this group has applied, if a split or merge
+//   end_resize      is replacing it. Written by apply(), not by a release: a marker's
+//                   write time is the timestamp the leader stamped it with. The kind
+//                   of the resize in progress comes from the tablet metadata
+schema_ptr make_tablet_raft_groups_schema(sstring name) {
+    if (!strongly_consistent_tables_enabled) {
+        on_internal_error(tablet_logger, "Can't create raft table for strongly consistent tablets when the feature is disabled");
     }
+    auto id = generate_legacy_id(db::system_keyspace::NAME, name);
+    return schema_builder(this_smp_shard_count(), db::system_keyspace::NAME, name, std::optional(id))
+        .with_column("shard", short_type, column_kind::partition_key)
+        .with_column("group_id", timeuuid_type, column_kind::partition_key)
+        // persisted term and vote
+        .with_column("vote_term", long_type)
+        .with_column("vote", uuid_type)
+        // the snapshot descriptor, plus the truncation history replay needs.
+        // No snapshot_id: raft only checks that a snapshot id is set, so
+        // load_snapshot_descriptor() synthesizes it. Presence of snapshot_idx
+        // marks that this node has hosted the group before.
+        .with_column("snapshot_idx", long_type)
+        .with_column("snapshot_term", long_type)
+        .with_column("snapshot_config", bytes_type)
+        .with_column("truncations",
+                list_type_impl::get_instance(
+                        // The same triple as truncation_tuple_type() in
+                        // raft_groups_storage.cc, which serializes the cell; drift
+                        // between them surfaces on the first row read.
+                        tuple_type_impl::get_instance({long_type, long_type, long_type}), false))
+        // the resize markers
+        .with_column("start_resize", boolean_type)
+        .with_column("end_resize", boolean_type)
+        .with_hash_version()
+        .set_caching_options(caching_options::get_disabled_caching_options())
+        .set_comment("Persisted RAFT votes and snapshot info for strongly consistent tablets")
+        .with_partitioner(dht::fixed_shard_partitioner::classname)
+        .with_sharder(dht::fixed_shard_sharder::instance())
+        .build();
 }
 
 schema_ptr make_raft_snapshots_schema(sstring name, bool is_group0) {
@@ -321,11 +382,19 @@ tablet_map_to_mutations(const tablet_map& tablets, table_id id, const sstring& k
             if (tr_info->session_id) {
                 m.set_clustered_cell(ck, "session", data_value(tr_info->session_id.uuid()), ts);
             }
+            if (features.tablet_transition_cancel && tr_info->cancelled) {
+                m.set_clustered_cell(ck, "cancel", data_value(true), ts);
+            }
         }
 
         if (tablets.has_raft_info()) {
             const auto& raft_info = tablets.get_tablet_raft_info(tid);
             m.set_clustered_cell(ck, "raft_group_id", raft_info.group_id.uuid(), ts);
+        }
+
+        if (tablets.has_raft_resize_info(tid)) {
+            m.set_clustered_cell(ck, "transition_raft_group_ids",
+                    make_raft_group_id_list_value(tablets.get_raft_resize_info(tid).new_gids), ts);
         }
 
         tid = *tablets.next_tablet(tid);
@@ -388,7 +457,7 @@ tablet_mutation_builder::del_session(dht::token last_token) {
 }
 
 tablet_mutation_builder&
-tablet_mutation_builder::del_transition(dht::token last_token) {
+tablet_mutation_builder::del_transition(dht::token last_token, const gms::feature_service& features) {
     auto ck = get_ck(last_token);
     auto stage_col = _s->get_column_definition("stage");
     _m.set_clustered_cell(ck, *stage_col, atomic_cell::make_dead(_ts, gc_clock::now()));
@@ -396,6 +465,26 @@ tablet_mutation_builder::del_transition(dht::token last_token) {
     _m.set_clustered_cell(ck, *transition_col, atomic_cell::make_dead(_ts, gc_clock::now()));
     auto new_replicas_col = _s->get_column_definition("new_replicas");
     _m.set_clustered_cell(ck, *new_replicas_col, atomic_cell::make_dead(_ts, gc_clock::now()));
+    auto session_col = _s->get_column_definition("session");
+    _m.set_clustered_cell(ck, *session_col, atomic_cell::make_dead(_ts, gc_clock::now()));
+    if (features.tablet_transition_cancel) {
+        auto cancel_col = _s->get_column_definition("cancel");
+        _m.set_clustered_cell(ck, *cancel_col, atomic_cell::make_dead(_ts, gc_clock::now()));
+    }
+    return *this;
+}
+
+tablet_mutation_builder&
+tablet_mutation_builder::cancel_transition(dht::token last_token, const locator::tablet_transition_info& trinfo,
+                                           const gms::feature_service& features) {
+    if (trinfo.transition == locator::tablet_transition_kind::repair) {
+        return del_repair_task_info(last_token, features).del_session(last_token);
+    }
+    if (!features.tablet_transition_cancel) {
+        on_internal_error(tablet_logger, "cancel_transition() without the TABLET_TRANSITION_CANCEL feature");
+    }
+    auto ck = get_ck(last_token);
+    _m.set_clustered_cell(ck, "cancel", data_value(true), _ts);
     auto session_col = _s->get_column_definition("session");
     _m.set_clustered_cell(ck, *session_col, atomic_cell::make_dead(_ts, gc_clock::now()));
     return *this;
@@ -522,6 +611,14 @@ tablet_mutation_builder::del_resize_task_info(const gms::feature_service& featur
 tablet_mutation_builder&
 tablet_mutation_builder::set_base_table(table_id base_table) {
     _m.set_static_cell("base_table", data_value(base_table.uuid()), _ts);
+    return *this;
+}
+
+tablet_mutation_builder&
+tablet_mutation_builder::set_raft_resize_info(dht::token last_token, const locator::tablet_raft_resize_info& raft_resize) {
+    auto ck = get_ck(last_token);
+    _m.set_clustered_cell(ck, "transition_raft_group_ids",
+            make_raft_group_id_list_value(raft_resize.new_gids), _ts);
     return *this;
 }
 
@@ -799,8 +896,10 @@ tablet_id process_one_row(replica::database* db, table_id table, tablet_map& map
         if (row.has("session")) {
             session_id = service::session_id(row.get_as<utils::UUID>("session"));
         }
+        bool cancelled = row.has("cancel") && row.get_as<bool>("cancel");
         map.set_tablet_transition_info(tid, tablet_transition_info{stage, transition,
-                std::move(new_tablet_replicas), pending_replica, session_id, std::move(snapshot_name)});
+                std::move(new_tablet_replicas), pending_replica, session_id, std::move(snapshot_name),
+                cancelled});
     }
 
     tablet_logger.debug("Set sstables_repaired_at={} table={} tablet={}", sstables_repaired_at, table, tid);
@@ -833,6 +932,20 @@ tablet_id process_one_row(replica::database* db, table_id table, tablet_map& map
     } else if (map.has_raft_info()) {
         on_internal_error(tablet_logger,
             format("Raft group id is not set for tablet {} of table {}", tid, table));
+    }
+
+    if (row.has("transition_raft_group_ids")) {
+        if (!map.has_raft_info()) {
+            on_internal_error(tablet_logger,
+                format("Unexpected raft resize info for tablet {} of table {}", tid, table));
+        }
+        locator::tablet_raft_resize_info raft_resize;
+        auto list_type = list_type_impl::get_instance(uuid_type, false);
+        for (const auto& v : value_cast<list_type_impl::native_type>(
+                    list_type->deserialize(row.get_blob_unfragmented("transition_raft_group_ids")))) {
+            raft_resize.new_gids.push_back(raft::group_id(value_cast<utils::UUID>(v)));
+        }
+        map.set_raft_resize_info(tid, std::move(raft_resize));
     }
 
     if (update_repair_time && db) {
@@ -1044,6 +1157,7 @@ do_update_tablet_metadata_rows(replica::database& db, cql3::query_processor& qp,
             throw std::runtime_error("Failed to update tablet metadata: updated row is empty");
         } else {
             tmap.clear_tablet_transition_info(tid);
+            tmap.clear_raft_resize_info(tid);
             process_one_row(&db, hint.table_id, tmap, tid, res->one(), updating::yes);
         }
     }
@@ -1398,7 +1512,7 @@ tablet_sstable_set::create_single_key_sstable_reader(
     // The singular partition_range start bound must be engaged.
     auto idx = group_of(pr.start()->value().token());
     const auto& set = find_sstable_set(idx);
-    return set->create_single_key_sstable_reader(cf, std::move(schema), std::move(permit), sstable_histogram, pr, slice, trace_state, fwd, fwd_mr, predicate);
+    return set->create_single_key_sstable_reader(cf, std::move(schema), std::move(permit), sstable_histogram, pr, slice, trace_state, fwd, fwd_mr, predicate, integrity);
 }
 
 sstables::sstable_set_impl::selector_and_schema_t tablet_sstable_set::make_incremental_selector() const {

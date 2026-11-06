@@ -22,6 +22,7 @@
 #include "readers/empty.hh"
 #include "readers/mutation_source.hh"
 #include "compaction/compaction_garbage_collector.hh"
+#include "tombstone_gc.hh"
 
 class row_cache;
 class cache_tracker;

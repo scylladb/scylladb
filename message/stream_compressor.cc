@@ -20,6 +20,7 @@
 
 #define ZSTD_STATIC_LINKING_ONLY
 #include <zstd.h>
+#include "utils/assert.hh"
 
 namespace netw {
 
@@ -384,7 +385,7 @@ void lz4_dstream::decompress(ZSTD_outBuffer* out, ZSTD_inBuffer* in, bool end_of
         reset();
     }
     // Sanity check.
-    assert(_buf_end >= _buf_beg);
+    SCYLLA_ASSERT(_buf_end >= _buf_beg);
 }
 // The passed dict must live until it is unset by another set_dict(). (Or until the decompressor is destroyed).
 // The span can be empty, this will unset the current dict.

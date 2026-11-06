@@ -165,7 +165,7 @@ macro(update_build_flags config)
   cmake_parse_arguments (
     parsed_args
     "WITH_DEBUG_INFO"
-    "OPTIMIZATION_LEVEL"
+    "OPTIMIZATION_LEVEL;DEBUG_INFO_LEVEL"
     ""
     ${ARGN})
   if(NOT DEFINED parsed_args_OPTIMIZATION_LEVEL)
@@ -177,7 +177,7 @@ macro(update_build_flags config)
   string(APPEND ${cxx_flags}
     " -O${parsed_args_OPTIMIZATION_LEVEL}")
   if(parsed_args_WITH_DEBUG_INFO OR ${Scylla_WITH_DEBUG_INFO})
-    string(APPEND ${cxx_flags} " -g -gz")
+    string(APPEND ${cxx_flags} " -g${parsed_args_DEBUG_INFO_LEVEL} -gz")
   else()
     # If Scylla is compiled without debug info, strip the debug symbols from
     # the result in case one of the linked static libraries happens to have

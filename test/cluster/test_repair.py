@@ -155,7 +155,9 @@ async def test_tombstone_gc_for_streaming_and_repair(manager):
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_repair_succeeds_with_unitialized_bm(manager):
-    servers = await manager.servers_add(2, auto_rack_dc="dc1")
+    # The failed tablet repair is retried only on the next load-stats refresh.
+    cfg = {'tablet_load_stats_refresh_interval_in_seconds': 1}
+    servers = await manager.servers_add(2, config=cfg, auto_rack_dc="dc1")
     cql = manager.get_cql()
 
     cql.execute("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}")
@@ -989,17 +991,23 @@ async def test_repair_rejects_invalid_ranges_parallelism(manager):
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_shutdown_during_repair_master_write(manager: ScyllaClusterManager, storage_config: FeatureConfig):
+@pytest.mark.parametrize('stopped', ['master', 'follower'])
+async def test_shutdown_during_repair_write(manager: ScyllaClusterManager, storage_config: FeatureConfig, stopped: str):
     """
-    A repair master seals the sstable it is writing when its repair_meta is
-    stopped, at the end of the repair fiber. Stopping the master while it is
-    held after the row exchange must make drain abort that fiber and wait for
-    it, so the sstable is sealed before system_keyspace shutdown unplugs the
-    sstables registry. On object storage sealing after that aborts the node.
+    A repair node seals the sstable it is writing when its repair_meta is
+    stopped. Stopping either node while the master is held after the row
+    exchange must seal it before system_keyspace shutdown unplugs the
+    sstables registry: drain aborts and waits for the master's repair fiber,
+    and repair_service::shutdown() stops the follower's repair_meta. On object
+    storage sealing after that aborts the node.
 
-    Reproduces https://scylladb.atlassian.net/browse/SCYLLADB-4888
+    Reproduces https://scylladb.atlassian.net/browse/SCYLLADB-4888 (master)
+    and https://scylladb.atlassian.net/browse/SCYLLADB-4366 (follower)
     """
-    cfg = storage_config.get_cluster_cfg({'hinted_handoff_enabled': False})
+    # The failed repair is retried after min_reschedule_time (5s), and nothing wakes the
+    # coordinator after that until the next load stats refresh.
+    cfg = storage_config.get_cluster_cfg({'hinted_handoff_enabled': False,
+                                          'tablet_load_stats_refresh_interval_in_seconds': 1})
     servers = await manager.servers_add(2, config=cfg, cmdline=['--logger-log-level', 'repair=debug'], property_file=[
         {'dc': 'dc1', 'rack': 'r1'},
         {'dc': 'dc1', 'rack': 'r2'}
@@ -1011,8 +1019,8 @@ async def test_shutdown_during_repair_master_write(manager: ScyllaClusterManager
     async with new_test_keyspace(manager, keyspace_opts) as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v int)")
 
-        # Give each node a row the other lacks, so that whichever node the
-        # repair picks as master receives rows.
+        # Give each node a row the other lacks, so that both the master and
+        # the follower receive rows, whichever node gets which role.
         for pk, (up, down) in enumerate([(servers[0], servers[1]), (servers[1], servers[0])]):
             await manager.server_stop_gracefully(down.server_id)
             cql = await reconnect_driver(manager)
@@ -1035,20 +1043,26 @@ async def test_shutdown_during_repair_master_write(manager: ScyllaClusterManager
         for t in pending:
             t.cancel()
         follower_idx = waits.index(done.pop())
-        master, master_log = servers[1 - follower_idx], logs[1 - follower_idx]
+        follower, master, master_log = servers[follower_idx], servers[1 - follower_idx], logs[1 - follower_idx]
         await manager.api.wait_for_injection_enter(master.ip_addr, 'repair_finish_wait')
 
-        # Release the held repair once drain waits for it, or, if drain does
-        # not wait, once drain is over and the registry is unplugged.
-        stop_mark = await master_log.mark()
-        stop_task = asyncio.create_task(manager.server_stop_gracefully(master.server_id))
-        await master_log.wait_for('Aborting running repairs and waiting for them to finish|Shutting down local storage was successful',
-                                  from_mark=stop_mark)
-        await manager.api.message_injection(master.ip_addr, 'repair_finish_wait')
-        await stop_task
+        if stopped == 'master':
+            # Release the held repair once drain waits for it, or, if drain does
+            # not wait, once drain is over and the registry is unplugged.
+            stop_mark = await master_log.mark()
+            stop_task = asyncio.create_task(manager.server_stop_gracefully(master.server_id))
+            await master_log.wait_for('Aborting running repairs and waiting for them to finish|Shutting down local storage was successful',
+                                      from_mark=stop_mark)
+            await manager.api.message_injection(master.ip_addr, 'repair_finish_wait')
+            await stop_task
+            await manager.api.disable_injection(follower.ip_addr, 'repair_finish_wait')
+            await manager.server_start(master.server_id)
+        else:
+            await manager.server_stop_gracefully(follower.server_id)
+            await manager.api.message_injection(master.ip_addr, 'repair_finish_wait')
+            await manager.api.disable_injection(master.ip_addr, 'repair_finish_wait')
+            await manager.server_start(follower.server_id)
 
-        await manager.api.disable_injection(servers[follower_idx].ip_addr, 'repair_finish_wait')
-        await manager.server_start(master.server_id)
         status = await manager.api.wait_task(servers[0].ip_addr, response['tablet_task_id'])
         assert status is not None and status['state'] == 'done', f"repair did not finish successfully: {status}"
 

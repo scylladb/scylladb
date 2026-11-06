@@ -56,7 +56,7 @@ public:
     }
 
     void subscribe(boost::signals2::scoped_connection&& c) {
-        assert(!_connection);
+        SCYLLA_ASSERT(!_connection);
         _connection.emplace(std::move(c));
     }
 

@@ -11,7 +11,7 @@
 
 import pytest
 from .util import new_test_table, unique_key_int
-from cassandra.query import UNSET_VALUE
+from cassandra.query import UNSET_VALUE, BatchStatement
 from cassandra.protocol import InvalidRequest
 
 @pytest.fixture(scope="module")
@@ -232,3 +232,44 @@ def test_unset_update_where_lwt(cql, table3):
 
     with pytest.raises(InvalidRequest, match="unset"):
         cql.execute(stmt, [1, UNSET_VALUE])
+
+# Return the i'th bound value recorded in a trace of a prepared statement.
+# Scylla names it "param[i]", while Cassandra names it
+# "bound_var_<i>_<column name>".
+def traced_bound_value(trace, i, column_name):
+    params = trace.parameters
+    return params.get(f"param[{i}]", params.get(f"bound_var_{i}_{column_name}"))
+
+# Tracing records the bound values of a prepared statement in the trace's
+# parameters. An unset value should be recorded differently from a null - the
+# two have different meanings: an unset value leaves the column unchanged,
+# while a null deletes it. Scylla records an unset value as "unset value",
+# while Cassandra records it as "<unset>". Both record a null as "null". The
+# trace parameters aren't a documented interface, so this test accepts both
+# formats, and only checks that an unset value is recorded as some string
+# containing "unset", which isn't the null's "null".
+# Reproduces SCYLLADB-5188 (an unset value was recorded as "null").
+def test_unset_traced(cql, table1):
+    p = unique_key_int()
+    stmt = cql.prepare(f"INSERT INTO {table1} (p, a) VALUES (?, ?)")
+    trace = cql.execute(stmt, [p, UNSET_VALUE], trace=True).get_query_trace(max_wait_sec=60)
+    assert traced_bound_value(trace, 0, "p") == str(p)
+    unset = traced_bound_value(trace, 1, "a")
+    trace = cql.execute(stmt, [p, None], trace=True).get_query_trace(max_wait_sec=60)
+    null = traced_bound_value(trace, 1, "a")
+    assert null == "null"
+    assert "unset" in unset
+
+# Like test_unset_traced, but for statements in a BATCH. Scylla records the
+# bound values of the j'th statement in the batch as "param[j][i]". This test
+# is scylla_only because Cassandra doesn't record the bound values of a BATCH
+# in the trace at all. Reproduces SCYLLADB-5188.
+def test_unset_traced_batch(cql, table1, scylla_only):
+    p = unique_key_int()
+    stmt = cql.prepare(f"INSERT INTO {table1} (p, a) VALUES (?, ?)")
+    batch = BatchStatement()
+    batch.add(stmt, [p, UNSET_VALUE])
+    batch.add(stmt, [p, None])
+    params = cql.execute(batch, trace=True).get_query_trace(max_wait_sec=60).parameters
+    assert params["param[0][1]"] == "unset value"
+    assert params["param[1][1]"] == "null"

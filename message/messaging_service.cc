@@ -173,7 +173,7 @@ class messaging_service::compressor_factory_wrapper {
             return _tracker.negotiate(std::move(feature), is_server, std::move(send_empty_frame));
         }
         std::unique_ptr<rpc::compressor> negotiate(sstring feature, bool is_server) const override {
-            assert(false && "negotiate() without send_empty_frame shouldn't happen");
+            SCYLLA_ASSERT(false && "negotiate() without send_empty_frame shouldn't happen");
             return nullptr;
         }
     };
@@ -300,6 +300,16 @@ rpc_resource_limits(size_t memory_limit) {
     limits.basic_request_size = 1000;
     limits.max_memory = memory_limit;
     return limits;
+}
+
+size_t messaging_service::max_admissible_message_size() const noexcept {
+    const auto limits = rpc_resource_limits(_cfg.rpc_memory_limit);
+    // Inverts rpc::estimate_request_size(), which charges
+    // basic_request_size + serialized_size * bloat_factor.
+    if (limits.max_memory <= limits.basic_request_size) {
+        return 0;
+    }
+    return (limits.max_memory - limits.basic_request_size) / limits.bloat_factor;
 }
 
 future<> messaging_service::start() {

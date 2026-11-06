@@ -337,8 +337,11 @@ class ScyllaRESTAPIClient:
     async def enable_tablet_balancing(self, node_ip: str) -> None:
         await self.client.post(f"/storage_service/tablets/balancing", host=node_ip, params={"enabled": "true"})
 
-    async def disable_tablet_balancing(self, node_ip: str) -> None:
-        await self.client.post(f"/storage_service/tablets/balancing", host=node_ip, params={"enabled": "false"})
+    async def disable_tablet_balancing(self, node_ip: str, grace_period_in_seconds: str | int | None = None) -> None:
+        params = {"enabled": "false"}
+        if grace_period_in_seconds is not None:
+            params["grace_period_in_seconds"] = str(grace_period_in_seconds)
+        await self.client.post(f"/storage_service/tablets/balancing", host=node_ip, params=params)
 
     async def create_vnode_tablet_migration(self, node_ip: str, ks: str) -> None:
         """Start vnodes-to-tablets migration for all tables in a keyspace"""
@@ -632,7 +635,7 @@ class ScyllaRESTAPIClient:
         except Exception as e:
             return f"unavailable ({type(e).__name__}: {e})"
 
-    async def repair(self, node_ip: str, keyspace: str, table: str, ranges: str = '', small_table_optimization: bool = False) -> None:
+    async def repair(self, node_ip: str, keyspace: str, table: str, ranges: str = '', small_table_optimization: bool = False, ignore_nodes: str = '') -> None:
         """Repair the given table and wait for it to complete"""
         vnode_keyspaces = await self.client.get_json(f"/storage_service/keyspaces", host=node_ip, params={"replication": "vnodes"})
         if keyspace in vnode_keyspaces:
@@ -642,6 +645,8 @@ class ScyllaRESTAPIClient:
                 params = {"columnFamilies": table}
             if small_table_optimization:
                 params["small_table_optimization"] = "true"
+            if ignore_nodes:
+                params["ignore_nodes"] = ignore_nodes
             sequence_number = await self.client.post_json(f"/storage_service/repair_async/{keyspace}", host=node_ip, params=params)
             status = await self.client.get_json(f"/storage_service/repair_status", host=node_ip, params={"id": str(sequence_number)})
             if status != 'SUCCESSFUL':

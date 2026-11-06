@@ -12,9 +12,12 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/timer.hh>
 #include <seastar/core/shared_future.hh>
+#include <seastar/core/condition-variable.hh>
+#include "db/timeout_clock.hh"
 #include "schema_fwd.hh"
 #include "frozen_schema.hh"
 #include "replica/database_fwd.hh"
+#include <seastar/core/weak_ptr.hh>
 
 namespace db {
 class schema_ctxt;
@@ -113,6 +116,11 @@ class schema_registry {
     std::unordered_map<table_schema_version, lw_shared_ptr<schema_registry_entry>> _entries;
     std::unique_ptr<db::schema_ctxt> _ctxt;
     schema_registry_entry::erase_clock::duration _grace_period{std::chrono::seconds(1)};
+    // Generation of the last schema change committed on this shard, see schema_applier::commit().
+    // All shards have the same generation once a commit has reached them all.
+    uint64_t _commit_gen = 0;
+    condition_variable _commit_gen_advanced;
+    uint64_t _commit_gen_waits = 0;
 
     friend class schema_registry_entry;
     schema_registry_entry& get_entry(table_schema_version) const;
@@ -159,6 +167,15 @@ public:
     //
     // Prerequisite: all futures from get_or_load() are resolved.
     void clear();
+
+    uint64_t commit_gen() const noexcept { return _commit_gen; }
+    // Called by the schema applier once a schema change is committed on this shard.
+    void advance_commit_gen(uint64_t gen);
+    // Resolves once this shard has committed the schema change of generation `gen`.
+    // Fails with timed_out_error if that does not happen before `timeout`.
+    future<> wait_for_commit_gen(uint64_t gen, db::timeout_clock::time_point timeout);
+    // How many times wait_for_commit_gen() had to wait.
+    uint64_t commit_gen_waits() const noexcept { return _commit_gen_waits; }
 };
 
 schema_registry& local_schema_registry();
@@ -167,17 +184,35 @@ schema_registry& local_schema_registry();
 // const&. Useful for ensuring that schema version obtained on one shard is
 // automatically propagated to other shards, no matter how long the processing
 // chain will last.
+//
+// Schema changes are committed shard by shard (see schema_applier::commit()), so the schema may
+// reach a shard which has not committed the change it comes from yet. get() waits for that shard
+// to catch up, comparing the schema commit generations of the two shards.
 class global_schema_ptr {
     schema_ptr _ptr;
     unsigned _cpu_of_origin;
+    // The commit generation of the origin shard and whether _ptr was synced there.
+    uint64_t _origin_gen;
+    bool _origin_synced;
+
+    // Returns the schema registered on the current shard, which must not be the origin.
+    schema_ptr get_on_this_shard() const;
+    future<schema_ptr> wait_and_get(db::timeout_clock::time_point timeout) const;
 public:
     // Note: the schema_ptr must come from the current shard and can't be nullptr.
     global_schema_ptr(const schema_ptr&);
-    // The other may come from a different shard.
+    // The other must come from current shard. Copying on another shard would share _ptr across
+    // shards, and the copy would have no way to wait for this shard to catch up, see get().
+    // Note that sharded<>::invoke_on_all() and the like copy the function on the calling shard.
     global_schema_ptr(const global_schema_ptr& other);
     // The other must come from current shard.
     global_schema_ptr(global_schema_ptr&& other) noexcept;
     // May be invoked across shards. Always returns an engaged pointer.
-    schema_ptr get() const;
-    operator schema_ptr() const { return get(); }
+    // On a shard other than the origin, first waits until the shard has committed every schema
+    // change the origin had committed when this object was created, failing with timed_out_error
+    // at `timeout`. Then the returned schema is synced if it was synced on the origin.
+    // Resolves immediately on the origin shard, or when no wait is needed. With db::no_timeout
+    // the wait is still bounded, because a shard can be behind the origin only by the schema
+    // change commit in progress.
+    future<schema_ptr> get(db::timeout_clock::time_point timeout) const;
 };

@@ -16,6 +16,7 @@ from cassandra.query import SimpleStatement
 
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for_cql_and_get_hosts
+from test.cluster.util import reconnect_driver
 
 logger = logging.getLogger(__name__)
 
@@ -177,3 +178,43 @@ async def test_read_repair_skips_large_data_guardrails(manager: ScyllaClusterMan
         consistency_level=ConsistencyLevel.ALL))
     cks = {row.ck for row in rows}
     assert 100 in cks, "Read-repair row (ck=100) missing from CL=ALL result"
+
+
+@pytest.mark.asyncio
+async def test_restart_with_guardrail_enabled_tablets_table(manager: ScyllaClusterManager):
+    """A node restarts with a guardrail-enabled tablets table on disk.
+
+    At startup each shard rebuilds the guardrail's index from the table's
+    sstable list. A tablets table builds that list anew on every call, and
+    the rebuild used to iterate it after it was freed, crashing the node.
+    """
+    cfg = {
+        "compaction_rows_count_warning_threshold": 50,
+        "rows_count_fail_threshold": 50,
+    }
+    server = await manager.server_add(config=cfg)
+    cql = manager.get_cql()
+
+    ks = "ks_restart_guardrail"
+    await cql.run_async(
+        f"CREATE KEYSPACE {ks} WITH REPLICATION = "
+        f"{{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'enabled': true}}"
+    )
+    await cql.run_async(
+        f"CREATE TABLE {ks}.tbl (pk int, ck int, v blob, PRIMARY KEY (pk, ck)) "
+        f"WITH large_data_guardrails_enabled = true"
+    )
+
+    # One partition over the row count limit, and small ones that put sstables on every shard.
+    await _make_oversized_partition(cql, f"{ks}.tbl", pk=0, num_rows=60, value_size_bytes=8)
+    for pk in range(1, 32):
+        await cql.run_async(f"INSERT INTO {ks}.tbl (pk, ck, v) VALUES ({pk}, 0, 0x00)")
+    await manager.api.keyspace_flush(server.ip_addr, ks, "tbl")
+
+    await manager.server_stop_gracefully(server.server_id)
+    await manager.server_start(server.server_id)
+    cql = await reconnect_driver(manager)
+
+    insert = cql.prepare(f"INSERT INTO {ks}.tbl (pk, ck, v) VALUES (?, ?, ?)")
+    with pytest.raises(WriteFailure, match=REJECT_MSG_RE):
+        await cql.run_async(insert, [0, 60, b"\x00"])

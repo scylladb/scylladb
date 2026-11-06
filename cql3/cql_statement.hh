@@ -15,7 +15,7 @@
 
 #include "timeout_config.hh"
 #include "service/pager/query_plan.hh"
-#include "service/raft/raft_group0_client.hh"
+#include "service/raft/group0_fwd.hh"
 #include "audit/audit.hh"
 #include "utils/chunked_string.hh"
 
@@ -112,11 +112,11 @@ public:
      *
      * @param state the current query state
      * @param options options for this query (consistency, variables, pageSize, ...)
+     *
+     * Defined in query_processor.cc, because cql_statement has no .cc file of its own.
      */
     virtual seastar::future<seastar::shared_ptr<cql_transport::messages::result_message>>
-            execute_without_checking_exception_message(query_processor& qp, service::query_state& state, const query_options& options, std::optional<service::group0_guard> guard) const {
-        return execute(qp, state, options, std::move(guard));
-    }
+            execute_without_checking_exception_message(query_processor& qp, service::query_state& state, const query_options& options, std::optional<service::group0_guard> guard) const;
 
     virtual bool depends_on(std::string_view ks_name, std::optional<std::string_view> cf_name) const = 0;
 

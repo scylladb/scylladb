@@ -16,6 +16,7 @@
 #include "stream_compressor.hh"
 #include "dict_trainer.hh"
 #include <seastar/core/on_internal_error.hh>
+#include "utils/assert.hh"
 
 namespace netw {
 
@@ -108,7 +109,7 @@ void control_protocol::consume_control_header(control_protocol_frame cpf) {
         _needs_progress.signal();
     } else if (cpf.receiver.header == control_protocol_frame::COMMIT && cpf.receiver.epoch == _sender_protocol_epoch) {
         _sender_has_commit = true;
-        assert(!_sender_has_update);
+        SCYLLA_ASSERT(!_sender_has_update);
         if (get_dict_id(_sender_committed_dict) != cpf.receiver.dict) {
             _sender_committed_dict = _sender_current_dict;
         }
@@ -127,7 +128,7 @@ void control_protocol::consume_control_header(control_protocol_frame cpf) {
         if (cpf.sender.dict == get_dict_id(_receiver_committed_dict)) {
             _receiver_current_dict = _receiver_committed_dict;
         } else {
-            assert(cpf.sender.dict == get_dict_id(_receiver_current_dict));
+            SCYLLA_ASSERT(cpf.sender.dict == get_dict_id(_receiver_current_dict));
         }
     }
 }
@@ -139,7 +140,7 @@ std::optional<control_protocol_frame> control_protocol::produce_control_header()
     }
     if (_sender_has_commit) {
         _sender_has_commit = false;
-        assert(!_sender_has_update);
+        SCYLLA_ASSERT(!_sender_has_update);
         _sender_current_dict = _sender_committed_dict;
         _sender_current_algo = _sender_committed_algo;
         pf.sender.header = control_protocol_frame::COMMIT;
@@ -279,7 +280,7 @@ size_t advanced_rpc_compressor::tracker::register_compressor(advanced_rpc_compre
 }
 
 void advanced_rpc_compressor::tracker::unregister_compressor(size_t i) {
-    assert(_compressors.size() && i < _compressors.size());
+    SCYLLA_ASSERT(_compressors.size() && i < _compressors.size());
     std::swap(_compressors[i], _compressors.back());
     _compressors[i]->_idx = i;
     _compressors.pop_back();

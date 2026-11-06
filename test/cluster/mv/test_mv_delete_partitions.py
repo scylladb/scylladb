@@ -9,7 +9,7 @@ import asyncio
 import pytest
 import time
 import logging
-from test.pylib.util import wait_for_view
+from test.pylib.util import wait_for, wait_for_view
 from test.cluster.util import new_test_keyspace, new_test_table, new_materialized_view
 from cassandra.cqltypes import Int32Type
 
@@ -74,7 +74,13 @@ async def test_delete_partition_rows_from_table_with_mv(manager: ScyllaClusterMa
         # When the view is build it should drop back down to 0 but this information may not reach
         # the coordinator before the delete, so we perform an additional write on the same host before
         # the delete - the current view update backlog will be propagated along the write response.
-        await cql.run_async(f"INSERT INTO {ks}.tab (key, c) VALUES (0, 999)", host=hosts[0], timeout=300)
+        # The coordinator may reject this write too, because it rejects any write to a replica whose last
+        # known backlog is over the limit, and a rejected write brings back no newer backlog. So retry it
+        # until the coordinator learns the newer backlog from gossip, which publishes it once a second.
+        async def refresh_view_update_backlog():
+            await cql.run_async(f"INSERT INTO {ks}.tab (key, c) VALUES (0, 999)", host=hosts[0], timeout=300)
+            return True
+        await wait_for(refresh_view_update_backlog, time.time() + 60)
         logger.info(f"Deleting all rows from partition with key 0")
         await cql.run_async(f"DELETE FROM {ks}.tab WHERE key = 0", host=hosts[0], timeout=300)
 

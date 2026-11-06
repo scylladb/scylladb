@@ -96,3 +96,15 @@ def test_compactionstats(nodetool, num_compactions, throughput):
         expected_output += f'Active compaction remaining time : {remaining_time:>10}\n'
 
     assert actual_output == expected_output
+
+
+@pytest.mark.parametrize("human_readable", ["-H", "--human-readable"])
+def test_compactionstats_human_readable(nodetool, human_readable):
+    expected_requests = [
+        expected_request("GET", "/compaction_manager/metrics/pending_tasks_by_table",
+                         response=[]),
+        expected_request("GET", "/compaction_manager/compactions",
+                         response=[]),
+    ]
+    res = nodetool("compactionstats", human_readable, expected_requests=expected_requests)
+    assert res.stdout == "pending tasks: 0\n\n"

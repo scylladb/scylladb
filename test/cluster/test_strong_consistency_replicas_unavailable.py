@@ -15,7 +15,8 @@ from cassandra.policies import FallthroughRetryPolicy
 from cassandra.pool import Host
 from cassandra.query import SimpleStatement
 
-from test.cluster.test_strong_consistency import DEFAULT_CMDLINE, DEFAULT_CONFIG, get_table_raft_group_id, wait_for_leader
+from test.cluster.test_strong_consistency import DEFAULT_CMDLINE, DEFAULT_CONFIG, expect_retry_before_timeout, \
+    get_table_raft_group_id, wait_for_leader
 from test.cluster.util import ensure_raft_group_leader_on, new_test_keyspace, new_test_table
 from test.pylib.internal_types import ServerInfo
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
@@ -28,6 +29,8 @@ NO_QUORUM_CONFIG = DEFAULT_CONFIG | {'write_request_timeout_in_ms': 3000, 'read_
 WRITE_ERRORS = 'scylla_strong_consistency_coordinator_write_errors'
 READ_ERRORS = 'scylla_strong_consistency_coordinator_read_errors'
 READ_COUNT = 'scylla_strong_consistency_coordinator_read_latency_count'
+WRITE_RETRIES = 'scylla_strong_consistency_coordinator_write_retries'
+READ_RETRIES = 'scylla_strong_consistency_coordinator_read_retries'
 
 
 async def get_roles(manager: ScyllaClusterManager, servers: list[ServerInfo], ks: str, table_name: str) \
@@ -103,29 +106,35 @@ async def test_all_replicas_down_fails_fast(manager: ScyllaClusterManager):
     a QUORUM (linearizable) read and a CL=ONE (relaxed) read alike.
 
     The request timeouts are raised to 10s so that "fast" and "timed out" cannot be
-    confused, and the coordinator's error counters are checked to be untouched: the
-    refusal happens before the coordinator starts waiting for anything. Once the replicas
+    confused, and the coordinator's error counters are checked to count the refusal only
+    as unavailable: it happens before the coordinator starts waiting for anything. Once the replicas
     are back, the acknowledged write is still there and the refused one left nothing.
     """
     config = DEFAULT_CONFIG | {'write_request_timeout_in_ms': 10000, 'read_request_timeout_in_ms': 10000}
     async with sc_table(manager, config) as (cql, host_of, table, (group_id, leader, followers, non_replica)):
         coordinator = host_of[non_replica]
-        reads = [SimpleStatement(f"SELECT c FROM {table} WHERE pk = 0", consistency_level=cl)
+        # Observe the server's Unavailable directly, without a retry exhausting the host-pinned query plan.
+        no_retry = FallthroughRetryPolicy()
+        write = SimpleStatement(f"INSERT INTO {table} (pk, c) VALUES (0, 2)", retry_policy=no_retry)
+        reads = [SimpleStatement(f"SELECT c FROM {table} WHERE pk = 0", consistency_level=cl, retry_policy=no_retry)
                  for cl in (ConsistencyLevel.QUORUM, ConsistencyLevel.ONE)]
 
         # Going through the non-replica also fills its leader cache, so the refusal below
         # has to see past a cached leader that is dead by then.
         await cql.run_async(f"INSERT INTO {table} (pk, c) VALUES (0, 1)", host=coordinator)
-        errors_before = [await get_metric(manager, non_replica, name) for name in (WRITE_ERRORS, READ_ERRORS)]
 
         async with down(manager, list(host_of), [leader] + followers):
-            for query in (f"INSERT INTO {table} (pk, c) VALUES (0, 2)", *reads):
+            for query in (write, *reads):
                 e, elapsed = await expect_error(cql, query, coordinator, Unavailable)
                 assert e.alive_replicas == 0 and "All replicas" in str(e), str(e)
                 assert elapsed < 5.0, f"{query} took {elapsed:.1f}s to be refused"
 
-            errors_after = [await get_metric(manager, non_replica, name) for name in (WRITE_ERRORS, READ_ERRORS)]
-            assert errors_after == errors_before, "the refusal was accounted as a coordinator error"
+            metrics = await manager.metrics.query(non_replica.ip_addr)
+            assert metrics.get(WRITE_ERRORS, {'reason': 'unavailable'}) == 1  # 1 write
+            assert metrics.get(READ_ERRORS, {'reason': 'unavailable'}) == 2   # 2 reads
+            # No refusal is counted under another reason.
+            assert metrics.get(WRITE_ERRORS) == 1
+            assert metrics.get(READ_ERRORS) == 2
 
         await wait_for_leader(manager, leader, group_id)
         assert [r.c for r in await cql.run_async(reads[0], host=coordinator)] == [1]
@@ -169,6 +178,15 @@ async def test_no_quorum_times_out_and_relaxed_read_answers(manager: ScyllaClust
 
         await cql.run_async(f"INSERT INTO {table} (pk, c) VALUES (0, 1)", host=host_of[leader])
         assert [r.c for r in await cql.run_async(quorum_read, host=host_of[leader])] == [1]
+        # The write and the QUORUM read need only a majority of the replicas, so a surviving
+        # follower may not have applied the row yet - and once the other replicas die, it never
+        # will, as nobody is left to replicate the row to it. Its CL=ONE read below expects the
+        # row, so wait until it has it (a CL=ONE read on a replica reads its local state). The
+        # leader already has the row, as it answered the QUORUM read.
+        if alive != leader:
+            async def survivor_has_row() -> bool | None:
+                return [r.c for r in await cql.run_async(relaxed_read, host=host_of[alive])] == [1] or None
+            await wait_for(survivor_has_row, time.time() + 60, label=f"{alive} to apply the row")
         relaxed_reads_before = await get_metric(manager, alive, READ_COUNT, {'read_type': 'non_linearizable'})
         write_timeouts_before = await get_metric(manager, alive, WRITE_ERRORS, {'reason': 'timeout'})
         read_timeouts_before = await get_metric(manager, alive, READ_ERRORS, {'reason': 'timeout'})
@@ -188,9 +206,11 @@ async def test_no_quorum_times_out_and_relaxed_read_answers(manager: ScyllaClust
                 assert elapsed >= 2.5, f"the write via {coordinator} failed after {elapsed:.1f}s, before its timeout"
                 _, elapsed = await expect_error(cql, quorum_read, coordinator, ReadTimeout)
                 assert elapsed >= 2.5, f"the QUORUM read via {coordinator} failed after {elapsed:.1f}s, before its timeout"
-                rows, elapsed = await attempt(cql, relaxed_read, coordinator)
+                # Returning the row at all shows that the read didn't wait for a leader: there is
+                # none, so such a read could only time out. Its latency isn't checked, as an
+                # overloaded node (e.g., in debug mode) can take over a second even for this read.
+                rows, _ = await attempt(cql, relaxed_read, coordinator)
                 assert rows == [1], f"the CL=ONE read via {coordinator} returned {rows!r}"
-                assert elapsed < 1.5, f"the CL=ONE read via {coordinator} took {elapsed:.1f}s"
 
             # Both relaxed reads and all four timeouts land on the survivor: the non-replica only
             # forwards the requests, and a forwarding timeout is not a coordinator error of its own.
@@ -205,6 +225,30 @@ async def test_no_quorum_times_out_and_relaxed_read_answers(manager: ScyllaClust
 
         await wait_for_leader(manager, alive, group_id)
         assert [r.c for r in await cql.run_async(quorum_read, host=host_of[alive])] == [1]
+
+
+@pytest.mark.asyncio
+async def test_no_quorum_counts_leader_waits(manager: ScyllaClusterManager, scale_timeout):
+    """
+    Verify that a write and a QUORUM read on the only live replica of three are counted
+    as retries with reason "wait_for_leader": without a quorum no leader is elected, so
+    each request waits for one until its timeout.
+    """
+    async with sc_table(manager) as (cql, host_of, table, (group_id, leader, followers, non_replica)):
+        alive = followers[0]
+        write = f"INSERT INTO {table} (pk, c) VALUES (0, 1)"
+        read = f"SELECT c FROM {table} WHERE pk = 0"
+
+        # The leader dies last, so that the two followers never have a quorum to elect one of them.
+        async with down(manager, list(host_of), [followers[1], leader]):
+            async def no_leader() -> bool | None:
+                return await manager.api.get_raft_leader(alive.ip_addr, group_id) is None or None
+            await wait_for(no_leader, time.time() + 60, label=f"{alive} to report no leader of group {group_id}")
+
+            await expect_retry_before_timeout(manager, alive, write, WriteTimeout, WRITE_RETRIES, 'wait_for_leader',
+                                              scale_timeout, host=host_of[alive])
+            await expect_retry_before_timeout(manager, alive, read, ReadTimeout, READ_RETRIES, 'wait_for_leader',
+                                              scale_timeout, host=host_of[alive], consistency_level=ConsistencyLevel.QUORUM)
 
 
 @pytest.mark.asyncio

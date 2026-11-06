@@ -781,6 +781,11 @@ future<std::vector<permission_details>> list_filtered_permissions(
     });
 }
 
+future<> service::commit_mutations(::service::group0_batch&& mc) {
+    co_await std::move(mc).commit(_group0_client, _as, ::service::raft_timeout{});
+    co_await _group0_client.send_group0_read_barrier_to_live_members();
+}
+
 future<> commit_mutations(service& ser, ::service::group0_batch&& mc) {
     return ser.commit_mutations(std::move(mc));
 }

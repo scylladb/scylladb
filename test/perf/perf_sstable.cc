@@ -14,6 +14,7 @@
 #include <random>
 
 #include "test/perf/perf_sstable.hh"
+#include "utils/assert.hh"
 
 using namespace sstables;
 
@@ -93,7 +94,7 @@ std::ostream& operator<<(std::ostream& os, test_modes mode) {
             return os << name;
         }
     }
-    assert(false && "unreachable");
+    SCYLLA_ASSERT(false && "unreachable");
 }
 
 namespace perf {

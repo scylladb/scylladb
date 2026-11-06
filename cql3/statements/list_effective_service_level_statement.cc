@@ -17,6 +17,8 @@
 #include "types/types.hh"
 #include "types/duration.hh"
 #include "transport/messages/result_message.hh"
+#include "service/raft/raft_group0_client.hh"
+#include "service/qos/service_level_controller.hh"
 
 namespace cql3 {
 

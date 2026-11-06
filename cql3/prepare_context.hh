@@ -46,9 +46,9 @@ private:
     // The driver needs this information in order to compute the partition token and send the request to the right node.
     std::vector<std::pair<std::size_t, lw_shared_ptr<column_specification>>> _targets;
 
-    // A list of pointers to prepared `function_call` cache ids, that
-    // participate in partition key ranges computation within an LWT statement.
-    std::vector<::shared_ptr<std::optional<uint8_t>>> _pk_function_calls_cache_ids;
+    // How many `function_call`s that take part in partition key computation
+    // have been given a cache id so far.
+    uint8_t _pk_function_calls_count = 0;
 
     // The flag denoting whether the context is currently in partition key
     // processing mode (inside query restrictions AST nodes). If set to true,
@@ -84,8 +84,6 @@ public:
     void set_bound_variables(const std::vector<shared_ptr<column_identifier>>& bind_variable_names, dialect d);
 
     const dialect& get_dialect() const;
-
-    void clear_pk_function_calls_cache();
 
     // Record a new function call, which evaluates a partition key constraint.
     // Also automatically assigns an id to the AST node for caching purposes.

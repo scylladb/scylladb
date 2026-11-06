@@ -21,49 +21,6 @@ extern seastar::logger logstor_logger;
 
 namespace {
 
-// The smallest record frame: a record_frame_header and a record_header with an empty key.
-constexpr size_t min_frame_size = ondisk::record_frame_header_size + ondisk::record_header_fixed_size;
-
-// Reads a segment through its input stream, and keeps the position in the segment of what it
-// reads next.
-class segment_reader {
-    seastar::input_stream<char>& _in;
-    size_t _position = 0;
-public:
-    explicit segment_reader(seastar::input_stream<char>& in) noexcept : _in(in) {}
-
-    size_t position() const noexcept {
-        return _position;
-    }
-
-    future<temporary_buffer<char>> read_exactly(size_t n) {
-        _position += n;
-        return _in.read_exactly(n);
-    }
-
-    // Reads an on-disk T, or returns nullopt if the stream ends first.
-    template <typename T>
-    future<std::optional<T>> read() {
-        constexpr size_t size = ser::serializer<T>::serialized_size;
-        return read_exactly(size).then([] (temporary_buffer<char> buf) -> std::optional<T> {
-            if (buf.size() < size) {
-                return std::nullopt;
-            }
-            return ser::deserialize_from_buffer(buf, std::type_identity<T>{});
-        });
-    }
-
-    // Does nothing if the reader is at or past the position already.
-    future<> skip_to(size_t position) {
-        if (_position >= position) {
-            return make_ready_future<>();
-        }
-        auto n = position - _position;
-        _position = position;
-        return _in.skip(n);
-    }
-};
-
 // The headers at the start of a chunk: the chunk header, and the segment header in a full segment.
 struct chunk_headers {
     ondisk::chunk_header chunk;
@@ -118,189 +75,162 @@ segment_info make_segment_info(const chunk_headers& headers) {
     return seg_info;
 }
 
-// Reads the body of the chunk whose headers the reader read last - its record frames. Returns
-// nullopt if the body goes past the end of the segment or the stream ends first. The caller
-// checks the body against the header's body CRC.
-future<std::optional<temporary_buffer<char>>> read_chunk_body(segment_reader& reader,
-        const ondisk::chunk_header& ch,
-        size_t segment_size) {
-    if (ch.records_size > segment_size - reader.position()) {
-        co_return std::nullopt;
-    }
+// The body of a chunk, and whether it matches the body CRC of the chunk header.
+struct chunk_body {
+    temporary_buffer<char> buf;
+    bool valid;
+};
+
+// Reads the body of the chunk whose headers the reader read last, and checks it against the body
+// CRC of the header. Returns nullopt if the stream ends first.
+future<std::optional<chunk_body>> read_chunk_body(segment_reader& reader, const ondisk::chunk_header& ch) {
     auto body = co_await reader.read_exactly(ch.records_size);
     if (body.size() < ch.records_size) {
         co_return std::nullopt;
     }
-    co_return body;
-}
-
-struct parsed_record {
-    record_header header;
-    log_record_bytes_view bytes; // views into the chunk body
-};
-
-// Reads the record frame at the start of records, without its padding. Returns nullopt if the
-// frame header is invalid or the record does not fit in what is left of records.
-std::optional<parsed_record> read_record(simple_memory_input_stream& records) {
-    // The sizes a record claims are checked against what is left of the chunk's records before
-    // they are trusted, as the CRC only says the bytes are the ones written, not that the writer
-    // was right.
-    const size_t bytes_left = records.size();
-    if (bytes_left < min_frame_size) {
-        return std::nullopt;
-    }
-    auto frame_header = ser::deserialize(records, std::type_identity<ondisk::record_frame_header>{});
-    if (!ondisk::validate_record_frame_header(frame_header) || size_t(frame_header.key_size) + frame_header.value_size > bytes_left - min_frame_size) {
-        return std::nullopt;
-    }
-    const size_t header_size = ondisk::record_header_size(frame_header.key_size);
-
-    auto header_stream = records.read_substream(header_size);
-    auto value_stream = records.read_substream(frame_header.value_size);
-    // Taken before read_record_header() consumes the stream.
-    const auto header_bytes = bytes_view(reinterpret_cast<const int8_t*>(header_stream.begin()), header_size);
-    return parsed_record{
-        .header = ondisk::read_record_header(header_stream, frame_header.key_size),
-        .bytes = {
-            .header = header_bytes,
-            .value = bytes_view(reinterpret_cast<const int8_t*>(value_stream.begin()), value_stream.size()),
-        },
-    };
-}
-
-// records_position is where the records start within the segment, which is what a record's
-// location is relative to. A record that does not parse ends the scan of the chunk.
-future<> scan_chunk_records(simple_memory_input_stream records,
-        size_t records_position,
-        log_segment_id segment_id,
-        const record_header_consumer& on_record_header,
-        const log_record_bytes_consumer& on_record) {
-    const size_t records_size = records.size();
-    while (records.size() > 0) {
-        const size_t record_offset = records_position + (records_size - records.size());
-        auto record = read_record(records);
-        if (!record) {
-            break;
-        }
-
-        logstor_logger.trace("Found record of size {} bytes in {}",
-                            record->bytes.header.size() + record->bytes.value.size(), segment_id);
-
-        record_location loc {
-            .segment = segment_id,
-            .offset = static_cast<uint32_t>(record_offset),
-            .size = static_cast<uint32_t>(ondisk::record_frame_size(record->bytes.header.size(), record->bytes.value.size()))
-        };
-
-        if (on_record_header(loc, record->header) == want_data::yes) {
-            co_await on_record(loc, record->header, record->bytes);
-        }
-
-        // The next record frame starts at a multiple of record_alignment.
-        const size_t consumed = records_size - records.size();
-        records.skip(std::min(align_up(consumed, ondisk::record_alignment) - consumed, records.size()));
-    }
+    const bool valid = ondisk::validate_chunk_body(ch, std::span(body.get(), body.size()));
+    co_return chunk_body{std::move(body), valid};
 }
 
 } // anonymous namespace
 
-future<std::optional<segment_info>> read_segment_info(seastar::input_stream<char>& in) {
-    segment_reader reader(in);
-    auto headers = co_await read_chunk_headers(reader);
-    if (!headers) {
+chunk_records::iterator::iterator(const scanned_chunk& chunk)
+    : _chunk(&chunk)
+    , _records(chunk.record_bytes().data(), chunk.record_bytes().size())
+{
+    read_next();
+}
+
+void chunk_records::iterator::read_next() {
+    _current.reset();
+    if (_records.size() == 0) {
+        return;
+    }
+    const size_t records_size = _chunk->record_bytes().size();
+    const size_t record_offset = _chunk->_body_position + (records_size - _records.size());
+    auto record = ondisk::try_read_record_frame(_records);
+    if (!record) {
+        return;
+    }
+
+    const auto segment_id = _chunk->_segment_id;
+    logstor_logger.trace("Found record of size {} bytes in {}",
+                        record->bytes.header.size() + record->bytes.value.size(), segment_id);
+
+    const auto frame_size = ondisk::record_frame_size(record->bytes.header.size(), record->bytes.value.size());
+    _current = chunk_record{
+        std::move(*record),
+        record_location{
+            .segment = segment_id,
+            .offset = static_cast<uint32_t>(record_offset),
+            .size = static_cast<uint32_t>(frame_size),
+        },
+    };
+
+    // The next record frame starts at a multiple of record_alignment.
+    const size_t consumed = records_size - _records.size();
+    _records.skip(std::min(align_up(consumed, ondisk::record_alignment) - consumed, _records.size()));
+}
+
+segment_scanner::segment_scanner(seastar::input_stream<char>& in, log_segment_id segment_id, size_t segment_size)
+    : _reader(in)
+    , _segment_id(segment_id)
+    , _segment_size(segment_size)
+{
+    logstor_logger.trace("Reading records from {}", segment_id);
+}
+
+future<const scanned_chunk*> segment_scanner::next_chunk() {
+    _chunk.reset();
+    if (_state == scan_state::more) {
+        _chunk = co_await read_chunk();
+    }
+    if (_chunk) {
+        co_return &*_chunk;
+    }
+    if (_state != scan_state::done) {
+        _state = scan_state::done;
+        report_failed_chunks();
+    }
+    co_return nullptr;
+}
+
+future<std::optional<scanned_chunk>> segment_scanner::read_chunk() {
+    // The next chunk starts at the first block boundary after the previous one.
+    co_await _reader.skip_to(align_up(_reader.position(), ondisk::block_alignment));
+    if (_reader.position() >= _segment_size) {
         co_return std::nullopt;
     }
 
-    co_return make_segment_info(*headers);
-}
+    // A chunk with invalid headers, or a chunk of an earlier use of the segment, ends the scan.
+    // Chunks are written in sequence, so no chunk of this use of the segment follows it.
+    auto headers = co_await read_chunk_headers(_reader);
+    if (!headers) {
+        co_return std::nullopt;
+    }
+    const auto& ch = headers->chunk;
 
-future<> scan_segment(seastar::input_stream<char>& in,
-        log_segment_id segment_id,
-        size_t segment_size,
-        segment_info_consumer on_segment_info,
-        record_header_consumer on_record_header,
-        log_record_bytes_consumer on_record) {
-    segment_reader reader(in);
-    std::optional<segment_sequence> segment_seq;
-    // The number of chunks whose body does not match its CRC, and whether the last chunk of the scan
-    // is one of them.
-    size_t failed_chunks = 0;
-    bool last_chunk_failed = false;
-
-    logstor_logger.trace("Reading records from {}", segment_id);
-
-    while (reader.position() < segment_size) {
-        // A chunk with invalid headers, or a chunk of an earlier generation of the segment, ends the
-        // scan. Chunks are written in sequence, so no chunk of this generation of the segment
-        // follows it.
-        auto headers = co_await read_chunk_headers(reader);
-        if (!headers) {
-            break;
-        }
-        const auto& ch = headers->chunk;
-
-        if (!segment_seq) {
-            segment_seq = ch.segment_seq;
-        } else if (ch.segment_seq != *segment_seq) {
-            break;
-        }
-
-        // The segment info comes before the body check. Recovery takes the highest segment_seq from
-        // it, and a segment_seq that is on disk must not go to a new segment again, even when the
-        // body of its chunk is torn.
-        auto seg_info = make_segment_info(*headers);
-        co_await on_segment_info(seg_info);
-
-        auto body_buf = co_await read_chunk_body(reader, ch, segment_size);
-        if (!body_buf) {
-            break;
-        }
-
-        // Validate the chunk before delivering records - a torn chunk can hold records of an
-        // earlier use of the segment that parse cleanly.
-        if (ondisk::validate_chunk_body(ch, std::span(body_buf->get(), body_buf->size()))) {
-            last_chunk_failed = false;
-            auto records = simple_memory_input_stream(body_buf->get(), body_buf->size());
-            co_await scan_chunk_records(records, reader.position() - records.size(), segment_id, on_record_header, on_record);
-        } else {
-            // The valid header gives the size of the chunk, so the scan continues at the next
-            // chunk. After a torn chunk, what follows is not a valid chunk or is a chunk of an
-            // earlier generation, which ends the scan.
-            last_chunk_failed = true;
-            ++failed_chunks;
-        }
-
-        if (seg_info.kind == segment_kind::full) {
-            // A full segment has only one chunk.
-            break;
-        }
-
-        // The next chunk starts at the first block boundary after this one.
-        co_await reader.skip_to(align_up(reader.position(), ondisk::block_alignment));
+    if (!_segment_seq) {
+        _segment_seq = ch.segment_seq;
+    } else if (ch.segment_seq != *_segment_seq) {
+        co_return std::nullopt;
     }
 
+    // A chunk whose body is cut short still gives its segment info. Recovery takes the highest
+    // segment_seq from it, and a segment_seq that is on disk must not go to a new segment again,
+    // even when the body of its chunk is torn.
+    auto seg_info = make_segment_info(*headers);
+    // A full segment has only one chunk.
+    if (seg_info.kind == segment_kind::full) {
+        _state = scan_state::last;
+    }
+
+    const size_t body_position = _reader.position();
+    if (body_position + ch.records_size > _segment_size) {
+        // The writer never writes a body past the end of the segment, and a torn write keeps the size
+        // in a valid header. So the chunk is corrupt, not torn.
+        logstor_logger.warn("Skipped the last chunk of {}: its header gives a body of {} bytes at offset {}, past the end of the segment. "
+                "The segment is corrupt; the records of the chunk are lost.", _segment_id, ch.records_size, body_position);
+        _state = scan_state::last;
+        _last_chunk_failed = false;
+        co_return scanned_chunk(_segment_id, std::move(seg_info), {}, body_position, false);
+    }
+    auto body = co_await read_chunk_body(_reader, ch);
+    if (!body) {
+        _state = scan_state::last;
+        _last_chunk_failed = true;
+        ++_failed_chunks;
+        co_return scanned_chunk(_segment_id, std::move(seg_info), {}, body_position, false);
+    }
+
+    if (body->valid) {
+        _last_chunk_failed = false;
+    } else {
+        // The valid header gives the size of the chunk, so the scan continues at the next chunk.
+        // After a torn chunk, what follows is not a valid chunk or is a chunk of an earlier use of
+        // the segment, which ends the scan.
+        _last_chunk_failed = true;
+        ++_failed_chunks;
+    }
+    co_return scanned_chunk(_segment_id, std::move(seg_info), std::move(body->buf), body_position, body->valid);
+}
+
+void segment_scanner::report_failed_chunks() const {
     // A segment has one chunk write in flight at a time, and a write is durable when it completes.
     // Thus a crash can tear only the last chunk of a segment. A failed chunk before it is corrupt.
-    if (failed_chunks == 1 && last_chunk_failed) {
-        logstor_logger.warn("Skipped the last chunk of {}: its body CRC does not match, probably a torn write from a crash.",
-                segment_id);
-    } else if (failed_chunks > 0) {
-        logstor_logger.warn("Skipped {} chunks of {} whose body CRC does not match, including a chunk before the last. "
-                "The segment is corrupt; their records are lost.", failed_chunks, segment_id);
+    if (_failed_chunks == 1 && _last_chunk_failed) {
+        logstor_logger.warn("Skipped the last chunk of {}: its body does not match its CRC or is cut short, probably a torn write from a crash.",
+                _segment_id);
+    } else if (_failed_chunks > 0) {
+        logstor_logger.warn("Skipped {} chunks of {} whose body does not match its CRC or is cut short, including a chunk before the last. "
+                "The segment is corrupt; their records are lost.", _failed_chunks, _segment_id);
     }
 }
 
-future<> scan_segment(seastar::input_stream<char>& in,
-        log_segment_id segment_id,
-        size_t segment_size,
-        segment_info_consumer on_segment_info,
-        record_header_consumer on_record_header,
-        log_record_consumer on_record) {
-    co_await scan_segment(in, segment_id, segment_size,
-            std::move(on_segment_info), std::move(on_record_header),
-            [on_record = std::move(on_record)] (record_location loc, const record_header& header, log_record_bytes_view record_view) {
-                return on_record(loc, log_record{header, record_value(record_view.value)});
-            });
+future<std::optional<segment_info>> read_chunk_info(seastar::input_stream<char>& in) {
+    segment_reader reader(in);
+    auto headers = co_await read_chunk_headers(reader);
+    co_return headers.transform(make_segment_info);
 }
 
 streamed_segment_rewriter::streamed_segment_rewriter(log_segment_id target_segment, segment_sequence target_seq, streamed_buffer_consumer on_buffer)

@@ -18,6 +18,7 @@
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include "schema/schema_fwd.hh"
 #include "service/client_routes.hh"
+#include "service/raft/raft_group0_client.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "service/qos/service_level_controller.hh"
 #include "service/task_manager_module.hh"
@@ -31,6 +32,7 @@
 #include <seastar/core/condition-variable.hh>
 #include "dht/token_range_endpoints.hh"
 #include "gms/application_state.hh"
+#include "gms/gossip_address_map.hh"
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/gate.hh>
 #include "replica/database_fwd.hh"
@@ -387,13 +389,6 @@ private:
     future<> snitch_reconfigured();
 
 public:
-    // Builds the initial tablet map for a vnodes-to-tablets migration. Depends on
-    // nothing but its arguments, so it is static and can be driven directly with a
-    // synthetic topology.
-    static future<locator::tablet_map> build_tablet_map_for_migration(
-            const locator::static_effective_replication_map_ptr& erm,
-            size_t target_pow2 = 0);
-
     future<std::unordered_map<table_id, uint64_t>> collect_table_sizes_for_migration(
         const sstring& ks_name,
         const locator::static_effective_replication_map_ptr& erm,
@@ -890,6 +885,9 @@ private:
 public:
     bool topology_global_queue_empty() const;
     future<bool> ongoing_rf_change(const group0_guard& guard, sstring ks) const;
+    // The prepare_migration request which is queued or executing, for `ks` or, without it,
+    // for any keyspace, if there is one.
+    future<std::optional<utils::UUID>> ongoing_prepare_migration(const group0_guard& guard, std::optional<sstring> ks) const;
     future<> raft_initialize_discovery_leader(const join_node_request_params& params);
     future<> initialize_done_topology_upgrade_state();
     // Does the local part of global_token_metadata_barrier(), without a raft group0 barrier.
@@ -913,6 +911,9 @@ private:
     std::optional<shared_future<>> _decommission_result;
     std::optional<shared_future<>> _rebuild_result;
     std::unordered_map<raft::server_id, std::optional<shared_future<>>> _remove_result;
+
+    std::optional<shared_future<>> _decommission_hints_drain;
+
     tablet_op_registry _tablet_ops;
     // This tracks active topology cmd rpc. There can be only one active
     // cmd running and by inspecting this structure it can be checked which
@@ -946,6 +947,7 @@ private:
             reset_streaming_result reset_result = reset_streaming_result::no);
 
     future<> raft_decommission();
+    future<> drain_hints_before_leaving();
     future<> raft_removenode(locator::host_id host_id, locator::host_id_or_endpoint_list ignore_nodes_params);
     future<> raft_rebuild(utils::optional_param source_dc);
     future<> raft_check_and_repair_cdc_streams();
@@ -1020,7 +1022,17 @@ public:
     future<> del_tablet_replica(table_id, dht::token, locator::tablet_replica dst, loosen_constraints force = loosen_constraints::no);
     future<> restore_tablets(table_id, sstring snap_name);
     future<> abort_restore_tablets(table_id);
-    future<> set_tablet_balancing_enabled(bool);
+    // When disabling, waits for the in-flight tablet transitions. Those still in flight after
+    // grace_period are cancelled where possible; zero cancels nothing. Without grace_period, the
+    // tablet_transition_abort_grace_period_in_seconds option applies.
+    future<> set_tablet_balancing_enabled(bool enabled, std::optional<std::chrono::seconds> grace_period = std::nullopt);
+
+    // Cancels every tablet transition which can be cancelled, except those of a node drain.
+    future<> cancel_tablet_transitions();
+
+    // Cancels the tablet's migration with the given task id, even one draining a node. Throws
+    // task_not_found if the tablet is no longer in that migration.
+    future<> cancel_tablet_transition(locator::global_tablet_id tablet, locator::tablet_task_id task_id);
 
     future<utils::UUID> submit_quiesce_topology_request();
     // The body of await_topology_quiesced(), run through _quiesce_topology so that
@@ -1041,7 +1053,8 @@ public:
 
     // Waits for a topology request with a given ID to complete and return non empty error string
     // if request completes with an error
-    future<sstring> wait_for_topology_request_completion(utils::UUID id, bool require_entry = true);
+    future<sstring> wait_for_topology_request_completion(utils::UUID id, bool require_entry = true,
+                                                        std::optional<lowres_clock::time_point> deadline = std::nullopt);
 
     // Initiates abort of a topology request with a given ID.
     // May have no effect if the request is not in an abortable state.
@@ -1128,7 +1141,8 @@ public:
     using ignore_errors = seastar::bool_class<ignore_errors_tag>;
     // if ignore_errors set to yes, the function will not throw an exception - any error will be ignored
     // and node for which an error happened will be considered having size 0.
-    future<uint64_t> estimate_total_sstable_volume(table_id, ignore_errors = ignore_errors::no);
+    // A disengaged timeout means the sampling RPC timeout.
+    future<uint64_t> estimate_total_sstable_volume(table_id, ignore_errors = ignore_errors::no, std::optional<lowres_clock::time_point> timeout = std::nullopt);
     future<std::vector<std::byte>> train_dict(utils::chunked_vector<temporary_buffer<char>> sample);
     future<> publish_new_sstable_dict(table_id, std::span<const std::byte>, service::raft_group0_client&);
     void set_train_dict_callback(decltype(_train_dict));

@@ -5,7 +5,7 @@ Do NOT load all files at once — read only what applies to your current task.
 
 ## Instruction Files
 
-- `.github/copilot-instructions.md` — build system, test runner, code philosophy, test philosophy
+- `.github/copilot-instructions.md` — build system, test runner, code philosophy, test philosophy, Git/GitHub workflow, external communication
 - `.github/instructions/cpp.instructions.md` — C++ style, Seastar patterns, memory, error handling (for `*.cc`, `*.hh`)
 - `.github/instructions/python.instructions.md` — Python style, testing conventions (for `*.py`)
 

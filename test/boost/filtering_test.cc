@@ -24,6 +24,7 @@
 #include "types/list.hh"
 #include "types/set.hh"
 #include "types/map.hh"
+#include "replica/database.hh"
 
 BOOST_AUTO_TEST_SUITE(filtering_test)
 

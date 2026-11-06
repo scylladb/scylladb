@@ -21,7 +21,7 @@
 #include "dht/ring_position.hh"
 #include "enum_set.hh"
 #include "utils/interval.hh"
-#include "tracing/tracing.hh"
+#include "tracing/tracing_fwd.hh"
 #include "utils/small_vector.hh"
 #include "db/per_partition_rate_limit_info.hh"
 #include "query_id.hh"

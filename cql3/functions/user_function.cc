@@ -78,6 +78,18 @@ sstring signature_type_name(const data_type& type) {
     return type->is_collection() ? type->cql3_type_name() : type->cql3_type_name_without_frozen();
 }
 
+// Returns the function's body as a CQL string literal. A dollar-quoted
+// literal, $$...$$, is easier to read because quotes in the body aren't
+// escaped. But it has no escapes at all, so it can't hold a body containing
+// "$$", or ending with "$" (the closing "$$" would start one character
+// early). Such a body is single-quoted instead.
+static sstring body_literal(std::string_view body) {
+    if (body.contains("$$") || body.ends_with('$')) {
+        return cql3::util::single_quote(body);
+    }
+    return fmt::format("$${}$$", body);
+}
+
 description user_function::describe(with_create_statement with_stmt) const {
     auto maybe_create_statement = std::invoke([&] -> std::optional<managed_string> {
         if (!with_stmt) {
@@ -90,19 +102,19 @@ description user_function::describe(with_create_statement with_stmt) const {
         auto arg_range = std::views::zip(_arg_names, arg_type_range)
                 | std::views::transform([] (std::tuple<std::string_view, std::string_view> arg) {
                     const auto [name, type] = arg;
-                    return seastar::format("{} {}", name, type);
+                    return seastar::format("{} {}", cql3::util::maybe_quote(name), type);
                 });
 
         fmt::format_to(stream.to_iter(), "CREATE FUNCTION {}.{}({})\n"
                 "{} ON NULL INPUT\n"
                 "RETURNS {}\n"
                 "LANGUAGE {}\n"
-                "AS $${}$$;",
+                "AS {};",
                 cql3::util::maybe_quote(name().keyspace), cql3::util::maybe_quote(name().name), fmt::join(arg_range, ", "),
                 _called_on_null_input ? "CALLED" : "RETURNS NULL",
                 signature_type_name(_return_type),
                 _language,
-                _body);
+                body_literal(_body));
 
         return std::move(stream).to_managed_string();
     });

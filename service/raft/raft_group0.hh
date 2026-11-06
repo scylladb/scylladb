@@ -207,13 +207,13 @@ public:
     //
     future<> setup_group0_if_exist(db::system_keyspace&, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm);
 
-    // Enable the in-memory state machine for group 0.
-    // This loads the persisted state (topology, schema, etc.) into memory.
-    // Must be called after all dependencies of reload_state() are initialized
-    // (e.g. CDC generation service, non-system keyspace schemas).
+    // Load the parts of the in-memory group0 state that are built from
+    // non-system table schemas (view building state, audit known tables).
+    // setup_group0_if_exist() enables the state machine before non-system
+    // keyspaces are loaded, so these parts are loaded only once they are.
     //
     // Precondition: joined_group0().
-    future<> enable_group0_state_machine();
+    future<> reload_schema_dependent_state();
 
     // Check whether the given Raft server is a member of group 0 configuration
     // according to our current knowledge.

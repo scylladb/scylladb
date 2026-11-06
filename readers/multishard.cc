@@ -871,7 +871,9 @@ future<> shard_reader::do_fill_buffer(std::optional<buffer_fill_hint> hint) {
                             mutation_reader::forwarding fwd_mr) {
                     return lifecycle_policy->create_reader(std::move(s), std::move(permit), pr, ps, std::move(ts), fwd_mr);
                 });
-                auto s = gs.get();
+                // The lifecycle policy looks the table up synchronously, so wait for this shard to
+                // catch up with the schema first.
+                auto s = co_await coroutine::try_future(gs.get(timeout()));
                 auto permit = co_await coroutine::try_future(_lifecycle_policy->obtain_reader_permit(s, "shard-reader", timeout(), _trace_state));
                 if (permit.needs_readmission()) {
                     co_await coroutine::try_future(permit.wait_readmission());
@@ -1181,8 +1183,11 @@ future<> multishard_combining_reader::fill_buffer() {
         }
 
         while (!reader.is_buffer_empty() && !is_buffer_full()) {
-            if (const auto& mf = reader.peek_buffer(); mf.is_partition_start() && maybe_move_to_next_shard(&mf.as_partition_start().key().token())) {
-                return make_ready_future<>();
+            if (const auto& mf = reader.peek_buffer(); mf.is_partition_start()) {
+                const auto tok = mf.as_partition_start().key().token();
+                if (maybe_move_to_next_shard(&tok)) {
+                    return make_ready_future<>();
+                }
             }
             push_mutation_fragment(reader.pop_mutation_fragment());
         }

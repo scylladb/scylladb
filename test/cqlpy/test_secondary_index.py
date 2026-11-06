@@ -1432,12 +1432,6 @@ def test_static_column_index_build(cql, test_keyspace):
 
 # Tests combinations of lookup in an index of static column with other
 # restrictions. Reproduces #12829.
-# NOTE: currently marked with skip instead of xfail because
-# on_internal_error() crashes Scylla.
-@pytest.mark.skip_bug(
-    link="https://github.com/scylladb/scylladb/issues/12829",
-    reason="test marked with skip instead of xfail because on_internal_error() crashes Scylla",
-)
 def test_static_column_index_restrictions(cql, test_keyspace):
     schema = 'pk int, c int, s int STATIC, v int, PRIMARY KEY(pk, c)'
     with new_test_table(cql, test_keyspace, schema) as table:

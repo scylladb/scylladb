@@ -18,6 +18,8 @@
 #include "utils/to_string.hh"
 #include "bytes.hh"
 #include "cql3/query_result_printer.hh"
+#include "replica/database.hh"
+#include "locator/abstract_replication_strategy.hh"
 
 static inline void fail(std::string_view msg, std::source_location loc) {
     throw std::runtime_error(std::format("assertion at {}:{} failed: {}", loc.file_name(), loc.line(), msg));

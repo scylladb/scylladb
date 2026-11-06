@@ -18,6 +18,7 @@
 #include "service/storage_proxy.hh"
 #include <optional>
 #include "validation.hh"
+#include "service/raft/raft_group0_client.hh"
 
 namespace cql3 {
 

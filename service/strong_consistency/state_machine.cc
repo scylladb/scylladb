@@ -7,7 +7,6 @@
  */
 
 #include <seastar/core/abort_source.hh>
-#include <seastar/util/defer.hh>
 #include <seastar/core/shard_id.hh>
 #include <seastar/core/on_internal_error.hh>
 #include "state_machine.hh"
@@ -23,12 +22,25 @@
 #include "utils/error_injection.hh"
 #include "schema/schema_registry.hh"
 #include "service/strong_consistency/raft_commitlog.hh"
+#include "service/strong_consistency/raft_resize_tracker.hh"
 
 using namespace std::chrono_literals;
 
 namespace service::strong_consistency {
 
 static logging::logger logger("sc_state_machine");
+
+mutation make_resize_marker_mutation(raft::group_id gid, shard_id shard, const resize_marker& marker) {
+    auto s = db::system_keyspace::raft_groups();
+    auto pk = partition_key::from_exploded(*s, {
+        short_type->decompose(int16_t(shard)),
+        timeuuid_type->decompose(gid.id),
+    });
+    mutation m(s, std::move(pk));
+    m.set_clustered_cell(clustering_key::make_empty(), to_bytes(fmt::to_string(marker.kind)), data_value(true),
+            marker.timestamp);
+    return m;
+}
 
 class state_machine : public raft_state_machine {
     locator::global_tablet_id _tablet;
@@ -37,6 +49,7 @@ class state_machine : public raft_state_machine {
     service::migration_manager& _mm;
     db::system_keyspace& _sys_ks;
     raft_groups_storage& _persistence;
+    raft_resize_tracker& _resize_tracker;
 
     abort_source _as;
 
@@ -46,63 +59,80 @@ public:
         replica::database& db,
         service::migration_manager& mm,
         db::system_keyspace& sys_ks,
-        raft_groups_storage& persistence)
+        raft_groups_storage& persistence,
+        raft_resize_tracker& resize_tracker)
         : _tablet(tablet)
         , _group_id(gid)
         , _db(db)
         , _mm(mm)
         , _sys_ks(sys_ks)
         , _persistence(persistence)
+        , _resize_tracker(resize_tracker)
     {
+    }
+
+    // Report a batch as applied when it never will be, because its table or
+    // keyspace is gone. A record is released only once its last command applies,
+    // so without the report the record stays at the front of the queue for good.
+    // Releases are front-first, so the whole queue freezes behind it and every segment
+    // the group holds stays dirty. Safe: no memtable holds this batch's data.
+    void note_batch_discarded(const raft::log_entry_ptr_list& command) {
+        if (!command.empty()) {
+            _persistence.note_applied(command.back()->idx);
+        }
     }
 
     future<> apply(raft::log_entry_ptr_list command) override {
         static thread_local logging::logger::rate_limit rate_limit(std::chrono::seconds(10));
-        // Handing a replay position handle to a memtable makes the memtable the
-        // owner of the commitlog segment holding the entry. Handles of entries
-        // that we haven't applied must be released, not destroyed: destroying
-        // them lets the commitlog reclaim segments which still hold committed
-        // entries that have to be replayed after a restart. Releasing keeps
-        // those segments.
-        std::vector<index_and_replay_position> replay_positions;
-        auto release_unapplied = defer([&replay_positions] noexcept {
-            for (auto& rp : replay_positions) {
-                if (rp.replay_position_handle) {
-                    rp.replay_position_handle.release();
-                }
-            }
-        });
         try {
             co_await utils::get_local_injector().inject("strong_consistency_state_machine_wait_before_apply", utils::wait_for_message(20min));
-            // Get replay positions for the commands.
-            replay_positions = _persistence.acquire_replay_position_handles_for(command);
-            // Make sure we got replay positions for all commands.
-            throwing_assert(replay_positions.size() == command.size());
+            logger.trace("Tablet {}, raft group {}, applies {} entries, indexes {} to {}.",
+                _tablet, _group_id, command.size(), command.front()->idx, command.back()->idx);
             // One store for the whole batch, so that commands written with the same
             // schema version resolve their schema only once.
             schema_store schemas(_db, _sys_ks, [this]() -> future<> {
                 if (utils::get_local_injector().enter("disable_raft_drop_append_entries_for_specified_group")) {
                     utils::get_local_injector().disable("raft_drop_incoming_append_entries_for_specified_group");
                 }
+                logger.debug("apply(): waiting for the group0 barrier for tablet {}, group_id={}", _tablet, _group_id);
                 co_await _mm.get_group0_barrier().trigger(false, &_as);
             });
             // Apply mutations sequentially to preserve linearizability.
             // E.g., for writes A-B-C-D, a reader must observe
             // them in that order and never see A-C or A-D skipping intermediate values.
             for (size_t i = 0; i < command.size(); ++i) {
-                throwing_assert(replay_positions[i].index == command[i]->idx);
-                auto mut = detail::deserialize_to_frozen_mutation(command[i]);
+                auto cmd = detail::deserialize_raft_command(command[i]);
+                if (const auto* marker = std::get_if<resize_marker>(&cmd.change)) {
+                    logger.log(log_level::trace, rate_limit, "apply(): applying the {} marker of group {}",
+                        marker->kind, _group_id);
+                    auto m = make_resize_marker_mutation(_group_id, this_shard_id(), *marker);
+                    // We pin the segment under system.raft_groups, which the marker's row goes to.
+                    co_await _db.apply_in_memory(m, m.schema()->table(),
+                            _persistence.pin_raft_groups_for_apply(command[i]->idx), db::no_timeout);
+                    _resize_tracker.mark_resize_phase(_group_id, *marker);
+                    _persistence.note_applied(command[i]->idx);
+                    continue;
+                }
+                auto& mut = std::get<write_mutation>(cmd.change).mutation;
                 auto schema = co_await schemas.resolve_and_upgrade(mut);
+                // Taken after the schema resolution, which may yield on the
+                // group0 barrier.
+                auto commitlog_pin = _persistence.pin_target_table_for_apply(command[i]->idx);
                 if (utils::get_local_injector().enter("strong_consistency_state_machine_abort_before_apply_in_memory")) {
                     throw std::runtime_error("strong_consistency_state_machine_abort_before_apply_in_memory");
                 }
                 // Concurrent apply_in_memory() calls can complete out of order under memory pressure
                 // (suspended at run_when_memory_available()), making mutations visible out of Raft log order.
                 // Therefore we must await each apply_in_memory() sequentially to preserve Raft log order.
-                co_await _db.apply_in_memory(mut, std::move(schema), std::move(replay_positions[i].replay_position_handle), db::no_timeout, db::noop_large_data_guardrail::instance());
-                // The entry has been applied, but the handle hasn't necessarily
-                // been consumed. Prevent releasing the handle by destroying it.
-                replay_positions[i].replay_position_handle = db::rp_handle{};
+                // apply_in_memory() skips the write counters of database::apply(), so count here.
+                try {
+                    co_await _db.apply_in_memory(mut, std::move(schema), std::move(commitlog_pin), db::no_timeout, db::noop_large_data_guardrail::instance());
+                } catch (...) {
+                    ++_db.get_stats().total_writes_failed;
+                    throw;
+                }
+                ++_db.get_stats().total_writes;
+                _persistence.note_applied(command[i]->idx);
             }
         } catch (replica::no_such_column_family&) {
             // If the table doesn't exist, it means it was already dropped.
@@ -110,9 +140,8 @@ public:
             // because the state machine is created only after the table is created
             // (see `schema_applier::commit_on_shard()` and `storage_service::commit_token_metadata_change()`).
             // In this case, we should just ignore mutations without throwing an error.
-            // The entries are discarded on purpose, so let their segments be reclaimed.
-            release_unapplied.cancel();
             logger.log(log_level::warn, rate_limit, "apply(): table {} was already dropped, ignoring mutations", _tablet.table);
+            note_batch_discarded(command);
         } catch (replica::no_such_keyspace&) {
             // Thrown when DROP KEYSPACE races with the raft applier fiber.
             // The path: schema_store::resolve_and_upgrade() calls
@@ -124,11 +153,16 @@ public:
             // if the keyspace was concurrently dropped.
             // Safe to ignore: the table's raft group is about to be destroyed
             // by schedule_raft_group_deletion() anyway.
-            release_unapplied.cancel();
             logger.log(log_level::warn, rate_limit, "apply(): keyspace for table {} was already dropped, ignoring mutations", _tablet.table);
+            note_batch_discarded(command);
         } catch (const abort_requested_exception& ex) {
             // The exception can be thrown by schema_store::resolve_and_upgrade.
             // It means that the Raft group is being removed.
+            //
+            // No note_batch_discarded() here, unlike the two arms above. abort() is
+            // called only while the group is torn down, and the teardown gives up the
+            // whole queue (raft_commitlog::release_all(), or the destructor), so no
+            // record is left waiting for the batch.
             //
             // Technically, throwing an exception from a state machine
             // may result in killing the corresponding Raft instance:
@@ -150,9 +184,10 @@ public:
             throw;
         }
          catch (...) {
-            throw std::runtime_error(::format(
-                "tablet {}, group id {}: error while applying mutations {}",
-                _tablet, _group_id, std::current_exception()));
+            // Nested, so that the Raft server can still tell what the error is.
+            std::throw_with_nested(std::runtime_error(::format(
+                "tablet {}, group id {}: error while applying mutations of entries {} to {}",
+                _tablet, _group_id, command.front()->idx, command.back()->idx)));
         }
     }
 
@@ -179,6 +214,7 @@ public:
         return make_ready_future<>();
     }
 
+    // FIXME: once implemented, the transfer has to carry the group's metadata (resize markers) stored in system.raft_groups
     future<> transfer_snapshot(raft::server_id from_id, raft::snapshot_descriptor snp) override {
         throw std::runtime_error("transfer_snapshot() not implemented");
     }
@@ -234,8 +270,13 @@ future<schema_ptr> schema_store::resolve_and_upgrade(frozen_mutation& m) {
         auto [schema, cm_ptr] = co_await get_schema(table, schema_version);
         if (!schema) {
             if (const auto trigger = std::exchange(_barrier_trigger, nullptr)) {
+                logger.debug("Table {} has no local schema version {}, running a group0 read barrier.",
+                    table, schema_version);
                 co_await trigger();
                 std::tie(schema, cm_ptr) = co_await get_schema(table, schema_version);
+                if (schema) {
+                    logger.debug("Table {} has schema version {} after the group0 read barrier.", table, schema_version);
+                }
             }
         }
         if (!schema) {
@@ -246,6 +287,10 @@ future<schema_ptr> schema_store::resolve_and_upgrade(frozen_mutation& m) {
             // or `no_such_keyspace` will be thrown earlier.
             on_internal_error(logger, fmt::format("couldn't find schema for table {} and mutation schema version {}",
                     table, schema_version));
+        }
+        if (cm_ptr) {
+            logger.trace("Upgrading mutations of table {} from schema version {} to {}.",
+                table, schema_version, schema->version());
         }
         it = _schema_mappings.insert({schema_version, {std::move(schema), cm_ptr}}).first;
     }
@@ -262,19 +307,30 @@ std::unique_ptr<raft_state_machine> make_state_machine(locator::global_tablet_id
     replica::database& db,
     service::migration_manager& mm,
     db::system_keyspace& sys_ks,
-    raft_groups_storage& persistence)
+    raft_groups_storage& persistence,
+    raft_resize_tracker& resize_tracker)
 {
-    return std::make_unique<state_machine>(tablet, gid, db, mm, sys_ks, persistence);
+    return std::make_unique<state_machine>(tablet, gid, db, mm, sys_ks, persistence, resize_tracker);
 }
 
 namespace detail {
 
-frozen_mutation deserialize_to_frozen_mutation(const raft::log_entry_ptr& entry) {
+raft_command deserialize_raft_command(const raft::log_entry_ptr& entry) {
     const auto& cmd = std::get<raft::command>(entry->data);
     auto is = ser::as_input_stream(cmd);
-    auto command = ser::deserialize(is, std::type_identity<raft_command>());
-    return std::move(command.mutation);
+    return ser::deserialize(is, std::type_identity<raft_command>());
 }
 
 } // namespace detail
 }; // namespace service::strong_consistency
+
+auto fmt::formatter<service::strong_consistency::resize_marker_kind>::format(service::strong_consistency::resize_marker_kind kind,
+        fmt::format_context& ctx) const -> decltype(ctx.out()) {
+    using enum service::strong_consistency::resize_marker_kind;
+    std::string_view name;
+    switch (kind) {
+    case start_resize: name = "start_resize"; break;
+    case end_resize: name = "end_resize"; break;
+    }
+    return fmt::formatter<string_view>::format(name, ctx);
+}

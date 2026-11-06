@@ -42,6 +42,7 @@
 #include "utils/error_injection.hh"
 #include "utils/exceptions.hh"
 #include "utils/to_string.hh"
+#include "exceptions/exceptions.hh"
 #include "data_dictionary/storage_options.hh"
 #include "dht/sharder.hh"
 #include "writer.hh"
@@ -94,7 +95,9 @@
 #include "utils/labels.hh"
 #include "utils/io-wrappers.hh"
 
-#include <boost/lexical_cast.hpp>
+#include <charconv>
+#include "db/system_keyspace.hh"
+#include "utils/assert.hh"
 
 thread_local disk_error_signal_type sstable_read_error;
 thread_local disk_error_signal_type sstable_write_error;
@@ -364,6 +367,9 @@ future<> parse(const schema&, sstable_version_types, random_access_reader& in, d
 
 template <typename T>
 future<> parse(const schema&, sstable_version_types, random_access_reader& in, T& len, bytes& s) {
+    if (len > in.size()) {
+        throw_malformed_sstable_exception(format("String length {} exceeds component size {}", len, in.size()));
+    }
     return in.read_exactly(len).then([&s, len] (auto buf) {
         check_buf_size(buf, len);
         // Likely a different type of char. Most bufs are unsigned, whereas the bytes type is signed.
@@ -494,7 +500,19 @@ template <typename Size, typename Members>
 future<> parse(const schema& s, sstable_version_types v, random_access_reader& in, disk_array<Size, Members>& arr) {
     Size len;
     co_await parse(s, v, in, len);
-    arr.elements.reserve(len);
+    // Every element takes at least one byte on disk; integral ones take
+    // exactly sizeof(Members). Only integral arrays are reserved up front,
+    // the in-memory size of other elements is unrelated to their on-disk size.
+    if constexpr (std::integral<Members>) {
+        if (len > in.size() / sizeof(Members)) {
+            throw_malformed_sstable_exception(format("Array length {} exceeds component size {}", len, in.size()));
+        }
+        arr.elements.reserve(len);
+    } else {
+        if (len > in.size()) {
+            throw_malformed_sstable_exception(format("Array length {} exceeds component size {}", len, in.size()));
+        }
+    }
     co_await parse(s, v, in, len, arr.elements);
 }
 
@@ -617,6 +635,10 @@ future<> parse(const schema& schema, sstable_version_types v, random_access_read
                      s.header.memory_size,
                      s.header.sampling_level,
                      s.header.size_at_full_sampling);
+    if (s.header.size >= in.size() / sizeof(pos_type) || s.header.memory_size > in.size()) {
+        throw_malformed_sstable_exception(format("Summary header is inconsistent with component size {}: size={}, memory_size={}",
+                in.size(), s.header.size, s.header.memory_size));
+    }
     // Positions are encoded in little-endian.
     s.positions.reserve(s.header.size + 1);
     while (s.positions.size() != s.header.size) {
@@ -634,6 +656,17 @@ future<> parse(const schema& schema, sstable_version_types v, random_access_read
     // can guarantee that no conditionals are used, and we can always
     // query the position of the "next" index.
     s.positions.push_back(s.header.memory_size);
+
+    // Each entry is a key followed by a 64-bit position, and entries are laid
+    // out back to back, so positions must be strictly increasing with at least
+    // the position field between them. Validate before computing entry sizes
+    // from their differences.
+    for (size_t i = 0; i + 1 < s.positions.size(); ++i) {
+        if (s.positions[i] >= s.positions[i + 1] || s.positions[i + 1] - s.positions[i] < sizeof(uint64_t)) {
+            throw_malformed_sstable_exception(format("Summary entry {} has invalid position range [{}, {})",
+                    i, s.positions[i], s.positions[i + 1]));
+        }
+    }
 
     co_await in.seek(sizeof(summary::header) + s.header.memory_size);
     co_await parse(schema, v, in, s.first_key, s.last_key);
@@ -723,40 +756,44 @@ inline void write(sstable_version_types v, file_writer& out, const std::unique_p
 }
 
 future<> parse(const schema& schema, sstable_version_types v, random_access_reader& in, statistics& s) {
-    try {
-        co_await parse(schema, v, in, s.offsets);
-        // Old versions of Scylla do not respect the order.
-        // See https://github.com/scylladb/scylla/issues/3937
-        std::ranges::sort(s.offsets.elements, std::ranges::less(), std::mem_fn(&std::pair<metadata_type, unsigned int>::first));
-        for (auto val : s.offsets.elements) {
-            auto type = val.first;
-            co_await in.seek(val.second);
-            switch (type) {
-            case metadata_type::Validation:
-                co_await parse<validation_metadata>(schema, v, in, s.contents[type]);
-                break;
-            case metadata_type::Compaction:
-                co_await parse<compaction_metadata>(schema, v, in, s.contents[type]);
-                break;
-            case metadata_type::Stats:
-                co_await parse<stats_metadata>(schema, v, in, s.contents[type]);
-                break;
-            case metadata_type::Serialization:
-                if (v < sstable_version_types::mc) {
-                    throw_malformed_sstable_exception(
-                        "Statistics is malformed: SSTable is in 2.x format but contains serialization header.");
-                } else {
-                    co_await parse<serialization_header>(schema, v, in, s.contents[type]);
-                }
-                break;
-            default:
-                throw_malformed_sstable_exception(fmt::format("Invalid metadata type at Statistics file: {} ", int(type)));
+    co_await parse(schema, v, in, s.offsets);
+    // Old versions of Scylla do not respect the order.
+    // See https://github.com/scylladb/scylla/issues/3937
+    std::ranges::sort(s.offsets.elements, std::ranges::less(), std::mem_fn(&std::pair<metadata_type, unsigned int>::first));
+    for (auto val : s.offsets.elements) {
+        auto type = val.first;
+        co_await in.seek(val.second);
+        switch (type) {
+        case metadata_type::Validation:
+            co_await parse<validation_metadata>(schema, v, in, s.contents[type]);
+            break;
+        case metadata_type::Compaction:
+            co_await parse<compaction_metadata>(schema, v, in, s.contents[type]);
+            break;
+        case metadata_type::Stats:
+            co_await parse<stats_metadata>(schema, v, in, s.contents[type]);
+            break;
+        case metadata_type::Serialization:
+            if (v < sstable_version_types::mc) {
+                throw_malformed_sstable_exception(
+                    "Statistics is malformed: SSTable is in 2.x format but contains serialization header.");
+            } else {
+                co_await parse<serialization_header>(schema, v, in, s.contents[type]);
             }
+            break;
+        default:
+            throw_malformed_sstable_exception(fmt::format("Invalid metadata type at Statistics file: {} ", int(type)));
         }
-    } catch (const malformed_sstable_exception&) {
-        throw;
-    } catch (...) {
-        throw_malformed_sstable_exception(fmt::format("Statistics file is malformed: {:t}", std::current_exception()));
+    }
+    // Every writer we read from (Cassandra 2.x/3.x, Scylla) emits all of
+    // these; the accessors assume their presence.
+    for (auto type : {metadata_type::Validation, metadata_type::Compaction, metadata_type::Stats}) {
+        if (!s.contents.contains(type)) {
+            throw_malformed_sstable_exception(fmt::format("Statistics is malformed: missing metadata type {}", int(type)));
+        }
+    }
+    if (v >= sstable_version_types::mc && !s.contents.contains(metadata_type::Serialization)) {
+        throw_malformed_sstable_exception("Statistics is malformed: missing Serialization header");
     }
 }
 
@@ -777,14 +814,17 @@ future<> parse(const schema& s, sstable_version_types v, random_access_reader& i
         co_await coroutine::return_exception(malformed_sstable_exception("Estimated histogram with zero size found. Can't continue!"));
     }
 
+    auto type_size = sizeof(uint64_t) * 2;
+    if (length > in.size() / type_size) {
+        throw_malformed_sstable_exception(format("Estimated histogram length {} exceeds component size {}", length, in.size()));
+    }
+
     // Arrays are potentially pre-initialized by the estimated_histogram constructor.
     eh.bucket_offsets.clear();
     eh.buckets.clear();
 
     eh.bucket_offsets.reserve(length - 1);
     eh.buckets.reserve(length);
-
-    auto type_size = sizeof(uint64_t) * 2;
     auto buf = co_await in.read_exactly(length * type_size);
     check_buf_size(buf, length * type_size);
 
@@ -886,7 +926,7 @@ void write(sstable_version_types v, file_writer& out, const commitlog_interval& 
     write(v, out, ci.end);
 }
 
-future<> parse(const schema& s, sstable_version_types v, random_access_reader& in, compression& c) {
+static future<> do_parse_compression(const schema& s, sstable_version_types v, random_access_reader& in, compression& c) {
     uint64_t data_len = 0;
     uint32_t chunk_len = 0;
 
@@ -900,15 +940,33 @@ future<> parse(const schema& s, sstable_version_types v, random_access_reader& i
     uint32_t len = 0;
     compression::segmented_offsets::writer offsets = c.offsets.get_writer();
     co_await parse(s, v, in, len);
+    // One offset per chunk of uncompressed data. Some older writers also
+    // appended one trailing offset past the last chunk, tolerate it.
+    const uint64_t expected_chunks = data_len / chunk_len + (data_len % chunk_len != 0);
+    if (len < expected_chunks || len - expected_chunks > 1) {
+        throw_malformed_sstable_exception(format("CompressionInfo is malformed: {} chunk offsets, expected {} for data_len={} chunk_len={}",
+                len, expected_chunks, data_len, chunk_len));
+    }
     auto eoarr = [&c, &len] { return c.offsets.size() == len; };
 
     while (!eoarr()) {
         auto now = std::min(len - c.offsets.size(), 100000 / sizeof(uint64_t));
         auto buf = co_await in.read_exactly(now * sizeof(uint64_t));
+        check_buf_size(buf, now * sizeof(uint64_t));
         for (size_t i = 0; i < now; ++i) {
             uint64_t value = read_unaligned<uint64_t>(buf.get() + i * sizeof(uint64_t));
+            // Throws std::invalid_argument on offsets that go backwards or
+            // jump further than the encoding allows. Converted below.
             offsets.push_back(net::ntoh(value));
         }
+    }
+}
+
+future<> parse(const schema& s, sstable_version_types v, random_access_reader& in, compression& c) {
+    try {
+        co_await do_parse_compression(s, v, in, c);
+    } catch (const std::invalid_argument& e) {
+        throw_malformed_sstable_exception(fmt::format("CompressionInfo is malformed: {}", e.what()));
     }
 }
 
@@ -1278,7 +1336,22 @@ future<> sstable::read_compression() {
     }
 
     co_await read_simple_and_verify_digest<component_type::CompressionInfo>(_components->compression);
-    auto compressor = co_await manager().get_compressor_factory().make_compressor_for_reading(_components->compression);
+    compressor_ptr compressor;
+    try {
+        // Interprets the algorithm name and options read from the component.
+        // An unknown algorithm is reported as std::runtime_error, an invalid
+        // option as request_validation_exception: both are problems with the
+        // component. Everything else (I/O, allocation, ...) keeps its type.
+        compressor = co_await manager().get_compressor_factory().make_compressor_for_reading(_components->compression);
+    } catch (const std::system_error&) {
+        throw;
+    } catch (const std::runtime_error& e) {
+        throw_malformed_sstable_exception(fmt::format("Failed to create decompressor from CompressionInfo: {}", e.what()),
+                filename(component_type::CompressionInfo));
+    } catch (const exceptions::request_validation_exception& e) {
+        throw_malformed_sstable_exception(fmt::format("Failed to create decompressor from CompressionInfo: {}", e.what()),
+                filename(component_type::CompressionInfo));
+    }
     _components->compression.set_compressor(std::move(compressor));
     _components->compression.discard_hidden_options();
 }
@@ -1295,11 +1368,11 @@ void sstable::write_compression() {
 void sstable::validate_partitioner() {
     auto entry = _components->statistics.contents.find(metadata_type::Validation);
     if (entry == _components->statistics.contents.end()) {
-        throw std::runtime_error("Validation metadata not available");
+        throw_malformed_sstable_exception("Validation metadata not available", get_filename(component_type::Statistics));
     }
     auto& p = entry->second;
     if (!p) {
-        throw std::runtime_error("Validation is malformed");
+        throw_malformed_sstable_exception("Validation is malformed", get_filename(component_type::Statistics));
     }
 
     validation_metadata& v = *static_cast<validation_metadata *>(p.get());
@@ -1341,28 +1414,31 @@ future<uint32_t> sstable::read_scylla_file_digest() const {
     co_return digest;
 }
 
-future<uint32_t> sstable::compute_component_file_digest(component_type type) const {
+future<uint32_t> sstable::compute_component_file_digest(component_type type, std::optional<abort_source&> as) const {
     auto f = co_await new_sstable_component_file(_read_error_handler, type, open_flags::ro);
     auto size = co_await f.size();
     if (type == component_type::Scylla && _components->scylla_metadata->digest) {
         // For Scylla metadata, the digest is stored at the end of the file, so we need to exclude it from the checksum calculation.
         size -= sizeof(uint32_t);
     }
-    co_return co_await compute_component_file_digest(std::move(f), size);
+    co_return co_await compute_component_file_digest(std::move(f), size, as);
 }
 
-static future<uint32_t> do_compute_component_file_digest(file f, size_t size, file_input_stream_options options) {
-    return with_closeable(make_file_input_stream(std::move(f), 0, size, options), [] (input_stream<char>& in) -> future<uint32_t> {
+static future<uint32_t> do_compute_component_file_digest(file f, size_t size, file_input_stream_options options, std::optional<abort_source&> as = std::nullopt) {
+    co_return co_await with_closeable(make_file_input_stream(std::move(f), 0, size, options), coroutine::lambda([&as] (input_stream<char>& in) -> future<uint32_t> {
         uint32_t digest = crc32_utils::init_checksum();
         while (auto buf = co_await in.read()) {
+            if (as) {
+                as->check();
+            }
             digest = crc32_utils::checksum(digest, buf.get(), buf.size());
         }
         co_return digest;
-    });
+    }));
 }
 
-future<uint32_t> sstable::compute_component_file_digest(file f, size_t size) const {
-    return do_compute_component_file_digest(std::move(f), size, {.buffer_size = sstable_buffer_size});
+future<uint32_t> sstable::compute_component_file_digest(file f, size_t size, std::optional<abort_source&> as) const {
+    return do_compute_component_file_digest(std::move(f), size, {.buffer_size = sstable_buffer_size}, as);
 }
 
 void sstable::validate_component_digest(component_type type, uint32_t computed_digest) const {
@@ -1379,13 +1455,13 @@ void sstable::validate_component_digest(component_type type, uint32_t computed_d
     }
 }
 
-future<> sstable::compute_and_validate_component_digest(component_type type) {
+future<> sstable::compute_and_validate_component_digest(component_type type, std::optional<abort_source&> as) {
     auto stored_digest = get_component_digest(type);
     if (!stored_digest.has_value()) {
         co_return;
     }
 
-    auto computed_digest = co_await compute_component_file_digest(type);
+    auto computed_digest = co_await compute_component_file_digest(type, as);
     validate_component_digest(type, computed_digest);
 }
 
@@ -1409,12 +1485,12 @@ future<> sstable::validate_scylla_digest_value() {
     }
 }
 
-future<> sstable::validate_digests(sstable::skip_data_digest skip_data) {
+future<> sstable::validate_digests(sstable::skip_data_digest skip_data, std::optional<abort_source&> as) {
     co_await validate_scylla_digest_value();
 
     for (const auto& type : _recognized_components) {
         if (type != component_type::Data || !skip_data) {
-            co_await compute_and_validate_component_digest(type);
+            co_await compute_and_validate_component_digest(type, as);
         }
     }
 }
@@ -1422,11 +1498,11 @@ future<> sstable::validate_digests(sstable::skip_data_digest skip_data) {
 void sstable::validate_min_max_metadata() {
     auto entry = _components->statistics.contents.find(metadata_type::Stats);
     if (entry == _components->statistics.contents.end()) {
-        throw std::runtime_error(fmt::format("Stats metadata not available for SSTable {}", get_filename()));
+        throw_malformed_sstable_exception("Stats metadata not available", get_filename(component_type::Statistics));
     }
     auto& p = entry->second;
     if (!p) {
-        throw std::runtime_error(fmt::format("Statistics is malformed for SSTable {}", get_filename()));
+        throw_malformed_sstable_exception("Statistics is malformed", get_filename(component_type::Statistics));
     }
 
     stats_metadata& s = *static_cast<stats_metadata *>(p.get());
@@ -1646,6 +1722,19 @@ std::optional<uint32_t> sstable::get_component_digest(component_type c) const {
     return it->second;
 }
 
+std::optional<db_clock::time_point> sstable::get_scrub_time() const {
+    auto& metadata = _components->scylla_metadata;
+    return metadata ? metadata->get_scrub_time() : std::nullopt;
+}
+
+void sstable::set_scrub_time(db_clock::time_point scrub_time) {
+    auto& metadata = _components->scylla_metadata;
+    if (!has_scylla_component() || !metadata) {
+        on_internal_error(sstlog, fmt::format("Cannot set scrub time for sstable {}, missing scylla-metadata component", shared_from_this()));
+    }
+    metadata->set_scrub_time(scrub_time);
+}
+
 int64_t sstable::update_repaired_at(int64_t repaired_at) {
     const stats_metadata& old_stats = get_stats_metadata();
     auto old_repaired_at = old_stats.repaired_at;
@@ -1698,7 +1787,7 @@ future<shared_sstable> sstable::link_with_rewritten_component(std::function<shar
     }
 
     if (!has_scylla_component()) {
-        on_internal_error(sstlog, "SSTable must have Scylla component to rewrite Statistics component.");
+        on_internal_error(sstlog, fmt::format("SSTable must have Scylla component to rewrite the {} component.", component));
     }
 
     if (_storage->is_object_storage() && !update_id) {
@@ -1782,9 +1871,7 @@ future<shared_sstable> sstable::link_with_rewritten_component(std::function<shar
             new_sst->_metadata_size_on_disk -= co_await component_filesize(type);
         })).get();
 
-        modifier(*new_sst);
-
-        new_sst->write_component_with_metadata(component);
+        new_sst->write_component_with_metadata_and_modifier(component, std::move(modifier));
 
         new_sst->_shards = this->_shards;
 
@@ -1802,24 +1889,22 @@ future<shared_sstable> sstable::link_with_rewritten_component(std::function<shar
 
 // Rewrites a single SSTable component along with updated Scylla metadata.
 // This is used when modifying components (e.g., Statistics) without rewriting the entire SSTable.
-// 1. Write the component file (e.g., Statistics-*.db)
+// 1. Update Scylla metadata sstable identifier.
+// 2. Apply the modifier.
+// 3. Write the component file (e.g., Statistics-*.db)
 //    - This calculates and stores the component's digest in _components_digests.map[type]
-// 2. Update the Scylla metadata's ComponentsDigests map with the new component digest
-// 3. Calculate the Scylla metadata's own digest based on its updated data
-// 4. Write the Scylla metadata component file
-void sstable::write_component_with_metadata(component_type type) {
+// 4. Update the Scylla metadata's ComponentsDigests map with the new component digest
+// 5. Calculate the Scylla metadata's own digest based on its updated data
+void sstable::write_component_with_metadata_and_modifier(component_type type, std::function<void(sstable&)> modifier) {
     if (!is_component_rewrite_supported(type)) {
-        on_internal_error(sstlog, "Only Statistics component can be rewritten.");
+        on_internal_error(sstlog, "Only Statistics and Scylla components can be rewritten.");
     }
     if (!_components->scylla_metadata) {
-        on_internal_error(sstlog, "SSTable must have Scylla component to rewrite Statistics component.");
+        on_internal_error(sstlog, fmt::format("SSTable must have Scylla component to rewrite the {} component.", type));
     }
 
     auto& metadata = *_components->scylla_metadata;
 
-    write_component(type);
-
-    metadata.get_or_create_components_digests().map[type] = _components_digests.map[type];
     // The sstable's identifier is authoritative: make sure the sstable_identifier
     // we store in scylla_metadata is the one the sstable is known by.  This must
     // happen before the digest below is computed over metadata.data.
@@ -1829,6 +1914,15 @@ void sstable::write_component_with_metadata(component_type type) {
                 get_filename(), component_name(*this, type)));
     }
     metadata.set_sstable_identifier(*sid);
+    metadata.digest = std::nullopt;
+
+    modifier(*this);
+
+    if (type != component_type::Scylla) {
+        write_component(type);
+        metadata.get_or_create_components_digests().map[type] = _components_digests.map[type];
+    }
+
     metadata.digest = serialized_checksum(_version, metadata.data);
 
     write_simple<component_type::Scylla>(metadata);
@@ -1836,7 +1930,7 @@ void sstable::write_component_with_metadata(component_type type) {
     // Keep the cached _features in sync with the metadata we just wrote,
     // mirroring read_scylla_metadata(). Otherwise a rewritten sstable would
     // report zeroed features (e.g. losing ShadowableTombstones).
-    _features = _components->scylla_metadata->get_features();
+    _features = metadata.get_features();
 }
 
 future<uint64_t> sstable::component_filesize(component_type type) const noexcept {
@@ -2230,6 +2324,7 @@ void sstable::disable_component_memory_reload() {
 bool sstable::is_component_rewrite_supported(component_type type) {
     switch (type) {
     case component_type::Statistics:
+    case component_type::Scylla:
         return true;
     default:
         return false;
@@ -2637,6 +2732,8 @@ sstable::write_scylla_metadata(shard_id shard, struct run_identifier identifier,
     }
     _components->scylla_metadata->data.set<scylla_metadata_type::Schema>(std::move(sstable_schema));
     _components->scylla_metadata->data.set<scylla_metadata_type::ComponentsDigests>(scylla_metadata::components_digests{_components_digests});
+
+    _components->scylla_metadata->set_scrub_time(db_clock::now());
 
     _components->scylla_metadata->digest = serialized_checksum(_version, _components->scylla_metadata->data);
 
@@ -3457,6 +3554,26 @@ static future<bool> do_validate_uncompressed(input_stream<char>& stream, size_t 
     co_return true;
 }
 
+// Digest.crc32 holds the full CRC32 of the Data file as an unsigned decimal
+// number in ASCII, and nothing else: no sign, no whitespace, no line
+// terminator. Anything else is a malformed sstable. The raw content is not
+// included in the message; the file itself is available for inspection.
+static uint32_t parse_digest(std::string_view digest_str) {
+    uint32_t digest = 0;
+    const char* const first = digest_str.data();
+    const char* const last = first + digest_str.size();
+    const auto [ptr, ec] = std::from_chars(first, last, digest, 10);
+    if (ec != std::errc{}) {
+        throw_malformed_sstable_exception(format("Failed to parse Digest ({} bytes): {}",
+                digest_str.size(), std::make_error_code(ec).message()));
+    }
+    if (ptr != last) {
+        throw_malformed_sstable_exception(format("Failed to parse Digest ({} bytes): {} trailing byte(s) after the number",
+                digest_str.size(), last - ptr));
+    }
+    return digest;
+}
+
 future<uint32_t> sstable::read_digest_from_file(file f) {
     sstring digest_str;
     file_input_stream_options options;
@@ -3474,7 +3591,7 @@ future<uint32_t> sstable::read_digest_from_file(file f) {
     co_await digest_stream.close();
     maybe_rethrow_exception(std::move(ex));
 
-    co_return boost::lexical_cast<uint32_t>(digest_str);
+    co_return parse_digest(digest_str);
 }
 
 
@@ -3509,7 +3626,11 @@ future<std::optional<uint32_t>> sstable::read_digest(file f) {
         co_return std::nullopt;
     }
 
-    _components->digest = co_await read_digest_from_file(std::move(f));
+    try {
+        _components->digest = co_await read_digest_from_file(std::move(f));
+    } catch (const malformed_sstable_exception& e) {
+        throw malformed_sstable_exception(e.what(), filename(component_type::Digest));
+    }
     co_return _components->digest;
 }
 
@@ -3529,6 +3650,11 @@ future<lw_shared_ptr<checksum>> sstable::read_checksum_from_file(file f) {
         auto buf = co_await crc_stream.read_exactly(size);
         check_buf_size(buf, size);
         checksum->chunk_size = net::ntoh(read_unaligned<uint32_t>(buf.get()));
+        // The checksummed readers index chunks with shifts and masks derived
+        // from the chunk size, so it must be a non-zero power of two.
+        if (!std::has_single_bit(checksum->chunk_size)) {
+            throw_malformed_sstable_exception(format("CRC chunk size {} is not a power of two", checksum->chunk_size));
+        }
 
         buf = co_await crc_stream.read_exactly(size);
         while (!buf.empty()) {
@@ -3548,7 +3674,12 @@ future<lw_shared_ptr<checksum>> sstable::read_checksum_from_file(file f) {
 
 
 future<lw_shared_ptr<checksum>> sstable::read_checksum(file f) {
-    auto checksum = co_await read_checksum_from_file(std::move(f));
+    lw_shared_ptr<sstables::checksum> checksum;
+    try {
+        checksum = co_await read_checksum_from_file(std::move(f));
+    } catch (const malformed_sstable_exception& e) {
+        throw malformed_sstable_exception(e.what(), filename(component_type::CRC));
+    }
 
     if (!_components->checksum) {
         _components->checksum = checksum->weak_from_this();
@@ -3732,7 +3863,7 @@ void sstable::set_sstable_level(uint32_t new_level) {
     }
     auto& p = entry->second;
     if (!p) {
-        throw std::runtime_error("Statistics is malformed");
+        throw_malformed_sstable_exception("Statistics is malformed", get_filename(component_type::Statistics));
     }
     stats_metadata& s = *static_cast<stats_metadata *>(p.get());
     sstlog.debug("set level of {} with generation {} from {} to {}", get_filename(), _generation, s.sstable_level, new_level);
@@ -3751,7 +3882,7 @@ void sstable::mutate_sstable_level(uint32_t new_level) {
 
     auto& p = entry->second;
     if (!p) {
-        throw std::runtime_error("Statistics is malformed");
+        throw_malformed_sstable_exception("Statistics is malformed", get_filename(component_type::Statistics));
     }
     stats_metadata& s = *static_cast<stats_metadata *>(p.get());
     if (s.sstable_level == new_level) {
@@ -4597,6 +4728,7 @@ class sstable_stream_sink_impl : public sstable_stream_sink {
     component_type _type;
     bool _last_component;
     bool _leave_unsealed;
+    bool _update_scrub_time;
     checksum _checksum;
     uint32_t _digest;
 public:
@@ -4605,10 +4737,11 @@ public:
         , _type(type)
         , _last_component(cfg.last_component)
         , _leave_unsealed(cfg.leave_unsealed)
+        , _update_scrub_time(cfg.update_scrub_time)
         , _checksum(DEFAULT_CHUNK_SIZE, {})
         , _digest(crc32_utils::init_checksum())
     {
-        sstlog.debug("Creating stream sink for SSTable gen={} sid={} type={} last={} leave_unsealed={}", _sst->generation(), _sst->sstable_identifier(), _type, _last_component, _leave_unsealed);
+        sstlog.debug("Creating stream sink for SSTable gen={} sid={} type={} last={} leave_unsealed={} update_scrub_time={}", _sst->generation(), _sst->sstable_identifier(), _type, _last_component, _leave_unsealed, _update_scrub_time);
     }
 private:
     future<> load_metadata() const {
@@ -4637,6 +4770,16 @@ private:
             write(_sst->get_version(), w, metadata);
             w.close();
         });
+    }
+
+    future<> update_scrub_time() const {
+        co_await load_metadata();
+        auto& metadata = _sst->get_shared_components().scylla_metadata;
+        if (!metadata) {
+            co_return;
+        }
+        metadata->set_scrub_time(db_clock::now());
+        co_await save_metadata();
     }
 
     // Validate digest in the sstable. Used instead of sstable::validate_component_digest, as
@@ -4672,7 +4815,7 @@ private:
     }
 public:
     future<output_stream<char>> output(const file_open_options& foptions, const file_output_stream_options& stream_options) override {
-        assert(_type != component_type::TOC);
+        SCYLLA_ASSERT(_type != component_type::TOC);
         // TOC and scylla components are guaranteed not to depend on metadata. Ignore these (chicken, egg)
         bool load_save_meta = _type != component_type::TemporaryTOC && _type != component_type::Scylla;
 
@@ -4702,6 +4845,9 @@ public:
     }
     future<shared_sstable> close() override {
         if (_last_component) {
+            if (_update_scrub_time) {
+                co_await update_scrub_time();
+            }
             // If we are the last component in a sequence, we can seal the table.
             if (!_leave_unsealed) {
                 co_await _sst->_storage->seal(*_sst);
@@ -4756,9 +4902,9 @@ generation_type::from_string(const std::string& s) {
         }
         utils::UUID_gen::decimicroseconds timestamp = {};
         auto decode_base36 = [](const std::string& s) {
-            std::size_t pos{};
-            auto n = std::stoull(s, &pos, 36);
-            if (pos != s.size()) {
+            uint64_t n = 0;
+            auto [ptr, ec] = std::from_chars(s.data(), s.data() + s.size(), n, 36);
+            if (ec != std::errc{} || ptr != s.data() + s.size()) {
                 throw std::invalid_argument(fmt::format("invalid part in UUID: {}", s));
             }
             return n;

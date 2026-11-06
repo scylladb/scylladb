@@ -326,7 +326,7 @@ async def test_tablet_repair_hosts_filter(manager: ScyllaClusterManager, include
 
         res = await load_tablet_repair_task_infos(cql, hosts[0], table_id)
         assert len(res) == 1
-        assert res[str(token)].repair_hosts_filter.split(",").sort() == hosts_filter.split(",").sort()
+        assert sorted(res[str(token)].repair_hosts_filter.split(",")) == sorted(hosts_filter.split(","))
 
         await inject_error_off(manager, injection, servers)
 
@@ -336,9 +336,13 @@ async def test_tablet_repair_hosts_filter(manager: ScyllaClusterManager, include
     check_repairs(row_num_before, row_num_after, [0, 1] if included_host_count == 2 else [])
 
 async def prepare_multi_dc_repair(manager) -> tuple[list[ServerInfo], CassandraSession, list[Host], str, str]:
-    servers = [await manager.server_add(property_file = {'dc': 'DC1', 'rack' : 'R1'}),
-               await manager.server_add(property_file = {'dc': 'DC1', 'rack' : 'R2'}),
-               await manager.server_add(property_file = {'dc': 'DC2', 'rack' : 'R3'})]
+    # Refresh the load stats every second, like create_table_insert_data_for_repair() does. A refresh
+    # wakes the topology coordinator, which a test needs after it turns off an injection holding a
+    # repair, or the repair waits for the next refresh, 60 seconds by default.
+    config = {'tablet_load_stats_refresh_interval_in_seconds': 1}
+    servers = [await manager.server_add(config=config, property_file = {'dc': 'DC1', 'rack' : 'R1'}),
+               await manager.server_add(config=config, property_file = {'dc': 'DC1', 'rack' : 'R2'}),
+               await manager.server_add(config=config, property_file = {'dc': 'DC2', 'rack' : 'R3'})]
     cql = manager.get_cql()
     ks = await create_new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', "
                   "'DC1': 2, 'DC2': 1} AND tablets = {'initial': 8};")
@@ -359,7 +363,11 @@ async def test_tablet_repair_dcs_filter(manager: ScyllaClusterManager, dcs_filte
 
     token = -1
     async def repair_task():
-        await inject_error_on(manager, "repair_tablet_fail_on_rpc_call", servers)
+        # Keep the repair from ending - which removes its repair_task_info - until check_filter()
+        # has read it. Failing the repair RPC with repair_tablet_fail_on_rpc_call, as the other
+        # tests do, doesn't hold a repair whose filter selects no replica (DC3), since such a
+        # repair sends no RPC.
+        await inject_error_on(manager, "delay_end_repair_update", servers)
         await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token, dcs_filter=dcs_filter)
 
     async def check_filter():
@@ -369,9 +377,9 @@ async def test_tablet_repair_dcs_filter(manager: ScyllaClusterManager, dcs_filte
 
         res = await load_tablet_repair_task_infos(cql, hosts[0], table_id)
         assert len(res) == 1
-        assert res[str(token)].repair_dcs_filter.split(",").sort() == dcs_filter.split(",").sort()
+        assert sorted(res[str(token)].repair_dcs_filter.split(",")) == sorted(dcs_filter.split(","))
 
-        await inject_error_off(manager, "repair_tablet_fail_on_rpc_call", servers)
+        await inject_error_off(manager, "delay_end_repair_update", servers)
 
     await asyncio.gather(repair_task(), check_filter())
 
@@ -398,7 +406,7 @@ async def test_tablet_repair_hosts_and_dcs_filter(manager: ScyllaClusterManager)
 
         res = await load_tablet_repair_task_infos(cql, hosts[0], table_id)
         assert len(res) == 1
-        assert res[str(token)].repair_dcs_filter.split(",").sort() == dcs_filter.split(",").sort()
+        assert sorted(res[str(token)].repair_dcs_filter.split(",")) == sorted(dcs_filter.split(","))
 
         await inject_error_off(manager, "repair_tablet_fail_on_rpc_call", servers)
 

@@ -1,0 +1,9 @@
+The following test files in Cassandra's
+test/unit/org/apache/cassandra/cql3/selection directory, which this
+directory mirrors, were not translated, because they test Cassandra's
+internal implementation through Java APIs instead of testing CQL:
+
+* SelectionColumnMappingTest.java: checks Cassandra's internal mapping
+  between the columns of a SELECT's result and the table's columns.
+* SelectorSerializationTest.java: checks the serialization of Cassandra's
+  internal Selector objects.

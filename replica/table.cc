@@ -52,6 +52,7 @@
 #include "db/snapshot_types.hh"
 #include "db/extensions.hh"
 #include "query/query-result-writer.hh"
+#include "db/view/view.hh"
 #include "db/view/view_update_generator.hh"
 #include "utils/error_injection.hh"
 #include "utils/histogram_metrics_helper.hh"
@@ -969,13 +970,8 @@ public:
         auto local_replica = locator::tablet_replica{_my_host_id, this_shard_id()};
 
         for (auto tid : tmap.tablet_ids()) {
-            if (!tmap.has_replica(tid, local_replica)) {
-                continue;
-            }
-
-            // if the tablet was cleaned up already on this replica, don't allocate a storage group for it.
-            auto trinfo = tmap.get_tablet_transition_info(tid);
-            if (trinfo && locator::is_post_cleanup(local_replica, tmap.get_tablet_info(tid), *trinfo)) {
+            if (locator::get_tablet_storage_state(local_replica, tmap.get_tablet_info(tid), tmap.get_tablet_transition_info(tid))
+                    == locator::tablet_storage_state::absent) {
                 continue;
             }
 
@@ -1054,6 +1050,10 @@ std::optional<locator::tablet_routing_info_v2> table::tablet_routing_info_v2_for
         return std::nullopt;
     }
     return _erm->check_tablet_version(token, block);
+}
+
+bool table::uses_static_sharding() const {
+    return !_erm || _erm->get_replication_strategy().is_vnode_based();
 }
 
 storage_group::storage_group(compaction_group_ptr cg)
@@ -2001,6 +2001,7 @@ table::update_cache(compaction_group& cg, lw_shared_ptr<memtable> m, std::vector
         for (auto& sst : ssts) {
             add_sstable(cg, sst);
             update_stats_for_new_sstable(sst);
+            _large_data_guardrail->register_sstable(sst);
         }
         m->mark_flushed(std::move(new_ssts_ms));
         try_trigger_compaction(cg);
@@ -2308,11 +2309,6 @@ table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtabl
 
         co_await update_cache(cg, old, newtabs);
 
-        for (const auto& sst : newtabs) {
-            _large_data_guardrail->register_sstable(sst);
-        }
-        _large_data_guardrail->on_flush();
-
         co_await utils::get_local_injector().inject("replica_post_flush_after_update_cache", [this] (auto& handler) -> future<> {
             const auto this_table_name = format("{}.{}", _schema->ks_name(), _schema->cf_name());
             if (this_table_name == handler.get("table_name")) {
@@ -2322,6 +2318,8 @@ table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtabl
                 tlogger.info("error injection handler replica_post_flush_after_update_cache: resuming flush for table {}", this_table_name);
             }
         });
+
+        _large_data_guardrail->on_flush();
 
         cg.memtables()->erase(old);
         tlogger.debug("Memtable for {}.{} replaced, into {} sstables", old->schema()->ks_name(), old->schema()->cf_name(), newtabs.size());
@@ -2358,8 +2356,8 @@ table::stop() noexcept {
     auto gate_closed_fut = _async_gate.close();
     co_await when_all(
         _pending_reads_phaser.close(),
-        _pending_writes_phaser.close(),
-        _pending_streams_phaser.close());
+        close_writes(),
+        close_streams());
     // Allow parallel flushes from the commitlog path
     // to synchronize with table::stop
     {
@@ -2580,8 +2578,7 @@ utils::file_size_stats table::total_disk_space_used() const {
 }
 
 void table::rebuild_large_data_index() {
-    auto& sstables = *get_sstables();
-    _large_data_guardrail->rebuild(sstables);
+    _large_data_guardrail->rebuild(*get_sstables());
 }
 
 future<table::sstable_list_permit>
@@ -2799,10 +2796,17 @@ compaction_group::do_update_sstable_sets_on_compaction_completion(compaction::co
             std::optional<lw_shared_ptr<sstables::sstable_set>> new_maintenance_sstables;
         };
         std::unordered_map<compaction_group*, replacement_desc> _cg_desc;
+        std::vector<sstables::shared_sstable> _sstables_to_register;
     public:
         explicit sstable_list_updater(compaction_group& cg, table::sstable_list_builder& builder, compaction::compaction_completion_desc& d, bool& attached)
             : _t(cg._t), _cg(cg), _builder(builder), _desc(d), _attached(attached) {}
         virtual future<> prepare() override {
+            std::unordered_set<sstables::shared_sstable> inputs(_desc.old_sstables.begin(), _desc.old_sstables.end());
+            for (auto& sst : _desc.new_sstables) {
+                if (!inputs.contains(sst)) {
+                    _sstables_to_register.push_back(sst);
+                }
+            }
             // Segregate output sstables according to their owner compaction group.
             // If not in splitting mode, then all output sstables will belong to the same group.
             for (auto& sst : _desc.new_sstables) {
@@ -2865,6 +2869,15 @@ compaction_group::do_update_sstable_sets_on_compaction_completion(compaction::co
             for (auto& [cg, d] : _cg_desc) {
                 cg->backlog_tracker_adjust_charges(d.main_sstable_set_builder_result.removed_sstables, d.desc.new_sstables);
             }
+            // _desc.new_gc_sstables are deliberately left out. They hold only data this
+            // compaction is dropping, they exist just long enough to keep a crash from
+            // resurrecting it, and they are released by the same compaction that
+            // created them. Their large-partition, large-row and large-collection
+            // records describe garbage, so feeding them to the guardrail would report
+            // limit violations for data that is on its way out.
+            for (auto& sst : _sstables_to_register) {
+                _t._large_data_guardrail->register_sstable(sst);
+            }
             // The outputs are attached now, so the caller must not unlink them on failure of
             // whatever runs later in this function.
             _attached = true;
@@ -2884,15 +2897,6 @@ compaction_group::do_update_sstable_sets_on_compaction_completion(compaction::co
     cache.refresh_snapshot();
 
     _t.rebuild_statistics();
-    // desc.new_gc_sstables are deliberately left out. They hold only data this
-    // compaction is dropping, they exist just long enough to keep a crash from
-    // resurrecting it, and they are released by the same compaction that
-    // created them. Their large-partition, large-row and large-collection
-    // records describe garbage, so feeding them to the guardrail would report
-    // limit violations for data that is on its way out.
-    for (auto& sst : desc.new_sstables) {
-        _t._large_data_guardrail->register_sstable(sst);
-    }
 
     co_await builder.delete_sstables_atomically(unused_sstables_for_deletion(std::move(desc)));
 }
@@ -3457,6 +3461,13 @@ public:
     }
     bool is_auto_compaction_disabled_by_user() const noexcept override {
         return _t.is_auto_compaction_disabled_by_user();
+    }
+    std::optional<std::chrono::seconds> scrub_period() const noexcept override {
+        // The repairing view sstables cannot compact, keep automatic scrub disabled for them.
+        if (_cg.is_repairing_view(this)) {
+            return std::nullopt;
+        }
+        return _t.scrub_period();
     }
     bool tombstone_gc_enabled() const noexcept override {
         return _t.tombstone_gc_enabled()  &&  _cg.tombstone_gc_enabled();
@@ -4046,18 +4057,16 @@ void tablet_storage_group_manager::update_effective_replication_map(
         .host = erm.get_token_metadata().get_my_id(),
         .shard = this_shard_id()
     };
-    auto tablet_migrates_in = [this_replica] (locator::tablet_transition_info& transition_info) {
-        return transition_info.stage == locator::tablet_transition_stage::allow_write_both_read_old && transition_info.pending_replica == this_replica;
-    };
     bool tablet_migrating_in = false;
     for (auto& transition : new_tablet_map->transitions()) {
         auto tid = transition.first;
         auto transition_info = transition.second;
-        if (!_storage_groups.contains(tid.value()) && tablet_migrates_in(transition_info)) {
+        const auto state = locator::get_tablet_storage_state(this_replica, new_tablet_map->get_tablet_info(tid), &transition_info);
+        if (!_storage_groups.contains(tid.value()) && state == locator::tablet_storage_state::present) {
             auto range = new_tablet_map->get_token_range(tid);
             _storage_groups[tid.value()] = allocate_storage_group(*new_tablet_map, tid, std::move(range));
             tablet_migrating_in = true;
-        } else if (_storage_groups.contains(tid.value()) && locator::is_post_cleanup(this_replica, new_tablet_map->get_tablet_info(tid), transition_info)) {
+        } else if (_storage_groups.contains(tid.value()) && state == locator::tablet_storage_state::absent) {
             // The storage group should be cleaned up and stopped at this point usually by the tablet cleanup stage,
             // unless the storage group was allocated after tablet cleanup was completed for this node. This could
             // happen if the node was restarted after tablet cleanup was run but before moving to the next stage. To
@@ -4924,12 +4933,15 @@ db::commitlog* table::commitlog() const {
     return _commitlog;
 }
 
+static bool large_data_guardrail_enabled(const schema& s) {
+    return s.large_data_guardrails_enabled()
+        && !is_internal_keyspace(s.ks_name())
+        && !s.is_view()
+        && !cdc::is_log_name(s.cf_name());
+}
+
 shared_ptr<db::large_data_guardrail_base> table::make_large_data_guardrail() const {
-    bool enabled = _schema->large_data_guardrails_enabled()
-        && !is_internal_keyspace(_schema->ks_name())
-        && !_schema->is_view()
-        && !cdc::is_log_name(_schema->cf_name());
-    if (enabled) {
+    if (large_data_guardrail_enabled(*_schema)) {
         return make_shared<db::large_data_guardrail>(_config.guardrail_config);
     }
     return db::noop_large_data_guardrail::instance();
@@ -4952,8 +4964,12 @@ void table::set_schema(schema_ptr s) {
     if (_counter_cell_locks) {
         _counter_cell_locks->set_schema(s);
     }
+    const bool large_data_guardrail_toggled = large_data_guardrail_enabled(*s) != large_data_guardrail_enabled(*_schema);
     _schema = std::move(s);
-    _large_data_guardrail = make_large_data_guardrail();
+    if (large_data_guardrail_toggled) {
+        _large_data_guardrail->rebuild({});
+        _large_data_guardrail = make_large_data_guardrail();
+    }
     _large_data_guardrail->rebuild(*get_sstables());
 
     for (auto&& v : _views) {
@@ -5182,11 +5198,17 @@ void table::do_apply(compaction_group& cg, db::rp_handle&& h, Args&&... args) {
     _stats.writes.mark(lc);
 }
 
-api::timestamp_type table::get_max_timestamp_for_tablet(locator::tablet_id tid) const {
-    return std::ranges::max(storage_group_for_id(tid.value()).compaction_groups_immediate()
-        | std::views::transform([](const compaction_group_ptr& cg_ptr) {
-            return std::max(cg_ptr->max_seen_timestamp(), cg_ptr->max_memtable_timestamp());
-        }));
+std::optional<api::timestamp_type> table::get_max_timestamp_for_token_range(dht::token_range range) const {
+    const auto sgs = storage_groups_for_token_range(std::move(range));
+    if (sgs.empty()) {
+        return std::nullopt;
+    }
+    return std::ranges::max(sgs | std::views::transform([](const storage_group_ptr& sg) {
+        return std::ranges::max(sg->compaction_groups_immediate()
+            | std::views::transform([](const compaction_group_ptr& cg_ptr) {
+                return std::max(cg_ptr->max_seen_timestamp(), cg_ptr->max_memtable_timestamp());
+            }));
+    }));
 }
 
 // Runs func, which applies a write to the memtable of a compaction group, once
@@ -5493,6 +5515,18 @@ table::disable_auto_compaction() {
         co_await parallel_foreach_compaction_group([this] (compaction_group& cg) {
             return get_logstor_compaction_manager().stop_ongoing_compactions(cg.as_logstor_group());
         });
+    }
+}
+
+void table::set_scrub_period(std::optional<std::chrono::seconds> period) {
+    if (period == _scrub_period) {
+        return;
+    }
+    _scrub_period = period;
+    if (period) {
+        tlogger.info0("Automatic scrub period for {}.{} set to {}", _schema->ks_name(), _schema->cf_name(), *period);
+    } else {
+        tlogger.info0("Automatic scrub disabled for {}.{}", _schema->ks_name(), _schema->cf_name());
     }
 }
 
@@ -5988,7 +6022,7 @@ future<> table::flush_compaction_groups(storage_group& sg) {
     }
 }
 
-future<> table::cleanup_compaction_groups(database& db, db::system_keyspace& sys_ks, locator::tablet_id tid, storage_group& sg) {
+future<> table::cleanup_compaction_groups(db::system_keyspace& sys_ks, locator::tablet_id tid, storage_group& sg) {
     for (auto& cg_ptr : sg.compaction_groups_immediate()) {
         co_await cg_ptr->cleanup();
         // FIXME: at this point _highest_rp might be greater than the replay_position of the last cleaned mutation,
@@ -5998,12 +6032,8 @@ future<> table::cleanup_compaction_groups(database& db, db::system_keyspace& sys
         // in the first place, but it would be better to extract the exact replay_position from
         // the actually flushed/deleted sstables, like discard_sstable() does, so that the mutations
         // cleaned from sstables are exactly the same as the ones cleaned from commitlog.
+        // This also drops the unneeded records, which apply only to deleted commitlog segments.
         co_await sys_ks.save_commitlog_cleanup_record(schema()->id(), sg.token_range(), _highest_rp);
-        // This is the only place (outside of reboot) where we delete unneeded commitlog cleanup
-        // records. This isn't ideal -- it would be more natural if the unneeded records
-        // were deleted as soon as they become unneeded -- but this gets the job done with a
-        // minimal amount of code.
-        co_await sys_ks.drop_old_commitlog_cleanup_records(db.commitlog()->min_position());
     }
 
     tlogger.info("Cleaned up tablet {} of table {}.{} successfully.", tid, _schema->ks_name(), _schema->cf_name());
@@ -6023,7 +6053,7 @@ future<> table::cleanup_tablet(database& db, db::system_keyspace& sys_ks, locato
     // compaction_group::stop takes care of flushing.
     co_await stop_compaction_groups(sg);
     co_await utils::get_local_injector().inject("delay_tablet_compaction_groups_cleanup", std::chrono::seconds(5));
-    co_await cleanup_compaction_groups(db, sys_ks, tid, sg);
+    co_await cleanup_compaction_groups(sys_ks, tid, sg);
 }
 
 future<> table::cleanup_tablet_without_deallocation(database& db, db::system_keyspace& sys_ks, locator::tablet_id tid) {
@@ -6032,7 +6062,7 @@ future<> table::cleanup_tablet_without_deallocation(database& db, db::system_key
 
     co_await clear_inactive_reads_for_tablet(db, sg);
     co_await flush_compaction_groups(sg);
-    co_await cleanup_compaction_groups(db, sys_ks, tid, sg);
+    co_await cleanup_compaction_groups(sys_ks, tid, sg);
 }
 
 // Retires the memtables of every compaction group of the tablet. The replacements are

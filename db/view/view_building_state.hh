@@ -13,7 +13,7 @@
 #include <seastar/core/condition-variable.hh>
 #include "db/view/view_build_status.hh"
 #include "locator/host_id.hh"
-#include "locator/tablets.hh"
+#include "locator/tablet_types.hh"
 #include "mutation/timestamp.hh"
 #include "utils/UUID.hh"
 #include <fmt/base.h>

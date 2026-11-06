@@ -299,9 +299,7 @@ future<> shared_tombstone_gc_state::flush_pending_repair_time_update(sharded<rep
             for (auto& update : x.second) {
                 co_await coroutine::maybe_yield();
                 if (update.shard == this_shard_id()) {
-                    if (high_rp.valid()) {
-                        co_await local_sys_ks.save_commitlog_cleanup_record(table, update.range, high_rp);
-                    }
+                    co_await local_sys_ks.save_commitlog_cleanup_record(table, update.range, high_rp);
                     do_update_repair_time(*shard_maps, table, update.range, update.time, high_rp);
                     dblog.debug("Flush pending repair time for tombstone gc: table={} range={} repair_time={}",
                             table, update.range, update.time);

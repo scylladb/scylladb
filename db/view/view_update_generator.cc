@@ -12,6 +12,7 @@
 #include "gms/inet_address.hh"
 #include <seastar/util/defer.hh>
 #include "replica/database.hh"
+#include "db/view/view.hh"
 #include "view_update_generator.hh"
 #include "utils/error_injection.hh"
 #include "db/view/view_updating_consumer.hh"
@@ -351,7 +352,7 @@ void view_update_generator::setup_metrics() {
 
 void view_update_generator::discover_staging_sstables() {
     _db.get_tables_metadata().for_each_table([&] (table_id, lw_shared_ptr<replica::table> table) {
-        if (table->uses_tablets()) {
+        if (_db.find_keyspace(table->schema()->ks_name()).uses_tablets()) {
             return;
         }
         auto t = table->shared_from_this();
@@ -432,6 +433,10 @@ future<> view_update_generator::populate_views(const replica::table& table,
         }
     }
     co_await builder.close();
+    // mutate_MV() records the backlog when each view update completes, but while it still holds the
+    // update's memory units, so the recorded backlog - which gossip publishes to coordinators - still
+    // includes the last batch. Record it again now that all the units were released.
+    _proxy.local().update_view_update_backlog();
     if (err) {
         std::rethrow_exception(err);
     }

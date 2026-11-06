@@ -26,6 +26,7 @@
 #include "raft/server.hh"
 #include "service/topology_coordinator.hh"
 #include "db/system_keyspace.hh"
+#include "gms/gossiper.hh"
 #include "replica/database.hh"
 #include "db/view/view_building_task_mutation_builder.hh"
 #include "utils/assert.hh"

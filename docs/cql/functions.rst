@@ -58,6 +58,11 @@ Scalar functions
 Native functions
 ~~~~~~~~~~~~~~~~
 
+Native functions whose names are made of several words run together, such as ``toTimestamp`` and ``blobAsInt``,
+can also be called by a "snake_case" name, with the words separated by underscores - here, ``to_timestamp`` and
+``blob_as_int``. These are the names with which Cassandra 5 documents these functions. Either name can be used.
+The only exceptions are the deprecated functions ``dateOf`` and ``unixTimestampOf``, which have no snake_case names.
+
 Cast
 ````
 

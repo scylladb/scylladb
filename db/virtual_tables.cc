@@ -906,6 +906,9 @@ class db_config_table final : public streaming_virtual_table {
                         }
                     } catch (boost::bad_lexical_cast&) {
                         ex = std::make_exception_ptr(virtual_table_update_exception("cannot parse option value"));
+                    } catch (const std::invalid_argument& e) {
+                        // Rejected by the config framework, e.g. while a cluster config override is in effect.
+                        ex = std::make_exception_ptr(virtual_table_update_exception(e.what()));
                     }
                     co_await coroutine::return_exception_ptr(std::move(ex));
                 }

@@ -12,7 +12,7 @@
 
 #include "cql3/statements/property_definitions.hh"
 #include "data_dictionary/storage_options.hh"
-#include "locator/abstract_replication_strategy.hh"
+#include "locator/abstract_replication_strategy_fwd.hh"
 #include "data_dictionary/consistency_config_options.hh"
 
 #include <seastar/core/shared_ptr.hh>

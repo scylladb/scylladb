@@ -18,6 +18,7 @@
 #include "db/config.hh"
 #include "db/consistency_level_type.hh"
 #include "db/system_keyspace.hh"
+#include "gms/gossiper.hh"
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/core/timer.hh>
 #include <seastar/core/future.hh>
@@ -33,6 +34,7 @@
 #include <seastar/core/reactor.hh>
 #include "utils/managed_string.hh"
 #include "utils/labels.hh"
+#include "service/raft/raft_group0_client.hh"
 
 namespace qos {
 static logging::logger sl_logger("service_level_controller");
@@ -40,6 +42,10 @@ static const seastar::metrics::label service_level_label("service_level");
 static const seastar::metrics::label workload_type_label("workload_type");
 
 sstring service_level_controller::default_service_level_name = "default";
+
+future<> service_level_controller::commit_mutations(::service::group0_batch&& mc) {
+    return _sl_data_accessor->commit_mutations(std::move(mc), _global_controller_db->group0_aborter);
+}
 constexpr const char* scheduling_group_name_pattern = "sl:{}";
 constexpr const char* deleted_scheduling_group_name_pattern = "sl_deleted:{}";
 constexpr const char* temp_scheduling_group_name_pattern = "sl_temp:{}";
@@ -68,7 +74,7 @@ service_level_controller::service_level_controller(sharded<auth::service>& auth_
         , _early_abort_subscription(as.subscribe([this] () noexcept { do_abort(); }))
 {
     // We can't rename the system default scheduling group so we have to reject it.
-    assert(default_scheduling_group != get_default_scheduling_group());
+    SCYLLA_ASSERT(default_scheduling_group != get_default_scheduling_group());
     if (this_shard_id() == global_controller) {
         _global_controller_db = std::make_unique<global_controller_data>();
         _global_controller_db->default_service_level_config = default_service_level_config;
@@ -518,6 +524,12 @@ std::optional<service_level_options> service_level_controller::find_cached_effec
 
 future<>  service_level_controller::notify_service_level_added(sstring name, service_level sl_data) {
     return seastar::async( [this, name, sl_data] {
+        utils::get_local_injector().inject("service_level_controller_pause_service_level_add", [&name] (auto& handler) -> future<> {
+            if (handler.get("service_level") == name && handler.template get<unsigned>("shard") == this_shard_id()) {
+                sl_logger.info("notify_service_level_added: pausing for service level {}", name);
+                co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes(5));
+            }
+        }).get();
         service_level_info sl_info = {
             .name = name,
             .sg = sl_data.sg,
@@ -529,18 +541,21 @@ future<>  service_level_controller::notify_service_level_added(sstring name, ser
                 sl_logger.error("notify_service_level_added: exception occurred in one of the observers callbacks {:t}", std::current_exception());
             }
         });
-        auto result= _service_levels_db.emplace(name, sl_data);
-        if (result.second) {
-            auto& slot = _sl_lookup[sl_data.sg];
-            slot.first = &(result.first->first);
-            slot.second = &(result.first->second);
-            if (name == driver_service_level_name) {
-                _driver_scheduling_group = sl_data.sg;
-            }
-            register_metrics();
-        }
     });
 
+}
+
+void service_level_controller::make_service_level_available(sstring name, service_level sl_data) {
+    auto result= _service_levels_db.emplace(name, sl_data);
+    if (result.second) {
+        auto& slot = _sl_lookup[sl_data.sg];
+        slot.first = &(result.first->first);
+        slot.second = &(result.first->second);
+        if (name == driver_service_level_name) {
+            _driver_scheduling_group = sl_data.sg;
+        }
+        register_metrics();
+    }
 }
 
 future<> service_level_controller::notify_service_level_updated(sstring name, service_level_options slo) {
@@ -699,7 +714,7 @@ future<service_levels_info> service_level_controller::get_distributed_service_le
 }
 
 future<bool> service_level_controller::validate_before_service_level_add() {
-    assert(this_shard_id() == global_controller);
+    SCYLLA_ASSERT(this_shard_id() == global_controller);
     if (_global_controller_db->deleted_scheduling_groups.size() > 0) {
         return make_ready_future<bool>(true);
     } else if (_global_controller_db->scheduling_groups_exhausted) {
@@ -802,6 +817,9 @@ future<> service_level_controller::do_add_service_level(sstring name, service_le
                 }
             }).then([this, &sl, &name] () {
                 return container().invoke_on_all(&service_level_controller::notify_service_level_added, name, sl);
+            }).then([this, &sl, &name] () {
+                // A shard must not hand out the new scheduling group before every shard's subscribers are ready for it.
+                return container().invoke_on_all(&service_level_controller::make_service_level_available, name, sl);
             });
         });
     }

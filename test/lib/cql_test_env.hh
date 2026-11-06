@@ -16,10 +16,9 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/shared_ptr.hh>
 
-#include "db/view/view_building_worker.hh"
-#include "db/view/view_update_generator.hh"
-#include "service/qos/service_level_controller.hh"
-#include "replica/database.hh"
+#include "replica/database_config.hh"
+#include "locator/token_metadata.hh"
+#include "data_dictionary/data_dictionary.hh"
 #include "data_dictionary/storage_options.hh"
 #include "transport/messages/result_message_base.hh"
 #include "cql3/query_options_fwd.hh"
@@ -29,9 +28,6 @@
 #include "cql3/statements/batch_statement.hh"
 #include "bytes.hh"
 #include "schema/schema.hh"
-#include "service/tablet_allocator.hh"
-#include "vector_search/vector_store_client.hh"
-#include "db/commitlog/raft_commitlog_replay_buffer.hh"
 
 namespace replica {
 class database;
@@ -39,12 +35,14 @@ class database;
 
 namespace db {
 class batchlog_manager;
+class raft_commitlog_replay_buffer;
 class cluster_config_manager;
 class system_distributed_keyspace;
 }
 
 namespace db::view {
 class view_builder;
+class view_building_worker;
 class view_update_generator;
 }
 
@@ -54,6 +52,30 @@ class service;
 
 namespace cql3 {
     class query_processor;
+}
+
+namespace netw {
+class messaging_service;
+}
+
+namespace gms {
+class gossiper;
+}
+
+namespace sstables {
+class storage_manager;
+}
+
+namespace tasks {
+class task_manager;
+}
+
+namespace qos {
+class service_level_controller;
+}
+
+namespace vector_search {
+class vector_store_client;
 }
 
 namespace utils {
@@ -66,6 +88,9 @@ class client_state;
 class migration_manager;
 class raft_group0_client;
 class raft_group_registry;
+class group0_batch;
+class tablet_allocator;
+struct topology_state_machine;
 
 namespace paxos {
 class paxos_store;

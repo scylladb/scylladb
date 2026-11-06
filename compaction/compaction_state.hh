@@ -104,6 +104,11 @@ public:
     // Raised by any function running under run_with_compaction_disabled();
     long compaction_disabled_counter = 0;
 
+    // Set by automatic scrub if compactions are disabled.
+    // If set, the compaction reenabler will retrigger automatic scrub instead
+    // of the periodic timer.
+    bool automatic_scrub_blocked = false;
+
     // Signaled whenever a compaction task completes.
     condition_variable compaction_done;
 
@@ -123,6 +128,14 @@ public:
         // Owned token ranges to keep while cleaning the above sstables.
         compaction::owned_ranges_ptr owned_ranges_ptr;
     };
+
+    // Taken by automatic scrub each time before scrubbing an sstable and held
+    // throughout the whole scrub compaction. Held by regular compaction while
+    // it selects and registers sstables, if the strategy does not allow for
+    // parallel compaction. Because of that, a running automatic scrub does not
+    // delay a regular compaction more than the time needed to finish scrubbing
+    // the current sstable.
+    seastar::semaphore automatic_compaction_sem{1};
 private:
     std::unique_ptr<cleanup_state> _cleanup_state;
 

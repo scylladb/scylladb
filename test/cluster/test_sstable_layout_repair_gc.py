@@ -22,7 +22,8 @@ def run_layout(scylla_path: str, workdir: str, table_dir: str, *args: str) -> tu
     """The header and the sstables `scylla sstable layout` reports for the table."""
     def layout(*extra: str) -> str:
         res = subprocess.run(
-            [scylla_path, "sstable", "layout",
+            # the node is running, it can delete sstables while they are loaded
+            [scylla_path, "sstable", "layout", "--ignore-incomplete-sstables",
              "--scylla-yaml-file", os.path.join(workdir, "conf", "scylla.yaml"), *extra, *args, table_dir],
             text=True, capture_output=True, check=True)
         return res.stdout

@@ -21,6 +21,7 @@
 #include "types/vector.hh"
 
 #include <fmt/ranges.h>
+#include "replica/database.hh"
 
 BOOST_AUTO_TEST_SUITE(user_types_test)
 

@@ -21,6 +21,8 @@
 #include "utils/log.hh"
 #include "cql3/query_processor.hh"
 #include "message/messaging_service.hh"
+#include <seastar/core/file.hh>
+#include <seastar/core/file.hh>
 
 using namespace seastar;
 

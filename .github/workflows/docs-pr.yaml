@@ -20,6 +20,7 @@ on:
     # can break the build, so they must trigger it too.
     paths:
       - "docs/**"
+      - "uv.lock"
       - "db/config.hh"
       - "**/*.cc"
       - "api/**"
@@ -43,5 +44,18 @@ jobs:
         uses: astral-sh/setup-uv@cec208311dfd045dd5311c1add060b2062131d57 # v8.0.0
       - name: Set up env
         run: make -C docs FLAG="${{ env.FLAG }}" setupenv
+      - name: Check redirects
+        run: make -C docs FLAG=manual check-redirects
+
       - name: Build docs
-        run: make -C docs FLAG="${{ env.FLAG }}" test
+        id: docs-build
+        shell: bash
+        run: |
+          make -C docs FLAG="${{ env.FLAG }}" test SPHINXOPTS="-j auto -w $RUNNER_TEMP/docs-warnings.log" \
+            2>&1 | tee "$RUNNER_TEMP/docs-build.log"
+
+      - name: Summarize docs diagnostics
+        if: always()
+        uses: scylladb/sphinx-scylladb-theme/.github/actions/docs-report@0d821fc4038ee9ad6363362c02035132489bf3f6
+        with:
+          build-outcome: ${{ steps.docs-build.outcome }}

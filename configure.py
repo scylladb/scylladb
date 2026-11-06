@@ -284,11 +284,15 @@ def generate_compdb(compdb, ninja, buildfile, modes):
             except FileExistsError:
                 # if there is already a valid compile_commands.json link in the
                 # source root, we are done. if it's a stale link, update it.
+                # concurrent configure.py runs may race on the stale link
                 if os.path.islink(compdb):
-                    current_target = os.readlink(compdb)
-                    if not os.path.exists(current_target):
-                        os.unlink(compdb)
-                        os.symlink(compdb_target, compdb)
+                    try:
+                        current_target = os.readlink(compdb)
+                        if not os.path.exists(current_target):
+                            os.unlink(compdb)
+                            os.symlink(compdb_target, compdb)
+                    except (FileNotFoundError, FileExistsError):
+                        pass
             return
 
 
@@ -466,7 +470,7 @@ modes = {
         'advanced_optimizations': False,
     },
     'release': {
-        'cxxflags': '-ffunction-sections -fdata-sections ',
+        'cxxflags': '-ffunction-sections -fdata-sections -DNDEBUG',
         'cxx_ld_flags': '-Wl,--gc-sections -Wl,--no-lto-pgo-warn-mismatch',
         'stack-usage-threshold': 1024*13,
         'optimization-level': '3',
@@ -492,16 +496,20 @@ modes = {
         'advanced_optimizations': False,
     },
     'sanitize': {
-        'cxxflags': '-DDEBUG -DSANITIZE -DDEBUG_LSA_SANITIZER -DSCYLLA_ENABLE_ERROR_INJECTION',
+        # SEASTAR_ENABLE_ALLOC_FAILURE_INJECTION is deliberately absent: Seastar builds
+        # Sanitize mode with SEASTAR_DEFAULT_ALLOCATOR, which the injector does not support.
+        'cxxflags': '-DDEBUG -DSANITIZE -DDEBUG_LSA_SANITIZER -DSCYLLA_ENABLE_ERROR_INJECTION -DSCYLLA_ENABLE_PREEMPTION_SOURCE',
         'cxx_ld_flags': '',
         'stack-usage-threshold': 1024*50,
-        'optimization-level': 's',
+        'optimization-level': '2',
         'per_src_extra_cxxflags': {},
         'cmake_build_type': 'Sanitize',
         'can_have_debug_info': True,
+        'debuginfo-level': '1',
         'build_seastar_shared_libs': False,
         'default': False,
-        'description': 'a mode with optimizations and sanitizers enabled, used for finding memory errors',
+        'description': 'a mode with optimizations and sanitizers enabled, '
+                       'designed to simulate release behavior while retaining runtime checks for CI runs',
         'advanced_optimizations': False,
     },
     'coverage': {
@@ -586,6 +594,7 @@ scylla_tests = set([
     'test/boost/gossiping_property_file_snitch_test',
     'test/boost/hash_test',
     'test/boost/hashers_test',
+    'test/boost/hint_storage_test',
     'test/boost/hint_test',
     'test/boost/hwlb_test',
     'test/boost/idl_test',
@@ -643,6 +652,7 @@ scylla_tests = set([
     'test/boost/serialized_action_test',
     'test/boost/service_level_controller_test',
     'test/boost/small_vector_test',
+    'test/boost/api_test',
     'test/boost/snitch_reset_test',
     'test/boost/sorting_test',
     'test/boost/sstable_3_x_test',
@@ -719,7 +729,9 @@ perf_tests = set([
     'test/perf/perf_vint',
     'test/perf/perf_big_decimal',
     'test/perf/perf_bti_key_translation',
+    'test/perf/perf_bytes_hash',
     'test/perf/perf_sort_by_proximity',
+    'test/perf/perf_array_search',
 ])
 
 perf_standalone_tests = set([
@@ -919,7 +931,7 @@ scylla_core = (['message/messaging_service.cc',
                 'replica/logstor/ondisk.cc',
                 'replica/logstor/segment_io.cc',
                 'replica/logstor/segment_file.cc',
-                'replica/logstor/compaction.cc',
+                'replica/logstor/compaction_policy.cc',
                 'replica/logstor/segment_manager.cc',
                 'replica/logstor/logstor.cc',
                 'replica/logstor/readers.cc',
@@ -954,7 +966,6 @@ scylla_core = (['message/messaging_service.cc',
                 'schema/schema_mutations.cc',
                 'transport/generic_server.cc',
                 'utils/alien_worker.cc',
-                'utils/array-search.cc',
                 'utils/base64.cc',
                 'utils/crypt_sha512.cc',
                 'utils/logalloc.cc',
@@ -1163,6 +1174,7 @@ scylla_core = (['message/messaging_service.cc',
                 'db/commitlog/commitlog_entry.cc',
                 'db/commitlog/commitlog_replayer.cc',
                 'db/commitlog/raft_commitlog_replay_buffer.cc',
+                'db/cluster_config_db_config_bridge.cc',
                 'db/cluster_config_manager.cc',
                 'db/cluster_config_registry.cc',
                 'db/config.cc',
@@ -1403,6 +1415,7 @@ scylla_core = (['message/messaging_service.cc',
                 'service/strong_consistency/state_machine.cc',
                 'service/strong_consistency/raft_groups_storage.cc',
                 'service/strong_consistency/raft_commitlog.cc',
+                'service/strong_consistency/raft_resize_tracker.cc',
                 'service/raft/group0_state_id_handler.cc',
                 'service/raft/group0_state_machine.cc',
                 'service/raft/group0_state_machine_merger.cc',
@@ -1734,6 +1747,7 @@ for t in sorted(perf_tests):
 
 deps['test/boost/combined_tests'] += [
     'test/boost/aggregate_fcts_test.cc',
+    'test/boost/audit_test.cc',
     'test/boost/auth_cache_test.cc',
     'test/boost/auth_test.cc',
     'test/boost/client_state_test.cc',
@@ -1770,6 +1784,7 @@ deps['test/boost/combined_tests'] += [
     'test/boost/json_cql_query_test.cc',
     'test/boost/large_data_guardrail_test.cc',
     'test/boost/large_paging_state_test.cc',
+    'test/boost/largest_k_test.cc',
     'test/boost/loading_cache_test.cc',
     'test/boost/memtable_test.cc',
     'test/boost/multishard_combining_reader_as_mutation_source_test.cc',
@@ -1789,6 +1804,7 @@ deps['test/boost/combined_tests'] += [
     'test/boost/role_manager_test.cc',
     'test/boost/row_cache_test.cc',
     'test/boost/schema_change_test.cc',
+    'test/boost/schema_change_cross_shard_test.cc',
     'test/boost/schema_registry_test.cc',
     'test/boost/scrub_test.cc',
     'test/boost/secondary_index_test.cc',
@@ -1805,7 +1821,6 @@ deps['test/boost/combined_tests'] += [
     'test/boost/statement_restrictions_test.cc',
     'test/boost/storage_proxy_test.cc',
     'test/boost/tablets_test.cc',
-    'test/boost/test_audit.cc',
     'test/boost/tracing_test.cc',
     'test/boost/user_function_test.cc',
     'test/boost/user_types_test.cc',
@@ -1857,6 +1872,7 @@ deps['test/boost/linearizing_input_stream_test'] = [
     "test/boost/linearizing_input_stream_test.cc",
     "test/lib/log.cc",
 ]
+deps['test/boost/api_test'] += api
 deps['test/boost/expr_test'] = ['test/boost/expr_test.cc', 'test/lib/expr_test_utils.cc'] + scylla_core + alternator
 deps['test/boost/rate_limiter_test'] = ['test/boost/rate_limiter_test.cc', 'db/rate_limiter.cc', 'utils/rate_limiter.cc']
 deps['test/boost/exceptions_optimized_test'] = ['test/boost/exceptions_optimized_test.cc', 'utils/exceptions.cc']
@@ -2326,7 +2342,6 @@ def configure_seastar(build_dir, mode, mode_config, compiler_cache=None):
         '-DSeastar_IO_URING=ON',
         '-DSeastar_OPENSSL=OFF',
         '-DSeastar_LTTNG=OFF', # https://scylladb.atlassian.net/browse/SCYLLADB-3797, https://bugs.lttng.org/issues/1438
-        '-DSeastar_ASSUME_C_ARES_DNS_FREEZE_FIXED=ON',
     ]
 
     if compiler_cache:
@@ -2529,7 +2544,7 @@ def configure_c_ares(build_dir, mode, mode_config, compiler_cache=None):
     # optimization level and debug info explicitly rather than inheriting them.
     c_flags += ' -O{}'.format(mode_config['optimization-level'])
     if args.debuginfo and mode_config['can_have_debug_info']:
-        c_flags += ' -g -gz'
+        c_flags += ' ' + ' '.join(get_debuginfo_flags(mode_config))
     if '-DSANITIZE' in mode_config['cxxflags']:
         c_flags += ' -fsanitize=address -fsanitize=undefined'
 
@@ -2752,6 +2767,14 @@ cpp_jwt_encryption_sources = [
     'ent/encryption/utils.cc',
 ]
 
+def get_debuginfo_flags(mode_config):
+    return [f"-g{mode_config.get('debuginfo-level', '')}", '-gz']
+
+
+def has_debuginfo_flag(flags):
+    return any(re.fullmatch(r'-g[1-3]?', flag) for flag in flags)
+
+
 def get_extra_cxxflags(mode, mode_config, cxx, debuginfo):
     cxxflags = [
         # we need this flag for correct precompiled header handling in connection with ccache (or similar)
@@ -2787,7 +2810,7 @@ def get_extra_cxxflags(mode, mode_config, cxx, debuginfo):
     cxxflags.append(f'-DSCYLLA_BUILD_MODE={mode}')
 
     if debuginfo and mode_config['can_have_debug_info']:
-        cxxflags += ['-g', '-gz']
+        cxxflags += get_debuginfo_flags(mode_config)
 
     return cxxflags
 
@@ -3546,7 +3569,7 @@ def create_build_system(args):
     # the result in case one of the linked static libraries happens to
     ## have some debug symbols. See issue #23834.
     for mode, mode_config in build_modes.items():
-        if '-g' not in user_cflags.split() + mode_config['cxxflags'].split():
+        if not has_debuginfo_flag(user_cflags.split() + mode_config['cxxflags'].split()):
             mode_config['cxx_ld_flags'] += ' -Wl,--strip-debug'
 
     ninja = find_ninja()

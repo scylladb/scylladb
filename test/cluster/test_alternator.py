@@ -31,7 +31,9 @@ import threading
 import random
 import re
 
-from test.cluster.util import get_replication
+from test.cluster.util import get_replication, FeatureConfig
+from test.pylib.internal_types import ServerInfo
+from test.pylib.object_storage import Storage, StorageFactory
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for
 from test.pylib.rest_client import inject_error
@@ -394,51 +396,48 @@ async def test_localnodes_joining_nodes(manager: ScyllaClusterManager):
     """
     # Start a cluster with one node, and then bring up a second node,
     # pausing its bootstrap (with an injection) in JOINING state.
+    # The "delay_node_bootstrap" injection pauses the topology coordinator
+    # (the first node) while the new node is still in "bootstrapping" state,
+    # until we send the injection a message. An injection on the joining node
+    # itself (such as "delay_bootstrap_120s") is not enough: it only delays
+    # that node's own startup, while the coordinator may still complete the
+    # bootstrap and make the node NORMAL.
     # We need to start the second node in the background, because server_add()
     # will wait for the bootstrap to complete - which we don't want to do.
     server = await manager.server_add(config=alternator_config)
-    task = asyncio.create_task(manager.server_add(config=alternator_config | {'error_injections_at_startup': ['delay_bootstrap_120s']}))
-    # Sleep until the first node knows of the second one as a "live node"
-    # (we check this with the REST API's /gossiper/endpoint/live.
-    async def check_two_live_nodes():
-        j = await manager.api.client.get_json("/gossiper/endpoint/live", host=server.ip_addr)
-        if len(j) == 1:
-            return None # try again
-        elif len(j) == 2:
-            return True
-        else:
-            return False
-    assert await wait_for(check_two_live_nodes, time.time() + 60)
-
-    # At this point the second node is live, but hasn't finished bootstrapping
-    # (we delayed that with the injection). So the "/localnodes" should still
-    # return just one node - not both. Reproduces #19694 (two nodes used to
-    # be returned)
-    localnodes_request = f"http://{server.ip_addr}:{alternator_config['alternator_port']}/localnodes"
-    response = requests.get(localnodes_request)
-    j = json.loads(response.content.decode('utf-8'))
-    assert len(j) == 1
-
-    # We don't want to wait for the second server to finish its long
-    # injection-caused bootstrap delay, so we won't check here that when the
-    # second server finally comes up, both nodes will finally be visible in
-    # /localnodes. This case is checked in other tests, where bootstrap
-    # finishes normally, so we don't need to check this case again here.
-    # But we can't just finish here with "task" unwaited or we'll get a
-    # warning about an unwaited coroutine, and the ScyllaClusterManager's
-    # tasks_history will wait for it anyway. For the same reason we can't
-    # task.cancel() (this will cause ScyllaClusterManager's tasks_history
-    # to report the ScyllaClusterManager got BROKEN and fail the next test).
-    # The solution is kill (with SIGKILL) the server currently starting and
-    # then the "await task" will quickly finish (and report a "Failed to add
-    # server" error).
-    # Without this trick, this test will take 2 minutes of wait to finish.
-    for server in await manager.starting_servers():
-        await manager.server_stop(server.server_id, convict=False)
+    await manager.api.enable_injection(server.ip_addr, 'delay_node_bootstrap', one_shot=True)
+    task = asyncio.create_task(manager.server_add(config=alternator_config))
     try:
+        await manager.api.wait_for_injection_enter(server.ip_addr, 'delay_node_bootstrap', deadline=time.time() + 300)
+        # Sleep until the first node knows of the second one as a "live node"
+        # (we check this with the REST API's /gossiper/endpoint/live.
+        async def check_two_live_nodes():
+            j = await manager.api.client.get_json("/gossiper/endpoint/live", host=server.ip_addr)
+            if len(j) == 1:
+                return None # try again
+            elif len(j) == 2:
+                return True
+            else:
+                return False
+        assert await wait_for(check_two_live_nodes, time.time() + 60)
+
+        # At this point the second node is live, but hasn't finished bootstrapping
+        # (we delayed that with the injection). So the "/localnodes" should still
+        # return just one node - not both. Reproduces #19694 (two nodes used to
+        # be returned)
+        localnodes_request = f"http://{server.ip_addr}:{alternator_config['alternator_port']}/localnodes"
+        response = requests.get(localnodes_request)
+        j = json.loads(response.content.decode('utf-8'))
+        assert len(j) == 1
+    finally:
+        # Let the second node finish its bootstrap - also if a check above
+        # failed, so the test does not leave it stuck in the injection.
+        # If the injection wasn't entered yet, the message is remembered
+        # and releases it when it is entered.
+        # That both nodes are then visible in /localnodes is checked in
+        # other tests, so we don't check it again here.
+        await manager.api.message_injection(server.ip_addr, 'delay_node_bootstrap')
         await task
-    except Exception as e:
-        assert 'Failed to add server' in str(e)
 
 async def test_localnodes_multi_dc_multi_rack(manager: ScyllaClusterManager):
     """A test for /localnodes on a more general setup, with multiple DCs and
@@ -2163,3 +2162,225 @@ async def test_export_to_s3_system_tables_readable_on_all_nodes(manager: ScyllaC
                 keys.add(row[0])
             assert keys == expected_keys, \
                 f"node {host} sees {keys} in {table}, expected {expected_keys}"
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_alternator_ttl_expiration_during_drain(manager: ScyllaClusterManager, storage_config: FeatureConfig):
+    """The Alternator TTL expiration service is stopped only after drain, so
+       an expiration delete can reach a table after drain has flushed it. On
+       object storage the table is then flushed again when it is closed, with
+       no sstables registry to record the sstable, and the node aborts
+       (SCYLLADB-4366). The delete must be rejected instead.
+    """
+    # Alternator tables cannot be on object storage yet: with the mixed-storage
+    # guardrail on, CreateTable refuses an object-storage keyspace.
+    cfg = storage_config.get_cluster_cfg(alternator_config | {'restrict_mixed_storage_clusters': 'false'})
+    [server] = await manager.servers_add(1, config=cfg)
+    table_name = f'ttl_drain_{int(time.time() * 1000)}'
+    # Alternator puts the table in an existing keyspace of the expected name,
+    # which is how the test places it on the storage under test.
+    cql = manager.get_cql()
+    await cql.run_async(storage_config.get_keyspace_opts(
+        f"CREATE KEYSPACE alternator_{table_name} WITH replication = "
+        "{'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}"))
+
+    alternator = get_alternator(server.ip_addr)
+    table = alternator.create_table(TableName=table_name,
+                                    BillingMode='PAY_PER_REQUEST',
+                                    KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+                                    AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'N'}])
+    await manager.api.enable_injection(server.ip_addr, 'alternator_ttl_before_expire_item', one_shot=False,
+                                       parameters={'cf_name': table_name})
+    table.meta.client.update_time_to_live(TableName=table_name,
+                                          TimeToLiveSpecification={'AttributeName': 'expiration', 'Enabled': True})
+    table.put_item(Item={'p': 1, 'expiration': int(time.time()) - 60})
+    await manager.api.wait_for_injection_enter(server.ip_addr, 'alternator_ttl_before_expire_item')
+
+    await manager.api.enable_injection(server.ip_addr, 'database_drain_after_user_flush', one_shot=False)
+    stop_task = asyncio.create_task(manager.server_stop_gracefully(server.server_id))
+    await manager.api.wait_for_injection_enter(server.ip_addr, 'database_drain_after_user_flush')
+    await manager.api.message_injection(server.ip_addr, 'alternator_ttl_before_expire_item')
+    await manager.api.message_injection(server.ip_addr, 'database_drain_after_user_flush')
+    await stop_task
+
+    # The rejected delete leaves the item in place, so the restarted node's
+    # TTL scanner has to expire it again.
+    await manager.server_start(server.server_id)
+    table = get_alternator(server.ip_addr).Table(table_name)
+    async def item_expired():
+        return True if 'Item' not in table.get_item(Key={'p': 1}, ConsistentRead=True) else None
+    assert await wait_for(item_expired, time.time() + 60)
+
+
+# Stops the export fiber during the table scan, so that the export stays
+# IN_PROGRESS while a test interrupts it.
+export_pause_injection = 'alternator_export_to_s3_pause_in_item_handler'
+
+# start_paused_export() pauses the export after `export_pause_after_items` items. The sink of the
+# data file starts the multipart upload with the first full part of 5 MiB of compressed data. The
+# items hold random bytes, which do not compress, so the items before the pause are more than
+# 5 MiB also in the data file. test_export_fails_when_the_node_stops needs that open upload: a
+# kill keeps it, and a clean shutdown aborts it.
+export_item_count = 30
+export_item_size = 350 * 1024
+export_pause_after_items = 20
+
+
+def export_object_keys(object_storage: Storage) -> list[str]:
+    """The keys of the objects that the exports wrote to the bucket.
+
+    The bucket of the fixture also holds an `sstables/` object, which is not from
+    an export. Thus take only the objects below an `AWSDynamoDB/` directory.
+    """
+    s3 = object_storage.get_resource().meta.client
+    contents = s3.list_objects_v2(Bucket=object_storage.bucket_name).get('Contents', [])
+    return [obj['Key'] for obj in contents if 'AWSDynamoDB/' in obj['Key']]
+
+
+def export_multipart_uploads(object_storage: Storage) -> list[dict]:
+    """The multipart uploads of the bucket, which a listing of the objects does not show."""
+    s3 = object_storage.get_resource().meta.client
+    return s3.list_multipart_uploads(Bucket=object_storage.bucket_name).get('Uploads', [])
+
+
+async def start_paused_export(manager: ScyllaClusterManager,
+                              object_storage_factory: StorageFactory,
+                              server_count: int = 1) -> tuple[list[ServerInfo], str, Storage]:
+    """Start a cluster of `server_count` nodes and an export that does not finish.
+
+    The first node runs the export. Its fiber waits in `export_pause_injection`
+    with the export row IN_PROGRESS and with an open multipart upload of the data
+    file. Returns the nodes, the export ARN and the object storage.
+    """
+    object_storage = await object_storage_factory('s3')
+    servers = await manager.servers_add(server_count, auto_rack_dc='dc1', config=alternator_config | {
+        'object_storage_endpoints': object_storage.create_endpoint_conf(),
+    })
+    server = servers[0]
+
+    alternator = get_alternator(server.ip_addr)
+    table = alternator.create_table(TableName=unique_table_name(),
+        BillingMode='PAY_PER_REQUEST',
+        KeySchema=[ {'AttributeName': 'p', 'KeyType': 'HASH' } ],
+        AttributeDefinitions=[ {'AttributeName': 'p', 'AttributeType': 'N' } ])
+    for p in range(export_item_count):
+        table.put_item(Item={'p': p, 'v': os.urandom(export_item_size)})
+
+    client = table.meta.client
+    table_arn = client.describe_table(TableName=table.name)['Table']['TableArn']
+    await manager.api.enable_injection(server.ip_addr, export_pause_injection, one_shot=False,
+                                       parameters={'pause_after_items': export_pause_after_items})
+    export_arn = client.export_table_to_point_in_time(
+        TableArn=table_arn,
+        S3Bucket=object_storage.bucket_name,
+    )['ExportDescription']['ExportArn']
+    # The injection enters for each item, and it stops the fiber at the item after
+    # the first `export_pause_after_items` items.
+    await manager.api.wait_for_injection_enter(server.ip_addr, export_pause_injection,
+                                               threshold=export_pause_after_items + 1)
+    uploads = export_multipart_uploads(object_storage)
+    assert len(uploads) == 1, uploads
+    return servers, export_arn, object_storage
+
+
+async def describe_finished_export(server: ServerInfo, export_arn: str, timeout: float = 120) -> dict:
+    """Call DescribeExport until the export is finished, and return its description.
+
+    An export that the garbage collector takes is IN_PROGRESS until the collector
+    writes the final row.
+    """
+    client = get_alternator(server.ip_addr).meta.client
+    async def export_finished():
+        desc = client.describe_export(ExportArn=export_arn)['ExportDescription']
+        return desc if desc['ExportStatus'] != 'IN_PROGRESS' else None
+    return await wait_for(export_finished, time.time() + timeout)
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.parametrize('graceful, failure_code, upload_count', [
+    # A killed node leaves its export IN_PROGRESS with the old incarnation. The first
+    # garbage collection round after the restart writes FAILED with NodeFailure. The
+    # dead node neither completed nor aborted the multipart upload of the data file,
+    # thus the upload stays in the bucket.
+    (False, 'NodeFailure', 1),
+    # A graceful shutdown aborts the running exports, and each export writes its own
+    # FAILED row with the failure code NodeShutdown. (The garbage collector writes
+    # NodeFailure, so this is not the garbage collector.) The shutdown also aborts the
+    # multipart upload of the data file.
+    (True, 'NodeShutdown', 0),
+], ids=['killed', 'shut_down'])
+async def test_export_fails_when_the_node_stops(manager: ScyllaClusterManager, object_storage_factory,
+                                                graceful, failure_code, upload_count):
+    """A node that stops during an export makes the export FAILED."""
+    servers, export_arn, object_storage = await start_paused_export(manager, object_storage_factory)
+    server = servers[0]
+    if graceful:
+        await manager.server_stop_gracefully(server.server_id)
+    else:
+        await manager.server_stop(server.server_id, convict=False)
+    # Start the node again for DescribeExport.
+    await manager.server_start(server.server_id)
+    desc = await describe_finished_export(server, export_arn)
+    assert desc['ExportStatus'] == 'FAILED', desc
+    assert desc['FailureCode'] == failure_code, desc
+    # The export did not write a data file. Thus the bucket holds only the _started
+    # object, and the data file is at most an incomplete multipart upload.
+    keys = export_object_keys(object_storage)
+    assert all(key.endswith('/_started') for key in keys), keys
+    uploads = export_multipart_uploads(object_storage)
+    assert len(uploads) == upload_count, uploads
+
+
+# The garbage collector takes the export of a node which stays down only after that node was
+# unreachable for an hour. This injection makes the hour short, so that the test is fast. The
+# `value` parameter is the time in seconds.
+export_unreachable_timeout_injection = 'alternator_export_to_s3_node_unreachable_timeout_s'
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_export_of_a_node_which_stays_down_fails(manager: ScyllaClusterManager, object_storage_factory):
+    """Another node marks FAILED the export of a node which stays down.
+
+    The cluster has three nodes, because the export tables are in
+    system_distributed, which the readers and the writers access at QUORUM.
+    """
+    servers, export_arn, object_storage = await start_paused_export(manager, object_storage_factory, server_count=3)
+    for server in servers[1:]:
+        await manager.api.enable_injection(server.ip_addr, export_unreachable_timeout_injection,
+                                           one_shot=False, parameters={'value': '1'})
+    # The node stays down. Conviction makes the other nodes see the death at once, and the
+    # garbage collector of each of them starts a round after the timeout above.
+    await manager.server_stop(servers[0].server_id, convict=True)
+    desc = await describe_finished_export(servers[1], export_arn)
+    assert desc['ExportStatus'] == 'FAILED', desc
+    assert desc['FailureCode'] == 'NodeFailure', desc
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_export_of_a_node_which_dies_soon_after_another_node_fails(manager: ScyllaClusterManager, object_storage_factory):
+    """A node-down event soon after an earlier one gets its own garbage collection round.
+
+    Each node-down event asks for a round after the unreachable timeout. The round of the
+    first event comes before the timeout of the second one, so it does not take the export
+    of the second node. If the second event did not get its own round, the export would
+    stay IN_PROGRESS until the periodic round, 4 hours later.
+    """
+    servers, export_arn, object_storage = await start_paused_export(manager, object_storage_factory, server_count=3)
+    unreachable_timeout = 10
+    for server in servers[1:]:
+        await manager.api.enable_injection(server.ip_addr, export_unreachable_timeout_injection,
+                                           one_shot=False, parameters={'value': str(unreachable_timeout)})
+    # The first event: each of the two other nodes sees the other one die once. The nodes
+    # do not stop, so gossip marks them up again soon. Each node asks for a round after
+    # `unreachable_timeout` + 1 seconds.
+    b, c = servers[1:]
+    b_host_id, c_host_id = await asyncio.gather(manager.get_host_id(b.server_id), manager.get_host_id(c.server_id))
+    await asyncio.gather(manager.api.convict(b.ip_addr, c_host_id), manager.api.convict(c.ip_addr, b_host_id))
+    # The second event comes before the round of the first one. That round sees the node of
+    # the export down for only about 6 seconds, less than `unreachable_timeout`, so it does
+    # not take the export. The round of the second event comes about 11 seconds after the kill.
+    await asyncio.sleep(5)
+    await manager.server_stop(servers[0].server_id, convict=True)
+    desc = await describe_finished_export(b, export_arn, timeout=60)
+    assert desc['ExportStatus'] == 'FAILED', desc
+    assert desc['FailureCode'] == 'NodeFailure', desc

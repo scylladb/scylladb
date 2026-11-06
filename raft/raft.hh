@@ -17,6 +17,7 @@
 #include <seastar/core/abort_source.hh>
 #include "bytes_ostream.hh"
 #include "internal.hh"
+#include "raft/raft_fwd.hh"
 #include "logical_clock.hh"
 #include "bounded_clock.hh"
 
@@ -28,20 +29,6 @@ using command = bytes_ostream;
 using command_cref = std::reference_wrapper<const command>;
 
 extern seastar::logger logger;
-
-// This is user provided id for a snapshot
-using snapshot_id = internal::tagged_id<struct snapshot_id_tag>;
-// Unique identifier of a server in a Raft group
-using server_id = internal::tagged_id<struct server_id_tag>;
-// Unique identifier of a Raft group
-using group_id = raft::internal::tagged_id<struct group_id_tag>;
-
-// This type represents the raft term
-using term_t = raft::internal::tagged_uint64<struct term_tag>;
-// This type represensts the index into the raft log
-using index_t = raft::internal::tagged_uint64<struct index_tag>;
-// Identifier for a read barrier request
-using read_id = raft::internal::tagged_uint64<struct read_id_tag>;
 
 // Opaque connection properties. May contain ip:port pair for instance.
 // This value is disseminated between cluster member
@@ -414,12 +401,12 @@ struct append_reply {
     // transfer and nothing more. False on a node with leases disabled, and on
     // one that predates this field.
     bool clock_ok = false;
-    // Set if the in-memory log of the follower has reached
-    // max_follower_log_size, so it will refuse further entries until a snapshot
-    // shrinks the log. Advisory: it lets the leader stop sending entries the
-    // follower would discard. The follower enforces the bound itself, so a
-    // leader which ignores the flag - an older version during an upgrade -
-    // costs only bandwidth.
+    // Set if the in-memory log of the follower has no room under
+    // max_follower_log_size for the next entry, so it will refuse further
+    // entries until a snapshot shrinks the log. Advisory: it lets the leader
+    // stop sending entries the follower would discard. The follower enforces
+    // the bound itself, so a leader which ignores the flag - an older version
+    // during an upgrade - costs only bandwidth.
     bool log_full = false;
 };
 
@@ -603,6 +590,14 @@ public:
     // that can be aborted and waiting for all the rest to complete
     // any unfinished apply/snapshot operation may return an error after
     // this function is called
+    //
+    // No function of this interface is called after abort() is called,
+    // so implementations don't have to handle that case.
+    //
+    // A call in progress when abort() is called may continue. It's expected
+    // to promptly fail with abort_requested_exception, possibly nested, unless
+    // it cannot be interrupted. Failing with any other error means that the
+    // state machine broke, not that it was aborted.
     virtual future<> abort() = 0;
 };
 
@@ -903,8 +898,8 @@ struct server_status {
     size_t in_memory_log_size = 0;
     // Bytes used by the in-memory part of the log.
     size_t log_memory_usage = 0;
-    // The in-memory log reached max_follower_log_size, so entries from a
-    // leader are being refused.
+    // The in-memory log has no room under max_follower_log_size for the next
+    // entry from a leader, so entries from it are being refused.
     bool log_full = false;
     index_t last_idx;
     term_t last_term;

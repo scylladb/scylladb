@@ -34,6 +34,7 @@ in individual sections
         | schema
         | components_digests
         | large_data_records
+        | scrub_time
 
 `sharding_metadata` (tag 1): describes what token sub-ranges are included in this
 sstable. This is used, when loading the sstable, to determine which shard(s)
@@ -85,6 +86,10 @@ verifying the integrity of individual component files.
 data entries (partitions, rows, cells) found during the sstable write. Unlike `large_data_stats`
 which only stores aggregate statistics, this records the actual keys and sizes so they survive
 tablet/shard migration.
+
+`scrub_time` (tag 14): an `int64_t` with the timestamp of when the sstable was
+last written or validated as milliseconds since the epoch of `db_clock`. Used
+to decide automatic scrub eligibility.
 
 The [scylla sstable dump-scylla-metadata](https://github.com/scylladb/scylladb/blob/master/docs/operating-scylla/admin-tools/scylla-sstable.rst#dump-scylla-metadata) tool
 can be used to dump the scylla metadata in JSON format.

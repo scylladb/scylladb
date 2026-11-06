@@ -157,6 +157,12 @@ public:
         _drop_apply_waiters = true;
         _changed.signal();
     }
+    // The fsm refuses entries until a snapshot shrinks its log (see
+    // fsm::log_is_full()). Nothing new to apply, but the applier fiber has to
+    // take that snapshot.
+    void notify_log_full() {
+        _changed.signal();
+    }
     // Called by trigger_snapshot(), not by io_fiber.
     void request_snapshot() {
         _snapshot_requested = true;
@@ -200,11 +206,6 @@ public:
     }
     bool snapshot_requested() const {
         return _snapshot_requested;
-    }
-    // abort() has been called: the applier fiber must stop at the first
-    // opportunity rather than drain what is left (see apply_entries()).
-    bool stopped() const {
-        return _stopped;
     }
 
     // Hands over what the round applies and clears the snapshot here. Called
@@ -500,6 +501,10 @@ private:
     future<> wait_for_apply(index_t idx, abort_source*);
 
     void check_not_aborted();
+    // The state machine cannot be used after it's aborted.
+    // This getter either returns the state machine, or throws
+    // abort_requested_exception if it has been aborted.
+    state_machine& usable_state_machine();
     void handle_background_error(const char* fiber_name);
 
     // Triggered on the next tick, used to delay retries in add_entry, modify_config, read_barrier.
@@ -1532,8 +1537,13 @@ future<> server_impl::process_fsm_output(index_t& last_stable, fsm_output&& batc
         }
     }
 
-    for (const auto& snp_id: batch.snps_to_drop) {
-        _state_machine->drop_snapshot(snp_id);
+    // The state machine must not be used once the server is aborted.
+    // Dropping snapshots is just cleanup, so it's skipped rather than
+    // stopping the fiber.
+    if (!_aborted) {
+        for (const auto& snp_id: batch.snps_to_drop) {
+            _state_machine->drop_snapshot(snp_id);
+        }
     }
 
     if (batch.log_entries.size()) {
@@ -1668,6 +1678,9 @@ future<> server_impl::process_fsm_output(index_t& last_stable, fsm_output&& batc
     if (_state_change_promise && batch.state_changed) {
         std::exchange(_state_change_promise, std::nullopt)->set_value();
     }
+    if (_fsm->log_is_full()) {
+        _applier_mailbox.notify_log_full();
+    }
 }
 
 future<> server_impl::io_fiber(index_t last_stable) {
@@ -1775,7 +1788,7 @@ future<> server_impl::applier_fiber() {
                 utils::wait_for_message(std::chrono::minutes(5)));
         // Apply snapshot it to the state machine
         logger.trace("[{}] apply_fiber applying snapshot {}", _tag, snp.id);
-        co_await _state_machine->load_snapshot(snp.id);
+        co_await usable_state_machine().load_snapshot(snp.id);
         // Resolve the apply waiters covered by the snapshot only now, after
         // load_snapshot(): a resolved "applied" waiter promises that the
         // local state machine already contains the entry's effect. The marked
@@ -1814,7 +1827,7 @@ future<> server_impl::applier_fiber() {
         snp.term = *_fsm->log_term_for(snp.idx);
         snp.config = _fsm->log_last_conf_for(snp.idx);
         logger.trace("[{}] applier fiber: taking snapshot term={}, idx={}", _tag, snp.term, snp.idx);
-        snp.id = co_await _state_machine->take_snapshot();
+        snp.id = co_await usable_state_machine().take_snapshot();
         // Note that at this point (after the `co_await`), _fsm may already have applied a later snapshot.
         // That's fine, `_fsm->apply_snapshot` will simply ignore our current attempt; we will soon find
         // a later snapshot in the mailbox.
@@ -1825,18 +1838,27 @@ future<> server_impl::applier_fiber() {
         _stats->snapshots_taken++;
     };
 
+    // True if the fsm refuses entries until its log shrinks, and a snapshot of
+    // what has been applied shrinks it. The fsm refuses on the promise that we
+    // take it (see fsm::can_shrink_log()), and the configured thresholds may
+    // not call for it: the log may have filled up with uncommitted entries
+    // after everything committed was applied, or an entry may not fit while
+    // the log is below snapshot_threshold_log_size. If the leader needs this
+    // server for a quorum, nothing else frees the room.
+    auto room_due = [this] {
+        return _fsm->log_is_full() && _applied_idx > _fsm->log_last_snapshot_idx();
+    };
+
     // Applies the committed entries up to apply_upto, in bounded batches,
-    // taking a state machine snapshot when the configured thresholds say so.
+    // taking a state machine snapshot when the configured thresholds say so,
+    // or when the fsm log is full.
     // Returns early, leaving _applied_idx below apply_upto, when a snapshot
     // received from the leader removed the remaining entries from the fsm log.
-    auto apply_entries = [this, &take_snapshot] (index_t apply_upto) -> future<> {
+    auto apply_entries = [this, &take_snapshot, &room_due] (index_t apply_upto) -> future<> {
         while (_applied_idx < apply_upto) {
-            if (_applier_mailbox.stopped()) {
-                // abort() waits for this fiber before it aborts the state
-                // machine, so nothing else will interrupt apply() -- and the
-                // backlog here is unbounded, io_fiber never having been
-                // throttled by the applier. Stop after the batch in hand, as
-                // the bounded queue this replaced did when its pop threw.
+            // The backlog is unbounded, io_fiber never having been throttled
+            // by the applier, and abort() doesn't wait for it to be applied.
+            if (_aborted) {
                 throw stop_apply_fiber{};
             }
             const index_t first_idx = _applied_idx + index_t{1};
@@ -1887,9 +1909,9 @@ future<> server_impl::applier_fiber() {
             const auto size = commands.size();
             if (size) {
                 try {
-                    co_await _state_machine->apply(std::move(commands));
+                    co_await usable_state_machine().apply(std::move(commands));
                 } catch (abort_requested_exception& e) {
-                    logger.info("[{}] applier fiber stopped because state machine was aborted: {}", _tag, e);
+                    logger.debug("[{}] applier fiber stopped because state machine was aborted: {}", _tag, e);
                     throw stop_apply_fiber{};
                 } catch (...) {
                     std::throw_with_nested(raft::state_machine_error{});
@@ -1922,7 +1944,8 @@ future<> server_impl::applier_fiber() {
 
             if (force_snapshot || (_applied_idx > last_snap_idx &&
                 ((_applied_idx - last_snap_idx).value() >= _config.snapshot_threshold ||
-                _fsm->log_memory_usage() >= _config.snapshot_threshold_log_size)))
+                _fsm->log_memory_usage() >= _config.snapshot_threshold_log_size)) ||
+                room_due())
             {
                 const auto max_trailing = force_snapshot ? 0 : _config.snapshot_trailing;
                 const auto max_trailing_bytes = force_snapshot ? 0 : _config.snapshot_trailing_size;
@@ -1937,7 +1960,7 @@ future<> server_impl::applier_fiber() {
     // waits for the snapshot rather than for more entries. The truncation
     // only ever moves up, so a stale read here cannot turn into a missed
     // wakeup; at worst it costs one extra turn through the loop.
-    auto has_work = [this] {
+    auto has_work = [this, &room_due] {
         const auto& mailbox = _applier_mailbox;
         if (mailbox.snapshot_to_load()) {
             return true;
@@ -1945,7 +1968,7 @@ future<> server_impl::applier_fiber() {
         if (_applied_idx < mailbox.stable_commit_idx()) {
             return _fsm->log_last_snapshot_idx() <= _applied_idx;
         }
-        return mailbox.drop_apply_waiters_requested() || mailbox.snapshot_requested();
+        return mailbox.drop_apply_waiters_requested() || mailbox.snapshot_requested() || room_due();
     };
 
     try {
@@ -1991,6 +2014,16 @@ future<> server_impl::applier_fiber() {
 
             if (_applier_mailbox.take_snapshot_request()) {
                 co_await take_snapshot(0, 0);
+            } else if (room_due()) {
+                // apply_entries() takes this snapshot right after a batch, so
+                // we get here when everything committed is applied and the log
+                // became full after that: it filled up with entries which are
+                // not committed yet, or an entry did not fit. The fsm refuses
+                // entries on the promise that we take this snapshot (see
+                // room_due()). If the leader needs this server for a quorum,
+                // nothing gets committed or applied until the fsm has room, so
+                // without this snapshot its log would stay full forever.
+                co_await take_snapshot(_config.snapshot_trailing, _config.snapshot_trailing_size);
             }
         }
     } catch(stop_apply_fiber& ex) {
@@ -2129,11 +2162,27 @@ void server_impl::check_not_aborted() {
     }
 }
 
+state_machine& server_impl::usable_state_machine() {
+    // abort() sets _aborted before it aborts the state machine.
+    if (_aborted) {
+        throw abort_requested_exception{};
+    }
+    return *_state_machine;
+}
+
 void server_impl::handle_background_error(const char* fiber_name) {
     _is_alive = false;
     auto e = std::current_exception();
-    if (_aborted && try_catch<const seastar::gate_closed_exception>(e)) {
-        logger.debug("[{}] {} fiber stopped while aborting raft server: {}", _tag, fiber_name, e);
+    // abort() aborts the state machine while the fibers still run, so a call
+    // in progress may fail because of that, with abort_requested_exception
+    // (see state_machine::abort()). The applier fiber also fails with it if
+    // it reaches the state machine afterwards (see usable_state_machine()).
+    // The services the fibers use may also be stopping already, e.g. on node
+    // shutdown, and fail them with gate_closed_exception (SCYLLADB-2632). Any
+    // other error is reported: it isn't explained by the abort.
+    if (_aborted && (try_catch_nested<seastar::abort_requested_exception>(e)
+            || try_catch_nested<seastar::gate_closed_exception>(e))) {
+        logger.debug("[{}] {} fiber stopped while aborting raft server: {:t}", _tag, fiber_name, e);
         return;
     }
     logger.error("[{}] {} fiber stopped because of the error: {}", _tag, fiber_name, e);
@@ -2176,9 +2225,15 @@ future<> server_impl::abort(sstring reason) {
     _add_entry_admission.broken(stopped_error(*_aborted));
 
     // IO and applier fibers may update waiters and start new snapshot
-    // transfers, so abort them first
+    // transfers, so abort them first. Aborting the state machine here
+    // to interrupt ongoing apply/snapshot operations.
     _applier_mailbox.stop();
 
+    // Only the state machine is aborted before waiting for the fibers. RPC
+    // and persistence are aborted only after that, so the fibers' calls to
+    // them are waited for rather than interrupted. Aborting them early too
+    // needs a closer look at how they and the fibers handle that.
+    auto abort_sm = futurize_invoke(&state_machine::abort, *_state_machine);
     co_await maybe_note_error(
         seastar::when_all_succeed(
             std::move(_io_status),
@@ -2189,7 +2244,6 @@ future<> server_impl::abort(sstring reason) {
     // After calling `_rpc->abort()` no new snapshot applications should be started or new waiters created
     // (see `rpc::abort()` comment and `_aborted` flag).
     auto abort_rpc = futurize_invoke(&rpc::abort, *_rpc);
-    auto abort_sm = futurize_invoke(&state_machine::abort, *_state_machine);
     auto abort_persistence = futurize_invoke(&persistence::abort, *_persistence);
 
     // Abort snapshot applications before waiting for `abort_rpc`,

@@ -646,10 +646,17 @@ async def create_new_test_keyspace(cql: Session, opts, host=None):
     wait_time = cql.cluster.max_schema_agreement_wait
     if wait_time and wait_time > 0:
         try:
-            await asyncio.get_event_loop().run_in_executor(
+            agreed = await asyncio.get_event_loop().run_in_executor(
                 None, lambda: cql.cluster.control_connection.wait_for_schema_agreement(wait_time=wait_time))
         except ConnectionException as e:
             logger.warning("wait_for_schema_agreement failed: %s", e)
+        else:
+            # wait_for_schema_agreement() returns False when it times out.
+            # Continuing anyway would only fail later with a misleading error,
+            # such as "Can't find a keyspace" from a node that did not yet
+            # apply the new keyspace.
+            if agreed is False:
+                raise RuntimeError(f"Schema agreement not reached within {wait_time} seconds after creating keyspace {keyspace}")
     return keyspace
 
 @asynccontextmanager

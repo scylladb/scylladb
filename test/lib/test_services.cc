@@ -42,6 +42,7 @@ class table_for_tests::compaction_group_view : public compaction::compaction_gro
     compaction::compaction_strategy_state _compaction_strategy_state;
     std::string _group_id;
     seastar::condition_variable _staging_condition;
+    bool _enforce_min_threshold = true;
 private:
     replica::table& table() const noexcept {
         return *_data.cf;
@@ -63,8 +64,14 @@ public:
     unsigned min_compaction_threshold() const noexcept override {
         return schema()->min_compaction_threshold();
     }
+    std::optional<std::chrono::seconds> scrub_period() const noexcept override {
+        return table().scrub_period();
+    }
     bool compaction_enforce_min_threshold() const noexcept override {
-        return true;
+        return _enforce_min_threshold;
+    }
+    void set_compaction_enforce_min_threshold(bool enforce_min_threshold) noexcept {
+        _enforce_min_threshold = enforce_min_threshold;
     }
     future<lw_shared_ptr<const sstables::sstable_set>> main_sstable_set() const override {
         co_return co_await table().try_get_compaction_group_view_with_static_sharding().main_sstable_set();
@@ -185,6 +192,10 @@ future<> table_for_tests::stop() noexcept {
 
 void table_for_tests::set_tombstone_gc_enabled(bool tombstone_gc_enabled) noexcept {
     _data->cf->set_tombstone_gc_enabled(tombstone_gc_enabled);
+}
+
+void table_for_tests::set_compaction_enforce_min_threshold(bool enforce_min_threshold) noexcept {
+    _data->table_s->set_compaction_enforce_min_threshold(enforce_min_threshold);
 }
 
 void table_for_tests::set_repair_sstable_classifier(replica::repair_classifier_func repair_sstable_classifier) {
@@ -644,6 +655,22 @@ future<> test_env_compaction_manager::perform_compaction(shared_ptr<compaction::
 
 bool test_env_compaction_manager::is_compaction_state_gate_closed(compaction::compaction_group_view& table_s) {
     return _cm.get_compaction_state(&table_s).gate.is_closed();
+}
+
+future<> test_env_compaction_manager::close_compaction_state_gate(compaction::compaction_group_view& table_s) {
+    return _cm.close_compaction_state_gate(_cm.get_compaction_state(&table_s));
+}
+
+void test_env_compaction_manager::trigger_auto_scrub_timer() {
+    _cm.automatic_scrub_submission_callback()();
+}
+
+future<> test_env_compaction_manager::submit_automatic_scrub(compaction::compaction_group_view& t) {
+    return _cm.submit_automatic_scrub(t);
+}
+
+future<> test_env_compaction_manager::reevaluate_automatic_scrub() {
+    return _cm.do_one_automatic_scrub_reevaluation();
 }
 
 }

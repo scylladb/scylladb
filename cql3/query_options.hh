@@ -21,7 +21,7 @@
 #include "utils/result.hh"
 #include "utils/small_vector.hh"
 #include "service/storage_proxy_fwd.hh"
-#include "locator/tablets.hh"
+#include "locator/tablet_types.hh"
 
 namespace cql3 {
 
@@ -243,6 +243,11 @@ public:
 
     const std::vector<cql3::raw_value_view>& get_values() const noexcept {
         return _value_views;
+    }
+
+    // Which of get_values() are unset.
+    const unset_bind_variable_vector& get_unset() const noexcept {
+        return _unset;
     }
 
     const cql_config& get_cql_config() const {

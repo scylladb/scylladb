@@ -12,6 +12,7 @@
 #include "alternator/executor.hh"
 #include "alternator/executor_util.hh"
 #include "alternator/consumed_capacity.hh"
+#include "alternator/export.hh"
 #include "auth/permission.hh"
 #include "auth/resource.hh"
 #include "cdc/log.hh"
@@ -21,6 +22,7 @@
 #include "cql3/cql3_type.hh"
 #include "db/config.hh"
 #include "db/consistency_level_type.hh"
+#include "db/view/view.hh"
 #include "db/view/view_build_status.hh"
 #include "locator/tablets.hh"
 #include "mutation/tombstone.hh"
@@ -77,6 +79,8 @@
 #include "vector_search/vector_store_client.hh"
 #include "utils/simple_value_with_expiry.hh"
 #include "service/paxos/paxos_state.hh"
+#include "service/storage_service.hh"
+#include "service/raft/raft_group0_client.hh"
 
 using namespace std::chrono_literals;
 
@@ -327,6 +331,7 @@ executor::executor(gms::gossiper& gossiper,
 {
     s_default_timeout_in_ms = std::move(default_timeout_in_ms);
     _describe_table_info_manager = std::make_unique<describe_table_info_manager>(*this);
+    _s3_exports = std::make_unique<s3_exports>(*this);
     register_metrics(_metrics, _stats);
 }
 
@@ -525,7 +530,7 @@ future<> executor::fill_table_size(rjson::value &table_description, schema_ptr s
         // there's no point in trying to estimate value of table that is being deleted, as other nodes more often than not might
         // move forward with deletion faster than we calculate the size
         if (!deleting) {
-            total_size = co_await _ss.estimate_total_sstable_volume(schema->id(), service::storage_service::ignore_errors::yes);
+            total_size = co_await _ss.estimate_total_sstable_volume(schema->id(), service::storage_service::ignore_errors::yes, executor::default_timeout());
             const auto expiry = std::chrono::seconds{ _proxy.data_dictionary().get_config().alternator_describe_table_info_cache_validity_in_seconds() };
             // Note: we don't care when the notification of other shards will finish, as long as it will be done
             // it's possible to get into race condition (next DescribeTable comes to other shard, that new shard doesn't have
@@ -5756,12 +5761,20 @@ static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_vie
 }
 
 future<> executor::start() {
-    // Currently, nothing to do on initialization. We delay the keyspace
-    // creation (create_keyspace()) until a table is actually created.
+    // Run the S3 export garbage collector on every node. Nobody resumes the
+    // exports of a dead node. The collector of a different node (or of the
+    // next incarnation of the same node) marks them FAILED. One collector per
+    // node is sufficient, thus it runs on shard 0 only. stop() stops it.
+    if (this_shard_id() == 0) {
+        (void)_s3_exports->run_garbage_collector();
+    }
+    // We create the keyspace of a table (see create_keyspace_metadata())
+    // when we serve CreateTable for that table, not here.
     return make_ready_future<>();
 }
 
 future<> executor::stop() {
+    co_await _s3_exports->stop();
     co_await _describe_table_info_manager->stop();
     // disconnect from the value source, but keep the value unchanged.
     s_default_timeout_in_ms = utils::updateable_value<uint32_t>{s_default_timeout_in_ms()};

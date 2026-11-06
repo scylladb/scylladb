@@ -30,7 +30,8 @@ enum class cql_protocol_extension {
     RATE_LIMIT_ERROR,
     TABLETS_ROUTING_V1,
     USE_METADATA_ID,
-    TABLETS_ROUTING_V2_EXPERIMENTAL
+    TABLETS_ROUTING_V2_EXPERIMENTAL,
+    FAILURE_REASON_MAP
 };
 
 using cql_protocol_extension_enum = super_enum<cql_protocol_extension,
@@ -38,7 +39,8 @@ using cql_protocol_extension_enum = super_enum<cql_protocol_extension,
     cql_protocol_extension::RATE_LIMIT_ERROR,
     cql_protocol_extension::TABLETS_ROUTING_V1,
     cql_protocol_extension::USE_METADATA_ID,
-    cql_protocol_extension::TABLETS_ROUTING_V2_EXPERIMENTAL>;
+    cql_protocol_extension::TABLETS_ROUTING_V2_EXPERIMENTAL,
+    cql_protocol_extension::FAILURE_REASON_MAP>;
 
 using cql_protocol_extension_enum_set = enum_set<cql_protocol_extension_enum>;
 

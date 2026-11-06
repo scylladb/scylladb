@@ -47,6 +47,8 @@
 #include "cql3/functions/functions.hh"
 #include "cql3/functions/aggregate_fcts.hh"
 #include "cql3/expr/expr-utils.hh"
+#include "service/topology_state_machine.hh"
+#include "locator/tablets.hh"
 
 namespace service {
 

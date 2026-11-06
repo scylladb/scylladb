@@ -20,6 +20,7 @@
 
 #include "schema/schema_registry.hh"
 #include "readers/forwardable.hh"
+#include "replica/memtable.hh"
 
 BOOST_AUTO_TEST_SUITE(multishard_combining_reader_as_mutation_source_test)
 
@@ -62,15 +63,15 @@ static auto make_populate(bool evict_paused_readers, bool single_fragment_buffer
 
         auto remote_memtables = make_lw_shared<std::vector<foreign_ptr<lw_shared_ptr<replica::memtable>>>>();
         for (unsigned shard = 0; shard < sharder.shard_count(); ++shard) {
-            auto remote_mt = smp::submit_to(shard, [shard, gs = global_schema_ptr(s), &mutations_by_shard, sharder] {
-                auto s = gs.get();
+            auto remote_mt = smp::submit_to(shard, [shard, gs = global_schema_ptr(s), &mutations_by_shard, sharder] () -> future<foreign_ptr<lw_shared_ptr<replica::memtable>>> {
+                auto s = co_await gs.get(db::no_timeout);
                 auto mt = make_lw_shared<replica::memtable>(s);
 
                 for (auto& mut : mutations_by_shard[shard]) {
                     mt->apply(mut.unfreeze(s));
                 }
 
-                return make_foreign(mt);
+                co_return make_foreign(mt);
             }).get();
             remote_memtables->emplace_back(std::move(remote_mt));
         }

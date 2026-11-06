@@ -39,6 +39,7 @@
 #include "db/tags/utils.hh"
 #include "db/schema_tables.hh"
 #include "alternator/ttl_tag.hh"
+#include "db/system_keyspace.hh"
 
 namespace cql3 {
 

@@ -33,6 +33,7 @@
 #include "compaction/compaction_manager.hh"
 #include "compaction/compaction_group_view.hh"
 #include "sstables/sstables_manager.hh"
+#include "replica/compaction_group.hh"
 
 struct table_for_tests {
     class compaction_group_view;
@@ -68,6 +69,7 @@ struct table_for_tests {
     future<> stop() noexcept;
 
     void set_tombstone_gc_enabled(bool tombstone_gc_enabled) noexcept;
+    void set_compaction_enforce_min_threshold(bool enforce_min_threshold) noexcept;
     void set_repair_sstable_classifier(replica::repair_classifier_func repair_sstable_classifier);
 };
 

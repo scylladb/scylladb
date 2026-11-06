@@ -1,0 +1,5 @@
+The tests in Cassandra's test/unit/org/apache/cassandra/cql3/functions/masking
+directory, which this directory mirrors, were not translated. They test the
+"dynamic data masking" feature that Cassandra 5 introduced (CASSANDRA-17940),
+which Scylla does not support - see
+https://github.com/scylladb/scylladb/issues/24277.

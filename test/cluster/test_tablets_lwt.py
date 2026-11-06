@@ -496,7 +496,11 @@ async def test_lwt_timeout_while_creating_paxos_state_table(manager: ScyllaClust
                              manager.server_stop_gracefully(servers[2].server_id))
 
         logger.info(f"Running an LWT with timeout {timeout}")
-        with pytest.raises(Exception, match="raft operation \\[read_barrier\\] timed out, there is no raft quorum"):
+        # Which stage of the group0 operation trips the timeout depends on what else the
+        # node has in flight: the read barrier when the operation runs alone, the group0
+        # operation mutex when it has to queue behind one that cannot commit. Both report
+        # the same reason, which is what this test is about.
+        with pytest.raises(Exception, match=r"raft operation \[[^\]]*\] timed out, there is no raft quorum"):
             await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES (1, 1) IF NOT EXISTS")
 
         logger.info("Start the second and third nodes")
@@ -811,9 +815,6 @@ async def test_lwts_for_special_tables(manager: ScyllaClusterManager, storage_co
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-@pytest.mark.skip_storage('s3', 'gs',
-                          reason='a node aborts during shutdown (exit code -6) on object storage, '
-                                 'intermittently on either backend; deeper investigation is needed')
 async def test_lwt_shutdown(manager: ScyllaClusterManager, storage_config: FeatureConfig):
     """
     This is a regression test for #26355:
@@ -892,6 +893,60 @@ async def test_lwt_shutdown(manager: ScyllaClusterManager, storage_config: Featu
         row = rows[0]
         assert row.pk == 1
         assert row.v == 2
+
+
+async def stop_during_held_paxos_write(manager: ScyllaClusterManager, storage_config: FeatureConfig,
+                                       injection: str, coordinator_idx: int):
+    """
+    Start a two-node cluster, hold a paxos write to <table>$paxos on s0 with
+    `injection`, stop s0 gracefully and release the write while drain is held
+    after flushing the user tables. On object storage the write must be
+    rejected, or the close-time flush aborts the node (SCYLLADB-4366).
+    """
+    cfg = storage_config.get_cluster_cfg()
+    servers = await manager.servers_add(2, config=cfg, cmdline=['--logger-log-level', 'paxos=trace'], property_file=[
+        {'dc': 'my_dc', 'rack': 'r1'},
+        {'dc': 'my_dc', 'rack': 'r2'}
+    ])
+    s0 = servers[0]
+    (cql, hosts) = await manager.get_ready_cql(servers)
+    keyspace_opts = storage_config.get_keyspace_opts(
+        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1}")
+    async with new_test_keyspace(manager, keyspace_opts) as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v int)")
+
+        await manager.api.enable_injection(s0.ip_addr, injection, one_shot=False)
+        await cql.run_async(SimpleStatement(f"INSERT INTO {ks}.test (pk, v) VALUES (1, 2) IF NOT EXISTS",
+                                            consistency_level=ConsistencyLevel.ONE),
+                            host=hosts[coordinator_idx])
+        await manager.api.wait_for_injection_enter(s0.ip_addr, injection)
+
+        await manager.api.enable_injection(s0.ip_addr, 'database_drain_after_user_flush', one_shot=False)
+        stop_task = asyncio.create_task(manager.server_stop_gracefully(s0.server_id))
+        await manager.api.wait_for_injection_enter(s0.ip_addr, 'database_drain_after_user_flush')
+        await manager.api.message_injection(s0.ip_addr, injection)
+        await manager.api.message_injection(s0.ip_addr, 'database_drain_after_user_flush')
+        await stop_task
+
+        await manager.server_start(s0.server_id)
+        cql = await reconnect_driver(manager)
+        [h0, _] = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+        rows = await cql.run_async(SimpleStatement(f"SELECT * FROM {ks}.test WHERE pk = 1",
+                                                   consistency_level=ConsistencyLevel.ONE),
+                                   host=h0)
+        assert [(r.pk, r.v) for r in rows] == [(1, 2)]
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_lwt_shutdown_during_coordinator_prune(manager: ScyllaClusterManager, storage_config: FeatureConfig):
+    """The coordinator's background prune writes locally without a write-response handler."""
+    await stop_during_held_paxos_write(manager, storage_config, 'paxos_state_prune_wait', coordinator_idx=0)
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_lwt_shutdown_during_replica_learn(manager: ScyllaClusterManager, storage_config: FeatureConfig):
+    """A PAXOS_LEARN from a remote coordinator keeps running after stop_transport()."""
+    await stop_during_held_paxos_write(manager, storage_config, 'paxos_state_learn_after_mutate', coordinator_idx=1)
 
 
 @pytest.mark.skip_mode(mode='debug', reason='dev is enough')
@@ -1171,3 +1226,62 @@ async def test_column_mapping_migrated_with_tablet(manager: ScyllaClusterManager
         # V2 (from n2->n3 streaming fetch), and V3 (from bootstrap).
         assert len(versions_on_n3) >= 3, \
             f"Expected at least 3 schema versions on n3 (V + V2 + V3), got {len(versions_on_n3)}: {versions_on_n3}"
+
+
+@pytest.mark.parametrize("tablets", [True, False], ids=["tablets", "vnodes"])
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_paxos_state_survives_crash(manager: ScyllaClusterManager, tablets: bool):
+    # A replica must not acknowledge a paxos promise or accept before it is
+    # durable in the commitlog: a replica that forgets them after a crash can
+    # let a competing proposer get a different value chosen. system.paxos
+    # (vnodes) is synced on every write; check that the per-table paxos state
+    # tables used with tablets give the same guarantee.
+    #
+    # The commitlog sync period is made long enough that only a forced sync
+    # can put the paxos state on disk before the server is killed.
+    # Only a superuser may read a paxos state table.
+    config = {
+        'commitlog_sync_period_in_ms': 3600000,
+        'authenticator': 'PasswordAuthenticator',
+        'authorizer': 'CassandraAuthorizer',
+    }
+    manager.auth_provider = PlainTextAuthProvider(username="cassandra", password="cassandra")
+    server = await manager.server_add(config=config, cmdline=['--logger-log-level', 'paxos=trace'])
+    cql, _ = await manager.get_ready_cql([server])
+
+    tablets_opts = "{'initial': 1}" if tablets else "{'enabled': false}"
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} "
+                                          f"AND tablets = {tablets_opts}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+        # Creates the paxos state table in the tablets case.
+        await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES (1, 1) IF NOT EXISTS")
+
+        rows = await cql.run_async(f"SELECT id FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = 'test'")
+        table_id = rows[0].id
+
+        async def get_proposal_ballot():
+            if tablets:
+                rows = await cql.run_async(f'SELECT proposal_ballot FROM {ks}."test$paxos"')
+            else:
+                rows = [r for r in await cql.run_async("SELECT cf_id, proposal_ballot FROM system.paxos") if r.cf_id == table_id]
+            assert len(rows) == 1
+            return rows[0].proposal_ballot
+
+        # Stop the LWT after its proposal is accepted, so that nothing (learn
+        # forces a sync) puts the promise and the proposal on disk but their own
+        # writes.
+        await inject_error_on(manager, 'paxos_error_before_learn', [server])
+        try:
+            await cql.run_async(f"UPDATE {ks}.test SET c = 2 WHERE pk = 1 IF c = 1")
+        except Exception as e:
+            logger.info(f"LWT failed as expected: {e}")
+        accepted_ballot = await get_proposal_ballot()
+        assert accepted_ballot is not None
+
+        logger.info("Kill and restart the server")
+        await manager.server_stop(server.server_id, convict=False)
+        await manager.server_start(server.server_id)
+        cql = await reconnect_driver(manager)
+        await wait_for_cql_and_get_hosts(cql, [server], time.time() + 60)
+
+        assert await get_proposal_ballot() == accepted_ballot

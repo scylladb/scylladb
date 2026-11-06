@@ -19,6 +19,7 @@
 #include "db/consistency_level_type.hh"
 #include "locator/tablets.hh"
 #include "service/topology_guard.hh"
+#include "utils/assert.hh"
 
 using namespace seastar;
 
@@ -72,12 +73,12 @@ struct stream_progress {
         return *this;
     }
     void start(float amount) {
-        assert(amount >= 0);
+        SCYLLA_ASSERT(amount >= 0);
         total = amount;
     }
     virtual void advance(float amount) {
         // we should not move backward
-        assert(amount >= 0);
+        SCYLLA_ASSERT(amount >= 0);
         completed += amount;
         // Clamp to total to absorb floating point rounding errors from
         // fractional progress contributions (e.g. per-tablet progress
@@ -222,4 +223,4 @@ struct manifest_summary {
 };
 
 // Manifests coming from a datacenter other than the expected one are rejected.
-future<manifest_summary> populate_snapshot_sstables_from_manifests(sstables::storage_manager& sm, db::system_distributed_keyspace& sys_dist_ks, sstring keyspace, sstring table, sstring endpoint, sstring bucket, sstring prefix, sstring expected_snapshot_name, sstring expected_datacenter, utils::chunked_vector<sstring> manifest_prefixes, db::consistency_level cl = db::consistency_level::EACH_QUORUM);
+future<manifest_summary> populate_snapshot_sstables_from_manifests(sstables::storage_manager& sm, db::system_distributed_keyspace& sys_dist_ks, sstring keyspace, sstring table, sstring endpoint, sstring bucket, sstring prefix, sstring expected_snapshot_name, sstring expected_datacenter, utils::chunked_vector<sstring> manifest_prefixes, db::consistency_level cl = db::consistency_level::QUORUM);

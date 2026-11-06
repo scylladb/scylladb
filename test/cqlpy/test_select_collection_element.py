@@ -152,6 +152,42 @@ def test_set_subscript(cql, table2):
     assert list(cql.execute(f"SELECT s[11] FROM {table2} WHERE p={p}")) == [(None,)]
     assert list(cql.execute(f"SELECT s[20] FROM {table2} WHERE p={p}")) == [(20,)]
 
+# A frozen map or set can be a clustering column, and a clustering column can
+# have descending order (CLUSTERING ORDER BY (c DESC)). Selecting an element
+# of such a column should work just like it does for ascending order.
+# Reproduces SCYLLADB-5210 (Scylla crashed).
+def test_frozen_map_subscript_reversed(cql, test_keyspace):
+    schema = 'p int, c frozen<map<int, int>>, PRIMARY KEY (p, c)'
+    with new_test_table(cql, test_keyspace, schema, 'WITH CLUSTERING ORDER BY (c DESC)') as table:
+        p = unique_key_int()
+        cql.execute(f"INSERT INTO {table}(p,c) VALUES ({p}, " + "{1:10,2:20})")
+        assert list(cql.execute(f"SELECT c[1] FROM {table} WHERE p={p}")) == [(10,)]
+        assert list(cql.execute(f"SELECT c[2] FROM {table} WHERE p={p}")) == [(20,)]
+        assert list(cql.execute(f"SELECT c[3] FROM {table} WHERE p={p}")) == [(None,)]
+
+def test_frozen_set_subscript_reversed(cql, test_keyspace):
+    schema = 'p int, c frozen<set<int>>, PRIMARY KEY (p, c)'
+    with new_test_table(cql, test_keyspace, schema, 'WITH CLUSTERING ORDER BY (c DESC)') as table:
+        p = unique_key_int()
+        cql.execute(f"INSERT INTO {table}(p,c) VALUES ({p}, " + "{10,20})")
+        assert list(cql.execute(f"SELECT c[10] FROM {table} WHERE p={p}")) == [(10,)]
+        assert list(cql.execute(f"SELECT c[11] FROM {table} WHERE p={p}")) == [(None,)]
+
+# Filtering with CONTAINS KEY on a frozen map clustering column with
+# descending order. Reproduces SCYLLADB-5210 (Scylla crashed).
+# This test is marked cassandra_bug because Cassandra rejects this query with
+# "Cannot use CONTAINS KEY on non-map column c" - its check doesn't notice
+# that a column with descending order is still a map (CASSANDRA-21742).
+def test_frozen_map_contains_key_reversed(cql, test_keyspace, cassandra_bug):
+    schema = 'p int, c frozen<map<int, int>>, PRIMARY KEY (p, c)'
+    with new_test_table(cql, test_keyspace, schema, 'WITH CLUSTERING ORDER BY (c DESC)') as table:
+        p = unique_key_int()
+        cql.execute(f"INSERT INTO {table}(p,c) VALUES ({p}, " + "{1:10,2:20})")
+        cql.execute(f"INSERT INTO {table}(p,c) VALUES ({p}, " + "{3:30})")
+        assert list(cql.execute(f"SELECT c FROM {table} WHERE p={p} AND c CONTAINS KEY 1 ALLOW FILTERING")) == [({1:10,2:20},)]
+        assert list(cql.execute(f"SELECT c FROM {table} WHERE p={p} AND c CONTAINS KEY 3 ALLOW FILTERING")) == [({3:30},)]
+        assert list(cql.execute(f"SELECT c FROM {table} WHERE p={p} AND c CONTAINS KEY 4 ALLOW FILTERING")) == []
+
 # scylla only because cassandra doesn't support lua language
 @pytest.mark.xfail(reason="#22075")
 def test_subscript_function_arg(scylla_only, cql, test_keyspace, table1):
@@ -283,6 +319,9 @@ def test_ttl_map_element_null_subscript(cql, table1, cassandra_bug):
 # of an entire unfrozen map, but returns an array of timestamps, where you
 # can't even tell which timestamp belongs to which element. So we'll mark
 # this test cassandra_bug - see CASSANDRA-21240.
+# SCYLLADB-5166 documents this deliberate difference from Cassandra.
+# Cassandra's own tests for this feature are translated (and marked xfail)
+# in cassandra_tests/validation/entities/writetime_or_ttl_test.py.
 def test_writetime_ttl_whole_collection_forbidden(cql, table1, cassandra_bug):
     p = unique_key_int()
     timestamp = int(time.time() * 1000000) - 1234 # a reasonable timestamp
@@ -369,7 +408,9 @@ def test_writetime_ttl_list_element_forbidden(cql, test_keyspace):
 # Because of this difference from Cassandra, we mark this test as xfail.
 # In the future we can consider if Cassandra's support for member timestamps
 # in frozen maps is a mistake, and replace the xfail by cassandra_bug.
-@pytest.mark.xfail(reason="Cassandra allows WRITETIME on members of frozen maps, but Scylla does not")
+# Reproduces SCYLLADB-5167 (WRITETIME and TTL of an element of a frozen
+# collection).
+@pytest.mark.xfail(reason="SCYLLADB-5167")
 def test_writetime_frozen_map_elements(cql, test_keyspace):
     schema = f'p int PRIMARY KEY, x frozen<map<int, int>>'
     with new_test_table(cql, test_keyspace, schema) as table:

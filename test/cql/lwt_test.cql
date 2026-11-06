@@ -642,7 +642,8 @@ select s from lwt where a= 1;
 drop table lwt;
 -- collections of collections
 -- non-frozen nested sets are not supported
-create table lwt (a int, b set<map<int,int>>, c list<set<int>>, primary key (a));
+create table lwt (a int, b set<map<int,int>>, primary key (a));
+create table lwt (a int, c list<set<int>>, primary key (a));
 -- frozen collection elements are however ok
 create table lwt (a int, b set<frozen<list<int>>>, c list<frozen<set<int>>>, primary key (a));
 insert into lwt (a, b, c) values (1, {[1,2], [1,2]}, [{1,2}, {1,2}]);

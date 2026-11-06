@@ -19,12 +19,14 @@
 #include <seastar/core/loop.hh>
 #include <seastar/core/on_internal_error.hh>
 #include "system_keyspace.hh"
+#include "gms/gossiper.hh"
 #include "cql3/untyped_result_set.hh"
 #include "cql3/query_processor.hh"
 #include "locator/host_id.hh"
 #include "locator/tablets.hh"
 #include "partition_slice_builder.hh"
 #include "db/config.hh"
+#include "locator/abstract_replication_strategy.hh"
 #include "gms/feature_service.hh"
 #include "system_keyspace_view_types.hh"
 #include "schema/schema_builder.hh"
@@ -57,6 +59,7 @@
 #include "message/shared_dict.hh"
 #include "replica/database.hh"
 #include "db/compaction_history_entry.hh"
+#include "db/commitlog/commitlog.hh"
 #include "mutation/async_utils.hh"
 #include "utils/chunked_string.hh"
 
@@ -85,6 +88,13 @@ namespace {
             // which are durable at once; the ordering needs this write to be
             // durable when it returns.
             system_keyspace::SSTABLES_REGISTRY,
+            // Strongly consistent groups write their votes and their initial
+            // descriptor here by CQL. Vote and descriptor must be durable before the
+            // write that depends on them is acknowledged. A lost vote lets a node vote
+            // twice in one term; a lost bootstrap row leaves raft batches on disk with
+            // no row to replay them against. The internal query processor has no
+            // per-statement force-sync, so the table asks for it (SCYLLADB-3828).
+            system_keyspace::RAFT_GROUPS,
         };
         if (builder.ks_name() == system_keyspace::NAME && tables.contains(builder.cf_name())) {
             builder.set_wait_for_sync_to_commitlog(true);
@@ -335,6 +345,8 @@ schema_ptr system_keyspace::topology_requests() {
             .with_column("snapshot_expiry", timestamp_type)
             .with_column("snapshot_skip_flush", boolean_type)
             .with_column("finalize_migration_ks_name", utf8_type)
+            .with_column("prepare_migration_ks_name", utf8_type)
+            .with_column("prepare_migration_tables", map_type_impl::get_instance(uuid_type, long_type, false))
             .with_column("restore_table_id", uuid_type)
             .with_column("restore_snapshot_name", utf8_type)
             .set_comment("Topology request tracking")
@@ -414,7 +426,7 @@ schema_ptr system_keyspace::cdc_streams_history() {
 }
 
 schema_ptr system_keyspace::raft() {
-    static thread_local auto schema = replica::make_raft_schema(db::system_keyspace::RAFT, true);
+    static thread_local auto schema = replica::make_group0_raft_schema(db::system_keyspace::RAFT);
     return schema;
 }
 
@@ -437,17 +449,7 @@ schema_ptr system_keyspace::raft_snapshot_config() {
 // The raft_groups_partitioner creates tokens that map to the specified shard.
 
 schema_ptr system_keyspace::raft_groups() {
-    static thread_local auto schema = replica::make_raft_schema(db::system_keyspace::RAFT_GROUPS, false);
-    return schema;
-}
-
-schema_ptr system_keyspace::raft_groups_snapshots() {
-    static thread_local auto schema = replica::make_raft_snapshots_schema(db::system_keyspace::RAFT_GROUPS_SNAPSHOTS, false);
-    return schema;
-}
-
-schema_ptr system_keyspace::raft_groups_snapshot_config() {
-    static thread_local auto schema = replica::make_raft_snapshot_config_schema(db::system_keyspace::RAFT_GROUPS_SNAPSHOT_CONFIG, false);
+    static thread_local auto schema = replica::make_tablet_raft_groups_schema(db::system_keyspace::RAFT_GROUPS);
     return schema;
 }
 
@@ -977,6 +979,7 @@ schema_ptr system_keyspace::commitlog_cleanups() {
         // comment
         "information about cleanups, for filtering commitlog replay"
        );
+        builder.set_gc_grace_seconds(0);
         builder.with_hash_version();
         return builder.build(schema_builder::compact_storage::no);
     }();
@@ -1577,30 +1580,69 @@ future<> system_keyspace::drop_all_commitlog_cleanup_records() {
     //
     // But we don't know that here, so we have to SELECT the set of partition keys,
     // and issue DELETEs on that.
-    sstring req = format("SELECT shard from system.{}", COMMITLOG_CLEANUPS);
+    // Use DISTINCT: each partition can hold a large number of records (clustering rows),
+    // and we want one DELETE per partition, not one per record.
+    sstring req = format("SELECT DISTINCT shard from {}.{}", NAME, COMMITLOG_CLEANUPS);
     auto rs = co_await execute_cql(req);
 
     co_await coroutine::parallel_for_each(*rs, [&] (const cql3::untyped_result_set_row& row) -> future<> {
         auto shard = row.get_as<int32_t>("shard");
-        static const sstring delete_req = format("DELETE FROM system.{} WHERE shard = ?", COMMITLOG_CLEANUPS);
+        static const sstring delete_req = format("DELETE FROM {}.{} WHERE shard = ?", NAME, COMMITLOG_CLEANUPS);
         co_await execute_cql(delete_req, shard);
     });
 }
 
-future<> system_keyspace::drop_old_commitlog_cleanup_records(replay_position min_position) {
-    auto pos = make_tuple_value(replay_position_type, tuple_type_impl::native_type({
-        int64_t(min_position.base_id()),
-        int32_t(min_position.pos)
-    }));
-    sstring req = format("DELETE FROM system.{} WHERE shard = ? AND position < ?", COMMITLOG_CLEANUPS);
-    co_await _qp.execute_internal(req, {int32_t(min_position.shard_id()), pos}, cql3::query_processor::cache_internal::yes);
-}
-
 future<> system_keyspace::save_commitlog_cleanup_record(table_id table, dht::token_range tr, db::replay_position rp) {
+    // An invalid replay position (e.g. the highest flushed replay position of a table
+    // which wasn't flushed yet on this shard) precedes all commitlog entries, so such
+    // a record would filter nothing on replay.
+    if (!rp.valid()) {
+        co_return;
+    }
+    auto s = commitlog_cleanups();
     auto [start_token_exclusive, end_token_inclusive] = canonical_token_range(tr);
-    auto pos = make_tuple_value(replay_position_type, tuple_type_impl::native_type({int64_t(rp.base_id()), int32_t(rp.pos)}));
-    sstring req = format("INSERT INTO system.{} (shard, position, table_uuid, start_token_exclusive, end_token_inclusive) VALUES(?,?,?,?,?)", COMMITLOG_CLEANUPS);
-    co_await _qp.execute_internal(req, {int32_t(rp.shard_id()), pos, table.uuid(), start_token_exclusive, end_token_inclusive}, cql3::query_processor::cache_internal::yes);
+    auto serialize_position = [] (db::replay_position rp) {
+        return make_tuple_value(replay_position_type, tuple_type_impl::native_type({int64_t(rp.base_id()), int32_t(rp.pos)})).serialize_nonnull();
+    };
+    const auto ts = api::new_timestamp();
+
+    // INSERT INTO system.commitlog_cleanups (shard, position, table_uuid, start_token_exclusive, end_token_inclusive) VALUES (...)
+    mutation m(s, partition_key::from_singular(*s, int32_t(rp.shard_id())));
+    auto ck = clustering_key::from_exploded(*s, {
+        serialize_position(rp),
+        data_value(table.uuid()).serialize_nonnull(),
+        data_value(start_token_exclusive).serialize_nonnull(),
+        data_value(end_token_inclusive).serialize_nonnull(),
+    });
+    m.partition().clustered_row(*s, ck).apply(row_marker(ts));
+
+    // Drop the records made obsolete by the commitlog: those below its minimum position,
+    // which apply only to commitlog segments which are already deleted.
+    // DELETE FROM system.commitlog_cleanups WHERE shard = ? AND position < min_position
+    //
+    // The range tombstone is added to the mutation of the record, so the save is a single
+    // write, instead of a write for the record and another one for the pruning. The table
+    // uses the (synced) schema commitlog, and all its partitions live on shard 0, so each
+    // write is a synced, cross-shard one. A failure to apply the mutation fails the save.
+    //
+    // If the record is below the minimum position, it is obsolete already: the range
+    // tombstone covers it, and having the same timestamp, the tombstone wins, so the
+    // record is effectively not written.
+    //
+    // The record and the pruned records are in the same partition: the records saved on
+    // a shard have the replay positions of the commitlog of that shard. Only tests save
+    // records with replay positions of other shards, for these the pruning is skipped.
+    if (const auto* cl = _db.commitlog()) {
+        const auto min_position = cl->min_position();
+        if (min_position.shard_id() == rp.shard_id()) {
+            auto range = query::clustering_range::make_ending_with({
+                    clustering_key_prefix::from_single_value(*s, serialize_position(min_position)), false});
+            auto bv = bound_view::from_range(range);
+            m.partition().apply_delete(*s, range_tombstone{bv.first, bv.second, tombstone{ts, gc_clock::now()}});
+        }
+    }
+
+    co_await apply_mutation(std::move(m));
 }
 
 std::pair<int64_t, int64_t> system_keyspace::canonical_token_range(dht::token_range tr) {
@@ -1668,9 +1710,8 @@ std::optional<db::replay_position> system_keyspace::commitlog_cleanup_local_map:
 
 future<system_keyspace::commitlog_cleanup_map> system_keyspace::get_commitlog_cleanup_records() {
     commitlog_cleanup_map ret;
-    const auto req = format("SELECT * from system.{}", COMMITLOG_CLEANUPS);
-    auto result_set = co_await execute_cql(req);
-    for (const auto& row: *result_set) {
+    const auto req = format("SELECT * from {}.{}", NAME, COMMITLOG_CLEANUPS);
+    co_await _qp.query_internal(req, [&ret] (const cql3::untyped_result_set_row& row) -> future<stop_iteration> {
         auto table = table_id(row.get_as<utils::UUID>("table_uuid"));
         auto shard = row.get_as<int32_t>("shard");
         auto start_token_exclusive = row.get_as<int64_t>("start_token_exclusive");
@@ -1683,7 +1724,8 @@ future<system_keyspace::commitlog_cleanup_map> system_keyspace::get_commitlog_cl
         );
         auto& inner_map = ret.try_emplace(std::make_pair(table, shard)).first->second;
         inner_map._pimpl->_map += std::make_pair(boost::icl::left_open_interval<int64_t>(start_token_exclusive, end_token_inclusive), rp);
-    }
+        return make_ready_future<stop_iteration>(stop_iteration::no);
+    });
     co_return ret;
 }
 
@@ -2295,7 +2337,7 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
     r.insert(r.end(), {sstables_registry()});
 
     if (cfg.check_experimental(db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES)) {
-        r.insert(r.end(), {raft_groups(), raft_groups_snapshots(), raft_groups_snapshot_config()});
+        r.insert(r.end(), {raft_groups()});
     }
 
     return r;
@@ -2307,9 +2349,7 @@ static bool maybe_write_in_user_memory(schema_ptr s, replica::database& db) {
             || (s.get() == system_keyspace::batchlog_v2().get())
             || (s.get() == system_keyspace::paxos().get())
             || s == system_keyspace::scylla_views_builds_in_progress()
-            || (strongly_consistent && s == system_keyspace::raft_groups())
-            || (strongly_consistent && s == system_keyspace::raft_groups_snapshots())
-            || (strongly_consistent && s == system_keyspace::raft_groups_snapshot_config());
+            || (strongly_consistent && s == system_keyspace::raft_groups());
 }
 
 future<> system_keyspace::make(
@@ -3649,6 +3689,16 @@ system_keyspace::topology_requests_entry system_keyspace::topology_request_row_t
     }
     if (row.has("finalize_migration_ks_name")) {
         entry.finalize_migration_ks_name = row.get_as<sstring>("finalize_migration_ks_name");
+    }
+    if (row.has("prepare_migration_ks_name")) {
+        entry.prepare_migration_ks_name = row.get_as<sstring>("prepare_migration_ks_name");
+    }
+    if (row.has("prepare_migration_tables")) {
+        std::unordered_map<table_id, int64_t> tables;
+        for (const auto& [id, target] : row.get_map<utils::UUID, int64_t>("prepare_migration_tables")) {
+            tables.emplace(table_id(id), target);
+        }
+        entry.prepare_migration_tables = std::move(tables);
     }
     if (row.has("restore_table_id")) {
         entry.restore_table_id = table_id(row.get_as<utils::UUID>("restore_table_id"));

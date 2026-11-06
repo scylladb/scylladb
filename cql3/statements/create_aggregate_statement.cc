@@ -10,6 +10,7 @@
 #include "cql3/statements/create_aggregate_statement.hh"
 #include "cql3/functions/functions.hh"
 #include "cql3/functions/user_aggregate.hh"
+#include "cql3/functions/user_function.hh"
 #include "cql3/expr/evaluate.hh"
 #include "cql3/expr/expr-utils.hh"
 #include "prepared_statement.hh"
@@ -74,11 +75,22 @@ seastar::future<shared_ptr<db::functions::function>> create_aggregate_statement:
         auto initcond_term = expr::evaluate(initcond_expr, query_options::DEFAULT);
         initcond = std::move(initcond_term).to_managed_bytes_opt();
     }
+    // Without an initial condition the state starts as null, so a state
+    // function which isn't called on null input would never be called, and
+    // the aggregate would always return null.
+    if (!initcond) {
+        auto user_state_func = dynamic_pointer_cast<functions::user_function>(state_func);
+        if (user_state_func && !user_state_func->called_on_null_input()) {
+            throw exceptions::invalid_request_exception(format("Cannot create aggregate '{}' without INITCOND because state function {} does not accept 'null' arguments",
+                    _name.name, state_func->name()));
+        }
+    }
 
     co_return ::make_shared<functions::user_aggregate>(_name, initcond, std::move(state_func), std::move(reduce_func), std::move(final_func));
 }
 
 std::unique_ptr<prepared_statement> create_aggregate_statement::prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) {
+    validate_name("Aggregate");
     return std::make_unique<prepared_statement>(audit_info(), make_shared<create_aggregate_statement>(*this));
 }
 

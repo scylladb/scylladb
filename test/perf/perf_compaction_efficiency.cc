@@ -34,6 +34,7 @@
 #include "schema/schema_registry.hh"
 #include "utils/estimated_histogram.hh"
 #include "backlog_controller.hh"
+#include "types/map.hh"
 
 namespace {
 
@@ -395,9 +396,9 @@ using sstable_set_t = std::unordered_map<sstables::generation_type, uint64_t>;
 // bytes (and write amplification) by however busy compaction was at the time.
 sstable_set_t get_sstable_set(sharded<replica::database>& db, const schema_ptr& s,
                               std::optional<sstring> origin = std::nullopt) {
-    return db.map_reduce0([gs = global_schema_ptr(s), origin] (replica::database& db) {
+    return db.map_reduce0([id = s->id(), origin] (replica::database& db) {
         sstable_set_t local;
-        auto& cf = db.find_column_family(gs);
+        auto& cf = db.find_column_family(id);
         auto sstables = cf.get_sstables();
         for (auto& sst : *sstables) {
             if (origin && sst->get_origin() != *origin) {
@@ -439,14 +440,14 @@ uint64_t removed_sstable_bytes(const sstable_set_t& previous, const sstable_set_
 }
 
 uint64_t get_total_bytes_on_disk(sharded<replica::database>& db, const schema_ptr& s) {
-    return db.map_reduce0([gs = global_schema_ptr(s)] (replica::database& db) -> uint64_t {
-        return db.find_column_family(gs).get_stats().sstables_total_disk_space_used.on_disk;
+    return db.map_reduce0([id = s->id()] (replica::database& db) -> uint64_t {
+        return db.find_column_family(id).get_stats().sstables_total_disk_space_used.on_disk;
     }, uint64_t(0), std::plus<uint64_t>()).get();
 }
 
 uint64_t get_sstable_count(sharded<replica::database>& db, const schema_ptr& s) {
-    return db.map_reduce0([gs = global_schema_ptr(s)] (replica::database& db) -> uint64_t {
-        return db.find_column_family(gs).get_stats().live_sstable_count;
+    return db.map_reduce0([id = s->id()] (replica::database& db) -> uint64_t {
+        return db.find_column_family(id).get_stats().live_sstable_count;
     }, uint64_t(0), std::plus<uint64_t>()).get();
 }
 
@@ -457,9 +458,9 @@ uint64_t probe_bloom_filters(sharded<replica::database>& db, const schema_ptr& s
     auto& local_cf = db.local().find_column_family(s);
     auto shard = local_cf.shard_for_reads(token);
 
-    return db.invoke_on(shard, [gs = global_schema_ptr(s), pkey = std::move(pkey)] (replica::database& db) {
-        auto& cf = db.find_column_family(gs);
-        auto schema = gs.get();
+    return db.invoke_on(shard, [id = s->id(), pkey = std::move(pkey)] (replica::database& db) {
+        auto& cf = db.find_column_family(id);
+        auto schema = cf.schema();
         uint64_t hits = 0;
         auto sstables = cf.get_sstables();
         for (auto& sst : *sstables) {
@@ -473,8 +474,8 @@ uint64_t probe_bloom_filters(sharded<replica::database>& db, const schema_ptr& s
 
 // Print per-shard SSTable state for the given table.
 void log_sstable_state(sharded<replica::database>& db, const schema_ptr& s, sstring label) {
-    db.invoke_on_all([gs = global_schema_ptr(s), label = std::move(label)] (replica::database& db) {
-        auto& cf = db.find_column_family(gs);
+    db.invoke_on_all([id = s->id(), label = std::move(label)] (replica::database& db) {
+        auto& cf = db.find_column_family(id);
         auto sstables = cf.get_sstables();
         if (sstables->empty()) {
             return;
@@ -493,8 +494,8 @@ void log_sstable_state(sharded<replica::database>& db, const schema_ptr& s, sstr
 
 // Wait for any ongoing compactions of the given table on all shards.
 void await_table_compactions(sharded<replica::database>& db, const schema_ptr& s) {
-    db.invoke_on_all([gs = global_schema_ptr(s)] (replica::database& db) {
-        auto& cf = db.find_column_family(gs);
+    db.invoke_on_all([id = s->id()] (replica::database& db) {
+        auto& cf = db.find_column_family(id);
         auto& cm = db.get_compaction_manager();
         return cf.parallel_foreach_compaction_group_view([&cm] (compaction::compaction_group_view& v) {
             return cm.await_ongoing_compactions(&v);
@@ -729,8 +730,8 @@ void do_compaction_efficiency_test(cql_test_env& env, test_config& cfg) {
     auto total_bytes_on_disk = get_total_bytes_on_disk(env.db(), s);
 
     // Major compaction to measure fully compacted size
-    env.db().invoke_on_all([gs = global_schema_ptr(s)] (replica::database& db) {
-        auto& cf = db.find_column_family(gs);
+    env.db().invoke_on_all([id = s->id()] (replica::database& db) {
+        auto& cf = db.find_column_family(id);
         auto& cm = db.get_compaction_manager();
         return cf.parallel_foreach_compaction_group_view([&cm] (compaction::compaction_group_view& v) {
             return cm.perform_major_compaction(v, tasks::make_empty_task_info());
@@ -1215,8 +1216,8 @@ void do_concurrent_compaction_test(cql_test_env& env, test_config& cfg) {
     auto total_bytes_on_disk = get_total_bytes_on_disk(env.db(), s);
 
     // Major compaction so we can report space amplification.
-    env.db().invoke_on_all([gs = global_schema_ptr(s)] (replica::database& db) {
-        auto& cf = db.find_column_family(gs);
+    env.db().invoke_on_all([id = s->id()] (replica::database& db) {
+        auto& cf = db.find_column_family(id);
         auto& cm = db.get_compaction_manager();
         return cf.parallel_foreach_compaction_group_view([&cm] (compaction::compaction_group_view& v) {
             return cm.perform_major_compaction(v, tasks::make_empty_task_info());

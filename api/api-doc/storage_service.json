@@ -3178,6 +3178,14 @@
                      "allowMultiple":false,
                      "type":"boolean",
                      "paramType":"query"
+                  },
+                  {
+                     "name":"grace_period_in_seconds",
+                     "description":"When disabling balancing, how long in-flight tablet transitions are given before those which can still be cancelled, tablet repairs included, are cancelled. A cancelled repair drops its tablets from the repair request without reporting them as failed. Cancelling a transition which was adding a replica leaves that tablet below its replication factor until balancing is enabled again. Transitions which cannot be cancelled, or which drain a node, are waited for. 0 cancels nothing. Defaults to the tablet_transition_abort_grace_period_in_seconds configuration option.",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"long",
+                     "paramType":"query"
                   }
                ]
             }
@@ -3783,7 +3791,7 @@
                "description":"The snapshot key"
             },
             "value":{
-               "type":"array",
+               "type":"chunked_array",
                "items":{
                   "type":"snapshot"
                },

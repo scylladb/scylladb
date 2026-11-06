@@ -19,7 +19,6 @@
 #include "utils/managed_bytes.hh"
 #include "utils/fragment_range.hh"
 #include "schema/schema_fwd.hh"
-#include "system_keyspace.hh"
 #include "sstables/shared_sstable.hh"
 #include "sstables/types.hh"
 #include "utils/assert.hh"
@@ -35,6 +34,10 @@ class key;
 
 class partition_key_view;
 class mutation_partition;
+
+namespace cql3 {
+class untyped_result_set_row;
+}
 
 namespace db {
 

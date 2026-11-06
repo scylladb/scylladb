@@ -55,9 +55,11 @@
 #include "service/migration_manager.hh"
 #include "service/strong_consistency/coordinator.hh"
 #include "service/strong_consistency/groups_manager.hh"
+#include "gms/gossiper.hh"
 
 #include <boost/regex.hpp>
 #include <atomic>
+#include "utils/assert.hh"
 
 BOOST_AUTO_TEST_SUITE(tablets_test)
 
@@ -836,6 +838,77 @@ SEASTAR_TEST_CASE(test_paused_rf_change_requests_persistence) {
     }, tablet_cql_test_config());
 }
 
+// A set column is overwritten by emitting a tombstone at timestamp-1 and the surviving
+// elements at timestamp, so several overwrites of one column at the same write timestamp
+// merge as the union of their elements rather than the later one winning. A caller that
+// drops ids one mutation at a time therefore loses every removal. Both sets the topology
+// coordinator maintains this way have to be updated with a single overwrite per pass.
+SEASTAR_TEST_CASE(test_set_removals_in_one_batch_need_a_single_overwrite) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        topology_builder topo(e);
+        auto& sys_ks = e.get_system_keyspace().local();
+
+        // ongoing_restore_requests, as generate_migration_updates() maintains it.
+        const auto id1 = utils::UUID_gen::get_time_UUID();
+        const auto id2 = utils::UUID_gen::get_time_UUID();
+        topo.modify_group0([&] (service::group0_guard& guard, utils::chunked_vector<canonical_mutation>& muts) {
+            muts.emplace_back(service::topology_mutation_builder(guard.write_timestamp())
+                    .start_restore_request(id1).build());
+            muts.emplace_back(service::topology_mutation_builder(guard.write_timestamp())
+                    .start_restore_request(id2).build());
+        });
+        auto topology = sys_ks.load_topology_state({}).get();
+        BOOST_REQUIRE_EQUAL(topology.ongoing_restore_requests.size(), 2u);
+
+        // One overwrite per removal, which is what the coordinator used to emit: the two
+        // merge as their union and neither removal sticks. Asserted rather than left as a
+        // comment, because it is the whole reason the plural builder has to be used.
+        const auto ongoing = topology.ongoing_restore_requests;
+        topo.modify_group0([&] (service::group0_guard& guard, utils::chunked_vector<canonical_mutation>& muts) {
+            muts.emplace_back(service::topology_mutation_builder(guard.write_timestamp())
+                    .finish_restore_requests(ongoing, {id1}).build());
+            muts.emplace_back(service::topology_mutation_builder(guard.write_timestamp())
+                    .finish_restore_requests(ongoing, {id2}).build());
+        });
+        topology = sys_ks.load_topology_state({}).get();
+        BOOST_REQUIRE_EQUAL(topology.ongoing_restore_requests.size(), 2u);
+
+        // One overwrite carrying both removals empties the set.
+        topo.modify_group0([&] (service::group0_guard& guard, utils::chunked_vector<canonical_mutation>& muts) {
+            muts.emplace_back(service::topology_mutation_builder(guard.write_timestamp())
+                    .finish_restore_requests(ongoing, {id1, id2}).build());
+        });
+        topology = sys_ks.load_topology_state({}).get();
+        BOOST_REQUIRE(topology.ongoing_restore_requests.empty());
+
+        // paused_rf_change_requests, as the rack_list colocation path maintains it: one plan
+        // can carry both a request to resume and a request to fail.
+        const auto p1 = utils::UUID_gen::get_time_UUID();
+        const auto p2 = utils::UUID_gen::get_time_UUID();
+        topo.pause_rf_change_request(p1);
+        topo.pause_rf_change_request(p2);
+        topology = sys_ks.load_topology_state({}).get();
+        BOOST_REQUIRE_EQUAL(topology.paused_rf_change_requests.size(), 2u);
+
+        const auto paused = topology.paused_rf_change_requests;
+        topo.modify_group0([&] (service::group0_guard& guard, utils::chunked_vector<canonical_mutation>& muts) {
+            muts.emplace_back(service::topology_mutation_builder(guard.write_timestamp())
+                    .resume_rf_change_requests(paused, {p1}).build());
+            muts.emplace_back(service::topology_mutation_builder(guard.write_timestamp())
+                    .resume_rf_change_requests(paused, {p2}).build());
+        });
+        topology = sys_ks.load_topology_state({}).get();
+        BOOST_REQUIRE_EQUAL(topology.paused_rf_change_requests.size(), 2u);
+
+        topo.modify_group0([&] (service::group0_guard& guard, utils::chunked_vector<canonical_mutation>& muts) {
+            muts.emplace_back(service::topology_mutation_builder(guard.write_timestamp())
+                    .resume_rf_change_requests(paused, {p1, p2}).build());
+        });
+        topology = sys_ks.load_topology_state({}).get();
+        BOOST_REQUIRE(topology.paused_rf_change_requests.empty());
+    }, tablet_cql_test_config());
+}
+
 SEASTAR_TEST_CASE(test_tablet_metadata_persistence_with_colocated_tables) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         auto h1 = host_id(utils::UUID_gen::get_time_UUID());
@@ -1153,7 +1226,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_update) {
                         tablet_replica {h2, 7},
                     }
                 );
-                builder.del_transition(token);
+                builder.del_transition(token, db.features());
 
                 muts.emplace_back(builder.build());
             }
@@ -1587,7 +1660,7 @@ SEASTAR_TEST_CASE(test_mutation_builder) {
                 tablet_replica {h1, 2},
                 tablet_replica {h2, 3},
             });
-            b.del_transition(last_token);
+            b.del_transition(last_token, e.local_db().features());
             e.local_db().apply({freeze(b.build())}, db::no_timeout).get();
         }
 
@@ -1621,7 +1694,7 @@ SEASTAR_TEST_CASE(test_mutation_builder) {
                     tablet_replica {h1, 2},
                     tablet_replica {h2, 3},
             });
-            b.del_transition(last_token);
+            b.del_transition(last_token, e.local_db().features());
             b.set_resize_decision(resize_decision, e.local_db().features());
             e.local_db().apply({freeze(b.build())}, db::no_timeout).get();
         }
@@ -1660,7 +1733,7 @@ SEASTAR_TEST_CASE(test_sharder) {
         auto table1 = table_id(utils::UUID_gen::get_time_UUID());
 
         token_metadata tokm(e.shared_token_metadata().local(), token_metadata::config{ .topo_cfg{ .this_host_id = h1, .local_dc_rack = locator::endpoint_dc_rack::default_location } });
-        tokm.get_topology().add_or_update_endpoint(h1);
+        tokm.update_topology(h1, std::nullopt);
 
         std::vector<tablet_id> tablet_ids;
         {
@@ -1882,7 +1955,7 @@ SEASTAR_TEST_CASE(test_intranode_sharding) {
         auto stop_stm = deferred_stop(stm);
         auto tmptr = stm.make_token_metadata_ptr();
         auto& tokm = *tmptr;
-        tokm.get_topology().add_or_update_endpoint(h1);
+        tokm.update_topology(h1, std::nullopt);
 
         auto leaving_replica = tablet_replica{h1, 5};
         auto pending_replica = tablet_replica{h1, 7};
@@ -4675,7 +4748,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_random_load) {
         // Sanity check just in case someone modifies the caller of this lambda
         // and starts providing RF > n_hosts. In that case, we wouldn't be able
         // to create an RF-rack-valid keyspace.
-        assert(rf <= n_hosts);
+        SCYLLA_ASSERT(rf <= n_hosts);
 
         std::vector<host_id> hosts;
         std::unordered_map<sstring, std::vector<host_id>> hosts_by_rack;
@@ -5285,6 +5358,62 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancer_does_not_balance_with_missing_tablet
         {
             auto plan = e.get_tablet_allocator().local().balance_tablets(stm.get(), nullptr, nullptr, topo.get_load_stats()).get();
             BOOST_REQUIRE(plan.empty());
+        }
+    }).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_load_balancer_drains_with_missing_sizes_of_a_migrating_table) {
+    // A node which keeps a table under vnodes-to-tablets migration in vnodes storage reports
+    // no tablet sizes for it. That must not keep the balancer from draining another node.
+    do_with_cql_env_thread([] (auto& e) {
+
+        scoped_logger_level lb_log("load_balancer", seastar::log_level::debug);
+
+        topology_builder topo(e);
+        auto host1 = topo.add_node(node_state::normal, 2);
+        auto host2 = topo.add_node(node_state::normal, 2);
+
+        auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, 16);
+        auto table1 = add_table(e, ks_name).get();
+
+        // A table under vnodes-to-tablets migration: its keyspace uses vnodes, but it has a tablet map.
+        e.execute_cql(fmt::format("create keyspace vnode_ks with replication = {{'class': 'NetworkTopologyStrategy', '{}': 1}}"
+                                  " and tablets = {{'enabled': false}}", topo.dc())).get();
+        e.execute_cql("create table vnode_ks.t (pk int primary key)").get();
+        auto migrating = e.local_db().find_schema("vnode_ks", "t")->id();
+
+        auto& stm = e.shared_token_metadata().local();
+
+        {
+            abort_source as;
+            auto guard = e.get_raft_group0_client().start_operation(as).get();
+            mutate_tablets(e, guard, [&] (tablet_metadata& tmeta) -> future<> {
+                tablet_map tmap(4);
+                for (auto tid : tmap.tablet_ids()) {
+                    tmap.set_tablet(tid, tablet_info {
+                        tablet_replica_set {
+                            tablet_replica {host1, 0},
+                        }
+                    });
+                }
+                tmeta.set_tablet_map(migrating, std::move(tmap));
+                co_return;
+            });
+        }
+
+        topo.set_node_state(host2, node_state::decommissioning);
+
+        // host1 keeps the migrating table in vnodes storage: no tablet sizes for it.
+        auto& shared_stats = topo.get_shared_load_stats();
+        shared_stats.set_default_tablet_sizes(stm.get());
+        shared_stats.stats.tablet_stats.at(host1).tablet_sizes.erase(migrating);
+
+        auto plan = e.get_tablet_allocator().local().balance_tablets(stm.get(), nullptr, nullptr, topo.get_load_stats()).get();
+        BOOST_REQUIRE(!plan.migrations().empty());
+        for (auto&& mig : plan.migrations()) {
+            BOOST_REQUIRE_EQUAL(mig.tablet.table, table1);
+            BOOST_REQUIRE(mig.src);
+            BOOST_REQUIRE_EQUAL(mig.src->host, host2);
         }
     }).get();
 }
@@ -6906,11 +7035,10 @@ static void execute_tablet_for_new_rf_test(calculate_tablet_replicas_for_new_rf_
 
     // Initialize the token_metadata
     stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
-        auto& topo = tm.get_topology();
         for (const auto& [ring_point, endpoint, id] : test_config.ring_points) {
             std::unordered_set<token> tokens;
             tokens.insert(dht::token{tests::d2t(ring_point / test_config.ring_points.size())});
-            topo.add_or_update_endpoint(id, make_endpoint_dc_rack(endpoint), locator::node::state::normal, 1);
+            tm.update_topology(id, make_endpoint_dc_rack(endpoint), locator::node::state::normal, 1);
             co_await tm.update_normal_tokens(std::move(tokens), id);
         }
     }).get();
@@ -7285,7 +7413,7 @@ SEASTAR_TEST_CASE(test_cleanup_of_deallocated_tablet) {
                 co_await cf.cleanup_tablet(db, sys_ks, locator::tablet_id(0));
             }
         }).get();
-        assert(all_tablets);
+        SCYLLA_ASSERT(all_tablets);
     }, cfg);
 }
 
@@ -8831,6 +8959,132 @@ SEASTAR_THREAD_TEST_CASE(test_tablet_version_block_matches) {
     BOOST_REQUIRE(!compare_tablet_version_block(version, wrong_block_0));
 }
 
+// Verifies that resize metadata (the replacement Raft group ids in tablet_raft_resize_info)
+// round-trips through system.tablets serialization for strongly consistent
+// tables, and that the in-memory tablet_map API for resizing tablets works.
+SEASTAR_THREAD_TEST_CASE(test_sc_tablet_resize_metadata_persistence) {
+    cql_test_config cfg = tablet_cql_test_config();
+    cfg.db_config->experimental_features(
+        {db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES},
+        db::config::config_source::CommandLine
+    );
+
+    do_with_cql_env_thread([] (cql_test_env& e) {
+        auto h1 = host_id(utils::UUID_gen::get_time_UUID());
+        auto h2 = host_id(utils::UUID_gen::get_time_UUID());
+        auto h3 = host_id(utils::UUID_gen::get_time_UUID());
+
+        auto table1 = add_table(e).get();
+        auto ts = current_timestamp(e);
+
+        tablet_metadata tm = read_tablet_metadata(e.local_qp()).get();
+
+        {
+            tablet_map tmap(2, /* with_raft_info = */ true);
+            auto tb0 = tmap.first_tablet();
+            tmap.set_tablet(tb0, tablet_info {
+                tablet_replica_set { {h1, 0}, {h2, 0}, {h3, 0} },
+            });
+            tmap.set_tablet_raft_info(tb0, locator::tablet_raft_info {
+                .group_id = raft::group_id(utils::UUID_gen::get_time_UUID())
+            });
+            auto tb1 = *tmap.next_tablet(tb0);
+            tmap.set_tablet(tb1, tablet_info {
+                tablet_replica_set { {h1, 0}, {h2, 0}, {h3, 0} },
+            });
+            tmap.set_tablet_raft_info(tb1, locator::tablet_raft_info {
+                .group_id = raft::group_id(utils::UUID_gen::get_time_UUID())
+            });
+            tm.set_tablet_map(table1, std::move(tmap));
+        }
+
+        // Round-trip without any resize fields set.
+        {
+            auto& tmap = tm.get_tablet_map(table1);
+            BOOST_REQUIRE(tmap.has_raft_info());
+            BOOST_REQUIRE(!tmap.has_raft_resize_info(tmap.first_tablet()));
+        }
+        verify_tablet_metadata_persistence(e, tm, ts);
+
+        // Now mark the first tablet as splitting and round-trip again. The kind of the resize is
+        // carried by the resize decision, which is recorded together with the child group ids.
+        auto left_gid = raft::group_id(utils::UUID_gen::get_time_UUID());
+        auto right_gid = raft::group_id(utils::UUID_gen::get_time_UUID());
+        tm.mutate_tablet_map_async(table1, [&] (tablet_map& tmap) {
+            tmap.set_resize_decision(locator::resize_decision(locator::resize_decision::split(), 1));
+            tmap.set_raft_resize_info(tmap.first_tablet(), locator::tablet_raft_resize_info {
+                .new_gids = {left_gid, right_gid},
+            });
+            return make_ready_future();
+        }).get();
+
+        const auto check_split_info = [&] (const tablet_map& tmap) {
+            BOOST_REQUIRE(tmap.resize_decision().is_split());
+            BOOST_REQUIRE(tmap.has_raft_resize_info(tmap.first_tablet()));
+            const auto& ri = tmap.get_raft_resize_info(tmap.first_tablet());
+            BOOST_REQUIRE_EQUAL(ri.new_gids.size(), 2u);
+            const auto [left, right] = tmap.get_raft_split_child_group_ids(tmap.first_tablet());
+            BOOST_REQUIRE_EQUAL(left, left_gid);
+            BOOST_REQUIRE_EQUAL(right, right_gid);
+            BOOST_REQUIRE(!tmap.has_raft_resize_info(*tmap.next_tablet(tmap.first_tablet())));
+        };
+
+        check_split_info(tm.get_tablet_map(table1));
+        check_split_info(verify_tablet_metadata_persistence(e, tm, ts).get_tablet_map(table1));
+
+        // Clear the resize info and round-trip: the resizing flag must be gone, both in memory
+        // and after reloading from system.tablets.
+        tm.mutate_tablet_map_async(table1, [&] (tablet_map& tmap) {
+            for (auto t : tmap.tablet_ids()) {
+                tmap.clear_raft_resize_info(t);
+            }
+            return make_ready_future();
+        }).get();
+
+        {
+            auto tm_reloaded = verify_tablet_metadata_persistence(e, tm, ts);
+            auto& tmap = tm_reloaded.get_tablet_map(table1);
+            BOOST_REQUIRE(tmap.has_raft_info());
+            for (auto t : tmap.tablet_ids()) {
+                BOOST_REQUIRE(!tmap.has_raft_resize_info(t));
+            }
+        }
+
+        // Everything above goes through save_tablet_metadata(), which rewrites the whole
+        // partition. Publishing the ids does not: the finalization writes the cells of the
+        // tablets it resizes and the replicas pick them up row by row, so take that path too.
+        {
+            auto& tmap = tm.get_tablet_map(table1);
+            const auto tid = tmap.first_tablet();
+            const auto last_token = tmap.get_last_token(tid);
+            auto published_left = raft::group_id(utils::UUID_gen::get_time_UUID());
+            auto published_right = raft::group_id(utils::UUID_gen::get_time_UUID());
+
+            replica::tablet_mutation_builder builder(ts++, table1);
+            builder.set_resize_decision(locator::resize_decision(locator::resize_decision::split(), 4),
+                                        e.get_feature_service().local());
+            builder.set_raft_resize_info(last_token, locator::tablet_raft_resize_info {
+                .new_gids = {published_left, published_right},
+            });
+            utils::chunked_vector<mutation> muts;
+            muts.emplace_back(builder.build());
+            verify_tablet_metadata_update(e, tm, std::move(muts));
+
+            auto& updated = tm.get_tablet_map(table1);
+            BOOST_REQUIRE(updated.has_raft_resize_info(tid));
+            const auto [got_left, got_right] = updated.get_raft_split_child_group_ids(tid);
+            BOOST_REQUIRE_EQUAL(got_left, published_left);
+            BOOST_REQUIRE_EQUAL(got_right, published_right);
+            // Only the tablet whose cells were written is resizing.
+            for (auto t : updated.tablet_ids()) {
+                if (t != tid) {
+                    BOOST_REQUIRE(!updated.has_raft_resize_info(t));
+                }
+            }
+        }
+    }, std::move(cfg)).get();
+}
+
 SEASTAR_THREAD_TEST_CASE(test_tablet_version_changes_after_tablet_migration) {
     cql_test_config cfg = tablet_cql_test_config();
     cfg.db_config->experimental_features(
@@ -8992,10 +9246,9 @@ SEASTAR_THREAD_TEST_CASE(test_stepdown_leaders_during_raft_group_restart) {
         // Must skip the group rather than touch its destroyed server.
         stepdown_leaders_on_home();
 
-        // Moving the tablet by rewriting its map leaves the group's commit
-        // index in system.raft_groups, while its log died with the server;
-        // raft::server::start() rejects a commit index ahead of the log.
-        // Drop it so the restart can finish.
+        // Moving the tablet by rewriting its map skips the tablet cleanup, so
+        // the group's row stays in system.raft_groups. Drop it, as the cleanup
+        // would, so the restart bootstraps the group afresh.
         e.execute_cql(format("delete from system.raft_groups where shard = {} and group_id = {}",
                 home.shard, group_id)).get();
         start_pause.reset();

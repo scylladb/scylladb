@@ -1,0 +1,24 @@
+The following test files in Cassandra's
+test/unit/org/apache/cassandra/cql3/validation/entities directory, which
+this directory mirrors, were not translated:
+
+* UFIdentificationTest.java: checks which functions Cassandra's internal
+  statement objects report as used by a statement (CQLStatement's
+  getFunctions()), which can't be observed through CQL.
+
+* UFSecurityTest.java: checks the sandbox that restricts what Java
+  user-defined functions may do (forbidden classes, time limits). Scylla
+  does not support Java user-defined functions.
+
+* UFVerifierTest.java: checks Cassandra's verifier of the byte code of Java
+  user-defined functions. Scylla does not support Java user-defined
+  functions.
+
+* VirtualTableTest.java: registers test virtual tables implemented in Java
+  through Cassandra's internal virtual table registry, and then queries
+  them. These test tables can't be created through CQL.
+
+Note also that the tests of user-defined functions which were translated
+(uf_test.py, uf_java_test.py, uf_auth_test.py, uf_types_test.py and others)
+use functions written in Java when running on Cassandra and in Lua when
+running on Scylla.

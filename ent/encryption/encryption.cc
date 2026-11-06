@@ -49,6 +49,7 @@
 #include "bytes.hh"
 #include "utils/unqualified_name.hh"
 #include "cql3/query_processor.hh"
+#include "db/config.hh"
 #include "db/extensions.hh"
 #include "db/system_keyspace.hh"
 #include "serializer.hh"
@@ -63,6 +64,7 @@
 #include "utils/UUID_gen.hh"
 #include "init.hh"
 #include "key_cache.hh"
+#include "utils/assert.hh"
 
 static seastar::logger logg{"encryption"};
 
@@ -1049,6 +1051,31 @@ public:
             return b ? remove_file(cfg_file) : make_ready_future();
         });
     }
+    // The options file is looked up next to the segment, so it must follow the segment.
+    // Without it, the segment is read as if it were unencrypted.
+    future<> before_rename(const sstring& from, const sstring& to) override {
+        const auto from_cfg_file = config_name(from);
+        const auto to_cfg_file = config_name(to);
+        bool changed = false;
+        // The destination must end up with the segment's options file, or none if the segment has none.
+        // Whatever is already there is a leftover, e.g. of an interrupted rename: remove it, or the segment
+        // could be decrypted with it.
+        if (co_await file_exists(to_cfg_file)) {
+            co_await remove_file(to_cfg_file);
+            changed = true;
+        }
+        if (co_await file_exists(from_cfg_file)) {
+            // Hard-link instead of copying: the new name either refers to the complete file or doesn't exist.
+            co_await link_file(from_cfg_file, to_cfg_file);
+            changed = true;
+        }
+        if (changed) {
+            co_await sync_directory(bfs::path(to_cfg_file).parent_path().string());
+        }
+    }
+    future<> after_rename(const sstring& from, const sstring& to) override {
+        co_await before_delete(from);
+    }
 };
 
 future<seastar::shared_ptr<encryption_context>> register_extensions(const db::config&, std::unique_ptr<encryption_config> cfg_in, db::extensions& exts, const ::service_set& services) {
@@ -1169,7 +1196,7 @@ future<seastar::shared_ptr<encryption_context>> register_extensions(const db::co
      * we don't crash on shared pointer destruction on wrong shard.
      * Doing so will hide the real issue from whomever runs the test.
      */
-    assert(p);
+    SCYLLA_ASSERT(p);
     co_await ctxt->stop();
     std::rethrow_exception(p);
 }

@@ -83,7 +83,7 @@ public:
     // already covered the segment do not ask `id` to flush: the caller must.
     [[nodiscard]] rp_handle clone(const cf_id_type& id) const;
 
-    replay_position release();
+    replay_position release() noexcept;
 
     operator bool() const {
         return _h && _rp != replay_position();

@@ -9,6 +9,7 @@
 #pragma once
 
 #include <seastar/util/log.hh>
+#include "utils/assert.hh"
 
 extern seastar::logger trie_logger;
 

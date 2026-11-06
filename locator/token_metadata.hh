@@ -25,7 +25,7 @@
 #include <seastar/core/sharded.hh>
 #include "utils/chunked_vector.hh"
 #include "utils/phased_barrier.hh"
-#include "service/topology_state_machine.hh"
+#include "service/topology_state_machine_fwd.hh"
 
 #include "locator/types.hh"
 #include "locator/topology.hh"
@@ -43,6 +43,8 @@ class gossiper;
 }
 
 namespace locator {
+
+using topology_version_t = service::topology_version_t;
 
 class abstract_replication_strategy;
 
@@ -111,7 +113,7 @@ public:
     };
 private:
     utils::phased_barrier::operation _op;
-    service::topology::version_t _version;
+    topology_version_t _version;
     const token_metadata* _tm = nullptr;
     link_type _link;
 
@@ -133,7 +135,7 @@ public:
     version_tracker(const version_tracker&) = delete;
     ~version_tracker();
 
-    service::topology::version_t version() const {
+    topology_version_t version() const {
         return _version;
     }
 
@@ -185,7 +187,7 @@ public:
         topology::config topo_cfg;
     };
     using inet_address = gms::inet_address;
-    using version_t = service::topology::version_t;
+    using version_t = topology_version_t;
     using version_tracker_t = version_tracker;
 
     token_metadata(shared_token_metadata& stm, config cfg);
@@ -219,6 +221,15 @@ public:
     void update_topology(host_id ep, std::optional<endpoint_dc_rack> opt_dr, std::optional<node::state> opt_st = std::nullopt,
                          std::optional<shard_id> shard_count = std::nullopt);
     /**
+     * Set a flag of the node with the given host_id, see node::set_flag().
+     * No-op if there is no such node.
+     */
+    void set_node_flag(host_id id, node::flag f, bool value);
+    /**
+     * Records the local host_id in the topology config, see topology::set_host_id_cfg().
+     */
+    void set_host_id_cfg(host_id this_host_id);
+    /**
      * Creates an iterable range of the sorted tokens starting at the token t
      * such that t >= start.
      *
@@ -233,7 +244,6 @@ public:
      */
     std::ranges::subrange<tokens_iterator> ring_range(dht::ring_position_view start) const;
 
-    topology& get_topology();
     const topology& get_topology() const;
     void debug_show() const;
 
@@ -328,11 +338,13 @@ public:
 
     // Returns the map: DC -> host_id of token owners in that DC.
     // If there are no token owners in a DC, it is not present in the result.
-    std::unordered_map<sstring, std::unordered_set<host_id>> get_datacenter_token_owners() const;
+    // The result is cached and remains valid until this token_metadata is mutated.
+    const std::unordered_map<sstring, std::unordered_set<host_id>>& get_datacenter_token_owners() const;
 
     // Returns the map: DC -> (map: rack -> host_id of token owners in that rack).
     // If there are no token owners in a DC/rack, it is not present in the result.
-    std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<host_id>>>
+    // The result is cached and remains valid until this token_metadata is mutated.
+    const std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<host_id>>>&
     get_datacenter_racks_token_owners() const;
 
     // Returns the map: DC -> token owners in that DC.
@@ -449,7 +461,7 @@ public:
     }
 
     // Returns a map version -> use_count
-    std::unordered_map<service::topology::version_t, int> describe_stale_versions();
+    std::unordered_map<topology_version_t, int> describe_stale_versions();
 
     future<> stale_versions_in_use() const {
         return _stale_versions_in_use.get_future();

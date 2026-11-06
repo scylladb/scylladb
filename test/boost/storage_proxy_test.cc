@@ -22,6 +22,7 @@
 #include "query_ranges_to_vnodes.hh"
 #include "schema/schema_builder.hh"
 #include "utils/error_injection.hh"
+#include <seastar/core/with_scheduling_group.hh>
 
 BOOST_AUTO_TEST_SUITE(storage_proxy_test)
 

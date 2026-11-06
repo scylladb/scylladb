@@ -191,6 +191,12 @@ public:
     /// \return Ready future when the procedure above completes.
     future<> flush_current_hints() noexcept;
 
+    /// \brief Like flush_current_hints(), for callers other than the sender.
+    ///
+    /// Does nothing once stop() has started. Otherwise holds stop() back until the flush is done,
+    /// so that the flush neither reopens the store that stop() closes nor outlives this object.
+    future<> flush_current_hints_unless_stopping() noexcept;
+
 private:
     future<> do_store_hint(schema_ptr s, lw_shared_ptr<const frozen_mutation> fm, tracing::trace_state_ptr tr_state);
 

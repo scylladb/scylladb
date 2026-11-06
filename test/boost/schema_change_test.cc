@@ -33,6 +33,8 @@
 #include "test/lib/exception_utils.hh"
 #include "test/lib/log.hh"
 #include "test/lib/test_utils.hh"
+#include "service/raft/raft_group0_client.hh"
+#include "replica/database.hh"
 
 BOOST_AUTO_TEST_SUITE(schema_change_test)
 

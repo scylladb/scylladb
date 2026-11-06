@@ -19,6 +19,7 @@
 #include "utils/assert.hh"
 #include "utils/UUID_gen.hh"
 #include "service/storage_proxy.hh"
+#include "service/raft/raft_group0_client.hh"
 
 namespace tracing {
 

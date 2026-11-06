@@ -10,6 +10,8 @@ permissions:
 
 jobs:
   range-diff:
+    # A draft is still taking shape and nobody is reviewing it yet.
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -95,16 +97,22 @@ jobs:
           def fence(lines):
               return "`" * max([3] + [len(r) + 1 for l in lines for r in re.findall(r"`+", l)])
 
-          label = {"=": "unchanged", "!": "**modified**", ">": "**new**", "<": "**dropped**"}
+          label = {"!": "**modified**", ">": "**new**", "<": "**dropped**"}
           total = sum(c["status"] != "<" for c in commits)
           repo, old, new = os.environ["REPO_URL"], os.environ["OLD_HEAD"], os.environ["NEW_HEAD"]
           out = [f"### Changes since previous version ([`{old[:10]}`]({repo}/commit/{old}) → [`{new[:10]}`]({repo}/commit/{new}))", ""]
           # Each block is (head, body, tail); only a section has a body, which
           # is what gets cut if the comment runs out of room.
           blocks = []
+          # Only the commits that changed are listed; their positions still
+          # tell where they are in the series.
           for c in commits:
+              if c["status"] == "=":
+                  continue
               pos = f"{c['pos']}/{total}" if c["status"] != "<" else "–"
               blocks.append(([f"- `{pos}` {label[c['status']]}: [{md(c['title'])}]({repo}/commit/{c['sha']})"], [], []))
+          if not blocks:
+              blocks.append((["Rebased only; no commit changed."], [], []))
           blocks.append(([""], [], []))
 
           for c in commits:

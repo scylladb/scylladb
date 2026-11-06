@@ -12,6 +12,7 @@
 #include <seastar/json/json_elements.hh>
 #include "api/api_init.hh"
 #include "db/data_listeners.hh"
+#include "db/snapshot-ctl.hh"
 #include "compaction/compaction_descriptor.hh"
 #include "gms/gossip_address_map.hh"
 
@@ -84,6 +85,8 @@ void unset_transport_controller(http_context& ctx, httpd::routes& r);
 void set_thrift_controller(http_context& ctx, httpd::routes& r);
 void unset_thrift_controller(http_context& ctx, httpd::routes& r);
 void set_snapshot(http_context& ctx, httpd::routes& r, sharded<db::snapshot_ctl>& snap_ctl);
+// Streams the response body of GET /storage_service/snapshots to `out`, closing it.
+future<> get_snapshot_details(std::unordered_map<sstring, db::snapshot_ctl::db_snapshot_details> result, output_stream<char>&& out);
 void unset_snapshot(http_context& ctx, httpd::routes& r);
 void set_load_meter(http_context& ctx, httpd::routes& r, service::load_meter& lm);
 void unset_load_meter(http_context& ctx, httpd::routes& r);

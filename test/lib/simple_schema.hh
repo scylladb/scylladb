@@ -296,7 +296,12 @@ public:
         , _timestamp(s.current_timestamp()) {
     }
 
-    simple_schema get() const {
-        return simple_schema(_gs.get(), _timestamp);
+    future<simple_schema> get() const {
+        co_return simple_schema(co_await _gs.get(db::no_timeout), _timestamp);
+    }
+
+    // For the same schema, already obtained on this shard, e.g. one passed to a reader factory.
+    simple_schema get(schema_ptr local_schema) const {
+        return simple_schema(std::move(local_schema), _timestamp);
     }
 };

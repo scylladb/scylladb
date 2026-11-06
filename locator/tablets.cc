@@ -13,6 +13,7 @@
 #include "locator/tablet_sharder.hh"
 #include "locator/token_range_splitter.hh"
 #include "db/system_keyspace.hh"
+#include "gms/gossiper.hh"
 #include "locator/topology.hh"
 #include "replica/database.hh"
 #include "utils/stall_free.hh"
@@ -185,13 +186,15 @@ tablet_transition_info::tablet_transition_info(tablet_transition_stage stage,
                                                tablet_replica_set next,
                                                std::optional<tablet_replica> pending_replica,
                                                service::session_id session_id,
-                                               sstring snapshot_name)
+                                               sstring snapshot_name,
+                                               bool cancelled)
     : stage(stage)
     , transition(transition)
     , next(std::move(next))
     , pending_replica(std::move(pending_replica))
     , session_id(session_id)
     , snapshot_name(std::move(snapshot_name))
+    , cancelled(cancelled)
     , writes(get_selector_for_writes(stage))
     , reads(get_selector_for_reads(stage))
 { }
@@ -345,16 +348,41 @@ std::optional<tablet_replica> get_leaving_replica(const tablet_info& tinfo, cons
     return *leaving.begin();
 }
 
-bool is_post_cleanup(tablet_replica replica, const tablet_info& tinfo, const tablet_transition_info& trinfo) {
-    if (replica == locator::get_leaving_replica(tinfo, trinfo)) {
-        // we do tablet cleanup on the leaving replica in the `cleanup` stage, after which there is only the `end_migration` stage.
-        return trinfo.stage == locator::tablet_transition_stage::end_migration;
+tablet_storage_state get_tablet_storage_state(const tablet_replica& replica, const tablet_info& tinfo,
+        const tablet_transition_info* trinfo) {
+    using enum tablet_storage_state;
+    const bool is_current = contains(tinfo.replicas, replica);
+    if (!trinfo) {
+        return is_current ? present : absent;
     }
-    if (replica == trinfo.pending_replica) {
-        // we do tablet cleanup on the pending replica in the `cleanup_target` stage, after which there is only the `revert_migration` stage.
-        return trinfo.stage == locator::tablet_transition_stage::revert_migration;
+    const bool is_pending = replica == trinfo->pending_replica;
+    const bool is_leaving = is_current && !contains(trinfo->next, replica);
+    const auto as_replica = is_current || is_pending ? present : absent;
+    switch (trinfo->stage) {
+        case tablet_transition_stage::allow_write_both_read_old:               [[fallthrough]];
+        case tablet_transition_stage::write_both_read_old:                     [[fallthrough]];
+        case tablet_transition_stage::write_both_read_old_fallback_cleanup:    [[fallthrough]];
+        case tablet_transition_stage::streaming:                               [[fallthrough]];
+        case tablet_transition_stage::rebuild_repair:                          [[fallthrough]];
+        case tablet_transition_stage::write_both_read_new:                     [[fallthrough]];
+        case tablet_transition_stage::use_new:                                 [[fallthrough]];
+        case tablet_transition_stage::sc_rollback:                             [[fallthrough]];
+        case tablet_transition_stage::sc_remove_pending:                       [[fallthrough]];
+        case tablet_transition_stage::repair:                                  [[fallthrough]];
+        case tablet_transition_stage::end_repair:                              [[fallthrough]];
+        case tablet_transition_stage::restore:
+            return as_replica;
+        case tablet_transition_stage::cleanup:
+            return is_leaving ? being_cleaned : as_replica;
+        case tablet_transition_stage::cleanup_target:
+            return is_pending ? being_cleaned : as_replica;
+        case tablet_transition_stage::end_migration:
+            return is_leaving ? absent : as_replica;
+        case tablet_transition_stage::revert_migration:
+            return is_pending ? absent : as_replica;
     }
-    return false;
+    on_internal_error(tablet_logger, format("get_tablet_storage_state(): unknown tablet transition stage {}",
+            static_cast<int>(trinfo->stage)));
 }
 
 tablet_replica_set get_new_replicas(const tablet_info& tinfo, const tablet_migration_info& mig) {
@@ -449,6 +477,16 @@ table_id tablet_metadata::get_base_table(table_id id) const {
 
 bool tablet_metadata::is_base_table(table_id id) const {
     return !_base_table.contains(id);
+}
+
+std::vector<schema_ptr> tablet_metadata::base_tables(const data_dictionary::keyspace_metadata& ksm) const {
+    std::vector<schema_ptr> result;
+    for (const auto& s : ksm.cf_meta_data() | std::views::values) {
+        if (has_tablet_map(s->id()) && is_base_table(s->id())) {
+            result.push_back(s);
+        }
+    }
+    return result;
 }
 
 future<> tablet_metadata::mutate_tablet_map_async(table_id id, noncopyable_function<future<>(tablet_map&)> func) {
@@ -634,7 +672,7 @@ tablet_layout tablet_map::get_layout() const {
 
 tablet_map tablet_map::clone() const {
     return tablet_map(_tablet_ids, _tablets, _transitions, _resize_decision, _resize_task_info,
-                      _raft_info, _target_pow2_tablet_count);
+                      _raft_info, _raft_resizes, _target_pow2_tablet_count);
 }
 
 future<tablet_map> tablet_map::clone_gently() const {
@@ -661,8 +699,16 @@ future<tablet_map> tablet_map::clone_gently() const {
         co_await coroutine::maybe_yield();
     }
 
+    raft_resize_map raft_resizes;
+    raft_resizes.reserve(_raft_resizes.size());
+    for (const auto& [id, resize] : _raft_resizes) {
+        raft_resizes.emplace(id, resize);
+        co_await coroutine::maybe_yield();
+    }
+
     co_return tablet_map(std::move(ids), std::move(tablets), std::move(transitions),
                          _resize_decision, _resize_task_info, std::move(raft_info),
+                         std::move(raft_resizes),
                          _target_pow2_tablet_count);
 }
 
@@ -948,6 +994,60 @@ void tablet_map::set_tablet_raft_info(tablet_id id, tablet_raft_info raft_info) 
     _raft_info[size_t(id)] = std::move(raft_info);
 }
 
+bool tablet_map::has_raft_resize_info(tablet_id id) const {
+    check_tablet_id(id);
+    return _raft_resizes.contains(id);
+}
+
+const tablet_raft_resize_info& tablet_map::get_raft_resize_info(tablet_id id) const {
+    check_tablet_id(id);
+    auto it = _raft_resizes.find(id);
+    if (it == _raft_resizes.end()) {
+        on_internal_error(tablet_logger,
+            format("Tablet map has no raft resize info for tablet_id {}", id));
+    }
+    return it->second;
+}
+
+std::pair<raft::group_id, raft::group_id> tablet_map::get_raft_split_child_group_ids(tablet_id id) const {
+    const auto& raft_resize = get_raft_resize_info(id);
+    if (!_resize_decision.is_split()) {
+        on_internal_error(tablet_logger,
+            format("Tablet_id {} is not being split, its resize decision is {}",
+                   id, _resize_decision.type_name()));
+    }
+    // There are exactly two: set_raft_resize_info() checks the count under a split decision, and
+    // an entry never exists under any other one.
+    return {raft_resize.new_gids[0], raft_resize.new_gids[1]};
+}
+
+void tablet_map::set_raft_resize_info(tablet_id id, tablet_raft_resize_info raft_resize) {
+    check_tablet_id(id);
+    if (_raft_info.empty()) {
+        on_internal_error(tablet_logger,
+            format("Tablet map has no raft info, cannot set raft resize info for tablet_id {}", id));
+    }
+    if (raft_resize.new_gids.empty()) {
+        on_internal_error(tablet_logger,
+            format("Raft resize info for tablet_id {} has no replacement group ids", id));
+    }
+    // The decision is recorded together with the resize info, so it is in place here. Only a split
+    // has a known number of children: two.
+    const size_t expected_gids = _resize_decision.is_split() ? 2 : 0;
+    if (expected_gids && raft_resize.new_gids.size() != expected_gids) {
+        on_internal_error(tablet_logger,
+            format("Raft resize info for {} of tablet_id {} must have exactly {} replacement "
+                   "group ids, got {}", _resize_decision.type_name(), id, expected_gids,
+                   raft_resize.new_gids.size()));
+    }
+    _raft_resizes[id] = std::move(raft_resize);
+}
+
+void tablet_map::clear_raft_resize_info(tablet_id id) {
+    check_tablet_id(id);
+    _raft_resizes.erase(id);
+}
+
 // The names are persisted in system tables so should not be changed.
 static const std::unordered_map<tablet_transition_stage, sstring> tablet_transition_stage_to_name = {
     {tablet_transition_stage::allow_write_both_read_old, "allow_write_both_read_old"},
@@ -975,6 +1075,37 @@ static const std::unordered_map<sstring, tablet_transition_stage> tablet_transit
     }
     return result;
 });
+
+bool can_cancel_tablet_transition(tablet_transition_stage stage) {
+    switch (stage) {
+        case tablet_transition_stage::allow_write_both_read_old:
+        case tablet_transition_stage::write_both_read_old:
+        case tablet_transition_stage::rebuild_repair:
+        case tablet_transition_stage::streaming:
+        case tablet_transition_stage::repair:
+            return true;
+        case tablet_transition_stage::write_both_read_old_fallback_cleanup:
+        case tablet_transition_stage::write_both_read_new:
+        case tablet_transition_stage::use_new:
+        case tablet_transition_stage::cleanup:
+        case tablet_transition_stage::sc_rollback:
+        case tablet_transition_stage::sc_remove_pending:
+        case tablet_transition_stage::cleanup_target:
+        case tablet_transition_stage::revert_migration:
+        case tablet_transition_stage::end_migration:
+        case tablet_transition_stage::end_repair:
+        case tablet_transition_stage::restore:
+            return false;
+    }
+    on_internal_error(tablet_logger, format("Invalid tablet transition stage: {}", static_cast<int>(stage)));
+}
+
+bool is_tablet_transition_cancelled(const tablet_info& tinfo, const tablet_transition_info& trinfo) {
+    if (trinfo.transition == tablet_transition_kind::repair) {
+        return !tinfo.repair_task_info;
+    }
+    return trinfo.cancelled;
+}
 
 tablet_transition_kind choose_rebuild_transition_kind(const gms::feature_service& features) {
     return features.repair_based_tablet_rebuild ? tablet_transition_kind::rebuild_v2 : tablet_transition_kind::rebuild;
@@ -1782,9 +1913,15 @@ void tablet_metadata_guard::check() noexcept {
         erm.get()->get_token_metadata().get_version(),
         old_tmap,
         tmap);
-    if (bool(_stage) != bool(trinfo) || (_stage && _stage != trinfo->stage) || 
+    // Cancelling doesn't change the stage, so check the flag too. It stays set through the
+    // roll-back stages, whose operations must not be aborted.
+    bool newly_cancelled = trinfo && trinfo->cancelled && !_cancelled
+            && can_cancel_tablet_transition(trinfo->stage);
+    if (bool(_stage) != bool(trinfo) || (_stage && _stage != trinfo->stage) ||
+        newly_cancelled ||
         old_tmap.tablet_count() != tmap.tablet_count())
     {
+        _cancelled = _cancelled || newly_cancelled;
         tablet_logger.debug("tablet_metadata_guard::check: retain the erm and abort the guard");
         _abort_source.request_abort();
     } else {
@@ -1802,6 +1939,10 @@ tablet_metadata_guard::tablet_metadata_guard(replica::table& table, global_table
     subscribe();
     if (auto* trinfo = get_tablet_map().get_tablet_transition_info(tablet.tablet)) {
         _stage = trinfo->stage;
+        if (trinfo->cancelled && can_cancel_tablet_transition(trinfo->stage)) {
+            _cancelled = true;
+            _abort_source.request_abort();
+        }
     }
 }
 
@@ -2194,12 +2335,20 @@ auto fmt::formatter<locator::tablet_map>::format(const locator::tablet_map& r, f
             if (tr->session_id) {
                 out = fmt::format_to(out, ", session={}", tr->session_id);
             }
+            if (tr->cancelled) {
+                out = fmt::format_to(out, ", cancelled");
+            }
         }
         if (r.has_raft_info()) {
             const auto& raft_info = r.get_tablet_raft_info(tid);
             if (raft_info.group_id) {
                 out = fmt::format_to(out, ", group_id={}", raft_info.group_id);
             }
+        }
+        if (r.has_raft_resize_info(tid)) {
+            const auto& raft_resize = r.get_raft_resize_info(tid);
+            out = fmt::format_to(out, ", resize={}, new_gids={}",
+                    r.resize_decision().type_name(), raft_resize.new_gids);
         }
         first = false;
         tid = *r.next_tablet(tid);
@@ -2382,4 +2531,16 @@ locator::tablet_task_info locator::tablet_task_info::make_merge_request() {
     long sched_nr = 0;
     auto tablet_task_id = locator::tablet_task_id(utils::UUID_gen::get_time_UUID());
     return locator::tablet_task_info{locator::tablet_task_type::merge, tablet_task_id, db_clock::now(), sched_nr, db_clock::time_point()};
+}
+
+bool locator::is_keyspace_undergoing_tablets_migration(const tablet_metadata& tmeta, const data_dictionary::keyspace_metadata& ksm) {
+    if (ksm.uses_tablets()) {
+        return false;
+    }
+    for (const auto& [name, s] : ksm.cf_meta_data()) {
+        if (tmeta.has_tablet_map(s->id())) {
+            return true;
+        }
+    }
+    return false;
 }

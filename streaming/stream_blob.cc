@@ -39,6 +39,7 @@
 #include <filesystem>
 #include <fmt/ranges.h>
 #include "replica/exceptions.hh"
+#include "locator/abstract_replication_strategy.hh"
 
 namespace streaming {
 
@@ -292,6 +293,9 @@ future<> stream_blob_handler(replica::database& db,
 
         bool got_end_of_stream = false;
         for (;;) {
+          // Release the session promptly once the coordinator invalidates it. A stalled
+          // sender is aborted on the initiator's side, see storage_service::stream_tablet().
+          guard.check();
           try {
             auto opt = co_await source();
             if (!opt) {
@@ -467,7 +471,8 @@ future<> stream_blob_handler(replica::database& db, db::view::view_building_work
             // SSTable will be only sealed when added to the sstable set, so we make sure unsplit sstables aren't
             // left sealed on the table directory.
             sstables::sstable_stream_sink_cfg cfg { .last_component = meta.fops == file_ops::load_sstables,
-                                                    .leave_unsealed = true };
+                                                    .leave_unsealed = true,
+                                                    .update_scrub_time = true };
             auto desc_result = sstables::parse_path(std::filesystem::path(meta.filename), schema->ks_name(), schema->cf_name());
             if (!desc_result) {
                 throw std::runtime_error(fmt::format("Cannot stream blob in {}.{}: file={}: {}", schema->ks_name(), schema->cf_name(), meta.filename, desc_result.error()));
@@ -580,7 +585,12 @@ tablet_stream_files(netw::messaging_service& ms, std::list<stream_blob_info> sou
     stream_options.buffer_size = file_stream_buffer_size;
     stream_options.read_ahead = file_stream_read_ahead;
 
+    // Lets the coordinator abort the transfer by closing the session. Unit tests pass a null
+    // guard, which is never aborted.
+    auto guard = service::topology_guard(topo_guard);
+
     for (auto&& source_info : sources) {
+        guard.check();
         // Keep stream_blob_info alive only at duration of streaming. Allowing the file descriptor
         // of the sstable component to be released right after it has been streamed.
         auto info = std::exchange(source_info, {});
@@ -616,6 +626,7 @@ tablet_stream_files(netw::messaging_service& ms, std::list<stream_blob_info> sou
             auto send_data_to_peer = [&] () mutable -> future<> {
                 try {
                     while (!got_error_from_peer) {
+                        guard.check();
                         may_inject_error(meta, inject_errors, "read_data");
                         auto buf = co_await fstream->read_up_to(file_stream_buffer_size);
                         if (buf.size() == 0) {
@@ -790,7 +801,8 @@ future<stream_files_response> tablet_stream_files_handler(replica::database& db,
 
     if (is_logstor_table) {
         auto segments = co_await table.take_logstor_snapshot(req.range);
-        co_await utils::get_local_injector().inject("wait_before_tablet_stream_files_after_snapshot", utils::wait_for_message(std::chrono::seconds(60)));
+        // Tests hold this across topology operations; an expired wait aborts the node.
+        co_await utils::get_local_injector().inject("wait_before_tablet_stream_files_after_snapshot", utils::wait_for_message(std::chrono::minutes(5)));
         for (auto& seg : segments) {
             auto& info = files.emplace_back();
             info.filename = format("logstor_segment_{}", seg.segment_id); // used only for logging
@@ -803,7 +815,7 @@ future<stream_files_response> tablet_stream_files_handler(replica::database& db,
                 req.ops_id, segments.size(), req.range);
     } else {
         auto sstables = co_await table.take_storage_snapshot(req.range);
-        co_await utils::get_local_injector().inject("wait_before_tablet_stream_files_after_snapshot", utils::wait_for_message(std::chrono::seconds(60)));
+        co_await utils::get_local_injector().inject("wait_before_tablet_stream_files_after_snapshot", utils::wait_for_message(std::chrono::minutes(5)));
         if (auto shadowed_file = utils::get_local_injector().inject_parameter<std::string_view>("order_sstables_for_streaming", "shadowed_file");
                 shadowed_file && sstables.size() == 3) {
             // make sure the sstables are ordered so that the sstable containing shadowed data is streamed last

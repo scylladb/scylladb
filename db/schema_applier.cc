@@ -35,8 +35,10 @@
 #include "view_info.hh"
 #include "replica/database.hh"
 #include "replica/tablets.hh"
+#include "db/config.hh"
 #include "lang/manager.hh"
 #include "db/system_keyspace.hh"
+#include "gms/gossiper.hh"
 #include "compaction/compaction_manager.hh"
 #include "cql3/expr/expression.hh"
 #include "types/types.hh"
@@ -47,9 +49,11 @@
 #include "query/query-result-set.hh"
 #include "query/query-result-writer.hh"
 #include "utils/map_difference.hh"
+#include "utils/error_injection.hh"
 #include <seastar/coroutine/all.hh>
 #include "utils/log.hh"
 #include "schema/frozen_schema.hh"
+#include "schema/schema_registry.hh"
 #include "system_keyspace.hh"
 #include "system_distributed_keyspace.hh"
 #include "cql3/query_processor.hh"
@@ -1025,7 +1029,7 @@ void schema_applier::commit_tables_and_views() {
     }
 }
 
-void schema_applier::commit_on_shard(replica::database& db) {
+void schema_applier::commit_on_shard(replica::database& db, uint64_t commit_gen) {
     // commit keyspace operations
     for (auto& ks_per_shard : _affected_keyspaces.created) {
         auto ks = ks_per_shard[this_shard_id()].release();
@@ -1064,6 +1068,9 @@ void schema_applier::commit_on_shard(replica::database& db) {
     for (const auto& ks_name : _affected_keyspaces.names.dropped) {
         db.drop_keyspace(ks_name);
     }
+
+    // Last, so that a request which waits for this generation finds the whole change applied.
+    local_schema_registry().advance_commit_gen(commit_gen);
 }
 
 // TODO: move per shard logic directly to raft so that all subsystems can be updated together
@@ -1082,9 +1089,15 @@ future<> schema_applier::commit() {
     // to allow "seeding" of the effective_replication_map
     // with a new e_r_m instance.
     SCYLLA_ASSERT(this_shard_id() == 0);
-    commit_on_shard(sharded_db.local());
-    co_await sharded_db.invoke_on_others([this] (replica::database& db) {
-        commit_on_shard(db);
+    // The shards commit one after another, so a request may hop from a shard which has committed
+    // the change to one which has not committed it yet. Number the change, the same on every
+    // shard, so that global_schema_ptr can tell and wait. Commits are serialized by the merge lock.
+    const auto commit_gen = local_schema_registry().commit_gen() + 1;
+    commit_on_shard(sharded_db.local(), commit_gen);
+    co_await utils::get_local_injector().inject("schema_applier_pause_before_commit_on_other_shards",
+            utils::wait_for_message(std::chrono::minutes(1)));
+    co_await sharded_db.invoke_on_others([this, commit_gen] (replica::database& db) {
+        commit_on_shard(db, commit_gen);
     });
     // unlock as some functions in post_commit() may read data under those locks
     _metadata_locks = nullptr;

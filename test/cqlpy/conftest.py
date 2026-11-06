@@ -22,7 +22,7 @@ import random
 from test.pylib.skip_types import skip_env
 from test.pylib.connect_options import add_host_option, add_cql_connection_options, add_s3_options
 from test.pylib.scylla_cluster import ScyllaCluster
-from .util import unique_name, new_test_keyspace, keyspace_has_tablets, cql_session, local_process_id, is_scylla, config_value_context
+from .util import unique_name, new_test_keyspace, keyspace_has_tablets, cql_session, local_process_id, is_scylla, config_value_context, is_cassandra_older_than
 from .nodetool import scylla_log
 from ..conftest import dynamic_scope
 from .vector_store_mock import VectorStoreMock
@@ -180,6 +180,14 @@ def cassandra_bug(cql):
     if not any('scylla' in name for name in names):
         pytest.xfail('A known Cassandra bug')
 
+# "new_to_cassandra_6" can be used by tests of features which Cassandra added
+# only in Cassandra 6. A test using this fixture is skipped when running on
+# an older version of Cassandra, but runs on Scylla and on Cassandra 6 or newer.
+@pytest.fixture(scope=dynamic_scope())
+def new_to_cassandra_6(cql):
+    if is_cassandra_older_than(cql, (6, 0)):
+        skip_env('Test needs Cassandra 6 or newer')
+
 # Older versions of the Cassandra driver had a bug where if Scylla returns
 # an empty page, the driver would immediately stop reading even if this was
 # not the last page. Some tests which filter out most of the results can end
@@ -321,6 +329,20 @@ def _vector_store_mock_session(cql):
     finally:
         mock.stop()
 
+
+# Fixture for tests which need a working vector store - tests that really
+# perform vector searches, as opposed to tests which only check syntax.
+# On Scylla, such tests are skipped unless Scylla is configured to use a
+# vector store (e.g., test/cqlpy/run was run with the "--vs" option, which
+# also runs a vector store). Cassandra has vector search built in, so these
+# tests always run on Cassandra.
+@pytest.fixture(scope=dynamic_scope())
+def needs_vector_store(cql):
+    if is_scylla(cql):
+        uri = list(cql.execute("SELECT value FROM system.config WHERE name = 'vector_store_primary_uri'"))
+        # The value is JSON, so an empty URI is '""'.
+        if not uri or not json.loads(uri[0].value):
+            skip_env('Vector Store is not configured (run with --vs)')
 
 @pytest.fixture(scope="function")
 def vector_store_mock(_vector_store_mock_session):

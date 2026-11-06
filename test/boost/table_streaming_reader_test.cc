@@ -22,6 +22,9 @@
 #include "locator/tablets.hh"
 #include "readers/mutation_reader.hh"
 #include "mutation/mutation.hh"
+#include "sstables/exceptions.hh"
+#include "test/lib/sstable_utils.hh"
+#include "db/commitlog/commitlog.hh"
 
 BOOST_AUTO_TEST_SUITE(table_streaming_reader_test)
 
@@ -103,6 +106,53 @@ SEASTAR_TEST_CASE(test_streaming_reader_reads_all_tablets_memtables) {
                 "Streaming reader missed the partition in the second range's tablet");
         BOOST_REQUIRE_MESSAGE(!read_keys.contains(mid_key),
                 "Streaming reader returned a partition from an unrequested tablet");
+    });
+}
+
+// Verifies that the streaming reader checks the integrity of the sstables
+// it reads also when it reads a single partition of a table with tablets -
+// which the table reads with the sstable set's single-partition reader.
+// The test corrupts the Data component of an uncompressed sstable, whose
+// checksums are verified only by a reader which checks integrity, and
+// expects the read to fail the checksum check.
+SEASTAR_TEST_CASE(test_streaming_reader_checks_integrity_of_single_partition) {
+    if (this_smp_shard_count() > 1) {
+        std::cerr << "Cannot run test " << get_name() << " with this_smp_shard_count() > 1" << std::endl;
+        return make_ready_future<>();
+    }
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE KEYSPACE test_ks "
+                "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} "
+                "AND tablets = {'enabled': true}").get();
+        e.execute_cql("CREATE TABLE test_ks.t (pk int PRIMARY KEY, v int) "
+                "WITH compression = {'sstable_compression': ''}").get();
+        e.execute_cql("INSERT INTO test_ks.t (pk, v) VALUES (1, 1)").get();
+
+        auto& db = e.local_db();
+        auto s = db.find_schema("test_ks", "t");
+        auto& table = db.find_column_family(s->id());
+        table.flush().get();
+        auto sstables = table.get_sstables();
+        BOOST_REQUIRE_EQUAL(sstables->size(), 1);
+        auto sst = *sstables->begin();
+
+        // Overwrite the beginning of the Data component.
+        auto f = open_file_dma(sstables::test(sst).filename(component_type::Data).native(), open_flags::wo).get();
+        auto len = f.disk_write_dma_alignment();
+        auto buf = temporary_buffer<char>::aligned(f.memory_dma_alignment(), len);
+        std::fill(buf.get_write(), buf.get_write() + len, 0xba);
+        f.dma_write(0, buf.get(), len).get();
+        f.close().get();
+
+        auto dk = dht::decorate_key(*s, partition_key::from_single_value(*s, int32_type->decompose(1)));
+        auto range = dht::partition_range::make_singular(dk);
+        tests::reader_concurrency_semaphore_wrapper semaphore;
+        auto reader = table.make_streaming_reader(s, semaphore.make_permit(), range, gc_clock::now());
+        auto close_reader = deferred_close(reader);
+        BOOST_REQUIRE_EXCEPTION(read_mutation_from_mutation_reader(reader).get(), sstables::malformed_sstable_exception,
+                [] (const sstables::malformed_sstable_exception& e) {
+                    return sstring(e.what()).find("failed checksum") != sstring::npos;
+                });
     });
 }
 

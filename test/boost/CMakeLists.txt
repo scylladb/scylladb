@@ -132,6 +132,8 @@ add_scylla_test(hash_test
   KIND SEASTAR)
 add_scylla_test(hashers_test
   KIND SEASTAR)
+add_scylla_test(hint_storage_test
+  KIND SEASTAR)
 add_scylla_test(hint_test
   KIND SEASTAR)
 add_scylla_test(hwlb_test
@@ -256,6 +258,9 @@ add_scylla_test(service_level_controller_test
   KIND SEASTAR)
 add_scylla_test(small_vector_test
   KIND SEASTAR)
+add_scylla_test(api_test
+  KIND SEASTAR
+  LIBRARIES api)
 add_scylla_test(snitch_reset_test
   KIND SEASTAR)
 add_scylla_test(sorting_test
@@ -349,6 +354,7 @@ add_scylla_test(combined_tests
   SOURCES
     combined_tests.cc
     aggregate_fcts_test.cc
+    audit_test.cc
     auth_cache_test.cc
     auth_test.cc
     client_state_test.cc
@@ -385,6 +391,7 @@ add_scylla_test(combined_tests
     json_cql_query_test.cc
     large_data_guardrail_test.cc
     large_paging_state_test.cc
+    largest_k_test.cc
     loading_cache_test.cc
     memtable_test.cc
     multishard_combining_reader_as_mutation_source_test.cc
@@ -404,6 +411,7 @@ add_scylla_test(combined_tests
     restrictions_test.cc
     row_cache_test.cc
     schema_change_test.cc
+    schema_change_cross_shard_test.cc
     schema_registry_test.cc
     scrub_test.cc
     secondary_index_test.cc
@@ -420,7 +428,6 @@ add_scylla_test(combined_tests
     statement_restrictions_test.cc
     storage_proxy_test.cc
     tablets_test.cc
-    test_audit.cc
     tracing_test.cc
     user_function_test.cc
     user_types_test.cc

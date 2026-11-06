@@ -26,10 +26,12 @@
 #include "utils/assert.hh"
 #include "utils/lister.hh"
 #include "replica/database.hh"
+#include "replica/streaming_reader_lifecycle_policy.hh"
 #include <memory>
 #include <seastar/core/future-util.hh>
 #include <seastar/coroutine/try_future.hh>
 #include "db/system_keyspace.hh"
+#include "gms/gossiper.hh"
 #include "db/system_keyspace_sstables_registry.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "db/commitlog/commitlog.hh"
@@ -98,6 +100,8 @@
 
 #include <algorithm>
 #include <flat_set>
+#include "service/topology_state_machine.hh"
+#include "replica/compaction_group.hh"
 
 using namespace std::chrono_literals;
 using namespace db;
@@ -539,6 +543,10 @@ locator::static_effective_replication_map_ptr keyspace::get_static_effective_rep
     return _effective_replication_map;
 }
 
+bool keyspace::uses_tablets() const {
+    return _replication_strategy->uses_tablets();
+}
+
 } // namespace replica
 
 void backlog_controller::adjust() {
@@ -797,6 +805,10 @@ database::setup_metrics() {
                 sm::description("Total number of view updates for which there were more view replicas than base replicas "
                     "and we had to generate an extra view update because the additional view replica wouldn't get paired with any base replica."
                     "Should only increase during RF change. Should stop increasing shortly after finishing the RF change.")).set_skip_when_empty(),
+
+        sm::make_counter("schema_change_commit_waits", [] { return local_schema_registry().commit_gen_waits(); },
+                sm::description("The number of requests which waited on this shard for a schema change to be committed here, "
+                    "after another shard had committed it.")).set_skip_when_empty(),
     });
     if (this_shard_id() == 0) {
         _metrics.add_group("database", {
@@ -2349,6 +2361,10 @@ future<> database::apply_counter_update(schema_ptr s, const frozen_mutation& fm,
     auto m = fm.unfreeze(s);
     m.upgrade(cf.schema());
 
+    if (utils::get_local_injector().inject_parameter<unsigned>("apply_counter_update_wait", "shard") == this_shard_id()) {
+        co_await utils::get_local_injector().inject("apply_counter_update_wait", utils::wait_for_message(5min));
+    }
+
     tracing::trace(trace_state, "Applying counter update");
     co_await coroutine::try_future(update_write_metrics(seastar::futurize_invoke([&] {
         if (!s->is_synced()) {
@@ -2356,7 +2372,10 @@ future<> database::apply_counter_update(schema_ptr s, const frozen_mutation& fm,
                                             s->ks_name(), s->cf_name(), s->version()));
         }
         try {
-            return apply_with_commitlog(cf, m, timeout);
+            // During an intranode migration this shard may be one the counter
+            // guard does not cover, so enter the phaser here as do_apply() does.
+            auto op = cf.write_in_progress();
+            return apply_with_commitlog(cf, m, timeout).finally([op = std::move(op)] {});
         } catch (no_such_column_family&) {
             dblog.error("Attempting to mutate non-existent table {}", m.column_family_id());
             throw;
@@ -2541,13 +2560,18 @@ future<db::large_data_violation_type> database::do_apply(schema_ptr s, const fro
     // so it knows when new writes start being sent to a new view.
     auto op = cf.write_in_progress();
 
+    db::large_data_violation_type violations = db::large_data_violation_type::none;
     row_locker::lock_holder lock;
     if (!cf.views().empty()) {
         if (!_view_update_generator) {
             co_await coroutine::return_exception(std::runtime_error("view update generator not plugged to push updates"));
         }
 
-        auto lock_f = co_await coroutine::as_future(cf.push_view_replica_updates(_view_update_generator, s, m, timeout, std::move(tr_state), view_update_read_concurrency_sem()));
+        auto unfrozen = m.unfreeze(s);
+        guardrails->check(*s, unfrozen.partition(), unfrozen.key(), &violations);
+        guardrails = db::noop_large_data_guardrail::instance();
+
+        auto lock_f = co_await coroutine::as_future(cf.push_view_replica_updates(_view_update_generator, s, std::move(unfrozen), timeout, std::move(tr_state), view_update_read_concurrency_sem()));
         if (lock_f.failed()) {
             auto ex = lock_f.get_exception();
             if (is_timeout_exception(ex)) {
@@ -2583,7 +2607,6 @@ future<db::large_data_violation_type> database::do_apply(schema_ptr s, const fro
             co_await coroutine::exception(std::move(ex));
         }
     }
-    db::large_data_violation_type violations = db::large_data_violation_type::none;
     auto f = co_await coroutine::as_future(
         this->apply_in_memory(m, s, std::move(h), timeout, std::move(guardrails), &violations));
     if (f.failed()) {
@@ -3642,7 +3665,16 @@ future<> database::flush_non_system_column_families() {
     dblog.info("Flushing non-system tables");
     return parallel_for_each(non_system_cfs, [this] (auto&& uuid_and_cf) {
         auto cf = uuid_and_cf.second;
-        return cf->flush().then([this] {
+        if (auto n = cf->streams_in_progress()) {
+            dblog.info("Waiting for {} in-flight streams to {}.{} before flushing it", n, cf->schema()->ks_name(), cf->schema()->cf_name());
+        }
+        // A write landing after the flush would be flushed again when the table
+        // closes, and a stream still running would seal its sstable then. On
+        // object storage both need the sstables registry that system_keyspace
+        // shutdown unplugs.
+        return when_all_succeed(cf->close_writes(), cf->close_streams()).discard_result().then([cf] {
+            return cf->flush();
+        }).then([this] {
             _drain_progress.remaining_cfs--;
         });
     }).finally([] {
@@ -3675,6 +3707,7 @@ future<> database::drain() {
     co_await _stop_barrier.arrive_and_wait();
     co_await flush_non_system_column_families();
     co_await _stop_barrier.arrive_and_wait();
+    co_await utils::get_local_injector().inject("database_drain_after_user_flush", utils::wait_for_message(5min));
     co_await flush_system_column_families();
     co_await _stop_barrier.arrive_and_wait();
     co_await _commitlog->shutdown();
@@ -3859,6 +3892,63 @@ void database::unplug_snapshot_ctl() noexcept {
 
 } // namespace replica
 
+streaming_reader_lifecycle_policy::streaming_reader_lifecycle_policy(sharded<replica::database>& db, table_id table_id, gc_clock::time_point compaction_time)
+    : _db(db)
+    , _table_id(table_id)
+    , _compaction_time(compaction_time)
+    , _contexts(this_smp_shard_count()) {
+}
+
+mutation_reader streaming_reader_lifecycle_policy::create_reader(
+    schema_ptr schema,
+    reader_permit permit,
+    const dht::partition_range& range,
+    const query::partition_slice& slice,
+    tracing::trace_state_ptr,
+    mutation_reader::forwarding fwd_mr) {
+    const auto shard = this_shard_id();
+    auto& cf = _db.local().find_column_family(schema);
+
+    _contexts[shard].range = make_foreign(make_lw_shared<const dht::partition_range>(range));
+    _contexts[shard].read_operation = make_foreign(std::make_unique<utils::phased_barrier::operation>(cf.read_in_progress()));
+    _contexts[shard].semaphore = &cf.streaming_read_concurrency_semaphore();
+
+    return cf.make_streaming_reader(std::move(schema), std::move(permit), *_contexts[shard].range, slice, fwd_mr, _compaction_time);
+}
+
+const dht::partition_range* streaming_reader_lifecycle_policy::get_read_range() const {
+    const auto shard = this_shard_id();
+    return _contexts[shard].range.get();
+}
+
+void streaming_reader_lifecycle_policy::update_read_range(lw_shared_ptr<const dht::partition_range> range) {
+    const auto shard = this_shard_id();
+    _contexts[shard].range = make_foreign(std::move(range));
+}
+
+future<> streaming_reader_lifecycle_policy::destroy_reader(stopped_reader reader) noexcept {
+    auto ctx = std::move(_contexts[this_shard_id()]);
+    auto reader_opt = ctx.semaphore->unregister_inactive_read(std::move(reader.handle));
+    if  (!reader_opt) {
+        return make_ready_future<>();
+    }
+    return reader_opt->close().finally([ctx = std::move(ctx)] {});
+}
+
+reader_concurrency_semaphore& streaming_reader_lifecycle_policy::semaphore() {
+    const auto shard = this_shard_id();
+    if (!_contexts[shard].semaphore) {
+        auto& cf = _db.local().find_column_family(_table_id);
+        _contexts[shard].semaphore = &cf.streaming_read_concurrency_semaphore();
+    }
+    return *_contexts[shard].semaphore;
+}
+
+future<reader_permit> streaming_reader_lifecycle_policy::obtain_reader_permit(schema_ptr schema, const char* const description, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr) {
+    auto& cf = _db.local().find_column_family(_table_id);
+    return semaphore().obtain_permit(schema, description, cf.estimate_read_memory_cost(), timeout, std::move(trace_ptr));
+}
+
 mutation_reader make_multishard_streaming_reader(sharded<replica::database>& db,
         schema_ptr schema, reader_permit permit,
         std::function<std::optional<dht::partition_range>()> range_generator,
@@ -3978,7 +4068,7 @@ class tablet_streaming_reader : public mutation_reader::impl {
         auto remote = co_await _db.invoke_on(t.shard,
                 [gs = global_schema_ptr(_schema), &remote_ranges = t.ranges, compaction_time = _compaction_time, buffer_size = _buffer_size] (replica::database& db)
                         -> future<foreign_ptr<std::unique_ptr<mutation_reader>>> {
-            auto s = gs.get();
+            auto s = co_await gs.get(db::no_timeout);
             // Copy here, so that the copy is allocated on this shard.
             auto ranges = remote_ranges;
             auto& cf = db.find_column_family(s);
@@ -4112,10 +4202,11 @@ future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> query_mutations(
     auto erm = s->table().get_effective_replication_map();
     if (auto shard_opt = dht::is_single_shard(erm->get_sharder(*s), *s, pr)) {
         auto shard = *shard_opt;
-        co_return co_await db.invoke_on(shard, [gs = global_schema_ptr(s), &cmd, &pr, timeout, tombstone_gc_enabled] (replica::database& db) mutable {
-            return db.query_mutations(gs, cmd, pr, {}, timeout, tombstone_gc_enabled).then([] (std::tuple<reconcilable_result, cache_temperature>&& res) {
-                return make_foreign(make_lw_shared<reconcilable_result>(std::move(std::get<0>(res))));
-            });
+        co_return co_await db.invoke_on(shard, [gs = global_schema_ptr(s), &cmd, &pr, timeout, tombstone_gc_enabled] (replica::database& db) mutable
+                -> future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> {
+            auto schema = co_await coroutine::try_future(gs.get(timeout));
+            auto res = co_await coroutine::try_future(db.query_mutations(std::move(schema), cmd, pr, {}, timeout, tombstone_gc_enabled));
+            co_return make_foreign(make_lw_shared<reconcilable_result>(std::move(std::get<0>(res))));
         });
     } else {
         auto prs = dht::partition_range_vector{pr};
@@ -4137,10 +4228,11 @@ future<foreign_ptr<lw_shared_ptr<query::result>>> query_data(
     auto erm = s->table().get_effective_replication_map();
     if (auto shard_opt = dht::is_single_shard(erm->get_sharder(*s), *s, pr)) {
         auto shard = *shard_opt;
-        co_return co_await db.invoke_on(shard, [gs = global_schema_ptr(s), &cmd, opts, &prs, timeout] (replica::database& db) mutable {
-            return db.query(gs, cmd, opts, prs, {}, timeout).then([] (std::tuple<lw_shared_ptr<query::result>, cache_temperature>&& res) {
-                return make_foreign(std::move(std::get<0>(res)));
-            });
+        co_return co_await db.invoke_on(shard, [gs = global_schema_ptr(s), &cmd, opts, &prs, timeout] (replica::database& db) mutable
+                -> future<foreign_ptr<lw_shared_ptr<query::result>>> {
+            auto schema = co_await coroutine::try_future(gs.get(timeout));
+            auto res = co_await coroutine::try_future(db.query(std::move(schema), cmd, opts, prs, {}, timeout));
+            co_return make_foreign(std::move(std::get<0>(res)));
         });
     } else {
         auto&& [res, _] = co_await query_data_on_all_shards(db, std::move(s), cmd, prs, opts, {}, timeout);

@@ -30,6 +30,7 @@
 #include "sstables/progress_monitor.hh"
 #include "db/commitlog/replay_position.hh"
 #include "component_type.hh"
+#include "sstables/exceptions.hh"
 #include "column_translation.hh"
 #include "stats.hh"
 #include "utils/observable.hh"
@@ -795,18 +796,18 @@ private:
     void validate_max_local_deletion_time();
     void validate_partitioner();
     // Read component data and validate the digest.
-    future<> compute_and_validate_component_digest(component_type type);
+    future<> compute_and_validate_component_digest(component_type type, std::optional<abort_source&> as = std::nullopt);
     future<> validate_scylla_digest_value();
 public:
     void validate_component_digest(component_type type, uint32_t computed_digest) const;
     using skip_data_digest = bool_class<struct skip_data_digest_tag>;
-    future<> validate_digests(skip_data_digest skip_data = skip_data_digest::no);
+    future<> validate_digests(skip_data_digest skip_data = skip_data_digest::no, std::optional<abort_source&> as = std::nullopt);
 private:
     // Read the Scylla component self-digest from file.
     // Should only be called by sstables which have a Scylla file digest.
     future<uint32_t> read_scylla_file_digest() const;
-    future<uint32_t> compute_component_file_digest(component_type type) const;
-    future<uint32_t> compute_component_file_digest(file f, size_t size) const;
+    future<uint32_t> compute_component_file_digest(component_type type, std::optional<abort_source&> as = std::nullopt) const;
+    future<uint32_t> compute_component_file_digest(file f, size_t size, std::optional<abort_source&> as = std::nullopt) const;
 
     // Loads first and last partition keys from appropriate components into `_first` and `_last`.
     void set_first_and_last_keys();
@@ -904,11 +905,11 @@ private:
     static auto& get_mutable_serialization_header(Components& components) {
         auto entry = components.statistics.contents.find(metadata_type::Serialization);
         if (entry == components.statistics.contents.end()) {
-            throw std::runtime_error("Serialization header metadata not available");
+            throw_malformed_sstable_exception("Serialization header metadata not available");
         }
         auto& p = entry->second;
         if (!p) {
-            throw std::runtime_error("Statistics is malformed");
+            throw_malformed_sstable_exception("Statistics is malformed");
         }
         serialization_header& s = *static_cast<serialization_header *>(p.get());
         return s;
@@ -1039,11 +1040,11 @@ public:
     const stats_metadata& get_stats_metadata() const {
         auto entry = _components->statistics.contents.find(metadata_type::Stats);
         if (entry == _components->statistics.contents.end()) {
-            throw std::runtime_error(fmt::format("Stats metadata not available for SSTable {}", get_filename()));
+            throw_malformed_sstable_exception("Stats metadata not available", get_filename(component_type::Statistics));
         }
         auto& p = entry->second;
         if (!p) {
-            throw std::runtime_error(fmt::format("Statistics is malformed for SSTable {}", get_filename()));
+            throw_malformed_sstable_exception("Statistics is malformed", get_filename(component_type::Statistics));
         }
         const stats_metadata& s = *static_cast<stats_metadata *>(p.get());
         return s;
@@ -1051,11 +1052,11 @@ public:
     const compaction_metadata& get_compaction_metadata() const {
         auto entry = _components->statistics.contents.find(metadata_type::Compaction);
         if (entry == _components->statistics.contents.end()) {
-            throw std::runtime_error("Compaction metadata not available");
+            throw_malformed_sstable_exception("Compaction metadata not available", get_filename(component_type::Statistics));
         }
         auto& p = entry->second;
         if (!p) {
-            throw std::runtime_error("Statistics is malformed");
+            throw_malformed_sstable_exception("Statistics is malformed", get_filename(component_type::Statistics));
         }
         const compaction_metadata& s = *static_cast<compaction_metadata *>(p.get());
         return s;
@@ -1126,6 +1127,9 @@ public:
     }
 
     std::optional<uint32_t> get_component_digest(component_type c) const;
+
+    std::optional<db_clock::time_point> get_scrub_time() const;
+    void set_scrub_time(db_clock::time_point scrub_time);
 
     // Gets ratio of droppable tombstone. A tombstone is considered droppable here
     // for cells and tombstones expired before the time point "GC before", which
@@ -1278,7 +1282,7 @@ public:
             std::function<void(sstable&)> modifier,
             update_sstable_id);
     // Must be called in a seastar thread
-    void write_component_with_metadata(component_type type);
+    void write_component_with_metadata_and_modifier(component_type type, std::function<void(sstable&)> modifier);
 private:
     future<uint64_t> component_filesize(component_type type) const noexcept;
 };
@@ -1431,6 +1435,7 @@ public:
 struct sstable_stream_sink_cfg {
     bool last_component = false;
     bool leave_unsealed = false;
+    bool update_scrub_time = false;
 };
 
 // Creates a sink object which can receive a component file sourced from above source object data.

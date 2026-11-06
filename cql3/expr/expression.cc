@@ -144,7 +144,7 @@ get_value(const subscript& s, const evaluation_inputs& inputs) {
         // For null[i] we return null.
         return std::nullopt;
     }
-    auto col_type = static_pointer_cast<const collection_type_impl>(type_of(s.val));
+    auto col_type = static_pointer_cast<const collection_type_impl>(type_of(s.val)->underlying_type());
     const auto deserialized = type_of(s.val)->deserialize(managed_bytes_view(*serialized));
     const auto key = evaluate(s.sub, inputs);
     auto&& key_type = col_type->is_list() ? int32_type : col_type->name_comparator();
@@ -407,7 +407,7 @@ bool_or_null contains_key(const expression& lhs, const expression& rhs, const ev
     data_type lhs_type = type_of(lhs);
     const map_type_impl::native_type data_map =
         value_cast<map_type_impl::native_type>(lhs_type->deserialize(managed_bytes_view(*lhs_bytes)));
-    data_type key_type = static_pointer_cast<const collection_type_impl>(lhs_type)->name_comparator();
+    data_type key_type = static_pointer_cast<const collection_type_impl>(lhs_type->underlying_type())->name_comparator();
 
     for (const std::pair<data_value, data_value>& map_element : data_map) {
         bytes serialized_element_key = map_element.first.serialize_nonnull();
@@ -1676,6 +1676,10 @@ static cql3::raw_value do_evaluate(const bind_variable& bind_var, const evaluati
         on_internal_error(expr_logger,
             "evaluate(bind_variable) called with nullptr receiver, should be prepared first");
     }
+    if (inputs.options == nullptr) {
+        on_internal_error(expr_logger,
+            "evaluate(bind_variable) called without query options");
+    }
 
     cql3::raw_value_view value = inputs.options->get_value_at(bind_var.bind_index);
 
@@ -1927,10 +1931,10 @@ static cql3::raw_value do_evaluate(const function_call& fun_call, const evaluati
         arguments.emplace_back(std::move(arg_val).to_managed_bytes_opt());
     }
 
-    bool has_cache_id = fun_call.lwt_cache_id.get() != nullptr && fun_call.lwt_cache_id->has_value();
+    bool has_cache_id = fun_call.lwt_cache_id.has_value();
     if (has_cache_id) {
         computed_function_values::mapped_type* cached_value =
-            inputs.options->find_cached_pk_function_call(**fun_call.lwt_cache_id);
+            inputs.options->find_cached_pk_function_call(*fun_call.lwt_cache_id);
         if (cached_value != nullptr) {
             return raw_value::make_value(*cached_value);
         }
@@ -1939,7 +1943,7 @@ static cql3::raw_value do_evaluate(const function_call& fun_call, const evaluati
     managed_bytes_opt result = scalar_fun->execute(arguments);
 
     if (has_cache_id) {
-        inputs.options->cache_pk_function_call(**fun_call.lwt_cache_id, to_bytes_opt(result));
+        inputs.options->cache_pk_function_call(*fun_call.lwt_cache_id, to_bytes_opt(result));
     }
 
     if (!result.has_value()) {

@@ -21,7 +21,8 @@ from cassandra.protocol import ConfigurationException, InvalidRequest
 from cassandra.query import BatchStatement, BatchType, SimpleStatement
 
 from .. import nodetool
-from ..util import new_materialized_view, new_test_table, unique_name
+from ..test_service_levels import new_service_level
+from ..util import ScyllaMetrics, new_materialized_view, new_session, new_test_table, new_user, unique_name
 
 
 def test_reject_user_provided_timestamps(cql, sc_keyspace):
@@ -598,7 +599,7 @@ def test_oversized_write_on_sc_table(cql, sc_keyspace):
     """
     A write whose raft command exceeds the command size limit of the
     group is rejected with a clear error, not the raft error surfacing as
-    a server error.
+    a server error. The rejection leaves the table writable.
     """
     with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, v blob") as table:
         insert = cql.prepare(f"INSERT INTO {table} (pk, v) VALUES (?, ?)")
@@ -608,6 +609,12 @@ def test_oversized_write_on_sc_table(cql, sc_keyspace):
         m = re.search(r"write of (\d+) bytes exceeds the limit of (\d+) bytes", str(e.value))
         size, limit = int(m.group(1)), int(m.group(2))
         assert size >= 200 * 1024 > limit
+
+        # Close to the limit, so the test also fails if the limit shrinks.
+        cql.execute(insert, [3, b'y' * (90 * 1024)])
+        assert [r.v for r in cql.execute(f"SELECT v FROM {table} WHERE pk = 1")] == [b'x' * 1024]
+        assert list(cql.execute(f"SELECT v FROM {table} WHERE pk = 2")) == []
+        assert [r.v for r in cql.execute(f"SELECT v FROM {table} WHERE pk = 3")] == [b'y' * (90 * 1024)]
 
 
 def test_mutation_fragments_on_sc_table(cql, sc_keyspace):
@@ -708,3 +715,41 @@ def test_mutation_fragments_consistency_level_on_sc_table(cql, sc_keyspace):
         for cl in (ConsistencyLevel.QUORUM, ConsistencyLevel.LOCAL_QUORUM, ConsistencyLevel.ALL):
             with pytest.raises(InvalidRequest, match=error_msg):
                 cql.execute(SimpleStatement(query, consistency_level=cl))
+
+
+def test_coordinator_metrics_per_scheduling_group(cql, sc_keyspace):
+    """
+    Verify that the coordinator metrics are split by scheduling group: the requests of
+    a role with its own service level are counted under that service level's
+    scheduling group, and a request of another role is not.
+
+    No other test runs in that scheduling group: the service level is attached only to
+    this test's role. But the group may be reused from a dropped service level and keep
+    its counts, so the test compares counts before and after its requests.
+    """
+    with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, c int") as table, \
+            new_user(cql, with_superuser_privileges=True) as role, \
+            new_service_level(cql, role=role) as sl, \
+            new_session(cql, role) as session:
+        scheduling_group = f"sl:{sl}"
+
+        def write_count():
+            return ScyllaMetrics.query(cql).get('scylla_strong_consistency_coordinator_write_latency_count',
+                                                {'scheduling_group_name': scheduling_group}) or 0
+
+        def read_count():
+            return ScyllaMetrics.query(cql).get('scylla_strong_consistency_coordinator_read_latency_count',
+                                                {'scheduling_group_name': scheduling_group, 'read_type': 'linearizable'}) or 0
+
+        writes_before = write_count()
+        reads_before = read_count()
+        session.execute(f"INSERT INTO {table} (pk, c) VALUES (1, 1)")
+        session.execute(f"INSERT INTO {table} (pk, c) VALUES (2, 2)")
+        session.execute(f"SELECT * FROM {table} WHERE pk = 1")
+        assert write_count() - writes_before == 2
+        assert read_count() - reads_before == 1
+
+        # A write of another role is not counted in this scheduling group.
+        writes_before = write_count()
+        cql.execute(f"INSERT INTO {table} (pk, c) VALUES (3, 3)")
+        assert write_count() - writes_before == 0

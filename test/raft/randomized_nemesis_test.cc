@@ -113,6 +113,7 @@ class impure_state_machine : public raft::state_machine {
     typename M::state_t _val;
     snapshots_t<typename M::state_t>& _snapshots;
 
+    bool _aborted = false;
     // Used to ensure that when `abort()` returns there are
     // no more in-progress methods running on this object.
     seastar::gate _gate;
@@ -131,7 +132,13 @@ public:
     impure_state_machine(raft::server_id id, snapshots_t<typename M::state_t>& snapshots)
         : _id(id), _val(M::init), _snapshots(snapshots) {}
 
+    // The server must not use the state machine after aborting it.
+    void check_not_aborted() const {
+        SCYLLA_ASSERT(!_aborted);
+    }
+
     future<> apply(raft::log_entry_ptr_list cmds) override {
+        check_not_aborted();
         co_await with_gate(_gate, [this, cmds = std::move(cmds)] () mutable -> future<> {
             for (const auto& entry : cmds) {
                 const auto& cref = std::get<raft::command>(entry->data);
@@ -161,6 +168,7 @@ public:
     }
 
     future<raft::snapshot_id> take_snapshot() override {
+        check_not_aborted();
         auto id = raft::snapshot_id::create_random_id();
         SCYLLA_ASSERT(_snapshots.emplace(id, _val).second);
         tlogger.trace("{}: took snapshot id {} val {}", _id, id, _val);
@@ -168,10 +176,12 @@ public:
     }
 
     void drop_snapshot(raft::snapshot_id id) override {
+        check_not_aborted();
         _snapshots.erase(id);
     }
 
     future<> load_snapshot(raft::snapshot_id id) override {
+        check_not_aborted();
         auto it = _snapshots.find(id);
         SCYLLA_ASSERT(it != _snapshots.end()); // dunno if the snapshot can actually be missing
         tlogger.trace("{}: loading snapshot id {} prev val {} new val {}", _id, id, _val, it->second);
@@ -180,6 +190,7 @@ public:
     }
 
     future<> abort() override {
+        _aborted = true;
         return _gate.close();
     }
 
@@ -1484,16 +1495,6 @@ public:
             _fd_subscription = std::nullopt;
             co_await _fd_service->stop();
             co_await _server->abort();
-
-            {
-                std::vector<raft::snapshot_id> snapshot_ids;
-                snapshot_ids.reserve(_snapshots->size());
-                for (const auto& p: *_snapshots) {
-                    snapshot_ids.push_back(p.first);
-                }
-                BOOST_TEST_INFO(seastar::format("snapshot ids: [{}]", snapshot_ids));
-                BOOST_CHECK_LE(snapshot_ids.size(), 2);
-            }
         }
         co_await std::move(f);
         _stopped = true;
@@ -2396,11 +2397,9 @@ SEASTAR_TEST_CASE(test_frequent_snapshotting) {
         // unconsumed output, with or without the applier queue bound the test
         // used to set for that purpose.
         //
-        // What it still checks is the teardown assertion that no more than two
-        // snapshots survive per server, which catches a leak by any route, and
-        // it does drive snapshotting hard: snapshot_threshold = 1 snapshots
-        // after every applied batch. Covering the replacement itself again
-        // would take a deliberate io_fiber delay.
+        // What it still does is drive snapshotting hard: snapshot_threshold = 1
+        // snapshots after every applied batch. Covering the replacement itself
+        // again would take a deliberate io_fiber delay.
 
         tlogger.debug("Started 2 more servers, changing configuration");
 

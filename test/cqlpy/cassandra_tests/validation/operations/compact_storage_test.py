@@ -1,5 +1,5 @@
 # This file was translated from the original Java test from the Apache
-# Cassandra source repository, as of commit a87055d56a33a9b17606f14535f48eb461965b82
+# Cassandra source repository, as of commit 4ab8bac4a51f8aef0d55b2497699e1291baeda4b
 #
 # The original Apache Cassandra license:
 #
@@ -972,7 +972,7 @@ def testDeleteWithNoClusteringColumns(cql, test_keyspace, forceFlush):
         assertInvalidMessage(cql, table, "Only EQ and IN relation are supported on the partition key",
                              "DELETE FROM %s WHERE partitionKey > ? ", 0)
 
-        assertInvalidMessage(cql, table, "Cannot use CONTAINS on non-collection column",
+        assertInvalidMessageRE(cql, table, "Cannot use CONTAINS on non-collection column|Cannot use DELETE with CONTAINS",
                              "DELETE FROM %s WHERE partitionKey CONTAINS ?", 0)
 
         # Non primary key in the where clause
@@ -1149,7 +1149,7 @@ def testDeleteWithTwoClusteringColumns(cql, test_keyspace, forceFlush):
         assertInvalidMessage(cql, table, "Only EQ and IN relation are supported on the partition key",
                              "DELETE FROM %s WHERE partitionKey > ? AND clustering_1 = ? AND clustering_2 = ?", 0, 1, 1)
 
-        assertInvalidMessage(cql, table, "Cannot use CONTAINS on non-collection column",
+        assertInvalidMessageRE(cql, table, "Cannot use CONTAINS on non-collection column|Cannot use DELETE with CONTAINS",
                              "DELETE FROM %s WHERE partitionKey CONTAINS ? AND clustering_1 = ? AND clustering_2 = ?", 0, 1, 1)
 
         # Non primary key in the where clause
@@ -2167,11 +2167,12 @@ def testFilteringOnCompactTablesWithoutIndices(cql, test_keyspace):
             assert_rows(execute(cql, table, "SELECT * FROM %s WHERE a = 1 AND b = 4 AND c = 4 ALLOW FILTERING"),
                        row(1, 4, 4))
 
-            assertInvalidMessage(cql, table, "IN predicates on non-primary-key columns (c) is not yet supported",
+            assertInvalidMessage(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
                                  "SELECT * FROM %s WHERE a IN (1, 2) AND c IN (6, 7)")
 
-            assertInvalidMessage(cql, table, "IN predicates on non-primary-key columns (c) is not yet supported",
-                                 "SELECT * FROM %s WHERE a IN (1, 2) AND c IN (6, 7) ALLOW FILTERING")
+            assert_rows(execute(cql, table, "SELECT * FROM %s WHERE a IN (1, 2) AND c IN (6, 7) ALLOW FILTERING"),
+                       row(1, 3, 6),
+                       row(2, 3, 7))
 
             assertInvalidMessage(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
                                  "SELECT * FROM %s WHERE c > 4")
@@ -2199,18 +2200,18 @@ def testFilteringOnCompactTablesWithoutIndices(cql, test_keyspace):
         # (returning nothing)
         #assertInvalidMessage(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
         #                     "SELECT * FROM %s WHERE c = null")
-        #assertInvalidMessage(cql, table, "Unsupported null value for column c",
+        #assertInvalidMessage(cql, table, "Invalid null value for column c",
         #                     "SELECT * FROM %s WHERE c = null ALLOW FILTERING")
         #assertInvalidMessage(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
         #                     "SELECT * FROM %s WHERE c > null")
-        #assertInvalidMessage(cql, table, "Unsupported null value for column c",
+        #assertInvalidMessage(cql, table, "Invalid null value for column c",
         #                     "SELECT * FROM %s WHERE c > null ALLOW FILTERING")
 
         # Checks filtering with unset
-        assertInvalidMessage(cql, table, "Unsupported unset value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) unset value for column c",
                              "SELECT * FROM %s WHERE c = ? ALLOW FILTERING",
                              unset())
-        assertInvalidMessage(cql, table, "Unsupported unset value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) unset value for column c",
                              "SELECT * FROM %s WHERE c > ? ALLOW FILTERING",
                              unset())
 
@@ -2236,11 +2237,12 @@ def testFilteringOnCompactTablesWithoutIndices(cql, test_keyspace):
             assert_rows(execute(cql, table, "SELECT * FROM %s WHERE a = 1 AND b = 2 AND c = 4 ALLOW FILTERING"),
                        row(1, 2, 4))
 
-            assertInvalidMessage(cql, table, "IN predicates on non-primary-key columns (c) is not yet supported",
+            assertInvalidMessage(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
                                  "SELECT * FROM %s WHERE a IN (1, 2) AND c IN (6, 7)")
 
-            assertInvalidMessage(cql, table, "IN predicates on non-primary-key columns (c) is not yet supported",
-                                 "SELECT * FROM %s WHERE a IN (1, 2) AND c IN (6, 7) ALLOW FILTERING")
+            assert_rows(execute(cql, table, "SELECT * FROM %s WHERE a IN (1, 2) AND c IN (6, 7) ALLOW FILTERING"),
+                       row(2, 1, 6))
+
 
             assertInvalidMessage(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
                                  "SELECT * FROM %s WHERE c > 4")
@@ -2267,18 +2269,18 @@ def testFilteringOnCompactTablesWithoutIndices(cql, test_keyspace):
         # Checks filtering with null
         assertInvalidMessage(cql, table,REQUIRES_ALLOW_FILTERING_MESSAGE,
                              "SELECT * FROM %s WHERE c = null")
-        assertInvalidMessage(cql, table,"Unsupported null value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) null value for column c",
                              "SELECT * FROM %s WHERE c = null ALLOW FILTERING")
         assertInvalidMessage(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
                              "SELECT * FROM %s WHERE c > null")
-        assertInvalidMessage(cql, table,"Unsupported null value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) null value for column c",
                              "SELECT * FROM %s WHERE c > null ALLOW FILTERING")
 
         # // Checks filtering with unset
-        assertInvalidMessage(cql, table,"Unsupported unset value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) unset value for column c",
                              "SELECT * FROM %s WHERE c = ? ALLOW FILTERING",
                              unset())
-        assertInvalidMessage(cql, table,"Unsupported unset value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) unset value for column c",
                              "SELECT * FROM %s WHERE c > ? ALLOW FILTERING",
                              unset())
 
@@ -2335,25 +2337,25 @@ def testFilteringOnCompactTablesWithoutIndicesAndWithLists(cql, test_keyspace):
         # Checks filtering with null
         assertInvalidMessage(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
                              "SELECT * FROM %s WHERE c = null")
-        assertInvalidMessage(cql, table, "Unsupported null value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) null value for column c",
                              "SELECT * FROM %s WHERE c = null ALLOW FILTERING")
         assertInvalidMessage(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
                              "SELECT * FROM %s WHERE c > null")
-        assertInvalidMessage(cql, table, "Unsupported null value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) null value for column c",
                              "SELECT * FROM %s WHERE c > null ALLOW FILTERING")
         assertInvalidMessage(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
                              "SELECT * FROM %s WHERE c CONTAINS null")
-        assertInvalidMessage(cql, table, "Unsupported null value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) null value for column c",
                              "SELECT * FROM %s WHERE c CONTAINS null ALLOW FILTERING")
 
         # Checks filtering with unset
-        assertInvalidMessage(cql, table, "Unsupported unset value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) unset value for column c",
                              "SELECT * FROM %s WHERE c = ? ALLOW FILTERING",
                              unset())
-        assertInvalidMessage(cql, table, "Unsupported unset value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) unset value for column c",
                              "SELECT * FROM %s WHERE c > ? ALLOW FILTERING",
                              unset())
-        assertInvalidMessage(cql, table, "Unsupported unset value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) unset value for column c",
                              "SELECT * FROM %s WHERE c CONTAINS ? ALLOW FILTERING",
                              unset())
 
@@ -2408,25 +2410,25 @@ def testFilteringOnCompactTablesWithoutIndicesAndWithLists(cql, test_keyspace):
         # Checks filtering with null
         assertInvalidMessage(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
                              "SELECT * FROM %s WHERE c = null")
-        assertInvalidMessage(cql, table, "Unsupported null value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) null value for column c",
                              "SELECT * FROM %s WHERE c = null ALLOW FILTERING")
         assertInvalidMessage(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
                              "SELECT * FROM %s WHERE c > null")
-        assertInvalidMessage(cql, table, "Unsupported null value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) null value for column c",
                              "SELECT * FROM %s WHERE c > null ALLOW FILTERING")
         assertInvalidMessage(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
                              "SELECT * FROM %s WHERE c CONTAINS null")
-        assertInvalidMessage(cql, table, "Unsupported null value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) null value for column c",
                              "SELECT * FROM %s WHERE c CONTAINS null ALLOW FILTERING")
 
         # Checks filtering with unset
-        assertInvalidMessage(cql, table, "Unsupported unset value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) unset value for column c",
                              "SELECT * FROM %s WHERE c = ? ALLOW FILTERING",
                              unset())
-        assertInvalidMessage(cql, table, "Unsupported unset value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) unset value for column c",
                              "SELECT * FROM %s WHERE c > ? ALLOW FILTERING",
                              unset())
-        assertInvalidMessage(cql, table, "Unsupported unset value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) unset value for column c",
                              "SELECT * FROM %s WHERE c CONTAINS ? ALLOW FILTERING",
                              unset())
 
@@ -2483,25 +2485,25 @@ def testFilteringOnCompactTablesWithoutIndicesAndWithSets(cql, test_keyspace):
         # Checks filtering with null
         assertInvalidMessage(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
                              "SELECT * FROM %s WHERE c = null")
-        assertInvalidMessage(cql, table, "Unsupported null value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) null value for column c",
                              "SELECT * FROM %s WHERE c = null ALLOW FILTERING")
         assertInvalidMessage(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
                              "SELECT * FROM %s WHERE c > null")
-        assertInvalidMessage(cql, table, "Unsupported null value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) null value for column c",
                              "SELECT * FROM %s WHERE c > null ALLOW FILTERING")
         assertInvalidMessage(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
                              "SELECT * FROM %s WHERE c CONTAINS null")
-        assertInvalidMessage(cql, table, "Unsupported null value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) null value for column c",
                              "SELECT * FROM %s WHERE c CONTAINS null ALLOW FILTERING")
 
         # Checks filtering with unset
-        assertInvalidMessage(cql, table, "Unsupported unset value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) unset value for column c",
                              "SELECT * FROM %s WHERE c = ? ALLOW FILTERING",
                              unset())
-        assertInvalidMessage(cql, table, "Unsupported unset value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) unset value for column c",
                              "SELECT * FROM %s WHERE c > ? ALLOW FILTERING",
                              unset())
-        assertInvalidMessage(cql, table, "Unsupported unset value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) unset value for column c",
                              "SELECT * FROM %s WHERE c CONTAINS ? ALLOW FILTERING",
                              unset())
 
@@ -2557,25 +2559,25 @@ def testFilteringOnCompactTablesWithoutIndicesAndWithSets(cql, test_keyspace):
         # Checks filtering with null
         assertInvalidMessage(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
                              "SELECT * FROM %s WHERE c = null")
-        assertInvalidMessage(cql, table, "Unsupported null value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) null value for column c",
                              "SELECT * FROM %s WHERE c = null ALLOW FILTERING")
         assertInvalidMessage(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
                              "SELECT * FROM %s WHERE c > null")
-        assertInvalidMessage(cql, table, "Unsupported null value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) null value for column c",
                              "SELECT * FROM %s WHERE c > null ALLOW FILTERING")
         assertInvalidMessage(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
                              "SELECT * FROM %s WHERE c CONTAINS null")
-        assertInvalidMessage(cql, table, "Unsupported null value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) null value for column c",
                              "SELECT * FROM %s WHERE c CONTAINS null ALLOW FILTERING")
 
         # Checks filtering with unset
-        assertInvalidMessage(cql, table, "Unsupported unset value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) unset value for column c",
                              "SELECT * FROM %s WHERE c = ? ALLOW FILTERING",
                              unset())
-        assertInvalidMessage(cql, table, "Unsupported unset value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) unset value for column c",
                              "SELECT * FROM %s WHERE c > ? ALLOW FILTERING",
                              unset())
-        assertInvalidMessage(cql, table, "Unsupported unset value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) unset value for column c",
                              "SELECT * FROM %s WHERE c CONTAINS ? ALLOW FILTERING",
                              unset())
 
@@ -2700,25 +2702,25 @@ def testAllowFilteringOnPartitionKeyOnCompactTablesWithoutIndicesAndWithLists(cq
         # Checks filtering with null
         assertInvalidMessage(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
                              "SELECT * FROM %s WHERE a > 1 AND c = null")
-        assertInvalidMessage(cql, table, "Unsupported null value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) null value for column c",
                              "SELECT * FROM %s WHERE a > 1 AND c = null ALLOW FILTERING")
         assertInvalidMessage(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
                              "SELECT * FROM %s WHERE a > 1 AND c > null")
-        assertInvalidMessage(cql, table, "Unsupported null value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) null value for column c",
                              "SELECT * FROM %s WHERE a > 1 AND c > null ALLOW FILTERING")
         assertInvalidMessage(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
                              "SELECT * FROM %s WHERE a > 1 AND c CONTAINS null")
-        assertInvalidMessage(cql, table, "Unsupported null value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) null value for column c",
                              "SELECT * FROM %s WHERE a > 1 AND c CONTAINS null ALLOW FILTERING")
 
         # Checks filtering with unset
-        assertInvalidMessage(cql, table, "Unsupported unset value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) unset value for column c",
                              "SELECT * FROM %s WHERE a > 1 AND c = ? ALLOW FILTERING",
                              unset())
-        assertInvalidMessage(cql, table, "Unsupported unset value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) unset value for column c",
                              "SELECT * FROM %s WHERE a > 1 AND c > ? ALLOW FILTERING",
                              unset())
-        assertInvalidMessage(cql, table, "Unsupported unset value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) unset value for column c",
                              "SELECT * FROM %s WHERE a > 1 AND c CONTAINS ? ALLOW FILTERING",
                              unset())
 
@@ -2772,25 +2774,25 @@ def testAllowFilteringOnPartitionKeyOnCompactTablesWithoutIndicesAndWithLists(cq
         # Checks filtering with null
         assertInvalidMessage(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
                              "SELECT * FROM %s WHERE a > 1 AND c = null")
-        assertInvalidMessage(cql, table, "Unsupported null value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) null value for column c",
                              "SELECT * FROM %s WHERE a > 1 AND c = null ALLOW FILTERING")
         assertInvalidMessage(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
                              "SELECT * FROM %s WHERE a > 1 AND c > null")
-        assertInvalidMessage(cql, table, "Unsupported null value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) null value for column c",
                              "SELECT * FROM %s WHERE a > 1 AND c > null ALLOW FILTERING")
         assertInvalidMessage(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
                              "SELECT * FROM %s WHERE a > 1 AND c CONTAINS null")
-        assertInvalidMessage(cql, table, "Unsupported null value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) null value for column c",
                              "SELECT * FROM %s WHERE a > 1 AND c CONTAINS null ALLOW FILTERING")
 
         # Checks filtering with unset
-        assertInvalidMessage(cql, table, "Unsupported unset value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) unset value for column c",
                              "SELECT * FROM %s WHERE a > 1 AND c = ? ALLOW FILTERING",
                              unset())
-        assertInvalidMessage(cql, table, "Unsupported unset value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) unset value for column c",
                              "SELECT * FROM %s WHERE a > 1 AND c > ? ALLOW FILTERING",
                              unset())
-        assertInvalidMessage(cql, table, "Unsupported unset value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) unset value for column c",
                              "SELECT * FROM %s WHERE a > 1 AND c CONTAINS ? ALLOW FILTERING",
                              unset())
 
@@ -2848,30 +2850,30 @@ def testAllowFilteringOnPartitionKeyOnCompactTablesWithoutIndicesAndWithMaps(cql
         # Checks filtering with null
         assertInvalidMessage(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
                              "SELECT * FROM %s WHERE a >= 1 AND c = null")
-        assertInvalidMessage(cql, table, "Unsupported null value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) null value for column c",
                              "SELECT * FROM %s WHERE a >= 1 AND c = null ALLOW FILTERING")
         assertInvalidMessage(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
                              "SELECT * FROM %s WHERE a >= 1 AND c > null")
-        assertInvalidMessage(cql, table, "Unsupported null value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) null value for column c",
                              "SELECT * FROM %s WHERE a >= 1 AND c > null ALLOW FILTERING")
         assertInvalidMessage(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
                              "SELECT * FROM %s WHERE a >= 1 AND c CONTAINS null")
-        assertInvalidMessage(cql, table, "Unsupported null value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) null value for column c",
                              "SELECT * FROM %s WHERE a >= 1 AND c CONTAINS null ALLOW FILTERING")
-        assertInvalidMessage(cql, table, "Unsupported null value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) null value for column c",
                              "SELECT * FROM %s WHERE a >= 1 AND c CONTAINS KEY null ALLOW FILTERING")
 
         # Checks filtering with unset
-        assertInvalidMessage(cql, table, "Unsupported unset value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) unset value for column c",
                              "SELECT * FROM %s WHERE a >= 1 AND c = ? ALLOW FILTERING",
                              unset())
-        assertInvalidMessage(cql, table, "Unsupported unset value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) unset value for column c",
                              "SELECT * FROM %s WHERE a >= 1 AND c > ? ALLOW FILTERING",
                              unset())
-        assertInvalidMessage(cql, table, "Unsupported unset value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) unset value for column c",
                              "SELECT * FROM %s WHERE a >= 1 AND c CONTAINS ? ALLOW FILTERING",
                              unset())
-        assertInvalidMessage(cql, table, "Unsupported unset value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) unset value for column c",
                              "SELECT * FROM %s WHERE a >= 1 AND c CONTAINS KEY ? ALLOW FILTERING",
                              unset())
 
@@ -2928,32 +2930,32 @@ def testAllowFilteringOnPartitionKeyOnCompactTablesWithoutIndicesAndWithMaps(cql
         # Checks filtering with null
         assertInvalidMessage(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
                              "SELECT * FROM %s WHERE a >= 1 AND c = null")
-        assertInvalidMessage(cql, table, "Unsupported null value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) null value for column c",
                              "SELECT * FROM %s WHERE a >= 1 AND c = null ALLOW FILTERING")
         assertInvalidMessage(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
                              "SELECT * FROM %s WHERE a >= 1 AND c > null")
-        assertInvalidMessage(cql, table, "Unsupported null value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) null value for column c",
                              "SELECT * FROM %s WHERE a >= 1 AND c > null ALLOW FILTERING")
         assertInvalidMessage(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
                              "SELECT * FROM %s WHERE a >= 1 AND c CONTAINS null")
-        assertInvalidMessage(cql, table, "Unsupported null value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) null value for column c",
                              "SELECT * FROM %s WHERE a >= 1 AND c CONTAINS null ALLOW FILTERING")
         assertInvalidMessage(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
                              "SELECT * FROM %s WHERE a >= 1 AND c CONTAINS KEY null")
-        assertInvalidMessage(cql, table, "Unsupported null value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) null value for column c",
                              "SELECT * FROM %s WHERE a >= 1 AND c CONTAINS KEY null ALLOW FILTERING")
 
         # Checks filtering with unset
-        assertInvalidMessage(cql, table, "Unsupported unset value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) unset value for column c",
                              "SELECT * FROM %s WHERE a >= 1 AND c = ? ALLOW FILTERING",
                              unset())
-        assertInvalidMessage(cql, table, "Unsupported unset value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) unset value for column c",
                              "SELECT * FROM %s WHERE a >= 1 AND c > ? ALLOW FILTERING",
                              unset())
-        assertInvalidMessage(cql, table, "Unsupported unset value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) unset value for column c",
                              "SELECT * FROM %s WHERE a >= 1 AND c CONTAINS ? ALLOW FILTERING",
                              unset())
-        assertInvalidMessage(cql, table, "Unsupported unset value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) unset value for column c",
                              "SELECT * FROM %s WHERE a >= 1 AND c CONTAINS KEY ? ALLOW FILTERING",
                              unset())
 
@@ -3011,25 +3013,25 @@ def testAllowFilteringOnPartitionKeyOnCompactTablesWithoutIndicesAndWithSets(cql
         # Checks filtering with null
         assertInvalidMessage(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
                              "SELECT * FROM %s WHERE a >= 1 AND c = null")
-        assertInvalidMessage(cql, table, "Unsupported null value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) null value for column c",
                              "SELECT * FROM %s WHERE a >= 1 AND c = null ALLOW FILTERING")
         assertInvalidMessage(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
                              "SELECT * FROM %s WHERE a >= 1 AND c > null")
-        assertInvalidMessage(cql, table, "Unsupported null value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) null value for column c",
                              "SELECT * FROM %s WHERE a >= 1 AND c > null ALLOW FILTERING")
         assertInvalidMessage(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
                              "SELECT * FROM %s WHERE a >= 1 AND c CONTAINS null")
-        assertInvalidMessage(cql, table, "Unsupported null value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) null value for column c",
                              "SELECT * FROM %s WHERE a >= 1 AND c CONTAINS null ALLOW FILTERING")
 
         # Checks filtering with unset
-        assertInvalidMessage(cql, table, "Unsupported unset value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) unset value for column c",
                              "SELECT * FROM %s WHERE a >= 1 AND c = ? ALLOW FILTERING",
                              unset())
-        assertInvalidMessage(cql, table, "Unsupported unset value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) unset value for column c",
                              "SELECT * FROM %s WHERE a >= 1 AND c > ? ALLOW FILTERING",
                              unset())
-        assertInvalidMessage(cql, table, "Unsupported unset value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) unset value for column c",
                              "SELECT * FROM %s WHERE a >= 1 AND c CONTAINS ? ALLOW FILTERING",
                              unset())
 
@@ -3085,25 +3087,25 @@ def testAllowFilteringOnPartitionKeyOnCompactTablesWithoutIndicesAndWithSets(cql
         # Checks filtering with null
         assertInvalidMessage(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
                              "SELECT * FROM %s WHERE a >= 1 AND c = null")
-        assertInvalidMessage(cql, table, "Unsupported null value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) null value for column c",
                              "SELECT * FROM %s WHERE a >= 1 AND c = null ALLOW FILTERING")
         assertInvalidMessage(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
                              "SELECT * FROM %s WHERE a >= 1 AND c > null")
-        assertInvalidMessage(cql, table, "Unsupported null value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) null value for column c",
                              "SELECT * FROM %s WHERE a >= 1 AND c > null ALLOW FILTERING")
         assertInvalidMessage(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
                              "SELECT * FROM %s WHERE a >= 1 AND c CONTAINS null")
-        assertInvalidMessage(cql, table, "Unsupported null value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) null value for column c",
                              "SELECT * FROM %s WHERE a >= 1 AND c CONTAINS null ALLOW FILTERING")
 
         # Checks filtering with unset
-        assertInvalidMessage(cql, table, "Unsupported unset value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) unset value for column c",
                              "SELECT * FROM %s WHERE a >= 1 AND c = ? ALLOW FILTERING",
                              unset())
-        assertInvalidMessage(cql, table, "Unsupported unset value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) unset value for column c",
                              "SELECT * FROM %s WHERE a >= 1 AND c > ? ALLOW FILTERING",
                              unset())
-        assertInvalidMessage(cql, table, "Unsupported unset value for column c",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) unset value for column c",
                              "SELECT * FROM %s WHERE a >= 1 AND c CONTAINS ? ALLOW FILTERING",
                              unset())
 
@@ -3133,11 +3135,11 @@ def testAllowFilteringOnPartitionKeyOnCompactTablesWithoutIndices(cql, test_keys
             assert_rows(execute(cql, table, "SELECT * FROM %s WHERE a = 1 AND b = 4 AND c = 4 ALLOW FILTERING"),
                        row(1, 4, 4, 5))
 
-            assertInvalidMessage(cql, table, "IN predicates on non-primary-key columns (d) is not yet supported",
+            assertInvalidMessage(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
                                  "SELECT * FROM %s WHERE a IN (1, 2) AND b = 3 AND d IN (6, 7)")
 
-            assertInvalidMessage(cql, table, "IN predicates on non-primary-key columns (d) is not yet supported",
-                                 "SELECT * FROM %s WHERE a IN (1, 2) AND b = 3 AND d IN (6, 7) ALLOW FILTERING")
+            assert_rows(execute(cql, table, "SELECT * FROM %s WHERE a IN (1, 2) AND b = 3 AND d IN (6, 7) ALLOW FILTERING"),
+                       row(1, 3, 6, 7))
 
             assert_rows(execute(cql, table, "SELECT * FROM %s WHERE a < 2 AND c > 4 AND c <= 6 ALLOW FILTERING"),
                        row(1, 3, 6, 7))
@@ -3158,16 +3160,16 @@ def testAllowFilteringOnPartitionKeyOnCompactTablesWithoutIndices(cql, test_keys
         # Checks filtering with null
         assertInvalidMessage(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
                              "SELECT * FROM %s WHERE d = null")
-        assertInvalidMessage(cql, table, "Unsupported null value for column a",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) null value for column a",
                              "SELECT * FROM %s WHERE a = null ALLOW FILTERING")
-        assertInvalidMessage(cql, table, "Unsupported null value for column a",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) null value for column a",
                              "SELECT * FROM %s WHERE a > null ALLOW FILTERING")
 
         # Checks filtering with unset
-        assertInvalidMessage(cql, table, "Unsupported unset value for column a",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) unset value for column a",
                              "SELECT * FROM %s WHERE a = ? ALLOW FILTERING",
                              unset())
-        assertInvalidMessage(cql, table, "Unsupported unset value for column a",
+        assertInvalidMessageRE(cql, table, "(Unsupported|Invalid) unset value for column a",
                              "SELECT * FROM %s WHERE a > ? ALLOW FILTERING",
                              unset())
 
@@ -3213,11 +3215,11 @@ def testAllowFilteringOnPartitionKeyOnCompactTablesWithoutIndices(cql, test_keys
             assert_rows(execute(cql, table, "SELECT * FROM %s WHERE a = 1 AND c >= 4 ALLOW FILTERING"),
                        row(1, 2, 4))
 
-            assertInvalidMessage(cql, table, "IN predicates on non-primary-key columns (b) is not yet supported",
+            assertInvalidMessage(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
                                  "SELECT * FROM %s WHERE a = 1 AND b IN (1, 2) AND c IN (6, 7)")
 
-            assertInvalidMessage(cql, table, "IN predicates on non-primary-key columns (c) is not yet supported",
-                                 "SELECT * FROM %s WHERE a IN (1, 2) AND c IN (6, 7) ALLOW FILTERING")
+            assert_rows(execute(cql, table, "SELECT * FROM %s WHERE a IN (1, 2) AND c IN (6, 7) ALLOW FILTERING"),
+                       row(2, 1, 6))
 
             assertInvalidMessage(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
                                  "SELECT * FROM %s WHERE c > 4")
@@ -3313,17 +3315,17 @@ def testFilteringOnCompactTablesWithoutIndicesAndWithMaps(cql, test_keyspace):
         # (returning nothing)
         #assertInvalidMessage(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
         #                     "SELECT * FROM %s WHERE c = null")
-        #assertInvalidMessage(cql, table, "Unsupported null value for column c",
+        #assertInvalidMessage(cql, table, "Invalid null value for column c",
         #                     "SELECT * FROM %s WHERE c = null ALLOW FILTERING")
         #assertInvalidMessage(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
         #                     "SELECT * FROM %s WHERE c > null")
-        #assertInvalidMessage(cql, table, "Unsupported null value for column c",
+        #assertInvalidMessage(cql, table, "Invalid null value for column c",
         #                     "SELECT * FROM %s WHERE c > null ALLOW FILTERING")
         #assertInvalidMessage(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
         #                     "SELECT * FROM %s WHERE c CONTAINS null")
-        #assertInvalidMessage(cql, table, "Unsupported null value for column c",
+        #assertInvalidMessage(cql, table, "Invalid null value for column c",
         #                     "SELECT * FROM %s WHERE c CONTAINS null ALLOW FILTERING")
-        #assertInvalidMessage(cql, table, "Unsupported null value for column c",
+        #assertInvalidMessage(cql, table, "Invalid null value for column c",
         #                     "SELECT * FROM %s WHERE c CONTAINS KEY null ALLOW FILTERING")
 
         # Checks filtering with unset
@@ -3397,19 +3399,19 @@ def testFilteringOnCompactTablesWithoutIndicesAndWithMaps(cql, test_keyspace):
         # (returning nothing)
         #assertInvalidMessage(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
         #                     "SELECT * FROM %s WHERE c = null")
-        #assertInvalidMessage(cql, table, "Unsupported null value for column c",
+        #assertInvalidMessage(cql, table, "Invalid null value for column c",
         #                     "SELECT * FROM %s WHERE c = null ALLOW FILTERING")
         #assertInvalidMessage(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
         #                     "SELECT * FROM %s WHERE c > null")
-        #assertInvalidMessage(cql, table, "Unsupported null value for column c",
+        #assertInvalidMessage(cql, table, "Invalid null value for column c",
         #                     "SELECT * FROM %s WHERE c > null ALLOW FILTERING")
         #assertInvalidMessage(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
         #                     "SELECT * FROM %s WHERE c CONTAINS null")
-        #assertInvalidMessage(cql, table, "Unsupported null value for column c",
+        #assertInvalidMessage(cql, table, "Invalid null value for column c",
         #                     "SELECT * FROM %s WHERE c CONTAINS null ALLOW FILTERING")
         #assertInvalidMessage(cql, table, REQUIRES_ALLOW_FILTERING_MESSAGE,
         #                     "SELECT * FROM %s WHERE c CONTAINS KEY null")
-        #assertInvalidMessage(cql, table, "Unsupported null value for column c",
+        #assertInvalidMessage(cql, table, "Invalid null value for column c",
         #                     "SELECT * FROM %s WHERE c CONTAINS KEY null ALLOW FILTERING")
 
         # Checks filtering with unset
@@ -4163,6 +4165,19 @@ def testUpdateWithMultiplePartitionKeyComponents(cql, test_keyspace, forceFlush)
         # there should be an error.
         assertInvalid(cql, table,
                              "UPDATE %s SET value = ? WHERE partitionKey_1 = ? AND clustering_1 = ? AND clustering_2 = ?", 7, 1, 1)
+
+# The tests testCfmCompactStorageCQL, testCfmCounterCQL and
+# testOperationCountWithCompactTable were not translated, because they use
+# Cassandra's internal APIs to create a table (TableMetadata.builder()) or an
+# update (RowUpdateBuilder). The tests testDenseTable, testStaticCompactTable,
+# testStaticCompactWithCounters, testDenseCompactTableWithoutRegulars and
+# testCompactDynamic create a table with CQL, and check the CREATE TABLE
+# statement that Cassandra's internal SchemaCQLHelper generates for it.
+# DESCRIBE TABLE ... WITH INTERNALS prints the statement generated by the same
+# code (without IF NOT EXISTS), but these tests were not translated to use it,
+# because what they check is the format of this statement: Cassandra's
+# DESCRIBE wraps it in a comment saying that the table is not compatible with
+# CQL, and Scylla's DESCRIBE prints it in a different format.
 
 # AlterTest
 

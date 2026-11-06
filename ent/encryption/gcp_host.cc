@@ -50,6 +50,7 @@
 #include "utils/http.hh"
 #include "marshal_exception.hh"
 #include "db/config.hh"
+#include "utils/assert.hh"
 
 using namespace std::chrono_literals;
 using namespace std::string_literals;
@@ -264,7 +265,7 @@ future<rjson::value> encryption::gcp_host::impl::gcp_auth_post_with_retry(std::s
         }
     }
 
-    assert(i != _cached_credentials.end()); // should either be set now or we threw.
+    SCYLLA_ASSERT(i != _cached_credentials.end()); // should either be set now or we threw.
 
     auto& creds = i->second;
 
@@ -485,8 +486,8 @@ future<encryption::gcp_host::impl::key_and_id_type> encryption::gcp_host::impl::
         .id = id,
     };
     co_await _id_cache.insert(key2, [&](const id_cache_key& kin) -> future<bytes>{
-        assert(kin.id == key2.id);
-        assert(kin.src == key2.src);
+        SCYLLA_ASSERT(kin.id == key2.id);
+        SCYLLA_ASSERT(kin.src == key2.src);
         co_return key->key();
     });
 

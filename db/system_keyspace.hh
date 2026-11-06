@@ -15,7 +15,9 @@
 #include <utility>
 #include <vector>
 #include "db/view/view_build_status.hh"
-#include "gms/gossiper.hh"
+#include "gms/inet_address.hh"
+#include "gms/generation-number.hh"
+#include "gms/loaded_endpoint_state.hh"
 #include "schema/schema_fwd.hh"
 #include "utils/UUID.hh"
 #include "query/query-result-set.hh"
@@ -30,9 +32,9 @@
 #include "cdc/generation.hh"
 #include "locator/host_id.hh"
 #include "virtual_tables.hh"
-#include "types/types.hh"
 #include "auth_version.hh"
 #include "db/view/view_building_state.hh"
+#include "service/topology_state_machine_fwd.hh"
 
 namespace netw {
     class shared_dict;
@@ -195,8 +197,6 @@ public:
     static constexpr auto RAFT_SNAPSHOTS = "raft_snapshots";
     static constexpr auto RAFT_SNAPSHOT_CONFIG = "raft_snapshot_config";
     static constexpr auto RAFT_GROUPS = "raft_groups";
-    static constexpr auto RAFT_GROUPS_SNAPSHOTS = "raft_groups_snapshots";
-    static constexpr auto RAFT_GROUPS_SNAPSHOT_CONFIG = "raft_groups_snapshot_config";
     static constexpr auto REPAIR_HISTORY = "repair_history";
     static constexpr auto REPAIR_TASKS = "repair_tasks";
     static constexpr auto GROUP0_HISTORY = "group0_history";
@@ -251,8 +251,6 @@ public:
     static schema_ptr raft();
     static schema_ptr raft_snapshots();
     static schema_ptr raft_groups();
-    static schema_ptr raft_groups_snapshots();
-    static schema_ptr raft_groups_snapshot_config();
     static schema_ptr repair_history();
     static schema_ptr repair_tasks();
     static schema_ptr group0_history();
@@ -434,6 +432,10 @@ public:
         std::optional<db_clock::time_point> snapshot_expiry;
         bool snapshot_skip_flush;
         std::optional<sstring> finalize_migration_ks_name;
+        std::optional<sstring> prepare_migration_ks_name;
+        // The tables which had no tablet map when the request was made, each with the
+        // tablet count target it was given then, 0 for none.
+        std::optional<std::unordered_map<table_id, int64_t>> prepare_migration_tables;
         std::optional<table_id> restore_table_id;
         std::optional<sstring> restore_snapshot_name;
     };
@@ -469,6 +471,10 @@ public:
     // Saves a record of a token range affected by cleanup.
     // After reboot, tokens from this range will be replayed only if they are on replay positions
     // strictly greater than the given one.
+    // Does nothing if the replay position is invalid, such a record wouldn't filter anything.
+    // Also drops the records made obsolete by the commitlog: those which apply only to
+    // positions older than its minimum position, i.e. to segments which are already deleted.
+    // The record and the dropping are written as a single mutation.
     future<> save_commitlog_cleanup_record(table_id, dht::token_range, db::replay_position);
     struct commitlog_cleanup_map_hash {
         size_t operator()(const std::pair<table_id, int32_t>& p) const;
@@ -490,9 +496,6 @@ public:
         commitlog_cleanup_map_hash
         >;
     future<commitlog_cleanup_map> get_commitlog_cleanup_records();
-    // Drops all cleanup records which apply to positions older than the given one.
-    // Used to drop records which only apply to segments which have already been deleted.
-    future<> drop_old_commitlog_cleanup_records(replay_position);
     // Cleans all records. Used after a successful replay, since the records only
     // apply to the commitlog of the last boot cycle, and can be wrong in this cycle.
     future<> drop_all_commitlog_cleanup_records();

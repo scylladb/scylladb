@@ -34,6 +34,8 @@
 #include "db/view/view_consumer.hh"
 #include "mutation/canonical_mutation.hh"
 #include "replica/database.hh"
+#include "replica/streaming_reader_lifecycle_policy.hh"
+#include "utils/exceptions.hh"
 #include "keys/clustering_bounds_comparator.hh"
 #include "cql3/cql_config.hh"
 #include "cql3/util.hh"
@@ -49,6 +51,7 @@
 #include "db/view/regular_column_transformation.hh"
 #include "db/system_keyspace_view_types.hh"
 #include "db/system_keyspace.hh"
+#include "gms/gossiper.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "db/tags/utils.hh"
 #include "db/tags/extension.hh"
@@ -2142,9 +2145,19 @@ future<> view_update_generator::mutate_MV(
                 memory_units = nullptr;
                 _proxy.local().update_view_update_backlog();
                 if (f.failed()) {
+                    auto ep = f.get_exception();
+                    // The update reaches the shard owning it only once that shard has committed every
+                    // schema change this one had (see global_schema_ptr::get()), so a view missing there
+                    // has been dropped, possibly while this shard is still committing the drop. Such an
+                    // update has no effect, so it must not fail the base write or be reported as an error.
+                    if (try_catch<replica::no_such_column_family>(ep)) {
+                        tracing::trace(tr_state, "Ignoring local view update for {}: the view was dropped", my_address);
+                        vlogger.debug("Ignoring view update to {} (view: {}.{}, base token: {}, view token: {}) of a dropped view: {:t}",
+                                my_address, s->ks_name(), s->cf_name(), base_token, view_token, ep);
+                        return make_ready_future<>();
+                    }
                     ++stats.view_updates_failed_local;
                     ++cf_stats.total_view_updates_failed_local;
-                    auto ep = f.get_exception();
                     tracing::trace(tr_state, "Failed to apply local view update for {}", my_address);
                     vlogger.error("Error applying view update to {} (view: {}.{}, base token: {}, view token: {}): {:t}",
                             my_address, s->ks_name(), s->cf_name(), base_token, view_token, ep);
@@ -3199,7 +3212,13 @@ public:
         if (_step.reader.is_end_of_stream() && _step.reader.is_buffer_empty()) {
             // before going back to the minimum token, advance current_key to the end
             // and check for built views in that range.
-            _step.current_key = { _step.prange.end().value_or(dht::ring_position::max()).value().token(), partition_key::make_empty()};
+            // Use token::last() (the largest key-kind token) rather than the
+            // partition range's after_all_keys end bound: decorated_key stores its
+            // token as a raw value without the kind, so an after_all_keys token can't
+            // be represented (and asserts in debug builds). last() is >= every real
+            // first_token (always a key or minimum token), so check_for_built_views()
+            // still sees current_token() >= first_token for all views.
+            _step.current_key = { dht::token::last(), partition_key::make_empty() };
             check_for_built_views();
 
             _step.current_key = {dht::minimum_token(), partition_key::make_empty()};

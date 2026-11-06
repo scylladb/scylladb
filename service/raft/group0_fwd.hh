@@ -9,10 +9,21 @@
 #pragma once
 
 #include <iosfwd>
-#include "raft/raft.hh"
+#include <variant>
+#include <vector>
+#include <seastar/core/lowres_clock.hh>
+#include <seastar/core/timer.hh>
+#include "raft/raft_fwd.hh"
 #include "gms/inet_address.hh"
 
 namespace service {
+
+class raft_group0_client;
+class raft_group_registry;
+class group0_guard;
+class group0_batch;
+struct schema_change;
+struct topology_change;
 
 // Address of a discovery peer
 struct discovery_peer {

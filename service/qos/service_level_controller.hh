@@ -9,6 +9,7 @@
 #pragma once
 
 #include <seastar/core/timer.hh>
+#include <seastar/core/gate.hh>
 #include <seastar/util/bool_class.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/sstring.hh>
@@ -28,8 +29,7 @@
 #include "mutation/mutation.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "qos_configuration_change_subscriber.hh"
-#include "service/raft/raft_group0_client.hh"
-#include "service/raft/raft_group_registry.hh"
+#include "service/raft/group0_fwd.hh"
 
 namespace db {
     class system_keyspace;
@@ -399,9 +399,7 @@ public:
 
     future<std::vector<cql3::description>> describe_service_levels();
 
-    future<> commit_mutations(::service::group0_batch&& mc) {
-        return _sl_data_accessor->commit_mutations(std::move(mc), _global_controller_db->group0_aborter);
-    }
+    future<> commit_mutations(::service::group0_batch&& mc);
 
     /**
      * Migrate data from `system_distributed.service_levels` to `system.service_levels_v2`.
@@ -436,6 +434,7 @@ private:
      * change due to execution reordering.
      */
     future<> notify_service_level_added(sstring name, service_level sl_data);
+    void make_service_level_available(sstring name, service_level sl_data);
     future<> notify_service_level_updated(sstring name, service_level_options slo);
     future<> notify_service_level_removed(sstring name);
     future<> notify_effective_service_levels_cache_reloaded();

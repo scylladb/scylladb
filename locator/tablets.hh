@@ -8,10 +8,9 @@
 
 #pragma once
 
+#include "locator/tablet_types.hh"
 #include "dht/token.hh"
 #include "locator/token_metadata_fwd.hh"
-#include "utils/small_vector.hh"
-#include "locator/host_id.hh"
 #include "service/session.hh"
 #include "dht/i_partitioner_fwd.hh"
 #include "dht/token-sharding.hh"
@@ -21,14 +20,17 @@
 #include "utils/chunked_vector.hh"
 #include "utils/hash.hh"
 #include "utils/UUID.hh"
-#include "raft/raft.hh"
+#include "raft/raft_fwd.hh"
 
 #include <memory>
 #include <ranges>
-#include <seastar/core/reactor.hh>
 #include <seastar/util/log.hh>
 #include <seastar/core/sharded.hh>
 #include <seastar/util/noncopyable_function.hh>
+
+namespace data_dictionary {
+class keyspace_metadata;
+}
 
 namespace gms {
 class feature_service;
@@ -41,22 +43,6 @@ class topology;
 extern seastar::logger tablet_logger;
 
 using token = dht::token;
-
-using tablet_task_id = utils::tagged_uuid<struct tablet_task_id_tag>;
-
-// Identifies tablet within the scope of a single tablet_map,
-// which has a scope of (table_id, token metadata version).
-// Different tablets of different tables can have the same tablet_id.
-// Different tablets in subsequent token metadata version can have the same tablet_id.
-// When splitting a tablet, one of the new tablets (in the new token metadata version)
-// will have the same tablet_id as the old one.
-struct tablet_id {
-    size_t id;
-    explicit tablet_id(size_t id) : id(id) {}
-    size_t value() const { return id; }
-    explicit operator size_t() const { return id; }
-    auto operator<=>(const tablet_id&) const = default;
-};
 
 /// Determines properties of tablet layout in a given table (tablet_map).
 enum class tablet_layout {
@@ -88,14 +74,6 @@ enum class tablet_layout {
 sstring tablet_layout_to_string(tablet_layout);
 tablet_layout tablet_layout_from_string(const sstring&);
 
-/// Identifies tablet (not be confused with tablet replica) in the scope of the whole cluster.
-struct global_tablet_id {
-    table_id table;
-    tablet_id tablet;
-
-    auto operator<=>(const global_tablet_id&) const = default;
-};
-
 struct range_based_tablet_id {
     table_id table;
 
@@ -106,47 +84,9 @@ struct range_based_tablet_id {
     bool operator==(const range_based_tablet_id&) const = default;
 };
 
-struct tablet_replica {
-    host_id host;
-    shard_id shard;
-
-    auto operator<=>(const tablet_replica&) const = default;
-};
-
-using tablet_replica_set = utils::small_vector<tablet_replica, 3>;
-
-/// A 64-bit hash computed from a tablet's replica list after ordering it.
-/// Used by TABLETS_ROUTING_V2 to detect when a driver's cached routing is stale.
-///
-/// Tablet version is computed differently for eventually-consistent and
-/// strongly-consistent tablets. For more details, see: docs/dev/tablets-routing-v2.md.
-using tablet_version = utils::tagged_integer<struct tablet_version_tag, uint64_t>;
-
-/// A single-byte encoding of one 4-bit block of a tablet_version.
-/// The high nibble is the block index (0-15), the low nibble is the block's value.
-/// Used in EXECUTE requests to minimize network usage.
-///
-/// Blocks are indexed from the least significant bits to the most significant ones.
-/// For more details, see: docs/dev/tablets-routing-v2.md.
-using tablet_version_block = utils::tagged_integer<struct tablet_version_block_tag, uint8_t>;
-
-inline bool compare_tablet_version_block(tablet_version hash, tablet_version_block block) noexcept {
-    uint64_t hash_value = hash.value();
-
-    // Extract the value of the block.
-    const uint8_t block_value = block.value() & 0x0F;
-
-    // Extract the index of the block.
-    const uint8_t block_index = (block.value() & 0xF0) >> 4;
-
-    // Shift the hash so that the block corresponds to the 4 least significant bits.
-    hash_value >>= (block_index * 4);
-
-    // Extract the block value.
-    const uint8_t hash_block = static_cast<uint8_t>(hash_value & 0x0F);
-
-    return hash_block == block_value;
-}
+/// The Raft groups replacing the group of a strongly consistent tablet which is being resized.
+/// Sized for a split, which has two.
+using raft_group_id_list = utils::small_vector<raft::group_id, 2>;
 
 namespace internal {
 
@@ -157,31 +97,6 @@ tablet_version hash_replica_list(const tablet_replica_set&) noexcept;
 } // namespace locator
 
 namespace std {
-
-template<>
-struct hash<locator::tablet_id> {
-    size_t operator()(const locator::tablet_id& id) const {
-        return std::hash<size_t>()(id.value());
-    }
-};
-
-template<>
-struct hash<locator::tablet_replica> {
-    size_t operator()(const locator::tablet_replica& r) const {
-        return utils::hash_combine(
-                std::hash<locator::host_id>()(r.host),
-                std::hash<shard_id>()(r.shard));
-    }
-};
-
-template<>
-struct hash<locator::global_tablet_id> {
-    size_t operator()(const locator::global_tablet_id& id) const {
-        return utils::hash_combine(
-                std::hash<table_id>()(id.table),
-                std::hash<locator::tablet_id>()(id.tablet));
-    }
-};
 
 template<>
 struct hash<locator::range_based_tablet_id> {
@@ -247,42 +162,6 @@ bool contains(const tablet_replica_set& rs, const tablet_replica& r) {
 }
 
 
-enum class tablet_task_type {
-    none,
-    user_repair,
-    auto_repair,
-    migration,
-    intranode_migration,
-    split,
-    merge
-};
-
-sstring tablet_task_type_to_string(tablet_task_type);
-tablet_task_type tablet_task_type_from_string(const sstring&);
-
-
-// - incremental (incremental repair): The incremental repair logic is enabled.
-//   Unrepaired sstables will be included for repair. Repaired sstables will be
-//   skipped. The incremental repair states will be updated after repair.
-
-// - full (full repair): The incremental repair logic is enabled.
-//   Both repaired and unrepaired sstables will be included for repair. The
-//   incremental repair states will be updated after repair.
-
-// - disabled (non incremental repair): The incremental repair logic is disabled
-//   completely. The incremental repair states, e.g., repaired_at in sstables and
-//   sstables_repaired_at in system.tablets table, will not be updated after
-//   repair.
-enum class tablet_repair_incremental_mode : uint8_t {
-    incremental,
-    full,
-    disabled,
-};
-
-constexpr tablet_repair_incremental_mode default_tablet_repair_incremental_mode{tablet_repair_incremental_mode::incremental};
-
-sstring tablet_repair_incremental_mode_to_string(tablet_repair_incremental_mode);
-tablet_repair_incremental_mode tablet_repair_incremental_mode_from_string(const sstring&);
 
 
 struct tablet_task_info {
@@ -336,6 +215,19 @@ struct tablet_raft_info {
     raft::group_id group_id;
 
     bool operator==(const tablet_raft_info&) const = default;
+};
+
+/// Raft-related information about a strongly-consistent tablet which is undergoing a resize.
+/// Holds the group ids of the children which will replace this tablet's own group. Present only
+/// while the resize is being carried out: from the start of the resize finalization, which
+/// generates the ids, to the tablet-map replacement which ends it.
+///
+/// Read through tablet_map::get_raft_split_child_group_ids(), which also knows the kind of the resize.
+struct tablet_raft_resize_info {
+    /// For a split: the left and right child groups, in this order.
+    raft_group_id_list new_gids;
+
+    bool operator==(const tablet_raft_resize_info&) const = default;
 };
 
 // Merges tablet_info b into a, but with following constraints:
@@ -408,6 +300,10 @@ enum class tablet_transition_kind {
 
 tablet_transition_kind choose_rebuild_transition_kind(const gms::feature_service& features);
 
+// Whether a transition at this stage can be cancelled: migration stages up to and including
+// streaming, where writes still go to the leaving replica, and repair.
+bool can_cancel_tablet_transition(tablet_transition_stage);
+
 sstring tablet_transition_stage_to_string(tablet_transition_stage);
 tablet_transition_stage tablet_transition_stage_from_string(const sstring&);
 sstring tablet_transition_kind_to_string(tablet_transition_kind);
@@ -428,6 +324,8 @@ struct tablet_transition_info {
     std::optional<tablet_replica> pending_replica; // Optimization (next - tablet_info::replicas)
     service::session_id session_id;
     sstring snapshot_name;
+    // Set by tablet_mutation_builder::cancel_transition(); the coordinator rolls the transition back.
+    bool cancelled = false;
     write_replica_set_selector writes;
     read_replica_set_selector reads;
 
@@ -436,17 +334,27 @@ struct tablet_transition_info {
                            tablet_replica_set next,
                            std::optional<tablet_replica> pending_replica,
                            service::session_id session_id = {},
-                           sstring snapshot_name = {});
+                           sstring snapshot_name = {},
+                           bool cancelled = false);
 
     bool operator==(const tablet_transition_info&) const = default;
 };
 
+// A repair is cancelled by clearing its repair_task_info, anything else by the cancel flag.
+bool is_tablet_transition_cancelled(const tablet_info&, const tablet_transition_info&);
+
 // Returns the leaving replica for a given transition.
 std::optional<tablet_replica> get_leaving_replica(const tablet_info&, const tablet_transition_info&);
 
-// True if the tablet is transitioning and it's in a stage that follows the stage
-// where we clean up the tablet on the given replica.
-bool is_post_cleanup(tablet_replica replica, const tablet_info& tinfo, const tablet_transition_info& trinfo);
+enum class tablet_storage_state {
+    present,
+    // The replica's cleanup runs at this stage: the storage is there before it, and gone after it.
+    being_cleaned,
+    absent,
+};
+
+tablet_storage_state get_tablet_storage_state(const tablet_replica& replica, const tablet_info& tinfo,
+        const tablet_transition_info* trinfo);
 
 /// Represents intention to move a single tablet replica from src to dst.
 struct tablet_migration_info {
@@ -480,12 +388,6 @@ struct tablet_migration_streaming_info {
 tablet_migration_streaming_info get_migration_streaming_info(const locator::topology&, const tablet_info&, const tablet_transition_info&);
 tablet_migration_streaming_info get_migration_streaming_info(const locator::topology&, const tablet_info&, const tablet_migration_info&);
 bool tablet_has_excluded_node(const locator::topology& topo, const tablet_info& tinfo);
-
-// Describes if a given token is located at either left or right side of a tablet's range
-enum tablet_range_side {
-    left = 0,
-    right = 1,
-};
 
 // The decision of whether tablets of a given should be split, merged, or none, is made
 // by the load balancer. This decision is recorded in the tablet_map and stored in group0.
@@ -750,12 +652,14 @@ public:
     struct initialized_later {};
 private:
     using transitions_map = std::unordered_map<tablet_id, tablet_transition_info>;
+    using raft_resize_map = std::unordered_map<tablet_id, tablet_raft_resize_info>;
     tablet_id_map _tablet_ids;
     tablet_container _tablets;
     transitions_map _transitions;
     resize_decision _resize_decision;
     tablet_task_info _resize_task_info;
     raft_info_container _raft_info;
+    raft_resize_map _raft_resizes;
     size_t _target_pow2_tablet_count = 0; // 0 means no convergence in progress
 
     // Internal constructor, used by clone() and clone_gently().
@@ -765,6 +669,7 @@ private:
                resize_decision resize_decision,
                tablet_task_info resize_task_info,
                raft_info_container raft_info,
+               raft_resize_map raft_resizes,
                size_t target_pow2_tablet_count)
         : _tablet_ids(std::move(ids))
         , _tablets(std::move(tablets))
@@ -772,6 +677,7 @@ private:
         , _resize_decision(resize_decision)
         , _resize_task_info(std::move(resize_task_info))
         , _raft_info(std::move(raft_info))
+        , _raft_resizes(std::move(raft_resizes))
         , _target_pow2_tablet_count(target_pow2_tablet_count)
     {}
 public:
@@ -837,6 +743,25 @@ public:
     /// Returns Raft information for the given tablet_id.
     /// It is an internal error to call this method if has_raft_info() returns false.
     const tablet_raft_info& get_tablet_raft_info(tablet_id) const;
+
+    /// Returns true if the given tablet is currently being resized, i.e. if it carries the
+    /// ids of the children which will replace its own group.
+    bool has_raft_resize_info(tablet_id) const;
+
+    /// Returns true if any tablet of this table carries the ids of the children which will replace
+    /// its group. Those are recorded when the resize starts being finalized and cleared when the
+    /// tablet map is replaced, so this also answers whether the finalization has begun.
+    bool has_raft_resizes() const { return !_raft_resizes.empty(); }
+
+    /// Returns the replacement Raft group ids for a resizing tablet.
+    /// It is an internal error to call this method if has_raft_resize_info() returns false.
+    const tablet_raft_resize_info& get_raft_resize_info(tablet_id) const;
+
+    /// Returns the children of a splitting tablet: the group owning the tokens up to and
+    /// including get_split_token(), and the group owning the rest, in that order.
+    /// It is an internal error to call this method if has_raft_resize_info() returns false or if
+    /// the resize decision is not a split.
+    std::pair<raft::group_id, raft::group_id> get_raft_split_child_group_ids(tablet_id) const;
 
     /// Returns the largest token owned by a given tablet.
     /// \throws std::logic_error If the given id does not belong to this instance.
@@ -963,6 +888,8 @@ public:
     void clear_tablet_transition_info(tablet_id);
     void clear_transitions();
     void set_tablet_raft_info(tablet_id, tablet_raft_info);
+    void set_raft_resize_info(tablet_id, tablet_raft_resize_info);
+    void clear_raft_resize_info(tablet_id);
 
     // Destroys gently.
     // The tablet map is not usable after this call and should be destroyed.
@@ -1040,6 +967,9 @@ public:
     table_id get_base_table(table_id id) const;
     bool is_base_table(table_id id) const;
 
+    // Returns the base tables of the keyspace's co-location groups (see is_base_table()).
+    std::vector<schema_ptr> base_tables(const data_dictionary::keyspace_metadata& ksm) const;
+
 public:
     tablet_metadata() = default;
     // No implicit copy, use copy()
@@ -1066,21 +996,16 @@ public:
     friend fmt::formatter<tablet_metadata>;
 };
 
+/// Returns true if the keyspace is currently undergoing vnodes-to-tablets migration.
+///
+/// A keyspace is considered to be undergoing migration when it uses vnode
+/// replication but at least one of its tables has a tablet map.
+bool is_keyspace_undergoing_tablets_migration(const tablet_metadata& tmeta, const data_dictionary::keyspace_metadata& ksm);
+
 // Check that all tablets which have replicas on this host, have a valid replica shard (< this_smp_shard_count()).
 future<bool> check_tablet_replica_shards(const tablet_metadata& tm, host_id this_host);
 
 std::optional<tablet_replica> maybe_get_primary_replica(tablet_id id, const tablet_replica_set& replica_set, const locator::topology& topo, std::function<bool(const tablet_replica&)> filter);
-
-struct tablet_routing_info {
-    tablet_replica_set tablet_replicas;
-    std::pair<dht::token, dht::token> token_range;
-};
-
-struct tablet_routing_info_v2 {
-    tablet_replica_set tablet_replicas;
-    std::pair<dht::token, dht::token> token_range;
-    tablet_version hash;
-};
 
 /// Split a list of ranges, such that conceptually each input range is
 /// intersected with each tablet range.
@@ -1198,25 +1123,6 @@ struct fmt::formatter<locator::tablet_transition_kind> : fmt::formatter<string_v
 };
 
 template <>
-struct fmt::formatter<locator::global_tablet_id> : fmt::formatter<string_view> {
-    auto format(const locator::global_tablet_id&, fmt::format_context& ctx) const -> decltype(ctx.out());
-};
-
-template <>
-struct fmt::formatter<locator::tablet_id> : fmt::formatter<string_view> {
-    auto format(locator::tablet_id  id, fmt::format_context& ctx) const {
-        return fmt::format_to(ctx.out(), "{}", id.value());
-    }
-};
-
-template <>
-struct fmt::formatter<locator::tablet_replica> : fmt::formatter<string_view> {
-    auto format(const locator::tablet_replica& r, fmt::format_context& ctx) const {
-        return fmt::format_to(ctx.out(), "{}:{}", r.host, r.shard);
-    }
-};
-
-template <>
 struct fmt::formatter<locator::range_based_tablet_id> : fmt::formatter<string_view> {
     auto format(const locator::range_based_tablet_id& rb_tid, fmt::format_context& ctx) const {
         return fmt::format_to(ctx.out(), "{}:{}", rb_tid.table, rb_tid.range);
@@ -1241,16 +1147,6 @@ struct fmt::formatter<locator::tablet_metadata_change_hint> : fmt::formatter<str
 template <>
 struct fmt::formatter<locator::tablet_task_info> : fmt::formatter<string_view> {
     auto format(const locator::tablet_task_info&, fmt::format_context& ctx) const -> decltype(ctx.out());
-};
-
-template <>
-struct fmt::formatter<locator::tablet_task_type> : fmt::formatter<string_view> {
-    auto format(const locator::tablet_task_type&, fmt::format_context& ctx) const -> decltype(ctx.out());
-};
-
-template <>
-struct fmt::formatter<locator::tablet_repair_incremental_mode> : fmt::formatter<string_view> {
-    auto format(const locator::tablet_repair_incremental_mode&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 
 template <>

@@ -38,6 +38,9 @@
 #include <sstream>
 #include <cryptopp/sha.h>
 #include "utils/io-wrappers.hh"
+#include "db/config.hh"
+#include "locator/abstract_replication_strategy.hh"
+#include "locator/tablets.hh"
 
 future<sstring> generate_file_hash(sstring filename) {
     auto f = co_await seastar::open_file_dma(filename, seastar::open_flags::ro);
@@ -640,6 +643,79 @@ SEASTAR_TEST_CASE(test_stream_sink_write_s3, *boost::unit_test::precondition(tes
 
 SEASTAR_FIXTURE_TEST_CASE(test_stream_sink_write_gs, gcs_fixture, *tests::check_run_test_decorator("ENABLE_GCP_STORAGE_TEST", true)) {
     return test_stream_sink_write(sstables::test_env_config{ .storage = make_test_object_storage_options("GS") });
+}
+
+SEASTAR_THREAD_TEST_CASE(test_stream_sink_stamps_scrub_time_on_completion) {
+    do_with_cql_env_thread([] (cql_test_env& env) {
+        using namespace sstables;
+
+        auto& db = env.local_db();
+        env.execute_cql("CREATE KEYSPACE ks_scrub_time WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};").get();
+        env.execute_cql("CREATE TABLE ks_scrub_time.cf (pk text PRIMARY KEY, v int);").get();
+        for (int i = 0; i < 10; i++) {
+            env.execute_cql(format("INSERT INTO ks_scrub_time.cf (pk, v) VALUES ('key_{}', {});", i, i * 10)).get();
+        }
+
+        auto& table = db.find_column_family("ks_scrub_time", "cf");
+        table.flush().get();
+        auto schema = table.schema();
+
+        auto snapshots = table.take_storage_snapshot(dht::token_range::make_open_ended_both_sides()).get();
+        BOOST_REQUIRE_GT(snapshots.size(), 0);
+        auto& snapshot = snapshots.front();
+
+        auto permit = db.obtain_reader_permit(table, "test_scrub_time", db::no_timeout, {}).get();
+        auto sources = create_stream_sources(snapshot, permit).get();
+        BOOST_REQUIRE_GT(sources.size(), 0);
+
+        auto gen = table.get_sstable_generation_generator()();
+        constexpr auto foptions = file_open_options{};
+        constexpr auto soptions = file_output_stream_options{};
+        const auto fis_options = file_input_stream_options{};
+
+        std::optional<db_clock::time_point> scylla_component_received;
+        shared_sstable received;
+
+        for (size_t i = 0; i < sources.size(); i++) {
+            auto& source = sources[i];
+            auto descriptor = snapshot.sst->get_descriptor(source->type());
+            descriptor.generation = gen;
+
+            auto sink = create_stream_sink(schema, table.get_sstables_manager(), table.get_storage_options(),
+                    sstable_state::normal, descriptor,
+                    sstable_stream_sink_cfg{.last_component = i + 1 == sources.size(), .update_scrub_time = true});
+
+            auto out = sink->output(foptions, soptions).get();
+            auto in = source->input(fis_options).get();
+            seastar::copy(in, out).get();
+            in.close().get();
+            out.close().get();
+
+            if (source->type() == component_type::Scylla) {
+                scylla_component_received = db_clock::now();
+                // db_clock has millisecond resolution, move past this tick.
+                seastar::sleep(std::chrono::milliseconds(10)).get();
+            }
+
+            sink->validate_integrity().get();
+            if (auto sst = sink->close().get()) {
+                received = std::move(sst);
+            }
+        }
+
+        BOOST_REQUIRE(scylla_component_received);
+        BOOST_REQUIRE(received);
+
+        // Check what was persisted rather than what the sink left in memory.
+        auto reopened = table.get_sstables_manager().make_sstable(schema, table.get_storage_options(),
+                received->generation(), *received->sstable_identifier(), sstable_state::normal,
+                received->get_version(), received->get_format());
+        reopened->load_metadata().get();
+
+        auto scrub_time = reopened->get_scrub_time();
+        BOOST_REQUIRE(scrub_time);
+        BOOST_REQUIRE_GT(*scrub_time, *scylla_component_received);
+    }).get();
 }
 
 // S3 variants: exercise reading SSTables from object storage.  Corruption

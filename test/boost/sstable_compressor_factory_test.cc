@@ -11,6 +11,8 @@
 #include <seastar/util/defer.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include "sstables/sstable_compressor_factory.hh"
+#include "sstables/compress.hh"
+#include "sstables/exceptions.hh"
 #include "test/lib/log.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/test_utils.hh"
@@ -132,6 +134,39 @@ SEASTAR_THREAD_TEST_CASE(test_numa_awareness) {
             n_numa_nodes[i] = i;
         }
         test_one_numa_topology(n_numa_nodes);
+    }
+}
+
+// The dictionary is stored in CompressionInfo as options named ".dictionary.<index>".
+SEASTAR_THREAD_TEST_CASE(test_malformed_dictionary_options) {
+    auto factory = make_sstable_compressor_factory_for_tests_in_thread();
+    auto make_compression = [] (const std::vector<std::string_view>& dict_option_names) {
+        sstables::compression c;
+        c.name.value = to_bytes(compression_parameters::algorithm_to_name(compressor::algorithm::zstd_with_dicts));
+        c.set_uncompressed_chunk_length(4096);
+        for (auto name : dict_option_names) {
+            c.options.elements.push_back({{to_bytes(name)}, {to_bytes("dict")}});
+        }
+        return c;
+    };
+
+    {
+        auto c = make_compression({".dictionary.00000000", ".dictionary.00000001"});
+        factory->make_compressor_for_reading(c).get();
+    }
+
+    const std::vector<std::vector<std::string_view>> malformed = {
+        {".dictionary.1abc"},
+        {".dictionary. 1"},
+        {".dictionary.+1"},
+        {".dictionary.-1"},
+        {".dictionary."},
+        {".dictionary.00000000", ".dictionary.00000002"},
+    };
+    for (const auto& dict_option_names : malformed) {
+        testlog.info("dictionary options: {}", dict_option_names);
+        auto c = make_compression(dict_option_names);
+        BOOST_REQUIRE_THROW(factory->make_compressor_for_reading(c).get(), sstables::malformed_sstable_exception);
     }
 }
 

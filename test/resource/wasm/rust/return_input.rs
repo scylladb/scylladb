@@ -1,6 +1,8 @@
+use std::ffi::c_void;
+
 extern "C" {
-    fn malloc(size: usize) -> usize;
-    fn free(ptr: *mut usize);
+    fn malloc(size: usize) -> *mut c_void;
+    fn free(ptr: *mut c_void);
 }
 
 #[no_mangle]
@@ -9,7 +11,7 @@ pub unsafe extern "C" fn _scylla_malloc(size: usize) -> u32 {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn _scylla_free(ptr: *mut usize) {
+pub unsafe extern "C" fn _scylla_free(ptr: *mut c_void) {
     free(ptr)
 }
 

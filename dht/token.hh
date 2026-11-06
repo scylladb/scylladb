@@ -19,6 +19,7 @@
 #include <utility>
 #include <compare>
 #include <byteswap.h>
+#include "utils/assert.hh"
 
 namespace dht {
 
@@ -257,7 +258,7 @@ raw_token::raw_token(const token& t)
     : value(t.raw())
 {
 #ifdef DEBUG
-    assert(t._kind == token::kind::key);
+    SCYLLA_ASSERT(t._kind == token::kind::key);
 #endif
 }
 
@@ -285,7 +286,7 @@ inline constexpr std::strong_ordering tri_compare_raw(const int64_t l1, const in
 
 template <typename T>
 concept TokenCarrier = requires (const T& v) {
-    { v.token() } noexcept -> std::same_as<const token&>;
+    { v.token() } noexcept -> std::convertible_to<token>;
 };
 
 struct raw_token_less_comparator {

@@ -482,10 +482,11 @@ int partition_start_index_l(lua_State* l) {
 void push_gc_clock_time_point(lua_State* l, gc_clock::time_point tp) {
     auto t = gc_clock::to_time_t(tp);
     std::tm tm{};
-    // This time is actually UTC, but C API assumes local-times and there is no
-    // way to specify the TZ used. So we lie about it being local-time to avoid
-    // libC doing TZ adjustments.
-    localtime_r(&t, &tm);
+    // The time point is exposed in UTC. Converting through local time instead
+    // would make the fields depend on the TZ of the machine, and the conversion
+    // back (in get_gc_clock_time_point_l()) ambiguous in the hour repeated when
+    // daylight saving time ends.
+    gmtime_r(&t, &tm);
 
     lua_createtable(l, 0, 6);
     luaL_setmetatable(l, get_metatable_name<gc_clock_time_point>());
@@ -509,45 +510,43 @@ void push_gc_clock_time_point(lua_State* l, gc_clock::time_point tp) {
     lua_setfield(l, -2, "sec");
 }
 
-gc_clock::time_point get_gc_clock_time_point_l(lua_State* l) {
+// Reads the time point at the given index of the stack, and leaves it there.
+gc_clock::time_point get_gc_clock_time_point_l(lua_State* l, int index) {
     std::tm tm{};
-    tm.tm_isdst = -1;
 
-    lua_getfield(l, 1, "year");
+    lua_getfield(l, index, "year");
     tm.tm_year = lua_tointeger(l, -1) - 1900;
     lua_pop(l, 1);
 
-    lua_getfield(l, 1, "month");
+    lua_getfield(l, index, "month");
     tm.tm_mon = lua_tointeger(l, -1) - 1;
     lua_pop(l, 1);
 
-    lua_getfield(l, 1, "day");
+    lua_getfield(l, index, "day");
     tm.tm_mday = lua_tointeger(l, -1);
     lua_pop(l, 1);
 
-    lua_getfield(l, 1, "hour");
+    lua_getfield(l, index, "hour");
     tm.tm_hour = lua_tointeger(l, -1);
     lua_pop(l, 1);
 
-    lua_getfield(l, 1, "min");
+    lua_getfield(l, index, "min");
     tm.tm_min = lua_tointeger(l, -1);
     lua_pop(l, 1);
 
-    lua_getfield(l, 1, "sec");
+    lua_getfield(l, index, "sec");
     tm.tm_sec = lua_tointeger(l, -1);
     lua_pop(l, 1);
 
-    lua_pop(l, 1);
-
-    return gc_clock::from_time_t(std::mktime(&tm));
+    // The fields are in UTC, see push_gc_clock_time_point().
+    return gc_clock::from_time_t(timegm(&tm));
 }
 
 template <typename Op>
 int gc_clock_time_point_binary_op_l(lua_State* l) {
-    auto b = get_gc_clock_time_point_l(l);
-    lua_pop(l, 1);
-    auto a = get_gc_clock_time_point_l(l);
-    lua_pop(l, 1);
+    auto a = get_gc_clock_time_point_l(l, 1);
+    auto b = get_gc_clock_time_point_l(l, 2);
+    lua_pop(l, 2);
 
     Op op;
 
@@ -556,7 +555,8 @@ int gc_clock_time_point_binary_op_l(lua_State* l) {
 }
 
 int gc_clock_time_point_tostring_l(lua_State* l) {
-    auto tp = get_gc_clock_time_point_l(l);
+    auto tp = get_gc_clock_time_point_l(l, 1);
+    lua_pop(l, 1);
     lua::push_sstring(l, format("{:%F %T}z", fmt::gmtime(gc_clock::to_time_t(tp))));
     return 1;
 }

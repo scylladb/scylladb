@@ -285,16 +285,6 @@ topology_mutation_builder& topology_mutation_builder::pause_rf_change_request(co
     return apply_set("paused_rf_change_requests", collection_apply_mode::update, std::vector<data_value>{id});
 }
 
-topology_mutation_builder& topology_mutation_builder::resume_rf_change_request(const std::unordered_set<utils::UUID>& values, const utils::UUID& id) {
-    if (values.contains(id)) {
-        auto new_values = values;
-        new_values.erase(id);
-        return apply_set("paused_rf_change_requests", collection_apply_mode::overwrite, new_values | std::views::transform([] (const auto& id) { return data_value{id}; }));
-    } else {
-        return *this;
-    }
-}
-
 topology_mutation_builder& topology_mutation_builder::start_rf_change_migrations(const utils::UUID& id) {
     return apply_set("ongoing_rf_changes", collection_apply_mode::update, std::vector<data_value>{id});
 }
@@ -313,10 +303,32 @@ topology_mutation_builder& topology_mutation_builder::start_restore_request(cons
     return apply_set("ongoing_restore_requests", collection_apply_mode::update, std::vector<data_value>{req_id});
 }
 
-topology_mutation_builder& topology_mutation_builder::finish_restore_request(const std::unordered_set<utils::UUID>& current, const utils::UUID& req_id) {
+topology_mutation_builder& topology_mutation_builder::finish_restore_requests(const std::unordered_set<utils::UUID>& current, const std::unordered_set<utils::UUID>& req_ids) {
+    if (req_ids.empty()) {
+        return *this;
+    }
     auto new_values = current;
-    new_values.erase(req_id);
+    for (const auto& id : req_ids) {
+        if (!new_values.erase(id)) {
+            on_internal_error(rtlogger, fmt::format("ongoing restore requests [{}] do not contain the completed request {}",
+                    fmt::join(current, ", "), id));
+        }
+    }
     return apply_set("ongoing_restore_requests", collection_apply_mode::overwrite, new_values | std::views::transform([] (const auto& id) { return data_value{id}; }));
+}
+
+topology_mutation_builder& topology_mutation_builder::resume_rf_change_requests(const std::unordered_set<utils::UUID>& current, const std::unordered_set<utils::UUID>& ids) {
+    if (ids.empty()) {
+        return *this;
+    }
+    auto new_values = current;
+    for (const auto& id : ids) {
+        if (!new_values.erase(id)) {
+            on_internal_error(rtlogger, fmt::format("paused rf change requests [{}] do not contain the request {} being resumed",
+                    fmt::join(current, ", "), id));
+        }
+    }
+    return apply_set("paused_rf_change_requests", collection_apply_mode::overwrite, new_values | std::views::transform([] (const auto& id) { return data_value{id}; }));
 }
 
 topology_mutation_builder& topology_mutation_builder::set_upgrade_state_done() {
@@ -429,6 +441,19 @@ topology_request_tracking_mutation_builder& topology_request_tracking_mutation_b
 topology_request_tracking_mutation_builder& topology_request_tracking_mutation_builder::set_finalize_migration_data(
         const sstring& ks_name) {
     apply_atomic("finalize_migration_ks_name", ks_name);
+    return *this;
+}
+
+topology_request_tracking_mutation_builder& topology_request_tracking_mutation_builder::set_prepare_migration_data(
+        const sstring& ks_name, const std::unordered_map<table_id, size_t>& tables) {
+    apply_atomic("prepare_migration_ks_name", ks_name);
+    map_type_impl::native_type values;
+    values.reserve(tables.size());
+    for (const auto& [tid, target] : tables) {
+        values.emplace_back(data_value(tid.uuid()), data_value(static_cast<int64_t>(target)));
+    }
+    apply_atomic("prepare_migration_tables",
+                 make_map_value(schema().get_column_definition("prepare_migration_tables")->type, std::move(values)));
     return *this;
 }
 

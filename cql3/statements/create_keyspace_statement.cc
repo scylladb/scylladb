@@ -22,6 +22,7 @@
 #include "cql3/query_processor.hh"
 #include "cql3/cql_config.hh"
 #include "db/config.hh"
+#include "locator/abstract_replication_strategy.hh"
 #include "gms/feature_service.hh"
 #include "replica/database.hh"
 

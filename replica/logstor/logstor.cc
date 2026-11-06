@@ -50,7 +50,7 @@ key_hash compute_key_hash(managed_bytes_view key) {
 }
 
 primary_index_key::primary_index_key(const dht::decorated_key& dk)
-    : primary_index_key(dk.token(), compute_key_hash(dk.key())) {
+    : primary_index_key(dht::raw_token(dk.token()), compute_key_hash(dk.key())) {
 }
 
 logstor::logstor(logstor_config config, ::cache_tracker& shared_cache_tracker)

@@ -8,14 +8,15 @@
 
 use anyhow::{anyhow, Result};
 use std::ops::Range;
-use std::{cmp, ptr, u32};
+use std::ffi::c_void;
+use std::{cmp, ptr};
 use wasmtime::LinearMemory;
 
 const WASM_PAGE_SIZE: usize = 64 * 1024;
 
 extern "C" {
     fn aligned_alloc(align: usize, size: usize) -> *mut u8;
-    fn free(ptr: *mut u8);
+    fn free(ptr: *mut c_void);
 }
 
 pub struct ScyllaLinearMemory {
@@ -32,7 +33,7 @@ unsafe impl Sync for ScyllaLinearMemory {}
 impl Drop for ScyllaLinearMemory {
     fn drop(&mut self) {
         // previously allocated or reset to nullptr in grow_to()
-        unsafe { free(self.ptr) };
+        unsafe { free(self.ptr.cast()) };
     }
 }
 
@@ -84,7 +85,7 @@ unsafe impl LinearMemory for ScyllaLinearMemory {
                 std::ptr::write_bytes(new_ptr.add(copy_size), 0, new_size_aligned - copy_size);
             };
         }
-        unsafe { free(self.ptr) };
+        unsafe { free(self.ptr.cast()) };
         self.size = new_size_aligned;
         self.ptr = new_ptr;
         Ok(())

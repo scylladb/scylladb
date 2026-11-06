@@ -124,7 +124,7 @@ public:
     bool is_known_endpoint(sstring endpoint, sstring type = "") const;
     sstring get_endpoint_type(sstring endpoint);
     future<> stop();
-    std::vector<sstring> endpoints(sstring type = "") const noexcept;
+    std::vector<sstring> endpoints(sstring type = "") const;
 };
 
 class sstables_manager {
@@ -247,6 +247,11 @@ public:
     bool is_known_endpoint(sstring endpoint, sstring type = "") const {
         SCYLLA_ASSERT(_storage != nullptr);
         return _storage->is_known_endpoint(std::move(endpoint), std::move(type));
+    }
+
+    std::vector<sstring> endpoints(sstring type = "") const {
+        SCYLLA_ASSERT(_storage != nullptr);
+        return _storage->endpoints(std::move(type));
     }
 
     virtual sstable_writer_config configure_writer(sstring origin) const;

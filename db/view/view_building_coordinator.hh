@@ -10,6 +10,8 @@
 #pragma once
 
 #include <seastar/core/abort_source.hh>
+#include <seastar/core/shared_mutex.hh>
+#include "seastarx.hh"
 #include "db/system_keyspace.hh"
 #include "locator/tablets.hh"
 #include "mutation/canonical_mutation.hh"

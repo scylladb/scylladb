@@ -11,6 +11,7 @@
 #include "compaction_strategy_state.hh"
 #include "sstables/sstable_set_impl.hh"
 #include <algorithm>
+#include "tombstone_gc.hh"
 
 namespace compaction {
 

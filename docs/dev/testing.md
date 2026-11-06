@@ -239,13 +239,58 @@ Tests from boost suite are divided into test-cases. These are top-level
 functions wrapped by `BOOST_AUTO_TEST_CASE`, `SEASTAR_TEST_CASE` or alike.
 Boost tests support `path/to/file_name.cc::casename` selection described above.
 
+Unit tests are run by the executable they are built into, which has to be
+built beforehand. `--build` builds it as part of the run, so that a change
+can be tested with a single command:
+
+    $ ./tools/toolchain/dbuild uv run --project test --locked -- pytest test/boost/aggregate_fcts_test.cc --mode=dev --build
+
+Note that tests which have no executable of their own are built into
+`test/boost/combined_tests`, so `--build` can build a lot more than the test
+selected.
+
 ### Debugging unit tests
 
 If a test fails, its log can be found in
 `testlog/{mode}/{suitename}.{testname}.{casename}_stdout.{run_id}.log`
 (e.g. `testlog/dev/boost.aggregate_fcts_test.test_aggregate_avg_stdout.1.log`).
-By default, all unit tests are built stripped. To build non-stripped tests,
-`./configure` with `--tests-debuginfo list-of-tests`.
+When a single test case is run, the path of its log is printed at the end of
+the run. The log of a test which passed is deleted, unless
+`--save-log-on-success` (`-s` for `test.py`) is passed.
+
+A single test case can be run under gdb with `--gdb`:
+
+    $ ./tools/toolchain/dbuild -i -- uv run --project test --locked -- pytest test/boost/aggregate_fcts_test.cc::test_aggregate_avg --mode=dev --gdb
+
+Note the `-i`: `dbuild` gives the container a terminal, but it does not pass
+input on to it unless asked to, and gdb sits at a prompt nothing can be typed
+into otherwise. It has to come before the `--` which ends dbuild's own flags.
+
+Since the debugging session takes over the terminal, exactly one test case
+has to be selected -- keep in mind that a test case is collected once per
+build mode, so `--mode` is needed as well -- and the tests cannot be run in
+parallel, which rules out `test.py`. The test case is reported as skipped
+afterwards: what the session exits with is gdb's verdict, not the test's.
+
+Note that the `dev` mode is compiled without debug info in both build systems,
+so a test can only be usefully debugged in another mode, `debug` and `release`
+among them:
+
+    $ ./tools/toolchain/dbuild -i -- uv run --project test --locked -- pytest test/boost/aggregate_fcts_test.cc::test_aggregate_avg --mode=debug --build --gdb
+
+The other half of the problem is that the tests are linked stripped by
+default, their debug info being huge and there being hundreds of them. The
+configure.py build emits an unstripped re-link of every test binary under a
+`_g` suffix, which `--build` builds when `--gdb` is given, so the command
+above needs nothing else. `--gdb` debugs the `_g` variant whenever it is
+present, so it can equally well be linked by hand beforehand:
+
+    $ ./tools/toolchain/dbuild ninja build/debug/test/boost/aggregate_fcts_test_g
+
+The cmake build has no `_g` target, so there the tests have to be linked
+unstripped to begin with, by configuring with `-DScylla_WITH_DEBUG_INFO=ON`.
+The configure.py build can do the same with `--tests-debuginfo 1`.
+
 `test.py` adds some command line arguments to unit tests.
 
 ## Python tests
@@ -345,6 +390,17 @@ to speed up boot. Some of these options are developer-only, such as
 extend the options of a used server, you can do it by adding
 `extra_scylla_cmdline_options` or `extra_scylla_config_options`
 to your test_config.yaml.
+
+`test.py` starts an S3 server for every run and points the
+`S3_SERVER_ADDRESS_FOR_TEST` and `S3_SERVER_PORT_FOR_TEST` environment
+variables at it, which is enough for a test talking to that server itself.
+A test which needs the tested Scylla to reach it - to back up to it or to
+export to it - needs the server in Scylla's `object_storage_endpoints`,
+and its address is known only once the run starts, so it cannot be written
+into `extra_scylla_config_options`. Add `object_storage_endpoint_from_env:
+true` to your test_config.yaml instead, and the servers created for that
+suite get that endpoint configured (see `test/alternator/test_config.yaml`,
+which uses it for `test_export.py`).
 
 ## Topology pytests
 

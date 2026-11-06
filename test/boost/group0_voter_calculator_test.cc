@@ -11,6 +11,7 @@
 
 #include "service/raft/group0_voter_calculator.hh"
 #include "raft/raft.hh"
+#include "utils/assert.hh"
 
 using is_voter = raft::is_voter;
 
@@ -197,7 +198,7 @@ BOOST_AUTO_TEST_CASE(limit_kept_on_voter_removal) {
             {ids[3], {.datacenter = "dc", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
     };
 
-    BOOST_ASSERT(nodes.size() > max_voters);
+    SCYLLA_ASSERT(nodes.size() > max_voters);
 
     const auto& voters = voter_calc.distribute_voters(nodes);
 
@@ -231,7 +232,7 @@ BOOST_AUTO_TEST_CASE(limit_is_kept_on_multiple_inserts) {
             {ids[3], {.datacenter = "dc", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
     };
 
-    BOOST_ASSERT(nodes.size() > max_voters);
+    SCYLLA_ASSERT(nodes.size() > max_voters);
 
     const auto& voters = voter_calc.distribute_voters(nodes);
 

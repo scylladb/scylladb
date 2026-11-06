@@ -36,6 +36,7 @@
 #include "readers/empty.hh"
 #include "readers/generating.hh"
 #include "readers/combined.hh"
+#include "utils/assert.hh"
 
 BOOST_AUTO_TEST_SUITE(mutation_writer_test)
 
@@ -113,13 +114,13 @@ SEASTAR_TEST_CASE(test_multishard_writer) {
 
         try {
             test_random_streams(random_mutation_generator(random_mutation_generator::generate_counters::no, local_shard_only::no), many_partitions(), generate_error::yes);
-            BOOST_ASSERT(false);
+            SCYLLA_ASSERT(false);
         } catch (...) {
         }
 
         try {
             test_random_streams(random_mutation_generator(random_mutation_generator::generate_counters::yes, local_shard_only::no), many_partitions(), generate_error::yes);
-            BOOST_ASSERT(false);
+            SCYLLA_ASSERT(false);
         } catch (...) {
         }
     });

@@ -142,6 +142,7 @@ public:
     gms::feature tablet_rack_aware_view_pairing { *this, "TABLET_RACK_AWARE_VIEW_PAIRING"sv };
 
     gms::feature tablet_migration_virtual_task { *this, "TABLET_MIGRATION_VIRTUAL_TASK"sv };
+    gms::feature tablet_transition_cancel { *this, "TABLET_TRANSITION_CANCEL"sv };
     gms::feature tablet_resize_virtual_task { *this, "TABLET_RESIZE_VIRTUAL_TASK"sv };
 
     // A feature just for use in tests. It must not be advertised unless
@@ -185,6 +186,7 @@ public:
     gms::feature vnodes_to_tablets_migrations { *this, "VNODES_TO_TABLETS_MIGRATIONS"sv };
     // Gates the `current_storage_mode` column of system.topology.
     gms::feature topology_current_storage_mode { *this, "TOPOLOGY_CURRENT_STORAGE_MODE"sv };
+    gms::feature prepare_migration_as_topology_operation { *this, "PREPARE_MIGRATION_AS_TOPOLOGY_OPERATION"sv };
     gms::feature writetime_ttl_individual_element { *this, "WRITETIME_TTL_INDIVIDUAL_ELEMENT"sv };
     gms::feature arbitrary_tablet_boundaries { *this, "ARBITRARY_TABLET_BOUNDARIES"sv };
     gms::feature large_data_virtual_tables { *this, "LARGE_DATA_VIRTUAL_TABLES"sv };

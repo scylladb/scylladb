@@ -16,6 +16,7 @@
 #include "test/lib/tmpdir.hh"
 #include "test/lib/log.hh"
 #include "db/view/view_builder.hh"
+#include "schema/schema_builder.hh"
 
 
 // Snapshot tests and their helpers

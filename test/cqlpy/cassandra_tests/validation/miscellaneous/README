@@ -1,0 +1,21 @@
+The following test files in Cassandra's
+test/unit/org/apache/cassandra/cql3/validation/miscellaneous directory, which
+this directory mirrors, were not translated, because they test Cassandra's
+internal implementation through Java APIs instead of testing CQL:
+
+* CrcCheckChanceTest.java: checks the effect of the crc_check_chance table
+  option by inspecting Cassandra's internal sstable objects, and races a
+  DROP TABLE with compaction using Cassandra's compaction manager.
+
+* PreparedStatementTest.java: checks Cassandra's internal cache of prepared
+  statements.
+
+* SSTableMetadataTrackingTest.java: checks the metadata (such as minimum and
+  maximum timestamps) that Cassandra keeps in its sstables.
+
+* SSTablesIteratedTest.java: checks Cassandra's metric of how many sstables
+  each read needed to read.
+
+* TombstonesTest.java: checks Cassandra's tombstone warning and failure
+  thresholds, which it sets through Cassandra's internal configuration API,
+  and their metrics.

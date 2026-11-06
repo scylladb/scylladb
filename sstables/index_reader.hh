@@ -19,6 +19,7 @@
 #include "sstables/mx/bsearch_clustered_cursor.hh"
 #include "sstables/sstables_manager.hh"
 #include "abstract_index_reader.hh"
+#include "utils/assert.hh"
 
 namespace sstables {
 
@@ -457,7 +458,7 @@ class index_reader final : public abstract_index_reader {
     }
 
     future<> advance_context(index_bound& bound, uint64_t begin, uint64_t end, int quantity) {
-        assert(!bound.context || !_single_page_read);
+        SCYLLA_ASSERT(!bound.context || !_single_page_read);
         if (!bound.context) {
             bound.consumer = std::make_unique<index_consumer>(_region, _sstable->get_schema());
             bound.context = co_await make_context(begin, end, *bound.consumer);

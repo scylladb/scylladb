@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -58,6 +59,10 @@ constexpr bool is_single_domain(scope_set scopes) {
     return !(scopes.intersects(table_only_scopes) && scopes.intersects(node_only_scopes));
 }
 
+// Defined below, with the other parsers and validators.
+// Declared here so that the automatic scrub period option may take their address.
+config_value parse_auto_scrub_period_seconds(std::string_view value);
+
 // The tablet repair scheduler reads auto_repair_enabled and auto_repair_threshold_in_seconds on demand.
 // When no scope stores an override it falls back to the deprecated yaml options
 // auto_repair_enabled_default and auto_repair_threshold_default_in_seconds instead of the
@@ -74,6 +79,34 @@ constexpr std::array registry_options = {
         .description = "Time in seconds since the start of the last successful repair of a tablet after which it is eligible for automatic repair. A repair restricted to some hosts or datacenters does not count, and a tablet that was never repaired is eligible immediately. 0 disables time-based automatic repair",
         .scopes = table_oriented_scopes,
         .default_value = auto_repair_threshold_default_seconds,
+    },
+    option{
+        .name = option_name::repair_hints_batchlog_flush_discard_unreplayed_hints,
+        .description = "Discard the regular hints a repair gave up waiting for, so that the next repair does not wait for them again. This covers every hint on the node, for all tables and destinations; a write acknowledged at consistency level ANY that only hints hold is lost. View hints are never discarded",
+        .scopes = scope_set::of<scope::cluster>(),
+        .default_value = true,
+
+    },
+    option{
+        .name = option_name::auto_scrub_period_seconds,
+        .description = "If set to a positive value, every sstable which was written or validated more than this "
+                "many seconds ago will be scheduled for automatic scrub. Set to 0 to disable automatic scrub",
+        .scopes = table_oriented_scopes,
+        .default_value = int64_t(0),
+        .custom_parser = parse_auto_scrub_period_seconds,
+        .custom_expected_description = "0 or an integer from 3600 to 4294967295",
+    },
+    // Migrated from the db::config option of the same name. The tablet load balancer reads
+    // it on the group0 leader and applies it to the whole cluster, so only the CLUSTER scope
+    // makes sense. The range matches the unsigned entry; 0 would scale every table's tablet
+    // count down to nothing.
+    option{
+        .name = "tablets_per_shard_goal",
+        .description = "The goal for the maximum number of tablet replicas per shard that the tablet load balancer tries to keep",
+        .scopes = scope_set::of<scope::cluster>(),
+        .default_value = int64_t(100),
+        .kind = option_kind::db_config,
+        .valid_range = integer_range{.min = 1, .max = std::numeric_limits<uint32_t>::max()},
     },
 };
 
@@ -92,6 +125,31 @@ static_assert(all_registry_options_are_single_domain(),
 
 // The feature names of options removed from the registry; see retired_feature_names().
 constexpr std::array<std::string_view, 0> retired_option_features = {};
+
+// A valid_range only makes sense for an integer option, and the default it falls back to
+// must itself be a value validate_value() would accept.
+constexpr bool has_consistent_range(const option& opt) {
+    if (!opt.valid_range) {
+        return true;
+    }
+    if (opt.type() != value_type::integer) {
+        return false;
+    }
+    const auto def = std::get<int64_t>(opt.default_value);
+    return opt.valid_range->min <= def && def <= opt.valid_range->max;
+}
+
+constexpr bool all_registry_options_have_consistent_ranges() {
+    for (const auto& opt : registry_options) {
+        if (!has_consistent_range(opt)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static_assert(all_registry_options_have_consistent_ranges(),
+        "A cluster config option's valid_range must belong to an integer option and contain its default");
 
 // Empty in production. When a test injects options via add_test_only_option(), this holds
 // registry_options followed by the injected ones, and options()/find() consult it instead of
@@ -152,8 +210,17 @@ std::optional<seastar::sstring> validate_with(T (*parse)(std::string_view), std:
     }
 }
 
-std::optional<seastar::sstring> validate_integer(std::string_view value) {
-    return validate_with(parse_integer, "64-bit integer", value);
+std::optional<seastar::sstring> validate_integer(const option& opt, std::string_view value) {
+    if (auto error = validate_with(parse_integer, "64-bit integer", value)) {
+        return error;
+    }
+    if (opt.valid_range) {
+        const auto v = parse_integer(value);
+        if (v < opt.valid_range->min || v > opt.valid_range->max) {
+            return fmt::format("expected an integer between {} and {}, got {}", opt.valid_range->min, opt.valid_range->max, v);
+        }
+    }
+    return std::nullopt;
 }
 
 std::optional<seastar::sstring> validate_floating_point(std::string_view value) {
@@ -162,6 +229,21 @@ std::optional<seastar::sstring> validate_floating_point(std::string_view value) 
 
 std::optional<seastar::sstring> validate_boolean(std::string_view value) {
     return validate_with(parse_boolean, "'true' or 'false'", value);
+}
+
+config_value parse_auto_scrub_period_seconds(std::string_view value) {
+    constexpr int64_t min_auto_scrub_period_seconds = 3600;
+    constexpr int64_t max_auto_scrub_period_seconds = std::numeric_limits<uint32_t>::max();
+
+    auto parsed = parse_integer(value);
+    if (parsed != 0 && (parsed < min_auto_scrub_period_seconds || parsed > max_auto_scrub_period_seconds)) {
+        throw marshal_exception("expected 0 or an integer between 3600 and 4294967295");
+    }
+    return parsed;
+}
+
+static std::optional<seastar::sstring> validate_with_custom_parser(const option& opt, std::string_view value) {
+    return validate_with(opt.custom_parser, opt.custom_expected_description, value);
 }
 
 // Nothing above the registry bounds a text value (it is a map cell in a schema table), and it
@@ -188,6 +270,18 @@ std::optional<seastar::sstring> validate_text(std::string_view value) {
     return std::nullopt;
 }
 
+template <typename T>
+static T custom_parse_as(const option& opt, std::string_view value) {
+    auto parsed = opt.custom_parser(value);
+    try {
+        return std::get<T>(parsed);
+    } catch (const std::bad_variant_access&) {
+        utils::on_internal_error(fmt::format(
+                   "cluster config '{}' has a custom parser returning a type other than the one it declares",
+                   opt.name));
+    }
+}
+
 // Shared implementation of the typed to_*() accessors: checks that the option was registered
 // with the type the accessor reads, applies the registered default when no override is stored,
 // and degrades an unparsable stored value (a row corrupted or written out-of-band) to the
@@ -206,6 +300,9 @@ T to_native(const option& opt, value_type expected_type, std::string_view type_n
         return std::get<T>(opt.default_value);
     }
     try {
+        if (opt.custom_parser) {
+            return custom_parse_as<T>(opt, *value);
+        }
         return parse(*value);
     } catch (const marshal_exception& e) {
         cluster_config_registry_logger.warn(
@@ -266,11 +363,15 @@ bool is_supported(const option& opt, const gms::feature_service& features) {
 }
 
 std::optional<seastar::sstring> validate_value(const option& opt, std::string_view value) {
+    if (opt.custom_parser) {
+        return validate_with_custom_parser(opt, value);
+    }
+
     switch (opt.type()) {
     case value_type::text:
         return validate_text(value);
     case value_type::integer:
-        return validate_integer(value);
+        return validate_integer(opt, value);
     case value_type::floating_point:
         return validate_floating_point(value);
     case value_type::boolean:
@@ -312,7 +413,13 @@ seastar::sstring canonicalize_value(const option& opt, std::string_view value) {
     case value_type::boolean:
         // Only reached after validate_value() accepted the input, so the parse cannot fail.
         try {
-            return parse_boolean(value) ? "true" : "false";
+            bool parsed;
+            if (opt.custom_parser) {
+                parsed = custom_parse_as<bool>(opt, value);
+            } else {
+                parsed = parse_boolean(value);
+            }
+            return parsed ? "true" : "false";
         } catch (const marshal_exception& e) {
             utils::on_internal_error(fmt::format(
                     "canonicalize_value() called for boolean config '{}' with a value that did not pass validation: '{}': {}",
@@ -333,6 +440,10 @@ void add_test_only_option(option opt) {
     if (!is_single_domain(opt.scopes)) {
         utils::on_internal_error(fmt::format(
                 "test-only cluster config option '{}' mixes table-oriented and node-oriented scopes", opt.name));
+    }
+    if (!has_consistent_range(opt)) {
+        utils::on_internal_error(fmt::format(
+                "test-only cluster config option '{}' has a valid_range that does not fit its type or default", opt.name));
     }
     if (g_options_with_test_overrides.empty()) {
         g_options_with_test_overrides.reserve(registry_options.size() + max_test_only_options);

@@ -41,6 +41,7 @@
 #include "message/messaging_service.hh"
 #include "gms/gossip_address_map.hh"
 #include "service/raft/raft_group_registry.hh"
+#include "service/strong_consistency/raft_resize_tracker.hh"
 #include "service/storage_service.hh"
 #include "service/storage_proxy.hh"
 #include "service/mapreduce_service.hh"
@@ -50,6 +51,7 @@
 #include "auth/common.hh"
 #include "db/config.hh"
 #include "db/batchlog_manager.hh"
+#include "db/cluster_config_db_config_bridge.hh"
 #include "db/cluster_config_manager.hh"
 #include "schema/schema_builder.hh"
 #include "schema/compression_initializer.hh"
@@ -174,6 +176,7 @@ private:
     sharded<service::migration_manager> _mm;
     sharded<db::batchlog_manager> _batchlog_manager;
     sharded<db::cluster_config_manager> _cluster_config_manager;
+    sharded<db::cluster_config_db_config_bridge> _cluster_config_db_config_bridge;
     sharded<gms::gossiper> _gossiper;
     sharded<service::raft_group_registry> _group0_registry;
     sharded<db::system_keyspace> _sys_ks;
@@ -184,6 +187,7 @@ private:
     sharded<tasks::task_manager> _task_manager;
     sharded<netw::messaging_service> _ms;
     sharded<db::raft_commitlog_replay_buffer> _raft_replay_buffer;
+    sharded<service::strong_consistency::raft_resize_tracker> _raft_resize_tracker;
     sharded<service::strong_consistency::groups_manager> _groups_manager;
     sharded<service::strong_consistency::coordinator> _sc_coordinator;
     sharded<service::storage_service> _ss;
@@ -237,7 +241,10 @@ private:
     }
 
     auto make_query_state() {
-        if (_db.local().has_keyspace(ks_name)) {
+        // Only fall back to the default keyspace if the client state doesn't
+        // have one yet, otherwise a keyspace selected with USE would be reset
+        // before each statement.
+        if (_core_local.local().client_state.get_raw_keyspace().empty() && _db.local().has_keyspace(ks_name)) {
             _core_local.local().client_state.set_keyspace(_db.local(), ks_name);
         }
         return ::make_shared<service::query_state>(_core_local.local().client_state, empty_service_permit());
@@ -270,11 +277,19 @@ public:
     }
 
     virtual future<cql3::prepared_cache_key_type> prepare(sstring query) override {
-        return qp().invoke_on_all([query, this] (auto& local_qp) {
+        // The client state is per shard and USE only changes the one on the
+        // shard it ran on, so prepare with the keyspace of the local shard on
+        // every shard, and compute the returned id with it too, that is what
+        // execute_prepared() will look it up with.
+        sstring ks = make_query_state()->get_client_state().get_raw_keyspace();
+        return qp().invoke_on_all([query, ks, this] (auto& local_qp) {
             auto qs = this->make_query_state();
+            if (!ks.empty()) {
+                qs->get_client_state().set_keyspace(_db.local(), ks);
+            }
             return local_qp.prepare(query, *qs, test_dialect()).finally([qs] {}).discard_result();
-        }).then([query, this] {
-            return local_qp().compute_id(query, ks_name, test_dialect());
+        }).then([query, ks, this] {
+            return local_qp().compute_id(query, ks, test_dialect());
         });
     }
 
@@ -787,6 +802,8 @@ private:
             _timeout_config.start(std::ref(*cfg)).get();
             auto stop_timeout_config = defer_verbose_shutdown("updateable timeout config", [this] { _timeout_config.stop().get(); });
 
+            auto sc_coordinator_stats_key = scheduling_group_key_create(
+                    make_scheduling_group_key_config<service::strong_consistency::stats>()).get();
             scheduling_group_key_config sg_conf =
                     make_scheduling_group_key_config<service::storage_proxy_stats::stats>();
             _proxy.start(std::ref(_db), spcfg, std::ref(b), scheduling_group_key_create(sg_conf).get(), std::ref(_feature_service), std::ref(_token_metadata), std::ref(_erm_factory), std::ref(_timeout_config)).get();
@@ -821,6 +838,10 @@ private:
             auto stop_cluster_config_manager = defer_verbose_shutdown("cluster config manager", [this] {
                 _cluster_config_manager.stop().get();
             });
+            _cluster_config_db_config_bridge.start(std::ref(_cluster_config_manager), std::ref(*cfg)).get();
+            auto stop_cluster_config_db_config_bridge = defer_verbose_shutdown("cluster config db::config bridge", [this] {
+                _cluster_config_db_config_bridge.stop().get();
+            });
 
             _elc_notif.start().get();
             auto stop_elc_notif = defer_verbose_shutdown("lifecycle notifier", [this] { _elc_notif.stop().get(); });
@@ -852,12 +873,11 @@ private:
                 _sys_ks.local().save_local_info(std::move(linfo), my_address, my_address).get();
             }
             locator::shared_token_metadata::mutate_on_all_shards(_token_metadata, [hostid = host_id] (locator::token_metadata& tm) {
-                auto& topo = tm.get_topology();
-                topo.set_host_id_cfg(hostid);
-                topo.add_or_update_endpoint(hostid,
-                                            std::nullopt,
-                                            locator::node::state::normal,
-                                            this_smp_shard_count());
+                tm.set_host_id_cfg(hostid);
+                tm.update_topology(hostid,
+                                   std::nullopt,
+                                   locator::node::state::normal,
+                                   this_smp_shard_count());
                 return make_ready_future<>();
             }).get();
 
@@ -1023,18 +1043,21 @@ private:
             _auth_cache.start(std::ref(_qp), std::ref(abort_sources)).get();
             auto stop_auth_cache = defer_verbose_shutdown("auth cache", [this] { _auth_cache.stop().get(); });
 
+            _raft_resize_tracker.start(std::ref(_sys_ks)).get();
+            auto stop_raft_resize_tracker = defer_verbose_shutdown("Raft resize tracker", [this] { _raft_resize_tracker.stop().get(); });
+
             _raft_replay_buffer.start().get();
             auto stop_raft_replay_buffer = defer_verbose_shutdown("raft_replay_buffer", [this] { _raft_replay_buffer.stop().get(); });
 
             _groups_manager.start(std::ref(_ms), std::ref(_group0_registry), std::ref(_qp), 
                 std::ref(_db), std::ref(_mm), std::ref(_sys_ks), std::ref(_feature_service), std::ref(_gossiper),
-                std::ref(_raft_replay_buffer)).get();
+                std::ref(_raft_replay_buffer), std::ref(_raft_resize_tracker)).get();
             auto stop_groups_manager = defer_verbose_shutdown("strongly consistent groups manager", [this] {
                 _groups_manager.invoke_on_all(&service::strong_consistency::groups_manager::uninit_messaging_service).get();
                 _groups_manager.stop().get();
             });
 
-            _sc_coordinator.start(std::ref(_groups_manager), std::ref(_db), std::ref(_gossiper)).get();
+            _sc_coordinator.start(std::ref(_groups_manager), std::ref(_db), std::ref(_gossiper), sc_coordinator_stats_key).get();
             auto stop_sc_coordinator = defer_verbose_shutdown("strongly consistent coordinator", [this] {
                 _sc_coordinator.stop().get();
             });
@@ -1178,7 +1201,9 @@ private:
 
             if (!group0_service.maintenance_mode() && _sys_ks.local().bootstrap_complete()) {
                 group0_service.setup_group0_if_exist(_sys_ks.local(), _ss.local(), _qp.local(), _mm.local()).get();
-                group0_service.enable_group0_state_machine().get();
+                if (group0_service.joined_group0()) {
+                    group0_service.reload_schema_dependent_state().get();
+                }
             }
             // As in main(): the first authoritative refresh runs once the group0 state is applied.
             _cluster_config_manager.local().refresh().get();

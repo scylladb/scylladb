@@ -59,8 +59,11 @@
 #include "service/view_update_backlog_broker.hh"
 #include "service/qos/service_level_controller.hh"
 #include "streaming/stream_session.hh"
+#include "db/cluster_config_db_config_bridge.hh"
 #include "db/cluster_config_manager.hh"
+#include "db/cluster_config_registry.hh"
 #include "db/system_keyspace.hh"
+#include "gms/gossiper.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "db/batchlog_manager.hh"
 #include "db/commitlog/commitlog.hh"
@@ -125,6 +128,7 @@
 #include "db/virtual_tables.hh"
 
 #include "service/strong_consistency/groups_manager.hh"
+#include "service/strong_consistency/raft_resize_tracker.hh"
 #include "db/commitlog/raft_commitlog_replay_buffer.hh"
 #include "service/strong_consistency/coordinator.hh"
 #include "service/raft/raft_group_registry.hh"
@@ -1258,8 +1262,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             dirs->create_and_verify(data_dir_set, utils::directories::recursive::no).get();
             utils::directories::verify_owner_and_mode_of_data_dir(data_dir_set).get();
 
-            auto hints_dir_initializer = db::hints::directory_initializer::make(*dirs, cfg->hints_directory()).get();
-            auto view_hints_dir_initializer = db::hints::directory_initializer::make(*dirs, cfg->view_hints_directory()).get();
+            auto hints_dir_initializer = db::hints::directory_initializer::make(*dirs, cfg->hints_directory(), &cfg->extensions()).get();
+            auto view_hints_dir_initializer = db::hints::directory_initializer::make(*dirs, cfg->view_hints_directory(), &cfg->extensions()).get();
             if (!hinted_handoff_enabled.is_disabled_for_all()) {
                 hints_dir_initializer.ensure_created_and_verified().get();
             }
@@ -1498,6 +1502,21 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             timeout_cfg.start(std::ref(*cfg)).get();
             auto stop_timeout_cfg = defer_verbose_shutdown("updateable timeout config", [] { timeout_cfg.stop().get(); });
 
+            scheduling_group_key_config sc_coordinator_stats_cfg =
+                    make_scheduling_group_key_config<service::strong_consistency::stats>();
+            // The in-flight gauges are exported even at zero, so register the
+            // metrics only where strongly consistent tables are enabled.
+            if (cfg->check_experimental(db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES)) {
+                sc_coordinator_stats_cfg.constructor = [plain_constructor = sc_coordinator_stats_cfg.constructor] (void* ptr) {
+                    plain_constructor(ptr);
+                    reinterpret_cast<service::strong_consistency::stats*>(ptr)->register_stats();
+                };
+                sc_coordinator_stats_cfg.rename = [] (void* ptr) {
+                    reinterpret_cast<service::strong_consistency::stats*>(ptr)->register_stats();
+                };
+            }
+            auto sc_coordinator_stats_key = scheduling_group_key_create(sc_coordinator_stats_cfg).get();
+
             scheduling_group_key_config storage_proxy_stats_cfg =
                     make_scheduling_group_key_config<service::storage_proxy_stats::stats>();
             storage_proxy_stats_cfg.constructor = [plain_constructor = storage_proxy_stats_cfg.constructor] (void* ptr) {
@@ -1621,7 +1640,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
               auto paths = sch_cl->get_segments_to_replay().get();
               if (!paths.empty()) {
                   checkpoint(stop_signal, "replaying schema commit log");
-                  auto rp = db::commitlog_replayer::create_replayer(db, sys_ks, nullptr, {}, "schema").get();
+                  auto rp = db::commitlog_replayer::create_replayer(db, sys_ks, nullptr, nullptr, {}, "schema").get();
                   rp.recover(paths, db::schema_tables::COMMITLOG_FILENAME_PREFIX).get();
                   startlog.info("replaying schema commit log - flushing memtables");
                   // The schema commitlog lives only on the null shard.
@@ -1692,7 +1711,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
               // Makes local host id available in topology cfg as soon as possible.
               // Raft topology discard the endpoint-to-id map, so the local id can
               // still be found in the config.
-              tm.get_topology().set_host_id_cfg(host_id);
+              tm.set_host_id_cfg(host_id);
               return make_ready_future<>();
           }).get();
 
@@ -2016,6 +2035,48 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 view_building_worker.stop().get();
             });
 
+            checkpoint(stop_signal, "starting cluster config manager");
+            cluster_config_manager.start(std::ref(cluster_config_manager), std::ref(db), std::ref(qp)).get();
+            auto stop_cluster_config_manager = defer_verbose_shutdown("cluster config manager", [] {
+                cluster_config_manager.stop().get();
+            });
+            // Stopped before the manager, which unregisters its callbacks.
+            static sharded<db::cluster_config_db_config_bridge> cluster_config_db_config_bridge;
+            cluster_config_db_config_bridge.start(std::ref(cluster_config_manager), std::ref(*cfg)).get();
+            auto stop_cluster_config_db_config_bridge = defer_verbose_shutdown("cluster config db::config bridge", [] {
+                cluster_config_db_config_bridge.stop().get();
+            });
+
+            static sharded<std::optional<db::cluster_config_manager::config_callback_registration>> scrub_period_registrations;
+            scrub_period_registrations.start(std::nullopt).get();
+            auto stop_scrub_period_registrations = defer_verbose_shutdown("auto scrub config callbacks", [] {
+                scrub_period_registrations.stop().get();
+            });
+
+            const auto& scrub_period_opt = *db::cluster_config_registry::find(db::cluster_config_registry::option_name::auto_scrub_period_seconds);
+            cluster_config_manager.invoke_on_all([&db, &scrub_period_opt] (db::cluster_config_manager& ccm) {
+                scrub_period_registrations.local() = ccm.register_config_callback(
+                        sstring(scrub_period_opt.name),
+                        [&db, &scrub_period_opt] (const db::cluster_config_manager::lookup_context& ctx, std::optional<sstring> value) {
+                    const auto& tables = db.local().get_tables_metadata();
+                    auto id = tables.get_table_id_if_exists({*ctx.keyspace_name, *ctx.table_name});
+                    if (!id) {
+                        return make_ready_future<>();
+                    }
+                    auto t = tables.get_table_if_exists(id);
+                    if (!t) {
+                        return make_ready_future<>();
+                    }
+                    auto seconds = std::chrono::seconds(db::cluster_config_registry::to_integer(scrub_period_opt, value));
+                    std::optional<std::chrono::seconds> period;
+                    if (seconds > std::chrono::seconds(0)) {
+                        period = seconds;
+                    }
+                    t->set_scrub_period(period);
+                    return make_ready_future<>();
+                });
+            }).get();
+
             checkpoint(stop_signal, "starting repair service");
             auto max_memory_repair = memory::stats().total_memory() * 0.1;
             auto repair_config = sharded_parameter([&] {
@@ -2029,7 +2090,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                     .repair_multishard_reader_enable_read_ahead = cfg->repair_multishard_reader_enable_read_ahead,
                 };
             });
-            repair.start(std::ref(tsm), std::ref(gossiper), std::ref(messaging), std::ref(db), std::ref(proxy), std::ref(bm), std::ref(sys_ks), std::ref(view_builder), std::ref(view_building_worker), std::ref(task_manager), std::ref(mm), max_memory_repair, std::move(repair_config)).get();
+            repair.start(std::ref(tsm), std::ref(gossiper), std::ref(messaging), std::ref(db), std::ref(proxy), std::ref(bm), std::ref(sys_ks), std::ref(view_builder), std::ref(view_building_worker), std::ref(task_manager), std::ref(mm), std::ref(cluster_config_manager), max_memory_repair, std::move(repair_config)).get();
             auto stop_repair_service = defer_verbose_shutdown("repair service", [&repair] {
                 repair.stop().get();
             });
@@ -2074,6 +2135,13 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 client_routes.stop().get();
             });
 
+            checkpoint(stop_signal, "initializing Raft resize tracker");
+            sharded<service::strong_consistency::raft_resize_tracker> raft_resize_tracker;
+            raft_resize_tracker.start(std::ref(sys_ks)).get();
+            auto stop_raft_resize_tracker = defer_verbose_shutdown("Raft resize tracker", [&] {
+                raft_resize_tracker.stop().get();
+            });
+
             // Create per-shard buffer to collect raft log entries during commitlog replay.
             // These entries are later consumed by tablet raft groups when they start.
             static seastar::sharded<db::raft_commitlog_replay_buffer> raft_replay_buffer;
@@ -2086,7 +2154,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             sharded<service::strong_consistency::groups_manager> groups_manager;
             groups_manager.start(std::ref(messaging), std::ref(raft_gr), std::ref(qp), 
                 std::ref(db), std::ref(mm), std::ref(sys_ks), std::ref(feature_service), std::ref(gossiper),
-                std::ref(raft_replay_buffer)).get();
+                std::ref(raft_replay_buffer), std::ref(raft_resize_tracker)).get();
             auto stop_groups_manager = defer_verbose_shutdown("strongly consistent groups manager", [&] {
                 groups_manager.invoke_on_all(&service::strong_consistency::groups_manager::uninit_messaging_service).get();
                 groups_manager.stop().get();
@@ -2094,7 +2162,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             checkpoint(stop_signal, "initializing strongly consistent coordinator");
             sharded<service::strong_consistency::coordinator> sc_coordinator;
-            sc_coordinator.start(std::ref(groups_manager), std::ref(db), std::ref(gossiper)).get();
+            sc_coordinator.start(std::ref(groups_manager), std::ref(db), std::ref(gossiper), sc_coordinator_stats_key).get();
             auto stop_sc_coordinator = defer_verbose_shutdown("strongly consistent coordinator", [&] {
                 sc_coordinator.stop().get();
             });
@@ -2149,12 +2217,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             checkpoint(stop_signal, "initializing system schema");
             db::schema_tables::save_system_schema(qp.local()).get();
-
-            checkpoint(stop_signal, "starting cluster config manager");
-            cluster_config_manager.start(std::ref(cluster_config_manager), std::ref(db), std::ref(qp)).get();
-            auto stop_cluster_config_manager = defer_verbose_shutdown("cluster config manager", [] {
-                cluster_config_manager.stop().get();
-            });
 
             // making compaction manager api available, after system keyspace has already been established.
             api::set_server_compaction_manager(ctx, cm).get();
@@ -2220,8 +2282,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             if (!group0_service.maintenance_mode() && sys_ks.local().bootstrap_complete()) {
                 // Start group0 raft server early so that its log is replayed and
                 // mutations are applied to system tables before non-system keyspaces
-                // are loaded. The in-memory state machine is enabled later, after
-                // all its dependencies are initialized.
+                // are loaded. start_server_for_group0() then enables the in-memory
+                // state machine, so the in-memory group0 state (topology, tablet
+                // metadata, service levels, ...) is consistent with the persisted one
+                // before the rest of startup relies on it.
                 group0_service.setup_group0_if_exist(sys_ks.local(), ss.local(), qp.local(), mm.local()).get();
             }
 
@@ -2255,6 +2319,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // the memtable when the second pass re-applies it, and the two
             // squash into the same rows.  A flush forced by memory pressure in
             // between would cost an extra sstable, not correctness.
+            //
+            // Raft replay relies on this pass too: a group's first batch reads
+            // its system.raft_groups row, and a row deleted by tablet cleanup
+            // must read as deleted, or finish_replay() writes the row back.
             if (auto* cl = db.local().commitlog(); cl != nullptr) {
                 auto paths = cl->get_segments_to_replay().get();
                 if (!paths.empty()) {
@@ -2265,7 +2333,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                             system_tables.insert(id);
                         }
                     });
-                    auto rp = db::commitlog_replayer::create_replayer(db, sys_ks, nullptr,
+                    auto rp = db::commitlog_replayer::create_replayer(db, sys_ks, nullptr, nullptr,
                             [tables = std::move(system_tables)] (table_id id) { return tables.contains(id); },
                             "system tables").get();
                     rp.recover(paths, db::commitlog::descriptor::FILENAME_PREFIX).get();
@@ -2290,21 +2358,18 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 auto paths = cl->get_segments_to_replay().get();
                 if (!paths.empty()) {
                     checkpoint(stop_signal, "replaying commit log");
-                    auto rp = db::commitlog_replayer::create_replayer(db, sys_ks, &raft_replay_buffer).get();
+                    auto rp = db::commitlog_replayer::create_replayer(db, sys_ks, &raft_replay_buffer, &qp).get();
                     rp.recover(paths, db::commitlog::descriptor::FILENAME_PREFIX).get();
 
-                    // Process raft replay buffer: apply committed mutations to memtables,
-                    // rewrite uncommitted entries to the new commitlog,
-                    // and discard entries that precede the last snapshot index.
-                    // Must happen after replay (entries are in the buffer) but before flushing
-                    // and deleting old segments (committed mutations need to be flushed,
-                    // uncommitted entries are now in new segments).
+                    // Persist each group's recovered descriptor and rewrite its
+                    // uncommitted tail to the new commitlog. The committed entries were
+                    // applied to memtables as replay read them. Must run after replay and
+                    // before the memtable flush and the deletion of the old segments: the
+                    // applied mutations still need flushing, and the rewritten tail makes
+                    // the old segments expendable.
                     supervisor::notify("processing raft replay buffer");
                     raft_replay_buffer.invoke_on_all([&db, &qp](db::raft_commitlog_replay_buffer& buffer) mutable {
-                        if (buffer.remaining_groups()) {
-                            return buffer.process_raft_replayed_items(db.local(), qp.local(), sys_ks.local());
-                        }
-                        return make_ready_future<>();
+                        return buffer.finish_replay(db.local(), qp.local());
                     }).get();
 
                     startlog.info("replaying commit log - flushing memtables");
@@ -2542,18 +2607,23 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             db.local().enable_autocompaction_toggle();
 
             if (!group0_service.maintenance_mode() && sys_ks.local().bootstrap_complete() && group0_service.joined_group0()) {
-                // Enable the in-memory state machine now that non-system keyspaces
-                // are loaded — reload_state() reads tablet metadata and view building
-                // state which reference user table schemas.
-                group0_service.enable_group0_state_machine().get();
+                // The in-memory group0 state machine was enabled before non-system
+                // keyspaces were loaded, so the state built from their schemas is
+                // loaded only now.
+                group0_service.reload_schema_dependent_state().get();
             }
 
             cluster_config_manager.local().refresh().get();
 
-            // The call to enable_group0_state_machine() above guarantees that, if group0 is
-            // created and started, the locally persisted group0 state has been applied
-            // before it returns. As a result, tablet Raft groups are started using
-            // tablet metadata that is at least as recent as the locally persisted version.
+            // By this point the in-memory group0 state machine is enabled and the
+            // locally persisted group0 state has been applied:
+            // - Restart path: setup_group0_if_exist() enabled it before loading
+            //   non-system keyspaces (above).
+            // - Join path: start_server_for_group0() is called with enable_sm_immediately=true
+            //   in join_group0(), so the state machine is active from construction and
+            //   the raft log is fully replayed synchronously during server startup.
+            // As a result, tablet Raft groups are started using tablet metadata that is
+            // at least as recent as the locally persisted version.
             // groups_manager::start() starts all these Raft groups, so when we begin
             // RPC messaging below, the system is ready to accept proxied requests
             // from other replicas.

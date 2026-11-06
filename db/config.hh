@@ -16,7 +16,8 @@
 #include <seastar/util/program-options.hh>
 #include <seastar/util/log.hh>
 
-#include "locator/abstract_replication_strategy.hh"
+#include "locator/replication_strategy_type.hh"
+#include "db/consistency_level_restriction.hh"
 #include "seastarx.hh"
 #include "utils/config_file.hh"
 #include "utils/enum_option.hh"
@@ -138,10 +139,6 @@ struct experimental_features_t {
 
 struct replication_strategy_restriction_t {
     static std::unordered_map<sstring, locator::replication_strategy_type> map(); // for enum_option<>
-};
-
-struct consistency_level_restriction_t {
-    static std::unordered_map<sstring, db::consistency_level> map(); // for enum_option<>
 };
 
 constexpr unsigned default_murmur3_partitioner_ignore_msb_bits = 12;
@@ -267,6 +264,7 @@ public:
     named_value<bool> commitlog_use_o_dsync;
     named_value<bool> commitlog_use_hard_size_limit;
     named_value<bool> commitlog_use_fragmented_entries;
+    named_value<bool> strongly_consistent_tables_start_on_damaged_commitlog;
     named_value<bool> compaction_preheat_key_cache;
     named_value<uint32_t> concurrent_compactors;
     named_value<uint32_t> in_memory_compaction_limit_in_mb;
@@ -533,6 +531,7 @@ public:
     named_value<double> alternator_ttl_period_in_seconds;
     named_value<sstring> alternator_describe_endpoints;
     named_value<uint32_t> alternator_max_items_in_batch_write;
+    named_value<uint32_t> alternator_max_concurrent_exports_per_shard;
     named_value<bool> alternator_allow_system_table_write;
     named_value<uint32_t> alternator_max_expression_cache_entries_per_shard;
     named_value<uint64_t> alternator_max_users_query_size_in_trace_output;
@@ -673,6 +672,7 @@ public:
     named_value<bool> force_capacity_based_balancing;
     named_value<float> size_based_balance_threshold_percentage;
     named_value<uint64_t> minimal_tablet_size_for_balancing;
+    named_value<uint32_t> tablet_transition_abort_grace_period_in_seconds;
 
     named_value<double> background_writer_scheduling_quota;
     named_value<bool> auto_adjust_flush_quota;

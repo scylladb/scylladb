@@ -13,7 +13,9 @@
 from .util import unique_name, unique_key_int, new_test_table, config_value_context
 from test.pylib.skip_types import skip_env
 from cassandra.protocol import InvalidRequest
+from cassandra.query import BoundStatement
 import pytest
+import struct
 import time
 
 @pytest.fixture(scope="module")
@@ -279,3 +281,28 @@ def test_clocks_offset_undo(scylla_only, cql, test_keyspace):
         for row in cql.execute(f"SELECT p, writetime(v) AS w, tounixtimestamp(u) AS t FROM {table} WHERE p >= 20 ALLOW FILTERING"):
             assert abs(row.w / 1e6 - time.time()) < jump / 10
             assert abs(row.t / 1e3 - time.time()) < jump / 10
+
+# A null value bound to USING TIMESTAMP ? is rejected with InvalidRequest.
+def test_null_timestamp(cql, table1):
+    p = unique_key_int()
+    write = cql.prepare(f"INSERT INTO {table1} (k, v) VALUES (?, ?) USING TIMESTAMP ?")
+    with pytest.raises(InvalidRequest, match='null'):
+        cql.execute(write, [p, 1, None])
+
+# An empty (zero-length) value bound to USING TIMESTAMP ? should also be
+# rejected with InvalidRequest. In Scylla, it causes a server error instead
+# (SCYLLADB-5208). Cassandra fails here too, with a NullPointerException
+# server error (CASSANDRA-21738). For USING TTL ?, Cassandra fixed the same
+# NullPointerException in CASSANDRA-17822 by treating an empty TTL like a
+# null one, and the translated Cassandra test testEmptyTTL (in
+# cassandra_tests/validation/operations/insert_test.py) checks that.
+@pytest.mark.xfail(reason="SCYLLADB-5208")
+def test_empty_timestamp(cql, table1, cassandra_bug):
+    p = unique_key_int()
+    write = cql.prepare(f"INSERT INTO {table1} (k, v) VALUES (?, ?) USING TIMESTAMP ?")
+    # The Python driver can't send an empty value for a bigint bind
+    # variable, so we send the raw serialized values ourselves.
+    bound = BoundStatement(write)
+    bound.values = [struct.pack('>i', p), struct.pack('>i', 1), b'']
+    with pytest.raises(InvalidRequest):
+        cql.execute(bound)

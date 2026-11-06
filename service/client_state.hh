@@ -21,7 +21,7 @@
 #include "client_data.hh"
 
 #include "transport/cql_protocol_extension.hh"
-#include "service/qos/service_level_controller.hh"
+#include "service/qos/qos_common.hh"
 
 namespace auth {
 class resource;
@@ -29,6 +29,10 @@ class resource;
 
 namespace data_dictionary {
 class database;
+}
+
+namespace qos {
+class service_level_controller;
 }
 
 namespace service {
@@ -572,12 +576,6 @@ public:
         return client_state(&_snapshot, _auth_service, _sl_controller, as);
     }
 };
-
-inline client_state::client_state_for_another_shard client_state::move_to_other_shard() const {
-    return client_state_for_another_shard(this,
-        _auth_service ? &_auth_service->container() : nullptr,
-        _sl_controller ? &_sl_controller->container() : nullptr);
-}
 
 }
 

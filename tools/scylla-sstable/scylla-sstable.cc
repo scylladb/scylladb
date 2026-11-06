@@ -457,25 +457,34 @@ std::optional<sstring> get_sstable_directory_argument(const bpo::variables_map& 
 // enumerates them: a directory listing for local storage, the sstables registry
 // of the node for a table living in object storage.
 //
-// Only sealed sstables are picked up, and an sstable the node deletes while the
-// scan is running is left out, as the data dir of a running node is a moving
-// target.
+// Only sealed sstables are picked up. An sstable with components missing fails
+// the scan, unless \p ignore_incomplete_sstables, in which case it is left out:
+// the data dir of a running node is a moving target, the node can delete an
+// sstable while the scan is running.
 std::vector<sstables::shared_sstable> load_sstables_of_storage(schema_ptr schema, sstables::sstables_manager& sst_man,
-        lw_shared_ptr<const data_dictionary::storage_options> storage_options) {
+        lw_shared_ptr<const data_dictionary::storage_options> storage_options, bool ignore_incomplete_sstables) {
     sstables::sstable_directory sst_dir(sst_man, schema, &schema->get_sharder(), std::move(storage_options),
             sstables::sstable_state::normal, default_io_error_handler_gen());
     auto flags = sstables::sstable_directory::process_flags::read_only();
-    flags.skip_vanished_sstables = true;
+    flags.skip_vanished_sstables = ignore_incomplete_sstables;
     sst_dir.scan_sstable_dir().get();
-    sst_dir.process_sstable_dir(flags).get();
+    try {
+        sst_dir.process_sstable_dir(flags).get();
+    } catch (...) {
+        if (components_are_missing(std::current_exception())) {
+            throw_with_nested(std::runtime_error("found an sstable with components missing, it might have been deleted"
+                    " while being loaded, pass --ignore-incomplete-sstables to leave such sstables out"));
+        }
+        throw;
+    }
     return std::move(sst_dir.get_unsorted_sstables());
 }
 
 // The sstables of a directory -- typically the table directory of a node.
 std::vector<sstables::shared_sstable> load_sstables_of_directory(schema_ptr schema, sstables::sstables_manager& sst_man,
-        const std::filesystem::path& directory) {
+        const std::filesystem::path& directory, bool ignore_incomplete_sstables) {
     return load_sstables_of_storage(schema, sst_man, make_lw_shared<const data_dictionary::storage_options>(
-            data_dictionary::make_local_options(directory)));
+            data_dictionary::make_local_options(directory)), ignore_incomplete_sstables);
 }
 
 } // anonymous namespace
@@ -519,7 +528,8 @@ std::vector<sstables::shared_sstable> load_sstables_of_table(schema_ptr schema, 
     auto unplug_registry = defer([&sst_man] noexcept { sst_man.unplug_sstables_registry(); });
 
     return load_sstables_of_storage(schema, sst_man,
-            make_lw_shared<const data_dictionary::storage_options>(std::move(*storage_options)));
+            make_lw_shared<const data_dictionary::storage_options>(std::move(*storage_options)),
+            app_config.contains("ignore-incomplete-sstables"));
 }
 
 } // namespace tools
@@ -546,11 +556,11 @@ locator::host_id resolve_local_host_id(const bpo::variables_map& app_config, con
 }
 
 const std::vector<sstables::shared_sstable> load_sstables(schema_ptr schema, sstables::sstables_manager& sst_man, sstables::storage_manager& sstm,
-        const std::vector<sstring>& sstable_names) {
+        const std::vector<sstring>& sstable_names, bool ignore_incomplete_sstables) {
     std::vector<sstables::shared_sstable> sstables;
     sstables.resize(sstable_names.size());
 
-    parallel_for_each(sstable_names, [schema, &sst_man, &sstm, &sstable_names, &sstables] (const sstring& sst_name) -> future<> {
+    parallel_for_each(sstable_names, [schema, &sst_man, &sstm, &sstable_names, &sstables, ignore_incomplete_sstables] (const sstring& sst_name) -> future<> {
         const auto i = std::distance(sstable_names.begin(), std::find(sstable_names.begin(), sstable_names.end(), sst_name));
         auto sst_path = std::filesystem::path(sst_name);
 
@@ -646,7 +656,16 @@ const std::vector<sstables::shared_sstable> load_sstables(schema_ptr schema, sst
                 sstables::throw_malformed_sstable_exception(ed_result.error());
             }
             ed = std::move(*ed_result);
-            sst_path = std::filesystem::canonical(std::filesystem::path(sst_name));
+            try {
+                sst_path = std::filesystem::canonical(std::filesystem::path(sst_name));
+            } catch (const std::filesystem::filesystem_error& e) {
+                // the sstable can be deleted from under us, just like its components can
+                if (ignore_incomplete_sstables && e.code() == std::errc::no_such_file_or_directory) {
+                    sst_log.warn("Skipping SSTable {}, it doesn't exist: {}", sst_name, e.what());
+                    co_return;
+                }
+                throw;
+            }
             const auto dir_path = sst_path.parent_path();
             options = data_dictionary::make_local_options(dir_path);
         }
@@ -660,13 +679,15 @@ const std::vector<sstables::shared_sstable> load_sstables(schema_ptr schema, sst
             co_await sst->load(schema->get_sharder(), open_cfg);
         } catch (...) {
             auto ex = std::current_exception();
-            if (components_are_missing(ex)) {
-                sst_log.warn("Skipping SSTable {}, it was deleted while being loaded: {:t}", sst->get_filename(), ex);
+            const auto incomplete = components_are_missing(ex);
+            if (incomplete && ignore_incomplete_sstables) {
+                sst_log.warn("Skipping SSTable {}, its components are missing: {:t}", sst->get_filename(), ex);
                 co_return;
             }
             // Print each individual error here since parallel_for_each
             // will propagate only one of them up the stack.
-            auto msg = fmt::format("Could not load SSTable: {}", sst->get_filename());
+            auto msg = fmt::format("Could not load SSTable: {}{}", sst->get_filename(), incomplete
+                    ? ", its components are missing, pass --ignore-incomplete-sstables to skip it" : "");
             fmt::print(std::cerr, "{}: {:t}\n", msg, ex);
             throw_with_nested(std::runtime_error(msg));
         }
@@ -674,8 +695,12 @@ const std::vector<sstables::shared_sstable> load_sstables(schema_ptr schema, sst
         sstables[i] = std::move(sst);
     }).get();
 
-    // the sstables which were deleted while being loaded left a hole behind
+    // the skipped incomplete sstables left a hole behind
     std::erase(sstables, nullptr);
+    if (sstables.empty()) {
+        // say so, instead of the operation reporting that no sstables were specified
+        throw std::runtime_error("all the sstables are incomplete, there is nothing to process");
+    }
 
     return sstables;
 }
@@ -1094,6 +1119,7 @@ public:
     virtual dht::token_range token_range() const noexcept override { return dht::token_range::make(dht::first_token(), dht::last_token()); }
     virtual const schema_ptr& schema() const noexcept override { return _schema; }
     virtual unsigned min_compaction_threshold() const noexcept override { return _schema->min_compaction_threshold(); }
+    virtual std::optional<std::chrono::seconds> scrub_period() const noexcept override { return std::nullopt; }
     virtual bool compaction_enforce_min_threshold() const noexcept override { return false; }
     virtual future<lw_shared_ptr<const sstables::sstable_set>> main_sstable_set() const override { co_return make_lw_shared<const sstables::sstable_set>(_main_set); }
     virtual future<lw_shared_ptr<const sstables::sstable_set>> maintenance_sstable_set() const override { co_return make_lw_shared<const sstables::sstable_set>(_maintenance_set); }
@@ -1187,7 +1213,7 @@ void scrub_operation(schema_ptr schema, reader_permit permit, const std::vector<
     scylla_sstable_compaction_group_view compaction_group_view(schema, permit, sst_man, output_dir);
 
     auto compaction_descriptor = compaction::compaction_descriptor(std::move(sstables));
-    compaction_descriptor.options = compaction::compaction_type_options::make_scrub(scrub_mode, compaction::compaction_type_options::scrub::quarantine_invalid_sstables::no);
+    compaction_descriptor.options = compaction::compaction_type_options::make_scrub(scrub_mode, compaction::compaction_type_options::scrub::quarantine_invalid_sstables::no, compaction::compaction_type_options::scrub::drop_unfixable_sstables::no, compaction::compaction_type_options::scrub::update_scrub_time::no);
     compaction_descriptor.creator = [&compaction_group_view] (shard_id) { return compaction_group_view.make_sstable(sstables::sstable_state::normal); };
     compaction_descriptor.replacer = [] (compaction::compaction_completion_desc) { };
 
@@ -1650,6 +1676,7 @@ const char* to_string(sstables::scylla_metadata_type t) {
         case sstables::scylla_metadata_type::Schema: return "schema";
         case sstables::scylla_metadata_type::ComponentsDigests: return "components_digests";
         case sstables::scylla_metadata_type::LargeDataRecords: return "large_data_records";
+        case sstables::scylla_metadata_type::ScrubTime: return "scrub_time";
     }
     std::abort();
 }
@@ -1846,6 +1873,10 @@ public:
         (*this)(s.columns);
 
         _writer.EndObject();
+    }
+
+    void operator()(const sstables::scrub_time_type& as) const {
+        _writer.Int64(as.timestamp);
     }
 };
 
@@ -2089,10 +2120,16 @@ void invoke_on_user_type(const data_type& t, const std::function<void(const user
     }
 }
 
+// The keyspace all tables are created in, in the cql environment used by the
+// query and write operations. The keyspace of the original schema is replaced
+// with this, to avoid collisions with system keyspaces. It is the current
+// keyspace of the cql environment, so queries don't have to name it.
+constexpr std::string_view scylla_sstable_keyspace_name = "scylla_sstable";
+
 future<replica::table&> create_table_in_cql_env(cql_test_env& env, schema_ptr sstable_schema) {
     auto& db = env.local_db();
 
-    const auto keyspace_name = "scylla_sstable";
+    const auto keyspace_name = sstring(scylla_sstable_keyspace_name);
     co_await env.execute_cql(seastar::format("CREATE KEYSPACE {} WITH replication = {{'class': 'LocalStrategy'}}", keyspace_name));
     auto& keyspace = db.find_keyspace(keyspace_name);
 
@@ -2136,6 +2173,10 @@ future<replica::table&> create_table_in_cql_env(cql_test_env& env, schema_ptr ss
 
     co_await env.execute_cql(schema_create_statement);
 
+    // Make the keyspace implicit for all subsequent queries, so users don't
+    // have to qualify the table name with it.
+    co_await env.execute_cql(seastar::format("USE {}", keyspace_name));
+
     co_return std::ref(db.find_column_family(keyspace_name, table_name));
 }
 
@@ -2154,11 +2195,12 @@ validate_and_prepare_query(std::string_view query, std::string_view table_name, 
     const auto raw_statement = raw_statements.front().get();
 
     if (auto cf_statement = dynamic_cast<cql3::statements::raw::cf_statement*>(raw_statement)) {
-        if (!cf_statement->has_keyspace()) {
-            throw std::invalid_argument("query must have keyspace and the keyspace has to be scylla_sstable");
-        }
-        if (cf_statement->keyspace() != "scylla_sstable") {
-            throw std::invalid_argument(seastar::format("query must be against scylla_sstable keyspace, got {} instead", std::string_view(cf_statement->keyspace())));
+        // The keyspace is optional, it defaults to the keyspace the table was
+        // created in, just like it does when the query is executed.
+        cf_statement->prepare_keyspace(scylla_sstable_keyspace_name);
+        if (std::string_view(cf_statement->keyspace()) != scylla_sstable_keyspace_name) {
+            throw std::invalid_argument(seastar::format("query must be against the {} keyspace (or omit the keyspace altogether), got {} instead",
+                        scylla_sstable_keyspace_name, std::string_view(cf_statement->keyspace())));
         }
         if (cf_statement->column_family() != table_name) {
             throw std::invalid_argument(seastar::format("query must be against {} table, got {} instead", table_name, std::string_view(cf_statement->column_family())));
@@ -2557,7 +2599,7 @@ void query_operation(schema_ptr sstable_schema, reader_permit permit, const std:
             auto fstream = make_file_input_stream(file);
             query = co_await util::read_entire_stream_contiguous(fstream);
         } else {
-            query = seastar::format("SELECT * FROM {}.{} ", table_schema->ks_name(), table_schema->cf_name());
+            query = seastar::format("SELECT * FROM {} ", table_schema->cf_name());
         }
 
         validate_query<cql3::statements::select_statement>(query, table_schema->cf_name(), db.as_data_dictionary(), "a select");
@@ -2797,6 +2839,8 @@ const std::vector<operation_option> global_options {
     typed_option<sstring>("scylla-yaml-file", "path to the scylla.yaml config file, to obtain the data directory path from,"
             " this can be also provided directly with --scylla-data-dir"),
     typed_option<sstring>("scylla-data-dir", "path to the scylla data dir (usually /var/lib/scylla/data), to read the schema tables from"),
+    typed_option<>("ignore-incomplete-sstables", "skip sstables which have components missing, instead of failing;"
+            " useful with the sstables of a running node, which can be deleted while being loaded"),
 };
 
 const std::vector<operation_option> global_positional_options{
@@ -2959,6 +3003,10 @@ Write output sstable(s) based on the CQL statements provided in the input.
 The following statements are supported: INSERT, UPDATE and DELETE.
 The statements are expected to be separated by semicolons.
 The statements do not need to be ordered in any way.
+The table lives in the scylla_sstable keyspace (to avoid collisions in case the
+sstables belong to a system keyspace), which is already selected when the
+statements are run, so the table name doesn't have to be qualified with it (but
+it can be).
 
 Data is buffered in memory, in a memtable. This provides the required ordering
 to the incoming statements. When the memtable reaches its maximum size, it is
@@ -3046,7 +3094,9 @@ Custom queries can be provided either via the --query (on the command-line) or
 via --query-file (in a file).
 When writing queries by hand, there are some things to keep in in mind:
 * The keyspace of the table is changed to scylla_sstable. This is to avoid any
-  collisions in case the sstables belong to a system keyspace.
+  collisions in case the sstables belong to a system keyspace. The queries are
+  run with this keyspace already selected, so the table name doesn't have to be
+  qualified with it (but it can be).
 * If the schema is read from the sstable itself, partition key columns will be
   $pk0..$pkN and clustering key columns will be $ck0..$ckN. This is because the
   in-sstable schema doesn't contain key column names.
@@ -3571,7 +3621,8 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
         std::vector<sstables::shared_sstable> sstables;
         if (sstable_directory) {
             try {
-                sstables = load_sstables_of_directory(schema, sst_man, std::filesystem::path(*sstable_directory));
+                sstables = load_sstables_of_directory(schema, sst_man, std::filesystem::path(*sstable_directory),
+                        app_config.contains("ignore-incomplete-sstables"));
             } catch (...) {
                 fmt::print(std::cerr, "error loading the sstables of {}: {:t}\n",
                         *sstable_directory, std::current_exception());
@@ -3584,7 +3635,8 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
                 return 1;
             }
             try {
-                sstables = load_sstables(schema, sst_man, sstm.local(), sstable_names);
+                sstables = load_sstables(schema, sst_man, sstm.local(), sstable_names,
+                        app_config.contains("ignore-incomplete-sstables"));
             } catch (...) {
                 fmt::print(std::cerr, "error loading sstables: {:t}\n", std::current_exception());
                 return 1;

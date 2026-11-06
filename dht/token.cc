@@ -15,6 +15,7 @@
 
 #include "dht/token.hh"
 #include "dht/token-sharding.hh"
+#include "utils/assert.hh"
 
 namespace dht {
 
@@ -273,7 +274,7 @@ utils::chunked_vector<dht::raw_token> get_uniform_tokens(size_t count) {
     for (size_t i = 1; i <= count; ++i) {
         uint64_t n = (uint128_t(i) * std::numeric_limits<uint64_t>::max()) / count;
         tokens.push_back(raw_token{bias(n)});
-        assert(tokens.back().value != std::numeric_limits<int64_t>::min()); // See token::normalize()
+        SCYLLA_ASSERT(tokens.back().value != std::numeric_limits<int64_t>::min()); // See token::normalize()
     }
 
     return tokens;

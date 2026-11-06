@@ -16,7 +16,6 @@ rows = {total=0, live=0, purgeable=0}
 cells = {total=0, live=0, purgeable=0}
 tombstones = {total=0, live=0, purgeable=0}
 
-now = os.time()
 tombstone_gc_grace_seconds = 1 * 24 * 60 * 60 -- 10 days
 
 gc_grace_seconds_env = os.getenv('GC_GRACE_SECONDS')
@@ -24,9 +23,14 @@ if gc_grace_seconds_env then
     tombstone_gc_grace_seconds = gc_grace_seconds_env
 end
 
+-- A tombstone is purgeable if it was deleted before this time point.
+-- Don't pass a deletion_time to os.time(): its fields are in UTC, while
+-- os.time() takes them as local time. os.date("!...") formats in UTC.
+purgeable_before = Scylla.time_point_from_string(os.date("!%Y-%m-%d %H:%M:%Sz", os.time() - tombstone_gc_grace_seconds))
+
 function handle_tombstone(tomb, stats)
     stats.total = stats.total + 1
-    if os.time(tomb.deletion_time) + tombstone_gc_grace_seconds < now then
+    if tomb.deletion_time < purgeable_before then
         stats.purgeable = stats.purgeable + 1
     end
 end

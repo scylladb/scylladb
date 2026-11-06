@@ -34,6 +34,7 @@
 #include "utils/http_client_error_processing.hh"
 #include "utils/object_storage_metrics.hh"
 #include "utils/overloaded_functor.hh"
+#include "utils/assert.hh"
 
 static logger gcp_storage("gcp_storage");
 
@@ -208,7 +209,7 @@ public:
                     }
                 }
             }
-            assert(std::accumulate(bufs.begin(), bufs.end(), size_t{}, [](size_t s, auto& buf) { return s + buf.size(); }) == total);
+            SCYLLA_ASSERT(std::accumulate(bufs.begin(), bufs.end(), size_t{}, [](size_t s, auto& buf) { return s + buf.size(); }) == total);
             _accumulated += total;
             // allow this in background
             (void)do_single_upload(std::move(bufs), start, total, final);
@@ -957,7 +958,7 @@ future<> utils::gcp::storage::client::object_data_sink::do_single_upload(std::de
                         auto total = std::accumulate(bufs.begin(), bufs.end(), size_t{}, [](size_t s, auto& buf) {
                             return s + buf.size();
                         });
-                        assert(len == total);
+                        SCYLLA_ASSERT(len == total);
                         continue;
                     }
                     // the whole chunk landed
@@ -1202,7 +1203,7 @@ future<> utils::gcp::storage::client::object_data_source::seek(uint64_t pos, sta
         co_await read_info();
     }
     auto buf_size = s.buffer_size();
-    assert(buf_size <= s.position);
+    SCYLLA_ASSERT(buf_size <= s.position);
     auto read_pos = s.position - buf_size;
     if (pos < read_pos || pos >= s.position) {
         s.buffers.clear();
@@ -1249,7 +1250,7 @@ future<std::chrono::system_clock::time_point> utils::gcp::storage::client::objec
 
 future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::skip(uint64_t n, state& s) {
     auto buf_size = s.buffer_size();
-    assert(buf_size <= s.position);
+    SCYLLA_ASSERT(buf_size <= s.position);
     auto read_pos = s.position - buf_size;
     auto new_pos = read_pos + n;
     co_await seek(new_pos, s);

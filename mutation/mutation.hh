@@ -21,6 +21,7 @@
 
 #include <seastar/util/later.hh>
 #include <seastar/util/optimized_optional.hh>
+#include "utils/hash.hh"
 
 struct mutation_consume_cookie {
     using crs_iterator_type = mutation_partition::rows_type::iterator;
@@ -126,7 +127,7 @@ public:
     const partition_key& key() const { return _ptr->_dk._key; };
     const dht::decorated_key& decorated_key() const { return _ptr->_dk; };
     dht::ring_position ring_position() const { return { decorated_key() }; }
-    const dht::token& token() const { return _ptr->_dk._token; }
+    dht::token token() const { return _ptr->_dk.token(); }
     const schema_ptr& schema() const { return _ptr->_schema; }
     const mutation_partition& partition() const { return _ptr->_p; }
     mutation_partition& partition() { return _ptr->_p; }

@@ -45,7 +45,12 @@
 #include "replica/tablet_mutation_builder.hh"
 #include "replica/tablets.hh"
 #include "db/config.hh"
+#include "locator/abstract_replication_strategy.hh"
+#include "db/schema_tables.hh"
 #include "db/view/view_builder.hh"
+#include "schema/schema_builder.hh"
+#include "tombstone_gc.hh"
+#include "tombstone_gc_extension.hh"
 #include "service/qos/service_level_controller.hh"
 #include "service/migration_manager.hh"
 #include "service/raft/group0_voter_handler.hh"
@@ -83,6 +88,7 @@
 #include <ranges>
 #include <seastar/core/metrics_registration.hh>
 #include "utils/labels.hh"
+#include "utils/assert.hh"
 
 using token = dht::token;
 using inet_address = gms::inet_address;
@@ -617,14 +623,14 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     fail_unexpected_state();
                 }
                 b().set_replicas(last_token, std::move(*next))
-                        .del_transition(last_token);
+                        .del_transition(last_token, _feature_service);
                 return;
             }
             case replace_tablets_phase::rollback: {
                 if (!trinfo || trinfo->transition != transition_kind || trinfo->next != *next) {
                     return;
                 }
-                b().del_transition(last_token);
+                b().del_transition(last_token, _feature_service);
                 return;
             }
             default:
@@ -1403,7 +1409,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             req = *_topo_sm._topology.global_request;
             req_id = _topo_sm._topology.global_request_id.value();
         } else {
-            assert(_feature_service.topology_global_request_queue);
+            SCYLLA_ASSERT(_feature_service.topology_global_request_queue);
             req_id = _topo_sm._topology.global_requests_queue[0];
             req_entry = co_await _sys_ks.get_topology_request_entry(req_id);
             req = std::get<global_topology_request>(req_entry.request_type);
@@ -1724,13 +1730,17 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
 
                     auto tmptr = get_token_metadata_ptr();
                     const auto& tablet_metadata = tmptr->tablets();
-                    auto tables = ks.metadata()->tables();
+                    auto tables = ks.metadata()->cf_meta_data()
+                        | std::views::values
+                        | std::ranges::to<std::vector<schema_ptr>>();
+                    auto kind = [] (const schema& s) { return s.is_view() ? "view" : "table"; };
 
-                    // Verify all tables have tablet maps.
+                    // Verify all tables and views have tablet maps.
                     for (const auto& schema : tables) {
                         if (!tablet_metadata.has_tablet_map(schema->id())) {
                             throw std::runtime_error(fmt::format(
-                                "Table {}.{} does not have a tablet map", ks_name, schema->cf_name()));
+                                "{} {}.{} does not have a tablet map",
+                                schema->is_view() ? "View" : "Table", ks_name, schema->cf_name()));
                         }
                     }
 
@@ -1772,8 +1782,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                             for (const auto& schema : tables) {
                                 if (!node_stats.tables.contains(schema->id())) {
                                     throw std::runtime_error(fmt::format(
-                                        "Node {} has not yet migrated table {}.{} to tablets",
-                                        host_id, ks_name, schema->cf_name()));
+                                        "Node {} has not yet migrated {} {}.{} to tablets",
+                                        host_id, kind(*schema), ks_name, schema->cf_name()));
                                 }
                             }
                         } else { // rollback path (tablets to vnodes)
@@ -1782,8 +1792,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                                 for (const auto& schema : tables) {
                                     if (node_stats.tables.contains(schema->id())) {
                                         throw std::runtime_error(fmt::format(
-                                            "Node {} still reports table {}.{} as tablet-based, rollback not complete",
-                                            host_id, ks_name, schema->cf_name()));
+                                            "Node {} still reports {} {}.{} as tablet-based, rollback not complete",
+                                            host_id, kind(*schema), ks_name, schema->cf_name()));
                                     }
                                 }
                             }
@@ -1809,8 +1819,71 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     }
 
                     if (!rollback) {
-                        // All nodes have been migrated. ALTER the keyspace to use tablets.
+                        // Remove the build status entries of views that no longer
+                        // exist.
+                        //
+                        // Before 2026.4 (bedcc69578), DROP MATERIALIZED VIEW in a
+                        // vnode keyspace didn't remove the view's entries from
+                        // system.view_build_status_v2. Instead, the view builder of
+                        // every node with view building enabled removed them
+                        // asynchronously, after the DROP had returned: it waited for
+                        // its semaphore, then deleted the node-local build rows of
+                        // the view and, in a separate group0 command, the entries.
+                        // If that group0 command failed, e.g. because the node was
+                        // shutting down or group0 had no quorum for longer than the
+                        // operation timeout, the view builder logged a warning and
+                        // didn't retry. On restart, a node retries only for views it
+                        // still has node-local build rows for, which the failed
+                        // attempt may already have deleted.
+                        //
+                        // So an entry is left behind for good only if this fails on
+                        // every node at once, e.g. if the whole cluster shuts down
+                        // right after the DROP. That is almost impossible. But the
+                        // consequences would be severe: once the keyspace uses
+                        // tablets, loading the view building state looks up the
+                        // view of every entry with find_schema(), which throws
+                        // no_such_column_family for a dropped view. Every following
+                        // group0 command that touches view building would fail,
+                        // on all nodes, stopping group0 cluster-wide. This cleanup
+                        // guards against that, just in case.
+                        const auto& views = ks.metadata()->views();
+                        auto build_statuses = co_await _sys_ks.get_view_build_status_map();
+                        for (const auto& name : build_statuses | std::views::keys) {
+                            if (name.first != ks_name || std::ranges::contains(views, name.second, &schema::cf_name)) {
+                                continue;
+                            }
+                            rtlogger.info("finalize_migration: removing build status entries of dropped view {}.{}", name.first, name.second);
+                            updates.emplace_back(co_await _sys_ks.make_remove_view_build_status_mutation(guard.write_timestamp(), name));
+                        }
+
+                        // Co-located tables don't support the 'repair'
+                        // tombstone_gc mode (see SCYLLADB-362): they are never
+                        // repaired on their own, so no repair time would ever
+                        // allow purging their tombstones. Views of a vnode
+                        // keyspace default to 'repair', so switch co-located
+                        // views to the default for co-located tables
+                        // ('timeout'). Views with a tablet map of their own
+                        // support 'repair' and keep their mode. Doing it here
+                        // keeps tombstone GC off for the whole migration,
+                        // during which repair is not allowed.
                         auto old_md = ks.metadata();
+                        auto colocated_gc_mode = get_default_tombstone_gc_mode(ks.get_replication_strategy(), false);
+                        for (const auto& view : old_md->views()) {
+                            bool is_colocated = !tablet_metadata.is_base_table(view->id());
+                            if (!is_colocated || view->tombstone_gc_options().mode() != tombstone_gc_mode::repair) {
+                                continue;
+                            }
+                            rtlogger.info("finalize_migration: switching tombstone_gc mode of view {}.{} from 'repair' to 'timeout'",
+                                ks_name, view->cf_name());
+                            schema_builder b(view);
+                            b.add_extension(tombstone_gc_extension::NAME, seastar::make_shared<tombstone_gc_extension>(colocated_gc_mode));
+                            for (auto& m : db::schema_tables::make_update_view_mutations(old_md, view, view_ptr(b.build()),
+                                    guard.write_timestamp(), false)) {
+                                updates.emplace_back(std::move(m));
+                            }
+                        }
+
+                        // All nodes have been migrated. ALTER the keyspace to use tablets.
                         auto new_md = data_dictionary::keyspace_metadata::new_keyspace(
                             old_md->name(),
                             old_md->strategy_name(),
@@ -1898,6 +1971,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             co_await _group0.client().add_entry(std::move(g0_cmd), std::move(guard), _as);
         }
         break;
+        case global_topology_request::prepare_migration:
+            co_await handle_prepare_migration(std::move(guard), req_id, req_entry);
+            break;
         case global_topology_request::restore_tablets: {
             rtlogger.info("restore_tablets requested");
 
@@ -2242,22 +2318,22 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     .build());
     }
 
+    // The request is removed from paused_rf_change_requests by the caller, together with
+    // any other request leaving the set in this pass, so that there is a single overwrite.
     void generate_rf_change_resume_update(group0_update_collector& out, const group0_guard& guard, utils::UUID request_to_resume) {
         rtlogger.debug("Generating RF change resume for request id {}", request_to_resume);
         out.emplace_back(topology_mutation_builder(guard.write_timestamp())
                 .queue_global_topology_request_id(request_to_resume)
-                .resume_rf_change_request(_topo_sm._topology.paused_rf_change_requests, request_to_resume)
                 .build());
     }
 
-    // Drops the request paused for rack_list colocation without queueing it again
+    // Fails the request paused for rack_list colocation, without queueing it again,
     // and reports the error to the client.
     // The keyspace metadata is not touched, as it is not modified before the colocation is done.
+    // As in generate_rf_change_resume_update(), the caller removes the request from
+    // paused_rf_change_requests.
     void generate_rack_list_colocation_failure_update(group0_update_collector& out, const group0_guard& guard, const rack_list_colocation_failure& failure) {
         rtlogger.warn("Failing request {} paused for rack_list colocation: {}", failure.request_id, failure.error);
-        out.emplace_back(topology_mutation_builder(guard.write_timestamp())
-                .resume_rf_change_request(_topo_sm._topology.paused_rf_change_requests, failure.request_id)
-                .build());
         out.emplace_back(topology_request_tracking_mutation_builder(failure.request_id)
                 .done(failure.error)
                 .build());
@@ -2361,12 +2437,27 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 }
             }
 
+            // A plan can carry both a resume and a failure, and each used to overwrite
+            // paused_rf_change_requests on its own. Several overwrites of one set at the
+            // same write timestamp merge into their union, so both removals are collected
+            // here and applied as one.
+            const auto& paused = _topo_sm._topology.paused_rf_change_requests;
+            std::unordered_set<utils::UUID> unpaused;
+
             if (auto request_to_resume = plan.rack_list_colocation_plan().request_to_resume(); request_to_resume) {
                 generate_rf_change_resume_update(out, guard, request_to_resume);
+                unpaused.insert(request_to_resume);
             }
 
             if (const auto& request_to_fail = plan.rack_list_colocation_plan().request_to_fail(); request_to_fail) {
                 generate_rack_list_colocation_failure_update(out, guard, *request_to_fail);
+                unpaused.insert(request_to_fail->request_id);
+            }
+
+            if (!unpaused.empty()) {
+                out.emplace_back(topology_mutation_builder(guard.write_timestamp())
+                        .resume_rf_change_requests(paused, unpaused)
+                        .build());
             }
 
             co_await generate_rf_change_updates(out, guard, plan.rf_change_plan());
@@ -2385,15 +2476,22 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             generate_resize_update(out, guard, table_id, resize_decision);
         }
 
-        for (const auto& completion : plan.restore_completions()) {
-            rtlogger.info("All restore transitions for table {} completed, finishing request {}", completion.table, completion.request_id);
+        if (!plan.restore_completions().empty()) {
+            // Several overwrites of one set at the same write timestamp merge into their
+            // union, so every completed request has to be removed in a single overwrite.
+            std::unordered_set<utils::UUID> finished;
+            const auto end_time = db_clock::now();
+            for (const auto& completion : plan.restore_completions()) {
+                rtlogger.info("All restore transitions for table {} completed, finishing request {}", completion.table, completion.request_id);
+                finished.insert(completion.request_id);
+                out.emplace_back(
+                    topology_request_tracking_mutation_builder(completion.request_id)
+                        .done(completion.error.empty() ? std::nullopt : std::optional<sstring>(completion.error), end_time)
+                        .build());
+            }
             out.emplace_back(
                 topology_mutation_builder(guard.write_timestamp())
-                    .finish_restore_request(_topo_sm._topology.ongoing_restore_requests, completion.request_id)
-                    .build());
-            out.emplace_back(
-                topology_request_tracking_mutation_builder(completion.request_id)
-                    .done(completion.error.empty() ? std::nullopt : std::optional<sstring>(completion.error))
+                    .finish_restore_requests(_topo_sm._topology.ongoing_restore_requests, finished)
                     .build());
         }
     }
@@ -2502,6 +2600,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         bool needs_barrier = false;
         bool has_transitions = false;
         tablet_builder_map tablet_builders;
+        // Published only once the round commits, as a retried round would count again.
+        uint64_t cancelled_transitions = 0;
 
         shared_promise barrier;
         auto fail_barrier = seastar::defer([&] noexcept {
@@ -2645,10 +2745,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
 
             // Advances past a stage of a strongly consistent migration once its raft
             // configuration change is done. The barrier runs first when the change needs
-            // requests drained - a promotion, of requests whose serving set lacks the
+            // requests drained: a promotion, of requests whose serving set lacks the
             // promoted replica, and a removal, of requests that may still be inside the
-            // removed replica's raft server - or when an older sync of this migration
-            // could still propose something.
+            // removed replica's raft server. An older sync of this migration that is still
+            // running needs no barrier; see sc_rollback.
             auto transition_to_with_config_sync = [&] (locator::tablet_transition_stage stage, with_barrier needs_barrier) {
                 if ((!needs_barrier || do_barrier()) && do_config_sync()) {
                     transition_to(stage);
@@ -2690,8 +2790,48 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 locator::tablet_transition_stage::sc_remove_pending :
                 locator::tablet_transition_stage::cleanup_target;
 
+            // Rolls a cancelled transition back, onto the track a failed one takes, once the
+            // stage's in-flight actions have finished. A strongly consistent migration keeps a
+            // session to its end (see do_config_sync), so it gets a fresh one.
+            auto rollback_cancelled = [&] (background_action_holder* holder,
+                                           background_action_holder* also = nullptr) {
+                bool in_flight = false;
+                for (auto* h : {holder, also}) {
+                    if (!h || !*h) {
+                        continue;
+                    }
+                    if (!(*h)->available()) {
+                        in_flight = true;
+                        continue;
+                    }
+                    if ((*h)->failed()) {
+                        (*h)->ignore_ready_future();
+                    }
+                    // ignore_ready_future() leaves an invalid future, which neither a later round
+                    // nor stop() could handle.
+                    *h = make_ready_future<>();
+                }
+                if (in_flight) {
+                    rtlogger.debug("Tablet {} cancelled at stage {}, waiting for the in-flight action",
+                                   gid, trinfo.stage);
+                    return;
+                }
+                rtlogger.debug("Rolling back cancelled tablet transition of {} at stage {}", gid, trinfo.stage);
+                cancelled_transitions++;
+                auto& builder = get_mutation_builder().set_stage(last_token, rollback_stage);
+                if (is_strong_consistency) {
+                    builder.set_session(last_token, session_id(utils::UUID_gen::get_time_UUID()));
+                } else {
+                    builder.del_session(last_token);
+                }
+            };
+
             switch (trinfo.stage) {
                 case locator::tablet_transition_stage::allow_write_both_read_old: /* start_migration */
+                    if (trinfo.cancelled) {
+                        rollback_cancelled(&tablet_state.barriers[trinfo.stage]);
+                        break;
+                    }
                     if (action_failed(tablet_state.barriers[trinfo.stage])) {
                         if (check_excluded_replicas()) {
                             transition_to(rollback_stage);
@@ -2704,12 +2844,16 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                             break;
                         }
                     }
-                    // The barrier lets every node see the pending replica's new storage
-                    // before the next stage writes to it. A strongly consistent tablet
-                    // takes writes only through raft, and raft reaches the pending replica
-                    // only through its raft server, which the pending replica starts only
-                    // once it has applied this stage. So this stage does nothing for it,
-                    // and is kept for uniformity with the eventually consistent migration.
+                    // The barrier makes the pending replica apply this stage, and so
+                    // allocate the tablet's storage, before coordinators of the next stage
+                    // write to it: the pending replica counts towards a write's acks. A
+                    // strongly consistent tablet takes writes only through raft, which
+                    // reaches the pending replica only through its raft server. The pending
+                    // replica allocates the storage and starts the server in the same token
+                    // metadata update, whichever stage it sees first, and the server's start
+                    // suspends before it can apply anything. So nothing needs every node to
+                    // see this stage, which is kept for uniformity with the eventually
+                    // consistent migration.
                     if (is_strong_consistency || do_barrier()) {
                         rtlogger.debug("Will set tablet {} stage to {}", gid, locator::tablet_transition_stage::write_both_read_old);
                         auto leaving_replica = get_leaving_replica(tmap.get_tablet_info(gid.tablet), trinfo);
@@ -2724,6 +2868,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     }
                     break;
                 case locator::tablet_transition_stage::write_both_read_old: /* sc_add_nonvoter */
+                    if (trinfo.cancelled) {
+                        rollback_cancelled(&tablet_state.barriers[trinfo.stage],
+                                           is_strong_consistency ? &tablet_state.config_sync[trinfo.stage] : nullptr);
+                        break;
+                    }
                     if (action_failed(tablet_state.barriers[trinfo.stage])
                             || (is_strong_consistency && action_failed(tablet_state.config_sync[trinfo.stage]))) {
                         if (check_excluded_replicas()) {
@@ -2747,6 +2896,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     transition_to_with_barrier(rollback_stage);
                     break;
                 case locator::tablet_transition_stage::rebuild_repair: {
+                    if (trinfo.cancelled) {
+                        rollback_cancelled(&tablet_state.rebuild_repair);
+                        break;
+                    }
                     if (action_failed(tablet_state.rebuild_repair)) {
                         bool fail = utils::get_local_injector().enter("rebuild_repair_stage_fail");
                         if (fail || check_excluded_replicas()) {
@@ -2789,6 +2942,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 // get admitted before global_tablet_token_metadata_barrier() is finished for earlier
                 // stage in case of coordinator failover.
                 case locator::tablet_transition_stage::streaming: /* sc_snapshot_transfer */ {
+                    if (trinfo.cancelled) {
+                        rollback_cancelled(&tablet_state.streaming);
+                        break;
+                    }
                     if (action_failed(tablet_state.streaming) || utils::get_local_injector().enter("stream_tablet_fail")) {
                         std::optional<sstring> rollback;
 
@@ -2985,15 +3142,25 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     break;
                 case locator::tablet_transition_stage::sc_rollback:
                     // Demotes the pending replica and makes the leaving one a voter again.
-                    // The leaving replica serves at every stage, so its promotion needs no
-                    // drain. The barrier is for the sync of sc_become_voter: it may still
-                    // run on a leader that hasn't applied this stage yet, and land its
-                    // change after the followers judged this stage's configuration
-                    // converged - they find it in place, since that change never landed.
+                    // Promoting the leaving replica needs no drain: it is in the serving
+                    // set of every stage a live request can have here, so no request can
+                    // see it named leader without being able to forward to it.
+                    //
+                    // A sync of sc_become_voter may still be running on the group's leader,
+                    // and needs no barrier either. This sync reaches every replica that can
+                    // lead, and succeeds only once each of them reports. On each replica,
+                    // before this sync's handler first reads the configuration, the older
+                    // handler's abort source is cancelled: by the guard, when the replica
+                    // applies this stage, and by this handler superseding it. The older
+                    // handler checks its abort source and appends its change with no
+                    // suspension in between (sync_raft_group_config()). So either it saw the
+                    // cancellation and proposes nothing more, or its change is already in
+                    // this replica's log, where this handler sees it and reverts it before
+                    // reporting.
                     //
                     // Retried until it succeeds: unlike the forward path there is
                     // nothing further to fall back to.
-                    transition_to_with_config_sync(locator::tablet_transition_stage::sc_remove_pending, with_barrier::yes);
+                    transition_to_with_config_sync(locator::tablet_transition_stage::sc_remove_pending, with_barrier::no);
                     break;
                 case locator::tablet_transition_stage::sc_remove_pending:
                     // Views of sc_rollback let the pending replica serve, so the barrier
@@ -3037,7 +3204,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     if (do_barrier()) {
                         _tablets.erase(gid);
                         get_mutation_builder()
-                                .del_transition(last_token)
+                                .del_transition(last_token, _feature_service)
                                 .del_migration_task_info(last_token, _feature_service);
                         auto leaving_replica = get_leaving_replica(tmap.get_tablet_info(gid.tablet), trinfo);
                         if (leaving_replica) {
@@ -3055,7 +3222,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     if (!defer_transition && do_barrier()) {
                         _tablets.erase(gid);
                         get_mutation_builder()
-                                .del_transition(last_token)
+                                .del_transition(last_token, _feature_service)
                                 .set_replicas(last_token, trinfo.next)
                                 .del_migration_task_info(last_token, _feature_service);
                         _vb_coordinator->generate_tablet_migration_updates(updates, guard, tmap, gid, trinfo);
@@ -3182,7 +3349,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         auto ep = tablet_state.restore->get_exception();
                         rtlogger.debug("Clearing restore transition for {} due to error", gid);
                         _tablets.erase(gid);
-                        get_mutation_builder().del_transition(last_token).del_snapshot_name(last_token).del_session(last_token);
+                        get_mutation_builder().del_transition(last_token, _feature_service).del_snapshot_name(last_token).del_session(last_token);
                         // Record error on the ongoing restore request so it's propagated to the caller.
                         if (auto it = restore_request_for_table.find(gid.table); it != restore_request_for_table.end()) {
                             updates.add(
@@ -3215,7 +3382,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     })) {
                         rtlogger.debug("Clearing restore transition for {}", gid);
                         _tablets.erase(gid);
-                        get_mutation_builder().del_transition(last_token).del_snapshot_name(last_token).del_session(last_token);
+                        get_mutation_builder().del_transition(last_token, _feature_service).del_snapshot_name(last_token).del_session(last_token);
                     }
                 }
                     break;
@@ -3253,7 +3420,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                                 rtlogger.info("The end_repair stage finished for tablet repair tablet_id={} session_id={}", gid, tablet_state.session_id);
                             }
                             _tablets.erase(gid);
-                            get_mutation_builder().del_transition(last_token);
+                            get_mutation_builder().del_transition(last_token, _feature_service);
                         }
                     }
                 }
@@ -3306,6 +3473,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             } else {
                 co_await update_topology_state(std::move(guard), std::move(updates), format("Tablet migration"));
             }
+            _tablet_ops_metrics.add_cancelled_transitions(cancelled_transitions);
         }
 
         if (needs_barrier) {
@@ -3649,6 +3817,290 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 break;
             } catch (group0_concurrent_modification&) {
             }
+        }
+    }
+
+    // How many of the keyspace's tables have a tablet map once the generated updates
+    // commit, out of how many it has. Equal means the request is complete.
+    struct prepare_progress {
+        size_t prepared;
+        size_t total;
+    };
+
+    // Generates the tablet maps of as many tables of the keyspace without one as fit into
+    // a group0 command and appends them to `updates`.
+    //
+    // Does no group0 or raft I/O of its own, so the only thing it throws is a reason for
+    // the request to fail.
+    future<prepare_progress> generate_prepare_migration_updates(
+            utils::chunked_vector<canonical_mutation>& updates, const group0_guard& guard,
+            const db::system_keyspace::topology_requests_entry& req) {
+        if (!req.prepare_migration_ks_name) {
+            throw std::runtime_error("prepare_migration request carries no keyspace name");
+        }
+        if (!req.prepare_migration_tables) {
+            throw std::runtime_error("prepare_migration request carries no tables");
+        }
+        const sstring& ks_name = *req.prepare_migration_ks_name;
+
+        const auto tmptr = get_token_metadata_ptr();
+
+        // The state may have changed since the API path asked the same questions. Whether
+        // the keyspace will be RF-rack-valid is the API path's to warn about.
+        const auto* nts = validate_keyspace_for_migration(_db, ks_name, _topo_sm._topology);
+        validate_rf_for_tablets_migration(_db, tmptr, *nts, ks_name);
+        co_await validate_keyspace_views_for_tablets_migration(_db, _sys_ks, _topo_sm._topology, ks_name);
+        auto& ks = _db.find_keyspace(ks_name);
+        const auto erm = ks.get_static_effective_replication_map();
+
+        // A tablet map, not table::uses_tablets(), says what is left to do: uses_tablets()
+        // reflects this node's effective replication map, fixed at startup, while the map is
+        // the cluster-wide state this request produces. It also makes the request idempotent.
+        struct map_to_build {
+            size_t target_pow2;
+            table_id id;
+            sstring name;
+        };
+
+        size_t all_tables = 0;
+        // Tables which have no tablet map yet.
+        size_t remaining_tables = 0;
+        // Tables that get a tablet map of their own: base tables, and views
+        // that cannot be co-located with their base table.
+        std::vector<map_to_build> tables_to_build_maps;
+        // Tables that share the tablet map of another table, keyed by the
+        // table whose map they share. Currently, these are views co-located
+        // with their base table. Each only needs an entry saying so, written
+        // in the same command as the base table's map.
+        std::unordered_map<table_id, std::vector<std::pair<table_id, sstring>>> tables_to_colocate;
+        for (const auto& [name, schema] : ks.metadata()->cf_meta_data()) {
+            ++all_tables;
+            if (tmptr->tablets().has_tablet_map(schema->id())) {
+                continue;
+            }
+            ++remaining_tables;
+            if (auto base_id = schema->is_view() ? _db.get_base_table_for_tablet_colocation(*schema, {}) : std::nullopt) {
+                tables_to_colocate[*base_id].push_back({schema->id(), name});
+            } else {
+                tables_to_build_maps.emplace_back(map_to_build{0, schema->id(), name});
+            }
+        }
+        if (remaining_tables == 0) {
+            rtlogger.info("All tables of keyspace '{}' already have a tablet map", ks_name);
+            co_return prepare_progress{all_tables, all_tables};
+        }
+        if (remaining_tables < all_tables) {
+            rtlogger.info("Resuming the preparation of keyspace '{}': {} of {} table(s) already have a tablet map",
+                          ks_name, all_tables - remaining_tables, all_tables);
+            co_await utils::get_local_injector().inject("prepare_migration_fail_on_resume", [] {
+                return std::make_exception_ptr(std::runtime_error("injected prepare_migration failure"));
+            });
+        }
+
+        const auto& targets = *req.prepare_migration_tables;
+        for (auto& table : tables_to_build_maps) {
+            // A table created after the request was made has no target and gets the
+            // plain vnode-derived layout, which the load balancer splits later.
+            if (auto it = targets.find(table.id); it != targets.end()) {
+                table.target_pow2 = static_cast<size_t>(it->second);
+            }
+        }
+
+        // Grouping by target means one map is held at a time and the size measured for one
+        // table predicts the next. The order is the same on every pass.
+        std::ranges::sort(tables_to_build_maps, [] (const auto& a, const auto& b) {
+            return std::make_pair(a.target_pow2, a.id) < std::make_pair(b.target_pow2, b.id);
+        });
+
+        // The command has to fit what group0 allows and what rpc admits; on a node with
+        // little memory per shard the second is the smaller of the two. What rpc admits is
+        // judged by this node's memory, so nodes are assumed to have similar memory per
+        // shard. Besides the maps, room is left for the tracking mutations, the group0
+        // history entry and the framing, 64 KiB, and for the earlier entries raft may send
+        // in the same append, which stop short of its append_request_threshold of 100 KB.
+        constexpr size_t command_size_headroom = 64 * 1024 + 100'000;
+        const size_t max_command_size = std::min<size_t>(_raft.max_command_size(),
+                                                         _messaging.max_admissible_message_size());
+        const size_t max_maps_size = max_command_size > command_size_headroom
+                ? max_command_size - command_size_headroom : 0;
+        size_t batch_budget = std::min<size_t>(_raft.max_command_size() / 2, max_maps_size);
+        if (utils::get_local_injector().is_enabled("prepare_migration_one_table_per_command")) {
+            batch_budget = 0;
+        }
+
+        // Appends to `out` the entries of the views co-located with `base_id`, adding their
+        // size to `size`, and returns how many there are.
+        auto append_colocated_tablet_map_mutations = [&] (table_id base_id, utils::chunked_vector<canonical_mutation>& out,
+                size_t& size) -> future<size_t> {
+            auto it = tables_to_colocate.find(base_id);
+            if (it == tables_to_colocate.end()) {
+                co_return 0;
+            }
+            for (const auto& [tid, cf_name] : it->second) {
+                auto cm = co_await make_canonical_mutation_gently(
+                        replica::colocated_tablet_map_to_mutation(tid, ks_name, cf_name, base_id, guard.write_timestamp()));
+                size += cm.representation().size();
+                out.emplace_back(std::move(cm));
+                rtlogger.info("Built co-located tablet map for {}.{} (shares the tablet map of {})", ks_name, cf_name, base_id);
+            }
+            co_return it->second.size();
+        };
+
+        std::optional<locator::tablet_map> tmap;
+        size_t tmap_target = 0;
+        std::optional<size_t> measured;
+        size_t batch_size = 0;
+        size_t written = 0;
+
+        for (const auto& [target_pow2, tid, cf_name] : tables_to_build_maps) {
+            if (written > 0 && batch_size >= batch_budget) {
+                break;
+            }
+            if (!tmap || target_pow2 != tmap_target) {
+                tmap = co_await build_tablet_map_for_migration(erm, target_pow2);
+                tmap_target = target_pow2;
+                measured.reset();
+            } else if (written > 0 && measured && batch_size + *measured > batch_budget) {
+                // Known not to fit; don't build its map only to drop it.
+                break;
+            }
+
+            utils::chunked_vector<canonical_mutation> table_updates;
+            size_t table_size = 0;
+            co_await replica::tablet_map_to_mutations(*tmap, tid, ks_name, cf_name, guard.write_timestamp(),
+                    _feature_service, [&] (mutation m) -> future<> {
+                        auto cm = co_await make_canonical_mutation_gently(m);
+                        table_size += cm.representation().size();
+                        table_updates.emplace_back(std::move(cm));
+                    });
+            measured = table_size;
+            // The views co-located with the table go into the same command as its map.
+            const size_t colocated = co_await append_colocated_tablet_map_mutations(tid, table_updates, table_size);
+
+            // A single map can't be split: its rows have to be applied together. A command
+            // rpc doesn't admit would only fail on every attempt to replicate it.
+            if (table_size > max_maps_size) {
+                throw std::runtime_error(fmt::format(
+                        "The tablet map of table {}.{} takes {} bytes, more than a group0 command can carry ({} bytes)",
+                        ks_name, cf_name, table_size, max_maps_size));
+            }
+            if (written == 0 && table_size > batch_budget) {
+                rtlogger.warn("The tablet map of table {}.{} takes {} bytes, more than the {} bytes a command of"
+                              " this preparation should carry; it goes out in a command of its own",
+                              ks_name, cf_name, table_size, batch_budget);
+            }
+            if (written > 0 && batch_size + table_size > batch_budget) {
+                break;
+            }
+            for (auto&& cm : table_updates) {
+                updates.emplace_back(std::move(cm));
+            }
+            batch_size += table_size;
+            written += 1 + colocated;
+
+            rtlogger.info("Built tablet map for table {}.{} with {} tablet(s) (target pow2={}, {} bytes)",
+                          ks_name, cf_name, tmap->tablet_count(), target_pow2, table_size);
+        }
+
+        co_return prepare_progress{all_tables - remaining_tables + written, all_tables};
+    }
+
+    // Writes the tablet maps of the tables of a keyspace which don't have one yet, the
+    // first phase of a vnodes-to-tablets migration. Each call writes as many maps as fit
+    // into one group0 command and, if that isn't all of them, leaves the request queued
+    // for the next pass. A request which fails drops the maps of the tables it records.
+    future<> handle_prepare_migration(group0_guard guard, utils::UUID req_id,
+                                      const db::system_keyspace::topology_requests_entry& req) {
+        const sstring ks_name = req.prepare_migration_ks_name.value_or("");
+        rtlogger.info("prepare_migration requested for keyspace '{}'", ks_name);
+
+        utils::chunked_vector<canonical_mutation> updates;
+        bool complete = true;
+        prepare_progress progress{};
+        sstring error;
+
+        try {
+            progress = co_await generate_prepare_migration_updates(updates, guard, req);
+            complete = progress.prepared == progress.total;
+        } catch (const std::exception& e) {
+            // The builder commits nothing of its own, so what it throws is a reason for the
+            // request to fail rather than for the coordinator to retry. Running out of memory
+            // might pass on a retry, but fails the request too.
+            error = e.what();
+            rtlogger.error("Couldn't process global_topology_request::prepare_migration for keyspace '{}': {}",
+                           ks_name, std::current_exception());
+            updates.clear();
+            complete = true;
+        }
+
+        // A keyspace which uses tablets by now is not this request's any more, and its maps
+        // are all its tables have, so it is left alone.
+        const bool ks_uses_tablets = _db.has_keyspace(ks_name) && _db.find_keyspace(ks_name).uses_tablets();
+        if (!error.empty() && req.prepare_migration_tables && !ks_uses_tablets) {
+            // The request fails as a whole, so drop the maps its earlier commands wrote, in
+            // the command which fails it. These are the maps of the tables it records: it
+            // was made only for tables which had none, so a table prepared before it is
+            // never touched. A map is found by its table's id, so that of a table dropped
+            // since goes too. A table created since isn't recorded, and keeps the map this
+            // request may have written for it.
+            const auto tmptr = get_token_metadata_ptr();
+            size_t dropped = 0;
+            for (const auto& [tid, _] : *req.prepare_migration_tables) {
+                if (tmptr->tablets().has_tablet_map(tid)) {
+                    updates.emplace_back(replica::make_drop_tablet_map_mutation(tid, guard.write_timestamp()));
+                    ++dropped;
+                }
+            }
+            if (dropped) {
+                rtlogger.info("Dropping the {} tablet map(s) the failed preparation of keyspace '{}' wrote",
+                              dropped, ks_name);
+            }
+        }
+
+        // Seed every node, so that an absent mode means one thing only: a migration started
+        // before the cluster knew the column, which is the single case the status API answers
+        // from tablet sizes. Each node overwrites its own cell with what it booted with as it
+        // restarts. Only once every node knows the column: a cell for a column an older node
+        // lacks would leave system.topology differing between them. Written with the maps
+        // rather than when the request is queued, since a finalization of another keyspace
+        // in between clears the column while no keyspace has a map, and not on failure,
+        // which leaves no map for a mode to describe.
+        if (error.empty() && _feature_service.topology_current_storage_mode) {
+            topology_mutation_builder builder(guard.write_timestamp());
+            bool seeded = false;
+            for (const auto& [node_id, rs] : _topo_sm._topology.normal_nodes) {
+                if (!rs.current_storage_mode) {
+                    builder.with_node(node_id).set("current_storage_mode", storage_mode::vnodes);
+                    seeded = true;
+                }
+            }
+            if (seeded) {
+                updates.emplace_back(builder.build());
+            }
+        }
+
+        sstring reason = fmt::format("prepare vnodes-to-tablets migration for keyspace '{}'", ks_name);
+        if (complete) {
+            updates.emplace_back(topology_request_tracking_mutation_builder(req_id)
+                                      .done(error)
+                                      .build());
+            updates.emplace_back(topology_mutation_builder(guard.write_timestamp())
+                                      .drop_first_global_topology_request_id(
+                                              _topo_sm._topology.global_requests_queue, req_id)
+                                      .build());
+        } else {
+            reason += fmt::format(", part: {} of {} table(s) prepared", progress.prepared, progress.total);
+        }
+
+        co_await update_topology_state(std::move(guard), std::move(updates), reason);
+
+        if (!complete) {
+            // After the command is applied, so it stands for a part really committed.
+            // Tests count the parts of a request by this line.
+            rtlogger.info("Committed a part of the vnodes-to-tablets migration preparation of keyspace '{}'",
+                          ks_name);
+            co_await utils::get_local_injector().inject("prepare_migration_after_part",
+                    utils::wait_for_message(std::chrono::minutes(5), &_as));
         }
     }
 
@@ -5947,6 +6399,10 @@ tablet_ops_metrics::tablet_ops_metrics() {
                 sm::description("Number of failed tablet user repair"), {ops_label_type("user_repair"), basic_level}),
         sm::make_gauge("succeeded", [this] { return stats[locator::tablet_task_type::user_repair].succeeded; },
                 sm::description("Number of succeeded tablet user repair"), {ops_label_type("user_repair"), basic_level}),
+        sm::make_counter("cancelled_transitions", [this] { return cancelled_transitions; },
+                sm::description("Number of tablet transitions which were cancelled and rolled back. "
+                                "Counted by the topology coordinator, so it restarts when the coordinator changes"),
+                {basic_level}),
     });
 }
 

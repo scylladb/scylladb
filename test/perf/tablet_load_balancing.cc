@@ -34,6 +34,7 @@
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/key_utils.hh"
+#include "service/storage_service.hh"
 
 using namespace locator;
 using namespace replica;

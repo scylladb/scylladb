@@ -23,7 +23,7 @@
 #include "auth/resource.hh"
 #include "auth/sasl_challenge.hh"
 
-#include "service/raft/raft_group0_client.hh"
+#include "service/raft/group0_fwd.hh"
 
 namespace db {
     class config;

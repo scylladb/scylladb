@@ -316,6 +316,8 @@ def test_scylla_sstable_dump_component(cql, test_keyspace, scylla_path, scylla_d
         for sst_name, sst_metadata in json_out["sstables"].items():
             assert "sharding" in sst_metadata, f"Expected 'sharding' metadata in sstable scylla-metadata: sstable={sst_name}: {sst_metadata}"
             assert sst_metadata["sharding"] != [], f"Expected non-empty sharding metadata in sstable scylla-metadata: sstable={sst_name}: {sst_metadata}"
+            assert "scrub_time" in sst_metadata, f"Expected 'scrub_time' in json output: {json_out}"
+            assert sst_metadata["scrub_time"] > 0, f"Expected non-zero 'scrub_time'"
 
 @pytest.mark.parametrize("components_spec", [
     None,                           # None -> --all-components
@@ -584,7 +586,7 @@ def test_scylla_sstable_write_cql_large_input(scylla_path):
         with open(input_file, 'w') as f:
             for i in range(0, value_count):
                 expected_json.append({'pk': i, 'v': value})
-                f.write(f"INSERT INTO scylla_sstable.{table_name} (pk, v) VALUES ({i}, '{value}');\n")
+                f.write(f"INSERT INTO {table_name} (pk, v) VALUES ({i}, '{value}');\n")
 
         # memtable grows in segment_size increments (128KiB)
         memory_limit = 1 << 17
@@ -639,10 +641,10 @@ def test_scylla_sstable_write_validation(cql, scylla_path):
             assert "error processing arguments: " + expected_error in res.stderr
 
         check(f"INSERT INTO scylla_sstable.{table_name} (pk) VALUES,", "failed to parse query: exceptions::syntax_exception")
-        check(f"INSERT INTO {table_name} (pk) VALUES (0);", "query must have keyspace and the keyspace has to be scylla_sstable")
-        check(f"INSERT INTO foo.{table_name} (pk) VALUES (0);", "query must be against scylla_sstable keyspace, got foo instead")
-        check(f"INSERT INTO {keyspace_name}.{table_name} (pk) VALUES (0);", f"query must be against scylla_sstable keyspace, got {keyspace_name} instead")
+        check(f"INSERT INTO foo.{table_name} (pk) VALUES (0);", "query must be against the scylla_sstable keyspace (or omit the keyspace altogether), got foo instead")
+        check(f"INSERT INTO {keyspace_name}.{table_name} (pk) VALUES (0);", f"query must be against the scylla_sstable keyspace (or omit the keyspace altogether), got {keyspace_name} instead")
         check(f"INSERT INTO scylla_sstable.foo (pk) VALUES (0);", f"query must be against {table_name} table, got foo instead")
+        check(f"INSERT INTO foo (pk) VALUES (0);", f"query must be against {table_name} table, got foo instead")
         check(f"SELECT * FROM scylla_sstable.{table_name}", "query must be an insert, update or delete query")
 
 
@@ -975,6 +977,125 @@ def test_scylla_sstable_script(cql, request, test_keyspace, scylla_path, scylla_
 
         assert dump_lua_json == cxx_json
         assert slice_lua_json == cxx_json
+
+
+# The gc_clock_time_point type of the Lua API is documented to support the ==,
+# < and <= operators. They used to fail with "attempt to index a nil value",
+# because the implementation read the second operand from an empty stack.
+def test_scylla_sstable_script_time_point_comparison(cql, test_keyspace, scylla_path, scylla_data_dir):
+    script_file = os.path.join(scylla_data_dir, '..', 'test_scylla_sstable_script_time_point_comparison.lua')
+    script = '''
+wr = Scylla.new_json_writer()
+
+function consume_stream_start(args)
+    a1 = Scylla.time_point_from_string("2024-11-03 05:30:00z")
+    a2 = Scylla.time_point_from_string("2024-11-03 05:30:00z")
+    b = Scylla.time_point_from_string("2024-11-03 06:30:00z")
+    wr:start_array()
+    for _, r in ipairs({a1 == a2, a1 == b, a1 < b, b < a1, a1 < a2, a1 <= b, b <= a1, a1 <= a2}) do
+        wr:bool(r)
+    end
+end
+
+function consume_stream_end()
+    wr:end_array()
+end
+'''
+    with open(script_file, 'w') as f:
+        f.write(script)
+    try:
+        with scylla_sstable(simple_no_clustering_table, cql, test_keyspace, scylla_data_dir) as (_, schema_file, sstables):
+            res = json.loads(subprocess.check_output([scylla_path, 'sstable', 'script', '--schema-file', schema_file, '--script-file', script_file] + sstables))
+            # Check the results of a1 == a2, a1 == b, a1 < b, b < a1, a1 < a2,
+            # a1 <= b, b <= a1 and a1 <= a2, where a1 and a2 are equal and b
+            # is later.
+            assert res == [True, False, True, False, False, True, False, True]
+    finally:
+        os.unlink(script_file)
+
+# The gc_clock_time_point type of the Lua API is documented to be in UTC, so
+# its fields, and its conversion back to a time (as in tostring()), must not
+# depend on the time zone of the machine running the tool. The tool used to
+# convert through local time, so the fields were in local time, and in the
+# hour repeated when daylight saving time ends, tostring() could be off by an
+# hour. This test runs the tool in a time zone with daylight saving time
+# (given as a POSIX TZ rule, which needs no time zone database), and uses two
+# time points at the same local time in the repeated hour: 01:30 EDT (05:30
+# UTC) and 01:30 EST (06:30 UTC) on November 3rd, 2024. Converting through
+# local time can't get both of them right.
+# Reproduces SCYLLADB-5662.
+def test_scylla_sstable_script_time_point_is_utc(cql, test_keyspace, scylla_path, scylla_data_dir):
+    script_file = os.path.join(scylla_data_dir, '..', 'test_scylla_sstable_script_time_point_is_utc.lua')
+    script = '''
+wr = Scylla.new_json_writer()
+
+function consume_stream_start(args)
+    wr:start_array()
+    for _, s in ipairs({"2024-11-03 05:30:00z", "2024-11-03 06:30:00z"}) do
+        tp = Scylla.time_point_from_string(s)
+        wr:start_object()
+        wr:key("hour")
+        wr:int(tp.hour)
+        wr:key("str")
+        wr:string(tostring(tp))
+        wr:end_object()
+    end
+end
+
+function consume_stream_end()
+    wr:end_array()
+end
+'''
+    with open(script_file, 'w') as f:
+        f.write(script)
+    try:
+        with scylla_sstable(simple_no_clustering_table, cql, test_keyspace, scylla_data_dir) as (_, schema_file, sstables):
+            env = dict(os.environ, TZ='EST5EDT,M3.2.0,M11.1.0')
+            res = json.loads(subprocess.check_output([scylla_path, 'sstable', 'script', '--schema-file', schema_file, '--script-file', script_file] + sstables, env=env))
+            # Check that the fields are in UTC, and that converting the time
+            # point back to a time (in tostring()) returns the original time.
+            assert res == [
+                {'hour': 5, 'str': '2024-11-03 05:30:00z'},
+                {'hour': 6, 'str': '2024-11-03 06:30:00z'},
+            ]
+    finally:
+        os.unlink(script_file)
+
+
+def one_partition_tombstone_table(cql, keyspace):
+    table = util.unique_name()
+    schema = f"CREATE TABLE {keyspace}.{table} (pk int PRIMARY KEY, v int) WITH compaction = {{'class': 'NullCompactionStrategy'}}"
+    cql.execute(schema)
+    cql.execute(f'DELETE FROM {keyspace}.{table} WHERE pk = 1')
+    nodetool.flush(cql, f'{keyspace}.{table}')
+    return table, schema
+
+
+# The purgeable.lua script counts the tombstones deleted more than
+# GC_GRACE_SECONDS ago. It used to pass a tombstone's deletion_time to
+# os.time(), which takes the fields as local time - but they are in UTC, so
+# the deletion time it calculated was off by the offset of the local time
+# zone. This test runs the script in time zones 14 hours ahead of UTC and 14
+# hours behind it, on a tombstone deleted just now: with a grace period of 10
+# hours it must not be purgeable, and with a grace period of -10 hours it
+# must be.
+def test_scylla_sstable_script_purgeable_time_zone(cql, test_keyspace, scylla_path, scylla_data_dir):
+    script_file = os.path.realpath(os.path.join(__file__, '../../../tools/scylla-sstable-scripts/purgeable.lua'))
+    with scylla_sstable(one_partition_tombstone_table, cql, test_keyspace, scylla_data_dir) as (_, schema_file, sstables):
+        # POSIX TZ offsets have the opposite sign: 'UTC-14' is 14 hours ahead
+        # of UTC.
+        for tz in ['UTC-14', 'UTC+14']:
+            for grace_seconds, expected_purgeable in [(36000, 0), (-36000, 1)]:
+                env = dict(os.environ, TZ=tz, GC_GRACE_SECONDS=str(grace_seconds))
+                out = subprocess.check_output([scylla_path, 'sstable', 'script', '--schema-file', schema_file, '--script-file', script_file] + sstables, env=env, text=True)
+                # The tombstones line has the total, live, dead and purgeable
+                # counts.
+                tombstones = [line.split() for line in out.splitlines() if line.split()[:1] == ['tombstones']]
+                assert len(tombstones) == 1
+                # Check that the tombstone is purgeable exactly when it was
+                # deleted more than the grace period ago.
+                assert tombstones[0][1] == '1'
+                assert tombstones[0][4] == str(expected_purgeable), f'TZ={tz}, GC_GRACE_SECONDS={grace_seconds}'
 
 
 class TestScyllaSsstableSchemaLoadingBase:
@@ -1796,12 +1917,12 @@ class sstable_query_tester:
         self._table = table
         self._temp_workdir = temp_workdir
 
-    def test_json(self, query_template):
+    def check_json(self, query_template):
         cql_query_result = self._cql.execute(query_template.replace("SELECT", "SELECT JSON").format(f"{self._keyspace}.{self._table}"))
         cql_query_result = list(map(lambda row: json.loads(row[0]), cql_query_result))
 
         with open(os.path.join(self._temp_workdir, "query.cql"), "w+t") as query_file:
-            query_file.write(query_template.format(f"scylla_sstable.{self._table}"))
+            query_file.write(query_template.format(self._table))
             query_file.flush()
 
             sstable_query_result = json.loads(subprocess.check_output([
@@ -1814,7 +1935,7 @@ class sstable_query_tester:
 
         assert sstable_query_result == cql_query_result
 
-    def test_text(self, query_template=None):
+    def check_text(self, query_template=None):
         if query_template is None:
             cql_query_result = self._cql.execute("SELECT JSON * FROM {}".format(f"{self._keyspace}.{self._table}"))
         else:
@@ -1826,7 +1947,7 @@ class sstable_query_tester:
             "--output-format", "text",
             "--schema-tables"]
         if query_template is not None:
-            params += ["--query", query_template.format(f"scylla_sstable.{self._table}")]
+            params += ["--query", query_template.format(self._table)]
         params += self._sstables
 
         sstable_query_result = subprocess.check_output(params, text=True)
@@ -2025,7 +2146,7 @@ def test_scylla_sstable_query_data_types(request, cql, test_keyspace, test_table
     with nodetool.no_autocompaction_context(cql, "system_schema"):
         tester = sstable_query_tester(cql, scylla_path, sstables, test_keyspace, table, temp_workdir)
 
-        tester.test_json("SELECT * FROM {}")
+        tester.check_json("SELECT * FROM {}")
 
     cql.execute(f"DROP TABLE {test_keyspace}.{table}")
 
@@ -2065,12 +2186,12 @@ def test_scylla_sstable_query_advanced_queries(cql, test_keyspace, scylla_path, 
     with nodetool.no_autocompaction_context(cql, "system_schema"):
         tester = sstable_query_tester(cql, scylla_path, sstables, test_keyspace, table, temp_workdir)
 
-        tester.test_text()
-        tester.test_json("SELECT count(*) FROM {} WHERE pk = 0")
-        tester.test_json("SELECT ck, v FROM {} WHERE pk = 0 and ck = 0")
-        tester.test_text("SELECT ck, v FROM {} WHERE pk=0")
-        tester.test_json("SELECT * FROM {} WHERE pk = 0 AND v = 0 ALLOW FILTERING")
-        tester.test_text("SELECT pk, v FROM {} WHERE pk=0 AND v=0 ALLOW FILTERING")
+        tester.check_text()
+        tester.check_json("SELECT count(*) FROM {} WHERE pk = 0")
+        tester.check_json("SELECT ck, v FROM {} WHERE pk = 0 and ck = 0")
+        tester.check_text("SELECT ck, v FROM {} WHERE pk=0")
+        tester.check_json("SELECT * FROM {} WHERE pk = 0 AND v = 0 ALLOW FILTERING")
+        tester.check_text("SELECT pk, v FROM {} WHERE pk=0 AND v=0 ALLOW FILTERING")
 
     cql.execute(f"DROP TABLE {test_keyspace}.{table}")
 
@@ -2109,10 +2230,10 @@ def test_scylla_sstable_query_validation(cql, scylla_path, scylla_data_dir):
 
         check("SELECT * FROM ,", "failed to parse query: exceptions::syntax_exception")
         check("SELECT * FROM scylla_sstable.columns; SELECT * FROM scylla_sstable.columns;", "expected exactly 1 query, got 2")
-        check("SELECT * FROM foo", "query must have keyspace and the keyspace has to be scylla_sstable")
-        check("SELECT * FROM foo.bar", "query must be against scylla_sstable keyspace, got foo instead")
-        check("SELECT * FROM system.local", "query must be against scylla_sstable keyspace, got system instead")
+        check("SELECT * FROM foo.bar", "query must be against the scylla_sstable keyspace (or omit the keyspace altogether), got foo instead")
+        check("SELECT * FROM system.local", "query must be against the scylla_sstable keyspace (or omit the keyspace altogether), got system instead")
         check("SELECT * FROM scylla_sstable.foo", "query must be against local table, got foo instead")
+        check("SELECT * FROM foo", "query must be against local table, got foo instead")
         check("SELECT * FROM scylla_sstable.tables", "query must be against local table, got tables instead")
         check("INSERT INTO scylla_sstable.local (key, bootstrapped) VALUES ('local', 'COMPLETED')", "query must be a select query")
 
@@ -2472,14 +2593,21 @@ def test_scylla_sstable_layout(cql, test_keyspace, scylla_path, scylla_data_dir)
                 os.unlink(unsealed + component)
 
         # an sstable can be deleted by the running scylla between being listed
-        # and being loaded, leaving components of it missing; it is left out
-        # rather than failing the whole operation
+        # and being loaded, leaving components of it missing; it fails the
+        # operation, unless --ignore-incomplete-sstables asks for it to be left out
         deleted = os.path.join(table_dir, "mc-998-big-")
         try:
             # a sealed sstable, but the components its TOC lists are gone
             shutil.copy(sstables[0], deleted + "Data.db")
             shutil.copy(sstables[0].replace("-Data.db", "-TOC.txt"), deleted + "TOC.txt")
-            assert sorted(sst["name"] for ssts in layout(table_dir).values() for sst in ssts) == sorted(laid_out)
+            for args in ([table_dir], [deleted + "Data.db"] + sstables):
+                subprocess_check_error([scylla_path, "sstable", "layout", "--schema-file", schema_file] + args,
+                                       "--ignore-incomplete-sstables")
+            assert sorted(sst["name"] for ssts in layout("--ignore-incomplete-sstables", table_dir).values()
+                          for sst in ssts) == sorted(laid_out)
+            assert sorted(sst["name"] for ssts in layout("--ignore-incomplete-sstables", deleted + "Data.db",
+                                                         *sstables).values()
+                          for sst in ssts) == sorted(laid_out)
         finally:
             for component in ("Data.db", "TOC.txt"):
                 os.unlink(deleted + component)

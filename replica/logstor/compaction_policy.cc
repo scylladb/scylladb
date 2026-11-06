@@ -5,9 +5,11 @@
 /*
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
+#include "replica/logstor/compaction_policy.hh"
 #include "replica/logstor/compaction.hh"
 #include <algorithm>
 #include <cmath>
+#include <span>
 
 namespace replica::logstor {
 
@@ -106,7 +108,9 @@ static size_t select_compaction_prefix(std::span<const compaction_candidate_scor
     return best;
 }
 
-std::optional<compaction_batch> select_compaction_batch(const segment_set& segments, uint64_t segment_size, size_t batch_cap) {
+std::optional<compaction_batch> select_compaction_batch(const segment_set& segments, uint64_t segment_size,
+        const compaction_batch_limits& limits) {
+    const auto batch_cap = limits.batch_cap;
     std::vector<const segment_descriptor*> candidates;
     // prefix_scores[i] scores the batch made of candidates[0..i].
     std::vector<compaction_candidate_score> prefix_scores;
@@ -115,7 +119,7 @@ std::optional<compaction_batch> select_compaction_batch(const segment_set& segme
 
     uint64_t accum_record_bytes = 0;
     uint64_t accum_record_count = 0;
-    for (const auto& desc : segments._segments) {
+    for (const auto& desc : segments.by_free_space()) {
         if (candidates.size() >= batch_cap) {
             break;
         }
@@ -132,7 +136,7 @@ std::optional<compaction_batch> select_compaction_batch(const segment_set& segme
         prefix_scores.push_back(score);
     }
 
-    const auto selected_count = select_compaction_prefix(prefix_scores, compaction_batch_extension_tolerance);
+    const auto selected_count = select_compaction_prefix(prefix_scores, limits.extension_tolerance);
     if (selected_count == 0) {
         return std::nullopt;
     }

@@ -122,7 +122,8 @@ Note that these are not all states, as there are other states specific to tablet
     to modified token ring), reads are using old replicas.
 - `write_both_read_new` - as above, but reads are using new replicas.
 - `left_token_ring` - the decommissioning or removing node left the token ring, but we still need to wait until other
-    nodes observe it and stop sending writes to this node. For decommission, we tell the node to shut down,
+    nodes observe it and stop sending writes to this node. A decommissioning node sends out its pending hints
+    while handling this state's `barrier_and_drain`. For decommission, we tell the node to shut down,
     then remove it from group 0. For removenode, the node is already down, so we skip the shutdown step.
     We also use this state to rollback a failed bootstrap or decommission.
 - `rollback_to_normal` - the decommission or removenode operation failed. Rollback the operation by
@@ -178,6 +179,22 @@ are the currently supported global topology operations:
    contain replicas of the table being truncated. It uses [sessions](#Topology guards)
    to make sure that no stale RPCs are executed outside of the scope of the request.
 - `restore_tablets` See [Tablet restore transition](#tablet-restore-transition) below.
+- `prepare_migration` Creates a tablet map for every table of a keyspace, the first phase
+   of a vnodes-to-tablets migration. It is executed by the topology coordinator rather than
+   by the node which received the API call, for two reasons. The coordinator is a singleton,
+   so two concurrent migrations of the same keyspace cannot interleave their writes. And the
+   request is stored in group0, so it survives coordinator failover. The tablet maps of a
+   large keyspace do not fit into a single group0 command, so the coordinator writes as many
+   as fit and leaves the request in the queue; the next pass, possibly on another
+   coordinator, continues with the tables which have no map yet, and the request is
+   completed together with the last of them. Every command is a regular guarded topology
+   change, so all nodes see each part as soon as it commits. The request records the tables
+   which had no map when it was made, together with their tablet count targets. The targets
+   are computed once, by the node which received the API call, so that they don't depend on
+   which coordinator writes which table's map. A request which fails drops the maps of the
+   tables it records, in the command which fails it, so that it leaves nothing behind for
+   the operator to clean up. Gated by the `PREPARE_MIGRATION_AS_TOPOLOGY_OPERATION` cluster
+   feature.
 
 ## Tablet draining
 
@@ -305,7 +322,10 @@ The "stage" serves two major purposes:
    Replica selectors are stored in tablet_transition_info::writes and tablet_transition_info::reads,
    which are directly derived from the stage stored in system tables.
 
-The invariants of stages, which hold as soon as the stage is committed to group0:
+The invariants of stages of an eventually-consistent tablet, which hold as soon as the stage is committed
+to group0, are listed below. A strongly-consistent tablet reuses some of these stages under other names,
+but these invariants don't apply to it; its own are in
+[Strongly-consistent tablets](#strongly-consistent-tablets).
 
 1. allow_write_both_read_old
 
@@ -359,9 +379,9 @@ stateDiagram-v2
     [*] --> repair
     repair --> end_repair
     end_repair --> [*]
-    allow_write_both_read_old --> cleanup_target: error
-    write_both_read_old --> cleanup_target: error
-    streaming --> cleanup_target: error
+    allow_write_both_read_old --> cleanup_target: error / cancel
+    write_both_read_old --> cleanup_target: error / cancel
+    streaming --> cleanup_target: error / cancel
     write_both_read_new --> if_state: error
     if_state --> use_new: more new replicas
     if_state --> cleanup_target: more old replicas
@@ -385,10 +405,10 @@ stateDiagram-v2
     use_new --> cleanup
     cleanup --> end_migration
     end_migration --> [*]
-    allow_write_both_read_old --> cleanup_target: error
-    write_both_read_old --> cleanup_target: error
-    rebuild_repair --> cleanup_target: error
-    streaming --> cleanup_target: error
+    allow_write_both_read_old --> cleanup_target: error / cancel
+    write_both_read_old --> cleanup_target: error / cancel
+    rebuild_repair --> cleanup_target: error / cancel
+    streaming --> cleanup_target: error / cancel
     write_both_read_new --> if_state: error
     if_state --> use_new: more new replicas
     if_state --> cleanup_target: more old replicas
@@ -414,6 +434,82 @@ Invariants:
 2. [INV-TABL-2] There is at most one transition per tablet happening at a time in the cluster. Operations started
    on behalf of previous transitions can still run in the cluster, but they can have no side effects. This is ensured
    by the proper use of the topology guard mechanism (see the "Topology guards" section).
+
+### Cancelling tablet transitions
+
+A tablet transition can be cancelled, which makes the coordinator roll it back instead of running
+it to completion. `tablet_mutation_builder::cancel_transition()` clears the transition's session,
+which aborts whatever the replicas started for the current stage, and marks the transition
+cancelled. `locator::can_cancel_tablet_transition()` lists the stages which can be cancelled: the
+migration stages up to and including `streaming`, where writes still go to the leaving replica so
+rolling back loses nothing, and `repair`. Later migration stages roll forward, and `restore` cannot
+be cancelled.
+
+A migration is marked with the `cancel` flag. Writing it is gated on the `TABLET_TRANSITION_CANCEL`
+cluster feature, since an old coordinator would not understand why the session was cleared. The
+replicas' `tablet_metadata_guard` aborts on the flag too, which is what stops the raft config syncs
+of a strongly-consistent tablet. The coordinator rolls the transition back once the actions it
+started for the stage have finished, onto the track a failed transition takes: `cleanup_target`,
+or `sc_remove_pending` first for a strongly-consistent tablet, which also gets a fresh session,
+since its migration keeps one to the end. `del_transition()` clears the flag with the rest of the
+transition.
+
+A repair is marked the way `del_repair_tablet_request()` cancels one, by clearing the tablet's
+`repair_task_info`; the coordinator then skips the repair and ends the transition. Only the
+tablets in a repair transition are cancelled; the rest of the repair request is left alone.
+Clearing `repair_task_info` is also how a repair request decides a tablet is finished, so a
+cancelled tablet is dropped from the request rather than failed: a caller awaiting the request is
+told it completed, and the tablet is counted neither as repaired nor as failed. Tracked in
+[SCYLLADB-4581](https://scylladb.atlassian.net/browse/SCYLLADB-4581).
+
+#### Unblocking a request to disable balancing
+
+Global topology requests are serviced only once no tablet is in transition, and nothing bounds how
+long a transition takes. Disabling tablet balancing is such a request, and Scylla Manager disables
+balancing before taking a backup.
+
+`set_tablet_balancing_enabled()` therefore waits for its request only for a grace period, and then
+cancels whatever is still in flight and can be cancelled, so that the coordinator can service the
+request. The grace period is a parameter of the call, defaulting to
+`tablet_transition_abort_grace_period_in_seconds`, which defaults to 0: wait and cancel nothing.
+
+One cancelling pass is enough: the queued request makes the coordinator preempt balancing, so the
+balancer schedules no new transitions while the call waits. Transitions started through the tablet
+api, or by a global request queued ahead of this one, can still appear and are waited for. Since
+the request is queued whether or not balancing is already disabled, an operator can also use this
+to recover from stuck transitions.
+
+What cannot be cancelled is waited for:
+
+- `restore` transitions, and transitions past the `streaming` stage.
+- the migrations of a node drain. Disabling balancing doesn't stop a drain, so a cancelled drain
+  migration would only be scheduled again. With `PARALLEL_TABLET_DRAINING` the migrations leaving
+  a node whose request is paused are skipped; without it a drain has its own transition state, and
+  nothing is cancelled.
+- everything, on a cluster which does not support `TABLET_TRANSITION_CANCEL` yet. The call logs a
+  warning.
+- on object storage, the copy of the sstable already in flight, and
+  `clone_locally_tablet_storage()` on the intra-node migration path: neither takes an abort source.
+
+`keyspace_rf_change` completes its request once it has created the `rebuild` transitions, so a
+later request can cancel them. `maybe_retry_failed_rf_change_tablet_rebuilds()`, which re-drives
+them, returns early while balancing is disabled, so such tablets stay below the keyspace's
+replication factor until balancing is enabled again. Tracked in
+[SCYLLADB-3948](https://scylladb.atlassian.net/browse/SCYLLADB-3948).
+
+#### Aborting a single migration
+
+Tablet migration tasks are abortable through the task manager, and aborting one cancels that
+tablet's transition (`storage_service::cancel_tablet_transition()`), which the coordinator then
+rolls back. The balancer may schedule the tablet again; to stop migrations, disable tablet
+balancing.
+
+Unlike the bulk path, a transition which is draining a node is not exempt here: the caller named
+the tablet, and restarting a stuck drain stream is a legitimate reason to ask.
+
+Only transitions which have a task id can be aborted this way. `rebuild` transitions created by
+an RF change, and by `add_tablet_replica` / `del_tablet_replica`, carry no `migration_task_info`,
+so they have no task and can only be cancelled in bulk.
 
 ## File-based streaming
 
@@ -500,9 +596,9 @@ stateDiagram-v2
     use_new --> cleanup
     cleanup --> end_migration
     end_migration --> [*]
-    start_migration --> sc_remove_pending: error
-    sc_add_nonvoter --> sc_remove_pending: error
-    sc_snapshot_transfer --> sc_remove_pending: error
+    start_migration --> sc_remove_pending: error / cancel
+    sc_add_nonvoter --> sc_remove_pending: error / cancel
+    sc_snapshot_transfer --> sc_remove_pending: error / cancel
     sc_become_voter --> sc_rollback: error
     sc_rollback --> sc_remove_pending
     sc_remove_pending --> cleanup_target
@@ -521,7 +617,7 @@ C is the current replica set and next the new one; L is the leaving replica and 
 | use_new | next / none | next | C+P | barrier, sync removing L |
 | cleanup | next / none | next | next | cleanup RPC |
 | end_migration | unchanged | next | next | barrier |
-| sc_rollback, only from sc_become_voter | C / P | C+P | C+P | barrier, sync |
+| sc_rollback, only from sc_become_voter | C / P | C+P | C+P | sync |
 | sc_remove_pending | C / none | C | C+P | barrier, sync removing P |
 | cleanup_target | C / none | C | C | cleanup RPC |
 | revert_migration | unchanged | C | C | barrier |
@@ -544,7 +640,9 @@ C is the current replica set and next the new one; L is the leaving replica and 
 A request's *view* is the stage in the effective replication map it pinned. A request is *inside* m's raft
 server from its call to acquire_server() on m until it drops the returned handle.
 
-Correctness is argued with two facts, never with "the barrier ran":
+These facts and invariants take the place of the stage invariants of eventually-consistent tablets in
+[Tablet transitions](#tablet-transitions). Correctness is argued with two facts, never with "the barrier
+ran":
 
 - **drained(h, K, S)**: on host h, nothing of kind K with a view older than S runs, and nothing can start
   with one. K is either requests (inside the group's server, or holding a map and about to enter it) or
@@ -561,6 +659,15 @@ Invariants:
 - **I3, storage.** Nothing reads or applies to m's tablet storage after its cleanup.
 - **I4, nesting.** Of any two live views, one's serving set contains the other's, so a request is served
   within two routing hops.
+- **I5, storage under the server.** A replica runs the group's raft server only while it has the tablet's
+  storage. It holds on each replica by itself, with no barrier, because the replica derives both from
+  its current tablet map, as described below.
+
+A replica derives its local state for a tablet, such as its storage and its raft server, from its current
+tablet map, on every update and at boot, never from having seen a particular stage. A replica that lags
+in group0 applies several stage changes at once and sees only the newest. Code that reacts to seeing a
+stage works only if every replica sees that stage, which only a barrier at the stage guarantees, and that
+barrier then does a job no precondition states.
 
 A stage S may be published only if every voter the group has, or is being changed to, and every leader a
 node of serving(S) may name, is in serving(S), and serving(S) nests with every live serving set.
@@ -574,14 +681,23 @@ Only these steps put an invariant at risk:
 | cleanup of m | I3 | m's server is gone, and m is drained as for its removal | m |
 | deleting the transition | a stale cleanup RPC erases a later copy of the tablet | drained(m, RPCs, S), S the stage after the cleanup | m |
 
-A sync handler starts only if its host sees the stage and migration it was sent for, and proposes nothing
-once that stage moves on there. Hosts see a new stage at slightly different times, though: a follower may judge convergence
-while a leader that hasn't applied the stage yet lands an older stage's change. So a sync whose older sync
-could still propose something runs a barrier first, which waits for every older handler. The only such
-sync is sc_rollback's, after sc_become_voter: sc_add_nonvoter's sync is the first one, and without a pending
-replica it targets the configuration the group already has.
+A sync handler starts only if its host sees the stage and migration it was sent for. An older sync of the
+migration that is still running, such as sc_become_voter's when sc_rollback's starts, needs no barrier. The
+newer sync reaches every replica that can lead, and succeeds only once each of them reports. On each
+replica, before the newer handler first reads the configuration, the older handler's abort source is
+cancelled: by the guard, when the replica applies the newer stage, and by the newer handler superseding it.
+The older handler checks its abort source and appends its change with no suspension in between. So either
+it saw the cancellation and proposes nothing more, or its change is already in the replica's log, where the
+newer handler sees it and reverts it before reporting.
 
 Every barrier in the table serves one of these needs; the others were dropped.
+
+For example, start_migration runs no barrier. For an eventually-consistent tablet, that barrier satisfies
+the precondition of write_both_read_old that P is prepared for writes: coordinators send writes to P as
+soon as they see that stage. A strongly-consistent tablet takes writes only through raft, which reaches P
+only through P's raft server, and by I5 P has the storage whenever it runs that server. Until P starts
+the server, the leader's appends to P fail and are retried. No request is routed to P before
+sc_become_voter, so P needn't see the transition info either.
 
 Consequences:
 
@@ -598,8 +714,8 @@ Consequences:
 
 Raft lets a server campaign as a non-voter of its newest configuration if, as far as it knows, that
 configuration is uncommitted and it was a voter in the previous one. After L's demotion this happens if L's
-commit index is below the demotion entry - L restarted within a commitlog sync period of the commit, since
-the commit index is stored after the log, or the leader died within a tick of it - and L then reaches no
+commit index is below the demotion entry - L restarted before a later raft batch or a record release persisted
+the commit, since store_commit_idx() does no IO, or the leader died within a tick of it - and L then reaches no
 leader for an election timeout. L can win; on its first commit it sees it can't vote and hands leadership
 over. For that one commit, requests with view use_new see a leader outside their serving set. The
 coordinator forgets that leader and waits for the next one. The same holds for P after sc_rollback.

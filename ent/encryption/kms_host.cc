@@ -43,6 +43,7 @@
 #include "utils/rjson.hh"
 #include "marshal_exception.hh"
 #include "db/config.hh"
+#include "utils/assert.hh"
 
 using namespace std::chrono_literals;
 using namespace std::string_literals;
@@ -455,7 +456,7 @@ future<rjson::value> encryption::kms_host::impl::do_post(std::string_view target
     std::string gtoken;
 
     if (_options.aws_region.empty() && _options.host.empty()) {
-        assert(_options.aws_use_ec2_region);
+        SCYLLA_ASSERT(_options.aws_use_ec2_region);
         httpclient::result_type res;
         std::tie(res, gtoken) = co_await query_ec2_meta("/latest/meta-data/placement/region");
         _options.aws_region = res.body();
@@ -463,7 +464,7 @@ future<rjson::value> encryption::kms_host::impl::do_post(std::string_view target
 
     if (_options.host.empty()) {
         // resolve region -> endpoint
-        assert(!_options.aws_region.empty());
+        SCYLLA_ASSERT(!_options.aws_region.empty());
         _options.host = make_aws_host(_options.aws_region, "kms");
     }
 
@@ -974,8 +975,8 @@ future<encryption::kms_host::impl::key_and_id_type> encryption::kms_host::impl::
             .aws_assume_role_arn = k.aws_assume_role_arn
         };
         co_await _id_cache.insert(key2, [&](const id_cache_key& kin) -> future<bytes>{
-            assert(kin.id == key2.id);
-            assert(kin.aws_assume_role_arn == key2.aws_assume_role_arn);
+            SCYLLA_ASSERT(kin.id == key2.id);
+            SCYLLA_ASSERT(kin.aws_assume_role_arn == key2.aws_assume_role_arn);
             co_return key->key();
         });
 

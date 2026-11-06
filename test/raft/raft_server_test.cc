@@ -51,6 +51,40 @@ static auto signal_when_leader_applies(int value, seastar::promise<>& applied) {
     };
 }
 
+// Makes the only server of a cluster receive a snapshot from a leader of a
+// later term, which the fsm accepts, so the applier fiber goes on to load it.
+// The returned future resolves once the fsm has accepted the snapshot.
+template <typename Clock>
+static future<raft::snapshot_reply> receive_snapshot_from_new_leader(raft_cluster<Clock>& cluster) {
+    // The fsm rejects a snapshot while it has commits it hasn't reported yet,
+    // like the commit of the dummy entry appended on election, which the io
+    // fiber may not have reported right after wait_for_leader(). Everything
+    // committed so far is reported once it's applied.
+    co_await cluster.get_server(0).read_barrier(nullptr);
+
+    raft::configuration config;
+    config.current.emplace(config_member_from_id(to_raft_id(0)));
+    const auto term = raft::term_t{cluster.get_server(0).get_current_term().value() + 1};
+    raft::install_snapshot snp {
+        .current_term = term,
+        .snp = {
+            .idx = raft::index_t{100},
+            .term = term,
+            .config = std::move(config),
+            .id = raft::snapshot_id::create_random_id(),
+        },
+    };
+    co_return co_await cluster.receive_snapshot(0, to_raft_id(1), std::move(snp));
+}
+
+template <typename Clock>
+static void stop_server_within_time(raft_cluster<Clock>& cluster, size_t id, std::chrono::seconds timeout) {
+    const auto start = std::chrono::steady_clock::now();
+    cluster.stop_server(id, "test abort").get();
+    const auto end = std::chrono::steady_clock::now();
+    BOOST_CHECK_LT(end - start, timeout);
+}
+
 SEASTAR_THREAD_TEST_CASE(test_check_abort_on_client_api) {
     raft_cluster<std::chrono::steady_clock> cluster(
             test_case { .nodes = 1 },
@@ -71,6 +105,306 @@ SEASTAR_THREAD_TEST_CASE(test_check_abort_on_client_api) {
     BOOST_CHECK_EXCEPTION(cluster.get_server(0).modify_config({}, {to_raft_id(0)}, nullptr).get(), raft::stopped_error, check_error);
     BOOST_CHECK_EXCEPTION(cluster.get_server(0).read_barrier(nullptr).get(), raft::stopped_error, check_error);
     BOOST_CHECK_EXCEPTION(cluster.get_server(0).set_configuration({}, nullptr).get(), raft::stopped_error, check_error);
+}
+
+// The applier fiber takes its input from the mailbox and may suspend before it
+// calls the state machine, so abort() may happen in between. The injection
+// puts the fiber in that window.
+// Refs: SCYLLADB-1056.
+SEASTAR_THREAD_TEST_CASE(test_state_machine_not_used_after_abort_before_load_snapshot) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    std::cerr << "Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n";
+#else
+    auto cluster = get_default_cluster(test_case { .nodes = 1 });
+    cluster.start_all().get();
+    auto stop = defer([&cluster] noexcept { cluster.stop_all().get(); });
+
+    cluster.get_server(0).wait_for_leader(nullptr).get();
+
+    std::optional<future<>> aborted;
+    std::optional<future<raft::snapshot_reply>> received;
+
+    {
+        constexpr std::string_view block_applier = "block_raft_applier_fiber_before_load_snapshot";
+        scoped_error_injection blocked_applier{block_applier};
+
+        received = receive_snapshot_from_new_leader(cluster);
+        wait_for_injection_enter(block_applier).get();
+
+        stop.cancel();
+        aborted = cluster.stop_server(0, "test abort");
+        // The test is only meaningful if the state machine is aborted before
+        // the applier fiber is released; otherwise it would pass no matter
+        // what the fiber does next.
+        BOOST_CHECK(eventually_true([&] { return cluster.sm_aborted(0); }));
+    }
+
+    // stop_server() checks that the state machine was not used after its abort.
+    aborted->get();
+    received->get();
+#endif
+}
+
+// A state machine may complete apply() after it's aborted, finishing what it
+// cannot interrupt. The applier fiber then must not go on to take a snapshot,
+// which it would do right away with a snapshot threshold of 1.
+// Refs: SCYLLADB-1056.
+SEASTAR_THREAD_TEST_CASE(test_state_machine_not_used_after_abort_after_apply) {
+    auto cfg = raft::server::configuration { .snapshot_threshold = 1 };
+    auto cluster = get_default_cluster(test_case {
+        .nodes = 1,
+        .config = std::vector<raft::server::configuration>({std::move(cfg)})
+    });
+    cluster.start_all().get();
+    auto stop = defer([&cluster] noexcept { cluster.stop_all().get(); });
+
+    cluster.get_server(0).wait_for_leader(nullptr).get();
+    // Let the snapshot after the dummy entry appended on election be taken
+    // before the state machine is aborted.
+    cluster.get_server(0).read_barrier(nullptr).get();
+
+    // Unlike the injections above, the hold doesn't end when the state
+    // machine is aborted.
+    delay_apply = to_raft_id(0);
+    auto release_apply = defer([] noexcept {
+        delay_apply.reset();
+        if (apply_release.waiters()) {
+            apply_release.signal();
+        }
+    });
+    cluster.get_server(0).add_entry(
+            create_command(1000), raft::wait_type::committed, nullptr).get();
+    apply_entered.wait().get();
+
+    stop.cancel();
+    auto aborted = cluster.stop_server(0, "test abort");
+    // The test is only meaningful if the state machine is aborted before
+    // apply() returns; otherwise it would pass no matter what the applier
+    // fiber does next.
+    BOOST_CHECK(eventually_true([&] { return cluster.sm_aborted(0); }));
+
+    apply_release.signal();
+    // stop_server() checks that the state machine was not used after its abort.
+    aborted.get();
+}
+
+// Like test_state_machine_not_used_after_abort_after_apply, but with a snapshot
+// requested by trigger_snapshot(), which the applier fiber takes once it has
+// applied what it was given.
+// Refs: SCYLLADB-1056.
+SEASTAR_THREAD_TEST_CASE(test_state_machine_not_used_after_abort_on_triggered_snapshot) {
+    auto cluster = get_default_cluster(test_case { .nodes = 1 });
+    cluster.start_all().get();
+    auto stop = defer([&cluster] noexcept { cluster.stop_all().get(); });
+
+    cluster.get_server(0).wait_for_leader(nullptr).get();
+    cluster.get_server(0).read_barrier(nullptr).get();
+
+    delay_apply = to_raft_id(0);
+    auto release_apply = defer([] noexcept {
+        delay_apply.reset();
+        if (apply_release.waiters()) {
+            apply_release.signal();
+        }
+    });
+    cluster.get_server(0).add_entry(
+            create_command(1000), raft::wait_type::committed, nullptr).get();
+    apply_entered.wait().get();
+
+    auto triggered = cluster.get_server(0).trigger_snapshot(nullptr);
+
+    stop.cancel();
+    auto aborted = cluster.stop_server(0, "test abort");
+    // The test is only meaningful if the state machine is aborted before
+    // apply() returns; otherwise it would pass no matter what the applier
+    // fiber does next.
+    BOOST_CHECK(eventually_true([&] { return cluster.sm_aborted(0); }));
+
+    apply_release.signal();
+    // stop_server() checks that the state machine was not used after its abort.
+    aborted.get();
+    BOOST_CHECK_THROW(triggered.get(), raft::request_aborted);
+}
+
+// The io fiber drops the snapshots replaced by a new one after it persists the
+// new one, so abort() may happen in between. The injection puts the fiber in
+// that window.
+// Refs: SCYLLADB-1056.
+SEASTAR_THREAD_TEST_CASE(test_state_machine_not_used_after_abort_on_dropping_snapshots) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    std::cerr << "Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n";
+#else
+    auto cluster = get_default_cluster(test_case { .nodes = 1 });
+    cluster.start_all().get();
+    auto stop = defer([&cluster] noexcept { cluster.stop_all().get(); });
+
+    cluster.get_server(0).wait_for_leader(nullptr).get();
+    cluster.get_server(0).read_barrier(nullptr).get();
+
+    std::optional<future<>> aborted;
+    std::optional<future<bool>> triggered;
+
+    {
+        constexpr std::string_view block_store = "raft_test_persistence_block_store_snapshot_descriptor";
+        scoped_error_injection blocked_store{block_store};
+
+        // The batch carrying the new snapshot also carries the one it replaces
+        // to be dropped.
+        triggered = cluster.get_server(0).trigger_snapshot(nullptr);
+        wait_for_injection_enter(block_store).get();
+
+        stop.cancel();
+        aborted = cluster.stop_server(0, "test abort");
+        // The test is only meaningful if the state machine is aborted before
+        // the io fiber is released; otherwise it would pass no matter what the
+        // fiber does next.
+        BOOST_CHECK(eventually_true([&] { return cluster.sm_aborted(0); }));
+    }
+
+    // stop_server() checks that the state machine was not used after its abort.
+    aborted->get();
+    BOOST_CHECK_THROW(triggered->get(), raft::request_aborted);
+#endif
+}
+
+// abort() must not wait for a state machine which is stuck in one of its
+// methods: it aborts the state machine before joining the applier fiber, which
+// is the only way to interrupt an operation already in progress.
+// Refs: SCYLLADB-1056.
+SEASTAR_THREAD_TEST_CASE(test_abort_with_state_machine_stuck_in_apply) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    std::cerr << "Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n";
+#else
+    auto cluster = get_default_cluster(test_case { .nodes = 1 });
+    cluster.start_all().get();
+    auto stop = defer([&cluster] noexcept { cluster.stop_all().get(); });
+
+    cluster.get_server(0).wait_for_leader(nullptr).get();
+
+    constexpr std::string_view block_sm_apply_injection = "raft_test_sm_block_apply";
+    scoped_error_injection blocked_apply{block_sm_apply_injection};
+
+    // Waiting for the entry to be committed doesn't get stuck: commit waiters
+    // are notified by the io fiber, not by the applier fiber.
+    cluster.get_server(0).add_entry(
+            create_command(1000), raft::wait_type::committed, nullptr).get();
+    wait_for_injection_enter(block_sm_apply_injection).get();
+
+    // Not applied before the server is stopped, as the applier fiber is stuck
+    // on the entry before it: the waiter must be failed, not resolved.
+    auto never_applied = cluster.get_server(0).add_entry(
+            create_command(1001), raft::wait_type::applied, nullptr);
+
+    stop.cancel();
+    stop_server_within_time(cluster, 0, std::chrono::seconds(15));
+
+    BOOST_CHECK_THROW(never_applied.get(), raft::stopped_error);
+#endif
+}
+
+// abort() must not wait for a state machine which is stuck in one of its
+// methods: it aborts the state machine before joining the applier fiber, which
+// is the only way to interrupt an operation already in progress.
+// Refs: SCYLLADB-1056.
+SEASTAR_THREAD_TEST_CASE(test_abort_with_state_machine_stuck_in_take_snapshot) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    std::cerr << "Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n";
+#else
+    // Enabled before starting: with a threshold of 1 the applier fiber takes a
+    // snapshot as soon as it applies what the leader commits on election.
+    constexpr std::string_view block_sm_take_snapshot_injection = "raft_test_sm_block_take_snapshot";
+    std::optional<scoped_error_injection> blocked_take_snapshot{block_sm_take_snapshot_injection};
+
+    auto cfg = raft::server::configuration { .snapshot_threshold = 1 };
+    auto cluster = get_default_cluster(test_case {
+        .nodes = 1,
+        .config = std::vector<raft::server::configuration>({std::move(cfg)})
+    });
+    cluster.start_all().get();
+    auto stop = defer([&] noexcept {
+        // Turn off the injection so the node can stop without any trouble.
+        blocked_take_snapshot = std::nullopt;
+        cluster.stop_all().get();
+    });
+
+    cluster.get_server(0).wait_for_leader(nullptr).get();
+    wait_for_injection_enter(block_sm_take_snapshot_injection).get();
+
+    stop.cancel();
+    stop_server_within_time(cluster, 0, std::chrono::seconds(15));
+#endif
+}
+
+// abort() must not wait for a state machine which is stuck in one of its
+// methods: it aborts the state machine before joining the applier fiber, which
+// is the only way to interrupt an operation already in progress.
+// Refs: SCYLLADB-1056.
+SEASTAR_THREAD_TEST_CASE(test_abort_with_state_machine_stuck_in_load_snapshot) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    std::cerr << "Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n";
+#else
+    auto cluster = get_default_cluster(test_case { .nodes = 1 });
+    cluster.start_all().get();
+    auto stop = defer([&cluster] noexcept { cluster.stop_all().get(); });
+
+    cluster.get_server(0).wait_for_leader(nullptr).get();
+
+    constexpr std::string_view block_sm_load_snapshot_injection = "raft_test_sm_block_load_snapshot";
+    scoped_error_injection blocked_load_snapshot{block_sm_load_snapshot_injection};
+
+    auto received = receive_snapshot_from_new_leader(cluster);
+    wait_for_injection_enter(block_sm_load_snapshot_injection).get();
+
+    stop.cancel();
+    stop_server_within_time(cluster, 0, std::chrono::seconds(15));
+    received.get();
+#endif
+}
+
+// A state machine call interrupted by the abort fails with
+// abort_requested_exception, which is expected while aborting. Any other error
+// means that the state machine broke, so it must still reach
+// on_background_error.
+// Refs: SCYLLADB-1056.
+SEASTAR_THREAD_TEST_CASE(test_unexpected_background_error_while_aborting_reported) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    std::cerr << "Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n";
+#else
+    bool background_error = false;
+    auto cfg = raft::server::configuration {
+        .on_background_error = [&background_error] (std::exception_ptr) { background_error = true; },
+    };
+    auto cluster = get_default_cluster(test_case {
+        .nodes = 1,
+        .config = std::vector<raft::server::configuration>({std::move(cfg)})
+    });
+    cluster.start_all().get();
+    auto stop = defer([&cluster] noexcept { cluster.stop_all().get(); });
+
+    cluster.get_server(0).wait_for_leader(nullptr).get();
+    cluster.get_server(0).read_barrier(nullptr).get();
+
+    delay_apply = to_raft_id(0);
+    auto release_apply = defer([] noexcept {
+        delay_apply.reset();
+        if (apply_release.waiters()) {
+            apply_release.signal();
+        }
+    });
+    cluster.get_server(0).add_entry(
+            create_command(1000), raft::wait_type::committed, nullptr).get();
+    apply_entered.wait().get();
+
+    stop.cancel();
+    auto aborted = cluster.stop_server(0, "test abort");
+    BOOST_CHECK(eventually_true([&] { return cluster.sm_aborted(0); }));
+
+    // Not an abort_requested_exception: an error the abort doesn't explain.
+    scoped_error_injection failing_apply{"raft_test_sm_apply_failure"};
+    apply_release.signal();
+    aborted.get();
+    BOOST_CHECK(background_error);
+#endif
 }
 
 SEASTAR_THREAD_TEST_CASE(test_release_memory_if_add_entry_throws) {
@@ -1081,9 +1415,19 @@ SEASTAR_THREAD_TEST_CASE(test_conf_change_completed_by_a_snapshot) {
     // it. trigger_snapshot() keeps no trailing entries, so node 0's log tail
     // ends up below the new leader's first log index and it has to be sent the
     // snapshot rather than caught up with append_entries.
+    //
+    // The new leader has to be a member of C_new which has the joint entry.
+    // Node 0 committed that entry with a majority which needn't include all of
+    // them, and a member without it can never get it now that node 0 is cut
+    // off. The others reject its votes, as its log is behind theirs, while its
+    // vote requests keep resetting their election timers, so nobody would ever
+    // be elected. The committing majority guarantees at least one member of
+    // C_new other than node 0 has the entry.
     cluster.disconnect(0);
-    cluster.elect_new_leader(1).get();
-    auto& new_leader = cluster.get_server(1);
+    const auto has_joint_entry = [&cluster] (size_t i) { return cluster.get_server(i).get_configuration().is_joint(); };
+    const size_t new_leader_idx = *std::ranges::find_if(std::views::iota(size_t(1), size_t(4)), has_joint_entry);
+    cluster.elect_new_leader(new_leader_idx).get();
+    auto& new_leader = cluster.get_server(new_leader_idx);
     new_leader.add_entry(create_command(42), raft::wait_type::applied, nullptr).get();
     BOOST_REQUIRE(!new_leader.get_configuration().is_joint());
     BOOST_REQUIRE(new_leader.trigger_snapshot(nullptr).get());
@@ -1770,4 +2114,249 @@ SEASTAR_THREAD_TEST_CASE(test_follower_log_is_bounded_when_apply_is_slow) {
     cluster.wait_log_all().get();
     slow.read_barrier(nullptr).get();
     BOOST_CHECK_LE(slow.get_status().log_memory_usage, bound);
+}
+
+// A follower whose applier is held fills its log up to max_follower_log_size and
+// refuses the next entry. It has to report the log full whatever the entry size,
+// including when the entries do not divide the bound and the refused entry
+// leaves usage short of it.
+SEASTAR_THREAD_TEST_CASE(test_follower_reports_full_log_when_entries_do_not_fill_the_bound) {
+    const size_t command_size = sizeof(size_t);
+    // One byte above a multiple of any entry size, so the follower stops short of
+    // the bound.
+    const size_t max_log_size = 10 * command_size + 1;
+    const size_t snapshot_trailing_size = command_size;
+
+    const auto follower_config = raft::server::configuration {
+        .snapshot_threshold = 5,
+        .snapshot_threshold_log_size = 5 * command_size,
+        .snapshot_trailing = 1,
+        .snapshot_trailing_size = snapshot_trailing_size,
+        .max_log_size = max_log_size,
+        .enable_forwarding = false,
+        .max_command_size = command_size,
+    };
+    // The other two nodes neither snapshot nor block admission while the test
+    // runs, so the leader's log keeps every entry the follower lacks and
+    // replicates to it from its log.
+    const auto healthy_config = raft::server::configuration {
+        .snapshot_threshold = 10000,
+        .snapshot_threshold_log_size = 1000 * command_size,
+        .snapshot_trailing = 1,
+        .snapshot_trailing_size = snapshot_trailing_size,
+        .max_log_size = 1000 * command_size,
+        .enable_forwarding = false,
+        .max_command_size = command_size,
+    };
+    test_case test_config {
+        .nodes = 3,
+        .config = {healthy_config, follower_config, healthy_config},
+    };
+    auto cluster = raft_cluster<std::chrono::steady_clock>{
+        std::move(test_config),
+        ::apply_changes,
+        1000,  // apply_entries
+        0,
+        0, false, tick_delay, rpc_config{}
+    };
+    cluster.start_all().get();
+    auto stop = defer([&cluster] noexcept { cluster.stop_all().get(); });
+
+    const auto slow_id = to_raft_id(1);
+    auto& slow = cluster.get_server(1);
+    auto& leader = cluster.get_server(0);
+
+    delay_apply = slow_id;
+    auto release_apply = defer([] noexcept {
+        delay_apply.reset();
+        if (apply_release.waiters()) {
+            apply_release.signal();
+        }
+    });
+    cluster.add_entries(1, 0).get();
+    apply_entered.wait().get();
+
+    // Several times what the follower can hold.
+    cluster.add_entries(49, 0).get();
+
+    const auto bound = max_log_size + snapshot_trailing_size;
+    BOOST_TEST_MESSAGE(fmt::format("slow follower log memory usage: {} (bound {})",
+            slow.get_status().log_memory_usage, bound));
+    BOOST_CHECK_LE(slow.get_status().log_memory_usage, bound);
+    BOOST_CHECK(eventually_true([&] { return slow.get_status().log_full; }));
+    BOOST_CHECK(eventually_true([&] { return leader.get_status().blocked.log_full == 1; }));
+
+    // Released, the follower drains, snapshots, reports room and catches up.
+    apply_release.signal();
+    cluster.wait_log_all().get();
+    slow.read_barrier(nullptr).get();
+    BOOST_CHECK(eventually_true([&] { return !slow.get_status().log_full; }));
+    BOOST_CHECK(eventually_true([&] { return leader.get_status().blocked.log_full == 0; }));
+}
+
+// A follower refuses an entry which does not fit into its log on the promise
+// that its applier fiber takes a snapshot to make room. With commands larger
+// than the gap between max_follower_log_size and snapshot_threshold_log_size,
+// the log is below the threshold when that happens, so the thresholds never
+// call for the snapshot. Node 2 is disconnected, so the leader needs the
+// follower to commit, and the entry commits only once the follower takes the
+// snapshot because its log is full.
+SEASTAR_THREAD_TEST_CASE(test_full_follower_below_snapshot_threshold_does_not_deadlock) {
+    const size_t small_size = sizeof(size_t);
+    const size_t max_log_size = 10 * small_size;
+    const size_t snapshot_trailing_size = small_size;
+    // The largest the configuration allows.
+    const size_t max_command_size = max_log_size - snapshot_trailing_size;
+
+    const auto follower_config = raft::server::configuration {
+        .snapshot_threshold = 1000,
+        .snapshot_threshold_log_size = 5 * small_size,
+        .snapshot_trailing = 1,
+        .snapshot_trailing_size = snapshot_trailing_size,
+        .max_log_size = max_log_size,
+        .enable_forwarding = false,
+        .max_command_size = max_command_size,
+    };
+    // The leader admits the large entry right away and takes no snapshot.
+    const auto leader_config = raft::server::configuration {
+        .snapshot_threshold = 10000,
+        .snapshot_threshold_log_size = 1000 * small_size,
+        .snapshot_trailing = 1,
+        .snapshot_trailing_size = snapshot_trailing_size,
+        .max_log_size = 1000 * small_size,
+        .enable_forwarding = false,
+        .max_command_size = max_command_size,
+    };
+    test_case test_config {
+        .nodes = 3,
+        .config = {leader_config, follower_config, leader_config},
+    };
+    auto cluster = raft_cluster<std::chrono::steady_clock>{
+        std::move(test_config),
+        ::apply_changes,
+        1000,  // apply_entries
+        0,
+        0, false, tick_delay, rpc_config{}
+    };
+    cluster.start_all().get();
+    auto stop = defer([&cluster] noexcept { cluster.stop_all().get(); });
+
+    auto& leader = cluster.get_server(0);
+    auto& follower = cluster.get_server(1);
+
+    // The follower applies a few small entries, too few for a snapshot, so
+    // they are committed above its snapshot index.
+    cluster.add_entries(3, 0).get();
+    follower.read_barrier(nullptr).get();
+    const size_t usage = follower.get_status().log_memory_usage;
+    const size_t bound = max_log_size + snapshot_trailing_size;
+    BOOST_TEST_MESSAGE(fmt::format("follower log memory usage: {} (bound {}, threshold {})",
+            usage, bound, follower_config.snapshot_threshold_log_size));
+    BOOST_REQUIRE_LT(usage, follower_config.snapshot_threshold_log_size);
+    BOOST_REQUIRE_GT(usage + max_command_size, bound);
+
+    cluster.disconnect(2);
+    auto large = create_command(size_t(100));
+    const std::string padding(max_command_size - large.size(), '\0');
+    large.write(padding.data(), padding.size());
+    with_timeout(std::chrono::steady_clock::now() + tick_delay * 200,
+            leader.add_entry(std::move(large), raft::wait_type::committed, nullptr)).get();
+
+    cluster.connect_all();
+}
+
+// A follower whose applier fiber has applied everything committed, and whose
+// log then fills up with uncommitted entries, takes the snapshot which makes
+// room: the thresholds are evaluated only when entries are applied, and none
+// are, since the leader needs the follower for a quorum to commit anything.
+//
+// The uncommitted entries have to be from an earlier term, which the leader
+// cannot commit by counting replicas: it needs an entry of its own term
+// accepted above them. So node 0 adds entries which node 1 receives but cannot
+// acknowledge, and is then re-elected in a new term.
+//
+// Reproduces SCYLLADB-5634.
+SEASTAR_THREAD_TEST_CASE(test_full_follower_with_everything_applied_does_not_deadlock) {
+    const size_t command_size = sizeof(size_t);
+    const size_t max_log_size = 10 * command_size;
+
+    test_case test_config {
+        .nodes = 3,
+        .config = std::vector<raft::server::configuration>(3,
+            raft::server::configuration {
+                // Only the byte threshold triggers a snapshot here.
+                .snapshot_threshold = 1000,
+                .snapshot_threshold_log_size = 5 * command_size,
+                .snapshot_trailing = 1,
+                .snapshot_trailing_size = command_size,
+                .max_log_size = max_log_size,
+                .enable_forwarding = false,
+                .max_command_size = command_size,
+            })
+    };
+    // Must exceed the number of entries added below, or the state machine's
+    // done promise fires early.
+    auto cluster = raft_cluster<std::chrono::steady_clock>{
+        std::move(test_config),
+        ::apply_changes,
+        1000,  // apply_entries
+        0,
+        0, false, tick_delay, rpc_config{}
+    };
+    cluster.start_all().get();
+    auto stop = defer([&cluster] noexcept { cluster.stop_all().get(); });
+
+    auto& leader = cluster.get_server(0);
+    auto& follower = cluster.get_server(1);
+
+    // Node 1 applies a few entries, too few for a snapshot, so they are
+    // committed above its snapshot index.
+    cluster.add_entries(3, 0).get();
+    follower.read_barrier(nullptr).get();
+    const auto [follower_last_idx, follower_last_term] = follower.log_last_idx_term();
+
+    // Empty the leader's log, so that it admits max_log_size worth of new
+    // entries, more than node 1 has room for on top of the entries it keeps.
+    leader.trigger_snapshot(nullptr).get();
+
+    // Node 0 can reach only node 1, and hears nothing back from it, so the
+    // entries added below are not committed. Node 0 stays the leader, since
+    // its failure detector sees node 1 alive.
+    cluster.disconnect(2);
+    cluster.block_receive(0, 1);
+    std::vector<future<>> added;
+    for (size_t i = 0; i < max_log_size / command_size; ++i) {
+        added.push_back(leader.add_entry(create_command(100 + i), raft::wait_type::committed, nullptr));
+    }
+    // All of them are in the leader's log before it steps down: add_entry()
+    // refuses to append in a term other than the one it was called in.
+    const auto max_entries = raft::index_t{max_log_size / command_size};
+    leader.wait_log_idx_term({follower_last_idx + max_entries, follower_last_term}).get();
+    // Node 1 has room for 8 of them without a snapshot: max_log_size +
+    // snapshot_trailing_size is 11 commands, and it holds 3.
+    follower.wait_log_idx_term({follower_last_idx + raft::index_t{8}, follower_last_term}).get();
+
+    // Re-elect node 0 in a new term, with node 1's vote: node 0 has the longer
+    // log. Node 2 stays disconnected, so node 0 needs node 1 for a quorum.
+    cluster.pause_tickers();
+    cluster.disconnect(0);
+    leader.elapse_election();
+    // Step down: an election timeout has passed without a live quorum.
+    leader.tick();
+    leader.wait_until_candidate();
+    cluster.connect_all();
+    cluster.disconnect(2);
+    cluster.restart_tickers().get();
+    // Node 1 has a shorter log and node 2 is disconnected, so node 0 is the
+    // only node which can win an election.
+    leader.wait_for_leader(nullptr).get();
+    BOOST_REQUIRE(leader.is_leader());
+
+    // The leader commits an entry of its new term, and with it everything
+    // added above.
+    with_timeout(std::chrono::steady_clock::now() + tick_delay * 200,
+            leader.read_barrier(nullptr)).get();
+    when_all_succeed(added.begin(), added.end()).get();
+
+    cluster.connect_all();
 }

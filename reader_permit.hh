@@ -13,7 +13,7 @@
 
 #include "db/timeout_clock.hh"
 #include "schema/schema_fwd.hh"
-#include "tracing/trace_state.hh"
+#include "tracing/tracing_fwd.hh"
 
 namespace query {
 

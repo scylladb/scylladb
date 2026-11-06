@@ -8,6 +8,7 @@
 
 #include "utils/alien_worker.hh"
 #include <seastar/util/log.hh>
+#include "utils/assert.hh"
 
 using namespace seastar;
 
@@ -18,7 +19,7 @@ std::thread alien_worker::spawn(seastar::logger& log, int niceness, const seasta
     sigset_t oldset;
     sigfillset(&newset);
     auto r = ::pthread_sigmask(SIG_SETMASK, &newset, &oldset);
-    assert(r == 0);
+    SCYLLA_ASSERT(r == 0);
     auto thread_name = fmt::format("alien-{}", name_suffix);
     if (thread_name.size() > 15) {
         log.warn("Thread name '{}' is longer than 15 characters, truncating to fit", thread_name);
@@ -49,7 +50,7 @@ std::thread alien_worker::spawn(seastar::logger& log, int niceness, const seasta
         }
     });
     r = ::pthread_sigmask(SIG_SETMASK, &oldset, nullptr);
-    assert(r == 0);
+    SCYLLA_ASSERT(r == 0);
     return thread;
 }
 
