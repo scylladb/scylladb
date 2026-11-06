@@ -363,11 +363,8 @@ public:
 
     future<uint64_t> estimated_keys_for_range(const dht::token_range& range);
 
-    // mark_for_deletion() specifies that a sstable isn't relevant to the
-    // current shard, and thus can be deleted by the deletion manager, if
-    // all shards sharing it agree. In case the sstable is unshared, it's
-    // guaranteed that all of its on-disk files will be deleted as soon as
-    // the in-memory object is destroyed.
+    // mark_for_deletion() specifies that the sstable is no longer needed, so
+    // all of its files will be deleted when the in-memory object is destroyed.
     void mark_for_deletion() {
         _marked_for_deletion = mark_for_deletion::marked;
     }
