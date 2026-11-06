@@ -2658,6 +2658,10 @@ future<executor::request_return_type> executor::update_table(client_state& clien
         co_await wait_for_schema_agreement_after_ddl(mm, p.local().local_db());
 
         rjson::value status = rjson::empty_object();
+        // UpdateTable has no GlobalSecondaryIndexes parameter, and DynamoDB
+        // ignores one. Do not echo it back: supplement_table_info() reads this
+        // member as the GSI list which CreateTable validated.
+        rjson::remove_member(request, "GlobalSecondaryIndexes");
         supplement_table_info(request, *schema, p.local());
         rjson::add(status, "TableDescription", std::move(request));
         co_return rjson::print(std::move(status));
