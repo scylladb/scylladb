@@ -1066,6 +1066,23 @@ public:
         return _components->filter->is_present(key);
     }
 
+    // Like filter_has_key(), but accounts the check as done on behalf of a
+    // read. Only reads should use this, so the counters reflect how much
+    // index IO the filter saves for reads.
+    bool filter_has_key_for_read(utils::hashed_key key) const {
+        const bool present = filter_has_key(key);
+        ++_filter_tracker.checks;
+        _filter_tracker.rejections += !present;
+        sstables_stats::on_filter_check(present);
+        return present;
+    }
+    uint64_t filter_get_checks() const {
+        return _filter_tracker.checks;
+    }
+    uint64_t filter_get_rejections() const {
+        return _filter_tracker.rejections;
+    }
+
     bool filter_has_key(const schema& s, partition_key_view key) const {
         return filter_has_key(key::from_partition_key(s, key));
     }

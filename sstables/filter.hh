@@ -21,6 +21,11 @@ class filter_tracker {
 
     uint64_t last_false_positive = 0;
     uint64_t last_true_positive = 0;
+
+    // Filter checks done on behalf of reads and how many of them were
+    // rejected. Mutable: they are bumped from const filter predicates.
+    mutable uint64_t checks = 0;
+    mutable uint64_t rejections = 0;
 public:
     void add_false_positive() {
         false_positive++;

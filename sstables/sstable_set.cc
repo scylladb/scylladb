@@ -831,7 +831,7 @@ make_pk_filter(const dht::ring_position& pos, const utils::hashed_key& hash, con
     return [&pos, hash, cmp = dht::ring_position_comparator(schema)] (const sstable& sst) {
         return cmp(pos, sst.get_first_decorated_key()) >= 0 &&
                cmp(pos, sst.get_last_decorated_key()) <= 0 &&
-               sst.filter_has_key(hash);
+               sst.filter_has_key_for_read(hash);
     };
 }
 

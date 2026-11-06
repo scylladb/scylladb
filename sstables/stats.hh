@@ -37,6 +37,18 @@ class sstables_stats {
         uint64_t deleted = 0;
         uint64_t promoted_index_auto_scale_events = 0;
         uint64_t compression_offsets_memory = 0;
+        // Bloom filter checks done on behalf of reads, and how many of them
+        // the filter rejected (each rejection saves an index lookup).
+        uint64_t filter_checks = 0;
+        uint64_t filter_rejections = 0;
+        // Bloom filter memory reclaim activity.
+        uint64_t filter_evictions = 0;
+        uint64_t filter_reloads = 0;
+        uint64_t filter_reload_bytes = 0;
+        uint64_t filter_downgrades = 0;
+        uint64_t filter_upgrades = 0;
+        // Bloom filter memory currently reclaimed (not in memory).
+        int64_t filter_reclaimed_bytes = 0;
     } _shard_stats;
 
     stats& _stats = _shard_stats;
@@ -142,6 +154,28 @@ public:
 
     static void on_compression_offsets_memory_freed(uint64_t bytes) noexcept {
         _shard_stats.compression_offsets_memory -= bytes;
+    }
+
+    static void on_filter_check(bool present) noexcept {
+        ++_shard_stats.filter_checks;
+        _shard_stats.filter_rejections += !present;
+    }
+    static void on_filter_eviction() noexcept {
+        ++_shard_stats.filter_evictions;
+    }
+    static void on_filter_reload(uint64_t bytes) noexcept {
+        ++_shard_stats.filter_reloads;
+        _shard_stats.filter_reload_bytes += bytes;
+    }
+    static void on_filter_reclaimed_bytes_change(int64_t delta) noexcept {
+        _shard_stats.filter_reclaimed_bytes += delta;
+    }
+    static void on_filter_downgrade() noexcept {
+        ++_shard_stats.filter_downgrades;
+    }
+    static void on_filter_upgrade(uint64_t bytes) noexcept {
+        ++_shard_stats.filter_upgrades;
+        _shard_stats.filter_reload_bytes += bytes;
     }
 };
 

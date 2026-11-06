@@ -4811,6 +4811,22 @@ future<> init_metrics() {
 
         sm::make_gauge("compression_offsets_memory_size", [] { return sstables_stats::get_shard_stats().compression_offsets_memory; },
             sm::description("Memory usage, in bytes, of the in-memory copies of sstable compression chunk offsets (CompressionInfo.db).")),
+        sm::make_counter("bloom_filter_checks", [] { return sstables_stats::get_shard_stats().filter_checks; },
+            sm::description("Bloom filter checks done on behalf of reads")),
+        sm::make_counter("bloom_filter_rejections", [] { return sstables_stats::get_shard_stats().filter_rejections; },
+            sm::description("Bloom filter checks done on behalf of reads, which the filter rejected (each saves an index lookup)")),
+        sm::make_counter("bloom_filter_evictions", [] { return sstables_stats::get_shard_stats().filter_evictions; },
+            sm::description("Bloom filters evicted from memory to keep their memory under components_memory_reclaim_threshold")),
+        sm::make_counter("bloom_filter_reloads", [] { return sstables_stats::get_shard_stats().filter_reloads; },
+            sm::description("Evicted bloom filters reloaded into memory")),
+        sm::make_counter("bloom_filter_reload_bytes", [] { return sstables_stats::get_shard_stats().filter_reload_bytes; },
+            sm::description("Bytes of bloom filter read from disk by reloads and upgrades")),
+        sm::make_counter("bloom_filter_downgrades", [] { return sstables_stats::get_shard_stats().filter_downgrades; },
+            sm::description("Bloom filters replaced in memory by a smaller one")),
+        sm::make_counter("bloom_filter_upgrades", [] { return sstables_stats::get_shard_stats().filter_upgrades; },
+            sm::description("Bloom filters replaced in memory by a larger one")),
+        sm::make_gauge("bloom_filter_reclaimed_bytes", [] { return sstables_stats::get_shard_stats().filter_reclaimed_bytes; },
+            sm::description("Bloom filter memory currently reclaimed, i.e. not in memory")),
     });
   });
 }
