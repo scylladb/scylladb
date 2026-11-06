@@ -1744,6 +1744,11 @@ void sstable::set_run_identifier(run_id identifier) {
     _run_identifier = identifier;
 }
 
+bool sstable::has_unpersisted_run_identifier() const {
+    auto* metadata = get_scylla_metadata();
+    return has_scylla_component() && metadata && metadata->get_optional_run_identifier() != _run_identifier;
+}
+
 int64_t sstable::update_repaired_at(int64_t repaired_at) {
     const stats_metadata& old_stats = get_stats_metadata();
     auto old_repaired_at = old_stats.repaired_at;

@@ -1106,12 +1106,17 @@ public:
     // sstable which is in a set.
     void set_run_identifier(run_id identifier);
 
-    // Changes the run identifier in memory only. The Scylla metadata keeps the one stored on disk.
+    // Changes the run identifier in memory only. The Scylla metadata keeps the one stored on disk,
+    // so has_unpersisted_run_identifier() tells whether the new one still has to be written.
     // Sstable sets index their sstables by run identifier. So once this is called, the sstable
     // must not be inserted into or erased from a set which already holds it.
     void set_in_memory_run_identifier(run_id identifier) {
         _run_identifier = identifier;
     }
+
+    // Returns true if the sstable has a Scylla component, and the run identifier the sstable is
+    // known by in memory isn't the one stored in that component.
+    bool has_unpersisted_run_identifier() const;
 
     double get_compression_ratio() const;
 
