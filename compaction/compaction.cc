@@ -296,7 +296,8 @@ static max_purgeable get_max_purgeable_timestamp(const compaction_group_view& ta
 }
 
 static std::vector<sstables::shared_sstable> get_uncompacting_sstables(const compaction_group_view& table_s, std::vector<sstables::shared_sstable> sstables) {
-    auto sstable_set = table_s.sstable_set_for_tombstone_gc();
+    // The fully expired check runs against the table's current schema, like its gc_before.
+    auto sstable_set = table_s.sstable_set_for_tombstone_gc(*table_s.schema());
     auto all_sstables = *sstable_set->all() | std::ranges::to<std::vector>();
     auto& compacted_undeleted = table_s.compacted_undeleted_sstables();
     all_sstables.insert(all_sstables.end(), compacted_undeleted.begin(), compacted_undeleted.end());

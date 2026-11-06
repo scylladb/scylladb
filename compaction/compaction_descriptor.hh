@@ -259,15 +259,16 @@ struct compaction_descriptor {
     bool gc_check_only_compacting_sstables = false;
 
     // If set to true, gc will not check the memtables to collect tombstones, see
-    // compaction_group_view::skip_memtable_for_tombstone_gc(). It is up to the caller to set
-    // it, from the same view of the table its sstable set for tombstone gc was selected with,
-    // so the two cannot disagree if the table's tombstone_gc mode changes in the meantime.
+    // compaction_group_view::skip_memtable_for_tombstone_gc(). Decided from the schema the
+    // compaction runs with, like its sstable set for tombstone gc, so the two cannot disagree
+    // if the table's tombstone_gc mode changes in the meantime.
     bool skip_memtable_for_tombstone_gc = false;
 
-    // The schema the compaction runs with, the table's current one if null. A caller that sets
-    // skip_memtable_for_tombstone_gc has to set it from the same view of the table too: gc_before
-    // is decided by the schema's tombstone_gc mode, so a compaction which picks up a schema with
-    // another mode would purge tombstones without consulting the data that mode requires it to.
+    // The schema the compaction runs with, the table's current one if null. Everything the
+    // compaction decides by the tombstone_gc mode (gc_before, the sstable set for tombstone gc,
+    // whether the memtables are consulted) is decided from this one schema, so that a mode
+    // change while the compaction runs cannot make it purge tombstones without consulting the
+    // data the mode it started with requires it to.
     schema_ptr schema;
 
     // The gc state the compaction decides tombstone collection with. It is up to the caller to

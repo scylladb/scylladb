@@ -441,11 +441,11 @@ future<compaction_result> compaction_task_executor::compact_sstables_and_update_
     co_return res;
 }
 
-future<sstables::sstable_set> compaction_task_executor::sstable_set_for_tombstone_gc(compaction_group_view& t) {
-    auto compound_set = t.sstable_set_for_tombstone_gc();
+future<sstables::sstable_set> compaction_task_executor::sstable_set_for_tombstone_gc(compaction_group_view& t, const schema_ptr& s) {
+    auto compound_set = t.sstable_set_for_tombstone_gc(*s);
     // Compound set will be linearized into a single set, since compaction might add or remove sstables
     // to it for incremental compaction to work.
-    auto new_set = sstables::make_partitioned_sstable_set(t.schema());
+    auto new_set = sstables::make_partitioned_sstable_set(s);
     co_await compound_set->for_each_sstable_gently([&] (const sstables::shared_sstable& sst) {
         auto inserted = new_set.insert(sst);
         if (!inserted) {
@@ -458,13 +458,15 @@ future<sstables::sstable_set> compaction_task_executor::sstable_set_for_tombston
 future<compaction_result> compaction_task_executor::compact_sstables(compaction_descriptor descriptor, ::compaction::compaction_data& cdata, on_replacement& on_replace, compaction_manager::can_purge_tombstones can_purge,
                                                                                sstables::offstrategy offstrategy) {
     compaction_group_view& t = *_compacting_table;
-    // Decided once, for the whole compaction: the property depends on the table's tombstone_gc
-    // mode, which can change while the compaction runs. Taken with no preemption point before
-    // the sstable set for tombstone gc is selected below, which depends on the same property.
-    // The compaction runs with the schema the property was decided by, see
-    // compaction_descriptor::schema.
-    descriptor.schema = t.schema();
-    descriptor.skip_memtable_for_tombstone_gc = t.skip_memtable_for_tombstone_gc();
+    // The compaction runs with one schema, see compaction_descriptor::schema: the one the
+    // caller set, or the table's current one. The table's own tombstone gc property and the
+    // sstable set for tombstone gc, selected below, are decided from that same schema, so
+    // neither can disagree with it, or with each other, if the table's tombstone_gc mode
+    // changes while the compaction runs.
+    if (!descriptor.schema) {
+        descriptor.schema = t.schema();
+    }
+    descriptor.skip_memtable_for_tombstone_gc = t.skip_memtable_for_tombstone_gc(*descriptor.schema);
     // A compaction that ignores the memtables, or more, ignores data that is not in the sstable
     // snapshot taken below, on the grounds that no GC-eligible tombstone can shadow it. That
     // holds only for tombstones which are eligible when the snapshot is taken, so freeze the
@@ -473,7 +475,7 @@ future<compaction_result> compaction_task_executor::compact_sstables(compaction_
     const bool ignores_newer_data = descriptor.gc_check_only_compacting_sstables || descriptor.skip_memtable_for_tombstone_gc;
     descriptor.gc_state = ignores_newer_data ? t.get_tombstone_gc_state().snapshot() : t.get_tombstone_gc_state();
     if (can_purge) {
-        descriptor.enable_garbage_collection(co_await sstable_set_for_tombstone_gc(t));
+        descriptor.enable_garbage_collection(co_await sstable_set_for_tombstone_gc(t, descriptor.schema));
         if (descriptor.skip_memtable_for_tombstone_gc) {
             co_await utils::get_local_injector().inject("compaction_repaired_view_wait_after_gc_snapshots", utils::wait_for_message(5min));
         }

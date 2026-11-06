@@ -712,7 +712,7 @@ private:
         return _compaction_done.get_future();
     }
 
-    future<sstables::sstable_set> sstable_set_for_tombstone_gc(::compaction::compaction_group_view& t);
+    future<sstables::sstable_set> sstable_set_for_tombstone_gc(::compaction::compaction_group_view& t, const schema_ptr& s);
 public:
     bool stopping() const noexcept {
         return _compaction_data.abort.abort_requested();

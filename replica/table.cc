@@ -3392,12 +3392,12 @@ private:
     //
     // USING TIMESTAMP with timestamps predating (gc_before + propagation_delay) is
     // explicitly UB and excluded from the safety argument.
-    bool is_tombstone_gc_repaired_only() const noexcept {
+    bool is_tombstone_gc_repaired_only(const ::schema& s) const noexcept {
         return _cg.is_repaired_view(this) &&
-               _t.schema()->tombstone_gc_options().mode() == tombstone_gc_mode::repair;
+               s.tombstone_gc_options().mode() == tombstone_gc_mode::repair;
     }
 public:
-    lw_shared_ptr<const sstables::sstable_set> sstable_set_for_tombstone_gc() const override {
+    lw_shared_ptr<const sstables::sstable_set> sstable_set_for_tombstone_gc(const ::schema& s) const override {
         // Optimization: when tombstone_gc=repair and this is the repaired view, only check
         // repaired sstables. The repair ordering guarantee ensures that by the time a tombstone
         // becomes GC-eligible (repair_time committed to Raft), any data it shadows has already
@@ -3405,13 +3405,13 @@ public:
         // than any GC-eligible tombstone (legitimate writes; USING TIMESTAMP abuse is UB).
         // For all other tombstone_gc modes this invariant does not hold, so we fall through to
         // the full storage-group set.
-        if (is_tombstone_gc_repaired_only()) {
+        if (is_tombstone_gc_repaired_only(s)) {
             return _t.make_repaired_sstable_set_for_tombstone_gc(_cg);
         }
         return _t.sstable_set_for_tombstone_gc(_cg);
     }
-    bool skip_memtable_for_tombstone_gc() const noexcept override {
-        return is_tombstone_gc_repaired_only();
+    bool skip_memtable_for_tombstone_gc(const ::schema& s) const noexcept override {
+        return is_tombstone_gc_repaired_only(s);
     }
     std::unordered_set<sstables::shared_sstable> fully_expired_sstables(const std::vector<sstables::shared_sstable>& sstables, gc_clock::time_point query_time) const override {
         return compaction::get_fully_expired_sstables(*this, sstables, query_time);
