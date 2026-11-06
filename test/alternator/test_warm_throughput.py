@@ -120,6 +120,55 @@ def test_create_table_warm_throughput_response(dynamodb):
         waiter.wait(TableName=name)
         dynamodb.meta.client.delete_table(TableName=name)
 
+# A WarmThroughput which is missing both ReadUnitsPerSecond and
+# WriteUnitsPerSecond configures nothing: DynamoDB's CreateTable accepts one,
+# for the table or for a GSI, and leaves it out of its response.
+def test_create_table_warm_throughput_empty(dynamodb):
+    with new_test_table(dynamodb,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[
+                {'AttributeName': 'p', 'AttributeType': 'S'},
+                {'AttributeName': 'x', 'AttributeType': 'S'}],
+            GlobalSecondaryIndexes=[{
+                'IndexName': 'gsi',
+                'KeySchema': [{'AttributeName': 'x', 'KeyType': 'HASH'}],
+                'Projection': {'ProjectionType': 'ALL'},
+                'WarmThroughput': {}}],
+            WarmThroughput={}) as table:
+        # boto3 fills table.meta.data with the TableDescription which
+        # CreateTable returned.
+        assert not 'WarmThroughput' in table.meta.data
+        assert not 'WarmThroughput' in table.meta.data['GlobalSecondaryIndexes'][0]
+
+# An update to a WarmThroughput which is missing both ReadUnitsPerSecond and
+# WriteUnitsPerSecond is refused, for the table and for a GSI alike, and so is a
+# GSI which UpdateTable creates with one. DynamoDB refuses the GSI's with the
+# message matched here, but fails the table's with an InternalFailure, where
+# Alternator gives a ValidationException.
+def test_update_table_warm_throughput_empty(dynamodb):
+    with new_test_table(dynamodb,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[
+                {'AttributeName': 'p', 'AttributeType': 'S'},
+                {'AttributeName': 'x', 'AttributeType': 'S'}],
+            GlobalSecondaryIndexes=[{
+                'IndexName': 'gsi',
+                'KeySchema': [{'AttributeName': 'x', 'KeyType': 'HASH'}],
+                'Projection': {'ProjectionType': 'ALL'}}]) as table:
+        with pytest.raises(ClientError, match='InternalFailure' if is_aws(dynamodb) else 'ValidationException'):
+            table.meta.client.update_table(TableName=table.name, WarmThroughput={})
+        with pytest.raises(ClientError, match='ValidationException.*WarmThroughput.*ReadUnitsPerSecond or WriteUnitsPerSecond'):
+            table.meta.client.update_table(TableName=table.name,
+                GlobalSecondaryIndexUpdates=[{'Update': {'IndexName': 'gsi', 'WarmThroughput': {}}}])
+        with pytest.raises(ClientError, match='ValidationException.*WarmThroughput.*ReadUnitsPerSecond or WriteUnitsPerSecond'):
+            table.meta.client.update_table(TableName=table.name,
+                AttributeDefinitions=[{'AttributeName': 'y', 'AttributeType': 'S'}],
+                GlobalSecondaryIndexUpdates=[{'Create': {
+                    'IndexName': 'gsi2',
+                    'KeySchema': [{'AttributeName': 'y', 'KeyType': 'HASH'}],
+                    'Projection': {'ProjectionType': 'ALL'},
+                    'WarmThroughput': {}}}])
+
 # A GSI has a WarmThroughput of its own, and a WarmThroughput given to a GSI by
 # CreateTable is reported back for that GSI by DescribeTable, and by
 # CreateTable's response with a Status - UPDATING in DynamoDB, ACTIVE in
