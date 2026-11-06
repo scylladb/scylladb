@@ -2396,6 +2396,8 @@ future<executor::request_return_type> executor::update_table(client_state& clien
             schema = builder.build();
             std::vector<view_ptr> new_views;
             std::vector<std::string> dropped_views;
+            // The existing views whose tags this request changes.
+            std::vector<view_ptr> updated_views;
 
             rjson::value* gsi_updates = rjson::find(request, "GlobalSecondaryIndexUpdates");
             if (gsi_updates) {
@@ -2403,11 +2405,10 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                     co_return api_error::validation("GlobalSecondaryIndexUpdates must be an array");
                 }
                 if (gsi_updates->Size() > 1) {
-                    // Although UpdateTable takes an array of operations and could
-                    // support multiple Create and/or Delete operations in one
-                    // command, DynamoDB doesn't actually allows this, and throws
-                    // a LimitExceededException if this is attempted.
-                    co_return api_error::limit_exceeded("GlobalSecondaryIndexUpdates only allows one index creation or deletion");
+                    // DynamoDB refuses several Create or Delete operations in one
+                    // command with a LimitExceededException. It accepts several
+                    // WarmThroughput Updates, which Alternator does not support yet.
+                    co_return api_error::limit_exceeded("GlobalSecondaryIndexUpdates only allows one index creation, update or deletion");
                 }
                 if (vector_index_updates && vector_index_updates->IsArray() &&
                     vector_index_updates->Size() && gsi_updates->Size()) {
@@ -2532,7 +2533,29 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                         }
                         dropped_views.emplace_back(vname);
                     } else if (op == "Update") {
-                        co_return api_error::validation("GlobalSecondaryIndexUpdates Update not yet supported");
+                        elogger.trace("Updating GSI {}", index_name);
+                        const auto gsi_view = p.local().data_dictionary().try_find_table(keyspace_name, vname);
+                        if (!gsi_view) {
+                            co_return api_error::resource_not_found(fmt::format("No GSI {} in table {}", index_name, table_name));
+                        }
+                        // An Update can change only a GSI's WarmThroughput so
+                        // far - changing its ProvisionedThroughput is still
+                        // issue #19718.
+                        const rjson::value* warm = rjson::find(it->value, "WarmThroughput");
+                        if (!warm || !warm->IsObject()) {
+                            co_return api_error::validation("GlobalSecondaryIndexUpdates Update supports only WarmThroughput");
+                        }
+                        // DynamoDB refuses a GSI's WarmThroughput update together
+                        // with another change of the GSI, or with a BillingMode -
+                        // even the one which the table already has. An Update
+                        // with no other change has only IndexName and WarmThroughput.
+                        if (it->value.MemberCount() != 2 || billing_mode) {
+                            co_return api_error::validation(fmt::format("One or more parameter values were invalid: "
+                                "WarmThroughput must be the only operation in the request for index: {}", index_name));
+                        }
+                        // Only this GSI's tags change, so update its view here.
+                        updated_views.push_back(view_with_modified_tags(gsi_view->schema(),
+                                [&] (auto& tags) { add_warm_throughput_tags(tags, it->value); }));
                     } else {
                         co_return api_error::validation(fmt::format("GlobalSecondaryIndexUpdates supports a Create, Delete or Update operation, saw '{}'", op));
                     }
@@ -2542,8 +2565,8 @@ future<executor::request_return_type> executor::update_table(client_state& clien
             // A switch to PAY_PER_REQUEST also erases the stored capacities of
             // the table's GSIs: DynamoDB reports zeros for a GSI in that mode,
             // and so does DescribeTable for a GSI without stored capacities.
-            // Only such a switch changes the tags of existing GSIs here.
-            std::vector<view_ptr> updated_views;
+            // A GSI Update, which changed its view above, cannot come with a
+            // BillingMode.
             if (billing_mode && !billing_mode->provisioned) {
                 for (const view_ptr& view : p.local().data_dictionary().find_column_family(tab).views()) {
                     // Skip a GSI which this request deletes, and a GSI
