@@ -2100,6 +2100,216 @@ SEASTAR_THREAD_TEST_CASE(test_tablet_metadata_copy_shares_tablet_maps) {
     tm.clear_gently().get();
 }
 
+// Hinted tablet-metadata updates must skip the storage-group sweep of tables whose tablet_map
+// and local rack are unchanged, and must apply it to the others. Hintless commits never skip.
+SEASTAR_TEST_CASE(test_update_effective_replication_map_gate) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        // Keeps the load balancer from moving tablets mid-test.
+        topology_builder topo(e);
+        auto local_dc = e.local_db().get_token_metadata().get_topology().get_location().dc;
+        auto ks_name = add_keyspace(e, {{local_dc, 1}}, 2);
+        auto changed = add_table(e, ks_name).get();
+        auto unchanged = add_table(e, ks_name).get();
+        auto other = add_table(e, ks_name).get();
+        auto& ss = e.get_storage_service().local();
+        auto& stm = e.shared_token_metadata().local();
+        // The token_metadata lock keeps background topology loads from interleaving between the
+        // poisoning and the assertions, and is what replicate_to_all_cores() requires of its callers.
+        auto locked = [&] (auto&& step) {
+            auto lk = stm.get_lock().get();
+            step();
+        };
+        const auto sentinel = counter_id(utils::UUID_gen::get_time_UUID());
+
+        // The sweep resets the tombstone-GC flag to true and the counter id to the rack's.
+        auto poison = [&] (table_id id) {
+            e.db().invoke_on_all([id, sentinel] (replica::database& db) {
+                column_family_test::get_storage_group_manager(db.find_column_family(id))->for_each_storage_group([sentinel] (size_t, storage_group& sg) {
+                    sg.for_each_compaction_group([sentinel] (const compaction_group_ptr& cg) {
+                        cg->set_tombstone_gc_enabled(false);
+                        cg->set_counter_id(sentinel);
+                    });
+                });
+            }).get();
+        };
+        struct group_counts {
+            size_t total = 0;
+            size_t gc_poisoned = 0;
+            size_t id_poisoned = 0;
+            // Tombstone GC enabled and counter id equal to the expected rack's id.
+            size_t swept = 0;
+            group_counts operator+(const group_counts& o) const {
+                return {total + o.total, gc_poisoned + o.gc_poisoned, id_poisoned + o.id_poisoned, swept + o.swept};
+            }
+        };
+        auto rack_uuid = e.local_db().get_token_metadata().get_topology().get_rack_uuid();
+        auto count_groups = [&] (table_id id) {
+            return e.db().map_reduce0([id, sentinel, rack_id = counter_id(rack_uuid)] (replica::database& db) {
+                group_counts c;
+                column_family_test::get_storage_group_manager(db.find_column_family(id))->for_each_storage_group([&] (size_t, storage_group& sg) {
+                    sg.for_each_compaction_group([&] (const compaction_group_ptr& cg) {
+                        c.total++;
+                        c.gc_poisoned += !cg->tombstone_gc_enabled();
+                        c.id_poisoned += cg->get_counter_id() == sentinel;
+                        c.swept += cg->tombstone_gc_enabled() && cg->get_counter_id() == rack_id;
+                    });
+                });
+                return c;
+            }, group_counts{}, std::plus<>()).get();
+        };
+        auto groups_changed = count_groups(changed).total;
+        auto groups_unchanged = count_groups(unchanged).total;
+        BOOST_REQUIRE_GT(groups_changed, 0);
+        BOOST_REQUIRE_GT(groups_unchanged, 0);
+
+        auto poison_all = [&] (std::vector<table_id> ids) {
+            for (auto id : ids) {
+                poison(id);
+                auto c = count_groups(id);
+                BOOST_REQUIRE_EQUAL(c.gc_poisoned, c.total);
+                BOOST_REQUIRE_EQUAL(c.id_poisoned, c.total);
+                BOOST_REQUIRE_EQUAL(c.swept, 0);
+            }
+        };
+        auto poison_both = [&] { poison_all({changed, unchanged}); };
+        auto require_untouched = [&] (table_id id, size_t total) {
+            auto c = count_groups(id);
+            BOOST_REQUIRE_EQUAL(c.total, total);
+            BOOST_REQUIRE_EQUAL(c.gc_poisoned, total);
+            BOOST_REQUIRE_EQUAL(c.id_poisoned, total);
+            BOOST_REQUIRE_EQUAL(c.swept, 0);
+        };
+        auto require_swept = [&] (table_id id, size_t total) {
+            auto c = count_groups(id);
+            BOOST_REQUIRE_EQUAL(c.total, total);
+            BOOST_REQUIRE_EQUAL(c.gc_poisoned, 0);
+            BOOST_REQUIRE_EQUAL(c.id_poisoned, 0);
+            BOOST_REQUIRE_EQUAL(c.swept, total);
+        };
+        auto erm_of = [&] (table_id id) {
+            return e.db().invoke_on(0, [id] (replica::database& db) {
+                return db.find_column_family(id).get_effective_replication_map();
+            }).get();
+        };
+
+        // Reloads `id`'s tablet_map from system.tablets (a new object, same content), commits
+        // it to all shards and leaves every other table's tablet_map shared.
+        auto reload = [&] (table_id id) {
+            locator::tablet_metadata_change_hint hint;
+            hint.tables.emplace(id, locator::tablet_metadata_change_hint::table_hint{.table_id = id});
+            ss.update_tablet_metadata(hint).get();
+        };
+
+        // A hinted update reloading only an unrelated table: both tables keep their shared tablet_map, nothing is swept.
+        // The update did run for them: their erm was replaced.
+        locked([&] {
+            poison_both();
+            auto changed_erm = erm_of(changed);
+            auto unchanged_erm = erm_of(unchanged);
+            reload(other);
+            BOOST_REQUIRE(erm_of(changed) != changed_erm);
+            BOOST_REQUIRE(erm_of(unchanged) != unchanged_erm);
+            require_untouched(changed, groups_changed);
+            require_untouched(unchanged, groups_unchanged);
+        });
+
+        // Replacing one table's tablet_map sweeps that table only.
+        locked([&] {
+            poison_both();
+            reload(changed);
+            require_swept(changed, groups_changed);
+            require_untouched(unchanged, groups_unchanged);
+        });
+
+        // A hintless commit (keyspace change notification) with identical tablet_maps runs the full update.
+        locked([&] {
+            poison_both();
+            ss.on_update_keyspace(ks_name);
+            require_swept(changed, groups_changed);
+            require_swept(unchanged, groups_unchanged);
+        });
+
+        // Co-located tables share the base's tablet_map; a view with another partition key has its own.
+        e.execute_cql(fmt::format("create table {}.base (p int, c int, v int, primary key (p, c))", ks_name)).get();
+        e.execute_cql(fmt::format("create materialized view {0}.mv_colocated as select * from {0}.base"
+                " where p is not null and c is not null and v is not null primary key (p, v, c)", ks_name)).get();
+        e.execute_cql(fmt::format("create materialized view {0}.mv_own as select * from {0}.base"
+                " where p is not null and c is not null and v is not null primary key (v, p, c)", ks_name)).get();
+        auto id_of = [&] (const char* name) { return e.local_db().find_uuid(ks_name, name); };
+        const auto base = id_of("base");
+        const auto mv_colocated = id_of("mv_colocated");
+        const auto mv_own = id_of("mv_own");
+        const std::vector<table_id> family{base, mv_colocated, mv_own};
+        std::unordered_map<table_id, size_t> family_groups;
+        for (auto id : family) {
+            family_groups[id] = count_groups(id).total;
+            BOOST_REQUIRE_GT(family_groups[id], 0);
+        }
+        auto family_state = [&] (const std::vector<table_id>& swept) {
+            for (auto id : family) {
+                if (std::ranges::contains(swept, id)) {
+                    require_swept(id, family_groups[id]);
+                } else {
+                    require_untouched(id, family_groups[id]);
+                }
+            }
+        };
+
+        // A hinted reload of an unrelated table leaves the base and both views untouched.
+        locked([&] {
+            poison_all(family);
+            reload(other);
+            family_state({});
+        });
+
+        // Reloading the base replaces the map shared with its co-located view, which is swept too;
+        // the view with its own map is not.
+        locked([&] {
+            poison_all(family);
+            reload(base);
+            family_state({base, mv_colocated});
+        });
+
+        // Reloading the view with its own map sweeps that view only.
+        locked([&] {
+            poison_all(family);
+            reload(mv_own);
+            family_state({mv_own});
+        });
+
+        // A rack change alone, with identical tablet_maps, sweeps every table to the new rack's id.
+        // The original rack is restored afterwards.
+        const auto orig_rack = e.local_db().get_token_metadata().get_topology().get_location().rack;
+        auto set_rack = [&] (const sstring& rack) {
+            auto tm = stm.get()->clone_async().get();
+            tm.invalidate_cached_rings();
+            tm.update_topology(tm.get_my_id(), locator::endpoint_dc_rack{local_dc, rack});
+            stm.set(stm.make_token_metadata_ptr(std::move(tm)));
+        };
+        locked([&] {
+            poison_both();
+            set_rack("moved_rack");
+            const auto orig_rack_uuid = std::exchange(rack_uuid, e.local_db().get_token_metadata().get_topology().get_rack_uuid());
+            BOOST_REQUIRE(rack_uuid != orig_rack_uuid);
+            reload(other);
+            require_swept(changed, groups_changed);
+            require_swept(unchanged, groups_unchanged);
+
+            set_rack(orig_rack);
+            rack_uuid = orig_rack_uuid;
+            BOOST_REQUIRE_EQUAL(e.local_db().get_token_metadata().get_topology().get_rack_uuid(), rack_uuid);
+            poison_both();
+            reload(other);
+            require_swept(changed, groups_changed);
+            require_swept(unchanged, groups_unchanged);
+        });
+    }, [] {
+        auto cfg = tablet_cql_test_config();
+        cfg.need_remote_proxy = true; // CREATE MATERIALIZED VIEW on tablets queries the view-building state via proxy remote
+        return cfg;
+    }());
+}
+
 // Compaction groups must come out of creation with a counter id and tombstone-GC flag set,
 // because the update_effective_replication_map() sweep that used to set them can be skipped.
 SEASTAR_THREAD_TEST_CASE(test_compaction_group_counter_id_and_gc_flag_set_at_creation) {
