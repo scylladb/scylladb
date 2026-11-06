@@ -158,7 +158,10 @@ def test_timeout_preserves_completed_write(scylla_only, test_table_s, rest_api):
     # A successful increment must not become a retriable error when sending
     # its result crosses the deadline (scylladb/scylladb#31652).
     key = {'p': 'completed_timeout_write'}
-    test_table_s.put_item(Item={**key, 'n': 0})
+    # Initialize Paxos before the timed request, so lazy table creation cannot
+    # consume its budget before the completed-response injection is reached.
+    test_table_s.update_item(Key=key, UpdateExpression='SET n = :zero',
+        ExpressionAttributeValues={':zero': 0}, ReturnValues='ALL_NEW')
     with scylla_inject_error(rest_api, 'alternator_delay_completed_request'):
         with client_headers(test_table_s.meta.client, {'X-Scylla-Timeout': '100ms'}):
             result = test_table_s.update_item(Key=key, UpdateExpression='ADD n :one',
