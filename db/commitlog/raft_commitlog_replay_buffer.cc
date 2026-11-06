@@ -29,6 +29,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <ranges>
 #include <unordered_map>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/on_internal_error.hh>
@@ -255,6 +256,22 @@ future<> raft_commitlog_replay_buffer::apply_committed(replica::database& db, db
         logger.debug("group {}: replaying the seal at {}", group_id, entry->idx);
         group.seals.emplace(entry->idx, s->timestamp);
         auto m = sc::make_seal_mutation(group_id, this_shard_id(), {.idx = entry->idx, .ts = s->timestamp}, api::new_timestamp());
+        co_await db.apply_in_memory(m, m.schema()->table(), db::rp_handle(), db::no_timeout);
+        co_return;
+    }
+    if (auto* p = std::get_if<sc::promote_command>(&cmd.change)) {
+        auto it = group.seals.find(p->seal_idx);
+        // Not pending: the row already holds this promotion or a newer one.
+        if (it == group.seals.end()) {
+            co_return;
+        }
+        logger.debug("group {}: replaying the promotion of the seal at {}", group_id, p->seal_idx);
+        const auto promoted = std::ranges::subrange(group.seals.begin(), std::next(it))
+                | std::views::transform([] (const auto& s) { return sc::raft_seal{.idx = s.first, .ts = s.second}; })
+                | std::ranges::to<std::vector>();
+        auto m = sc::make_promote_seal_mutation(group_id, this_shard_id(), promoted.back(), promoted, api::new_timestamp());
+        group.promoted_seal = it->first;
+        group.seals.erase(group.seals.begin(), std::next(it));
         co_await db.apply_in_memory(m, m.schema()->table(), db::rp_handle(), db::no_timeout);
         co_return;
     }

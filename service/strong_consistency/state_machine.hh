@@ -80,10 +80,16 @@ struct seal_command {
     api::timestamp_type timestamp;
 };
 
+// Makes the seal at `seal_idx` the promoted one on every replica, and drops it and every
+// older seal from the pending ones.
+struct promote_command {
+    raft::index_t seal_idx;
+};
+
 struct raft_command {
     // Note: needs to be default-constructible to use with ser::deserialize, which is why the
     // marker, and not the write, comes first.
-    std::variant<resize_marker, write_mutation, truncate_command, seal_command> change;
+    std::variant<resize_marker, write_mutation, truncate_command, seal_command, promote_command> change;
 };
 
 // Builds the mutation which records `marker` in the system.raft_groups row of the group `gid`
