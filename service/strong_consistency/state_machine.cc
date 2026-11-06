@@ -105,6 +105,20 @@ public:
         _persistence.add_seal(s);
     }
 
+    future<> apply_promote(raft::index_t idx, raft::index_t seal_idx) {
+        const auto& seals = _persistence.seals();
+        auto it = std::ranges::find(seals, seal_idx, &raft_seal::idx);
+        // Already promoted, or older than the promoted seal.
+        if (it == seals.end()) {
+            co_return;
+        }
+        const auto s = *it;
+        auto m = make_promote_seal_mutation(_group_id, this_shard_id(), s, seals, _persistence.next_row_timestamp());
+        co_await _db.apply_in_memory(m, m.schema()->table(),
+                _persistence.pin_raft_groups_for_apply(idx), db::no_timeout);
+        _persistence.promote_seal(s);
+    }
+
     future<> apply(raft::log_entry_ptr_list command) override {
         static thread_local logging::logger::rate_limit rate_limit(std::chrono::seconds(10));
         try {
@@ -153,6 +167,13 @@ public:
                     logger.log(log_level::trace, rate_limit, "apply(): applying the seal of group {} at {}",
                         _group_id, command[i]->idx);
                     co_await apply_seal(raft_seal{.idx = command[i]->idx, .ts = s->timestamp});
+                    _persistence.note_applied(command[i]->idx);
+                    continue;
+                }
+                if (const auto* p = std::get_if<promote_command>(&cmd.change)) {
+                    logger.log(log_level::trace, rate_limit, "apply(): promoting the seal of group {} at {}",
+                        _group_id, p->seal_idx);
+                    co_await apply_promote(command[i]->idx, p->seal_idx);
                     _persistence.note_applied(command[i]->idx);
                     continue;
                 }

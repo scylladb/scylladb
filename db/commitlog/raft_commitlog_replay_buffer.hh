@@ -85,7 +85,8 @@ class raft_commitlog_replay_buffer {
         // The group's seals, from its row and from the entries replay reads, so that
         // replay cuts the tablet's memtables where apply cut them. A seal's own entry
         // can be gone while the data before it still has to be replayed, but then its
-        // row is flushed.
+        // row is flushed. Their timestamps are for a replayed promote, which names its
+        // seal by index only.
         std::map<raft::index_t, api::timestamp_type> seals;
         // Seals older than the promoted one need no cut any more, but this one does.
         std::optional<raft::index_t> promoted_seal;
