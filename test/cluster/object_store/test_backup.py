@@ -1299,6 +1299,173 @@ async def test_restore_tablets_strongly_consistent_refuses_requests(build_mode: 
         assert (await cql.run_async(read_stmt))[0].value == 100
 
 
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_snapshot_strongly_consistent_includes_committed_writes(build_mode: str, manager: ScyllaClusterManager, object_storage):
+    """A snapshot of a strongly consistent table holds every write the replica knows is committed.
+
+    A write is acked once its raft entry is committed, and reaches the memtable only when
+    each replica applies it, a little later; the raft log itself is in no snapshot. So a
+    snapshot first makes the local replicas apply what they know their groups have
+    committed, and flushes only then. A follower learns the commit index from the leader's
+    next message, so the test waits until no replica has uncommitted entries left before it
+    snapshots, and then every replica's copy must hold every acked write.
+
+    Apply is parked on every replica, rows are written and acked, and a snapshot is
+    requested on every node. Each snapshot blocks in the wait until
+    apply is released; the backup of each node's snapshot then restores every row.
+    """
+    topology = topo(rf = 3, nodes = 3, racks = 3, dcs = 1)
+    servers, host_ids = await create_cluster(topology, manager, logger, object_storage, extra_config=SC_CONFIG,
+                                             extra_cmdline=['--logger-log-level', 'sc_groups_manager=debug'])
+    cql = manager.get_cql()
+    num_keys = 20
+    tablet_count = 2
+    cf = 'test'
+    apply_injection = 'strong_consistency_state_machine_wait_before_apply'
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}} AND tablets = {{'initial': {tablet_count}}}{ks_consistency_opts(True)}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.{cf} ( pk text primary key, value int ) WITH tablets = {{'min_tablet_count': {tablet_count}, 'max_tablet_count': {tablet_count}}};")
+        insert_stmt = cql.prepare(f"INSERT INTO {ks}.{cf} (pk, value) VALUES (?, ?)")
+        insert_stmt.consistency_level = write_cl(True)
+        # A warm-up row, applied everywhere: the groups are up and led.
+        await cql.run_async(insert_stmt, ('-1', -1))
+        await sc_catch_up(manager, servers, ks, [cf])
+
+        # Every replica parks apply(): the writes below are committed and acked, and none
+        # reaches a memtable. The snapshot's wait is stretched so that a slow run can't hit
+        # its timeout before the test releases apply.
+        await asyncio.gather(*(manager.api.enable_injection(s.ip_addr, apply_injection, one_shot=False) for s in servers))
+        await asyncio.gather(*(manager.api.enable_injection(s.ip_addr, 'sc_committed_writes_wait_timeout_ms', one_shot=False, parameters={'value': 600000}) for s in servers))
+        await asyncio.gather(*(cql.run_async(insert_stmt, (str(i), i)) for i in range(num_keys)))
+        expected = {str(i): i for i in range(-1, num_keys)}
+
+        # Every replica has learned that every entry is committed (and applied none).
+        async def all_entries_known_committed():
+            for s in servers:
+                metrics = await manager.metrics.query(s.ip_addr)
+                if (metrics.get('scylla_strong_consistency_raft_uncommitted_entries', {'ks': ks, 'cf': cf}) or 0) != 0:
+                    return None
+                assert (metrics.get('scylla_strong_consistency_raft_unapplied_entries', {'ks': ks, 'cf': cf}) or 0) > 0, f'{s.ip_addr} applied the parked writes'
+            return True
+        await wait_for(all_entries_known_committed, time.time() + 60)
+
+        logs = [await manager.server_open_log(s.server_id) for s in servers]
+        marks = [await log.mark() for log in logs]
+        snap_name = unique_name('backup_')
+        snapshots = [asyncio.create_task(manager.api.take_snapshot(s.ip_addr, ks, snap_name, [cf])) for s in servers]
+        # Every node waits for its replicas to apply the acked writes, and none gets there.
+        # Without the wait the snapshots complete at once and the line never appears.
+        for log, mark in zip(logs, marks):
+            await log.wait_for(r'wait_for_committed_writes\(.*\): waiting for the apply of [1-9][0-9]* groups', from_mark=mark, timeout=120)
+        assert not any(t.done() for t in snapshots), 'a snapshot completed without waiting for the acked writes to be applied'
+
+        for s in servers:
+            await manager.api.message_injection(s.ip_addr, apply_injection)
+            await manager.api.disable_injection(s.ip_addr, apply_injection)
+        await asyncio.gather(*snapshots)
+
+        prefix = f'committed/{snap_name}'
+        await asyncio.gather(*(do_backup(s, snap_name, f'{prefix}/{s.server_id}', ks, cf, object_storage, manager, logger) for s in servers))
+
+        # Each node's copy alone restores every acked row.
+        for s in servers:
+            dst = f'{cf}_restored_{s.server_id}'
+            await cql.run_async(f"CREATE TABLE {ks}.{dst} ( pk text primary key, value int ){restore_target_tablet_opts(True, tablet_count)};")
+            tid = await manager.api.restore_tablets(servers[0].ip_addr, ks, dst, snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, [f'{s.server_id}/manifest.json'], prefix=prefix)
+            status = await manager.api.wait_task(servers[0].ip_addr, tid)
+            assert (status is not None) and (status['state'] == 'done'), f"Restore of {ks}.{dst} failed: {status}"
+
+            restored = {pk: row.value for pk, row in (await read_rows(cql, ks, dst, expected.keys(), True)).items()}
+            missing = sorted(set(expected) - set(restored), key=int)
+            assert not missing, f"the snapshot of {s.ip_addr} taken after {num_keys} acked writes misses {len(missing)} of them: {missing}"
+            assert restored == expected, f'Unexpected contents of {ks}.{dst} after restore: {restored}'
+
+
+async def test_snapshot_strongly_consistent_without_quorum(build_mode: str, manager: ScyllaClusterManager, object_storage):
+    """A snapshot of a strongly consistent table needs no raft quorum.
+
+    The wait for the committed writes is local: each replica applies what it knows its
+    group has committed, asking no leader. Two of the three replicas are stopped, so that
+    no group has a quorum, and the surviving node snapshots the table: the snapshot
+    completes at once, without waiting for a group to answer.
+    """
+    topology = topo(rf = 3, nodes = 3, racks = 3, dcs = 1)
+    servers, host_ids = await create_cluster(topology, manager, logger, object_storage, extra_config=SC_CONFIG)
+    cql = manager.get_cql()
+    cf = 'test'
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}} AND tablets = {{'initial': 2}}{ks_consistency_opts(True)}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.{cf} ( pk text primary key, value int );")
+        insert_stmt = cql.prepare(f"INSERT INTO {ks}.{cf} (pk, value) VALUES (?, ?)")
+        insert_stmt.consistency_level = write_cl(True)
+        await asyncio.gather(*(cql.run_async(insert_stmt, (str(i), i)) for i in range(10)))
+        await sc_catch_up(manager, servers, ks, [cf])
+
+        survivor = servers[0]
+        for s in servers[1:]:
+            await manager.server_stop_gracefully(s.server_id)
+
+        log = await manager.server_open_log(survivor.server_id)
+        mark = await log.mark()
+        snap_name = unique_name('backup_')
+        started = time.time()
+        await manager.api.take_snapshot(survivor.ip_addr, ks, snap_name, [cf])
+        elapsed = time.time() - started
+        assert elapsed < 20, f'the snapshot took {elapsed:.1f}s without a quorum'
+        assert not await log.grep(r'wait_for_committed_writes: .* a snapshot taken now may miss writes', from_mark=mark), \
+            'the snapshot gave up waiting for a group although nothing was pending'
+
+        workdir = await manager.server_get_workdir(survivor.server_id)
+        snapshots = glob.glob(os.path.join(workdir, 'data', ks, f'{cf}-*', 'snapshots', snap_name, '*-Data.db'))
+        assert snapshots, f'the snapshot {snap_name} of {ks}.{cf} holds no sstables'
+
+        # The cluster is left without a quorum of nodes; the keyspace can't be dropped.
+        for s in servers[1:]:
+            await manager.server_start(s.server_id)
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_snapshot_strongly_consistent_apply_timeout(build_mode: str, manager: ScyllaClusterManager, object_storage):
+    """A replica that doesn't apply its committed writes in time doesn't hold the snapshot.
+
+    apply() is parked on every replica and rows are written and acked, so every replica
+    knows of committed writes it hasn't applied. A snapshot with the wait's timeout
+    shortened by an injection completes once the timeout passes, with a warning naming
+    the group, and holds what the replicas applied.
+    """
+    topology = topo(rf = 3, nodes = 3, racks = 3, dcs = 1)
+    servers, host_ids = await create_cluster(topology, manager, logger, object_storage, extra_config=SC_CONFIG)
+    cql = manager.get_cql()
+    cf = 'test'
+    apply_injection = 'strong_consistency_state_machine_wait_before_apply'
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}} AND tablets = {{'initial': 2}}{ks_consistency_opts(True)}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.{cf} ( pk text primary key, value int );")
+        insert_stmt = cql.prepare(f"INSERT INTO {ks}.{cf} (pk, value) VALUES (?, ?)")
+        insert_stmt.consistency_level = write_cl(True)
+        await cql.run_async(insert_stmt, ('-1', -1))
+        await sc_catch_up(manager, servers, ks, [cf])
+
+        await asyncio.gather(*(manager.api.enable_injection(s.ip_addr, apply_injection, one_shot=False) for s in servers))
+        await asyncio.gather(*(cql.run_async(insert_stmt, (str(i), i)) for i in range(10)))
+
+        node = servers[0]
+        timeout_ms = 2000
+        await manager.api.enable_injection(node.ip_addr, 'sc_committed_writes_wait_timeout_ms', one_shot=False, parameters={'value': timeout_ms})
+        log = await manager.server_open_log(node.server_id)
+        mark = await log.mark()
+        snap_name = unique_name('backup_')
+        started = time.time()
+        await manager.api.take_snapshot(node.ip_addr, ks, snap_name, [cf])
+        elapsed = time.time() - started
+        assert elapsed < 60, f'the snapshot took {elapsed:.1f}s with apply parked'
+        await log.wait_for(rf"wait_for_committed_writes: .* didn't apply the writes committed before the wait within {timeout_ms} ms", from_mark=mark)
+
+        for s in servers:
+            await manager.api.message_injection(s.ip_addr, apply_injection)
+            await manager.api.disable_injection(s.ip_addr, apply_injection)
+
+
 @pytest.mark.parametrize("strongly_consistent", [True])
 async def test_restore_tablets_after_majority_loss(build_mode: str, manager: ScyllaClusterManager, object_storage, strongly_consistent):
     '''Recover a strongly consistent keyspace whose tablets lost a majority of their replicas.
