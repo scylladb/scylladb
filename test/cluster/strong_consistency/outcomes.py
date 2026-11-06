@@ -83,7 +83,7 @@ class FailureContext:
     """Everything a policy may need to classify one failed operation."""
 
     workload: "RegisterWorkload"
-    op: str  # "read" or "write"
+    op: str  # "read", "write" or "cas"
     client_id: int
     key: int
     t_call_ns: int
@@ -91,7 +91,7 @@ class FailureContext:
 
     @property
     def is_write(self) -> bool:
-        return self.op == "write"
+        return self.op in ("write", "cas")
 
 
 # Returns the status to record, or None if the exception is not expected —

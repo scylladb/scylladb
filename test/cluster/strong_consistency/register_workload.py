@@ -178,12 +178,17 @@ class HistoryRecorder:
         self._next_id = 0
 
     def record_call(self, client_id: int, op: str, key: int,
-                    value: int = 0, time_ns: Optional[int] = None) -> tuple[int, int]:
-        """Returns (op_id, absolute_time_ns)."""
+                    value: int = 0, time_ns: Optional[int] = None,
+                    expected: Optional[int] = None) -> tuple[int, int]:
+        """Returns (op_id, absolute_time_ns).
+
+        ``expected`` is for a ``cas`` call: the value the register must hold
+        for the compare-and-set to apply.
+        """
         op_id = self._next_id
         self._next_id += 1
         t = time.monotonic_ns() if time_ns is None else time_ns
-        self._events.append({
+        event = {
             "id": op_id,
             "client_id": client_id,
             "kind": "call",
@@ -191,7 +196,10 @@ class HistoryRecorder:
             "key": key,
             "value": value,
             "time_ns": t,
-        })
+        }
+        if expected is not None:
+            event["expected"] = expected
+        self._events.append(event)
         return op_id, t
 
     def record_return(self, op_id: int, client_id: int, op: str,
@@ -295,10 +303,13 @@ class HistoryRecorder:
             ret = returns.get(call["id"])
             if not is_counted(call, ret):
                 continue
+            # A cas is counted as a write: "ok" is an applied one, "fail" one
+            # the server reported as not applied.
+            is_write = call["op"] in ("write", "cas")
             if ret is None:
-                counts["write_indeterminate" if call["op"] == "write"
+                counts["write_indeterminate" if is_write
                        else "read_indeterminate"] += 1
-            elif call["op"] == "write":
+            elif is_write:
                 counts["write_ok" if ret["status"] == Outcome.OK
                        else "write_fail"] += 1
             elif ret["status"] != Outcome.OK:
@@ -505,6 +516,11 @@ class RegisterWorkload:
             stmt.retry_policy = FallthroughRetryPolicy()
         logger.debug("Prepared read/write statements for %s", self.fqtn)
 
+    def read_statement(self, reader_id: int) -> PreparedStatement:
+        """The statement reader ``reader_id`` runs; one for all by default."""
+        assert self.read_stmt is not None, "prepare() has not been called"
+        return self.read_stmt
+
     @contextlib.asynccontextmanager
     async def reset_window(self) -> AsyncIterator[ResetWindow]:
         """Wrap an operation that resets every register to 0.
@@ -671,7 +687,7 @@ async def reader_task(workload: RegisterWorkload, cql, reader_id: int) -> None:
         op_id, t_call_ns = workload.history.record_call(client_id, "read", pk)
 
         try:
-            bound = workload.read_stmt.bind([pk])
+            bound = workload.read_statement(reader_id).bind([pk])
             rows = await cql.run_async(bound)
 
             # An empty result means the register holds its default value 0 —
@@ -701,13 +717,24 @@ async def reader_task(workload: RegisterWorkload, cql, reader_id: int) -> None:
 DisruptorFactory = Callable[[], Awaitable[None]]
 
 
+# A client task drives one writer or reader; it gets the workload, the session
+# and its index among the clients of its kind.
+ClientTask = Callable[[RegisterWorkload, object, int], Awaitable[None]]
+
+
 async def run_workload(
     workload: RegisterWorkload,
     cql,
     duration_s: float,
     disruptors: Sequence[tuple[str, DisruptorFactory]] = (),
+    *,
+    writer: ClientTask = writer_task,
+    reader: ClientTask = reader_task,
 ) -> list[BaseException]:
     """Run writers, readers and the given disruptors for ``duration_s``.
+
+    ``writer`` and ``reader`` replace the plain register clients for a
+    workload with other statements, e.g. compare-and-set writes.
 
     Returns the exceptions raised by the tasks; an empty list means every task
     finished cleanly.  Errors are returned rather than raised so that the
@@ -732,9 +759,9 @@ async def run_workload(
 
             tg.create_task(stop_timer(), name="stop-timer")
             for i in range(workload.num_writers):
-                tg.create_task(writer_task(workload, cql, i), name=f"writer-{i}")
+                tg.create_task(writer(workload, cql, i), name=f"writer-{i}")
             for i in range(workload.num_readers):
-                tg.create_task(reader_task(workload, cql, i), name=f"reader-{i}")
+                tg.create_task(reader(workload, cql, i), name=f"reader-{i}")
             for name, factory in disruptors:
                 tg.create_task(factory(), name=name)
     except* Exception as eg:
