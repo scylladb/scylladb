@@ -2100,6 +2100,44 @@ SEASTAR_THREAD_TEST_CASE(test_tablet_metadata_copy_shares_tablet_maps) {
     tm.clear_gently().get();
 }
 
+// More maps per shard than copy()'s batch size, so each owner shard is visited in several batches.
+SEASTAR_THREAD_TEST_CASE(test_tablet_metadata_copy_shares_tablet_maps_across_shards) {
+    constexpr size_t map_count = 2500;
+    auto h1 = host_id(utils::UUID_gen::get_time_UUID());
+
+    tablet_metadata local;
+    auto local_ids = make_table_ids(map_count);
+    add_single_tablet_maps(local, local_ids, h1);
+    check_copy_shares_tablet_maps(local, local_ids);
+    if (this_smp_shard_count() == 1) {
+        local.clear_gently().get();
+        return;
+    }
+
+    // Built, and later destroyed, on shard 1 so its containers never cross shards.
+    // Shard 0 only reads it.
+    auto foreign_ids = make_table_ids(map_count);
+    auto foreign = smp::submit_to(1, [&] {
+        auto tm = std::make_unique<tablet_metadata>();
+        add_single_tablet_maps(*tm, foreign_ids, h1);
+        return make_foreign(std::move(tm));
+    }).get();
+    check_copy_shares_tablet_maps(*foreign, foreign_ids);
+
+    // A copy of the foreign-owned metadata plus locally-owned maps owns maps on both shards.
+    auto mixed = foreign->copy().get();
+    auto mixed_ids = foreign_ids;
+    auto more_ids = make_table_ids(map_count);
+    add_single_tablet_maps(mixed, more_ids, h1);
+    mixed_ids.insert(mixed_ids.end(), more_ids.begin(), more_ids.end());
+    check_copy_shares_tablet_maps(mixed, mixed_ids);
+
+    mixed.clear_gently().get();
+    local.clear_gently().get();
+    smp::submit_to(1, [tm = foreign.get()] { return tm->clear_gently(); }).get();
+    foreign = {};
+}
+
 // Hinted tablet-metadata updates must skip the storage-group sweep of tables whose tablet_map
 // and local rack are unchanged, and must apply it to the others. Hintless commits never skip.
 SEASTAR_TEST_CASE(test_update_effective_replication_map_gate) {
