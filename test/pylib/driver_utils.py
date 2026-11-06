@@ -7,6 +7,7 @@
 """Utilities for working with the scylla-driver (cassandra-driver)."""
 
 import logging
+import re
 from collections.abc import Iterator
 from contextlib import contextmanager
 
@@ -79,3 +80,17 @@ def safe_shutting_down(cluster: Cluster) -> Iterator[Cluster]:
         yield cluster
     finally:
         safe_driver_shutdown(cluster)
+
+
+# This function normalizes the SSL cipher suite name (a string),
+# which we need to do because tests use python library and scylla server uses C library,
+# and both the python's and the C's library naming conventions are different,
+# so we need some translation in order to compare them.
+def normalize_cipher(cipher_name: str) -> str:
+    if cipher_name.startswith("TLS_"):
+        cipher_name = cipher_name[len("TLS_"):] # Remove leading "TLS_" if present.
+    cipher_name = cipher_name.replace("_WITH_", "-")
+    cipher_name = cipher_name.replace("_", "-")
+    # Remove hyphen between letters and digits: e.g. convert "AES-256" to "AES256"
+    cipher_name = re.sub(r'([A-Z]+)-(\d+)', r'\1\2', cipher_name)
+    return cipher_name
