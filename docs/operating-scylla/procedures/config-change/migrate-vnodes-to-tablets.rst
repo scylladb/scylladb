@@ -367,6 +367,11 @@ Procedure
       Finalization **cannot be undone**. Once the migration is finalized, the
       keyspace cannot be switched back to vnodes.
 
+   #. If the keyspace has tables with CDC, prepare their CDC consumers, as
+      described in :ref:`Tables with CDC <migrate-vnodes-to-tablets-cdc>`.
+      After the finalization, restart them only once they have read the
+      changes up to the switch.
+
    #. Issue the finalization request:
 
       .. code-block:: console
@@ -488,6 +493,42 @@ streams change:
 
 CDC consumers must read the streams of the vnode-based CDC generations up to
 the switch, then the tablet streams from the switch on.
+
+The CDC client libraries, and the connectors built on them, don't follow the
+switch. A consumer reads either the streams of the vnode-based CDC generations
+or the tablet streams, depending on whether the keyspace uses tablets, which
+changes at the finalization, before the switch. It decides when it starts,
+and some consumers decide again by themselves: after an internal error, or
+when their platform restarts or moves them, as Kafka Connect can do with a
+connector. A consumer that reads the streams of the vnode-based CDC
+generations gets no changes after the switch. A consumer that reads the tablet
+streams starts at the switch at the earliest, and doesn't read the streams of
+the vnode-based CDC generations.
+
+So, for each CDC consumer of the keyspace's tables:
+
+* Before the finalization, make sure that the consumer reads tables of this
+  keyspace only, and one table only, as some libraries require. A consumer
+  that also reads tables of other keyspaces, or several tables, can stop
+  working when it restarts after the finalization. Split it into several
+  consumers.
+* After the finalization, keep the consumer running until it has read the
+  changes up to the switch: its progress, such as its checkpoints, must be
+  past the switch. This takes at least the consumer's confidence window after
+  the switch, which is 30 seconds by default in the client libraries (called
+  the safety interval in scylla-cdc-rust), and longer if the consumer lags
+  behind.
+* Then restart the consumer, and have it start reading at the switch or
+  earlier, not at the current time.
+
+A consumer that restarts earlier, for any reason, skips the changes before the
+switch that it hasn't read yet. A consumer started after the finalization
+doesn't read any change before the switch. These changes stay in the CDC log
+until the CDC TTL expires them, and can be read with CQL, as described in
+:doc:`Querying CDC Streams </features/cdc/cdc-querying-streams/>`: read the
+streams of the vnode-based CDC generations, listed in
+``system_distributed.cdc_generation_timestamps`` and
+``system_distributed.cdc_streams_descriptions_v2``, up to the switch.
 
 Once the switch has happened, writes with client-side timestamps more than 5
 seconds older than the current time are rejected if their timestamps are
