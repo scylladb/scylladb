@@ -45,7 +45,7 @@ static future<std::optional<google_credentials>> credentials(const std::string& 
 
 static future<std::tuple<tp::process_fixture, int>> start_fake_gcs_server(const tmpdir& tmp) {
     return tp::start_docker_service("fake-gcs-server"
-        , "docker.io/fsouza/fake-gcs-server:1.52.3"
+        , "docker.io/fsouza/fake-gcs-server:1.54.0"
         , {}
         , [](std::string_view line) {
             if (line.find("server started at") != std::string::npos) {
