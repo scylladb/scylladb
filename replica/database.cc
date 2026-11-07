@@ -973,7 +973,7 @@ database::init_commitlog() {
 
         auto reg = add_fragmented_listeners(features().fragmented_commitlog_entries, *_commitlog);
 
-        _commitlog->add_flush_handler([this, reg = std::move(reg)](db::cf_id_type id, db::replay_position pos) {
+        _commitlog->add_commit_externally_handler([this, reg = std::move(reg)](db::cf_id_type id, db::replay_position pos) {
             if (!_tables_metadata.contains(id)) {
                 // the CF has been removed.
                 _commitlog->discard_completed_segments(id);
@@ -1123,7 +1123,7 @@ void database::init_schema_commitlog() {
 
     auto reg = add_fragmented_listeners(features().fragmented_commitlog_entries, *_schema_commitlog);
 
-    _schema_commitlog->add_flush_handler([this, reg = std::move(reg)] (db::cf_id_type id, db::replay_position pos) {
+    _schema_commitlog->add_commit_externally_handler([this, reg = std::move(reg)] (db::cf_id_type id, db::replay_position pos) {
         if (!_tables_metadata.contains(id)) {
             // the CF has been removed.
             _schema_commitlog->discard_completed_segments(id);

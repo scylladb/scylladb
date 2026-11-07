@@ -205,7 +205,7 @@ class raft_commitlog {
     std::vector<truncation_record> _truncations;
     // Furthest flush-round position reported through mark_segment_closed(); a
     // round is the commitlog asking a segment's dirty tables to flush (see
-    // db::commitlog::flush_position). Only half of closed_up_to().
+    // db::commitlog::commit_externally_position). Only half of closed_up_to().
     db::replay_position _reported_up_to;
     raft::log_entries _replayed_entries;
 
@@ -270,9 +270,9 @@ public:
 
     // How far the commitlog's flush rounds have got: a record at or below the
     // returned position has had its segment's round. _reported_up_to and
-    // flush_position() are both needed: _reported_up_to carries the round now
-    // running, whose handler runs before flush_position() advances, and
-    // flush_position() carries rounds whose handler never reached this group,
+    // commit_externally_position() are both needed: _reported_up_to carries the round now
+    // running, whose handler runs before commit_externally_position() advances, and
+    // commit_externally_position() carries rounds whose handler never reached this group,
     // as in the boot window.
     //
     // A round reaching a record means the record's segment stopped allocating, so
@@ -281,14 +281,14 @@ public:
     // A round ends at or below the start of the still-allocating segment, when one
     // exists. A record's pin_table is never at offset 0, because a segment opens
     // with its descriptor header, so no record of a live segment compares at or below
-    // flush_position().
+    // commit_externally_position().
     //
     // The max-data-lifetime sweep reports a segment it closes in the same pass,
     // discarding the close's future. segment::close() sets _closed before its first
     // co_await, so is_still_allocating() is already false when the round is
     // reported; only the file work is deferred.
     db::replay_position closed_up_to() const {
-        return std::max(_reported_up_to, _commit_log.flush_position());
+        return std::max(_reported_up_to, _commit_log.commit_externally_position());
     }
 };
 
