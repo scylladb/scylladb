@@ -75,6 +75,9 @@ private:
 
 std::ostream& operator<<(std::ostream&, const kmip_host::key_options&);
 
+// Whether this binary was built with KMIP support.
+bool kmip_host_enabled();
+
 }
 
 template <> struct fmt::formatter<encryption::kmip_host::key_options> : fmt::ostream_formatter {};
