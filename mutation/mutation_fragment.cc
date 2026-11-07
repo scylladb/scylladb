@@ -73,6 +73,18 @@ void mutation_fragment::reset_memory(const schema& s, std::optional<reader_resou
     }
 }
 
+mutation_fragment::mutation_fragment(reader_permit permit, mutation_fragment&& o)
+    : _data(std::move(o._data))
+{
+    try {
+        // New units are acquired before the move-assign releases the old ones.
+        _data->_memory = permit.consume_resources(_data->_memory.resources());
+    } catch (...) {
+        destroy_data();
+        throw;
+    }
+}
+
 void mutation_fragment::destroy_data() noexcept
 {
     switch (_data->_kind) {
