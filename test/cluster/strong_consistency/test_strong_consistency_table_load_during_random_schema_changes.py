@@ -38,6 +38,7 @@ import asyncio
 import datetime
 import logging
 import random
+from collections import Counter
 import time
 import uuid as _uuid
 from dataclasses import dataclass, field
@@ -101,6 +102,11 @@ class SchemaChangerState:
     current_c_type: str = "int"
     col_counter: int = 0
     schema_ops: int = 0
+    op_weights: list[tuple[str, int]] = field(default_factory=lambda: list(SCHEMA_OPS))
+    op_counts: Counter = field(default_factory=Counter)
+    # Cycle through op_weights in order instead of a weighted random pick, so
+    # that every operation runs a guaranteed share of the time.
+    round_robin: bool = False
 
     @property
     def ks(self) -> str:
@@ -275,7 +281,7 @@ async def schema_changer_task(state: SchemaChangerState, cql) -> None:
 
         while result is None and not state.workload.stop_event.is_set():
             available_ops = [
-                (name, weight) for name, weight in SCHEMA_OPS
+                (name, weight) for name, weight in state.op_weights
                 # BUG_ALTER_TYPE:
                 # if not (name == "alter_type" and state.current_c_type != "int")
                 if not (name == "drop_column" and not state.added_columns)
@@ -283,7 +289,10 @@ async def schema_changer_task(state: SchemaChangerState, cql) -> None:
             op_names = [name for name, _ in available_ops]
             op_weights = [weight for _, weight in available_ops]
 
-            [op_name] = rng.choices(op_names, weights=op_weights)
+            if state.round_robin:
+                op_name = state.op_weights[state.schema_ops % len(state.op_weights)][0]
+            else:
+                [op_name] = rng.choices(op_names, weights=op_weights)
             # Log the start and the end of every schema change with the raw
             # timestamps the history records, so that it can be located in
             # history.jsonl, which the checker dumps into its artifacts
@@ -299,6 +308,7 @@ async def schema_changer_task(state: SchemaChangerState, cql) -> None:
             break
 
         state.schema_ops += 1
+        state.op_counts[op_name] += 1
         logger.info("DDL: %s (schema op #%d) done at time_ns=%d",
                     result, state.schema_ops, t_end_ns)
         await asyncio.sleep(rng.uniform(1.0, 3.0))
@@ -306,16 +316,25 @@ async def schema_changer_task(state: SchemaChangerState, cql) -> None:
     logger.info("Schema changer finished: %d ops", state.schema_ops)
 
 
+# The `all` mix may never pick a rare operation; each per-operation variant
+# runs its operations round robin, which guarantees that each of them runs.
 @pytest.mark.asyncio
 @pytest.mark.no_parallel
+@pytest.mark.parametrize("schema_ops", [
+    pytest.param(SCHEMA_OPS, id="all"),
+    pytest.param([("add_column", 1), ("drop_column", 1)], id="add_drop_column"),
+    pytest.param([("drop_recreate", 1)], id="drop_recreate"),
+    pytest.param([("drop_recreate_ks", 1)], id="drop_recreate_ks"),
+])
 async def test_sc_linearizability_with_schema_changes(
-    manager: ScyllaClusterManager, tmp_path,
+    manager: ScyllaClusterManager, tmp_path, schema_ops,
 ):
     _servers, cql = await boot_sc_cluster(manager)
 
     async with new_test_keyspace(manager, sc_keyspace_opts()) as ks:
         workload = RegisterWorkload(ks=ks)
-        state = SchemaChangerState(workload=workload)
+        state = SchemaChangerState(workload=workload, op_weights=list(schema_ops),
+                                   round_robin=schema_ops is not SCHEMA_OPS)
         await workload.create_table(cql)
 
         task_errors = await run_workload(
@@ -325,6 +344,7 @@ async def test_sc_linearizability_with_schema_changes(
 
         logger.info("Stats: %s | schema_ops=%d",
                     workload.stats_line(), state.schema_ops)
+        logger.info("Schema operations by kind: %s", dict(state.op_counts))
 
         assert not task_errors, (
             f"Task(s) failed with unexpected exceptions (seed={workload.seed}): "
@@ -335,6 +355,12 @@ async def test_sc_linearizability_with_schema_changes(
         assert state.schema_ops >= 3, (
             f"Too few schema operations ({state.schema_ops}), expected >= 3"
         )
+        if schema_ops is not SCHEMA_OPS:
+            for name, _ in schema_ops:
+                assert state.op_counts[name] >= 3, (
+                    f"Too few {name} operations ({state.op_counts[name]}), "
+                    f"expected >= 3: {dict(state.op_counts)}"
+                )
 
         await check_linearizable(
             workload, output_dir=tmp_path / "porcupine-checker-output")
