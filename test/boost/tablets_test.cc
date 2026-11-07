@@ -9369,4 +9369,35 @@ SEASTAR_TEST_CASE(test_load_stats_split_ready_invalidation) {
     return make_ready_future<>();
 }
 
+// The repair plan is ordered by auto_repair_urgency(): how far past its own threshold a tablet
+// is, on whichever trigger says it is further. Covers what the cluster test cannot set up
+// precisely: a size-selected tablet ahead of a slightly overdue one, a long overdue tablet
+// ahead of a size-selected one, the crossover at 1/size_fraction where even a wholly
+// unrepaired tablet is overtaken, and a disabled trigger contributing nothing.
+SEASTAR_THREAD_TEST_CASE(test_auto_repair_urgency) {
+    using namespace std::chrono_literals;
+    constexpr auto day = 24h;
+
+    // Just past its threshold scores 1 on either trigger.
+    BOOST_REQUIRE_CLOSE(auto_repair_urgency(day, day, std::nullopt, 0.1), 1.0, 1e-9);
+    BOOST_REQUIRE_CLOSE(auto_repair_urgency(0s, day, 0.1, 0.1), 1.0, 1e-9);
+
+    // Size-selected at twice its fraction is ahead of a tablet an hour overdue...
+    BOOST_REQUIRE_GT(auto_repair_urgency(0s, day, 0.2, 0.1), auto_repair_urgency(25h, day, std::nullopt, 0.1));
+    // ...and behind one a whole interval overdue.
+    BOOST_REQUIRE_LT(auto_repair_urgency(0s, day, 0.2, 0.1), auto_repair_urgency(49h, day, std::nullopt, 0.1));
+
+    // A wholly unrepaired tablet scores 1/size_fraction, the most the size trigger can say, so
+    // a time-selected tablet overtakes it once it is that many intervals overdue.
+    BOOST_REQUIRE_CLOSE(auto_repair_urgency(0s, day, 1.0, 0.1), 10.0, 1e-9);
+    BOOST_REQUIRE_LT(auto_repair_urgency(0s, day, 1.0, 0.1), auto_repair_urgency(11 * day, day, std::nullopt, 0.1));
+
+    // A tablet both triggers selected is as urgent as the more urgent of the two says.
+    BOOST_REQUIRE_CLOSE(auto_repair_urgency(3 * day, day, 0.2, 0.1), 3.0, 1e-9);
+
+    // A disabled trigger contributes nothing.
+    BOOST_REQUIRE_EQUAL(auto_repair_urgency(3 * day, 0s, std::nullopt, 0.1), 0.0);
+    BOOST_REQUIRE_EQUAL(auto_repair_urgency(0s, day, 1.0, 0.0), 0.0);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
