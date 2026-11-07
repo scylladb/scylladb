@@ -18,6 +18,8 @@
 #include "test/lib/random_utils.hh"
 #include "service/topology_mutation.hh"
 #include "service/storage_service.hh"
+#include "db/system_keyspace.hh"
+#include "mutation/atomic_cell.hh"
 #include <fmt/ranges.h>
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/testing/on_internal_error.hh>
@@ -60,6 +62,18 @@
 #include <boost/regex.hpp>
 #include <atomic>
 #include "utils/assert.hh"
+
+namespace service {
+// Test access to the private storage_service::topology_state_load()
+// (friend declaration in storage_service.hh).
+struct topology_state_load_test_access {
+    static future<> reload(storage_service& ss, topology_change_hint::scope scope) {
+        storage_service::state_change_hint hint;
+        hint.topology_hint = topology_change_hint{.reload_scope = scope};
+        return ss.topology_state_load(std::move(hint));
+    }
+};
+}
 
 BOOST_AUTO_TEST_SUITE(tablets_test)
 
@@ -1406,6 +1420,133 @@ SEASTAR_TEST_CASE(test_tablet_metadata_hint) {
 
             mut.partition().apply(tombstone(delete_ts, gc_clock::now()));
         });
+    }, tablet_cql_test_config());
+}
+
+SEASTAR_TEST_CASE(test_topology_change_hint) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        using scope = service::topology_change_hint::scope;
+        auto ts = current_timestamp(e);
+
+        // version-only mutation -> versions_only, hint has the right value
+        {
+            service::topology_mutation_builder builder(ts++);
+            builder.set_version(7);
+            utils::chunked_vector<canonical_mutation> muts{builder.build()};
+
+            auto hint = db::get_topology_change_hint(muts).get();
+            BOOST_REQUIRE(hint.reload_scope == scope::versions_only);
+            BOOST_REQUIRE_EQUAL(hint.version, 7);
+            BOOST_REQUIRE(!hint.fence_version);
+        }
+
+        // version + fence_version -> versions_only, both present
+        {
+            service::topology_mutation_builder builder(ts++);
+            builder.set_version(8);
+            builder.set_fence_version(8);
+            utils::chunked_vector<canonical_mutation> muts{builder.build()};
+
+            auto hint = db::get_topology_change_hint(muts).get();
+            BOOST_REQUIRE(hint.reload_scope == scope::versions_only);
+            BOOST_REQUIRE_EQUAL(hint.version, 8);
+            BOOST_REQUIRE_EQUAL(hint.fence_version, 8);
+        }
+
+        // two mutations both setting version -> full (unreachable via the merger; guards the classifier)
+        {
+            service::topology_mutation_builder b1(ts++);
+            b1.set_version(12);
+            service::topology_mutation_builder b2(ts++);
+            b2.set_version(13);
+            utils::chunked_vector<canonical_mutation> muts;
+            muts.push_back(b1.build());
+            muts.push_back(b2.build());
+
+            BOOST_REQUIRE(db::get_topology_change_hint(muts).get().reload_scope == scope::full);
+        }
+
+        // any other static column touched -> full
+        {
+            service::topology_mutation_builder builder(ts++);
+            builder.set_version(9);
+            builder.set_transition_state(service::topology::transition_state::commit_cdc_generation);
+            utils::chunked_vector<canonical_mutation> muts{builder.build()};
+
+            BOOST_REQUIRE(db::get_topology_change_hint(muts).get().reload_scope == scope::full);
+        }
+
+        // a dead cell (deletion) for transition_state -> full, not ignored
+        {
+            service::topology_mutation_builder builder(ts++);
+            builder.set_version(10);
+            builder.del_transition_state();
+            utils::chunked_vector<canonical_mutation> muts{builder.build()};
+
+            BOOST_REQUIRE(db::get_topology_change_hint(muts).get().reload_scope == scope::full);
+        }
+
+        // a dead cell for version itself -> full, not treated as a live version bump
+        {
+            auto s = db::system_keyspace::topology();
+            auto& version_cdef = *s->get_column_definition("version");
+
+            mutation mut(s, partition_key::from_singular(*s, sstring(db::system_keyspace::TOPOLOGY)));
+            mut.partition().static_row().maybe_create().apply(version_cdef, atomic_cell::make_dead(ts++, gc_clock::now()));
+            utils::chunked_vector<canonical_mutation> muts{canonical_mutation(mut)};
+
+            BOOST_REQUIRE(db::get_topology_change_hint(muts).get().reload_scope == scope::full);
+        }
+
+        // clustering row (per-node data) touched -> full
+        {
+            auto id = raft::server_id::create_random_id();
+            service::topology_mutation_builder builder(ts++);
+            builder.set_version(11);
+            builder.with_node(id).set("node_state", service::node_state::normal);
+            utils::chunked_vector<canonical_mutation> muts{builder.build()};
+
+            BOOST_REQUIRE(db::get_topology_change_hint(muts).get().reload_scope == scope::full);
+        }
+
+        // no system.topology mutation at all -> tablets_only
+        {
+            simple_schema s;
+            auto mut = s.new_mutation("pk1");
+            s.add_row(mut, s.make_ckey(1), "v");
+            utils::chunked_vector<canonical_mutation> muts{canonical_mutation(mut)};
+
+            BOOST_REQUIRE(db::get_topology_change_hint(muts).get().reload_scope == scope::tablets_only);
+        }
+    }, tablet_cql_test_config());
+}
+
+// A tablets_only reload with non-empty left_nodes_rs must not do a full reload
+// and must drop left_nodes_rs/excluded_tablet_nodes entries without tablet replicas.
+SEASTAR_TEST_CASE(test_topology_state_load_tablets_only_reload_with_left_nodes_rs) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto h_leaving = raft::server_id::create_random_id();
+
+        auto& topology = e.get_topology_state_machine().local()._topology;
+        abort_source as;
+        auto holder = e.get_raft_group0_client().hold_read_apply_mutex(as).get();
+        // Only a full reload re-reads this from disk, so it staying flipped proves a non-full reload.
+        const bool flipped = !topology.tablet_balancing_enabled;
+        topology.tablet_balancing_enabled = flipped;
+        topology.left_nodes_rs.emplace(h_leaving, replica_state{});
+        topology.excluded_tablet_nodes.insert(h_leaving);
+
+        service::topology_state_load_test_access::reload(e.get_storage_service().local(),
+                service::topology_change_hint::scope::tablets_only).get();
+
+        BOOST_REQUIRE_EQUAL(topology.tablet_balancing_enabled, flipped);
+        BOOST_REQUIRE(!topology.left_nodes_rs.contains(h_leaving));
+        BOOST_REQUIRE(!topology.excluded_tablet_nodes.contains(h_leaving));
+
+        // Restore state so token metadata is consistent for teardown.
+        topology.tablet_balancing_enabled = !flipped;
+        service::topology_state_load_test_access::reload(e.get_storage_service().local(),
+                service::topology_change_hint::scope::tablets_only).get();
     }, tablet_cql_test_config());
 }
 
