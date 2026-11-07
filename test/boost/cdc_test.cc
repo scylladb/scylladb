@@ -19,6 +19,8 @@
 
 #include "cdc/log.hh"
 #include "cdc/cdc_options.hh"
+#include "cdc/cdc_extension.hh"
+#include "gc_clock.hh"
 #include "cdc/metadata.hh"
 #include "db/system_keyspace.hh"
 #include "schema/schema_builder.hh"
@@ -65,6 +67,19 @@ cql_test_config enable_tablets() {
 } // namespace
 
 BOOST_AUTO_TEST_SUITE(cdc_test)
+
+// A CDC ttl above max_ttl is rejected by CREATE/ALTER TABLE, but the persisted
+// schema extension of a table created before that check existed can still
+// carry one. It must keep decoding, and the value is clamped to max_ttl on
+// decode so that every consumer sees a valid TTL. Reproduces SCYLLADB-6065.
+BOOST_AUTO_TEST_CASE(test_cdc_extension_clamps_persisted_too_big_ttl) {
+    const auto too_big_ttl = max_ttl.count() + 1;
+    cdc::options opts({{"enabled", "true"}, {"ttl", std::to_string(too_big_ttl)}});
+    BOOST_REQUIRE_EQUAL(opts.ttl(), too_big_ttl);
+    cdc::cdc_extension ext(cdc::cdc_extension(opts).serialize());
+    BOOST_REQUIRE(ext.get_options().enabled());
+    BOOST_REQUIRE_EQUAL(ext.get_options().ttl(), max_ttl.count());
+}
 
 SEASTAR_THREAD_TEST_CASE(test_find_mutation_timestamp) {
     do_with_cql_env_thread([] (cql_test_env& e) {
