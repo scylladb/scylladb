@@ -70,7 +70,7 @@ class SSTablesOnLocalStorage:
         # that correspond to these toc_names, copy them to the upload directory and then
         # call refresh
         workdir = await manager.server_get_workdir(s.server_id)
-        cf_dir = os.listdir(f'{workdir}/data/{ks}')[0]
+        cf_dir = next(d for d in os.listdir(f'{workdir}/data/{ks}') if d.startswith(f'{cf}-'))
         upload_dir = os.path.join(f'{workdir}/data/{ks}', cf_dir, 'upload')
         os.makedirs(upload_dir, exist_ok=True)
         tmpbackup = os.path.join(workdir, f'../{self.tmpdir}')

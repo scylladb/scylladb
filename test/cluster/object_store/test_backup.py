@@ -13,6 +13,7 @@ import codecs
 import pytest
 import time
 import random
+import re
 
 from typing import Callable, Awaitable
 from dataclasses import dataclass
@@ -609,7 +610,7 @@ async def do_restore_server(manager, logger, ks, cf, s, toc_names, scope, primar
     status = await manager.api.wait_task(s.ip_addr, tid)
     assert (status is not None) and (status['state'] == 'done')
 
-async def check_streaming_directions(logger, servers, topology, host_ids, scope, primary_replica_only, log_marks):
+async def check_streaming_directions(logger, servers, topology, host_ids, scope, primary_replica_only, log_marks, ks, cf):
     host_ids_per_dc = defaultdict(list)
     host_ids_per_dc_rack = dict()
     servers_by_host_id = dict()
@@ -623,8 +624,8 @@ async def check_streaming_directions(logger, servers, topology, host_ids, scope,
     for s in servers:
         streamed_to = defaultdict(int)
         log, mark = log_marks[s.server_id]
-        direct_downloads = await log.grep('sstables_loader - Adding downloaded SSTable.*to the table', from_mark=mark)
-        res = await log.grep(r'sstables_loader - load_and_stream:.*target_node=(?P<target_host_id>[0-9a-f-]+)', from_mark=mark)
+        direct_downloads = await log.grep(rf'sstables_loader - Adding downloaded SSTable.*to the table {re.escape(ks)}\.{re.escape(cf)} ', from_mark=mark)
+        res = await log.grep(rf'sstables_loader - load_and_stream:.*ks={re.escape(ks)}, table={re.escape(cf)}, target_node=(?P<target_host_id>[0-9a-f-]+)', from_mark=mark)
         for r in res:
             target_host_id = r[1].group('target_host_id')
             if scope == 'all':
@@ -830,11 +831,11 @@ async def do_test_streaming_scopes(build_mode: str, manager: ScyllaClusterManage
 
         await sstables_storage.save(manager, servers, snap_name, prefix, ks, 'test', logger)
 
-    # Reuse keyspace and group by tablet_count to avoid DDL overhead
-    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}") as ks:
-        for restored_min_tablet_count in restored_min_tablet_counts:
-            await cql.run_async(f"CREATE TABLE {ks}.test ( pk text primary key, value int ) WITH tablets = {{'min_tablet_count': {restored_min_tablet_count}}};")
+        # One keyspace and one DDL batch for all restore targets: every DDL pays a schema agreement wait
+        restore_tables = {c: f'restored_{c}' for c in restored_min_tablet_counts}
+        await asyncio.gather(*(cql.run_async(f"CREATE TABLE {ks}.{cf} ( pk text primary key, value int ) WITH tablets = {{'min_tablet_count': {c}}};") for c, cf in restore_tables.items()))
 
+        for restored_min_tablet_count, cf in restore_tables.items():
             for scope, pro in itertools.product(scopes, pros):
                 if scope == 'node' and pro == True:
                     continue
@@ -849,16 +850,14 @@ async def do_test_streaming_scopes(build_mode: str, manager: ScyllaClusterManage
 
                 logger.info(f'Loading {servers=} with {sstables=} scope={scope}')
                 sstables_per_server = distribute_sstables(sstables, servers, topology, scope)
-                await sstables_storage.restore(manager, sstables_per_server, prefix, ks, 'test', scope, pro, logger)
+                await sstables_storage.restore(manager, sstables_per_server, prefix, ks, cf, scope, pro, logger)
                 if pro:
-                    await manager.api.tablet_repair(servers[0].ip_addr, ks, 'test', 'all', timeout=600)
-                await check_mutation_replicas(cql, manager, servers, range(num_keys), topology, logger, ks, 'test')
+                    await manager.api.tablet_repair(servers[0].ip_addr, ks, cf, 'all', timeout=600)
+                await check_mutation_replicas(cql, manager, servers, range(num_keys), topology, logger, ks, cf)
                 if restored_min_tablet_count == original_min_tablet_count:
-                    await check_streaming_directions(logger, servers, topology, host_ids, scope, pro, log_marks)
+                    await check_streaming_directions(logger, servers, topology, host_ids, scope, pro, log_marks, ks, cf)
 
-                await cql.run_async(f"TRUNCATE {ks}.test")
-
-            await cql.run_async(f"DROP TABLE {ks}.test")
+                await cql.run_async(f"TRUNCATE {ks}.{cf}")
 
 @pytest.mark.parametrize("topology", [
         topo(rf = 1, nodes = 2, racks = 1, dcs = 1),
