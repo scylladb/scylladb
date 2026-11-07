@@ -288,6 +288,257 @@ SEASTAR_TEST_CASE(test_commitlog_discard_completed_segments){
         });
 }
 
+namespace {
+
+struct record_deletes_extension : public db::commitlog_file_extension {
+    std::vector<std::string> deleted;
+    // Number of before_delete() calls to fail.
+    int fail = 0;
+    // When set, the next before_delete() waits for it first.
+    std::optional<shared_future<>> hold;
+
+    seastar::future<seastar::file> wrap_file(const seastar::sstring& filename, seastar::file f, seastar::open_flags flags) override {
+        co_return f;
+    }
+    seastar::future<> before_delete(const seastar::sstring& filename) override {
+        if (auto h = std::exchange(hold, std::nullopt)) {
+            co_await h->get_future();
+        }
+        if (fail > 0) {
+            --fail;
+            throw std::runtime_error("injected before_delete failure");
+        }
+        deleted.emplace_back(filename);
+        co_return;
+    }
+    seastar::future<> before_rename(const seastar::sstring&, const seastar::sstring&) override {
+        co_return;
+    }
+    seastar::future<> after_rename(const seastar::sstring&, const seastar::sstring&) override {
+        co_return;
+    }
+};
+
+future<std::vector<sstring>> create_fake_segments(sstring dir, std::vector<segment_id_type> ids) {
+    std::vector<sstring> files;
+    for (auto id : ids) {
+        files.push_back(dir + "/" + commitlog::descriptor(id, commitlog::descriptor::FILENAME_PREFIX).filename());
+        auto f = co_await open_file_dma(files.back(), open_flags::wo | open_flags::create);
+        co_await f.truncate(4096);
+        co_await f.close();
+    }
+    co_return files;
+}
+
+// Writes until the log has `n` segments, makes them all deletable, and
+// returns their names.
+future<std::vector<sstring>> release_segments(commitlog& log, size_t n) {
+    sstring data(100 * 1024, 'x');
+    auto uuid = make_table_id();
+    rp_set rps;
+    while (log.get_active_segment_names().size() < n) {
+        rps.put(co_await log.add_mutation(uuid, data.size(), db::commitlog::force_sync::no, [&] (db::commitlog::output& dst) {
+            dst.write(data.data(), data.size());
+        }));
+    }
+    co_await log.force_new_active_segment();
+    co_await log.sync_all_segments();
+    auto names = log.get_active_segment_names();
+    log.discard_completed_segments(uuid, rps);
+    co_return std::vector<sstring>(names.begin(), names.end());
+}
+
+std::vector<segment_id_type> segment_ids(const std::vector<std::string>& names) {
+    return names | std::views::transform([] (const std::string& name) {
+        return commitlog::descriptor(name).id;
+    }) | std::ranges::to<std::vector>();
+}
+
+future<> deletes_segments_in_order(commitlog& log, record_deletes_extension& ex) {
+    sstring data(100 * 1024, 'x');
+    auto write = [&] (table_id id) {
+        return log.add_mutation(id, data.size(), db::commitlog::force_sync::no, [&] (db::commitlog::output& dst) {
+            dst.write(data.data(), data.size());
+        });
+    };
+
+    auto old_uuid = make_table_id();
+    auto uuid = make_table_id();
+    rp_set old_rps, rps;
+    old_rps.put(co_await write(old_uuid));
+    while (log.get_active_segment_names().size() < 4) {
+        rps.put(co_await write(uuid));
+    }
+    co_await log.force_new_active_segment();
+    co_await log.sync_all_segments();
+    auto names = log.get_active_segment_names();
+
+    // The oldest segment is still dirty, so nothing may be deleted.
+    log.discard_completed_segments(uuid, rps);
+    co_await log.wait_for_pending_deletes();
+    BOOST_REQUIRE(ex.deleted.empty());
+
+    log.discard_completed_segments(old_uuid, old_rps);
+    co_await log.wait_for_pending_deletes();
+    BOOST_REQUIRE(log.get_active_segment_names().empty());
+    BOOST_REQUIRE_EQUAL(ex.deleted.size(), names.size());
+    BOOST_REQUIRE(std::ranges::is_sorted(segment_ids(ex.deleted)));
+}
+
+future<> retries_failed_delete_in_order(commitlog& log, record_deletes_extension& ex) {
+    // The first delete waits until newer segments are released as well,
+    // then fails.
+    promise<> unblock;
+    ex.hold = unblock.get_future();
+    ex.fail = 1;
+    auto names = co_await release_segments(log, 3);
+    auto newer = co_await release_segments(log, 3);
+    names.insert(names.end(), newer.begin(), newer.end());
+    unblock.set_value();
+
+    // The timer retries the failed oldest segment.
+    for (int i = 0; i < 1000 && ex.deleted.size() < names.size(); ++i) {
+        co_await seastar::sleep(std::chrono::milliseconds(10));
+        co_await log.wait_for_pending_deletes();
+    }
+    BOOST_REQUIRE_EQUAL(ex.fail, 0);
+    BOOST_REQUIRE_EQUAL(ex.deleted.size(), names.size());
+    BOOST_REQUIRE(std::ranges::is_sorted(segment_ids(ex.deleted)));
+}
+
+future<> delete_replayed_segments_in_order(commitlog& log, record_deletes_extension& ex) {
+    // Ids below those of the live segments.
+    auto files = co_await create_fake_segments(log.active_config().commit_log_location, {1005, 1003, 1009, 1001, 1007});
+
+    co_await log.delete_segments(files);
+
+    BOOST_REQUIRE_EQUAL(ex.deleted.size(), files.size());
+    BOOST_REQUIRE(std::ranges::is_sorted(segment_ids(ex.deleted)));
+}
+
+}
+
+// A clean segment must not be deleted while an older segment is still dirty,
+// and segments must be deleted in id order.
+SEASTAR_TEST_CASE(test_commitlog_deletes_segments_in_order) {
+    auto ep = std::make_unique<record_deletes_extension>();
+    auto& ex = *ep;
+    db::extensions myexts;
+    myexts.add_commitlog_file_extension("record_deletes", std::move(ep));
+
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 1;
+    cfg.extensions = &myexts;
+
+    co_await cl_test(cfg, [&ex] (commitlog& log) {
+        return deletes_segments_in_order(log, ex);
+    });
+}
+
+// A segment that fails to be deleted is retried, and no newer segment is
+// deleted before it.
+SEASTAR_TEST_CASE(test_commitlog_retries_failed_delete_in_order) {
+    auto ep = std::make_unique<record_deletes_extension>();
+    auto& ex = *ep;
+    db::extensions myexts;
+    myexts.add_commitlog_file_extension("record_deletes", std::move(ep));
+
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 1;
+    cfg.commitlog_sync_period_in_ms = 10;
+    cfg.extensions = &myexts;
+
+    co_await cl_test(cfg, [&ex] (commitlog& log) {
+        return retries_failed_delete_in_order(log, ex);
+    });
+}
+
+// Live segments are not deleted before the segments of this shard found on
+// disk at start, and those are deleted in id order first.
+SEASTAR_TEST_CASE(test_commitlog_live_segments_wait_for_replay_cleanup) {
+    auto ep = std::make_unique<record_deletes_extension>();
+    auto& ex = *ep;
+    db::extensions myexts;
+    myexts.add_commitlog_file_extension("record_deletes", std::move(ep));
+
+    tmpdir tmp;
+    commitlog::config cfg;
+    cfg.commit_log_location = tmp.path().string();
+    cfg.commitlog_segment_size_in_mb = 1;
+    cfg.extensions = &myexts;
+    cfg.wait_for_replay_cleanup = true;
+
+    // Segments from a previous run of this shard.
+    auto old_ids = std::vector<segment_id_type>{1003, 1001};
+    for (auto& id : old_ids) {
+        id = replay_position(this_shard_id(), id).id;
+    }
+    auto old_files = co_await create_fake_segments(cfg.commit_log_location, old_ids);
+
+    auto log = co_await commitlog::create_commitlog(cfg);
+    std::exception_ptr ep2;
+    try {
+        auto names = co_await release_segments(log, 3);
+        co_await log.wait_for_pending_deletes();
+        BOOST_REQUIRE(ex.deleted.empty());
+
+        co_await log.delete_segments(old_files);
+        co_await log.wait_for_pending_deletes();
+        BOOST_REQUIRE_EQUAL(ex.deleted.size(), old_files.size() + names.size());
+        BOOST_REQUIRE(std::ranges::is_sorted(segment_ids(ex.deleted)));
+    } catch (...) {
+        ep2 = std::current_exception();
+    }
+    co_await log.shutdown();
+    co_await log.clear();
+    if (ep2) {
+        std::rethrow_exception(ep2);
+    }
+}
+
+// Each shard's segments are deleted by one shard.
+SEASTAR_TEST_CASE(test_commitlog_split_segments_for_delete) {
+    std::vector<sstring> paths;
+    std::unordered_map<sstring, unsigned> origin;
+    for (unsigned shard : {3, 0, 2, 1, 0, 3, 2, 1}) {
+        auto id = replay_position(shard, 1000 + paths.size()).id;
+        paths.push_back("/dir/" + commitlog::descriptor(id, commitlog::descriptor::FILENAME_PREFIX).filename());
+        origin[paths.back()] = shard;
+    }
+    paths.push_back("/dir/not-a-segment");
+
+    for (unsigned shards : {1, 2, 4, 5}) {
+        auto groups = commitlog::split_segments_for_delete(paths, shards);
+        BOOST_REQUIRE_EQUAL(groups.size(), shards);
+        size_t total = 0;
+        for (unsigned g = 0; g < shards; ++g) {
+            total += groups[g].size();
+            for (auto& p : groups[g]) {
+                auto it = origin.find(p);
+                BOOST_REQUIRE_EQUAL(it == origin.end() ? 0 : it->second % shards, g);
+            }
+        }
+        BOOST_REQUIRE_EQUAL(total, paths.size());
+    }
+    co_return;
+}
+
+// Replayed segments passed to delete_segments() must be deleted in id order.
+SEASTAR_TEST_CASE(test_commitlog_delete_replayed_segments_in_order) {
+    auto ep = std::make_unique<record_deletes_extension>();
+    auto& ex = *ep;
+    db::extensions myexts;
+    myexts.add_commitlog_file_extension("record_deletes", std::move(ep));
+
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 1;
+    cfg.extensions = &myexts;
+
+    co_await cl_test(cfg, [&ex] (commitlog& log) {
+        return delete_replayed_segments_in_order(log, ex);
+    });
+}
+
 SEASTAR_TEST_CASE(test_equal_record_limit){
     return cl_test([](commitlog& log) {
             auto size = log.max_record_size();
@@ -1585,6 +1836,64 @@ SEASTAR_TEST_CASE(test_commitlog_deadlock_with_flush_threshold) {
         BOOST_ERROR("log write timed out. maybe it is deadlocked... Will not free log. ASAN errors and leaks will follow...");
         abort();
     }
+
+    co_await log.shutdown();
+    co_await log.clear();
+}
+
+// A dirty front segment holds back every newer segment. If its table ignores
+// the first flush request, the flush must be requested again, or writes stall
+// once the disk limit is reached.
+SEASTAR_TEST_CASE(test_commitlog_rerequests_flush_of_front_segment) {
+    commitlog::config cfg;
+
+    constexpr auto max_size_mb = 1;
+
+    cfg.commitlog_segment_size_in_mb = max_size_mb;
+    cfg.commitlog_total_space_in_mb = 4 * max_size_mb * this_smp_shard_count();
+    cfg.commitlog_sync_period_in_ms = 10;
+    cfg.allow_going_over_size_limit = false;
+    cfg.use_o_dsync = true; // make sure we pre-allocate.
+
+    // not using cl_test, because we need to be able to abandon
+    // the log.
+
+    tmpdir tmp;
+    cfg.commit_log_location = tmp.path().string();
+    auto log = co_await commitlog::create_commitlog(cfg);
+
+    sstring data(100 * 1024, 'x');
+    auto write = [&] (table_id id) {
+        return with_timeout(timeout_clock::now() + 30s, log.add_mutation(id, data.size(), db::commitlog::force_sync::no, [&] (db::commitlog::output& dst) {
+            dst.write(data.data(), data.size());
+        }));
+    };
+
+    auto cold_uuid = make_table_id();
+    auto hot_uuid = make_table_id();
+    rp_set cold_rps, hot_rps;
+    int cold_requests = 0;
+
+    auto r = log.add_flush_handler([&](cf_id_type id, replay_position pos) {
+        if (id == hot_uuid) {
+            log.discard_completed_segments(id, std::exchange(hot_rps, {}));
+        } else if (id == cold_uuid && ++cold_requests > 1) {
+            log.discard_completed_segments(id, std::exchange(cold_rps, {}));
+        }
+    });
+
+    try {
+        cold_rps.put(co_await write(cold_uuid));
+        // Write enough to fill the disk limit several times over.
+        for (uint64_t i = 0; i < 4 * 10 * cfg.commitlog_total_space_in_mb / this_smp_shard_count(); ++i) {
+            hot_rps.put(co_await write(hot_uuid));
+        }
+    } catch (timed_out_error&) {
+        BOOST_ERROR("log write timed out. front segment flush was not requested again? Will not free log. ASAN errors and leaks will follow...");
+        abort();
+    }
+
+    BOOST_REQUIRE_GT(cold_requests, 1);
 
     co_await log.shutdown();
     co_await log.clear();
