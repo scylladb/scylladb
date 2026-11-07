@@ -14,6 +14,7 @@
 #include <seastar/core/thread.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/as_future.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/util/defer.hh>
 #include "replica/memtable.hh"
 #include <boost/version.hpp>
@@ -29,6 +30,7 @@
 #include "utils/assert.hh"
 #include "utils/updateable_value.hh"
 #include "utils/labels.hh"
+#include "utils/error_injection.hh"
 #include "utils/chunked_vector.hh"
 
 namespace cache {
@@ -1124,6 +1126,10 @@ future<> row_cache::do_update(external_updater eu, replica::memtable& m, Updater
 }
 
 future<> row_cache::update(external_updater eu, replica::memtable& m, preemption_source& preempt_src) {
+    // Simulates a failure before the external updater is executed, for the table named by the injection's "table" parameter.
+    if (utils::get_local_injector().inject_parameter<std::string_view>("row_cache_update_fail", "table") == std::string_view(_schema->cf_name())) [[unlikely]] {
+        throw std::runtime_error("row_cache_update_fail injected");
+    }
     m._merging_into_cache = true;
     return do_update(std::move(eu), m, [this] (logalloc::allocating_section& alloc,
             row_cache::partitions_type::iterator cache_i, replica::memtable_entry& mem_e, partition_presence_checker& is_present,
@@ -1223,17 +1229,39 @@ void row_cache::invalidate_locked(const dht::decorated_key& dk) {
     }
 }
 
-future<> row_cache::invalidate(external_updater eu, const dht::decorated_key& dk) {
-    return invalidate(std::move(eu), dht::partition_range::make_singular(dk));
+future<> row_cache::invalidate(external_updater eu, const dht::decorated_key& dk) noexcept {
+    try {
+        auto range = dht::partition_range::make_singular(dk);
+        return invalidate(std::move(eu), range);
+    } catch (...) {
+        return clear_on_error(std::move(eu), std::current_exception());
+    }
 }
 
-future<> row_cache::invalidate(external_updater eu, const dht::partition_range& range, cache_invalidation_filter filter) {
-    return invalidate(std::move(eu), utils::chunked_vector<dht::partition_range>({range}), std::move(filter));
+future<> row_cache::invalidate(external_updater eu, const dht::partition_range& range, cache_invalidation_filter filter) noexcept {
+    try {
+        utils::chunked_vector<dht::partition_range> ranges;
+        ranges.push_back(range);
+        return invalidate(std::move(eu), std::move(ranges), std::move(filter));
+    } catch (...) {
+        return clear_on_error(std::move(eu), std::current_exception());
+    }
 }
 
-future<> row_cache::invalidate(external_updater eu, utils::chunked_vector<dht::partition_range>&& ranges, cache_invalidation_filter filter) {
-    return do_update(std::move(eu), [this, ranges = std::move(ranges), filter = std::move(filter)] mutable {
-        return seastar::async([this, ranges = std::move(ranges), filter = std::move(filter)] {
+future<> row_cache::invalidate(external_updater eu, utils::chunked_vector<dht::partition_range>&& ranges, cache_invalidation_filter filter) noexcept {
+    internal_updater iu;
+    try {
+        if (utils::get_local_injector().inject_parameter<std::string_view>("row_cache_invalidate_prepare_fail", "table") == std::string_view(_schema->cf_name())) [[unlikely]] {
+            throw std::runtime_error("row_cache_invalidate_prepare_fail injected");
+        }
+        iu = [this, ranges_ = std::move(ranges), filter_ = std::move(filter)] () mutable -> future<> {
+            // Move the captures into the coroutine frame: the internal_updater
+            // contract keeps the closure alive only until the invocation returns.
+            auto ranges = std::move(ranges_);
+            auto filter = std::move(filter_);
+            if (utils::get_local_injector().inject_parameter<std::string_view>("row_cache_invalidate_updater_fail", "table") == std::string_view(_schema->cf_name())) [[unlikely]] {
+                throw std::runtime_error("row_cache_invalidate_updater_fail injected");
+            }
             auto on_failure = defer([this] () noexcept {
                 this->clear_now();
                 _prev_snapshot_pos = {};
@@ -1242,7 +1270,7 @@ future<> row_cache::invalidate(external_updater eu, utils::chunked_vector<dht::p
 
             for (auto&& range : ranges) {
                 _prev_snapshot_pos = dht::ring_position_view::for_range_start(range);
-                seastar::thread::maybe_yield();
+                co_await coroutine::maybe_yield();
 
                 while (true) {
                     auto done = _update_section(_tracker.region(), [&] {
@@ -1281,12 +1309,23 @@ future<> row_cache::invalidate(external_updater eu, utils::chunked_vector<dht::p
                     }
                     // _prev_snapshot_pos must be updated at this point such that every position < _prev_snapshot_pos
                     // is already invalidated and >= _prev_snapshot_pos is not yet invalidated.
-                    seastar::thread::yield();
+                    co_await yield();
                 }
             }
 
             on_failure.cancel();
-        });
+        };
+    } catch (...) {
+        return clear_on_error(std::move(eu), std::current_exception());
+    }
+    return do_update(std::move(eu), std::move(iu));
+}
+
+future<> row_cache::clear_on_error(external_updater eu, std::exception_ptr ex) noexcept {
+    clogger.warn("Failed to prepare cache invalidation: {}. Clearing the cache instead.", ex);
+    return do_update(std::move(eu), [this] {
+        clear_now();
+        return make_ready_future<>();
     });
 }
 
@@ -1488,11 +1527,18 @@ future<> row_cache::do_update(row_cache::external_updater eu, row_cache::interna
             return iu();
         }));
         {
+            if (f.failed()) {
+                // The internal updater is responsible for bringing the cache
+                // in sync with the new underlying mutation source. If it failed
+                // before completing, e.g. when it could not allocate memory for
+                // its continuation, entries made stale by the external update
+                // may still be in the cache. Clearing the whole cache does not
+                // allocate and restores consistency.
+                clogger.warn("Failure during cache update: {}. Clearing the cache.", f.get_exception());
+                clear_now();
+            }
             _prev_snapshot_pos = {};
             _prev_snapshot = {};
-            if (f.failed()) {
-                clogger.warn("Failure during cache update: {}", f.get_exception());
-            }
         }
     }
 }
