@@ -749,6 +749,7 @@ raft_tests = set([
     'test/raft/raft_sys_table_storage_test',
     'test/raft/discovery_test',
     'test/raft/failure_detector_test',
+    'test/raft/bounded_clock_adjtimex_test',
 ])
 
 vector_search_tests = set([
@@ -789,6 +790,8 @@ tests = scylla_tests | perf_tests | perf_standalone_tests | raft_tests | vector_
 
 other = set([
     'iotune',
+    'clockbound',
+    'cbctl',
 ])
 
 all_artifacts = apps | cpp_apps | tests | other | wasms
@@ -1421,6 +1424,8 @@ scylla_core = (['message/messaging_service.cc',
                 'service/raft/group0_state_machine_merger.cc',
                 'service/raft/group0_voter_handler.cc',
                 'service/raft/raft_sys_table_storage.cc',
+                'service/raft/bounded_clock_adjtimex.cc',
+                'service/raft/bounded_clock_clockbound.cc',
                 'serializer.cc',
                 'release.cc',
                 'service/raft/raft_metrics.cc',
@@ -1889,6 +1894,7 @@ deps['test/raft/failure_detector_test'] = ['test/raft/failure_detector_test.cc',
 deps['test/raft/many_test'] = ['test/raft/many_test.cc', 'test/raft/replication.cc', 'test/raft/helpers.cc', 'test/lib/eventually.cc'] + scylla_raft_dependencies
 deps['test/raft/fsm_test'] =  ['test/raft/fsm_test.cc', 'test/raft/helpers.cc', 'test/lib/log.cc'] + scylla_raft_dependencies
 deps['test/raft/log_indexed_container_test'] =  ['test/raft/log_indexed_container_test.cc', 'test/raft/helpers.cc', 'test/lib/log.cc'] + scylla_raft_dependencies
+deps['test/raft/bounded_clock_adjtimex_test'] = ['test/raft/bounded_clock_adjtimex_test.cc', 'service/raft/bounded_clock_adjtimex.cc', 'test/lib/log.cc'] + scylla_raft_dependencies
 deps['test/raft/etcd_test'] =  ['test/raft/etcd_test.cc', 'test/raft/helpers.cc', 'test/lib/log.cc'] + scylla_raft_dependencies
 deps['test/raft/raft_sys_table_storage_test'] = ['test/raft/raft_sys_table_storage_test.cc'] + \
     scylla_core + alternator + scylla_tests_generic_dependencies
@@ -2747,6 +2753,45 @@ if os.path.exists(kmipc_lib):
     libs += f' {kmipc_lib}'
     user_cflags += f' -I{kmipc_dir}/include -DHAVE_KMIP'
 
+# AWS ClockBound bounded-clock backend. The clock-bound git submodule yields
+# the C client library (libclockbound.a, the clock-bound-ffi workspace member)
+# via the clockbound_lib ninja rule, linked into any binary that includes the
+# backend, and the clockbound daemon and its cbctl tool (the clock-bound
+# package's binaries, behind its `daemon` feature) via the clockbound_bin rule,
+# packaged as scylla-clockbound. The backend uses the plain C interface in
+# clock-bound/clock-bound-ffi/include/clockbound.h.
+user_cflags += ' -Iclock-bound/clock-bound-ffi/include'
+
+
+# The submodule's release profile is tuned for its standalone daemon: fat LTO,
+# one codegen unit, panic=abort, stripped. The library is linked into scylla
+# next to librust_combined.a, and with fat LTO it is one object that carries
+# the Rust runtime, which librust_combined.a carries too, so the link fails on
+# duplicate symbols. The library is built with the profile defaults for those
+# settings instead, which keeps the runtime in archive members of its own that
+# the linker never takes from it. The binaries keep their symbols too: the
+# dist step strips them and keeps the debuginfo.
+clockbound_cargo_config = '--config profile.release.strip=false'
+clockbound_lib_cargo_config = clockbound_cargo_config + \
+    ' --config profile.release.lto=false --config profile.release.codegen-units=16' \
+    ' --config \'profile.release.panic="unwind"\''
+
+
+def clockbound_lib(mode):
+    # Cargo writes the archive and its dep-info file side by side under the
+    # target directory, and the dep-info names that exact archive path as its
+    # target. Linking the archive where cargo puts it keeps the depfile's target
+    # equal to the build statement's output, which is what ninja requires.
+    return f'$builddir/{mode}/clock-bound/release/libclockbound'
+
+
+clockbound_bins = ['clockbound', 'cbctl']
+
+
+def clockbound_bin(mode, name):
+    # A clock-bound binary and its dep-info file, laid out the same way.
+    return f'$builddir/{mode}/clock-bound/release/{name}'
+
 cpp_jwt_encryption_sources = [
     'ent/encryption/azure_host.cc',
     'ent/encryption/azure_key_provider.cc',
@@ -3033,6 +3078,19 @@ def write_build_file(f,
                         && touch $out
               description = RUST_LIB $out
             ''').format(mode=mode, antlr3_exec=args.antlr3_exec, fmt_libs=fmt_libs, test_repeat=args.test_repeat, test_timeout=args.test_timeout, rustc_wrapper=rustc_wrapper, **modeval))
+        f.write(textwrap.dedent('''\
+            rule clockbound_lib.{mode}
+              command = CARGO_BUILD_DEP_INFO_BASEDIR='.' CARGO_NET_RETRY=10 {rustc_wrapper}cargo build --locked --release {lib_cargo_config} --manifest-path=clock-bound/Cargo.toml -p clock-bound-ffi --target-dir=$builddir/{mode}/clock-bound $
+                        && touch $out
+              description = CLOCKBOUND_LIB $out
+            # The binaries are built by cargo runs of their own: enabling the
+            # `daemon` feature in the run that builds the library would compile
+            # the library with the daemon's dependencies in it.
+            rule clockbound_bin.{mode}
+              command = CARGO_BUILD_DEP_INFO_BASEDIR='.' CARGO_NET_RETRY=10 {rustc_wrapper}cargo build --locked --release {cargo_config} --manifest-path=clock-bound/Cargo.toml -p clock-bound --features daemon --bin $bin --target-dir=$builddir/{mode}/clock-bound $
+                        && touch $out
+              description = CLOCKBOUND_BIN $out
+            ''').format(mode=mode, rustc_wrapper=rustc_wrapper, lib_cargo_config=clockbound_lib_cargo_config, cargo_config=clockbound_cargo_config))
         f.write(
             'build {mode}-build: phony {artifacts} {wasms}\n'.format(
                 mode=mode,
@@ -3088,6 +3146,12 @@ def write_build_file(f,
             if has_rust:
                 parent_mode = modes[mode].get('parent_mode', mode)
                 objs.append(f'$builddir/{parent_mode}/rust-{parent_mode}/librust_combined.a')
+            # Link libclockbound.a into any binary that includes the ClockBound
+            # backend object (it references clockbound_* symbols). Adding it to
+            # objs makes it a link input and a build dependency, so ninja builds
+            # the library first.
+            if 'service/raft/bounded_clock_clockbound.cc' in srcs:
+                objs.append(f'{clockbound_lib(mode)}.a')
             if binary in cpp_apps:
                 # binary only needs the C++ standard library, no additional
                 # libraries.
@@ -3248,6 +3312,21 @@ def write_build_file(f,
         if 'parent_mode' not in modes[mode]:
             librust = '$builddir/{}/rust-{}/librust_combined'.format(mode, mode)
             f.write('build {}.a: rust_lib.{} rust/Cargo.lock\n  depfile={}.d\n'.format(librust, mode, librust))
+        # Cargo's dep-info covers the workspace's Rust sources, so a submodule bump
+        # or an edit to any of them rebuilds the archive. The manifests are named
+        # explicitly here, so a feature or dependency change rebuilds it too.
+        clockbound = clockbound_lib(mode)
+        f.write('build {lib}.a: clockbound_lib.{mode} clock-bound/Cargo.lock clock-bound/Cargo.toml'
+                ' clock-bound/clock-bound-ffi/Cargo.toml\n  depfile={lib}.d\n'.format(lib=clockbound, mode=mode))
+        for name in clockbound_bins:
+            path = clockbound_bin(mode, name)
+            f.write('build {path}: clockbound_bin.{mode} clock-bound/Cargo.lock clock-bound/Cargo.toml'
+                    ' clock-bound/clock-bound/Cargo.toml\n  bin = {name}\n  depfile={path}.d\n'.format(path=path, name=name, mode=mode))
+            f.write(textwrap.dedent(f'''\
+                build $builddir/{mode}/{name}: copy {path}
+                build $builddir/{mode}/{name}.stripped: strip $builddir/{mode}/{name}
+                build $builddir/{mode}/{name}.debug: phony $builddir/{mode}/{name}.stripped
+                '''))
         for grammar in antlr3_grammars:
             outs = ' '.join(grammar.generated('$builddir/{}/gen'.format(mode)))
             f.write('build {}: antlr3.{} {}\n  stem = {}\n'.format(outs, mode, grammar.source,
@@ -3318,9 +3397,9 @@ def write_build_file(f,
             include_scylla_and_iotune_stripped = ''
             include_scylla_and_iotune_debug = ''
         else:
-            include_scylla_and_iotune = f'$builddir/{mode}/scylla $builddir/{mode}/iotune $builddir/{mode}/patchelf'
-            include_scylla_and_iotune_stripped = f'$builddir/{mode}/scylla.stripped $builddir/{mode}/iotune.stripped $builddir/{mode}/patchelf.stripped'
-            include_scylla_and_iotune_debug = f'$builddir/{mode}/scylla.debug $builddir/{mode}/iotune.debug'
+            include_scylla_and_iotune = f'$builddir/{mode}/scylla $builddir/{mode}/iotune $builddir/{mode}/patchelf $builddir/{mode}/clockbound $builddir/{mode}/cbctl'
+            include_scylla_and_iotune_stripped = f'$builddir/{mode}/scylla.stripped $builddir/{mode}/iotune.stripped $builddir/{mode}/patchelf.stripped $builddir/{mode}/clockbound.stripped $builddir/{mode}/cbctl.stripped'
+            include_scylla_and_iotune_debug = f'$builddir/{mode}/scylla.debug $builddir/{mode}/iotune.debug $builddir/{mode}/clockbound.debug $builddir/{mode}/cbctl.debug'
         f.write(f'build $builddir/{mode}/dist/tar/{scylla_product}-unstripped-{scylla_version}-{scylla_release}.{arch}.tar.gz: package {include_scylla_and_iotune} $builddir/SCYLLA-RELEASE-FILE $builddir/SCYLLA-VERSION-FILE $builddir/debian/debian | always\n')
         f.write(f'  mode = {mode}\n')
         f.write(f'build $builddir/{mode}/dist/tar/{scylla_product}-{scylla_version}-{scylla_release}.{arch}.tar.gz: stripped_package {include_scylla_and_iotune_stripped} $builddir/SCYLLA-RELEASE-FILE $builddir/SCYLLA-VERSION-FILE $builddir/debian/debian | always\n')

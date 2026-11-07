@@ -2,6 +2,9 @@
 Description=Scylla Server
 # This will only requires for abrt < 2.14
 Conflicts=abrt-ccpp.service
+# Ordering only: when clockbound.service is enabled, its shared-memory segment
+# exists before scylla reads it.
+After=clockbound.service
 
 [Service]
 Type=notify

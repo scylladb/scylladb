@@ -11,6 +11,8 @@ add_custom_command(
     ${CMAKE_BINARY_DIR}/$<CONFIG>/scylla
     ${CMAKE_BINARY_DIR}/$<CONFIG>/iotune
     ${CMAKE_BINARY_DIR}/$<CONFIG>/patchelf
+    ${CMAKE_BINARY_DIR}/$<CONFIG>/clockbound
+    ${CMAKE_BINARY_DIR}/$<CONFIG>/cbctl
     ${CMAKE_BINARY_DIR}/debian
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
@@ -58,6 +60,18 @@ add_stripped("${iotune_dst}")
 
 add_stripped("${CMAKE_BINARY_DIR}/$<CONFIG>/patchelf")
 
+# The clockbound daemon and cbctl are built by rust/CMakeLists.txt, always
+# with cargo's release profile, so there is one copy for every config.
+foreach(bin clockbound cbctl)
+  set(clockbound_src "${CMAKE_BINARY_DIR}/rust/clock-bound/release/${bin}")
+  set(clockbound_dst "${CMAKE_BINARY_DIR}/$<CONFIG>/${bin}")
+  add_custom_command(
+    OUTPUT "${clockbound_dst}"
+    COMMAND ${CMAKE_COMMAND} -E copy "${clockbound_src}" "${clockbound_dst}"
+    DEPENDS clockbound-daemon "${clockbound_src}")
+  add_stripped("${clockbound_dst}")
+endforeach()
+
 add_custom_command(
   OUTPUT ${CMAKE_BINARY_DIR}/debian
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/debian/debian_files_gen.py
@@ -80,6 +94,8 @@ add_custom_command(
     ${CMAKE_BINARY_DIR}/$<CONFIG>/scylla.stripped
     ${CMAKE_BINARY_DIR}/$<CONFIG>/patchelf.stripped
     ${CMAKE_BINARY_DIR}/$<CONFIG>/iotune.stripped
+    ${CMAKE_BINARY_DIR}/$<CONFIG>/clockbound.stripped
+    ${CMAKE_BINARY_DIR}/$<CONFIG>/cbctl.stripped
     ${CMAKE_BINARY_DIR}/debian
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 add_custom_target(dist-server-tar
@@ -139,6 +155,7 @@ set(server_rpms
   "${server_rpms_dir}/${Scylla_PRODUCT}-server-debuginfo-${rpm_ver}.${rpm_arch}.rpm"
   "${server_rpms_dir}/${Scylla_PRODUCT}-conf-${rpm_ver}.${rpm_arch}.rpm"
   "${server_rpms_dir}/${Scylla_PRODUCT}-kernel-conf-${rpm_ver}.${rpm_arch}.rpm"
+  "${server_rpms_dir}/${Scylla_PRODUCT}-clockbound-${rpm_ver}.${rpm_arch}.rpm"
   "${server_rpms_dir}/${Scylla_PRODUCT}-node-exporter-${rpm_ver}.${rpm_arch}.rpm")
 set(cqlsh_rpms
   "${CMAKE_SOURCE_DIR}/tools/cqlsh/build/redhat/RPMS/${rpm_arch}/${Scylla_PRODUCT}-cqlsh-${rpm_ver}.${rpm_arch}.rpm")
@@ -152,6 +169,7 @@ set(server_debs
   "${server_debs_dir}/${Scylla_PRODUCT}-server-dbg_${deb_ver}_${deb_arch}.deb"
   "${server_debs_dir}/${Scylla_PRODUCT}-conf_${deb_ver}_${deb_arch}.deb"
   "${server_debs_dir}/${Scylla_PRODUCT}-kernel-conf_${deb_ver}_${deb_arch}.deb"
+  "${server_debs_dir}/${Scylla_PRODUCT}-clockbound_${deb_ver}_${deb_arch}.deb"
   "${server_debs_dir}/${Scylla_PRODUCT}-node-exporter_${deb_ver}_${deb_arch}.deb"
   "${server_debs_dir}/scylla-enterprise_${deb_ver}_all.deb"
   "${server_debs_dir}/scylla-enterprise-server_${deb_ver}_all.deb"

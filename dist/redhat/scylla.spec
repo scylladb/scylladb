@@ -267,6 +267,39 @@ fi
 %attr(0644,root,root) %{_unitdir}/scylla-perf-collector.service
 %attr(0755,root,root) %dir /var/log/scylla-perf
 
+%package clockbound
+Group:          Applications/Databases
+Summary:        AWS ClockBound daemon for Scylla leader leases
+Requires:       %{product}-server = %{version}-%{release}
+AutoReqProv:    no
+%description clockbound
+This package contains the AWS ClockBound daemon, which disciplines the system
+clock and publishes a bound on its error for Scylla's Raft leader leases
+(strongly_consistent_raft_leader_lease_clock_source: clockbound). The daemon
+replaces chronyd or ntpd on the host: enabling clockbound.service stops them.
+
+%post clockbound
+/usr/bin/systemctl daemon-reload ||:
+
+%preun clockbound
+if [ $1 -eq 0 ] ; then
+    /usr/bin/systemctl --no-reload disable clockbound.service ||:
+    /usr/bin/systemctl stop clockbound.service ||:
+fi
+
+%postun clockbound
+/usr/bin/systemctl daemon-reload ||:
+
+%files clockbound
+%defattr(-,root,root)
+%{_bindir}/clockbound
+%{_bindir}/cbctl
+%{_sbindir}/configure_phc
+%attr(0644,root,root) %{_unitdir}/clockbound.service
+%config(noreplace) %{_sysconfdir}/clockbound.toml
+%config(noreplace) %{_sysconfdir}/logrotate.d/clockbound
+/opt/scylladb/clockbound/*
+
 
 %changelog
 * Tue Jul 21 2015 Takuya ASADA <syuu@cloudius-systems.com>

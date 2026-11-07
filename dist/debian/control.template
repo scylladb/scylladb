@@ -53,6 +53,15 @@ Description: Scylla system-wide perf data collector
  This package contains the system-wide perf data collector for ScyllaDB.
  It collects low-overhead CPU profiling samples and rotates logs automatically.
 
+Package: %{product}-clockbound
+Architecture: any
+Depends: %{product}-server (= ${binary:Version})
+Description: AWS ClockBound daemon for Scylla leader leases
+ This package contains the AWS ClockBound daemon, which disciplines the
+ system clock and publishes a bound on its error for Scylla's Raft leader
+ leases. The daemon replaces chronyd or ntpd on the host: enabling
+ clockbound.service stops them.
+
 Package: %{product}
 Section: metapackages
 Architecture: any

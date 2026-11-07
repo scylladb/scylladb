@@ -1,0 +1,9 @@
+#!/bin/sh
+set -e
+
+if [ -d /run/systemd/system ]; then
+    systemctl stop clockbound.service || true
+    systemctl disable clockbound.service || true
+fi
+
+#DEBHELPER#
