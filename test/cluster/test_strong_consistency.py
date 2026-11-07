@@ -15,7 +15,6 @@ from test.pylib.internal_types import HostID, ServerInfo
 from cassandra import InvalidRequest, ReadTimeout, Unavailable, WriteTimeout
 from cassandra.cluster import ConsistencyLevel
 from cassandra.policies import FallthroughRetryPolicy
-from cassandra.protocol import ServerError
 from cassandra.query import SimpleStatement, BoundStatement
 from test.pylib.tablets import get_all_tablet_replicas, get_tablet_info, get_tablet_replicas
 from test.pylib.rest_client import read_barrier, ScyllaMetrics, ScyllaMetricsLine
@@ -1091,7 +1090,7 @@ async def test_queries_while_dropping_table(manager: ScyllaClusterManager):
     immediately (no in-flight ops). On the leader, the raft server is aborted
     as part of group deletion (SCYLLADB-2080 fix), causing the paused
     operations to fail with raft::stopped_error which the coordinator converts
-    to "no such column family" / "unconfigured table".
+    to "unconfigured table".
 
     We also verify that new reads/writes after the drop are rejected
     immediately.
@@ -1174,9 +1173,9 @@ async def test_queries_while_dropping_table(manager: ScyllaClusterManager):
         # FallthroughRetryPolicy prevents a driver retry from replacing ServerError
         # with InvalidRequest from a new request.
         # Use a timeout to detect the old buggy behavior (write stuck forever).
-        missing_table_error = r"[Uu]nconfigured table|[Cc]an't find a column family|[Nn]o such column family"
+        missing_table_error = f"unconfigured table {table_name}"
         try:
-            with pytest.raises((InvalidRequest, ServerError), match=missing_table_error):
+            with pytest.raises(InvalidRequest, match=missing_table_error):
                 await asyncio.wait_for(asyncio.shield(write_fut), timeout=15)
         except asyncio.TimeoutError:
             cql.cluster.shutdown()
@@ -1186,7 +1185,7 @@ async def test_queries_while_dropping_table(manager: ScyllaClusterManager):
                         "be reached because the follower's raft group was already destroyed. "
                         "The leader should abort the raft server to unblock the write.")
 
-        with pytest.raises((InvalidRequest, ServerError), match=missing_table_error):
+        with pytest.raises(InvalidRequest, match=missing_table_error):
             await read_fut
 
 
@@ -1898,11 +1897,8 @@ async def test_dropped_table_errors_metrics(manager: ScyllaClusterManager):
     log = await manager.server_open_log(server.server_id)
 
     def start_write_and_read(table: str) -> tuple[asyncio.Future, asyncio.Future]:
-        # By default the driver retries a server error on the next host. Without
-        # retries, the requests fail with the error this node returned.
-        no_retry = FallthroughRetryPolicy()
-        write = SimpleStatement(f"INSERT INTO {table} (pk, v) VALUES (1, 1)", retry_policy=no_retry)
-        read = SimpleStatement(f"SELECT * FROM {table} WHERE pk = 0", retry_policy=no_retry)
+        write = f"INSERT INTO {table} (pk, v) VALUES (1, 1)"
+        read = f"SELECT * FROM {table} WHERE pk = 0"
         return asyncio.ensure_future(cql.run_async(write)), asyncio.ensure_future(cql.run_async(read))
 
     async def drop_table_and_release(table: str, injections: list[str]) -> None:
@@ -1925,7 +1921,6 @@ async def test_dropped_table_errors_metrics(manager: ScyllaClusterManager):
         # Case 1: the table is gone before the requests get their raft server.
         await cql.run_async(f"CREATE TABLE {ks}.tbl1 (pk int PRIMARY KEY, v int)")
         await cql.run_async(f"INSERT INTO {ks}.tbl1 (pk, v) VALUES (0, 0)")
-        table_id = await manager.get_table_id(ks, "tbl1")
         write_errors_before = await write_errors()
         read_errors_before = await read_errors()
 
@@ -1939,9 +1934,9 @@ async def test_dropped_table_errors_metrics(manager: ScyllaClusterManager):
         await drop_table_and_release(f"{ks}.tbl1", [injection])
 
         # Both fail, and each is counted once as table_dropped.
-        with pytest.raises(ServerError, match=f"Can't find a column family with UUID {table_id}"):
+        with pytest.raises(InvalidRequest, match="unconfigured table tbl1"):
             await write
-        with pytest.raises(ServerError, match=f"Can't find a column family with UUID {table_id}"):
+        with pytest.raises(InvalidRequest, match="unconfigured table tbl1"):
             await read
         assert await write_errors() - write_errors_before == 1
         assert await read_errors() - read_errors_before == 1
@@ -1965,12 +1960,49 @@ async def test_dropped_table_errors_metrics(manager: ScyllaClusterManager):
         await drop_table_and_release(f"{ks}.tbl2", [write_injection, read_injection])
 
         # Both fail, and each is counted once as table_dropped.
-        with pytest.raises(ServerError, match=f"Can't find a column family tbl2 in keyspace {ks}"):
+        with pytest.raises(InvalidRequest, match="unconfigured table tbl2"):
             await write
-        with pytest.raises(ServerError, match=f"Can't find a column family tbl2 in keyspace {ks}"):
+        with pytest.raises(InvalidRequest, match="unconfigured table tbl2"):
             await read
         assert await write_errors() - write_errors_before == 1
         assert await read_errors() - read_errors_before == 1
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+async def test_prepared_write_across_table_recreation(manager: ScyllaClusterManager):
+    """
+    Regression test for SCYLLADB-4655: a prepared write in flight while its table is
+    dropped and created again fails with INVALID rather than SERVER_ERROR, so the
+    driver returns it without retrying. The failed write leaves no row in the new
+    table, and the next execution of the same prepared statement writes to it.
+    """
+    [server] = await manager.servers_add(1, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE)
+    cql, _ = await manager.get_ready_cql([server])
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        create_table = f"CREATE TABLE {ks}.tbl (pk int PRIMARY KEY, v int)"
+        await cql.run_async(create_table)
+        insert = cql.prepare(f"INSERT INTO {ks}.tbl (pk, v) VALUES (?, ?)")
+
+        logger.info("Pausing a prepared write before it gets its raft server")
+        injection = "sc_coordinator_wait_before_acquire_server"
+        await manager.api.enable_injection(server.ip_addr, injection, one_shot=False)
+        write = asyncio.ensure_future(cql.run_async(insert, [1, 1]))
+        await manager.api.wait_for_injection_enter(server.ip_addr, injection)
+
+        logger.info("Recreating the table and releasing the write")
+        await cql.run_async(f"DROP TABLE {ks}.tbl")
+        await cql.run_async(create_table)
+        await manager.api.message_injection(server.ip_addr, injection)
+        await manager.api.disable_injection(server.ip_addr, injection)
+        with pytest.raises(InvalidRequest, match="unconfigured table tbl"):
+            await write
+
+        logger.info("Executing the same prepared write again")
+        await cql.run_async(insert, [2, 2])
+        assert not await cql.run_async(f"SELECT v FROM {ks}.tbl WHERE pk = 1")
+        rows = await cql.run_async(f"SELECT v FROM {ks}.tbl WHERE pk = 2")
+        assert [row.v for row in rows] == [2]
 
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
