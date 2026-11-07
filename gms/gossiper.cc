@@ -386,10 +386,21 @@ future<> gossiper::do_send_ack2_msg(locator::host_id from, utils::chunked_vector
         }
     }
     gms::gossip_digest_ack2 ack2_msg(std::move(delta_ep_state_map));
+<<<<<<< HEAD
     auto ack2_msg_str = fmt::format("{}", ack2_msg);
     logger.debug("Calling do_send_ack2_msg to node {}, ack_msg_digest={}, ack2_msg={}", from, ack_msg_digest, ack2_msg_str);
     co_await ser::gossip_rpc_verbs::send_gossip_digest_ack2(&_messaging, from, std::move(ack2_msg));
     logger.debug("finished do_send_ack2_msg to node {}, ack_msg_digest={}, ack2_msg={}", from, ack_msg_digest, ack2_msg_str);
+||||||| parent of 40daca53d2 (gms/gossiper: don't format the ack2 message unless debug logging is on)
+    auto ack2_msg_str = fmt::format("{}", ack2_msg);
+    logger.debug("Calling do_send_ack2_msg to node {}, ack_msg_digest={}, ack2_msg={}", from, ack_msg_digest, ack2_msg_str);
+    co_await ser::gossip_rpc_verbs::send_gossip_digest_ack2(&_messaging, from, _msg_abort_source, std::move(ack2_msg));
+    logger.debug("finished do_send_ack2_msg to node {}, ack_msg_digest={}, ack2_msg={}", from, ack_msg_digest, ack2_msg_str);
+=======
+    logger.debug("Calling do_send_ack2_msg to node {}, ack_msg_digest={}, ack2_msg={}", from, ack_msg_digest, ack2_msg);
+    co_await ser::gossip_rpc_verbs::send_gossip_digest_ack2(&_messaging, from, _msg_abort_source, std::move(ack2_msg));
+    logger.debug("finished do_send_ack2_msg to node {}, ack_msg_digest={}", from, ack_msg_digest);
+>>>>>>> 40daca53d2 (gms/gossiper: don't format the ack2 message unless debug logging is on)
 }
 
 // Depends on
