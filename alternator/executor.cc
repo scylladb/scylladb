@@ -54,6 +54,9 @@
 #include "db/tags/utils.hh"
 #include "replica/database.hh"
 #include "alternator/rmw_operation.hh"
+#include <unicode/uchar.h>
+#include <unicode/utf8.h>
+#include <unicode/utf16.h>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/loop.hh>
@@ -1194,15 +1197,33 @@ static schema_ptr get_table_from_arn(service::storage_proxy& proxy, std::string_
     }
 }
 
-static bool is_legal_tag_char(char c) {
-    // FIXME: According to docs, unicode strings should also be accepted.
-    // Alternator currently uses a simplified ASCII approach
-    return std::isalnum(c) || std::isspace(c)
-            || c == '+' || c == '-' || c == '=' || c == '.' || c == '_' || c == ':' || c == '/' ;
+// A tag key or value may contain Unicode letters, numbers and separators
+// (the Unicode general categories L, N and Z - e.g., a space, but not a tab
+// or a newline, which are control characters), and the characters +-=._:/@.
+static bool is_legal_tag_char(UChar32 c) {
+    if (U_GET_GC_MASK(c) & (U_GC_L_MASK | U_GC_N_MASK | U_GC_Z_MASK)) {
+        return true;
+    }
+    return c == '+' || c == '-' || c == '=' || c == '.' || c == '_' || c == ':' || c == '/' || c == '@';
 }
 
-static bool validate_legal_tag_chars(std::string_view tag) {
-    return std::all_of(tag.begin(), tag.end(), &is_legal_tag_char);
+// Returns the length of a tag key or value, or an unset optional if it is
+// not valid UTF-8 or has a character which isn't allowed in tags. The length
+// limits of tags are counted in UTF-16 code units: A character outside
+// Unicode's Basic Multilingual Plane counts as two.
+static std::optional<size_t> legal_tag_length(std::string_view tag) {
+    const auto* s = reinterpret_cast<const uint8_t*>(tag.data());
+    const int32_t n = tag.size();
+    size_t length = 0;
+    for (int32_t i = 0; i < n;) {
+        UChar32 c;
+        U8_NEXT(s, i, n, c);
+        if (c < 0 || !is_legal_tag_char(c)) {
+            return std::nullopt;
+        }
+        length += U16_LENGTH(c);
+    }
+    return length;
 }
 
 static const std::unordered_set<std::string_view> allowed_write_isolation_values = {
@@ -1290,22 +1311,24 @@ static void update_tags_map(const rjson::value& tags, std::map<sstring, sstring>
             if (tag_key.empty()) {
                 throw api_error::validation("A tag Key cannot be empty");
             }
-            if (tag_key.size() > 128) {
-                throw api_error::validation("A tag Key is limited to 128 characters");
+            auto key_length = legal_tag_length(tag_key);
+            if (!key_length) {
+                throw api_error::validation("A tag Key can only contain letters, numbers, spaces, and [+-=._:/@]");
             }
-            if (!validate_legal_tag_chars(tag_key)) {
-                throw api_error::validation("A tag Key can only contain letters, spaces, and [+-=._:/]");
+            if (*key_length > 128) {
+                throw api_error::validation("A tag Key is limited to 128 characters");
             }
             if (tag_key_is_internal(tag_key)) {
                 throw api_error::validation(fmt::format("Tag key '{}' is reserved for internal use", tag_key));
             }
             // Note tag values are limited similarly to tag keys, but have a
             // longer length limit, and *can* be empty.
-            if (tag_value.size() > 256) {
-                throw api_error::validation("A tag Value is limited to 256 characters");
+            auto value_length = legal_tag_length(tag_value);
+            if (!value_length) {
+                throw api_error::validation("A tag Value can only contain letters, numbers, spaces, and [+-=._:/@]");
             }
-            if (!validate_legal_tag_chars(tag_value)) {
-                throw api_error::validation("A tag Value can only contain letters, spaces, and [+-=._:/]");
+            if (*value_length > 256) {
+                throw api_error::validation("A tag Value is limited to 256 characters");
             }
             tags_map[sstring(tag_key)] = sstring(tag_value);
         }
