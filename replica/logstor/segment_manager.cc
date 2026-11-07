@@ -51,6 +51,7 @@
 #include "replica/logstor/write_buffer.hh"
 #include "utils/disk-error-handler.hh"
 #include "utils/dynamic_bitset.hh"
+#include "utils/exceptions.hh"
 #include "utils/serialized_action.hh"
 #include "replica/database.hh"
 
@@ -412,6 +413,8 @@ public:
     future<> stop_ongoing_compactions(logstor_group&) override;
     future<> remove(logstor_group&) override;
     future<compaction_reenabler> disable_compaction(logstor_group&) override;
+    // Like disable_compaction(), but aborts the compaction that is running instead of waiting for it.
+    future<compaction_reenabler> disable_compaction_aborting(logstor_group&);
     compaction_reenabler disable_compaction_no_wait(logstor_group&) override;
     future<> submit_normal_compaction(logstor_group&, compaction_batch_limits limits);
     future<> submit_split_compaction(logstor_group&, mutation_writer::classify_by_token_group, split_target_group) override;
@@ -458,6 +461,7 @@ private:
 
     future<std::vector<compaction_candidate>> find_top_compaction_candidates(size_t);
 
+    future<compaction_reenabler> do_disable_compaction(logstor_group&, bool abort_running);
     future<> submit_group_compaction(logstor_group&, std::function<future<>(group_compaction_state&)>, scheduling_group);
     future<> do_compaction(logstor_group&, compaction_batch_limits, abort_source&);
     future<> do_split_compaction(logstor_group&, mutation_writer::classify_by_token_group, split_target_group, abort_source&);
@@ -517,6 +521,7 @@ class segment_pool {
     seastar::queue<seg_ptr> _segments;
     size_t _reserved_for_compaction;
     seastar::condition_variable _segment_available;
+    bool _stopping = false;
 
 public:
 
@@ -526,18 +531,33 @@ public:
         uint64_t normal_segments_wait{0};
     } _stats;
 
-    segment_pool(size_t pool_size, size_t reserved_for_compaction)
+    // No reserve at first: recovery has no compaction to reclaim segments, so it may use them all.
+    explicit segment_pool(size_t pool_size)
         : _segments(pool_size)
-        , _reserved_for_compaction(reserved_for_compaction)
+        , _reserved_for_compaction(0)
     {}
+
+    // The segments only compaction may take, so that it can always make progress.
+    void set_reserve(size_t reserve) {
+        _reserved_for_compaction = reserve;
+        _segment_available.broadcast();
+    }
+
+    // From now on a normal write or a streaming one fails instead of waiting for a segment, and the
+    // separator may take the reserve. Only the flushes of the separator free segments of mixed data.
+    void begin_stop() {
+        _stopping = true;
+        _segment_available.broadcast();
+    }
 
     future<> start() {
         co_return;
     }
 
     future<> stop() {
-        _segments.abort(std::make_exception_ptr(abort_requested_exception()));
-        _segment_available.broken();
+        auto ex = std::make_exception_ptr(abort_requested_exception());
+        _segments.abort(ex);
+        _segment_available.broken(ex);
         co_return;
     }
 
@@ -547,20 +567,34 @@ public:
         _stats.segments_put++;
     }
 
-    future<seg_ptr> get_segment(write_source src) {
-        seg_ptr seg;
-        if (src == write_source::compaction) {
-            _stats.segments_get[static_cast<size_t>(src)]++;
-            co_return co_await _segments.pop_eventually();
+    // `as` aborts the wait for a segment: with none left, only compaction frees one, so a compaction
+    // that waits here has to be abortable.
+    future<seg_ptr> get_segment(write_source src, abort_source* as = nullptr) {
+        // Not queue::pop_eventually(): it supports a single waiter, and several compactions may wait.
+        // The reserve is read again on each check, it changes while a waiter waits.
+        const auto reserve = [this, src] -> size_t {
+            return src == write_source::compaction || (src == write_source::separator && _stopping) ? 0 : _reserved_for_compaction;
+        };
+        const bool client_write = src == write_source::normal_write || src == write_source::streaming;
+        if (src == write_source::normal_write && _segments.size() <= reserve()) {
+            _stats.normal_segments_wait++;
         }
-        if (_segments.size() <= _reserved_for_compaction) {
-            if (src == write_source::normal_write) {
-                _stats.normal_segments_wait++;
+        optimized_optional<abort_source::subscription> on_abort;
+        if (as && as->abort_requested()) {
+            co_return coroutine::exception(as->abort_requested_exception_ptr());
+        }
+        // Once stopped the queue is empty, so this waits on the broken condition variable and throws.
+        while (_segments.size() <= reserve()) {
+            if (client_write && _stopping) {
+                co_return coroutine::exception(std::make_exception_ptr(abort_requested_exception()));
             }
-            while (_segments.size() <= _reserved_for_compaction) {
-                co_await _segment_available.wait([this] {
-                    return _segments.size() > _reserved_for_compaction;
-                });
+            // Subscribe only once a wait is needed.
+            if (as && !on_abort) {
+                on_abort = as->subscribe([this] () noexcept { _segment_available.broadcast(); });
+            }
+            co_await _segment_available.wait();
+            if (as && as->abort_requested()) {
+                co_return coroutine::exception(as->abort_requested_exception_ptr());
             }
         }
         _stats.segments_get[static_cast<size_t>(src)]++;
@@ -658,6 +692,7 @@ class segment_manager_impl {
 
     seastar::gate _async_gate;
     future<> _reserve_replenisher{make_ready_future<>()};
+    bool _reserve_replenisher_started = false;
     seastar::condition_variable _segment_freed_cv;
 
     write_buffer_pool _compaction_buffer_pool;
@@ -688,8 +723,14 @@ public:
     future<> start();
     future<> stop();
 
+    // Fails the writes that wait for a segment and lets the final separator flushes take the reserve,
+    // so that a stop need not wait for either. Idempotent.
+    void begin_stop() {
+        _segment_pool.begin_stop();
+    }
+
     future<> write(write_buffer&);
-    future<> write_full_segment(write_buffer&, logstor_group&, write_source);
+    future<> write_full_segment(write_buffer&, logstor_group&, write_source, abort_source* as = nullptr);
 
     future<log_record> read(record_location);
 
@@ -827,8 +868,10 @@ public:
 private:
 
     future<> replenish_reserve();
+    void start_reserve_replenisher();
     future<seg_ptr> allocate_segment();
 
+    void start_segment_switch();
     future<> request_segment_switch();
     future<> switch_active_segment();
     segment_sequence allocate_segment_seq() noexcept {
@@ -866,8 +909,8 @@ private:
         );
     }
 
-    future<seg_ptr> get_segment(write_source src) {
-        seg_ptr seg = co_await _segment_pool.get_segment(src);
+    future<seg_ptr> get_segment(write_source src, abort_source* as = nullptr) {
+        seg_ptr seg = co_await _segment_pool.get_segment(src, as);
         seg->start(make_segment_ref(seg->id()), allocate_segment_seq());
         co_return seg;
     }
@@ -997,9 +1040,7 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
     , _segments_per_file(config.file_size / config.segment_size)
     , _configured_max_segments((config.disk_size / config.file_size) * _segments_per_file)
     , _segment_descs(static_cast<size_t>(_configured_max_segments))
-    // A compaction job takes one segment from the pool per flush, so the reserve that keeps normal
-    // writes from draining the pool is one segment per concurrent job.
-    , _segment_pool(segment_pool_size, max_compaction_parallelism)
+    , _segment_pool(segment_pool_size)
     // Compaction concurrency is limited by buffer availability. Normal compaction
     // uses one buffer; split compaction allocates two buffers. The buffers are built up front and
     // all of them are kept, so that a compaction never waits for memory to build one.
@@ -1140,19 +1181,31 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
     });
 }
 
-future<> segment_manager_impl::start() {
-    // Start background replenisher before creating initial segment
+void segment_manager_impl::start_reserve_replenisher() {
+    if (std::exchange(_reserve_replenisher_started, true)) {
+        return;
+    }
     _reserve_replenisher = with_scheduling_group(_cfg.compaction_sg, [this] {
         return replenish_reserve();
     });
+}
+
+future<> segment_manager_impl::start() {
+    // Start background replenisher before creating initial segment, unless recovery started it
+    start_reserve_replenisher();
 
     co_await _compaction_mgr.start();
+    // A compaction job takes one segment per flush, so reserve one per concurrent job to keep normal
+    // writes from draining the pool.
+    _segment_pool.set_reserve(max_compaction_parallelism);
 
     _separator_fiber = with_scheduling_group(_cfg.separator_sg, [this] {
         return run_separator_fiber();
     });
 
-    co_await switch_active_segment();
+    // Not awaited: with no more free segments than the reserve, as on a disk full of live data, the
+    // first segment may wait for ever, and the node must still start to serve reads. A write waits for it.
+    start_segment_switch();
 
     logstor_logger.info("Segment manager started with base directory {}", _cfg.base_dir.string());
 }
@@ -1162,6 +1215,9 @@ future<> segment_manager_impl::stop() {
         co_return;
     }
     logstor_logger.info("Stopping segment manager");
+
+    // Idempotent; logstor::stop() calls it earlier, before its own gate closes.
+    begin_stop();
 
     // stop admitting new writes and external operations
     co_await _async_gate.close();
@@ -1179,13 +1235,14 @@ future<> segment_manager_impl::stop() {
 
     co_await _compaction_mgr.flush_all_separator_buffers(std::nullopt);
 
-    if (_active_segment) {
-        co_await _active_segment->stop();
-    }
-
+    // A pending switch may still replace the active segment.
     if (_switch_segment_fut) {
         auto f = co_await coroutine::as_future(_switch_segment_fut->get_future());
         f.ignore_ready_future();
+    }
+
+    if (_active_segment) {
+        co_await _active_segment->stop();
     }
 
     logstor_logger.debug("Stopping compaction manager and buffer pools");
@@ -1299,14 +1356,19 @@ future<> segment_manager_impl::write(write_buffer& wb) {
     }
 }
 
-future<> segment_manager_impl::write_full_segment(write_buffer& wb, logstor_group& cg, write_source source) {
+future<> segment_manager_impl::write_full_segment(write_buffer& wb, logstor_group& cg, write_source source, abort_source* as) {
     const auto chunk_size = wb.chunk_size(block_alignment);
 
     if (chunk_size > _cfg.segment_size) {
         throw std::runtime_error(fmt::format("Chunk size {} exceeds segment size {}", chunk_size, _cfg.segment_size));
     }
 
-    auto seg = co_await get_segment(source);
+    // Lets a test tell that a compaction asks for its segment, which it waits for on an empty pool.
+    if (source == write_source::compaction) {
+        utils::get_local_injector().inject("logstor_compaction_segment_request", [] {});
+        co_await utils::get_local_injector().inject("logstor_hold_compaction_segment_request", utils::wait_for_message(std::chrono::seconds(60)));
+    }
+    auto seg = co_await get_segment(source, as);
     logstor_logger.trace("Write full segment {} seq {} from {}", seg->id(), seg->seq_num(), write_source_to_string(source));
 
     wb.seal(seg->seq_num(), cg.table_id(), block_alignment);
@@ -1397,18 +1459,34 @@ future<log_record> segment_manager_impl::read(record_location location) {
     co_return ondisk::read_record_frame(frame);
 }
 
-future<> segment_manager_impl::request_segment_switch() {
-    if (!_switch_segment_fut) {
-        auto f = switch_active_segment();
-        if (f.available()) {
-            f.get();
-            co_return;
-        }
-        _switch_segment_fut.emplace(f.discard_result().finally([this] {
-            _switch_segment_fut.reset();
-        }));
+void segment_manager_impl::start_segment_switch() {
+    if (_switch_segment_fut) {
+        return;
     }
-    co_await _switch_segment_fut->get_future();
+    auto f = switch_active_segment();
+    if (f.available()) {
+        f.get();
+        return;
+    }
+    _switch_segment_fut.emplace(f.discard_result().handle_exception([] (std::exception_ptr ep) {
+        // No write may be joined to it, so log here; a stop aborts it, which is no failure.
+        if (!try_catch<abort_requested_exception>(ep)) {
+            logstor_logger.warn("Switching the active segment failed: {}", ep);
+        }
+        return make_exception_future<>(ep);
+    }).finally([this] {
+        _switch_segment_fut.reset();
+    }));
+    // A waiter keeps the shared state alive until the chain resolves; otherwise the reset above
+    // drops it, and the chain's failure is reported as ignored.
+    (void)_switch_segment_fut->get_future().handle_exception([] (std::exception_ptr) {});
+}
+
+future<> segment_manager_impl::request_segment_switch() {
+    start_segment_switch();
+    if (_switch_segment_fut) {
+        co_await _switch_segment_fut->get_future();
+    }
 }
 
 future<> segment_manager_impl::switch_active_segment() {
@@ -1478,7 +1556,7 @@ future<seg_ptr> segment_manager_impl::allocate_segment() {
         _compaction_mgr.schedule_auto_compaction();
 
         // reuse freed segments
-        if (!_free_segments.empty()) {
+        if (!_free_segments.empty() && !utils::get_local_injector().is_enabled("logstor_hold_back_free_segments")) {
             auto seg_id = _free_segments.front();
             _free_segments.pop_front();
             co_return co_await make_segment(seg_id);
@@ -1522,7 +1600,8 @@ void segment_manager_impl::free_segment(log_segment_id segment_id) noexcept {
 }
 
 future<> segment_manager_impl::discard_segments(logstor_group& cg) {
-    auto compaction_disable_guard = co_await _compaction_mgr.disable_compaction(cg);
+    // The group's data is gone, so its compaction is of no use, and it may wait for a segment that never comes.
+    auto compaction_disable_guard = co_await _compaction_mgr.disable_compaction_aborting(cg);
 
     auto holder = _async_gate.hold();
 
@@ -1615,8 +1694,13 @@ future<> compaction_manager_impl::submit_group_compaction(logstor_group& cg, std
         state->completion = shared_future(with_scheduling_group(sg, [state, op = std::move(op)] {
             return op(*state);
         }).handle_exception([this] (std::exception_ptr ep) {
-            ++_stats.failures;
-            logstor_logger.warn("logstor compaction failed: {}", ep);
+            // A stop or the removal of the group aborts a compaction, which is no failure.
+            if (try_catch<abort_requested_exception>(ep)) {
+                logstor_logger.debug("logstor compaction aborted");
+            } else {
+                ++_stats.failures;
+                logstor_logger.warn("logstor compaction failed: {}", ep);
+            }
             return make_exception_future<>(std::move(ep));
         }));
         co_return co_await state->completion.get_future();
@@ -1670,6 +1754,14 @@ future<> compaction_manager_impl::remove(logstor_group& cg) {
 }
 
 future<compaction_reenabler> compaction_manager_impl::disable_compaction(logstor_group& cg) {
+    return do_disable_compaction(cg, false);
+}
+
+future<compaction_reenabler> compaction_manager_impl::disable_compaction_aborting(logstor_group& cg) {
+    return do_disable_compaction(cg, true);
+}
+
+future<compaction_reenabler> compaction_manager_impl::do_disable_compaction(logstor_group& cg, bool abort_running) {
     auto* state = find_group_state(cg);
     if (!state) {
         // The group was already removed, so no compaction can run on it anymore and there
@@ -1678,6 +1770,10 @@ future<compaction_reenabler> compaction_manager_impl::disable_compaction(logstor
     }
 
     ++state->compaction_disabled_counter;
+
+    if (abort_running) {
+        state->as.request_abort();
+    }
 
     // Wait for any ongoing compaction to finish before disabling
     auto f = co_await coroutine::as_future(state->completion.get_future());
@@ -1867,18 +1963,20 @@ struct compaction_buffer {
     segment_manager_impl& sm;
     owned_write_buffer buf;
     logstor_group& cg;
+    abort_source& as;
     std::vector<future<>> pending_updates;
 
     compaction_buffer_stats stats;
 
-    compaction_buffer(segment_manager_impl& sm, owned_write_buffer buf, logstor_group& cg)
+    compaction_buffer(segment_manager_impl& sm, owned_write_buffer buf, logstor_group& cg, abort_source& as)
         : sm(sm)
         , buf(std::move(buf))
         , cg(cg)
+        , as(as)
     {}
 
     compaction_buffer(compaction_buffer&& o) noexcept
-        : sm(o.sm), buf(std::move(o.buf)), cg(o.cg)
+        : sm(o.sm), buf(std::move(o.buf)), cg(o.cg), as(o.as)
         , pending_updates(std::move(o.pending_updates)), stats(o.stats) {}
 
     ~compaction_buffer() {
@@ -1892,7 +1990,7 @@ struct compaction_buffer {
 
     future<> flush() {
         if (buf->has_data()) {
-            co_await sm.write_full_segment(*buf, cg, write_source::compaction);
+            co_await sm.write_full_segment(*buf, cg, write_source::compaction, &as);
             stats.flush_count++;
             logstor_logger.trace("Compaction buffer flushed with {} bytes", buf->record_bytes());
         }
@@ -1982,7 +2080,7 @@ future<> compaction_manager_impl::do_compaction(logstor_group& cg, compaction_ba
     // with_closeable() returns the buffer to the pool on every way out, including the ones that
     // throw - a compaction that fails part way through simply discards what it had buffered.
     auto cb_stats = co_await with_closeable(
-            compaction_buffer(_sm, co_await _sm._compaction_buffer_pool.allocate(as), cg),
+            compaction_buffer(_sm, co_await _sm._compaction_buffer_pool.allocate(as), cg, as),
             [this, &index, &nonempty_segments] (compaction_buffer& cb) -> future<compaction_buffer_stats> {
         co_await _sm.for_each_record(nonempty_segments, [&index, &cb] (const chunk_record& record) {
             if (!index.is_record_alive(record.header.index_key(), record.location)) {
@@ -2089,8 +2187,8 @@ future<> compaction_manager_impl::do_split_compaction(logstor_group& src, mutati
         auto split_buffers = co_await _sm._compaction_buffer_pool.allocate_many(2, as);
         auto batch_stats = co_await with_closeable(
                 split_buffer_pair{
-                    compaction_buffer(_sm, std::move(split_buffers[0]), src),
-                    compaction_buffer(_sm, std::move(split_buffers[1]), src),
+                    compaction_buffer(_sm, std::move(split_buffers[0]), src, as),
+                    compaction_buffer(_sm, std::move(split_buffers[1]), src, as),
                 },
                 [this, &index, &classifier, &nonempty_segments] (split_buffer_pair& bufs) -> future<compaction_buffer_stats> {
             co_await _sm.for_each_record(nonempty_segments, [&index, &bufs, &classifier] (const chunk_record& record) {
@@ -2301,6 +2399,11 @@ future<> segment_manager_impl::do_recovery(replica::database& db) {
     const file_id_t used_file_count = used_segment_count > 0 ? max_used_seg_idx / _segments_per_file + 1 : 0;
     co_await files.retire_unused_files(used_file_count);
 
+    // Separator flushes of the mixed segments below need segments, so fill the pool first.
+    _next_segment_seq = max_segment_seq + 1;
+    co_await files.finish();
+    start_reserve_replenisher();
+
     uint64_t recovered_used_segment_count = 0;
     if (used_segments.size() > 0) {
         for (auto seg_idx = used_segments.find_first_set(); seg_idx != utils::dynamic_bitset::npos; seg_idx = used_segments.find_next_set(seg_idx)) {
@@ -2315,10 +2418,6 @@ future<> segment_manager_impl::do_recovery(replica::database& db) {
             recovered_used_segment_count++;
         }
     }
-
-    _next_segment_seq = max_segment_seq + 1;
-
-    co_await files.finish();
 
     logstor_logger.info("Recovery complete");
 }
@@ -2481,6 +2580,10 @@ future<> segment_manager::start() {
 
 future<> segment_manager::stop() {
     return _impl->stop();
+}
+
+void segment_manager::begin_stop() {
+    _impl->begin_stop();
 }
 
 future<> segment_manager::write(write_buffer& wb) {

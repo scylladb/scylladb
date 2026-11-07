@@ -118,6 +118,11 @@ public:
     future<> start();
     future<> stop();
 
+    // Starts a stop: the writes that wait for a segment fail with abort_requested_exception, as do
+    // later ones that would have to wait, and only the flushes of the separator may use the segments
+    // reserved for compaction. Call it before waiting for writes, which hold up stop() while they wait.
+    void begin_stop();
+
     future<> write(write_buffer& wb);
 
     // Reads the record at a location from the index. Keep the guard of the location until the
