@@ -65,7 +65,7 @@ static permission_set applicable_permissions(const data_resource_view& dv) {
 
 static permission_set applicable_permissions(const role_resource_view& rv) {
     if (rv.role()) {
-        return permission_set::of<permission::ALTER, permission::DROP, permission::AUTHORIZE>();
+        return permission_set::of<permission::ALTER, permission::DROP, permission::AUTHORIZE, permission::DESCRIBE>();
     }
 
     return permission_set::of<
