@@ -24,6 +24,10 @@ logger = logging.getLogger(__name__)
 
 GROUP0_STATUS_ABORTED = 2
 
+# Logged by a node whose group 0 snapshot transfer persisted the snapshot,
+# but failed to apply it to the in-memory state.
+SNAPSHOT_APPLY_FAILED = "was persisted, but applying it to the in-memory state failed"
+
 
 async def wait_for_group0_aborted(manager: ScyllaClusterManager, server: ServerInfo) -> None:
     async def aborted():
@@ -64,8 +68,13 @@ async def start_cluster_with_nts_system_distributed(manager: ScyllaClusterManage
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_joining_node_stops_group0_on_schema_merge_failure(manager: ScyllaClusterManager) -> None:
-    """Verify that a failure in schema_applier::update() after the schema
-    mutations are persisted stops group 0 on a joining node.
+    """Verify that a failure to apply the group 0 snapshot to the in-memory
+    state after the snapshot is persisted stops group 0 on a joining node.
+
+    The failure is injected in transfer_snapshot() rather than in
+    schema_and_topology_applier::update(), because update() also runs while
+    group 0 starts and a one-shot injection there would fire before the
+    snapshot transfer.
 
     Reproducer for SCYLLADB-5770:
     1. A joining node applies the group0 snapshot; the schema is persisted,
@@ -84,8 +93,8 @@ async def test_joining_node_stops_group0_on_schema_merge_failure(manager: Scylla
     servers, hosts, states = await start_cluster_with_nts_system_distributed(manager)
     cql = manager.get_cql()
 
-    await manager.server_add(config={'error_injections_at_startup': [{'name': 'schema_applier_update_fail', 'one_shot': True}]},
-                             expected_error="schema mutations were persisted, but the in-memory schema was not updated")
+    await manager.server_add(config={'error_injections_at_startup': [{'name': 'group0_snapshot_transfer_apply_fail', 'one_shot': True}]},
+                             expected_error=SNAPSHOT_APPLY_FAILED)
 
     for host, state in zip(hosts, states):
         assert await get_system_distributed_state(cql, host) == state
@@ -165,11 +174,11 @@ async def test_failed_state_machine_rejects_snapshot_transfer(manager: ScyllaClu
     mark = await leader_log.mark()
 
     joiner = await manager.server_add(start=False, config={'error_injections_at_startup': [
-        {'name': 'schema_applier_update_fail', 'one_shot': True},
+        {'name': 'group0_snapshot_transfer_apply_fail', 'one_shot': True},
         'delay_group0_abort_on_error',
     ]})
     start_task = asyncio.create_task(manager.server_start(
-        joiner.server_id, expected_error="schema mutations were persisted, but the in-memory schema was not updated"))
+        joiner.server_id, expected_error=SNAPSHOT_APPLY_FAILED))
 
     # Wait until the leader's retry is rejected, or until system_distributed is changed.
     async def retry_rejected_or_state_changed():
