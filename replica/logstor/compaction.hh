@@ -14,6 +14,7 @@
 #include "utils/log_heap.hh"
 #include "segment_stats.hh"
 #include <seastar/core/format.hh>
+#include <seastar/core/gate.hh>
 #include <seastar/core/semaphore.hh>
 #include <seastar/util/noncopyable_function.hh>
 #include <seastar/coroutine/maybe_yield.hh>
@@ -464,6 +465,10 @@ class logstor_group {
     separator_buffer _flushing_buffer;
     uint64_t _separator_generation{1};
     shared_future<> _separator_flush{make_ready_future<>()};
+    // Held by flush_separator(); close_separator() closes it, so that no flush call outlives the group.
+    seastar::gate _separator_flush_gate;
+    // Set by close_separator() together with closing the gate: whenever the gate is closed, this is set.
+    std::optional<shared_future<>> _separator_closed;
     // Whether the separator may write to this group. The group must be registered with the compaction
     // manager in order for it to be enabled.
     bool _separator_enabled{false};
@@ -471,6 +476,8 @@ class logstor_group {
     void switch_active_separator_buffer();
 
     future<> allocate_active_separator_buffer();
+
+    future<> do_close_separator(future<> gate_closed);
 
 protected:
     // `shard_stats` are the shard-wide segment statistics. The set of this group adds its segments
@@ -515,11 +522,9 @@ public:
         _separator_enabled = true;
     }
 
-    // Stops taking separator writes and gives up what the separator has already buffered for this
-    // group, handing its buffers back to the pool. What is dropped here was never written out, so the
-    // source segments the buffers hold are marked as failed rather than released: the index still
-    // points at those records there. A group is expected to have been flushed before it is closed, so
-    // anything this finds costs the segments it is holding, and it says so.
+    // Stops separator writes, waits for the flush_separator() calls on the group and gives up what is
+    // still buffered, marking its source segments as failed since the index still points there. A
+    // group is expected to be flushed first, so anything given up here is logged.
     future<> close_separator();
 
     bool empty() const noexcept {
