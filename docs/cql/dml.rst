@@ -32,7 +32,9 @@ parameters:
   ScyllaDB ensures that query timestamps created by the same coordinator node are unique (even across different shards
   on the same node). However, timestamps assigned at different nodes are not guaranteed to be globally unique.
   Note that with a steadily high write rate, timestamp collision is not unlikely. If it happens, e.g. two INSERTS
-  have the same timestamp, a conflict resolution algorithm determines which of the inserted cells prevails (see :ref:`update ordering <update-ordering>` for more information):
+  have the same timestamp, a conflict resolution algorithm determines which of the inserted cells prevails (see :ref:`update ordering <update-ordering>` for more information).
+  The timestamp does not have to be related to real time: see :ref:`synthetic write timestamps <synthetic-timestamps>`
+  for the requirements and limitations of timestamps that are not the current time.
 - ``TTL``: specifies an optional Time To Live (in seconds) for the inserted values. If set, the inserted values are
   automatically removed from the database after the specified time. Note that the TTL concerns the inserted values, not
   the columns themselves. This means that any subsequent update of the column will also reset the TTL (to whatever TTL
