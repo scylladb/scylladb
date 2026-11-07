@@ -244,6 +244,8 @@ The cost is one feature name per option, about fifty bytes, in gossip and in `sy
 
 Config values are stored and transported as text, regardless of an option's declared type. The registry type is the single point of validation: before any mutation is generated, the textual value is validated against it (`text`, `integer`, `floating_point`, `boolean`), and an invalid value is rejected before any schema mutation.
 
+A stored integer outside the option's `valid_range`, only reachable out-of-band, is logged and treated as absent like an unparsable one.
+
 For an option whose value cannot be expressed as a registry type, the option may instead declare a per-option parser and validator.
 
 ### Storage Model
@@ -506,6 +508,8 @@ ALTER TABLE ks.tbl WITH auto_repair_enabled = true;
 ```
 
 `auto_repair_threshold_in_seconds` (integer seconds counted from the start of the last successful unfiltered repair, default `86400`, `0` disables time-based repair) is registered the same way and is set through the same forms.
+
+`tablets_group0_leader_shard_ratio` (integer percentage, bounded to `[0, 100]`, default `100`) is registered for the `CLUSTER` scope only, since there is one group0 leader: `ALTER CLUSTER WITH tablets_group0_leader_shard_ratio = 50` gives shard 0 of the leader half the normal per-shard tablet capacity, and the tablet allocator reads it on demand when it balances or allocates tablets.
 
 #### Consumer: The Tablet Repair Scheduler
 

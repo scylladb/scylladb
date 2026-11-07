@@ -37,9 +37,9 @@ value set at a broader one:
 
 Each option supports a fixed set of scopes. Options that describe a table (such as
 ``auto_repair_enabled``) can be set at ``TABLE``, ``KEYSPACE`` and ``CLUSTER`` scope. Options that
-describe the cluster as a whole (such as ``repair_hints_batchlog_flush_discard_unreplayed_hints``)
-can be set at ``CLUSTER`` scope only. No option currently supports the ``DATACENTER``, ``RACK`` or
-``NODE`` scopes.
+describe the cluster as a whole (such as ``repair_hints_batchlog_flush_discard_unreplayed_hints``
+or ``tablets_group0_leader_shard_ratio``) can be set at ``CLUSTER`` scope only. No option currently
+supports the ``DATACENTER``, ``RACK`` or ``NODE`` scopes.
 
 Each scope stores only the values that were explicitly set there. The *effective* value of an
 option for a table is the value stored at the narrowest scope that has one: the table's own value
@@ -197,6 +197,16 @@ Available options
        at that scope even if a broader scope enabled it, whereas ``NULL`` removes the value and
        falls back to the broader scope. See
        :doc:`Automatic Scrub </operating-scylla/procedures/maintenance/automatic-scrub>`.
+   * - ``tablets_group0_leader_shard_ratio``
+     - integer
+     - ``CLUSTER``
+     - Percentage (0-100) of the normal per-shard tablet capacity given to shard 0 of the group0
+       leader node, which carries extra raft and topology work. The capacity taken from shard 0 is
+       spread over the node's other shards. ``100`` means no skew; ``0`` leaves shard 0 at most
+       about one tablet. The skew follows the current group0 leader: when leadership moves,
+       tablets migrate between shards within the old and new leader nodes (intranode only; node
+       totals and cross-node balance are unaffected). A moderate value such as ``50`` keeps that
+       movement smaller than ``0``. Default: ``100``.
 
 .. _cql-cluster-config-yaml-options:
 

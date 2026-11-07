@@ -87,6 +87,8 @@ public:
     // consumer rather than by name on every read. Its type must match the accessor.
     bool resolve_boolean_config(const cluster_config_registry::option& opt, const lookup_context& ctx) const;
     int64_t resolve_integer_config(const cluster_config_registry::option& opt, const lookup_context& ctx) const;
+    // By registered name, looked up per call (see find_registered_option()); an unknown name is an internal error.
+    int64_t resolve_integer_config(std::string_view config_name, const lookup_context& ctx) const;
     double resolve_floating_point_config(const cluster_config_registry::option& opt, const lookup_context& ctx) const;
     sstring resolve_text_config(const cluster_config_registry::option& opt, const lookup_context& ctx) const;
 

@@ -66,6 +66,7 @@ inline constexpr std::string_view auto_repair_enabled = "auto_repair_enabled";
 inline constexpr std::string_view auto_repair_threshold_in_seconds = "auto_repair_threshold_in_seconds";
 inline constexpr std::string_view repair_hints_batchlog_flush_discard_unreplayed_hints = "repair_hints_batchlog_flush_discard_unreplayed_hints";
 inline constexpr std::string_view auto_scrub_period_seconds = "auto_scrub_period_seconds";
+inline constexpr std::string_view tablets_group0_leader_shard_ratio = "tablets_group0_leader_shard_ratio";
 
 }
 
@@ -104,7 +105,8 @@ struct option {
     std::string_view custom_expected_description = "";
     option_kind kind = option_kind::native;
     // When set, validate_value() rejects an integer value outside this range. Only valid for
-    // an integer option, and the default must fall within it. A db_config option bound to an
+    // an integer option, and the default must fall within it. A stored value outside it (only
+    // reachable out-of-band) is ignored by to_integer(). A db_config option bound to an
     // integral db::config entry narrower than int64_t must declare one that fits the entry's type.
     std::optional<integer_range> valid_range = std::nullopt;
 
