@@ -1374,6 +1374,28 @@ def test_index_paging_group_by(cql, test_keyspace, use_group_by):
             # Finally check that altogether, we read the right rows.
             assert sorted(all_rows) == [(i,) for i in range(10)]
 
+# A query with GROUP BY and a LIMIT on a secondary index must return LIMIT
+# complete groups. Currently, the aggregate loop of the index path ignores the
+# LIMIT and returns all groups. Reproduces SCYLLADB-6059.
+#
+# The aggregate loop reads the data in internal pages (see
+# small_select_internal_page_size), and a group may be smaller or larger than
+# an internal page. This test uses groups larger than an internal page, to
+# check that the LIMIT returns complete groups even when a group spans more
+# than one internal page.
+@pytest.mark.xfail(reason="SCYLLADB-6059")
+def test_index_group_by_limit(cql, test_keyspace, small_select_internal_page_size):
+    n = small_select_internal_page_size + 10
+    with new_test_table(cql, test_keyspace, 'p int, c int, v int, primary key (p, c)') as table:
+        cql.execute(f'CREATE INDEX ON {table}(v)')
+        stmt = cql.prepare(f'INSERT INTO {table} (p, c, v) VALUES (?, ?, ?)')
+        for p in range(3):
+            for c in range(n):
+                cql.execute(stmt, [p, c, 1])
+        for limit in [1, 2]:
+            rows = list(cql.execute(f'SELECT p, count(*) FROM {table} WHERE v = 1 GROUP BY p LIMIT {limit}'))
+            assert [count for _, count in rows] == [n] * limit
+
 # Tests basic operations on a static column index.
 def test_static_column_index(cql, test_keyspace):
     schema = 'pk int, c int, s int STATIC, v int, PRIMARY KEY(pk, c)'
