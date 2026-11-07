@@ -19,7 +19,7 @@ from test.cluster.test_strong_consistency import get_table_raft_group_id
 from test.cluster.util import ensure_raft_group_leader_on
 from test.pylib.rest_client import HTTPError, inject_error, read_barrier
 from test.pylib.tablets import get_all_tablet_replicas
-from test.pylib.util import wait_for
+from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
 
 
 CONFIG = {**alternator_config, 'experimental_features': ['strongly-consistent-tables'],
@@ -87,7 +87,7 @@ async def table_groups_ready(manager, servers, ks, name):
 
 
 @asynccontextmanager
-async def sc_table(manager, servers, replication, tablets=1):
+async def sc_table(manager, servers, replication, tablets=1, populate=True):
     # Native CQL creates and populates the SC table through its supported Raft
     # path. HTTP assertions below concern routing hints, not SC data execution.
     name = unique_table_name()
@@ -99,8 +99,9 @@ async def sc_table(manager, servers, replication, tablets=1):
     try:
         await asyncio.wait_for(cql.run_async(f'CREATE TABLE "{ks}"."{name}" (p text PRIMARY KEY, ":attrs" map<text, blob>)'), 30)
         await table_groups_ready(manager, servers, ks, name)
-        insert = cql.prepare(f'INSERT INTO "{ks}"."{name}" (p) VALUES (?)')
-        await asyncio.wait_for(cql.run_async(insert, ['present']), 30)
+        if populate:
+            insert = cql.prepare(f'INSERT INTO "{ks}"."{name}" (p) VALUES (?)')
+            await asyncio.wait_for(cql.run_async(insert, ['present']), 30)
         groups, replicas = await table_groups_ready(manager, servers, ks, name)
         by_host = {str(await manager.get_host_id(server.server_id)): server for server in servers}
         for tablet in replicas:
@@ -226,18 +227,26 @@ async def test_sc_routing_nonreplica_uses_cached_leader(manager):
     servers = await manager.servers_add(2, config=CONFIG, cmdline=['--smp', '1'],
         property_file=[{'dc': 'dc1', 'rack': f'r{i}'} for i in range(2)])
     await manager.disable_tablet_balancing()
-    async with sc_table(manager, servers, {'dc1': 1}) as (name, ks):
+    async with sc_table(manager, servers, {'dc1': 1}, populate=False) as (name, ks):
         tablet, = await get_all_tablet_replicas(manager, servers[0], ks, name)
         ids = {str(await manager.get_host_id(server.server_id)): server for server in servers}
         owner = ids[str(tablet.replicas[0][0])]
         contact = next(server for server in servers if server != owner)
+        # A setup write through contact would cache the leader before the
+        # first HTTP request. Populate only through the replica instead.
+        cql = manager.get_cql()
+        owner_host, = await wait_for_cql_and_get_hosts(cql, [owner], time.time() + 30)
+        insert = cql.prepare(f'INSERT INTO "{ks}"."{name}" (p) VALUES (?)')
+        await asyncio.wait_for(cql.run_async(insert, ['present'], host=owner_host), 30)
+        group = await get_table_raft_group_id(manager, ks, name)
+        await read_barrier(manager.api, owner.ip_addr, group, timeout=30)
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
             expected, header = await request(session, owner, name)
             info = parse_info(header, mode='strong')
             assert await request(session, contact, name) == (expected, None)
             # A CQL request through the non-replica is redirected to the leader,
             # which caches the leader on the shard that handled it.
-            select = manager.get_cql().prepare(f'SELECT p FROM "{ks}"."{name}" WHERE p = ?')
+            select = cql.prepare(f'SELECT p FROM "{ks}"."{name}" WHERE p = ?')
             assert await asyncio.to_thread(cql_hint, contact.ip_addr, select.query_id, 'present', info[2]) == info
             assert await request(session, contact, name) == (expected, header)
             assert (await request(session, contact, name, block=version_block(info[2], 7)))[1] is None
