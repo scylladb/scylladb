@@ -16,7 +16,7 @@ class incremental_backlog_tracker;
 
 class incremental_compaction_strategy_options {
 public:
-    static constexpr uint64_t DEFAULT_MIN_SSTABLE_SIZE = 50L * 1024L * 1024L;
+    static constexpr uint64_t DEFAULT_MIN_SSTABLE_SIZE = default_min_sstable_size;
     static constexpr std::chrono::seconds DEFAULT_MIN_SSTABLE_AGE = std::chrono::hours(1);
     static constexpr double DEFAULT_BUCKET_LOW = 0.7071;
     static constexpr double DEFAULT_BUCKET_HIGH = 1.4142;
@@ -31,7 +31,10 @@ private:
     double bucket_low = DEFAULT_BUCKET_LOW;
     double bucket_high = DEFAULT_BUCKET_HIGH;
 public:
-    incremental_compaction_strategy_options(const std::map<sstring, sstring>& options);
+    /// @param defaults provides the values of the options that aren't set in @param options.
+    /// Defaults to the values used when the expected memtable size isn't known.
+    incremental_compaction_strategy_options(const std::map<sstring, sstring>& options,
+            const strategy_options_defaults& defaults = {});
 
     incremental_compaction_strategy_options() {
         min_sstable_size = DEFAULT_MIN_SSTABLE_SIZE;
@@ -82,7 +85,10 @@ private:
 public:
     incremental_compaction_strategy() = default;
 
-    incremental_compaction_strategy(const std::map<sstring, sstring>& options);
+    /// @param defaults provides the values of the options that aren't set in @param options.
+    /// Defaults to the values used when the expected memtable size isn't known.
+    incremental_compaction_strategy(const std::map<sstring, sstring>& options,
+            const strategy_options_defaults& defaults = {});
 
     static void validate_options(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options);
 
