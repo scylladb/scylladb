@@ -14,7 +14,7 @@ import pytest
 import requests
 from botocore.exceptions import ClientError
 
-from test.alternator.util import create_test_table, new_test_table, random_string, full_scan, full_query, multiset, unique_table_name
+from test.alternator.util import create_test_table, new_test_table, random_string, full_scan, full_query, multiset, unique_table_name, scylla_config_temporary
 
 
 # LSIs support strongly-consistent reads, so the following functions do not
@@ -516,6 +516,75 @@ def test_lsi_consistent_read(test_table_lsi_1):
     assert_index_query(test_table_lsi_1, 'hello', expected_items,
         KeyConditions={'p': {'AttributeValueList': [p2], 'ComparisonOperator': 'EQ'},
                        'b': {'AttributeValueList': [b2], 'ComparisonOperator': 'EQ'}})
+
+# Test paging of a Query and a Scan on an LSI: The LastEvaluatedKey of each
+# page has the LSI's sort key as well as the base table's key attributes, and
+# it must be accepted as the ExclusiveStartKey of the next page. Similar tests
+# for GSIs are in test_gsi.py and test_gsi_composite_keys.py.
+def test_lsi_paging(test_table_lsi_1):
+    p = random_string()
+    items = [{'p': p, 'c': str(i), 'b': str(i % 3)} for i in range(10)]
+    with test_table_lsi_1.batch_writer() as batch:
+        for item in items:
+            batch.put_item(item)
+    key_conditions = {'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}}
+    response = test_table_lsi_1.query(IndexName='hello', ConsistentRead=True, Limit=3,
+        KeyConditions=key_conditions)
+    assert response['LastEvaluatedKey'].keys() == {'p', 'b', 'c'}
+    for limit in [1, 2, 7]:
+        assert_index_query(test_table_lsi_1, 'hello', items, ConsistentRead=True,
+            Limit=limit, KeyConditions=key_conditions)
+        assert_index_scan(test_table_lsi_1, 'hello', items, ConsistentRead=True,
+            Limit=limit, FilterExpression='p = :p', ExpressionAttributeValues={':p': p})
+    # Also with a condition on the LSI's sort key, matching several items,
+    # so pages also end in the middle, and at the end, of the matching items.
+    for forward in [True, False]:
+        for limit in [1, 2]:
+            assert_index_query(test_table_lsi_1, 'hello', [i for i in items if i['b'] == '1'],
+                ConsistentRead=True, Limit=limit, ScanIndexForward=forward,
+                KeyConditions={**key_conditions, 'b': {'AttributeValueList': ['1'], 'ComparisonOperator': 'EQ'}})
+
+# Test paging a Query on an LSI through a long run of deleted items, as
+# test_query.py::test_query_paging_deleted_items does for a base table: A
+# page may end on a deleted item, and its LastEvaluatedKey (which includes the
+# LSI's sort key) must be accepted as the next page's ExclusiveStartKey, also
+# with a condition on the LSI's sort key and in a reversed query. The test is
+# scylla_only because it lowers Scylla's query_tombstone_page_limit.
+def test_lsi_paging_deleted_items(dynamodb, test_table_lsi_1, scylla_only):
+    p = random_string()
+    keys = [f'{i:02d}' for i in range(60)]
+    live = keys[::10]
+    with test_table_lsi_1.batch_writer() as batch:
+        for k in keys:
+            # Write the item first, so the LSI has an entry to delete.
+            batch.put_item({'p': p, 'c': k, 'b': k})
+    with test_table_lsi_1.batch_writer() as batch:
+        for k in keys:
+            if k not in live:
+                batch.delete_item(Key={'p': p, 'c': k})
+    with scylla_config_temporary(dynamodb, 'query_tombstone_page_limit', '5'):
+        for condition, match in [
+                (None, lambda k: True),
+                ({'AttributeValueList': ['15', '45'], 'ComparisonOperator': 'BETWEEN'}, lambda k: '15' <= k <= '45')]:
+            key_conditions = {'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}}
+            if condition:
+                key_conditions['b'] = condition
+            for forward in [True, False]:
+                got = []
+                start_keys = []
+                response = test_table_lsi_1.query(IndexName='hello', ConsistentRead=True,
+                    KeyConditions=key_conditions, ScanIndexForward=forward)
+                got.extend(response['Items'])
+                while 'LastEvaluatedKey' in response:
+                    start_keys.append(response['LastEvaluatedKey']['b'])
+                    response = test_table_lsi_1.query(IndexName='hello', ConsistentRead=True,
+                        KeyConditions=key_conditions, ScanIndexForward=forward,
+                        ExclusiveStartKey=response['LastEvaluatedKey'])
+                    got.extend(response['Items'])
+                expected = [k for k in live if match(k)]
+                assert [x['b'] for x in got] == (expected if forward else expected[::-1])
+                # Check that some pages really ended on a deleted item.
+                assert any(k not in live for k in start_keys)
 
 # A table with both gsi and lsi present
 @pytest.fixture(scope="module")
