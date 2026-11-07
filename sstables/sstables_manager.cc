@@ -334,6 +334,13 @@ future<> sstables_manager::maybe_reclaim_components() {
         auto sst_with_max_memory = std::max_element(_active.begin(), _active.end(), [](const sstable& sst1, const sstable& sst2) {
             return sst1.total_reclaimable_memory_size() < sst2.total_reclaimable_memory_size();
         });
+        if (sst_with_max_memory == _active.end() || sst_with_max_memory->total_reclaimable_memory_size() == 0) {
+            // Counter drifted from what _active holds; resync it, or reload would never run again.
+            on_internal_error_noexcept(smlogger, format("reclaimable memory counter is {} bytes, but no active sstable has reclaimable memory",
+                    _total_reclaimable_memory));
+            _total_reclaimable_memory = 0;
+            break;
+        }
 
         auto memory_reclaimed = sst_with_max_memory->reclaim_memory_from_components();
         _total_memory_reclaimed += memory_reclaimed;
@@ -342,8 +349,8 @@ future<> sstables_manager::maybe_reclaim_components() {
         // TODO: As of now only bloom filter is reclaimed. Print actual component names when adding support for more components.
         smlogger.info("Reclaimed {} bytes of memory from components of {}. Total memory reclaimed so far is {} bytes",
                 memory_reclaimed, sst_with_max_memory->get_filename(), _total_memory_reclaimed);
-        }
         co_await coroutine::maybe_yield();
+    }
 }
 
 size_t sstables_manager::get_components_memory_reclaim_threshold() const {
