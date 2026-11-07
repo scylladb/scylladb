@@ -2924,6 +2924,10 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                 }
                 sstring index_name = rjson::to_sstring(*index_name_v);
                 if (op == "Create") {
+                    // A CQL-created logstor table in an alternator_ keyspace skips CQL's index checks.
+                    if (tab->logstor_enabled()) {
+                        co_return api_error::validation("Indexes are not supported on a logstor table");
+                    }
                     if (!p.local().local_db().find_keyspace(tab->ks_name()).get_replication_strategy().uses_tablets()) {
                         co_return api_error::validation("Vector indexes are not supported on tables using vnodes.");
                     }
@@ -3128,6 +3132,10 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                     std::string_view keyspace_name = schema->ks_name();
                     std::string vname(view_name(table_name, index_name));
                     if (op == "Create") {
+                        // A CQL-created logstor table in an alternator_ keyspace skips CQL's view checks.
+                        if (schema->logstor_enabled()) {
+                            co_return api_error::validation("Indexes are not supported on a logstor table");
+                        }
                         const rjson::value* attribute_definitions = rjson::find(request, "AttributeDefinitions");
                         if (!attribute_definitions) {
                             co_return api_error::validation("GlobalSecondaryIndexUpdates Create needs AttributeDefinitions");
