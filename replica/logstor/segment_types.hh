@@ -64,11 +64,6 @@ struct segment_sequence {
     }
 };
 
-enum class segment_kind : uint8_t {
-    mixed = 0,
-    full = 1,
-};
-
 }
 
 template <>
