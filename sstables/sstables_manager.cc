@@ -298,7 +298,7 @@ shared_sstable sstables_manager::make_sstable(schema_ptr schema,
         db_clock::time_point now,
         io_error_handler_gen error_handler_gen,
         size_t buffer_size) {
-    return make_lw_shared<sstable>(std::move(schema), storage, generation, sid, state, v, f, get_large_data_handler(), get_corrupt_data_handler(), *this, now, std::move(error_handler_gen), buffer_size);
+    return shared_sstable(new sstable(std::move(schema), storage, generation, sid, state, v, f, get_large_data_handler(), get_corrupt_data_handler(), *this, now, std::move(error_handler_gen), buffer_size));
 }
 
 sstable_writer_config sstables_manager::configure_writer(sstring origin) const {

@@ -59,7 +59,7 @@ std::pair<shared_sstable, size_t> create_sstable_with_bloom_filter(test_env& env
 
 void dispose_and_stop_tracking_bf_memory(shared_sstable&& sst, test_env_sstables_manager& mgr) {
     mgr.remove_sst_from_reclaimed(sst.get());
-    shared_sstable::dispose(sst.release().release());
+    sst.reset();
 }
 
 SEASTAR_TEST_CASE(test_sstable_manager_auto_reclaim_and_reload_of_bloom_filter) {
@@ -368,7 +368,7 @@ SEASTAR_TEST_CASE(test_bloom_filter_reload_after_unlink) {
 
         // unlink the sst and release the object
         sst->unlink().get();
-        sst.release();
+        sst.reset();
 
         // verify that the sstable manager's reclaimed set and the reclaim metrics
         // do not track unlinked sst1 at this point.
@@ -428,7 +428,7 @@ SEASTAR_TEST_CASE(test_bloom_filter_reclaim_after_unlink) {
         BOOST_REQUIRE_EQUAL(sst_mgr.get_reclaimed_set().size(), 0);
         BOOST_REQUIRE_EQUAL(sst_mgr.get_total_memory_reclaimed(), 0);
         // release the sst1's reference from this thread
-        sst1.release();
+        sst1.reset();
         // despite being unlinked and released, the sstable manager's _active list will still
         // hold sst1 as the async thread still has a reference.
         auto& active_list = sst_mgr.get_active_list();
@@ -439,7 +439,7 @@ SEASTAR_TEST_CASE(test_bloom_filter_reclaim_after_unlink) {
         // the reload should not attempt to load sst'1 bloom filter into memory depsite its presence in the _active list.
         auto sst2 = make_sstable_containing(env.make_sstable(schema), {mutations[0]}).get();
         sst2->unlink().get();
-        sst2.release();
+        sst2.reset();
 
         // message async thread to complete waiting and thus release its copy of sst, triggering deactivation
         utils::get_local_injector().receive_message("test_bloom_filter_reclaim_after_unlink");
