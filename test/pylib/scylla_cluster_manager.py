@@ -860,12 +860,13 @@ class ScyllaClusterManager:
         assert self.cql
         return self.cql
 
-    async def get_ready_cql(self, servers: list[ServerInfo]) -> tuple[CassandraSession, list[Host]]:
+    async def get_ready_cql(self, servers: list[ServerInfo], timeout: float = 60,
+                            see_others_interval: float = 45.) -> tuple[CassandraSession, list[Host]]:
         """Precondition: driver is connected."""
 
         cql = self.get_cql()
-        await self.servers_see_each_other(servers)
-        hosts = await wait_for_cql_and_get_hosts(cql, servers, time() + 60)
+        await self.servers_see_each_other(servers, interval=see_others_interval)
+        hosts = await wait_for_cql_and_get_hosts(cql, servers, time() + timeout)
         return cql, hosts
 
     async def get_cql_exclusive(self,
