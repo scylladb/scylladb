@@ -61,6 +61,7 @@
 #include <seastar/coroutine/maybe_yield.hh>
 #include <boost/range/algorithm/find_end.hpp>
 #include <string_view>
+#include <set>
 #include <unordered_set>
 #include "service/storage_proxy.hh"
 #include "gms/feature_service.hh"
@@ -3332,7 +3333,8 @@ public:
 
 // Verify that a value parsed from the user input is legal. In particular,
 // we check that the value is not an empty set, string or bytes - which is
-// (somewhat artificially) forbidden by DynamoDB.
+// (somewhat artificially) forbidden by DynamoDB - and that a set has no
+// duplicate elements.
 void validate_value(const rjson::value& v, const char* caller) {
     if (!v.IsObject() || v.MemberCount() != 1) {
         throw api_error::validation(format("{}: improperly formatted value '{}'", caller, v));
@@ -3345,6 +3347,12 @@ void validate_value(const rjson::value& v, const char* caller) {
         }
         if (it->value.Size() == 0) {
             throw api_error::validation(format("{}: empty set not allowed", caller));
+        }
+        std::set<const rjson::value*, rjson::single_value_ptr_comp> seen;
+        for (const auto& e : it->value.GetArray()) {
+            if (!seen.insert(&e).second) {
+                throw api_error::validation(format("{}: Input collection {} contains duplicates", caller, it->value));
+            }
         }
     } else if (type == "S" || type == "B") {
         if (!it->value.IsString()) {
