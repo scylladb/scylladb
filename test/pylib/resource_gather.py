@@ -160,6 +160,22 @@ class ResourceGatherOn(ResourceGatherRecord):
         self.cgroup_path = CGROUP_TESTS / self.worker_id
         self._memory_peak_fd: IO | None = None
         self._cpu_stat_start: dict[str, float] | None = None
+        self.anon_samples: list[int] = []
+
+    @property
+    def anon_peak(self) -> int | None:
+        """Peak anonymous (non page-cache) memory of the worker cgroup seen during the test."""
+        return max(self.anon_samples) if self.anon_samples else None
+
+    def _read_anon_memory(self) -> int | None:
+        """Anonymous memory of the worker cgroup, plus that of the containers the worker started.
+
+        A container lives in its own cgroup (see test/pylib/container_accounting.py), so
+        without adding it a test's peak would leave out, say, the Cassandra JVM it ran.
+        """
+        from test.pylib.container_accounting import worker_anon
+        anon_memory = worker_anon(self.cgroup_path, worker=self.worker_id)
+        return None if anon_memory is None else int(anon_memory)
 
     def stop_monitoring(self) -> None:
         self.stop_event.set()
@@ -171,15 +187,20 @@ class ResourceGatherOn(ResourceGatherRecord):
         self.future = self.pool.submit(self._monitor_cgroup)
 
     def _monitor_cgroup(self) -> None:
-        """Continuously monitors cgroup memory utilization every second."""
+        """Every second: the cgroup's memory, and its anonymous part for the test's peak."""
         memory_current = self.cgroup_path / 'memory.current'
         sqlite_writer = SQLiteWriter(self.db_path)
         try:
             while not self.stop_event.is_set():
                 try:
+                    memory_current_now = int(memory_current.read_text().strip())
+                    anon_memory = self._read_anon_memory()  # kept for the footprint-to-anonymous ratio
+                    if anon_memory is not None:
+                        self.anon_samples.append(anon_memory)
+                    # the shared metrics table keeps its original meaning: memory.current
                     timeline_record = CgroupMetric(
                         test_id=self.test_id,
-                        memory=int(memory_current.read_text().strip()),
+                        memory=memory_current_now,
                         timestamp=datetime.now()
                     )
                     sqlite_writer.write_row(timeline_record, CGROUP_MEMORY_METRICS_TABLE)
@@ -221,9 +242,16 @@ class ResourceGatherOn(ResourceGatherRecord):
         if cpu_stat_path.exists():
             with open(cpu_stat_path, 'r') as f:
                 self._cpu_stat_start = self._read_cpu_stat(f)
+        # CPU pressure of this worker's cgroup: stall time tells whether the test
+        # wanted more CPU than it got (contention), which cpu.stat cannot show.
+        self._cpu_stall_start = self._read_cpu_stall()
+        self.cpu_stall_sec: float | None = None
 
     def get_test_metrics(self, seastar_io: dict[str, int] | None = None) -> Metric:
         test_metrics = super().get_test_metrics(seastar_io)
+        anon_memory = self._read_anon_memory()
+        if anon_memory is not None:
+            self.anon_samples.append(anon_memory)
         if self._memory_peak_fd is not None:
             try:
                 self._memory_peak_fd.seek(0)
@@ -239,6 +267,9 @@ class ResourceGatherOn(ResourceGatherRecord):
                 start_val = self._cpu_stat_start.get(stat, 0.0)
                 end_val = cpu_stat_end.get(stat, 0.0)
                 setattr(test_metrics, attr, end_val - start_val)
+        stall_end = self._read_cpu_stall()
+        if stall_end is not None and getattr(self, "_cpu_stall_start", None) is not None:
+            self.cpu_stall_sec = max(0.0, stall_end - self._cpu_stall_start)
 
         return test_metrics
 
@@ -256,6 +287,17 @@ class ResourceGatherOn(ResourceGatherRecord):
         'system_usec': 'system_sec',
         'usage_usec': 'usage_sec',
     }
+
+    def _read_cpu_stall(self) -> float | None:
+        """Seconds this cgroup's tasks spent runnable but waiting for a CPU (PSI 'some total')."""
+        try:
+            with open(self.cgroup_path / 'cpu.pressure', 'r') as f:
+                for line in f:
+                    if line.startswith('some'):
+                        return int(line.split('total=')[1].split()[0]) / 1_000_000
+        except Exception:
+            return None
+        return None
 
     @staticmethod
     def _read_cpu_stat(file: TextIO) -> dict[str, float]:
