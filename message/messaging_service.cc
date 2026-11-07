@@ -1179,6 +1179,10 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
     // checkers. Accepts either enum type.
     auto must_helper = [&](auto opt) {
         using type = std::decay_t<decltype(opt)>;
+        static_assert(std::is_same_v<type, encrypt_what> || std::is_same_v<type, compress_what>);
+        // The peer filters plaintext connections by their source address (laddr), so only
+        // encryption needs the laddr checks below. Compression has no such filter.
+        constexpr bool check_laddr = std::is_same_v<type, encrypt_what>;
 
         // either rack/dc need to be in same dc to avoid tls/compression
         if (!has_topology() || !is_same_dc(id.addr)) {
@@ -1187,8 +1191,9 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
 
         // #9653 - if our idea of dc for bind address differs from our official endpoint address,
         // we cannot trust downgrading. We need to ensure either (local) bind address is same as
-        // broadcast or that the dc info we get for it is the same.
-        if (broadcast_address != laddr && !is_same_dc(laddr)) {
+        // broadcast or that the dc info we get for it is the same. A laddr unknown to the
+        // topology (e.g. a private listen address) counts as a different dc.
+        if (check_laddr && broadcast_address != laddr && !(topology_known_for(laddr) && is_same_dc(laddr))) {
             return true;
         }
         // if cross-rack tls, check rack.
@@ -1202,7 +1207,7 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
 
         // See above: We need to ensure either (local) bind address is same as
         // broadcast or that the rack info we get for it is the same.
-        return broadcast_address != laddr && !is_same_rack(laddr);
+        return check_laddr && broadcast_address != laddr && !(topology_known_for(laddr) && is_same_rack(laddr));
     };
     auto must_encrypt = [&] {
         if (_cfg.encrypt == encrypt_what::none) {
