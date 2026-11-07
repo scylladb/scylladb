@@ -1665,6 +1665,179 @@ SEASTAR_TEST_CASE(test_ensure_entry_in_latest_does_not_set_continuity_in_reverse
     });
 }
 
+// When a reversed cursor is positioned at a key which has no entry, it moves
+// to the preceding entry in table order. ensure_entry_in_latest() must then
+// return that entry, not the following one.
+SEASTAR_TEST_CASE(test_ensure_entry_in_latest_in_reversed_mode_after_missing_key) {
+    return seastar::async([] {
+        cache_tracker tracker;
+        auto& r = tracker.region();
+        with_allocator(r.allocator(), [&] {
+            simple_schema table;
+            auto&& s = *table.schema();
+
+            auto e = partition_entry::make_evictable(s, mutation_partition(s));
+            auto snap = e.read(r, tracker.cleaner(), &tracker);
+
+            {
+                auto&& p = snap->version()->partition();
+                p.clustered_row(s, table.make_ckey(1), is_dummy::no, is_continuous::yes);
+                p.clustered_row(s, table.make_ckey(3), is_dummy::no, is_continuous::yes);
+                p.clustered_row(s, table.make_ckey(5), is_dummy::no, is_continuous::yes);
+                p.ensure_last_dummy(s);
+            }
+
+            auto rev_s = s.make_reversed();
+            partition_snapshot_row_cursor cur(*rev_s, *snap, false, true);
+            position_in_partition::equal_compare eq(s);
+
+            {
+                logalloc::reclaim_lock rl(r);
+                BOOST_REQUIRE(cur.maybe_advance_to(table.make_ckey(4)));
+                BOOST_REQUIRE(eq(cur.table_position(), table.make_ckey(3)));
+
+                auto res = cur.ensure_entry_in_latest();
+                BOOST_REQUIRE(!res.inserted);
+                BOOST_REQUIRE(eq(res.row.position(), table.make_ckey(3)));
+                BOOST_REQUIRE(eq(res.it->position(), table.make_ckey(3)));
+            }
+            e.evict(tracker.cleaner());
+        });
+    });
+}
+
+// Like the previous test, but here the reversed cursor gets to the row in the
+// latest version from a row which is only in an older version, after
+// maybe_refresh() looked up the latest version's entries again.
+SEASTAR_TEST_CASE(test_ensure_entry_in_latest_in_reversed_mode_after_refresh) {
+    return seastar::async([] {
+        cache_tracker tracker;
+        auto& r = tracker.region();
+        with_allocator(r.allocator(), [&] {
+            simple_schema table;
+            auto&& s = *table.schema();
+
+            auto e = partition_entry::make_evictable(s, mutation_partition(s));
+            tracker.insert(e);
+            auto snap1 = e.read(r, tracker.cleaner(), &tracker);
+
+            {
+                auto&& p1 = snap1->version()->partition();
+                tracker.insert(
+                    p1.clustered_rows_entry(s, table.make_ckey(2), is_dummy::no, is_continuous::yes));
+            }
+
+            auto snap2 = e.read(r, tracker.cleaner(), &tracker, 1);
+
+            {
+                auto&& p2 = snap2->version()->partition();
+                tracker.insert(
+                    p2.clustered_rows_entry(s, table.make_ckey(1), is_dummy::no, is_continuous::yes));
+                tracker.insert(
+                    p2.clustered_rows_entry(s, table.make_ckey(3), is_dummy::no, is_continuous::yes));
+            }
+
+            auto rev_s = s.make_reversed();
+            partition_snapshot_row_cursor cur(*rev_s, *snap2, false, true);
+            position_in_partition::equal_compare eq(s);
+
+            {
+                logalloc::reclaim_lock rl(r);
+                BOOST_REQUIRE(cur.maybe_advance_to(table.make_ckey(2)));
+                BOOST_REQUIRE(eq(cur.table_position(), table.make_ckey(2)));
+                BOOST_REQUIRE(cur.maybe_refresh());
+
+                BOOST_REQUIRE(cur.next());
+                BOOST_REQUIRE(eq(cur.table_position(), table.make_ckey(1)));
+
+                auto res = cur.ensure_entry_in_latest();
+                BOOST_REQUIRE(!res.inserted);
+                BOOST_REQUIRE(eq(res.row.position(), table.make_ckey(1)));
+                BOOST_REQUIRE(eq(res.it->position(), table.make_ckey(1)));
+            }
+            e.evict(tracker.cleaner());
+        });
+    });
+}
+
+// When a reversed cursor is positioned after all the entries of the latest
+// version, it moves to the last entry. get_iterator_in_latest_version() must
+// then point to that entry, not to end(). This can't happen in the row cache,
+// whose versions end with a dummy entry after all rows, so this test uses a
+// non-evictable snapshot, as in a memtable.
+SEASTAR_TEST_CASE(test_latest_iterator_in_reversed_mode_after_last_entry) {
+    return seastar::async([] {
+        logalloc::region r;
+        mutation_application_stats app_stats;
+        mutation_cleaner cleaner(r, nullptr, app_stats);
+        with_allocator(r.allocator(), [&] {
+            simple_schema table;
+            auto&& s = *table.schema();
+
+            auto e = partition_entry_builder(table.schema(), cleaner, nullptr, r)
+                    .new_version()
+                    .add(table.make_ckey(1), is_continuous::yes)
+                    .add(table.make_ckey(3), is_continuous::yes)
+                    .build();
+
+            auto snap = e.snapshots[0];
+            auto rev_s = s.make_reversed();
+            partition_snapshot_row_cursor cur(*rev_s, *snap, false, true);
+            position_in_partition::equal_compare eq(s);
+            auto&& rows = snap->version()->partition().mutable_clustered_rows();
+
+            logalloc::reclaim_lock rl(r);
+            BOOST_REQUIRE(cur.maybe_advance_to(table.make_ckey(5)));
+            BOOST_REQUIRE(eq(cur.table_position(), table.make_ckey(3)));
+
+            auto it = cur.get_iterator_in_latest_version();
+            BOOST_REQUIRE(it != rows.end());
+            BOOST_REQUIRE(eq(it->position(), table.make_ckey(3)));
+        });
+    });
+}
+
+// Like the previous test, but here the reversed cursor gets to the last entry
+// of the latest version from a row which is only in an older version, after
+// maybe_refresh() looked up the latest version's entries again.
+SEASTAR_TEST_CASE(test_latest_iterator_in_reversed_mode_after_last_entry_after_refresh) {
+    return seastar::async([] {
+        logalloc::region r;
+        mutation_application_stats app_stats;
+        mutation_cleaner cleaner(r, nullptr, app_stats);
+        with_allocator(r.allocator(), [&] {
+            simple_schema table;
+            auto&& s = *table.schema();
+
+            auto e = partition_entry_builder(table.schema(), cleaner, nullptr, r)
+                    .new_version()
+                    .add(table.make_ckey(5), is_continuous::yes)
+                    .new_version()
+                    .add(table.make_ckey(1), is_continuous::yes)
+                    .add(table.make_ckey(3), is_continuous::yes)
+                    .build();
+
+            auto snap = e.snapshots[1];
+            auto rev_s = s.make_reversed();
+            partition_snapshot_row_cursor cur(*rev_s, *snap, false, true);
+            position_in_partition::equal_compare eq(s);
+            auto&& rows = snap->version()->partition().mutable_clustered_rows();
+
+            logalloc::reclaim_lock rl(r);
+            BOOST_REQUIRE(cur.maybe_advance_to(table.make_ckey(5)));
+            BOOST_REQUIRE(eq(cur.table_position(), table.make_ckey(5)));
+            BOOST_REQUIRE(cur.maybe_refresh());
+
+            BOOST_REQUIRE(cur.next());
+            BOOST_REQUIRE(eq(cur.table_position(), table.make_ckey(3)));
+
+            auto it = cur.get_iterator_in_latest_version();
+            BOOST_REQUIRE(it != rows.end());
+            BOOST_REQUIRE(eq(it->position(), table.make_ckey(3)));
+        });
+    });
+}
+
 SEASTAR_TEST_CASE(test_apply_is_atomic) {
     auto do_test = [](auto&& gen) {
         logalloc::region r;
