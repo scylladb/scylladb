@@ -120,6 +120,15 @@ private:
     // Using mutable because `query_state` is not available at
     // evaluation sites and we only have a const reference to `query_options`.
     mutable computed_function_values _cached_pk_fn_calls;
+
+    // For each bind variable, the type its value was last validated as.
+    // A query can evaluate the same bind variable for every result row
+    // (e.g. `similarity_cosine(v, ?)` in the selection); validating a large
+    // value each time made the row loop stall the reactor (SCYLLADB-5936).
+    // The row loop itself still doesn't yield, so per-row work like computing
+    // the similarity can still stall on large pages, see SCYLLADB-2150.
+    // Mutable for the same reason as _cached_pk_fn_calls.
+    mutable std::vector<const abstract_type*> _validated_as;
 private:
     // Batch constructor.
     template <typename Values>
@@ -178,6 +187,17 @@ public:
             throw exceptions::invalid_request_exception(fmt::format("Unexpected unset value for bind variable {}", idx));
         }
         return _value_views[idx];
+    }
+
+    bool is_validated_as(size_t idx, const abstract_type& type) const {
+        return idx < _validated_as.size() && _validated_as[idx] == &type;
+    }
+
+    void set_validated_as(size_t idx, const abstract_type& type) const {
+        if (idx >= _validated_as.size()) {
+            _validated_as.resize(std::max(idx + 1, _value_views.size()));
+        }
+        _validated_as[idx] = &type;
     }
 
     bool is_unset(size_t idx) const {
