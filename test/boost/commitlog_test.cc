@@ -32,6 +32,7 @@
 #include <seastar/core/sleep.hh>
 #include <seastar/util/noncopyable_function.hh>
 #include <seastar/util/closeable.hh>
+#include <seastar/core/byteorder.hh>
 
 #include "utils/assert.hh"
 #include "utils/UUID_gen.hh"
@@ -1394,6 +1395,101 @@ SEASTAR_TEST_CASE(test_commitlog_new_segment_odsync){
             BOOST_CHECK_EQUAL(s, 1024u*1024u);
         }
     });
+}
+
+// Write a few entries into a segment that reuses a recycled file, then read it back
+// as replay would after a crash: past the write frontier the file still holds the
+// sectors of the segment it was recycled from. Replay must see those as the end of
+// the written data, not as corruption. With O_DSYNC, a fresh segment is written with
+// the overwrite alignment, so the recycled one must use it too. The two alignments
+// differ only on some file systems (XFS with 512-byte sectors), so only there does
+// the test catch a mismatch.
+static future<> test_read_back_recycled_segment(bool use_o_dsync) {
+    commitlog::config cfg;
+    cfg.commitlog_segment_size_in_mb = 1;
+    // Small enough that the commitlog keeps reusing files instead of creating new ones.
+    cfg.commitlog_total_space_in_mb = 4 * this_smp_shard_count();
+    cfg.allow_going_over_size_limit = false;
+    cfg.commitlog_sync_period_in_ms = 1;
+    cfg.use_o_dsync = use_o_dsync;
+
+    tmpdir tmp;
+    cfg.commit_log_location = tmp.path().string();
+    auto log = co_await commitlog::create_commitlog(cfg);
+    const auto uuid = make_table_id();
+    const auto path_of = [&] (segment_id_type id) {
+        return (tmp.path() / commitlog::descriptor(id, commitlog::descriptor::FILENAME_PREFIX).filename()).string();
+    };
+    const auto header_alignment = [] (sstring path) -> future<uint32_t> {
+        auto f = co_await open_file_dma(path, open_flags::ro);
+        auto header = co_await f.dma_read_exactly<char>(0, f.disk_read_dma_alignment());
+        co_await f.close();
+        // magic, version and id precede the alignment
+        co_return read_be<uint32_t>(header.get() + 16);
+    };
+
+    struct segment_file {
+        uint64_t inode;
+        uint32_t alignment;
+    };
+    std::map<segment_id_type, segment_file> segments;
+    segment_id_type current = 0;
+    rp_set current_handles;
+    size_t entries_in_current = 0;
+    std::optional<segment_id_type> recycled_from;
+    constexpr size_t entries_to_read_back = 3;
+    for (int i = 0; i < 100000 && !(recycled_from && entries_in_current == entries_to_read_back); ++i) {
+        rp_handle h = co_await with_timeout(timeout_clock::now() + 30s, log.add_mutation(uuid, 1000, db::commitlog::force_sync::yes,
+                [] (db::commitlog::output& dst) {
+            dst.fill('1', 1000);
+        }));
+        const segment_id_type id = h.rp().id;
+        if (id != current) {
+            // Release the previous segment, so that the commitlog recycles its file.
+            log.discard_completed_segments(uuid, current_handles);
+            current_handles = rp_set{};
+            current = id;
+            entries_in_current = 0;
+            const segment_file file{(co_await file_stat(path_of(id))).inode_number, co_await header_alignment(path_of(id))};
+            // A recycled file is renamed, so it keeps the inode of the segment it served.
+            for (const auto& [old_id, old_file] : segments) {
+                if (old_file.inode == file.inode) {
+                    recycled_from = old_id;
+                }
+            }
+            segments.emplace(id, file);
+        }
+        current_handles.put(std::move(h));
+        ++entries_in_current;
+    }
+    BOOST_REQUIRE_MESSAGE(recycled_from, "no segment reused a recycled file");
+    BOOST_TEST_MESSAGE(fmt::format("use_o_dsync={}: segment {} (alignment {}) reuses the file of segment {} (alignment {})",
+            use_o_dsync, current, segments[current].alignment, *recycled_from, segments[*recycled_from].alignment));
+
+    size_t read_entries = 0;
+    try {
+        co_await db::commitlog::read_log_file(path_of(current), db::commitlog::descriptor::FILENAME_PREFIX,
+                [&] (db::commitlog::buffer_and_replay_position) -> future<> {
+            ++read_entries;
+            co_return;
+        });
+    } catch (commitlog::segment_truncation&) {
+        // Where the writing stopped: the recycled file's old sectors carry another segment id.
+    }
+    BOOST_REQUIRE_EQUAL(read_entries, entries_to_read_back);
+    BOOST_REQUIRE_EQUAL(segments[current].alignment, segments[*recycled_from].alignment);
+
+    current_handles = rp_set{};
+    co_await log.shutdown();
+    co_await log.clear();
+}
+
+SEASTAR_TEST_CASE(test_commitlog_read_back_recycled_segment) {
+    return test_read_back_recycled_segment(false);
+}
+
+SEASTAR_TEST_CASE(test_commitlog_read_back_recycled_segment_odsync) {
+    return test_read_back_recycled_segment(true);
 }
 
 // Test for #8363

@@ -2467,10 +2467,11 @@ future<db::commitlog::segment_manager::sseg_ptr> db::commitlog::segment_manager:
                 co_await f.flush();
                 co_await f.close();
                 co_await f.open(flags, opt, max_size);
-
-                // we will never add blocks (scouts honour). I can haz smaller align?
-                align = f.disk_overwrite_dma_alignment();
             }
+            // A file this mode created was zero-filled to max_size, so overwrite writes
+            // allocate nothing. A recycled file must keep the alignment of its old sectors
+            // past the write frontier, or replay misreads them.
+            align = f.disk_overwrite_dma_alignment();
         } else {
             co_await f.truncate(max_size);
         }
