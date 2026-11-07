@@ -8,10 +8,15 @@
 
 #pragma once
 
+#include <string_view>
+
+#include <fmt/format.h>
+
 #include "schema/schema_fwd.hh"
 #include "dht/token.hh"
 #include "locator/host_id.hh"
 #include "sstables/types.hh"
+#include "utils/UUID.hh"
 
 namespace utils {
 template <typename, size_t>
@@ -51,6 +56,16 @@ struct snapshot_sstable_entry {
     int64_t index_size;
 };
 
+// One snapshot_sstables row, as read by the collection of a failed
+// snapshot attempt's residue.
+struct snapshot_sstable_cleanup_entry {
+    sstables::sstable_id sstable_id;
+    dht::token first_token;
+    sstring toc_name;
+    locator::host_id node;
+    int64_t write_timestamp;
+};
+
 struct snapshot_sstables_progress {
     size_t nr_sstables;
     size_t nr_downloaded_sstables;
@@ -69,6 +84,35 @@ struct snapshot_entry {
 
     constexpr bool operator==(const snapshot_entry& o) const noexcept = default;
 };
+
+using snapshot_attempt_committed = bool_class<class snapshot_attempt_committed_tag>;
+
+// One attempt of a cluster snapshot. The coordinator writes the row before
+// the attempt's RPCs go out and sets `committed` when the attempt seals the
+// tag. Uncommitted attempts are residue, collected lazily.
+struct snapshot_attempt_entry {
+    utils::UUID attempt;
+    bool committed;
+
+    constexpr bool operator==(const snapshot_attempt_entry& o) const noexcept = default;
+};
+
+// A cluster snapshot attempt keys its catalog rows and bucket references by
+// "{tag}/{attempt}", so two attempts of one tag never share a name. The user
+// tag is the first path segment, which is why a user tag cannot contain '/'.
+constexpr char snapshot_attempt_separator = '/';
+
+inline std::string_view snapshot_user_tag(std::string_view name) {
+    return name.substr(0, name.find(snapshot_attempt_separator));
+}
+
+inline bool is_valid_user_snapshot_tag(std::string_view tag) {
+    return !tag.empty() && tag.find(snapshot_attempt_separator) == std::string_view::npos;
+}
+
+inline sstring make_snapshot_attempt_name(std::string_view tag, utils::UUID attempt) {
+    return sstring(fmt::format("{}{}{}", tag, snapshot_attempt_separator, attempt));
+}
 
 // Backup location for a snapshot for a given dc
 struct snapshot_remote_location_entry {
@@ -112,6 +156,11 @@ struct snapshot_table_entry {
     std::string tablet_layout;
 
     constexpr bool operator==(const snapshot_table_entry& o) const noexcept = default;
+};
+
+struct snapshot_tablet_cleanup_entry {
+    dht::token first_token;
+    int64_t write_timestamp;
 };
 
 // Tablet as of the time of snapshot

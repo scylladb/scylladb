@@ -83,6 +83,12 @@ public:
      * remote location metadata per datacenter. */
     static constexpr auto SNAPSHOT_REMOTE_LOCATIONS = "snapshot_remote_locations";
 
+    /* This table lists the attempts of each cluster snapshot tag. An attempt's
+     * catalog rows and bucket references live under "{tag}/{attempt}".
+     * There can only be a single committed=true row, and if there is one, all the other attempts are
+     * considered garbage which will get cleaned up. */
+    static constexpr auto SNAPSHOT_ATTEMPTS = "snapshot_attempts";
+
     /* This table is used by the Alternator export to S3 code to store the metadata of each
      * export, keyed by its ARN. The node driving an export writes its progress here, and
      * DescribeExport/ListExports read from it. */
@@ -165,6 +171,51 @@ public:
     /* Retrieves download progress for a given snapshot, keyspace, table, datacenter, and rack */
     future<snapshot_sstables_progress> get_snapshot_sstables_progress(sstring snapshot_name, sstring ks, sstring table, sstring dc, sstring rack, db::consistency_level cl = db::consistency_level::QUORUM) const;
 
+    /* Retrieves, for one (snapshot, keyspace, table, datacenter, rack) partition, the
+     * information needed to clean up the residue of a crashed or failed snapshot
+     * attempt. */
+    future<utils::chunked_vector<snapshot_sstable_cleanup_entry>> get_snapshot_sstables_for_cleanup(
+            std::string_view snapshot_name, std::string_view ks, std::string_view table,
+            std::string_view dc, std::string_view rack,
+            db::consistency_level cl = db::consistency_level::QUORUM) const;
+
+    /* Retrieves, for one (snapshot, keyspace, table, datacenter) partition,
+     * each snapshot_tablets row's clustering key and write timestamp, for
+     * collecting a failed attempt's rows. */
+    future<utils::chunked_vector<snapshot_tablet_cleanup_entry>> get_snapshot_tablets_for_cleanup(
+            std::string_view snapshot_name, std::string_view ks, std::string_view table, std::string_view dc,
+            db::consistency_level cl = db::consistency_level::QUORUM) const;
+
+    /* Deletes a single snapshot_tablets row, tombstone pinned at the row's
+     * observed write timestamp */
+    future<> delete_snapshot_tablet_entry(std::string_view snapshot_name, std::string_view ks, std::string_view table,
+            std::string_view dc, dht::token first_token, int64_t write_timestamp,
+            db::consistency_level cl = db::consistency_level::QUORUM);
+
+    /* Returns the (keyspace, table) names on the snapshot_tables rows of one
+     * name, for finding the tables of a failed attempt, dropped ones included. */
+    future<utils::chunked_vector<std::pair<sstring, sstring>>> get_snapshot_schema_rows_for_cleanup(std::string_view snapshot_name,
+            db::consistency_level cl = db::consistency_level::QUORUM) const;
+
+    /* Deletes one name's snapshot_keyspaces and snapshot_tables partitions
+     * with a tombstone at the given timestamp. */
+    future<> delete_snapshot_schema_rows(std::string_view snapshot_name, int64_t write_timestamp,
+            db::consistency_level cl = db::consistency_level::QUORUM);
+
+    /* Deletes one name's snapshot_nodes partition with a tombstone at the
+     * given timestamp. The rows have no regular column to read a write
+     * timestamp from, so the caller picks it; nothing writes under a failed
+     * attempt's name again, so a fresh timestamp is safe. */
+    future<> delete_snapshot_nodes_rows(std::string_view snapshot_name, int64_t write_timestamp,
+            db::consistency_level cl = db::consistency_level::QUORUM);
+
+    /* Deletes a single snapshot_sstables row, tombstone pinned at the row's
+     * observed write timestamp, so exactly the observed write dies. */
+    future<> delete_snapshot_sstable_entry(std::string_view snapshot_name, std::string_view ks, std::string_view table,
+            std::string_view dc, std::string_view rack,
+            dht::token first_token, sstables::sstable_id sstable_id, int64_t write_timestamp,
+            db::consistency_level cl = db::consistency_level::QUORUM);
+
     future<> update_sstable_download_status(sstring snapshot_name,
                                             sstring ks,
                                             sstring table,
@@ -198,6 +249,20 @@ public:
      * Find a snapshot entry. 
      */
     future<std::optional<snapshot_entry>> get_snapshot(std::string_view snapshot_name, db::consistency_level cl = db::consistency_level::QUORUM);
+
+    /* The row is written before the attempt's RPCs and committed by the coordinator's
+     * commit step, which writes it with committed = true.*/
+    future<> insert_snapshot_attempt(std::string_view tag, utils::UUID attempt,
+            snapshot_attempt_committed committed = snapshot_attempt_committed::no,
+            db::consistency_level cl = db::consistency_level::EACH_QUORUM);
+    future<std::vector<snapshot_attempt_entry>> get_snapshot_attempts(std::string_view tag,
+            db::consistency_level cl = db::consistency_level::QUORUM);
+    future<> delete_snapshot_attempt(std::string_view tag, utils::UUID attempt,
+            db::consistency_level cl = db::consistency_level::QUORUM);
+    /* Returns the name of the snapshot attempt as written in the catalog tables, i.e. "{tag}/{attempt}"
+       or nullopt when none is committed.*/
+    future<std::optional<sstring>> find_committed_snapshot_name(std::string_view tag,
+            db::consistency_level cl = db::consistency_level::QUORUM);
 
     /**
      * Add backup locations to a snapshot
@@ -276,10 +341,9 @@ public:
     );
 
     /**
-     * Helper to write snapshot base metadata
+     * Helper to write a snapshot's keyspace and table schema rows.
      */
-    future<> insert_snapshot_info(std::string_view snapshot_name
-        , db_clock::time_point created, db_clock::time_point expiry
+    future<> insert_snapshot_schema_rows(std::string_view snapshot_name
         , std::span<const lw_shared_ptr<replica::table>> tables
         , db::consistency_level cl = db::consistency_level::QUORUM
     );

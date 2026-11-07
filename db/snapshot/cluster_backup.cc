@@ -26,6 +26,7 @@
 #include "sstables/sstables.hh"
 #include "sstables/sstable_directory.hh"
 #include "sstables/sstables_manager.hh"
+#include "sstables/storage.hh"
 #include "sstables/object_storage_client.hh"
 #include "sstables/component_type.hh"
 #include "utils/error_injection.hh"
@@ -82,6 +83,13 @@ static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string&
             co_return; // throw?
         }
     }
+    // The catalog rows of a cluster snapshot live under the committed
+    // attempt's name, "{tag}/{attempt}". The backup's own rows, the
+    // manifest and the uploaded references keep the user tag.
+    const auto committed_name = co_await sth.find_committed_snapshot_name(snapshot_name);
+    if (!committed_name) {
+        throw std::runtime_error(fmt::format("Snapshot '{}' has no committed attempt", snapshot_name));
+    }
 
     auto locations = co_await sth.get_snapshot_remote_locations(snapshot_name);
     std::unordered_map<std::string, db::snapshot_state> state_filter;
@@ -128,7 +136,7 @@ static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string&
         co_await sth.insert_snapshot_remote_locations(new_locations); // update status
     });
 
-    auto nodes = co_await sth.get_snapshot_nodes(snapshot_name);
+    auto nodes = co_await sth.get_snapshot_nodes(*committed_name);
     auto nodes_for_location = nodes | std::views::filter([&](auto& n) { return dc_locations.count(n.datacenter); });
     auto& db = snap_ctl.db().local();
 
@@ -152,7 +160,7 @@ static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string&
         std::unordered_map<std::string, std::unordered_map<size_t, db::snapshot_tablet_entry>> dc_tablets;
         for (auto& dc : dc_locations | std::views::keys) {
             dc_tablets.emplace(dc, 
-                (co_await sth.get_snapshot_tablets(snapshot_name, keyspace, table, dc))
+                (co_await sth.get_snapshot_tablets(*committed_name, keyspace, table, dc))
                 | std::views::transform([](auto& e) {
                     return std::make_pair(e.tablet_id, e);
                 })
@@ -180,7 +188,7 @@ static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string&
 
             auto& dst = dc_locations.at(node.datacenter);
             auto& repair_master = repair_masters[dst];
-            auto sstables = co_await sth.get_snapshot_sstables(snapshot_name, keyspace, table, node.datacenter, node.rack);
+            auto sstables = co_await sth.get_snapshot_sstables(*committed_name, keyspace, table, node.datacenter, node.rack);
             auto& tablets = dc_tablets.at(node.datacenter);
 
             // eliminate all but one of the completed repair set.
@@ -248,7 +256,7 @@ static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string&
                 for (auto& sst : sstables) {
                     sst.state = db::snapshot_state::local;
                 }
-                co_await sth.insert_snapshot_sstables(snapshot_name, keyspace, table, node.datacenter, node.rack, sstables);
+                co_await sth.insert_snapshot_sstables(*committed_name, keyspace, table, node.datacenter, node.rack, sstables);
             }
 
             // we don't really need/use this atm, but...
@@ -265,7 +273,7 @@ static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string&
 
             try {
                 auto prefix = db::snapshot::sstables_location(dst.prefix);
-                co_await ser::snapshot_backup_rpc_verbs::send_backup_snapshot_sstables(&snap_ctl.ms(), node.node, tid, snapshot_name, dst.endpoint, dst.bucket, prefix, first_token, last_token, std::move(sstable_ids), remove_on_uploaded);
+                co_await ser::snapshot_backup_rpc_verbs::send_backup_snapshot_sstables(&snap_ctl.ms(), node.node, tid, *committed_name, dst.endpoint, dst.bucket, prefix, first_token, last_token, std::move(sstable_ids), remove_on_uploaded);
                 total_progress.completed += 1;
             } catch (...) {
                 snap_log.error("Exception requesting backup of {}:{} from {}", snapshot_name, sstable_ids, node.node);
@@ -278,8 +286,8 @@ static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string&
         // Note: atm, tablet mapping is same across all dcs. If this changes, we need to get this per dc,
         // each of which can shared dest with others. Thus we also need to change manifest grammar to allow
         // tablet info per dc.
-        auto tablets = co_await sth.get_snapshot_tablets(snapshot_name, keyspace, table, dc_locations.begin()->first);
-        auto tables = co_await sth.get_snapshot_tables(snapshot_name, keyspace, table);
+        auto tablets = co_await sth.get_snapshot_tablets(*committed_name, keyspace, table, dc_locations.begin()->first);
+        auto tables = co_await sth.get_snapshot_tables(*committed_name, keyspace, table);
 
         auto& manager = db.get_sstables_manager(*schema);
 
@@ -429,7 +437,10 @@ db::snapshot::backup_sstables(db::snapshot_ctl& snap, table_id table_id, std::st
         throw std::invalid_argument("not able to backup a non-local table");
     }
     auto& local_storage_options = std::get<data_dictionary::storage_options::local>(storage_options.value);
-    auto dir = (local_storage_options.dir / sstables::snapshots_dir / std::string_view(tag));
+    // `tag` names the catalog rows, "{tag}/{attempt}" for a cluster snapshot.
+    // The snapshot directory and the uploaded references use the user tag for local tables.
+    const sstring user_tag(db::snapshot_user_tag(tag));
+    auto dir = (local_storage_options.dir / sstables::snapshots_dir / std::string_view(user_tag));
 
     struct gen_info {
         db::snapshot_sstable_entry& sstable;
@@ -497,7 +508,7 @@ db::snapshot::backup_sstables(db::snapshot_ctl& snap, table_id table_id, std::st
             }
 
             auto gen = (*gen_info).generation;
-            auto ref_name = sstables::object_name(bucket, table_prefix, fmt::format("refs/snapshot-{}/{}", tag, gen));
+            auto ref_name = sstables::object_name(bucket, table_prefix, sstables::object_storage_snapshot_ref_name(user_tag, gen));
             co_await client->put_object(ref_name, memory_data_sink_buffers{}, sstables::object_storage_attributes{}); // any exception here can just propagate
 
             bool any_failed = false;
