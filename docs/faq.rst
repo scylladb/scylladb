@@ -38,22 +38,6 @@ Yes, for more than one reason:
 * each table will run its compactions independently, often at the same time
 * depending on the compaction strategy, more than one compaction can run in parallel. For example in Sized Tier Compaction Strategy (STCS), large sstable compaction can take time, allowing smaller sstable to be compacted at the same time
 
-.. _faq-io:
-
-Setting io.conf configuration for HDD storage
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-As part of the ScyllaDB setup process, **iotune** runs a short benchmark of your storage. When completed, it generates the `/etc/scylla.d/io.conf` configuration file. Note that iotune has known issues benchmarking HDD storage.
-
-.. note:: This section is not relevant in 2.3
-
-Therefore, when using ScyllaDB with HDD storage, it is recommended to use RAID0 on all of your available disks, and manually update the `io.conf` configuration file `max-io-request` parameter. This parameter sets the number of concurrent requests sent to the storage. The value for this parameter should be 3X (3 times) the number of your disks. For example, if you have 3 disks, you would set `max-io-request=9`.
-
-How many connections is it recommended to open from each ScyllaDB client application?
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-As a rule of thumb, for ScyllaDB's best performance, each client needs at least 1-3 connection per ScyllaDB core.
-For example, a cluster with three nodes, each node with 16 cores, each client application should open 32 (2x16) connections to each ScyllaDB node.
-
 Do I need to configure ``swap`` on a ScyllaDB node?
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -73,12 +57,6 @@ Swap can be set up in several ways. One way to set up swap is detailed in the KB
 My query does not return any or some of the data? What happened?
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 If you are using a time range in the query, refer to the solution in the troubleshooting document, :doc:`Time Range Queries Do Not Return Some or All of the Data </troubleshooting/time-zone>`.
-
-
-DESC SCHEMA shows that I am using many materialized views (MVs) when I know I only added Secondary Indexes (SI). Why are there MVs in my schema?
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-As SI is built on top of MV, you can expect to see MV in your schema. There is nothing wrong with your system. More information on :doc:`Global Secondary Indexes </features/secondary-indexes>`.
 
 
 Using the Java driver SimpleStatements are slow. Why does this happen?
@@ -105,53 +83,6 @@ You can clean snapshots by using :doc:`nodetool clearsnapshot </operating-scylla
 Features
 --------
 
-I want to try out new features.  How do I enable them?
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-ScyllaDB features can be enabled individually either through the configuration file or via command-line flags.
-
-To configure using :code:`scylla.yaml` file:
-
-1. Open the file in a text editor:
-
-   On Linux systems
-
-   :code:`$ vi /etc/scylla/scylla.yaml`
-
-   On Docker
-
-   :code:`$ docker exec -it your_node vi /etc/scylla/scylla.yaml`
-
-2. Add the features you want to enable
-
-   .. code-block:: yaml
-
-      # Example: enabling UDF and Strongly Consistent Tables features
-      experimental_features:
-         - udf
-         - strongly-consistent-tables
-
-3. Save the file and exit.
-4. Restart the node.
-
-   On RedHat Enterprise Linux, CentOS or Ubuntu:
-   
-   :code:`$ sudo systemctl restart scylla-server`
-   
-   On Docker:  
-   
-   :code:`$ docker stop <your_node> && docker start <your_node>`
-
-Alternately, you can enable features directly via command line flags the :code:`--experimental-features` flag as follows. This command line options can be repeated multiple times. For example, to enable UDF and Strongly Consistent Tables:
-
-.. code-block:: console
-
-   $ docker run --name <your_node> -d scylladb/scylla \
-       --experimental-features=udf \
-       --experimental-features=strongly-consistent-tables
-
-You should now be able to use the specified experimental features.
-
 How do I check the current version of ScyllaDB that I am running?
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 * On a regular system or VM (running Ubuntu, CentOS, or RedHat Enterprise): :code:`$ scylla --version`
@@ -175,17 +106,6 @@ See `Error connecting Java Spring application to ScyllaDB Cluster in Docker <htt
 
 Installation
 -----------------------------------------------------
-Can I install ScyllaDB on an Apache Cassandra server?
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-ScyllaDB comes with its own version of the Apache Cassandra client tools, in the package :code:`scylla-tools`. Trying to install it on a server with Cassandra already installed may result in something like:
-
-.. code-block:: console
-
-   Unpacking scylla-tools (1.0.1-20160411.b9fe89b-ubuntu1) ...
-   dpkg: error processing archive /var/cache/apt/archives/scylla-tools_1.0.1-20160411.b9fe89b-ubuntu1_all.deb (--unpack):
-   trying to overwrite '/usr/bin/nodetool', which is also in package cassandra 2.1.4
-
-We recommend uninstalling Apache Cassandra before installing :code:`scylla-tools`.
 
  .. TODO Update the example below then a patch release for 2025.1 is available
 
@@ -284,17 +204,6 @@ Yes, but it will require running a full repair (or cleanup) to change the replic
   Cleanup runs on a per-node basis.
 - If you're increasing the replication factor, refer to :doc:`How to Safely Increase the RF </kb/rf-increase>`
 - Note that you need to provide the keyspace name. If you do not, the cleanup or repair operation runs on all keyspaces for the specific node.
-
-Why can't I set ``listen_address`` to listen to 0.0.0.0 (all my addresses)?
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-ScyllaDB is a gossip-based distributed system and ``listen_address`` is the address a node tells other nodes to reach
-it at. Telling other nodes "contact me on any of my addresses" is a bad idea; if different nodes in the cluster pick
-different addresses for you, Bad Things happen.
-
-If you don't want to manually specify an IP to ``listen_address`` for each node in your cluster (understandable!), leave
-it blank and ScyllaDB will use ``InetAddress.getLocalHost()`` to pick an address. Then it's up to you or your ops team
-to make things resolve correctly (``/etc/hosts/``, dns, etc).
 
 .. _faq-best-scenario-node-multi-availability-zone:
 
@@ -420,25 +329,3 @@ You can restrict the number of items in the IN clause with the following options
 
 The options can be configured on the command line, passed with ``SCYLLA_ARGS`` in ``/etc/default/scylla-server`` or ``/etc/sysconfig/scylla-server``, 
 or added to your ``scylla.yaml`` (see :doc:`ScyllaDB Configuration<operating-scylla/admin>`).
-
-Can I change the coredump mount point? 
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Yes, by edit ``sysctl.d``.
- 
-Procedure
-
-1. Create ``/etc/sysctl.d/99-scylla-coredump.conf`` (this file exists by default in ScyllaDB AMI).
-
-2. Open the ``99-scylla-coredump.conf`` file.
-
-3. Add the following line ``kernel.core_pattern=|/<path>/<coredump_directory> %p %u %g %s %t %e"``
-
-For example:
-
-.. code-block:: shell
-
-   kernel.core_pattern=|/home/centos/core/ %p %u %g %s %t %e"
-
-4. Run ``sysctl -p /etc/sysctl.d/99-scylla-coredump.conf`` 
-
