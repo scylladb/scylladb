@@ -324,6 +324,7 @@ public:
     bool key_is_in_relation() const { return _analysis.key_is_in_relation(); }
     bool clustering_key_restrictions_has_IN() const { return _analysis.clustering_key_restrictions_has_IN(); }
     bool clustering_key_restrictions_has_only_eq() const { return _analysis.ck_is_all_eq; }
+    std::optional<size_t> find_unset_bind_variable(const query_options& options) const { return _analysis.find_unset_bind_variable(options); }
     bool has_token_restrictions() const { return _analysis.has_token_restrictions(); }
     bool has_eq_restriction_on_column(const column_definition& column) const {
         return _analysis.has_eq_restriction_on_column(column);
