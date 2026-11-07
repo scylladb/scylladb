@@ -20,6 +20,9 @@ What’s more, the size of an index is proportional to the size of the indexed d
 
 For this reason, secondary indexes in ScyllaDB are **global** rather than local. With global indexing, a materialized view is created for each index. This :doc:`materialized view </features/materialized-views/>` has the indexed column as a partition key and primary key (partition key and clustering keys) of the indexed row as clustering keys.
 
+The definition of the materialized view dictates the data distribution of the secondary index. For example, creating an index on a column that allows just a few distinct values (e.g., a boolean column) will lead to a materialized view with very large partitions. Conversely, creating an index on a column whose values are mostly unique will lead to a materialized view with many very small partitions.
+In the latter case, it's worth noting that all of these partitions will also have an entry in the primary index (the index used for disk reads), which can have a significant impact on the size of the index, particularly if the indexed column is larger than the partition key of the base table.
+
 Secondary indexes created globally provide a further advantage: you can use the value of the indexed column to find the corresponding index table row in the cluster so reads are scalable. Note however, that with this approach, writes are slower than with local indexing because of the overhead required to keep the indexed view up to date.
 
 How Secondary Index Queries Work
@@ -126,6 +129,13 @@ Note that you can use the ``DESCRIBE`` command to see the whole schema for the b
    ...
 
 Note the Secondary Index is implemented as MATERIALIZED VIEW.
+
+Index table options
+...................
+
+The materialized view backing the secondary index does not inherit all of the options (in particular, compaction and compression strategies) of the base table. This is because the materialized view does not necessarily have the same characteristics as the base table. Instead, when creating a secondary index, default options are used.
+
+After creating the index, you can change the options of the materialized view backing the secondary index using the ``ALTER MATERIALIZED VIEW`` command. For more details, refer to :doc:`Materialized Views documentation </features/materialized-views>`.
 
 
 More information 
