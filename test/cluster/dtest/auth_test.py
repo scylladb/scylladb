@@ -1196,7 +1196,7 @@ class TestAuth(Tester):
         if not include_superuser:
             perms = [(u, r, p) for (u, r, p) in perms if u != "cassandra"]
 
-        assert sorted(expected), sorted(perms)
+        assert sorted(expected) == sorted(perms)
 
     def assert_unauthorized(self, message, session, query):
         with pytest.raises(Unauthorized) as cm:
