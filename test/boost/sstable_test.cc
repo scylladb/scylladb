@@ -496,6 +496,35 @@ SEASTAR_TEST_CASE(test_link_with_rewritten_component_bytes_on_disk) {
     return test_env::do_with_async(do_test_link_with_rewritten_component_size);
 }
 
+// The run identifier can be changed in memory, e.g. when the sstable's run is spliced with
+// another one, and rewriting a component must not revert it to the one stored on disk.
+SEASTAR_TEST_CASE(test_link_with_rewritten_component_preserves_run_identifier) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto random_spec = tests::make_random_schema_specification(
+            "ks",
+            std::uniform_int_distribution<size_t>(1, 4),
+            std::uniform_int_distribution<size_t>(2, 4),
+            std::uniform_int_distribution<size_t>(2, 8),
+            std::uniform_int_distribution<size_t>(2, 8));
+        auto random_schema = tests::random_schema{tests::random::get_int<uint32_t>(), *random_spec};
+        auto schema = random_schema.schema();
+
+        const auto muts = tests::generate_random_mutations(random_schema, 2).get();
+        auto sst = make_sstable_containing(env.make_sstable(schema, sstable::version_types::me), muts).get();
+
+        auto on_disk_run_id = sst->run_identifier();
+        auto in_memory_run_id = sstables::run_id::create_random_id();
+        sst->set_run_identifier(in_memory_run_id);
+
+        auto new_sst = mutate_sstable(env, std::move(sst), std::identity{}).get();
+        BOOST_REQUIRE(new_sst->run_identifier() == in_memory_run_id);
+
+        // The rewrite doesn't persist the in-memory run identifier.
+        auto reloaded_sst = env.reusable_sst(new_sst).get();
+        BOOST_REQUIRE(reloaded_sst->run_identifier() == on_disk_run_id);
+    });
+}
+
 // Tests for reading a large partition for which the index contains a
 // "promoted index", i.e., a sample of the column names inside the partition,
 // with which we can avoid reading the entire partition when we look only

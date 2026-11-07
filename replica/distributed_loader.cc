@@ -358,6 +358,11 @@ future<> table_populator::start() {
     for (auto dir : _sstable_directories) {
         co_await populate_subdir(*dir);
     }
+
+    // Runs are spliced only in memory, so splicing is lost on restart and has to be redone.
+    co_await smp::invoke_on_all([this] {
+        return _global_table->splice_sstable_runs();
+    });
 }
 
 future<> table_populator::stop() {

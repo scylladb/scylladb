@@ -259,6 +259,11 @@ future<uint64_t> compaction_manager::get_candidates_size(compaction_group_view& 
     co_return std::ranges::fold_left(candidates | std::views::transform([] (auto& sst) { return sst->data_size(); }), uint64_t(0), std::plus{});
 }
 
+future<std::vector<sstables::frozen_sstable_run>> compaction_manager::get_candidate_runs(compaction_group_view& t) const {
+    auto main_set = co_await t.main_sstable_set();
+    co_return get_candidates(t, main_set->all_sstable_runs());
+}
+
 bool compaction_manager::eligible_for_compaction(const sstables::shared_sstable& sstable) const {
     return is_eligible_for_compaction(sstable) && !_compacting_sstables.contains(sstable);
 }

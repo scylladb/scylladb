@@ -40,6 +40,7 @@
 #include "test/lib/test_services.hh"
 #include "test/lib/eventually.hh"
 #include "test/lib/log.hh"
+#include "test/lib/permutations.hh"
 
 namespace fs = std::filesystem;
 
@@ -1046,5 +1047,317 @@ SEASTAR_TEST_CASE(unused_gc_sstable_is_deleted_when_final_replacement_fails_test
         BOOST_REQUIRE_MESSAGE(leaked().empty(),
                 seastar::format("{} garbage collected sstable(s) left on disk after the final replacement failed: [{}]",
                         leaked().size(), fmt::join(leaked(), ", ")));
+    });
+}
+
+// Makes a run of fake sstables, covering the given keys, two keys per fragment.
+static frozen_sstable_run make_fake_run(test_env& env, schema_ptr s, const std::vector<dht::decorated_key>& keys,
+        unsigned first, unsigned last, uint64_t fragment_size) {
+    sstable_run run;
+    auto id = run_id::create_random_id();
+    for (unsigned i = first; i < last; i += 2) {
+        auto sst = env.make_sstable(s);
+        sstables::test(sst).set_values_for_leveled_strategy(fragment_size, 0, 0, keys[i].key(), keys[i + 1].key());
+        sstables::test(sst).set_run_identifier(id);
+        BOOST_REQUIRE(run.insert(std::move(sst)));
+    }
+    return make_lw_shared<const sstable_run>(std::move(run));
+}
+
+static schema_ptr make_ics_schema(const char* name, int min_threshold = 4) {
+    auto builder = schema_builder(this_smp_shard_count(), "tests", name)
+            .with_column("id", utf8_type, column_kind::partition_key)
+            .with_column("value", int32_type);
+    builder.set_compaction_strategy(compaction::compaction_strategy_type::incremental);
+    builder.set_min_compaction_threshold(min_threshold);
+    return builder.build();
+}
+
+// Checks which runs ICS picks to splice. Disjoint runs of similar size, such as the halves of
+// a merged tablet, are picked. Overlapping runs, runs whose fragments interleave, and runs too
+// different in size to be compacted together, are not. Each case is also checked with the input
+// reversed, as the outcome must not depend on its order.
+SEASTAR_TEST_CASE(ics_runs_to_splice_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto s = make_ics_schema("ics_runs_to_splice_test");
+        auto cs = compaction::make_compaction_strategy(compaction::compaction_strategy_type::incremental, {});
+        auto keys = tests::generate_partition_keys(16, s);
+        constexpr uint64_t gb = 1024 * 1024 * 1024;
+
+        auto make_run = [&] (unsigned first, unsigned last, uint64_t fragment_size) {
+            return make_fake_run(env, s, keys, first, last, fragment_size);
+        };
+        using run_ids = std::set<run_id>;
+        // Returns the identifiers of the runs in each group, along with the identifier of its first run,
+        // which names the spliced run.
+        auto get_runs_to_splice = [&] (std::vector<frozen_sstable_run> runs) {
+            // Converts groups of runs into a value that doesn't depend on the order of groups or of runs
+            // within a group: for each group, the identifier of its first run, which names the spliced
+            // run, and the identifiers of all its runs.
+            auto to_ids = [] (const std::vector<std::vector<frozen_sstable_run>>& groups) {
+                std::set<std::pair<run_id, run_ids>> ret;
+                for (auto& group : groups) {
+                    BOOST_REQUIRE_GE(group.size(), 2);
+                    run_ids ids;
+                    for (auto& run : group) {
+                        ids.insert(run->run_identifier());
+                    }
+                    ret.emplace(group.front()->run_identifier(), std::move(ids));
+                }
+                return ret;
+            };
+            auto ret = to_ids(cs.get_runs_to_splice(runs));
+            // The outcome must not depend on the order of the input.
+            std::ranges::reverse(runs);
+            BOOST_REQUIRE(to_ids(cs.get_runs_to_splice(runs)) == ret);
+            return ret;
+        };
+
+        // The two halves of a merged tablet, of similar size, are spliced, under the name of the larger one.
+        {
+            auto left = make_run(0, 8, gb);
+            auto right = make_run(8, 16, gb + 1);
+            auto groups = get_runs_to_splice({left, right});
+            BOOST_REQUIRE(groups == (std::set<std::pair<run_id, run_ids>>{{right->run_identifier(), {left->run_identifier(), right->run_identifier()}}}));
+        }
+
+        // Overlapping runs cannot be spliced.
+        {
+            auto a = make_run(0, 8, gb);
+            auto b = make_run(4, 12, gb);
+            BOOST_REQUIRE(get_runs_to_splice({a, b}).empty());
+        }
+
+        // Disjoint runs which are too different in size to be compacted together are left alone.
+        {
+            auto left = make_run(0, 8, gb);
+            auto right = make_run(8, 16, 10 * gb);
+            BOOST_REQUIRE(get_runs_to_splice({left, right}).empty());
+        }
+
+        // Each tier of the left half is spliced with its counterpart of the right half.
+        {
+            auto left_big = make_run(0, 8, 10 * gb);
+            auto left_small = make_run(0, 8, gb);
+            auto right_big = make_run(8, 16, 10 * gb);
+            auto right_small = make_run(8, 16, gb);
+            auto groups = get_runs_to_splice({left_big, left_small, right_big, right_small});
+            BOOST_REQUIRE_EQUAL(groups.size(), 2);
+            std::set<run_ids> expected = {
+                {left_big->run_identifier(), right_big->run_identifier()},
+                {left_small->run_identifier(), right_small->run_identifier()},
+            };
+            BOOST_REQUIRE((groups | std::views::values | std::ranges::to<std::set>()) == expected);
+        }
+
+        // A run overlapping with the others in its tier doesn't prevent them from being spliced together.
+        {
+            auto left = make_run(0, 8, gb);
+            auto right = make_run(8, 16, gb);
+            auto whole = make_run(0, 16, gb / 2);
+            auto groups = get_runs_to_splice({left, right, whole});
+            BOOST_REQUIRE_EQUAL(groups.size(), 1);
+            BOOST_REQUIRE(groups.begin()->second == (run_ids{left->run_identifier(), right->run_identifier()}));
+        }
+
+        // The quarters of a tablet merged twice are all spliced into one run.
+        {
+            std::vector<frozen_sstable_run> quarters;
+            for (unsigned i = 0; i < 4; ++i) {
+                quarters.push_back(make_run(i * 4, (i + 1) * 4, gb));
+            }
+            auto groups = get_runs_to_splice(quarters);
+            BOOST_REQUIRE_EQUAL(groups.size(), 1);
+            BOOST_REQUIRE_EQUAL(groups.begin()->second.size(), 4);
+        }
+
+        // With two overlapping runs on each side, the larger runs are spliced together, and so are the smaller ones.
+        {
+            auto left_large = make_run(0, 8, gb + 2);
+            auto left_small = make_run(0, 8, gb);
+            auto right_large = make_run(8, 16, gb + 3);
+            auto right_small = make_run(8, 16, gb + 1);
+            auto groups = get_runs_to_splice({left_large, left_small, right_large, right_small});
+            BOOST_REQUIRE(groups == (std::set<std::pair<run_id, run_ids>>{
+                {right_large->run_identifier(), {left_large->run_identifier(), right_large->run_identifier()}},
+                {right_small->run_identifier(), {left_small->run_identifier(), right_small->run_identifier()}},
+            }));
+        }
+
+        // Runs whose fragments interleave are not spliced, even though the fragments don't overlap,
+        // since the runs span overlapping ranges.
+        {
+            auto make_run_of_fragments = [&] (std::initializer_list<unsigned> firsts) {
+                sstable_run run;
+                auto id = run_id::create_random_id();
+                for (auto i : firsts) {
+                    auto sst = env.make_sstable(s);
+                    sstables::test(sst).set_values_for_leveled_strategy(gb, 0, 0, keys[i].key(), keys[i + 1].key());
+                    sstables::test(sst).set_run_identifier(id);
+                    BOOST_REQUIRE(run.insert(std::move(sst)));
+                }
+                return make_lw_shared<const sstable_run>(std::move(run));
+            };
+            auto a = make_run_of_fragments({0, 4});
+            auto b = make_run_of_fragments({2, 6});
+            BOOST_REQUIRE(get_runs_to_splice({a, b}).empty());
+        }
+    });
+}
+
+// Checks that compaction_group::splice_sstable_runs() gives the halves of a merged tablet a
+// common run identifier, in memory and in the main set, so that ICS stops picking them for
+// compaction. A run overlapping with both halves is left alone, and splicing again changes
+// nothing.
+SEASTAR_TEST_CASE(ics_splice_sstable_runs_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        // With min_threshold=2, any two runs of similar size get compacted together.
+        auto s = make_ics_schema("ics_splice_sstable_runs_test", 2);
+        auto cf = env.make_table_for_tests(s);
+        auto close_cf = deferred_stop(cf);
+        auto& cs = cf->get_compaction_strategy();
+        auto control = make_strategy_control_for_test(false);
+        auto keys = tests::generate_partition_keys(16, s);
+        constexpr uint64_t gb = 1024 * 1024 * 1024;
+
+        auto add_run = [&] (unsigned first, unsigned last, uint64_t fragment_size) {
+            auto run = make_fake_run(env, s, keys, first, last, fragment_size);
+            for (auto& sst : run->all()) {
+                column_family_test(cf).add_sstable(sst).get();
+            }
+            return run;
+        };
+        // The halves of a merged tablet, along with a run spanning both, 4 GiB each: the run spanning
+        // both has twice as many fragments, each half the size.
+        auto left = add_run(0, 8, gb);
+        auto right = add_run(8, 16, gb);
+        auto whole = add_run(0, 16, gb / 2);
+        auto main_runs = [&] {
+            return cf.as_compaction_group_view().main_sstable_set().get()->all_sstable_runs();
+        };
+        BOOST_REQUIRE_EQUAL(main_runs().size(), 3);
+        BOOST_REQUIRE_EQUAL(cs.get_sstables_for_compaction(cf.as_compaction_group_view(), *control).get().sstables.size(),
+                left->all().size() + right->all().size() + whole->all().size());
+        // A run's identifier is that of its fragments, so it has to be captured before splicing.
+        // The halves are of the same size, so the one with the greater identifier names the spliced run.
+        auto spliced_run_id = std::max(left->run_identifier(), right->run_identifier());
+        auto whole_run_id = whole->run_identifier();
+
+        cf->splice_sstable_runs().get();
+
+        auto runs = main_runs();
+        BOOST_REQUIRE_EQUAL(runs.size(), 2);
+        BOOST_REQUIRE_EQUAL(cf->get_sstables()->size(), left->all().size() + right->all().size() + whole->all().size());
+        for (auto& run : {left, right}) {
+            for (auto& sst : run->all()) {
+                BOOST_REQUIRE(sst->run_identifier() == spliced_run_id);
+            }
+        }
+        for (auto& sst : whole->all()) {
+            BOOST_REQUIRE(sst->run_identifier() == whole_run_id);
+        }
+        auto spliced = std::ranges::find(runs, spliced_run_id, std::mem_fn(&sstable_run::run_identifier));
+        BOOST_REQUIRE(spliced != runs.end());
+        BOOST_REQUIRE_EQUAL((*spliced)->all().size(), left->all().size() + right->all().size());
+
+        // The spliced run is twice the size of the remaining one, so they're no longer compacted together.
+        BOOST_REQUIRE(cs.get_sstables_for_compaction(cf.as_compaction_group_view(), *control).get().sstables.empty());
+
+        // Nothing is left to splice.
+        cf->splice_sstable_runs().get();
+        BOOST_REQUIRE_EQUAL(main_runs().size(), 2);
+    });
+}
+
+// Checks how compaction_group::splice_sstable_runs() handles repair views.
+//
+// The sstables of a compaction group are split into three views: unrepaired, repairing and
+// repaired. ICS compacts each view on its own. It never compacts a run from one view with a run
+// from another.
+//
+// For the run splicing mechanism, we respect that split.
+// We don't group runs from different views for splicing,
+// because splicing is meant to prevent unnecessary compactions
+// and ICS would never compact them together anyway.
+// Worse, splicing a run with something in a different view
+// could prevent it from being spliced with a sibling run in the same view.
+//
+// Splicing has one hard rule: the sstables of a run must not overlap. Sstable sets require this.
+// ICS follows this rule when it picks runs for splicing, but it only sees one view at a time.
+// Normally that's enough, because each run has all its sstables in one view:
+// incremental repair marks all sstables of a tablet at once.
+//
+// But if a run has sstables in two views, which is theoretically possible,
+// ICS can pick two runs to splice which don't overlap within one view
+// but overlap when other views are included.
+//
+// We deal with that in a higher layer. This test checks that it's indeed dealt with.
+SEASTAR_TEST_CASE(ics_splice_sstable_runs_across_views_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto s = make_ics_schema("ics_splice_sstable_runs_across_views_test", 2);
+        auto cs = compaction::make_compaction_strategy(compaction::compaction_strategy_type::incremental, {});
+        auto keys = tests::generate_partition_keys(8, s);
+        constexpr uint64_t gb = 1024 * 1024 * 1024;
+
+        // Splices the runs of a table holding the given runs, with the given sstables repaired.
+        // Returns the run identifier of each sstable afterwards.
+        auto splice = [&] (std::vector<frozen_sstable_run> runs, std::unordered_set<shared_sstable> repaired) {
+            auto cf = env.make_table_for_tests(s);
+            auto close_cf = deferred_stop(cf);
+            cf.set_repair_sstable_classifier([&repaired] (const shared_sstable& sst, int64_t) {
+                return repaired.contains(sst) ? replica::repair_sstable_classification::repaired : replica::repair_sstable_classification::unrepaired;
+            });
+            for (auto& run : runs) {
+                for (auto& sst : run->all()) {
+                    column_family_test(cf).add_sstable(sst).get();
+                }
+            }
+            cf->splice_sstable_runs().get();
+            BOOST_REQUIRE_EQUAL(cf->get_sstables()->size(), std::ranges::fold_left(runs | std::views::transform([] (auto& run) { return run->all().size(); }), size_t(0), std::plus{}));
+            return *cf->get_sstables() | std::views::transform([] (const shared_sstable& sst) { return std::pair(sst, sst->run_identifier()); })
+                    | std::ranges::to<std::unordered_map>();
+        };
+
+        // A run of 4 sstables, the last 2 of which are repaired, and an unrepaired run of 2 sstables, which
+        // overlap with the repaired ones. Within the unrepaired view, the two runs are disjoint and of
+        // similar size, so ICS wants to splice them. But the first run has sstables in both views,
+        // so neither run is spliced.
+        for (auto [partly_repaired_fragment_size, unrepaired_fragment_size] : tests::permutations(std::array{gb, gb + gb / 10})) {
+            auto partly_repaired = make_fake_run(env, s, keys, 0, 8, partly_repaired_fragment_size);
+            auto unrepaired = make_fake_run(env, s, keys, 4, 8, unrepaired_fragment_size);
+            auto repaired = partly_repaired->all() | std::views::drop(2) | std::ranges::to<std::unordered_set>();
+            sstable_run unrepaired_part;
+            for (auto& sst : partly_repaired->all() | std::views::take(2)) {
+                BOOST_REQUIRE(unrepaired_part.insert(sst));
+            }
+            BOOST_REQUIRE_EQUAL(cs.get_runs_to_splice({make_lw_shared<const sstable_run>(std::move(unrepaired_part)), unrepaired}).size(), 1);
+
+            auto partly_repaired_id = partly_repaired->run_identifier();
+            auto unrepaired_id = unrepaired->run_identifier();
+            auto run_ids = splice({partly_repaired, unrepaired}, repaired);
+            for (auto& sst : partly_repaired->all()) {
+                BOOST_REQUIRE(run_ids.at(sst) == partly_repaired_id);
+            }
+            for (auto& sst : unrepaired->all()) {
+                BOOST_REQUIRE(run_ids.at(sst) == unrepaired_id);
+            }
+        }
+
+        // Runs which have all their sstables in a view other than the unrepaired one are spliced too.
+        {
+            auto left = make_fake_run(env, s, keys, 0, 4, gb);
+            auto right = make_fake_run(env, s, keys, 4, 8, gb);
+            auto spliced_run_id = std::max(left->run_identifier(), right->run_identifier());
+            std::unordered_set<shared_sstable> repaired;
+            for (auto& run : {left, right}) {
+                repaired.insert(run->all().begin(), run->all().end());
+            }
+            auto run_ids = splice({left, right}, repaired);
+            for (auto& run : {left, right}) {
+                for (auto& sst : run->all()) {
+                    BOOST_REQUIRE(run_ids.at(sst) == spliced_run_id);
+                }
+            }
+        }
     });
 }
