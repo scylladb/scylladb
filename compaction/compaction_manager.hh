@@ -148,14 +148,21 @@ private:
 
     std::unordered_map<compaction::compaction_group_view*, compaction_state> _compaction_state;
 
-    // Purpose is to serialize all maintenance (non regular) compaction activity to reduce aggressiveness and space requirement.
+    // Semaphore names, shared between each named_semaphore_exception_factory below and the
+    // acquire_semaphore() call sites, so the two cannot drift apart.
+    static constexpr const char* maintenance_ops_sem_name = "maintenance operation";
+    static constexpr const char* off_strategy_sem_name = "off-strategy compaction";
+
+    // Purpose is to serialize maintenance (non regular) compaction activity to reduce aggressiveness and space requirement.
+    // Cleanup is the exception: it is bounded in space on its own and must not be queued behind user
+    // maintenance operations, as a topology change waits for it.
     // If the operation must be serialized with regular, then the per-table write lock must be taken.
-    seastar::named_semaphore _maintenance_ops_sem = {1, named_semaphore_exception_factory{"maintenance operation"}};
+    seastar::named_semaphore _maintenance_ops_sem = {1, named_semaphore_exception_factory{maintenance_ops_sem_name}};
 
     // This semaphore ensures that off-strategy compaction will be serialized for
     // all tables, to limit space requirement and protect against candidates
     // being picked more than once.
-    seastar::named_semaphore _off_strategy_sem = {1, named_semaphore_exception_factory{"off-strategy compaction"}};
+    seastar::named_semaphore _off_strategy_sem = {1, named_semaphore_exception_factory{off_strategy_sem_name}};
 
     utils::pluggable<db::system_keyspace> _sys_ks;
 
@@ -641,8 +648,9 @@ protected:
 
     state switch_state(state new_state);
 
+    // A contended acquisition is logged at debug level, together with the time waited.
     template <typename ExceptionFactory>
-    future<semaphore_units<ExceptionFactory>> acquire_semaphore(basic_semaphore<ExceptionFactory>& sem, size_t units = 1);
+    future<semaphore_units<ExceptionFactory>> acquire_semaphore(basic_semaphore<ExceptionFactory>& sem, const char* sem_name, size_t units = 1);
 
     // Return true if the task isn't stopped
     // and the compaction manager allows proceeding.
