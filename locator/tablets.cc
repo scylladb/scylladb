@@ -330,7 +330,7 @@ std::optional<tablet_info> merge_tablet_info(tablet_info a, tablet_info b) {
         return {};
     }
 
-    auto repair_time = std::max(a.repair_time, b.repair_time);
+    auto repair_time = std::min(a.repair_time, b.repair_time);
     int64_t sstables_repaired_at = std::max(a.sstables_repaired_at, b.sstables_repaired_at);
     auto info = tablet_info(std::move(a.replicas), repair_time, std::make_unique<tablet_task_info>(*repair_task_info),
         a.migration_task_info ? std::make_unique<tablet_task_info>(*a.migration_task_info) : nullptr, sstables_repaired_at);
