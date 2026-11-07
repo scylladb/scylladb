@@ -91,7 +91,6 @@ def testCompactCollections(cql, test_keyspace):
 
 # Check for a table with counters,
 # migrated from cql_tests.py:TestCQL.counters_test()
-@pytest.mark.xfail(reason="Cassandra 3.10's += syntax not yet supported. Issue #7735")
 def testCounters(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(userid int, url text, total counter, PRIMARY KEY (userid, url)) WITH COMPACT STORAGE") as table:
         execute(cql, table, "UPDATE %s SET total = total + 1 WHERE userid = 1 AND url = 'http://foo.com'")

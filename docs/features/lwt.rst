@@ -340,19 +340,23 @@ You can use lightweight transactions for any of the following activities:
 
       (8 rows)
 
-Arithmetic SET in a LWT update (ScyllaDB extension)
-----------------------------------------------------
+Arithmetic SET in a LWT update
+------------------------------
 
 ScyllaDB allows ``SET col = col + value`` and ``SET col = col - value`` on
-non-counter numeric columns in a conditional ``UPDATE``. Because the statement
-is executed as an LWT, the read-modify-write is atomic: no separate read and
-no race condition. An ``IF`` condition is required; without it ScyllaDB
-rejects the statement.
+non-counter numeric columns in a conditional ``UPDATE``. ``SET col = col + value``
+is also allowed on string (``text`` or ``ascii``) columns, where it appends
+``value`` to the string. Because the statement is executed as an LWT, the
+read-modify-write is atomic: no separate read and no race condition. An ``IF``
+condition is required; without it ScyllaDB rejects the statement.
 
 If the column is null, the arithmetic result is also null (standard SQL
 null-propagation semantics), so the column remains unset. To catch an
 uninitialized column, use an ``IF`` condition that checks the column directly
 (e.g. ``IF r != null``) rather than ``IF EXISTS``.
+
+Instead of ``SET col = col + value`` and ``SET col = col - value``, you can
+also use the shorthand syntax ``SET col += value`` and ``SET col -= value``.
 
 .. code-block:: cql
 
@@ -365,12 +369,19 @@ uninitialized column, use an ``IF`` condition that checks the column directly
    -- Increment r atomically - and visibly fail if r was not initialized:
    UPDATE mytable SET r = r + 1 WHERE pk = 1 AND ck = 1 IF r != null;
 
+   -- The same, with the shorthand syntax "r += 1":
+   UPDATE mytable SET r += 1 WHERE pk = 1 AND ck = 1 IF r != null;
+
    -- Decrement r by 5 only when the value is large enough:
    UPDATE mytable SET r = r - 5 WHERE pk = 1 AND ck = 1 IF r >= 5;
 
 .. note::
 
-   This syntax is a ScyllaDB extension and is not supported by Apache Cassandra.
+   Apache Cassandra also supports this syntax: ``col = col + value`` since
+   Cassandra 4.1, and ``col = col - value`` since Cassandra 6.0. One
+   difference is that when the result overflows an integer type, Cassandra
+   silently wraps around (e.g., incrementing the largest ``int`` yields the
+   smallest ``int``), while ScyllaDB rejects the update with an error.
 
 Update a table using a LWT
 --------------------------

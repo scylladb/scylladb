@@ -1815,6 +1815,7 @@ columnOperation[operations_type& operations]
 
 columnOperationDifferentiator[operations_type& operations, ::shared_ptr<cql3::column_identifier::raw> key]
     : '=' normalColumnOperation[operations, key]
+    | shorthandColumnOperation[operations, key]
     | '[' k=term ']' collectionColumnOperation[operations, key, std::move(k), false]
     | '.' field=ident udtColumnOperation[operations, key, field]
     | '[' K_SCYLLA_TIMEUUID_LIST_INDEX '(' k=term ')' ']' collectionColumnOperation[operations, key, std::move(k), true]
@@ -1857,6 +1858,19 @@ normalColumnOperation[operations_type& operations, ::shared_ptr<cql3::column_ide
     | K_SCYLLA_COUNTER_SHARD_LIST '(' t=term ')'
       {
           operations.emplace_back(std::move(key), std::make_unique<cql3::operation::set_counter_value_from_tuple_list>(std::move(t)));
+      }
+    ;
+
+// "X += <value>" and "X -= <value>" are shorthands for "X = X + <value>"
+// and "X = X - <value>".
+shorthandColumnOperation[operations_type& operations, ::shared_ptr<cql3::column_identifier::raw> key]
+    : '+=' t=term
+      {
+          operations.emplace_back(std::move(key), std::make_unique<cql3::operation::addition>(std::move(t)));
+      }
+    | '-=' t=term
+      {
+          operations.emplace_back(std::move(key), std::make_unique<cql3::operation::subtraction>(std::move(t)));
       }
     ;
 
