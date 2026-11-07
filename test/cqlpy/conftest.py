@@ -12,6 +12,7 @@
 import pytest
 from cassandra.cluster import NoHostAvailable
 from cassandra.connection import DRIVER_NAME, DRIVER_VERSION
+from cassandra.protocol import InvalidRequest
 import json
 import os
 import subprocess
@@ -22,7 +23,7 @@ import random
 from test.pylib.skip_types import skip_env
 from test.pylib.connect_options import add_host_option, add_cql_connection_options, add_s3_options
 from test.pylib.scylla_cluster import ScyllaCluster
-from .util import unique_name, new_test_keyspace, keyspace_has_tablets, cql_session, local_process_id, is_scylla, config_value_context, is_cassandra_older_than
+from .util import unique_name, new_test_keyspace, new_function, keyspace_has_tablets, cql_session, local_process_id, is_scylla, config_value_context, is_cassandra_older_than
 from .nodetool import scylla_log
 from ..conftest import dynamic_scope
 from .vector_store_mock import VectorStoreMock
@@ -187,6 +188,24 @@ def cassandra_bug(cql):
 def new_to_cassandra_6(cql):
     if is_cassandra_older_than(cql, (6, 0)):
         skip_env('Test needs Cassandra 6 or newer')
+
+# Unfortunately, while ScyllaDB and Cassandra support the same UDF
+# feature, each supports a different choice of languages. In particular,
+# Cassandra supports Java and ScyllaDB doesn't - but ScyllaDB supports
+# Lua. The following fixture can be used to check if the server supports
+# Java UDFs - and if it doesn't, the test should use Lua.
+@pytest.fixture(scope=dynamic_scope())
+def has_java_udf(cql, test_keyspace):
+    try:
+        with new_function(cql, test_keyspace, "(i int) CALLED ON NULL INPUT RETURNS int LANGUAGE java AS 'return 42;'"):
+            return True
+    except InvalidRequest as e:
+        # When the language "java" is not supported, Scylla prints the
+        # error message "Language 'java' is not supported". Cassandra
+        # isn't expected to fail here because it does support Java.
+        # Any other error here indicates an unexpected bug.
+        assert "Language 'java' is not supported" in str(e)
+        return False
 
 # Older versions of the Cassandra driver had a bug where if Scylla returns
 # an empty page, the driver would immediately stop reading even if this was

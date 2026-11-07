@@ -249,6 +249,10 @@ std::optional<std::string_view> functions_resource_view::keyspace() const {
     return _resource._parts[1];
 }
 
+bool functions_resource_view::is_keyspace() const {
+    return _resource._parts.size() == 2;
+}
+
 std::optional<std::string_view> functions_resource_view::function_signature() const {
     if (_resource._parts.size() <= 2 || _resource._parts.size() > 3) {
         return {};

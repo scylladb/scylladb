@@ -211,6 +211,10 @@ public:
     explicit functions_resource_view(const resource&);
 
     std::optional<std::string_view> keyspace() const;
+    /// True if this resource is all the functions in one keyspace
+    /// ("functions/<keyspace>"), and not all functions or a single function.
+    bool is_keyspace() const;
+
     std::optional<std::string_view> function_signature() const;
     std::optional<std::string_view> function_name() const;
     std::optional<std::vector<std::string_view>> function_args() const;
