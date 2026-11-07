@@ -5354,7 +5354,8 @@ table::query(schema_ptr query_schema,
         if (!querier_opt) {
             co_await wait_for_tablet_truncate(range);
             querier_base::querier_config conf(_config.tombstone_warn_threshold);
-            querier_opt = querier(as_mutation_source(), query_schema, permit, range, qs.cmd.slice, trace_state, get_tombstone_gc_state(), conf);
+            querier_opt = querier(as_mutation_source(), query_schema, permit, range, qs.cmd.slice, trace_state,
+                    get_tombstone_gc_state().with_commitlog_check_disabled(), conf);
         }
         auto& q = *querier_opt;
 
@@ -5408,7 +5409,7 @@ table::mutation_query(schema_ptr query_schema,
     }
     if (!querier_opt) {
         co_await wait_for_tablet_truncate(range);
-        auto tombstone_gc_state = tombstone_gc_enabled ? get_tombstone_gc_state() : tombstone_gc_state::no_gc();
+        auto tombstone_gc_state = tombstone_gc_enabled ? get_tombstone_gc_state().with_commitlog_check_disabled() : tombstone_gc_state::no_gc();
         querier_base::querier_config conf(_config.tombstone_warn_threshold);
         querier_opt = querier(as_mutation_source(), query_schema, permit, range, cmd.slice, trace_state, tombstone_gc_state, conf);
     }
