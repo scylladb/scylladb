@@ -339,6 +339,42 @@ async def test_streaming_rx_error_no_failed_message_no_fail_stream_plan_hang(man
         logger.info("Migration timeout as expected")
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_streaming_rx_error_with_failed_table_check(manager: ScyllaClusterManager):
+    """
+    When receiving STREAM_MUTATION_FRAGMENTS fails, the receiver checks whether
+    the table was dropped, which needs a group0 barrier. A failure of that check
+    (the node is shutting down, for example) must not turn the stream failure
+    into an error of the respond phase: the stream failure is logged at its own
+    level and the stream plan is failed as usual. Reproduces SCYLLADB-6010.
+    """
+    servers, cql, s0_host_id, s1_host_id, replica, tablet_token, dst_shard, ks = await get_two_servers_to_move_tablet(manager)
+
+    await manager.api.set_logger_level(servers[1].ip_addr, "stream_session", "debug")
+    await manager.api.enable_injection(servers[1].ip_addr, "stream_mutation_fragments_rx_error", one_shot=True)
+    await manager.api.enable_injection(servers[1].ip_addr, "table_sync_and_check_fail", one_shot=True)
+
+    s1_log = await manager.server_open_log(servers[1].server_id)
+    s1_mark = await s1_log.mark()
+
+    migration_task = asyncio.create_task(
+        manager.api.move_tablet(servers[0].ip_addr, ks, "test", replica[0], replica[1], s1_host_id, dst_shard, tablet_token, timeout=60))
+
+    await s1_log.wait_for('Failed to handle STREAM_MUTATION_FRAGMENTS', from_mark=s1_mark)
+
+    await manager.api.disable_injection(servers[1].ip_addr, "stream_mutation_fragments_rx_error")
+
+    logger.info("Waiting for migration to finish")
+    await migration_task
+    logger.info("Migration done")
+
+    assert await s1_log.grep(r"Failed to check whether .* was dropped: .*table_sync_and_check_fail", from_mark=s1_mark)
+    assert await s1_log.grep(r"Failed to handle STREAM_MUTATION_FRAGMENTS \(receive and distribute phase\) .*stream_mutation_fragments_rx_error", from_mark=s1_mark)
+    assert not await s1_log.grep(r"ERROR.*Failed to handle STREAM_MUTATION_FRAGMENTS \(respond phase\)", from_mark=s1_mark)
+
+    rows = await cql.run_async(f"SELECT pk from {ks}.test")
+    assert len(list(rows)) == 1
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_streaming_is_guarded_by_topology_guard(manager: ScyllaClusterManager):
     logger.info("Bootstrapping cluster")
     cmdline = [
