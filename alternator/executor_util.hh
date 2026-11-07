@@ -76,7 +76,8 @@ bool get_bool_attribute(const rjson::value& value, std::string_view attribute_na
 /// Extract table name from a request.
 /// Most requests expect the table's name to be listed in a "TableName" field.
 /// get_table_name() returns the name or api_error in case the table name is
-/// missing or not a string.
+/// missing or not a string. If TableName holds the table's ARN instead of its
+/// name, the name of the table it refers to is returned.
 std::string get_table_name(const rjson::value& request);
 
 /// find_table_name() is like get_table_name() except that it returns an
@@ -263,8 +264,16 @@ schema_ptr try_get_internal_table(const data_dictionary::database& db, std::stri
 
 /// get_table_from_batch_request() is used by batch write/read operations to
 /// look up the schema for a table named in a batch request, by the JSON member
-/// name (which is the table name in a BatchWriteItem or BatchGetItem request).
+/// name (which is the table's name or ARN in a BatchWriteItem or BatchGetItem
+/// request).
 schema_ptr get_table_from_batch_request(const service::storage_proxy& proxy, const rjson::value::ConstMemberIterator& batch_request);
+
+/// A batch request names each of its tables by a key of its RequestItems map,
+/// which may be either the table's name or its ARN - so two different keys
+/// may name the same table. validate_batch_table_not_repeated() rejects this
+/// with a ValidationException if the given table is already in seen_tables,
+/// and otherwise adds it there.
+void validate_batch_table_not_repeated(std::unordered_set<table_id>& seen_tables, const schema& schema);
 
 /// Returns (or lazily creates) the per-table stats object for the given schema.
 /// If the table has been deleted, returns a temporary stats object.
