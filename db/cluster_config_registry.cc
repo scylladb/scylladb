@@ -108,6 +108,13 @@ constexpr std::array registry_options = {
         .kind = option_kind::db_config,
         .valid_range = integer_range{.min = 1, .max = std::numeric_limits<uint32_t>::max()},
     },
+    option{
+        .name = option_name::min_compression_saving_percent,
+        .description = "Store an sstable chunk uncompressed unless compression saves at least this percentage (0-99) of its size, saving compressor CPU for data that doesn't compress, such as encrypted values. Applies to sstables written afterwards. 0 disables it",
+        .scopes = table_oriented_scopes,
+        .default_value = int64_t(0),
+        .valid_range = integer_range{.min = 0, .max = 99},
+    },
 };
 
 constexpr bool all_registry_options_are_single_domain() {
@@ -386,7 +393,14 @@ bool to_boolean(const option& opt, const std::optional<seastar::sstring>& value)
 }
 
 int64_t to_integer(const option& opt, const std::optional<seastar::sstring>& value) {
-    return to_native<int64_t>(opt, value_type::integer, "integer", value, parse_integer);
+    const auto v = to_native<int64_t>(opt, value_type::integer, "integer", value, parse_integer);
+    if (opt.valid_range && (v < opt.valid_range->min || v > opt.valid_range->max)) {
+        // Resolved per sstable writer, so an out-of-band value would otherwise flood the log.
+        static thread_local seastar::logger::rate_limit rate_limit(std::chrono::seconds(30));
+        cluster_config_registry_logger.log(seastar::log_level::warn, rate_limit, "Ignoring out-of-range stored value {} for integer config '{}', using default", v, opt.name);
+        return std::get<int64_t>(opt.default_value);
+    }
+    return v;
 }
 
 double to_floating_point(const option& opt, const std::optional<seastar::sstring>& value) {
