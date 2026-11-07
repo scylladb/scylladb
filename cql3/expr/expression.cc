@@ -17,6 +17,7 @@
 #include <unordered_map>
 #include <algorithm>
 #include <ranges>
+#include <strings.h>
 
 #include "cql3/selection/selection.hh"
 #include "cql3/util.hh"
@@ -27,6 +28,7 @@
 #include "types/set.hh"
 #include "types/vector.hh"
 #include "utils/like_matcher.hh"
+#include "utils/rjson.hh"
 #include "utils/big_decimal.hh"
 #include "utils/multiprecision_int.hh"
 #include "query/query-result-reader.hh"
@@ -2812,6 +2814,119 @@ convert_extended_property_map(const collection_constructor& map, error_sink_fn a
         }
     }
     return res;
+}
+
+namespace {
+
+// Appends the text of `e`, a literal, to `out`; see structured_literal_to_text(). Returns
+// false, having reported why, if `e` is not something a structured value can hold.
+bool append_structured_literal(sstring& out, const expression& e, error_sink_fn& add_recognition_error) {
+    auto not_a_literal = [&] {
+        sstring msg = fmt::format("Invalid value: {} (only literals are accepted here)", e);
+        if (expr::is<bind_variable>(e)) {
+            msg += " (bind variables are not supported in DDL queries)";
+        }
+        add_recognition_error(msg);
+        return false;
+    };
+    // A key is rendered as a string whatever it was written as, so that `{1: x}` and
+    // `{'1': x}` mean the same thing, as they do to a reader of the value.
+    auto append_key = [&] (const expression& key) {
+        auto constant = expr::as_if<untyped_constant>(&key);
+        if (!constant || constant->partial_type == untyped_constant::null) {
+            add_recognition_error(fmt::format("Invalid map key: {} (only constants are accepted here)", key));
+            return false;
+        }
+        out += rjson::quote_json_string(sstring(constant->raw_text.linearize()));
+        return true;
+    };
+
+    if (auto constant = expr::as_if<untyped_constant>(&e)) {
+        auto text = sstring(constant->raw_text.linearize());
+        switch (constant->partial_type) {
+        case untyped_constant::string:
+            out += rjson::quote_json_string(text);
+            break;
+        case untyped_constant::boolean:
+            // CQL takes TRUE as readily as true; JSON only takes the latter.
+            out += strcasecmp(text.c_str(), "true") == 0 ? "true" : "false";
+            break;
+        case untyped_constant::null:
+            out += "null";
+            break;
+        case untyped_constant::integer:
+        case untyped_constant::floating_point:
+        case untyped_constant::duration:
+        case untyped_constant::uuid:
+        case untyped_constant::hex:
+            out += text;
+            break;
+        }
+        return true;
+    }
+    if (auto collection = expr::as_if<collection_constructor>(&e)) {
+        // "{}" parses as an empty set (see collectionLiteral in Cql.g); here it can only
+        // mean an empty map.
+        bool is_map = collection->style == collection_constructor::style_type::map || collection->elements.empty();
+        out += is_map ? "{" : "[";
+        bool first = true;
+        for (const auto& element : collection->elements) {
+            if (!std::exchange(first, false)) {
+                out += ", ";
+            }
+            if (is_map) {
+                auto entry = expr::as_if<tuple_constructor>(&element);
+                // The parser recovers from an error by leaving a default-constructed
+                // entry behind; the error itself has been reported already.
+                if (!entry || entry->elements.size() != 2) {
+                    return false;
+                }
+                if (!append_key(entry->elements[0])) {
+                    return false;
+                }
+                out += ": ";
+                if (!append_structured_literal(out, entry->elements[1], add_recognition_error)) {
+                    return false;
+                }
+            } else if (!append_structured_literal(out, element, add_recognition_error)) {
+                return false;
+            }
+        }
+        out += is_map ? "}" : "]";
+        return true;
+    }
+    if (auto fields = expr::as_if<usertype_constructor>(&e)) {
+        // The {name: value} form, whose names need no quotes. Sorted, since the parser
+        // keeps them in no particular order and the same literal should always read the
+        // same way.
+        auto sorted = fields->elements
+                | std::views::transform([] (const auto& field) { return std::pair(field.first.to_string(), &field.second); })
+                | std::ranges::to<std::vector>();
+        std::ranges::sort(sorted, {}, &decltype(sorted)::value_type::first);
+        out += "{";
+        bool first = true;
+        for (const auto& [name, value] : sorted) {
+            if (!std::exchange(first, false)) {
+                out += ", ";
+            }
+            out += rjson::quote_json_string(name);
+            out += ": ";
+            if (!append_structured_literal(out, *value, add_recognition_error)) {
+                return false;
+            }
+        }
+        out += "}";
+        return true;
+    }
+    return not_a_literal();
+}
+
+}
+
+sstring structured_literal_to_text(const expression& literal, error_sink_fn add_recognition_error) {
+    sstring out;
+    append_structured_literal(out, literal, add_recognition_error);
+    return out;
 }
 
 } // namespace expr

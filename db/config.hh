@@ -739,6 +739,14 @@ inline bool is_true(sstring val) {
 
 future<> configure_tls_creds_builder(seastar::tls::credentials_builder& creds, db::config::string_map options);
 future<gms::inet_address> resolve(const config_file::named_value<sstring>&, gms::inet_address::opt_family family = {}, gms::inet_address::opt_family preferred = {});
+future<gms::inet_address> resolve(const sstring& address, std::string_view name, gms::inet_address::opt_family family = {}, gms::inet_address::opt_family preferred = {});
+/// Resolve an address to listen on, which unlike any other address may be written as a
+/// network - "10.0.0.0/8" - meaning "whichever address of mine is in it". That spelling
+/// is what lets one set of listeners, given to a whole cluster or a whole datacenter, be
+/// served by nodes that each listen on a different address.
+///
+/// Anything without a "/" in it is an address or a name, and is resolved as usual.
+future<gms::inet_address> resolve_listen_address(const sstring& address, std::string_view name, gms::inet_address::opt_family family = {}, gms::inet_address::opt_family preferred = {});
 
 /*!
  * \brief read the the relabel config from a file

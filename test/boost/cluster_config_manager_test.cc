@@ -274,6 +274,66 @@ SEASTAR_TEST_CASE(test_cluster_config_registry_rejects_text_value_that_would_bre
     });
 }
 
+// No shipped option is structured yet, so the literal tests inject one whose codec takes any
+// text and stores it as written, so that what is stored is exactly what the literal rendered to.
+constexpr db::cluster_config_registry::structured_codec verbatim_codec{
+    .validate = [] (std::string_view) -> std::optional<seastar::sstring> { return std::nullopt; },
+    .canonicalize = [] (std::string_view value) { return seastar::sstring(value); },
+};
+
+// A structured option may be given a CQL literal rather than a string: a map, the
+// {name: value} form whose names need no quotes, a list, nested as deep as they like. It is
+// stored as the text the option's codec reads, which a string spelling the same value out
+// would give too.
+SEASTAR_TEST_CASE(test_alter_cluster_takes_a_literal_for_a_structured_option) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        db::cluster_config_registry::add_test_only_option_on_all_shards(e.get_feature_service(), db::cluster_config_registry::option{
+            .name = "test_structured_option",
+            .scopes = db::cluster_config_registry::scope_set::of<db::cluster_config_registry::scope::cluster>(),
+            .default_value = db::cluster_config_registry::structured_default{"{}"},
+            .codec = &verbatim_codec,
+        }).get();
+        db::cluster_config_registry::add_test_only_option_on_all_shards(e.get_feature_service(), db::cluster_config_registry::option{
+            .name = "test_text_option",
+            .scopes = db::cluster_config_registry::scope_set::of<db::cluster_config_registry::scope::cluster>(),
+            .default_value = std::string_view(""),
+        }).get();
+        auto clear_test_options = seastar::defer([] noexcept {
+            db::cluster_config_registry::clear_test_only_options_on_all_shards().get();
+        });
+
+        auto stored_for = [&] (std::string_view value) {
+            e.execute_cql(fmt::format("ALTER CLUSTER WITH test_structured_option = {}", value)).get();
+            sstring stored;
+            with_config_manager(e, [&] (sharded<db::cluster_config_manager>& mgr) {
+                stored = mgr.local().resolve_config("test_structured_option", {}).value_or("");
+            });
+            return stored;
+        };
+
+        BOOST_REQUIRE_EQUAL(stored_for("{b: {d: true, c: 'x'}, a: [1, 2.5]}"), R"({"a": [1, 2.5], "b": {"c": "x", "d": true}})");
+        BOOST_REQUIRE_EQUAL(stored_for("{'b': {'c': 'x'}, 'a': 1}"), R"({"b": {"c": "x"}, "a": 1})");
+        BOOST_REQUIRE_EQUAL(stored_for("{}"), "{}");
+        BOOST_REQUIRE_EQUAL(stored_for("{a: TRUE, b: null, \"Quoted Name\": 'it''s \"q\"'}"),
+                R"({"Quoted Name": "it's \"q\"", "a": true, "b": null})");
+        // A string is still taken as the text of the value, as it was before.
+        BOOST_REQUIRE_EQUAL(stored_for("'{\"a\": 1}'"), R"({"a": 1})");
+
+        // Only a structured option takes a literal; any other would store its text as though
+        // it had been written as a string.
+        BOOST_REQUIRE_THROW(
+            e.execute_cql("ALTER CLUSTER WITH test_text_option = {a: 1}").get(),
+            exceptions::invalid_request_exception);
+        // A literal is all it can hold.
+        BOOST_REQUIRE_THROW(
+            e.execute_cql("ALTER CLUSTER WITH test_structured_option = {a: now()}").get(),
+            exceptions::syntax_exception);
+        BOOST_REQUIRE_THROW(
+            e.execute_cql("ALTER CLUSTER WITH test_structured_option = {a: ?}").get(),
+            exceptions::syntax_exception);
+    });
+}
+
 // The node-oriented resolution domain: an override on the node shadows the rack's, the
 // rack's shadows the datacenter's, and the datacenter's shadows the cluster's. Verified
 // by stacking overrides on every scope and peeling them off one at a time.

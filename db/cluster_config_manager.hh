@@ -89,6 +89,14 @@ public:
     int64_t resolve_integer_config(const cluster_config_registry::option& opt, const lookup_context& ctx) const;
     double resolve_floating_point_config(const cluster_config_registry::option& opt, const lookup_context& ctx) const;
     sstring resolve_text_config(const cluster_config_registry::option& opt, const lookup_context& ctx) const;
+    // The canonical text of a structured option, for the owning subsystem to decode. Unlike
+    // the scalar accessors this yields text: only the option knows what it parses into.
+    sstring resolve_structured_config(const cluster_config_registry::option& opt, const lookup_context& ctx) const;
+
+    // The local node's identity, for resolving a node-oriented option through the
+    // node -> rack -> dc -> cluster chain. Built here rather than at each call site so that
+    // a poll and a callback resolve against the same node.
+    lookup_context local_node_context() const;
 
     // A consumer registers a callback to be told the effective value of an option for each
     // target the option resolves for: once initially, and again whenever a refresh pass finds

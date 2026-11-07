@@ -62,6 +62,7 @@
 #include "db/cluster_config_db_config_bridge.hh"
 #include "db/cluster_config_manager.hh"
 #include "db/cluster_config_registry.hh"
+#include "db/listener_config.hh"
 #include "db/system_keyspace.hh"
 #include "gms/gossiper.hh"
 #include "db/system_distributed_keyspace.hh"
@@ -2515,7 +2516,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                         sharded_parameter(make_auth_cfg),
                         maintenance_socket_enabled::yes, std::ref(auth_cache)).get();
 
-                cql_maintenance_server_ctl.emplace(maintenance_auth_service, mm_notifier, gossiper, qp, service_memory_limiter, sl_controller, lifecycle_notifier, messaging, timeout_cfg, *cfg, maintenance_cql_sg_stats_key, maintenance_socket_enabled::yes, dbcfg.statement_scheduling_group);
+                cql_maintenance_server_ctl.emplace(maintenance_auth_service, mm_notifier, gossiper, qp, service_memory_limiter, sl_controller, lifecycle_notifier, messaging, timeout_cfg, *cfg, db::listener_configs{}, maintenance_cql_sg_stats_key, maintenance_socket_enabled::yes, dbcfg.statement_scheduling_group);
 
                 start_auth_service(maintenance_auth_service, stop_maintenance_auth_service, "maintenance auth service");
             }
@@ -2958,11 +2959,67 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // after drain stops them in stop_transport()
             // Register controllers after drain_on_shutdown() below, so that even on start
             // failure drain is called and stops controllers
-            cql_transport::controller cql_server_ctl(auth_service, mm_notifier, gossiper, qp, service_memory_limiter, sl_controller, lifecycle_notifier, messaging, timeout_cfg, *cfg, cql_sg_stats_key, maintenance_socket_enabled::no, dbcfg.statement_scheduling_group);
+            // The listeners this node is to serve, as the "listeners" cluster config option
+            // resolves for it. Read once here: applying a later change to a running server
+            // is the job of the callback registered further down, not of this read.
+            auto configured_listeners = [&] {
+                const auto* option = db::cluster_config_registry::find(db::cluster_config_registry::option_name::listeners);
+                auto text = cluster_config_manager.local().resolve_structured_config(
+                        *option, cluster_config_manager.local().local_node_context());
+                try {
+                    return db::decode_listeners(text);
+                } catch (...) {
+                    // Written through CQL the value was validated, so this means a row
+                    // corrupted or written out of band. Degrade to the per-protocol options
+                    // rather than refuse to start with no way to reach the node.
+                    startlog.error("Ignoring unreadable \"listeners\" cluster config value: {}",
+                            std::current_exception());
+                    return db::listener_configs{};
+                }
+            }();
+
+            auto cql_listeners = db::get_listeners(*cfg, configured_listeners, db::listener_config::protocol_type::cql);
+            cql_transport::controller cql_server_ctl(auth_service, mm_notifier, gossiper, qp, service_memory_limiter, sl_controller, lifecycle_notifier, messaging, timeout_cfg, *cfg, cql_listeners, cql_sg_stats_key, maintenance_socket_enabled::no, dbcfg.statement_scheduling_group);
 
             api::set_server_service_levels(ctx, cql_server_ctl, qp).get();
 
-            alternator::controller alternator_ctl(gossiper, proxy, ss, mm, sys_dist_ks, sys_ks, cdc_generation_service, service_memory_limiter, auth_service, sl_controller, vector_store_client, timeout_cfg, *cfg, dbcfg.statement_scheduling_group);
+            auto alternator_listeners = db::get_listeners(*cfg, configured_listeners, db::listener_config::protocol_type::alternator);
+            alternator::controller alternator_ctl(gossiper, proxy, ss, mm, sys_dist_ks, sys_ks, cdc_generation_service, service_memory_limiter, auth_service, sl_controller, vector_store_client, timeout_cfg, *cfg, alternator_listeners, dbcfg.statement_scheduling_group);
+
+            // Follow the option from here on. Registered after the controllers are built
+            // so that it is torn down before them, and on shard 0 only: applying a set of
+            // listeners fans out to every shard by itself.
+            auto listeners_registration = cluster_config_manager.local().register_config_callback(sstring(db::cluster_config_registry::option_name::listeners),
+                    [&cfg, &cql_server_ctl, &alternator_ctl] (const db::cluster_config_manager::lookup_context&,
+                            std::optional<sstring> value) -> future<> {
+                const auto* option = db::cluster_config_registry::find(db::cluster_config_registry::option_name::listeners);
+                db::listener_configs configured;
+                try {
+                    configured = db::decode_listeners(db::cluster_config_registry::to_structured(*option, value));
+                } catch (...) {
+                    startlog.error("Ignoring unreadable \"listeners\" cluster config value: {}",
+                            std::current_exception());
+                    co_return;
+                }
+
+                // A set that cannot be served is left unapplied, with the server still
+                // serving what it was. Don't let the failure escape: it would fail the
+                // whole cluster config refresh, which would then retry forever.
+                try {
+                    co_await cql_server_ctl.apply_listeners(
+                            db::get_listeners(*cfg, configured, db::listener_config::protocol_type::cql));
+                } catch (...) {
+                    startlog.error("Failed to apply the CQL listeners, keeping the previous ones: {}",
+                            std::current_exception());
+                }
+                try {
+                    co_await alternator_ctl.apply_listeners(
+                            db::get_listeners(*cfg, configured, db::listener_config::protocol_type::alternator));
+                } catch (...) {
+                    startlog.error("Failed to apply the Alternator listeners, keeping the previous ones: {}",
+                            std::current_exception());
+                }
+            });
 
             // Register at_exit last, so that storage_service::drain_on_shutdown will be called first
             auto do_drain = defer_verbose_shutdown("local storage", [&ss] {
@@ -2970,6 +3027,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
 
             auth_service.local().ensure_superuser_is_created().get();
+            // Registered even when the configuration gives it nothing to listen on - as an
+            // explicit "listeners" option consisting of Alternator listeners only does - so
+            // that it starts as soon as a later change gives it a listener. Until then the
+            // controller holds off starting it.
             ss.local().register_protocol_server(cql_server_ctl, cfg->start_native_transport()).get();
             api::set_transport_controller(ctx, cql_server_ctl).get();
             auto stop_transport_controller = defer_verbose_shutdown("transport controller API", [&ctx] {
@@ -2988,9 +3049,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
 #endif
 
-            if (bool enabled = cfg->alternator_port() || cfg->alternator_https_port()) {
-                ss.local().register_protocol_server(alternator_ctl, enabled).get();
-            }
+            // Registered, and asked to start, even when there is nothing for it to listen
+            // on yet: the controller holds off starting the server until a change to the
+            // listeners gives it one.
+            ss.local().register_protocol_server(alternator_ctl, true).get();
 
             stop_signal.ready();
             supervisor::notify("serving");

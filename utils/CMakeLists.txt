@@ -13,6 +13,7 @@ target_sources(utils
     bloom_calculations.cc
     bloom_filter.cc
     build_id.cc
+    cidr.cc
     config_file.cc
     crypt_sha512.cc
     directories.cc
