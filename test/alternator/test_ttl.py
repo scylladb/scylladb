@@ -14,7 +14,7 @@ import pytest
 from botocore.exceptions import ClientError
 
 from test.pylib.skip_types import skip_bug, skip_env
-from .util import new_test_table, random_string, full_query, unique_table_name, is_aws, client_no_transform, multiset, scylla_config_read
+from .util import new_test_table, random_string, full_query, unique_table_name, is_aws, client_no_transform, multiset, scylla_config_read, scylla_config_temporary
 
 # The following fixture is to ensure that Alternator TTL is being tested with both vnodes and tablets.
 # This fixture will run automatically for every test in the module.
@@ -805,6 +805,35 @@ def test_ttl_expiration_long(dynamodb, waits_for_expiration):
                 break
             time.sleep(max_duration/100.0)
         assert count == 99*N
+
+# Test that a live update of alternator_ttl_period_in_seconds changes the
+# sleep between two expiration scans that is in progress (SCYLLADB-2820).
+# While the period is one hour, an expired item stays. When the period
+# changes back to the short value of the test suite, the expiration service
+# stops its long sleep and deletes the item soon.
+def test_ttl_period_live_update(dynamodb, waits_for_expiration, scylla_only):
+    with new_test_table(dynamodb,
+        Tags=TAGS,
+        KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, ],
+        AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' } ]) as table:
+        p = random_string()
+        with scylla_config_temporary(dynamodb, 'alternator_ttl_period_in_seconds', '3600'):
+            # Enable TTL only after the period change. A scan pass in progress
+            # uses the table schema from its start, without TTL, so it does not
+            # delete the item. The next pass starts only after one hour.
+            table.meta.client.update_time_to_live(TableName=table.name,
+                TimeToLiveSpecification={'AttributeName': 'expiration', 'Enabled': True})
+            table.put_item(Item={'p': p, 'expiration': int(time.time()) - 60})
+            time.sleep(1)
+            assert 'Item' in table.get_item(Key={'p': p})
+        # The period is short again. Without the live update, the item stays
+        # for one hour, so a timeout of 60 seconds does not hide the bug.
+        start_time = time.time()
+        while time.time() < start_time + 60:
+            if 'Item' not in table.get_item(Key={'p': p}):
+                return
+            time.sleep(0.1)
+        pytest.fail('expired item was not deleted after the period changed back')
 
 # Alternator uses a tag "system:ttl_attribute" to store the TTL attribute
 # chosen by UpdateTimeToLive. However, this tag is not supposed to be
