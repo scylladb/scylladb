@@ -104,16 +104,25 @@ static void wait_for_alternator(const test_config& c, abort_source& as) {
     throw std::runtime_error("Timed out waiting for alternator port to become ready");
 }
 
-static void delete_alternator_table(http::client& cli) {
+// The GSI workloads use their own table, because the other workloads write
+// attributes of types that the GSI keys don't allow.
+static constexpr auto table_name = "workloads_test";
+static constexpr auto gsi_table_name = "workloads_test_gsi";
+
+static bool is_gsi_workload(const std::string& workload) {
+    return workload == "write_gsi" || workload == "batch_write_gsi";
+}
+
+static void delete_alternator_table(http::client& cli, std::string_view name) {
     try {
-        make_request(cli, "DeleteTable", R"({"TableName": "workloads_test"})").get();
+        make_request(cli, "DeleteTable", format(R"({{"TableName": "{}"}})", name)).get();
     } catch(...) {
         // table may exist or not
     }
 }
 
 static void create_alternator_table(http::client& cli) {
-    delete_alternator_table(cli); // cleanup in case of leftovers
+    delete_alternator_table(cli, table_name); // cleanup in case of leftovers
     make_request(cli, "CreateTable", R"(
         {
             "AttributeDefinitions": [{
@@ -141,7 +150,7 @@ static void create_alternator_table(http::client& cli) {
 }
 
 static void create_alternator_table_with_gsi(http::client& cli) {
-    delete_alternator_table(cli); // cleanup in case of leftovers
+    delete_alternator_table(cli, gsi_table_name); // cleanup in case of leftovers
     make_request(cli, "CreateTable", R"(
         {
             "AttributeDefinitions": [{
@@ -173,7 +182,7 @@ static void create_alternator_table_with_gsi(http::client& cli) {
                     "AttributeType": "S"
                 }
             ],
-            "TableName": "workloads_test",
+            "TableName": "workloads_test_gsi",
             "BillingMode": "PAY_PER_REQUEST",
             "KeySchema": [{
                     "AttributeName": "p",
@@ -277,7 +286,7 @@ static future<> update_item(const test_config& _, http::client& cli, uint64_t se
 
 static future<> update_item_gsi(const test_config& _, http::client& cli, uint64_t seq) {
     auto prefix = format(R"({{
-            "TableName": "workloads_test",
+            "TableName": "workloads_test_gsi",
             "Key": {{
                 "p": {{
                     "S": "{}"
@@ -411,7 +420,7 @@ static future<> batch_write_item_gsi(const test_config& c, http::client& cli, ui
             key, key >> 1, key >> 2, key >> 3, key >> 4, key, key);
     }
     co_await make_request(cli, "BatchWriteItem", format(R"({{
-        "RequestItems": {{ "workloads_test": [{}] }},
+        "RequestItems": {{ "workloads_test_gsi": [{}] }},
         "ReturnConsumedCapacity": "TOTAL"
     }})", fmt::to_string(items)));
 }
@@ -463,15 +472,32 @@ void workload_main(const test_config& c, sharded<abort_source>* as) {
     wait_for_alternator(c, as->local());
 
     auto cli = get_client(c);
+    // Without prepopulate_partitions, the tables were prepared, and are kept,
+    // by an earlier run of the populate workload.
+    const bool own_table = c.prepopulate_partitions && c.workload != "populate";
     auto finally = defer([&] noexcept {
         // Might throw, will terminate test
-        delete_alternator_table(cli);
+        if (own_table) {
+            delete_alternator_table(cli, is_gsi_workload(c.workload) ? gsi_table_name : table_name);
+        }
         cli.close().get();
     });
-    if (c.workload == "write_gsi" || c.workload == "batch_write_gsi") {
-        create_alternator_table_with_gsi(cli);
-    } else {
+
+    if (c.workload == "populate") {
         create_alternator_table(cli);
+        create_alternator_table_with_gsi(cli);
+        create_partitions(c, cli);
+        return;
+    }
+    if (own_table) {
+        if (is_gsi_workload(c.workload)) {
+            create_alternator_table_with_gsi(cli);
+        } else {
+            create_alternator_table(cli);
+            if (c.workload == "read" || c.workload == "batch_read" || c.workload == "scan") {
+                create_partitions(c, cli);
+            }
+        }
     }
 
     using fun_t = std::function<future<>(const test_config&, http::client&, uint64_t)>;
@@ -486,10 +512,6 @@ void workload_main(const test_config& c, sharded<abort_source>* as) {
         // for realistic scenario
         {"write_rmw", update_item_rmw},
     };
-
-    if (c.prepopulate_partitions && (c.workload == "read" || c.workload == "batch_read" || c.workload == "scan")) {
-        create_partitions(c, cli);
-    }
 
     auto it = workloads.find(c.workload);
     if (it == workloads.end()) {
@@ -548,9 +570,9 @@ std::function<int(int, char**)> alternator(std::function<int(int, char**)> scyll
 
         bpo::options_description opts_desc;
         opts_desc.add_options()
-            ("workload", bpo::value<std::string>()->default_value(""), "which workload type to run")
+            ("workload", bpo::value<std::string>()->default_value(""), "which workload type to run; populate only creates and fills the tables, and keeps them")
             ("partitions", bpo::value<unsigned>()->default_value(10000), "number of partitions")
-            ("prepopulate-partitions", bpo::value<bool>()->default_value(true), "relevant for read workloads, can be disabled when data is prepopulated externally")
+            ("prepopulate-partitions", bpo::value<bool>()->default_value(true), "create the table, and fill it for the read workloads, before the test and delete it after; when disabled, the tables and data of an earlier run of the populate workload are used")
             ("duration", bpo::value<unsigned>()->default_value(5), "test duration in seconds")
             ("operations-per-shard", bpo::value<unsigned>()->default_value(0), "run this many operations per shard (overrides duration)")
             ("concurrency", bpo::value<unsigned>()->default_value(100), "workers per core")
