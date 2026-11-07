@@ -61,16 +61,22 @@ def wait_for_clients(cql, username, clients_num, wait_s = 1, timeout_s = 30):
 
     raise RuntimeError(f"Awaiting for {clients_num} clients timed out.")
 
-def wait_until_all_connections_authenticated(cql, wait_s = 1, timeout_s = 30):
+# count_opened_connections() and count_opened_connections_from_table() take
+# two separate snapshots of the connections, which may differ if a connection
+# changes in between - e.g., if it finishes authenticating, and its username
+# changes from "anonymous". So retry until the two snapshots match. We can't
+# instead wait until no connection is "anonymous", because other clients may
+# have connections which never authenticate - such as a connection stranded
+# by the driver used by test/cqlpy/run to check if Scylla is up (see
+# https://github.com/scylladb/python-driver/issues/1131).
+def get_matching_connection_counts(cql, wait_s = 0.1, timeout_s = 30):
     start_time = time.time()
-    while time.time() - start_time < timeout_s:
-        result = cql.execute("SELECT COUNT(*) FROM system.clients WHERE username='anonymous' ALLOW FILTERING")
-        if result.one()[0] == 0:
-            return
-        else:
-            time.sleep(wait_s)
-    
-    raise RuntimeError(f"Awaiting for connections authentication timed out.")
+    while True:
+        api_response = count_opened_connections(cql)
+        table_response = count_opened_connections_from_table(cql)
+        if api_response == table_response or time.time() - start_time > timeout_s:
+            return api_response, table_response
+        time.sleep(wait_s)
 
 # The driver creates 1 connection per shard plus 1 control connection.
 # This function returns the set of shards whose per-shard connection of `user`
@@ -129,16 +135,13 @@ def test_count_opened_cql_connections(cql, test_keyspace):
 
             with new_session(cql, user) as session:
                 wait_for_clients(cql, user, 3) # 3 from smp=2 + control connection
-                wait_until_all_connections_authenticated(cql)
                 # The connections start in sl:driver and only move to sl:{sl} once
                 # they run user load, so issue a user-table query on each of them.
                 wait_for_scheduling_group_assignment(cql, session, user, user_table, sl, get_shard_count(cql))
 
-                api_response = count_opened_connections(cql)
+                api_response, table_response = get_matching_connection_counts(cql)
                 assert f"sl:{sl}" in api_response
                 assert user in api_response[f"sl:{sl}"]
-
-                table_response = count_opened_connections_from_table(cql)
                 assert api_response == table_response
     finally:
         cql.execute(f"DETACH SERVICE LEVEL FROM {user}")
