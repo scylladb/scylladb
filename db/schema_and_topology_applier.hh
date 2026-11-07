@@ -179,13 +179,6 @@ class schema_and_topology_applier {
     // system.topology. The token metadata is then built from the new topology,
     // and committed together with it and the schema.
     bool _reload_topology;
-    // Set when the change may add or drop tables, or change the schema
-    // (schema, mixed and snapshot changes). commit() then holds the
-    // tables_metadata write lock on all shards. Topology-only changes, including
-    // tablet transitions, swap the token metadata and effective replication maps
-    // without it, as replicate_to_all_cores() does, so they are not blocked by a
-    // long tables_metadata iteration, such as flush_all_tables().
-    bool _lock_tables_metadata;
     std::unique_ptr<service::storage_service::topology_state_change> _topology_change;
 
     schema_persisted_state _before;
@@ -219,9 +212,8 @@ public:
             sharded<service::storage_proxy>& proxy,
             sharded<service::storage_service>& ss,
             sharded<db::system_keyspace>& sys_ks,
-            bool reload_topology = false,
-            bool lock_tables_metadata = true)
-            : _proxy(proxy), _ss(ss), _sys_ks(sys_ks), _reload_topology(reload_topology), _lock_tables_metadata(lock_tables_metadata) {};
+            bool reload_topology = false)
+            : _proxy(proxy), _ss(ss), _sys_ks(sys_ks), _reload_topology(reload_topology) {};
 
     // Gets called before mutations are applied,
     // preferably no work should be done here but subsystem
@@ -261,6 +253,8 @@ private:
     future<> merge_functions();
     future<> merge_aggregates();
 
+    // True if the change adds or drops a table, view or CDC table.
+    bool changes_tables_metadata() const;
     void commit_tables_and_views();
     future<> finalize_tables_and_views();
     void commit_on_shard(replica::database& db, uint64_t commit_gen);

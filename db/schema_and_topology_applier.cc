@@ -1093,15 +1093,29 @@ void schema_and_topology_applier::commit_on_shard(replica::database& db, uint64_
 
 // TODO: move per shard logic directly to raft so that all subsystems can be updated together
 // (requires switching all affected subsystems to 'applier' interface first)
+bool schema_and_topology_applier::changes_tables_metadata() const {
+    // The diff is the same on every shard.
+    const auto& diff = _affected_tables_and_views.tables_and_views.local();
+    auto changes = [] (const schema_diff_per_shard& d) {
+        return !d.created.empty() || !d.dropped.empty();
+    };
+    return changes(diff.tables) || changes(diff.views) || changes(diff.cdc);
+}
+
 future<> schema_and_topology_applier::commit() {
     auto& sharded_db = _proxy.local().get_db();
-    // Adding and dropping tables, or changing tablet metadata, uses this
-    // locking mechanism to prevent changes to tables_metadata during preemptive
-    // iteration over it (e.g., tables_metadata::for_each_table_gently).
-    // However, we can only acquire the (write) lock after preparing all
-    // entities for the pending schema change that need to iterate over tables_metadata;
-    // otherwise, such iteration would deadlock.
-    if (_lock_tables_metadata) {
+    // The tables_metadata lock protects the map of tables against changes during
+    // preemptive iteration over it (e.g., tables_metadata::for_each_table_gently).
+    // Only adding and dropping tables changes the map, and add_table() and
+    // remove_table() assert that the lock is held. Altering tables and changing the
+    // token metadata and effective replication maps of existing tables does not
+    // need it, because commit_on_shard() does not yield, so a waiting iteration
+    // sees either the old or the new state. Taking the lock only when needed keeps
+    // the commit from waiting behind a long iteration, such as flush_all_tables().
+    // The lock can only be acquired after preparing all entities for the pending
+    // change that need to iterate over tables_metadata; otherwise, such iteration
+    // would deadlock.
+    if (changes_tables_metadata()) {
         _metadata_locks = std::make_unique<replica::tables_metadata_lock_on_all_shards>(
                 co_await replica::database::lock_tables_metadata(sharded_db));
     }
