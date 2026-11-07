@@ -29,7 +29,9 @@ def check_tombstone_gc_mode(cql, table, mode):
 @pytest.mark.parametrize("rf", [1, 2])
 @pytest.mark.parametrize("tablets", [True, False])
 async def test_default_tombstone_gc(manager: ScyllaClusterManager, rf: int, tablets: bool):
-    _ = await manager.servers_add(2, auto_rack_dc="dc1")
+    # The test framework sets default_tombstone_gc_mode to "timeout", so set
+    # it back to its default, "repair", which is what this test checks.
+    _ = await manager.servers_add(2, auto_rack_dc="dc1", config={'default_tombstone_gc_mode': 'repair'})
     cql = manager.get_cql()
     tablets_enabled = "true" if tablets else "false"
     async with new_test_keyspace(manager, f"with replication = {{ 'class': 'NetworkTopologyStrategy', 'replication_factor': {rf}}} and tablets = {{ 'enabled': {tablets_enabled} }}") as keyspace:
@@ -304,7 +306,9 @@ async def test_tombstone_gc_rf_one(manager: ScyllaClusterManager, tablets: bool)
     * When RF>1, tombstone-gc mode 'repair' works like normal repair-based tombstone gc
     * The above also holds during the RF increase process
     """
-    servers = await manager.servers_add(2, auto_rack_dc="dc1", config={'enable_cache': False})
+    # The test framework sets default_tombstone_gc_mode to "timeout", so set
+    # it back to its default, "repair", which is what this test checks.
+    servers = await manager.servers_add(2, auto_rack_dc="dc1", config={'enable_cache': False, 'default_tombstone_gc_mode': 'repair'})
 
     cql, hosts = await manager.get_ready_cql(servers)
 
