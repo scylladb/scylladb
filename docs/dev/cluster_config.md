@@ -384,13 +384,13 @@ A subsystem registers a callback for an option, keyed by config name, with the m
 ```cpp
 config_callback_registration register_config_callback(
         sstring config_name,
-        std::function<future<>(const lookup_context&, std::optional<sstring>)> on_change);
+        std::function<future<>(const cluster_config_registry::option&, const lookup_context&, std::optional<sstring>)> on_change);
 ```
 
 When an option's value changes, the manager refreshes cached values on all shards, resolves it for each affected target, and invokes registered callbacks with the target context and the resolved value. Registration itself only installs/uninstalls the callback; initial application is performed by the normal refresh path. `std::nullopt` means no scope has an effective value, so the consumer should fall back to the option's registered default; passing the callback's value through the matching `cluster_config_registry::to_*` converter does that, and keeps the callback and poll paths agreeing on both the parse and the default. The `lookup_context` identifies which target each call applies to. How many targets a refresh touches depends on the option's domain:
 
-- a **node-oriented** option has a single target, the local node, so the manager resolves once and calls `on_change(node_ctx, value)`
-- a **table-oriented** option targets a single table, so the manager resolves per affected table and calls `on_change(table_ctx, value)` for each.
+- a **node-oriented** option has a single target, the local node, so the manager resolves once and calls `on_change(opt, node_ctx, value)`
+- a **table-oriented** option targets a single table, so the manager resolves per affected table and calls `on_change(opt, table_ctx, value)` for each.
 
 For a given registration, the manager invokes callbacks serially on the local shard and waits for the returned `future<>` before invoking that registration again. The manager never invokes a callback after its registration is destroyed. The callback must still be idempotent: the manager may re-emit the same effective value after registration, restart, or a coalesced refresh. The manager only resolves the value and fans the call out. The callback owns everything behavior-specific — where the value lands and what the restore-on-unset baseline is; the manager does not snapshot anything on the subsystem's behalf.
 
@@ -548,12 +548,10 @@ A native option that needs to react to changes registers a callback with the man
 ```cpp
 auto registration = mgr.local().register_config_callback(
         "auto_repair_enabled",
-        [] (const lookup_context& ctx, std::optional<sstring> value) -> future<> {
-            if (value) {
-                /* apply the parsed value for ctx's table to the subsystem */
-            } else {
-                /* restore the default for ctx's table */
-            }
+        [] (const cluster_config_registry::option& opt, const lookup_context& ctx, std::optional<sstring> value) -> future<> {
+            // The registered default when no scope stores an override.
+            bool enabled = cluster_config_registry::to_boolean(opt, value);
+            /* apply enabled to ctx's table */
             co_return;
         });
 ```

@@ -95,9 +95,10 @@ public:
     // the value changed since the one last delivered. A table-oriented option has one target
     // per table, so a keyspace-scope value reaches the callback only once a table exists in
     // that keyspace; a node-oriented option has the local node as its single target. The
-    // callback receives the resolved text, or std::nullopt when no scope stores an override
-    // and the consumer should use the registered default (the registry's to_* converters do
-    // that).
+    // callback receives the option's registry entry and the resolved text, or std::nullopt
+    // when no scope stores an override and the consumer should use the registered default
+    // (the registry's to_* converters, given the entry, do that). Registering for an option
+    // the registry does not know is an internal error.
     //
     // The initial delivery does not depend on when the consumer registers: a registration
     // made before the startup refresh is delivered by it, a later one requests a refresh
@@ -109,7 +110,7 @@ public:
     // on every shard (invoke_on_all) for per-shard behavior, or on one shard to fire once. A
     // pass that fails midway is retried and re-delivers what the failed pass delivered, so the
     // callback must be idempotent.
-    using config_callback_function = std::function<future<>(const lookup_context&, std::optional<sstring>)>;
+    using config_callback_function = std::function<future<>(const cluster_config_registry::option&, const lookup_context&, std::optional<sstring>)>;
 
     class config_callback_registration {
     public:

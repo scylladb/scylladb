@@ -140,7 +140,7 @@ public:
         : _entry(entry)
         , _opt(opt)
         , _registration(manager.register_config_callback(sstring(opt.name),
-                [this] (const cluster_config_manager::lookup_context&, std::optional<sstring> value) {
+                [this] (const registry_option&, const cluster_config_manager::lookup_context&, std::optional<sstring> value) {
                     on_change(value);
                     return make_ready_future<>();
                 })) {
