@@ -930,7 +930,6 @@ class cache_tracker;
 class rows_entry final : public evictable {
     friend class size_calculator;
     intrusive_b::member_hook _link;
-    clustering_key _key;
     deletable_row _row;
 
     // Given p is the preceding rows_entry&,
@@ -953,6 +952,8 @@ class rows_entry final : public evictable {
         bool _last_dummy : 1;
         flags() : _before_ck(0), _after_ck(0), _continuous(true), _dummy(false), _last_dummy(false) { }
     } _flags{};
+    // Right after _flags: position() reads both, so comparisons touch one cacheline.
+    clustering_key _key;
 public:
     struct last_dummy_tag {};
     explicit rows_entry(clustering_key&& key)
@@ -974,23 +975,23 @@ public:
         : rows_entry(s, position_in_partition_view::after_all_clustered_rows(), is_dummy::yes, continuous)
     { }
     rows_entry(const clustering_key& key, deletable_row&& row)
-        : _key(key), _row(std::move(row))
+        : _row(std::move(row)), _key(key)
     { }
     rows_entry(const schema& s, const clustering_key& key, const deletable_row& row)
-        : _key(key), _row(s, row)
+        : _row(s, row), _key(key)
     { }
     rows_entry(rows_entry&& o) noexcept;
     rows_entry(const schema& s, const rows_entry& e)
-        : _key(e._key)
-        , _row(s, e._row)
+        : _row(s, e._row)
         , _range_tombstone(e._range_tombstone)
         , _flags(e._flags)
+        , _key(e._key)
     { }
     rows_entry(const schema& our_schema, const schema& their_schema, const rows_entry& e)
-        : _key(e._key)
-        , _row(our_schema, their_schema, e._row)
+        : _row(our_schema, their_schema, e._row)
         , _range_tombstone(e._range_tombstone)
         , _flags(e._flags)
+        , _key(e._key)
     { }
     // Valid only if !dummy()
     clustering_key& key() {
