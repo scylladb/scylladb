@@ -1378,7 +1378,8 @@ private:
                 _rs._repair_compaction_locks[gid].push_back(std::move(lock_holder));
             }
         }
-        auto sstables = co_await table.take_storage_snapshot(_range);
+        // Repair reads through the sstable objects' own fds; no per-component handles needed.
+        auto sstables = co_await table.take_storage_snapshot(_range, replica::table::open_component_files::no);
         _incremental_repair_meta.sst_set = make_lw_shared<sstables::sstable_set>(sstables::make_partitioned_sstable_set(_schema));
         _incremental_repair_meta.sstables_repaired_at = sstables_repaired_at;
         for (auto& snap : sstables) {
