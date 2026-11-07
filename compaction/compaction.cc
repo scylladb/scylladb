@@ -34,6 +34,7 @@
 #include "sstables/sstables.hh"
 #include "sstables/sstable_writer.hh"
 #include "sstables/progress_monitor.hh"
+#include "sstables/object_storage_page_cache_compaction.hh"
 #include "sstables/sstables_manager.hh"
 #include "compaction.hh"
 #include "schema/schema.hh"
@@ -323,6 +324,7 @@ class compaction_write_monitor final : public sstables::write_monitor, public ba
     uint64_t _progress_seen = 0;
     api::timestamp_type _maximum_timestamp;
     unsigned _sstable_level;
+    shared_ptr<sstables::page_cache_compaction_output> _page_cache_output;
 public:
     compaction_write_monitor(sstables::shared_sstable sst, compaction_group_view& table_s, api::timestamp_type max_timestamp, unsigned sstable_level)
         : _sst(sst)
@@ -362,6 +364,14 @@ public:
 
     unsigned level() const override {
         return _sstable_level;
+    }
+
+    void set_page_cache_output(shared_ptr<sstables::page_cache_compaction_output> output) noexcept {
+        _page_cache_output = std::move(output);
+    }
+
+    virtual sstables::page_cache_compaction_output* page_cache_output() noexcept override {
+        return _page_cache_output.get();
     }
 };
 
@@ -464,6 +474,7 @@ struct compaction_read_monitor_generator final : public sstables::read_monitor_g
         const sstables::reader_position_tracker* _tracker = nullptr;
         uint64_t _last_position_seen = 0;
         use_backlog_tracker _use_backlog_tracker;
+        sstables::page_cache_compaction_input* _page_cache_input;
     public:
         virtual void on_read_started(const sstables::reader_position_tracker& tracker) override {
             _tracker = &tracker;
@@ -493,8 +504,13 @@ struct compaction_read_monitor_generator final : public sstables::read_monitor_g
             _sst = {};
         }
 
-        compaction_read_monitor(sstables::shared_sstable sst, compaction_group_view& table_s, use_backlog_tracker use_backlog_tracker)
-            : _sst(std::move(sst)), _table_s(table_s), _use_backlog_tracker(use_backlog_tracker) { }
+        compaction_read_monitor(sstables::shared_sstable sst, compaction_group_view& table_s, use_backlog_tracker use_backlog_tracker,
+                sstables::page_cache_compaction_input* page_cache_input)
+            : _sst(std::move(sst)), _table_s(table_s), _use_backlog_tracker(use_backlog_tracker), _page_cache_input(page_cache_input) { }
+
+        virtual sstables::page_cache_compaction_input* page_cache_input() noexcept override {
+            return _page_cache_input;
+        }
 
         ~compaction_read_monitor() {
             // We failed to finish handling this SSTable, so we have to update the backlog_tracker
@@ -508,12 +524,17 @@ struct compaction_read_monitor_generator final : public sstables::read_monitor_g
     };
 
     virtual sstables::read_monitor& operator()(sstables::shared_sstable sst) override {
-        auto p = _generated_monitors.emplace(sst->generation(), compaction_read_monitor(sst, _table_s, _use_backlog_tracker));
-        return p.first->second;
+        auto it = _generated_monitors.find(sst->generation());
+        if (it == _generated_monitors.end()) {
+            auto* page_cache_input = _page_cache_compaction ? _page_cache_compaction->add_input(*sst) : nullptr;
+            it = _generated_monitors.emplace(sst->generation(), compaction_read_monitor(sst, _table_s, _use_backlog_tracker, page_cache_input)).first;
+        }
+        return it->second;
     }
 
-    explicit compaction_read_monitor_generator(compaction_group_view& table_s, use_backlog_tracker use_backlog_tracker = use_backlog_tracker::yes)
-        : _table_s(table_s), _use_backlog_tracker(use_backlog_tracker) {}
+    explicit compaction_read_monitor_generator(compaction_group_view& table_s, use_backlog_tracker use_backlog_tracker = use_backlog_tracker::yes,
+            lw_shared_ptr<sstables::page_cache_compaction> page_cache_compaction = nullptr)
+        : _table_s(table_s), _use_backlog_tracker(use_backlog_tracker), _page_cache_compaction(std::move(page_cache_compaction)) {}
 
     uint64_t compacted() const {
         return std::ranges::fold_left(_generated_monitors | std::views::values | std::views::transform([](auto& monitor) { return monitor.compacted(); }), uint64_t(0), std::plus());
@@ -531,6 +552,9 @@ private:
     compaction_group_view& _table_s;
     std::unordered_map<sstables::generation_type, compaction_read_monitor> _generated_monitors;
     use_backlog_tracker _use_backlog_tracker;
+    // Keeps the object storage page cache of the compacted sstables (see
+    // object_storage_page_cache_compaction.hh), or null.
+    lw_shared_ptr<sstables::page_cache_compaction> _page_cache_compaction;
 
     friend class compaction_progress_monitor;
 };
@@ -612,6 +636,7 @@ private:
     // Keeps track of monitors for input sstable.
     // If _update_backlog_tracker is set to true, monitors are responsible for adjusting backlog as compaction progresses.
     compaction_progress_monitor& _progress_monitor;
+    lw_shared_ptr<sstables::page_cache_compaction> _page_cache_compaction;
     compaction_data& init_compaction_data(compaction_data& cdata, const compaction_descriptor& descriptor) const {
         cdata.compaction_fan_in = descriptor.fan_in();
         return cdata;
@@ -667,7 +692,13 @@ protected:
         _contains_multi_fragment_runs = std::any_of(_sstables.begin(), _sstables.end(), [&ssts_run_ids] (sstables::shared_sstable& sst) {
             return !ssts_run_ids.insert(sst->run_identifier()).second;
         });
-        _progress_monitor.set_generator(std::make_unique<compaction_read_monitor_generator>(_table_s, use_backlog_tracker));
+        // Resharding writes sstables of other shards, whose caches it can't
+        // write. Scrub, in segregate mode, writes its outputs interleaved,
+        // not in the order of their keys, which the cache's copying needs.
+        if (_type != compaction_type::Reshard && _type != compaction_type::Scrub) {
+            _page_cache_compaction = sstables::make_page_cache_compaction(_sstables, _schema);
+        }
+        _progress_monitor.set_generator(std::make_unique<compaction_read_monitor_generator>(_table_s, use_backlog_tracker, _page_cache_compaction));
     }
 
     sstables::read_monitor_generator& unwrap_monitor_generator() const {
@@ -683,6 +714,16 @@ protected:
         uint64_t estimated_sstables = std::max(1UL, uint64_t(ceil(double(_compacting_data_file_size) / max_sstable_size)));
         return std::min(uint64_t(ceil(double(_estimated_partitions) / estimated_sstables)),
                         _table_s.get_compaction_strategy().adjust_partition_estimate(_ms_metadata, _estimated_partitions, _schema));
+    }
+
+    // A monitor of the writing of a new sstable, which copies to the object
+    // storage page cache the data which was cached in the compacted sstables.
+    std::unique_ptr<compaction_write_monitor> make_write_monitor(const sstables::shared_sstable& sst) {
+        auto monitor = std::make_unique<compaction_write_monitor>(sst, _table_s, maximum_timestamp(), _sstable_level);
+        if (_page_cache_compaction) {
+            monitor->set_page_cache_output(_page_cache_compaction->make_output(*sst));
+        }
+        return monitor;
     }
 
     void setup_new_sstable(sstables::shared_sstable& sst) {
@@ -930,6 +971,10 @@ private:
 
         _ms_metadata.min_timestamp = timestamp_tracker.min();
         _ms_metadata.max_timestamp = timestamp_tracker.max();
+
+        if (_page_cache_compaction) {
+            co_await _page_cache_compaction->start(_sstables);
+        }
     }
 
     // This consumer will perform mutation compaction on producer side using
@@ -1320,7 +1365,7 @@ public:
         auto sst = _sstable_creator(this_shard_id());
         setup_new_sstable(sst);
 
-        auto monitor = std::make_unique<compaction_write_monitor>(sst, _table_s, maximum_timestamp(), _sstable_level);
+        auto monitor = make_write_monitor(sst);
         sstables::sstable_writer_config cfg = make_sstable_writer_config(_type);
         cfg.monitor = monitor.get();
         return compaction_writer{std::move(monitor), sst->get_writer(*_schema, partitions_per_sstable(), cfg, get_encoding_stats()), sst};
@@ -1613,7 +1658,7 @@ public:
         auto token_range_of_new_sst = _table_s.get_token_range_after_split(dk.token());
         const auto estimated_keys = _sstables[0]->estimated_keys_for_range(token_range_of_new_sst).get();
 
-        auto monitor = std::make_unique<compaction_write_monitor>(sst, _table_s, maximum_timestamp(), _sstable_level);
+        auto monitor = make_write_monitor(sst);
         sstables::sstable_writer_config cfg = make_sstable_writer_config(_type);
         cfg.monitor = monitor.get();
 

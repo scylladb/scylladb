@@ -15,6 +15,7 @@
 #include "utils/log.hh"
 #include "utils/error_injection.hh"
 #include "sstables/sstables_manager.hh"
+#include "sstables/object_storage_page_cache.hh"
 #include "sstables/sstable_directory.hh"
 #include "sstables/sstables_registry.hh"
 #include "sstables/partition_index_cache.hh"
@@ -511,6 +512,55 @@ void sstables_manager::plug_sstables_registry(std::unique_ptr<sstables::sstables
 
 void sstables_manager::unplug_sstables_registry() noexcept {
     _sstables_registry.reset();
+}
+
+void sstables_manager::plug_object_storage_page_cache(shared_ptr<sstables::object_storage_page_cache> cache) noexcept {
+    _object_storage_page_cache = std::move(cache);
+}
+
+void sstables_manager::unplug_object_storage_page_cache() noexcept {
+    _object_storage_page_cache = nullptr;
+}
+
+future<> sstables_manager::evict_orphans_from_page_cache() noexcept {
+    auto cache = _object_storage_page_cache;
+    if (!cache) {
+        co_return;
+    }
+    try {
+        // All the sstables of this shard, whether in use or being closed.
+        std::unordered_set<sstable_id> live;
+        for (auto* list : {&_active, &_undergoing_close}) {
+            for (const auto& sst : *list) {
+                if (const auto& id = sst.sstable_identifier()) {
+                    live.insert(*id);
+                }
+            }
+        }
+        co_await cache->evict_other_sstables(live);
+    } catch (...) {
+        // The orphan pages only waste disk space, so failing to drop them
+        // shouldn't fail the startup.
+        smlogger.warn("Failed to evict orphan pages from the object storage page cache: {}", std::current_exception());
+    }
+}
+
+future<> sstables_manager::copy_cached_pages(const data_dictionary::storage_options& so,
+        const std::vector<sstable_id>& ssts, shard_id from) noexcept {
+    auto* os = std::get_if<data_dictionary::storage_options::object_storage>(&so.value);
+    auto cache = _object_storage_page_cache;
+    if (!os || os->disk_cache != data_dictionary::storage_options::disk_cache_mode::pages || !cache) {
+        co_return;
+    }
+    try {
+        for (auto sst : ssts) {
+            co_await cache->copy_sstable_from_shard(sst, from);
+        }
+    } catch (...) {
+        // The pages which weren't copied will be read again from the object
+        // store, so failing to copy them shouldn't fail the migration.
+        smlogger.warn("Failed to copy pages from shard {} in the object storage page cache: {}", from, std::current_exception());
+    }
 }
 
 future<lw_shared_ptr<const data_dictionary::storage_options>> sstables_manager::init_table_storage(const schema& s, const data_dictionary::storage_options& so) {

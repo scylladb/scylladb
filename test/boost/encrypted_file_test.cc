@@ -964,3 +964,82 @@ SEASTAR_TEST_CASE(test_encrypted_data_source_fuzzy) {
 
     co_return;
 }
+
+// make_encrypted_range_source() returns exactly the requested range of the
+// plaintext, wherever it starts and ends, reading with a single request just
+// the encrypted blocks containing the range - and if the range is in the last
+// block, up to the end of the encrypted file.
+static future<> test_encrypted_range_source(size_t plaintext_size) {
+    testlog.info("test_encrypted_range_source: plaintext_size={}", plaintext_size);
+    constexpr uint64_t block_size = 4096;
+    key_info info{"AES/CBC", 256};
+    auto k = ::make_shared<symmetric_key>(info);
+
+    auto plaintext = generate_random<char>(plaintext_size);
+    std::vector<temporary_buffer<char>> encrypted_bufs;
+    {
+        data_sink sink(make_encrypted_sink(create_memory_sink(encrypted_bufs), k));
+        co_await sink.put(plaintext.clone());
+        co_await sink.close();
+    }
+    std::string encrypted;
+    for (const auto& b : encrypted_bufs) {
+        encrypted.append(b.get(), b.size());
+    }
+
+    std::vector<std::pair<uint64_t, uint64_t>> ranges;
+    for (uint64_t offset : {0ul, 1ul, 4095ul, 4096ul, 4097ul, plaintext_size / 2, plaintext_size - 1}) {
+        if (offset >= plaintext_size) {
+            continue;
+        }
+        for (uint64_t len : {1ul, 100ul, 4096ul, plaintext_size - offset}) {
+            ranges.emplace_back(offset, std::min(len, plaintext_size - offset));
+        }
+    }
+    for (auto [offset, len] : ranges) {
+        std::vector<std::pair<uint64_t, uint64_t>> requests;
+        auto read_encrypted = [&] (uint64_t start, uint64_t length) {
+            requests.emplace_back(start, length);
+            // Return the encrypted bytes in chunks of an odd size.
+            auto bytes = temporary_buffer<char>(encrypted.data() + start, std::min<uint64_t>(length, encrypted.size() - start));
+            return make_ready_future<data_source>(data_source(std::make_unique<limiting_data_source_impl>(
+                    data_source(std::make_unique<util::temporary_buffer_data_source>(std::move(bytes))), 1000)));
+        };
+        auto in = input_stream<char>(co_await make_encrypted_range_source(k, offset, len, plaintext_size, read_encrypted));
+        std::string result;
+        while (auto buf = co_await in.read()) {
+            result.append(buf.get(), buf.size());
+        }
+        co_await in.close();
+
+        // Check that the range is the right plaintext.
+        BOOST_REQUIRE_EQUAL(result, std::string_view(plaintext.get() + offset, len));
+        // Check that the encrypted bytes were read in one request, from the
+        // beginning of the range's first block, to the end of its last block
+        // or to the end of the file.
+        BOOST_REQUIRE_EQUAL(requests.size(), 1);
+        auto [start, length] = requests.front();
+        BOOST_REQUIRE_EQUAL(start, align_down(offset, block_size));
+        auto end = start + length;
+        BOOST_REQUIRE(end == align_up(offset + len, block_size) || end == encrypted.size());
+        BOOST_REQUIRE_LE(end, encrypted.size());
+    }
+}
+
+SEASTAR_TEST_CASE(test_encrypted_range_source_small) {
+    co_await test_encrypted_range_source(100);
+}
+
+SEASTAR_TEST_CASE(test_encrypted_range_source_one_block) {
+    co_await test_encrypted_range_source(4096);
+}
+
+SEASTAR_TEST_CASE(test_encrypted_range_source_unaligned) {
+    // Not a multiple of the key's block size, so the encrypted file has extra
+    // bytes at its end.
+    co_await test_encrypted_range_source(8180);
+}
+
+SEASTAR_TEST_CASE(test_encrypted_range_source_large) {
+    co_await test_encrypted_range_source(5 * 4096 + 5);
+}

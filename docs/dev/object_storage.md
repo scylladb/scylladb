@@ -148,6 +148,324 @@ CREATE KEYSPACE ks
   };
 ```
 
+## Object storage page cache
+
+A keyspace created with the `'disk_cache': 'pages'` storage option (which
+requires the experimental feature `object-storage-page-cache`) caches, on the
+node's local disk, the byte ranges of its sstables which it reads from the
+object store. See the [CQL extensions](../cql/cql-extensions.md) for the
+option, and the [administration guide](../operating-scylla/admin.rst) for its
+configuration and metrics. The code is in the files named
+`*object_storage_page_cache*`, each of which starts with a comment explaining
+its part. This section explains how the parts fit together.
+
+### The tables
+
+The cache is stored in two tables of the node-local `system_cache` keyspace,
+whose writes skip the commitlog (`durable_writes = false`): the cache only
+holds copies of what the object store holds, so losing recent writes in a
+crash is harmless.
+
+* `system_cache.pagecache`: the cached pages, with the key
+  `((shard, sstable), component, offset)` and the page as a blob. All the
+  pages of an sstable are in one partition, so dropping them takes a single
+  partition tombstone.
+* `system_cache.pagecache_hits`: a small row for each cached page, with the
+  same key, recording the page's size and when it was last hit. It is a
+  separate table because it is rewritten on every hit, while the pages are
+  written once; and choosing which pages to evict reads only this table.
+
+Eviction and the count of the cache's bytes find pages only through their
+rows in `pagecache_hits`, so a page left without one would stay, uncounted,
+until its sstable is deleted:
+
+* A page's row in `pagecache_hits` is written before the page itself - a
+  failure between the two writes leaves a row without a page, which is
+  harmless - and the eviction of a page doesn't come between these two writes:
+  the hand doesn't evict a page which is being cached, and a page isn't cached
+  while the hand is evicting it.
+* A crash loses what the memtables hold, and when memtables take too much
+  memory, the largest is flushed - almost always `pagecache`'s - so the rows
+  of `pagecache_hits` could stay in memory for long, while their pages were
+  flushed; and a flush of `pagecache_hits` could persist the deletion of an
+  evicted page's row there, while the deletion of the page itself was still in
+  `pagecache`'s memtable. So once a minute, the eviction fiber flushes the
+  tables, as needed: if pages were evicted, `pagecache` and then
+  `pagecache_hits` (between evictions); if pages were only cached, only
+  `pagecache_hits`; and if nothing changed, nothing - so an idle cache, or one
+  with room to spare, doesn't flush `pagecache` every minute. Then a crash
+  leaves without their rows only the pages cached in about the last minute
+  before it.
+
+Both tables use the `fixed_shard_partitioner`, which puts the `shard` column
+in the high bits of the token, so each shard's cache - the cache of the
+sstables it owns - is stored on that shard, and is a contiguous range of
+tokens. Each shard reads and writes only its own cache. Their row cache is
+disabled (the pages are cached in memory by the user tables' own caches), and
+their tombstones are dropped immediately.
+
+Both tables use incremental compaction - `pagecache` with a space
+amplification goal of 1.5, and `pagecache_hits` without one. The
+[administration guide](../operating-scylla/admin.rst) explains these choices,
+and the disk space which the cache takes.
+
+The cache is reached through `sstables::object_storage_page_cache` (an
+interface, so the sstables code doesn't depend on the code which reads and
+writes tables), implemented by `db::object_storage_page_cache_table`. It
+reads and writes the tables directly, rather than with internal CQL, for
+the lookups and writes which reads of sstables make, and uses internal CQL
+queries only for its scans of whole tables or sstables. A lookup is made
+while an sstable read holds its permit of its reader concurrency semaphore,
+so it must not wait on that semaphore, which could be waiting for the read:
+an internal CQL query would wait there for admission - all the reads would
+wait for their lookups, and their lookups for admission - and even a lookup
+which skips admission would wait there for memory, when the semaphore's
+reads use too much memory, and let only one of them proceed - possibly the
+one waiting for the lookup. So the lookups read with permits of a semaphore
+without limits, `database::object_storage_page_cache_semaphore()`, which
+never waits; the pages which a read keeps - including the rest of each
+batch of pages which it read from the cache, until it reaches them - are
+tracked in its own permit, without waiting either.
+
+### Pages
+
+The cache holds an sstable component's bytes exactly as they are stored in
+the object store - below the file I/O extensions, so the pages of an
+encrypted sstable stay encrypted. A component is split into pages
+(`object_storage_page_cache_geometry.hh`):
+
+* a compressed Data component, in its compressed chunks;
+* an encrypted Data component, in the encryption's 4 KiB blocks, because
+  decryption needs whole blocks anyway;
+* any other component - an uncompressed Data component, and the index
+  components - in fixed 4 KiB pages.
+
+The Data component is read through a `data_source`
+(`object_storage_page_cache_source.hh`), and the index components through a
+`seastar::file` (`object_storage_page_cache_file.hh`) which uses the same
+`data_source`. It reads the cached pages of its range, in batches, and at the
+first page which isn't cached, reads all the rest of its range from the
+object store with a single request - even if some of it is cached - and
+caches the pages it reads. This minimizes the number of requests, assuming
+that a request costs the same regardless of its size. A read may skip
+forward - for example, between rows far apart in a wide partition. A skip of
+up to a megabyte (`max_read_through_skip`) continues with the same request,
+and caches the skipped pages too; after a longer skip, the source closes the
+request, rather than download pages which the read doesn't need, and
+continues from the cache, and with a new request at the next page which
+isn't cached.
+
+### Which reads populate the cache
+
+Every read of an sstable of a `disk_cache` keyspace reads the cached pages,
+but only the user's reads (`table::make_mutation_reader()`, directly or
+through the row cache) without `BYPASS CACHE` add pages to the cache, and
+record hits. This is the `sstables::populate_disk_cache` flag, which defaults
+to `no`, so background reads - compaction, streaming, view building, and
+opening an sstable - don't need to set it. A read which must not populate the
+cache reads the index through a second set of index files, which don't
+populate it, and doesn't use the in-memory caches of the index, which read
+their misses through the populating files. The reader of sstables of the old
+`ka` and `la` formats, which Scylla no longer writes, never populates the
+cache.
+
+### Eviction
+
+* When an sstable is deleted, its pages are evicted
+  (`object_storage_base::destroy()`), before its objects are deleted. When
+  compaction deletes the sstables it compacted, the sstables it wrote already
+  hold their cached data (see "Compaction-resistant caching" below).
+* When the node starts, after loading the sstables, each shard evicts the
+  pages of sstables which no longer exist on it - for example, after a crash
+  between deleting an sstable and evicting its pages
+  (`sstables_manager::evict_orphans_from_disk_page_cache()`).
+* When a shard's cache grows beyond its share of
+  `object_storage_page_cache_size_in_mb`, a background fiber evicts the
+  pages which were least recently hit, approximately, until the cache is
+  10% under its limit. A hand moves over the shard's rows of
+  `pagecache_hits`, in the order of their keys, and evicts every page which
+  was never hit since it was cached, or was last hit before a cutoff time.
+  When the hand starts a pass, it chooses the cutoff from a histogram of how
+  long ago the cache's pages were last hit, so that the pages which it
+  evicts add up to at least a quarter of the cache - first the pages which
+  were never hit. So pages are evicted in the order of their last hits, not
+  of their keys; and one pass, with one cutoff, serves several evictions.
+  If pages are hit during a pass - after the histogram from which its
+  cutoff was chosen - a pass may evict too little; so if two passes didn't
+  evict enough, the third evicts pages regardless of their hits, which
+  keeps the cache within its limit even if all of its pages are hit all the
+  time.
+
+  To save writes, each shard remembers which pages it recorded a hit of in
+  the hand's current pass, and doesn't write their hits again - so a page's
+  last hit is known only to within a pass. A read records its hits in the
+  background, rather than wait for their writes - which wait when memtables
+  take too much memory - and if too many of these writes are in progress, it
+  doesn't record its hits at all.
+
+  Each shard counts the bytes in its cache in memory, adding a page's size
+  when it is cached and subtracting it when it is evicted. Caching a page
+  which was already cached - for example, when a long read which missed the
+  cache fetches the rest of its range, including pages which were cached -
+  counts it again. So as the hand passes the pages, it recounts their bytes,
+  and builds the histogram for its next pass, and when it completes a pass,
+  the recount replaces the count. The hand reads `pagecache_hits` in batches,
+  so it knows which pages cached during the pass it won't see - those up to
+  the end of its batch, which aren't in it - and these are counted when they
+  are cached, or, if they are cached while the hand fetches a batch, when the
+  batch arrives. If the hand stops in the middle of a batch, it stops
+  counting the pages cached within the batch which are still after it, which
+  it will fetch again. Only when the node starts are the bytes, and the first
+  histogram, counted by a scan of the table - and the evictions, which
+  subtract the pages they evict from the count, wait for the scan, which
+  may have counted these pages.
+
+### Compaction-resistant caching
+
+Compaction replaces its input sstables with new ones, and deleting the inputs
+evicts their pages. If the new sstables started with nothing cached, every
+compaction would lose the cache of the data it compacts - so a workload which
+writes, and therefore compacts, would keep losing its cache, and a major
+compaction would drop all of it. So while compaction writes an output sstable,
+it copies to the cache the pages of the output which hold data that was cached
+in an input (`object_storage_page_cache_compaction.hh`). When the inputs are
+deleted, the output already has their data cached. Until then, the cache
+holds both - incremental compaction deletes its inputs while it runs, so this
+is temporary and bounded.
+
+Input and output pages don't correspond by their offsets - an output page holds
+the merged data of all the inputs - but by the keys of their data. This must
+be accurate to about a page, because when the cache holds a small part of the
+data, its pages are scattered, so a neighbor of the right page is useless. So
+the mapping isn't by when the pages are read and written - each input is read
+ahead of the merged data which is written, by many pages - but by keys:
+
+* For each input sstable, the reader tells, for each fragment (partition start,
+  row, range tombstone change, partition end), where it starts in the Data
+  component, through compaction's `read_monitor` of the sstable. Whether that
+  position's page is cached is found in the sstable's rows of
+  `pagecache_hits`, which are read alongside the reader, in batches - not from
+  compaction's own reads, which read the cached pages only until the first page
+  which isn't cached, and then read the rest of the sstable from the object
+  store in one request. The rows also tell when the pages were last hit. The
+  input keeps its fragments which were in cached pages ("hot").
+* For each output sstable, the writer tells the key and the offset of each
+  fragment it writes, through compaction's `write_monitor`, and the fragment is
+  hot if an input had a hot fragment with the same key (partition and position
+  in it). The merged data is written in the order of its keys, and every input
+  is read past a key before the data at that key is written - the merge needs
+  the next fragment of every input to choose which is first - so the inputs and
+  outputs only move forward, and keep little in memory.
+* A page of the output's Data component (a compressed chunk, or 4 KiB of an
+  uncompressed one) is copied if at least a 16th of its data is hot. The cache
+  knows which pages were read, but not which of their rows: a cached page of a
+  large input holds about the same data as a page of the output, which should
+  be copied - with the rows around its rows, such as rows which writes added -
+  but the rows of a cached page of a small input, such as an sstable which a
+  memtable flush wrote, whose rows are scattered over all of the keys, end up
+  one in each of many pages of the output. Copying all of these would turn one
+  cached page into tens or hundreds, for a read which probably needed one of
+  its rows - and we don't know which. A read of a row also reads the data
+  around it: a forward read reads from the start of the row's block in the
+  partition's row index (or from the start of the partition, if it has no
+  row index), a reversed read reads the whole block, and both parse the
+  start of the row after the last one they return. The blocks of the output
+  aren't those of the inputs, so when a page is copied, so are all the
+  blocks with hot data in it, whole, with the start of the row after each.
+* The sink which writes each of the output's components to the object store,
+  below compression and the file I/O extensions, splits it into the pages in
+  which reads cache it, and copies the pages to copy with
+  `object_storage_page_cache::put_copied_page()`. A page which isn't decided
+  yet - because the writer hasn't finished writing its data - waits in the
+  sink until it is. The storage finds the output by the sstable's id, so the
+  sstable needn't know about it.
+* The index is copied too, so that a read of cached data needs no request to
+  the object store at all: a partition's entries in the index are copied if its
+  hot data is in Data pages which are copied. A partition usually ends before
+  the page which holds its end is decided, so the decision about its index
+  entries waits for the page. The Index component of a `me` sstable is read by
+  intervals: a read reads the whole range of the Index between two of the
+  Summary's entries - and the next range too, if the entry it looks for is the
+  last in its range, to know where the partition ends. So the whole interval
+  is copied if any of its partitions is hot, and so is the next interval if
+  the last partition of a hot interval is hot; its pages wait in the sink until
+  this is decided. (So the whole entry of a hot wide partition is copied,
+  including its promoted index, even if only a few of its rows are hot.)
+* The Partitions and Rows components of a BTI sstable are tries, which a read
+  descends from the root to the key it looks for - and then to the next key,
+  to know where its partition, or block of rows, ends. So the writer of each
+  trie marks the keys whose data is hot, and the next keys, and tells the
+  output the position of each node it writes whose subtree has a marked key
+  - including the root - before writing the node; the page which holds the
+  node is copied. (The marks are a generic feature of the trie writer: each
+  key may have a 32-bit mark, which isn't written, and the writer tells its
+  sink the largest mark in the subtree of each node it writes.) A key in
+  Partitions is marked if its partition is hot; a key in Rows - the
+  separator of a block of a partition's rows - if its block is copied; and the
+  header of a partition's entry in Rows, which a read reads first, if the
+  partition is hot. Whether they are is decided only when the partition's
+  blocks are, which may be after the partition ends, so the writer writes a
+  partition's entries in Rows and Partitions only then.
+
+A copied page gets the latest last hit of the input pages which made it hot,
+so it is evicted when they would have been. If it got no last hit, the hand
+would evict it first - in a full cache, right away - and if it got the current
+time, data which was compacted again and again would look recently used, and
+never be evicted.
+
+Most compactions compact data of which nothing is cached, so before a
+compaction reads its inputs, it looks up whether any of them has a Data page
+cached - and if none does, it doesn't track its inputs and outputs at all.
+
+A failure to read `pagecache_hits` or to copy a page doesn't fail the
+compaction: it only stops copying pages. Resharding, which writes sstables of
+other shards, doesn't copy pages, and neither does scrub, which may write its
+outputs interleaved rather than in the order of their keys.
+
+The copying is approximate, so the cache doesn't keep exactly what it held:
+
+* Rows which were read only from small sstables aren't kept. A cached page of
+  a small sstable, such as one which a memtable flush wrote, holds rows from
+  all over the keys, which end up one in each of many pages of the output,
+  so less than a 16th of each of these pages is hot, and none is copied. A
+  read of such a row misses the cache once after the compaction. A row which
+  was read from a large sstable too is kept, because the large sstable's
+  cached page makes the output's page hot. Likewise, a hot page isn't copied
+  if writes added to its range more than 15 times as much data as it had.
+* A copied page copies the whole row-index blocks with hot data in it, which
+  a reversed read reads, though a forward read of a row reads only from the
+  start of its block - so in a wide partition, a hot row may cost the cache
+  up to a whole block (64 KiB by default) more than was cached. In a `me`
+  sstable, the whole Index entry of a hot partition is copied, including all
+  of its promoted index.
+* Until the inputs are deleted, the cache holds both their pages and the
+  copies. Incremental compaction deletes its inputs as it goes, but a
+  compaction which deletes them only at its end can grow the cache by up to
+  all of its hot data - and if this exceeds the cache's limit, the hand may
+  evict copies, whose last hits are those of the input pages, rather than
+  the input pages, which will be deleted anyway.
+* The sink holds the output's pages in memory until it is decided whether
+  to copy them - from the start of the row-index block being written, so
+  at most about a block, except for a row larger than a block, which the
+  sink holds whole (as the reader already holds it).
+* sstables which aren't written by compaction - by repair, streaming, or a
+  tablet's migration to another node - start with nothing cached.
+
+### Migrating tablets
+
+When a tablet moves between shards of the same node, its sstables are cloned
+by reference, keeping their sstable id, so the pages which the old shard
+cached are copied to the new shard's cache, before the clones are loaded
+(`storage_service::clone_locally_tablet_storage()`). When a tablet moves to
+another node, the new node starts with an empty cache, and the old node
+evicts its pages when it deletes its sstables.
+
+### Errors
+
+A failure of the cache never fails a read: a failure to read pages from the
+cache is treated as a miss, and a failure to cache a page or to record a hit
+is logged and ignored.
+
 # Copying sstables on S3/GS (backup)
 
 It's possible to upload sstables from data/ directory on S3 via API. This is good

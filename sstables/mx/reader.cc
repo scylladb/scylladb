@@ -12,6 +12,7 @@
 #include "sstables/liveness_info.hh"
 #include "sstables/mutation_fragment_filter.hh"
 #include "sstables/m_format_read_helpers.hh"
+#include "sstables/object_storage_page_cache_compaction.hh"
 #include "sstables/sstable_mutation_reader.hh"
 #include "sstables/processing_result_generator.hh"
 #include "utils/to_string.hh"
@@ -75,6 +76,19 @@ public:
     };
     std::vector<cell> _cells;
     std::optional<collection_mutation_writer> _cm;
+
+    // For a compaction's read of an sstable which uses the object storage
+    // page cache, what to tell about each fragment (see
+    // object_storage_page_cache_compaction.hh), or null; and the data offset
+    // where the fragment being parsed starts.
+    page_cache_compaction_input* _page_cache_input = nullptr;
+    uint64_t _fragment_start = 0;
+
+    void page_cache_fragment(position_in_partition_view pos) {
+        if (_page_cache_input && _reader->_current_partition_key) {
+            _page_cache_input->on_fragment(*_reader->_current_partition_key, pos, _fragment_start);
+        }
+    }
 
     data_consumer::proceed consume_range_tombstone_start(clustering_key_prefix ck, bound_kind k, tombstone t) {
         sstlog.trace("mp_row_consumer_m {}: consume_range_tombstone_start(ck={}, k={}, t={})", fmt::ptr(this), ck, k, t);
@@ -298,6 +312,9 @@ public:
         auto pk = key.to_partition_key(*_schema);
         setup_for_partition(pk);
         auto dk = dht::decorate_key(*_schema, pk);
+        if (_page_cache_input) {
+            _page_cache_input->on_fragment(dk, position_in_partition_view::for_partition_start(), _fragment_start);
+        }
 
         auto should_proceed = _reader->on_next_partition(std::move(dk), tombstone(deltime));
         if (should_proceed == data_consumer::proceed::no) {
@@ -314,6 +331,7 @@ public:
         sstlog.trace("mp_row_consumer_m {}: consume_row_start({})", fmt::ptr(this), key);
 
         _in_progress_row.emplace(std::move(key));
+        page_cache_fragment(_in_progress_row->position());
 
         mutation_fragment_filter::clustering_result res = _mf_filter->apply(_in_progress_row->position());
 
@@ -372,6 +390,7 @@ public:
         }
         _inside_static_row = true;
         _in_progress_static_row = static_row();
+        page_cache_fragment(position_in_partition_view::for_static_row());
         return row_processing_result::do_proceed;
     }
 
@@ -480,6 +499,7 @@ public:
                                             tombstone tomb) {
         auto ck = clustering_key_prefix::from_range(ecp | std::views::transform(
             [] (const fragmented_temporary_buffer& b) { return fragmented_temporary_buffer::view(b); }));
+        page_cache_fragment(position_in_partition_view(position_in_partition_view::range_tag_t(), bound_view(ck, kind)));
         if (kind == bound_kind::incl_start || kind == bound_kind::excl_start) {
             return consume_range_tombstone_start(std::move(ck), kind, std::move(tomb));
         } else { // *_end kind
@@ -496,10 +516,12 @@ public:
         switch (kind) {
         case bound_kind_m::incl_end_excl_start: {
             auto pos = position_in_partition(position_in_partition::range_tag_t(), bound_kind::incl_end, std::move(ck));
+            page_cache_fragment(pos);
             return consume_range_tombstone_boundary(std::move(pos), end_tombstone, start_tombstone);
         }
         case bound_kind_m::excl_end_incl_start: {
             auto pos = position_in_partition(position_in_partition::range_tag_t(), bound_kind::excl_end, std::move(ck));
+            page_cache_fragment(pos);
             return consume_range_tombstone_boundary(std::move(pos), end_tombstone, start_tombstone);
         }
         default:
@@ -576,6 +598,7 @@ public:
     // proceed consuming more data.
     data_consumer::proceed consume_partition_end() {
         sstlog.trace("mp_row_consumer_m {}: consume_partition_end()", fmt::ptr(this));
+        page_cache_fragment(position_in_partition_view::after_all_clustered_rows());
         reset_for_new_partition();
 
         if (_fwd == streamed_mutation::forwarding::yes) {
@@ -618,6 +641,15 @@ public:
         // active tombstone, if any, is obtained from the index and will be set using
         // `set_range_tombstone`.
         _stored_tombstone.reset();
+    }
+
+    // For data_consume_rows_context_m and data_consume_rows(): see
+    // _page_cache_input.
+    void on_fragment_start(uint64_t offset) noexcept {
+        _fragment_start = offset;
+    }
+    page_cache_compaction_input* page_cache_input() const noexcept {
+        return _page_cache_input;
     }
 
     position_in_partition_view position() {
@@ -836,11 +868,20 @@ public:
         return _gen.generate();
     }
 private:
+    // Tells the consumer, if it wants to know, the data offset at which the
+    // next fragment (a partition start, a row, a range tombstone change or a
+    // partition end) starts - before any of it is parsed.
+    void notify_fragment_start() {
+        if constexpr (requires { _consumer.on_fragment_start(uint64_t(0)); }) {
+            _consumer.on_fragment_start(this->position() - _processing_data->size());
+        }
+    }
     processing_result_generator do_process_state() {
         if (_state != state::PARTITION_START) {
             goto flags_label;
         }
         partition_start_label: {
+            notify_fragment_start();
             _is_first_unfiltered = true;
             _state = state::DELETION_TIME;
             co_yield this->read_short_length_bytes(*_processing_data, _pk);
@@ -860,6 +901,7 @@ private:
             }
         }
         flags_label:
+            notify_fragment_start();
             _liveness = {};
             _row_tombstone = {};
             _row_shadowable_tombstone = {};
@@ -1270,6 +1312,7 @@ class mx_sstable_mutation_reader : public mp_row_consumer_reader_mx {
     mutation_reader::forwarding _fwd_mr;
     read_monitor& _monitor;
     integrity_check _integrity;
+    populate_disk_cache _populate;
     lw_shared_ptr<checksum> _checksum;
 
     // For reversed (single partition) reads, points to the current position in the sstable
@@ -1287,6 +1330,7 @@ public:
                             mutation_reader::forwarding fwd_mr,
                             read_monitor& mon,
                             integrity_check integrity,
+                            populate_disk_cache populate,
                             std::unique_ptr<abstract_index_reader> ir,
                             const utils::hashed_key* single_partition_read_murmur_hash)
             : mp_row_consumer_reader_mx(std::move(schema), permit, std::move(sst))
@@ -1306,8 +1350,10 @@ public:
             , _fwd(fwd)
             , _fwd_mr(fwd_mr)
             , _monitor(mon)
-            , _integrity(integrity) {
+            , _integrity(integrity)
+            , _populate(populate) {
         sstlog.trace("mx_sstable_mutation_reader {}: init with _pr={}", fmt::ptr(this), _pr.get());
+        _consumer._page_cache_input = _monitor.page_cache_input();
         if (reversed()) {
             if (!_single_partition_read) {
                 on_internal_error(sstlog, format(
@@ -1587,17 +1633,17 @@ private:
                     on_internal_error(sstlog, "mx reader: integrity checking not supported for single-partition reversed reads");
                 }
                 auto reversed_context = data_consume_reversed_partition<DataConsumeRowsContext>(
-                        *_schema, _sst, *_index_reader, _consumer, { begin, *end });
+                        *_schema, _sst, *_index_reader, _consumer, { begin, *end }, _populate);
                 _context = std::move(reversed_context.the_context);
                 _reversed_read_sstable_position = &reversed_context.current_position_in_sstable;
             } else {
-                _context = co_await data_consume_single_partition<DataConsumeRowsContext>(*_schema, _sst, _consumer, { begin, *end }, _integrity);
+                _context = co_await data_consume_single_partition<DataConsumeRowsContext>(*_schema, _sst, _consumer, { begin, *end }, _integrity, _populate);
             }
         } else {
             sstable::disk_read_range drr{begin, *end};
             auto last_end = _fwd_mr ? _sst->data_size() : drr.end;
             _read_enabled = bool(drr);
-            _context = co_await data_consume_rows<DataConsumeRowsContext>(*_schema, _sst, _consumer, std::move(drr), last_end, _integrity);
+            _context = co_await data_consume_rows<DataConsumeRowsContext>(*_schema, _sst, _consumer, std::move(drr), last_end, _integrity, _populate);
         }
 
         _monitor.on_read_started(_context->reader_position());
@@ -1873,12 +1919,13 @@ static mutation_reader make_reader(
         mutation_reader::forwarding fwd_mr,
         read_monitor& monitor,
         integrity_check integrity,
+        populate_disk_cache populate,
         std::unique_ptr<abstract_index_reader> ir,
         const utils::hashed_key* single_partition_read_murmur_hash
     ) {
     return make_mutation_reader<mx_sstable_mutation_reader>(
         std::move(sstable), std::move(schema), std::move(permit), range,
-        std::move(slice), std::move(trace_state), fwd, fwd_mr, monitor, integrity, std::move(ir), single_partition_read_murmur_hash);
+        std::move(slice), std::move(trace_state), fwd, fwd_mr, monitor, integrity, populate, std::move(ir), single_partition_read_murmur_hash);
 }
 
 mutation_reader make_reader(
@@ -1892,11 +1939,12 @@ mutation_reader make_reader(
         mutation_reader::forwarding fwd_mr,
         read_monitor& monitor,
         integrity_check integrity,
+        populate_disk_cache populate,
         std::unique_ptr<abstract_index_reader> ir,
         const utils::hashed_key* single_partition_read_murmur_hash
 ) {
     return make_reader(std::move(sstable), std::move(schema), std::move(permit), range,
-            value_or_reference(slice), std::move(trace_state), fwd, fwd_mr, monitor, integrity, std::move(ir), single_partition_read_murmur_hash);
+            value_or_reference(slice), std::move(trace_state), fwd, fwd_mr, monitor, integrity, populate, std::move(ir), single_partition_read_murmur_hash);
 }
 
 mutation_reader make_reader(
@@ -1910,11 +1958,12 @@ mutation_reader make_reader(
         mutation_reader::forwarding fwd_mr,
         read_monitor& monitor,
         integrity_check integrity,
+        populate_disk_cache populate,
         std::unique_ptr<abstract_index_reader> ir,
         const utils::hashed_key* single_partition_read_murmur_hash
 ) {
     return make_reader(std::move(sstable), std::move(schema), std::move(permit), range,
-            value_or_reference(std::move(slice)), std::move(trace_state), fwd, fwd_mr, monitor, integrity, std::move(ir), single_partition_read_murmur_hash);
+            value_or_reference(std::move(slice)), std::move(trace_state), fwd, fwd_mr, monitor, integrity, populate, std::move(ir), single_partition_read_murmur_hash);
 }
 
 /// a reader which does not support seeking to given position.
@@ -1947,7 +1996,9 @@ public:
         : mp_row_consumer_reader_mx(std::move(schema), permit, std::move(sst))
         , _consumer(this, _schema, std::move(permit), _schema->full_slice(), std::move(trace_state), streamed_mutation::forwarding::no, _sst)
         , _monitor(mon)
-        , _integrity(integrity) {}
+        , _integrity(integrity) {
+        _consumer._page_cache_input = _monitor.page_cache_input();
+    }
 private:
     bool is_initialized() const {
         return bool(_context);

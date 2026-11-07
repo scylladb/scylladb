@@ -310,6 +310,7 @@ public:
             mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes,
             read_monitor& monitor = default_read_monitor(),
             integrity_check integrity = integrity_check::no,
+            populate_disk_cache populate = populate_disk_cache::no,
             const utils::hashed_key* single_partition_read_murmur_hash = nullptr
         );
 
@@ -404,9 +405,17 @@ public:
     file& index_file() {
         return _index_file;
     }
-    file uncached_index_file();
-    file uncached_partitions_file();
-    file uncached_rows_file();
+    // The index files without the in-memory cache of index pages - and with
+    // populate_disk_cache::no, files which don't populate the object storage
+    // page cache.
+    file uncached_index_file(populate_disk_cache populate);
+    file uncached_partitions_file(populate_disk_cache populate);
+    file uncached_rows_file(populate_disk_cache populate);
+    // The use_caching of a read of the index, given the read's use_caching and
+    // populate_disk_cache: the in-memory caches of the index read their misses
+    // through the index files, which populate the object storage page cache, so
+    // a read which must not populate it can't use them.
+    use_caching index_caching(use_caching caching, populate_disk_cache populate) const;
     // Returns size of bloom filter data.
     uint64_t filter_size() const;
 
@@ -583,6 +592,12 @@ private:
     std::optional<trie::bti_partitions_db_footer> _partitions_db_footer;
     file _rows_file;
     seastar::shared_ptr<cached_file> _cached_rows_file;
+    // If the index files above read through the object storage page cache, the
+    // same index files, but without populating the object storage page cache,
+    // for the reads which must not populate it (see populate_disk_cache).
+    file _non_populating_index_file;
+    file _non_populating_partitions_file;
+    file _non_populating_rows_file;
     uint64_t _data_file_size;
     uint64_t _index_file_size = 0;
     uint64_t _partitions_file_size = 0;
@@ -864,6 +879,11 @@ public:
     // When created with `integrity_check::yes`, the integrity mechanisms
     // of the underlying data streams will be enabled.
     //
+    // If the sstable is on object storage in a keyspace with the 'disk_cache'
+    // option, the data is read through the object storage page cache, which the
+    // read populates only with `populate_disk_cache::yes` (see the comment on
+    // populate_disk_cache).
+    //
     // The `error_handler` parameter allows to customize the error handling
     // logic when a checksum or digest mismatch is detected on an
     // integrity-checked stream with no compression. The parameter is ignored
@@ -876,12 +896,14 @@ public:
     future<input_stream<char>> data_stream(uint64_t pos, size_t len,
             reader_permit permit, tracing::trace_state_ptr trace_state, lw_shared_ptr<file_input_stream_history> history,
             raw_stream raw = raw_stream::no, integrity_check integrity = integrity_check::no,
+            populate_disk_cache populate = populate_disk_cache::no,
             integrity_error_handler error_handler = throwing_integrity_error_handler);
 
     future<input_stream<char>> data_stream(uint64_t pos, size_t len,
         reader_permit permit, tracing::trace_state_ptr trace_state, lw_shared_ptr<file_input_stream_history> history,
         file_input_stream_options options,
         raw_stream raw = raw_stream::no, integrity_check integrity = integrity_check::no,
+        populate_disk_cache populate = populate_disk_cache::no,
         integrity_error_handler error_handler = throwing_integrity_error_handler);
 
     // Read exactly the specific byte range from the data file (after
@@ -890,7 +912,8 @@ public:
     // determined using the index file).
     // This function is intended (and optimized for) random access, not
     // for iteration through all the rows.
-    future<temporary_buffer<char>> data_read(uint64_t pos, size_t len, reader_permit permit);
+    future<temporary_buffer<char>> data_read(uint64_t pos, size_t len, reader_permit permit,
+            populate_disk_cache populate = populate_disk_cache::no);
 
 private:
     future<summary_entry&> read_summary_entry(size_t i);
@@ -916,6 +939,7 @@ private:
     }
 
     future<> open_or_create_data(open_flags oflags, file_open_options options = {}) noexcept;
+    future<> open_non_populating_index_files();
     // runs in async context (called from storage::open)
     void write_toc(std::unique_ptr<crc32_digest_file_writer> w);
     static future<uint32_t> read_digest_from_file(file f);
@@ -1230,7 +1254,8 @@ public:
         reader_permit permit,
         tracing::trace_state_ptr trace_state = {},
         use_caching caching = use_caching::yes,
-        bool single_partition_read = false);
+        bool single_partition_read = false,
+        populate_disk_cache populate = populate_disk_cache::no);
 
     // Allow the test cases from sstable_test.cc to test private methods. We use
     // a placeholder to avoid cluttering this class too much. The sstable_test class
@@ -1242,10 +1267,10 @@ public:
     friend class sstables_manager;
     template <typename DataConsumeRowsContext>
     friend future<std::unique_ptr<DataConsumeRowsContext>>
-    data_consume_rows(const schema&, shared_sstable, typename DataConsumeRowsContext::consumer&, disk_read_range, uint64_t, integrity_check);
+    data_consume_rows(const schema&, shared_sstable, typename DataConsumeRowsContext::consumer&, disk_read_range, uint64_t, integrity_check, populate_disk_cache);
     template <typename DataConsumeRowsContext>
     friend future<std::unique_ptr<DataConsumeRowsContext>>
-    data_consume_single_partition(const schema&, shared_sstable, typename DataConsumeRowsContext::consumer&, disk_read_range, integrity_check);
+    data_consume_single_partition(const schema&, shared_sstable, typename DataConsumeRowsContext::consumer&, disk_read_range, integrity_check, populate_disk_cache);
     template <typename DataConsumeRowsContext>
     friend future<std::unique_ptr<DataConsumeRowsContext>>
     data_consume_rows(const schema&, shared_sstable, typename DataConsumeRowsContext::consumer&, integrity_check);
@@ -1361,6 +1386,19 @@ public:
 
     virtual future<data_source>
     wrap_source(const sstable&, component_type, data_source);
+
+    // Reads the byte range [offset, offset + length) of a component as it is
+    // stored, before the extension's transformation is undone.
+    using stored_range_reader = noncopyable_function<future<data_source>(uint64_t offset, uint64_t length)>;
+    // Like wrap_source(), but for the byte range [offset, offset + len) of the
+    // component (as the sstable code reads it, after the transformation is
+    // undone), which may start anywhere in the component, whose size is "size".
+    // The extension reads the stored bytes it needs with read_stored(). Returns
+    // nothing if the extension cannot do this; the caller should then read the
+    // component in another way, such as through wrap_file().
+    virtual future<std::optional<data_source>>
+    wrap_ranged_source(const sstable&, component_type, uint64_t offset, uint64_t len, uint64_t size,
+            stored_range_reader read_stored);
     // optionally return a map of attributes for a given sstable,
     // suitable for "describe".
     // This would preferably be interesting info on what/why the extension did

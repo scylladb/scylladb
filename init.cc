@@ -96,6 +96,9 @@ std::set<sstring> get_disabled_features_from_db_config(const db::config& cfg, st
     if (!cfg.check_experimental(db::experimental_features_t::feature::LOGSTOR)) {
         disabled.insert("LOGSTOR"s);
     }
+    if (!cfg.check_experimental(db::experimental_features_t::feature::OBJECT_STORAGE_PAGE_CACHE)) {
+        disabled.insert("OBJECT_STORAGE_PAGE_CACHE"s);
+    }
     if (!cfg.table_digest_insensitive_to_expiry()) {
         disabled.insert("TABLE_DIGEST_INSENSITIVE_TO_EXPIRY"s);
     }
