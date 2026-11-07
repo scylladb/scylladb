@@ -468,6 +468,10 @@ have a :ref:`full-text index <create-fulltext-index-statement>` created with
 ``USING 'fulltext_index'``. ``BM25()`` takes a column name and a query string
 and scores rows using the BM25 ranking algorithm.
 
+The search term is a query, not plain text, so some characters have a special
+meaning. To search for text literally, wrap it in double quotes; it is then
+searched as a phrase. See :ref:`Search term syntax <fulltext-search-term>`.
+
 A full-text search query must contain **both** of the following clauses,
 referencing the **same** column and the **same** search term:
 
@@ -524,6 +528,13 @@ Return the score and the rank of each row::
     SELECT title, BM25(body, 'distributed database') AS score_and_rank FROM articles
         WHERE BM25(body, 'distributed database') > 0
         ORDER BY BM25(body, 'distributed database')
+        LIMIT 10;
+
+Search for a phrase, with a single quote written as ``''``::
+
+    SELECT * FROM articles
+        WHERE BM25(body, '"don''t panic"') > 0
+        ORDER BY BM25(body, '"don''t panic"')
         LIMIT 10;
 
 ``BM25()`` returns a ``tuple<float, int>``: the **score** the index gave the row, and the row's
