@@ -1521,6 +1521,13 @@ private:
     timer<> _off_strategy_trigger;
     void do_update_off_strategy_trigger();
 
+    // Keeps _stats.pending_compactions (the "pending_compaction" gauge) fresh;
+    // estimate_pending_compactions() can yield, so it can't run in the gauge callback itself.
+    // Triggers are coalesced and serialized.
+    future<> do_refresh_pending_compactions_stat();
+    serialized_action _pending_compactions_refresh{[this] { return do_refresh_pending_compactions_stat(); }};
+    void refresh_pending_compactions_stat() noexcept;
+
     compaction_group* try_get_compaction_group_with_static_sharding() const;
 public:
     void update_off_strategy_trigger();
