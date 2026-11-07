@@ -3335,6 +3335,13 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, s
         throw std::runtime_error(format("Truncating of {}.{} is not allowed.", s->ks_name(), s->cf_name()));
     }
 
+    // The replicas of a strongly consistent table may hold committed, unapplied writes.
+    // Let them apply what they know is committed before the flush, so that the snapshot
+    // taken below holds those writes, as a backup's snapshot does; see
+    // snapshot_table_on_all_shards(). A dropped table has been unregistered by now and
+    // its raft groups are going away, so this is a no-op for the pre-drop snapshot.
+    co_await sharded_db.local().wait_for_strongly_consistent_apply(s->id());
+
     if (!sharded_db.local().get_config().auto_snapshot()) {
         with_snapshot = false;
     }
