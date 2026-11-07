@@ -729,6 +729,14 @@
                      "allowMultiple":false,
                      "type":"boolean",
                      "paramType":"query"
+                  },
+                  {
+                     "name":"ttl",
+                     "description":"The time-to-live for the snapshot: a non-negative integer, optionally followed by 's' for seconds (the default), 'm' for minutes, 'h' for hours, or 'd' for days. If omitted or 0, the snapshot does not expire. The expiration time is recorded in the snapshot manifest as expires_at and the snapshot is deleted when it expires.",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
                   }
                ]
             },
