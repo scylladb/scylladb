@@ -18,8 +18,11 @@
 #include "db/commitlog/raft_commitlog_replay_buffer.hh"
 #include "utils/hash.hh"
 
+#include <seastar/core/lowres_clock.hh>
+#include <seastar/core/timer.hh>
 #include <seastar/util/noncopyable_function.hh>
 
+#include <deque>
 #include <source_location>
 
 namespace db {
@@ -154,6 +157,17 @@ class groups_manager : public peering_sharded_service<groups_manager> {
 
         shared_future<> server_control_op = make_ready_future<>();
 
+        // The priority members of the raft server; refreshed by update().
+        std::vector<raft::server_id> priority_members;
+        // While armed, the raft server gets no priority members; see note_leadership_gain().
+        timer<lowres_clock> priority_members_hold;
+        // When this replica gained the leadership lately, oldest first.
+        std::deque<lowres_clock::time_point> leadership_gains;
+
+        std::vector<raft::server_id> effective_priority_members() const {
+            return priority_members_hold.armed() ? std::vector<raft::server_id>{} : priority_members;
+        }
+
         // Populated only when this node thinks it's a tablet raft group leader.
         std::optional<leader_info> leader_info = std::nullopt;
         condition_variable leader_info_cond = condition_variable();
@@ -200,7 +214,8 @@ class groups_manager : public peering_sharded_service<groups_manager> {
         locator::token_metadata_ptr tm,
         lw_shared_ptr<raft::server_stats> server_stats,
         lw_shared_ptr<raft_rpc::stats> rpc_stats,
-        lw_shared_ptr<state_machine_stats> apply_stats);
+        lw_shared_ptr<state_machine_stats> apply_stats,
+        std::vector<raft::server_id> priority_members);
 
     // Creates them if the table does not have any yet.
     table_metrics& get_table_metrics(const schema& s);
@@ -251,6 +266,10 @@ class groups_manager : public peering_sharded_service<groups_manager> {
 
     future<> leader_info_updater(raft_group_state& state, table_id table, raft::group_id gid,
         dht::token_range range);
+
+    // Guards against a ping-pong of the leadership: withdraws the priority members of a
+    // group for a while once this replica has gained its leadership too often.
+    static void note_leadership_gain(raft_group_state& state, raft::group_id gid);
 
     void init_messaging_service();
 

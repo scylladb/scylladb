@@ -232,7 +232,8 @@ keyspace_metadata::keyspace_metadata(std::string_view name,
              user_types_metadata user_types,
              storage_options storage_opts,
              std::optional<locator::replication_strategy_config_options> next_options,
-             std::map<sstring, sstring> config_options)
+             std::map<sstring, sstring> config_options,
+             std::map<sstring, sstring> preferred_rack)
     : _name{name}
     , _strategy_name{locator::abstract_replication_strategy::to_qualified_class_name(strategy_name.empty() ? "NetworkTopologyStrategy" : strategy_name)}
     , _strategy_options{std::move(strategy_options)}
@@ -243,6 +244,7 @@ keyspace_metadata::keyspace_metadata(std::string_view name,
     , _storage_options(make_lw_shared<storage_options>(std::move(storage_opts)))
     , _consistency_option(consistency_option)
     , _config_options(std::move(config_options))
+    , _preferred_rack(std::move(preferred_rack))
 {
     for (auto&& s : cf_defs) {
         _cf_meta_data.emplace(s->cf_name(), s);
@@ -262,6 +264,31 @@ void keyspace_metadata::validate(const gms::feature_service& fs, const locator::
     }
     if (params.consistency && *params.consistency == data_dictionary::consistency_config_option::local) {
         throw exceptions::configuration_exception("Local consistency is not supported yet");
+    }
+    if (!_preferred_rack.empty()) {
+        if (params.consistency != data_dictionary::consistency_config_option::global) {
+            throw exceptions::configuration_exception("preferred_rack requires global consistency");
+        }
+        if (_preferred_rack.size() > 1) {
+            throw exceptions::configuration_exception("Only a single preferred_rack entry is supported with global consistency");
+        }
+    }
+    for (const auto& [dc, rack] : _preferred_rack) {
+        auto it = strategy_options().find(dc);
+        if (it == strategy_options().end()) {
+            throw exceptions::configuration_exception(
+                fmt::format("preferred_rack references datacenter '{}' which is not in the replication options", dc));
+        }
+        auto rf = locator::abstract_replication_strategy::parse_replication_factor(it->second);
+        if (!rf.is_rack_based()) {
+            throw exceptions::configuration_exception(
+                fmt::format("preferred_rack requires rack-based replication for datacenter '{}', but replication factor is numeric", dc));
+        }
+        const auto& rack_list = rf.get_rack_list();
+        if (std::find(rack_list.begin(), rack_list.end(), rack) == rack_list.end()) {
+            throw exceptions::configuration_exception(
+                fmt::format("preferred_rack '{}' is not in the replication rack list for datacenter '{}': {}", rack, dc, rack_list));
+        }
     }
 }
 
@@ -285,14 +312,15 @@ keyspace_metadata::new_keyspace(std::string_view name,
                                 storage_options storage_opts,
                                 std::vector<schema_ptr> cf_defs,
                                 std::optional<locator::replication_strategy_config_options> next_options,
-                                std::map<sstring, sstring> config_options)
+                                std::map<sstring, sstring> config_options,
+                                std::map<sstring, sstring> preferred_rack)
 {
-    return ::make_lw_shared<keyspace_metadata>(name, strategy_name, options, initial_tablets, consistency_option, durables_writes, cf_defs, user_types_metadata{}, storage_opts, next_options, std::move(config_options));
+    return ::make_lw_shared<keyspace_metadata>(name, strategy_name, options, initial_tablets, consistency_option, durables_writes, cf_defs, user_types_metadata{}, storage_opts, next_options, std::move(config_options), std::move(preferred_rack));
 }
 
 lw_shared_ptr<keyspace_metadata>
 keyspace_metadata::new_keyspace(const keyspace_metadata& ksm) {
-    return new_keyspace(ksm.name(), ksm.strategy_name(), ksm.strategy_options(), ksm.initial_tablets(), ksm.consistency_option(), ksm.durable_writes(), ksm.get_storage_options(), {}, ksm.next_strategy_options_opt(), ksm.config_options());
+    return new_keyspace(ksm.name(), ksm.strategy_name(), ksm.strategy_options(), ksm.initial_tablets(), ksm.consistency_option(), ksm.durable_writes(), ksm.get_storage_options(), {}, ksm.next_strategy_options_opt(), ksm.config_options(), ksm.preferred_rack());
 }
 
 void keyspace_metadata::add_user_type(const user_type ut) {
@@ -604,6 +632,11 @@ cql3::description keyspace_metadata::describe(const replica::database& db, cql3:
         if (db.features().tablets) {
             if (_consistency_option) {
                 os << " AND consistency = " << cql3::util::single_quote(consistency_config_option_to_string(*_consistency_option));
+            }
+            if (!_preferred_rack.empty()) {
+                os << " AND preferred_rack = {" << fmt::to_string(fmt::join(_preferred_rack | std::views::transform([] (const auto& e) {
+                    return format("{}: {}", cql3::util::single_quote(e.first), cql3::util::single_quote(e.second));
+                }), ", ")) << "}";
             }
             if (!_initial_tablets.has_value()) {
                 os << " AND tablets = {'enabled': false}";

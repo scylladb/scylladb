@@ -120,6 +120,8 @@ name                 kind       mandatory    default    description
                                                         :ref:`Paxos State Tables <paxos-state-tables>`.
 ``tablets``          *map*      no                      Enables or disables tablets for the keyspace (see :ref:`tablets <tablets>`)
 ``consistency``      *simple*   no          `eventual`  Configures consistency mode for the keyspace (see :ref:`consistency <consistency-option>`).
+``preferred_rack``   *map*      no                      The rack whose replicas should lead the keyspace's tablets (see
+                                                        :ref:`preferred_rack <preferred-rack-option>`).
 =================== ========== =========== =========== ===================================================================
 
 A keyspace also accepts the options that can be set through CQL at the ``KEYSPACE`` scope, such as
@@ -337,6 +339,76 @@ only for operations going to the same DC and `global` means that strong
 consistency is guaranteed for operations going to all DCs. Note that
 `local` or `global` consistencies are guaranteed only for requests that
 are going to the same partition.
+
+The ``consistency`` option cannot be changed after the keyspace is created. To change
+it, recreate the keyspace. ``ALTER KEYSPACE`` accepts the current value and rejects any
+other.
+
+.. _preferred-rack-option:
+
+Keyspace ``preferred_rack`` option :label-caution:`Experimental`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``preferred_rack`` names the rack whose replicas should lead the tablets of a strongly
+consistent keyspace::
+
+  CREATE KEYSPACE ks
+   WITH replication = { 'class': 'NetworkTopologyStrategy', 'dc1': ['rack1', 'rack2', 'rack3'] }
+   AND consistency = 'global'
+   AND preferred_rack = { 'dc1': 'rack1' };
+
+Each tablet of a strongly consistent keyspace is a Raft group with one leader. The
+leader executes strongly consistent writes and reads at ``QUORUM`` or ``LOCAL_QUORUM``.
+Reads at ``ONE`` or ``LOCAL_ONE`` can be served by any replica. A rack list places one
+replica of each tablet in every listed rack, so each tablet has exactly one replica in
+the preferred rack. That replica is preferred as the leader: it becomes the leader of a
+new tablet, and it is the first to start an election when the tablet loses its leader.
+
+The preference is not a guarantee. When the replica in the preferred rack is
+unavailable, for example during a rolling restart or a rack outage, another replica
+leads the tablet. The keyspace stays available; only the benefit of the preferred rack
+is lost. When the replica is back and has caught up, the leadership moves back to it
+automatically, usually within seconds. Writes to the tablet pause briefly while the
+leadership moves.
+
+Benefits and costs of ``preferred_rack``:
+
+- A client in the preferred rack reaches the leader without leaving its rack. The leader
+  still needs a majority of the replicas to commit a write or confirm a read, so the
+  request crosses racks once. When leaders are spread across all racks, most requests
+  cross racks twice. This lowers latency and cross-zone traffic, which cloud providers
+  usually charge for. Clients in other racks gain nothing.
+- All leader-executed requests of the keyspace are handled by the nodes of one rack, so
+  their throughput is limited by that rack. With three racks of equal size, that is
+  about a third of the cluster's capacity.
+
+The preferred rack handles all of the keyspace's strongly consistent traffic, so size it
+for that traffic and add nodes to it when the traffic grows. The leaders are balanced
+across the rack's nodes, like the tablets themselves. If the preferred rack goes down,
+the other racks take over its traffic. Make sure they can handle it, or expect lower
+throughput until the rack is back.
+
+Use ``preferred_rack`` for latency- or cost-sensitive workloads whose clients run in a
+single rack, for example one availability zone. For throughput-bound workloads, or
+clients in several racks, leave it unset, and leadership is spread across all replicas.
+
+``preferred_rack`` requires:
+
+- ``consistency = 'global'``, and tablets;
+- exactly one entry: one datacenter with one rack;
+- the datacenter to be in the ``replication`` options, replicated with a
+  :ref:`rack list <rack_list_rf>` rather than a numeric replication factor;
+- the rack to be in that rack list.
+
+The preferred rack can be changed, and an empty map unsets it::
+
+  ALTER KEYSPACE ks WITH preferred_rack = { 'dc1': 'rack2' };
+  ALTER KEYSPACE ks WITH preferred_rack = {};
+
+The leadership then moves to the new rack within seconds. ``preferred_rack`` can be
+altered together with ``replication``, in which case it takes effect when the replication
+change completes. It can't be altered while a replication change of the keyspace is in
+progress, and the preferred rack can't be removed from the rack list.
 
 .. _use-statement:        
         

@@ -1560,6 +1560,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                             rtlogger.info("keyspace_rf_change for keyspace {} will use multi-rf change procedure", ks_name);
                             ks_md->set_next_strategy_options(ks_md->strategy_options());
                             ks_md->set_strategy_options(ks.metadata()->strategy_options()); // start from the old strategy
+                            // The new preferred_rack may need the new replication; it is applied on completion.
+                            ks_md->set_preferred_rack(ks.metadata()->preferred_rack());
                             auto schema_muts = prepare_keyspace_update_announcement(_db, ks_md, guard.write_timestamp());
                             for (auto& m: schema_muts) {
                                 updates.add_large(std::move(m));

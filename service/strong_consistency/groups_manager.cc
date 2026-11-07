@@ -49,6 +49,15 @@ static logging::logger logger("sc_groups_manager");
 // request holds the server by then, so all that's left is stopping it.
 static constexpr auto group_teardown_timeout = std::chrono::seconds(60);
 
+// Two replicas which disagree on the priority members of a group - one has a stale
+// view of the topology, say - can hand its leadership back and forth. Raft's cooldown
+// after a handover covers a short disagreement, but not a lasting one. A replica which
+// gains the leadership more than this many times within the window withdraws the
+// priority members of the group for the hold, so that it keeps the leadership.
+static constexpr size_t max_leadership_gains = 3;
+static constexpr auto leadership_gains_window = std::chrono::minutes(1);
+static constexpr auto priority_members_hold = std::chrono::minutes(5);
+
 static raft::server_id to_server_id(host_id host_id) {
     return raft::server_id{host_id.uuid()};
 };
@@ -82,6 +91,27 @@ static dht::token_range token_range_of_group(const tablet_map& tablet_map, table
     const auto [first, second] = tablet_map.sibling_tablets(tid);
     return dht::token_range::make(*tablet_map.get_token_range(first).start_copy(),
             *tablet_map.get_token_range(second.value_or(first)).end_copy());
+}
+
+// The replicas of the tablet in its keyspace's preferred rack - at most one, since a
+// rack list places one replica per rack - or none if the keyspace has no preferred rack.
+static std::vector<raft::server_id> preferred_leaders(const std::map<sstring, sstring>& preferred_rack,
+        const locator::tablet_replica_set& replicas, const locator::topology& topo) {
+    std::vector<raft::server_id> preferred;
+    if (preferred_rack.empty()) {
+        return preferred;
+    }
+    for (const auto& replica : replicas) {
+        const auto* node = topo.find_node(replica.host);
+        if (!node) {
+            continue;
+        }
+        const auto it = preferred_rack.find(node->dc());
+        if (it != preferred_rack.end() && it->second == node->rack()) {
+            preferred.push_back(to_server_id(replica.host));
+        }
+    }
+    return preferred;
 }
 
 class groups_manager::rpc_impl: public service::raft_rpc {
@@ -207,7 +237,8 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
         token_metadata_ptr tm,
         lw_shared_ptr<raft::server_stats> server_stats,
         lw_shared_ptr<raft_rpc::stats> rpc_stats,
-        lw_shared_ptr<state_machine_stats> apply_stats)
+        lw_shared_ptr<state_machine_stats> apply_stats,
+        std::vector<raft::server_id> priority_members)
 {
     const auto my_id = to_server_id(tm->get_my_id());
     const auto this_replica = locator::tablet_replica{
@@ -314,7 +345,8 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
         // groups pick different replicas instead of all electing the
         // smallest-id node (which would concentrate load on one node when a
         // table starts with many tablets).
-        .fast_bootstrap_seed = std::hash<raft::group_id>()(group_id)
+        .fast_bootstrap_seed = std::hash<raft::group_id>()(group_id),
+        .priority_members = std::move(priority_members)
     };
     auto server = raft::create_server(my_id, std::move(rpc), std::move(state_machine),
             std::move(storage), _raft_gr.failure_detector(), config, std::move(server_stats));
@@ -405,6 +437,9 @@ void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_
         }
         _raft_gr.destroy_server(id);
         state.server = nullptr;
+        // The hold is for the server which bounced; a restarted one starts clean.
+        state.priority_members_hold.cancel();
+        state.leadership_gains.clear();
         logger.info("schedule_raft_group_deletion(): raft server for group id {} is destroyed", id);
 
         // We need to erase the raft group state only if we are still the last operation on it.
@@ -434,6 +469,33 @@ void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_
             on_internal_error(logger, format("raft group {} is already deleted", id));
         }
     });
+}
+
+void groups_manager::note_leadership_gain(raft_group_state& state, raft::group_id gid) {
+    const auto now = lowres_clock::now();
+    auto& gains = state.leadership_gains;
+    while (!gains.empty() && now - gains.front() > leadership_gains_window) {
+        gains.pop_front();
+    }
+    gains.push_back(now);
+    if (gains.size() <= max_leadership_gains || state.priority_members_hold.armed()) {
+        return;
+    }
+    const auto hold = utils::get_local_injector().inject_parameter<int64_t>("sc_priority_members_hold_ms")
+            .transform([] (int64_t ms) { return lowres_clock::duration(std::chrono::milliseconds(ms)); })
+            .value_or(priority_members_hold);
+    logger.warn("group {}: this replica gained the leadership {} times within {}s, ignoring the preferred leaders for {}s",
+            gid, gains.size(), std::chrono::duration_cast<std::chrono::seconds>(leadership_gains_window).count(),
+            std::chrono::duration_cast<std::chrono::seconds>(hold).count());
+    gains.clear();
+    state.priority_members_hold.set_callback([&state] {
+        // A server which is (re)starting gets the list once it has started.
+        if (auto srv = try_acquire_server(state)) {
+            srv->server().set_priority_members(state.priority_members);
+        }
+    });
+    state.priority_members_hold.arm(hold);
+    state.server->set_priority_members({});
 }
 
 void groups_manager::chain_control_op(raft_group_state& state, raft::group_id id,
@@ -602,6 +664,7 @@ future<> groups_manager::leader_info_updater(raft_group_state& state, table_id t
     try {
         const auto schema = _db.find_schema(table);
         const auto server_id = state.server->id();
+        raft::term_t last_led_term{};
 
         while (true) {
             const auto current_term = state.server->get_current_term();
@@ -610,6 +673,10 @@ future<> groups_manager::leader_info_updater(raft_group_state& state, table_id t
                 tablet, gid, current_term, current_leader);
 
             if (current_leader == server_id) {
+                if (current_term != last_led_term) {
+                    last_led_term = current_term;
+                    note_leadership_gain(state, gid);
+                }
                 logger.debug("leader_info_updater({}, group_id={}): current term {}, running read_barrier()",
                     tablet, gid,
                     current_term);
@@ -1015,14 +1082,18 @@ void groups_manager::schedule_raft_group_start(global_tablet_id tablet, raft::gr
             m = metrics.weak_from_this(), server_stats = metrics.server_stats(),
             rpc_stats = metrics.rpc_stats(), apply_stats = metrics.apply_stats()] () mutable -> future<> {
         co_await start_raft_group(tablet, id, std::move(tm), std::move(server_stats), std::move(rpc_stats),
-            std::move(apply_stats));
+                std::move(apply_stats), state.effective_priority_members());
         state.server = &_raft_gr.get_server(id);
+        // update() may have changed the list while the server was starting.
+        state.server->set_priority_members(state.effective_priority_members());
         state.metrics = std::move(m);
         if (state.metrics) {
             state.metrics->add_server(*state.server);
         }
         state.leader_info_updater = leader_info_updater(state, tablet.table, id, range);
         co_await wait_for_first_leader(tablet, id, state, *g);
+        // Nor could update() push the list while the server was waiting for a leader.
+        state.server->set_priority_members(state.effective_priority_members());
 
         // If a restart is already queued behind us, the group isn't started yet; that
         // start will unlink the state.
@@ -1093,6 +1164,13 @@ void groups_manager::update(token_metadata_ptr new_tm) {
             raft::group_id id;
             std::optional<raft::group_id> parent_id;
         };
+        std::map<sstring, sstring> preferred_rack;
+        if (table) {
+            const auto& keyspaces = _db.get_keyspaces();
+            if (const auto ks = keyspaces.find(table->schema()->ks_name()); ks != keyspaces.end()) {
+                preferred_rack = ks->second->metadata()->preferred_rack();
+            }
+        }
         std::vector<tablet_group_info> tablet_groups;
         for (const auto& tid: tablet_map.tablet_ids()) {
             const auto id = tablet_map.get_tablet_raft_info(tid).group_id;
@@ -1132,6 +1210,24 @@ void groups_manager::update(token_metadata_ptr new_tm) {
 
             auto& state = _raft_groups[id];
             state.has_tablet = true;
+            // A child of a resize has no preference until the resize is finalized. During a
+            // migration, the replica leaving the preferred rack is about to lose its vote, so the
+            // pending one is preferred; Raft skips it until it becomes a voter.
+            const auto* trinfo = tablet_map.get_tablet_transition_info(tid);
+            auto priority_members = parent_id
+                    ? std::vector<raft::server_id>{}
+                    : preferred_leaders(preferred_rack, trinfo ? trinfo->next : tablet_map.get_tablet_info(tid).replicas,
+                            new_tm->get_topology());
+            if (const auto host = utils::get_local_injector().inject_parameter<std::string_view>("sc_preferred_leader_override")) {
+                priority_members = {raft::server_id(utils::UUID(*host))};
+            }
+            if (priority_members != state.priority_members) {
+                state.priority_members = std::move(priority_members);
+                // A server which is still starting gets the list once it has started.
+                if (auto srv = state.gate ? try_acquire_server(state) : std::nullopt) {
+                    srv->server().set_priority_members(state.effective_priority_members());
+                }
+            }
             // Start the server, unless it is started or starting already and not being
             // deleted.
             if (!state.gate || state.gate->is_closed()) {
