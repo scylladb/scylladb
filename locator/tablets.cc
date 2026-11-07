@@ -489,6 +489,13 @@ std::vector<schema_ptr> tablet_metadata::base_tables(const data_dictionary::keys
     return result;
 }
 
+table_group_set tablet_metadata::get_table_group(table_id id) const {
+    if (auto it = _table_groups.find(get_base_table(id)); it != _table_groups.end()) {
+        return it->second;
+    }
+    return table_group_set{id};
+}
+
 future<> tablet_metadata::mutate_tablet_map_async(table_id id, noncopyable_function<future<>(tablet_map&)> func) {
     auto it = _tablets.find(id);
     if (it == _tablets.end()) {
@@ -1436,62 +1443,76 @@ std::optional<uint64_t> load_stats::get_tablet_size_in_transition(host_id host, 
     return tablet_size_opt;
 }
 
-lw_shared_ptr<load_stats> load_stats::reconcile_tablets_resize(const std::unordered_set<table_id>& tables, const token_metadata& old_tm, const token_metadata& new_tm) const {
+// Rewrites the tablet sizes of one table in new_stats from the ranges of
+// old_tmap to those of new_tmap. Returns false if the size of a pre-resize
+// tablet replica is missing.
+static bool reconcile_table_resize(load_stats& new_stats, table_id table, const tablet_map& old_tmap, const tablet_map& new_tmap) {
+    size_t old_tablet_count = old_tmap.tablet_count();
+    size_t new_tablet_count = new_tmap.tablet_count();
+    if (old_tablet_count > new_tablet_count) {
+        // Reconcile for merge
+        for (size_t i = 0; i < old_tablet_count; i++) {
+            auto old_tablet_id = tablet_id(i);
+            auto new_tablet_id = new_tmap.get_tablet_id(old_tmap.get_last_token(old_tablet_id));
+            auto new_range = new_tmap.get_token_range(new_tablet_id);
+            auto rb_tid = range_based_tablet_id{table, old_tmap.get_token_range(old_tablet_id)};
+            auto& tinfo = old_tmap.get_tablet_info(old_tablet_id);
+            for (auto& replica : tinfo.replicas) {
+                auto tablet_size_opt = new_stats.get_tablet_size(replica.host, rb_tid);
+                if (!tablet_size_opt) {
+                    tablet_logger.debug("Unable to find tablet size in stats for table resize reconcile for tablet {} on host {}", rb_tid, replica.host);
+                    return false;
+                }
+                auto& sizes_for_table = new_stats.tablet_stats.at(replica.host).tablet_sizes.at(table);
+                sizes_for_table.erase(rb_tid.range); // rb_tid.range may be equal to new_range, so do it first
+                sizes_for_table[new_range] += *tablet_size_opt;
+                tablet_logger.debug("reconcile merge: host {}, old tablet {}, old range {}, new tablet {}, new range {}, size {}",
+                                    replica.host, old_tablet_id, rb_tid.range, new_tablet_id, new_range, *tablet_size_opt);
+            }
+        }
+    } else if (old_tablet_count * 2 == new_tablet_count) {
+        // Reconcile for split
+        for (size_t i = 0; i < old_tablet_count; i++) {
+            range_based_tablet_id rb_tid { table, old_tmap.get_token_range(tablet_id(i)) };
+            auto& tinfo = old_tmap.get_tablet_info(tablet_id(i));
+            for (auto& replica : tinfo.replicas) {
+                auto tablet_size_opt = new_stats.get_tablet_size(replica.host, rb_tid);
+                if (!tablet_size_opt) {
+                    tablet_logger.debug("Unable to find tablet size in stats for table resize reconcile for tablet {} on host {}", rb_tid, replica.host);
+                    return false;
+                }
+                dht::token_range new_range1 { new_tmap.get_token_range(tablet_id(i * 2)) };
+                dht::token_range new_range2 { new_tmap.get_token_range(tablet_id(i * 2 + 1)) };
+                auto& sizes_for_table = new_stats.tablet_stats.at(replica.host).tablet_sizes.at(table);
+                uint64_t split_tablet_size = *tablet_size_opt / 2;
+                sizes_for_table[new_range1] = split_tablet_size;
+                sizes_for_table[new_range2] = split_tablet_size;
+                sizes_for_table.erase(rb_tid.range);
+            }
+        }
+    }
+    return true;
+}
+
+lw_shared_ptr<load_stats> load_stats::reconcile_tablets_resize(const std::unordered_set<table_id>& base_tables, const token_metadata& old_tm, const token_metadata& new_tm) const {
     lw_shared_ptr<load_stats> reconciled_stats { make_lw_shared<load_stats>(*this) };
     load_stats& new_stats = *reconciled_stats;
 
-    for (table_id table : tables) {
-        if (!new_tm.tablets().has_tablet_map(table)) {
-            // Table has been dropped, remove it from stats
-            for (auto& [host, tls] : new_stats.tablet_stats) {
-                tls.tablet_sizes.erase(table);
-            }
-            continue;
-        }
-        const auto& old_tmap = old_tm.tablets().get_tablet_map(table);
-        const auto& new_tmap = new_tm.tablets().get_tablet_map(table);
-        size_t old_tablet_count = old_tmap.tablet_count();
-        size_t new_tablet_count = new_tmap.tablet_count();
-        if (old_tablet_count > new_tablet_count) {
-            // Reconcile for merge
-            for (size_t i = 0; i < old_tablet_count; i++) {
-                auto old_tablet_id = tablet_id(i);
-                auto new_tablet_id = new_tmap.get_tablet_id(old_tmap.get_last_token(old_tablet_id));
-                auto new_range = new_tmap.get_token_range(new_tablet_id);
-                auto rb_tid = range_based_tablet_id{table, old_tmap.get_token_range(old_tablet_id)};
-                auto& tinfo = old_tmap.get_tablet_info(old_tablet_id);
-                for (auto& replica : tinfo.replicas) {
-                    auto tablet_size_opt = new_stats.get_tablet_size(replica.host, rb_tid);
-                    if (!tablet_size_opt) {
-                        tablet_logger.debug("Unable to find tablet size in stats for table resize reconcile for tablet {} on host {}", rb_tid, replica.host);
-                        return nullptr;
-                    }
-                    auto& sizes_for_table = new_stats.tablet_stats.at(replica.host).tablet_sizes.at(table);
-                    sizes_for_table.erase(rb_tid.range); // rb_tid.range may be equal to new_range, so do it first
-                    sizes_for_table[new_range] += *tablet_size_opt;
-                    tablet_logger.debug("reconcile merge: host {}, old tablet {}, old range {}, new tablet {}, new range {}, size {}",
-                                        replica.host, old_tablet_id, rb_tid.range, new_tablet_id, new_range, *tablet_size_opt);
+    for (table_id base_table : base_tables) {
+        // Co-located tables share the tablet map of their base table, so the
+        // resize of a base table resizes every table of its group.
+        for (table_id table : old_tm.tablets().get_table_group(base_table)) {
+            if (!new_tm.tablets().has_tablet_map(table)) {
+                // Table has been dropped, remove it from stats
+                for (auto& [host, tls] : new_stats.tablet_stats) {
+                    tls.tablet_sizes.erase(table);
                 }
+                continue;
             }
-        } else if (old_tablet_count * 2 == new_tablet_count) {
-            // Reconcile for split
-            for (size_t i = 0; i < old_tablet_count; i++) {
-                range_based_tablet_id rb_tid { table, old_tmap.get_token_range(tablet_id(i)) };
-                auto& tinfo = old_tmap.get_tablet_info(tablet_id(i));
-                for (auto& replica : tinfo.replicas) {
-                    auto tablet_size_opt = new_stats.get_tablet_size(replica.host, rb_tid);
-                    if (!tablet_size_opt) {
-                        tablet_logger.debug("Unable to find tablet size in stats for table resize reconcile for tablet {} on host {}", rb_tid, replica.host);
-                        return nullptr;
-                    }
-                    dht::token_range new_range1 { new_tmap.get_token_range(tablet_id(i * 2)) };
-                    dht::token_range new_range2 { new_tmap.get_token_range(tablet_id(i * 2 + 1)) };
-                    auto& sizes_for_table = new_stats.tablet_stats.at(replica.host).tablet_sizes.at(table);
-                    uint64_t split_tablet_size = *tablet_size_opt / 2;
-                    sizes_for_table[new_range1] = split_tablet_size;
-                    sizes_for_table[new_range2] = split_tablet_size;
-                    sizes_for_table.erase(rb_tid.range);
-                }
+            const auto& old_tmap = old_tm.tablets().get_tablet_map(table);
+            const auto& new_tmap = new_tm.tablets().get_tablet_map(table);
+            if (!reconcile_table_resize(new_stats, table, old_tmap, new_tmap)) {
+                return nullptr;
             }
         }
     }
@@ -1499,22 +1520,76 @@ lw_shared_ptr<load_stats> load_stats::reconcile_tablets_resize(const std::unorde
     return reconciled_stats;
 }
 
-lw_shared_ptr<load_stats> load_stats::migrate_tablet_size(locator::host_id leaving, locator::host_id pending, locator::global_tablet_id gid, const dht::token_range trange) const {
+// Moves the size of a tablet from the leaving to the pending host.
+// The caller checks that the size is on the leaving host and not on the pending host.
+static void migrate_table_tablet_size(load_stats& stats, host_id leaving, host_id pending, const range_based_tablet_id& rb_tid) {
+    auto& leaving_ts = stats.tablet_stats.at(leaving);
+    auto& pending_ts = stats.tablet_stats.at(pending);
+    auto map_node = leaving_ts.tablet_sizes.at(rb_tid.table).extract(rb_tid.range);
+    pending_ts.tablet_sizes[rb_tid.table].insert(std::move(map_node));
+    if (leaving_ts.tablet_sizes.at(rb_tid.table).empty()) {
+        leaving_ts.tablet_sizes.erase(rb_tid.table);
+    }
+}
 
+lw_shared_ptr<load_stats> load_stats::migrate_tablet_size(locator::host_id leaving, locator::host_id pending, locator::global_tablet_id gid, const dht::token_range trange, const table_group_set& tables) const {
     lw_shared_ptr<load_stats> result;
 
-    if (leaving != pending) {
-        range_based_tablet_id rb_tid {gid.table, trange};
-        if (get_tablet_size(leaving, rb_tid) && !get_tablet_size(pending, rb_tid) && tablet_stats.contains(pending)) {
-            tablet_logger.debug("Moving tablet size for tablet: {} from: {} to: {}", gid, leaving, pending);
-            result = make_lw_shared<locator::load_stats>(*this);
-            auto& new_leaving_ts = result->tablet_stats.at(leaving);
-            auto& new_pending_ts = result->tablet_stats.at(pending);
-            auto map_node = new_leaving_ts.tablet_sizes.at(gid.table).extract(trange);
-            new_pending_ts.tablet_sizes[gid.table].insert(std::move(map_node));
-            if (new_leaving_ts.tablet_sizes.at(gid.table).empty()) {
-                new_leaving_ts.tablet_sizes.erase(gid.table);
+    if (leaving == pending || !tablet_stats.contains(pending)) {
+        return result;
+    }
+
+    // Co-located tables share the migration of their base table, so the
+    // tablet sizes of every table in the group move along.
+    for (auto table : tables) {
+        range_based_tablet_id rb_tid {table, trange};
+        if (get_tablet_size(leaving, rb_tid) && !get_tablet_size(pending, rb_tid)) {
+            tablet_logger.debug("Moving tablet size for tablet: {} of table: {} from: {} to: {}", gid, table, leaving, pending);
+            if (!result) {
+                result = make_lw_shared<locator::load_stats>(*this);
             }
+            migrate_table_tablet_size(*result, leaving, pending, rb_tid);
+        }
+    }
+
+    return result;
+}
+
+// Estimates the size of a tablet on the pending host as the average of its
+// sizes on the read_from replicas. Returns nullopt if a replica lacks a size.
+// With no read_from replicas the rebuild streams nothing, so the new replica
+// is empty and its size is 0.
+static std::optional<uint64_t> average_tablet_size(const load_stats& stats, const std::unordered_set<tablet_replica>& read_from, const range_based_tablet_id& rb_tid) {
+    uint64_t tablet_size_sum = 0;
+    size_t replica_count = 0;
+    for (auto& r : read_from) {
+        auto tablet_size_opt = stats.get_tablet_size(r.host, rb_tid);
+        if (!tablet_size_opt) {
+            return std::nullopt;
+        }
+        tablet_size_sum += *tablet_size_opt;
+        replica_count++;
+    }
+    return replica_count ? tablet_size_sum / replica_count : 0;
+}
+
+lw_shared_ptr<load_stats> load_stats::rebuild_tablet_size(locator::host_id pending, const std::unordered_set<tablet_replica>& read_from, locator::global_tablet_id gid, const dht::token_range trange, const table_group_set& tables) const {
+    lw_shared_ptr<load_stats> result;
+
+    if (!tablet_stats.contains(pending)) {
+        return result;
+    }
+
+    // Co-located tables share the rebuild of their base table, so the
+    // tablet of every table in the group gets an estimate.
+    for (auto table : tables) {
+        range_based_tablet_id rb_tid {table, trange};
+        if (auto size = average_tablet_size(*this, read_from, rb_tid)) {
+            tablet_logger.debug("Estimating tablet size for rebuilt tablet: {} of table: {} on: {} as {}", gid, table, pending, *size);
+            if (!result) {
+                result = make_lw_shared<locator::load_stats>(*this);
+            }
+            result->tablet_stats.at(pending).tablet_sizes[table][trange] = *size;
         }
     }
 

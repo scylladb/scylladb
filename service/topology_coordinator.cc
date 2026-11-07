@@ -3214,7 +3214,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     break;
                 case locator::tablet_transition_stage::end_migration: {
                     // Update load_stats after a migration or rebuild
-                    update_load_stats_on_end_migration(gid, tmap, trinfo);
+                    update_load_stats_on_end_migration(gid, tmap, tables, trinfo);
 
                     // Need a separate stage and a barrier after cleanup RPC to cut off stale RPCs.
                     // See do_tablet_operation() doc.
@@ -3531,9 +3531,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         co_await update_topology_state(std::move(guard), std::move(updates), "Finished tablet migration");
     }
 
-    // Migrates tablet size from leaving to pending host after migration,
-    // or creates a new tablet size on pending host after a rebuild
-    void update_load_stats_on_end_migration(locator::global_tablet_id gid, const locator::tablet_map& tmap, const locator::tablet_transition_info& trinfo) {
+    // Updates the load stats at the end of a tablet transition: moves the tablet size from the
+    // leaving to the pending host after a migration, or estimates it on the pending host after a
+    // rebuild. The tablet belongs to the co-location group given in tables, whose tables share
+    // the transition.
+    void update_load_stats_on_end_migration(locator::global_tablet_id gid, const locator::tablet_map& tmap,
+            const locator::table_group_set& tables, const locator::tablet_transition_info& trinfo) {
         if (auto old_load_stats = _tablet_allocator.get_load_stats()) {
             lw_shared_ptr<locator::load_stats> new_load_stats;
             auto& tinfo = tmap.get_tablet_info(gid.tablet);
@@ -3543,34 +3546,15 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             switch (trinfo.transition) {
             case locator::tablet_transition_kind::migration:
                 // Handle tablet migration
-                new_load_stats = old_load_stats->migrate_tablet_size(leaving->host, pending->host, gid, trange);
+                new_load_stats = old_load_stats->migrate_tablet_size(leaving->host, pending->host, gid, trange, tables);
                 break;
             case locator::tablet_transition_kind::rebuild:
                 [[fallthrough]];
             case locator::tablet_transition_kind::rebuild_v2:
                 // Handle rebuild
-                if (pending && old_load_stats->tablet_stats.contains(pending->host)) {
-                    // Compute the average tablet size of existing replicas
-                    uint64_t tablet_size_sum = 0;
-                    size_t replica_count = 0;
-                    bool incomplete = false;
-                    const locator::range_based_tablet_id rb_tid {gid.table, trange};
+                if (pending) {
                     auto tsi = get_migration_streaming_info(get_token_metadata().get_topology(), tinfo, trinfo);
-                    for (auto& r : tsi.read_from) {
-                        auto tablet_size_opt = old_load_stats->get_tablet_size(r.host, rb_tid);
-                        if (tablet_size_opt) {
-                            tablet_size_sum += *tablet_size_opt;
-                            replica_count++;
-                        } else {
-                            incomplete = true;
-                        }
-                    }
-
-                    if (!incomplete) {
-                        new_load_stats = make_lw_shared<locator::load_stats>(*old_load_stats);
-                        auto size = replica_count ? tablet_size_sum / replica_count : 0;
-                        new_load_stats->tablet_stats.at(pending->host).tablet_sizes[gid.table][trange] = size;
-                    }
+                    new_load_stats = old_load_stats->rebuild_tablet_size(pending->host, tsi.read_from, gid, trange, tables);
                 }
                 break;
             case locator::tablet_transition_kind::repair:
