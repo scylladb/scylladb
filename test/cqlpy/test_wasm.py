@@ -402,6 +402,28 @@ def test_not_exported(cql, test_keyspace, scylla_with_wasm_only):
         cql.execute(f"CREATE FUNCTION {test_keyspace}.i_was_not_exported (input float) RETURNS NULL ON NULL INPUT RETURNS float LANGUAGE wasm "
                 f"AS '{wrong_source}'")
 
+# Test that a function whose module declares an initially empty memory,
+# "(memory 0)", works. Such a function can still take and return an int,
+# which is passed directly and not through the memory.
+def test_empty_memory(cql, test_keyspace, table1, scylla_with_wasm_only):
+    table = table1
+    name = 'empty_memory_' + unique_name()
+    source = f'''
+(module
+  (func ${name} (param i32) (result i32)
+    local.get 0)
+  (memory (;0;) 0)
+  (global (;0;) i32 (i32.const 0))
+  (export "memory" (memory 0))
+  (export "{name}" (func ${name}))
+  (export "_scylla_abi" (global 0)))
+'''
+    src = f"(input int) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE wasm AS '{source}'"
+    with new_function(cql, test_keyspace, src, name):
+        cql.execute(f'INSERT INTO {table} (p, i) VALUES (11, 11)')
+        res = list(cql.execute(f'SELECT {test_keyspace}.{name}(i) AS result FROM {table} WHERE p = 11'))
+        assert len(res) == 1 and res[0].result == 11
+
 # Test that trying to use something that is exported, but is not a function, won't work
 def test_not_a_function(cql, test_keyspace, scylla_with_wasm_only):
     wrong_source = f"""
