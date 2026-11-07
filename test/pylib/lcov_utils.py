@@ -23,6 +23,7 @@ import unidiff.patch
 from unidiff import PatchSet, PatchedFile
 from unidiff.patch import Hunk, Line
 import copy
+import xml.etree.ElementTree as ET
 from itertools import repeat, accumulate
 
 # TN: test name
@@ -333,11 +334,13 @@ class LcovRecord(metaclass = MakeLcovRouter):
                 self.line_hits[line] = other.line_hits[line]
             else:
                 self.line_hits[line] += other.line_hits[line]
-        for key in other.function_hits.keys():
-            if key not in self.function_hits:
-                self.function_hits[key] = other.function_hits[key]
-            else:
-                self.function_hits[key] += other.function_hits[key]
+        # Different binaries can report a different start line for the same
+        # function (e.g. a header compiled with and without the PCH), so merge
+        # functions by name and keep the line already recorded.
+        self._refresh_functions_to_lines()
+        for (line, func_name), hits in other.function_hits.items():
+            key = (self.functions_to_lines.setdefault(func_name, line), func_name)
+            self.function_hits[key] = self.function_hits.get(key, 0) + hits
         self._refresh_functions_to_lines()
         for key in other.branch_hits.keys():
             if key not in self.branch_hits or self.branch_hits[key] is None:
@@ -725,6 +728,50 @@ class LcovFile:
         else:
             with open(target_file, "w") as f:
                 [record.write(f) for record in self.records.values()]
+
+    def write_cobertura(self, target_file: Path):
+        """Writes the line and branch coverage as a Cobertura XML report, the format
+        SonarQube imports C++ coverage from (sonar.cxx.cobertura.reportPaths)."""
+        line_hits: dict[Path, dict[int, int]] = dict()
+        branch_hits: dict[Path, dict[Tuple[int, int, int], bool]] = dict()
+        for record in self.records.values():
+            file_lines = line_hits.setdefault(record.source_file, dict())
+            for line, hits in record.line_hits.items():
+                file_lines[line] = file_lines.get(line, 0) + hits
+            file_branches = branch_hits.setdefault(record.source_file, dict())
+            for key, hits in record.branch_hits.items():
+                file_branches[key] = file_branches.get(key, False) or bool(hits)
+
+        root = ET.Element("coverage", version = "1")
+        # An empty source makes SonarQube resolve the repository relative file
+        # names against the project base directory.
+        ET.SubElement(ET.SubElement(root, "sources"), "source")
+        classes = ET.SubElement(ET.SubElement(ET.SubElement(root, "packages"), "package", name = "scylladb"), "classes")
+        totals = [0, 0, 0, 0] # lines valid, lines covered, branches valid, branches covered
+        for source_file in sorted(line_hits):
+            line_branches: dict[int, Tuple[int, int]] = dict()
+            for (line, _, _), covered in branch_hits[source_file].items():
+                valid, hit = line_branches.get(line, (0, 0))
+                line_branches[line] = (valid + 1, hit + covered)
+            lines = ET.SubElement(ET.SubElement(classes, "class", name = str(source_file), filename = str(source_file)), "lines")
+            for line, hits in sorted(line_hits[source_file].items()):
+                attrs = {"number": str(line), "hits": str(hits), "branch": "false"}
+                totals[0] += 1
+                totals[1] += hits > 0
+                if line in line_branches:
+                    valid, hit = line_branches[line]
+                    attrs["branch"] = "true"
+                    attrs["condition-coverage"] = f"{100 * hit // valid}% ({hit}/{valid})"
+                    totals[2] += valid
+                    totals[3] += hit
+                ET.SubElement(lines, "line", attrs)
+        root.set("lines-valid", str(totals[0]))
+        root.set("lines-covered", str(totals[1]))
+        root.set("line-rate", str(totals[1] / totals[0] if totals[0] else 0))
+        root.set("branches-valid", str(totals[2]))
+        root.set("branches-covered", str(totals[3]))
+        root.set("branch-rate", str(totals[3] / totals[2] if totals[2] else 0))
+        ET.ElementTree(root).write(target_file, encoding = "utf-8", xml_declaration = True)
 
     def filter_files(self, files_to_keep: List[Path]):
         for key_to_remove in [

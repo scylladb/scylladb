@@ -350,26 +350,59 @@ def scale_timeout(build_mode: str) -> Callable[[int | float], int | float]:
     return scale_timeout_inner
 
 
+def coverage_enabled(config: pytest.Config, build_mode: str, suite_config: TestSuiteConfig | None) -> bool:
+    """Whether profiles of instrumented binaries run for the suite should be routed to its coverage dir.
+
+    Any mode can be instrumented (`configure.py --coverage`), so besides the coverage mode itself,
+    route the profiles of every mode coverage was requested for.
+    """
+    if suite_config is None or not suite_config.cfg.get("coverage", True):
+        return False
+    options = config.option
+    return build_mode == "coverage" or (options.coverage and (not options.coverage_modes or build_mode in options.coverage_modes))
+
+
+@pytest.fixture(scope="module")
+def coverage_env(request: pytest.FixtureRequest, build_mode: str, suite_log_dir: pathlib.Path) -> dict[str, str]:
+    """Environment routing the coverage profile of an instrumented process started for the current suite."""
+    suite_config = get_params_stash(node=request.node)[TEST_SUITE]
+
+    if coverage_enabled(request.config, build_mode, suite_config):
+        # Set the coverage data from each instrumented object to use the same file (and merged into it with locking)
+        # as long as we don't need test specific coverage data, this looks sufficient. The benefit of doing this in
+        # this way is that the storage will not be bloated with coverage files (each can weigh 10s of MBs so for several
+        # thousands of tests it can easily reach 10 of GBs)
+        # ref: https://clang.llvm.org/docs/SourceBasedCodeCoverage.html#running-the-instrumented-program
+        return {"LLVM_PROFILE_FILE": str(coverage_dir(suite_log_dir) / suite_config.name / "%m.profraw")}
+    return {}
+
+
+@pytest.fixture(scope="module", autouse=True)
+def route_coverage_profiles(coverage_env: dict[str, str]) -> Generator[None]:
+    """Route the profiles of instrumented binaries the tests run themselves (e.g. Scylla tools).
+
+    Processes inheriting the environment pick it up as is; ones started with an explicit environment
+    have to add test.llvm_profile_env() to it.
+    """
+    with pytest.MonkeyPatch.context() as mp:
+        for name, value in coverage_env.items():
+            mp.setenv(name, value)
+        yield
+
+
 @pytest.fixture(scope="module")
 def testpy_cluster_factory(request: pytest.FixtureRequest,
                            build_mode: str,
                            suite_log_dir: pathlib.Path,
                            scylla_binary: str,
+                           coverage_env: dict[str, str],
                            testpy_logger: logging.Logger) -> ClusterFactory:
     """A factory of Scylla clusters configured for the current suite and build mode."""
     suite_config = get_params_stash(node=request.node)[TEST_SUITE]
     options = request.config.option
 
     # environment variables that should be the base of all processes running in this suit
-    base_env = {}
-
-    if options.coverage and (build_mode in options.coverage_modes) and bool(suite_config.cfg.get("coverage", True)):
-        # Set the coverage data from each instrumented object to use the same file (and merged into it with locking)
-        # as long as we don't need test specific coverage data, this looks sufficient. The benefit of doing this in
-        # this way is that the storage will not be bloated with coverage files (each can weigh 10s of MBs so for several
-        # thousands of tests it can easily reach 10 of GBs)
-        # ref: https://clang.llvm.org/docs/SourceBasedCodeCoverage.html#running-the-instrumented-program
-        base_env["LLVM_PROFILE_FILE"] = str(coverage_dir(suite_log_dir) / suite_config.name / "%m.profraw")
+    base_env = dict(coverage_env)
 
     @asynccontextmanager
     async def cluster_for_test(node: _pytest.nodes.Node, test_name: str) -> AsyncGenerator[ScyllaCluster]:
