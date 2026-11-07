@@ -22,6 +22,7 @@
 #include <seastar/core/sstring.hh>
 
 #include "cql3/untyped_result_set.hh"
+#include "db/timeout_clock.hh"
 #include "mutation/timestamp.hh"
 #include "tracing/trace_state.hh"
 #include "utils/UUID.hh"
@@ -84,6 +85,10 @@ struct per_request_options {
     // request, because it's live-updateable. As a result, the flag may change
     // between reads.
     const bool alternator_streams_increased_compatibility = false;
+    // An explicit request deadline, such as Alternator's X-Scylla-Timeout.
+    // When set, a preimage read selected by CDC ends by the earlier of this
+    // deadline and CDC's own preimage timeout. Otherwise only the latter applies.
+    const std::optional<db::timeout_clock::time_point> preimage_deadline = std::nullopt;
 };
 
 struct operation_result_tracker;

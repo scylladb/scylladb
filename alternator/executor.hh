@@ -17,7 +17,7 @@
 #include <seastar/util/noncopyable_function.hh>
 
 #include "service/migration_manager.hh"
-#include "service/client_state.hh"
+#include "alternator/client_state.hh"
 #include "service_permit.hh"
 #include "db/timeout_clock.hh"
 #include "db/config.hh"
@@ -109,7 +109,7 @@ class executor : public peering_sharded_service<executor> {
     future<> cache_newly_calculated_size_on_all_shards(schema_ptr schema, std::uint64_t size_in_bytes, std::chrono::nanoseconds ttl);
     future<> fill_table_size(rjson::value &table_description, schema_ptr schema, bool deleting);
 public:
-    using client_state = service::client_state;
+    using client_state = alternator::client_state;
     // request_return_type is the return type of the executor methods, which
     // can be one of:
     // 1. A string, which is the response body for the request.
@@ -175,6 +175,8 @@ public:
     future<> stop();
 
     static db::timeout_clock::time_point default_timeout();
+    /// Use the HTTP deadline, or default_timeout() for each step without a header.
+    static db::timeout_clock::time_point request_timeout(const client_state& client_state);
 private:
     static thread_local utils::updateable_value<uint32_t> s_default_timeout_in_ms;
     friend class rmw_operation;
@@ -192,17 +194,18 @@ private:
                      std::optional<audit::audit_table_set> alternator_batch_tables = std::nullopt);
 
     future<std::variant<rjson::value, api_error>> fill_table_description(schema_ptr schema, table_status tbl_status, service::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit);
-    future<executor::request_return_type> create_table_on_shard0(service::client_state&& client_state, tracing::trace_state_ptr trace_state, rjson::value request, bool enforce_authorization,
+    future<executor::request_return_type> create_table_on_shard0(alternator::client_state&& client_state,
+            tracing::trace_state_ptr trace_state, rjson::value request, bool enforce_authorization,
             bool warn_authorization, const db::tablets_mode_t::mode tablets_mode, std::unique_ptr<audit::audit_info_alternator>& audit_info);
 
     future<> do_batch_write(
         std::vector<std::pair<schema_ptr, put_or_delete_item>> mutation_builders,
-        service::client_state& client_state,
+        alternator::client_state& client_state,
         tracing::trace_state_ptr trace_state,
         service_permit permit);
 
     future<> cas_write(schema_ptr schema, service::cas_shard cas_shard, const dht::decorated_key& dk,
-        const std::vector<put_or_delete_item>& mutation_builders, service::client_state& client_state,
+        const std::vector<put_or_delete_item>& mutation_builders, alternator::client_state& client_state,
         tracing::trace_state_ptr trace_state, service_permit permit);
 
 public:

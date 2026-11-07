@@ -1367,7 +1367,8 @@ future<executor::request_return_type> executor::get_records(client_state& client
             query::tombstone_limit(_proxy.get_tombstone_limit()), query::row_limit(limit * mul));
 
     service::storage_proxy::result<service::storage_proxy::coordinator_query_result> rqr =
-            co_await _proxy.query_result(schema, std::move(command), std::move(partition_ranges), cl, service::storage_proxy::coordinator_query_options(default_timeout(), std::move(permit), client_state));
+            co_await _proxy.query_result(schema, std::move(command), std::move(partition_ranges), cl,
+                    service::storage_proxy::coordinator_query_options(request_timeout(client_state), std::move(permit), client_state));
     if (!rqr) {
         co_return create_api_error_from_coordinators_exception(std::move(rqr).assume_error());
     }
@@ -1538,10 +1539,10 @@ future<executor::request_return_type> executor::get_records(client_state& client
 
     db_clock::time_point ts;
     if (schema->table().uses_tablets()) {
-        ts = co_await _system_keyspace.read_cdc_for_tablets_current_generation_timestamp(base->ks_name(), base->cf_name());
+        ts = co_await _system_keyspace.read_cdc_for_tablets_current_generation_timestamp(base->ks_name(), base->cf_name(), client_state.request_deadline());
     } else {
         auto normal_token_owners = _proxy.get_token_metadata_ptr()->count_normal_token_owners();
-        ts = co_await _sdks.cdc_current_generation_timestamp({ normal_token_owners });
+        ts = co_await _sdks.cdc_current_generation_timestamp({ normal_token_owners }, client_state.request_deadline());
     }
 
     auto& shard = iter.shard;

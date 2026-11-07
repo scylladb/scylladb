@@ -240,6 +240,12 @@ void select_statement::detect_range_scan() {
     }
 }
 
+// Internal-query deadlines precede execution-stage dispatch. Later SELECT
+// steps must not restart the budget from a relative timeout snapshot.
+static db::timeout_clock::time_point read_deadline(db::timeout_clock::duration timeout, const query_options& options) {
+    return std::min(db::timeout_clock::now() + timeout, options.get_read_deadline());
+}
+
 db::timeout_clock::duration select_statement::get_timeout(const service::client_state& state, const query_options& options) const {
     if (_attrs->is_timeout_set()) {
         return _attrs->get_timeout(options);
@@ -594,8 +600,7 @@ select_statement::execute_without_checking_exception_message_aggregate_or_paged(
         const query_options& options, gc_clock::time_point now, int32_t page_size, bool aggregate, bool nonpaged_filtering,
         uint64_t limit, std::optional<service::cas_shard> cas_shard) const {
     command->slice.options.set<query::partition_slice::option::allow_short_read>();
-    auto timeout_duration = get_timeout(state.get_client_state(), options);
-    auto timeout = db::timeout_clock::now() + timeout_duration;
+    auto timeout = read_deadline(get_timeout(state.get_client_state(), options), options);
     auto p = service::pager::query_pagers::pager(qp.proxy(), _query_schema, _selection,
             state, options, command, std::move(key_ranges), needs_post_filtering() ? _restrictions : nullptr, std::move(cas_shard));
 
@@ -735,7 +740,7 @@ view_indexed_table_select_statement::do_execute_base_query(
         lw_shared_ptr<const service::pager::paging_state> paging_state) const {
     using value_type = std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, lw_shared_ptr<query::read_command>>;
     auto cmd = prepare_command_for_base_query(qp, options, state, now, bool(paging_state));
-    auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
+    auto timeout = read_deadline(get_timeout(state.get_client_state(), options), options);
     uint32_t queried_ranges_count = partition_ranges.size();
     auto&& table = qp.proxy().local_db().find_column_family(_schema);
     auto erm = table.get_effective_replication_map();
@@ -845,7 +850,7 @@ view_indexed_table_select_statement::do_execute_base_query(
         lw_shared_ptr<const service::pager::paging_state> paging_state) const {
     using value_type = std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, lw_shared_ptr<query::read_command>>;
     auto cmd = prepare_command_for_base_query(qp, options, state, now, bool(paging_state));
-    auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
+    auto timeout = read_deadline(get_timeout(state.get_client_state(), options), options);
 
     query::result_merger merger(cmd->get_row_limit(), query::max_partitions);
     std::vector<primary_key> keys = std::move(primary_keys);
@@ -940,7 +945,7 @@ select_statement::execute_without_checking_exception_message_non_aggregate_unpag
     // is specified we need to get "limit" rows from each partition since there
     // is no way to tell which of these rows belong to the query result before
     // doing post-query ordering.
-    auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
+    auto timeout = read_deadline(get_timeout(state.get_client_state(), options), options);
     if (needs_post_query_ordering() && _limit) {
         return do_with(std::forward<dht::partition_range_vector>(partition_ranges), [this, &qp, &state, &options, cmd, timeout, cas_shard = std::move(cas_shard)](auto& prs) {
             throwing_assert(cmd->partition_limit == query::max_partitions);
@@ -1511,7 +1516,7 @@ view_indexed_table_select_statement::find_index_partition_ranges(query_processor
 {
     using value_type = std::tuple<dht::partition_range_vector, lw_shared_ptr<const service::pager::paging_state>>;
     auto now = gc_clock::now();
-    auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
+    auto timeout = read_deadline(get_timeout(state.get_client_state(), options), options);
     bool is_paged = options.get_page_size() >= 0;
     constexpr size_t MAX_PARTITION_RANGES = 1000;
     // Check that `partition_range_vector` won't cause a large allocation (see #18536).
@@ -1585,7 +1590,7 @@ view_indexed_table_select_statement::find_index_clustering_rows(query_processor&
 {
     using value_type = std::tuple<std::vector<primary_key>, lw_shared_ptr<const service::pager::paging_state>>;
     auto now = gc_clock::now();
-    auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
+    auto timeout = read_deadline(get_timeout(state.get_client_state(), options), options);
     const uint64_t limit = get_inner_loop_limit(get_limit(options, _limit), _selection->is_aggregate());
     return read_posting_list(qp, options, limit, state, now, timeout, true).then(utils::result_wrap(
             [this, &options] (::shared_ptr<cql_transport::messages::result_message::rows> rows) {
@@ -1793,6 +1798,10 @@ parallelized_select_statement::do_execute(
 
     command->slice.options.set<query::partition_slice::option::allow_short_read>();
     auto timeout_duration = get_timeout(state.get_client_state(), options);
+    if (options.get_read_deadline() != db::no_timeout) {
+        timeout_duration = std::max(read_deadline(timeout_duration, options) - db::timeout_clock::now(),
+                db::timeout_clock::duration::zero());
+    }
     auto timeout = lowres_system_clock::now() + timeout_duration;
     auto reductions = _selection->get_reductions();
 
@@ -1929,8 +1938,7 @@ mutation_fragments_select_statement::do_execute(query_processor& qp, service::qu
 
     auto key_ranges = _restrictions->get_partition_key_ranges(options);
 
-    auto timeout_duration = get_timeout(state.get_client_state(), options);
-    auto timeout = db::timeout_clock::now() + timeout_duration;
+    auto timeout = read_deadline(get_timeout(state.get_client_state(), options), options);
 
     auto& tbl = qp.proxy().local_db().find_column_family(_underlying_schema);
 

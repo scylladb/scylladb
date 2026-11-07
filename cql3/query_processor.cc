@@ -992,6 +992,7 @@ internal_query_state query_processor::create_paged_state(
         db::timeout_clock::time_point deadline) {
     auto p = prepare_internal(query_string);
     auto opts = make_internal_options(p, values, cl, page_size);
+    opts.set_read_deadline(deadline);
     if (!qs) {
         qs.emplace(query_state_for_internal_call());
     }
@@ -1026,6 +1027,9 @@ future<> query_processor::for_each_cql_result(
 future<::shared_ptr<untyped_result_set>>
 query_processor::execute_paged_internal(internal_query_state& state) {
     state.p->statement->validate(*this, service::client_state::for_internal_calls());
+    if (state.deadline != db::no_timeout) {
+        co_await utils::get_local_injector().inject("query_internal_delay_before_select", state.deadline);
+    }
     ::shared_ptr<cql_transport::messages::result_message> msg =
       co_await state.p->statement->execute(*this, *state.qs, *state.opts, std::nullopt);
 
