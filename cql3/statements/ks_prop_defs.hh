@@ -92,6 +92,16 @@ public:
     lw_shared_ptr<data_dictionary::keyspace_metadata> as_ks_metadata_update(lw_shared_ptr<data_dictionary::keyspace_metadata> old, const locator::token_metadata&, const gms::feature_service&, const db::config&);
 };
 
+locator::replication_strategy_config_options prepare_options(
+        const sstring& strategy_class,
+        const locator::token_metadata& tm,
+        bool rf_rack_valid_keyspaces,
+        bool enforce_rack_list,
+        locator::replication_strategy_config_options options,
+        const locator::replication_strategy_config_options& old_options,
+        bool rack_list_enabled,
+        bool uses_tablets);
+
 }
 
 }

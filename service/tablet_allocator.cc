@@ -1544,6 +1544,14 @@ public:
                 continue;
             }
 
+            // The sketch throws when picking a shard on a node without complete load stats
+            // (one which (re)joined since the last refresh); leave the rack for the next round.
+            if (auto it = std::ranges::find_if(nodes_by_load_dst, [&] (host_id h) { return !_load_sketch->has_complete_data(h); });
+                    it != nodes_by_load_dst.end()) {
+                lblogger.info("Skipping RF change colocation plan in dc {}, rack {} until node {} has reported load stats", dc, rack, *it);
+                continue;
+            }
+
             auto nodes_cmp = nodes_by_load_cmp(nodes);
             auto nodes_dst_cmp = [&] (const host_id& a, const host_id& b) {
                 return nodes_cmp(b, a);
@@ -1739,6 +1747,7 @@ public:
                         .ks_name = ks_name,
                         .error = format("Keyspace {} not found", ks_name),
                         .saved_ks_props = req_entry.new_keyspace_rf_change_data.value(),
+                        .initiating_host = req_entry.initiating_host,
                     };
                 }
                 continue;
@@ -1758,7 +1767,8 @@ public:
                         .request_id = request_id,
                         .ks_name = ks_name,
                         .error = req_entry.error,
-                        .saved_ks_props = req_entry.new_keyspace_rf_change_data.value()
+                        .saved_ks_props = req_entry.new_keyspace_rf_change_data.value(),
+                        .initiating_host = req_entry.initiating_host,
                     };
                 }
                 continue;
@@ -1987,8 +1997,10 @@ public:
                         auto mig_streaming_info = get_migration_streaming_info(topo, ti, mig);
                         // The node being shrunk may be excluded/down and lack complete tablet stats.
                         // Since we're removing a replica (not placing one), accurate load data isn't needed.
+                        // A dead node which is not (yet) excluded lacks load stats too, and
+                        // unload() throws without them.
                         auto* rep_node = topo.find_node(replica->host);
-                        if (_load_sketch->has_node(replica->host) && !(rep_node && rep_node->is_excluded())) {
+                        if (_load_sketch->has_complete_data(replica->host) && !(rep_node && rep_node->is_excluded())) {
                             unload(*_load_sketch, replica->host, replica->shard, source_tablets);
                         }
                         if (can_accept_load(nodes, mig_streaming_info)) {
@@ -2599,8 +2611,13 @@ public:
             if (utils::get_local_injector().enter("tablet_force_tablet_count_increase")) {
                 target_tablet_count = {tablet_count * 2, "force_tablet_count_increase"};
             } else if (utils::get_local_injector().enter("tablet_force_tablet_count_decrease")) {
-                auto size = std::max(size_t(1), tablet_count / 2);
-                target_tablet_count = {size, "force_tablet_count_decrease"};
+                auto for_table_id_str_opt = utils::get_local_injector().inject_parameter<std::string_view>("tablet_force_tablet_count_decrease", "for_table_id");
+                auto for_table_id_opt = for_table_id_str_opt.transform( [] (const std::string_view& table_id_str) { return table_id(utils::UUID(table_id_str)); });
+                if (!for_table_id_opt || *for_table_id_opt == table) {
+                    lblogger.debug("tablet_force_tablet_count_decrease for table ks:{} table:{}", s->ks_name(), s->cf_name());
+                    auto size = std::max(size_t(1), tablet_count / 2);
+                    target_tablet_count = {size, "force_tablet_count_decrease"};
+                }
             }
 
             result.target = target_tablet_count;

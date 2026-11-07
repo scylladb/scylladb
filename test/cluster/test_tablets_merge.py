@@ -10,7 +10,7 @@ from test.pylib.rest_client import inject_error_one_shot, read_barrier
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas, get_tablet_count
 from test.pylib.util import wait_for
 from test.cluster.util import new_test_keyspace, create_new_test_keyspace, feature_configs, FeatureConfigurations, \
-    FeatureConfig, count_rows
+    FeatureConfig, count_rows, quiesce_and_disable_tablet_balancing
 
 import pytest
 import asyncio
@@ -55,6 +55,8 @@ async def test_tablet_merge_simple(manager: ScyllaClusterManager, storage_config
         "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}")
     async with new_test_keyspace(manager, keyspace_opts) as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c blob) WITH gc_grace_seconds=0 AND bloom_filter_fp_chance=1;")
+        # The system keyspaces' tables split and merge too; the waits below name this table.
+        table_id = await manager.get_table_or_view_id(ks, 'test')
 
         # Initial average table size of 400k (1 tablet), so triggers some splits.
         total_keys = 200
@@ -94,7 +96,7 @@ async def test_tablet_merge_simple(manager: ScyllaClusterManager, storage_config
         await check()
         time.sleep(2) # Give load balancer some time to do work
 
-        await s1_log.wait_for('Detected tablet split for table', from_mark=s1_mark)
+        await s1_log.wait_for(f'Detected tablet split for table {ks}.test', from_mark=s1_mark)
 
         await check()
 
@@ -126,9 +128,9 @@ async def test_tablet_merge_simple(manager: ScyllaClusterManager, storage_config
             await manager.api.keyspace_compaction(server.ip_addr, ks)
         await manager.enable_tablet_balancing()
 
-        await s1_log.wait_for("Emitting resize decision of type merge", from_mark=s1_mark)
+        await s1_log.wait_for(f"Emitting resize decision of type merge for table {table_id}", from_mark=s1_mark)
         # Waits for balancer to co-locate sibling tablets
-        await s1_log.wait_for("All sibling tablets are co-located")
+        await s1_log.wait_for(f"All sibling tablets are co-located for table {table_id}", from_mark=s1_mark)
         # Do some shuffling to make sure balancer works with co-located tablets
         await shuffle()
 
@@ -138,7 +140,7 @@ async def test_tablet_merge_simple(manager: ScyllaClusterManager, storage_config
         await inject_error_on(manager, "replica_merge_completion_wait", servers)
         await disable_injection_on(manager, "tablet_merge_completion_bypass", servers)
 
-        await s1_log.wait_for('Detected tablet merge for table', from_mark=s1_mark)
+        await s1_log.wait_for(f'Detected tablet merge for table {ks}.test', from_mark=s1_mark)
 
         tablet_count = await get_tablet_count(manager, servers[0], ks, 'test')
         assert tablet_count < old_tablet_count
@@ -170,7 +172,7 @@ async def test_tablet_merge_simple(manager: ScyllaClusterManager, storage_config
             # forgive if balancer decided to migrate the target tablet post split.
             pass
 
-        await s1_log.wait_for('Merge completion fiber finished', from_mark=s1_mark)
+        await s1_log.wait_for(f'Merge completion fiber finished for table {ks}.test', from_mark=s1_mark)
 
         for server in servers:
             await manager.api.flush_keyspace(server.ip_addr, ks)
@@ -203,6 +205,8 @@ async def test_tablet_split_and_merge_with_concurrent_topology_changes(manager: 
         "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}")
     async with new_test_keyspace(manager, keyspace_opts) as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c blob) WITH gc_grace_seconds=0 AND bloom_filter_fp_chance=1;")
+        # Other tablets tables split and merge too; name the test table in every wait.
+        table_id = await manager.get_table_id(ks, "test")
 
         async def perform_topology_ops():
             logger.info("Topology ops in background")
@@ -257,7 +261,7 @@ async def test_tablet_split_and_merge_with_concurrent_topology_changes(manager: 
 
             logger.info("Waiting for split")
             await disable_injection_on(manager, "tablet_allocator_shuffle", servers)
-            await s1_log.wait_for('Detected tablet split for table', from_mark=s1_mark)
+            await s1_log.wait_for(f'Detected tablet split for table {ks}.test', from_mark=s1_mark)
 
             logger.info("Waiting for topology ops")
             await topology_ops_task
@@ -293,9 +297,9 @@ async def test_tablet_split_and_merge_with_concurrent_topology_changes(manager: 
             await manager.enable_tablet_balancing()
 
             logger.info("Waiting for merge decision")
-            await s1_log.wait_for("Emitting resize decision of type merge", from_mark=s1_mark)
-            # Waits for balancer to co-locate sibling tablets
-            await s1_log.wait_for("All sibling tablets are co-located")
+            await s1_log.wait_for(f"Emitting resize decision of type merge for table {table_id}", from_mark=s1_mark)
+            # Waits for balancer to co-locate sibling tablets of this table
+            await s1_log.wait_for(f"All sibling tablets are co-located for table {table_id}", from_mark=s1_mark)
             # Do some shuffling to make sure balancer works with co-located tablets
             await inject_error_on(manager, "tablet_allocator_shuffle", servers)
 
@@ -307,8 +311,8 @@ async def test_tablet_split_and_merge_with_concurrent_topology_changes(manager: 
             await disable_injection_on(manager, "tablet_merge_completion_bypass", servers)
             await disable_injection_on(manager, "tablet_allocator_shuffle", servers)
 
-            await s1_log.wait_for('Detected tablet merge for table', from_mark=s1_mark)
-            await s1_log.wait_for('Merge completion fiber finished', from_mark=s1_mark)
+            await s1_log.wait_for(f'Detected tablet merge for table {ks}.test', from_mark=s1_mark)
+            await s1_log.wait_for(f'Merge completion fiber finished for table {ks}.test', from_mark=s1_mark)
 
             logger.info("Waiting for topology ops")
             await topology_ops_task
@@ -424,6 +428,11 @@ async def test_tablet_split_merge_with_many_tables(build_mode: str, manager: Scy
 
     await check_logs("after split completion")
 
+    # A migration during the flush-and-compact loop below can move uncompacted data onto
+    # a node which already compacted, and the table then stays too large to merge. Keep
+    # the balancer still until the deletes are compacted away.
+    await quiesce_and_disable_tablet_balancing(manager, servers[0].ip_addr)
+
     delete_keys = range(total_keys - 1)
     await asyncio.gather(*[cql.run_async(f"DELETE FROM {ks}.test WHERE pk={k};") for k in delete_keys])
     keys = range(total_keys - 1, total_keys)
@@ -433,6 +442,8 @@ async def test_tablet_split_merge_with_many_tables(build_mode: str, manager: Scy
     for server in servers:
         await manager.api.flush_keyspace(server.ip_addr, ks)
         await manager.api.keyspace_compaction(server.ip_addr, ks)
+
+    await manager.enable_tablet_balancing()
 
     async def finished_merging():
         tablet_count = await get_tablet_count(manager, servers[0], ks, 'test')

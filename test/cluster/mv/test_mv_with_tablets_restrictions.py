@@ -55,6 +55,9 @@ async def test_create_mv_and_index_restrictions_in_tablet_keyspaces(manager: Scy
             await cql.run_async(f"CREATE KEYSPACE ks WITH replication = "
                                  f"{{'class': 'NetworkTopologyStrategy', 'dc1': {rf_str}}} "
                                  "AND tablets = {'enabled': true}")
+            # The keyspace makes racks eligible for auto-RF (or lets it give them up); its
+            # commits can make the DDL below lose every attempt on a group0 follower.
+            await manager.api.quiesce_topology(servers[0].ip_addr)
             if schema_kind == "vector":
                 await cql.run_async("CREATE TABLE ks.t (p int PRIMARY KEY, v vector<float, 3>)")
             else:
@@ -216,7 +219,7 @@ async def test_remove_node_violating_rf_rack(manager: ScyllaClusterManager, op: 
     Then attempts to remove the other node from the same rack, which would eliminate
     that rack entirely and make the keyspace RF-rack-invalid - should be rejected.
     """
-    cfg = {'rf_rack_valid_keyspaces': False, 'error_injections_at_startup': [{'name': 'suppress_features', 'value': 'RACK_LIST_RF'}]}
+    cfg = {'rf_rack_valid_keyspaces': False, 'error_injections_at_startup': [{'name': 'suppress_features', 'value': 'RACK_LIST_RF'}, 'auto_rf_keyspaces_use_vnodes']}
     cmdline = ['--logger-log-level', 'tablets=debug', '--logger-log-level', 'raft_topology=debug']
 
     async def remove_node(srv_to_remove, expected_error: str = None):

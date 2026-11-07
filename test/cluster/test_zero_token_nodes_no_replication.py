@@ -45,6 +45,9 @@ async def test_zero_token_nodes_no_replication(manager: ScyllaClusterManager):
                                     {{'class': '{replication_strategy}', 'replication_factor': 2}}
                                     AND tablets = {{ 'enabled': {str(tablets_enabled).lower()} }}""")
             ks_names.append(ks_name)
+            # Auto-RF's commits for the new keyspace's racks can fail the DDL below, issued
+            # on a group0 follower; let them finish.
+            await manager.api.quiesce_topology(server_a.ip_addr)
             await cql_b.run_async(f'CREATE TABLE {ks_name}.tbl (pk int PRIMARY KEY, v int)')
             for i in range(100):
                 insert_query = f'INSERT INTO {ks_name}.tbl (pk, v) VALUES ({i}, {i})'

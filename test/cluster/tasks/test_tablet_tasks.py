@@ -221,7 +221,7 @@ async def test_tablet_repair_wait(manager: ScyllaClusterManager):
         # Merge tablets.
         coord = await manager.find_server_by_host_id(servers, await get_topology_coordinator(manager))
         log2 = await manager.server_open_log(coord.server_id)
-        await trigger_tablet_merge(manager, servers, [log2])
+        await trigger_tablet_merge(manager, servers, [log2], table_id, f"{ks}.test")
 
         await read_barrier(manager.api, servers[0].ip_addr)
         await message_injection(manager, servers, "tablet_virtual_task_wait")
@@ -483,7 +483,7 @@ async def test_tablet_resize_task(manager: ScyllaClusterManager):
         total_keys = 60
         keys = range(total_keys)
         await prepare_split(manager, servers[0], keyspace, table1, keys)
-        await enable_tablet_balancing_and_wait(manager, servers[0], "Detected tablet split for table")
+        await enable_tablet_balancing_and_wait(manager, servers[0], f"Detected tablet split for table {keyspace}.{table1}")
         await wait_tasks_created(tm, servers[0], module_name, 0, "split", keyspace, table1)
 
         await prepare_split(manager, servers[0], keyspace, table2, keys)
