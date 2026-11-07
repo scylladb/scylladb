@@ -2658,6 +2658,49 @@ def test_short_read(cql, test_keyspace):
         rows = [(col[0], col[1]) for col in list(rs)]
         assert sorted(rows) == [(1,1), (1,2), (1,3), (2,1)]
 
+# Same as test_short_read above, but with an index on a static column. The
+# index view has one row per base partition, so the paging state cannot record
+# where in the partition a short read stopped, and the next page skips the rest
+# of the partition. Reproduces SCYLLADB-6057.
+@pytest.mark.xfail(reason="SCYLLADB-6057")
+def test_short_read_static_column(cql, test_keyspace):
+    page_memory_limit = 1024 if is_scylla(cql) else 1024 * 1024  # 1MiB in Cassandra, 1KiB in Scylla (for faster execution)
+    row_size = page_memory_limit // 2  # will cause short read after 2 rows
+    with ExitStack() as stack:
+        table = stack.enter_context(new_test_table(cql, test_keyspace, 'pk int, ck int, s int static, data text, primary key (pk, ck)'))
+        if is_scylla(cql):
+            stack.enter_context(config_value_context(cql, 'query_page_size_in_bytes', str(page_memory_limit)))
+        cql.execute(f'CREATE INDEX ON {table}(s)')
+        stmt = cql.prepare(f'INSERT INTO {table} (pk, ck, s, data) VALUES (?, ?, ?, ?)')
+        cql.execute(stmt, [1, 1, 1, 'A' * row_size])
+        cql.execute(stmt, [1, 2, 1, 'B' * row_size])
+        cql.execute(stmt, [1, 3, 1, 'C' * row_size])
+        cql.execute(stmt, [2, 1, 1, 'D' * row_size])
+        rs = cql.execute(f'SELECT pk, ck, data FROM {table} WHERE s = 1')
+        rows = [(col[0], col[1]) for col in list(rs)]
+        assert sorted(rows) == [(1,1), (1,2), (1,3), (2,1)]
+
+# Same as test_short_read above, but with an index on the map values of a
+# static column. Besides the problem above, the cross-page deduplication of
+# partition keys, which applies to indexes on map values, skips the partition
+# too. Reproduces SCYLLADB-6057.
+@pytest.mark.xfail(reason="SCYLLADB-6057")
+def test_short_read_static_column_map_values(cql, test_keyspace):
+    page_memory_limit = 1024 if is_scylla(cql) else 1024 * 1024  # 1MiB in Cassandra, 1KiB in Scylla (for faster execution)
+    row_size = page_memory_limit // 2  # will cause short read after 2 rows
+    with ExitStack() as stack:
+        table = stack.enter_context(new_test_table(cql, test_keyspace, 'pk int, ck int, m map<int, int> static, data text, primary key (pk, ck)'))
+        if is_scylla(cql):
+            stack.enter_context(config_value_context(cql, 'query_page_size_in_bytes', str(page_memory_limit)))
+        cql.execute(f'CREATE INDEX ON {table}(m)')
+        stmt = cql.prepare(f'INSERT INTO {table} (pk, ck, m, data) VALUES (?, ?, ?, ?)')
+        cql.execute(stmt, [1, 1, {1: 2}, 'A' * row_size])
+        cql.execute(stmt, [1, 2, {1: 2}, 'B' * row_size])
+        cql.execute(stmt, [1, 3, {1: 2}, 'C' * row_size])
+        rs = cql.execute(f'SELECT pk, ck, data FROM {table} WHERE m CONTAINS 2')
+        rows = [(col[0], col[1]) for col in list(rs)]
+        assert sorted(rows) == [(1,1), (1,2), (1,3)]
+
 # Another reproducer for issue #25839, this time asking for a count() as
 # a user tried in #28026 and noticing that adding an additional column
 # to the selection causes the count to become smaller.
