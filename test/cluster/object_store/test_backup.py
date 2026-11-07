@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from functools import partial
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.internal_types import ServerInfo
-from test.cluster.util import wait_for_cql_and_get_hosts, get_replication, new_test_keyspace, new_test_table, reconnect_driver
+from test.cluster.util import wait_for_cql_and_get_hosts, get_replication, new_test_keyspace, new_test_table, reconnect_driver, get_topology_coordinator
 from test.pylib.object_storage import keyspace_options
 from test.pylib.rest_client import read_barrier, HTTPError
 from test.pylib.util import unique_name, wait_all, wait_for_view
@@ -1424,17 +1424,33 @@ async def test_restore_tablets_duplicate_after_failed_api_node(build_mode: str, 
         await manager.server_stop(servers[1].server_id, convict=True)
         with pytest.raises(aiohttp.client_exceptions.ClientConnectorError):
             await manager.api.wait_task(servers[1].ip_addr, tid)
-        await log.wait_for("All restore transitions for table .* completed", "Clearing restore transition for .* due to error", timeout=60)
+
+        # The task of the failed restore died with servers[1], so wait for the restore request itself to
+        # finish: a new request for the same table issued before that would join it instead of starting anew.
+        # The topology coordinator does not have to stay on servers[0] (a stalled leader is replaced), so read
+        # the request state from group0 rather than looking for the coordinator's log messages on one node.
+        # A node that is behind on group0 shows the request missing or not done yet, never done too early.
+        table_id = (await cql.run_async(f"SELECT id FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = 'test'"))[0].id
+
+        async def failed_restore_done():
+            rows = await cql.run_async(f"SELECT done, error FROM system.topology_requests WHERE restore_table_id = {table_id} ALLOW FILTERING")
+            return rows if rows and all(r.done for r in rows) else None
+        requests = await wait_for(failed_restore_done, deadline=time.time() + 60)
+        assert len(requests) == 1 and requests[0].error, f"the restore should have failed after the loss of servers[1]: {requests}"
 
         tid = await manager.api.restore_tablets(servers[3].ip_addr, ks, 'test', snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests)
         await asyncio.wait_for(manager.api.wait_task(servers[3].ip_addr, tid), timeout=60)
 
         # The previous restore succeeded. Issue one more restore of the same table/tablets (same gid) and make
-        # sure it actually runs the restore action instead of being silently skipped.
-        mark = await log.mark()
+        # sure it actually runs the restore action instead of being silently skipped. Only the topology
+        # coordinator logs it, and which server that is is known only once the restore is done, so mark
+        # the log of every live server now and look in the coordinator's log afterwards.
+        logs = {s.server_id: await manager.server_open_log(s.server_id) for s in (servers[0], servers[2], servers[3])}
+        marks = {server_id: await server_log.mark() for server_id, server_log in logs.items()}
         tid = await manager.api.restore_tablets(servers[2].ip_addr, ks, 'test', snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests)
         await asyncio.wait_for(manager.api.wait_task(servers[2].ip_addr, tid), timeout=60)
-        restored = await log.grep("Restoring tablet=", from_mark=mark)
+        coordinator = await manager.find_server_by_host_id(servers, await get_topology_coordinator(manager))
+        restored = await logs[coordinator.server_id].grep("Restoring tablet=", from_mark=marks[coordinator.server_id])
         assert len(restored) > 0, "Restore was skipped: coordinator reused stale _tablets state and did not restore any tablet"
 
 
