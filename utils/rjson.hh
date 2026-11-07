@@ -221,6 +221,19 @@ inline std::string_view type_name(rjson::type t) {
 // as parse() will allocate member names and values.
 // Throws rjson::error if parsing failed.
 rjson::value parse(std::string_view str, size_t max_nested_level = default_max_nested_level);
+// Like parse(), but reads a JSON number with a decimal point or an exponent
+// into the double nearest to it. parse() may read such a number into a double
+// which differs from the nearest one by one unit in the last place, e.g., it
+// may read 9.58220516 as the double printed as 9.582205160000001. This uses
+// RapidJSON's kParseFullPrecisionFlag, and is significantly slower: in a
+// benchmark, parsing JSON numbers - even integers, which it doesn't change -
+// took 2.5 to 4.5 times longer. So use it only where numbers must be read as
+// precisely as possible and parsing speed matters less, as in CQL's JSON
+// support. Note that even with full precision, a number which needs more
+// significant digits than a double holds (about 16), such as a large integer
+// or a precise decimal, can't be read exactly - so applications which need
+// such numbers should write them as JSON strings, not JSON numbers.
+rjson::value parse_full_precision(std::string_view str, size_t max_nested_level = default_max_nested_level);
 // Parses a JSON value returns a disengaged optional on failure.
 // NOTICE: any error context will be lost, so this function should
 // be used only if one does not care why parsing failed.
