@@ -197,6 +197,12 @@ Available options
        at that scope even if a broader scope enabled it, whereas ``NULL`` removes the value and
        falls back to the broader scope. See
        :doc:`Automatic Scrub </operating-scylla/procedures/maintenance/automatic-scrub>`.
+   * - ``cql_response_compression_threshold_in_bytes``
+     - integer
+     - ``CLUSTER``
+     - CQL responses with a body smaller than this are sent uncompressed, even on connections that
+       negotiated compression; compressing small bodies costs CPU and saves few or no bytes. ``0``
+       (or a negative value) compresses all responses. Default: ``1024``.
 
 .. _cql-cluster-config-yaml-options:
 
