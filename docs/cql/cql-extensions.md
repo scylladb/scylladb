@@ -220,6 +220,17 @@ value. For example, to run the PRUNE with 100 parallel reads/writes, you can use
 ```
 (synchronous-materialized-views)=
 
+## EXECUTE statement
+
+`EXECUTE COMMAND <name> [WITH <param> = <value> AND ...]` runs a built-in command on the
+node that receives the statement and returns its result as rows. The syntax follows
+Cassandra's CEP-38 (CQL Management API). Parameters are named, in any order, and are
+ordinary terms, so they can be bind markers in a prepared statement. Commands are
+superuser-only. The `host_id` parameter is reserved for selecting the node to run on and
+is currently rejected. The only command
+today is `toppartitions`, see
+{doc}`nodetool toppartitions </operating-scylla/nodetool-commands/toppartitions>`.
+
 ## Synchronous materialized views
 
 Usually, when a table with materialized views is updated, the update to the
