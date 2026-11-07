@@ -4659,7 +4659,14 @@ table::query(schema_ptr query_schema,
 
         if (!querier_opt) {
             querier_base::querier_config conf(_config.tombstone_warn_threshold);
+<<<<<<< HEAD
             querier_opt = querier(as_mutation_source(), query_schema, permit, range, qs.cmd.slice, trace_state, get_compaction_manager().get_tombstone_gc_state(), conf);
+||||||| parent of 2234b07688 (replica: don't hold back query tombstone gc with the commitlog)
+            querier_opt = querier(as_mutation_source(), query_schema, permit, range, qs.cmd.slice, trace_state, get_tombstone_gc_state(), conf);
+=======
+            querier_opt = querier(as_mutation_source(), query_schema, permit, range, qs.cmd.slice, trace_state,
+                    get_tombstone_gc_state().with_commitlog_check_disabled(), conf);
+>>>>>>> 2234b07688 (replica: don't hold back query tombstone gc with the commitlog)
         }
         auto& q = *querier_opt;
 
@@ -4711,7 +4718,13 @@ table::mutation_query(schema_ptr query_schema,
         querier_opt = std::move(*saved_querier);
     }
     if (!querier_opt) {
+<<<<<<< HEAD
         auto tombstone_gc_state = tombstone_gc_enabled ? get_compaction_manager().get_tombstone_gc_state() : tombstone_gc_state::no_gc();
+||||||| parent of 2234b07688 (replica: don't hold back query tombstone gc with the commitlog)
+        auto tombstone_gc_state = tombstone_gc_enabled ? get_tombstone_gc_state() : tombstone_gc_state::no_gc();
+=======
+        auto tombstone_gc_state = tombstone_gc_enabled ? get_tombstone_gc_state().with_commitlog_check_disabled() : tombstone_gc_state::no_gc();
+>>>>>>> 2234b07688 (replica: don't hold back query tombstone gc with the commitlog)
         querier_base::querier_config conf(_config.tombstone_warn_threshold);
         querier_opt = querier(as_mutation_source(), query_schema, permit, range, cmd.slice, trace_state, tombstone_gc_state, conf);
     }
