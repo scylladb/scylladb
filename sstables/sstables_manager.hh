@@ -92,7 +92,8 @@ class storage_manager : public peering_sharded_service<storage_manager> {
     };
 
     struct connections_updater_sync {
-        utils::observer<unsigned> observer;
+        utils::observer<std::unordered_map<sstring, unsigned>> connections_observer;
+        utils::observer<unsigned> per_shard_observer;
         connections_updater_sync(const db::config& cfg, storage_manager&);
     };
 
@@ -103,13 +104,14 @@ class storage_manager : public peering_sharded_service<storage_manager> {
     };
 
     semaphore _object_storage_clients_memory;
-    unsigned _connections_per_shard;
+    s3::group_connections _group_connections;
     std::unordered_map<sstring, object_storage_endpoint> _object_storage_endpoints;
     std::unique_ptr<config_updater_sync> _config_updater;
     std::unique_ptr<connections_updater_sync> _connections_updater;
     seastar::metrics::metric_groups metrics;
 
     object_storage_endpoint& get_endpoint(const sstring& ep);
+    void reload_group_connections(const db::config& cfg, std::optional<unsigned> budget_override = std::nullopt);
 
 public:
     struct config {
