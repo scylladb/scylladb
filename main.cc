@@ -2156,7 +2156,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 std::ref(db), std::ref(mm), std::ref(sys_ks), std::ref(feature_service), std::ref(gossiper),
                 std::ref(raft_replay_buffer), std::ref(raft_resize_tracker)).get();
             auto stop_groups_manager = defer_verbose_shutdown("strongly consistent groups manager", [&] {
-                groups_manager.invoke_on_all(&service::strong_consistency::groups_manager::uninit_messaging_service).get();
+                groups_manager.local().stop_all_shards().get();
                 groups_manager.stop().get();
             });
 
@@ -2433,6 +2433,12 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             });
             early_stop_group0_usage_in_storage_service->cancel();
             early_stop_group0_service->cancel();
+
+            // A startup that fails before do_drain() is registered must stop the strongly
+            // consistent groups before group0 too, as do_drain() does.
+            auto stop_sc_groups = defer_verbose_shutdown("strongly consistent groups", [&] {
+                groups_manager.local().stop_all_shards().get();
+            });
 
             checkpoint(stop_signal, "starting hinted handoff manager");
             if (!hinted_handoff_enabled.is_disabled_for_all()) {

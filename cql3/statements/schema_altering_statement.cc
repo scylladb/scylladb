@@ -76,7 +76,7 @@ schema_altering_statement::execute(query_processor& qp, service::query_state& st
     }
     service::group0_batch mc{std::move(guard)};
     auto result = co_await qp.execute_schema_statement(*this, state, options, mc);
-    co_await qp.announce_schema_statement(*this, mc);
+    co_await qp.announce_schema_statement(*this, mc, state.get_client_state().get_abort_source_ptr());
     co_return std::move(result);
 }
 

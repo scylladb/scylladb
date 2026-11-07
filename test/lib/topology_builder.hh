@@ -141,7 +141,7 @@ private:
             if (topo.tstate) {
                 testlog.info("Waiting for topology state machine to be idle");
                 release_guard(std::move(guard));
-                _env.get_topology_state_machine().local().await_not_busy().get();
+                _env.get_topology_state_machine().local().await_not_busy(as).get();
                 testlog.info("Woken up");
                 continue;
             }

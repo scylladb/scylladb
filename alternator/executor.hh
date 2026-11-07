@@ -106,6 +106,9 @@ class executor : public peering_sharded_service<executor> {
     struct describe_table_info_manager;
     std::unique_ptr<describe_table_info_manager> _describe_table_info_manager;
 
+    abort_source _stop_as;
+    future<> modify_tags(sstring ks, sstring cf, std::function<void(std::map<sstring, sstring>&)> modify);
+
     future<> cache_newly_calculated_size_on_all_shards(schema_ptr schema, std::uint64_t size_in_bytes, std::chrono::nanoseconds ttl);
     future<> fill_table_size(rjson::value &table_description, schema_ptr schema, bool deleting);
 public:
@@ -206,6 +209,7 @@ private:
         tracing::trace_state_ptr trace_state, service_permit permit);
 
 public:
+    void request_stop() noexcept { _stop_as.request_abort(); }
     static bool add_stream_options(const rjson::value& stream_spec, schema_builder&, service::storage_proxy& sp, const cdc::options& existing_cdc_opts = {});
     static void supplement_table_info(rjson::value& descr, const schema& schema, service::storage_proxy& sp);
     static void supplement_table_stream_info(rjson::value& descr, const schema& schema, const service::storage_proxy& sp);

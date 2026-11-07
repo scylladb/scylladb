@@ -871,9 +871,10 @@ future<executor::request_return_type> executor::delete_table(client_state& clien
     }
     co_await verify_permission(_enforce_authorization, _warn_authorization, client_state, schema, auth::permission::DROP, _stats);
     co_await _mm.container().invoke_on(0, [&, cs = client_state.move_to_other_shard()] (service::migration_manager& mm) -> future<> {
+        auto* stop_as = &container().local()._stop_as;
         size_t retries = mm.get_concurrent_ddl_retries();
         for (;;) {
-            auto group0_guard = co_await mm.start_group0_operation();
+            auto group0_guard = co_await mm.start_group0_operation(std::nullopt, stop_as);
 
             std::optional<data_dictionary::table> tbl = p.local().data_dictionary().try_find_table(keyspace_name, table_name);
             if (!tbl) {
@@ -911,7 +912,8 @@ future<executor::request_return_type> executor::delete_table(client_state& clien
             std::tie(m, group0_guard) = co_await std::move(mc).extract();
 
             try {
-                co_await mm.announce(std::move(m), std::move(group0_guard), fmt::format("alternator-executor: delete {} table", table_name));
+                co_await mm.announce(std::move(m), std::move(group0_guard), fmt::format("alternator-executor: delete {} table", table_name),
+                        std::nullopt, stop_as);
                 break;
             } catch (const service::group0_concurrent_modification& ex) {
                 elogger.info("Failed to execute DeleteTable {} due to concurrent schema modifications. {}.",
@@ -1345,7 +1347,7 @@ future<executor::request_return_type> executor::tag_resource(client_state& clien
         co_return api_error::validation("The number of tags must be at least 1") ;
     }
     co_await verify_permission(_enforce_authorization, _warn_authorization, client_state, schema, auth::permission::ALTER, _stats);
-    co_await db::modify_tags(_mm, schema->ks_name(), schema->cf_name(), [tags](std::map<sstring, sstring>& tags_map) {
+    co_await modify_tags(schema->ks_name(), schema->cf_name(), [tags](std::map<sstring, sstring>& tags_map) {
         update_tags_map(*tags, tags_map, update_tags_action::add_tags);
     });
     co_return ""; // empty response
@@ -1369,7 +1371,7 @@ future<executor::request_return_type> executor::untag_resource(client_state& cli
 
     get_stats_from_schema(_proxy, *schema)->api_operations.untag_resource++;
     co_await verify_permission(_enforce_authorization, _warn_authorization, client_state, schema, auth::permission::ALTER, _stats);
-    co_await db::modify_tags(_mm, schema->ks_name(), schema->cf_name(), [tags](std::map<sstring, sstring>& tags_map) {
+    co_await modify_tags(schema->ks_name(), schema->cf_name(), [tags](std::map<sstring, sstring>& tags_map) {
         update_tags_map(*tags, tags_map, update_tags_action::delete_tags);
     });
     co_return ""; // empty response
@@ -2474,7 +2476,7 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
 
     size_t retries = _mm.get_concurrent_ddl_retries();
     for (;;) {
-        auto group0_guard = co_await _mm.start_group0_operation();
+        auto group0_guard = co_await _mm.start_group0_operation(std::nullopt, &_stop_as);
         auto ts = group0_guard.write_timestamp();
         utils::chunked_vector<mutation> schema_mutations;
         auto ksm = create_keyspace_metadata(keyspace_name, _proxy, _gossiper, ts, tags_map, _proxy.features(), tablets_mode);
@@ -2606,7 +2608,8 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
         }
         std::tie(schema_mutations, group0_guard) = co_await std::move(mc).extract();
         try {
-            co_await _mm.announce(std::move(schema_mutations), std::move(group0_guard), fmt::format("alternator-executor: create {} table", table_name));
+            co_await _mm.announce(std::move(schema_mutations), std::move(group0_guard), fmt::format("alternator-executor: create {} table", table_name),
+                    std::nullopt, &_stop_as);
             break;
         }  catch (const service::group0_concurrent_modification& ex) {
             elogger.info("Failed to execute CreateTable {} due to concurrent schema modifications. {}.",
@@ -2765,10 +2768,11 @@ future<executor::request_return_type> executor::update_table(client_state& clien
         // Materialize the shard-local copy once; every get() creates a whole
         // new client_state.
         const service::client_state local_client_state = client_state_other_shard.get();
+        auto* stop_as = &e.local()._stop_as;
         schema_ptr schema;
         size_t retries = mm.get_concurrent_ddl_retries();
         for (;;) {
-            auto group0_guard = co_await mm.start_group0_operation();
+            auto group0_guard = co_await mm.start_group0_operation(std::nullopt, stop_as);
 
             schema_ptr tab = get_table(p.local(), request);
 
@@ -2879,7 +2883,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                                 p.local(), tab->ks_name(), logname,
                                 group0_guard.write_timestamp());
                             co_await mm.announce(std::move(drop_m), std::move(group0_guard),
-                                format("alternator-executor: drop old CDC log for {}", tab->cf_name()));
+                                format("alternator-executor: drop old CDC log for {}", tab->cf_name()), std::nullopt, stop_as);
                             co_await mm.wait_for_schema_agreement(
                                 p.local().local_db(), db::timeout_clock::now() + 10s, nullptr);
                             continue;
@@ -3271,7 +3275,8 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                 std::tie(m, group0_guard) = co_await std::move(mc).extract();
             }
             try {
-                co_await mm.announce(std::move(m), std::move(group0_guard), format("alternator-executor: update {} table", tab->cf_name()));
+                co_await mm.announce(std::move(m), std::move(group0_guard), format("alternator-executor: update {} table", tab->cf_name()),
+                        std::nullopt, stop_as);
                 break;
             } catch (const service::group0_concurrent_modification& ex) {
                 elogger.info("Failed to execute UpdateTable {} due to concurrent schema modifications. {}.",
@@ -5726,6 +5731,12 @@ future<> executor::start() {
     // Currently, nothing to do on initialization. We delay the keyspace
     // creation (create_keyspace()) until a table is actually created.
     return make_ready_future<>();
+}
+
+future<> executor::modify_tags(sstring ks, sstring cf, std::function<void(std::map<sstring, sstring>&)> modify) {
+    return container().invoke_on(0, [ks = std::move(ks), cf = std::move(cf), modify = std::move(modify)] (executor& e) mutable {
+        return db::modify_tags(e._mm, std::move(ks), std::move(cf), std::move(modify), e._stop_as);
+    });
 }
 
 future<> executor::stop() {

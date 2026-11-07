@@ -527,7 +527,8 @@ public:
 
     future<::shared_ptr<cql_transport::messages::result_message>>
     execute_schema_statement(const statements::schema_altering_statement&, service::query_state& state, const query_options& options, service::group0_batch& mc);
-    future<> announce_schema_statement(const statements::schema_altering_statement&, service::group0_batch& mc);
+    // `as` aborts the waits for group0, like the drain of the migration manager.
+    future<> announce_schema_statement(const statements::schema_altering_statement&, service::group0_batch& mc, abort_source* as);
 
     // Sends an RPC to every host that holds a tablet replica of the given table, asking it to wait
     // until the raft groups for those tablets are started and ready to serve queries.

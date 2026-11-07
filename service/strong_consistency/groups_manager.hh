@@ -183,6 +183,8 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     boost::intrusive::list<raft_group_state, boost::intrusive::constant_time_size<false>> _starting_groups;
     locator::token_metadata_ptr _pending_tm = nullptr;
     bool _started = false;
+    // Requested on every shard by stop_all_shards() before it does anything else.
+    abort_source _as;
 
     tablet_group_leader_cache _leader_cache;
 
@@ -254,6 +256,14 @@ class groups_manager : public peering_sharded_service<groups_manager> {
 
     void init_messaging_service();
 
+    // Unregisters the RPC handlers, waiting for those that are running. Has to complete
+    // on every shard before stop_shard() runs on any: a handler that runs on one shard
+    // forwards to another, whose stop_shard() deletes the raft groups the handler uses.
+    future<> uninit_messaging_service();
+
+    // Deletes every raft::server of this shard and waits for that.
+    future<> stop_shard();
+
     // Makes the pending replica of a tablet at sc_snapshot_transfer catch up with the
     // group's leader, with a read barrier. Called through the wait_for_snapshot_transfer
     // RPC, on the pending replica.
@@ -314,20 +324,17 @@ public:
     // to the latest group0 state in the background.
     void start();
 
-    // Unregisters the RPC handlers, waiting for those that are running. Has to complete
-    // on every shard before stop() runs on any: a handler that runs on one shard
-    // forwards to another, whose stop() deletes the raft groups the handler uses.
-    future<> uninit_messaging_service();
-
-    // Called during node shutdown. Waits for all raft::server instances to stop.
-    future<> stop();
+    // Stops the groups of every shard, from any shard: unregisters the RPC handlers
+    // on every shard, waiting for those still running, and then stops every shard.
+    // Idempotent. There is no stop(): sharded<>::stop() only destroys the instances.
+    future<> stop_all_shards();
 
     // Hands Raft leadership over to another replica for every strongly consistent
     // tablet group hosted on this shard which this node currently leads.
     //
     // Transferring leadership takes a round of Raft RPCs with the other replicas,
-    // so it must run while messaging_service is still up. stop() runs late in the
-    // shutdown sequence, after storage_service::do_drain() has already shut the
+    // so it must run while messaging_service is still up. In a normal shutdown,
+    // stop_all_shards() runs after storage_service::stop_transport() has shut the
     // transport down, so we need a separate entry point to trigger stepdown().
     future<> stepdown_leaders();
 
