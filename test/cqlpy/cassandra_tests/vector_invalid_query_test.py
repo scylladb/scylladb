@@ -28,7 +28,8 @@ CASSANDRA_ANN_REQUIRES_INDEXED_FILTERING_MESSAGE = "ANN ordering by vector requi
 # Cassandra says "can not be run with aggregation", Scylla says "cannot".
 TOPK_AGGREGATION_ERROR = "can ?not be run with aggregation"
 TOPK_LIMIT_ERROR = "queries must have a limit specified"
-VECTOR_INDEXES_ANN_ONLY_MESSAGE = "Vector indexes only support ANN queries"
+CASSANDRA_VECTOR_INDEXES_ANN_ONLY_MESSAGE = "Vector indexes only support ANN queries"
+SCYLLA_VECTOR_INDEX_CANNOT_SERVE_MESSAGE = "cannot serve this restriction"
 
 def test_cannot_create_empty_vector_column(cql, test_keyspace):
         assert_invalid_message(
@@ -136,7 +137,7 @@ def test_cannot_perform_non_ann_query_on_vector_index(cql, test_keyspace):
         custom_index = "vector_index" if is_scylla(cql) else "StorageAttachedIndex"
         execute(cql, table, f"CREATE CUSTOM INDEX c_index ON %s (val) USING '{custom_index}'")
         assert_invalid_message(
-            cql, table, VECTOR_INDEXES_ANN_ONLY_MESSAGE,
+            cql, table, SCYLLA_VECTOR_INDEX_CANNOT_SERVE_MESSAGE if is_scylla(cql) else CASSANDRA_VECTOR_INDEXES_ANN_ONLY_MESSAGE,
             "SELECT * FROM %s WHERE val = [1.0, 2.0, 3.0]"
         )
 
