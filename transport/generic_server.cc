@@ -279,7 +279,12 @@ future<> server::shutdown() {
         l.abort_accept();
         _logger.debug("abort accept {} out of {} done", ++nr, nr_total);
     }
+    // abort_accept() doesn't wake a do_accepts() blocked on the semaphore.
+    _conns_cpu_concurrency_semaphore.broken();
      co_await std::move(_listeners_stopped);
+    // Close the listening sockets now, so a restarted server can bind while
+    // lingering requests still delay stop().
+    _listeners.clear();
 
     // Shutdown RX side of the connections, so no new requests could be received.
     // Leave the TX side so the responses to ongoing requests could be sent.

@@ -127,6 +127,7 @@ private:
     utils::observer<uint32_t> _conns_cpu_concurrency_observer;
     uint32_t _prev_conns_cpu_concurrency;
     named_semaphore _conns_cpu_concurrency_semaphore;
+protected:
     std::chrono::seconds _shutdown_timeout;
 public:
     server(const sstring& server_name, logging::logger& logger, config cfg);
@@ -139,7 +140,7 @@ public:
     //
     // It does _not_ wait for any internal activity started by the established connections
     // to finish. It's the .stop() method that does it
-    future<> shutdown();
+    virtual future<> shutdown();
     future<> stop();
 
     future<> listen(socket_address addr,
