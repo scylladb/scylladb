@@ -369,6 +369,8 @@ class partition_key_and_mutation_fragments;
 using repair_rows_on_wire = std::list<partition_key_and_mutation_fragments>;
 class repair_row;
 class repair_hasher;
+class decorated_key_with_hash;
+class mutation_fragment;
 class repair_writer;
 
 future<> repair_cf_range_row_level(shard_repair_state& rstate,
@@ -377,6 +379,9 @@ future<> repair_cf_range_row_level(shard_repair_state& rstate,
 future<std::list<repair_row>> to_repair_rows_list(repair_rows_on_wire rows,
         schema_ptr s, uint64_t seed, repair_master is_master,
         reader_permit permit, repair_hasher hasher);
+// The row repair builds from a fragment it read from disk; dk is the current partition, never null.
+repair_row make_repair_row_from_disk(
+        const lw_shared_ptr<const decorated_key_with_hash>& dk, repair_hasher& hasher, const schema& s, const mutation_fragment& mf);
 void flush_rows(schema_ptr s, std::list<repair_row>& rows, lw_shared_ptr<repair_writer>& writer, std::optional<small_table_optimization_params> small_table_optimization = std::nullopt, repair_meta* rm = nullptr);
 
 // A struct to hold the first and last token of a tablet.

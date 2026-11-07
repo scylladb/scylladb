@@ -6,8 +6,11 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
+#include <cstring>
 #include "utils/assert.hh"
+#include "utils/chunked_vector.hh"
 #include "utils/on_internal_error.hh"
+#include "utils/small_vector.hh"
 #include "types/collection.hh"
 #include "types/user.hh"
 #include "types/concrete_types.hh"
@@ -17,6 +20,8 @@
 #include "idl/mutation.dist.impl.hh"
 
 #include "collection_mutation.hh"
+#include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 
 collection_mutation::collection_mutation() : _data(managed_bytes::initialized_later{}, sizeof(uint8_t) + sizeof(int32_t)) {
     auto out = managed_bytes_mutable_view(_data);
@@ -39,26 +44,8 @@ collection_mutation_view atomic_cell_or_collection::as_collection_mutation() con
     return collection_mutation_view{managed_bytes_view(_data)};
 }
 
-namespace {
-
-// Reads (and consumes) the tombstone prefix from `v`. Returns the tombstone,
-// which is empty if the has_tombstone flag was not set.
-tombstone read_collection_tombstone(managed_bytes_view& v) {
-    if (read_simple<uint8_t>(v)) {
-        auto timestamp = read_simple<api::timestamp_type>(v);
-        auto deletion_time = read_simple<gc_clock::duration::rep>(v);
-        return tombstone{timestamp, gc_clock::time_point(gc_clock::duration(deletion_time))};
-    }
-    return tombstone{};
-}
-
-// Reads (and consumes) the cell-count field from `v`, assuming the tombstone
-// prefix has already been consumed.
-uint32_t read_collection_size(managed_bytes_view& v) {
-    return read_simple<uint32_t>(v);
-}
-
-} // anonymous namespace
+using collection_mutation_detail::read_collection_tombstone;
+using collection_mutation_detail::read_collection_size;
 
 bool collection_mutation_view::empty() const {
     auto v = data;
@@ -78,12 +65,11 @@ bool collection_mutation_view::is_any_live(const abstract_type& type, tombstone 
 }
 
 api::timestamp_type collection_mutation_view::last_update(const abstract_type& type) const {
-    auto tomb = this->tomb();
-    api::timestamp_type max = tomb.timestamp;
-    for (auto& [key, value] : *this) {
+    api::timestamp_type max = tomb().timestamp;
+    for_each_element([&] (managed_bytes_view, atomic_cell_view value) {
         max = std::max(value.timestamp(), max);
-    }
-
+        return true;
+    });
     return max;
 }
 
@@ -106,12 +92,7 @@ collection_mutation_view::iterator::iterator(managed_bytes_view data) {
 }
 
 void collection_mutation_view::iterator::advance() {
-    auto key_size = read_simple<uint32_t>(_remaining);
-    auto key = _remaining.prefix(key_size);
-    _remaining.remove_prefix(key_size);
-    auto vsize = read_simple<uint32_t>(_remaining);
-    auto value = _remaining.prefix(vsize);
-    _remaining.remove_prefix(vsize);
+    auto [key, value] = collection_mutation_detail::read_element(_remaining);
     _current = value_type{key, atomic_cell_view::from_bytes(value)};
 }
 
@@ -166,7 +147,7 @@ auto fmt::formatter<collection_mutation_view::printer>::format(const collection_
     return fmt::format_to(out, "}}");
 }
 
-collection_mutation_compact_and_expire_result compact_and_expire(
+collection_mutation_compact_and_expire_if_changed_result compact_and_expire_if_changed(
         collection_mutation_view cmv,
         column_id id,
         const abstract_type& type,
@@ -190,8 +171,35 @@ collection_mutation_compact_and_expire_result compact_and_expire(
     }
     t.apply(base_tomb.regular());
     collection_mutation_writer survivors(tomb);
+    auto rest = cmv.data;
+    auto n = collection_mutation_detail::skip_header(rest);
+    // Usually nothing is dropped, expired or purged: then return no copy, and otherwise
+    // copy the leading run of unchanged elements verbatim instead of element by element.
+    if (tomb == cmv.tomb()) {
+        const auto shadowable = base_tomb.shadowable().tomb();
+        const auto first = rest;
+        uint32_t kept = 0;
+        for (; n; --n, ++kept) {
+            auto next = rest;
+            auto cell = atomic_cell_view::from_bytes(collection_mutation_detail::read_element(next).second);
+            if (!cell.is_live() || cell.has_expired(query_time) || cell.is_covered_by(t, false) || cell.is_covered_by(shadowable, false)) {
+                break;
+            }
+            rest = next;
+        }
+        res.live_cells += kept;
+        if (!n) {
+            if (collector) {
+                collector->collect(id, collection_mutation());
+            }
+            return {std::nullopt, std::move(res)};
+        }
+        survivors.append_serialized(first.prefix(first.size_bytes() - rest.size_bytes()), kept);
+    }
     collection_mutation_writer losers(purged_tomb);
-    for (auto& [key, cell] : cmv) {
+    for (; n; --n) {
+        auto [key, value] = collection_mutation_detail::read_element(rest);
+        auto cell = atomic_cell_view::from_bytes(value);
         auto cannot_erase_cell = [&] {
             // Only row tombstones can be shadowable, (collection) cell tombstones aren't
             return cell.deletion_time() >= gc_before || !can_gc(tombstone(cell.timestamp(), cell.deletion_time()), is_shadowable::no);
@@ -227,56 +235,89 @@ collection_mutation_compact_and_expire_result compact_and_expire(
     return {std::move(survivors).finish(), std::move(res)};
 }
 
-/// A CollectionMutationAdaptor is a static interface that adapts a collection
-/// element (an iterator value type) to the serialization requirements of
-/// serialize_collection_mutation(). It provides static methods to measure the
-/// serialized sizes and to write the key and value of each element into a buffer.
-template <typename Adaptor, typename Element>
-concept CollectionMutationAdaptor = requires(const Element& e, managed_bytes_mutable_view& out) {
-    { Adaptor::key_size(e) } -> std::convertible_to<size_t>;
-    { Adaptor::value_size(e) } -> std::convertible_to<size_t>;
-    { Adaptor::write_key(e, out) };
-    { Adaptor::write_value(e, out) };
-};
-
-template <typename Adaptor, typename Iterator>
-    requires CollectionMutationAdaptor<Adaptor, std::iter_value_t<Iterator>>
-static collection_mutation serialize_collection_mutation(
-        const tombstone& tomb,
-        std::ranges::subrange<Iterator> cells) {
-    auto element_size = [] (size_t c, auto&& e) -> size_t {
-        return c + 8 + Adaptor::key_size(e) + Adaptor::value_size(e);
-    };
-    auto size = std::ranges::fold_left(cells, (size_t)4, element_size);
-    size += 1;
-    if (tomb) {
-        size += sizeof(int64_t) + sizeof(int64_t);
-    }
-    managed_bytes ret(managed_bytes::initialized_later(), size);
-    managed_bytes_mutable_view out(ret);
-    write<uint8_t>(out, uint8_t(bool(tomb)));
-    if (tomb) {
-        write<int64_t>(out, tomb.timestamp);
-        write<int64_t>(out, tomb.deletion_time.time_since_epoch().count());
-    }
-    auto writek = [&out] (auto& kv) {
-        write<int32_t>(out, Adaptor::key_size(kv));
-        Adaptor::write_key(kv, out);
-    };
-    auto writev = [&out] (auto& kv) {
-        write<int32_t>(out, Adaptor::value_size(kv));
-        Adaptor::write_value(kv, out);
-    };
-    // FIXME: overflow?
-    write<int32_t>(out, std::ranges::distance(cells));
-    for (auto&& kv : cells) {
-        writek(kv);
-        writev(kv);
-    }
-    return collection_mutation(std::move(ret));
+collection_mutation_compact_and_expire_result compact_and_expire(
+        collection_mutation_view cmv,
+        column_id id,
+        const abstract_type& type,
+        row_tombstone base_tomb,
+        gc_clock::time_point query_time,
+        can_gc_fn& can_gc,
+        gc_clock::time_point gc_before,
+        compaction_garbage_collector* collector) {
+    auto r = compact_and_expire_if_changed(cmv, id, type, base_tomb, query_time, can_gc, gc_before, collector);
+    return {r.collection ? std::move(*r.collection) : collection_mutation(cmv), r.result};
 }
 
 namespace {
+
+// A collection_element as laid out by idl/mutation.idl.hh, parsed from one
+// contiguous frame. Only leading fields are read, so appended fields are ignored.
+struct frozen_collection_element {
+    // Variant alternatives of collection_element::value, in IDL order.
+    enum kind_type : uint32_t { live, expiring, dead };
+    bytes_view key;
+    kind_type kind;
+    api::timestamp_type timestamp;
+    bytes_view value;
+    gc_clock::time_point time; // expiry or deletion time
+    gc_clock::duration ttl;
+
+    static bytes_view read_bytes(seastar::simple_memory_input_stream& in) {
+        auto len = ser::deserialize(in, std::type_identity<uint32_t>());
+        auto p = in.begin();
+        in.skip(len);
+        return bytes_view(reinterpret_cast<const int8_t*>(p), len);
+    }
+
+    explicit frozen_collection_element(bytes_view frame) {
+        seastar::simple_memory_input_stream in(reinterpret_cast<const char*>(frame.data()), frame.size());
+        in.skip(sizeof(uint32_t)); // element frame
+        key = read_bytes(in);
+        in.skip(sizeof(uint32_t)); // variant frame
+        kind = kind_type(ser::deserialize(in, std::type_identity<uint32_t>()));
+        switch (kind) {
+        case expiring:
+            in.skip(sizeof(uint32_t)); // expiring_cell frame
+            ttl = ser::deserialize(in, std::type_identity<gc_clock::duration>());
+            time = ser::deserialize(in, std::type_identity<gc_clock::time_point>());
+            [[fallthrough]];
+        case live:
+            in.skip(sizeof(uint32_t)); // live_cell frame
+            timestamp = ser::deserialize(in, std::type_identity<api::timestamp_type>());
+            value = read_bytes(in);
+            break;
+        case dead:
+            in.skip(sizeof(uint32_t)); // tombstone frame; dead_cell itself is final
+            timestamp = ser::deserialize(in, std::type_identity<api::timestamp_type>());
+            time = ser::deserialize(in, std::type_identity<gc_clock::time_point>());
+            break;
+        default:
+            utils::on_internal_error("Trying to deserialize cell in unknown state");
+        }
+    }
+
+    size_t cell_size() const {
+        switch (kind) {
+        case live: return atomic_cell_type::live_serialized_size(value.size());
+        case expiring: return atomic_cell_type::live_expiring_serialized_size(value.size());
+        case dead: return atomic_cell_type::dead_serialized_size();
+        }
+        __builtin_unreachable();
+    }
+
+    void write_to(managed_bytes_mutable_view& out) const {
+        write<int32_t>(out, key.size());
+        write_fragmented(out, single_fragmented_view(key));
+        const auto size = cell_size();
+        write<int32_t>(out, size);
+        switch (kind) {
+        case live: atomic_cell_type::write_live(out, timestamp, single_fragment_range(value)); break;
+        case expiring: atomic_cell_type::write_live(out, timestamp, single_fragment_range(value), time, ttl); break;
+        case dead: atomic_cell_type::write_dead(out, timestamp, time); break;
+        }
+        out.remove_prefix(size);
+    }
+};
 
 struct serialized_cell_adaptor {
     static size_t key_size(const ser::collection_element_view& v) {
@@ -327,12 +368,126 @@ struct serialized_cell_adaptor {
     }
 };
 
+size_t element_size(const frozen_collection_element& e) {
+    return 2 * sizeof(int32_t) + e.key.size() + e.cell_size();
+}
+
+void write_element(managed_bytes_mutable_view& out, const frozen_collection_element& e) {
+    e.write_to(out);
+}
+
+size_t element_size(const ser::collection_element_view& e) {
+    return 2 * sizeof(int32_t) + serialized_cell_adaptor::key_size(e) + serialized_cell_adaptor::value_size(e);
+}
+
+void write_element(managed_bytes_mutable_view& out, const ser::collection_element_view& e) {
+    write<int32_t>(out, serialized_cell_adaptor::key_size(e));
+    serialized_cell_adaptor::write_key(e, out);
+    write<int32_t>(out, serialized_cell_adaptor::value_size(e));
+    serialized_cell_adaptor::write_value(e, out);
+}
+
+// Calls fn on each of the `remaining` elements of `in`, advancing both; a preemptible call may stop early.
+// Frames within one fragment are parsed in place, as the generic IDL views cost thousands of instructions.
+template <typename Fn>
+void for_each_frozen_element(utils::input_stream& in, uint32_t& remaining, bool preemptible, Fn&& fn) {
+    seastar::with_serialized_stream(in, [&] (auto& s) {
+        for (uint32_t i = 0; remaining; --remaining, ++i) {
+            // Checked per element, as elements can be large; i > 0 guarantees progress.
+            if (preemptible && i && seastar::need_preempt()) {
+                return;
+            }
+            bytes_view frag;
+            if constexpr (requires { s.first_fragment_data(); }) {
+                // A substream shares its parent's fragment, which can extend past the stream.
+                frag = bytes_view(reinterpret_cast<const int8_t*>(s.first_fragment_data()), std::min(s.first_fragment_size(), s.size()));
+            } else {
+                frag = bytes_view(reinterpret_cast<const int8_t*>(s.begin()), s.size());
+            }
+            if (frag.size() >= sizeof(uint32_t)) {
+                const auto frame = seastar::read_le<uint32_t>(reinterpret_cast<const char*>(frag.data()));
+                if (frame <= frag.size()) {
+                    fn(frozen_collection_element(frag.substr(0, frame)));
+                    s.skip(frame);
+                    continue;
+                }
+            }
+            fn(ser::deserialize(s, std::type_identity<ser::collection_element_view>()));
+        }
+    });
+}
+
+// Sizes the output exactly in a first pass, then writes it: this also runs under LSA
+// (memtable apply), where slack would be garbage.
+struct frozen_collection_decoder {
+    tombstone tomb;
+    utils::input_stream in;
+    uint32_t count;
+    utils::input_stream sizing_in;
+    uint32_t sizing_left;
+    uint32_t left;
+    size_t size;
+    std::optional<managed_bytes> buf;
+    managed_bytes_mutable_view out;
+
+    // Positioned at the element count.
+    static utils::input_stream elements(const ser::collection_cell_view& collection) {
+        auto in = collection.v;
+        ser::skip(in, std::type_identity<uint32_t>());
+        ser::skip(in, std::type_identity<ser::tombstone_view>());
+        return in;
+    }
+
+    explicit frozen_collection_decoder(const ser::collection_cell_view& collection)
+            : tomb(collection.tomb())
+            , in(elements(collection))
+            , count(ser::deserialize(in, std::type_identity<uint32_t>()))
+            , sizing_in(in)
+            , sizing_left(count)
+            , left(count)
+            , size(sizeof(uint8_t) + (tomb ? 2 * sizeof(int64_t) : 0) + sizeof(int32_t)) {
+    }
+
+    // Returns true when done.
+    bool decode(bool preemptible) {
+        if (!buf) {
+            for_each_frozen_element(sizing_in, sizing_left, preemptible, [this] (const auto& e) { size += element_size(e); });
+            if (sizing_left) {
+                return false;
+            }
+            buf.emplace(managed_bytes::initialized_later(), size);
+            out = managed_bytes_mutable_view(*buf);
+            write<uint8_t>(out, uint8_t(bool(tomb)));
+            if (tomb) {
+                write<int64_t>(out, tomb.timestamp);
+                write<int64_t>(out, tomb.deletion_time.time_since_epoch().count());
+            }
+            // FIXME: overflow?
+            write<int32_t>(out, count);
+        }
+        for_each_frozen_element(in, left, preemptible, [this] (const auto& e) { write_element(out, e); });
+        return !left;
+    }
+
+    collection_mutation finish() && {
+        return collection_mutation(std::move(*buf));
+    }
+};
+
 }
 
 collection_mutation read_from_collection_cell_view(const abstract_type& type, const ser::collection_cell_view& collection) {
-    auto tomb = collection.tomb();
-    auto cells = collection.elements();
-    return serialize_collection_mutation<serialized_cell_adaptor>(tomb, std::ranges::subrange(cells.begin(), cells.end()));
+    frozen_collection_decoder d(collection);
+    d.decode(false);
+    return std::move(d).finish();
+}
+
+future<collection_mutation> read_from_collection_cell_view_gently(const ser::collection_cell_view& collection) {
+    frozen_collection_decoder d(collection);
+    while (!d.decode(true)) {
+        co_await coroutine::maybe_yield();
+    }
+    co_return std::move(d).finish();
 }
 
 collection_mutation_writer::collection_mutation_writer(::tombstone tomb) : _tomb(tomb) {
@@ -362,6 +517,13 @@ void collection_mutation_writer::push_back(managed_bytes_view key, atomic_cell_v
     ++_size;
 }
 
+void collection_mutation_writer::append_serialized(managed_bytes_view elements, uint32_t count) {
+    for (bytes_view frag : fragment_range(elements)) {
+        _out.write(frag);
+    }
+    _size += count;
+}
+
 collection_mutation collection_mutation_writer::finish() && {
     if (empty()) {
         return {};
@@ -383,6 +545,270 @@ collection_mutation collection_mutation_writer::finish() && {
     });
 }
 
+thread_local size_t collection_fast_path_min_size = 64 * 1024;
+
+// Copies the large side's unchanged runs verbatim; byte-identical to the general merge.
+// Requires small.tomb() to be empty, so nothing on the large side is filtered out.
+template <typename C>
+static collection_mutation
+merge_into_large(collection_mutation_view large, collection_mutation_view small, bool large_is_a, C&& key_type) {
+    struct element {
+        managed_bytes_view key;
+        atomic_cell_view value;
+    };
+    const auto tomb = large.tomb();
+    utils::chunked_vector<element> ins;
+    for (auto&& [key, value] : small) {
+        // Same filter as the general merge: a tombstone wins over an equal timestamp.
+        if (!tomb || tomb.timestamp < value.timestamp()) {
+            ins.push_back({key, value});
+        }
+    }
+
+    managed_bytes_view body = large.data;
+    auto remaining = collection_mutation_detail::skip_header(body);
+    const size_t header_size = large.data.size_bytes() - body.size_bytes() - sizeof(int32_t);
+    uint32_t count = remaining;
+
+    // Replace `replaced` bytes at `offset` of the large side's elements with `e`.
+    struct splice {
+        size_t offset;
+        size_t replaced;
+        element e;
+    };
+    utils::chunked_vector<splice> splices;
+    splices.reserve(ins.size());
+    size_t out_size = large.data.size_bytes();
+    auto insert_at = [&] (size_t offset, size_t replaced, element e) {
+        out_size += 2 * sizeof(int32_t) + e.key.size_bytes() + e.value.serialize().size_bytes() - replaced;
+        splices.push_back({offset, replaced, e});
+    };
+
+    auto next = ins.begin();
+    managed_bytes_view cur = body;
+    while (next != ins.end() && remaining) {
+        const size_t offset = body.size_bytes() - cur.size_bytes();
+        auto [key, value_bytes] = collection_mutation_detail::read_element(cur);
+        auto value = atomic_cell_view::from_bytes(value_bytes);
+        --remaining;
+        const size_t size = body.size_bytes() - cur.size_bytes() - offset;
+        std::strong_ordering cmp = std::strong_ordering::less;
+        while (next != ins.end() && (cmp = key_type.compare(next->key, key)) < 0) {
+            insert_at(offset, 0, *next++);
+            ++count;
+        }
+        if (cmp == 0) {
+            // Same rule as the general merge: a's key, a's cell only if it compares greater.
+            const element s = *next++;
+            const bool a_wins = large_is_a ? compare_atomic_cell_for_merge(value, s.value) > 0 : compare_atomic_cell_for_merge(s.value, value) > 0;
+            const bool large_wins = a_wins == large_is_a;
+            // The result takes a's key, so a large b element stays as is when the keys are byte-equal.
+            if (!large_wins || (!large_is_a && s.key != key)) {
+                insert_at(offset, size, element{large_is_a ? key : s.key, large_wins ? value : s.value});
+            }
+        }
+    }
+    for (; next != ins.end(); ++next) {
+        insert_at(body.size_bytes(), 0, *next);
+        ++count;
+    }
+
+    managed_bytes ret(managed_bytes::initialized_later(), out_size);
+    managed_bytes_mutable_view out(ret);
+    write_fragmented(out, large.data.prefix(header_size));
+    write<int32_t>(out, count);
+    size_t copied = 0;
+    for (auto& sp : splices) {
+        write_fragmented(out, body.prefix(sp.offset - copied));
+        body.remove_prefix(sp.offset - copied + sp.replaced);
+        copied = sp.offset + sp.replaced;
+        write<int32_t>(out, sp.e.key.size_bytes());
+        write_fragmented(out, sp.e.key);
+        auto v = sp.e.value.serialize();
+        write<int32_t>(out, v.size_bytes());
+        write_fragmented(out, v);
+    }
+    write_fragmented(out, body);
+    return collection_mutation(std::move(ret));
+}
+
+template <typename C>
+static bool key_less(const C& key_type, managed_bytes_view k1, managed_bytes_view k2) {
+    return k1.with_linearized([&] (bytes_view k1) {
+        return k2.with_linearized([&] (bytes_view k2) {
+            return key_type.less(k1, k2);
+        });
+    });
+}
+
+// Length of the common prefix of two fragmented views.
+static size_t common_prefix(managed_bytes_view a, managed_bytes_view b) {
+    size_t n = 0;
+    while (!a.empty() && !b.empty()) {
+        auto fa = a.current_fragment();
+        auto fb = b.current_fragment();
+        const auto len = std::min(fa.size(), fb.size());
+        if (std::memcmp(fa.data(), fb.data(), len)) {
+            return n + (std::mismatch(fa.begin(), fa.begin() + len, fb.begin()).first - fa.begin());
+        }
+        n += len;
+        a.remove_prefix(len);
+        b.remove_prefix(len);
+    }
+    return n;
+}
+
+// Length of the common suffix of two fragmented views.
+static size_t common_suffix(managed_bytes_view a, managed_bytes_view b) {
+    utils::small_vector<bytes_view, 16> fa, fb;
+    for (auto f : fragment_range(a)) { fa.push_back(f); }
+    for (auto f : fragment_range(b)) { fb.push_back(f); }
+    size_t n = 0;
+    auto ia = fa.rbegin();
+    auto ib = fb.rbegin();
+    bytes_view ca, cb;
+    while (true) {
+        if (ca.empty()) { if (ia == fa.rend()) { break; } ca = *ia++; }
+        if (cb.empty()) { if (ib == fb.rend()) { break; } cb = *ib++; }
+        const auto len = std::min(ca.size(), cb.size());
+        const auto* pa = ca.data() + ca.size() - len;
+        const auto* pb = cb.data() + cb.size() - len;
+        if (std::memcmp(pa, pb, len)) {
+            return n + (std::mismatch(ca.rbegin(), ca.rbegin() + len, cb.rbegin()).first - ca.rbegin());
+        }
+        n += len;
+        ca.remove_suffix(len);
+        cb.remove_suffix(len);
+    }
+    return n;
+}
+
+// Advances both element streams past the whole elements within their `prefix` identical leading
+// bytes; returns the number of elements skipped on each side.
+static uint32_t skip_common_prefix(managed_bytes_view& ra, managed_bytes_view& rb, uint32_t& na, uint32_t& nb, size_t prefix) {
+    uint32_t total = 0;
+    while (na && nb && prefix) {
+        const auto frag = ra.current_fragment().substr(0, prefix);
+        size_t len = 0;
+        uint32_t skipped = 0;
+        while (skipped < std::min(na, nb)) {
+            const auto size = collection_mutation_detail::contiguous_element_size(frag.substr(len));
+            if (!size) {
+                break;
+            }
+            len += size;
+            ++skipped;
+        }
+        if (!len) {
+            // The next element crosses a fragment boundary: measure it the slow way.
+            auto peek = ra;
+            collection_mutation_detail::read_element(peek);
+            len = ra.size_bytes() - peek.size_bytes();
+            if (len > prefix) {
+                break;
+            }
+            skipped = 1;
+        }
+        ra.remove_prefix(len);
+        rb.remove_prefix(len);
+        prefix -= len;
+        na -= skipped;
+        nb -= skipped;
+        total += skipped;
+    }
+    return total;
+}
+
+namespace {
+
+// Walks `n` serialized elements of `r`, keeping the stream from the current element on.
+struct element_cursor {
+    managed_bytes_view& r;
+    uint32_t& n;
+    std::optional<std::pair<managed_bytes_view, atomic_cell_view>> cur;
+    managed_bytes_view before; // stream including cur
+    uint32_t n_before = 0;
+    void next() {
+        before = r;
+        n_before = n;
+        if (n) {
+            --n;
+            auto [key, value] = collection_mutation_detail::read_element(r);
+            cur.emplace(key, atomic_cell_view::from_bytes(value));
+        } else {
+            cur.reset();
+        }
+    }
+};
+
+} // anonymous namespace
+
+// With equal tombstones, elements identical on both sides merge to themselves (unless covered),
+// so only the middle between the common prefix and suffix is compared. Same result as merge().
+template <typename C>
+static collection_mutation merge_near_identical(collection_mutation_view a, collection_mutation_view b, size_t prefix, size_t suffix, C&& key_type) {
+    const tombstone t = a.tomb();
+    collection_mutation_writer merged(t);
+    auto live = [t] (atomic_cell_view c) { return !t || t.timestamp < c.timestamp(); };
+    auto emit_all = [&] (managed_bytes_view r, uint32_t n) {
+        if (!t) {
+            merged.append_serialized(r, n); // nothing to filter
+            return;
+        }
+        for (; n; --n) {
+            auto [key, value] = collection_mutation_detail::read_element(r);
+            auto cell = atomic_cell_view::from_bytes(value);
+            if (live(cell)) {
+                merged.push_back(key, cell);
+            }
+        }
+    };
+
+    auto ra = a.data;
+    auto rb = b.data;
+    auto na = collection_mutation_detail::skip_header(ra);
+    auto nb = collection_mutation_detail::skip_header(rb);
+    const auto ra0 = ra;
+    const auto skipped = skip_common_prefix(ra, rb, na, nb, prefix);
+    emit_all(ra0.prefix(ra0.size_bytes() - ra.size_bytes()), skipped);
+
+    auto less = [&] (managed_bytes_view k1, managed_bytes_view k2) { return key_less(key_type, k1, k2); };
+    element_cursor sa{ra, na};
+    element_cursor sb{rb, nb};
+    sa.next();
+    sb.next();
+    while (sa.cur || sb.cur) {
+        if (sa.cur && sb.cur && sa.before.size_bytes() == sb.before.size_bytes() && sa.before.size_bytes() <= suffix) {
+            emit_all(sa.before, sa.n_before); // the rest is identical on both sides
+            break;
+        }
+        if (!sb.cur || (sa.cur && less(sa.cur->first, sb.cur->first))) {
+            if (live(sa.cur->second)) {
+                merged.push_back(sa.cur->first, sa.cur->second);
+            }
+            sa.next();
+        } else if (!sa.cur || less(sb.cur->first, sa.cur->first)) {
+            if (live(sb.cur->second)) {
+                merged.push_back(sb.cur->first, sb.cur->second);
+            }
+            sb.next();
+        } else {
+            const bool a_live = live(sa.cur->second);
+            const bool b_live = live(sb.cur->second);
+            if (a_live && b_live) {
+                merged.push_back(sa.cur->first, compare_atomic_cell_for_merge(sa.cur->second, sb.cur->second) > 0 ? sa.cur->second : sb.cur->second);
+            } else if (a_live) {
+                merged.push_back(sa.cur->first, sa.cur->second);
+            } else if (b_live) {
+                merged.push_back(sb.cur->first, sb.cur->second);
+            }
+            sa.next();
+            sb.next();
+        }
+    }
+    return std::move(merged).finish();
+}
+
 template <typename C>
 requires std::is_base_of_v<abstract_type, std::remove_reference_t<C>>
 static collection_mutation
@@ -390,11 +816,7 @@ merge(collection_mutation_view a, collection_mutation_view b, C&& key_type) {
     using element_type = collection_mutation_view::iterator::value_type;
 
     auto compare = [&] (const element_type& e1, const element_type& e2) {
-        return e1.first.with_linearized([&] (bytes_view k1) {
-            return e2.first.with_linearized([&] (bytes_view k2) {
-                return key_type.less(k1, k2);
-            });
-        });
+        return key_less(key_type, e1.first, e2.first);
     };
 
     auto merge = [] (const element_type& e1, const element_type& e2) {
@@ -417,6 +839,32 @@ merge(collection_mutation_view a, collection_mutation_view b, C&& key_type) {
             // FIXME: should we consider TTLs too?
         });
     };
+
+    // Heuristic thresholds: below them re-serializing both sides is cheap enough.
+    const auto min_size = collection_fast_path_min_size;
+    if (a.data.size_bytes() >= min_size && b.data.size_bytes() * 8 <= a.data.size_bytes() && !b.tomb()) {
+        return merge_into_large(a, b, true, key_type);
+    }
+    if (b.data.size_bytes() >= min_size && a.data.size_bytes() * 8 <= b.data.size_bytes() && !a.tomb()) {
+        return merge_into_large(b, a, false, key_type);
+    }
+
+    // Read repair merges near-identical replica results; skip their common parts.
+    if (a.tomb() == b.tomb() && std::min(a.data.size_bytes(), b.data.size_bytes()) >= min_size) {
+        auto ra = a.data;
+        auto rb = b.data;
+        collection_mutation_detail::skip_header(ra);
+        collection_mutation_detail::skip_header(rb);
+        const auto body = std::min(ra.size_bytes(), rb.size_bytes());
+        const auto prefix = common_prefix(ra, rb);
+        // Taken after the prefix, so identical cells need no reverse scan.
+        ra.remove_prefix(prefix);
+        rb.remove_prefix(prefix);
+        const auto suffix = common_suffix(ra, rb);
+        if ((prefix + suffix) * 2 >= body) {
+            return merge_near_identical(a, b, prefix, suffix, key_type);
+        }
+    }
 
     collection_mutation_writer merged(std::max(a.tomb(), b.tomb()));
 
@@ -452,31 +900,42 @@ requires std::is_base_of_v<abstract_type, std::remove_reference_t<C>>
 static collection_mutation
 difference(collection_mutation_view a, collection_mutation_view b, C&& key_type)
 {
-    using element_type = collection_mutation_view::iterator::value_type;
-
     tombstone diff_tomb;
     if (a.tomb() > b.tomb()) {
         diff_tomb = a.tomb();
     }
     collection_mutation_writer diff(diff_tomb);
 
-    auto less = [&] (const element_type& e1, const element_type& e2) {
-        return e1.first.with_linearized([&] (bytes_view k1) {
-            return e2.first.with_linearized([&] (bytes_view k2) {
-                return key_type.less(k1, k2);
-            });
-        });
-    };
+    auto ra = a.data;
+    auto rb = b.data;
+    auto na = collection_mutation_detail::skip_header(ra);
+    auto nb = collection_mutation_detail::skip_header(rb);
 
-    auto it = b.begin();
-    for (auto&& c : a) {
-        while (it != b.end() && less(*it, c)) {
-            ++it;
+    // Read repair diffs near-identical large cells: identical leading elements cannot contribute,
+    // and the walk ends where both sides reach their identical trailing elements.
+    size_t suffix = 0;
+    if (std::min(ra.size_bytes(), rb.size_bytes()) >= collection_fast_path_min_size) {
+        skip_common_prefix(ra, rb, na, nb, common_prefix(ra, rb));
+        // Taken after the prefix, so identical cells need no reverse scan.
+        suffix = common_suffix(ra, rb);
+    }
+
+    auto less = [&] (managed_bytes_view k1, managed_bytes_view k2) { return key_less(key_type, k1, k2); };
+
+    element_cursor cb{rb, nb};
+    cb.next();
+    for (; na; --na) {
+        if ((ra.size_bytes() == cb.before.size_bytes() || ra.size_bytes() == rb.size_bytes()) && ra.size_bytes() <= suffix) {
+            break; // the rest is identical on both sides
         }
-        if (it == b.end() || !key_type.equal(it->first, c.first)
-            || compare_atomic_cell_for_merge(c.second, it->second) > 0) {
-
-            diff.push_back(c.first, c.second);
+        auto [key, value] = collection_mutation_detail::read_element(ra);
+        auto cell = atomic_cell_view::from_bytes(value);
+        while (cb.cur && less(cb.cur->first, key)) {
+            cb.next();
+        }
+        if (!cb.cur || !key_type.equal(cb.cur->first, key)
+            || compare_atomic_cell_for_merge(cell, cb.cur->second) > 0) {
+            diff.push_back(key, cell);
         }
     }
 

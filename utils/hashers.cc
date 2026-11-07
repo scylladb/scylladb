@@ -21,6 +21,7 @@ static_assert(Hasher<hasher>);
 static_assert(HasherReturningBytes<md5_hasher>);
 static_assert(HasherReturningBytes<sha256_hasher>);
 static_assert(HasherReturningBytes<xx_hasher>);
+static_assert(HasherReturningBytes<buffered_xx_hasher>);
 
 static_assert(SimpleHasher<simple_xx_hasher>);
 
