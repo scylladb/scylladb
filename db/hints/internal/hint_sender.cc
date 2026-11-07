@@ -27,6 +27,7 @@
 #include "db/hints/internal/hint_endpoint_manager.hh"
 #include "db/hints/manager.hh"
 #include "db/hints/resource_manager.hh"
+#include "exceptions/exceptions.hh"
 #include "gms/gossiper.hh"
 #include "gms/inet_address.hh"
 #include "replica/database.hh"
@@ -34,10 +35,12 @@
 #include "service/storage_proxy.hh"
 #include "utils/div_ceil.hh"
 #include "utils/error_injection.hh"
+#include "utils/exceptions.hh"
 #include "mutation/converting_mutation_partition_applier.hh"
 #include "gc_clock.hh"
 
 // STD.
+#include <algorithm>
 #include <ranges>
 #include <span>
 #include <stdexcept>
@@ -53,6 +56,16 @@ class no_column_mapping : public std::out_of_range {
 public:
     no_column_mapping(const table_schema_version& id) : std::out_of_range(format("column mapping for CF schema_version {} is missing", id)) {}
 };
+
+static bool rejected_by_large_data_guardrail(std::exception_ptr& eptr) {
+    const auto* ex = try_catch<exceptions::mutation_write_failure_exception>(eptr);
+    if (!ex || ex->failed_replicas.empty() || std::cmp_not_equal(ex->failures, ex->failed_replicas.size())) {
+        return false;
+    }
+    return std::ranges::all_of(ex->failed_replicas, [] (const exceptions::replica_failure& f) {
+        return f.reason == exceptions::request_failure_reason::SCYLLA_LARGE_DATA_REJECTED;
+    });
+}
 
 future<> hint_sender::flush_maybe() noexcept {
     auto current_time = clock::now();
@@ -315,6 +328,12 @@ future<> hint_sender::send_one_hint(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fr
                     ++this->shard_stats().sent_total;
                     this->shard_stats().sent_hints_bytes_total += mutation_size;
                 }).handle_exception([this, ctx_ptr] (auto eptr) {
+                    if (rejected_by_large_data_guardrail(eptr)) {
+                        manager_logger.debug("hint_sender[{}]:send_one_hint: Discarding a hint rejected by the large data guardrail: {}",
+                                end_point_key(), eptr);
+                        ++this->shard_stats().discarded;
+                        return make_ready_future<>();
+                    }
                     manager_logger.trace("hint_sender[{}]:send_one_hint: Failed to send: {}", end_point_key(), eptr);
                     ++this->shard_stats().send_errors;
                     return make_exception_future<>(std::move(eptr));
