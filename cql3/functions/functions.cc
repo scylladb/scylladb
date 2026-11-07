@@ -12,6 +12,7 @@
 #include "cql3/ut_name.hh"
 #include "cql3/functions/aggregate_fcts.hh"
 #include "cql3/functions/bytes_conversion_fcts.hh"
+#include "cql3/functions/castas_fcts.hh"
 #include "cql3/functions/time_uuid_fcts.hh"
 #include "cql3/functions/user_function.hh"
 #include "cql3/functions/user_aggregate.hh"
@@ -435,6 +436,38 @@ static function_resolution resolution_failed(sstring message) {
             exceptions::invalid_request_exception(std::move(message)));
 }
 
+// The functions which implement CAST(x AS type) can also be called by name,
+// as in Cassandra: by the name which Cassandra 5 gave them, cast_as_<type>
+// (e.g., cast_as_int), or by their old name, castAs<Type> (e.g., castAsInt),
+// which must be quoted in CQL because it isn't lowercase. If func_name is one
+// of these names, returns the type it casts to; otherwise, nullptr.
+static data_type cast_function_type(const function_name& func_name) {
+    if (func_name.keyspace != db::system_keyspace_name()) {
+        return nullptr;
+    }
+    std::string_view name = func_name.name;
+    bool capitalized;
+    if (name.starts_with("cast_as_")) {
+        name.remove_prefix(8);
+        capitalized = false;
+    } else if (name.starts_with("castAs")) {
+        name.remove_prefix(6);
+        capitalized = true;
+    } else {
+        return nullptr;
+    }
+    // name is now the type's name, e.g., "int", or "Int" for the old name.
+    for (const auto& t : cql3_type::values()) {
+        std::string_view type_name = t.to_string();
+        if (name.size() == type_name.size() && !name.empty() &&
+                name[0] == (capitalized ? std::toupper(type_name[0]) : type_name[0]) &&
+                name.substr(1) == type_name.substr(1)) {
+            return t.get_type();
+        }
+    }
+    return nullptr;
+}
+
 function_resolution
 functions::try_get(data_dictionary::database db,
         const sstring& keyspace,
@@ -522,6 +555,23 @@ functions::try_get(data_dictionary::database db,
             return resolution_failed("fromJson() can only be called if receiver type is known");
         }
         return make_from_json_function(func_name.name, db, keyspace, receiver->type);
+    }
+
+    if (auto cast_type = cast_function_type(func_name)) {
+        if (provided_args.size() != 1) {
+            return resolution_failed(format("{}() accepts 1 argument only", func_name.name));
+        }
+        auto arg_type_opt = provided_args[0]->assignment_testable_type_opt();
+        if (!arg_type_opt) {
+            return resolution_failed(format("{}() is only valid when its argument type is known", func_name.name));
+        }
+        // The same function that CAST(x AS type) uses, so the result
+        // column is also named "cast(x as type)".
+        try {
+            return get_castas_fctn_as_cql3_function(cast_type, *arg_type_opt);
+        } catch (const exceptions::invalid_request_exception& e) {
+            return resolution_failed(e.what());
+        }
     }
 
     // FIXME: add proper support for generic functions
