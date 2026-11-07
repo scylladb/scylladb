@@ -31,6 +31,7 @@
 #include "utils/error_injection.hh"
 #include "utils/upload_progress.hh"
 #include "utils/memory_data_sink.hh"
+#include "utils/io-wrappers.hh"
 #include "idl/snapshot_backup.dist.hh"
 #include "utils/assert.hh"
 
@@ -337,11 +338,34 @@ static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string&
                 }
             }
 
-            auto client = manager.get_endpoint_client(dst.endpoint);
             auto prefix = db::snapshot::snapshot_meta_location(dst.prefix, t, snapshot_name);
-            output_stream<char> out(client->make_upload_sink(sstables::object_name(dst.bucket, prefix, "manifest.json"), sstables::object_storage_attributes{}, &as));
-            auto streamer = json::stream_object(std::move(manifest));
-            co_await streamer(std::move(out));
+            bool try_remote = false;
+            try {
+                auto client = manager.get_endpoint_client(dst.endpoint);
+                output_stream<char> out(client->make_upload_sink(sstables::object_name(dst.bucket, prefix, "manifest.json"), sstables::object_storage_attributes{}, &as));
+                auto streamer = json::stream_object(std::move(manifest));
+                co_await streamer(std::move(out));
+            } catch (std::invalid_argument& e) {
+                snap_log.info("Endpoint {}:{} not defined on this node - {}. Will attempt call via remote node", dst.endpoint, dst.bucket, e);
+                try_remote = true;
+            }
+
+            if (try_remote) {
+                // TODO: should we try _all_ nodes until success?
+                auto i = std::ranges::find_if(nodes_for_location, [&](auto& n) {
+                    return info.datacenters.contains(n.datacenter);
+                });
+                if (i == nodes_for_location.end()) {
+                    throw std::runtime_error("No node for current datacenter");
+                }
+                bytes_ostream data;
+                output_stream<char> out(create_memory_sink(data));
+                co_await manifest.write(out);
+                co_await out.flush();
+                co_await out.close();
+                co_await ser::snapshot_backup_rpc_verbs::send_store_backup_snapshot_manifest(&snap_ctl.ms(), i->node, snapshot_name, dst.endpoint, dst.bucket, prefix, manifest_data(std::move(data)));
+            }
+
             total_progress.completed += 1;
         });
 
@@ -400,7 +424,7 @@ db::snapshot::backup_sstables(db::snapshot_ctl& snap, table_id table_id, std::st
     auto sstables = co_await sth.get_snapshot_sstables(tag, ksname, cfname 
         , local.dc
         , local.rack
-        , db::consistency_level::ONE // we are querying our own data
+        , db::consistency_level::QUORUM
         , first_token
         , last_token
     );
@@ -571,4 +595,19 @@ db::snapshot::backup_sstables(db::snapshot_ctl& snap, table_id table_id, std::st
             co_await coroutine::return_exception_ptr(std::move(p));
         }
     });
+}
+
+db::snapshot::manifest_data::manifest_data(bytes_ostream&& data)
+   : _bytes(std::move(data))
+{}
+
+future<>
+db::snapshot::write_backup_manifest(sstables::storage_manager& manager, sstring tag, sstring endpoint, sstring bucket, sstring prefix, manifest_data manifest, abort_source* as) {
+    auto client = manager.get_endpoint_client(endpoint);
+    output_stream<char> out(client->make_upload_sink(sstables::object_name(bucket, prefix, "manifest.json"), sstables::object_storage_attributes{}, as));
+    for (auto&& view : manifest.data()) {
+        co_await out.write(reinterpret_cast<const char*>(view.data()), view.size());
+    }
+    co_await out.flush();
+    co_await out.close();
 }
