@@ -61,9 +61,17 @@ protected:
     seastar::named_gate _pending_requests_gate;
     seastar::gate::holder _hold_server;
 
-    bool _ssl_enabled = false;
-    std::optional<sstring> _ssl_cipher_suite = std::nullopt;
-    std::optional<sstring> _ssl_protocol = std::nullopt;
+    // Negotiated TLS parameters. A node sees a handful of distinct
+    // protocol/cipher pairs, so connections share interned entries.
+    struct ssl_info {
+        sstring protocol;
+        sstring cipher_suite;
+        auto operator<=>(const ssl_info&) const = default;
+    };
+    // null: plaintext. Points at an empty entry until the handshake is inspected.
+    const ssl_info* _ssl_info = nullptr;
+public:
+    static const ssl_info* intern_ssl_info(sstring protocol, sstring cipher_suite);
 
 private:
     future<> process_until_tenant_switch();
