@@ -15,7 +15,7 @@ from cassandra.query import ConsistencyLevel, SimpleStatement
 
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.cluster.mv.tablets.test_mv_tablets import get_tablet_replicas, pin_the_only_tablet
-from test.cluster.util import new_test_keyspace, wait_for_token_ring_and_group0_consistency
+from test.cluster.util import new_test_keyspace, reconnect_driver, wait_for_token_ring_and_group0_consistency
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.tablets import get_tablet_replica
 from test.pylib.util import wait_for, wait_for_first_completed, wait_for_view
@@ -335,7 +335,9 @@ async def test_mv_first_replica_in_dc(manager: ScyllaClusterManager, delayed_rep
     servers.append(await manager.server_add(cmdline=['--smp', '1'], config={"rf_rack_valid_keyspaces": "false"}, property_file={'dc': f'dc1', 'rack': 'myrack1'}))
     servers.append(await manager.server_add(cmdline=['--smp', '1'], property_file={'dc': f'dc2', 'rack': 'myrack1'}))
 
-    cql = manager.get_cql()
+    # Reconnect the driver as a workaround for scylladb/python-driver#317.
+    await reconnect_driver(manager)
+    cql, _ = await manager.get_ready_cql(servers)
     await cql.run_async("CREATE KEYSPACE IF NOT EXISTS ks WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': 1} AND tablets = {'initial': 1}")
     await cql.run_async("CREATE TABLE ks.base (pk int, ck int, PRIMARY KEY (pk, ck))")
     await cql.run_async("CREATE MATERIALIZED VIEW ks.mv AS SELECT pk, ck FROM ks.base WHERE ck IS NOT NULL PRIMARY KEY (ck, pk)")
