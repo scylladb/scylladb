@@ -27,7 +27,6 @@ namespace service {
 namespace gms { class gossiper; }
 namespace cql3 { class query_processor; }
 namespace qos { class service_level_controller; }
-namespace netw { class messaging_service; }
 namespace db { class config; }
 struct client_data;
 class updateable_timeout_config;
@@ -35,6 +34,7 @@ class updateable_timeout_config;
 namespace cql_transport {
 
 class cql_server;
+class cql_processor;
 struct connection_service_level_params;
 class controller : public protocol_server {
     std::vector<socket_address> _listen_addresses;
@@ -48,9 +48,9 @@ class controller : public protocol_server {
     sharded<service::endpoint_lifecycle_notifier>& _lifecycle_notifier;
     sharded<gms::gossiper>& _gossiper;
     sharded<cql3::query_processor>& _qp;
+    sharded<cql_processor>& _processor;
     sharded<service::memory_limiter>& _mem_limiter;
     sharded<qos::service_level_controller>& _sl_controller;
-    sharded<netw::messaging_service>& _messaging;
     sharded<updateable_timeout_config>& _timeout_config;
     const db::config& _config;
     scheduling_group_key _cql_opcode_stats_key;
@@ -70,9 +70,9 @@ class controller : public protocol_server {
 
 public:
     controller(sharded<auth::service>&, sharded<service::migration_notifier>&, sharded<gms::gossiper>&,
-            sharded<cql3::query_processor>&, sharded<service::memory_limiter>&,
+            sharded<cql3::query_processor>&, sharded<cql_processor>&, sharded<service::memory_limiter>&,
             sharded<qos::service_level_controller>&, sharded<service::endpoint_lifecycle_notifier>&,
-            sharded<netw::messaging_service>&, sharded<updateable_timeout_config>& timeout_config,
+            sharded<updateable_timeout_config>& timeout_config,
             const db::config& cfg, scheduling_group_key cql_opcode_stats_key, maintenance_socket_enabled used_by_maintenance_socket,
             seastar::scheduling_group sg);
     virtual sstring name() const override;
