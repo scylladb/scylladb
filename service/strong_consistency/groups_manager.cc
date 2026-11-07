@@ -1158,7 +1158,7 @@ future<raft_server> groups_manager::acquire_server(table_id table_id, raft::grou
     // is still alive.
     //
     // Check that the table still exists. The table is removed from the
-    // database (via schema_applier::commit_tables_and_views) BEFORE
+    // database (via schema_and_topology_applier::commit_tables_and_views) BEFORE
     // groups_manager::update() is called (which triggers gate closure via
     // schedule_raft_group_deletion). Since there's no scheduling point
     // between the column_family_exists check and try_hold below, the gate

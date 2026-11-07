@@ -626,8 +626,22 @@ tablet_replica_set network_topology_strategy::drop_tablets_in_dc(schema_ptr s, c
     return filtered;
 }
 
+const network_topology_strategy& as_network_topology_strategy(const effective_replication_map& erm) {
+    const auto& rs = erm.get_replication_strategy();
+    if (rs.get_type() != replication_strategy_type::network_topology) [[unlikely]] {
+        on_internal_error(rslogger, format("NetworkTopologyStrategy requested for {} strategy", rs.get_type()));
+    }
+    return static_cast<const network_topology_strategy&>(rs);
+}
+
 sstring network_topology_strategy::sanity_check_read_replicas(const effective_replication_map& erm,
                                                               const host_id_vector_replica_set& read_replicas) const {
+    // A tablet can have more replicas in a datacenter than the schema lists while an RF change
+    // migrates it, as in a numeric decrease, which switches the schema first. The tablet's own
+    // replica set is the only per-tablet bound, so there is nothing to check.
+    if (uses_tablets()) {
+        return {};
+    }
     const auto& topology = erm.get_topology();
 
     struct rf_node_count {

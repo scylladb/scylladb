@@ -40,7 +40,7 @@
 #include "replica/tablets.hh"
 #include "locator/tablets.hh"
 #include "replica/query.hh"
-#include "db/schema_applier.hh"
+#include "db/schema_and_topology_applier.hh"
 #include "db/schema_tables.hh"
 #include "types/user.hh"
 #include "db/system_keyspace.hh"
@@ -261,35 +261,6 @@ future<> migration_manager::wait_for_schema_agreement(const replica::database& d
         }
         co_await (as ? sleep_abortable(std::chrono::milliseconds(500), *as) : sleep(std::chrono::milliseconds(500)));
     }
-}
-
-future<> migration_manager::merge_schema_from(locator::host_id src, const utils::chunked_vector<canonical_mutation>& canonical_mutations) {
-    canonical_mutation_merge_count++;
-    mlogger.debug("Applying schema mutations from {}", src);
-    auto& proxy = _storage_proxy;
-    const auto& db = proxy.get_db().local();
-    auto ss = _ss.get_permit();
-    if (!ss) {
-        co_return;
-    }
-
-    if (_as.abort_requested()) {
-        throw abort_requested_exception{};
-    }
-
-    utils::chunked_vector<mutation> mutations;
-    mutations.reserve(canonical_mutations.size());
-    try {
-        for (const auto& cm : canonical_mutations) {
-            auto& tbl = db.find_column_family(cm.column_family_id());
-            mutations.emplace_back(cm.to_mutation(
-                    tbl.schema()));
-        }
-    } catch (replica::no_such_column_family& e) {
-        mlogger.error("Error while applying schema mutations from {}: {}", src, e);
-        throw std::runtime_error(fmt::format("Error while applying schema mutations: {}", e));
-    }
-    co_await db::schema_tables::merge_schema(_sys_ks, proxy.container(), ss.get()->container(), std::move(mutations));
 }
 
 future<> migration_notifier::on_schema_change(std::function<void(migration_listener*)> notify, std::function<std::string(std::exception_ptr)> describe_error) {

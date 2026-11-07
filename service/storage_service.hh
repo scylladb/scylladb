@@ -84,7 +84,7 @@ class view_builder;
 class view_building_worker;
 }
 namespace schema_tables {
-class schema_applier;
+class schema_and_topology_applier;
 }
 }
 
@@ -363,8 +363,8 @@ private:
     //
     // By default the merge_lock (that is unified with the token_metadata_lock)
     // is acquired for mutating the token_metadata.  Pass acquire_merge_lock::no
-    // when called from paths that already acquire the merge_lock, like
-    // db::schema_tables::do_merge_schema.
+    // when called from paths that already acquire the merge_lock, like the
+    // schema applier commit path.
     //
     // Note: must be called on shard 0.
     future<> mutate_token_metadata(std::function<future<> (mutable_token_metadata_ptr)> func, acquire_merge_lock aml = acquire_merge_lock::yes) noexcept;
@@ -372,8 +372,9 @@ private:
     // Prepares token metadata change without making it visible. Combined with commit function
     // and appropriate lock it does exactly the same as mutate_token_metadata.
     // Note: prepare_token_metadata_change must be called on shard 0.
+    // `t` is the topology state machine state that tmptr was built from.
     future<token_metadata_change> prepare_token_metadata_change(mutable_token_metadata_ptr tmptr,
-            const schema_getter& loader);
+            const schema_getter& loader, const topology& t);
 
     // Commits prepared token metadata changes. Must be called under token_metadata_lock
     // and on all shards.
@@ -382,7 +383,7 @@ private:
     // Update pending ranges locally and then replicate to all cores.
     // Should be serialized under token_metadata_lock.
     // Must be called on shard 0.
-    future<> update_topology_change_info(mutable_token_metadata_ptr tmptr, sstring reason);
+    future<> update_topology_change_info(const topology& t, mutable_token_metadata_ptr tmptr, sstring reason);
     future<> update_topology_change_info(sstring reason, acquire_merge_lock aml = acquire_merge_lock::yes);
     future<> keyspace_changed(const sstring& ks_name);
     void register_metrics();
@@ -411,7 +412,7 @@ private:
     }
 
     friend void check_raft_rpc_scheduling_group(storage_service&, std::string_view);
-    friend class db::schema_tables::schema_applier;
+    friend class db::schema_tables::schema_and_topology_applier;
 public:
 
     const gms::gossiper& gossiper() const noexcept {
@@ -953,15 +954,6 @@ private:
     future<> raft_check_and_repair_cdc_streams();
     future<> update_topology_with_local_metadata(raft::server&);
 
-    struct state_change_hint {
-        std::optional<locator::tablet_metadata_change_hint> tablets_hint;
-    };
-
-    // This is called on all nodes for each new command received through raft
-    // raft_group0_client::_read_apply_mutex must be held
-    // Precondition: the topology mutations were already written to disk; the function only transitions the in-memory state machine.
-    future<> topology_transition(state_change_hint hint = {});
-    
     // This is called on all nodes for each new command related to tablet-view-building, received through raft
     // raft_group0_client::_read_apply_mutex must be held
     // Precondition: the mutations were already written to disk; the function only transitions the in-memory state machine.
@@ -1089,19 +1081,41 @@ private:
         std::vector<locator::host_id> released;
     };
 
+    // Topology state machine state read from system.topology. The schema applier
+    // builds token metadata from it and commits both together with the schema
+    // (see db::schema_tables::schema_and_topology_applier).
+    struct topology_state_change {
+        topology new_topology;
+        token_metadata_ptr prev_token_metadata;
+        nodes_to_notify_after_sync nodes_to_notify;
+    };
+
     using host_id_to_ip_map_t = db::system_keyspace::host_id_to_ip_map_t;
-    future<> raft_topology_update_ip(locator::host_id id, gms::inet_address ip, const host_id_to_ip_map_t& map, nodes_to_notify_after_sync* nodes_to_notify);
+    future<> raft_topology_update_ip(const topology& t, locator::host_id id, gms::inet_address ip, const host_id_to_ip_map_t& map, nodes_to_notify_after_sync* nodes_to_notify);
     // Synchronizes the local node state (token_metadata, system.peers/system.local tables,
     // gossiper) to align it with the other raft topology nodes.
     // Optional target_node can be provided to restrict the synchronization to the specified node.
     // Returns a structure that describes which notifications to trigger after token metadata is updated.
-    future<nodes_to_notify_after_sync> sync_raft_topology_nodes(mutable_token_metadata_ptr tmptr, std::unordered_set<raft::server_id> prev_normal, std::optional<std::unordered_set<locator::host_id>> prev_released);
+    future<nodes_to_notify_after_sync> sync_raft_topology_nodes(const topology& t, mutable_token_metadata_ptr tmptr, std::unordered_set<raft::server_id> prev_normal, std::optional<std::unordered_set<locator::host_id>> prev_released);
     // Triggers notifications (on_joined, on_left) based on the recent changes to token metadata, as described by the passed in structure.
     // This function should be called on the result of `sync_raft_topology_nodes`, after the global token metadata is updated.
     future<> notify_nodes_after_sync(nodes_to_notify_after_sync&& nodes_to_notify);
-    // load topology state machine snapshot into memory
+    // Reads the topology state from system.topology and enables the cluster features it lists.
+    // Must not be called under token_metadata_lock.
+    future<std::unique_ptr<topology_state_change>> load_topology_state();
+    // Builds token metadata for the loaded topology state, without making either visible.
+    // Updates only the tablets named in tablets_hint, or reads all tablets if it is empty.
+    // Must be called under token_metadata_lock, on shard 0.
+    future<mutable_token_metadata_ptr> prepare_topology_token_metadata(topology_state_change& change, const locator::tablet_metadata_change_hint& tablets_hint);
+    // Makes the loaded topology state current. Called on shard 0 in the same
+    // non-preemptible section that commits the token metadata built from it.
+    void commit_topology_state(topology_state_change& change) noexcept;
+    // Runs the actions which follow committing the topology state.
+    // Must not be called under token_metadata_lock.
+    future<> finish_topology_state_change(topology_state_change& change);
+    // load topology state machine snapshot into memory and notify its listeners
     // raft_group0_client::_read_apply_mutex must be held
-    future<> topology_state_load(state_change_hint hint = {});
+    future<> topology_state_load();
     // Applies received raft snapshot to local state machine persistent storage
     // raft_group0_client::_read_apply_mutex must be held
     future<> merge_topology_snapshot(raft_snapshot snp);
@@ -1110,6 +1124,8 @@ private:
     future<> view_building_state_load();
     // Stores the views whose build is finished on every node in the tombstone GC state of every shard
     future<> update_built_views(const db::system_keyspace::view_build_status_map& statuses);
+    // Same, reading the view build statuses from system.view_build_status_v2
+    future<> update_built_views();
 
     utils::chunked_vector<canonical_mutation> build_mutation_from_join_params(const join_node_request_params& params, api::timestamp_type write_timestamp,
         utils::UUID old_request_id = utils::UUID{});

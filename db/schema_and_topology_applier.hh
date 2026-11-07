@@ -29,8 +29,6 @@ namespace db {
 
 namespace schema_tables {
 
-future<> merge_schema(sharded<db::system_keyspace>& sys_ks, sharded<service::storage_proxy>& proxy, sharded<service::storage_service>& ss, utils::chunked_vector<mutation> mutations);
-
 enum class table_kind { table, view };
 
 struct table_selector {
@@ -160,7 +158,7 @@ class pending_schema_getter;
 // Schema_applier encapsulates intermediate state needed to construct schema objects from
 // set of rows read from system tables (see struct schema_state). It does atomic (per shard)
 // application of a new schema.
-class schema_applier {
+class schema_and_topology_applier {
     using keyspace_name = sstring;
 
     sharded<service::storage_proxy>& _proxy;
@@ -176,6 +174,12 @@ class schema_applier {
     locator::pending_token_metadata _pending_token_metadata;
     locator::tablet_metadata_change_hint _tablet_hint;
     service::token_metadata_change _token_metadata_change;
+
+    // Set when the change also reloads the topology state machine state from
+    // system.topology. The token metadata is then built from the new topology,
+    // and committed together with it and the schema.
+    bool _reload_topology;
+    std::unique_ptr<service::storage_service::topology_state_change> _topology_change;
 
     schema_persisted_state _before;
     schema_persisted_state _after;
@@ -194,26 +198,44 @@ class schema_applier {
     // compare per schema mutation on the (rare) DDL path, instead of taxing every read and
     // write with a permanently installed data_listener.
     bool _cluster_config_changed = false;
+    // Set during prepare() when the incoming mutations touch a system_schema table.
+    bool _schema_changed = false;
 
     future<schema_persisted_state> get_schema_persisted_state();
     future<> load_mutable_token_metadata();
 
     friend pending_schema_getter;
 public:
-    schema_applier(
+    // If reload_topology is true, the change also reloads the topology state
+    // machine state from system.topology (see apply_persisted()).
+    schema_and_topology_applier(
             sharded<service::storage_proxy>& proxy,
             sharded<service::storage_service>& ss,
-            sharded<db::system_keyspace>& sys_ks)
-            : _proxy(proxy), _ss(ss), _sys_ks(sys_ks) {};
+            sharded<db::system_keyspace>& sys_ks,
+            bool reload_topology = false)
+            : _proxy(proxy), _ss(ss), _sys_ks(sys_ks), _reload_topology(reload_topology) {};
 
     // Gets called before mutations are applied,
     // preferably no work should be done here but subsystem
     // may do some snapshot of 'before' data.
     future<> prepare(utils::chunked_vector<mutation>& muts);
 
+    // Applies the persisted state to memory: the schema changed by the mutations
+    // passed to prepare() and, if reload_topology is set, the topology state from
+    // system.topology. Call it after the mutations are persisted; prepare() may be
+    // skipped when only the topology is reloaded. Runs update(), commit() and
+    // post_commit() under the merge_lock. The topology state is read before taking
+    // the lock, since that enables cluster features, and the actions following a
+    // topology change run after releasing it. Must be called on shard 0.
+    future<> apply_persisted();
+
+    // Some destruction may need to be done on particular shard hence we need to run it in coroutine.
+    future<> destroy();
+
+private:
     // Update is called after mutations are applied, it should create
     // all updates but not yet commit them to a subsystem (i.e. copy on write style).
-    // All changes should be visible only to schema_applier object but not to other subsystems.
+    // All changes should be visible only to schema_and_topology_applier object but not to other subsystems.
     future<> update();
     // Makes updates visible. Before calling this function in memory state as observed by other
     // components should not yet change. The function atomically switches current state with
@@ -223,10 +245,7 @@ public:
     // atomicity either for legacy reasons or causes side effects to an external system
     // (e.g. informing client's driver).
     future<> post_commit();
-    // Some destruction may need to be done on particular shard hence we need to run it in coroutine.
-    future<> destroy();
 
-private:
     future<> merge_keyspaces();
     future<> merge_types();
     future<> merge_tables_and_views();
