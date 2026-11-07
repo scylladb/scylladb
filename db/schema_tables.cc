@@ -43,6 +43,7 @@
 #include "cql3/util.hh"
 #include "types/list.hh"
 #include "types/set.hh"
+#include "types/vector.hh"
 #include "replica/tablets.hh"
 
 #include "db/marshal/type_parser.hh"
@@ -1759,6 +1760,10 @@ static data_type expand_user_type(data_type original) {
     if (original->is_reversed()) {
         return reversed_type_impl::get_instance(
                         expand_user_type(original->underlying_type()));
+    }
+    if (original->is_vector()) {
+        auto vt = static_pointer_cast<const vector_type_impl>(original);
+        return vector_type_impl::get_instance(expand_user_type(vt->get_elements_type()), vt->get_dimension());
     }
 
     if (original->is_collection()) {
