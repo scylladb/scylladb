@@ -1633,6 +1633,32 @@ def test_index_filter_by_token(cql, test_keyspace):
         assert base_results[4:] == list(cql.execute(f"SELECT token(p), p FROM {table} WHERE v = 1 AND token(p) > {token3}"))
         assert [] == list(cql.execute(f"SELECT token(p), p FROM {table} WHERE v = 0 AND token(p) > {token3}"))
 
+# A query combining token and partition key restrictions also with a
+# restriction on an indexed column. Scylla doesn't use the index for such a
+# query, so it needs ALLOW FILTERING. Cassandra does use the index, so it
+# doesn't - see test_token_and_partition_key_with_index_no_filtering
+# below.
+def test_token_and_partition_key_with_index(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int, c int, v int, PRIMARY KEY (p, c)') as table:
+        cql.execute(f'CREATE INDEX ON {table}(v)')
+        cql.execute(f'INSERT INTO {table} (p, c, v) VALUES (1, 1, 3)')
+        cql.execute(f'INSERT INTO {table} (p, c, v) VALUES (1, 2, 4)')
+        t = list(cql.execute(f'SELECT token(p) FROM {table} WHERE p = 1 LIMIT 1'))[0][0]
+        assert list(cql.execute(f'SELECT p, c FROM {table} WHERE p = 1 AND token(p) = {t} AND v = 3 ALLOW FILTERING')) == [(1, 1)]
+        assert list(cql.execute(f'SELECT p, c FROM {table} WHERE p = 1 AND token(p) > {t} AND v = 3 ALLOW FILTERING')) == []
+
+# Cassandra uses the index for a query combining token, partition key and
+# indexed column restrictions, so it doesn't need ALLOW FILTERING.
+@pytest.mark.xfail(reason="SCYLLADB-5388")
+def test_token_and_partition_key_with_index_no_filtering(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int, c int, v int, PRIMARY KEY (p, c)') as table:
+        cql.execute(f'CREATE INDEX ON {table}(v)')
+        cql.execute(f'INSERT INTO {table} (p, c, v) VALUES (1, 1, 3)')
+        cql.execute(f'INSERT INTO {table} (p, c, v) VALUES (1, 2, 4)')
+        t = list(cql.execute(f'SELECT token(p) FROM {table} WHERE p = 1 LIMIT 1'))[0][0]
+        assert list(cql.execute(f'SELECT p, c FROM {table} WHERE p = 1 AND token(p) = {t} AND v = 3')) == [(1, 1)]
+        assert list(cql.execute(f'SELECT p, c FROM {table} WHERE p = 1 AND token(p) > {t} AND v = 3')) == []
+
 # Looking up a null value in a secondary index should match nothing (in
 # general in Scylla, "= null" matches nothing - not even a null value).
 # The "= null" expression is disallowed in Cassandra, so these tests are
