@@ -519,6 +519,9 @@ async def test_alternator_enforce_authorization_false(manager: ManagerClient):
           username is accepted.
        2. Any user (or even non-existent user) has permissions to do any
           operation.
+       3. With alternator_warn_authorization=true such requests are still
+          accepted, but CreateTable is counted as an authorization failure
+          just like the other operations.
     """
     servers = await manager.servers_add(1, config=alternator_config)
     # Requests from a non-existent user with garbage password work,
@@ -532,7 +535,29 @@ async def test_alternator_enforce_authorization_false(manager: ManagerClient):
     table.get_item(Key={'p': 42})
     table.delete()
 
+<<<<<<< HEAD
 async def test_alternator_enforce_authorization_false2(manager: ManagerClient):
+||||||| parent of e7957470f0 (test/cluster: test CreateTable's authorization failure in warn mode)
+async def test_alternator_enforce_authorization_false2(manager: ScyllaClusterManager):
+=======
+    await manager.get_cql().run_async("UPDATE system.config SET value = 'true' WHERE name = 'alternator_warn_authorization'")
+    async def authorization_failures():
+        metrics = await manager.metrics.query(servers[0].ip_addr)
+        return metrics.get('scylla_alternator_authorization_failures') or 0
+    before = await authorization_failures()
+    table = alternator.create_table(TableName=unique_table_name(),
+        BillingMode='PAY_PER_REQUEST',
+        KeySchema=[ {'AttributeName': 'p', 'KeyType': 'HASH' } ],
+        AttributeDefinitions=[ {'AttributeName': 'p', 'AttributeType': 'N' } ])
+    after_create_table = await authorization_failures()
+    table.get_item(Key={'p': 42})
+    after_get_item = await authorization_failures()
+    table.delete()
+    assert after_create_table - before == 1
+    assert after_get_item - after_create_table == 1
+
+async def test_alternator_enforce_authorization_false2(manager: ScyllaClusterManager):
+>>>>>>> e7957470f0 (test/cluster: test CreateTable's authorization failure in warn mode)
     """A variant of the above test for alternator_enforce_authorization=false
        Here we check what happens when CQL's authenticator/authorizer are
        enabled (in the previous test they were disabled).
