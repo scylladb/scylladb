@@ -467,6 +467,8 @@ class logstor_group {
     // Whether the separator may write to this group. The group must be registered with the compaction
     // manager in order for it to be enabled.
     bool _separator_enabled{false};
+    // The number of discards of the group that take no new snapshot of it, see discarding().
+    unsigned _discards{0};
 
     void switch_active_separator_buffer();
 
@@ -502,6 +504,17 @@ public:
 
     void clear_segments() {
         _logstor_segments.clear();
+    }
+
+    // While the segments of the group are being discarded, making a snapshot of them fails.
+    bool discarding() const noexcept {
+        return _discards != 0;
+    }
+    void start_discard() noexcept {
+        ++_discards;
+    }
+    void end_discard() noexcept {
+        --_discards;
     }
 
     template <log_record_writer_concept Writer>
