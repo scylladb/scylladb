@@ -439,14 +439,21 @@ topology_request_tracking_mutation_builder& topology_request_tracking_mutation_b
 }
 
 topology_request_tracking_mutation_builder& topology_request_tracking_mutation_builder::set_finalize_migration_data(
-        const sstring& ks_name) {
+        const sstring& ks_name, const std::optional<sstring>& table_name) {
     apply_atomic("finalize_migration_ks_name", ks_name);
+    if (table_name) {
+        apply_atomic("finalize_migration_table_name", *table_name);
+    }
     return *this;
 }
 
 topology_request_tracking_mutation_builder& topology_request_tracking_mutation_builder::set_prepare_migration_data(
-        const sstring& ks_name, const std::unordered_map<table_id, size_t>& tables) {
+        const sstring& ks_name, const std::unordered_map<table_id, size_t>& tables,
+        const std::optional<sstring>& table_name) {
     apply_atomic("prepare_migration_ks_name", ks_name);
+    if (table_name) {
+        apply_atomic("prepare_migration_table_name", *table_name);
+    }
     map_type_impl::native_type values;
     values.reserve(tables.size());
     for (const auto& [tid, target] : tables) {

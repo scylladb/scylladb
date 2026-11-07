@@ -232,12 +232,39 @@ partition_tables_for_small_table_optimization(repair_service& rs, replica::datab
     co_return std::make_pair(std::move(small_cfs), std::move(normal_cfs));
 }
 
-static size_t get_nr_tables(const replica::database& db, const sstring& keyspace) {
+// Node operations sync a keyspace by its vnode token ranges, so they must skip a
+// table that runs on tablets: it has no tablet for a vnode range. Tablet
+// keyspaces are already filtered out by get_non_local_strategy_keyspaces_erms(),
+// but that can only judge a keyspace, and a vnode keyspace holds tablet-based
+// tables too once their migration is finalized.
+//
+// Decide from the tablet map in group0, not from the table's current effective
+// replication map: a joining node switches the flavour asynchronously, so the
+// erm is not a stable answer here.
+static bool syncs_by_vnode_ranges(const replica::database& db, table_id id) {
+    // Hold the token metadata: get_token_metadata_ptr() returns by value, and a
+    // reference into what it owns does not keep it alive.
+    auto tmptr = db.get_token_metadata_ptr();
+    const auto& tmeta = tmptr->tablets();
+    return !tmeta.has_tablet_map(id) || !tmeta.get_tablet_map(id).migration_finalized();
+}
+
+static size_t get_nr_vnode_tables(const replica::database& db, const sstring& keyspace) {
     size_t tables = 0;
-    db.get_tables_metadata().for_each_table_id([&keyspace, &tables] (const std::pair<sstring, sstring>& kscf, table_id) {
-        tables += kscf.first == keyspace;
+    db.get_tables_metadata().for_each_table_id([&] (const std::pair<sstring, sstring>& kscf, table_id id) {
+        tables += kscf.first == keyspace && syncs_by_vnode_ranges(db, id);
     });
     return tables;
+}
+
+static std::vector<sstring> list_vnode_column_families(const replica::database& db, const sstring& keyspace) {
+    std::vector<sstring> ret;
+    db.get_tables_metadata().for_each_table_id([&] (const std::pair<sstring, sstring>& kscf, table_id id) {
+        if (kscf.first == keyspace && syncs_by_vnode_ranges(db, id)) {
+            ret.push_back(kscf.second);
+        }
+    });
+    return ret;
 }
 
 static std::vector<sstring> list_column_families(const replica::database& db, const sstring& keyspace) {
@@ -1760,10 +1787,10 @@ future<> repair_service::run_data_sync_repair(
     // operation, but the small group syncs the whole ring as a single range from
     // all replicas, while the rest use the ranges and neighbors computed by the
     // node operation driver.
-    auto cfs = list_column_families(db, keyspace);
+    auto cfs = list_vnode_column_families(db, keyspace);
     cfs_size = cfs.size();
     if (cfs.empty()) {
-        rlogger.warn("repair[{}]: sync data for keyspace={}, no table in this keyspace", id.uuid(), keyspace);
+        rlogger.warn("repair[{}]: sync data for keyspace={}, no table in this keyspace syncs by vnode ranges", id.uuid(), keyspace);
         co_return;
     }
     // The set of replica nodes this operation syncs from, used to probe table
@@ -1879,7 +1906,7 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
             if (!db.has_keyspace(keyspace_name)) {
                 continue;
             }
-            auto nr_tables = get_nr_tables(db, keyspace_name);
+            auto nr_tables = get_nr_vnode_tables(db, keyspace_name);
             bool small_table_optimization = should_enable_small_table_optimization_for_rbno(_config.enable_small_table_optimization_for_rbno(), keyspace_name, reason);
             if (small_table_optimization) {
                 nr_ranges_total += 1 * nr_tables;
@@ -1904,7 +1931,7 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
             dht::token_range_vector desired_ranges;
             //Collects the source that will have its range moved to the new node
             std::unordered_map<dht::token_range, repair_neighbors> range_sources;
-            auto nr_tables = get_nr_tables(db, keyspace_name);
+            auto nr_tables = get_nr_vnode_tables(db, keyspace_name);
           if (small_table_optimization) {
             try {
                 auto germs = make_lw_shared(locator::make_global_static_effective_replication_map(get_db(), keyspace_name).get());
@@ -2098,7 +2125,7 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
         size_t nr_ranges_total = 0;
         for (const auto& [keyspace_name, erm] : ks_erms) {
             dht::token_range_vector ranges = erm->get_ranges(leaving_node_id).get();
-            auto nr_tables = get_nr_tables(db, keyspace_name);
+            auto nr_tables = get_nr_vnode_tables(db, keyspace_name);
             nr_ranges_total += ranges.size() * nr_tables;
         }
         if (reason == streaming::stream_reason::decommission) {
@@ -2125,7 +2152,7 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
             auto& strat = erm->get_replication_strategy();
             // First get all ranges the leaving node is responsible for
             dht::token_range_vector ranges = erm->get_ranges(leaving_node_id).get();
-            auto nr_tables = get_nr_tables(db, keyspace_name);
+            auto nr_tables = get_nr_vnode_tables(db, keyspace_name);
             rlogger.info("{}: started with keyspace={}, leaving_node={}, nr_ranges={}", op, keyspace_name, leaving_node_id, ranges.size() * nr_tables);
             size_t nr_ranges_total = ranges.size() * nr_tables;
             size_t nr_ranges_skipped = 0;
@@ -2311,7 +2338,7 @@ future<> repair_service::do_rebuild_replace_with_repair(std::unordered_map<sstri
             auto& strat = erm->get_replication_strategy();
             // Okay to yield since tm is immutable
             dht::token_range_vector ranges = strat.get_ranges(myid, tmptr).get();
-            auto nr_tables = get_nr_tables(db, keyspace_name);
+            auto nr_tables = get_nr_vnode_tables(db, keyspace_name);
             nr_ranges_total += ranges.size() * nr_tables;
 
         }
@@ -2373,7 +2400,7 @@ future<> repair_service::do_rebuild_replace_with_repair(std::unordered_map<sstri
             auto& strat = erm->get_replication_strategy();
             dht::token_range_vector ranges = strat.get_ranges(myid, *tmptr).get();
             std::unordered_map<dht::token_range, repair_neighbors> range_sources;
-            auto nr_tables = get_nr_tables(db, keyspace_name);
+            auto nr_tables = get_nr_vnode_tables(db, keyspace_name);
             sstring source_dc_for_keyspace;
             // Allow repairing in the source_dc only if there are enough replicas remaining
             if (source_dc) {
