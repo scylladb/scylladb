@@ -387,3 +387,12 @@ struct tablet_token_range {
 
 // Function to count the number of ranges in ranges1 covered by the merged ranges of ranges2.
 future<size_t> count_finished_tablets(utils::chunked_vector<tablet_token_range> ranges1, utils::chunked_vector<tablet_token_range> ranges2);
+
+struct decoded_row_hashes {
+    repair_hash_set hashes;
+    size_t diff_size; // Size of the symmetric difference with the local set.
+};
+
+// Rebuilds a peer's row hashes from its sketch and `local`, the row hashes the
+// sketch is compared against; nullopt if the sketch does not decode.
+future<std::optional<decoded_row_hashes>> decode_peer_row_hashes(const repair_hash_set& local, repair_hash_sketch peer_sketch, repair_hash peer_combined_hash);

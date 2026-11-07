@@ -27,6 +27,7 @@
 #include "mutation/frozen_mutation.hh"
 #include "utils/hash.hh"
 #include "repair/hash.hh"
+#include "repair/hash_sketch.hh"
 #include "utils/stall_free.hh"
 #include "repair/sync_boundary.hh"
 #include "tasks/types.hh"
@@ -172,6 +173,7 @@ enum class repair_row_level_start_status: uint8_t {
 
 struct repair_row_level_start_response {
     repair_row_level_start_status status;
+    std::optional<uint64_t> estimated_partitions;
 };
 
 // Return value of the REPAIR_GET_SYNC_BOUNDARY RPC verb
@@ -188,6 +190,12 @@ struct get_sync_boundary_response {
 
 // Return value of the REPAIR_GET_COMBINED_ROW_HASH RPC verb
 using get_combined_row_hash_response = repair_hash;
+
+// Return value of the REPAIR_GET_COMBINED_ROW_HASH_WITH_SKETCH RPC verb
+struct get_combined_row_hash_with_sketch_response {
+    repair_hash hash;
+    std::optional<repair_hash_sketch> sketch;
+};
 
 struct node_repair_meta_id {
     locator::host_id ip;
