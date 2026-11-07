@@ -618,6 +618,10 @@ large_collection_elements_fail_threshold: 20000
 #   - "none": auditing is disabled
 #   - "table": save audited events in audit.audit_log column family (default)
 #   - "syslog": send audited events via syslog (depends on OS, but usually to /dev/log)
+#   - "stdout": write audited events to the standard output, which must be a pipe
+#     or a character device other than /dev/null (e.g. a container log stream or
+#     a terminal)
+# Combine several of them with a comma, e.g. "table,stdout".
 audit: "table"
 #
 # List of statement categories that should be audited.
@@ -632,7 +636,7 @@ audit_categories: "DCL,DDL,AUTH,ADMIN"
 #
 # Granular audit rules for fine-grained, role-aware auditing.
 # Each rule is an object with four required fields:
-#   sinks: list of output targets ("table", "syslog")
+#   sinks: list of output targets ("table", "syslog", "stdout")
 #   categories: list of statement categories to audit (QUERY, DML, DDL, DCL, AUTH, ADMIN)
 #   qualified_table_names: list of "keyspace.table" glob patterns (fnmatch with extended globs)
 #   roles: list of role name glob patterns (fnmatch with extended globs)
@@ -651,7 +655,7 @@ audit_categories: "DCL,DDL,AUTH,ADMIN"
 # Each rule's sinks must be a subset of the global 'audit' config; a rule that
 # references a sink not enabled globally will log an error and events for that
 # sink will be silently dropped.
-# Requires 'audit' to be set to "table" or "syslog" (rules are ignored when audit="none").
+# Requires 'audit' to be set to "table", "syslog" or "stdout" (rules are ignored when audit="none").
 # Example:
 # audit_rules:
 #   - sinks: [table]

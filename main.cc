@@ -1986,6 +1986,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto audit_stop = defer([] noexcept {
                 audit::audit::stop_audit().get();
             });
+            // Fails the startup before the node joins the cluster. In maintenance mode
+            // audit storage never starts, so there is nothing to check.
+            if (!cfg->maintenance_mode()) {
+                audit::check_storage(*cfg).get();
+            }
 
             // XXX: stop_raft has to happen before query_processor and migration_manager
             // is stopped, since some groups keep using the query
