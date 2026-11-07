@@ -43,21 +43,13 @@
 static logging::logger slogger("alternator-streams");
 
 /**
- * Base template type to implement  rapidjson::internal::TypeHelper<...>:s
+ * Base template type to implement rjson::type_helper<...>:s
  * for types that are ostreamable/string constructible/castable.
  * Eventually maybe graduate to header, for other modules. 
  */
-template<typename ValueType, typename T>
+template<typename T>
 struct from_string_helper {
-    static bool Is(const ValueType& v) {
-        try {
-            Get(v);
-            return true;
-        } catch (...) {
-            return false;
-        }
-    }
-    static T Get(const ValueType& v) {
+    static T get(const rjson::value& v) {
         auto s = rjson::to_string_view(v);
         if constexpr (std::is_constructible_v<T, std::string_view>) {
             return T(s);
@@ -67,18 +59,16 @@ struct from_string_helper {
             return boost::lexical_cast<T>(s.data(), s.size());
         }
     }
-    static ValueType& Set(ValueType&, T) = delete;
-    static ValueType& Set(ValueType& v, T data, typename ValueType::AllocatorType& a) {
+    static rjson::value make(const T& data) {
         std::ostringstream ss;
         ss << data;
-        auto s = ss.str();
-        return v.SetString(s.data(), s.size(), a);
+        return rjson::from_string(ss.str());
     }
 };
 
-template<typename ValueType>
-struct rapidjson::internal::TypeHelper<ValueType, utils::UUID>
-    : public from_string_helper<ValueType, utils::UUID>
+template<>
+struct rjson::type_helper<utils::UUID>
+    : public from_string_helper<utils::UUID>
 {};
 
 static db_clock::time_point as_timepoint(const table_id& tid) {
@@ -171,9 +161,9 @@ static schema_ptr get_schema_from_arn(service::storage_proxy& proxy, const strea
 
 } // namespace alternator
 
-template<typename ValueType>
-struct rapidjson::internal::TypeHelper<ValueType, alternator::stream_arn>
-    : public from_string_helper<ValueType, alternator::stream_arn>
+template<>
+struct rjson::type_helper<alternator::stream_arn>
+    : public from_string_helper<alternator::stream_arn>
 {};
 
 namespace alternator {
@@ -306,7 +296,7 @@ future<alternator::executor::request_return_type> alternator::executor::list_str
     if (last && limit == 0) {
         rjson::add(ret, "LastEvaluatedStreamArn", *last);
     }
-    return make_ready_future<executor::request_return_type>(rjson::print(std::move(ret)));
+    return make_ready_future<executor::request_return_type>(rjson::print_sstring(std::move(ret)));
 }
 
 struct shard_id {
@@ -387,14 +377,14 @@ sequence_number::sequence_number(std::string_view v)
 
 } // namespace alternator
 
-template<typename ValueType>
-struct rapidjson::internal::TypeHelper<ValueType, alternator::shard_id>
-    : public from_string_helper<ValueType, alternator::shard_id>
+template<>
+struct rjson::type_helper<alternator::shard_id>
+    : public from_string_helper<alternator::shard_id>
 {};
 
-template<typename ValueType>
-struct rapidjson::internal::TypeHelper<ValueType, alternator::sequence_number>
-    : public from_string_helper<ValueType, alternator::sequence_number>
+template<>
+struct rjson::type_helper<alternator::sequence_number>
+    : public from_string_helper<alternator::sequence_number>
 {};
 
 namespace alternator {
@@ -447,9 +437,9 @@ static stream_view_type cdc_options_to_stream_view_type(const cdc::options& opts
 
 } // namespace alternator
 
-template<typename ValueType>
-struct rapidjson::internal::TypeHelper<ValueType, alternator::stream_view_type>
-    : public from_string_helper<ValueType, alternator::stream_view_type>
+template<>
+struct rjson::type_helper<alternator::stream_view_type>
+    : public from_string_helper<alternator::stream_view_type>
 {};
 
 namespace alternator {
@@ -1060,7 +1050,7 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
     rjson::add(stream_desc, "Shards", std::move(shards));
     rjson::add(ret, "StreamDescription", std::move(stream_desc));
         
-    co_return rjson::print(std::move(ret));
+    co_return rjson::print_sstring(std::move(ret));
 }
 
 enum class shard_iterator_type {
@@ -1139,14 +1129,14 @@ shard_iterator::shard_iterator(const sstring& s)
 }
 }
 
-template<typename ValueType>
-struct rapidjson::internal::TypeHelper<ValueType, alternator::shard_iterator>
-    : public from_string_helper<ValueType, alternator::shard_iterator>
+template<>
+struct rjson::type_helper<alternator::shard_iterator>
+    : public from_string_helper<alternator::shard_iterator>
 {};
 
-template<typename ValueType>
-struct rapidjson::internal::TypeHelper<ValueType, alternator::shard_iterator_type>
-    : public from_string_helper<ValueType, alternator::shard_iterator_type>
+template<>
+struct rjson::type_helper<alternator::shard_iterator_type>
+    : public from_string_helper<alternator::shard_iterator_type>
 {};
 
 namespace alternator {
@@ -1215,7 +1205,7 @@ future<executor::request_return_type> executor::get_shard_iterator(client_state&
 
     auto ret = rjson::empty_object();
     rjson::add(ret, "ShardIterator", iter);
-    return make_ready_future<executor::request_return_type>(rjson::print(std::move(ret)));
+    return make_ready_future<executor::request_return_type>(rjson::print_sstring(std::move(ret)));
 }
 
 struct event_id {
@@ -1238,9 +1228,9 @@ struct event_id {
 };
 } // namespace alternator
 
-template<typename ValueType>
-struct rapidjson::internal::TypeHelper<ValueType, alternator::event_id>
-    : public from_string_helper<ValueType, alternator::event_id>
+template<>
+struct rjson::type_helper<alternator::event_id>
+    : public from_string_helper<alternator::event_id>
 {};
 
 namespace alternator {
@@ -1465,7 +1455,7 @@ future<executor::request_return_type> executor::get_records(client_state& client
             auto item = rjson::empty_object();
             describe_single_item(*selection, row, attr_names, item, &total_item_bytes, true);
             describe_single_item(*selection, row, key_names, item, &total_item_bytes);
-            rjson::add(record.dynamodb, op == cdc::operation::pre_image ? "OldImage" : "NewImage", std::move(item));
+            rjson::add_with_string_name(record.dynamodb, op == cdc::operation::pre_image ? "OldImage" : "NewImage", std::move(item));
             break;
         }
         case cdc::operation::update:
@@ -1530,8 +1520,7 @@ future<executor::request_return_type> executor::get_records(client_state& client
         per_table_stats->returned_records += nrecords;
         _stats.operation_sizes.get_records_op_size_kb.add((total_item_bytes + 1023) / 1024);
         per_table_stats->operation_sizes.get_records_op_size_kb.add((total_item_bytes + 1023) / 1024);
-        auto str = rjson::print(std::move(ret));
-        co_return str;
+        co_return rjson::print_sstring(ret);
     }
 
     // ugh. figure out if we are and end-of-shard
@@ -1569,7 +1558,7 @@ future<executor::request_return_type> executor::get_records(client_state& client
     if (is_big(ret)) {
         co_return make_streamed(std::move(ret));
     }
-    co_return rjson::print(std::move(ret));
+    co_return rjson::print_sstring(std::move(ret));
 }
 
 bool executor::add_stream_options(const rjson::value& stream_specification, schema_builder& builder, service::storage_proxy& sp, const cdc::options& existing_cdc_opts) {

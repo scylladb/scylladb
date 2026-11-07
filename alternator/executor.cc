@@ -208,7 +208,7 @@ void executor::maybe_audit(
         }
         // FIXME: rjson::print(request) serializes the entire JSON request body, which
         // can be up to 16 MB for BatchWriteItem.
-        audit_info->set_query_string(sstring(rjson::print(request)), sstring(operation_name));
+        audit_info->set_query_string(rjson::print_sstring(request), sstring(operation_name));
     }
 }
 
@@ -849,7 +849,7 @@ future<executor::request_return_type> executor::describe_table(client_state& cli
     rjson::value response = rjson::empty_object();
     rjson::add(response, "Table", std::move(std::get<rjson::value>(table_description_result)));
     elogger.trace("returning {}", response);
-    co_return rjson::print(std::move(response));
+    co_return rjson::print_sstring(std::move(response));
 }
 
 future<executor::request_return_type> executor::delete_table(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
@@ -927,7 +927,7 @@ future<executor::request_return_type> executor::delete_table(client_state& clien
     rjson::value response = rjson::empty_object();
     rjson::add(response, "TableDescription", std::move(std::get<rjson::value>(table_description_result)));
     elogger.trace("returning {}", response);
-    co_return rjson::print(std::move(response));
+    co_return rjson::print_sstring(std::move(response));
 }
 
 static data_type parse_key_type(std::string_view type) {
@@ -1014,7 +1014,7 @@ static std::pair<std::string, std::string> parse_key_schema(const rjson::value& 
             throw api_error::validation("Second key in KeySchema must have string AttributeName");
         }
         validate_attr_name_length(supplementary_context, v->GetStringLength(), true, "RANGE key in KeySchema - ");
-        range_key = v->GetString();
+        range_key = rjson::to_string(*v);
     }
     return {hash_key, range_key};
 }
@@ -1401,7 +1401,7 @@ future<executor::request_return_type> executor::list_tags_of_resource(client_sta
         rjson::push_back(tags, std::move(new_entry));
     }
 
-    return make_ready_future<executor::request_return_type>(rjson::print(std::move(ret)));
+    return make_ready_future<executor::request_return_type>(rjson::print_sstring(std::move(ret)));
 }
 
 struct billing_mode_type {
@@ -2622,7 +2622,7 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
     rjson::value status = rjson::empty_object();
     executor::supplement_table_info(request, *schema, _proxy);
     rjson::add(status, "TableDescription", std::move(request));
-    co_return rjson::print(std::move(status));
+    co_return rjson::print_sstring(std::move(status));
 }
 
 future<executor::request_return_type> executor::create_table(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
@@ -3287,7 +3287,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
         rjson::value status = rjson::empty_object();
         supplement_table_info(request, *schema, p.local());
         rjson::add(status, "TableDescription", std::move(request));
-        co_return rjson::print(std::move(status));
+        co_return rjson::print_sstring(std::move(status));
     });
 }
 
@@ -3940,7 +3940,7 @@ static executor::request_return_type rmw_operation_return(rjson::value&& attribu
     if (!attributes.IsNull()) {
         rjson::add(ret, "Attributes", std::move(attributes));
     }
-    return rjson::print(std::move(ret));
+    return rjson::print_sstring(std::move(ret));
 }
 
 static future<std::variant<std::unique_ptr<rjson::value>, api_error>> get_previous_item(
@@ -4103,7 +4103,8 @@ public:
             std::unordered_set<std::string> used_attribute_values;
             resolve_condition_expression(_condition_expression,
                     expression_attribute_names, expression_attribute_values,
-                    used_attribute_names, used_attribute_values);
+                    used_attribute_names, used_attribute_values,
+                    /* borrow_values: _request outlives the expression */ true);
             verify_all_are_used(expression_attribute_names, used_attribute_names,"ExpressionAttributeNames", "PutItem");
             verify_all_are_used(expression_attribute_values, used_attribute_values,"ExpressionAttributeValues", "PutItem");
         } else {
@@ -4216,7 +4217,8 @@ public:
             std::unordered_set<std::string> used_attribute_values;
             resolve_condition_expression(_condition_expression,
                     expression_attribute_names, expression_attribute_values,
-                    used_attribute_names, used_attribute_values);
+                    used_attribute_names, used_attribute_values,
+                    /* borrow_values: _request outlives the expression */ true);
             verify_all_are_used(expression_attribute_names, used_attribute_names,"ExpressionAttributeNames", "DeleteItem");
             verify_all_are_used(expression_attribute_values, used_attribute_values, "ExpressionAttributeValues", "DeleteItem");
         } else {
@@ -4712,7 +4714,7 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
         maybe_audit(audit_info, audit::statement_category::DML, "",
                     audit_table_names, "BatchWriteItem", request, db::consistency_level::LOCAL_QUORUM, std::move(audited_table_names));
     }
-    co_return rjson::print(std::move(ret));
+    co_return rjson::print_sstring(std::move(ret));
 }
 
 static const std::string_view get_item_type_string(const rjson::value& v) {
@@ -4864,7 +4866,8 @@ update_item_operation::update_item_operation(parsed::expression_cache& parsed_ex
             parsed::update_expression expr = parsed_expression_cache.parse_update_expression(rjson::to_string_view(*update_expression));
             resolve_update_expression(expr,
                     expression_attribute_names, expression_attribute_values,
-                    used_attribute_names, used_attribute_values);
+                    used_attribute_names, used_attribute_values,
+                    /* borrow_values: _request outlives the expression */ true);
             for (auto& action : expr.actions()) {
                 // Unfortunately we need to copy the action's path, because
                 // we std::move the action object.
@@ -4888,7 +4891,8 @@ update_item_operation::update_item_operation(parsed::expression_cache& parsed_ex
     _condition_expression = get_parsed_condition_expression(parsed_expression_cache, _request);
     resolve_condition_expression(_condition_expression,
             expression_attribute_names, expression_attribute_values,
-            used_attribute_names, used_attribute_values);
+            used_attribute_names, used_attribute_values,
+                    /* borrow_values: _request outlives the expression */ true);
 
     verify_all_are_used(expression_attribute_names, used_attribute_names, "ExpressionAttributeNames", "UpdateItem");
     verify_all_are_used(expression_attribute_values, used_attribute_values, "ExpressionAttributeValues", "UpdateItem");
@@ -4986,7 +4990,7 @@ static std::optional<rjson::value> action_result(
             if (v1.IsNull()) {
                 const auto v2_type = get_item_type_string(v2);
                 if (v2_type == "N" || v2_type == "SS" || v2_type == "NS" || v2_type == "BS") {
-                    result = v2;
+                    result = std::move(v2);
                 } else {
                     throw api_error::validation(format("An operand in the update expression has an incorrect data type: {}", v2));
                 }
@@ -5072,7 +5076,7 @@ static bool hierarchy_actions(
         // documents before storing them, so this can happen on read.
         throw api_error::validation(format("Malformed value object read: {}", obj));
     }
-    const char* type = obj.MemberBegin()->name.GetString();
+    std::string_view type = rjson::to_string_view(obj.MemberBegin()->name);
     rjson::value& v = obj.MemberBegin()->value;
     if (h.has_value()) {
         // Action replacing everything in this position in the hierarchy
@@ -5083,7 +5087,7 @@ static bool hierarchy_actions(
             return false;
         }
     } else if (h.has_members()) {
-        if (type[0] != 'M' || !v.IsObject()) {
+        if (!type.starts_with('M') || !v.IsObject()) {
             // A .something on a non-map doesn't work.
             throw api_error::validation(fmt::format("UpdateExpression: document paths not valid for this item:{}", h));
         }
@@ -5114,7 +5118,7 @@ static bool hierarchy_actions(
             }
         }
     } else if (h.has_indexes()) {
-        if (type[0] != 'L' || !v.IsArray()) {
+        if (!type.starts_with('L') || !v.IsArray()) {
             // A [i] on a non-list doesn't work.
             throw api_error::validation(format("UpdateExpression: document paths not valid for this item:{}", h));
         }
@@ -5353,7 +5357,17 @@ inline void update_item_operation::apply_update_expression(const std::unique_ptr
             // An action on a top-level attribute column_name. The single
             // action is actions.second.get_value(). We can simply invoke
             // the action and replace the attribute with its result:
-            std::optional<rjson::value> result = action_result(actions.second.get_value(), previous_item.get());
+            const auto& action = actions.second.get_value();
+            if (auto* set = std::get_if<parsed::update_expression::action::set>(&action._action)) {
+                // A SET writes a value which often exists already, as a
+                // constant or another attribute, so don't copy it.
+                rjson::value storage;
+                const rjson::value& result = calculate_value_ref(set->_rhs, previous_item.get(), storage);
+                any_updates = true;
+                update_attribute(to_bytes(column_name), result, previous_item, ts, row, modified_attrs, &actions.second);
+                continue;
+            }
+            std::optional<rjson::value> result = action_result(action, previous_item.get());
             if (result) {
                 any_updates = true;
                 update_attribute(to_bytes(column_name), *result, previous_item, ts, row, modified_attrs, &actions.second);
@@ -5567,7 +5581,7 @@ future<executor::request_return_type> executor::list_tables(client_state& client
         rjson::add(response, "LastEvaluatedTableName", rjson::copy(last_table_name));
     }
 
-    co_return rjson::print(std::move(response));
+    co_return rjson::print_sstring(std::move(response));
 }
 
 future<executor::request_return_type> executor::describe_endpoints(client_state& client_state, service_permit permit, rjson::value request, std::string host_header, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
@@ -5600,7 +5614,7 @@ future<executor::request_return_type> executor::describe_endpoints(client_state&
     rjson::push_back(response["Endpoints"], rjson::empty_object());
     rjson::add(response["Endpoints"][0], "Address", rjson::from_string(host_header));
     rjson::add(response["Endpoints"][0], "CachePeriodInMinutes", rjson::value(1440));
-    co_return rjson::print(std::move(response));
+    co_return rjson::print_sstring(std::move(response));
 }
 
 static locator::replication_strategy_config_options get_network_topology_options(service::storage_proxy& sp, gms::gossiper& gossiper, int rf) {
@@ -5637,7 +5651,7 @@ future<executor::request_return_type> executor::describe_continuous_backups(clie
     rjson::add(desc, "PointInTimeRecoveryDescription", std::move(pitr));
     rjson::value response = rjson::empty_object();
     rjson::add(response, "ContinuousBackupsDescription", std::move(desc));
-    co_return rjson::print(std::move(response));
+    co_return rjson::print_sstring(std::move(response));
 }
 
 static std::optional<unsigned> get_initial_tablet_count(const std::map<sstring, sstring>& tags_map,

@@ -284,7 +284,7 @@ ScyllaDB.json_writer
 """"""""""""""""""""
 
 A JSON writer object, with both low-level and high-level APIs.
-The low-level API allows you to write custom JSON and it loosely follows the API of `rapidjson::Writer <https://rapidjson.org/classrapidjson_1_1_writer.html>`_ (upon which it is implemented).
+The low-level API allows you to write custom JSON and it loosely follows the API of `rapidjson::Writer <https://rapidjson.org/classrapidjson_1_1_writer.html>`_.
 The high-level API is for writing :ref:`mutation fragments <scylla-sstable-sstable-content>` as JSON directly, using the built-in JSON conversion logic that is used by :ref:`dump-data <scylla-sstable-dump-data-operation>` operation.
 
 Low level API Methods:

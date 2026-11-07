@@ -699,11 +699,11 @@ static future<> validate_manifest(const locator::topology& topology, const fs::p
     BOOST_REQUIRE(manifest_info.HasMember("version"));
     auto& manifest_version = manifest_info["version"];
     BOOST_REQUIRE(manifest_version.IsString());
-    BOOST_REQUIRE_EQUAL(manifest_version.GetString(), "1.0");
+    BOOST_REQUIRE_EQUAL(rjson::to_string(manifest_version), "1.0");
     BOOST_REQUIRE(manifest_info.HasMember("scope"));
     auto& manifest_scope = manifest_info["scope"];
     BOOST_REQUIRE(manifest_scope.IsString());
-    BOOST_REQUIRE_EQUAL(manifest_scope.GetString(), "node");
+    BOOST_REQUIRE_EQUAL(rjson::to_string(manifest_scope), "node");
 
     BOOST_REQUIRE(manifest_json.HasMember("node"));
     auto& node_info = manifest_json["node"];
@@ -711,16 +711,16 @@ static future<> validate_manifest(const locator::topology& topology, const fs::p
     BOOST_REQUIRE(node_info.HasMember("host_id"));
     auto& host_id_json = node_info["host_id"];
     BOOST_REQUIRE(host_id_json.IsString());
-    auto id = utils::UUID(host_id_json.GetString());
+    auto id = utils::UUID(rjson::to_string_view(host_id_json));
     BOOST_REQUIRE_EQUAL(id, topology.my_host_id().uuid());
     BOOST_REQUIRE(node_info.HasMember("datacenter"));
     auto& datacenter = node_info["datacenter"];
     BOOST_REQUIRE(datacenter.IsString());
-    BOOST_REQUIRE_EQUAL(datacenter.GetString(), topology.get_location().dc);
+    BOOST_REQUIRE_EQUAL(rjson::to_string(datacenter), topology.get_location().dc);
     BOOST_REQUIRE(node_info.HasMember("rack"));
     auto& rack = node_info["rack"];
     BOOST_REQUIRE(rack.IsString());
-    BOOST_REQUIRE_EQUAL(rack.GetString(), topology.get_location().rack);
+    BOOST_REQUIRE_EQUAL(rjson::to_string(rack), topology.get_location().rack);
 
     BOOST_REQUIRE(manifest_json.HasMember("snapshot"));
     auto& manifest_snapshot = manifest_json["snapshot"];
@@ -728,7 +728,7 @@ static future<> validate_manifest(const locator::topology& topology, const fs::p
     BOOST_REQUIRE(manifest_snapshot.HasMember("name"));
     auto& snapshot_name = manifest_snapshot["name"];
     BOOST_REQUIRE(snapshot_name.IsString());
-    BOOST_REQUIRE_EQUAL(snapshot_dir.filename(), snapshot_name.GetString());
+    BOOST_REQUIRE_EQUAL(snapshot_dir.filename(), rjson::to_string(snapshot_name));
     BOOST_REQUIRE(manifest_snapshot.HasMember("created_at"));
     auto& created_at = manifest_snapshot["created_at"];
     BOOST_REQUIRE(created_at.IsNumber());
@@ -756,15 +756,15 @@ static future<> validate_manifest(const locator::topology& topology, const fs::p
     BOOST_REQUIRE(manifest_table.HasMember("keyspace_name"));
     auto& manifest_table_ks_name = manifest_table["keyspace_name"];
     BOOST_REQUIRE(manifest_table_ks_name.IsString());
-    BOOST_REQUIRE_EQUAL(snapshot_dir.parent_path().parent_path().parent_path().filename().native(), manifest_table_ks_name.GetString());
+    BOOST_REQUIRE_EQUAL(snapshot_dir.parent_path().parent_path().parent_path().filename().native(), rjson::to_string(manifest_table_ks_name));
     auto& manifest_table_table_name = manifest_table["table_name"];
     BOOST_REQUIRE(manifest_table_table_name.IsString());
-    BOOST_REQUIRE(snapshot_dir.parent_path().parent_path().filename().native().starts_with(manifest_table_table_name.GetString()));
+    BOOST_REQUIRE(snapshot_dir.parent_path().parent_path().filename().native().starts_with(rjson::to_string(manifest_table_table_name)));
     std::optional<sstring> tablets_type;
     if (manifest_table.HasMember("tablets_type")) {
         auto& tablets_type_json = manifest_table["tablets_type"];
         BOOST_REQUIRE(tablets_type_json.IsString());
-        tablets_type = tablets_type_json.GetString();
+        tablets_type = rjson::to_string(tablets_type_json);
     }
     if (tablets_enabled) {
         BOOST_REQUIRE(tablets_type.has_value());
@@ -800,13 +800,13 @@ static future<> validate_manifest(const locator::topology& topology, const fs::p
 
             auto& id = sst_json["id"];
             BOOST_REQUIRE(id.IsString());
-            auto uuid = utils::UUID(id.GetString());
+            auto uuid = utils::UUID(rjson::to_string_view(id));
             BOOST_REQUIRE(!uuid.is_null());
 
             auto& toc_name = sst_json["toc_name"];
             BOOST_REQUIRE(toc_name.IsString());
-            BOOST_REQUIRE(is_component(toc_name.GetString(), suffix));
-            sstables_in_manifest.insert(toc_name.GetString());
+            BOOST_REQUIRE(is_component(rjson::to_string(toc_name), suffix));
+            sstables_in_manifest.insert(rjson::to_string(toc_name));
 
             auto& data_size = sst_json["data_size"];
             BOOST_REQUIRE(data_size.IsNumber());
@@ -831,7 +831,7 @@ static future<> validate_manifest(const locator::topology& topology, const fs::p
         auto& manifest_files = manifest_json["files"];
         BOOST_REQUIRE(manifest_files.IsArray());
         for (auto& f : manifest_files.GetArray()) {
-            non_sstables_in_manifest.insert(f.GetString());
+            non_sstables_in_manifest.insert(rjson::to_string(f));
         }
     }
 

@@ -638,6 +638,7 @@ scylla_tests = set([
     'test/boost/recent_entries_map_test',
     'test/boost/reservoir_sampling_test',
     'test/boost/result_utils_test',
+    'test/boost/rjson_test',
     'test/boost/rest_client_test',
     'test/boost/rolling_max_tracker_test',
     'test/boost/reusable_buffer_test',
@@ -732,6 +733,7 @@ perf_tests = set([
     'test/perf/perf_bytes_hash',
     'test/perf/perf_sort_by_proximity',
     'test/perf/perf_array_search',
+    'test/perf/perf_rjson',
 ])
 
 perf_standalone_tests = set([

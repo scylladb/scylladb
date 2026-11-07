@@ -50,3 +50,19 @@ Import commit:
 
 musl as a whole is licensed under the standard MIT license included in
 `licenses/musl-license.txt`.
+
+### `fast_float` files
+
+`licenses/fast_float-license.txt` is obtained from:
+  https://github.com/fastfloat/fast_float/blob/v8.0.2/LICENSE-MIT
+
+`utils/rjson_fast_float.hh` contains the decimal-to-binary conversion of
+fast_float's `fast_float.h`, obtained from:
+  https://github.com/fastfloat/fast_float/releases/download/v8.0.2/fast_float.h
+
+Import commit:
+  commit 50a80a73ab2ab256ba1c3bf86923ddd8b4202bc7 (tag v8.0.2)
+
+fast_float is available under the MIT, Apache-2.0 or BSL-1.0 licenses; it
+is used here under the MIT license, included in
+`licenses/fast_float-license.txt`.
