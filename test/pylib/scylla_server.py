@@ -466,6 +466,17 @@ class ScyllaServer:
             if ((root_dir/f).is_file()):
                 (root_dir/f).unlink()
 
+    async def wipe(self) -> None:
+        """Make the next start a first boot on the same IP: a fresh workdir and a new host id."""
+        if self.is_running:
+            raise RuntimeError(f"Can't wipe a running server {self.ip_addr}.")
+        if hasattr(self, "_host_id"):
+            del self._host_id
+        if self.log_file is not None and not self.log_file.closed:
+            self.log_file.close()
+        await async_rmtree(self.workdir)  # strict: a leftover data dir would keep the old host id
+        await self.install()
+
     def get_sstables(self, keyspace: str, table: str):
         root_dir = self.workdir/"data"
         sstables = []

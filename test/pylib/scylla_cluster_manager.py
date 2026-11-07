@@ -726,6 +726,11 @@ class ScyllaClusterManager:
         return self.cluster.wipe_sstables(server_id, keyspace, table)
 
     @manager_op
+    async def server_wipe(self, server_id: ServerNum) -> None:
+        """Wipe a stopped server's data: its next start is a first boot, with a new host id, on the same IP."""
+        await self.cluster.server_wipe(server_id)
+
+    @manager_op
     async def server_get_sstables_disk_usage(self, server_id: ServerNum, keyspace: str, table: str) -> int:
         return self.cluster.get_sstables_disk_usage(server_id, keyspace, table)
 
