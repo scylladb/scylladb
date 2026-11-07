@@ -30,9 +30,12 @@ def tune_path(path, data, check=None):
         check = default_check
     if not os.path.exists(path):
         return
-    if check(open(path).read().strip()):
+    current = open(path).read().strip()
+    if check(current):
         print('already tuned: {}'.format(path))
         return
+    if callable(data):
+        data = data(current)
     print('tuning: {} {}'.format(path, data))
     try_write(path, data + '\n')
 
@@ -51,10 +54,14 @@ def tune_blockdev(path, nomerges):
     tuned_blockdevs.add(path)
 
     def check_sched(current):
-        return current == 'none' or '[noop]' in current
+        return current == 'none' or '[none]' in current or '[noop]' in current
+
+    def wanted_sched(current):
+        # blk-mq kernels have no 'noop', its equivalent there is 'none'
+        return 'noop' if 'noop' in current.split() else 'none'
 
     if not nomerges:
-        tune_path(join(path, 'queue', 'scheduler'), 'noop', check_sched)
+        tune_path(join(path, 'queue', 'scheduler'), wanted_sched, check_sched)
         tune_path(join(path, 'queue', 'nomerges'), '2')
     else:
         tune_path(join(path, 'queue', 'nomerges'), nomerges)
