@@ -840,3 +840,80 @@ async def test_load_and_stream_rejected_on_critical_disk(manager: ScyllaClusterM
                     sstable_files_after = list_sstable_files()
                     assert sstable_files_after == sstable_files_before, \
                         f"Orphan SSTable files found after failed stream: {sstable_files_after - sstable_files_before}"
+
+
+async def test_vnodes_to_tablets_recovery_after_out_of_space(manager: ScyllaClusterManager, volumes_factory: Callable) -> None:
+    """Verify that force_vnodes_for_migrating_tables recovers a node whose upgrade to tablets runs out of space.
+
+    Regression test for https://scylladb.atlassian.net/browse/SCYLLADB-2351.
+
+    Resharding cannot run while the disk is above the critical utilization level, so a
+    node marked for upgrade to tablets fails to start until it gets space back. With the
+    override it starts as a vnodes node on the full disk: its SSTables were never
+    upgraded, so going back needs no resharding.
+
+    Steps:
+    1. Start a space-limited node with a vnode table and data.
+    2. Start the migration and mark the node for upgrade.
+    3. Fill the disk past the critical level and restart the node - it must fail.
+    4. Start it with force_vnodes_for_migrating_tables, disk still full - it must come
+       up with its data intact, marked for downgrade. Finalize the rollback.
+    5. Free the disk, remove the option and restart - the node must start on vnodes.
+    """
+    num_rows = 64
+
+    async with space_limited_servers(manager, volumes_factory, ["20M"], cmdline=global_cmdline) as servers:
+        server = servers[0]
+        cql, _ = await manager.get_ready_cql(servers)
+        workdir = await manager.server_get_workdir(server.server_id)
+        log = await manager.server_open_log(server.server_id)
+
+        async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}") as ks:
+            async with new_test_table(manager, ks, "pk int PRIMARY KEY, t text") as cf:
+                table = cf.split('.')[-1]
+                await write_rows(cql, cf, num_rows)
+                await manager.api.flush_keyspace(server.ip_addr, ks)
+
+                logger.info("Start the migration and mark the node for upgrade")
+                await manager.api.create_vnode_tablet_migration(server.ip_addr, ks)
+                await manager.api.upgrade_node_to_tablets(server.ip_addr)
+
+                logger.info("Create a big file on the node to reach critical disk utilization level")
+                mark = await log.mark()
+                disk_info = psutil.disk_usage(workdir)
+                with random_content_file(workdir, int(disk_info.total*DISK_FILL_TARGET_RATIO) - disk_info.used):
+                    await log.wait_for("Reached the critical disk utilization level", from_mark=mark)
+
+                    logger.info("Restart the node; resharding to tablets must fail")
+                    await manager.server_stop_gracefully(server.server_id)
+                    await manager.server_start(server.server_id, expected_error="critical disk utilization")
+
+                    logger.info("Start the node with force_vnodes_for_migrating_tables, disk still full")
+                    await manager.server_update_config(server.server_id, "force_vnodes_for_migrating_tables", True)
+                    mark = await log.mark()
+                    await manager.server_start(server.server_id)
+                    cql = await reconnect_driver(manager)
+                    await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+                    await log.wait_for("Reached the critical disk utilization level", from_mark=mark)
+                    assert await log.grep(rf"Keyspace {ks}: CF {table} is in vnodes-to-tablets migration mode \(direction: rollback\)",
+                                          from_mark=mark), \
+                        "The node did not take the rollback direction"
+
+                    rows = await cql.run_async(f"SELECT pk FROM {cf}")
+                    assert sorted(row.pk for row in rows) == list(range(num_rows))
+
+                    logger.info("Finalize the rollback, disk still full")
+                    await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks)
+                    assert await get_tablet_count(manager, server, ks, table) == 0
+
+                logger.info("With the file removed, restart without the option")
+                await manager.server_stop_gracefully(server.server_id)
+                await manager.server_remove_config_option(server.server_id, "force_vnodes_for_migrating_tables")
+                mark = await log.mark()
+                await manager.server_start(server.server_id)
+                cql = await reconnect_driver(manager)
+                await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+                assert not await log.grep("force_vnodes_for_migrating_tables is set", from_mark=mark)
+
+                rows = await cql.run_async(f"SELECT pk FROM {cf}")
+                assert sorted(row.pk for row in rows) == list(range(num_rows))
