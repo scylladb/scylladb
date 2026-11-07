@@ -34,6 +34,7 @@
 #include "test/lib/log.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/topology_builder.hh"
+#include "test/lib/tablet_test_utils.hh"
 #include "service/storage_service.hh"
 
 using namespace locator;
@@ -61,27 +62,6 @@ cql_test_config tablet_cql_test_config(unsigned schema_commitlog_segment_size_mb
         c.db_config->schema_commitlog_segment_size_in_mb.set(uint32_t(schema_commitlog_segment_size_mb));
     }
     return c;
-}
-
-static
-future<table_id> add_table(cql_test_env& e, int tablet_count) {
-    auto id = table_id(utils::UUID_gen::get_time_UUID());
-    co_await e.create_table([id, tablet_count] (std::string_view ks_name) {
-        return *schema_builder(this_smp_shard_count(), ks_name, id.to_sstring(), id)
-                .with_column("p1", utf8_type, column_kind::partition_key)
-                .with_column("r1", int32_type)
-                // Create the table with exactly `tablet_count` tablets so that the
-                // generated tablet metadata matches the table's tablet map and
-                // applying it doesn't look like a tablet split/merge. pow2_count=false
-                // lets us pin an arbitrary count without power-of-2 rounding.
-                .set_tablet_options({
-                    {"min_tablet_count", format("{}", tablet_count)},
-                    {"max_tablet_count", format("{}", tablet_count)},
-                    {"pow2_count", "false"},
-                })
-                .build();
-    });
-    co_return id;
 }
 
 static future<> test_basic_operations(app_template& app) {
@@ -120,7 +100,14 @@ static future<> test_basic_operations(app_template& app) {
         std::vector<table_id> ids;
         ids.resize(nr_tables);
         for (int i = 0; i < nr_tables; ++i) {
-            ids[i] = add_table(e, tablets_per_table).get();
+            // Pin exactly `tablets_per_table` tablets so that the generated tablet metadata matches the
+            // table's tablet map and applying it doesn't look like a split/merge. pow2_count=false
+            // lets us pin an arbitrary count without power-of-2 rounding.
+            ids[i] = tablet_test_utils::add_table(e, "", {
+                {"min_tablet_count", format("{}", tablets_per_table)},
+                {"max_tablet_count", format("{}", tablets_per_table)},
+                {"pow2_count", "false"},
+            }).get();
         }
 
         testlog.info("Generating tablet metadata");
