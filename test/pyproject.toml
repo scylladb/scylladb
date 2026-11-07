@@ -7,8 +7,8 @@
 
 # Python dependencies required to run test.py.
 #
-# scylla-driver's pin here is intentionally independent of both
-# tools/cqlsh/requirements.txt and install-dependencies.sh: test.py syncs
+# scylla-driver's pin here is intentionally independent of
+# install-dependencies.sh: test.py syncs
 # this environment itself on startup (see _ensure_running_under_uv() in
 # test.py), so bumping the version here takes effect immediately and does
 # not require rebuilding the frozen toolchain image.
