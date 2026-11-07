@@ -170,7 +170,17 @@ class CppFile(pytest.File, ABC):
             **BASE_TEST_ENV,
             "TMPDIR": str(self.log_dir),
         }
-        if self.build_mode == "coverage":
+        # Either the dedicated coverage build mode, or any mode that was built
+        # with `configure.py --coverage` and selected with `--coverage-mode`,
+        # the same rule the cluster runner applies to the scylla nodes it starts
+        # (test/pylib/runner.py). Without the second half, the C++ tests of a
+        # `--mode dev --coverage` build write their profiles to the default
+        # location, test.py finds none, and the merged trace comes out empty.
+        options = self.config.option
+        if self.build_mode == "coverage" or (
+                options.coverage
+                and self.build_mode in (options.coverage_modes or ())
+                and bool(self.suite_config.get("coverage", True))):
             # "%m" in LLVM_PROFILE_FILE expands to a value unique to this
             # binary and makes the profile runtime merge counters into the
             # resulting file (under a file lock) rather than overwrite it.

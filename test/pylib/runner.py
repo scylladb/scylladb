@@ -619,6 +619,22 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
         session.exitstatus = EXIT_MAXFAIL_REACHED
 
 
+def normalize_coverage_options(option, build_modes: list[str]) -> None:
+    """Apply what the --coverage and --coverage-mode help texts promise.
+
+    test.py resolves the two before forwarding them, so it always passes both.
+    A bare pytest run did not: `--coverage-mode dev` alone left `coverage`
+    false, so neither the C++ tests nor the cluster nodes wrote their profiles
+    where test.py looks, and `--coverage` alone left `coverage_modes` None,
+    which the cluster gate in `testpy_cluster_factory` tests membership in and
+    raised TypeError on.
+    """
+    if option.coverage_modes:
+        option.coverage = True
+    elif option.coverage:
+        option.coverage_modes = list(build_modes)
+
+
 @pytest.hookimpl(tryfirst=True)
 def pytest_configure(config: pytest.Config) -> None:
     global _pytest_config
@@ -697,6 +713,7 @@ def pytest_configure(config: pytest.Config) -> None:
 
     os.environ["TOPOLOGY_RANDOM_FAILURES_TEST_SHUFFLE_SEED"] = os.environ.get("TOPOLOGY_RANDOM_FAILURES_TEST_SHUFFLE_SEED", str(random.randint(0, sys.maxsize)))
     config.build_modes = get_modes_to_run(config)
+    normalize_coverage_options(config.option, config.build_modes)
 
     if testpy_run_id := config.getoption("--run_id"):
         if config.getoption("--repeat") != 1:
