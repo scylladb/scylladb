@@ -122,7 +122,8 @@ Note that these are not all states, as there are other states specific to tablet
     to modified token ring), reads are using old replicas.
 - `write_both_read_new` - as above, but reads are using new replicas.
 - `left_token_ring` - the decommissioning or removing node left the token ring, but we still need to wait until other
-    nodes observe it and stop sending writes to this node. For decommission, we tell the node to shut down,
+    nodes observe it and stop sending writes to this node. A decommissioning node sends out its pending hints
+    while handling this state's `barrier_and_drain`. For decommission, we tell the node to shut down,
     then remove it from group 0. For removenode, the node is already down, so we skip the shutdown step.
     We also use this state to rollback a failed bootstrap or decommission.
 - `rollback_to_normal` - the decommission or removenode operation failed. Rollback the operation by
