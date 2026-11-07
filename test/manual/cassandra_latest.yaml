@@ -2202,7 +2202,7 @@ default_secondary_index_enabled: true
 # Verifies correct ownership of attached locations on disk at startup. See CASSANDRA-16879 for more details.
 #  check_filesystem_ownership:
 #    enabled: false
-#    ownership_token: "sometoken" # (overriden by "CassandraOwnershipToken" system property)
+#    ownership_token: "sometoken" # (overridden by "CassandraOwnershipToken" system property)
 #    ownership_filename: ".cassandra_fs_ownership" # (overriden by "cassandra.fs_ownership_filename")
 # Prevents a node from starting if snitch's data center differs from previous data center.
 #  check_dc:
