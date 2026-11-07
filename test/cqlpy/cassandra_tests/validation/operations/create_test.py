@@ -29,7 +29,6 @@ from uuid import UUID
 
 # Reproduces SCYLLADB-5200 (Scylla's CQL lexer reads the unquoted
 # identifier P as a duration literal, so it can't be used as a name).
-@pytest.mark.xfail(reason="SCYLLADB-5200")
 def testCreateTableWithNameCapitalPAndColumnDuration(cql, test_keyspace):
     # CASSANDRA-17919
     # The Java test creates the table with the fixed name P, so this name
@@ -45,14 +44,20 @@ def testCreateTableWithNameCapitalPAndColumnDuration(cql, test_keyspace):
 # tablets, so we use NetworkTopologyStrategy instead.
 # Reproduces SCYLLADB-5200 (Scylla's CQL lexer reads the unquoted
 # identifier P as a duration literal, so it can't be used as a name).
-@pytest.mark.xfail(reason="SCYLLADB-5200")
 def testCreateKeyspaceWithNameCapitalP(cql):
     # CASSANDRA-17919
+    # The Java test runs on a private Cassandra node, so it can create and
+    # drop the keyspace "p" freely. cqlpy may run against a shared cluster,
+    # so if a keyspace "p" already exists, we must not drop it - in that case
+    # we only check that CREATE KEYSPACE IF NOT EXISTS P is accepted.
+    existed = list(cql.execute("SELECT keyspace_name FROM system_schema.keyspaces WHERE keyspace_name = 'p'"))
     try:
         cql.execute("CREATE KEYSPACE IF NOT EXISTS P WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}")
-        cql.execute("DROP KEYSPACE P")
+        if not existed:
+            cql.execute("DROP KEYSPACE P")
     finally:
-        cql.execute("DROP KEYSPACE IF EXISTS P")
+        if not existed:
+            cql.execute("DROP KEYSPACE IF EXISTS P")
 
 def testCreateTableWithSmallintColumns(cql, test_keyspace):
     short_max_value = 2**15-1

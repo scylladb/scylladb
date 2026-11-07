@@ -74,7 +74,6 @@ def testInsertZeroDuration(cql, test_keyspace):
 # Cassandra 6's is "rule insertValue failed predicate: {isParsingTxn}?", so
 # we don't check the message.
 # Reproduces SCYLLADB-5200 (Scylla accepts a bare P as a zero duration).
-@pytest.mark.xfail(reason="SCYLLADB-5200")
 def testInsertZeroDurationWithoutDesignator(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a INT PRIMARY KEY, b DURATION);") as table:
         assertInvalidThrow(cql, table, SyntaxException, "INSERT INTO %s (a, b) VALUES (15, P)")
