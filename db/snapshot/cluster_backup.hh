@@ -28,6 +28,10 @@ namespace replica {
     class table;
 }
 
+namespace sstables {
+    class storage_manager;
+}
+
 namespace db::snapshot {
 
 std::string sstables_location(std::string_view prefix);
@@ -39,5 +43,22 @@ start_global_backup(db::snapshot_ctl&, tasks::task_manager::module_ptr, std::str
 
 future<>
 backup_sstables(db::snapshot_ctl&, table_id table_id, std::string tag, std::string endpoint, std::string bucket, std::string prefix, dht::token first_token, dht::token last_token, utils::chunked_vector<sstables::sstable_id> sstable_ids, bool use_move);
+
+struct backup_manifest_info {
+    snapshot_table_entry table_info;
+
+    uint64_t size;
+    uint64_t num_sstables;
+    uint64_t num_nodes;
+};
+
+struct backup_location_info {
+    snapshot_dc_location location;
+    std::unordered_set<std::string> dcs;
+    std::vector<backup_manifest_info> manifests;
+};
+
+future<std::vector<backup_location_info>>
+list_backups(sstables::storage_manager&, std::string snapshot_name, std::unordered_multimap<sstring, sstring> ks_tables, std::vector<snapshot_dc_location> locations, abort_source* as = nullptr);
 
 }

@@ -47,6 +47,8 @@ public:
     task_manager_module(tasks::task_manager& tm) noexcept : tasks::task_manager::module(tm, "snapshot") {}
 };
 
+struct backup_location_info;
+
 } // snapshot namespace
 
 struct snapshot_options {
@@ -136,6 +138,9 @@ public:
     future<int64_t> true_snapshots_size(sstring ks, sstring cf);
 
     future<tasks::task_id> start_global_backup(std::unordered_map<sstring, snapshot_dc_location> locations, std::vector<sstring> ks_names, std::vector<sstring> tables, sstring tag, bool move_files);
+
+    future<std::vector<db::snapshot::backup_location_info>>
+    list_global_backups(std::vector<snapshot_dc_location> locations, std::vector<sstring> ks_names, std::vector<sstring> tables, sstring tag);
 
     future<> disable_all_operations();
 
