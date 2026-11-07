@@ -9,6 +9,7 @@
  */
 
 #include <algorithm>
+#include <span>
 
 #include "utils/assert.hh"
 
@@ -24,6 +25,11 @@
 
 #include "db/size_estimates_virtual_reader.hh"
 #include "readers/from_mutations.hh"
+#include "locator/abstract_replication_strategy.hh"
+#include "locator/tablets.hh"
+#include "utils/chunked_vector.hh"
+
+#include <seastar/coroutine/maybe_yield.hh>
 
 namespace db {
 
@@ -48,59 +54,6 @@ struct virtual_row_comparator {
     }
     bool operator()(const clustering_key_prefix& key, const virtual_row& row) {
         return operator()(key, row.as_key());
-    }
-};
-
-// Iterating over the cartesian product of cf_names and token_ranges.
-class virtual_row_iterator {
-public:
-    using iterator_category = std::input_iterator_tag;
-    using value_type = const virtual_row;
-    using difference_type = std::ptrdiff_t;
-    using pointer = const virtual_row*;
-    using reference = const virtual_row&;
-private:
-    const std::vector<bytes>* _cf_names = nullptr;
-    const std::vector<token_range>* _ranges = nullptr;
-    size_t _cf_names_idx = 0;
-    size_t _ranges_idx = 0;
-public:
-    struct end_iterator_tag {};
-    virtual_row_iterator() = default;
-    virtual_row_iterator(const std::vector<bytes>& cf_names, const std::vector<token_range>& ranges)
-            : _cf_names(&cf_names)
-            , _ranges(&ranges)
-    { }
-    virtual_row_iterator(const std::vector<bytes>& cf_names, const std::vector<token_range>& ranges, end_iterator_tag)
-            : _cf_names(&cf_names)
-            , _ranges(&ranges)
-            , _cf_names_idx(cf_names.size())
-            , _ranges_idx(ranges.size())
-    {
-        if (cf_names.empty() || ranges.empty()) {
-            // The product of an empty range with any range is an empty range.
-            // In this case we want the end iterator to be equal to the begin iterator,
-            // which has_ranges_idx = _cf_names_idx = 0.
-            _ranges_idx = _cf_names_idx = 0;
-        }
-    }
-    virtual_row_iterator& operator++() {
-        if (++_ranges_idx == _ranges->size() && ++_cf_names_idx < _cf_names->size()) {
-            _ranges_idx = 0;
-        }
-        return *this;
-    }
-    virtual_row_iterator operator++(int) {
-        virtual_row_iterator i(*this);
-        ++(*this);
-        return i;
-    }
-    const value_type operator*() const {
-        return { (*_cf_names)[_cf_names_idx], (*_ranges)[_ranges_idx] };
-    }
-    bool operator==(const virtual_row_iterator& i) const {
-        return _cf_names_idx == i._cf_names_idx
-            && _ranges_idx == i._ranges_idx;
     }
 };
 
@@ -262,8 +215,7 @@ future<> size_estimates_mutation_reader::get_next_partition() {
         co_return;
     }
     auto guard = reader_permit::awaits_guard(_permit);
-    auto ranges = co_await get_local_ranges(_db, _sys_ks);
-    auto estimates = co_await this->estimates_for_current_keyspace(std::move(ranges));
+    auto estimates = co_await this->estimates_for_current_keyspace();
     auto mutations = db::system_keyspace::make_size_estimates_mutation(*_current_partition, std::move(estimates));
     ++_current_partition;
     utils::chunked_vector<mutation> ms;
@@ -326,7 +278,7 @@ future<> size_estimates_mutation_reader::close() noexcept {
 }
 
 future<std::vector<db::system_keyspace::range_estimates>>
-size_estimates_mutation_reader::estimates_for_current_keyspace(std::vector<token_range> local_ranges) const {
+size_estimates_mutation_reader::estimates_for_current_keyspace() const {
     // For each specified range, estimate (crudely) mean partition size and partitions count.
     auto pkey = partition_key::from_single_value(*_schema, utf8_type->decompose(*_current_partition));
     auto cfs = _db.find_keyspace(*_current_partition).metadata()->cf_meta_data();
@@ -336,18 +288,75 @@ size_estimates_mutation_reader::estimates_for_current_keyspace(std::vector<token
     std::ranges::sort(cf_names, [] (auto&& n1, auto&& n2) {
         return utf8_type->less(n1, n2);
     });
+    auto cmp = virtual_row_comparator(_schema);
     std::vector<db::system_keyspace::range_estimates> estimates;
-    for (auto& range : _slice.row_ranges(*_schema, pkey)) {
-        auto rows = std::ranges::subrange(
-                virtual_row_iterator(cf_names, local_ranges),
-                virtual_row_iterator(cf_names, local_ranges, virtual_row_iterator::end_iterator_tag()));
-        // WARNING: interval<clustering_key_prefix> is unsafe - refer to scylladb#21604 and scylladb#8157
-        auto rows_to_estimate = range.slice(rows, virtual_row_comparator(_schema));
-        for (auto&& r : rows_to_estimate) {
-            auto& cf = _db.find_column_family(*_current_partition, utf8_type->to_string(r.cf_name));
-            estimates.push_back(co_await estimate(_db, cf.schema()->id(), cf.schema(), r.tokens));
-            if (estimates.size() >= _slice.partition_row_limit()) {
-                co_return estimates;
+    // Vnode ranges are only needed once a vnode table is reached.
+    std::optional<utils::chunked_vector<token_range>> local_ranges;
+    const auto& row_ranges = _slice.row_ranges(*_schema, pkey);
+    // Tables outermost: row ranges are sorted and disjoint, so rows stay in clustering order.
+    for (const auto& cf_name : cf_names) {
+        auto cf_key = clustering_key_prefix::from_exploded(std::vector<bytes_view>{cf_name});
+        auto cf_name_str = utf8_type->to_string(cf_name);
+        // Candidate ranges of this table, resolved on first use (s is null until then).
+        utils::chunked_vector<token_range> tablet_ranges;
+        const utils::chunked_vector<token_range>* table_ranges = nullptr;
+        schema_ptr s;
+        for (const auto& range : row_ranges) {
+            // All rows of a table share its name as first component, so a miss on it skips the table.
+            // Strict compares on purpose: prefix equality ignores bound inclusivity, so
+            // before()/overlaps() would skip a table on e.g. `range_start > 'x'`.
+            if ((range.start() && cmp(cf_key, range.start()->value())) || (range.end() && cmp(range.end()->value(), cf_key))) {
+                continue;
+            }
+            if (!s) {
+                // The tablet loop yields, so a table may be dropped mid-query.
+                if (!_db.has_schema(*_current_partition, cf_name_str)) {
+                    break;
+                }
+                auto& cf = _db.find_column_family(*_current_partition, cf_name_str);
+                s = cf.schema();
+                if (cf.uses_tablets()) {
+                    // Only the primary replica reports a tablet, so summing over all nodes counts each tablet once.
+                    auto erm = cf.get_effective_replication_map();
+                    const auto& topo = erm->get_topology();
+                    const auto& tmap = erm->get_token_metadata().tablets().get_tablet_map(s->id());
+                    for (auto tid : tmap.tablet_ids()) {
+                        // get_primary_replica() copies and sorts the replica set; skip tablets we don't host.
+                        const auto& replicas = tmap.get_tablet_info(tid).replicas;
+                        if (std::ranges::any_of(replicas, [&] (const auto& r) { return r.host == topo.my_host_id(); })
+                                && tmap.get_primary_replica(tid, topo).host == topo.my_host_id()) {
+                            auto r = tmap.get_token_range(tid);
+                            tablet_ranges.push_back(
+                                    token_range{utf8_type->decompose(r.start()->value().to_sstring()), utf8_type->decompose(r.end()->value().to_sstring())});
+                        }
+                        co_await coroutine::maybe_yield();
+                    }
+                    // Tablet order is token order, but rows are ordered by range_start as text.
+                    std::ranges::sort(tablet_ranges, [] (auto&& tr1, auto&& tr2) {
+                        return utf8_type->less(tr1.start, tr2.start);
+                    });
+                    table_ranges = &tablet_ranges;
+                } else {
+                    if (!local_ranges) {
+                        auto v = co_await get_local_ranges(_db, _sys_ks);
+                        local_ranges.emplace();
+                        std::ranges::move(v, std::back_inserter(*local_ranges));
+                    }
+                    // local_ranges is already sorted by range_start.
+                    table_ranges = &*local_ranges;
+                }
+            }
+            for (const auto& r : *table_ranges) {
+                co_await coroutine::maybe_yield();
+                // WARNING: interval<clustering_key_prefix> is unsafe - refer to scylladb#21604 and scylladb#8157
+                virtual_row row{cf_name, r};
+                if (range.slice(std::span(&row, 1), cmp).empty()) {
+                    continue;
+                }
+                estimates.push_back(co_await estimate(_db, s->id(), s, r));
+                if (estimates.size() >= _slice.partition_row_limit()) {
+                    co_return estimates;
+                }
             }
         }
     }
