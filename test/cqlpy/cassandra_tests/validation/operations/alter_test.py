@@ -25,17 +25,22 @@
 from ...porting import *
 from cassandra.protocol import ConfigurationException
 
-# Reproduces #24305 (Scylla allows re-adding a dropped column with an
-# incompatible type)
-@pytest.mark.xfail(reason="#24305")
-def testNonFrozenCollectionsAreIncompatibleWithBlob(cql, test_keyspace):
+# Scylla deliberately allows re-adding a dropped column with any type that can
+# interpret the dropped type's values - the same rule as for altering the
+# type of an existing column (see #24305, #24290, and test_alter_table.py::
+# test_readd_column_with_incompatible_type).
+# A blob can hold any value, so Scylla allows re-adding a dropped
+# collection column as a blob, which Cassandra forbids. So we changed the
+# first half of this test to check that this succeeds, and the test is
+# scylla_only. Re-adding a dropped blob column as a collection is still
+# forbidden.
+def testNonFrozenCollectionsAreIncompatibleWithBlob(cql, test_keyspace, scylla_only):
     collectionTypes = ["map<int, int>", "set<int>", "list<int>"]
 
     for type in collectionTypes:
         with create_table(cql, test_keyspace, "(a int, b " + type + ", PRIMARY KEY (a));") as table:
             execute(cql, table, "ALTER TABLE %s DROP b;")
-            assert_invalid_message(cql, table, "Cannot add a column 'b' of type blob, incompatible with previously dropped column 'b' of type " + type,
-                                   "ALTER TABLE %s ADD b blob;")
+            execute(cql, table, "ALTER TABLE %s ADD b blob;")
 
     for type in collectionTypes:
         with create_table(cql, test_keyspace, "(a int, b blob, PRIMARY KEY (a));") as table:
@@ -43,17 +48,20 @@ def testNonFrozenCollectionsAreIncompatibleWithBlob(cql, test_keyspace):
             assert_invalid_message(cql, table, "Cannot add a column 'b' of type " + type + ", incompatible with previously dropped column 'b' of type blob",
                                    "ALTER TABLE %s ADD b " + type + ";")
 
-# Reproduces #24305 (Scylla allows re-adding a dropped column with an
-# incompatible type)
-@pytest.mark.xfail(reason="#24305")
-def testFrozenCollectionsAreNotCompatibleWithBlob(cql, test_keyspace):
+# Scylla deliberately allows re-adding a dropped column with any type that can
+# interpret the dropped type's values - the same rule as for altering the
+# type of an existing column (see #24305, #24290, and test_alter_table.py::
+# test_readd_column_with_incompatible_type).
+# A blob can hold any value, so Scylla allows re-adding a dropped frozen
+# collection column as a blob, which Cassandra forbids. So we changed this
+# test to check that this succeeds, and it is scylla_only.
+def testFrozenCollectionsAreNotCompatibleWithBlob(cql, test_keyspace, scylla_only):
     collectionTypes = ["frozen<map<int, int>>", "frozen<set<int>>", "frozen<list<int>>"]
 
     for type in collectionTypes:
         with create_table(cql, test_keyspace, "(a int, b " + type + ", PRIMARY KEY (a));") as table:
             execute(cql, table, "ALTER TABLE %s DROP b;")
-            assert_invalid_message(cql, table, "Cannot add a column 'b' of type blob, incompatible with previously dropped column 'b' of type " + type,
-                                   "ALTER TABLE %s ADD b blob;")
+            execute(cql, table, "ALTER TABLE %s ADD b blob;")
 
 def testAddList(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(id text PRIMARY KEY, content text)") as table:
@@ -301,14 +309,23 @@ def testDowngradeToCompact(cql, test_keyspace):
         execute(cql, table, "alter table %s drop v")
         execute(cql, table, "alter table %s add v1 int")
 
-# Reproduces #24305 (Scylla allows re-adding a dropped column with an
-# incompatible type)
-@pytest.mark.xfail(reason="#24305")
-def testInvalidDroppingAndAddingOfCollections(cql, test_keyspace):
+# Scylla deliberately allows re-adding a dropped column with any type that can
+# interpret the dropped type's values - the same rule as for altering the
+# type of an existing column (see #24305, #24290, and test_alter_table.py::
+# test_readd_column_with_incompatible_type).
+# A varint can interpret any int value, so Scylla allows re-adding a dropped
+# list<int> column as list<varint>, and similarly for set and map, which
+# Cassandra forbids. So we changed this test to check that this succeeds, and
+# it is scylla_only. Re-adding a dropped non-frozen collection as a frozen
+# collection is still forbidden.
+def testInvalidDroppingAndAddingOfCollections(cql, test_keyspace, scylla_only):
     for typePair in [["list<int>", "list<varint>"],
                      ["set<int>", "set<varint>"],
-                     ["map<int, int>", "map<varint, varint>"],
-                     ["list<int>", "frozen<list<varint>>"],
+                     ["map<int, int>", "map<varint, varint>"]]:
+        with create_table(cql, test_keyspace, "(k int, c int, v " + typePair[0] + ", PRIMARY KEY (k, c))") as table:
+            execute(cql, table, "alter table %s drop v")
+            execute(cql, table, "alter table %s add v " + typePair[1])
+    for typePair in [["list<int>", "frozen<list<varint>>"],
                      ["set<int>", "frozen<set<varint>>"],
                      ["map<int, int>", "frozen<map<varint, varint>>"]]:
         with create_table(cql, test_keyspace, "(k int, c int, v " + typePair[0] + ", PRIMARY KEY (k, c))") as table:
@@ -317,23 +334,29 @@ def testInvalidDroppingAndAddingOfCollections(cql, test_keyspace):
                                    + typePair[1] + ", incompatible with previously dropped column 'v' of type " + typePair[0],
                                    "alter table %s add v " + typePair[1])
 
-# Reproduces #24305 (Scylla allows re-adding a dropped column with an
-# incompatible type)
-@pytest.mark.xfail(reason="#24305")
-def testDropFixedAddVariable(cql, test_keyspace):
+# Scylla deliberately allows re-adding a dropped column with any type that can
+# interpret the dropped type's values - the same rule as for altering the
+# type of an existing column (see #24305, #24290, and test_alter_table.py::
+# test_readd_column_with_incompatible_type).
+# A varint can interpret any int value, so Scylla allows re-adding a dropped
+# int column as varint, which Cassandra forbids. So we changed this test to
+# check that this succeeds, and it is scylla_only.
+def testDropFixedAddVariable(cql, test_keyspace, scylla_only):
     with create_table(cql, test_keyspace, "(k int, c int, v int, PRIMARY KEY (k, c))") as table:
         execute(cql, table, "alter table %s drop v")
-        with pytest.raises(InvalidRequest):
-            execute(cql, table, "alter table %s add v varint")
+        execute(cql, table, "alter table %s add v varint")
 
-# Reproduces #24305 (Scylla allows re-adding a dropped column with an
-# incompatible type)
-@pytest.mark.xfail(reason="#24305")
-def testDropSimpleAddComplex(cql, test_keyspace):
+# Scylla deliberately allows re-adding a dropped column with any type that can
+# interpret the dropped type's values - the same rule as for altering the
+# type of an existing column (see #24305, #24290, and test_alter_table.py::
+# test_readd_column_with_incompatible_type).
+# A blob can hold any value, so Scylla allows re-adding a dropped set<text>
+# column as a blob, which Cassandra forbids. So we changed this test to check
+# that this succeeds, and it is scylla_only.
+def testDropSimpleAddComplex(cql, test_keyspace, scylla_only):
     with create_table(cql, test_keyspace, "(k int, c int, v set<text>, PRIMARY KEY (k, c))") as table:
         execute(cql, table, "alter table %s drop v")
-        with pytest.raises(InvalidRequest):
-            execute(cql, table, "alter table %s add v blob")
+        execute(cql, table, "alter table %s add v blob")
 
 def testrenameToEmptyTest(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int, c1 int, v int, PRIMARY KEY (k, c1))") as table:

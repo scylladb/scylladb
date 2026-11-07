@@ -13,8 +13,8 @@ from cassandra.policies import WhiteListRoundRobinPolicy
 
 logger = logging.getLogger(__name__)
 
-async def create_server_and_cqls(manager, cqls_num):
-    server = await manager.server_add()
+async def create_server_and_cqls(manager, cqls_num, config=None):
+    server = await manager.server_add(config=config)
 
     def create_cluster_connection():
         return manager.con_gen([server.ip_addr],
@@ -42,7 +42,10 @@ async def test_changed_prepared_statement_metadata_columns(manager):
             assert len(cql2.execute(prepared2).one()) == 3
 
 async def test_changed_prepared_statement_metadata_types(manager):
-    cql1, cql2, cql3 = await create_server_and_cqls(manager, cqls_num=3)
+    # The test re-adds a dropped int column as text, which can't interpret int
+    # values, so it needs this option to be allowed.
+    cql1, cql2, cql3 = await create_server_and_cqls(manager, cqls_num=3,
+            config={'allow_readd_column_with_incompatible_type': True})
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1};") as ks:
         async with new_test_table(manager, ks, "pk BIGINT PRIMARY KEY, c INT") as table:

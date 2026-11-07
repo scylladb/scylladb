@@ -1733,8 +1733,6 @@ static void add_table_params_to_mutations(mutation& m, const clustering_key& cke
     store_map(m, ckey, "extensions", timestamp, map);
 }
 
-static data_type expand_user_type(data_type);
-
 static std::vector<data_type> expand_user_types(const std::vector<data_type>& types) {
     std::vector<data_type> result;
     result.reserve(types.size());
@@ -1742,7 +1740,7 @@ static std::vector<data_type> expand_user_types(const std::vector<data_type>& ty
     return result;
 }
 
-static data_type expand_user_type(data_type original) {
+data_type expand_user_type(data_type original) {
     if (original->is_user_type()) {
         return tuple_type_impl::get_instance(
                         expand_user_types(
