@@ -326,6 +326,12 @@ private:
     // Mutable so that logically-const methods can call non-const methods on the
     // tracker (touch, insert) for LRU accounting.
     mutable cache_tracker* _cache_tracker = nullptr;
+    // The caching option of the table, which controls only lookups and populates. Evicts depend
+    // only on `_cache_tracker`, so a partition that stays cached while this is false stays correct.
+    bool _cache_enabled = false;
+    // Set by the first populate, so that drain_cache() does not scan an index that never had a
+    // cached partition. When it is true, `_cache_tracker` is set.
+    mutable bool _cache_used = false;
 
     // Currently we support a single subscriber for space accounting which is the segment manager.
     space_accounting_subscriber& _space_accounting;
@@ -357,7 +363,7 @@ private:
     auto make_entry_disposer() noexcept {
         return [this] (primary_index_entry* e) noexcept {
             with_allocator(standard_allocator(), [this, e] () noexcept {
-                if (_cache_tracker) {
+                if (e->_cached_entry) {
                     try {
                         _cache_tracker->evict(*e);
                     } catch (...) {}
@@ -409,6 +415,10 @@ private:
                 : self._partitions.end();
     }
 
+    bool reads_cache() const noexcept {
+        return _cache_tracker && _cache_enabled;
+    }
+
     index_read_guard start_read() const {
         return index_read_guard(_reads_phaser.start());
     }
@@ -418,9 +428,10 @@ private:
     }
 
 public:
-    explicit primary_index(space_accounting_subscriber& space_accounting, cache_tracker* ct)
+    explicit primary_index(space_accounting_subscriber& space_accounting, cache_tracker* ct, bool cache_enabled)
         : _partitions(dht::raw_token_less_comparator{})
         , _cache_tracker(ct)
+        , _cache_enabled(cache_enabled)
         , _space_accounting(space_accounting)
         {}
 
@@ -428,8 +439,12 @@ public:
         with_allocator(_tree_allocator, [this] { _partitions.clear(); });
     }
 
+    void set_cache_enabled(bool enabled) noexcept {
+        _cache_enabled = enabled;
+    }
+
     future<> drain_cache() {
-        if (_cache_tracker) {
+        if (_cache_used) {
             auto scan = this->scan();
             while (auto batch = scan.next_batch(1024)) {
                 for (const auto& pie : batch->entries) {
@@ -478,7 +493,7 @@ public:
     // the entry holds nothing, the cache is not enabled or the read does not use it. Counts a hit
     // or a miss and touches the LRU, like a point read does. The entry must belong to this index.
     std::optional<keyed_single_row_partition> lookup_cached(const primary_index_entry& e, const schema& target_schema, use_cache uses_cache) const {
-        if (!_cache_tracker || !uses_cache) {
+        if (!reads_cache() || !uses_cache) {
             return std::nullopt;
         }
         return _cache_tracker->read_partition(e, target_schema);
@@ -494,7 +509,7 @@ public:
             return std::nullopt;
         }
 
-        if (_cache_tracker && uses_cache) {
+        if (reads_cache() && uses_cache) {
             if (auto cached = _cache_tracker->read_partition(*it, target_schema)) {
                 return std::move(*cached);
             }
@@ -504,7 +519,7 @@ public:
 
     bool populate_cache(const primary_index_key& key, record_location read_location, const schema_ptr& schema, const partition_key& pk,
             const single_row_partition& partition) const {
-        if (!_cache_tracker) {
+        if (!reads_cache()) {
             return false;
         }
 
@@ -513,6 +528,7 @@ public:
             return false;
         }
 
+        _cache_used = true;
         _cache_tracker->populate(*it, schema, pk, partition);
         return true;
     }
@@ -560,7 +576,7 @@ public:
         if (hint.match) {
             if (cmp(i->_e, new_entry) <= 0) {
                 // Overwriting with newer data: evict the stale cached partition.
-                if (_cache_tracker) {
+                if (i->_cached_entry) {
                     _cache_tracker->evict(*i);
                 }
                 auto old_entry = i->_e;

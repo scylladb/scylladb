@@ -350,6 +350,55 @@ def test_logstor_mutation_fragments_caching_disabled(cql, test_keyspace):
         assert len(rows) == 3
         assert all(r.mutation_source.startswith('logstor-log:') for r in rows)
 
+def is_cached(cql, table, pk):
+    return bool(list(cql.execute(f"SELECT * FROM MUTATION_FRAGMENTS({table}) WHERE pk = {pk} AND mutation_source = 'logstor-cache'")))
+
+# Test that ALTER TABLE ... WITH caching = {'enabled': 'false'} takes effect at once.
+def test_logstor_alter_caching_disable(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int",
+                        " WITH storage_engine = 'logstor'") as table:
+        cql.execute(f"ALTER TABLE {table} WITH caching = {{'enabled': 'false'}}")
+        cql.execute(f"INSERT INTO {table} (pk, v) VALUES (1, 100)")
+        assert cql.execute(f"SELECT v FROM {table} WHERE pk = 1").one().v == 100
+        assert not is_cached(cql, table, 1)
+
+# Test that ALTER TABLE ... WITH caching = {'enabled': 'true'} takes effect at once.
+def test_logstor_alter_caching_enable(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int",
+                        " WITH storage_engine = 'logstor'"
+                        " AND caching = {'enabled': 'false'}") as table:
+        cql.execute(f"INSERT INTO {table} (pk, v) VALUES (1, 100)")
+        assert cql.execute(f"SELECT v FROM {table} WHERE pk = 1").one().v == 100
+        assert not is_cached(cql, table, 1)
+        cql.execute(f"ALTER TABLE {table} WITH caching = {{'enabled': 'true'}}")
+        assert cql.execute(f"SELECT v FROM {table} WHERE pk = 1").one().v == 100
+        assert is_cached(cql, table, 1)
+
+# A write while caching is disabled must evict a partition cached before, so that a read after
+# caching is enabled again does not return the old value.
+def test_logstor_alter_caching_overwrite_while_disabled(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int",
+                        " WITH storage_engine = 'logstor'") as table:
+        cql.execute(f"INSERT INTO {table} (pk, v) VALUES (1, 100)")
+        assert cql.execute(f"SELECT v FROM {table} WHERE pk = 1").one().v == 100
+        assert is_cached(cql, table, 1)
+        cql.execute(f"ALTER TABLE {table} WITH caching = {{'enabled': 'false'}}")
+        cql.execute(f"INSERT INTO {table} (pk, v) VALUES (1, 200)")
+        assert not is_cached(cql, table, 1)
+        cql.execute(f"ALTER TABLE {table} WITH caching = {{'enabled': 'true'}}")
+        assert cql.execute(f"SELECT v FROM {table} WHERE pk = 1").one().v == 200
+
+# Test that an ALTER of another option keeps the cached partitions.
+def test_logstor_alter_other_option_keeps_cache(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int",
+                        " WITH storage_engine = 'logstor'") as table:
+        cql.execute(f"INSERT INTO {table} (pk, v) VALUES (1, 100)")
+        assert cql.execute(f"SELECT v FROM {table} WHERE pk = 1").one().v == 100
+        assert is_cached(cql, table, 1)
+        cql.execute(f"ALTER TABLE {table} WITH comment = 'new comment'")
+        assert is_cached(cql, table, 1)
+        assert cql.execute(f"SELECT v FROM {table} WHERE pk = 1").one().v == 100
+
 # Test that the log source name identifies the segment holding the record, and
 # is therefore shared by all the partitions stored in that segment - the way an
 # sstable source is shared by the partitions of one sstable. A dump can be

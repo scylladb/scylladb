@@ -94,7 +94,7 @@ public:
     test_logstor_group(schema_ptr schema, replica::logstor::logstor& ls, bool cache_enabled = false)
         : logstor_group(ls.get_segment_manager().get_segment_size(), &ls.get_segment_manager().shard_segment_stats())
         , _table_id(schema->id())
-        , _owned_index(ls.make_primary_index(cache_enabled))
+        , _owned_index(ls.make_primary_index(cache_enabled, cache_enabled))
         , _index(*_owned_index)
         , _cm(ls.get_compaction_manager()) {
         _cm.add(*this);

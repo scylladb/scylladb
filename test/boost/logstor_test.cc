@@ -1284,7 +1284,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_space_accounting) {
         }
     } accounting;
 
-    primary_index index(accounting, nullptr);
+    primary_index index(accounting, nullptr, false);
 
     // The index counts the bytes of the records it points at for the table it belongs to, which is
     // the same number the subscriber accumulates, so the two must agree after every operation.
@@ -1447,7 +1447,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_range_erase_and_clear_space_
         }
     } accounting;
 
-    primary_index index(accounting, nullptr);
+    primary_index index(accounting, nullptr, false);
 
     auto check_live_bytes = [&] (ssize_t expected) {
         BOOST_REQUIRE_EQUAL(accounting.live_bytes, expected);
@@ -3935,7 +3935,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_reader_produces_nothing_for_empty_ranges) 
 // larger of the two and it has to follow the index up and back down.
 SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_memory_usage) {
     auto schema = make_kv_schema();
-    primary_index index(noop_space_accounting, nullptr);
+    primary_index index(noop_space_accounting, nullptr, false);
 
     // The tree builds its root on the first insert, so an untouched index holds nothing.
     BOOST_REQUIRE_EQUAL(index.get_entries_memory_usage(), 0u);
