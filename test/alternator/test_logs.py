@@ -36,6 +36,8 @@ from botocore.exceptions import ClientError
 from test.pylib.skip_types import skip_env
 
 from .util import new_test_table, scylla_config_temporary, new_role, new_dynamodb
+from .test_export import make_s3_client
+from .test_import import INVALID_LINES, VALID_ITEMS, dynamodb_json_lines, finished_import, new_s3_bucket, upload_lines
 
 # Utility function for trying to find a local process which is listening to
 # the given local IP address and port. If such a process exists, return its
@@ -272,3 +274,17 @@ def test_log_authorization_failure(dynamodb, cql, logfile, test_table_s, enforce
                 else:
                     assert operation_succeeded
                 wait_for_log(logfile, f'^WARN .*SELECT access on table.*{test_table_s.name} is denied to role {role}.*client address')
+
+# An import reports each item which fails validation in the log, with its S3
+# object and line, as Alternator has no CloudWatch log for import errors.
+@pytest.mark.xfail(reason="SCYLLADB-1369")
+def test_log_import_invalid_item(dynamodb, logfile):
+    s3 = make_s3_client(dynamodb)
+    with new_s3_bucket(s3) as bucket:
+        prefix = upload_lines(s3, bucket, dynamodb_json_lines(VALID_ITEMS[:1]) +
+                              [INVALID_LINES['missing partition key']], context='log')
+        with finished_import(dynamodb, bucket, prefix) as (_, final):
+            assert final['ErrorCount'] == 1
+            # The invalid item is on line 2 of the object: the first number
+            # after the object's key is the line number.
+            wait_for_log(logfile, rf'^WARN .*{re.escape(prefix)}00000\.json[^0-9\n]*2\b')
