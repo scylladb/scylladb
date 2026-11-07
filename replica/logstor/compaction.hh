@@ -107,6 +107,16 @@ struct segment_descriptor : public log_heap_hook<segment_descriptor_hist_options
     }
 };
 
+} // namespace replica::logstor
+
+// Defined in segment_manager.cc. C++ requires an explicit specialization to
+// be declared before its first use in every source file that uses it, so
+// declare it here, next to segment_descriptor_hist, which uses it.
+template<>
+size_t hist_key<replica::logstor::segment_descriptor>(const replica::logstor::segment_descriptor&);
+
+namespace replica::logstor {
+
 using segment_descriptor_hist = log_heap<segment_descriptor, segment_descriptor_hist_options>;
 
 // The segments of one compaction group, and the statistics of their live record bytes.
