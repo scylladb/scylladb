@@ -12,7 +12,7 @@
 import pytest
 import time
 from botocore.exceptions import ClientError
-from test.alternator.util import is_aws, new_test_table, unique_table_name
+from test.alternator.util import is_aws, new_test_table
 
 # The warm throughput every table starts with in DynamoDB, which is also the
 # least it can be configured with - see
@@ -94,25 +94,16 @@ def test_create_table_warm_throughput_one_unit(dynamodb, unit, minimum):
 # needs.
 def test_create_table_warm_throughput_response(dynamodb):
     warm = warm_throughput(1.02, 1.02)
-    name = unique_table_name()
-    got = dynamodb.meta.client.create_table(TableName=name,
-        KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
-        AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}],
-        BillingMode='PAY_PER_REQUEST',
-        WarmThroughput=warm)['TableDescription']
-    try:
+    with new_test_table(dynamodb,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}],
+            WarmThroughput=warm) as table:
+        # boto3 fills table.meta.data with the TableDescription returned by
+        # CreateTable (see create_test_table()).
+        got = table.meta.data
         assert got['WarmThroughput']['ReadUnitsPerSecond'] == warm['ReadUnitsPerSecond']
         assert got['WarmThroughput']['WriteUnitsPerSecond'] == warm['WriteUnitsPerSecond']
         assert got['WarmThroughput']['Status'] in ['ACTIVE', 'UPDATING']
-    finally:
-        # DynamoDB's CreateTable is asynchronous; the table cannot be deleted
-        # until it finishes being created. The waiter is tuned as in
-        # util.create_test_table(), whose default frequency is too slow.
-        waiter = dynamodb.meta.client.get_waiter('table_exists')
-        waiter.config.delay = 1
-        waiter.config.max_attempts = 200
-        waiter.wait(TableName=name)
-        dynamodb.meta.client.delete_table(TableName=name)
 
 # Once raised, a warm throughput cannot be lowered again - the documentation
 # says "After warm throughput is increased, the values can't be decreased", and
