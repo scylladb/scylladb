@@ -664,21 +664,30 @@ future<locator::effective_replication_map_ptr> sstables_loader::await_topology_q
     co_return std::move(erm);
 }
 
-// Loading only the primary replica relies on a repair to fill the others in, which a
-// strongly consistent table has no use for and refuses. Checked up front by the entry
-// points, before anything is downloaded or opened, and again by load_and_stream().
+// Nothing reconciles the replicas of a strongly consistent tablet after a load: raft
+// replicates only what goes through its log, and such a table is never repaired. So every
+// load must reach every replica of each tablet. Loading only the primary replica relies on
+// a repair to fill the others in, and a scope other than `all` sends each node's sstables
+// to the replicas of its own node, rack or datacenter only; either leaves the replicas
+// with different data for good. Checked up front by the entry points, before anything is
+// downloaded or opened, and again by load_and_stream().
 //
 // TODO: thin replication (SCYLLADB-204): every sstable is streamed to every replica
 // of its tablet, and the tablet's thin replica must be left out.
-static void check_primary_replica_only_load(const replica::table& tbl, primary_replica_only primary) {
-    if (!primary || !tbl.uses_tablets()) {
+static void check_strongly_consistent_load(const replica::table& tbl, primary_replica_only primary, sstables_loader::stream_scope scope) {
+    if ((!primary && scope == sstables_loader::stream_scope::all) || !tbl.uses_tablets()) {
         return;
     }
     const auto& s = *tbl.schema();
-    if (tbl.get_effective_replication_map()->get_token_metadata().tablets().get_tablet_map(s.id()).has_raft_info()) {
+    if (!tbl.get_effective_replication_map()->get_token_metadata().tablets().get_tablet_map(s.id()).has_raft_info()) {
+        return;
+    }
+    if (primary) {
         throw std::invalid_argument(format("Cannot load {}.{} with primary_replica_only: a strongly consistent table needs no repair to fill in the other replicas, load every replica instead",
                 s.ks_name(), s.cf_name()));
     }
+    throw std::invalid_argument(format("Cannot load {}.{} with scope {}: every replica of a strongly consistent tablet must receive every loaded sstable, use scope 'all'",
+            s.ks_name(), s.cf_name(), scope));
 }
 
 future<> sstables_loader::load_and_stream(sstring ks_name, sstring cf_name,
@@ -698,7 +707,7 @@ future<> sstables_loader::load_and_stream(sstring ks_name, sstring cf_name,
     auto& tbl = _db.local().find_column_family(table_id);
     auto stream_guard = tbl.stream_in_progress();
 
-    check_primary_replica_only_load(tbl, primary);
+    check_strongly_consistent_load(tbl, primary, scope);
 
     std::unique_ptr<sstable_streamer> streamer;
     if (tbl.uses_tablets()) {
@@ -744,7 +753,7 @@ future<> sstables_loader::load_new_sstables(sstring ks_name, sstring cf_name,
             ks_name, cf_name, load_and_stream_desc, primary, skip_cleanup, skip_reshape, scope);
     try {
         if (load_and_stream) {
-            check_primary_replica_only_load(_db.local().find_column_family(ks_name, cf_name), primary_replica_only(primary));
+            check_strongly_consistent_load(_db.local().find_column_family(ks_name, cf_name), primary_replica_only(primary), scope);
 
             ::table_id table_id;
             std::vector<std::vector<sstables::shared_sstable>> sstables_on_shards;
@@ -940,7 +949,7 @@ future<tasks::task_id> sstables_loader::download_new_sstables(sstring ks_name, s
         throw std::invalid_argument(format("Cannot restore {}.{} with /storage_service/restore: the table keeps its sstables on object storage, use /storage_service/tablets/restore",
                 ks_name, cf_name));
     }
-    check_primary_replica_only_load(_db.local().find_column_family(ks_name, cf_name), primary_replica_only(primary_replica));
+    check_strongly_consistent_load(_db.local().find_column_family(ks_name, cf_name), primary_replica_only(primary_replica), scope);
     llog.info("Restore sstables from {}({}) to {}.{} using scope={}, primary_replica={}", endpoint, prefix, ks_name, cf_name, scope, primary_replica);
 
     auto progress = make_lw_shared<download_progress>();

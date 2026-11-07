@@ -863,18 +863,20 @@ async def test_restore_with_streaming_scopes_strongly_consistent(build_mode: str
     '''Check that load-and-stream based restore works for a strongly consistent table.
 
     The mutations are streamed straight into the replicas' memtables, outside of raft,
-    which is fine for an offline restore into an empty table: every replica gets the
-    same data. Primary-replica-only is left out: it relies on a repair afterwards, which
-    a strongly consistent table refuses.'''
+    which is fine for an offline restore: every replica gets the same data as long as
+    every node streams what it loads to every replica, so only scope 'all' runs here.
+    Primary-replica-only and the other scopes are refused, see
+    test_load_primary_replica_only_strongly_consistent_refused.'''
     await do_test_streaming_scopes(build_mode, manager, topology, SSTablesOnObjectStorage(object_storage), strongly_consistent=True)
 
 
 async def test_load_primary_replica_only_strongly_consistent_refused(build_mode: str, manager: ScyllaClusterManager, object_storage):
-    '''A primary-replica-only load into a strongly consistent table is refused up front.
+    '''A load into a strongly consistent table that would not reach every replica is refused up front.
 
-    It relies on a repair to fill the other replicas in, which such a table refuses. The
-    restore endpoint fails before it starts a task or downloads anything, and nodetool
-    refresh fails before it scans the upload directory.'''
+    Primary-replica-only relies on a repair to fill the other replicas in, which such a
+    table refuses; a scope other than 'all' streams each node's sstables to its own node,
+    rack or datacenter only. The restore endpoint fails before it starts a task or
+    downloads anything, and nodetool refresh fails before it scans the upload directory.'''
     topology = topo(rf = 2, nodes = 2, racks = 2, dcs = 1)
     servers, host_ids = await create_cluster(topology, manager, logger, object_storage, extra_config=SC_CONFIG)
     cql = manager.get_cql()
@@ -891,6 +893,14 @@ async def test_load_primary_replica_only_strongly_consistent_refused(build_mode:
 
         with pytest.raises(HTTPError, match='primary_replica_only'):
             await manager.api.load_new_sstables(servers[0].ip_addr, ks, cf, primary_replica=True, load_and_stream=True)
+
+        # A scope other than 'all' would stream each node's sstables to a subset of the
+        # replicas, which nothing reconciles for a strongly consistent table.
+        for scope in ['node', 'rack', 'dc']:
+            with pytest.raises(HTTPError, match=f"scope {scope}"):
+                await manager.api.restore(servers[0].ip_addr, ks, cf, object_storage.address, object_storage.bucket_name, 'nothing', ['nothing-TOC.txt'], scope=scope)
+            with pytest.raises(HTTPError, match=f"scope {scope}"):
+                await manager.api.load_new_sstables(servers[0].ip_addr, ks, cf, scope=scope, load_and_stream=True)
 
         # Every other variant stays allowed: an empty load succeeds.
         await manager.api.load_new_sstables(servers[0].ip_addr, ks, cf, primary_replica=False, load_and_stream=True)
@@ -921,7 +931,9 @@ async def do_test_streaming_scopes(build_mode: str, manager: ScyllaClusterManage
     num_keys = 10
     original_min_tablet_count=5
 
-    scopes = ['rack', 'dc'] if build_mode in DEBUG_MODES else ['all', 'dc', 'rack', 'node']
+    # Every replica of a strongly consistent tablet must receive every loaded sstable, so
+    # only scope 'all' is allowed, and primary-replica-only is refused.
+    scopes = ['all'] if strongly_consistent else ['rack', 'dc'] if build_mode in DEBUG_MODES else ['all', 'dc', 'rack', 'node']
     pros = [ False ] if strongly_consistent else [ True, False ] # Primary Replica Only
     restored_min_tablet_counts = [original_min_tablet_count] if (build_mode in DEBUG_MODES or sstables_storage.object_storage is None) else [2, original_min_tablet_count, 10]
     
