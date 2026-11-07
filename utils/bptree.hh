@@ -1393,7 +1393,13 @@ class node final {
         destroy(*this);
     }
 
-    void insert_into_full(kid_index idx, Key k, node_or_data nd, Less less, prealloc& nodes) noexcept {
+    /*
+     * Makes room in a full node for a new key at idx by pushing an
+     * existing key to a sibling that has room, and returns the index for
+     * the new key afterwards. The node is still full on return when no
+     * sibling could take a key, and the caller splits it then.
+     */
+    kid_index push_to_sibling(kid_index idx, Less less) noexcept {
         if (!is_root()) {
             node& p = *_parent;
             kid_index i = p.index_for(_keys[0].v, less);
@@ -1430,18 +1436,25 @@ class node final {
                     right->grab_from_left(*this, p._keys[i]);
                 }
             }
-
-            if (_num_keys < NodeSize) {
-                do_insert(idx, std::move(k), nd, less);
-                nodes.drain();
-                return;
-            }
-
-            /*
-             * We can only get here if both ->can_push_to() checks above
-             * had failed. In this case -- go ahead and split this.
-             */
         }
+
+        return idx;
+    }
+
+    void insert_into_full(kid_index idx, Key k, node_or_data nd, Less less, prealloc& nodes) noexcept {
+        idx = push_to_sibling(idx, less);
+
+        if (_num_keys < NodeSize) {
+            do_insert(idx, std::move(k), nd, less);
+            nodes.drain();
+            return;
+        }
+
+        /*
+         * We can only get here if both ->can_push_to() checks in
+         * push_to_sibling() had failed. In this case -- go ahead
+         * and split this.
+         */
 
         split_and_insert(idx, std::move(k), nd, less, nodes);
     }
@@ -1629,9 +1642,23 @@ class node final {
         prealloc nodes;
 
         /*
-         * Prepare the nodes for split in advaice, if the node::create will
+         * A full leaf first pushes a key to a sibling when one has room,
+         * which needs no new node and is the common case once the leaves
+         * have filled up. A push leaves the leaf with room, so the loop
+         * below allocates nothing after it, and an insert that throws
+         * leaves the tree as it was.
+         */
+        if (_num_keys == NodeSize) {
+            i = push_to_sibling(i, less);
+        }
+
+        /*
+         * Prepare the nodes for split in advance, if the node::create will
          * start throwing while splitting we'll have troubles "unsplitting"
-         * the nodes back.
+         * the nodes back. A full node above the leaf gets its node here
+         * even when it will push instead of splitting, and it tries the
+         * push in insert_into_full() after the split below, because a
+         * full inner node is much less frequent than a full leaf.
          */
         node* cur = this;
         while (cur->_num_keys == NodeSize) {
