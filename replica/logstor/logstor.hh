@@ -28,8 +28,6 @@ class frozen_mutation;
 
 namespace replica {
 
-class database;
-
 namespace logstor {
 
 extern seastar::logger logstor_logger;
@@ -61,8 +59,8 @@ public:
     logstor(const logstor&) = delete;
     logstor& operator=(const logstor&) = delete;
 
-    future<> do_recovery(replica::database&);
-    future<> do_recovery_for_test();
+    // The catalog must live until start() returns, see segment_manager::do_recovery().
+    future<recovery_summary> do_recovery(recovery_catalog&);
 
     future<> start();
     future<> stop();

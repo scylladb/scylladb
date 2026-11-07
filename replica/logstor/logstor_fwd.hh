@@ -21,5 +21,6 @@ class compaction_manager;
 class segment_set;
 struct segment_snapshot;
 class segment_stream_sink;
+class recovery_catalog;
 
 } // namespace replica::logstor
