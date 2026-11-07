@@ -19,6 +19,7 @@ from cassandra.concurrent import execute_concurrent_with_args
 from cassandra.query import SimpleStatement, dict_factory
 from concurrent.futures import ThreadPoolExecutor
 
+from test import DEBUG_MODES
 from dtest_class import Tester, create_cf, create_ks, read_barrier
 from tools.assertions import assert_all, assert_invalid
 from tools.cluster_topology import generate_cluster_topology
@@ -559,7 +560,7 @@ class TestLargePartitionAlterSchema(Tester):
         threads = []
         timeout = 300
         ck_end = 5000
-        if self.cluster.scylla_mode == "debug":
+        if self.cluster.scylla_mode in DEBUG_MODES:
             timeout = 900
             ck_end = 500
         with ThreadPoolExecutor(max_workers=2) as executor:
@@ -602,7 +603,7 @@ class TestLargePartitionAlterSchema(Tester):
         threads = []
         timeout = 300
         ck_end = 5000
-        if self.cluster.scylla_mode == "debug":
+        if self.cluster.scylla_mode in DEBUG_MODES:
             timeout = 900
             ck_end = 500
         with ThreadPoolExecutor(max_workers=2) as executor:

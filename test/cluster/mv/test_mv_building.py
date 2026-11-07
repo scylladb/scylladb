@@ -8,6 +8,7 @@ import pytest
 import logging
 import random
 import time
+from test import DEBUG_MODES
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.tablets import get_tablet_replica
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, wait_for_view
@@ -49,7 +50,7 @@ async def resume_view_builder(manager: ManagerClient, servers):
 #
 # For more context, see: https://github.com/scylladb/scylladb/issues/21232.
 # This test reproduces the issue in non-tablet mode.
-@pytest.mark.skip_mode(mode='debug', reason='the test needs to do some work which takes too much time in debug mode')
+@pytest.mark.skip_mode(mode=DEBUG_MODES, reason='the test needs to do some work which takes too much time in debug mode')
 async def test_view_building_scheduling_group(manager: ScyllaClusterManager):
     # Note: The view building coordinator works in the gossiping scheduling group,
     #       and we intentionally omit it here.

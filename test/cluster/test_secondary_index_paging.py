@@ -14,6 +14,7 @@ import pytest
 from cassandra.protocol import InvalidRequest  # type: ignore
 from cassandra.query import SimpleStatement  # type: ignore
 
+from test import DEBUG_MODES
 from test.cluster.util import new_test_keyspace
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.scylla_server import ScyllaVersionDescription
@@ -143,7 +144,7 @@ async def indexed_table(cql, hosts, ks):
 
 
 @pytest.mark.skip_mode(mode='release', reason='dev mode is enough for this test')
-@pytest.mark.skip_mode(mode='debug', reason='dev mode is enough for this test')
+@pytest.mark.skip_mode(mode=DEBUG_MODES, reason='dev mode is enough for this test')
 async def test_paged_read_crosses_versions(manager: ScyllaClusterManager,
         scylla_2025_1: ScyllaVersionDescription, scylla_binary: str) -> None:
     """A paged read has to survive a rolling upgrade in both directions: a state
@@ -171,7 +172,7 @@ async def test_paged_read_crosses_versions(manager: ScyllaClusterManager,
 
 
 @pytest.mark.skip_mode(mode='release', reason='dev mode is enough for this test')
-@pytest.mark.skip_mode(mode='debug', reason='dev mode is enough for this test')
+@pytest.mark.skip_mode(mode=DEBUG_MODES, reason='dev mode is enough for this test')
 async def test_resuming_a_pre_plan_paging_state_is_not_refused(manager: ScyllaClusterManager,
         scylla_2025_1: ScyllaVersionDescription, scylla_binary: str) -> None:
     """A state that records no plan has nothing to pin, so dropping the index it

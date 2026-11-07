@@ -25,6 +25,7 @@ import pytest
 from cassandra import ConsistencyLevel, WriteTimeout, ReadTimeout, OperationTimedOut
 from cassandra.query import SimpleStatement, PreparedStatement
 
+from test import DEBUG_MODES
 from test.cluster.lwt.lwt_common import BaseLWTTester, is_uncertainty_timeout
 from test.cluster.util import new_test_keyspace
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
@@ -299,7 +300,7 @@ async def test_lwt_contention_many_workers(manager: ScyllaClusterManager, scale_
 
     This is a tier2-only test due to the high contention load.
     """
-    num_workers = 100 if build_mode == "debug" else 300
+    num_workers = 100 if build_mode in DEBUG_MODES else 300
     await _run_workload(
         manager, scale_timeout, contention_cluster,
         num_workers=num_workers,

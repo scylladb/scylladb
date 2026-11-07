@@ -5,6 +5,7 @@
 #
 from pathlib import Path
 
+from test import DEBUG_MODES
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.random_tables import RandomTables, Column, IntType, CounterType
 from test.pylib.util import unique_name, wait_for_cql_and_get_hosts, wait_for
@@ -352,7 +353,7 @@ async def test_fence_lwt_during_bootstap(manager: ScyllaClusterManager):
 
 
 @pytest.mark.skip_mode(mode='release', reason='dev mode is enough for this test')
-@pytest.mark.skip_mode(mode='debug', reason='dev mode is enough for this test')
+@pytest.mark.skip_mode(mode=DEBUG_MODES, reason='dev mode is enough for this test')
 async def test_lwt_fencing_upgrade(manager: ScyllaClusterManager, scylla_2025_1: ScyllaVersionDescription, scylla_binary: Path):
     """
     The test runs some LWT workload on a vnodes-based table, rolling-restarts nodes
