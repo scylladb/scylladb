@@ -32,20 +32,18 @@ converting_mutation_partition_applier::upgrade_cell(const abstract_type& new_typ
     }
 }
 
-void
-converting_mutation_partition_applier::accept_cell(row& dst, column_kind kind, const column_definition& new_def, const abstract_type& old_type, atomic_cell_view cell,
-        db::large_data_cache_tracker* tracker) {
+std::optional<atomic_cell_or_collection>
+converting_mutation_partition_applier::convert_cell(column_kind kind, const column_definition& new_def, const abstract_type& old_type, atomic_cell_view cell) {
     if (!is_compatible(new_def, old_type, kind) || cell.timestamp() <= new_def.dropped_at()) {
-        return;
+        return std::nullopt;
     }
-    dst.apply(new_def, upgrade_cell(*new_def.type, old_type, cell), {}, tracker);
+    return upgrade_cell(*new_def.type, old_type, cell);
 }
 
-void
-converting_mutation_partition_applier::accept_cell(row& dst, column_kind kind, const column_definition& new_def, const abstract_type& old_type, collection_mutation_view cell,
-        db::large_data_cache_tracker* tracker) {
+std::optional<atomic_cell_or_collection>
+converting_mutation_partition_applier::convert_cell(column_kind kind, const column_definition& new_def, const abstract_type& old_type, collection_mutation_view cell) {
     if (!is_compatible(new_def, old_type, kind)) {
-        return;
+        return std::nullopt;
     }
 
     auto tomb = cell.tomb();
@@ -85,8 +83,26 @@ converting_mutation_partition_applier::accept_cell(row& dst, column_kind kind, c
         }
     ));
 
-    if (!new_view.empty()) {
-        dst.apply(new_def, std::move(new_view).finish(), {}, tracker);
+    if (new_view.empty()) {
+        return std::nullopt;
+    }
+    return std::move(new_view).finish();
+}
+
+std::optional<atomic_cell_or_collection>
+converting_mutation_partition_applier::convert_cell(column_kind kind, const column_definition& new_def, const column_definition& old_def, atomic_cell_or_collection_view cell) {
+    if (new_def.is_atomic()) {
+        return convert_cell(kind, new_def, *old_def.type, cell.as_atomic_cell(old_def));
+    } else {
+        return convert_cell(kind, new_def, *old_def.type, cell.as_collection_mutation());
+    }
+}
+
+template <typename Cell>
+void
+converting_mutation_partition_applier::accept_cell(row& dst, column_kind kind, const column_definition& new_def, const abstract_type& old_type, Cell cell) {
+    if (auto converted = convert_cell(kind, new_def, old_type, cell)) {
+        dst.apply(new_def, std::move(*converted));
     }
 }
 
@@ -164,12 +180,21 @@ converting_mutation_partition_applier::accept_row_cell(column_id id, collection_
     }
 }
 
-void
-converting_mutation_partition_applier::append_cell(row& dst, column_kind kind, const column_definition& new_def, const column_definition& old_def, const atomic_cell_or_collection& cell,
-        db::large_data_cache_tracker* tracker) {
-    if (new_def.is_atomic()) {
-        accept_cell(dst, kind, new_def, *old_def.type, cell.as_atomic_cell(old_def), tracker);
-    } else {
-        accept_cell(dst, kind, new_def, *old_def.type, cell.as_collection_mutation(), tracker);
-    }
+row
+converting_mutation_partition_applier::upgrade_row(const schema& new_schema, const schema& old_schema, column_kind kind, const row& r) {
+    // Columns of a kind are sorted by name in every schema version, so
+    // the converted cells are still in column order.
+    row new_row;
+    row::cell_appender cells(new_row);
+    r.for_each_cell([&] (column_id id, atomic_cell_or_collection_view cell) {
+        const column_definition& old_def = old_schema.column_at(kind, id);
+        const column_definition* new_def = new_schema.get_column_definition(old_def.name());
+        if (new_def) {
+            if (auto converted = convert_cell(kind, *new_def, old_def, cell)) {
+                cells.append(new_def->id, std::move(*converted));
+            }
+        }
+    });
+    cells.finish();
+    return new_row;
 }

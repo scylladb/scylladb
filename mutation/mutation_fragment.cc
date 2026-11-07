@@ -408,7 +408,7 @@ bool mutation_fragment_v2::relevant_for_range(const schema& s, position_in_parti
 
 template<typename Hasher>
 void appending_hash<mutation_fragment>::operator()(Hasher& h, const mutation_fragment& mf, const schema& s) const {
-    auto hash_cell = [&] (const column_definition& col, const atomic_cell_or_collection& cell) {
+    auto hash_cell = [&] (const column_definition& col, atomic_cell_or_collection_view cell) {
         feed_hash(h, col.kind);
         feed_hash(h, col.id);
         feed_hash(h, cell, col);
@@ -419,13 +419,13 @@ void appending_hash<mutation_fragment>::operator()(Hasher& h, const mutation_fra
             feed_hash(h, cr.key(), s);
             feed_hash(h, cr.tomb());
             feed_hash(h, cr.marker());
-            cr.cells().for_each_cell([&] (column_id id, const atomic_cell_or_collection& cell) {
+            cr.cells().for_each_cell([&] (column_id id, atomic_cell_or_collection_view cell) {
                 auto&& col = s.regular_column_at(id);
                 hash_cell(col, cell);
             });
         },
         [&] (const static_row& sr) {
-            sr.cells().for_each_cell([&] (column_id id, const atomic_cell_or_collection& cell) {
+            sr.cells().for_each_cell([&] (column_id id, atomic_cell_or_collection_view cell) {
                 auto&& col = s.static_column_at(id);
                 hash_cell(col, cell);
             });

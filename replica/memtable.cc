@@ -59,7 +59,7 @@ void memtable::memtable_encoding_stats_collector::update(tombstone tomb) noexcep
 }
 
 void memtable::memtable_encoding_stats_collector::update(const ::schema& s, const row& r, column_kind kind) {
-    r.for_each_cell([this, &s, kind](column_id id, const atomic_cell_or_collection& item) {
+    r.for_each_cell([this, &s, kind](column_id id, atomic_cell_or_collection_view item) {
         auto& col = s.column_at(kind, id);
         if (col.is_atomic()) {
             update(item.as_atomic_cell(col));
@@ -812,6 +812,7 @@ memtable::apply(const frozen_mutation& m, const schema_ptr& m_schema,
             mutation_partition mp(*m_schema);
             partition_builder pb(*m_schema, mp);
             m.partition().accept(*m_schema, pb);
+            pb.finish();
             guardrails.check(*m_schema, mp, m.key(), violations_out);
             auto& p = find_or_create_partition_slow(m.key());
             _stats_collector.update(*m_schema, mp);

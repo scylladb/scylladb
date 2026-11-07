@@ -796,7 +796,7 @@ int collection_index_l(lua_State* l) {
 int push_cells(lua_State* l, const row& cells, column_kind kind) {
     auto& schema = get_schema_l(l);
     lua_createtable(l, 0, 0);
-    cells.for_each_cell([l, &schema, kind] (column_id id, const atomic_cell_or_collection& cell) {
+    cells.for_each_cell([l, &schema, kind] (column_id id, atomic_cell_or_collection_view cell) {
         auto cdef = schema.column_at(kind, id);
         if (cdef.is_atomic()) {
             push_userdata<atomic_cell_with_type>(l, cell.as_atomic_cell(cdef), cdef.type);

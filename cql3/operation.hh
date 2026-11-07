@@ -17,6 +17,7 @@
 #include "cql3/column_identifier.hh"
 #include "cql3/expr/expression.hh"
 #include "cql3/expr/unset.hh"
+#include "cql3/mutation_cell_collector.hh"
 
 #include <optional>
 
@@ -104,7 +105,7 @@ public:
     /**
      * Execute the operation. Check should_skip_operation() first.
      */
-    virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) = 0;
+    virtual void execute(mutation_cell_collector& m, const clustering_key_prefix& prefix, const update_parameters& params) = 0;
 
     bool should_skip_operation(const query_options& qo) const {
         return _unset_guard.is_unset(qo);
