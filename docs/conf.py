@@ -61,6 +61,7 @@ extensions = [
     "scylladb_aws_images",
     "scylladb_azure_images",
     "scylladb_gcp_images",
+    "scylladb_oci_images",
     "scylladb_include_flag",
     "scylladb_dynamic_substitutions",
     "scylladb_swagger",
