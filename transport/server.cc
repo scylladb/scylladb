@@ -431,6 +431,16 @@ void cql_server::init_messaging_service() {
             co_await utils::get_local_injector().inject("wait_before_handling_forwarded_request", utils::wait_for_message(60s));
 
             co_return co_await container().invoke_on(shard, [src_host, req = std::move(req)] (cql_server& shard_svc) mutable -> future<forward_cql_execute_response> {
+                // The request runs with this shard's abort source, like a request from
+                // one of this shard's own connections, but no connection of this shard
+                // waits for it: the client's connection is on the node that forwarded
+                // it. Hold the gate, so that shutdown() waits for the request, as it
+                // does for the connections, before it aborts them (SCYLLADB-5594).
+                //
+                // Once the gate is closed, the abort may fire at any moment. The request
+                // still runs: a node that has stepped down usually knows the new leader
+                // and redirects the request without touching the abort source.
+                auto gate_holder = shard_svc._gate.try_hold();
                 service::client_state cs(shard_svc._auth_service,
                     &shard_svc._sl_controller,
                     std::move(req.client_state),
@@ -2214,6 +2224,12 @@ cql_server::process(uint16_t stream, request_reader in, service::client_state& c
             auto gcs = client_state.move_to_other_shard();
             auto gt = tracing::global_trace_state_ptr(trace_state);
             msg = co_await container().invoke_on(shard, sg, [&, stream, dialect, version, request_start_timestamp] (cql_server& server) -> future<process_fn_return_type> {
+                // The request runs with this shard's abort source, but its connection
+                // is on the shard it came from, so no connection of this shard waits
+                // for it. Hold the gate, so that shutdown() of this shard waits for the
+                // request, as it does for its own connections, before it aborts them
+                // (SCYLLADB-5405).
+                auto gate_holder = server._gate.try_hold();
                 bytes_ostream linearization_buffer;
                 request_reader in(is, linearization_buffer);
                 auto local_client_state = gcs.get(&server._abort_source);
