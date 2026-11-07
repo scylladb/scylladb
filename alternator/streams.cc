@@ -1367,7 +1367,7 @@ future<executor::request_return_type> executor::get_records(client_state& client
             query::tombstone_limit(_proxy.get_tombstone_limit()), query::row_limit(limit * mul));
 
     service::storage_proxy::result<service::storage_proxy::coordinator_query_result> rqr =
-            co_await _proxy.query_result(schema, std::move(command), std::move(partition_ranges), cl, service::storage_proxy::coordinator_query_options(default_timeout(), std::move(permit), client_state));
+            co_await _proxy.query_result(schema, std::move(command), std::move(partition_ranges), cl, service::storage_proxy::coordinator_query_options(request_timeout(client_state), std::move(permit), client_state));
     if (!rqr) {
         co_return create_api_error_from_coordinators_exception(std::move(rqr).assume_error());
     }

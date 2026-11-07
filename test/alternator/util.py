@@ -646,3 +646,22 @@ def new_dynamodb(dynamodb, role, key):
         yield ret
     finally:
         ret.meta.client.close()
+
+# Create a new DynamoDB Streams API client, similar to the existing
+# "dynamodbstreams" client - but authenticating with the given role and key.
+# This is a ScyllaDB-only feature.
+@contextmanager
+def new_dynamodb_streams(dynamodb, role, key):
+    if get_cert(dynamodb):
+        skip_env("new_dynamodb_streams() authenticates using SigV4 role/key pairs, which are not supported under mTLS")
+    url = dynamodb.meta.client._endpoint.host
+    config = dynamodb.meta.client._client_config
+    region_name = dynamodb.meta.client.meta.region_name
+    verify = not url.startswith('https')
+    ret = boto3.client('dynamodbstreams', endpoint_url=url, verify=verify,
+        aws_access_key_id=role, aws_secret_access_key=key,
+        region_name=region_name, config=config)
+    try:
+        yield ret
+    finally:
+        ret.close()
