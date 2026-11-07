@@ -26,11 +26,13 @@
 #include "sstables/sstables.hh"
 #include "sstables/sstable_directory.hh"
 #include "sstables/sstables_manager.hh"
+#include "sstables/storage.hh"
 #include "sstables/object_storage_client.hh"
 #include "sstables/component_type.hh"
 #include "utils/error_injection.hh"
 #include "utils/upload_progress.hh"
 #include "utils/memory_data_sink.hh"
+#include "utils/overloaded_functor.hh"
 #include "idl/snapshot_backup.dist.hh"
 #include "utils/assert.hh"
 
@@ -82,6 +84,13 @@ static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string&
             co_return; // throw?
         }
     }
+    // The catalog rows of a cluster snapshot live under the committed
+    // attempt's name, "{tag}/{attempt}". The backup's own rows, the
+    // manifest and the uploaded references keep the user tag.
+    const auto committed_name = co_await sth.find_committed_snapshot_name(snapshot_name);
+    if (!committed_name) {
+        throw std::runtime_error(fmt::format("Snapshot '{}' has no committed attempt", snapshot_name));
+    }
 
     auto locations = co_await sth.get_snapshot_remote_locations(snapshot_name);
     std::unordered_map<std::string, db::snapshot_state> state_filter;
@@ -111,6 +120,13 @@ static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string&
         state_filter[loc.datacenter] = filter;
     }
 
+    if (dc_locations.empty()) {
+        // Every requested location is already backed up. Abort early,
+        // the per-table loop below dereferences dc_locations.begin() and would crash the node.
+        snap_log.info("Snapshot {} is already backed up at every requested location", snapshot_name);
+        co_return;
+    }
+
     auto new_locations = dc_locations | std::views::transform([&](auto& p) {
         return db::snapshot_remote_location_entry {
             .snapshot_name = snapshot_name,
@@ -128,7 +144,7 @@ static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string&
         co_await sth.insert_snapshot_remote_locations(new_locations); // update status
     });
 
-    auto nodes = co_await sth.get_snapshot_nodes(snapshot_name);
+    auto nodes = co_await sth.get_snapshot_nodes(*committed_name);
     auto nodes_for_location = nodes | std::views::filter([&](auto& n) { return dc_locations.count(n.datacenter); });
     auto& db = snap_ctl.db().local();
 
@@ -142,6 +158,24 @@ static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string&
         auto schema = t.schema();
         auto tid = schema->id();
 
+        // Recording the unified layout prefix as the destination makes the manifest land correctly at
+        // {prefix}/snapshots/{ks}/{cf}/{tag}/manifest.json, which is where restore reads it from.
+        const bool remote_table = t.get_storage_options().is_object_storage_type();
+        auto effective_dst = [&] (const db::snapshot_dc_location& requested) -> db::snapshot_dc_location {
+            return std::visit(overloaded_functor{
+                [&] (const data_dictionary::storage_options::local&) {
+                    return requested;
+                },
+                [] (const data_dictionary::storage_options::object_storage& os) {
+                    return db::snapshot_dc_location {
+                        .endpoint = os.endpoint,
+                        .bucket = os.bucket,
+                        .prefix = os.location ? std::string(*os.location) : std::string(sstables::object_storage_default_prefix),
+                    };
+                },
+            }, t.get_storage_options().value);
+        };
+
         struct dst_data {
             utils::chunked_vector<db::snapshot_sstable_entry> sstables;
             std::unordered_set<std::string> datacenters;
@@ -152,7 +186,7 @@ static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string&
         std::unordered_map<std::string, std::unordered_map<size_t, db::snapshot_tablet_entry>> dc_tablets;
         for (auto& dc : dc_locations | std::views::keys) {
             dc_tablets.emplace(dc, 
-                (co_await sth.get_snapshot_tablets(snapshot_name, keyspace, table, dc))
+                (co_await sth.get_snapshot_tablets(*committed_name, keyspace, table, dc))
                 | std::views::transform([](auto& e) {
                     return std::make_pair(e.tablet_id, e);
                 })
@@ -178,9 +212,9 @@ static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string&
             SCYLLA_ASSERT(state_filter.count(node.datacenter));
             SCYLLA_ASSERT(dc_locations.count(node.datacenter));
 
-            auto& dst = dc_locations.at(node.datacenter);
+            auto dst = effective_dst(dc_locations.at(node.datacenter));
             auto& repair_master = repair_masters[dst];
-            auto sstables = co_await sth.get_snapshot_sstables(snapshot_name, keyspace, table, node.datacenter, node.rack);
+            auto sstables = co_await sth.get_snapshot_sstables(*committed_name, keyspace, table, node.datacenter, node.rack);
             auto& tablets = dc_tablets.at(node.datacenter);
 
             // eliminate all but one of the completed repair set.
@@ -230,7 +264,7 @@ static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string&
 
             auto [off, n, _]= node_sstables_dc.at(node.node);
             auto filter = state_filter.at(node.datacenter);
-            auto& dst = dc_locations.at(node.datacenter);
+            auto dst = effective_dst(dc_locations.at(node.datacenter));
             auto& dst_info = dst_mapping[dst];
 
             // filter out sstables already backed up
@@ -248,7 +282,7 @@ static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string&
                 for (auto& sst : sstables) {
                     sst.state = db::snapshot_state::local;
                 }
-                co_await sth.insert_snapshot_sstables(snapshot_name, keyspace, table, node.datacenter, node.rack, sstables);
+                co_await sth.insert_snapshot_sstables(*committed_name, keyspace, table, node.datacenter, node.rack, sstables);
             }
 
             // we don't really need/use this atm, but...
@@ -264,8 +298,10 @@ static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string&
             snap_log.info("Requesting backup of {}: {}", node.node, sstable_ids);
 
             try {
-                auto prefix = db::snapshot::sstables_location(dst.prefix);
-                co_await ser::snapshot_backup_rpc_verbs::send_backup_snapshot_sstables(&snap_ctl.ms(), node.node, tid, snapshot_name, dst.endpoint, dst.bucket, prefix, first_token, last_token, std::move(sstable_ids), remove_on_uploaded);
+                // For an object-storage table dst.prefix already names the
+                // data location
+                auto prefix = remote_table ? dst.prefix : db::snapshot::sstables_location(dst.prefix);
+                co_await ser::snapshot_backup_rpc_verbs::send_backup_snapshot_sstables(&snap_ctl.ms(), node.node, tid, *committed_name, dst.endpoint, dst.bucket, prefix, first_token, last_token, std::move(sstable_ids), remove_on_uploaded);
                 total_progress.completed += 1;
             } catch (...) {
                 snap_log.error("Exception requesting backup of {}:{} from {}", snapshot_name, sstable_ids, node.node);
@@ -278,8 +314,8 @@ static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string&
         // Note: atm, tablet mapping is same across all dcs. If this changes, we need to get this per dc,
         // each of which can shared dest with others. Thus we also need to change manifest grammar to allow
         // tablet info per dc.
-        auto tablets = co_await sth.get_snapshot_tablets(snapshot_name, keyspace, table, dc_locations.begin()->first);
-        auto tables = co_await sth.get_snapshot_tables(snapshot_name, keyspace, table);
+        auto tablets = co_await sth.get_snapshot_tablets(*committed_name, keyspace, table, dc_locations.begin()->first);
+        auto tables = co_await sth.get_snapshot_tables(*committed_name, keyspace, table);
 
         auto& manager = db.get_sstables_manager(*schema);
 
@@ -384,6 +420,18 @@ db::snapshot::start_global_backup(db::snapshot_ctl& ctl, tasks::task_manager::mo
     co_return task->id();
 }
 
+// Marks an sstable as backedup in the snapshot_sstables catalog table.
+static future<> mark_sstable_backed_up(db::snapshot_ctl& snap, const std::string& tag, const sstring& ksname, const sstring& cfname,
+        const locator::endpoint_dc_rack& local, db::snapshot_sstable_entry& e, bool use_move) {
+    db::snapshot_table_helper sth(snap.qp().local());
+    e.state = use_move ? db::snapshot_state::remote : db::snapshot_state::remote_and_local;
+    // Spell out the single-element array instead of passing a braced list,
+    // which would be ambiguous between the two insert_snapshot_sstables()
+    // overloads.
+    std::array entry{e};
+    co_await sth.insert_snapshot_sstables(tag, ksname, cfname, local.dc, local.rack, entry);
+}
+
 future<>
 db::snapshot::backup_sstables(db::snapshot_ctl& snap, table_id table_id, std::string tag, std::string endpoint, std::string bucket, std::string prefix, dht::token first_token, dht::token last_token, utils::chunked_vector<sstables::sstable_id> sstable_ids, bool use_move) {
     snap_log.info("Got backup request for snapshot {}, table {}, sstables {} ({}:{}) -> {}:{}:{}", tag, table_id, sstable_ids, first_token, last_token, endpoint, bucket, prefix);
@@ -425,11 +473,25 @@ db::snapshot::backup_sstables(db::snapshot_ctl& snap, table_id table_id, std::st
 
     auto global_table = co_await get_table_on_all_shards(snap.db(), ksname, cfname);
     auto& storage_options = global_table->get_storage_options();
-    if (!storage_options.is_local_type()) {
-        throw std::invalid_argument("not able to backup a non-local table");
+    if (storage_options.is_object_storage_type()) {
+        co_await seastar::max_concurrent_for_each(sstables, 16, [&] (db::snapshot_sstable_entry& e) -> future<> {
+            snap_log.debug("Marking {} as backed up in place", e.sstable_id);
+            // the state change doesnt say anything meaningful for remote tables
+            // we're just emulation the state change for consistency with local backups, but
+            // there is nothing functional about it really.
+            co_await mark_sstable_backed_up(snap, tag, ksname, cfname, local, e, use_move);
+            utils::get_local_injector().inject("cluster_backup_object_storage_flip", [] {
+                throw std::runtime_error("cluster_backup_object_storage_flip: injected error");
+            });
+        });
+        co_return;
     }
+
     auto& local_storage_options = std::get<data_dictionary::storage_options::local>(storage_options.value);
-    auto dir = (local_storage_options.dir / sstables::snapshots_dir / std::string_view(tag));
+    // `tag` names the catalog rows, "{tag}/{attempt}" for a cluster snapshot.
+    // The snapshot directory and the uploaded references use the user tag for local tables.
+    const sstring user_tag(db::snapshot_user_tag(tag));
+    auto dir = (local_storage_options.dir / sstables::snapshots_dir / std::string_view(user_tag));
 
     struct gen_info {
         db::snapshot_sstable_entry& sstable;
@@ -497,7 +559,7 @@ db::snapshot::backup_sstables(db::snapshot_ctl& snap, table_id table_id, std::st
             }
 
             auto gen = (*gen_info).generation;
-            auto ref_name = sstables::object_name(bucket, table_prefix, fmt::format("refs/snapshot-{}/{}", tag, gen));
+            auto ref_name = sstables::object_name(bucket, table_prefix, sstables::object_storage_snapshot_ref_name(user_tag, gen));
             co_await client->put_object(ref_name, memory_data_sink_buffers{}, sstables::object_storage_attributes{}); // any exception here can just propagate
 
             bool any_failed = false;
@@ -555,13 +617,7 @@ db::snapshot::backup_sstables(db::snapshot_ctl& snap, table_id table_id, std::st
 
             try {
                 snap_log.info("Marking {} as uploaded", id);
-                db::snapshot_table_helper sth(snap.qp().local());
-                info.sstable.state = use_move ? db::snapshot_state::remote : db::snapshot_state::remote_and_local;
-                // Spell out the single-element array instead of passing a
-                // braced list, which would be ambiguous between the two
-                // insert_snapshot_sstables() overloads.
-                std::array sstables{info.sstable};
-                co_await sth.insert_snapshot_sstables(tag, ksname, cfname, local.dc, local.rack, sstables);
+                co_await mark_sstable_backed_up(snap, tag, ksname, cfname, local, info.sstable, use_move);
             } catch (...) {
                 snap_log.error("Error marking {} as uploaded: {:t}", id, std::current_exception());
             }

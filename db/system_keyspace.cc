@@ -344,6 +344,7 @@ schema_ptr system_keyspace::topology_requests() {
             .with_column("snapshot_tag", utf8_type)
             .with_column("snapshot_expiry", timestamp_type)
             .with_column("snapshot_skip_flush", boolean_type)
+            .with_column("snapshot_attempt", uuid_type)
             .with_column("finalize_migration_ks_name", utf8_type)
             .with_column("prepare_migration_ks_name", utf8_type)
             .with_column("prepare_migration_tables", map_type_impl::get_instance(uuid_type, long_type, false))
@@ -3684,6 +3685,9 @@ system_keyspace::topology_requests_entry system_keyspace::topology_request_row_t
         ;
         if (row.has("snapshot_expiry")) {
             entry.snapshot_expiry = row.get_as<db_clock::time_point>("snapshot_expiry");
+        }
+        if (row.has("snapshot_attempt")) {
+            entry.snapshot_attempt = row.get_as<utils::UUID>("snapshot_attempt");
         }
     }
     if (row.has("finalize_migration_ks_name")) {
