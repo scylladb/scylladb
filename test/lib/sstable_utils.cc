@@ -261,17 +261,27 @@ void slightly_corrupt_sstable(sstables::shared_sstable sst, component_type compo
     auto close_f = deferred_close(f);
     const auto mem_align = f.memory_dma_alignment();
     const auto dma_align = f.disk_write_dma_alignment();
-    auto block_offset = align_down(size - 1, dma_align);
+    const bool is_toc = component == component_type::TOC;
+    const bool scylla_digest = component == component_type::Scylla && sst->get_component_digest(component_type::Scylla);
+    // Corrupt the data, not the trailing digest; align from the target byte so it lies in the block.
+    uint64_t corrupt_offset = size - 1 - (scylla_digest ? sizeof(uint32_t) : 0);
+    auto block_offset = is_toc ? uint64_t(0) : align_down(corrupt_offset, uint64_t(dma_align));
     auto buf = seastar::temporary_buffer<char>::aligned(mem_align, dma_align);
     f.dma_read(block_offset, buf.get_write(), dma_align).get();
-    if (component == component_type::Scylla && sst->get_component_digest(component_type::Scylla)) {
-        // Modify the last bit of the data itself, not the digest.
-        buf.get_write()[size - 1 - sizeof(uint32_t) - block_offset] ^= 1u;
+    if (is_toc) {
+        // Corrupt the first entry that isn't Scylla.db: dropping the Scylla
+        // component would skip TOC digest validation.
+        std::string_view toc(buf.get(), std::min(size, uint64_t(dma_align)));
+        constexpr std::string_view scylla_entry = "Scylla.db\n";
+        corrupt_offset = toc.starts_with(scylla_entry) ? scylla_entry.size() : 0;
+    }
+    if (scylla_digest) {
+        buf.get_write()[corrupt_offset - block_offset] ^= 1u;
     } else {
-        // Flip one bit in the last byte of the file to corrupt it minimally.
+        // Flip one bit in the corrupted byte to corrupt the file minimally.
         // Using a single-bit flip avoids creating values that overflow
         // during parsing.
-        buf.get_write()[size - 1 - block_offset] += 1;
+        buf.get_write()[corrupt_offset - block_offset] += 1;
     }
     f.dma_write(block_offset, buf.get(), dma_align).get();
     f.truncate(size).get();
