@@ -577,8 +577,7 @@ def test_UDA(cql, test_keyspace, table1, scylla_with_wasm_only, metrics):
 # - the instance hasn't been used for a long time
 # FIXME: shorten the wait time when such configuration becomes possible
 
-# The function grows the memory by n pages and returns n.
-@pytest.mark.skip_bug(link="https://scylladb.atlassian.net/browse/SCYLLADB-2800", reason="bug in WASM memory limit enforcement")
+# The function grows its memory by n pages.
 @pytest.mark.tier2
 def test_mem_grow(cql, test_keyspace, table1, scylla_with_wasm_only, metrics):
     table = table1
@@ -603,10 +602,35 @@ def test_mem_grow(cql, test_keyspace, table1, scylla_with_wasm_only, metrics):
         # A memory of 30+ pages is too big for the cache, so assert that it's not cached
         assert(get_metric(metrics, 'scylla_user_functions_cache_total_size') == 0)
 
-        cql.execute(f"INSERT INTO {table} (p, i) VALUES (100, 100)")
-        # A memory of 100+ pages is too big for an instance in the cache, it is rejected
-        map_res = [row for row in cql.execute(f"SELECT {test_keyspace}.{mem_grow_name}(i) AS result FROM {table} WHERE p = 100")]
-        assert len(map_res) == 1 and map_res[0].result == -1
+# Test that a WASM UDF's memory can't grow beyond wasm_udf_memory_limit
+# (2 MiB, i.e., 32 pages of 64 KiB, by default). In WebAssembly, a
+# memory.grow which isn't allowed doesn't fail the function, it returns -1
+# instead of the previous memory size in pages. The function grows its
+# memory by n pages and returns memory.grow's result. Its memory starts with
+# 2 pages, and each call to it with a new function instance - like its first
+# call - starts again with 2 pages.
+def test_wasm_memory_limit(cql, test_keyspace, table1, scylla_with_wasm_only):
+    table = table1
+    mem_grow_name = "mem_grow_" + unique_name()
+    mem_grow_source = read_function_from_file('test_mem_grow', 'grow_mem', mem_grow_name)
+    src = f"(pages int) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE wasm AS '{mem_grow_source}'"
+    with new_function(cql, test_keyspace, src, mem_grow_name):
+        def grow(pages):
+            cql.execute(f"INSERT INTO {table} (p, i) VALUES ({pages}, {pages})")
+            res = list(cql.execute(f"SELECT {test_keyspace}.{mem_grow_name}(i) AS result FROM {table} WHERE p = {pages}"))
+            assert len(res) == 1
+            return res[0].result
+        # Check that growing the 2 pages of a new instance by 30 pages, to
+        # exactly the limit of 32 pages, succeeds and returns the previous
+        # size, 2 pages. An instance this big isn't kept in the cache, so the
+        # next call gets a new instance again.
+        assert grow(30) == 2
+        # Check that growing a new instance by 31 pages, one page beyond the
+        # limit, fails
+        assert grow(31) == -1
+        # Check that growing the memory by 100 pages, far beyond the limit,
+        # fails
+        assert grow(100) == -1
 
 # Test that all wasm instance entries are removed from the cache when the correlating UDF is dropped,
 # to avoid using excessive memory for unused UDFs.
