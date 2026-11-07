@@ -2711,6 +2711,203 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_execution_stage_wakeu
     permit2_fut.get();
 }
 
+// with_permit() never inlines in a seastar::thread or when need_preempt() (always true in debug).
+// Tests run it on the reactor stack and assert inlining only if !need_preempt() after the call,
+// which is safe since need_preempt() can't go from true to false within a task.
+template <typename Func>
+static auto on_reactor(Func func) {
+    std::optional<std::invoke_result_t<Func&>> res;
+    yield().then([&] { res.emplace(func()); }).get();
+    return std::move(*res);
+}
+
+// A read admitted immediately by with_permit() runs inline, with the same
+// admission and need_cpu accounting as one run by the execution loop.
+SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_with_permit_runs_inline) {
+    reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::for_tests{}, get_name(), 2, 4 * 1024);
+    auto stop_sem = deferred_stop(semaphore);
+
+    bool func_called = false;
+    reader_permit_opt permit_holder;
+    on_reactor([&] {
+        auto fut = semaphore.with_permit(nullptr, get_name().c_str(), 1024, db::no_timeout, {}, permit_holder, [&] (reader_permit permit) {
+            func_called = true;
+            BOOST_REQUIRE(permit.get_state() == reader_permit::state::active);
+            reader_permit::need_cpu_guard ncpu_guard{permit};
+            BOOST_REQUIRE(permit.get_state() == reader_permit::state::active_need_cpu);
+            BOOST_REQUIRE_EQUAL(semaphore.get_stats().need_cpu_permits, 1);
+            return make_ready_future<>();
+        });
+        if (!need_preempt()) {
+            BOOST_REQUIRE(func_called);
+            BOOST_REQUIRE(fut.available());
+        }
+        return fut;
+    }).get();
+
+    const auto& stats = semaphore.get_stats();
+    BOOST_REQUIRE_EQUAL(stats.reads_admitted, 1);
+    BOOST_REQUIRE_EQUAL(stats.reads_admitted_immediately, 1);
+    BOOST_REQUIRE_EQUAL(stats.reads_enqueued_for_admission, 0);
+    BOOST_REQUIRE_EQUAL(stats.waiters, 0);
+    BOOST_REQUIRE_EQUAL(stats.need_cpu_permits, 0);
+    BOOST_REQUIRE_EQUAL(semaphore.consumed_resources(), reader_resources(1, 1024));
+
+    permit_holder = {};
+    BOOST_REQUIRE_EQUAL(semaphore.consumed_resources(), reader_resources{});
+}
+
+// Inlining relies on immediate admission requiring empty wait and ready lists:
+// a with_permit() read must not overtake reads queued on either.
+SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_with_permit_inline_keeps_order) {
+    reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::for_tests{}, get_name(), 1, 4 * 1024);
+    auto stop_sem = deferred_stop(semaphore);
+
+    std::vector<int> order;
+    auto record = [&order] (int id) {
+        return [&order, id] (reader_permit) {
+            order.push_back(id);
+            return make_ready_future<>();
+        };
+    };
+
+    // Ready list: permit1 waits for execution, a new read queues behind it.
+    {
+        reader_permit_opt permit1 = semaphore.obtain_permit(nullptr, get_name(), 1024, db::no_timeout, {}).get();
+        reader_permit_opt permit2_holder;
+        // One task: no scheduling point between the two calls.
+        auto [fut1, fut2] = on_reactor([&] {
+            auto f1 = semaphore.with_ready_permit(*permit1, record(1));
+            auto f2 = semaphore.with_permit(nullptr, get_name().c_str(), 1024, db::no_timeout, {}, permit2_holder, record(2));
+            BOOST_REQUIRE(order.empty());
+            return std::make_pair(std::move(f1), std::move(f2));
+        });
+        BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_queued_because_ready_list, 1);
+        fut1.get();
+        permit1 = {};
+        fut2.get();
+        BOOST_REQUIRE(order == std::vector<int>({1, 2}));
+    }
+
+    // Wait list: permit3 waits for count resources, which are freed but not yet
+    // handed over; a new read that could be admitted must still queue behind it.
+    order.clear();
+    {
+        reader_permit_opt permit1 = semaphore.obtain_permit(nullptr, get_name(), 1024, db::no_timeout, {}).get();
+        reader_permit_opt permit3_holder;
+        auto fut3 = semaphore.with_permit(nullptr, get_name().c_str(), 1024, db::no_timeout, {}, permit3_holder, record(3));
+        BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_queued_because_count_resources, 1);
+        // Freeing resources only wakes the execution loop, admission is deferred.
+        reader_permit_opt permit4_holder;
+        auto fut4 = on_reactor([&] {
+            permit1 = {};
+            auto f4 = semaphore.with_permit(nullptr, get_name().c_str(), 1024, db::no_timeout, {}, permit4_holder, record(4));
+            BOOST_REQUIRE(order.empty());
+            return f4;
+        });
+        fut3.get();
+        permit3_holder = {};
+        fut4.get();
+        BOOST_REQUIRE(order == std::vector<int>({3, 4}));
+    }
+}
+
+// Running inline does not let more reads hold the CPU than cpu_concurrency allows.
+SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_with_permit_inline_cpu_concurrency) {
+    reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::for_tests{}, get_name(), 10, 10 * 1024, 100,
+            utils::updateable_value(std::numeric_limits<uint32_t>::max()), utils::updateable_value(std::numeric_limits<uint32_t>::max()),
+            utils::updateable_value<uint32_t>(1));
+    auto stop_sem = deferred_stop(semaphore);
+
+    promise<> pr1;
+    bool func1_called = false;
+    reader_permit_opt permit1_holder;
+    auto fut1 = on_reactor([&] {
+        return semaphore.with_permit(nullptr, get_name().c_str(), 1024, db::no_timeout, {}, permit1_holder, [&] (reader_permit permit) {
+            func1_called = true;
+            reader_permit::need_cpu_guard ncpu_guard{permit};
+            return pr1.get_future().then([ncpu_guard = std::move(ncpu_guard)] { });
+        });
+    });
+    // func1 may have gone through the execution loop.
+    while (!func1_called) {
+        yield().get();
+    }
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().need_cpu_permits, 1);
+
+    bool func2_called = false;
+    reader_permit_opt permit2_holder;
+    auto fut2 = on_reactor([&] {
+        return semaphore.with_permit(nullptr, get_name().c_str(), 1024, db::no_timeout, {}, permit2_holder, [&] (reader_permit permit) {
+            func2_called = true;
+            BOOST_REQUIRE_EQUAL(semaphore.get_stats().need_cpu_permits, 0);
+            return make_ready_future<>();
+        });
+    });
+    BOOST_REQUIRE(!func2_called);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_queued_because_need_cpu_permits, 1);
+
+    pr1.set_value();
+    fut1.get();
+    fut2.get();
+    BOOST_REQUIRE(func2_called);
+}
+
+// Exceptions from a read run inline reach the caller like those of a read run
+// by the execution loop, whether thrown or returned as a failed future.
+SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_with_permit_inline_exception) {
+    reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::for_tests{}, get_name(), 2, 4 * 1024);
+    auto stop_sem = deferred_stop(semaphore);
+
+    struct test_exception : std::exception { };
+
+    {
+        reader_permit_opt permit_holder;
+        auto [fut, inl] = on_reactor([&] {
+            auto f = semaphore.with_permit(nullptr, get_name().c_str(), 1024, db::no_timeout, {}, permit_holder, [] (reader_permit) -> future<> {
+                throw test_exception{};
+            });
+            return std::make_pair(std::move(f), !need_preempt());
+        });
+        if (inl) {
+            BOOST_REQUIRE(fut.failed());
+        }
+        BOOST_REQUIRE_THROW(fut.get(), test_exception);
+    }
+    {
+        reader_permit_opt permit_holder;
+        auto fut = on_reactor([&] {
+            return semaphore.with_permit(nullptr, get_name().c_str(), 1024, db::no_timeout, {}, permit_holder, [] (reader_permit permit) {
+                reader_permit::need_cpu_guard ncpu_guard{permit};
+                return make_exception_future<>(test_exception{});
+            });
+        });
+        BOOST_REQUIRE_THROW(fut.get(), test_exception);
+    }
+
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_admitted_immediately, 2);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().need_cpu_permits, 0);
+    BOOST_REQUIRE_EQUAL(semaphore.consumed_resources(), reader_resources{});
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().current_permits, 0);
+}
+
+// A read is not run inline from a seastar::thread, whose stack is small.
+SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_with_permit_not_inline_in_thread) {
+    reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::for_tests{}, get_name(), 2, 4 * 1024);
+    auto stop_sem = deferred_stop(semaphore);
+
+    bool func_called = false;
+    reader_permit_opt permit_holder;
+    auto fut = semaphore.with_permit(nullptr, get_name().c_str(), 1024, db::no_timeout, {}, permit_holder, [&] (reader_permit) {
+        func_called = true;
+        return make_ready_future<>();
+    });
+    BOOST_REQUIRE(!func_called);
+    fut.get();
+    BOOST_REQUIRE(func_called);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().reads_admitted_immediately, 1);
+}
+
 SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_live_update_count) {
     utils::updateable_value_source<int> count{1};
     const uint32_t initial_memory = 4 * 1024;

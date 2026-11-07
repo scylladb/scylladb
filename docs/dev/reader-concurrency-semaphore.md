@@ -40,7 +40,7 @@ For a permit to be admitted, the following conditions have to be true:
 
 API wise, there are 3 main ways to create permits:
 * `obtain_permit()` - this is the most generic way to obtain a permit. The method creates a permit, waits for admission (this might be immediate if the conditions are right) and then returns the permit to be used.
-* `with_permit()` - the permit is created and then waits for admission as with `obtain_permit()`. But instead of returning the admitted permit, this method runs the functor passed in as its func parameter once the permit is admitted. This facilitates batch-running cache reads. If a permit is already available (saved paged read resuming), `with_ready_permit()` can be used to benefit of the batching.
+* `with_permit()` - the permit is created and then waits for admission as with `obtain_permit()`. But instead of returning the admitted permit, this method runs the functor passed in as its func parameter once the permit is admitted. This facilitates batch-running cache reads. A read admitted immediately runs its functor inline, unless called from a `seastar::thread` or a preemption is pending, in which case it goes through the execution loop. If a permit is already available (saved paged read resuming), `with_ready_permit()` can be used to benefit of the batching.
 * `make_tracking_only_permit()` - make a permit that bypasses admission and is only used to keep track of the memory consumption of a read. Used in places that don't want to wait for admission.
 
 For more details on the reader concurrency semaphore's API, check [reader_concurrency_semaphore.hh](../../reader_concurrency_semaphore.hh).
