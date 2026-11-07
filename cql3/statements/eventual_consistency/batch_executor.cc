@@ -87,8 +87,6 @@ future<coordinator_result<>> execute_without_conditions(const batch_statement& b
         }
     }));
 #endif
-    batch.verify_batch_size(qp, mutations);
-
     bool mutate_atomic = true;
     if (batch.batch_type() != batch_statement::type::LOGGED) {
         batch.stats().batches_pure_unlogged += 1;
@@ -273,6 +271,7 @@ batch_executor::commit(const batch_statement& batch, query_processor& qp, servic
     db::large_data_violation_type violations = db::large_data_violation_type::none;
 
     utils::chunked_vector<mutation> ms = co_await get_mutations(batch, qp, options, timeout, local, now, query_state);
+    std::optional<sstring> batch_size_warning = batch.verify_batch_size(qp, ms);
     coordinator_result<> res = co_await execute_without_conditions(batch, qp, std::move(ms), cl, timeout, query_state.get_trace_state(), query_state.get_permit(), &violations);
     if (!res) {
         co_return seastar::make_shared<cql_transport::messages::result_message::exception>(std::move(res).assume_error());
@@ -284,6 +283,9 @@ batch_executor::commit(const batch_statement& batch, query_processor& qp, servic
     }
     if (auto warning = db::large_data_soft_violation_warning(violations); !warning.empty()) [[unlikely]] {
         result->add_warning(std::move(warning));
+    }
+    if (batch_size_warning) [[unlikely]] {
+        result->add_warning(std::move(*batch_size_warning));
     }
     co_return result;
 }
