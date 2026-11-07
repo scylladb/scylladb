@@ -3586,6 +3586,39 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         }
     }
 
+    // Re-keys the load stats of the tables whose resize was just committed by their new tablet maps.
+    // Not a coroutine on purpose: a load stats refresh which completed between reading the stats
+    // and installing the reconciled copy would be overwritten by stats reconciled from the older
+    // copy, so nothing here may yield. No group0 guard is needed either: the stats and the token
+    // metadata are local to this shard, and the caller commits the resize with
+    // update_topology_state(), which returns only once the resize is applied here.
+    void reconcile_load_stats_after_resize(const std::unordered_set<table_id>& resized_tables, const locator::token_metadata& old_tm) {
+        auto old_load_stats = _tablet_allocator.get_load_stats();
+        if (!old_load_stats) {
+            return;
+        }
+        auto new_tm = get_token_metadata_ptr();
+        auto reconciled_stats = old_load_stats->reconcile_tablets_resize(resized_tables, old_tm, *new_tm);
+        // Simulates reconciliation failing the way it does in production, when a
+        // pre-resize replica has no recorded tablet size yet.
+        if (utils::get_local_injector().enter("tablet_resize_load_stats_reconcile_failure")) {
+            reconciled_stats = {};
+        }
+        if (reconciled_stats) {
+            _tablet_allocator.set_load_stats(reconciled_stats);
+            return;
+        }
+        // Load stats are keyed by tablet token range, which the resize just rewrote, so
+        // without reconciled stats there is no size for any of the newly allocated
+        // tablets. The load balancer would then see incomplete stats for every node,
+        // produce an empty plan and go back to sleep, making no progress until the
+        // periodic refresher ticks (tablet_load_stats_refresh_interval_in_seconds, 60s
+        // by default). Refresh now, like on_create_column_family() does for freshly
+        // allocated tablets. The refresh also wakes up the load balancer once it
+        // completes.
+        trigger_load_stats_refresh();
+    }
+
     future<> handle_tablet_resize_finalization(group0_guard g) {
         // Executes a global barrier to guarantee that any process (e.g. repair) holding stale version
         // of token metadata will complete before we update topology.
@@ -3652,29 +3685,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 .build());
         co_await update_topology_state(std::move(guard), std::move(updates), format("Finished tablet resize finalization"));
 
-        if (auto old_load_stats = _tablet_allocator.get_load_stats()) {
-            guard = co_await start_operation();
-            auto new_tm = get_token_metadata_ptr();
-            auto reconciled_stats = old_load_stats->reconcile_tablets_resize(plan.resize_plan().finalize_resize, *tm, *new_tm);
-            // Simulates reconciliation failing the way it does in production, when a
-            // pre-resize replica has no recorded tablet size yet.
-            if (utils::get_local_injector().enter("tablet_resize_load_stats_reconcile_failure")) {
-                reconciled_stats = {};
-            }
-            if (reconciled_stats) {
-                _tablet_allocator.set_load_stats(reconciled_stats);
-            } else {
-                // Load stats are keyed by tablet token range, which the resize just rewrote, so
-                // without reconciled stats there is no size for any of the newly allocated
-                // tablets. The load balancer would then see incomplete stats for every node,
-                // produce an empty plan and go back to sleep, making no progress until the
-                // periodic refresher ticks (tablet_load_stats_refresh_interval_in_seconds, 60s
-                // by default). Refresh now, like on_create_column_family() does for freshly
-                // allocated tablets. The refresh also wakes up the load balancer once it
-                // completes.
-                trigger_load_stats_refresh();
-            }
-        }
+        reconcile_load_stats_after_resize(plan.resize_plan().finalize_resize, *tm);
 
         // Wait for the background storage group merge to finish before releasing the state machine.
         // Background merge holds the old erm, so a successful barrier joins with it.
@@ -3684,9 +3695,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         // The background merge fiber will try to stop a compaction group which is locked, and the lock is held
         // by the background merge fiber.
         tm = nullptr;
-        if (!guard) {
-            guard = co_await start_operation();
-        }
+        guard = co_await start_operation();
         co_await global_tablet_token_metadata_barrier(std::move(guard));
     }
 
