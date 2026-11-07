@@ -446,7 +446,9 @@ class ScyllaNode:
             server_id=self.server_id,
             seeds=None if self.bootstrap else [self.address()],
             expected_server_up_state=ServerUpState.PROCESS_STARTED,
+            # ccm builds the whole argv itself, nothing of the harness defaults applies.
             cmdline_options_override=scylla_args,
+            replace_cmdline_options=True,
             append_env_override=scylla_env,
             connect_driver=False,
         )
