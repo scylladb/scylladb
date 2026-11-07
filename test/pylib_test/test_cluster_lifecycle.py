@@ -124,7 +124,7 @@ def test_leftover_clusters_are_recycled_at_session_finish(pytester: pytest.Pytes
     item_a.parent.stash[CLUSTER_KEY] = shared   # the module node, shared by both items
     item_b.stash[CLUSTER_KEY] = None            # recycled normally: nothing to do
 
-    swept = asyncio.run(recycle_leftover_clusters(SimpleNamespace(items=[item_a, item_b])))
+    swept = asyncio.run(recycle_leftover_clusters(SimpleNamespace(items=[item_a, item_b], config=item_a.config)))
 
     assert swept == 2
 
@@ -132,8 +132,8 @@ def test_leftover_clusters_are_recycled_at_session_finish(pytester: pytest.Pytes
     assert (shared.stops, shared.recycles) == (1, 1)
 
 
-# Registers the real module-scoped scylla_cluster fixture, its cluster factory
-# and the report hook, with just enough of test.py's options, stash entries
+# Registers the real module-scoped scylla_cluster fixture, the fixtures it
+# creates and keeps clusters with and the report hook, with just enough of test.py's options, stash entries
 # and fixtures around them to run without a suite.
 HARNESS_CONFTEST = textwrap.dedent("""\
     import logging
@@ -142,8 +142,8 @@ HARNESS_CONFTEST = textwrap.dedent("""\
 
     import pytest
 
-    from test.pylib.runner import (BUILD_MODE, TEST_SUITE, pytest_runtest_makereport, scylla_cluster,
-                                   testpy_cluster_factory)
+    from test.pylib.runner import (BUILD_MODE, TEST_SUITE, pytest_runtest_makereport, pytest_runtest_teardown,
+                                   scylla_cluster, testpy_idle_clusters, testpy_new_cluster)
 
     def pytest_addoption(parser):
         parser.addoption("--tmpdir")
@@ -154,7 +154,8 @@ HARNESS_CONFTEST = textwrap.dedent("""\
     def pytest_collection_modifyitems(items):
         for item in items:
             item.stash[BUILD_MODE] = "dev"
-            item.parent.stash[TEST_SUITE] = SimpleNamespace(cfg={})
+            item.parent.stash[BUILD_MODE] = "dev"
+            item.parent.stash[TEST_SUITE] = SimpleNamespace(cfg={}, path=pathlib.Path("."))
 
     @pytest.fixture(scope="module")
     def build_mode():
@@ -169,6 +170,10 @@ HARNESS_CONFTEST = textwrap.dedent("""\
         return "scylla"
 
     @pytest.fixture(scope="module")
+    def testpy_shortname(request):
+        return request.module.__name__
+
+    @pytest.fixture(scope="module")
     def testpy_uname(request):
         return request.module.__name__
 
@@ -180,9 +185,12 @@ HARNESS_CONFTEST = textwrap.dedent("""\
 
 class LogWritingCluster:
     """Stands in for ScyllaCluster: one server, whose directory and log are named after the module, and a record of
-    the server logs already on disk when each cluster is created."""
+    the server logs already on disk when each cluster is created.  Never fit for reuse, so that each module
+    gets a cluster of its own."""
 
     save_log_on_success = False
+    is_dirty = True
+    initial_keyspaces = None
 
     def __init__(self, events: list[str], exit_status: int | None, logger, vardir: pathlib.Path, **kwargs) -> None:
         self.events = events
@@ -199,6 +207,18 @@ class LogWritingCluster:
         self.servers[1] = SimpleNamespace(workdir=self.workdir, log_filename=log, cmd=SimpleNamespace(returncode=None))
 
     def take_log_savepoint(self) -> None:
+        pass
+
+    def keyspaces(self) -> None:
+        return None
+
+    def write_log_marker(self, marker: str) -> None:
+        pass
+
+    def check_unchanged(self) -> None:
+        pass
+
+    def mark_dirty(self, reason: str) -> None:
         pass
 
     async def recycle(self) -> None:

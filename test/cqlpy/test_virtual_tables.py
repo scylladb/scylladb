@@ -58,9 +58,9 @@ def test_snapshots_table(scylla_only, cql, test_keyspace, scylla_data_dir):
 
 @pytest.mark.parametrize("ttl", [0, 5])
 def test_snapshots_dropped_table(scylla_only, cql, test_keyspace, scylla_data_dir, ttl):
-    cql.execute(f"UPDATE system.config SET value = '{ttl}' WHERE name = 'auto_snapshot_ttl'")
     test_tag = util.unique_name()
-    with util.new_test_table(cql, test_keyspace, 'pk int PRIMARY KEY, v int') as table:
+    with (util.config_value_context(cql, 'auto_snapshot_ttl', str(ttl)),
+          util.new_test_table(cql, test_keyspace, 'pk int PRIMARY KEY, v int') as table):
         cql.execute(f"INSERT INTO {table} (pk, v) VALUES (0, 0)")
         expiry = int(time.time() + ttl) if ttl else None
         nodetool.take_snapshot(cql, table, test_tag, False, ttl)
