@@ -3,7 +3,11 @@ Nodetool status
 **status** - This command prints the cluster information for a single keyspace or all keyspaces.
 
 The keyspace argument is required to calculate effective ownership information (``Owns`` column).
-For tablet keyspaces, a table is also required for effective ownership.
+For tablet keyspaces, a table is also required for effective ownership and for the token count (``Tokens`` column).
+
+Syntax: ``nodetool status [(-r | --resolve-ip)] [<keyspace> [<table>]]``
+
+* ``-r`` or ``--resolve-ip`` - Show node domain names instead of IP addresses.
 
 For example:
 
@@ -65,9 +69,9 @@ Example output:
 |          |                                                               |
 +----------+---------------------------------------------------------------+
 |Tokens    |The number of tokens per node.                                 |
-|          |                                                               |
-|          |                                                               |
-|          |                                                               |
+|          |For a tablet keyspace with a table specified, the number of    |
+|          |tablets for which the node is the primary replica; ``?`` if    |
+|          |no table is given.                                             |
 +----------+---------------------------------------------------------------+
 |Owns      |The percentage of data owned by                                |
 |          |the node (per datacenter) multiplied by                        |

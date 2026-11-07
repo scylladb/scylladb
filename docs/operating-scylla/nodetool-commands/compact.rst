@@ -20,6 +20,9 @@ Syntax
 Options
 --------
 
+* ``--flush-memtables <true|false>`` - Control flushing of tables before major compaction (``true`` by default).
+* ``--consider-only-existing-data <true|false>`` - Check only the SSTables being compacted to garbage collect the tombstones and do not check memtables, commit log and other uncompacting SSTables (``false`` by default). Enabling this will also force flush all memtables before starting major compaction.
+
 The following options are available in Cassandra's nodetool, but are NOT implemented in ScyllaDB's nodetool:
 
 * ``-st`` or ``--start-token``

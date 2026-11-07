@@ -4653,7 +4653,8 @@ For more information, see: {}
                 "listsnapshots",
                 "Lists all the snapshots along with the size on disk and true size",
 fmt::format(R"(
-Dropped tables (column family) will not be part of the listsnapshots.
+Snapshots of dropped tables (for example, the automatic snapshot taken on
+DROP TABLE) are also listed.
 
 For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/listsnapshots.html")),
@@ -4768,9 +4769,10 @@ This operation is not supported.
             {
                 "netstats",
                 "Print network information on provided host (connecting node by default)",
-fmt::format(R"(
-For more information, see: {}
-)", doc_link("operating-scylla/nodetool-commands/netstats.html")),
+R"(
+Prints the node's operation mode, the progress of ongoing streaming sessions,
+read repair statistics and messaging statistics.
+)",
                 {
                     typed_option<>("human-readable,H", "Display bytes in human readable form, i.e. KiB, MiB, GiB, TiB"),
                 },
@@ -4804,8 +4806,10 @@ For more information, see: {}
                 "rebuild",
                 "Rebuilds a node’s data by streaming data from other nodes in the cluster (similarly to bootstrap)",
 fmt::format(R"(
-Rebuild operates on multiple nodes in a Scylla cluster. It streams data from a
-single source replica when rebuilding a token range. When executing the command,
+Rebuild operates on multiple nodes in a Scylla cluster. When rebuild is enabled
+in repair-based node operations (the default), data is rebuilt by repairing
+against all source replicas of each token range. Otherwise, it streams data from
+a single source replica when rebuilding a token range. When executing the command,
 Scylla first figures out which ranges the local node (the one we want to rebuild)
 is responsible for. Then which node in the cluster contains the same ranges.
 Finally, Scylla streams the data to the local node.
@@ -4868,7 +4872,7 @@ For more information, see: {}
                     typed_option<sstring>("ignore-dead-nodes", "Comma-separated list of dead node host IDs to ignore during removenode"),
                 },
                 {
-                    typed_option<sstring>("remove-operation", "status|force|$HOST_ID - show status of current node removal, force completion of pending removal, or remove provided ID", 1),
+                    typed_option<sstring>("remove-operation", "The host ID of the node to remove", 1),
                 },
             },
             {
@@ -4887,7 +4891,7 @@ Data ownership is not changed, and the nodes are still cluster members,
 so should be eventually removed or replaced.
 
 After nodes are excluded, there is no need to pass them in the list of ignored
-nodes to removnenode, replace, or repair.
+nodes to removenode, replace, or repair.
 
 Important: use this command *only* on nodes that are not reachable by other nodes
 by any means, and they are not going to become reachable again.
@@ -4934,7 +4938,7 @@ For more information, see: {}
                     typed_option<std::vector<sstring>>("in-hosts", "Constrain repair to the specific host(s)"),
                     typed_option<>("ignore-unreplicated-keyspaces", "Ignore keyspaces which are not replicated, without this repair will fail on such keyspaces"),
                     typed_option<unsigned>("job-threads,j", "Number of threads to run repair on"),
-                    typed_option<>("partitioner-range", "Repair only the first range returned by the partitioner"),
+                    typed_option<>("partitioner-range", "Repair only the token ranges for which this node is the primary replica"),
                     typed_option<>("pull", "Fix local node only"),
                     typed_option<>("sequential", "Perform repair sequentially"),
                     typed_option<uint64_t>("start-token", "Repair data starting from this token"),
@@ -4952,10 +4956,12 @@ For more information, see: {}
         {
             {
                 "resetlocalschema",
-                "Reset node's local schema and resync",
-R"(
-For more information, see: https://opensource.docs.scylladb.com/stable/operating-scylla/nodetool-commands/resetlocalschema.html
-)",
+                "Reset node's local schema and resync (no longer supported)",
+fmt::format(R"(
+This operation is no longer supported.
+
+For more information, see: {}
+)", doc_link("operating-scylla/nodetool-commands/resetlocalschema.html")),
                 { },
                 { },
             },
@@ -5042,7 +5048,7 @@ which can spread the compaction or can get in a fail-retry loop. It also makes
 corrupt sstables easy to find and retrieve for investigation.
 
 It is possible to opt-out from quarantining sstables by passing
---quarantine-invalid-sstables=false to scrub.
+--mode=VALIDATE --quarantine-invalid-sstables=false to scrub.
 
 For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/scrub.html")),
@@ -5077,8 +5083,8 @@ For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/setlogginglevel.html")),
                 { },
                 {
-                    typed_option<sstring>("logger", "The logger to set the log level for, if unspecified, all loggers are reset to the default level", 1),
-                    typed_option<sstring>("level", "The log level to set, one of (trace, debug, info, warn and error), if unspecified, default level is reset to default log level", 1),
+                    typed_option<sstring>("logger", "The logger to set the log level for", 1),
+                    typed_option<sstring>("level", "The log level to set, one of (trace, debug, info, warn and error)", 1),
                 },
             },
             {
@@ -5114,7 +5120,7 @@ For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/snapshot.html")),
                 {
                     typed_option<sstring>("table", "The table(s) to snapshot, multiple ones can be joined with ','"),
-                    typed_option<sstring>("keyspace-table-list", "The keyspace.table pair(s) to snapshot, multiple ones can be joined with ','"),
+                    typed_option<sstring>("keyspace-table-list", "The keyspaces to snapshot (joined with ','), or a single keyspace.table pair"),
                     typed_option<sstring>("tag,t", "The name of the snapshot"),
                     typed_option<>("skip-flush", "Do not flush memtables before snapshotting (snapshot will not contain unflushed data)"),
                     typed_option<sstring>("ttl", "The TTL for the snapshot, optionally followed by 's' for seconds (the default), 'm' for minutes, 'h' for hours, or 'd' for days. Missing TTL, or 0, means no TTL"),
@@ -5156,7 +5162,7 @@ For more information, see: {}
                 },
                 {
                     typed_option<sstring>("keyspace", "The keyspace name", 1),
-                    typed_option<sstring>("table", "The table name (needed to display load information, if the keyspace uses tablets)", 1),
+                    typed_option<sstring>("table", "The table name (needed to display token count and effective ownership, if the keyspace uses tablets)", 1),
                 },
             },
             {
@@ -5182,7 +5188,7 @@ For more information, see: {}
         {
             {
                 "statusbinary",
-                "Displays the incremental backup status",
+                "Displays the status of native transport (CQL binary protocol)",
 fmt::format(R"(
 Provides the status of native transport - CQL (binary protocol).
 In case that you don’t want to use CQL you can disable it using the disablebinary
@@ -5242,8 +5248,8 @@ For more information, see: {}
                 "Provides statistics about a table",
 fmt::format(R"(
 Provides statistics about a table, including number of SSTables, read/write
-latency, partition size and column count. cfhistograms covers all operations
-since the last time you ran the nodetool cfhistograms command.
+latency, partition size and column count. Read/write latencies are computed
+over a recent moving window.
 
 Also invokable as "cfhistograms".
 
@@ -5251,7 +5257,7 @@ For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/cfhistograms.html")),
                 { },
                 {
-                    typed_option<std::vector<sstring>>("table", "<keyspace> <table>, <keyspace>.<table> or <keyspace>-<table>", 2),
+                    typed_option<std::vector<sstring>>("table", "<keyspace> <table>, <keyspace>.<table> or <keyspace>/<table>", 2),
                 }
             },
             {
@@ -5286,7 +5292,7 @@ For more information, see: {}
                 "",
                 { },
                 {
-                    typed_option<sstring>("command", "The uuid of a task", 1),
+                    typed_option<sstring>("command", "The name of the subcommand", 1),
                 },
                 {
                         {
@@ -5588,7 +5594,7 @@ Print throughput cap for streaming in the system in megabits
         {
             {
                 "setstreamthroughput",
-                "Set compaction IO throughput",
+                "Set streaming IO throughput",
 R"(
 Set the MiB/s throughput for streaming, or 0 to disable throttling
 )",

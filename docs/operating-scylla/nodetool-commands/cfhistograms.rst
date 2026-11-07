@@ -1,6 +1,6 @@
 Nodetool cfhistograms (tablehistograms) 
 =======================================
-**cfhistograms** ``<keyspace> <cfname>``- This command provides statistics about a table, including number of SSTables, read/write latency, partition size and column count. `cfhistograms` covers all operations since the last time you ran the `nodetool cfhistograms` command. Note that this command can also be used for ``tablehistograms``. This command uses the following syntax:
+**cfhistograms** ``<keyspace> <cfname>``- This command provides statistics about a table, including number of SSTables, read/write latency, partition size and column count. Read/write latencies are computed over a recent moving window. Note that this command can also be used for ``tablehistograms``. This command uses the following syntax:
 
 .. code-block:: shell
 
@@ -13,7 +13,7 @@ For example: to get statistics about the ``standard1`` table in the ``keyspaces1
    nodetool cfhistograms keyspaces1 standard1
 
 ==========  ==============  =============  ============  ==============  ==========
-Percentile  SSTables value  Write Latency  Read Latency  Partition Size  Cell Count
+Percentile  SSTables        Write Latency  Read Latency  Partition Size  Cell Count
 ==========  ==============  =============  ============  ==============  ==========
 50%	        10.00           42.00          20.00         210             5
 ----------  --------------  -------------  ------------  --------------  ----------
