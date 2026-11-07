@@ -274,22 +274,28 @@ BOOST_AUTO_TEST_CASE(test_get_keepalive_parameters) {
     BOOST_CHECK_EQUAL(params_2s.interval.count(), 1);
     BOOST_CHECK_EQUAL(params_2s.count, 1);
 
+    // For timeout < 2s the function should return minimal valid parameters:
+    // Linux rejects an idle time of 0 (SCYLLADB-3870), and the interval and
+    // count can't be 0 either.
+    auto params_1999ms = get_keepalive_parameters(std::chrono::milliseconds(1999));
+    BOOST_CHECK_EQUAL(params_1999ms.idle.count(), 1);
+    BOOST_CHECK_EQUAL(params_1999ms.interval.count(), 1);
+    BOOST_CHECK_EQUAL(params_1999ms.count, 1);
+
     auto params_1s = get_keepalive_parameters(1s);
-    BOOST_CHECK_EQUAL(params_1s.idle.count(), 0);
+    BOOST_CHECK_EQUAL(params_1s.idle.count(), 1);
     BOOST_CHECK_EQUAL(params_1s.interval.count(), 1);
     BOOST_CHECK_EQUAL(params_1s.count, 1);
 
-    // For timeout < 1s the function should return minimal valid parameters.
     auto params_500ms = get_keepalive_parameters(std::chrono::milliseconds(500));
-    BOOST_CHECK_GE(params_500ms.idle.count(), 0);
-    BOOST_CHECK_GE(params_500ms.interval.count(), 1);
-    BOOST_CHECK_GE(static_cast<int>(params_500ms.count), 1);
+    BOOST_CHECK_EQUAL(params_500ms.idle.count(), 1);
+    BOOST_CHECK_EQUAL(params_500ms.interval.count(), 1);
+    BOOST_CHECK_EQUAL(params_500ms.count, 1);
 
-    // For timeout < 1s the function should return minimal valid parameters.
     auto params_0ms = get_keepalive_parameters(std::chrono::milliseconds(0));
-    BOOST_CHECK_GE(params_0ms.idle.count(), 0);
-    BOOST_CHECK_GE(params_0ms.interval.count(), 1);
-    BOOST_CHECK_GE(static_cast<int>(params_0ms.count), 1);
+    BOOST_CHECK_EQUAL(params_0ms.idle.count(), 1);
+    BOOST_CHECK_EQUAL(params_0ms.interval.count(), 1);
+    BOOST_CHECK_EQUAL(params_0ms.count, 1);
 }
 
 // Regression test for SCYLLADB-1561: check_status() hung indefinitely when the vector store

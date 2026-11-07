@@ -10,6 +10,7 @@
 #include "utils.hh"
 #include <seastar/core/seastar.hh>
 #include <seastar/net/api.hh>
+#include <chrono>
 #include <cstdint>
 #include <vector>
 #include <memory>
@@ -18,7 +19,11 @@ namespace test::vector_search {
 
 class unavailable_server {
     struct Connection {
-        seastar::lowres_clock::time_point timestamp;
+        // Not lowres_clock: its now() is refreshed only once per reactor poll, so it may lag by as
+        // much as the tasks that ran since then took, and the interval between two connections'
+        // timestamps could come out shorter than the real one. Seastar timers use steady_clock, so
+        // two connections separated by a sleep() are at least the slept time apart on this clock.
+        std::chrono::steady_clock::time_point timestamp;
         seastar::connected_socket socket;
     };
 
@@ -89,7 +94,7 @@ private:
         while (_running) {
             try {
                 auto result = co_await _socket.accept();
-                _connections.push_back(Connection{.timestamp = seastar::lowres_clock::now(), .socket = std::move(result.connection)});
+                _connections.push_back(Connection{.timestamp = std::chrono::steady_clock::now(), .socket = std::move(result.connection)});
                 if (_auto_shutdown) {
                     co_await shutdown(_connections.back().socket);
                 }

@@ -35,12 +35,17 @@ inline seastar::net::tcp_keepalive_params get_keepalive_parameters(std::chrono::
     constexpr unsigned min_count = 1;
     constexpr unsigned max_count = 3;
     constexpr auto min_interval = std::chrono::seconds(1);
+    // Linux rejects a TCP_KEEPIDLE of 0 with EINVAL, so keepalive can't detect
+    // a dead peer in less than 2s (1s idle and a single 1s probe). A shorter
+    // timeout gets these minimal parameters; the connect timeout,
+    // TCP_USER_TIMEOUT and the request deadline still apply it in full.
+    constexpr auto min_idle = std::chrono::seconds(1);
 
     auto timeout_s = std::chrono::duration_cast<std::chrono::seconds>(timeout);
 
-    if (timeout_s < min_interval) {
+    if (timeout_s < min_idle + min_interval) {
         return seastar::net::tcp_keepalive_params{
-                .idle = std::chrono::seconds(0),
+                .idle = min_idle,
                 .interval = min_interval,
                 .count = min_count,
         };
@@ -49,8 +54,8 @@ inline seastar::net::tcp_keepalive_params get_keepalive_parameters(std::chrono::
     auto count = std::max(min_count, std::min(max_count, static_cast<unsigned>(timeout_s / min_interval) - 1));
     auto interval = std::max(min_interval, timeout_s / (count + 1));
     auto idle = timeout_s - (interval * count);
-    if (idle < std::chrono::seconds(0)) {
-        idle = std::chrono::seconds(0);
+    if (idle < min_idle) {
+        idle = min_idle;
     }
 
     return seastar::net::tcp_keepalive_params{
