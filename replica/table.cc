@@ -2962,20 +2962,6 @@ void table::try_trigger_compaction(compaction_group& cg) noexcept {
     }
 }
 
-future<> table::flush_separator(std::optional<logstor::segment_sequence> seq_num) {
-    if (!uses_logstor()) {
-        co_return;
-    }
-
-    // wait for all previous writes to be written to a separator buffer
-    co_await _logstor->flush_to_separator();
-
-    // flush separator buffers
-    co_await parallel_foreach_compaction_group([seq_num] (compaction_group& cg) {
-        return cg.flush_separator(seq_num);
-    });
-}
-
 void compaction_group::trigger_compaction() {
     // But not if we're locked out or stopping
     if (!_async_gate.is_closed()) {
@@ -4722,6 +4708,10 @@ size_t storage_group::memtable_count() const {
     return count;
 }
 
+future<> table::flush_storage() {
+    return uses_logstor() ? flush_separator() : flush();
+}
+
 future<> table::flush(std::optional<db::replay_position> pos) {
     // There is nothing to flush if the table was stopped.
     if (_pending_flushes_phaser.is_closed()) {
@@ -4730,6 +4720,25 @@ future<> table::flush(std::optional<db::replay_position> pos) {
     auto op = _pending_flushes_phaser.start();
     // no std::bind_back in the clang version I'm on... :-(
     co_await parallel_foreach_compaction_group([pos](auto& cg) { return cg.flush(pos); });
+}
+
+future<> table::flush_separator(std::optional<logstor::segment_sequence> seq_num) {
+    if (!uses_logstor()) {
+        co_return;
+    }
+    // There is nothing to flush if the table was stopped: compaction_group::stop() flushed the separator.
+    if (_pending_flushes_phaser.is_closed()) {
+        co_return;
+    }
+    auto op = _pending_flushes_phaser.start();
+
+    // wait for all previous writes to be written to a separator buffer
+    co_await _logstor->flush_to_separator();
+
+    // flush separator buffers
+    co_await parallel_foreach_compaction_group([seq_num] (compaction_group& cg) {
+        return cg.flush_separator(seq_num);
+    });
 }
 
 bool storage_group::can_flush() const {

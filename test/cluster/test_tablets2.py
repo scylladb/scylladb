@@ -1782,10 +1782,7 @@ async def test_drop_table_during_streaming(manager: ScyllaClusterManager, stream
             servers = [servers[1], servers[0]]
 
         src_server = servers[0]
-        if uses_logstor:
-            await manager.api.logstor_flush(src_server.ip_addr)
-        else:
-            await manager.api.keyspace_flush(src_server.ip_addr, ks, "test")
+        await manager.api.keyspace_flush(src_server.ip_addr, ks, "test")
 
         src_log = await manager.server_open_log(src_server.server_id)
         src_mark = await src_log.mark()

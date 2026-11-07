@@ -552,7 +552,7 @@ async def test_space_accounting_metrics(manager: ScyllaClusterManager):
         initial_value = make_value("initial_")
         await asyncio.gather(*[cql.run_async(insert, [pk, initial_value]) for pk in range(key_count)])
 
-        await manager.api.logstor_flush(server.ip_addr)
+        await manager.api.keyspace_flush(server.ip_addr, ks, "test")
 
         baseline_live_record_bytes, baseline_live_record_count = await get_live_record_metrics()
         logger.info(f"baseline live_record_bytes={baseline_live_record_bytes}, baseline_live_record_count={baseline_live_record_count}, avg overhead per record={(baseline_live_record_bytes / baseline_live_record_count) - value_size}")
@@ -665,7 +665,7 @@ async def test_table_disk_space_metrics(manager: ScyllaClusterManager):
         await asyncio.gather(*[cql.run_async(insert, [pk, value]) for pk in range(key_count)])
 
         # the space of a table is the segments its groups own, which the separator fills
-        await manager.api.logstor_flush(server.ip_addr)
+        await manager.api.keyspace_flush(server.ip_addr, ks, "test")
 
         live_disk_space, segments, live_record_bytes = await get_table_space(ks)
         logger.info(f"after writes: live_disk_space={live_disk_space} segments={segments} live_record_bytes={live_record_bytes}")
@@ -715,7 +715,7 @@ async def test_table_disk_space_metrics(manager: ScyllaClusterManager):
         # overwriting every key leaves the same live data behind, in more segments
         for _ in range(3):
             await asyncio.gather(*[cql.run_async(insert, [pk, value]) for pk in range(key_count)])
-        await manager.api.logstor_flush(server.ip_addr)
+        await manager.api.flush_all_keyspaces(server.ip_addr)
 
         _, segments_after_overwrites, live_record_bytes_after_overwrites = await get_table_space(ks)
         logger.info(f"after overwrites: segments={segments_after_overwrites} live_record_bytes={live_record_bytes_after_overwrites}")
@@ -797,7 +797,7 @@ async def test_compaction(manager: ScyllaClusterManager):
 
         # flush all segments and put them into a single compaction group since
         # there is a single tablet.
-        await manager.api.logstor_flush(servers[0].ip_addr)
+        await manager.api.keyspace_flush(servers[0].ip_addr, ks, "test")
 
         # trigger compaction. should take the 4 segments with dead data and compact them
         await manager.api.logstor_compaction(servers[0].ip_addr)
@@ -911,7 +911,7 @@ async def test_table_removal_during_logstor_compaction(manager: ScyllaClusterMan
             for i in range(5):
                 await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({i}, '{overwritten_value}')")
 
-        await manager.api.logstor_flush(server.ip_addr)
+        await manager.api.keyspace_flush(server.ip_addr, ks, "test")
 
         server_log = await manager.server_open_log(server.server_id)
         await manager.api.enable_injection(server.ip_addr, inj, one_shot=True)
@@ -1024,7 +1024,7 @@ async def test_tablet_split_trigger_by_size(manager: ScyllaClusterManager):
 
         # Flush to assign segments to compaction groups so their size is
         # visible to tablet load stats.
-        await manager.api.logstor_flush(servers[0].ip_addr)
+        await manager.api.keyspace_flush(servers[0].ip_addr, ks, "test")
 
         await s0_log.wait_for('Detected tablet split for table', from_mark=s0_mark, timeout=60)
         await asyncio.sleep(1)
@@ -1067,7 +1067,7 @@ async def test_tablet_split_and_merge(manager: ScyllaClusterManager):
 
         await check()
 
-        await manager.api.logstor_flush(servers[0].ip_addr)
+        await manager.api.keyspace_flush(servers[0].ip_addr, ks, "test")
 
         tablet_count = await get_tablet_count(manager, servers[0], ks, 'test')
         assert tablet_count == 1
@@ -1223,7 +1223,7 @@ async def test_tablet_migration_with_compaction(manager: ScyllaClusterManager):
             await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({i}, '{value}')")
 
         # Flush to assign all segments to the tablet's compaction group before migration
-        await manager.api.logstor_flush(s1.ip_addr)
+        await manager.api.keyspace_flush(s1.ip_addr, ks, "test")
 
         # Find which shard owns the tablet and pick the other shard as destination
         tablet_token = 0
@@ -1246,7 +1246,7 @@ async def test_tablet_migration_with_compaction(manager: ScyllaClusterManager):
         # Trigger compaction while streaming is paused; the snapshot holds segment refs so
         # compaction can compact and free dead segments without affecting the in-flight data
         await manager.api.logstor_compaction(s1.ip_addr)
-        await manager.api.logstor_flush(s1.ip_addr)
+        await manager.api.keyspace_flush(s1.ip_addr, ks, "test")
 
         # Release the injection to let streaming proceed
         await manager.api.message_injection(s1.ip_addr, inj)

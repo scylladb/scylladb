@@ -577,11 +577,6 @@ class ScyllaRESTAPIClient:
         params = {"major": "true" if major else "false"}
         await self.client.post(url, host=node_ip, params=params)
 
-    async def logstor_flush(self, node_ip: str) -> None:
-        """Trigger logstor flush"""
-        url = "/storage_service/logstor_flush"
-        await self.client.post(url, host=node_ip)
-
     async def get_load(self, node_ip: str) -> float:
         """Get the disk space the storage of the node takes, which is the load it reports"""
         return await self.client.get_json("/storage_service/load", host=node_ip)

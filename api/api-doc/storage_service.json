@@ -1379,21 +1379,6 @@
          ]
       },
       {
-         "path":"/storage_service/logstor_flush",
-         "operations":[
-            {
-               "method":"POST",
-               "summary":"Trigger flush of logstor storage",
-               "type":"void",
-               "nickname":"logstor_flush",
-               "produces":[
-                  "application/json"
-               ],
-               "parameters":[]
-            }
-         ]
-      },
-      {
          "path":"/storage_service/active_repair/",
          "operations":[
             {
