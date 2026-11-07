@@ -42,6 +42,7 @@
 #include <seastar/core/shared_ptr.hh>
 #include "cdc/generation_id.hh"
 #include "db/system_keyspace.hh"
+#include "db/timeout_clock.hh"
 #include "raft/raft.hh"
 #include "node_ops/id.hh"
 #include "raft/server.hh"
@@ -296,6 +297,11 @@ public:
     future<> stop();
     void init_messaging_service();
     future<> uninit_messaging_service();
+
+    /// Advisory SC V2 metadata; this does not execute or change a data operation.
+    future<std::optional<locator::tablet_routing_info_v2>> strongly_consistent_tablet_routing_info(
+            table_id table, dht::token token, std::optional<locator::tablet_version_block> block,
+            db::timeout_clock::time_point timeout);
 
     // If a hint is provided, only the changed parts of the tablet metadata will be (re)loaded.
     future<locator::mutable_token_metadata_ptr> prepare_tablet_metadata(const locator::tablet_metadata_change_hint& hint, mutable_token_metadata_ptr pending_token_metadata);

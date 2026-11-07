@@ -528,6 +528,7 @@ public:
     named_value<bool> alternator_streams_increased_compatibility;
     named_value<bool> alternator_vector_search_extra_operators;
     named_value<uint32_t> alternator_timeout_in_ms;
+    named_value<uint32_t> alternator_tablet_routing_wait_timeout_in_ms;
     named_value<double> alternator_ttl_period_in_seconds;
     named_value<sstring> alternator_describe_endpoints;
     named_value<uint32_t> alternator_max_items_in_batch_write;

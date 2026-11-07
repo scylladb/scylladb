@@ -305,8 +305,9 @@ public:
     virtual std::optional<tablet_routing_info> check_locality(const token& token, unsigned original_shard) const = 0;
 
     /// Checks whether a tablet_version_block matches the tablet_version corresponding to token.
-    /// \returns std::nullopt if there's a match; tablet_routing_info_v2 otherwise.
-    virtual std::optional<tablet_routing_info_v2> check_tablet_version(const token&, tablet_version_block) const = 0;
+    /// An empty block requests current information unconditionally.
+    /// \returns std::nullopt for non-tablet tables or a match; tablet_routing_info_v2 otherwise.
+    virtual std::optional<tablet_routing_info_v2> check_tablet_version(const token&, std::optional<tablet_version_block>) const = 0;
 
     /// Returns true if there are any pending ranges for this endpoint.
     /// This operation is expensive, for vnode_erm it iterates
@@ -491,7 +492,7 @@ public: // effective_replication_map
     host_id_vector_replica_set get_replicas_for_reading(const token& token, bool is_vnode = false) const override;
     host_id_vector_replica_set get_replicas(const token& search_token, bool is_vnode = false) const override;
     std::optional<tablet_routing_info> check_locality(const token& token, unsigned original_shard) const override;
-    std::optional<tablet_routing_info_v2> check_tablet_version(const token&, tablet_version_block) const override;
+    std::optional<tablet_routing_info_v2> check_tablet_version(const token&, std::optional<tablet_version_block>) const override;
     bool has_pending_ranges(locator::host_id endpoint) const override;
     std::unique_ptr<token_range_splitter> make_splitter() const override;
     const dht::sharder& get_sharder(const schema& s) const override;
@@ -604,7 +605,7 @@ public:
     host_id_vector_replica_set get_replicas_for_reading(const token& token, bool is_vnode = false) const override;
     host_id_vector_replica_set get_replicas(const token& search_token, bool is_vnode = false) const override;
     std::optional<tablet_routing_info> check_locality(const token& token, unsigned original_shard) const override;
-    std::optional<tablet_routing_info_v2> check_tablet_version(const token&, tablet_version_block) const override;
+    std::optional<tablet_routing_info_v2> check_tablet_version(const token&, std::optional<tablet_version_block>) const override;
     bool has_pending_ranges(locator::host_id endpoint) const override;
     std::unique_ptr<token_range_splitter> make_splitter() const override;
     const dht::sharder& get_sharder(const schema& s) const override;

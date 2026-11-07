@@ -9,6 +9,7 @@
 #include "test/lib/scylla_test_case.hh"
 
 #include <seastar/util/defer.hh>
+#include <seastar/util/alloc_failure_injector.hh>
 #include <seastar/core/memory.hh>
 #include "utils/base64.hh"
 #include "utils/rjson.hh"
@@ -26,6 +27,8 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/core/sleep.hh>
+#include <seastar/http/request.hh>
+#include <seastar/http/reply.hh>
 
 namespace alternator {
     const cdc::stream_id& find_parent_shard_in_previous_generation(db_clock::time_point prev_timestamp, const utils::chunked_vector<cdc::stream_id>& prev_streams, const cdc::stream_id& child);
@@ -1565,5 +1568,221 @@ BOOST_AUTO_TEST_CASE(test_find_children_range_from_parent_vnodes_brute_force_all
         for(auto parent_index = 0u; parent_index < parent_streams.size(); ++parent_index) {
             run(iteration, parent_index);
         }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(test_tablet_routing_request) {
+    using alternator::parse_tablet_routing_request;
+    auto disabled = parse_tablet_routing_request(std::nullopt);
+    BOOST_REQUIRE(disabled);
+    BOOST_REQUIRE(!*disabled);
+    for (auto value : {"2:-", " \t2:-\t ", "02:-"}) {
+        auto forced = parse_tablet_routing_request(value);
+        BOOST_REQUIRE(forced);
+        BOOST_REQUIRE(*forced);
+        BOOST_REQUIRE(!(**forced).block);
+    }
+    for (auto value : {"2:dc", "2:DC", "2:dC", " 2:Dc\t"}) {
+        auto conditional = parse_tablet_routing_request(value);
+        BOOST_REQUIRE(conditional);
+        BOOST_REQUIRE(*conditional);
+        BOOST_REQUIRE((**conditional).block);
+        BOOST_REQUIRE_EQUAL((**conditional).block->value(), 0xdc);
+    }
+    for (auto value : {"0:", "1:any suffix", "3:", "999999999999999999999999999999:!"}) {
+        auto unsupported = parse_tablet_routing_request(value);
+        BOOST_REQUIRE(unsupported);
+        BOOST_REQUIRE(!*unsupported);
+    }
+    for (auto value : {"", " \t", "2", ":-", "-2:-", "+2:-", "v2:-", "2 :dc", "2:", "2:0", "2:000", "2:gg", "2:d c", "2:dc;", "2:--"}) {
+        auto invalid = parse_tablet_routing_request(value);
+        BOOST_REQUIRE(!invalid);
+        BOOST_REQUIRE_EQUAL(invalid.error()._type, "ValidationException");
+    }
+}
+
+BOOST_AUTO_TEST_CASE(test_tablet_routing_header) {
+    locator::tablet_routing_info_v2 info{
+        .tablet_replicas = {
+            {locator::host_id(utils::UUID("22222222-2222-4222-8222-222222222222")), 3},
+            {locator::host_id(utils::UUID("11111111-1111-4111-8111-111111111111")), 1},
+        },
+        .token_range = {dht::token{-1000}, dht::token{2000}},
+        .hash = locator::tablet_version{0xabc},
+    };
+    BOOST_REQUIRE_EQUAL(alternator::format_tablet_routing_info({info, alternator::tablet_routing_mode::regular}),
+        "2;start=-1000;end=2000;version=0000000000000abc;mode=regular;replicas=\""
+        "22222222-2222-4222-8222-222222222222/3 11111111-1111-4111-8111-111111111111/1\"");
+    BOOST_REQUIRE_EQUAL(alternator::format_tablet_routing_info({info, alternator::tablet_routing_mode::strong}),
+        "2;start=-1000;end=2000;version=0000000000000abc;mode=strong;replicas=\""
+        "22222222-2222-4222-8222-222222222222/3 11111111-1111-4111-8111-111111111111/1\"");
+}
+
+SEASTAR_THREAD_TEST_CASE(test_tablet_routing_header_allocations) {
+    alternator::tablet_routing_response response;
+    response.info.token_range = {dht::token::from_int64(std::numeric_limits<int64_t>::min()),
+                                dht::token::from_int64(std::numeric_limits<int64_t>::max())};
+    response.info.hash = locator::tablet_version{std::numeric_limits<uint64_t>::max()};
+    for (unsigned i = 0; i < 5; ++i) {
+        response.info.tablet_replicas.push_back({locator::host_id(utils::UUID(0, i + 1)), std::numeric_limits<unsigned>::max()});
+    }
+    for (auto mode : {alternator::tablet_routing_mode::regular, alternator::tablet_routing_mode::strong}) {
+        response.mode = mode;
+        const auto before = memory::stats().mallocs();
+        auto header = alternator::format_tablet_routing_info(response);
+        const auto allocations = memory::stats().mallocs() - before;
+#ifndef SEASTAR_DEFAULT_ALLOCATOR // allocations are counted only by the seastar allocator
+        BOOST_REQUIRE_EQUAL(allocations, 1u);
+#else
+        (void)allocations;
+#endif
+        seastar::http::reply reply;
+        alternator::add_tablet_routing_header(reply, response);
+        BOOST_REQUIRE_EQUAL(reply.get_header(alternator::tablet_info_header), header);
+        // Updating an existing header must replace its value.
+        response.info.hash = locator::tablet_version{0};
+        alternator::add_tablet_routing_header(reply, response);
+        BOOST_REQUIRE_EQUAL(reply.get_header(alternator::tablet_info_header), alternator::format_tablet_routing_info(response));
+    }
+}
+
+SEASTAR_THREAD_TEST_CASE(test_tablet_routing_header_allocation_failure) {
+    // An advisory header must not fail a completed data operation.
+    alternator::tablet_routing_response response;
+    for (unsigned i = 0; i < 5; ++i) {
+        response.info.tablet_replicas.push_back({locator::host_id(utils::UUID(0, i + 1)), i});
+    }
+    auto& injector = memory::local_failure_injector();
+    for (auto mode : {alternator::tablet_routing_mode::regular, alternator::tablet_routing_mode::strong}) {
+        response.mode = mode;
+        for (unsigned offset = 0; ; ++offset) {
+            seastar::http::reply reply;
+            reply.add_header("Content-Type", "application/x-amz-json-1.0");
+            bool threw = false;
+            injector.fail_after(offset);
+            try {
+                alternator::add_tablet_routing_header(reply, response);
+            } catch (...) {
+                threw = true;
+            }
+            const bool failed = injector.failed();
+            injector.cancel();
+            BOOST_REQUIRE(!threw);
+            BOOST_REQUIRE_EQUAL(reply.get_header("Content-Type"), "application/x-amz-json-1.0");
+            if (!failed) {
+                BOOST_REQUIRE(!reply.get_header(alternator::tablet_info_header).empty());
+                break;
+            }
+            BOOST_REQUIRE(reply.get_header(alternator::tablet_info_header).empty());
+            BOOST_REQUIRE_LT(offset, 20u);
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(test_request_result_without_routing_is_compact) {
+    using result_type = alternator::executor::request_return_type;
+    using response_type = decltype(result_type::response);
+    // Clients without the extension should pay only for the nullable metadata
+    // handle, including in ready futures and coroutine result storage.
+    BOOST_REQUIRE_LE(sizeof(result_type), sizeof(response_type) + sizeof(void*));
+    BOOST_REQUIRE_LE(sizeof(future<result_type>), sizeof(future<response_type>) + sizeof(void*));
+
+    const auto before = memory::stats().mallocs();
+    auto ready = make_ready_future<result_type>(std::string("{}"));
+    auto result = ready.get();
+    const auto after = memory::stats().mallocs();
+    BOOST_REQUIRE_EQUAL(before, after);
+    BOOST_REQUIRE(!result.routing_info);
+    BOOST_REQUIRE(!result.is_error());
+    BOOST_REQUIRE_EQUAL(std::get<std::string>(result.response), "{}");
+}
+
+BOOST_AUTO_TEST_CASE(test_request_error_clears_tablet_routing) {
+    alternator::executor::request_return_type result = std::string("{}");
+    result.routing_info = std::make_unique<alternator::tablet_routing_response>();
+    result.routing_info->info.hash = locator::tablet_version{123};
+    result.routing_info->mode = alternator::tablet_routing_mode::strong;
+    auto* metadata = result.routing_info.get();
+    BOOST_REQUIRE(!result.is_error());
+    auto moved = std::move(result);
+    BOOST_REQUIRE(!result.routing_info);
+    BOOST_REQUIRE_EQUAL(moved.routing_info.get(), metadata);
+    BOOST_REQUIRE_EQUAL(moved.routing_info->info.hash.value(), 123);
+    BOOST_REQUIRE(moved.routing_info->mode == alternator::tablet_routing_mode::strong);
+    moved = alternator::api_error::validation("invalid");
+    BOOST_REQUIRE(moved.is_error());
+    BOOST_REQUIRE(!moved.routing_info);
+}
+
+BOOST_AUTO_TEST_CASE(test_tablet_header_lookup_without_allocations) {
+    seastar::http::request request;
+    request._headers.emplace("Host", "localhost");
+    request._headers.emplace("X-Scylla-Tablet-Version-Other", "invalid");
+    const auto before = seastar::memory::stats().mallocs();
+    auto absent = alternator::parse_tablet_routing_request(request);
+    const auto after = seastar::memory::stats().mallocs();
+    BOOST_REQUIRE_EQUAL(before, after);
+    BOOST_REQUIRE(absent);
+    BOOST_REQUIRE(!*absent);
+    for (const auto name : {"x-scylla-tablet-version", "X-SCYLLA-TABLET-VERSION", "X-sCyLlA-tAbLeT-vErSiOn",
+            "x-scylla-t-v", "X-SCYLLA-T-V", "X-sCyLlA-t-V"}) {
+        request._headers.emplace(name, "2:-");
+        const auto before = seastar::memory::stats().mallocs();
+        auto forced = alternator::parse_tablet_routing_request(request);
+        const auto after = seastar::memory::stats().mallocs();
+        BOOST_REQUIRE_EQUAL(before, after);
+        BOOST_REQUIRE(forced && *forced);
+        BOOST_REQUIRE(!(**forced).block);
+        request._headers.erase(name);
+    }
+    request._headers.emplace(alternator::tablet_version_header, " 2:dC\t");
+    const auto conditional_before = seastar::memory::stats().mallocs();
+    auto conditional = alternator::parse_tablet_routing_request(request);
+    const auto conditional_after = seastar::memory::stats().mallocs();
+    BOOST_REQUIRE_EQUAL(conditional_before, conditional_after);
+    BOOST_REQUIRE(conditional && *conditional && (**conditional).block);
+    BOOST_REQUIRE_EQUAL((**conditional).block->value(), 0xdc);
+    request._headers[alternator::tablet_version_header] = "";
+    auto empty = alternator::parse_tablet_routing_request(request);
+    BOOST_REQUIRE(!empty);
+    BOOST_REQUIRE_EQUAL(empty.error()._type, "ValidationException");
+}
+
+BOOST_AUTO_TEST_CASE(test_tablet_header_alias_values) {
+    for (const auto alias : {"2:-", " 02:-\t"}) {
+        seastar::http::request request;
+        request._headers.emplace(alternator::tablet_version_header, "2:-");
+        request._headers.emplace(alternator::tablet_version_short_header, alias);
+        const auto before = seastar::memory::stats().mallocs();
+        auto parsed = alternator::parse_tablet_routing_request(request);
+        const auto after = seastar::memory::stats().mallocs();
+        BOOST_REQUIRE_EQUAL(before, after);
+        BOOST_REQUIRE(parsed && *parsed && !(**parsed).block);
+    }
+    seastar::http::request request;
+    request._headers.emplace(alternator::tablet_version_header, "2:dc");
+    request._headers.emplace(alternator::tablet_version_short_header, " 02:DC\t");
+    const auto before = seastar::memory::stats().mallocs();
+    auto parsed = alternator::parse_tablet_routing_request(request);
+    const auto after = seastar::memory::stats().mallocs();
+    BOOST_REQUIRE_EQUAL(before, after);
+    BOOST_REQUIRE(parsed && *parsed && (**parsed).block);
+    BOOST_REQUIRE_EQUAL((**parsed).block->value(), 0xdc);
+    for (const auto value : {"2:dd", "2:-", "3:any", "", "2:gg"}) {
+        request._headers[alternator::tablet_version_short_header] = value;
+        auto invalid = alternator::parse_tablet_routing_request(request);
+        BOOST_REQUIRE(!invalid);
+        BOOST_REQUIRE_EQUAL(invalid.error()._type, "ValidationException");
+    }
+    request._headers[alternator::tablet_version_header] = "3:any";
+    request._headers[alternator::tablet_version_short_header] = "4:any";
+    auto disabled = alternator::parse_tablet_routing_request(request);
+    BOOST_REQUIRE(disabled && !*disabled);
+    request._headers.erase(alternator::tablet_version_header);
+    for (const auto value : {"", "2:gg"}) {
+        request._headers[alternator::tablet_version_short_header] = value;
+        auto invalid = alternator::parse_tablet_routing_request(request);
+        BOOST_REQUIRE(!invalid);
+        BOOST_REQUIRE_EQUAL(invalid.error()._type, "ValidationException");
     }
 }
