@@ -38,6 +38,7 @@ class size_estimates_mutation_reader final : public mutation_reader::impl {
     ks_range::const_iterator _current_partition;
     streamed_mutation::forwarding _fwd;
     mutation_reader_opt _partition_reader;
+    std::optional<std::vector<token_range>> _local_ranges;
 public:
     size_estimates_mutation_reader(replica::database& db, db::system_keyspace& sys_ks, schema_ptr, reader_permit, const dht::partition_range&, const query::partition_slice&, streamed_mutation::forwarding);
 
