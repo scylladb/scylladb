@@ -3352,6 +3352,16 @@ bool table::tablet_has_compacted_undeleted_sstables(locator::tablet_id tid) cons
     });
 }
 
+bool table::tablet_empty(locator::tablet_id tid) const {
+    auto* sg = _sg_manager->maybe_storage_group_for_id(_schema, tid.value());
+    if (!sg) {
+        return true;
+    }
+    return std::ranges::all_of(sg->compaction_groups_immediate(), [] (const auto& cg) {
+        return cg->empty();
+    });
+}
+
 lw_shared_ptr<memtable_list>
 table::make_memory_only_memtable_list() {
     auto get_schema = [this] { return schema(); };

@@ -1049,6 +1049,41 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
     auto sst_infos = co_await sth.get_snapshot_sstables(snapshot_name, keyspace_name, table_name, datacenter, rack,
             db::consistency_level::QUORUM, tablet_range.start().transform([] (auto& v) { return v.value(); }), tablet_range.end().transform([] (auto& v) { return v.value(); }));
     llog.debug("{} SSTables found for tablet {}", sst_infos.size(), tid);
+
+    // Skip sstables not uploaded (de-duplicated by backup).
+    auto uploaded = sst_infos | std::views::filter([] (const auto& si) {
+        return si.state >= db::snapshot_state::remote_and_local;
+    });
+
+    // tmap above is valid only until the first co_await: the guard switches to a newer
+    // effective replication map whenever one arrives that doesn't affect this tablet,
+    // and the old one may be freed. Re-read the map from the guard from here on.
+    if (guard.get_tablet_map().has_raft_info()) {
+        // A strongly consistent tablet is restored into an empty table only. Nothing but
+        // its raft log ever reconciles the replicas, and with an empty state machine and
+        // an empty log the running raft group can do nothing to the data meanwhile. An
+        // earlier attempt of this very restore may have attached its sstables already.
+        // Checked before the backup's contents are looked at: a tablet the backup holds
+        // nothing for must be empty too, or the table would mix restored and old data.
+        const auto resumed = std::ranges::any_of(uploaded, [] (const auto& si) { return si.downloaded != db::is_downloaded::no; });
+        // A write committed right before the restore may not be applied yet; apply it
+        // first, or the tablet would look empty while its log isn't. The data is on the
+        // replica's shard, which isn't necessarily this one.
+        co_await _db.local().wait_for_strongly_consistent_apply(tid.table, tid.tablet);
+        const auto shard = [&] {
+            const auto& replicas = guard.get_tablet_map().get_tablet_info(tid.tablet).replicas;
+            const auto replica = std::ranges::find(replicas, guard.get_token_metadata()->get_my_id(), &locator::tablet_replica::host);
+            return replica != replicas.end() ? replica->shard : this_shard_id();
+        }();
+        const bool empty = co_await _db.invoke_on(shard, [tid] (replica::database& db) {
+            return db.find_column_family(tid.table).tablet_empty(tid.tablet);
+        });
+        if (!resumed && !empty) {
+            throw std::runtime_error(fmt::format("Cannot restore strongly consistent tablet {}: the tablet holds data on this replica, "
+                    "and a restore into a non-empty strongly consistent table is not supported; restore into an empty table", tid));
+        }
+    }
+
     if (sst_infos.empty()) {
         // It can happen when the restored table has more tablets than the original.
         // Some tablets simply have no data in their token range.
@@ -1056,20 +1091,13 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
         co_return;
     }
 
-    // Skip sstables not uploaded (de-duplicated by backup).
-    auto uploaded = sst_infos | std::views::filter([] (const auto& si) {
-        return si.state >= db::snapshot_state::remote_and_local;
-    });
     auto [ fully, partially ] = co_await get_sstables_for_tablet(uploaded, tablet_range, [] (const auto& si) { return si.first_token; }, [] (const auto& si) { return si.last_token; });
     if (!partially.empty()) {
         llog.debug("Sstable {} is partially contained", partially.front().sstable_id);
         throw std::logic_error("sstables_partially_contained");
     }
 
-    // tmap above is valid only until the first co_await: the guard switches to a newer
-    // effective replication map whenever one arrives that doesn't affect this tablet,
-    // and the old one may be freed. Re-read the map from the guard from here on.
-    if (guard.get_tablet_map().has_raft_info()) {
+    if (strongly_consistent) {
         // The replicas of a strongly consistent tablet hold the same data, and the
         // backup may hold a copy from each of them (restore_tablets() registers every
         // copy for every rack). Attach one copy only, the same on every replica: that

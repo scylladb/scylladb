@@ -1146,16 +1146,16 @@ void groups_manager::update(token_metadata_ptr new_tm) {
     schedule_raft_groups_deletion(false, log_disposition::release);
 }
 
-future<> groups_manager::wait_for_committed_writes(table_id table, lowres_clock::duration timeout) {
+future<> groups_manager::wait_for_committed_writes(table_id table, std::optional<locator::tablet_id> tablet, lowres_clock::duration timeout) {
     if (const auto ms = utils::get_local_injector().inject_parameter<uint32_t>("sc_committed_writes_wait_timeout_ms")) {
         timeout = std::chrono::milliseconds(*ms);
     }
-    co_await container().invoke_on_all([table, timeout] (groups_manager& gm) {
-        return gm.wait_for_committed_writes_on_shard(table, timeout);
+    co_await container().invoke_on_all([table, tablet, timeout] (groups_manager& gm) {
+        return gm.wait_for_committed_writes_on_shard(table, tablet, timeout);
     });
 }
 
-future<> groups_manager::wait_for_committed_writes_on_shard(table_id table, lowres_clock::duration timeout) {
+future<> groups_manager::wait_for_committed_writes_on_shard(table_id table, std::optional<locator::tablet_id> tablet, lowres_clock::duration timeout) {
     if (!_features.strongly_consistent_tables || !_started) {
         co_return;
     }
@@ -1171,6 +1171,9 @@ future<> groups_manager::wait_for_committed_writes_on_shard(table_id table, lowr
 
     std::vector<std::pair<global_tablet_id, raft::group_id>> groups;
     for (const auto tid : tmap.tablet_ids()) {
+        if (tablet && tid != *tablet) {
+            continue;
+        }
         if (hosts_raft_group(tmap.get_tablet_info(tid), tmap.get_tablet_transition_info(tid), this_replica)) {
             groups.emplace_back(global_tablet_id{table, tid}, tmap.get_tablet_raft_info(tid).group_id);
         }

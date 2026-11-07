@@ -2170,8 +2170,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // A snapshot of a strongly consistent table first makes its local replicas
             // apply the writes committed so far, so that it holds every acked write.
             db.invoke_on_all([&groups_manager] (replica::database& db) {
-                db.plug_strongly_consistent_apply_barrier([&groups_manager] (table_id table) {
-                    return groups_manager.local().wait_for_committed_writes(table);
+                db.plug_strongly_consistent_apply_barrier([&groups_manager] (table_id table, std::optional<locator::tablet_id> tablet) {
+                    return groups_manager.local().wait_for_committed_writes(table, tablet);
                 });
             }).get();
             auto unplug_sc_apply_barrier = defer_verbose_shutdown("strongly consistent apply barrier", [&db] {

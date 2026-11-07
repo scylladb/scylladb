@@ -1919,7 +1919,7 @@ public:
     // writes. Plugged by main once the strongly consistent groups manager is up; until
     // then no table of the node has running raft groups. See
     // strong_consistency::groups_manager::wait_for_committed_writes().
-    using strongly_consistent_apply_barrier = noncopyable_function<future<>(table_id)>;
+    using strongly_consistent_apply_barrier = noncopyable_function<future<>(table_id, std::optional<locator::tablet_id>)>;
 
 private:
     std::optional<strongly_consistent_apply_barrier> _sc_apply_barrier;
@@ -1956,8 +1956,9 @@ public:
 
     void plug_strongly_consistent_apply_barrier(strongly_consistent_apply_barrier barrier) noexcept;
     void unplug_strongly_consistent_apply_barrier() noexcept;
-    // Runs the plugged barrier for the table; a no-op before it is plugged.
-    future<> wait_for_strongly_consistent_apply(table_id);
+    // Runs the plugged barrier for the table, or for one of its tablets; a no-op before
+    // it is plugged.
+    future<> wait_for_strongly_consistent_apply(table_id, std::optional<locator::tablet_id> = std::nullopt);
 
 private:
     future<> flush_non_system_column_families();

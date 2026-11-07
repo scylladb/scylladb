@@ -253,7 +253,7 @@ class groups_manager : public peering_sharded_service<groups_manager> {
         dht::token_range range);
 
     // The shard's part of wait_for_committed_writes().
-    future<> wait_for_committed_writes_on_shard(table_id table, lowres_clock::duration timeout);
+    future<> wait_for_committed_writes_on_shard(table_id table, std::optional<locator::tablet_id> tablet, lowres_clock::duration timeout);
 
     void init_messaging_service();
 
@@ -367,7 +367,11 @@ public:
     // A group whose apply isn't through by the deadline is skipped with a warning, so
     // that a stuck applier can't hold a snapshot forever. Runs on any shard; a no-op for
     // a table that isn't strongly consistent.
-    future<> wait_for_committed_writes(table_id table, lowres_clock::duration timeout = committed_writes_wait_timeout);
+    //
+    // With a tablet, waits for this node's replica of that tablet only, wherever its
+    // shard: a restore of one tablet needs no other tablet's writes applied.
+    future<> wait_for_committed_writes(table_id table, std::optional<locator::tablet_id> tablet = std::nullopt,
+            lowres_clock::duration timeout = committed_writes_wait_timeout);
 
     tablet_group_leader_cache& leader_cache() { return _leader_cache; }
 };

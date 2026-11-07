@@ -3952,9 +3952,9 @@ void database::unplug_strongly_consistent_apply_barrier() noexcept {
     _sc_apply_barrier.reset();
 }
 
-future<> database::wait_for_strongly_consistent_apply(table_id id) {
+future<> database::wait_for_strongly_consistent_apply(table_id id, std::optional<locator::tablet_id> tablet) {
     if (_sc_apply_barrier) {
-        return (*_sc_apply_barrier)(id);
+        return (*_sc_apply_barrier)(id, tablet);
     }
     return make_ready_future<>();
 }

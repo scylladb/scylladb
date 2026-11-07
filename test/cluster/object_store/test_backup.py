@@ -1478,6 +1478,40 @@ async def test_snapshot_strongly_consistent_apply_timeout(build_mode: str, manag
             await manager.api.disable_injection(s.ip_addr, apply_injection)
 
 
+async def test_restore_tablets_strongly_consistent_into_non_empty_refused(build_mode: str, manager: ScyllaClusterManager, object_storage):
+    """A tablet-aware restore into a non-empty strongly consistent table fails.
+
+    Nothing but the raft log reconciles the replicas of such a table, so a restore is
+    supported into an empty table only, where the running raft groups can't touch the
+    data meanwhile. A replica that finds data in the tablet fails its restore, which
+    fails the request; the data is left as it was.
+    """
+    topology = topo(rf = 2, nodes = 2, racks = 2, dcs = 1)
+    servers, host_ids = await create_cluster(topology, manager, logger, object_storage, extra_config=SC_CONFIG)
+    cql = manager.get_cql()
+    cf = 'test'
+    num_keys = 10
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}} AND tablets = {{'initial': 1}}{ks_consistency_opts(True)}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.{cf} ( pk text primary key, value int ) WITH tablets = {{'min_tablet_count': 1, 'max_tablet_count': 1}};")
+        insert_stmt = cql.prepare(f"INSERT INTO {ks}.{cf} (pk, value) VALUES (?, ?)")
+        insert_stmt.consistency_level = write_cl(True)
+        await asyncio.gather(*(cql.run_async(insert_stmt, (str(i), i)) for i in range(num_keys)))
+        snap_name, _ = await take_snapshot(ks, servers, manager, logger, strongly_consistent=True)
+        prefix = f'nonempty/{snap_name}'
+        await asyncio.gather(*(do_backup(s, snap_name, f'{prefix}/{s.server_id}', ks, cf, object_storage, manager, logger) for s in servers))
+        manifests = [f'{s.server_id}/manifest.json' for s in servers]
+
+        await cql.run_async(f"CREATE TABLE {ks}.{cf}_restored ( pk text primary key, value int ) WITH tablets = {{'min_tablet_count': 1, 'max_tablet_count': 1}};")
+        await cql.run_async(f"INSERT INTO {ks}.{cf}_restored (pk, value) VALUES ('kept', 1);")
+        tid = await manager.api.restore_tablets(servers[0].ip_addr, ks, f'{cf}_restored', snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests, prefix=prefix)
+        status = await manager.api.wait_task(servers[0].ip_addr, tid)
+        assert (status is not None) and (status['state'] == 'failed'), f"Restore into the non-empty {ks}.{cf}_restored did not fail: {status}"
+        assert 'non-empty strongly consistent table' in status['error'], status['error']
+        kept = {pk: row.value for pk, row in (await read_rows(cql, ks, f'{cf}_restored', ['kept', *range(num_keys)], True)).items()}
+        assert kept == {'kept': 1}, f'Unexpected contents of {ks}.{cf}_restored after the refused restore: {kept}'
+
+
 @pytest.mark.parametrize("strongly_consistent", [True])
 async def test_restore_tablets_after_majority_loss(build_mode: str, manager: ScyllaClusterManager, object_storage, strongly_consistent):
     '''Recover a strongly consistent keyspace whose tablets lost a majority of their replicas.
