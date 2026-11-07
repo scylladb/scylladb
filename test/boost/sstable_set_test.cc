@@ -147,6 +147,71 @@ SEASTAR_TEST_CASE(test_time_series_sstable_set_bytes_on_disk) {
     });
 }
 
+// A partition range read from a time_series_sstable_set must select the sstables by token,
+// like partitioned_sstable_set does, rather than all of them: otherwise a scan, or a
+// compaction, of an sstable run opens all of its fragments at once.
+SEASTAR_TEST_CASE(test_time_series_sstable_set_selects_run_fragments_by_token) {
+    return test_env::do_with_async([] (test_env& env) {
+        simple_schema ss;
+        auto s = ss.schema();
+
+        auto pks = tests::generate_partition_keys(4, s);
+        sstable_writer_config cfg = env.manager().configure_writer("");
+        auto run = sstables::run_id::create_random_id();
+
+        // A run of one fragment per partition.
+        std::vector<shared_sstable> fragments;
+        for (auto& pk : pks) {
+            auto mut = mutation(s, pk);
+            ss.add_row(mut, ss.make_ckey(0), "val");
+            auto sst = make_sstable_easy(env, make_mutation_reader_from_mutations(s, env.make_reader_permit(), std::move(mut)), cfg);
+            sstables::test(sst).set_run_identifier(run);
+            fragments.push_back(std::move(sst));
+        }
+
+        auto set = sstable_set(std::make_unique<time_series_sstable_set>(s, true));
+        for (auto& sst : fragments) {
+            BOOST_REQUIRE(set.insert(sst));
+        }
+        // Inserting an sstable already in the set doesn't add it again.
+        BOOST_REQUIRE(!set.insert(fragments[0]));
+        BOOST_REQUIRE_EQUAL(set.size(), fragments.size());
+
+        auto runs = set.all_sstable_runs();
+        BOOST_REQUIRE_EQUAL(runs.size(), 1);
+        BOOST_REQUIRE_EQUAL(runs.front()->all().size(), fragments.size());
+
+        for (size_t i = 0; i < pks.size(); i++) {
+            auto selected = set.select(dht::partition_range::make_singular(pks[i]));
+            BOOST_REQUIRE(selected == std::vector<shared_sstable>({fragments[i]}));
+        }
+
+        auto selector = set.make_incremental_selector();
+        for (size_t i = 0; i < pks.size(); i++) {
+            auto selection = selector.select(dht::ring_position_view(pks[i]));
+            BOOST_REQUIRE(selection.sstables == std::vector<shared_sstable>({fragments[i]}));
+        }
+
+        // A clone selects the same, and is independent of the set it was cloned from.
+        auto clone = make_lw_shared<sstable_set>(set);
+        BOOST_REQUIRE(set.erase(fragments[0]));
+        BOOST_REQUIRE(set.select(dht::partition_range::make_singular(pks[0])).empty());
+        BOOST_REQUIRE(clone->select(dht::partition_range::make_singular(pks[0])) == std::vector<shared_sstable>({fragments[0]}));
+        BOOST_REQUIRE_EQUAL(set.size(), fragments.size() - 1);
+        BOOST_REQUIRE_EQUAL(clone->size(), fragments.size());
+
+        // A scan still reads every partition.
+        auto reader = clone->make_range_sstable_reader(s, env.make_reader_permit(), query::full_partition_range, s->full_slice(),
+                nullptr, ::streamed_mutation::forwarding::no, ::mutation_reader::forwarding::no);
+        auto close_reader = deferred_close(reader);
+        for (auto& pk : pks) {
+            auto mopt = read_mutation_from_mutation_reader(reader).get();
+            BOOST_REQUIRE(mopt && mopt->decorated_key().equal(*s, pk));
+        }
+        BOOST_REQUIRE(!read_mutation_from_mutation_reader(reader).get());
+    });
+}
+
 SEASTAR_TEST_CASE(test_partitioned_sstable_set_bytes_on_disk) {
     return test_env::do_with_async([] (test_env& env) {
         simple_schema ss;
