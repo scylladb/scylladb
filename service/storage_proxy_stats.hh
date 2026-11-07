@@ -174,6 +174,7 @@ struct stats : public write_stats {
     uint64_t read_retries = 0; // read is retried with new limit
     uint64_t speculative_digest_reads = 0;
     uint64_t speculative_data_reads = 0;
+    uint64_t speculative_retries_redirected = 0;
 
     uint64_t cas_read_unfinished_commit = 0;
     uint64_t cas_foreground = 0;
