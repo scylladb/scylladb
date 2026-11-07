@@ -17,6 +17,9 @@
 
 #include <seastar/core/future.hh>
 #include <seastar/core/sharded.hh>
+#include <seastar/core/gate.hh>
+#include <seastar/core/semaphore.hh>
+#include <seastar/core/units.hh>
 
 #include "commitlog.hh"
 #include "commitlog_replayer.hh"
@@ -40,6 +43,10 @@ class raft_replay_error : public std::runtime_error {
 public:
     using std::runtime_error::runtime_error;
 };
+
+// Bound the bytes pinned by in-flight applies; a huge entry is applied alone.
+static constexpr size_t max_in_flight_bytes = 4_MiB;
+static constexpr size_t min_entry_charge = 16_KiB;
 
 class db::commitlog_replayer::impl {
     struct column_mappings {
@@ -94,9 +101,21 @@ public:
         return _column_mappings.stop();
     }
 
-    future<> process(stats*, detail::commitlog_entry_serialization_format, commitlog::buffer_and_replay_position buf_rp) const;
+    // Lives in recover()'s frame: every process() call holds the gate, so none outlives it.
+    struct replay_pipeline {
+        stats s;
+        named_semaphore sem{max_in_flight_bytes, named_semaphore_exception_factory{"commitlog_replay"}};
+        gate g;
+        // Set by process() when its apply leaves this shard: only then may the reader move on.
+        bool pipelined = false;
+    };
+
+    future<> process(replay_pipeline&, detail::commitlog_entry_serialization_format, commitlog::buffer_and_replay_position buf_rp,
+            semaphore_units<named_semaphore_exception_factory> units) const;
     future<stats> recover(const commitlog::descriptor&, const commitlog::replay_state&) const;
     detail::commitlog_entry_serialization_format get_entry_format(const commitlog::descriptor&) const;
+
+    commitlog_replayer::totals _last_totals;
 
     typedef std::unordered_map<table_id, replay_position> rp_map;
     typedef std::unordered_map<unsigned, rp_map> shard_rpm_map;
@@ -201,48 +220,72 @@ db::commitlog_replayer::impl::recover(const commitlog::descriptor& d, const comm
 
     if (rp.id < gp.id) {
         rlogger.debug("skipping replay of fully-flushed {}", f);
-        return make_ready_future<stats>();
+        co_return stats{};
     }
     position_type p = 0;
     if (rp.id == gp.id) {
         p = gp.pos;
     }
 
-    auto s = make_lw_shared<stats>();
+    replay_pipeline st;
     auto& exts = _db.local().extensions();
     auto entry_format = get_entry_format(d);
 
-    return db::commitlog::read_log_file(rpstate, f, d.filename_prefix,
-            std::bind(&impl::process, this, s.get(), entry_format, std::placeholders::_1),
-            p, &exts).then_wrapped([this, s, id = db::replay_position(d).id](future<> f) {
-        bool unreadable = false;
-        try {
-            f.get();
-        } catch (commitlog::segment_data_corruption_error& e) {
-            // Counted, skipped and reported: a bad sector or chunk header ends the read,
-            // and a broken entry header skips the rest of its chunk. finish_replay() refuses
-            // the boot over the unread bytes while this shard hosts a strongly consistent
-            // group, unless strongly_consistent_tables_start_on_damaged_commitlog is set.
-            s->corrupt_bytes += e.bytes();
-            unreadable = true;
-        } catch (commitlog::segment_truncation& e) {
-            // Where the writing stopped, which every crash leaves behind: an EOF, a
-            // short read, or a recycled sector still carrying its old segment id.
-            // Nothing was lost, so no raft log has a hole here.
-            s->truncated_at = e.position();
-        } catch (commitlog::header_checksum_error&) {
-            ++s->broken_files;
-            unreadable = true;
-        } catch (...) {
-            throw;
+    auto run = [this, &st, entry_format](semaphore_units<named_semaphore_exception_factory> units, commitlog::buffer_and_replay_position buf_rp) {
+        auto f = process(st, entry_format, std::move(buf_rp), std::move(units));
+        // Same-shard applies and raft batches are awaited, as without the pipeline.
+        const bool pipelined = std::exchange(st.pipelined, false);
+        if (f.available() || !pipelined) {
+            return f;
         }
-        if (unreadable && _raft_buffer) {
-            // What the unread part held is unknowable, so the raft side decides,
-            // where it knows whether this shard hosts a group at all.
-            _raft_buffer->local().note_unreadable_segment(id);
+        // Don't wait for in-flight cross-shard applies, so reading overlaps with the round trips.
+        // process() holds the gate and the units, and catches every apply error, so f can be dropped.
+        return make_ready_future<>();
+    };
+    auto consume = [&st, run](commitlog::buffer_and_replay_position buf_rp) {
+        auto n = std::clamp(buf_rp.buffer.size_bytes(), min_entry_charge, max_in_flight_bytes);
+        // Measured: get_units().then() costs one allocation per entry even when units are free.
+        if (auto units = try_get_units(st.sem, n)) {
+            return run(std::move(*units), std::move(buf_rp));
         }
-        return make_ready_future<stats>(*s);
-    });
+        return get_units(st.sem, n).then([run, buf_rp = std::move(buf_rp)](auto units) mutable {
+            return run(std::move(units), std::move(buf_rp));
+        });
+    };
+
+    std::exception_ptr ex;
+    bool unreadable = false;
+    try {
+        co_await db::commitlog::read_log_file(rpstate, f, d.filename_prefix, consume, p, &exts);
+    } catch (commitlog::segment_data_corruption_error& e) {
+        // Counted, skipped and reported: a bad sector or chunk header ends the read,
+        // and a broken entry header skips the rest of its chunk. finish_replay() refuses
+        // the boot over the unread bytes while this shard hosts a strongly consistent
+        // group, unless strongly_consistent_tables_start_on_damaged_commitlog is set.
+        st.s.corrupt_bytes += e.bytes();
+        unreadable = true;
+    } catch (commitlog::segment_truncation& e) {
+        // Where the writing stopped, which every crash leaves behind: an EOF, a
+        // short read, or a recycled sector still carrying its old segment id.
+        // Nothing was lost, so no raft log has a hole here.
+        st.s.truncated_at = e.position();
+    } catch (commitlog::header_checksum_error&) {
+        ++st.s.broken_files;
+        unreadable = true;
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    // close() cannot fail, so the applies, which reference this, always finish first.
+    co_await st.g.close();
+    if (ex) {
+        std::rethrow_exception(ex);
+    }
+    if (unreadable && _raft_buffer) {
+        // What the unread part held is unknowable, so the raft side decides,
+        // where it knows whether this shard hosts a group at all.
+        _raft_buffer->local().note_unreadable_segment(rp.id);
+    }
+    co_return st.s;
 }
 
 detail::commitlog_entry_serialization_format db::commitlog_replayer::impl::get_entry_format(const commitlog::descriptor& d) const {
@@ -253,13 +296,22 @@ detail::commitlog_entry_serialization_format db::commitlog_replayer::impl::get_e
     return detail::commitlog_entry_serialization_format::mutation;
 }
 
-future<> db::commitlog_replayer::impl::process(
-        stats* s, detail::commitlog_entry_serialization_format entry_format, commitlog::buffer_and_replay_position buf_rp) const {
+// recover() pipelines calls to this, so it must not suspend between the detach
+// decision (st.pipelined) and the column-mapping insert and skip checks, or
+// column-mapping state stops following log order. The raft path also suspends,
+// at get_units, but recover() awaits it. units and the gate are held until done.
+future<> db::commitlog_replayer::impl::process(impl::replay_pipeline& st, detail::commitlog_entry_serialization_format entry_format,
+        commitlog::buffer_and_replay_position buf_rp, semaphore_units<named_semaphore_exception_factory> units) const {
+    auto h = st.g.hold();
+    auto* s = &st.s;
+    auto& sem = st.sem;
     auto&& buf = buf_rp.buffer;
     auto&& rp = buf_rp.position;
     try {
 
         commitlog_entry_reader cer(buf, entry_format);
+        // cer owns a copy, don't keep the raw buffer pinned.
+        buf = {};
         const auto& read_entry = cer.entry().item;
 
         if (std::holds_alternative<raft_commitlog_batch>(read_entry)) {
@@ -275,6 +327,10 @@ future<> db::commitlog_replayer::impl::process(
             rlogger.debug("Adding raft batch for group {} at {} to replay buffer: {} entries, commit_idx {}",
                     batch.group_id, rp, batch.entries.size(), batch.commit_idx);
             SCYLLA_ASSERT(_qp);
+            // add_batch reads system.raft_groups, which earlier entries of this
+            // replay may still be writing: wait for them, and hold off later ones.
+            units.return_all();
+            auto all = co_await get_units(sem, max_in_flight_bytes);
             // Everything for this batch is decided as it arrives: see
             // raft_commitlog_replay_buffer.
             try {
@@ -386,6 +442,7 @@ future<> db::commitlog_replayer::impl::process(
                 rlogger.debug("no shard for token {} in table {}", token, uuid);
                 s->skipped_mutations++;
             } else {
+                st.pipelined = std::ranges::any_of(shards, [](auto shard) { return shard != this_shard_id(); });
                 co_await seastar::parallel_for_each(shards, apply);
             }
         } else {
@@ -434,6 +491,10 @@ future<db::commitlog_replayer> db::commitlog_replayer::create_replayer(
             return make_ready_future<commitlog_replayer>(std::move(rp));
         });
     });
+}
+
+db::commitlog_replayer::totals db::commitlog_replayer::last_totals() const {
+    return _impl->_last_totals;
 }
 
 future<> db::commitlog_replayer::recover(std::vector<sstring> files, sstring fname_prefix) {
@@ -499,6 +560,7 @@ future<> db::commitlog_replayer::recover(std::vector<sstring> files, sstring fna
             });
         }, impl::stats(), std::plus<impl::stats>());
             
+        _impl->_last_totals = {totals.applied_mutations, totals.invalid_mutations, totals.skipped_mutations};
         rlogger.info("Log replay complete for {}, {} replayed mutations ({} invalid, {} skipped)"
                         , _impl->_context
                         , totals.applied_mutations
