@@ -11,12 +11,16 @@
 #pragma once
 
 #include <algorithm>
+#include <functional>
+#include <ranges>
+#include <unordered_map>
 
 #include "utils/assert.hh"
 #include "sstables/sstables.hh"
 #include "size_tiered_compaction_strategy.hh"
 #include "utils/interval.hh"
 #include "utils/log.hh"
+#include "utils/pretty_printers.hh"
 
 namespace compaction {
 
@@ -24,6 +28,7 @@ class leveled_manifest {
     compaction_group_view& _table_s;
     schema_ptr _schema;
     std::vector<std::vector<sstables::shared_sstable>> _generations;
+    std::vector<sstables::shared_sstable> _oversized_l0;
     uint64_t _max_sstable_size_in_bytes;
     const size_tiered_compaction_strategy_options& _stcs_options;
 
@@ -84,7 +89,45 @@ public:
         // partitioned_sstable_set keeps track of a list for each level.
         manifest._generations = get_levels(sstables);
 
+        auto& l0 = manifest._generations[0];
+        auto oversized = std::ranges::partition(l0, [&manifest] (const sstables::shared_sstable& sst) {
+            return !manifest.is_oversized_l0(sst);
+        });
+        manifest._oversized_l0.assign(std::make_move_iterator(oversized.begin()), std::make_move_iterator(oversized.end()));
+        l0.erase(oversized.begin(), oversized.end());
+
         return manifest;
+    }
+
+    bool is_oversized_l0(const sstables::shared_sstable& sst) const {
+        auto threshold = max_bytes_for_level(1);
+        if (sst->ondisk_data_size() <= threshold) {
+            return false;
+        }
+        // Output is cut at partition boundaries, so a file holds less than one sstable size
+        // of data besides the partition that crossed the cap. Rewriting only sstables with
+        // at least two sstable sizes outside their largest partition thus never qualifies
+        // an output again. The stat is uncompressed; with a little slack for compression
+        // framing it bounds the partition's on-disk size from above.
+        auto largest_partition = sst->get_large_data_stat(sstables::large_data_type::partition_size).value_or(sstables::large_data_stats_entry{}).max_value;
+        largest_partition += largest_partition / 32;
+        auto ondisk_size = sst->ondisk_data_size();
+        return ondisk_size - std::min(largest_partition, ondisk_size) >= 2 * _max_sstable_size_in_bytes;
+    }
+
+    // Only when nothing else is pending, so a rewrite failing for lack of space does not
+    // block the other jobs. Smallest first, so one fits whenever any does.
+    compaction_descriptor get_oversized_l0_rewrite() const {
+        if (_oversized_l0.empty()) {
+            return compaction_descriptor();
+        }
+        auto& sst = *std::ranges::min_element(_oversized_l0, std::less<>(), [] (const sstables::shared_sstable& candidate) {
+            return candidate->ondisk_data_size();
+        });
+        logger.debug("Rewriting oversized L0 sstable {} of {} into sstables of at most {} on behalf of {}.{}",
+            sst->get_filename(), utils::pretty_printed_data_size(sst->ondisk_data_size()),
+            utils::pretty_printed_data_size(_max_sstable_size_in_bytes), _schema->ks_name(), _schema->cf_name());
+        return compaction_descriptor({ sst }, 0, _max_sstable_size_in_bytes);
     }
 
     // Return first set of overlapping sstables for a given level.
@@ -215,11 +258,13 @@ public:
             // before proceeding with a higher level, let's see if L0 is far enough behind to warrant STCS
             // TODO: we shouldn't proceed with size tiered strategy if cassandra.disable_stcs_in_l0 is true.
             if (get_level_size(0) > MAX_COMPACTING_L0) {
-                auto most_interesting = size_tiered_compaction_strategy::most_interesting_bucket(get_level(0),
+                // Without the input filter this branch would re-tier its own bounded
+                // output forever and never yield to the higher levels.
+                auto most_interesting = size_tiered_compaction_strategy::most_interesting_bucket(single_fragment_runs(get_level(0)),
                     _table_s.min_compaction_threshold(), _schema->max_compaction_threshold(), _stcs_options);
                 if (!most_interesting.empty()) {
                     logger.debug("L0 is too far behind, performing size-tiering there first");
-                    return compaction_descriptor(std::move(most_interesting));
+                    return compaction_descriptor(std::move(most_interesting), 0, max_bytes_for_level(0));
                 }
             }
             auto descriptor = get_descriptor_for_level(i, last_compacted_keys, compaction_counter);
@@ -545,6 +590,17 @@ public:
             SCYLLA_ASSERT(new_level > 0);
         }
         return new_level;
+    }
+
+    // Fragments of a run are disjoint; size-tiering must not re-tier capped outputs.
+    static std::vector<sstables::shared_sstable> single_fragment_runs(const std::vector<sstables::shared_sstable>& sstables) {
+        std::unordered_map<sstables::run_id, unsigned> fragments;
+        for (auto& sst : sstables) {
+            fragments[sst->run_identifier()]++;
+        }
+        return sstables | std::views::filter([&fragments] (const sstables::shared_sstable& sst) {
+            return fragments[sst->run_identifier()] == 1;
+        }) | std::ranges::to<std::vector>();
     }
 
     template <typename T>
