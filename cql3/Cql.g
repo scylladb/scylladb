@@ -1313,9 +1313,13 @@ permission returns [auth::permission perm = auth::permission{}]
     { $perm = auth::permissions::from_string($p.text); }
     ;
 
+/**
+ * ALL [PERMISSIONS] | <permission> [PERMISSION] (, <permission> [PERMISSION])*
+ */
 permissionOrAll returns [auth::permission_set perms]
     : K_ALL ( K_PERMISSIONS )?       { $perms = auth::permissions::ALL; }
-    | p=permission ( K_PERMISSION )? { $perms = auth::permission_set::from_mask(auth::permission_set::mask_for($p.perm)); }
+    | p=permission ( K_PERMISSION )? { $perms.set($p.perm); }
+      ( ',' p2=permission ( K_PERMISSION )? { $perms.set($p2.perm); } )*
     ;
 
 resource returns [uninitialized<auth::resource> res]

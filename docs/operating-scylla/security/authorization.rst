@@ -500,7 +500,7 @@ Granting permission uses the ``GRANT PERMISSION`` statement:
 .. code-block::
    
    grant_permission_statement: GRANT `permissions` ON `resource` TO `user_name`
-   permissions: ALL [ PERMISSIONS ] | `permission` [ PERMISSION ]
+   permissions: ALL [ PERMISSIONS ] | `permission` [ PERMISSION ] ( ',' `permission` [ PERMISSION ] )*
    permission: CREATE | ALTER | DROP | SELECT | MODIFY | AUTHORIZE | DESCRIBE | VECTOR_SEARCH_INDEXING | TEXT_SEARCH_INDEXING | PATTERN_SEARCH_INDEXING
    resource: ALL KEYSPACES
            :| KEYSPACE `keyspace_name`
@@ -523,6 +523,14 @@ and ``TRUNCATE`` queries on all tables in the ``keyspace1`` keyspace::
     GRANT DROP ON keyspace1.table1 TO schema_owner;
 
 This gives any user with the ``schema_owner`` role, permissions to ``DROP`` ``keyspace1.table1``
+
+Several permissions can be granted in one statement, separated by commas (this also works for ``REVOKE`` and
+``LIST PERMISSIONS``)::
+
+    GRANT SELECT, MODIFY ON KEYSPACE keyspace1 TO data_editor;
+
+This gives any user with the ``data_editor`` role both the ``SELECT`` and ``MODIFY`` permissions on all tables in the
+``keyspace1`` keyspace.
 
 .. GRANT EXECUTE ON FUNCTION keyspace1.user_function( int ) TO report_writer;
 .. This grants any user with the ``report_writer`` permission to execute ``SELECT``, ``INSERT`` and ``UPDATE`` queries
