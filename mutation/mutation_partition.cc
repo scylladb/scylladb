@@ -404,6 +404,13 @@ void mutation_partition::apply(const schema& s, mutation_partition&& p, mutation
     apply_monotonically(s, std::move(p), no_cache_tracker, app_stats, is_preemptible::no, res);
 }
 
+void mutation_partition::apply(const schema& s, mutation_partition&& p, const schema& p_schema, mutation_application_stats& app_stats) {
+    if (s.version() != p_schema.version()) {
+        p.upgrade(p_schema, s);
+    }
+    apply(s, std::move(p), app_stats);
+}
+
 tombstone
 mutation_partition::range_tombstone_for_row(const schema& schema, const clustering_key& key) const {
     check_schema(schema);
