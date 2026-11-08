@@ -790,9 +790,8 @@ public:
     future<rebuild_index_result> rebuild_index(uint64_t segment_count, const index_resolver&);
 
     // Scans one segment into the resolver's indexes. `cmp` decides between two records of the same
-    // key. The scan calls `on_segment_info` with the segment info of each chunk, which holds the
-    // segment sequence, before it inserts the records of the chunk.
-    future<> index_segment_records(log_segment_id, const primary_index::entry_cmp_fn& cmp, const index_resolver&, std::function<void(const segment_info&)> on_segment_info);
+    // key.
+    future<> index_segment_records(log_segment_id, const primary_index::entry_cmp_fn& cmp, const index_resolver&);
 
     future<> rebuild_index_from_disk(index_resolver resolve) {
         co_await rebuild_index(_file_mgr.allocated_file_count() * _segments_per_file, resolve);
@@ -2446,20 +2445,20 @@ future<segment_manager_impl::rebuild_index_result> segment_manager_impl::rebuild
     };
 
     co_await max_concurrent_for_each(std::views::iota(uint64_t(0), segment_count), 32,
-        [this, &cmp_with_seq, &resolve, &segment_infos, &result] (uint64_t seg_idx) {
+        [this, &cmp_with_seq, &resolve, &segment_infos, &result] (uint64_t seg_idx) -> future<> {
             const log_segment_id seg_id(seg_idx);
-            // The scan calls the callback before it inserts the records of a chunk, so the
-            // sequence of the segment is in segment_infos before cmp_with_seq reads it.
-            return index_segment_records(seg_id, cmp_with_seq, resolve,
-                [seg_id, &segment_infos, &result] (const segment_info& seg_info) {
-                    // Keep the info of the first chunk. The scan stops at a chunk with another
-                    // sequence, so the other chunks give only the same sequence.
-                    auto& info = segment_infos[seg_id.value];
-                    if (!info) {
-                        info = seg_info;
-                    }
-                    result.max_segment_seq = std::max(result.max_segment_seq, seg_info.segment_seq);
-                });
+            // The scan reads a whole segment in its first read, also when the first chunk is not
+            // valid. A segment that was never written, or that discard_segments() freed, starts
+            // with a block of zeros, and most segments of a new store are like this. So read only
+            // the headers of the first chunk first, and scan the segment only when they are valid.
+            // The scanner checks the headers of the first chunk in the same way, so it would find
+            // no chunk in the segments that this check skips.
+            if (auto info = co_await read_segment_info(seg_id)) {
+                logstor_logger.trace("Recovering segment {} with sequence {}", seg_id, info->segment_seq);
+                result.max_segment_seq = std::max(result.max_segment_seq, info->segment_seq);
+                segment_infos[seg_idx] = std::move(info);
+                co_await index_segment_records(seg_id, cmp_with_seq, resolve);
+            }
         }
     );
 
@@ -2467,18 +2466,12 @@ future<segment_manager_impl::rebuild_index_result> segment_manager_impl::rebuild
 }
 
 future<> segment_manager_impl::index_segment_records(log_segment_id segment_id, const primary_index::entry_cmp_fn& cmp,
-        const index_resolver& resolve, std::function<void(const segment_info&)> on_segment_info) {
-    co_await for_each_chunk(segment_id, [&] (const scanned_chunk& chunk) {
-        logstor_logger.trace("Recovering segment {} with sequence {}", segment_id, chunk.info().segment_seq);
-        on_segment_info(chunk.info());
-
-        for (const auto& record : chunk.records()) {
-            const auto& header = record.header;
-            logstor_logger.trace("Recovery: read record at {} key {} ts {}", record.location, header.key, header.timestamp);
-
-            if (auto* index = resolve(header)) {
-                index->insert(header.index_key(), index_entry{.location = record.location, .timestamp = header.timestamp}, cmp);
-            }
+        const index_resolver& resolve) {
+    co_await for_each_record(segment_id, [&] (const chunk_record& record) {
+        const auto& header = record.header;
+        logstor_logger.trace("Recovery: read record at {} key {} ts {}", record.location, header.key, header.timestamp);
+        if (auto* index = resolve(header)) {
+            index->insert(header.index_key(), index_entry{.location = record.location, .timestamp = header.timestamp}, cmp);
         }
         return make_ready_future<>();
     });
@@ -2746,16 +2739,12 @@ public:
 
 future<> segment_manager_impl::adopt_streamed_segment(recovery_catalog& catalog, log_segment_id seg_id) {
     recovery_stats stats;
-    std::optional<segment_info> info;
-    co_await index_segment_records(seg_id, primary_index::default_entry_cmp{}, make_index_resolver(catalog, stats), [&info] (const segment_info& seg_info) {
-        if (!info) {
-            info = seg_info;
-        }
-    });
+    const auto info = co_await read_segment_info(seg_id);
     if (!info) {
-        // The segment has no valid chunk, so the scan indexed no record of it.
+        // The segment has no valid chunk, so it holds no record.
         co_return;
     }
+    co_await index_segment_records(seg_id, primary_index::default_entry_cmp{}, make_index_resolver(catalog, stats));
     if (place_recovered_segment(catalog, seg_id, *info, stats) == needs_separation::yes) {
         co_await separate_segment_records(catalog, seg_id, stats);
     }
