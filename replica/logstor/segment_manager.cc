@@ -736,12 +736,26 @@ public:
     }
 
     future<> load_segment(replica::database&, log_segment_id);
-    // Calls `on_chunk` with each chunk of the segment, before it inserts the records of the chunk
-    // into the index.
-    template <typename Func>
-        requires std::invocable<Func&, const scanned_chunk&>
-    future<> recover_segment(replica::database&, log_segment_id, primary_index::entry_cmp_fn cmp, Func on_chunk);
     future<> add_segment_to_compaction_group(replica::database&, segment_descriptor&);
+
+    using index_resolver = segment_manager::index_resolver;
+
+    // Returns a resolver that gives the index of the table that a record belongs to, or nullptr
+    // if the record does not belong to a table of this shard.
+    static index_resolver make_index_resolver(replica::database&);
+
+    struct rebuild_index_result {
+        segment_sequence max_segment_seq{0};
+    };
+
+    // Scans every segment below segment_count into the indexes the resolver names, the way
+    // recovery does.
+    future<rebuild_index_result> rebuild_index(uint64_t segment_count, const index_resolver&);
+
+    // Scans one segment into the resolver's indexes. `cmp` decides between two records of the same
+    // key. The scan calls `on_segment_info` with the segment info of each chunk, which holds the
+    // segment sequence, before it inserts the records of the chunk.
+    future<> index_segment_records(log_segment_id, const primary_index::entry_cmp_fn& cmp, const index_resolver&, std::function<void(const segment_info&)> on_segment_info);
 
     compaction_manager& get_compaction_manager() noexcept {
         return _compaction_mgr;
@@ -904,13 +918,6 @@ private:
         file_id_t file_id = segment_id.value / _segments_per_file;
         uint64_t file_offset = (segment_id.value % _segments_per_file) * _cfg.segment_size;
         return segment_location{file_id, file_offset};
-    }
-
-    auto segments_in_file(file_id_t file_id) const noexcept {
-        return std::views::iota(file_id * _segments_per_file, (file_id + 1) * _segments_per_file)
-            | std::views::transform([] (uint64_t i) {
-                return log_segment_id(i);
-            });
     }
 
     friend class compaction_manager_impl;
@@ -2233,34 +2240,14 @@ future<> segment_manager_impl::do_recovery(replica::database& db) {
     // the configured count, and a new segment is only below it, so retiring files changes nothing.
     _next_new_segment_id = found_segment_count;
 
-    std::vector<segment_sequence> segment_seqs(static_cast<size_t>(found_segment_count), segment_sequence(0));
-    segment_sequence max_segment_seq = segment_sequence(0);
-
-    // Populate the index from all segments. Keep the latest record for each key.
-    // For equal records, keep the one from the segment with the highest sequence number.
-    auto cmp_with_seq = [&segment_seqs] (const index_entry& old_entry, const index_entry& candidate) -> std::strong_ordering {
-        if (auto c = primary_index::default_entry_cmp{}(old_entry, candidate); c != 0) {
-            return c;
-        }
-        const auto old_seq = segment_seqs[old_entry.location.segment.value];
-        const auto new_seq = segment_seqs[candidate.location.segment.value];
-        if (auto c = old_seq <=> new_seq; c != 0) {
-            return c;
-        }
-        return old_entry.location.offset <=> candidate.location.offset;
-    };
-
-    for (file_id_t file_id = 0; file_id < found_file_count; ++file_id) {
-        logstor_logger.info("Recovering segments from file {}: {}%", _file_mgr.file_path(file_id).string(), (file_id + 1) * 100 / found_file_count);
-        co_await max_concurrent_for_each(segments_in_file(file_id), 32,
-            [this, &db, &cmp_with_seq, &segment_seqs, &max_segment_seq] (log_segment_id seg_id) {
-                return recover_segment(db, seg_id, cmp_with_seq, [seg_id, &segment_seqs, &max_segment_seq] (const scanned_chunk& chunk) {
-                    segment_seqs[seg_id.value] = chunk.info().segment_seq;
-                    max_segment_seq = std::max(max_segment_seq, chunk.info().segment_seq);
-                });
-            }
-        );
+    // Every segment starts out empty; the records the scan below puts in the index charge their
+    // segments through on_add_record().
+    for (uint64_t seg_idx = 0; seg_idx < found_segment_count; ++seg_idx) {
+        get_segment_descriptor(log_segment_id(seg_idx)).reset(_cfg.segment_size);
+        co_await coroutine::maybe_yield();
     }
+
+    const auto rebuilt = co_await rebuild_index(found_segment_count, make_index_resolver(db));
 
     // go over the index and mark all segments that have live data as used.
     utils::dynamic_bitset used_segments(static_cast<size_t>(found_segment_count));
@@ -2316,7 +2303,7 @@ future<> segment_manager_impl::do_recovery(replica::database& db) {
         }
     }
 
-    _next_segment_seq = max_segment_seq + 1;
+    _next_segment_seq = rebuilt.max_segment_seq + 1;
 
     co_await files.finish();
 
@@ -2330,29 +2317,63 @@ future<> segment_manager_impl::do_recovery_for_test() {
     co_await files.finish();
 }
 
-template <typename Func>
-    requires std::invocable<Func&, const scanned_chunk&>
-future<> segment_manager_impl::recover_segment(replica::database& db, log_segment_id segment_id,
-        primary_index::entry_cmp_fn cmp, Func on_chunk) {
-    auto& desc = get_segment_descriptor(segment_id);
-    desc.reset(_cfg.segment_size);
+segment_manager_impl::index_resolver segment_manager_impl::make_index_resolver(replica::database& db) {
+    return [&db] (const record_header& header) -> primary_index* {
+        try {
+            auto& t = db.find_column_family(header.table);
+            return t.uses_logstor() ? &t.logstor_index() : nullptr;
+        } catch (const replica::no_such_column_family&) {
+            return nullptr;
+        }
+    };
+}
 
+future<segment_manager_impl::rebuild_index_result> segment_manager_impl::rebuild_index(uint64_t segment_count, const index_resolver& resolve) {
+    std::vector<segment_sequence> segment_seqs(static_cast<size_t>(segment_count), segment_sequence(0));
+    rebuild_index_result result;
+
+    // Keep the latest record for each key. For equal records, keep the one from the segment with
+    // the highest sequence number.
+    primary_index::entry_cmp_fn cmp_with_seq = [&segment_seqs] (const index_entry& old_entry, const index_entry& candidate) -> std::strong_ordering {
+        if (auto c = primary_index::default_entry_cmp{}(old_entry, candidate); c != 0) {
+            return c;
+        }
+        const auto old_seq = segment_seqs[old_entry.location.segment.value];
+        const auto new_seq = segment_seqs[candidate.location.segment.value];
+        if (auto c = old_seq <=> new_seq; c != 0) {
+            return c;
+        }
+        return old_entry.location.offset <=> candidate.location.offset;
+    };
+
+    co_await max_concurrent_for_each(std::views::iota(uint64_t(0), segment_count), 32,
+        [this, &cmp_with_seq, &resolve, &segment_seqs, &result] (uint64_t seg_idx) {
+            const log_segment_id seg_id(seg_idx);
+            // The scan calls the callback before it inserts the records of a chunk, so the
+            // sequence of the segment is in segment_seqs before cmp_with_seq reads it.
+            return index_segment_records(seg_id, cmp_with_seq, resolve,
+                [seg_id, &segment_seqs, &result] (const segment_info& seg_info) {
+                    segment_seqs[seg_id.value] = seg_info.segment_seq;
+                    result.max_segment_seq = std::max(result.max_segment_seq, seg_info.segment_seq);
+                });
+        }
+    );
+
+    co_return result;
+}
+
+future<> segment_manager_impl::index_segment_records(log_segment_id segment_id, const primary_index::entry_cmp_fn& cmp,
+        const index_resolver& resolve, std::function<void(const segment_info&)> on_segment_info) {
     co_await for_each_chunk(segment_id, [&] (const scanned_chunk& chunk) {
         logstor_logger.trace("Recovering segment {} with sequence {}", segment_id, chunk.info().segment_seq);
-        on_chunk(chunk);
+        on_segment_info(chunk.info());
 
         for (const auto& record : chunk.records()) {
             const auto& header = record.header;
             logstor_logger.trace("Recovery: read record at {} key {} ts {}", record.location, header.key, header.timestamp);
 
-            try {
-                auto& t = db.find_column_family(header.table);
-                if (!t.uses_logstor()) {
-                    continue;
-                }
-                t.logstor_index().insert(header.index_key(), index_entry{.location = record.location, .timestamp = header.timestamp}, cmp);
-            } catch (const replica::no_such_column_family&) {
-                // ignore record
+            if (auto* index = resolve(header)) {
+                index->insert(header.index_key(), index_entry{.location = record.location, .timestamp = header.timestamp}, cmp);
             }
         }
         return make_ready_future<>();
@@ -2589,7 +2610,7 @@ public:
 
 future<> segment_manager_impl::load_segment(replica::database& db, log_segment_id seg_id) {
     // read the segment and populate the index
-    co_await recover_segment(db, seg_id, primary_index::default_entry_cmp{}, [] (const scanned_chunk&) {});
+    co_await index_segment_records(seg_id, primary_index::default_entry_cmp{}, make_index_resolver(db), [] (const segment_info&) {});
 
     auto& desc = get_segment_descriptor(seg_id);
     co_await add_segment_to_compaction_group(db, desc);
