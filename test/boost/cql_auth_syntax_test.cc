@@ -63,6 +63,8 @@ BOOST_AUTO_TEST_CASE(maybe_quote) {
     BOOST_REQUIRE_EQUAL(cql3::util::maybe_quote("ttl"), "ttl");
     BOOST_REQUIRE_EQUAL(cql3::util::maybe_quote("int"), "int");
     BOOST_REQUIRE_EQUAL(cql3::util::maybe_quote("as"), "as");
+    // The OBJECT keyword of ALL OBJECT STORAGE is unreserved, as `object` is a common column name.
+    BOOST_REQUIRE_EQUAL(cql3::util::maybe_quote("object"), "object");
     BOOST_REQUIRE_EQUAL(cql3::util::maybe_quote("ttl hi"), "\"ttl hi\"");
 }
 
