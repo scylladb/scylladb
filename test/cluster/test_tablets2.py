@@ -2263,6 +2263,13 @@ async def test_load_stats_refresh_after_failed_resize_reconciliation(manager: Sc
         # size. The coordinator must refresh load stats on its own.
         await wait_for_valid_load_stats(cql, table_id, timeout=60)
 
+async def wait_until_tablet_count(manager: ScyllaClusterManager, server: ServerInfo, ks: str, table: str, expected: int, timeout: float = 120):
+    """Waits until the table has `expected` tablets."""
+    started = time.time()
+    while await get_tablet_count(manager, server, ks, table) != expected:
+        assert time.time() - started < timeout, f'Timeout while waiting for {expected} tablets'
+        await asyncio.sleep(.1)
+
 @pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_resize_reconciliation_does_not_overwrite_newer_load_stats(manager: ScyllaClusterManager):
     """
@@ -2315,6 +2322,62 @@ async def test_resize_reconciliation_does_not_overwrite_newer_load_stats(manager
         await wait_for_valid_load_stats(cql, other_id, timeout=30)
         # The refreshed stats already have the new keys for the resized table, so reconciling
         # them fails and the fallback refresh must bring its sizes back.
+        await wait_for_valid_load_stats(cql, table_id, timeout=30)
+
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
+async def test_load_stats_refresh_overlapping_resize_finalization(manager: ScyllaClusterManager):
+    """
+    A refresh collects tablet sizes keyed by the tablet maps the nodes have when they answer.
+    A resize finalized meanwhile re-keys the resized table, and the refresh then installs the
+    old keys over the reconciled stats. The coordinator must refresh again on its own.
+    """
+    cmdline = [
+        '--logger-log-level', 'raft_topology=debug',
+        '--logger-log-level', 'load_balancer=debug',
+    ]
+    # No periodic refresh: only the refreshes the code asks for.
+    config = { 'tablet_load_stats_refresh_interval_in_seconds': 3600 }
+    server = await manager.server_add(cmdline=cmdline, config=config)
+    cql = manager.get_cql()
+
+    await manager.disable_tablet_balancing()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH tablets = {{'min_tablet_count': 2}};")
+        table_id = await manager.get_table_or_view_id(ks, 'test')
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k})") for k in range(256)])
+        await manager.api.flush_keyspace(server.ip_addr, ks)
+        # Reconciliation needs a size for every pre-resize replica.
+        await wait_for_valid_load_stats(cql, table_id)
+        assert await get_tablet_count(manager, server, ks, 'test') == 2
+
+        # Hold the finalization before it commits the new tablet map.
+        await manager.api.enable_injection(server.ip_addr, "tablet_resize_finalization_post_barrier", one_shot=True)
+        log = await manager.server_open_log(server.server_id)
+        await cql.run_async(f"ALTER TABLE {ks}.test WITH tablets = {{'min_tablet_count': 4}}")
+        await manager.enable_tablet_balancing()
+        await manager.api.wait_for_injection_enter(server.ip_addr, "tablet_resize_finalization_post_barrier")
+
+        # Start a refresh while the pre-resize ranges are current and hold it before the
+        # install. The finalization holds the group0 guard, so no schema change can trigger
+        # it; the injection does.
+        await manager.api.enable_injection(server.ip_addr, "refresh_tablet_load_stats_before_install", one_shot=True)
+        await manager.api.enable_injection(server.ip_addr, "trigger_tablet_load_stats_refresh", one_shot=False)
+        await manager.api.disable_injection(server.ip_addr, "trigger_tablet_load_stats_refresh")
+        await manager.api.wait_for_injection_enter(server.ip_addr, "refresh_tablet_load_stats_before_install")
+
+        # Finalize the split meanwhile: the reconciliation keys the stats by the new ranges.
+        mark = await log.mark()
+        await manager.api.message_injection(server.ip_addr, "tablet_resize_finalization_post_barrier")
+        await wait_until_tablet_count(manager, server, ks, 'test', 4)
+        await log.wait_for('executing global topology command barrier_and_drain', from_mark=mark)
+        await wait_for_valid_load_stats(cql, table_id, timeout=30)
+
+        # Release the refresh: it installs stats with no sizes for the new tablets. The
+        # coordinator must refresh again on its own.
+        mark = await log.mark()
+        await manager.api.message_injection(server.ip_addr, "refresh_tablet_load_stats_before_install")
+        await log.wait_for('Refreshed table load stats for all DC', from_mark=mark)
         await wait_for_valid_load_stats(cql, table_id, timeout=30)
 
 @pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
