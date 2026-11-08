@@ -9,7 +9,6 @@ import logging
 import struct
 import time
 
-import pytest
 from cassandra.cluster import ConsistencyLevel  # type: ignore
 from cassandra.metadata import Murmur3Token  # type: ignore
 from cassandra.query import SimpleStatement  # type: ignore
@@ -29,7 +28,6 @@ async def get_cleanup_records(cql, host, table_id) -> list[tuple[tuple[int, int]
     return [(tuple(r.position), r.start_token_exclusive, r.end_token_inclusive) for r in rows if str(r.table_uuid) == str(table_id)]
 
 
-@pytest.mark.xfail(reason="SCYLLADB-6071: cleanup record moves past unflushed writes", strict=True, raises=AssertionError)
 async def test_tablet_repair_cleanup_record_keeps_unflushed_writes(manager: ScyllaClusterManager):
     """Reproducer for SCYLLADB-6071.
 
@@ -120,6 +118,10 @@ async def test_tablet_repair_cleanup_record_keeps_unflushed_writes(manager: Scyl
             a_positions_after = [r[0] for r in recs if r[2] == token_a]
             b_positions = [r[0] for r in recs if r[2] == token_b]
             logger.info(f"cleanup records on {h} after repair of B: {recs}; tablet A positions {a_positions_before} -> {a_positions_after}")
+            # A did not flush since its repair, so its record must not have moved,
+            # while B's record is at B's later flush.
+            assert a_positions_after == a_positions_before, f"tablet A cleanup record moved on {h}"
+            assert max(b_positions) > max(a_positions_after)
 
         # Step 6: control writes to A, after the last flush on the shard.
         await insert(control_a)
