@@ -628,8 +628,16 @@ def normalize_coverage_options(option, build_modes: list[str]) -> None:
     where test.py looks, and `--coverage` alone left `coverage_modes` None,
     which the cluster gate in `testpy_cluster_factory` tests membership in and
     raised TypeError on.
+
+    Like test.py, reject a --coverage-mode that is not being run: no test runs
+    in that mode, so the run would end without the profiles it asked for.
     """
     if option.coverage_modes:
+        if not_run := sorted(set(option.coverage_modes) - set(build_modes)):
+            raise pytest.UsageError(
+                f"--coverage-mode {' '.join(not_run)} is not being run (running: {' '.join(build_modes)})."
+                " Add it with --mode, or drop it from --coverage-mode.",
+            )
         option.coverage = True
     elif option.coverage:
         option.coverage_modes = list(build_modes)

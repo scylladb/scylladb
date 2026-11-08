@@ -18,6 +18,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from test.pylib.runner import normalize_coverage_options
 
 
@@ -53,3 +55,11 @@ def test_test_py_forwarded_options_are_unchanged() -> None:
     normalize_coverage_options(option, ["dev", "release"])
     assert option.coverage
     assert option.coverage_modes == ["dev"]
+
+
+def test_coverage_mode_not_being_run_is_rejected() -> None:
+    # `--mode dev --coverage-mode release` runs nothing in release, so it would
+    # end without the profiles it asked for. test.py rejects it too.
+    option = _option(coverage=False, coverage_modes=["dev", "release"])
+    with pytest.raises(pytest.UsageError, match="--coverage-mode release is not being run"):
+        normalize_coverage_options(option, ["dev"])
