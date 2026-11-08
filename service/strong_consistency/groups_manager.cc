@@ -1222,6 +1222,40 @@ future<> groups_manager::wait_for_committed_writes_on_shard(table_id table, std:
     });
 }
 
+future<> groups_manager::refresh_leader_timestamp(global_tablet_id tablet) {
+    co_await container().invoke_on_all([tablet] (groups_manager& gm) {
+        gm.refresh_leader_timestamp_on_shard(tablet);
+    });
+}
+
+void groups_manager::refresh_leader_timestamp_on_shard(global_tablet_id tablet) {
+    if (!_features.strongly_consistent_tables || !_started) {
+        return;
+    }
+    const auto tm = _db.get_token_metadata_ptr();
+    const auto& tablets = tm->tablets();
+    if (!tablets.has_tablet_map(tablet.table) || !tablets.get_tablet_map(tablet.table).has_raft_info()) {
+        return;
+    }
+    const auto& tmap = tablets.get_tablet_map(tablet.table);
+    const auto gid = tmap.get_tablet_raft_info(tablet.tablet).group_id;
+    const auto it = _raft_groups.find(gid);
+    if (it == _raft_groups.end() || !it->second.leader_info) {
+        return;
+    }
+    const auto table = _db.get_tables_metadata().get_table_if_exists(tablet.table);
+    if (!table) {
+        return;
+    }
+    const auto max_timestamp = table->get_max_timestamp_for_token_range(tmap.get_token_range(tablet.tablet));
+    auto& info = *it->second.leader_info;
+    if (max_timestamp && *max_timestamp > info.last_timestamp) {
+        logger.debug("refresh_leader_timestamp({}, group_id={}): raising last_timestamp from {} to {}, the data attached outside of raft",
+                tablet, gid, info.last_timestamp, *max_timestamp);
+        info.last_timestamp = *max_timestamp;
+    }
+}
+
 future<raft_server> groups_manager::acquire_server(table_id table_id, raft::group_id group_id, abort_source& as) {
     if (!_features.strongly_consistent_tables) {
         on_internal_error(logger, "strongly consistent tables are not enabled on this shard");

@@ -1920,9 +1920,15 @@ public:
     // then no table of the node has running raft groups. See
     // strong_consistency::groups_manager::wait_for_committed_writes().
     using strongly_consistent_apply_barrier = noncopyable_function<future<>(table_id, std::optional<locator::tablet_id>)>;
+    // Moves the clock of the local leader of a strongly consistent tablet's raft group past
+    // the data the tablet holds, after a restore attached sstables to it outside of raft.
+    // Plugged by main like the apply barrier. See
+    // strong_consistency::groups_manager::refresh_leader_timestamp().
+    using strongly_consistent_leader_timestamp_refresh = noncopyable_function<future<>(locator::global_tablet_id)>;
 
 private:
     std::optional<strongly_consistent_apply_barrier> _sc_apply_barrier;
+    std::optional<strongly_consistent_leader_timestamp_refresh> _sc_leader_timestamp_refresh;
 
 public:
     data_dictionary::database as_data_dictionary() const;
@@ -1959,6 +1965,11 @@ public:
     // Runs the plugged barrier for the table, or for one of its tablets; a no-op before
     // it is plugged.
     future<> wait_for_strongly_consistent_apply(table_id, std::optional<locator::tablet_id> = std::nullopt);
+
+    void plug_strongly_consistent_leader_timestamp_refresh(strongly_consistent_leader_timestamp_refresh refresh) noexcept;
+    void unplug_strongly_consistent_leader_timestamp_refresh() noexcept;
+    // Runs the plugged refresh for the tablet; a no-op before it is plugged.
+    future<> refresh_strongly_consistent_leader_timestamp(locator::global_tablet_id);
 
 private:
     future<> flush_non_system_column_families();

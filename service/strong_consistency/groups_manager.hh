@@ -255,6 +255,9 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     // The shard's part of wait_for_committed_writes().
     future<> wait_for_committed_writes_on_shard(table_id table, std::optional<locator::tablet_id> tablet, lowres_clock::duration timeout);
 
+    // The shard's part of refresh_leader_timestamp().
+    void refresh_leader_timestamp_on_shard(locator::global_tablet_id tablet);
+
     void init_messaging_service();
 
     // Makes the pending replica of a tablet at sc_snapshot_transfer catch up with the
@@ -372,6 +375,16 @@ public:
     // shard: a restore of one tablet needs no other tablet's writes applied.
     future<> wait_for_committed_writes(table_id table, std::optional<locator::tablet_id> tablet = std::nullopt,
             lowres_clock::duration timeout = committed_writes_wait_timeout);
+
+    // Moves the clock of this node's leader of the tablet's raft group, if any, past the
+    // data the tablet holds, after a tablet-aware restore attached sstables to it outside
+    // of raft. The leader stamps a write with max(now, last_timestamp + 1) and seeds
+    // last_timestamp from the tablet's data once, when it is elected. A restore runs under
+    // the already elected leaders of an empty table, so without this a restored row with a
+    // timestamp ahead of the clock (from a clock that ran ahead on the backed-up cluster)
+    // would shadow every later write to it until the leader changes. Runs on every
+    // shard; a no-op on a shard that leads no such group.
+    future<> refresh_leader_timestamp(locator::global_tablet_id tablet);
 
     tablet_group_leader_cache& leader_cache() { return _leader_cache; }
 };

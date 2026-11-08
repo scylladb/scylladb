@@ -1058,7 +1058,8 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
     // tmap above is valid only until the first co_await: the guard switches to a newer
     // effective replication map whenever one arrives that doesn't affect this tablet,
     // and the old one may be freed. Re-read the map from the guard from here on.
-    if (guard.get_tablet_map().has_raft_info()) {
+    const bool strongly_consistent = guard.get_tablet_map().has_raft_info();
+    if (strongly_consistent) {
         // A strongly consistent tablet is restored into an empty table only. Nothing but
         // its raft log ever reconciles the replicas, and with an empty state machine and
         // an empty log the running raft group can do nothing to the data meanwhile. An
@@ -1257,6 +1258,15 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
                                                             db::is_downloaded::yes);
             });
         });
+
+        if (strongly_consistent) {
+            // The sstables were attached outside of raft, under a leader that seeded its
+            // clock from the empty table when it was elected. Move the clock past the
+            // restored data, or a restored row with a timestamp ahead of the clock would
+            // shadow every later write to it until the leader changes. The restore stage
+            // ends, and requests are served again, only after every replica got here.
+            co_await _db.local().refresh_strongly_consistent_leader_timestamp(tid);
+        }
     } catch (...) {
         ex = std::current_exception();
     }

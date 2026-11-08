@@ -1512,6 +1512,64 @@ async def test_restore_tablets_strongly_consistent_into_non_empty_refused(build_
         assert kept == {'kept': 1}, f'Unexpected contents of {ks}.{cf}_restored after the refused restore: {kept}'
 
 
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_restore_tablets_strongly_consistent_write_after_restore_wins(build_mode: str, manager: ScyllaClusterManager, object_storage):
+    """A write after a tablet-aware restore gets a timestamp above the restored data's.
+
+    The leader of a strongly consistent tablet stamps a write with max(now, last_timestamp + 1)
+    and seeds last_timestamp from the tablet's data when it is elected. A restore attaches
+    the data under the already elected leaders of an empty table, outside of raft, so
+    restored rows with timestamps ahead of the clock (from a clock that ran ahead on the
+    backed-up cluster) would shadow every later write to them until the leader changes.
+    The restore moves the leader's clock past the attached data.
+
+    The backed-up table's writes are stamped an hour ahead with the sc_leader_timestamp_offset_us
+    injection, the way test_strong_consistency_leader_timestamps.py does it, and the test
+    checks that they really are ahead of the clock, so that it can't pass vacuously.
+    """
+    topology = topo(rf = 2, nodes = 2, racks = 2, dcs = 1)
+    servers, host_ids = await create_cluster(topology, manager, logger, object_storage, extra_config=SC_CONFIG)
+    cql = manager.get_cql()
+    cf = 'test'
+    num_keys = 10
+    clock_offset_us = 3600 * 1_000_000
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}} AND tablets = {{'initial': 1}}{ks_consistency_opts(True)}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.{cf} ( pk text primary key, value int ) WITH tablets = {{'min_tablet_count': 1, 'max_tablet_count': 1}};")
+        # The tablet's leader may be on any node: shift the clock of every node's leaders.
+        await asyncio.gather(*(manager.api.enable_injection(s.ip_addr, 'sc_leader_timestamp_offset_us', one_shot=False,
+                                                            parameters={'value': str(clock_offset_us)}) for s in servers))
+        insert_stmt = cql.prepare(f"INSERT INTO {ks}.{cf} (pk, value) VALUES (?, ?)")
+        insert_stmt.consistency_level = write_cl(True)
+        await asyncio.gather(*(cql.run_async(insert_stmt, (str(i), i)) for i in range(num_keys)))
+        await asyncio.gather(*(manager.api.disable_injection(s.ip_addr, 'sc_leader_timestamp_offset_us') for s in servers))
+        written = {pk: row.wt for pk, row in (await read_rows(cql, ks, cf, range(num_keys), True, columns='pk, writetime(value) AS wt')).items()}
+        assert all(wt > time.time() * 1_000_000 + clock_offset_us / 2 for wt in written.values()), \
+            f'the backed-up writes are not ahead of the clock: {written}'
+
+        snap_name, _ = await take_snapshot(ks, servers, manager, logger, strongly_consistent=True)
+        prefix = f'clock-ahead/{snap_name}'
+        await asyncio.gather(*(do_backup(s, snap_name, f'{prefix}/{s.server_id}', ks, cf, object_storage, manager, logger) for s in servers))
+        manifests = [f'{s.server_id}/manifest.json' for s in servers]
+
+        # The tablet's raft group starts, and elects its leader over the empty table, here.
+        await cql.run_async(f"CREATE TABLE {ks}.{cf}_restored ( pk text primary key, value int ) WITH tablets = {{'min_tablet_count': 1, 'max_tablet_count': 1}};")
+        tid = await manager.api.restore_tablets(servers[0].ip_addr, ks, f'{cf}_restored', snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests, prefix=prefix)
+        status = await manager.api.wait_task(servers[0].ip_addr, tid)
+        assert (status is not None) and (status['state'] == 'done'), f"Restore into {ks}.{cf}_restored failed: {status}"
+        restored = {pk: row.value for pk, row in (await read_rows(cql, ks, f'{cf}_restored', range(num_keys), True)).items()}
+        assert restored == {str(i): i for i in range(num_keys)}, f'Unexpected contents of {ks}.{cf}_restored after restore: {restored}'
+
+        # The writes go through leaders whose own clock is an hour behind the restored data.
+        update_stmt = cql.prepare(f"UPDATE {ks}.{cf}_restored SET value = ? WHERE pk = ?")
+        update_stmt.consistency_level = write_cl(True)
+        await asyncio.gather(*(cql.run_async(update_stmt, (i + 100, str(i))) for i in range(num_keys)))
+        updated = {pk: row for pk, row in (await read_rows(cql, ks, f'{cf}_restored', range(num_keys), True, columns='pk, value, writetime(value) AS wt')).items()}
+        assert {pk: row.value for pk, row in updated.items()} == {str(i): i + 100 for i in range(num_keys)}, \
+            f'The writes after the restore are shadowed by the restored data: {updated}'
+        assert all(row.wt > written[pk] for pk, row in updated.items()), f'The writes after the restore are not above the restored data: {updated}'
+
+
 @pytest.mark.parametrize("strongly_consistent", [True])
 async def test_restore_tablets_after_majority_loss(build_mode: str, manager: ScyllaClusterManager, object_storage, strongly_consistent):
     '''Recover a strongly consistent keyspace whose tablets lost a majority of their replicas.

@@ -3959,6 +3959,21 @@ future<> database::wait_for_strongly_consistent_apply(table_id id, std::optional
     return make_ready_future<>();
 }
 
+void database::plug_strongly_consistent_leader_timestamp_refresh(strongly_consistent_leader_timestamp_refresh refresh) noexcept {
+    _sc_leader_timestamp_refresh = std::move(refresh);
+}
+
+void database::unplug_strongly_consistent_leader_timestamp_refresh() noexcept {
+    _sc_leader_timestamp_refresh.reset();
+}
+
+future<> database::refresh_strongly_consistent_leader_timestamp(locator::global_tablet_id tablet) {
+    if (_sc_leader_timestamp_refresh) {
+        return (*_sc_leader_timestamp_refresh)(tablet);
+    }
+    return make_ready_future<>();
+}
+
 } // namespace replica
 
 streaming_reader_lifecycle_policy::streaming_reader_lifecycle_policy(sharded<replica::database>& db, table_id table_id, gc_clock::time_point compaction_time)
