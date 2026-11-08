@@ -137,7 +137,6 @@ public:
     client_state& cstate;
     tracing::trace_state_ptr trace_state = nullptr;
     replicas_per_token_range preferred_replicas;
-    std::optional<db::read_repair_decision> read_repair_decision;
     node_local_only node_local_only;
 
     storage_proxy_coordinator_query_options(storage_proxy_clock_type::time_point timeout,
@@ -145,14 +144,12 @@ public:
             client_state& client_state_,
             tracing::trace_state_ptr trace_state = nullptr,
             replicas_per_token_range preferred_replicas = { },
-            std::optional<db::read_repair_decision> read_repair_decision = { },
             service::node_local_only node_local_only_ = service::node_local_only::no)
         : _timeout(timeout)
         , permit(std::move(permit_))
         , cstate(client_state_)
         , trace_state(std::move(trace_state))
         , preferred_replicas(std::move(preferred_replicas))
-        , read_repair_decision(read_repair_decision)
         , node_local_only(node_local_only_) {
     }
 
@@ -164,14 +161,11 @@ public:
 struct storage_proxy_coordinator_query_result {
     foreign_ptr<lw_shared_ptr<query::result>> query_result;
     replicas_per_token_range last_replicas;
-    db::read_repair_decision read_repair_decision;
 
     storage_proxy_coordinator_query_result(foreign_ptr<lw_shared_ptr<query::result>> query_result,
-            replicas_per_token_range last_replicas = {},
-            db::read_repair_decision read_repair_decision = db::read_repair_decision::NONE)
+            replicas_per_token_range last_replicas = {})
         : query_result(std::move(query_result))
-        , last_replicas(std::move(last_replicas))
-        , read_repair_decision(std::move(read_repair_decision)) {
+        , last_replicas(std::move(last_replicas)) {
     }
 };
 

@@ -83,7 +83,6 @@ protected:
     dht::partition_range_vector _ranges;
     std::optional<service::cas_shard> _cas_shard;
     paging_state::replicas_per_token_range _last_replicas;
-    std::optional<db::read_repair_decision> _query_read_repair_decision;
     uint64_t _rows_fetched_for_last_partition = 0;
     stats _stats;
 

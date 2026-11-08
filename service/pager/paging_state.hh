@@ -179,14 +179,10 @@ public:
     }
 
     /**
-     * The read-repair decision made for this query.
+     * Read-repair decision field of the serialized paging state.
      *
-     * The read-repair decision is made on the first page and is applied to
-     * all subsequent pages. This way we can ensure that we consistently use
-     * the same replicas on each page throughout the query. This helps
-     * reader-reuse on the replicas as readers can only be reused if they're
-     * used for all pages, if the replica is skipped for one or more pages the
-     * saved reader has to be dropped.
+     * Kept for compatibility of the paging state format; coordinators
+     * write std::nullopt and ignore the received value.
      */
     std::optional<db::read_repair_decision> get_query_read_repair_decision() const {
         return _query_read_repair_decision;

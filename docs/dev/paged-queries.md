@@ -148,7 +148,6 @@ At the end of each page, in addition to what was already saved, the
 coordinator saves in the paging state:
 * The `query_uuid`.
 * The list of replicas used for the page (`last_replicas`).
-* The [read repair decision](#probabilistic-read-repair)
 
 ##### Replica
 
@@ -221,21 +220,6 @@ which is reading another partition. To avoid this, on lookup, the
 partition each found querier is reading is matched with that of the read
 request. In case when no matching querier is found a new querier is
 created as if the lookup missed.
-
-##### Probabilistic read repair
-
-On each page of a query there is a chance (user-changable property of
-the table) that a read-repair will be attempted. This hurts stateful
-queries as each page has a chance of using additional replicas in the
-query and on the next page not use some of them. This will result in
-cache misses when new replicas are involved and querier drops when these
-abandoned replicas will be attempted to be used again (the read position
-of the saved queriers that were neglected for some pages will not match
-the current one). To solve this problem we make the read repair decision
-apply to an entire query instead of a single page. Make it on the first
-page and stick to it for the entire duration of the query. The read
-repair decision is generated on the first page and saved in the paging
-state to be remembered for the duration of the query.
 
 ##### Cache eviction
 

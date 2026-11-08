@@ -6486,9 +6486,6 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
     replica::table& table = _db.local().find_column_family(schema->id());
     auto erm = table.get_effective_replication_map();
 
-    db::read_repair_decision repair_decision = query_options.read_repair_decision
-        ? *query_options.read_repair_decision : db::read_repair_decision::NONE;
-
     // Update reads_coordinator_outside_replica_set once per request,
     // not once per partition.
     bool is_read_non_local = false;
@@ -6503,7 +6500,7 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
         const auto replicas = it == query_options.preferred_replicas.end()
             ? host_id_vector_replica_set{} : (it->second | std::ranges::to<host_id_vector_replica_set>());
 
-        auto r_read_executor = get_read_executor(cmd, erm, schema, std::move(pr), cl, repair_decision,
+        auto r_read_executor = get_read_executor(cmd, erm, schema, std::move(pr), cl, db::read_repair_decision::NONE,
                                                  query_options.trace_state, replicas, is_read_non_local,
                                                  query_options.permit,
                                                  query_options.node_local_only);
@@ -6571,7 +6568,7 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
         co_return std::move(result).as_failure();
     }
 
-    co_return coordinator_query_result(std::move(result).value(), std::move(used_replicas), repair_decision);
+    co_return coordinator_query_result(std::move(result).value(), std::move(used_replicas));
 }
 
 bool storage_proxy::is_worth_merging_for_range_query(
