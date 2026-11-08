@@ -11,7 +11,6 @@
 #pragma once
 
 #include "db/consistency_level_type.hh"
-#include "db/read_repair_decision.hh"
 #include "inet_address_vectors.hh"
 #include "utils/log.hh"
 #include "replica/database_fwd.hh"
@@ -45,7 +44,6 @@ filter_for_query(consistency_level cl,
                  const locator::effective_replication_map& erm,
                  host_id_vector_replica_set live_endpoints,
                  const host_id_vector_replica_set& preferred_endpoints,
-                 read_repair_decision read_repair,
                  const gms::gossiper& g,
                  std::optional<locator::host_id>* extra,
                  replica::column_family* cf);

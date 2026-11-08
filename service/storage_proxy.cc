@@ -36,7 +36,6 @@
 #include "message/messaging_service.hh"
 #include "gms/gossiper.hh"
 #include <seastar/core/future-util.hh>
-#include "db/read_repair_decision.hh"
 #include "db/config.hh"
 #include "db/batchlog.hh"
 #include "db/batchlog_manager.hh"
@@ -5098,8 +5097,6 @@ class digest_read_resolver : public abstract_read_resolver {
         { }
     };
 private:
-    shared_ptr<storage_proxy> _proxy;
-    locator::effective_replication_map_ptr _effective_replication_map_ptr;
     size_t _block_for;
     size_t _cl_responses = 0;
     promise<result<digest_read_result>> _cl_promise; // cl is reached
@@ -5107,7 +5104,7 @@ private:
     foreign_ptr<lw_shared_ptr<query::result>> _data_result;
     utils::small_vector<digest_and_last_pos, 3> _digest_results;
     api::timestamp_type _last_modified = api::missing_timestamp;
-    size_t _target_count_for_cl; // _target_count_for_cl < _targets_count if CL=LOCAL and RRD.GLOBAL
+    size_t _target_count_for_cl; // number of targets that count towards CL
     exceptions::replica_failure_map _failed_replicas; // replicas counted in _failed
     noncopyable_function<void()> _on_disconnect;
 
@@ -5124,19 +5121,15 @@ private:
         _on_disconnect = {};
     }
 public:
-    digest_read_resolver(shared_ptr<storage_proxy> proxy,
-            locator::effective_replication_map_ptr ermp,
-            schema_ptr schema, db::consistency_level cl, size_t block_for, size_t target_count_for_cl, storage_proxy::clock_type::time_point timeout)
+    digest_read_resolver(schema_ptr schema, db::consistency_level cl, size_t block_for, size_t target_count_for_cl, storage_proxy::clock_type::time_point timeout)
         : abstract_read_resolver(std::move(schema), cl, 0, timeout)
-        , _proxy(std::move(proxy))
-        , _effective_replication_map_ptr(std::move(ermp))
         , _block_for(block_for)
         , _target_count_for_cl(target_count_for_cl)
     {}
     virtual size_t response_count() const override {
         return _digest_results.size();
     }
-    void add_data(locator::host_id from, foreign_ptr<lw_shared_ptr<query::result>> result) {
+    void add_data(foreign_ptr<lw_shared_ptr<query::result>> result) {
         if (!_stopped) {
             // if only one target was queried digest_check() will be skipped so we can also skip digest calculation
             _digest_results.emplace_back(_targets_count == 1 ? query::result_digest() : *result->digest(), result->last_position());
@@ -5144,14 +5137,14 @@ public:
             if (!_data_result) {
                 _data_result = std::move(result);
             }
-            got_response(from);
+            got_response();
         }
     }
-    void add_digest(locator::host_id from, query::result_digest digest, api::timestamp_type last_modified, std::optional<full_position> last_pos) {
+    void add_digest(query::result_digest digest, api::timestamp_type last_modified, std::optional<full_position> last_pos) {
         if (!_stopped) {
             _digest_results.emplace_back(std::move(digest), std::move(last_pos));
             _last_modified = std::max(_last_modified, last_modified);
-            got_response(from);
+            got_response();
         }
     }
     bool digests_match() const {
@@ -5176,15 +5169,9 @@ public:
         })->last_pos;
     }
 private:
-    bool waiting_for(locator::host_id ep) {
-        const auto& topo = _effective_replication_map_ptr->get_topology();
-        return db::is_datacenter_local(_cl) ? topo.is_me(ep) || (topo.get_datacenter(ep) == topo.get_datacenter()) : true;
-    }
-    void got_response(locator::host_id ep) {
+    void got_response() {
         if (!_cl_reported) {
-            if (waiting_for(ep)) {
-                _cl_responses++;
-            }
+            _cl_responses++;
             if (_cl_responses >= _block_for && _data_result) {
                 _cl_reported = true;
                 _cl_promise.set_value(digest_read_result{std::move(_data_result), digests_match()});
@@ -5200,10 +5187,8 @@ private:
         }
     }
     void on_error(locator::host_id ep, error_kind kind, exceptions::request_failure_reason reason) override {
-        if (waiting_for(ep)) {
-            _failed++;
-            _failed_replicas.add(ep, reason);
-        }
+        _failed++;
+        _failed_replicas.add(ep, reason);
         if (kind == error_kind::DISCONNECT && _on_disconnect) {
             _on_disconnect();
         }
@@ -5905,7 +5890,7 @@ protected:
                     auto v = f.get();
                     tracing::trace(_trace_state, "read_data: got response from /{}", ep);
                     _cf->set_hit_rate(ep, std::get<1>(v));
-                    resolver->add_data(ep, std::get<0>(std::move(v)));
+                    resolver->add_data(std::get<0>(std::move(v)));
                     ++_proxy->get_stats().data_read_completed.get_ep_stat(get_topology(), ep);
                     _used_targets.push_back(ep);
                     register_request_latency(latency_clock::now() - start);
@@ -5939,7 +5924,7 @@ protected:
                     auto v = f.get();
                     tracing::trace(_trace_state, "read_digest: got response from /{}", ep);
                     _cf->set_hit_rate(ep, std::get<2>(v));
-                    resolver->add_digest(ep, std::get<0>(v), std::get<1>(v), std::get<3>(std::move(v)));
+                    resolver->add_digest(std::get<0>(v), std::get<1>(v), std::get<3>(std::move(v)));
                     ++_proxy->get_stats().digest_read_completed.get_ep_stat(get_topology(), ep);
                     _used_targets.push_back(ep);
                     register_request_latency(latency_clock::now() - start);
@@ -6123,8 +6108,7 @@ public:
             // Return an empty result in this case
             return make_ready_future<result<foreign_ptr<lw_shared_ptr<query::result>>>>(make_foreign(make_lw_shared(query::result())));
         }
-        digest_resolver_ptr digest_resolver = ::make_shared<digest_read_resolver>(_proxy, _effective_replication_map_ptr, _schema, _cl, _block_for,
-                db::is_datacenter_local(_cl) ? _effective_replication_map_ptr->get_topology().count_local_endpoints(_targets): _targets.size(), timeout);
+        digest_resolver_ptr digest_resolver = ::make_shared<digest_read_resolver>(_schema, _cl, _block_for, _targets.size(), timeout);
         auto exec = shared_from_this();
 
         make_requests(digest_resolver, timeout);
@@ -6285,23 +6269,14 @@ public:
             }
         });
 
-        // if CL + RR result in covering all replicas, getReadExecutor forces AlwaysSpeculating.  So we know
-        // that the last replica in our list is "extra."
+        // The last target is the extra replica for the speculative retry. The
+        // others are all needed for CL, so it doesn't matter which of them
+        // gets the data request.
         resolver->add_wait_targets(_targets.size() - 1);
         // FIXME: consider disabling for CL=*ONE
         bool want_digest = true;
-        if (_block_for < _targets.size() - 1) {
-            // We're hitting additional targets for read repair.  Since our "extra" replica is the least-
-            // preferred by the snitch, we do an extra data read to start with against a replica more
-            // likely to reply; better to let RR fail than the entire query.
-            make_data_requests(resolver, _targets.begin(), _targets.begin() + 2, timeout, want_digest);
-            make_digest_requests(resolver, _targets.begin() + 2, _targets.end(), timeout);
-        } else {
-            // not doing read repair; all replies are important, so it doesn't matter which nodes we
-            // perform data reads against vs digest.
-            make_data_requests(resolver, _targets.begin(), _targets.begin() + 1, timeout, want_digest);
-            make_digest_requests(resolver, _targets.begin() + 1, _targets.end() - 1, timeout);
-        }
+        make_data_requests(resolver, _targets.begin(), _targets.begin() + 1, timeout, want_digest);
+        make_digest_requests(resolver, _targets.begin() + 1, _targets.end() - 1, timeout);
     }
     virtual void got_cl() override {
         _speculate_timer.cancel();
@@ -6316,7 +6291,6 @@ result<::shared_ptr<abstract_read_executor>> storage_proxy::get_read_executor(lw
         schema_ptr schema,
         dht::partition_range partition_range,
         db::consistency_level cl,
-        db::read_repair_decision repair_decision,
         tracing::trace_state_ptr trace_state,
         const host_id_vector_replica_set& preferred_endpoints,
         bool& is_read_non_local,
@@ -6334,12 +6308,12 @@ result<::shared_ptr<abstract_read_executor>> storage_proxy::get_read_executor(lw
     is_read_non_local |= !all_replicas.empty() && all_replicas.front() != erm->get_topology().my_host_id();
 
     auto cf = _db.local().find_column_family(schema).shared_from_this();
-    host_id_vector_replica_set target_replicas = filter_replicas_for_read(cl, *erm, all_replicas, preferred_endpoints, repair_decision,
+    host_id_vector_replica_set target_replicas = filter_replicas_for_read(cl, *erm, all_replicas, preferred_endpoints,
             retry_type == speculative_retry::type::NONE ? nullptr : &extra_replica,
             _db.local().get_config().cache_hit_rate_read_balancing() ? &*cf : nullptr);
 
-    slogger.trace("creating read executor for token {} with all: {} targets: {} rp decision: {}", token, all_replicas, target_replicas, repair_decision);
-    tracing::trace(trace_state, "Creating read executor for token {} with all: {} targets: {} repair decision: {}", token, all_replicas, target_replicas, repair_decision);
+    slogger.trace("creating read executor for token {} with all: {} targets: {}", token, all_replicas, target_replicas);
+    tracing::trace(trace_state, "Creating read executor for token {} with all: {} targets: {}", token, all_replicas, target_replicas);
 
     // Throw UAE early if we don't have enough replicas.
     try {
@@ -6348,10 +6322,6 @@ result<::shared_ptr<abstract_read_executor>> storage_proxy::get_read_executor(lw
         slogger.debug("Read unavailable: cl={} required {} alive {}", ex.consistency, ex.required, ex.alive);
         get_stats().read_unavailables.mark();
         throw;
-    }
-
-    if (repair_decision != db::read_repair_decision::NONE) {
-        get_stats().read_repair_attempts++;
     }
 
     const size_t block_for = db::block_for(*erm, cl);
@@ -6370,33 +6340,19 @@ result<::shared_ptr<abstract_read_executor>> storage_proxy::get_read_executor(lw
     }
 
     // Speculative retry is disabled *OR* there are simply no extra replicas to speculate.
-    if (retry_type == speculative_retry::type::NONE || block_for == all_replicas.size()
-            || (repair_decision == db::read_repair_decision::DC_LOCAL && is_datacenter_local(cl) && block_for == target_replicas.size())) {
+    if (retry_type == speculative_retry::type::NONE || block_for == all_replicas.size()) {
         tracing::trace(trace_state, "Creating never_speculating_read_executor - speculative retry is disabled or there are no extra replicas to speculate with");
         return ::make_shared<never_speculating_read_executor>(schema, cf, shared_from_this(), std::move(erm), cmd, std::move(partition_range), cl, std::move(target_replicas), std::move(trace_state), std::move(permit), rate_limit_info);
     }
 
-    if (target_replicas.size() == all_replicas.size()) {
-        // CL.ALL, RRD.GLOBAL or RRD.DC_LOCAL and a single-DC.
-        // We are going to contact every node anyway, so ask for 2 full data requests instead of 1, for redundancy
-        // (same amount of requests in total, but we turn 1 digest request into a full blown data request).
-        tracing::trace(trace_state, "always_speculating_read_executor (all targets)");
-        return ::make_shared<always_speculating_read_executor>(schema, cf, shared_from_this(), std::move(erm), cmd, std::move(partition_range), cl, block_for, std::move(target_replicas), std::move(trace_state), std::move(permit), rate_limit_info);
+    if (!extra_replica) {
+        slogger.trace("read executor no extra target to speculate");
+        tracing::trace(trace_state, "Creating never_speculating_read_executor - there are no extra replicas to speculate with");
+        return ::make_shared<never_speculating_read_executor>(schema, cf, shared_from_this(), std::move(erm), cmd, std::move(partition_range), cl, std::move(target_replicas), std::move(trace_state), std::move(permit), rate_limit_info);
     }
-
-    // RRD.NONE or RRD.DC_LOCAL w/ multiple DCs.
-    if (target_replicas.size() == block_for) { // If RRD.DC_LOCAL extra replica may already be present
-        auto local_dc_filter = erm->get_topology().get_local_dc_filter();
-        if (!extra_replica || (is_datacenter_local(cl) && !local_dc_filter(*extra_replica))) {
-            slogger.trace("read executor no extra target to speculate");
-            tracing::trace(trace_state, "Creating never_speculating_read_executor - there are no extra replicas to speculate with");
-            return ::make_shared<never_speculating_read_executor>(schema, cf, shared_from_this(), std::move(erm), cmd, std::move(partition_range), cl, std::move(target_replicas), std::move(trace_state), std::move(permit), rate_limit_info);
-        } else {
-            target_replicas.push_back(*extra_replica);
-            slogger.trace("creating read executor with extra target {}", *extra_replica);
-            tracing::trace(trace_state, "Added extra target {} for speculative read", *extra_replica);
-        }
-    }
+    target_replicas.push_back(*extra_replica);
+    slogger.trace("creating read executor with extra target {}", *extra_replica);
+    tracing::trace(trace_state, "Added extra target {} for speculative read", *extra_replica);
 
     if (retry_type == speculative_retry::type::ALWAYS) {
         tracing::trace(trace_state, "Creating always_speculating_read_executor");
@@ -6500,7 +6456,7 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
         const auto replicas = it == query_options.preferred_replicas.end()
             ? host_id_vector_replica_set{} : (it->second | std::ranges::to<host_id_vector_replica_set>());
 
-        auto r_read_executor = get_read_executor(cmd, erm, schema, std::move(pr), cl, db::read_repair_decision::NONE,
+        auto r_read_executor = get_read_executor(cmd, erm, schema, std::move(pr), cl,
                                                  query_options.trace_state, replicas, is_read_non_local,
                                                  query_options.permit,
                                                  query_options.node_local_only);
@@ -7392,7 +7348,6 @@ storage_proxy::filter_replicas_for_read(
         const locator::effective_replication_map& erm,
         host_id_vector_replica_set live_endpoints,
         const host_id_vector_replica_set& preferred_endpoints,
-        db::read_repair_decision repair_decision,
         std::optional<locator::host_id>* extra,
         replica::column_family* cf) const {
     if (live_endpoints.empty() || only_me(erm, live_endpoints)) {
@@ -7403,7 +7358,7 @@ storage_proxy::filter_replicas_for_read(
 
     // There are nodes other than us in `live_endpoints`.
     auto& gossiper = remote().gossiper();
-    return db::filter_for_query(cl, erm, live_endpoints, preferred_endpoints, repair_decision, gossiper, extra, cf);
+    return db::filter_for_query(cl, erm, live_endpoints, preferred_endpoints, gossiper, extra, cf);
 }
 
 host_id_vector_replica_set
@@ -7413,7 +7368,7 @@ storage_proxy::filter_replicas_for_read(
         const host_id_vector_replica_set& live_endpoints,
         const host_id_vector_replica_set& preferred_endpoints,
         replica::column_family* cf) const {
-    return filter_replicas_for_read(cl, erm, live_endpoints, preferred_endpoints, db::read_repair_decision::NONE, nullptr, cf);
+    return filter_replicas_for_read(cl, erm, live_endpoints, preferred_endpoints, nullptr, cf);
 }
 
 bool storage_proxy::is_alive(const locator::effective_replication_map& erm, const locator::host_id& ep) const {
