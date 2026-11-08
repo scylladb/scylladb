@@ -684,7 +684,7 @@ public:
     segment_manager_impl(const segment_manager_impl&) = delete;
     segment_manager_impl& operator=(const segment_manager_impl&) = delete;
 
-    future<> do_recovery(recovery_catalog&);
+    future<recovery_summary> do_recovery(recovery_catalog&);
     future<> do_recovery_for_test();
 
     future<> start();
@@ -2234,7 +2234,7 @@ future<> compaction_manager_impl::flush_separator_buffer(separator_buffer& buf, 
     co_await buf.release();
 }
 
-future<> segment_manager_impl::do_recovery(recovery_catalog& catalog) {
+future<recovery_summary> segment_manager_impl::do_recovery(recovery_catalog& catalog) {
     logstor_logger.info("Starting recovery for shard {} in directory {}", this_shard_id(), _cfg.base_dir.string());
 
     auto files = _file_mgr.start_recovery();
@@ -2314,7 +2314,19 @@ future<> segment_manager_impl::do_recovery(recovery_catalog& catalog) {
 
     co_await files.finish();
 
-    logstor_logger.info("Recovery complete");
+    const recovery_summary summary{
+        .found_segments = found_segment_count,
+        .used_segments = used_segment_count,
+        .free_segments = free_segment_count,
+        .dropped_records = stats.dropped_records,
+        .separated_segments = stats.separated_segments,
+        .next_segment_seq = _next_segment_seq,
+    };
+    logstor_logger.info("Recovery complete: {} live records in {} used segments, {} free segments, {} found segments, "
+            "{} dropped records, {} full segments to separate, next segment sequence {}",
+            _stats.live_record_count, summary.used_segments, summary.free_segments, summary.found_segments,
+            summary.dropped_records, summary.separated_segments, summary.next_segment_seq);
+    co_return summary;
 }
 
 future<> segment_manager_impl::do_recovery_for_test() {
@@ -2519,7 +2531,7 @@ const segment_manager_impl& segment_manager::get_impl() const noexcept {
     return *_impl;
 }
 
-future<> segment_manager::do_recovery(recovery_catalog& catalog) {
+future<recovery_summary> segment_manager::do_recovery(recovery_catalog& catalog) {
     return _impl->do_recovery(catalog);
 }
 

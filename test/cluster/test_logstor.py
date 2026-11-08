@@ -1208,8 +1208,8 @@ async def test_recovery_after_tablet_migration(manager: ScyllaClusterManager):
             assert len(rows) == 1, f"Expected 1 row for key {i} after recovery, but got {len(rows)}"
             assert rows[0].v == f"{i}_{value}", f"Wrong value for key {i} after recovery"
 
-        matches = await server_log.grep(r"Dropping record of table", from_mark=log_mark)
-        assert len(matches) >= nrows
+        matches = await server_log.grep(r"Recovery complete: .*, (\d+) dropped records", from_mark=log_mark)
+        assert sum(int(m.group(1)) for _, m in matches) >= nrows
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_migration_with_compaction(manager: ScyllaClusterManager):
