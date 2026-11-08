@@ -760,10 +760,11 @@ public:
 
     using needs_separation = bool_class<class needs_separation_tag>;
 
-    // Gives a full segment that holds a record of an index back to its compaction group. Returns
-    // needs_separation::yes when the records of the segment must be separated instead: the
+    // Gives a full segment that holds a record of an index back to its compaction group. `info` is
+    // the segment info of the first chunk of the segment, which the scan of the segment returns.
+    // Returns needs_separation::yes when the records of the segment must be separated instead: the
     // segment is mixed, or it is full and fits no single group.
-    future<needs_separation> place_recovered_segment(recovery_catalog&, log_segment_id, recovery_stats&);
+    needs_separation place_recovered_segment(recovery_catalog&, log_segment_id, const segment_info& info, recovery_stats&);
 
     // Separates the records of the segments that recovery listed in `_recovered`.
     future<> separate_recovered_segments();
@@ -778,8 +779,9 @@ public:
     static index_resolver make_index_resolver(recovery_catalog&, recovery_stats& stats);
 
     struct rebuild_index_result {
-        // The sequence of each scanned segment, by segment id. A segment with no valid chunk has 0.
-        std::vector<segment_sequence> segment_seqs;
+        // The segment info of the first chunk of each scanned segment, by segment id. A segment
+        // with no valid chunk has no segment info.
+        utils::chunked_vector<std::optional<segment_info>> segment_infos;
         segment_sequence max_segment_seq{0};
     };
 
@@ -2270,14 +2272,15 @@ future<> compaction_manager_impl::flush_separator_buffer(separator_buffer& buf, 
 // One recovery of the segments of the shard. do_recovery() makes one and runs it. The steps run in
 // the order of run(), and each step starts from the state that the step before it leaves.
 class segment_manager_impl::recovery {
-    static constexpr uint64_t placement_progress_step = 1000;
-
     segment_manager_impl& _sm;
     recovery_catalog& _catalog;
     file_manager::recovery _files;
     recovery_summary _summary;
     recovery_stats _stats;
     segment_sequence _max_segment_seq{0};
+    // The segment info of the first chunk of each found segment, by segment id, which the scan
+    // returns. The placement of the used segments reads it, so it does not read the segments again.
+    utils::chunked_vector<std::optional<segment_info>> _segment_infos;
     // The count of the files from the first one to the last one that holds a used segment.
     file_id_t _used_file_count{0};
 
@@ -2340,9 +2343,11 @@ future<> segment_manager_impl::recovery::open_found_files() {
 
 // Scans every found segment into the indexes of the catalog.
 future<> segment_manager_impl::recovery::index_found_segments() {
-    const auto rebuilt = co_await _sm.rebuild_index(_summary.found_segments, _sm.make_index_resolver(_catalog, _stats));
+    auto rebuilt = co_await _sm.rebuild_index(_summary.found_segments, _sm.make_index_resolver(_catalog, _stats));
+    _segment_infos = std::move(rebuilt.segment_infos);
     for (uint64_t seg_idx = 0; seg_idx < _summary.found_segments; ++seg_idx) {
-        _sm.get_segment_descriptor(log_segment_id(seg_idx)).seq = rebuilt.segment_seqs[seg_idx];
+        const auto& info = _segment_infos[seg_idx];
+        _sm.get_segment_descriptor(log_segment_id(seg_idx)).seq = info ? info->segment_seq : segment_sequence(0);
         co_await coroutine::maybe_yield();
     }
     _max_segment_seq = rebuilt.max_segment_seq;
@@ -2377,24 +2382,25 @@ future<> segment_manager_impl::recovery::retire_unused_files() {
 
 // Gives each used full segment back to its compaction group, and lists the segments whose records
 // start() must separate. The placement writes nothing, so the used segments are the ones that
-// classify_found_segments() counted.
+// classify_found_segments() counted. The placement also reads nothing, because it uses the segment
+// infos that the scan kept.
 future<> segment_manager_impl::recovery::place_used_segments() {
-    uint64_t placed_segment_count = 0;
     for (uint64_t seg_idx = 0; seg_idx < _summary.found_segments; ++seg_idx) {
         co_await coroutine::maybe_yield();
         log_segment_id seg_id(seg_idx);
         if (_sm.get_segment_descriptor(seg_id).record_count == 0) {
             continue;
         }
-        logstor_logger.trace("Recovering used segment {}", seg_id);
-        if (placed_segment_count % placement_progress_step == 0) {
-            logstor_logger.info("Recovering used segments: {}%", 100 * placed_segment_count / _summary.used_segments);
+        // The scan indexes only the records of a valid chunk, so a used segment has a valid first
+        // chunk.
+        const auto& info = _segment_infos[seg_idx];
+        if (!info) {
+            on_internal_error(logstor_logger, format("Recovered segment {} holds records but has no segment info", seg_id));
         }
-        const auto placement = co_await _sm.place_recovered_segment(_catalog, seg_id, _stats);
-        if (placement == needs_separation::yes) {
+        logstor_logger.trace("Recovering used segment {}", seg_id);
+        if (_sm.place_recovered_segment(_catalog, seg_id, *info, _stats) == needs_separation::yes) {
             _sm._recovered.to_separate.push_back(seg_id);
         }
-        placed_segment_count++;
     }
     if (!_sm._recovered.to_separate.empty()) {
         _sm._recovered.catalog = &_catalog;
@@ -2429,17 +2435,21 @@ segment_manager_impl::index_resolver segment_manager_impl::make_index_resolver(r
 
 future<segment_manager_impl::rebuild_index_result> segment_manager_impl::rebuild_index(uint64_t segment_count, const index_resolver& resolve) {
     rebuild_index_result result;
-    auto& segment_seqs = result.segment_seqs;
-    segment_seqs.resize(static_cast<size_t>(segment_count), segment_sequence(0));
+    auto& segment_infos = result.segment_infos;
+    segment_infos.resize(static_cast<size_t>(segment_count));
+    auto segment_seq_of = [&segment_infos] (log_segment_id seg_id) {
+        const auto& info = segment_infos[seg_id.value];
+        return info ? info->segment_seq : segment_sequence(0);
+    };
 
     // Keep the latest record for each key. For equal records, keep the one from the segment with
     // the highest sequence number.
-    primary_index::entry_cmp_fn cmp_with_seq = [&segment_seqs] (const index_entry& old_entry, const index_entry& candidate) -> std::strong_ordering {
+    primary_index::entry_cmp_fn cmp_with_seq = [&segment_seq_of] (const index_entry& old_entry, const index_entry& candidate) -> std::strong_ordering {
         if (auto c = primary_index::default_entry_cmp{}(old_entry, candidate); c != 0) {
             return c;
         }
-        const auto old_seq = segment_seqs[old_entry.location.segment.value];
-        const auto new_seq = segment_seqs[candidate.location.segment.value];
+        const auto old_seq = segment_seq_of(old_entry.location.segment);
+        const auto new_seq = segment_seq_of(candidate.location.segment);
         if (auto c = old_seq <=> new_seq; c != 0) {
             return c;
         }
@@ -2447,13 +2457,18 @@ future<segment_manager_impl::rebuild_index_result> segment_manager_impl::rebuild
     };
 
     co_await max_concurrent_for_each(std::views::iota(uint64_t(0), segment_count), 32,
-        [this, &cmp_with_seq, &resolve, &segment_seqs, &result] (uint64_t seg_idx) {
+        [this, &cmp_with_seq, &resolve, &segment_infos, &result] (uint64_t seg_idx) {
             const log_segment_id seg_id(seg_idx);
             // The scan calls the callback before it inserts the records of a chunk, so the
-            // sequence of the segment is in segment_seqs before cmp_with_seq reads it.
+            // sequence of the segment is in segment_infos before cmp_with_seq reads it.
             return index_segment_records(seg_id, cmp_with_seq, resolve,
-                [seg_id, &segment_seqs, &result] (const segment_info& seg_info) {
-                    segment_seqs[seg_id.value] = seg_info.segment_seq;
+                [seg_id, &segment_infos, &result] (const segment_info& seg_info) {
+                    // Keep the info of the first chunk. The scan stops at a chunk with another
+                    // sequence, so the other chunks give only the same sequence.
+                    auto& info = segment_infos[seg_id.value];
+                    if (!info) {
+                        info = seg_info;
+                    }
                     result.max_segment_seq = std::max(result.max_segment_seq, seg_info.segment_seq);
                 });
         }
@@ -2488,28 +2503,23 @@ void segment_manager::on_free_record(record_location location) noexcept {
     get_impl().on_free_record(location);
 }
 
-future<segment_manager_impl::needs_separation> segment_manager_impl::place_recovered_segment(recovery_catalog& catalog, log_segment_id seg_id, recovery_stats& stats) {
-    auto info = co_await read_segment_info(seg_id);
-    if (!info) {
-        co_return needs_separation::no;
-    }
-
-    switch (info->kind) {
+segment_manager_impl::needs_separation segment_manager_impl::place_recovered_segment(recovery_catalog& catalog, log_segment_id seg_id, const segment_info& info, recovery_stats& stats) {
+    switch (info.kind) {
     case segment_kind::mixed:
         logstor_logger.debug("Recovering mixed segment {} using separator", seg_id);
-        co_return needs_separation::yes;
+        return needs_separation::yes;
     case segment_kind::full: {
-        const auto& full = std::get<segment_info::full>(info->v);
+        const auto& full = std::get<segment_info::full>(info.v);
         auto [index, cg] = catalog.find(full.table, full.first_token, full.last_token);
         if (!index) {
             // The table is gone, and its records with it.
-            co_return needs_separation::no;
+            return needs_separation::no;
         }
         if (cg) {
             cg->add_logstor_segment(get_segment_descriptor(seg_id));
             logstor_logger.debug("Added segment {} with tokens [{},{}] to compaction group of table {}", seg_id, full.first_token, full.last_token,
                     seastar::value_of([&] { return catalog.table_name(full.table); }));
-            co_return needs_separation::no;
+            return needs_separation::no;
         }
         // The range of the segment is in two tablets of this shard, or part of the range
         // is in a tablet that is not on this shard, so no compaction group of this shard
@@ -2523,10 +2533,10 @@ future<segment_manager_impl::needs_separation> segment_manager_impl::place_recov
         ++stats.separated_segments;
         logstor_logger.warn("Segment {} with tokens [{},{}] of table {} fits no compaction group of this shard, separating its records",
                 seg_id, full.first_token, full.last_token, catalog.table_name(full.table));
-        co_return needs_separation::yes;
+        return needs_separation::yes;
     }
     }
-    co_return needs_separation::no;
+    return needs_separation::no;
 }
 
 future<> segment_manager_impl::separate_recovered_segments() {
@@ -2747,9 +2757,17 @@ public:
 
 future<> segment_manager_impl::adopt_streamed_segment(recovery_catalog& catalog, log_segment_id seg_id) {
     recovery_stats stats;
-    co_await index_segment_records(seg_id, primary_index::default_entry_cmp{}, make_index_resolver(catalog, stats), [] (const segment_info&) {});
-    const auto placement = co_await place_recovered_segment(catalog, seg_id, stats);
-    if (placement == needs_separation::yes) {
+    std::optional<segment_info> info;
+    co_await index_segment_records(seg_id, primary_index::default_entry_cmp{}, make_index_resolver(catalog, stats), [&info] (const segment_info& seg_info) {
+        if (!info) {
+            info = seg_info;
+        }
+    });
+    if (!info) {
+        // The segment has no valid chunk, so the scan indexed no record of it.
+        co_return;
+    }
+    if (place_recovered_segment(catalog, seg_id, *info, stats) == needs_separation::yes) {
         co_await separate_segment_records(catalog, seg_id, stats);
     }
     if (stats.dropped_records) {
