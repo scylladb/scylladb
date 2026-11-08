@@ -11,6 +11,7 @@ from typing import Callable
 
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.cluster.storage.conftest import space_limited_servers
+from test.cluster.tasks.task_manager_client import TaskManagerClient
 from test.cluster.storage.test_out_of_space_prevention import DISK_FILL_TARGET_RATIO, global_cmdline, random_content_file
 
 logger = logging.getLogger(__name__)
@@ -148,3 +149,51 @@ async def test_boot_fails_when_resharding_is_drained(manager: ScyllaClusterManag
 
         assert await log.grep("Startup failed", from_mark=mark)
         assert await log.grep(f"Compaction for {ks}/{table} was stopped due to: drain", from_mark=mark)
+
+
+@pytest.mark.xfail(strict=True, reason="SCYLLADB-5324: boot continues after resharding is aborted")
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_boot_fails_when_resharding_is_aborted(manager: ScyllaClusterManager) -> None:
+    """
+    Test that a node fails to start, with an error, if a user aborts
+    boot-time resharding through the task manager.
+
+    Same as test_boot_fails_when_resharding_is_drained, but a user stops the
+    reshard jobs by aborting the resharding task of the table through the
+    task manager, instead of out-of-space prevention draining the compaction
+    manager.
+
+    Scenario:
+      - Start a node with 2 shards and write data into a vnodes table.
+      - Restart the node with 3 shards to trigger resharding, and pause the
+        reshard jobs of the table.
+      - Abort the resharding task of the table through the task manager,
+        which stops the paused jobs.
+      - Expect startup to fail with an error.
+
+    Reproduces https://scylladb.atlassian.net/browse/SCYLLADB-5324.
+    """
+    shards = 2
+    server = await manager.server_add(cmdline=["--smp", str(shards)])
+    cql, _ = await manager.get_ready_cql([server])
+    log = await manager.server_open_log(server.server_id)
+    ks, table = await populate_vnodes_table(manager, cql, server)
+
+    logger.info(f"Restart the node with {shards + 1} shards and pause the reshard jobs of the table")
+    start_task, mark = await restart_with_paused_resharding(
+        manager, server, log, table, shards, expected_error=f"Exception while populating keyspace '{ks}' with column family '{table}'")
+    try:
+        mark = await wait_for_paused_reshard_jobs(log, mark, start_task, jobs=shards)
+
+        logger.info("Abort the resharding task of the table and expect the boot to fail")
+        tm = TaskManagerClient(manager.api)
+        tasks = await tm.list_tasks(server.ip_addr, "compaction", internal=True, keyspace=ks, table=table)
+        [task] = [t for t in tasks if t.type == "resharding compaction" and t.scope == "table"]
+        await tm.abort_task(server.ip_addr, task.task_id)
+        await start_task
+    finally:
+        if not start_task.done():
+            start_task.cancel()
+
+    assert await log.grep("Startup failed", from_mark=mark)
+    assert await log.grep(f"Compaction for {ks}/{table} was stopped due to: user requested abort", from_mark=mark)
