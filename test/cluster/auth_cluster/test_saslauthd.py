@@ -28,6 +28,7 @@ import pytest
 from cassandra import InvalidRequest, Unauthorized
 from cassandra.auth import PlainTextAuthProvider
 from cassandra.cluster import NoHostAvailable
+from cassandra.policies import RoundRobinPolicy
 from cassandra.protocol import BadCredentials
 
 from test.cluster.auth_cluster import extra_scylla_config_options as auth_config
@@ -83,8 +84,12 @@ def ldap_role_manager_config() -> dict:
 @contextmanager
 def session_as(manager: ScyllaClusterManager, server, username: str, password: str | None):
     """A CQL session on `server` logged in as `username`, closed on exit."""
+    # A policy of its own: con_gen's default RoundRobinPolicy is one object shared
+    # by every cluster it creates, so a failed login's cluster would take the
+    # host away from sessions that are still open.
     cluster = manager.con_gen([server.ip_addr], manager.port, manager.use_ssl,
-                              PlainTextAuthProvider(username=username, password=password or ""))
+                              PlainTextAuthProvider(username=username, password=password or ""),
+                              load_balancing_policy=RoundRobinPolicy())
     try:
         yield cluster.connect()
     finally:
@@ -287,31 +292,30 @@ async def test_ldap_group_permissions(manager: ScyllaClusterManager):
     select = f"SELECT * FROM {ks}.t"
     insert = f"INSERT INTO {ks}.t (k, v) VALUES (1, 1)"
 
-    async def eventually(fn, label):
+    async def eventually(allowed: bool, session, statement):
         # Permission changes reach the authorizer's cache asynchronously.
-        async def attempt():
-            fn()
-            return True
-        await wait_for(attempt, time.time() + 60, label=label)
-
-    def refused(session, statement):
-        def check():
-            with pytest.raises(Unauthorized):
+        async def outcome_as_expected():
+            try:
                 session.execute(statement)
-        return check
+                succeeded = True
+            except Unauthorized:
+                succeeded = False
+            return True if succeeded == allowed else None
+        label = f"{statement!r} {'allowed' if allowed else 'refused'}"
+        await wait_for(outcome_as_expected, time.time() + 60, label=label)
 
     with session_as(manager, server, JDOE, JDOE_PASSWORD) as jdoe, \
          session_as(manager, server, JSMITH, JSMITH_PASSWORD) as jsmith:
-        await eventually(refused(jdoe, select), "no SELECT before any grant")
+        await eventually(False, jdoe, select)
 
         await cql.run_async(f"GRANT SELECT ON KEYSPACE {ks} TO {JDOE_GROUP}")
-        await eventually(lambda: jdoe.execute(select), "SELECT through role3")
-        await eventually(refused(jdoe, insert), "no MODIFY yet")
-        await eventually(refused(jsmith, select), "jsmith is not in role3")
+        await eventually(True, jdoe, select)
+        await eventually(False, jdoe, insert)
+        await eventually(False, jsmith, select)
 
         await cql.run_async(f"GRANT MODIFY ON KEYSPACE {ks} TO {JDOE_GROUP}")
-        await eventually(lambda: jdoe.execute(insert), "MODIFY through role3")
+        await eventually(True, jdoe, insert)
 
         await cql.run_async(f"REVOKE SELECT ON KEYSPACE {ks} FROM {JDOE_GROUP}")
-        await eventually(refused(jdoe, select), "SELECT revoked from role3")
+        await eventually(False, jdoe, select)
         jdoe.execute(insert)
