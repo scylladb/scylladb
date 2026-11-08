@@ -349,6 +349,7 @@ schema_ptr system_keyspace::topology_requests() {
             .with_column("prepare_migration_tables", map_type_impl::get_instance(uuid_type, long_type, false))
             .with_column("restore_table_id", uuid_type)
             .with_column("restore_snapshot_name", utf8_type)
+            .with_column("restore_repair", boolean_type)
             .set_comment("Topology request tracking")
             .with_hash_version()
             .build();
@@ -3702,6 +3703,9 @@ system_keyspace::topology_requests_entry system_keyspace::topology_request_row_t
     if (row.has("restore_table_id")) {
         entry.restore_table_id = table_id(row.get_as<utils::UUID>("restore_table_id"));
         entry.restore_snapshot_name = row.get_as<sstring>("restore_snapshot_name");
+    }
+    if (row.has("restore_repair")) {
+        entry.restore_repair = row.get_as<bool>("restore_repair");
     }
 
     return entry;
