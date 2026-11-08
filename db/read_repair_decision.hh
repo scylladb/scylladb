@@ -10,11 +10,10 @@
 
 #pragma once
 
-#include <fmt/format.h>
-#include <string_view>
-
 namespace db {
 
+// Type of a field in the serialized paging state (see idl/paging_state.idl.hh).
+// Coordinators write std::nullopt to the field and ignore the received value.
 enum class read_repair_decision {
   NONE,
   GLOBAL,
@@ -22,26 +21,3 @@ enum class read_repair_decision {
 };
 
 }
-
-template <> struct fmt::formatter<db::read_repair_decision> {
-    constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
-    auto format(db::read_repair_decision d, fmt::format_context& ctx) const {
-        std::string_view name;
-        switch (d) {
-        using enum db::read_repair_decision;
-        case NONE:
-            name = "NONE";
-            break;
-        case GLOBAL:
-            name = "GLOBAL";
-            break;
-        case DC_LOCAL:
-            name = "DC_LOCAL";
-            break;
-        default:
-              name = "ERR";
-              break;
-        }
-        return fmt::format_to(ctx.out(), "{}", name);
-    }
-};
