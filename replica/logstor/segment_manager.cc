@@ -40,6 +40,7 @@
 #include <seastar/coroutine/exception.hh>
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/circular_buffer.hh>
+#include <seastar/core/temporary_buffer.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/gate.hh>
 #include <seastar/core/lowres_clock.hh>
@@ -2405,23 +2406,63 @@ future<> segment_manager::await_pending_writes() {
     return _impl->await_pending_writes();
 }
 
+// Writes a streamed segment to a local segment. A direct write needs memory that is aligned to the
+// block size and a size that is a multiple of it, and the streamed buffers can have any address and
+// size. Thus the sink copies the streamed bytes to an aligned buffer, and appends the buffer to the
+// segment when the buffer is full and when the stream closes.
 class segment_data_sink_impl : public data_sink_impl {
     seg_ptr _segment;
     streamed_segment_rewriter _rewriter;
+    temporary_buffer<char> _buf;
+    size_t _buf_used = 0;
+
+    future<> consume(bytes_view data) {
+        while (!data.empty()) {
+            const auto n = std::min(data.size(), _buf.size() - _buf_used);
+            std::copy_n(data.data(), n, _buf.get_write() + _buf_used);
+            _buf_used += n;
+            data.remove_prefix(n);
+            if (_buf_used == _buf.size()) {
+                co_await append_buffer();
+            }
+        }
+    }
+
+    future<> append_buffer() {
+        if (_buf_used == 0) {
+            co_return;
+        }
+        // The data comes from another node, thus bad data fails the stream, and does not reach the
+        // direct write of the segment.
+        if (_buf_used % ondisk::block_alignment != 0) [[unlikely]] {
+            co_await coroutine::return_exception(std::runtime_error(fmt::format("Streamed data for {} ends with {} bytes, which is not a multiple of the block size {}",
+                    _segment->id(), _buf_used, ondisk::block_alignment)));
+        }
+        co_await _segment->append(bytes_view(reinterpret_cast<const int8_t*>(_buf.get()), _buf_used));
+        _buf_used = 0;
+    }
+
 public:
     segment_data_sink_impl(seg_ptr segment)
         : _segment(std::move(segment))
-        , _rewriter(_segment->id(), _segment->seq_num(), [segment = _segment] (bytes_view data) {
-            return segment->append(data).discard_result();
+        , _rewriter(_segment->id(), _segment->seq_num(), [this] (bytes_view data) {
+            return consume(data);
         })
+        , _buf(temporary_buffer<char>::aligned(ondisk::block_alignment, _rewriter.buffer_size()))
     {}
 
     virtual future<> put(std::span<temporary_buffer<char>> data) override {
-        co_await _rewriter.put(data);
+        // The caller can release the buffers of `data` when put() returns, which is before the
+        // rewriter is done with them, so put() moves the buffers before the first suspension.
+        std::vector<temporary_buffer<char>> buffers;
+        buffers.reserve(data.size());
+        std::ranges::move(data, std::back_inserter(buffers));
+        co_await _rewriter.put(buffers);
     }
 
     virtual future<> close() override {
         co_await _rewriter.close();
+        co_await append_buffer();
     }
 
     virtual size_t buffer_size() const noexcept override {
