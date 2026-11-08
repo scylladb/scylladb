@@ -2444,8 +2444,21 @@ future<segment_manager_impl::rebuild_index_result> segment_manager_impl::rebuild
         return old_entry.location.offset <=> candidate.location.offset;
     };
 
+    // The scan of a large store takes a long time, so the scan logs its progress at this interval.
+    constexpr auto progress_interval = std::chrono::seconds(10);
+    uint64_t scanned_segment_count = 0;
+    auto last_progress_time = lowres_clock::now();
+    auto on_segment_scanned = [&] {
+        ++scanned_segment_count;
+        const auto now = lowres_clock::now();
+        if (now - last_progress_time >= progress_interval) {
+            last_progress_time = now;
+            logstor_logger.info("Scanned {} of {} segments ({}%)", scanned_segment_count, segment_count, 100 * scanned_segment_count / segment_count);
+        }
+    };
+
     co_await max_concurrent_for_each(std::views::iota(uint64_t(0), segment_count), 32,
-        [this, &cmp_with_seq, &resolve, &segment_infos, &result] (uint64_t seg_idx) -> future<> {
+        [this, &cmp_with_seq, &resolve, &segment_infos, &result, &on_segment_scanned] (uint64_t seg_idx) -> future<> {
             const log_segment_id seg_id(seg_idx);
             // The scan reads a whole segment in its first read, also when the first chunk is not
             // valid. A segment that was never written, or that discard_segments() freed, starts
@@ -2459,6 +2472,7 @@ future<segment_manager_impl::rebuild_index_result> segment_manager_impl::rebuild
                 segment_infos[seg_idx] = std::move(info);
                 co_await index_segment_records(seg_id, cmp_with_seq, resolve);
             }
+            on_segment_scanned();
         }
     );
 
