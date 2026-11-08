@@ -763,6 +763,8 @@ public:
     static index_resolver make_index_resolver(recovery_catalog&, recovery_stats& stats);
 
     struct rebuild_index_result {
+        // The sequence of each scanned segment, by segment id. A segment with no valid chunk has 0.
+        std::vector<segment_sequence> segment_seqs;
         segment_sequence max_segment_seq{0};
     };
 
@@ -904,7 +906,9 @@ private:
 
     future<seg_ptr> get_segment(write_source src) {
         seg_ptr seg = co_await _segment_pool.get_segment(src);
-        seg->start(make_segment_ref(seg->id()), allocate_segment_seq());
+        auto& desc = get_segment_descriptor(seg->id());
+        desc.seq = allocate_segment_seq();
+        seg->start(make_segment_ref(seg->id()), desc.seq);
         co_return seg;
     }
 
@@ -2324,6 +2328,10 @@ future<> segment_manager_impl::recovery::open_found_files() {
 // Scans every found segment into the indexes of the catalog.
 future<> segment_manager_impl::recovery::index_found_segments() {
     const auto rebuilt = co_await _sm.rebuild_index(_summary.found_segments, _sm.make_index_resolver(_catalog, _stats));
+    for (uint64_t seg_idx = 0; seg_idx < _summary.found_segments; ++seg_idx) {
+        _sm.get_segment_descriptor(log_segment_id(seg_idx)).seq = rebuilt.segment_seqs[seg_idx];
+        co_await coroutine::maybe_yield();
+    }
     _max_segment_seq = rebuilt.max_segment_seq;
     logstor_logger.info("Recovery indexed {} live records", _sm._stats.live_record_count);
 }
@@ -2408,8 +2416,9 @@ segment_manager_impl::index_resolver segment_manager_impl::make_index_resolver(r
 }
 
 future<segment_manager_impl::rebuild_index_result> segment_manager_impl::rebuild_index(uint64_t segment_count, const index_resolver& resolve) {
-    std::vector<segment_sequence> segment_seqs(static_cast<size_t>(segment_count), segment_sequence(0));
     rebuild_index_result result;
+    auto& segment_seqs = result.segment_seqs;
+    segment_seqs.resize(static_cast<size_t>(segment_count), segment_sequence(0));
 
     // Keep the latest record for each key. For equal records, keep the one from the segment with
     // the highest sequence number.
