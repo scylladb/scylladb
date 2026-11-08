@@ -2296,9 +2296,8 @@ public:
 private:
     future<> open_found_files();
     future<> index_found_segments();
-    future<> classify_found_segments();
+    future<> place_found_segments();
     future<> retire_unused_files();
-    future<> place_used_segments();
     void resume_segment_sequence();
 };
 
@@ -2307,9 +2306,8 @@ future<recovery_summary> segment_manager_impl::recovery::run() {
 
     co_await open_found_files();
     co_await index_found_segments();
-    co_await classify_found_segments();
+    co_await place_found_segments();
     co_await retire_unused_files();
-    co_await place_used_segments();
     resume_segment_sequence();
     co_await _files.finish();
 
@@ -2354,43 +2352,27 @@ future<> segment_manager_impl::recovery::index_found_segments() {
     logstor_logger.info("Recovery indexed {} live records", _sm._stats.live_record_count);
 }
 
-// Counts the used and the free found segments, and puts the free segments below the configured
-// count on the free list. A free segment at or above it is in a file that an earlier, larger
-// configuration made, and is not used again. The scan started every found segment empty, and the
-// indexes charge a segment for each entry that points into it, so a segment is used exactly when
-// it holds records.
-future<> segment_manager_impl::recovery::classify_found_segments() {
-    for (uint64_t seg_idx = 0; seg_idx < _summary.found_segments; ++seg_idx) {
-        co_await coroutine::maybe_yield();
-        log_segment_id seg_id(seg_idx);
-        if (_sm.get_segment_descriptor(seg_id).record_count > 0) {
-            _summary.used_segments++;
-            _used_file_count = _sm.segment_id_to_file_location(seg_id).file_id + 1;
-        } else if (seg_idx < _sm._configured_max_segments) {
-            _sm._free_segments.push_back(seg_id);
-            _summary.free_segments++;
-        }
-    }
-    logstor_logger.info("Found {} used segments and {} free segments", _summary.used_segments, _summary.free_segments);
-}
-
-// Removes the files at or above the configured count that come after the last file with a used
-// segment.
-future<> segment_manager_impl::recovery::retire_unused_files() {
-    co_await _files.retire_unused_files(_used_file_count);
-}
-
-// Gives each used full segment back to its compaction group, and lists the segments whose records
-// start() must separate. The placement writes nothing, so the used segments are the ones that
-// classify_found_segments() counted. The placement also reads nothing, because it uses the segment
-// infos that the scan kept.
-future<> segment_manager_impl::recovery::place_used_segments() {
+// Gives each used full segment back to its compaction group, lists the used segments whose records
+// start() must separate, and puts the free segments below the configured count on the free list. A
+// free segment at or above that count is in a file that an earlier, larger configuration made, and
+// is not used again.
+//
+// The scan started every found segment empty, and the indexes charge a segment for each entry that
+// points into it, so a segment is used exactly when it holds records. The placement reads nothing,
+// because it uses the segment infos that the scan kept.
+future<> segment_manager_impl::recovery::place_found_segments() {
     for (uint64_t seg_idx = 0; seg_idx < _summary.found_segments; ++seg_idx) {
         co_await coroutine::maybe_yield();
         log_segment_id seg_id(seg_idx);
         if (_sm.get_segment_descriptor(seg_id).record_count == 0) {
+            if (seg_idx < _sm._configured_max_segments) {
+                _sm._free_segments.push_back(seg_id);
+                _summary.free_segments++;
+            }
             continue;
         }
+        _summary.used_segments++;
+        _used_file_count = _sm.segment_id_to_file_location(seg_id).file_id + 1;
         // The scan indexes only the records of a valid chunk, so a used segment has a valid first
         // chunk.
         const auto& info = _segment_infos[seg_idx];
@@ -2405,6 +2387,13 @@ future<> segment_manager_impl::recovery::place_used_segments() {
     if (!_sm._recovered.to_separate.empty()) {
         _sm._recovered.catalog = &_catalog;
     }
+    logstor_logger.info("Found {} used segments and {} free segments", _summary.used_segments, _summary.free_segments);
+}
+
+// Removes the files at or above the configured count that come after the last file with a used
+// segment.
+future<> segment_manager_impl::recovery::retire_unused_files() {
+    co_await _files.retire_unused_files(_used_file_count);
 }
 
 // New segments get sequences above every sequence on disk.
