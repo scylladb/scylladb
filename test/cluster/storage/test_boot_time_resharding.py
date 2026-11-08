@@ -99,7 +99,6 @@ async def test_boot_fails_on_critical_disk_before_resharding(manager: ScyllaClus
                                        expected_error="Startup failed: .*populating keyspace.*critical disk utilization")
 
 
-@pytest.mark.xfail(strict=True, reason="SCYLLADB-5324: boot continues after resharding is drained")
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_boot_fails_when_resharding_is_drained(manager: ScyllaClusterManager, volumes_factory: Callable) -> None:
     """
@@ -151,7 +150,6 @@ async def test_boot_fails_when_resharding_is_drained(manager: ScyllaClusterManag
         assert await log.grep(f"Compaction for {ks}/{table} was stopped due to: drain", from_mark=mark)
 
 
-@pytest.mark.xfail(strict=True, reason="SCYLLADB-5324: boot continues after resharding is aborted")
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_boot_fails_when_resharding_is_aborted(manager: ScyllaClusterManager) -> None:
     """
