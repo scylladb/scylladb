@@ -5000,28 +5000,32 @@ protected:
         RATE_LIMIT,
     };
     db::consistency_level _cl;
-    bool _request_failed = false; // will be true if request fails or timeouts
+    bool _stopped = false; // the request failed, timed out or reached its consistency level; later responses and errors are ignored
     size_t _targets_count;
     promise<result<>> _done_promise; // all target responded
     timer<storage_proxy::clock_type> _timeout;
     schema_ptr _schema;
     size_t _failed = 0;
     // Cancels the requests to the targets which haven't replied when the request
-    // fails or times out. Their callbacks keep the read executor, and with it its
-    // effective replication map, alive.
+    // fails, times out or reaches its consistency level. Their callbacks keep the
+    // read executor, and with it its effective replication map, alive.
     abort_source _abort_source;
 
     virtual void on_failure(exceptions::coordinator_exception_container&& ex) = 0;
     virtual void on_timeout() = 0;
     virtual size_t response_count() const = 0;
+    // Stops accepting responses and cancels the requests which haven't replied.
+    void cancel_requests() {
+        _stopped = true;
+        _timeout.cancel();
+        _abort_source.request_abort();
+    }
     void fail_request(exceptions::coordinator_exception_container&& ex) {
-        _request_failed = true;
         // The exception container was created on the same shard,
         // so it should be cheap to clone and not throw
         _done_promise.set_value(ex.clone());
-        _timeout.cancel();
         on_failure(std::move(ex));
-        _abort_source.request_abort();
+        cancel_requests();
     }
 public:
     abstract_read_resolver(schema_ptr schema, db::consistency_level cl, size_t target_count, storage_proxy::clock_type::time_point timeout)
@@ -5061,7 +5065,7 @@ public:
             // do not report timeouts, the whole operation will timeout and be reported
             return; // also do not report timeout as replica failure for the same reason
         } else if (try_catch<abort_requested_exception>(eptr)) {
-            // do not report aborts, they are triggered by shutdown or timeouts
+            // do not report aborts, they are triggered by shutdown, timeouts or the read reaching its consistency level
         } else if (try_catch<gate_closed_exception>(eptr)) {
             // do not report gate_closed errors, they are triggered by shutdown (See #8995)
         } else if (auto ex = try_catch<rpc::remote_verb_error>(eptr)) {
@@ -5073,7 +5077,7 @@ public:
             slogger.error("Exception when communicating with {}, to read from {}.{}: {:t}", ep, _schema->ks_name(), _schema->cf_name(), eptr);
         }
 
-        if (!_request_failed) { // request may fail only once.
+        if (!_stopped) { // errors are ignored once the request stopped
             on_error(ep, kind, failure_reason_of(std::move(eptr)));
         }
     }
@@ -5085,7 +5089,6 @@ struct digest_read_result {
 };
 
 class digest_read_resolver : public abstract_read_resolver {
-    static constexpr auto background_digest_check_timeout = std::chrono::seconds(1);
     struct digest_and_last_pos {
         query::result_digest digest;
         std::optional<full_position> last_pos;
@@ -5134,7 +5137,7 @@ public:
         return _digest_results.size();
     }
     void add_data(locator::host_id from, foreign_ptr<lw_shared_ptr<query::result>> result) {
-        if (!_request_failed) {
+        if (!_stopped) {
             // if only one target was queried digest_check() will be skipped so we can also skip digest calculation
             _digest_results.emplace_back(_targets_count == 1 ? query::result_digest() : *result->digest(), result->last_position());
             _last_modified = std::max(_last_modified, result->last_modified());
@@ -5145,7 +5148,7 @@ public:
         }
     }
     void add_digest(locator::host_id from, query::result_digest digest, api::timestamp_type last_modified, std::optional<full_position> last_pos) {
-        if (!_request_failed) {
+        if (!_stopped) {
             _digest_results.emplace_back(std::move(digest), std::move(last_pos));
             _last_modified = std::max(_last_modified, last_modified);
             got_response(from);
@@ -5185,9 +5188,9 @@ private:
             if (_cl_responses >= _block_for && _data_result) {
                 _cl_reported = true;
                 _cl_promise.set_value(digest_read_result{std::move(_data_result), digests_match()});
-                // The remaining responses are only used for the background digest check,
-                // so don't wait for them for long.
-                _timeout.rearm(std::min(_timeout.get_timeout(), storage_proxy::clock_type::now() + background_digest_check_timeout));
+                // The remaining responses are not needed.
+                _on_disconnect = {};
+                cancel_requests();
             }
         }
         if (is_completed()) {
@@ -5536,7 +5539,7 @@ public:
         _data_results.reserve(targets_count);
     }
     void add_mutate_data(locator::host_id from, foreign_ptr<lw_shared_ptr<reconcilable_result>> result) {
-        if (!_request_failed) {
+        if (!_stopped) {
             _max_live_count = std::max(result->row_count(), _max_live_count);
             _data_results.emplace_back(std::move(from), std::move(result));
             if (_data_results.size() == _targets_count) {
@@ -5776,7 +5779,6 @@ protected:
 
 private:
     void on_read_resolved() noexcept {
-        // We could have !_foreground if this is called on behalf of background reconciliation.
         _proxy->get_stats().foreground_reads -= int(_foreground);
         _foreground = false;
     }
@@ -5915,8 +5917,8 @@ protected:
                   ex = std::current_exception();
                 }
 
-                // The requests which haven't replied shortly after the read reached CL
-                // are cancelled. They didn't fail.
+                // The requests which haven't replied when the read reached CL are
+                // cancelled. They didn't fail.
                 if (resolver->cl_reported() && try_catch<abort_requested_exception>(ex)) {
                     ++_proxy->get_stats().data_read_cancelled.get_ep_stat(get_topology(), ep);
                 } else {
@@ -5949,8 +5951,8 @@ protected:
                   ex = std::current_exception();
                 }
 
-                // The requests which haven't replied shortly after the read reached CL
-                // are cancelled. They didn't fail.
+                // The requests which haven't replied when the read reached CL are
+                // cancelled. They didn't fail.
                 if (resolver->cl_reported() && try_catch<abort_requested_exception>(ex)) {
                     ++_proxy->get_stats().digest_read_cancelled.get_ep_stat(get_topology(), ep);
                 } else {
@@ -6129,7 +6131,6 @@ public:
 
         // Waited on indirectly.
         (void)digest_resolver->has_cl().then_wrapped([exec, digest_resolver, timeout] (future<result<digest_read_result>> f) mutable {
-            bool background_repair_check = false;
             // All errors are handled, it's OK to discard the result.
             (void)utils::result_try([&] () -> result<> {
                 exec->got_cl();
@@ -6149,9 +6150,6 @@ public:
                         }
                     }
                     exec->_result_promise.set_value(std::move(result));
-                    if (exec->_block_for < exec->_targets.size()) { // if there are more targets then needed for cl, check digest in background
-                        background_repair_check = true;
-                    }
                     exec->on_read_resolved();
                 } else { // digest mismatch
                     // Skip cross-DC repair optimization in the following cases:
@@ -6183,24 +6181,6 @@ public:
                 exec->on_read_resolved();
                 return bo::success();
             }));
-
-            // Waited on indirectly.
-            (void)digest_resolver->done().then(utils::result_wrap([exec, digest_resolver, timeout, background_repair_check] () mutable {
-                if (background_repair_check && !digest_resolver->digests_match()) {
-                    exec->_proxy->get_stats().read_repair_repaired_background++;
-                    exec->_result_promise = promise<result<foreign_ptr<lw_shared_ptr<query::result>>>>();
-                    // Nobody waits for the repair, so bound its reads even if the read has no
-                    // timeout. Its writes use the write timeout.
-                    auto repair_timeout = std::min(timeout, storage_proxy::clock_type::now() + std::chrono::milliseconds(exec->_proxy->_timeout_config.read_timeout_in_ms()));
-                    exec->reconcile(exec->_cl, repair_timeout);
-                    return exec->_result_promise.get_future().then(utils::result_discard_value<result<foreign_ptr<lw_shared_ptr<query::result>>>>);
-                } else {
-                    return make_ready_future<result<>>(bo::success());
-                }
-            })).then_wrapped([] (auto&& f) {
-                // ignore any failures during background repair (both failed results and exceptions)
-                f.ignore_ready_future();
-            });
         });
 
         return _result_promise.get_future();
