@@ -3735,6 +3735,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         tm = nullptr;
         guard = co_await start_operation();
         co_await global_tablet_token_metadata_barrier(std::move(guard));
+
+        // Every node has applied the resize by now, while a refresh running or pending at the
+        // commit may install the old keys of the resized tables, collected from nodes which had
+        // not. Refresh once more; the action is serialized, so this one installs last.
+        trigger_load_stats_refresh();
     }
 
     using get_table_ids_func = std::function<std::unordered_set<table_id>(const db::system_keyspace::topology_requests_entry&)>;
@@ -5880,6 +5885,11 @@ public:
         _topo_sm.on_tablet_split_ready = [this] {
             trigger_load_stats_refresh();
         };
+        // Lets a test trigger a refresh while the coordinator holds the group0 guard, which
+        // blocks the schema changes that would trigger one.
+        utils::get_local_injector().register_on_disable("trigger_tablet_load_stats_refresh", [this] {
+            trigger_load_stats_refresh();
+        });
     }
 
     future<> run();
@@ -6181,6 +6191,8 @@ future<topology_coordinator::tablet_load_stats_collect_result> topology_coordina
 
 future<> topology_coordinator::refresh_tablet_load_stats() {
     auto [load_stats, _] = co_await collect_tablet_load_stats(require_live_nodes::no);
+    // Lets a test finalize a resize between the collection and the install.
+    co_await utils::get_local_injector().inject("refresh_tablet_load_stats_before_install", utils::wait_for_message(std::chrono::minutes(2)));
     _tablet_allocator.set_load_stats(std::move(load_stats));
     _topo_sm.event.broadcast(); // wake up load balancer.
     rtlogger.debug("raft topology: Refreshed table load stats for all DC(s).");
@@ -6418,6 +6430,7 @@ future<> topology_coordinator::run() {
 future<> topology_coordinator::stop() {
     co_await _db.get_notifier().unregister_listener(this);
     utils::get_local_injector().unregister_on_disable("delay_cdc_stream_finalization");
+    utils::get_local_injector().unregister_on_disable("trigger_tablet_load_stats_refresh");
     _topo_sm.on_tablet_split_ready = nullptr;
     co_await _lifecycle_notifier.unregister_subscriber(this);
     co_await _tablet_load_stats_refresh.join();
