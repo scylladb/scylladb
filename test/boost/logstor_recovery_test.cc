@@ -12,10 +12,12 @@
 #include <array>
 #include <optional>
 #include <random>
+#include <stdexcept>
 #include <span>
 #include <tuple>
 #include <vector>
 
+#include <seastar/core/on_internal_error.hh>
 #include <seastar/core/seastar.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/util/defer.hh>
@@ -718,4 +720,60 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_recovery_reproduces_index_under_mixed_work
     null_space_accounting accounting;
     const auto rebuilt = rebuild_index_from_disk(ls, schema->id(), accounting);
     require_equal_indexes(cg.logstor_index(), *rebuilt);
+}
+
+// do_recovery() and start() out of order fail with an internal error, and the store still stops.
+SEASTAR_THREAD_TEST_CASE(test_logstor_lifecycle_misuse_is_an_internal_error) {
+    const auto do_abort = set_abort_on_internal_error(false);
+    auto reset_abort = seastar::defer([do_abort] noexcept {
+        set_abort_on_internal_error(do_abort);
+    });
+
+    // Runs `test` on a new store in a new directory, and stops the store after it.
+    auto with_store = [] (auto test) {
+        tmpdir dir;
+        test_store store(dir);
+        auto& ls = store.ls();
+        auto stop_store = seastar::defer([&ls] noexcept { ls.stop().get(); });
+        test(dir, ls);
+    };
+
+    // start() with no recovery fails.
+    with_store([] (const tmpdir&, logstor& ls) {
+        BOOST_REQUIRE_THROW(ls.start().get(), std::runtime_error);
+    });
+
+    // start() after a failed recovery fails. The recovery fails because the directory holds file 1
+    // and no file 0.
+    with_store([] (const tmpdir& dir, logstor& ls) {
+        const auto file_1 = dir.path() / fmt::format("ls_{}-1-Data.db", this_shard_id());
+        seastar::open_file_dma(file_1.string(), seastar::open_flags::wo | seastar::open_flags::create).get().close().get();
+        test_recovery_catalog no_tables;
+        BOOST_REQUIRE_THROW(ls.do_recovery(no_tables).get(), std::runtime_error);
+        BOOST_REQUIRE_THROW(ls.start().get(), std::runtime_error);
+    });
+
+    // A second do_recovery() fails, and start() still works after it.
+    with_store([] (const tmpdir&, logstor& ls) {
+        test_recovery_catalog no_tables;
+        ls.do_recovery(no_tables).get();
+        BOOST_REQUIRE_THROW(ls.do_recovery(no_tables).get(), std::runtime_error);
+        ls.start().get();
+    });
+
+    // A second start() fails.
+    with_store([] (const tmpdir&, logstor& ls) {
+        test_recovery_catalog no_tables;
+        ls.do_recovery(no_tables).get();
+        ls.start().get();
+        BOOST_REQUIRE_THROW(ls.start().get(), std::runtime_error);
+    });
+
+    // do_recovery() after start() fails.
+    with_store([] (const tmpdir&, logstor& ls) {
+        test_recovery_catalog no_tables;
+        ls.do_recovery(no_tables).get();
+        ls.start().get();
+        BOOST_REQUIRE_THROW(ls.do_recovery(no_tables).get(), std::runtime_error);
+    });
 }

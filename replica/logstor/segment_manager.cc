@@ -671,6 +671,15 @@ class segment_manager_impl {
     };
     recovered_segments _recovered;
 
+    // The stage of the segment manager. do_recovery() must run once on a new segment manager, and
+    // start() must run once after the recovery succeeded. A recovery that fails leaves the stage at
+    // created.
+    enum class lifecycle { created, recovered, started };
+    lifecycle _lifecycle{lifecycle::created};
+
+    // Fails with an internal error when the segment manager is not at the expected stage.
+    void check_lifecycle(lifecycle expected, std::string_view call) const;
+
     seastar::condition_variable _segment_freed_cv;
 
     write_buffer_pool _compaction_buffer_pool;
@@ -1189,7 +1198,26 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
     });
 }
 
+void segment_manager_impl::check_lifecycle(lifecycle expected, std::string_view call) const {
+    if (_lifecycle != expected) [[unlikely]] {
+        auto name = [] (lifecycle l) {
+            switch (l) {
+            case lifecycle::created: return "created";
+            case lifecycle::recovered: return "recovered";
+            case lifecycle::started: return "started";
+            }
+            return "unknown";
+        };
+        on_internal_error(logstor_logger, fmt::format("logstor {} called at stage {}, expected stage {}",
+                call, name(_lifecycle), name(expected)));
+    }
+}
+
 future<> segment_manager_impl::start() {
+    check_lifecycle(lifecycle::recovered, "start()");
+    // A start that fails is not repeated, so the stage changes before the work starts.
+    _lifecycle = lifecycle::started;
+
     // Start background replenisher before creating initial segment
     _reserve_replenisher = with_scheduling_group(_cfg.compaction_sg, [this] {
         return replenish_reserve();
@@ -2402,8 +2430,11 @@ void segment_manager_impl::recovery::resume_segment_sequence() {
 }
 
 future<recovery_summary> segment_manager_impl::do_recovery(recovery_catalog& catalog) {
+    check_lifecycle(lifecycle::created, "do_recovery()");
     recovery r(*this, catalog);
-    co_return co_await r.run();
+    auto summary = co_await r.run();
+    _lifecycle = lifecycle::recovered;
+    co_return summary;
 }
 
 segment_manager_impl::index_resolver segment_manager_impl::make_index_resolver(recovery_catalog& catalog, recovery_stats& stats) {
