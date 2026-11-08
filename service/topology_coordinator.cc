@@ -2165,6 +2165,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         background_action_holder repair;
         background_action_holder repair_update_compaction_ctrl;
         background_action_holder restore;
+        background_action_holder restore_repair;
         std::unordered_map<locator::tablet_transition_stage, background_action_holder> barriers;
         // Driving the tablet's raft group to the configuration a stage implies, for
         // the stages of a strongly consistent migration which change it. Per tablet
@@ -3383,6 +3384,43 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         rtlogger.debug("Clearing restore transition for {}", gid);
                         _tablets.erase(gid);
                         get_mutation_builder().del_transition(last_token, _feature_service).del_snapshot_name(last_token).del_session(last_token);
+                    }
+                }
+                    break;
+                case locator::tablet_transition_stage::restore_repair: {
+                    // A repair of a restored tablet, run like the repair of a rebuilt one: the
+                    // repair is part of the transition, so no repair request is placed on the
+                    // tablet, and a user's request for one waits for the restore to finish.
+                    // It is a full repair which does not mark the sstables repaired.
+                    auto clear_transition = [&] {
+                        _tablets.erase(gid);
+                        get_mutation_builder().del_transition(last_token, _feature_service).del_session(last_token);
+                    };
+                    if (action_failed(tablet_state.restore_repair)) {
+                        auto ep = tablet_state.restore_repair->get_exception();
+                        rtlogger.warn("Repair of tablet {} after restoring it failed. The restore completes without it: {}", gid, ep);
+                        clear_transition();
+                        break;
+                    }
+                    // Aborting the restore deletes the session.
+                    if (!tablet_state.restore_repair && !trinfo.session_id) {
+                        rtlogger.info("Restore of tablet {} was aborted, not repairing it", gid);
+                        clear_transition();
+                        break;
+                    }
+                    // The explicit object parameter copies the captures into the coroutine
+                    // frame. The captured references are used only before the first suspension.
+                    if (advance_in_background(gid, tablet_state.restore_repair, "restore_repair",
+                            [this, &tmap, &trinfo, gid] (this auto) -> future<> {
+                        auto dst = locator::maybe_get_primary_replica(gid.tablet, tmap.get_tablet_info(gid.tablet).replicas,
+                                _db.get_token_metadata().get_topology(), [] (const auto& tr) { return true; }).value().host;
+                        const auto session_id = trinfo.session_id;
+                        rtlogger.info("Repairing tablet {} after restoring it, host={}", gid, dst);
+                        co_await ser::storage_service_rpc_verbs::send_tablet_repair(&_messaging,
+                                dst, _as, raft::server_id(dst.uuid()), gid, session_id).discard_result();
+                    })) {
+                        rtlogger.info("Repaired tablet {} after restoring it", gid);
+                        clear_transition();
                     }
                 }
                     break;

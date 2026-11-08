@@ -266,6 +266,7 @@ enum class tablet_transition_stage {
     repair,
     end_repair,
     restore,
+    restore_repair,
 
     start_migration = allow_write_both_read_old,
     sc_add_nonvoter = write_both_read_old,
