@@ -163,7 +163,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_recovery_restores_the_newest_records) {
     {
         test_store store(dir);
         auto& ls = store.ls();
-        ls.do_recovery_for_test().get();
+        test_recovery_catalog no_tables;
+        ls.do_recovery(no_tables).get();
         ls.start().get();
         auto stop_store = seastar::defer([&ls] noexcept { ls.stop().get(); });
         test_logstor_group group_a(schema_a, ls);
@@ -223,7 +224,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_recovery_places_segments_by_their_kind) {
     {
         test_store store(dir);
         auto& ls = store.ls();
-        ls.do_recovery_for_test().get();
+        test_recovery_catalog no_tables;
+        ls.do_recovery(no_tables).get();
         ls.start().get();
         auto stop_store = seastar::defer([&ls] noexcept { ls.stop().get(); });
         test_logstor_group left(schema, ls);
@@ -275,7 +277,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_recovery_leaves_out_a_table_that_is_gone) 
     {
         test_store store(dir);
         auto& ls = store.ls();
-        ls.do_recovery_for_test().get();
+        test_recovery_catalog no_tables;
+        ls.do_recovery(no_tables).get();
         ls.start().get();
         auto stop_store = seastar::defer([&ls] noexcept { ls.stop().get(); });
         test_logstor_group group_a(schema_a, ls);
@@ -314,7 +317,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_recovery_drops_the_records_of_a_tablet_tha
     {
         test_store store(dir);
         auto& ls = store.ls();
-        ls.do_recovery_for_test().get();
+        test_recovery_catalog no_tables;
+        ls.do_recovery(no_tables).get();
         ls.start().get();
         auto stop_store = seastar::defer([&ls] noexcept { ls.stop().get(); });
         test_logstor_group left(schema, ls);
@@ -358,7 +362,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_recovery_separates_a_full_segment_that_fit
     {
         test_store store(dir);
         auto& ls = store.ls();
-        ls.do_recovery_for_test().get();
+        test_recovery_catalog no_tables;
+        ls.do_recovery(no_tables).get();
         ls.start().get();
         auto stop_store = seastar::defer([&ls] noexcept { ls.stop().get(); });
         test_logstor_group group(schema, ls);
@@ -402,7 +407,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_recovery_continues_the_segment_sequence) {
     {
         test_store store(dir);
         auto& ls = store.ls();
-        ls.do_recovery_for_test().get();
+        test_recovery_catalog no_tables;
+        ls.do_recovery(no_tables).get();
         ls.start().get();
         auto stop_store = seastar::defer([&ls] noexcept { ls.stop().get(); });
         test_logstor_group group(schema, ls);
@@ -459,7 +465,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_recovery_with_a_smaller_configuration) {
     auto write_versions = [&] (const tmpdir& dir, size_t count) {
         test_store store(dir, larger);
         auto& ls = store.ls();
-        ls.do_recovery_for_test().get();
+        test_recovery_catalog no_tables;
+        ls.do_recovery(no_tables).get();
         ls.start().get();
         auto stop_store = seastar::defer([&ls] noexcept { ls.stop().get(); });
         test_logstor_group group(schema, ls);
@@ -528,7 +535,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_recovery_reproduces_index_after_compaction
 
     test_store store(dir);
     auto& ls = store.ls();
-    ls.do_recovery_for_test().get();
+    test_recovery_catalog no_tables;
+    ls.do_recovery(no_tables).get();
     ls.start().get();
     auto stop_store = seastar::defer([&ls] noexcept { ls.stop().get(); });
 
@@ -561,7 +569,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_recovery_reproduces_index_after_split_comp
 
     test_store store(dir);
     auto& ls = store.ls();
-    ls.do_recovery_for_test().get();
+    test_recovery_catalog no_tables;
+    ls.do_recovery(no_tables).get();
     ls.start().get();
     auto stop_store = seastar::defer([&ls] noexcept { ls.stop().get(); });
 
@@ -613,7 +622,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_recovery_reproduces_index_under_mixed_work
 
     test_store store(dir);
     auto& ls = store.ls();
-    ls.do_recovery_for_test().get();
+    test_recovery_catalog no_tables;
+    ls.do_recovery(no_tables).get();
     ls.start().get();
     auto stop_store = seastar::defer([&ls] noexcept { ls.stop().get(); });
 
