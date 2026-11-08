@@ -1220,16 +1220,6 @@ future<> compaction_group::split(compaction::compaction_type_options::split opt,
     auto& cm = get_compaction_manager();
 
     for (auto view : all_views()) {
-        // Injection point used by tests to synchronize split with a concurrent
-        // repair: pause before the repairing-view iteration so the test can
-        // let repair mark sstables as being-repaired (moving them into
-        // _repairing_view) and optionally let repair's component rewrite
-        // unlink them before split captures them on this iteration.
-        if (is_repairing_view(view)) {
-            co_await utils::get_local_injector().inject(
-                    "split_pause_before_repairing_view_iteration",
-                    utils::wait_for_message{std::chrono::minutes{5}});
-        }
         auto lock_holder = co_await cm.get_incremental_repair_read_lock(*view, "storage_group_split");
         // Waits on sstables produced by repair to be integrated into main set; off-strategy is usually a no-op with tablets.
         co_await cm.perform_offstrategy(*view, tablet_split_task_info);
