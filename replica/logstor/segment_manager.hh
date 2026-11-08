@@ -136,6 +136,12 @@ public:
     // The index a record found on disk goes into, or nullptr to drop the record.
     using index_resolver = std::function<primary_index*(const record_header&)>;
 
+    // Rebuilds indexes from the records on disk the way that recovery does. The rebuild scans every
+    // segment of the allocated files and offers each record to the index that the resolver names,
+    // and the index decides by its conflict resolution rules which entry to keep. Nothing may
+    // write, separate or compact while the rebuild runs.
+    future<> rebuild_index_from_disk(index_resolver);
+
     future<> start();
     future<> stop();
 
