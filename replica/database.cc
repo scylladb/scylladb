@@ -18,6 +18,7 @@
 #include "locator/token_metadata_fwd.hh"
 #include "replica/logstor/compaction.hh"
 #include "replica/logstor/logstor.hh"
+#include "replica/logstor/recovery_catalog.hh"
 #include "replica/logstor/segment_manager.hh"
 #include "replica/logstor/types.hh"
 #include "utils/log.hh"
@@ -989,6 +990,42 @@ database::init_commitlog() {
     });
 }
 
+namespace {
+
+// The recovery catalog of a node: the logstor tables of the database.
+class database_logstor_catalog final : public logstor::recovery_catalog {
+    database& _db;
+
+    lw_shared_ptr<table> logstor_table(table_id id) const {
+        auto t = _db.get_tables_metadata().get_table_if_exists(id);
+        return t && t->uses_logstor() ? t : nullptr;
+    }
+public:
+    explicit database_logstor_catalog(database& db) noexcept : _db(db) {}
+
+    logstor::primary_index* index(table_id id) override {
+        auto t = logstor_table(id);
+        return t ? &t->logstor_index() : nullptr;
+    }
+
+    target find(table_id id, dht::token token) override {
+        auto t = logstor_table(id);
+        return t ? target{&t->logstor_index(), t->maybe_get_logstor_group(token)} : target{};
+    }
+
+    target find(table_id id, dht::token first, dht::token last) override {
+        auto t = logstor_table(id);
+        return t ? target{&t->logstor_index(), t->maybe_get_logstor_group(first, last)} : target{};
+    }
+
+    sstring table_name(table_id id) override {
+        auto t = _db.get_tables_metadata().get_table_if_exists(id);
+        return t ? seastar::format("{}.{}", t->schema()->ks_name(), t->schema()->cf_name()) : seastar::format("{}", id);
+    }
+};
+
+} // anonymous namespace
+
 future<>
 database::init_logstor() {
     dblog.info("Initializing logstor");
@@ -1011,6 +1048,7 @@ database::init_logstor() {
         .max_queued_write_bytes = _dbcfg.available_memory * 1 / 100,
     };
     _logstor = std::make_unique<logstor::logstor>(std::move(cfg), _row_cache_tracker);
+    _logstor_catalog = std::make_unique<database_logstor_catalog>(*this);
 
     dblog.info("logstor initialized");
     co_return;
@@ -1022,7 +1060,7 @@ database::recover_logstor() {
         co_return;
     }
 
-    co_await _logstor->do_recovery(*this);
+    co_await _logstor->do_recovery(*_logstor_catalog);
 
     co_await _logstor->start();
 
