@@ -141,6 +141,23 @@ mutation sources:
 SELECT * FROM MUTATION_FRAGMENTS(keyspace.table_name) WHERE pk = 1;
 ```
 
+## Space Accounting
+
+Logstor counts the space it takes in several ways, because its consumers ask different questions. The
+segments a compaction group owns hold live records and dead ones, and the dead ones stay until
+compaction reclaims them.
+
+| Number | Where | Consumers |
+|--------|-------|-----------|
+| Space of the segments a group owns | `compaction_group::live_disk_space_used()`, the `live_disk_space` and `logstor_segments` table metrics | the disk space of a table (nodetool, the `column_family` API) |
+| Live record bytes of the segments a group owns | `compaction_group::data_size()`, the `owned_segments_live_record_bytes` metric | tablet sizes, the table size for split and merge |
+| Live record bytes the index refers to, the records in mixed segments included | the `logstor_live_record_bytes` table metric, the `live_record_bytes` metric | metrics only |
+| Segments that hold records | `segment_bytes_in_use`, the `segments_in_use` metric | the load of the node (`database::disk_space_used()`) |
+| Files allocated for segments | `disk_usage`, the `disk_usage` metric; `segment_bytes_in_use` with sparse files (`space_on_disk`) | the capacity of the node for the tablet balancer |
+
+A write counts in the live record bytes of a group only after the separator moves it into a segment
+of the group.
+
 ## Measuring Performance
 
 Two tests measure the cost of a logstor operation on one node, at two levels.
