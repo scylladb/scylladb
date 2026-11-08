@@ -278,7 +278,13 @@ async def test_ldap_group_permissions(manager: ScyllaClusterManager):
     TestLdapSaslAuth inherits from TestLdap (test_partial_permissions,
     test_grant_role_permissions, test_revoke_role_permissions,
     test_multiple_roles_*)."""
-    server = await manager.server_add(config=saslauthd_config(**ldap_role_manager_config()))
+    # jdoe gets role3's permissions through its LDAP group, so a GRANT or REVOKE
+    # on role3 doesn't invalidate jdoe's cached permissions: LDAPRoleManager
+    # reloads them on a timer, separately on each shard. With several shards,
+    # a check that passed on one shard says nothing about the shard serving
+    # the next statement. One shard means one cache.
+    server = await manager.server_add(cmdline=["--smp", "1"],
+                                      config=saslauthd_config(**ldap_role_manager_config()))
     cql = manager.get_cql()
     ks = unique_name("ks_")
     await cql.run_async(f"CREATE KEYSPACE {ks} WITH replication = "
@@ -318,4 +324,4 @@ async def test_ldap_group_permissions(manager: ScyllaClusterManager):
 
         await cql.run_async(f"REVOKE SELECT ON KEYSPACE {ks} FROM {JDOE_GROUP}")
         await eventually(False, jdoe, select)
-        jdoe.execute(insert)
+        await eventually(True, jdoe, insert)
