@@ -231,7 +231,9 @@ public:
         appender& operator=(appender&&) noexcept = default;
 
         // Writes the data at the append offset of the segment and returns its position. The caller
-        // must give data that fits in the segment. If the write fails, the segment fails.
+        // must give data that fits in the segment, whose size is a positive multiple of
+        // ondisk::block_alignment, and whose address is aligned to ondisk::block_alignment. If the
+        // write fails, the segment fails.
         future<segment_position> append(bytes_view data) &&;
 
     private:
