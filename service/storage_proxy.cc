@@ -5001,7 +5001,6 @@ protected:
     db::consistency_level _cl;
     bool _stopped = false; // the request failed, timed out or reached its consistency level; later responses and errors are ignored
     size_t _targets_count;
-    promise<result<>> _done_promise; // all target responded
     timer<storage_proxy::clock_type> _timeout;
     schema_ptr _schema;
     size_t _failed = 0;
@@ -5020,9 +5019,6 @@ protected:
         _abort_source.request_abort();
     }
     void fail_request(exceptions::coordinator_exception_container&& ex) {
-        // The exception container was created on the same shard,
-        // so it should be cheap to clone and not throw
-        _done_promise.set_value(ex.clone());
         on_failure(std::move(ex));
         cancel_requests();
     }
@@ -5039,11 +5035,11 @@ public:
     }
     virtual ~abstract_read_resolver() {};
     virtual void on_error(locator::host_id ep, error_kind kind, exceptions::request_failure_reason reason) = 0;
-    future<result<>> done() {
-        return _done_promise.get_future();
-    }
     abort_source& get_abort_source() noexcept {
         return _abort_source;
+    }
+    bool stopped() const noexcept {
+        return _stopped;
     }
     void error(locator::host_id ep, std::exception_ptr eptr) {
         sstring why;
@@ -5180,11 +5176,6 @@ private:
                 cancel_requests();
             }
         }
-        if (is_completed()) {
-            _timeout.cancel();
-            _on_disconnect = {};
-            _done_promise.set_value(bo::success());
-        }
     }
     void on_error(locator::host_id ep, error_kind kind, exceptions::request_failure_reason reason) override {
         _failed++;
@@ -5230,9 +5221,6 @@ public:
     }
     void add_wait_targets(size_t targets_count) {
         _targets_count += targets_count;
-    }
-    bool is_completed() {
-        return response_count() == _targets_count;
     }
     api::timestamp_type last_modified() const {
         return _last_modified;
@@ -5313,11 +5301,13 @@ class data_read_resolver : public abstract_read_resolver {
     query::short_read _is_short_read;
     std::vector<reply> _data_results;
     mutations_per_partition_key_map _diffs;
+    promise<result<>> _done_promise; // all targets responded
 private:
     void on_timeout() override {
         fail_request(read_timeout_exception(_schema->ks_name(), _schema->cf_name(), _cl, response_count(), _targets_count, response_count() != 0));
     }
     void on_failure(exceptions::coordinator_exception_container&& ex) override {
+        _done_promise.set_value(std::move(ex));
         // we will not need them any more
         _data_results.clear();
     }
@@ -5522,6 +5512,9 @@ public:
     data_read_resolver(schema_ptr schema, db::consistency_level cl, size_t targets_count, storage_proxy::clock_type::time_point timeout) : abstract_read_resolver(std::move(schema), cl, targets_count, timeout),
     _diffs(10, partition_key::hashing(*_schema), partition_key::equality(*_schema)) {
         _data_results.reserve(targets_count);
+    }
+    future<result<>> done() {
+        return _done_promise.get_future();
     }
     void add_mutate_data(locator::host_id from, foreign_ptr<lw_shared_ptr<reconcilable_result>> result) {
         if (!_stopped) {
@@ -6241,7 +6234,7 @@ public:
                                               _targets.size()));
         }
         _speculate_timer.set_callback([this, resolver, timeout] {
-            if (!resolver->is_completed()) { // at the time the callback runs request may be completed already
+            if (!resolver->stopped()) { // the request may have stopped by the time the callback runs
                 resolver->add_wait_targets(1); // we send one more request so wait for it too
                 // FIXME: consider disabling for CL=*ONE
                 auto send_request = [&] (bool has_data) {
