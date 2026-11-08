@@ -2621,13 +2621,18 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             }
         }
 
-        // Build table_id -> request_id mapping for ongoing restore requests
-        // so that we can find the owning request when a restore transition fails.
-        std::unordered_map<table_id, utils::UUID> restore_request_for_table;
+        // Build table_id -> request mapping for ongoing restore requests, so that we can
+        // find the owning request when a restore transition fails, and whether it repairs
+        // each tablet once the tablet is restored.
+        struct restore_request_info {
+            utils::UUID id;
+            bool repair;
+        };
+        std::unordered_map<table_id, restore_request_info> restore_request_for_table;
         for (const auto& req_id : _topo_sm._topology.ongoing_restore_requests) {
             auto req_entry = co_await _sys_ks.get_topology_request_entry(req_id);
             if (req_entry.restore_table_id) {
-                restore_request_for_table[*req_entry.restore_table_id] = req_id;
+                restore_request_for_table[*req_entry.restore_table_id] = {req_id, req_entry.restore_repair};
             }
         }
 
@@ -3354,7 +3359,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         // Record error on the ongoing restore request so it's propagated to the caller.
                         if (auto it = restore_request_for_table.find(gid.table); it != restore_request_for_table.end()) {
                             updates.add(
-                                topology_request_tracking_mutation_builder(it->second)
+                                topology_request_tracking_mutation_builder(it->second.id)
                                     .set("error", format("Restore failed for tablet {}: {:t}", gid, ep))
                                     .build());
                         }
@@ -3381,6 +3386,22 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                             rtlogger.debug("Tablet {} restored on {}", gid, r.host);
                         });
                     })) {
+                        // An abort deletes the session, so a tablet whose download finished just
+                        // before the abort is not repaired.
+                        auto it = restore_request_for_table.find(gid.table);
+                        if (it != restore_request_for_table.end() && it->second.repair && trinfo.session_id) {
+                            // The barrier makes every replica see the restore_repair stage, which the
+                            // repair_tablet verb requires. The transition kind stays restore, so the
+                            // restore request stays open until the repair finishes.
+                            if (do_barrier()) {
+                                rtlogger.debug("Will set tablet {} stage to {}", gid, locator::tablet_transition_stage::restore_repair);
+                                _tablets.erase(gid);
+                                get_mutation_builder()
+                                        .del_snapshot_name(last_token)
+                                        .set_stage(last_token, locator::tablet_transition_stage::restore_repair);
+                            }
+                            break;
+                        }
                         rtlogger.debug("Clearing restore transition for {}", gid);
                         _tablets.erase(gid);
                         get_mutation_builder().del_transition(last_token, _feature_service).del_snapshot_name(last_token).del_session(last_token);
