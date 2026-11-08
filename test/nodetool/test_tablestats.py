@@ -333,7 +333,7 @@ class keyspace_stats:
             self.total_read_time += table.read_latency
 
         if table.local_write_count > 0:
-            self.write_count = table.local_write_count
+            self.write_count += table.local_write_count
             self.total_write_time += table.write_latency
 
         self.pending_flushes += table.pending_flushes
