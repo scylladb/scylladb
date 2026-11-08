@@ -453,6 +453,7 @@ void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>&
         std::string keyspace = req->get_query_param("keyspace");
         std::string table = req->get_query_param("table");
         std::string snapshot = req->get_query_param("snapshot");
+        auto skip_repair = get_query_param<bool>(*req, "skip_repair");
 
         rjson::chunked_content content = co_await util::read_entire_stream(*req->content_stream);
         rjson::value parsed = rjson::parse(std::move(content));
@@ -507,7 +508,8 @@ void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>&
         }
 
         auto table_id = validate_table(ctx.db.local(), keyspace, table);
-        auto task_id = co_await sst_loader.local().restore_tablets(table_id, keyspace, table, snapshot, std::move(restore_locations));
+        auto task_id = co_await sst_loader.local().restore_tablets(table_id, keyspace, table, snapshot, std::move(restore_locations),
+                service::restore_repair(!skip_repair));
         co_return json::json_return_type(fmt::to_string(task_id));
     });
 }
