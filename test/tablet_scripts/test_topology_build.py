@@ -7,8 +7,6 @@
 from __future__ import annotations
 
 import csv
-import ipaddress
-from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
@@ -26,7 +24,6 @@ from tablets.topology import Topology
 from tablets.topology import TopologyFromSnapshot
 from tablets.topology import parse_replica_list
 from tablets.topology import parse_replica_size_map
-from tablets.topology import rows_from_cql
 from tablets.topology import rows_from_csv
 
 
@@ -78,63 +75,8 @@ def build_from_snapshot() -> Topology:
     return topo
 
 
-def build_from_live_cluster() -> Topology:
-    """
-    Builds the topology the way LiveClusterTopologySource does, from the same data as
-    build_from_snapshot(), but shaped as the CQL driver returns it.
-    """
-    tablets = [
-        SimpleNamespace(table_id=TABLE, last_token=0, base_table=None, keyspace_name="ks",
-                        table_name="tbl", replicas=[(HOST1, 0), (HOST2, 1)], new_replicas=None,
-                        stage="none", resize_seq_number=0),
-        SimpleNamespace(table_id=TABLE, last_token=100, base_table=None, keyspace_name="ks",
-                        table_name="tbl", replicas=[(HOST1, 3)], new_replicas=[(HOST2, 0)],
-                        stage="streaming", resize_seq_number=0),
-        SimpleNamespace(table_id=VIEW, last_token=0, base_table=TABLE, keyspace_name="ks",
-                        table_name="tbl_view", replicas=None, new_replicas=None, stage="none",
-                        resize_seq_number=0),
-        SimpleNamespace(table_id=VIEW, last_token=100, base_table=TABLE, keyspace_name="ks",
-                        table_name="tbl_view", replicas=None, new_replicas=None, stage="none",
-                        resize_seq_number=0),
-    ]
-    topology = [
-        SimpleNamespace(key="local", host_id=HOST1, shard_count=4, node_state="normal",
-                        num_tokens=256, version=7, datacenter="dc1"),
-        SimpleNamespace(key="local", host_id=HOST2, shard_count=8, node_state="normal",
-                        num_tokens=256, version=7, datacenter="dc1"),
-    ]
-    load_per_node = [
-        SimpleNamespace(node=HOST1, dc="dc1", rack="rack1", ip=ipaddress.ip_address("10.0.0.1"),
-                        storage_capacity=1000, effective_capacity=800),
-        SimpleNamespace(node=HOST2, dc="dc1", rack="rack2", ip=ipaddress.ip_address("10.0.0.2"),
-                        storage_capacity=2000, effective_capacity=1600),
-    ]
-    tablet_sizes = [
-        SimpleNamespace(table_id=TABLE, last_token=0, replicas={HOST1: 10, HOST2: 20}),
-        SimpleNamespace(table_id=TABLE, last_token=100, replicas={HOST1: 30}),
-    ]
-
-    topo = Topology()
-    topo._build({
-        TABLETS_TABLE.name: rows_from_cql(tablets, TABLETS_COLUMNS),
-        LOAD_PER_NODE_TABLE.name: rows_from_cql(load_per_node, LOAD_PER_NODE_COLUMNS),
-        TOPOLOGY_TABLE.name: rows_from_cql(topology, TOPOLOGY_COLUMNS),
-        TABLET_SIZES_TABLE.name: rows_from_cql(tablet_sizes, TABLET_SIZES_COLUMNS),
-    })
-    return topo
-
-
-def test_a_snapshot_and_a_live_cluster_build_the_same_topology() -> None:
-    """
-    Both sources feed Topology._build() the same rows, differing only in how they got them,
-    so the same cluster state has to come out identical either way.
-    """
-    assert build_from_snapshot() == build_from_live_cluster()
-
-
-@pytest.mark.parametrize("build", [build_from_snapshot, build_from_live_cluster])
-def test_build_populates_tablets_hosts_and_sizes(build) -> None:
-    topo = build()
+def test_build_populates_tablets_hosts_and_sizes() -> None:
+    topo = build_from_snapshot()
 
     assert topo.host_count() == 2
     host1 = topo.require_host(HOST1)
@@ -162,9 +104,8 @@ def test_build_populates_tablets_hosts_and_sizes(build) -> None:
     assert topo.get_tablet_size(TABLE, tablets[1], (HOST1, 3)) == 30
 
 
-@pytest.mark.parametrize("build", [build_from_snapshot, build_from_live_cluster])
-def test_build_makes_a_colocated_table_share_the_base_tables_tablets(build) -> None:
-    topo = build()
+def test_build_makes_a_colocated_table_share_the_base_tables_tablets() -> None:
+    topo = build_from_snapshot()
 
     assert topo.get_table_name(VIEW) == "ks.tbl_view"
     assert topo.get_base_table_id(VIEW) == TABLE
@@ -448,19 +389,17 @@ def test_a_snapshot_taken_before_the_status_columns_says_nothing_either_way() ->
     assert (topo.require_host(HOST1).up, topo.require_host(HOST1).excluded) == (None, None)
 
 
-def test_optional_columns_read_as_none_whichever_source_lacks_them() -> None:
+def test_optional_columns_read_as_none_when_a_dump_lacks_them() -> None:
     """
-    A snapshot or a cluster which predates an optional column is read without it, rather
-    than failing, and both end up with the same row.
+    A snapshot of a cluster which predates an optional column is read without it, rather
+    than failing.
     """
     dump = f"node;storage_capacity\n{HOST1};1000\n"
 
-    csv_row, = rows_from_csv(dump.splitlines(), LOAD_PER_NODE_COLUMNS)
-    cql_row, = rows_from_cql([SimpleNamespace(node=HOST1, storage_capacity=1000)], LOAD_PER_NODE_COLUMNS)
+    row, = rows_from_csv(dump.splitlines(), LOAD_PER_NODE_COLUMNS)
 
-    assert csv_row == cql_row
-    assert (csv_row.node, csv_row.storage_capacity) == (HOST1, 1000)
-    assert (csv_row.effective_capacity, csv_row.dc, csv_row.rack, csv_row.ip) == (None, None, None, None)
+    assert (row.node, row.storage_capacity) == (HOST1, 1000)
+    assert (row.effective_capacity, row.dc, row.rack, row.ip) == (None, None, None, None)
 
 
 @pytest.mark.parametrize("parse, text, expected", [

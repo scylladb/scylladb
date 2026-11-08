@@ -30,6 +30,14 @@ from tablets import topology
 logger = logging.getLogger(__name__)
 
 
+@pytest.fixture(autouse=True)
+def source_tree_cqlsh(monkeypatch):
+    """
+    Reading a live cluster runs cqlsh, which isn't on PATH here: use the source tree's.
+    """
+    monkeypatch.setattr(topology, "CQLSH", str(TOP_SRC_DIR / "bin/cqlsh"))
+
+
 def take_manual_snapshot(host: str, workdir: Path, output_dir: str = "manual_snapshot") -> Path:
     """
     Captures a snapshot by running the cqlsh commands --manual prints, as a user without

@@ -103,10 +103,10 @@ capture a snapshot, to be run by someone who does:
 ``` bash
 $ ./scylla-tablets.py snapshot --manual --gz -u scylla_admin -p xxxx
 mkdir -p tablet_snap_260807_144540
-cqlsh -u scylla_admin -p xxxx -e 'COPY system.topology TO '"'"'tablet_snap_260807_144540/system_topology.csv'"'"' WITH DELIMITER='"'"';'"'"' AND HEADER=TRUE'
-cqlsh -u scylla_admin -p xxxx -e 'COPY system.tablets TO '"'"'tablet_snap_260807_144540/system_tablets.csv'"'"' WITH DELIMITER='"'"';'"'"' AND HEADER=TRUE'
-cqlsh -u scylla_admin -p xxxx -e 'COPY system.load_per_node TO '"'"'tablet_snap_260807_144540/system_load_per_node.csv'"'"' WITH DELIMITER='"'"';'"'"' AND HEADER=TRUE'
-cqlsh -u scylla_admin -p xxxx -e 'COPY system.tablet_sizes TO '"'"'tablet_snap_260807_144540/system_tablet_sizes.csv'"'"' WITH DELIMITER='"'"';'"'"' AND HEADER=TRUE'
+cqlsh -u scylla_admin -p xxxx -e 'COPY system.topology TO '"'"'tablet_snap_260807_144540/system_topology.csv'"'"' WITH DELIMITER='"'"';'"'"' AND HEADER=TRUE AND CONFIGFILE='"'"'/dev/null'"'"''
+cqlsh -u scylla_admin -p xxxx -e 'COPY system.tablets TO '"'"'tablet_snap_260807_144540/system_tablets.csv'"'"' WITH DELIMITER='"'"';'"'"' AND HEADER=TRUE AND CONFIGFILE='"'"'/dev/null'"'"''
+cqlsh -u scylla_admin -p xxxx -e 'COPY system.load_per_node TO '"'"'tablet_snap_260807_144540/system_load_per_node.csv'"'"' WITH DELIMITER='"'"';'"'"' AND HEADER=TRUE AND CONFIGFILE='"'"'/dev/null'"'"''
+cqlsh -u scylla_admin -p xxxx -e 'COPY system.tablet_sizes TO '"'"'tablet_snap_260807_144540/system_tablet_sizes.csv'"'"' WITH DELIMITER='"'"';'"'"' AND HEADER=TRUE AND CONFIGFILE='"'"'/dev/null'"'"''
 tar -czf tablet_snap_260807_144540.tar.gz tablet_snap_260807_144540 && rm -r tablet_snap_260807_144540
 ```
 
