@@ -234,6 +234,8 @@ private:
     future<> merge_functions();
     future<> merge_aggregates();
 
+    // True if the change adds or drops a table, view or CDC table.
+    bool changes_tables_metadata() const;
     void commit_tables_and_views();
     future<> finalize_tables_and_views();
     void commit_on_shard(replica::database& db, uint64_t commit_gen);
