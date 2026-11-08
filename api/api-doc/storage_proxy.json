@@ -462,7 +462,7 @@
          "operations":[
             {
                "method":"GET",
-               "summary":"Get read repair attempted",
+               "summary":"Get read repair attempted (deprecated, always 0)",
                "type":"long",
                "nickname":"get_read_repair_attempted",
                "produces":[
@@ -496,7 +496,7 @@
          "operations":[
             {
                "method":"GET",
-               "summary":"Get read repair repaired background",
+               "summary":"Get read repair repaired background (deprecated, always 0)",
                "type":"long",
                "nickname":"get_read_repair_repaired_background",
                "produces":[

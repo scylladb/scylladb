@@ -3171,7 +3171,7 @@ void storage_proxy_stats::stats::register_stats() {
                       {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
 
         sm::make_total_operations("background_read_repairs", read_repair_repaired_background,
-                       sm::description("number of background read repairs"),
+                       sm::description("deprecated, always 0: background read repairs are no longer performed"),
                        {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
 
         sm::make_total_operations("read_repairs_diff_found_total", read_repair_diff_found,
