@@ -34,7 +34,7 @@ ScyllaDB tries to maximize the resource usage of all system components. The shar
 CPU
 ^^^
 
-ScyllaDB requires modern Intel/AMD CPUs that support the x86-64-v3 instruction set level (AVX2, BMI2, FMA and the rest) and PCLMUL, and will not boot without them.
+On x86_64, ScyllaDB requires modern Intel/AMD CPUs that support the x86-64-v3 instruction set level (AVX2, BMI2, FMA and the rest) and PCLMUL, and will not boot without them.
 
 
 ScyllaDB supports the following CPUs:
