@@ -288,6 +288,7 @@ static future<semaphore_units<>> claim_unit(semaphore& sem, seastar::abort_sourc
 }
 
 client::group_client::group_client(std::unique_ptr<http::connection_factory> f, unsigned max_conn) : http(std::move(f), max_conn) {
+    http.set_connection_reset_policy(std::make_unique<aws::aws_connection_reset_policy>());
 }
 
 void client::group_client::register_metrics(std::string class_name, std::string host) {

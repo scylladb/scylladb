@@ -34,4 +34,12 @@ public:
     seastar::future<bool> should_retry(std::exception_ptr error, unsigned attempted_retries) const override;
 };
 
+// Keeps the connection after an error reply the handler parsed, which means it read the
+// whole body. A transport failure maps to NETWORK_CONNECTION, or to UNKNOWN when it is
+// not retryable.
+class aws_connection_reset_policy final : public seastar::http::connection_reset_policy {
+public:
+    [[nodiscard]] bool should_reset(std::exception_ptr error) const override;
+};
+
 } // namespace aws
