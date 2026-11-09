@@ -77,6 +77,15 @@ private:
     compaction_descriptor find_garbage_collection_job(const compaction_group_view& t, std::vector<size_bucket_t>& buckets);
 
     static std::vector<sstables::shared_sstable> runs_to_sstables(std::vector<sstables::frozen_sstable_run> runs);
+
+    // Returns the run to splice the given runs into, if they're better off spliced than
+    // compacted: that's when they don't overlap one another, so compacting them together would
+    // only rewrite their data. The largest run is picked, so that its sstables are left alone.
+    static std::optional<sstables::run_id> run_to_splice_into(const std::vector<sstables::frozen_sstable_run>& runs);
+
+    // Makes the job for the runs of one tier: a splice if they don't overlap one another, a
+    // regular compaction otherwise.
+    compaction_descriptor make_same_tier_job(std::vector<sstables::frozen_sstable_run> runs) const;
     static std::vector<sstables::frozen_sstable_run> sstables_to_runs(std::vector<sstables::shared_sstable> sstables);
     static void sort_run_bucket_by_first_key(size_bucket_t& bucket, size_t max_elements, const schema_ptr& schema);
 public:

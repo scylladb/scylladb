@@ -269,6 +269,57 @@ incremental_compaction_strategy::most_interesting_bucket(std::vector<std::vector
     return std::move(max.first);
 }
 
+// Returns true if no run overlaps another, i.e. each run ends before the next one starts.
+// The fragments of a run don't overlap and are kept in key order, so a run spans from the
+// start of its first fragment to the end of its last one.
+static bool are_disjoint(std::vector<sstables::frozen_sstable_run> runs) {
+    auto first_fragment = [] (const sstables::frozen_sstable_run& run) -> const sstables::shared_sstable& {
+        return *run->all().begin();
+    };
+    auto last_fragment = [] (const sstables::frozen_sstable_run& run) -> const sstables::shared_sstable& {
+        return *run->all().rbegin();
+    };
+    if (std::ranges::any_of(runs, [] (const sstables::frozen_sstable_run& run) { return run->all().empty(); })) {
+        return false;
+    }
+    std::ranges::sort(runs, sstables::sstable_first_key_less_comparator{}, first_fragment);
+    for (auto it = runs.begin(); std::next(it) != runs.end(); ++it) {
+        if (!sstables::completely_ordered_before(last_fragment(*it), first_fragment(*std::next(it)))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::optional<sstables::run_id>
+incremental_compaction_strategy::run_to_splice_into(const std::vector<sstables::frozen_sstable_run>& runs) {
+    if (runs.size() < 2) {
+        return std::nullopt;
+    }
+    // A splice rewrites the Scylla component of the sstables it moves, so every sstable needs one.
+    auto has_scylla_component = [] (const sstables::frozen_sstable_run& run) {
+        return std::ranges::all_of(run->all(), std::mem_fn(&sstables::sstable::has_scylla_component));
+    };
+    if (!std::ranges::all_of(runs, has_scylla_component) || !are_disjoint(runs)) {
+        return std::nullopt;
+    }
+    // Ties are broken by run identifier, so that the same runs always pick the same one.
+    auto size_and_id = [] (const sstables::frozen_sstable_run& run) {
+        return std::pair(run->data_size(), run->run_identifier());
+    };
+    return std::ranges::max(runs | std::views::transform(size_and_id)).second;
+}
+
+compaction_descriptor
+incremental_compaction_strategy::make_same_tier_job(std::vector<sstables::frozen_sstable_run> runs) const {
+    auto splice_into = run_to_splice_into(runs);
+    if (!splice_into) {
+        return compaction_descriptor(runs_to_sstables(std::move(runs)), 0, _fragment_size);
+    }
+    clogger.debug("ICS: splicing {} disjoint runs into run {}", runs.size(), *splice_into);
+    return compaction_descriptor(runs_to_sstables(std::move(runs)), 0, _fragment_size, *splice_into, compaction_type_options::make_splice());
+}
+
 compaction_descriptor
 incremental_compaction_strategy::find_garbage_collection_job(const compaction::compaction_group_view& t, std::vector<size_bucket_t>& buckets) {
     // min_memtable_timestamp() scans all memtables; hoist it out of the per-run loop below.
@@ -357,12 +408,12 @@ incremental_compaction_strategy::get_sstables_for_compaction(compaction_group_vi
 
     if (is_any_bucket_interesting(buckets, min_threshold)) {
         std::vector<sstables::frozen_sstable_run> most_interesting = most_interesting_bucket(std::move(buckets), min_threshold, max_threshold);
-        co_return compaction_descriptor(runs_to_sstables(std::move(most_interesting)), 0, _fragment_size);
+        co_return make_same_tier_job(std::move(most_interesting));
     }
     // If we are not enforcing min_threshold explicitly, try any pair of sstable runs in the same tier.
     if (!t.compaction_enforce_min_threshold() && is_any_bucket_interesting(buckets, 2)) {
         std::vector<sstables::frozen_sstable_run> most_interesting = most_interesting_bucket(std::move(buckets), 2, max_threshold);
-        co_return compaction_descriptor(runs_to_sstables(std::move(most_interesting)), 0, _fragment_size);
+        co_return make_same_tier_job(std::move(most_interesting));
     }
 
     // The cross-tier behavior is only triggered once we're done with all the pending same-tier compaction to

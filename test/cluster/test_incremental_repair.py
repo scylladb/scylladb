@@ -1782,8 +1782,9 @@ async def test_tombstone_gc_no_resurrection_full_repair_demotes_repaired(manager
 
     Scenario:
       - D (ts=1) is flushed with filler rows into a large sstable B, repaired.
-      - T (ts=2) deleting D is flushed into a small sstable A, and an unrelated
-        row into a small sstable C; both repaired.  T is GC-eligible now.
+      - T (ts=2) deleting D is flushed into a small sstable A, and an older
+        write (ts=1) to D's partition into a small sstable C; both repaired.
+        T is GC-eligible now.
       - Full repair starts; it's paused after the snapshot, and repaired
         compaction merges A and C into O (B is in a different STCS bucket).
         T is kept since B is in the repaired set.
@@ -1817,7 +1818,9 @@ async def test_tombstone_gc_no_resurrection_full_repair_demotes_repaired(manager
     await cql.run_async(f"DELETE FROM {ks}.test USING TIMESTAMP 2 WHERE pk = {key}")
     for s in servers:
         await manager.api.flush_keyspace(s.ip_addr, ks)
-    await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({key + 1}, 1)")
+    # C has to overlap A, or ICS would splice their runs instead of compacting them into O.
+    # So C is a write to the same partition, which T shadows, so that O holds only T.
+    await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({key}, 2) USING TIMESTAMP 1")
     for s in servers:
         await manager.api.flush_keyspace(s.ip_addr, ks)
     # Make T GC-eligible (T.deletion_time < repair_time).

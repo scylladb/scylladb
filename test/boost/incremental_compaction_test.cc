@@ -22,6 +22,7 @@
 #include "schema/schema.hh"
 #include "replica/database.hh"
 #include "compaction/compaction_manager.hh"
+#include "compaction/exceptions.hh"
 #include "sstable_test.hh"
 #include "sstables/metadata_collector.hh"
 #include "test/lib/tmpdir.hh"
@@ -37,9 +38,11 @@
 #include "repair/incremental.hh"
 
 #include "test/lib/sstable_utils.hh"
+#include "test/lib/random_utils.hh"
 #include "test/lib/test_services.hh"
 #include "test/lib/eventually.hh"
 #include "test/lib/log.hh"
+#include "utils/error_injection.hh"
 
 namespace fs = std::filesystem;
 
@@ -1048,3 +1051,433 @@ SEASTAR_TEST_CASE(unused_gc_sstable_is_deleted_when_final_replacement_fails_test
                         leaked().size(), fmt::join(leaked(), ", ")));
     });
 }
+
+static schema_ptr make_ics_schema(const char* name, int min_threshold) {
+    auto builder = schema_builder(this_smp_shard_count(), "tests", name)
+            .with_column("id", utf8_type, column_kind::partition_key)
+            .with_column("value", bytes_type);
+    builder.set_compaction_strategy(compaction::compaction_strategy_type::incremental);
+    builder.set_min_compaction_threshold(min_threshold);
+    return builder.build();
+}
+
+// Makes a run of fake sstables of the given size each, two keys per fragment, covering
+// keys[first] to keys[last - 1]. The sstables get a Scylla component, as every real sstable
+// has one, and a splice needs it.
+static frozen_sstable_run make_fake_run(test_env& env, schema_ptr s, const std::vector<dht::decorated_key>& keys,
+        unsigned first, unsigned last, uint64_t fragment_size) {
+    sstable_run run;
+    auto id = run_id::create_random_id();
+    for (unsigned i = first; i < last; i += 2) {
+        auto sst = env.make_sstable(s);
+        sstables::test(sst).set_values_for_leveled_strategy(fragment_size, 0, 0, keys[i].key(), keys[i + 1].key());
+        sstables::test(sst).set_run_identifier(id);
+        sstables::test(sst).get_components().insert(component_type::Scylla);
+        BOOST_REQUIRE(run.insert(std::move(sst)));
+    }
+    return make_lw_shared<const sstable_run>(std::move(run));
+}
+
+static std::unordered_set<shared_sstable> sstables_of(const std::vector<frozen_sstable_run>& runs) {
+    std::unordered_set<shared_sstable> ret;
+    for (auto& run : runs) {
+        ret.insert(run->all().begin(), run->all().end());
+    }
+    return ret;
+}
+
+// Returns the identifier of the largest run, which names the run the others are spliced into.
+static run_id largest_run(const std::vector<frozen_sstable_run>& runs) {
+    return std::ranges::max(runs | std::views::transform([] (const frozen_sstable_run& run) {
+        return std::pair(run->data_size(), run->run_identifier());
+    })).second;
+}
+
+// Checks which job ICS makes for the runs of one tier. Runs which don't overlap one another,
+// such as the halves of a merged tablet, are spliced into the largest of them. Runs which
+// overlap are compacted, as before. Disjoint runs of different tiers are left alone.
+SEASTAR_TEST_CASE(ics_splice_job_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        // min_threshold=2 makes ICS compact any two runs of similar size.
+        auto s = make_ics_schema("ics_splice_job_test", 2);
+        auto control = make_strategy_control_for_test(false);
+        auto keys = tests::generate_partition_keys(16, s);
+        constexpr uint64_t gb = 1024 * 1024 * 1024;
+
+        auto make_run = [&] (unsigned first, unsigned last, uint64_t fragment_size) {
+            return make_fake_run(env, s, keys, first, last, fragment_size);
+        };
+        // Adds the runs to a fresh table and returns the job ICS makes for it.
+        auto job_for = [&] (const std::vector<frozen_sstable_run>& runs) {
+            auto cf = env.make_table_for_tests(s);
+            auto close_cf = deferred_stop(cf);
+            for (auto& sst : sstables_of(runs)) {
+                column_family_test(cf).add_sstable(sst).get();
+            }
+            return cf->get_compaction_strategy().get_sstables_for_compaction(cf.as_compaction_group_view(), *control).get();
+        };
+        auto to_set = [] (const std::vector<shared_sstable>& sstables) {
+            return sstables | std::ranges::to<std::unordered_set>();
+        };
+
+        // The halves of a merged tablet are spliced into the larger one.
+        {
+            auto left = make_run(0, 8, gb);
+            auto right = make_run(8, 16, gb + 1);
+            auto job = job_for({left, right});
+            BOOST_REQUIRE(job.options.type() == compaction::compaction_type::Splice);
+            BOOST_REQUIRE(job.run_identifier == right->run_identifier());
+            BOOST_REQUIRE(to_set(job.sstables) == sstables_of({left, right}));
+        }
+
+        // Runs which overlap one another are compacted.
+        {
+            auto a = make_run(0, 8, gb);
+            auto b = make_run(4, 12, gb);
+            auto job = job_for({a, b});
+            BOOST_REQUIRE(job.options.type() == compaction::compaction_type::Compaction);
+            BOOST_REQUIRE(to_set(job.sstables) == sstables_of({a, b}));
+        }
+
+        // Disjoint runs of different tiers are left alone.
+        {
+            auto left = make_run(0, 8, gb);
+            auto right = make_run(8, 16, 10 * gb);
+            BOOST_REQUIRE(job_for({left, right}).sstables.empty());
+        }
+
+        // The quarters of a tablet merged twice are spliced into one run.
+        {
+            std::vector<frozen_sstable_run> quarters;
+            for (unsigned i = 0; i < 4; ++i) {
+                quarters.push_back(make_run(i * 4, (i + 1) * 4, gb));
+            }
+            auto job = job_for(quarters);
+            BOOST_REQUIRE(job.options.type() == compaction::compaction_type::Splice);
+            BOOST_REQUIRE(job.run_identifier == largest_run(quarters));
+            BOOST_REQUIRE(to_set(job.sstables) == sstables_of(quarters));
+        }
+
+        // A run spanning both halves overlaps them, so the tier is compacted as a whole.
+        {
+            auto left = make_run(0, 8, gb);
+            auto right = make_run(8, 16, gb);
+            auto whole = make_run(0, 16, gb / 2);
+            auto job = job_for({left, right, whole});
+            BOOST_REQUIRE(job.options.type() == compaction::compaction_type::Compaction);
+            BOOST_REQUIRE(to_set(job.sstables) == sstables_of({left, right, whole}));
+        }
+
+        // Runs whose fragments interleave overlap one another, even though no two fragments do.
+        {
+            auto make_run_of_fragments = [&] (std::initializer_list<unsigned> firsts) {
+                sstable_run run;
+                auto id = run_id::create_random_id();
+                for (auto i : firsts) {
+                    auto sst = env.make_sstable(s);
+                    sstables::test(sst).set_values_for_leveled_strategy(gb, 0, 0, keys[i].key(), keys[i + 1].key());
+                    sstables::test(sst).set_run_identifier(id);
+                    sstables::test(sst).get_components().insert(component_type::Scylla);
+                    BOOST_REQUIRE(run.insert(std::move(sst)));
+                }
+                return make_lw_shared<const sstable_run>(std::move(run));
+            };
+            auto a = make_run_of_fragments({0, 4});
+            auto b = make_run_of_fragments({2, 6});
+            BOOST_REQUIRE(job_for({a, b}).options.type() == compaction::compaction_type::Compaction);
+        }
+
+        // An sstable without a Scylla component can't be moved into another run, so its tier is compacted.
+        {
+            auto left = make_run(0, 8, gb);
+            auto right = make_run(8, 16, gb);
+            sstables::test(*left->all().begin()).get_components().erase(component_type::Scylla);
+            BOOST_REQUIRE(job_for({left, right}).options.type() == compaction::compaction_type::Compaction);
+        }
+    });
+}
+
+// A splice rewrites the Scylla components of real sstables, so the tests below use real ones.
+// Their sizes are set by the size of their values, way below the default min_sstable_size, so
+// that's set to 0 for ICS to tell the runs apart by size. With min_threshold=2, any two runs
+// of similar size make a job.
+static schema_ptr make_ics_schema_for_splicing(const char* name) {
+    auto builder = schema_builder(this_smp_shard_count(), "tests", name)
+            .with_column("id", utf8_type, column_kind::partition_key)
+            .with_column("value", bytes_type);
+    builder.set_compaction_strategy(compaction::compaction_strategy_type::incremental);
+    builder.set_compaction_strategy_options({{compaction::incremental_compaction_strategy_options::MIN_SSTABLE_SIZE_KEY, "0"}});
+    builder.set_min_compaction_threshold(2);
+    return builder.build();
+}
+
+// Writes a run of sstables starting at keys[first], each spanning `step` keys, up to keys[last].
+// Each sstable holds two partitions, at the first and the last of its keys, with values of the
+// given size.
+static frozen_sstable_run make_real_run(test_env& env, schema_ptr s, const std::vector<dht::decorated_key>& keys,
+        unsigned first, unsigned last, unsigned step, size_t value_size) {
+    sstable_run run;
+    auto cfg = env.manager().configure_writer();
+    cfg.run_identifier = run_id::create_random_id();
+    for (unsigned i = first; i < last; i += step) {
+        utils::chunked_vector<mutation> muts;
+        for (auto& key : {keys[i], keys[i + step - 1]}) {
+            mutation m(s, key);
+            m.set_clustered_cell(clustering_key::make_empty(), bytes("value"), data_value(tests::random::get_bytes(value_size)), api::new_timestamp());
+            muts.push_back(std::move(m));
+        }
+        auto mt = make_memtable(s, muts).get();
+        BOOST_REQUIRE(run.insert(make_sstable_easy(env, mt, cfg, sstables::get_highest_sstable_version(), muts.size())));
+    }
+    return make_lw_shared<const sstable_run>(std::move(run));
+}
+
+// Adds the halves of a merged tablet to the table: two runs of four sstables, with two
+// partitions each. The right half has larger values, so it names the spliced run.
+static std::pair<frozen_sstable_run, frozen_sstable_run> add_merged_halves(test_env& env, table_for_tests& cf, const std::vector<dht::decorated_key>& keys) {
+    auto add_run = [&] (unsigned first, unsigned last, size_t value_size) {
+        auto run = make_real_run(env, cf->schema(), keys, first, last, 2, value_size);
+        for (auto& sst : run->all()) {
+            column_family_test(cf).add_sstable(sst).get();
+        }
+        return run;
+    };
+    auto left = add_run(0, 8, 1024);
+    auto right = add_run(8, 16, 1100);
+    BOOST_REQUIRE_GT(right->data_size(), left->data_size());
+    return {std::move(left), std::move(right)};
+}
+
+static std::vector<frozen_sstable_run> main_runs(table_for_tests& cf) {
+    return cf.as_compaction_group_view().main_sstable_set().get()->all_sstable_runs();
+}
+
+// Splices the halves of a merged tablet the way it happens in production: regular compaction
+// picks the job and runs it. Afterwards the table holds one run. The sstables of the larger
+// half are as they were, and those of the smaller half are replaced by copies of the same data,
+// which store the run identifier on disk.
+SEASTAR_TEST_CASE(ics_splice_compaction_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto s = make_ics_schema_for_splicing("ics_splice_compaction_test");
+        auto cf = env.make_table_for_tests(s);
+        auto close_cf = deferred_stop(cf);
+        auto& cm = cf->get_compaction_manager();
+        auto keys = tests::generate_partition_keys(16, s);
+        auto [left, right] = add_merged_halves(env, cf, keys);
+        BOOST_REQUIRE_EQUAL(main_runs(cf).size(), 2);
+
+        cf->trigger_compaction();
+        // trigger_compaction() registers the task before it returns. The task runs on a view of
+        // the table's compaction group, not on cf.as_compaction_group_view(), so wait for all tasks.
+        cm.await_ongoing_compactions(nullptr).get();
+        BOOST_REQUIRE_EQUAL(cm.get_stats().active_tasks, 0);
+        BOOST_REQUIRE_EQUAL(cm.get_stats().errors, 0);
+
+        auto runs = main_runs(cf);
+        BOOST_REQUIRE_EQUAL(runs.size(), 1);
+        auto& spliced = runs.front();
+        BOOST_REQUIRE(spliced->run_identifier() == right->run_identifier());
+        BOOST_REQUIRE_EQUAL(spliced->all().size(), left->all().size() + right->all().size());
+        auto spliced_sstables = spliced->all() | std::ranges::to<std::unordered_set>();
+
+        // The sstables of the right half are as they were.
+        for (auto& sst : right->all()) {
+            BOOST_REQUIRE(spliced_sstables.contains(sst));
+        }
+        // Those of the left half are replaced by copies of the same data, under the same sstable
+        // identifier, which store the new run identifier.
+        auto originals = left->all() | std::ranges::to<std::vector>();
+        std::vector<shared_sstable> copies;
+        std::ranges::copy_if(spliced->all(), std::back_inserter(copies), [&] (const shared_sstable& sst) {
+            return !right->all().contains(sst);
+        });
+        std::ranges::sort(copies, sstable_first_key_less_comparator{});
+        BOOST_REQUIRE_EQUAL(copies.size(), originals.size());
+        for (size_t i = 0; i < copies.size(); ++i) {
+            auto& copy = copies[i];
+            auto& original = originals[i];
+            BOOST_REQUIRE(!spliced_sstables.contains(original));
+            BOOST_REQUIRE(copy->get_first_decorated_key().equal(*s, original->get_first_decorated_key()));
+            BOOST_REQUIRE(copy->get_last_decorated_key().equal(*s, original->get_last_decorated_key()));
+            BOOST_REQUIRE_EQUAL(copy->data_size(), original->data_size());
+            BOOST_REQUIRE(copy->sstable_identifier() == original->sstable_identifier());
+            BOOST_REQUIRE(env.reusable_sst(copy).get()->run_identifier() == right->run_identifier());
+        }
+
+        // All the data is still there.
+        size_t partitions = 0;
+        for (auto& sst : spliced->all()) {
+            auto reader = sstable_reader(env.make_reader_permit(), sst, s);
+            auto close_reader = deferred_close(reader);
+            while (read_mutation_from_mutation_reader(reader).get()) {
+                ++partitions;
+            }
+        }
+        BOOST_REQUIRE_EQUAL(partitions, keys.size());
+
+        // Nothing is left to compact.
+        auto control = make_strategy_control_for_test(false);
+        BOOST_REQUIRE(cf->get_compaction_strategy().get_sstables_for_compaction(cf.as_compaction_group_view(), *control).get().sstables.empty());
+    });
+}
+
+// Counts the partitions in the sstables of the table.
+static size_t count_partitions(test_env& env, table_for_tests& cf) {
+    size_t partitions = 0;
+    for (auto& sst : *cf->get_sstables()) {
+        auto reader = sstable_reader(env.make_reader_permit(), sst, cf->schema());
+        auto close_reader = deferred_close(reader);
+        while (read_mutation_from_mutation_reader(reader).get()) {
+            ++partitions;
+        }
+    }
+    return partitions;
+}
+
+// A splice copies the sstables it moves, so it can't drop the data which cleanup has to drop.
+// If some of the runs require cleanup, they are compacted instead, and the compaction drops the
+// data the node doesn't own anymore.
+SEASTAR_TEST_CASE(ics_splice_requiring_cleanup_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto s = make_ics_schema_for_splicing("ics_splice_requiring_cleanup_test");
+        auto cf = env.make_table_for_tests(s);
+        auto close_cf = deferred_stop(cf);
+        auto& cm = cf->get_compaction_manager();
+        auto keys = tests::generate_partition_keys(16, s);
+        auto [left, right] = add_merged_halves(env, cf, keys);
+        BOOST_REQUIRE_EQUAL(count_partitions(env, cf), keys.size());
+
+        // The node owns the keys of the right half only, so the left half requires cleanup.
+        auto owned_ranges = make_lw_shared<const dht::token_range_vector>(dht::token_range_vector{
+                dht::token_range::make_starting_with({keys[8].token(), true})});
+        auto& view = cf->compaction_group_view_for_sstable(*left->all().begin());
+        env.test_compaction_manager().mark_sstables_requiring_cleanup(view, left->all() | std::ranges::to<std::vector>(), owned_ranges);
+        BOOST_REQUIRE_EQUAL(cm.sstables_requiring_cleanup(view).size(), left->all().size());
+
+        cf->trigger_compaction();
+        cm.await_ongoing_compactions(nullptr).get();
+        BOOST_REQUIRE_EQUAL(cm.get_stats().active_tasks, 0);
+        BOOST_REQUIRE_EQUAL(cm.get_stats().errors, 0);
+
+        BOOST_REQUIRE(cm.sstables_requiring_cleanup(view).empty());
+        BOOST_REQUIRE_EQUAL(main_runs(cf).size(), 1);
+        BOOST_REQUIRE(main_runs(cf).front()->run_identifier() != right->run_identifier());
+        BOOST_REQUIRE_EQUAL(count_partitions(env, cf), keys.size() - 8);
+    });
+}
+
+// The run a splice moves sstables into is named by its in-memory identifier. That can differ
+// from the one stored on disk, e.g. if the sstable set gave the sstables a new one because they
+// overlapped their run. The sstables of the named run are then rewritten too, so that the whole
+// run is still one after the sstables are loaded again.
+SEASTAR_TEST_CASE(ics_splice_into_run_known_by_another_identifier_on_disk_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto s = make_ics_schema_for_splicing("ics_splice_into_run_known_by_another_identifier_on_disk_test");
+        auto cf = env.make_table_for_tests(s);
+        auto close_cf = deferred_stop(cf);
+        auto& cm = cf->get_compaction_manager();
+        auto keys = tests::generate_partition_keys(16, s);
+        auto left = make_real_run(env, s, keys, 0, 8, 2, 1024);
+        auto right = make_real_run(env, s, keys, 8, 16, 2, 1100);
+        auto in_memory_run_identifier = run_id::create_random_id();
+        for (auto& sst : right->all()) {
+            sstables::test(sst).set_run_identifier(in_memory_run_identifier);
+        }
+        for (auto& run : {left, right}) {
+            for (auto& sst : run->all()) {
+                column_family_test(cf).add_sstable(sst).get();
+            }
+        }
+
+        cf->trigger_compaction();
+        cm.await_ongoing_compactions(nullptr).get();
+        BOOST_REQUIRE_EQUAL(cm.get_stats().active_tasks, 0);
+        BOOST_REQUIRE_EQUAL(cm.get_stats().errors, 0);
+
+        auto runs = main_runs(cf);
+        BOOST_REQUIRE_EQUAL(runs.size(), 1);
+        BOOST_REQUIRE(runs.front()->run_identifier() == in_memory_run_identifier);
+        BOOST_REQUIRE_EQUAL(runs.front()->all().size(), left->all().size() + right->all().size());
+        for (auto& sst : runs.front()->all()) {
+            BOOST_REQUIRE(env.reusable_sst(sst).get()->run_identifier() == in_memory_run_identifier);
+        }
+    });
+}
+
+#ifdef SCYLLA_ENABLE_ERROR_INJECTION
+// A splice which fails leaves the table as it was, so that it's retried from the start.
+SEASTAR_TEST_CASE(ics_splice_failure_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto s = make_ics_schema_for_splicing("ics_splice_failure_test");
+        auto cf = env.make_table_for_tests(s);
+        auto close_cf = deferred_stop(cf);
+        auto keys = tests::generate_partition_keys(16, s);
+        auto [left, right] = add_merged_halves(env, cf, keys);
+        auto sstables_before = *cf->get_sstables();
+
+        auto control = make_strategy_control_for_test(false);
+        auto job = cf->get_compaction_strategy().get_sstables_for_compaction(cf.as_compaction_group_view(), *control).get();
+        BOOST_REQUIRE(job.options.type() == compaction::compaction_type::Splice);
+
+        auto& injector = utils::get_local_injector();
+        injector.enable("link_with_rewritten_component_fail");
+        auto disable_injection = defer([&] () noexcept { injector.disable("link_with_rewritten_component_fail"); });
+        BOOST_REQUIRE_THROW(compact_sstables(env, std::move(job), cf, [&] { return env.make_sstable(s); }).get(), std::runtime_error);
+
+        BOOST_REQUIRE(*cf->get_sstables() == sstables_before);
+        for (auto& sst : left->all()) {
+            BOOST_REQUIRE(sst->run_identifier() == left->run_identifier());
+            BOOST_REQUIRE(env.reusable_sst(sst).get()->run_identifier() == left->run_identifier());
+        }
+        BOOST_REQUIRE_EQUAL(main_runs(cf).size(), 2);
+    });
+}
+
+// A splice which is stopped after it has copied some sstables deletes the copies, and the
+// copied sstables don't refer to them anymore.
+SEASTAR_TEST_CASE(ics_splice_stop_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto s = make_ics_schema_for_splicing("ics_splice_stop_test");
+        auto cf = env.make_table_for_tests(s);
+        auto close_cf = deferred_stop(cf);
+        auto keys = tests::generate_partition_keys(16, s);
+        auto [left, right] = add_merged_halves(env, cf, keys);
+        auto sstables_before = *cf->get_sstables();
+        auto dir = fs::path(fmt::to_string((*left->all().begin())->get_filename())).parent_path();
+        auto count_tocs = [&] {
+            return std::ranges::count_if(fs::directory_iterator(dir), [] (const fs::directory_entry& e) {
+                return e.path().filename().string().ends_with("TOC.txt");
+            });
+        };
+        BOOST_REQUIRE_EQUAL(count_tocs(), sstables_before.size());
+
+        auto control = make_strategy_control_for_test(false);
+        auto job = cf->get_compaction_strategy().get_sstables_for_compaction(cf.as_compaction_group_view(), *control).get();
+        BOOST_REQUIRE(job.options.type() == compaction::compaction_type::Splice);
+
+        // Pauses the copy of the first sstable.
+        auto& injector = utils::get_local_injector();
+        const auto pause = "pause_sstable_component_rewrite";
+        injector.enable(pause, true);
+        auto disable_injection = defer([&] () noexcept { injector.disable(pause); });
+        auto splice = compact_sstables(env, std::move(job), cf, [&] { return env.make_sstable(s); });
+        while (injector.waiters(pause) == 0) {
+            seastar::sleep(std::chrono::milliseconds(1)).get();
+        }
+        // The splice sees the stop request once it has copied the first sstable.
+        auto& cm = cf->get_compaction_manager();
+        auto stop = cm.stop_ongoing_compactions("test", &cf.as_compaction_group_view());
+        injector.receive_message(pause);
+        BOOST_REQUIRE_THROW(splice.get(), compaction::compaction_stopped_exception);
+        stop.get();
+
+        BOOST_REQUIRE_EQUAL(count_tocs(), sstables_before.size());
+        BOOST_REQUIRE(*cf->get_sstables() == sstables_before);
+        for (auto& sst : left->all()) {
+            BOOST_REQUIRE(!sst->cloned_to_sstable_filename());
+            BOOST_REQUIRE(sst->run_identifier() == left->run_identifier());
+        }
+        BOOST_REQUIRE_EQUAL(main_runs(cf).size(), 2);
+    });
+}
+#endif

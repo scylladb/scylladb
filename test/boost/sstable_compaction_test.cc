@@ -225,7 +225,12 @@ static table_for_tests compaction_manager_basic_prepare(test_env& env) {
         mutation m(s, key);
         m.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type, int32_type->decompose(1)));
 
-        auto sst = make_sstable_containing(sst_gen, {std::move(m)}).get();
+        // Every sstable also holds the same shared partition, so that the sstables overlap.
+        // Otherwise, ICS would splice their runs instead of compacting them.
+        mutation shared(s, partition_key::from_exploded(*s, {to_bytes("shared_key")}));
+        shared.set_clustered_cell(c_key, r1_col, make_atomic_cell(int32_type, int32_type->decompose(1)));
+
+        auto sst = make_sstable_containing(sst_gen, {std::move(m), std::move(shared)}).get();
         column_family_test(cf).add_sstable(sst).get();
     }
 
@@ -5089,6 +5094,8 @@ void basic_ics_controller_correctness_fn(test_env& env) {
             auto schema = table_for_tests::make_default_schema();
         table_for_tests cf = env.make_table_for_tests(schema);
         auto stop_cf = defer([&] noexcept { cf.stop().get(); });
+        // The sstables below have no files, so they can't be compacted. Only the backlog is tested.
+        cf->disable_auto_compaction().get();
 
         uint64_t current_sstable_size = default_fragment_size;
         uint64_t data_set_size = 0;

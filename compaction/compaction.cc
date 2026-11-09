@@ -2376,6 +2376,10 @@ static future<compaction_result> splice_sstable_runs(compaction_descriptor descr
     auto schema = table_s.schema();
     const auto run_identifier = descriptor.run_identifier;
     const auto prefix = fmt::format("[{} {}.{} {}]", compaction_type::Splice, schema->ks_name(), schema->cf_name(), cdata.compaction_uuid);
+    // The compaction manager compacts the runs instead, see regular_compaction_task_executor.
+    if (descriptor.owned_ranges) {
+        on_internal_error(clogger, fmt::format("{} Cannot splice sstables which require cleanup", prefix));
+    }
 
     // An sstable is rewritten unless it belongs to the named run both in memory and on disk. The
     // two differ if the Scylla component stores no run identifier, or if the sstable set gave
