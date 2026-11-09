@@ -10,11 +10,12 @@ from test.pylib.skip_types import skip_env
 # If no keyspaces are given, a snapshot is taken over all keyspaces and tables.
 # If no tables are given, a snapshot is taken over all tables in the keyspace.
 # If no tag is given, a unique tag will be computed using the current time, in milliseconds.
+# If skip_flush is set, the snapshot is taken without flushing memtables first.
 # It can be used in a "with", as:
 #   with new_test_snapshot(cql, tag, keyspace, [table(s)]) as snapshot:
 # This is not a fixture - see those in conftest.py.
 @contextmanager
-def new_test_snapshot(rest_api, keyspaces=[], tables=[], tag=""):
+def new_test_snapshot(rest_api, keyspaces=[], tables=[], tag="", skip_flush=False):
     if not tag:
         tag = f"test_snapshot_{int(time.time() * 1000)}"
     params = { "tag": tag }
@@ -34,6 +35,8 @@ def new_test_snapshot(rest_api, keyspaces=[], tables=[], tag=""):
             delete_params.extend([{**params, "cf": table} for table in tables])
     else:
         delete_params.append(dict(params))
+    if skip_flush:
+        params["sf"] = "true"
     resp = rest_api.send("POST", "storage_service/snapshots", params)
     resp.raise_for_status()
     try:
