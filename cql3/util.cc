@@ -21,10 +21,22 @@
 #include <ucontext.h>
 #include <unistd.h>
 
+#include "build_mode.hh"
+
+#ifndef SCYLLA_BUILD_MODE_COVERAGE
+
 extern "C" {
 void __sanitizer_start_switch_fiber(void** fake_stack_save, const void* stack_bottom, size_t stack_size);
 void __sanitizer_finish_switch_fiber(void* fake_stack_save, const void** stack_bottom_old, size_t* stack_size_old);
 }
+
+#else
+
+// Coverage mode is not built with ASAN, so there is no fiber bookkeeping to do.
+static inline void __sanitizer_start_switch_fiber(void**, const void*, size_t) {}
+static inline void __sanitizer_finish_switch_fiber(void*, const void**, size_t*) {}
+
+#endif
 
 #endif
 
@@ -70,9 +82,9 @@ void do_with_parser_impl(utils::chunked_string_view cql, dialect d, noncopyable_
 #else
 
 // The CQL parser uses huge amounts of stack space in debug mode, enough to
-// overflow a seastar fiber stack - 256 KiB in the builds that define DEBUG,
-// since those enable ASAN and Seastar raises its default accordingly. The
-// mechanism below runs the parser on a larger stack.
+// overflow a seastar fiber stack - 256 KiB in the builds that enable ASAN,
+// since Seastar raises its default accordingly. The mechanism below runs the
+// parser on a larger stack.
 
 // The parser stack is hand-rolled, so nothing stops a deep parse from running
 // off its lower end into whatever is mapped below. That overflow used to be

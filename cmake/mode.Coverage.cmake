@@ -17,6 +17,7 @@ set(scylla_build_mode_Coverage "coverage")
 # Debug/Sanitize configs, so we add them explicitly for Coverage.
 set(Seastar_DEFINITIONS_COVERAGE
   SCYLLA_BUILD_MODE=${scylla_build_mode_Coverage}
+  DEBUG
   SEASTAR_DEBUG
   SEASTAR_DEFAULT_ALLOCATOR
   SEASTAR_SHUFFLE_TASK_QUEUE

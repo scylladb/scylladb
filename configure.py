@@ -513,7 +513,7 @@ modes = {
         'advanced_optimizations': False,
     },
     'coverage': {
-        'cxxflags': '-DSCYLLA_ENABLE_ERROR_INJECTION -fprofile-instr-generate -fcoverage-mapping -g -gz',
+        'cxxflags': '-DDEBUG -DSCYLLA_ENABLE_ERROR_INJECTION -fprofile-instr-generate -fcoverage-mapping -g -gz',
         'cxx_ld_flags': '-fprofile-instr-generate -fcoverage-mapping',
         'stack-usage-threshold': 1024*40,
         'optimization-level': 'g',

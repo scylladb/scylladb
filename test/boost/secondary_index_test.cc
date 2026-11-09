@@ -21,6 +21,7 @@
 #include "cql3/statements/select_statement.hh"
 #include "utils/assert.hh"
 #include "utils/error_injection.hh"
+#include "build_mode.hh"
 #include "db/config.hh"
 #include "replica/database.hh"
 
@@ -50,8 +51,8 @@ SEASTAR_TEST_CASE(test_secondary_index_regular_column_query) {
 // and view_builder depends on group0, there was a possible use after free.
 // The test injects sleep in read barrier, increasing reproducibility of the bug.
 SEASTAR_TEST_CASE(test_view_builder_use_after_free) {
-#ifndef DEBUG
-    fmt::print("Skipping test as it depends on error injection and ASAN. Please run in mode where they're enabled (debug).\n");
+#if !defined(DEBUG) || defined(SCYLLA_BUILD_MODE_COVERAGE)
+    fmt::print("Skipping test as it depends on error injection and ASAN. Please run in mode where they're enabled (debug, sanitize).\n");
     return make_ready_future<>();
 #else
     return do_with_cql_env([] (cql_test_env& e) -> future<> {
