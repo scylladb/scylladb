@@ -3988,6 +3988,21 @@ static future<std::variant<uint64_t, api_error>> get_previous_item_size(
     co_return item_length;
 }
 
+future<std::optional<api_error>> rmw_operation::read_previous_item_size(service::storage_proxy& proxy,
+        service::client_state& client_state, service_permit permit,
+        stats& global_stats, stats& per_table_stats) {
+    global_stats.reads_before_write++;
+    per_table_stats.reads_before_write++;
+    auto res = co_await get_previous_item_size(proxy, client_state, _schema, _pk, _ck, std::move(permit));
+    if (auto error = std::get_if<api_error>(&res)) {
+        co_return std::move(*error);
+    }
+    // As apply() does with the item read by LWT: the WCU is based on the
+    // larger of the old item's size and the size calculated so far.
+    _consumed_capacity._total_bytes = std::max(_consumed_capacity._total_bytes, std::get<uint64_t>(res));
+    co_return std::nullopt;
+}
+
 future<executor::request_return_type> rmw_operation::execute(service::storage_proxy& proxy,
         std::optional<service::cas_shard> cas_shard,
         service::client_state& client_state,
@@ -4277,7 +4292,7 @@ future<executor::request_return_type> executor::delete_item(client_state& client
     lw_shared_ptr<stats> per_table_stats = get_stats_from_schema(_proxy, *(op->schema()));
     per_table_stats->api_operations.delete_item++;
     tracing::add_alternator_table_name(trace_state, op->schema()->cf_name());
-    const bool needs_read_before_write = _proxy.data_dictionary().get_config().alternator_force_read_before_write() || op->needs_read_before_write();
+    const bool needs_read_before_write = op->needs_read_before_write();
 
     co_await verify_permission(_enforce_authorization, _warn_authorization, client_state, op->schema(), auth::permission::MODIFY, _stats);
 
@@ -4299,6 +4314,11 @@ future<executor::request_return_type> executor::delete_item(client_state& client
                 return e.delete_item(client_state, std::move(trace_state), empty_service_permit(), std::move(request), audit_info);
             });
         });
+    }
+    if (!needs_read_before_write && _proxy.data_dictionary().get_config().alternator_force_read_before_write()) {
+        if (auto error = co_await op->read_previous_item_size(_proxy, client_state, permit, _stats, *per_table_stats)) {
+            co_return std::move(*error);
+        }
     }
     uint64_t wcu_total = 0;
     auto res = co_await op->execute(_proxy, std::move(cas_shard), client_state, trace_state, std::move(permit), needs_read_before_write, _stats, *per_table_stats, wcu_total);
@@ -5478,7 +5498,7 @@ future<executor::request_return_type> executor::update_item(client_state& client
     }
 
     tracing::add_alternator_table_name(trace_state, op->schema()->cf_name());
-    const bool needs_read_before_write = _proxy.data_dictionary().get_config().alternator_force_read_before_write() || op->needs_read_before_write();
+    const bool needs_read_before_write = op->needs_read_before_write();
 
     co_await verify_permission(_enforce_authorization, _warn_authorization, client_state, op->schema(), auth::permission::MODIFY, _stats);
 
@@ -5500,6 +5520,11 @@ future<executor::request_return_type> executor::update_item(client_state& client
                 return e.update_item(client_state, std::move(trace_state), empty_service_permit(), std::move(request), audit_info);
             });
         });
+    }
+    if (!needs_read_before_write && _proxy.data_dictionary().get_config().alternator_force_read_before_write()) {
+        if (auto error = co_await op->read_previous_item_size(_proxy, client_state, permit, _stats, *per_table_stats)) {
+            co_return std::move(*error);
+        }
     }
     uint64_t wcu_total = 0;
     auto res = co_await op->execute(_proxy, std::move(cas_shard), client_state, trace_state, std::move(permit), needs_read_before_write, _stats, *per_table_stats, wcu_total);
