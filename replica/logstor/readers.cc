@@ -441,10 +441,6 @@ class logstor_range_reader : public logstor_reader_base {
         // concurrently: a scan holds at most this many partitions ahead of its buffer.
         static constexpr size_t read_ahead_entries = 10;
 
-        if (_scan.exhausted()) {
-            co_return false;
-        }
-
         auto batch = collect_batch(read_ahead_entries);
         if (!batch) {
             co_return false;
