@@ -110,6 +110,10 @@ static constexpr auto tablet_config_sync_timeout = std::chrono::seconds(60);
 // logic either retries or turns into a rollback.
 static constexpr auto tablet_snapshot_transfer_timeout = std::chrono::minutes(5);
 
+// How long a replica may take to answer whether its tables are split, while the
+// coordinator holds the group0 guard. A replica that runs out of it postpones its tables.
+static constexpr auto tablet_split_ready_timeout = std::chrono::seconds(60);
+
 locator::host_id to_host_id(raft::server_id id) {
     return locator::host_id{id.uuid()};
 }
@@ -3586,6 +3590,67 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         }
     }
 
+    // Returns the tables which need a split and are reported as split by all their replicas.
+    future<std::unordered_set<table_id>> get_split_ready_tables() {
+        auto tm = get_token_metadata_ptr();
+        std::unordered_map<table_id, std::unordered_set<locator::host_id>> replicas;
+        for (const auto& [table_id, _] : tm->tablets().all_table_groups()) {
+            const auto& tmap = tm->tablets().get_tablet_map(table_id);
+            if (!tmap.needs_split()) {
+                continue;
+            }
+            auto& hosts = replicas[table_id];
+            for (auto& tinfo : tmap.tablets()) {
+                for (auto& r : tinfo.replicas) {
+                    if (!is_excluded(raft::server_id(r.host.uuid()))) {
+                        hosts.insert(r.host);
+                    }
+                }
+            }
+            co_await coroutine::maybe_yield();
+        }
+
+        std::unordered_map<locator::host_id, std::unordered_set<table_id>> reported;
+        auto all_hosts = replicas | std::views::values | std::views::join | std::ranges::to<std::unordered_set>();
+        co_await coroutine::parallel_for_each(all_hosts, [&] (locator::host_id h) -> future<> {
+            try {
+                reported[h] = co_await ser::storage_service_rpc_verbs::send_tablet_split_ready(&_messaging, h, lowres_clock::now() + tablet_split_ready_timeout, _as, raft::server_id(h.uuid()))
+                        | std::ranges::to<std::unordered_set>();
+            } catch (seastar::abort_requested_exception&) {
+                throw;
+            } catch (...) {
+                rtlogger.warn("tablet_split_ready to {} failed: {}", h, std::current_exception());
+            }
+        });
+
+        std::unordered_set<table_id> ready;
+        for (const auto& [table_id, hosts] : replicas) {
+            if (std::ranges::all_of(hosts, [&] (locator::host_id h) { return reported[h].contains(table_id); })) {
+                ready.insert(table_id);
+            }
+        }
+        co_return ready;
+    }
+
+    // Drops the split ack of the tables from the cached load stats, so that split
+    // finalization is not attempted again before the next load stats refresh.
+    void drop_split_ack(const std::vector<table_id>& tables) {
+        auto stats = _tablet_allocator.get_load_stats();
+        if (!stats) {
+            return;
+        }
+        auto tm = get_token_metadata_ptr();
+        auto new_stats = make_lw_shared<locator::load_stats>(*stats);
+        for (auto table_id : tables) {
+            for (auto id : tm->tablets().all_table_groups().at(table_id)) {
+                if (auto it = new_stats->tables.find(id); it != new_stats->tables.end()) {
+                    it->second.split_ready_seq_number = std::numeric_limits<locator::resize_decision::seq_number_t>::min();
+                }
+            }
+        }
+        _tablet_allocator.set_load_stats(std::move(new_stats));
+    }
+
     future<> handle_tablet_resize_finalization(group0_guard g) {
         // Executes a global barrier to guarantee that any process (e.g. repair) holding stale version
         // of token metadata will complete before we update topology.
@@ -3595,10 +3660,27 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
 
         auto tm = get_token_metadata_ptr();
         auto plan = co_await _tablet_allocator.balance_tablets(tm, &_topo_sm._topology, &_sys_ks, {}, get_dead_nodes());
+        auto finalize_resize = plan.resize_plan().finalize_resize;
+        auto needs_split = [&] (table_id id) { return tm->tablets().get_tablet_map(id).needs_split(); };
+
+        std::optional<std::unordered_set<table_id>> ready;
+        if (_feature_service.tablet_split_ready_check && std::ranges::any_of(finalize_resize, needs_split)) {
+            ready = co_await get_split_ready_tables();
+        }
+        if (ready) {
+            // finalize_resize holds merges too, which the replicas don't report.
+            auto not_ready = [&] (table_id id) { return needs_split(id) && !ready->contains(id); };
+            auto postponed = finalize_resize | std::views::filter(not_ready) | std::ranges::to<std::vector>();
+            if (!postponed.empty()) {
+                rtlogger.info("Postponing split finalization of tables {}, not split on all replicas", postponed);
+                drop_split_ack(postponed);
+                std::erase_if(finalize_resize, not_ready);
+            }
+        }
 
         group0_update_collector updates;
 
-        for (auto& table_id : plan.resize_plan().finalize_resize) {
+        for (auto& table_id : finalize_resize) {
             auto s = _db.find_schema(table_id);
             auto new_tablet_map = co_await _tablet_allocator.resize_tablets(tm, table_id);
             co_await replica::tablet_map_to_mutations(
@@ -3655,7 +3737,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         if (auto old_load_stats = _tablet_allocator.get_load_stats()) {
             guard = co_await start_operation();
             auto new_tm = get_token_metadata_ptr();
-            auto reconciled_stats = old_load_stats->reconcile_tablets_resize(plan.resize_plan().finalize_resize, *tm, *new_tm);
+            auto reconciled_stats = old_load_stats->reconcile_tablets_resize(finalize_resize, *tm, *new_tm);
             // Simulates reconciliation failing the way it does in production, when a
             // pre-resize replica has no recorded tablet size yet.
             if (utils::get_local_injector().enter("tablet_resize_load_stats_reconcile_failure")) {
