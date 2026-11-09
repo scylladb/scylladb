@@ -57,6 +57,7 @@ target_include_directories(db
 target_link_libraries(db
   PUBLIC
     mutation
+    repair
     Seastar::seastar
     xxHash::xxhash
     absl::headers
