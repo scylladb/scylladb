@@ -103,6 +103,9 @@ tombstone_gc_state::get_gc_before_for_range_result tombstone_gc_state::get_gc_be
         auto max_repair_timestamp = gc_clock::time_point::min();
         int hits = 0;
         knows_entire_range = false;
+        // The lowest replay position of the history entries intersecting the
+        // range. An entry without one has the invalid (lowest) position, so the
+        // commitlog check then filters out no segments, as it must.
         db::replay_position min_rp;
 
         if (_shared_state && _shared_state->is_table_rf_one(s->id())) {
@@ -120,7 +123,7 @@ tombstone_gc_state::get_gc_before_for_range_result tombstone_gc_state::get_gc_be
                 auto r = locator::token_metadata::interval_to_range(x.first);
                 min = std::min(x.second.timestamp, min);
                 max = std::max(x.second.timestamp, max);
-                min_rp = min_rp.valid() ? std::min(min_rp, x.second.replay_position) : min_rp;
+                min_rp = hits ? std::min(min_rp, x.second.replay_position) : x.second.replay_position;
                 if (++hits == 1 && r.contains(range, dht::token_comparator{})) {
                     contains_all = true;
                 }
