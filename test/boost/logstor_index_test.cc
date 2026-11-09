@@ -622,6 +622,9 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_cache_survives_index_rebalan
     index.drain_cache().get();
 }
 
+// The scan tests that look only at what a batch covered use this visit, which does nothing.
+static const auto no_visit = [] (const primary_index::scanned_entry&) {};
+
 SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_scan_resumes_across_batches_by_token) {
     auto schema = make_logstor_schema();
     primary_index index(noop_space_accounting, nullptr, false);
@@ -632,28 +635,28 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_scan_resumes_across_batches_
 
     auto scan = index.scan();
 
-    auto batch0 = scan.next_batch(3);
+    auto batch0 = scan.next_batch(3, no_visit);
     BOOST_REQUIRE(batch0);
     BOOST_REQUIRE_EQUAL(batch0->first_token, dht::token::from_int64(7));
     BOOST_REQUIRE_EQUAL(batch0->last_token, dht::token::from_int64(7));
     BOOST_REQUIRE_EQUAL(batch0->entry_count, 2u);
     BOOST_REQUIRE(!batch0->exhausted);
 
-    auto batch1 = scan.next_batch(3);
+    auto batch1 = scan.next_batch(3, no_visit);
     BOOST_REQUIRE(batch1);
     BOOST_REQUIRE_EQUAL(batch1->first_token, dht::token::from_int64(11));
     BOOST_REQUIRE_EQUAL(batch1->last_token, dht::token::from_int64(11));
     BOOST_REQUIRE_EQUAL(batch1->entry_count, 3u);
     BOOST_REQUIRE(!batch1->exhausted);
 
-    auto batch2 = scan.next_batch(3);
+    auto batch2 = scan.next_batch(3, no_visit);
     BOOST_REQUIRE(batch2);
     BOOST_REQUIRE_EQUAL(batch2->first_token, dht::token::from_int64(19));
     BOOST_REQUIRE_EQUAL(batch2->last_token, dht::token::from_int64(19));
     BOOST_REQUIRE_EQUAL(batch2->entry_count, 2u);
     BOOST_REQUIRE(batch2->exhausted);
 
-    BOOST_REQUIRE(!scan.next_batch(3));
+    BOOST_REQUIRE(!scan.next_batch(3, no_visit));
 }
 
 SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_scan_keeps_oversized_same_token_batch_intact) {
@@ -665,14 +668,14 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_scan_keeps_oversized_same_to
 
     auto scan = index.scan();
 
-    auto batch0 = scan.next_batch(2);
+    auto batch0 = scan.next_batch(2, no_visit);
     BOOST_REQUIRE(batch0);
     BOOST_REQUIRE_EQUAL(batch0->first_token, dht::token::from_int64(23));
     BOOST_REQUIRE_EQUAL(batch0->last_token, dht::token::from_int64(23));
     BOOST_REQUIRE_EQUAL(batch0->entry_count, 5u);
     BOOST_REQUIRE(!batch0->exhausted);
 
-    auto batch1 = scan.next_batch(2);
+    auto batch1 = scan.next_batch(2, no_visit);
     BOOST_REQUIRE(batch1);
     BOOST_REQUIRE_EQUAL(batch1->first_token, dht::token::from_int64(29));
     BOOST_REQUIRE_EQUAL(batch1->last_token, dht::token::from_int64(29));
@@ -936,26 +939,27 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_cache_peek_snapshots_without_counting) {
     index.drain_cache().get();
 }
 
-// The entry of a key, found the way a scan finds it: through the batch of its token.
-static const primary_index_entry& find_entry(primary_index& index, const primary_index_key& key) {
+// Returns the cached partition of a key, and reads it the way a scan reads it, inside the visit of
+// the entry and through the batch of its token.
+static std::optional<keyed_single_row_partition> scan_read_cached(primary_index& index, const primary_index_key& key,
+        const schema& s) {
+    std::optional<keyed_single_row_partition> cached;
+    bool found = false;
     auto scan = index.scan(dht::token_range::make_singular(key.token()));
-    while (auto batch = scan.next_batch(16)) {
-        for (const auto& entry : batch->entries) {
-            if ((entry.get().key() <=> key) == 0) {
-                return entry.get();
-            }
+    while (!found && scan.next_batch(16, [&] (const primary_index::scanned_entry& entry) {
+        if ((entry.key() <=> key) == 0) {
+            found = true;
+            cached = entry.read_cached(s);
         }
-        if (batch->exhausted) {
-            break;
-        }
+    })) {
     }
-    BOOST_FAIL("key is missing from the index");
-    __builtin_unreachable();
+    BOOST_REQUIRE(found);
+    return cached;
 }
 
 // The scan's read of the cache: the key comes too, since the scan holds only the entry, and it
 // counts as a hit or a miss like a point read does.
-SEASTAR_THREAD_TEST_CASE(test_logstor_cache_lookup_cached_hands_out_the_key_too) {
+SEASTAR_THREAD_TEST_CASE(test_logstor_cache_read_cached_hands_out_the_key_too) {
     auto schema = make_logstor_schema();
     shared_logstor_cache cache;
     primary_index index(noop_space_accounting, &cache.logstor_tracker, true);
@@ -964,21 +968,17 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_cache_lookup_cached_hands_out_the_key_too)
     BOOST_REQUIRE(!index.insert(key, make_index_entry(1, 0, 10, 1)).previous_entry);
 
     const auto stats_before = cache.shared_tracker.get_stats();
-    BOOST_REQUIRE(!index.lookup_cached(find_entry(index, key), *schema, use_cache::yes));
+    BOOST_REQUIRE(!scan_read_cached(index, key, *schema));
     BOOST_REQUIRE_EQUAL(cache.shared_tracker.get_stats().partition_misses, stats_before.partition_misses + 1);
 
     auto m = make_mutation(schema, "pk0", "v0");
     populate(index, key, m);
-    auto cached = index.lookup_cached(find_entry(index, key), *schema, use_cache::yes);
+    auto cached = scan_read_cached(index, key, *schema);
     BOOST_REQUIRE(cached);
     BOOST_REQUIRE_EQUAL(cache.shared_tracker.get_stats().partition_hits, stats_before.partition_hits + 1);
     BOOST_REQUIRE(cached->key.equal(*schema, m.decorated_key()));
     assert_that(to_mutation(schema, std::move(cached->key), std::move(cached->partition))).is_equal_to(m);
 
-    // A read that does not use the cache is not a lookup at all.
-    BOOST_REQUIRE(!index.lookup_cached(find_entry(index, key), *schema, use_cache::no));
-    BOOST_REQUIRE_EQUAL(cache.shared_tracker.get_stats().partition_hits, stats_before.partition_hits + 1);
-    BOOST_REQUIRE_EQUAL(cache.shared_tracker.get_stats().partition_misses, stats_before.partition_misses + 1);
     index.drain_cache().get();
 }
 
@@ -995,7 +995,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_cache_disabled_index_does_not_read_or_popu
     BOOST_REQUIRE(!index.populate_cache(key, *lookup_location(index, key, *schema), schema, m.key(), to_single_row_partition(mutation(m))));
     BOOST_REQUIRE_EQUAL(cache.shared_tracker.partitions(), 0);
     BOOST_REQUIRE(!lookup_exists(index, key, schema));
-    BOOST_REQUIRE(!index.lookup_cached(find_entry(index, key), *schema, use_cache::yes));
+    BOOST_REQUIRE(!scan_read_cached(index, key, *schema));
     BOOST_REQUIRE_EQUAL(cache.shared_tracker.get_stats().partition_misses, 0);
 }
 
@@ -1021,7 +1021,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_cache_disabled_index_still_evicts) {
 
     index.set_cache_enabled(false);
     BOOST_REQUIRE(!lookup_exists(index, key0, schema));
-    BOOST_REQUIRE(!index.lookup_cached(find_entry(index, key0), *schema, use_cache::yes));
+    BOOST_REQUIRE(!scan_read_cached(index, key0, *schema));
     BOOST_REQUIRE_EQUAL(cache.shared_tracker.partitions(), 3);
 
     // An overwrite or an erase while the cache is disabled evicts, so the old partition is not

@@ -18,7 +18,6 @@
 #include "utils/double-decker.hh"
 #include "utils/on_internal_error.hh"
 #include "utils/phased_barrier.hh"
-#include "utils/small_vector.hh"
 #include <utility>
 #include <variant>
 #include <seastar/util/bool_class.hh>
@@ -157,8 +156,6 @@ public:
                             dht::raw_token_less_comparator, primary_index_key_cmp,
                             16, bplus::key_search::linear>;
 
-    using entry_reference = std::reference_wrapper<const primary_index_entry>;
-
     // A record location and the guard that keeps the location readable.
     struct guarded_location {
         record_location location;
@@ -195,20 +192,51 @@ private:
 
 public:
 
+    class token_range_scan;
+
+    // A scanned_entry gives the visit of a scan access to one entry of the index. The entry is
+    // valid only inside the visit, so a scanned_entry cannot be copied or moved, and only the scan
+    // can create one. It returns the key and the index entry as copies, and it reads the cached
+    // partition through the index that holds the entry.
+    class scanned_entry {
+        const primary_index& _index;
+        const primary_index_entry& _e;
+
+        scanned_entry(const primary_index& index, const primary_index_entry& e) noexcept : _index(index), _e(e) {}
+
+        friend class token_range_scan;
+        friend class primary_index;
+    public:
+        scanned_entry(const scanned_entry&) = delete;
+        scanned_entry& operator=(const scanned_entry&) = delete;
+
+        primary_index_key key() const noexcept { return _e.key(); }
+        index_entry entry() const noexcept { return _e.entry(); }
+
+        // Returns the cached partition of the entry, with its key. Returns nullopt when the cache
+        // does not hold the entry or when the index does not read the cache. Counts a hit or a miss
+        // and touches the LRU, like a point read does.
+        std::optional<keyed_single_row_partition> read_cached(const schema& target_schema) const {
+            if (!_index.reads_cache()) {
+                return std::nullopt;
+            }
+            return _index._cache_tracker->read_partition(_e, target_schema);
+        }
+    };
+
     // Stateful cursor over a token range in the primary index.
     //
     // This type intentionally does not expose index iterators. Call `next_batch()` repeatedly
     // to consume the scan in primary_index_key order: first by token, then by the key hash
-    // order for keys that share the same token. The scan remembers the last fully returned
+    // order for keys that share the same token. The scan remembers the last fully visited
     // token and, on the next call, re-seeks from that resume point instead of keeping raw
     // iterators alive.
     //
     // Use it like this:
     //   - construct it with `index.scan()` or `index.scan(range)`;
-    //   - call `next_batch(max_entries)` with the maximum number of entries you want to handle
-    //     in one batch, knowing that the scan will never split a token run;
-    //   - consume every entry in the returned batch synchronously; the batch is not usable after
-    //     a yield.
+    //   - call `next_batch(max_entries, visit)` with the maximum number of entries you want to
+    //     handle in one batch, knowing that the scan will never split a token run, and a `visit`
+    //     that takes what it needs from each entry.
     //
     // The scan is not a snapshot. Later batches observe whatever is currently in the index.
     class token_range_scan {
@@ -227,17 +255,12 @@ public:
         }
 
     public:
-        // A contiguous chunk of index entries returned by `next_batch()`.
+        // A batch describes the entries that one call of `next_batch()` visited.
         //
-        // `entries` are references to entries currently stored in the index, so they are only
-        // meant for immediate consumption. Do not keep them across yields or index mutations.
-        // The scan only saves token position, not entry handles.
+        // `guard` keeps the locations of the visited entries readable. Hold it until all reads
+        // of the records are complete.
         //
-        // `guard` keeps the locations of the entries readable. Hold it until all reads of the
-        // records are complete.
-        //
-        // `first_token` and `last_token` are useful for tracing and resume bookkeeping.
-        // `entry_count` is the number of entries in `entries`.
+        // `entry_count` is the number of entries visited.
         // `exhausted` tells whether this batch reached the end of the requested range.
         //
         // Each batch contains all entries for every token it includes. If adding the next token
@@ -246,7 +269,6 @@ public:
         // case the batch will contain only that token).
         struct batch {
             index_read_guard guard;
-            utils::small_vector<entry_reference, 16> entries;
             dht::token first_token;
             dht::token last_token;
             bool exhausted;
@@ -262,7 +284,14 @@ public:
             return _exhausted;
         }
 
-        std::optional<batch> next_batch(size_t max_entries) {
+        // Visits the entries of the next batch in index order, with `visit(const scanned_entry&)`,
+        // and returns what the batch covered, or nullopt at the end of the range. An entry is valid
+        // inside `visit` and not after it, so `visit` copies what it needs. `visit` must not yield
+        // and must not change the index.
+        template <typename Visit>
+        requires std::invocable<Visit, const scanned_entry&>
+                && std::is_void_v<std::invoke_result_t<Visit, const scanned_entry&>>
+        std::optional<batch> next_batch(size_t max_entries, Visit&& visit) {
             if (_exhausted) {
                 return std::nullopt;
             }
@@ -296,9 +325,8 @@ public:
                 }
 
                 next.last_token = token;
-                next.entries.reserve(next.entries.size() + token_entry_count);
                 for (; current != token_end; ++current) {
-                    next.entries.push_back(std::cref(*current));
+                    visit(scanned_entry(*_index, *current));
                 }
                 next.entry_count += token_entry_count;
             }
@@ -411,10 +439,7 @@ public:
     future<> drain_cache() {
         if (_cache_used) {
             auto scan = this->scan();
-            while (auto batch = scan.next_batch(1024)) {
-                for (const auto& pie : batch->entries) {
-                    _cache_tracker->evict(pie.get());
-                }
+            while (scan.next_batch(1024, [this] (const scanned_entry& e) { _cache_tracker->evict(e._e); })) {
                 co_await coroutine::maybe_yield();
             }
         }
@@ -443,16 +468,6 @@ public:
             result.cached_mutation = _cache_tracker->peek(*it, std::move(target_schema));
         }
         return result;
-    }
-
-    // The cached partition of an entry the caller holds from scan(), with its key, or nullopt when
-    // the entry holds nothing, the cache is not enabled or the read does not use it. Counts a hit
-    // or a miss and touches the LRU, like a point read does. The entry must belong to this index.
-    std::optional<keyed_single_row_partition> lookup_cached(const primary_index_entry& e, const schema& target_schema, use_cache uses_cache) const {
-        if (!reads_cache() || !uses_cache) {
-            return std::nullopt;
-        }
-        return _cache_tracker->read_partition(e, target_schema);
     }
 
     // Finds a key for a point read. Returns nullopt if the index does not have the key. If the
