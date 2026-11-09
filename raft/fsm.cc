@@ -79,8 +79,6 @@ fsm::fsm(server_id id, sstring tag, term_t current_term, server_id voted_for, lo
 
     if (start_as_candidate) {
         become_candidate(false);
-    } else {
-        reset_election_timeout();
     }
 }
 
@@ -347,8 +345,6 @@ void fsm::become_candidate(bool is_prevote, bool is_leadership_transfer) {
     // Note that current state should be destroyed only after the new one is
     // assigned. The exchange here guarantis that.
     std::exchange(_state, candidate(_log.get_configuration(), is_prevote));
-
-    reset_election_timeout();
 
     // 3.4 Leader election
     //
@@ -1014,6 +1010,9 @@ void fsm::tick() {
         // Ensure the follower doesn't disrupt a valid leader
         // simply because there were no AppendEntries RPCs recently.
         _last_election_time = _clock.now();
+    } else if (election_elapsed() == logical_clock::duration{1}) {
+        // The countdown has just started, so the timeout is drawn from the state as of now.
+        reset_election_timeout();
     } else if (is_past_election_timeout()) {
         logger.trace("tick[{}]: becoming a candidate at term {}, last election: {}, now: {}", _tag,
             _current_term, _last_election_time, _clock.now());
