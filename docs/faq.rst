@@ -129,7 +129,7 @@ The following example shows pinning ScyllaDB Enterprise version 2021.1.0-0.20210
    EOF
 
 Pinning may be particularly useful when you want to downgrade ScyllaDB or upgrade to a version that is not the latest 
-available version. See `this article <https://help.ubuntu.com/community/PinningHowto>`_ for details about pinning on Debian-based systems.
+available version. See `AptConfiguration <https://wiki.debian.org/AptConfiguration>`_ for details about pinning on Debian-based systems.
 
 Alternatively, you can explicitly install **all** the ScyllaDB packages for the desired non-latest version. For example:
 
