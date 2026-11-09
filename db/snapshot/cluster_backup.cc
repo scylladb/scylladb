@@ -21,6 +21,7 @@
 #include "db/config.hh"
 #include "db/snapshot-ctl.hh"
 #include "db/system_distributed_keyspace.hh"
+#include "repair/incremental.hh"
 #include "service/storage_proxy.hh"
 #include "sstables/exceptions.hh"
 #include "sstables/sstables.hh"
@@ -192,7 +193,8 @@ static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string&
                 }
                 auto& ti = tablets.at(e.tablet_id);
 
-                if (e.repaired_at < ti.repaired_at || e.repaired_at == 0) {
+                // SCYLLADB-6079. Ensure we use repair::is_repaired condition
+                if (!repair::is_repaired(ti.repaired_at, e.repaired_at)) {
                     return true; // must include
                 }
                 auto i = repair_master.find(ti.first_token);
@@ -319,7 +321,7 @@ static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string&
                 auto& tablet_map = dc_tablets.at(std::get<2>(node_sstables_dc.at(s.node)));
                 auto& ti = tablet_map.at(s.tablet_id);
                 // was this a de-duplicated sstable? If so, with mark additional nodes
-                if (s.repaired_at >= ti.repaired_at && s.repaired_at != 0) {
+                if (repair::is_repaired(ti.repaired_at, s.repaired_at)) {
                     auto i = repair_master.find(ti.first_token);
                     if (i != repair_master.end()) {
                         for (auto& n : i->second.others) {

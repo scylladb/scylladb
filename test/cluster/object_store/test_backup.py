@@ -2473,6 +2473,45 @@ async def test_cluster_snapshot_repair_set_unique(manager: ScyllaClusterManager,
     """
     await do_test_snapshot_on_all_nodes(manager, partial(run_cluster_backup_and_check_redundancy, object_storage), object_storage, True, True)
 
+async def run_cluster_backup_and_check_repair_state(object_storage, rf: int, manager: ScyllaClusterManager, snapshot_name: str, ks: str, cf:str, servers: list[ServerInfo]):
+    """
+    Helper
+    """
+    # add more data outside repair set
+    cql = manager.get_cql()
+    insert_stmt = cql.prepare(f"INSERT INTO {ks}.{cf} (pk, value) VALUES (?, ?)")
+    insert_stmt.consistency_level = ConsistencyLevel.ALL
+    await asyncio.gather(*(cql.run_async(insert_stmt, (str(i), i)) for i in range(100, 200)))
+    # repair again
+    await manager.api.repair(servers[0].ip_addr, ks, cf)
+    # now snapshot
+    await manager.api.take_cluster_snapshot(servers[0].ip_addr, ks, tag=snapshot_name, tables=[cf])
+    # and take a backup. this should be partially deduped
+    manifest = await run_cluster_backup(object_storage, 'kallax', manager, snapshot_name, ks, cf, servers)
+
+    tablets = { t['id']: t for t in manifest['tablets'] }
+
+    for sst in manifest['sstables']:
+        tid = sst['tablet_id']
+        t = tablets[tid]
+        repaired_at = sst['repaired_at']
+        # ah, the glorious copying of logic here. repair::is_repaired:
+        if repaired_at != 0 and repaired_at <= t['repaired_at']:
+            assert len(sst['additional_nodes']) == (rf - 1)
+        else:
+            assert not 'additional_nodes' in sst
+
+@pytest.mark.parametrize("topology", [
+        topo(rf = 2, nodes = 4, racks = 1, dcs = 1),
+        topo(rf = 3, nodes = 6, racks = 3, dcs = 1),
+    ])
+@pytest.mark.asyncio
+async def test_cluster_snapshot_repair_set_repair(manager: ScyllaClusterManager, object_storage, topology):
+    """
+    Tests a cluster snapshot dedups only the repair set
+    """
+    await do_test_snapshot_on_all_nodes(manager, partial(run_cluster_backup_and_check_repair_state, object_storage, topology.rf), object_storage, False, True, topology)
+
 
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
