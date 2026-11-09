@@ -15,12 +15,15 @@
 #include "repair/row_level.hh"
 #include "test/lib/mutation_source_test.hh"
 #include "test/lib/random_utils.hh"
+#include "test/lib/simple_schema.hh"
 #include "test/lib/cql_test_env.hh"
 #include "service/storage_proxy.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
 #include <boost/lexical_cast.hpp>
 #undef SEASTAR_TESTING_MAIN
 #include <seastar/testing/test_case.hh>
+#include <seastar/testing/thread_test_case.hh>
+#include <seastar/util/closeable.hh>
 #include <seastar/util/short_streams.hh>
 #include "test/lib/sstable_utils.hh"
 #include "readers/mutation_fragment_v1_stream.hh"
@@ -350,6 +353,41 @@ SEASTAR_TEST_CASE(repair_rows_size_considers_external_memory) {
         repair_row row_with_boundary{frozen_mf, pos, dk_ptr, std::nullopt, is_dirty_on_master::no, nullptr};
         BOOST_REQUIRE_EQUAL(row_with_boundary.size(), fmf_size + dk_ptr->dk.external_memory_usage() + pos.external_memory_usage() + sizeof(repair_row));
     });
+}
+
+SEASTAR_THREAD_TEST_CASE(repair_row_freezes_on_demand) {
+    reader_concurrency_semaphore sem(reader_concurrency_semaphore::no_limits{}, "read", reader_concurrency_semaphore::register_metrics::no);
+    auto stop_sem = deferred_stop(sem);
+
+    simple_schema ss;
+    schema_ptr s = ss.schema();
+    auto ck = ss.make_ckey(0);
+    reader_permit keep_permit = sem.make_tracking_only_permit(s, "read", db::no_timeout, {});
+
+    auto mf = ss.make_row(keep_permit, ck, "value");
+    auto expected = freeze(*s, mf);
+    auto mf_memory = mf.memory_usage();
+    auto kept = make_lw_shared<mutation_fragment>(std::move(mf));
+
+    auto dk = make_lw_shared<const decorated_key_with_hash>(*s, ss.make_pkey(0), 0);
+    const auto dk_memory = dk->dk.external_memory_usage();
+
+    // Row read from disk: freeze_for_send() drops the in-memory form.
+    repair_row row{dk, repair_hash(), is_dirty_on_master::no, kept};
+    BOOST_REQUIRE_EQUAL(row.size(), mf_memory + sizeof(repair_row) + dk_memory);
+    BOOST_REQUIRE(position_in_partition::equal_compare(*s)(row.position(), position_in_partition::for_key(ck)));
+    row.freeze_for_send(*s);
+    BOOST_REQUIRE(position_in_partition::equal_compare(*s)(row.position(), position_in_partition::for_key(ck)));
+    BOOST_REQUIRE(!row.get_mutation_fragment_ptr());
+    BOOST_REQUIRE_EQUAL(row.size(), row.get_frozen_mutation().representation().size() + sizeof(repair_row)
+            + position_in_partition::for_key(ck).external_memory_usage() + dk_memory);
+    BOOST_REQUIRE(row.get_frozen_mutation().unfreeze(*s, keep_permit).equal(*s, expected.unfreeze(*s, keep_permit)));
+
+    // Row from a peer: freeze_for_send() keeps the in-memory form for flush.
+    repair_row dirty{dk, repair_hash(), is_dirty_on_master::yes, kept};
+    dirty.freeze_for_send(*s);
+    BOOST_REQUIRE(dirty.get_mutation_fragment_ptr());
+    BOOST_REQUIRE(dirty.get_frozen_mutation().unfreeze(*s, keep_permit).equal(*s, expected.unfreeze(*s, keep_permit)));
 }
 
 SEASTAR_TEST_CASE(test_tablet_token_range_count) {
