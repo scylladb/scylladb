@@ -250,10 +250,9 @@ inline index_entries entries_of(const replica::logstor::primary_index& index) {
     index_entries out;
     out.reserve(index.get_usage().key_count);
     auto scan = index.scan();
-    while (auto batch = scan.next_batch(1024)) {
-        for (const auto& e : batch->entries) {
-            out.emplace_back(e.get().key(), e.get().entry());
-        }
+    while (scan.next_batch(1024, [&] (const replica::logstor::primary_index::scanned_entry& e) {
+        out.emplace_back(e.key(), e.entry());
+    })) {
     }
     return out;
 }
