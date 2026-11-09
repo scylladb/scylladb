@@ -22,7 +22,7 @@ from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import HTTPError, ScyllaMetricsClient, TCPRESTClient, inject_error
 from test.pylib.tablets import get_tablet_replicas
 from test.pylib.scylla_cluster import ReplaceConfig
-from test.pylib.util import gather_safely, wait_for
+from test.pylib.util import gather_safely, wait_for, wait_for_cql_and_get_hosts
 
 from test.pylib import nodetool
 from test.pylib.encryption_provider import LocalFileSystemKeyProviderFactory
@@ -249,22 +249,48 @@ async def update_hh_enabled_via_http_api(manager: ScyllaClusterManager, server: 
     assert response == expected
 
 
-async def assert_rows_present(cql, table: str, pk: str, keys) -> None:
-    stmt = SimpleStatement(f"SELECT {pk} FROM {table}", consistency_level=ConsistencyLevel.ONE)
-    rows = await cql.run_async(stmt, all_pages=True)
-    results = set(getattr(row, pk) for row in rows)
-    keys = set(keys)
+async def get_stored_keys(manager: ScyllaClusterManager, server: ServerInfo, table: str, pk: str) -> set:
+    """
+    Return the partition keys of the rows of `table` stored on `server`.
 
-    assert keys.issubset(results), f"{keys} vs. {results}"
+    The rows are read with MUTATION_FRAGMENTS, which only looks at the data the coordinator holds, through
+    the shared driver session with `server` as the coordinator. So the other nodes can be up and running,
+    and it doesn't matter if some of them are dead or paused.
+    """
+    cql = manager.get_cql()
+    [host] = await wait_for_cql_and_get_hosts(cql, [server], time.time() + 60)
+    rows = await cql.run_async(f"SELECT {pk}, mutation_fragment_kind FROM MUTATION_FRAGMENTS({table})", host=host)
+    # A partition holds a partition start and a partition end fragment even
+    # if it carries nothing but a tombstone, so only a clustering row tells
+    # us that a row is really stored.
+    return set(getattr(row, pk) for row in rows if row.mutation_fragment_kind == "clustering row")
 
 
-async def assert_rows_not_present(cql, table: str, pk: str, keys) -> None:
-    stmt = SimpleStatement(f"SELECT {pk} FROM {table}", consistency_level=ConsistencyLevel.ONE)
-    rows = await cql.run_async(stmt, all_pages=True)
-    results = set(getattr(row, pk) for row in rows)
-    keys = set(keys)
+async def get_stored_keys_on_any(manager: ScyllaClusterManager, servers: list[ServerInfo], table: str, pk: str) -> set:
+    """
+    Return the partition keys of the rows of `table` stored on any of `servers`, read with `get_stored_keys()`.
+    """
+    return set().union(*await gather_safely(*[get_stored_keys(manager, server, table, pk) for server in servers]))
 
-    assert len(keys.intersection(results)) == 0, f"{keys} vs. {results}"
+
+async def assert_rows_present(manager: ScyllaClusterManager, servers: list[ServerInfo], table: str, pk: str,
+                              keys) -> None:
+    """
+    Check that each of the rows with the given partition keys is stored on some of `servers`.
+    """
+    stored = await get_stored_keys_on_any(manager, servers, table, pk)
+    missing = set(keys) - stored
+    assert not missing, f"Rows missing from {[server.ip_addr for server in servers]}: {sorted(missing)}"
+
+
+async def assert_rows_not_present(manager: ScyllaClusterManager, servers: list[ServerInfo], table: str, pk: str,
+                                  keys) -> None:
+    """
+    Check that none of the rows with the given partition keys is stored on any of `servers`.
+    """
+    stored = await get_stored_keys_on_any(manager, servers, table, pk)
+    unexpected = set(keys) & stored
+    assert not unexpected, f"Unexpected rows on {[server.ip_addr for server in servers]}: {sorted(unexpected)}"
 
 
 # Write with RF=1 and CL=ANY to a dead node should write hints and succeed
@@ -515,11 +541,8 @@ async def test_discard_hint_segments_up_to_sync_point(manager: ScyllaClusterMana
     assert metrics["sent_total"] >= len(preserved_keys), f"Too few hints have been sent: {metrics}"
 
     # Hints are the only way the written rows could have reached node2.
-    await manager.server_stop_gracefully(node1.server_id)
-    cql = await manager.get_cql_exclusive(node2)
-
-    await assert_rows_not_present(cql, "ks.tbl", "pk", discarded_keys)
-    await assert_rows_present(cql, "ks.tbl", "pk", preserved_keys)
+    await assert_rows_not_present(manager, [node2], "ks.tbl", "pk", discarded_keys)
+    await assert_rows_present(manager, [node2], "ks.tbl", "pk", preserved_keys)
 
 
 @pytest.mark.skip_mode(
@@ -583,16 +606,8 @@ async def test_discard_hint_segments_only_for_sync_point_hosts(manager: ScyllaCl
     assert metrics["sent_total"] >= len(keys), f"Too few hints have been sent: {metrics}"
 
     # Hints are the only way the written rows could have reached node 2 and node 3.
-    await gather_safely(*[manager.server_stop_gracefully(srv.server_id) for srv in (node1, node3)])
-    cql = await manager.get_cql_exclusive(node2)
-    await assert_rows_not_present(cql, "ks.tbl", "pk", keys)
-
-    await gather_safely(*[
-        manager.server_start(node3.server_id),
-        manager.server_stop_gracefully(node2.server_id)])
-
-    cql = await manager.get_cql_exclusive(node3)
-    await assert_rows_present(cql, "ks.tbl", "pk", keys)
+    await assert_rows_not_present(manager, [node2], "ks.tbl", "pk", keys)
+    await assert_rows_present(manager, [node3], "ks.tbl", "pk", keys)
 
 
 @pytest.mark.skip_mode(mode='release', reason="error injections aren't enabled in release mode")
@@ -753,11 +768,7 @@ async def test_draining_hints(manager: ScyllaClusterManager):
         await s1_log.wait_for("DECOMMISSIONING: draining hints", from_mark=s1_mark, timeout=60)
         await manager.api.disable_injection(s1.ip_addr, "hinted_handoff_pause_hint_replay")
 
-    await manager.server_stop_gracefully(s3.server_id)
-    await manager.others_not_see_server(s3.ip_addr)
-    cql = await manager.get_cql_exclusive(s2)
-    rows = await cql.run_async(SimpleStatement("SELECT pk, v FROM ks.t", consistency_level=ConsistencyLevel.ONE))
-    assert sorted((r.pk, r.v) for r in rows) == [(i, i + 1) for i in range(100)]
+    await assert_rows_present(manager, [s2], "ks.t", "pk", range(100))
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_failed_hint_draining_does_not_block_decommission(manager: ScyllaClusterManager):
@@ -1051,10 +1062,7 @@ async def test_hints_rebalance(manager: ScyllaClusterManager):
     await update_hh_enabled_via_http_api(manager, s1, "true")
     await wait_until_hints_are_sent_from(manager, [s1], expected_rows)
 
-    await manager.server_stop_gracefully(s1.server_id)
-
-    cql = await manager.get_cql_exclusive(s2)
-    await assert_rows_present(cql, "ks.t", "pk", list(range(expected_rows)))
+    await assert_rows_present(manager, [s2], "ks.t", "pk", list(range(expected_rows)))
 
 
 @pytest.mark.skip_mode(mode="release", reason="error injections aren't enabled in release mode")
@@ -1120,12 +1128,10 @@ async def test_hints_encrypted_segments_after_rebalancing(manager: ScyllaCluster
         asyncio.create_task(manager.server_start(s2.server_id))])
 
     await wait_until_hints_are_sent_from(manager, [s1], expected_count=written_total)
-    await manager.server_stop_gracefully(s1.server_id)
 
-    cql = await manager.get_cql_exclusive(s2)
-    stmt = SimpleStatement("SELECT count(*) FROM ks.t", consistency_level=ConsistencyLevel.ONE)
-    results = await cql.run_async(stmt)
-    assert results[0].count == written_total
+    # Every write generated exactly one hint, so the hints must have delivered all of the rows.
+    assert written_total == row_count
+    await assert_rows_present(manager, [s2], "ks.t", "pk", list(range(row_count)))
 
 
 @pytest.mark.skip_mode(mode="release", reason="error injections aren't enabled in release mode")
@@ -1190,10 +1196,7 @@ async def test_hints_after_enabling_commitlog_encryption(manager: ScyllaClusterM
     await manager.server_start(s2.server_id)
     await wait_until_hints_are_sent_from(manager, [s1], 2 * row_count)
 
-    await manager.server_stop_gracefully(s1.server_id)
-
-    cql = await manager.get_cql_exclusive(s2)
-    await assert_rows_present(cql, "ks.t", "pk", list(range(2 * row_count)))
+    await assert_rows_present(manager, [s2], "ks.t", "pk", list(range(2 * row_count)))
 
 
 @pytest.mark.skip_mode(mode="release", reason="error injections and the hinted handoff test API aren't available in release mode")
@@ -1388,7 +1391,7 @@ async def test_hints_decom(manager: ScyllaClusterManager):
     await log.wait_for(f"drain_for: finished draining {s3_host_id}", from_mark=mark)
 
     # Make sure all rows are present.
-    await assert_rows_present(cql, "ks.tbl", "pk", list(range(row_count)))
+    await assert_rows_present(manager, [s1, s2], "ks.tbl", "pk", list(range(row_count)))
 
     await gather_safely(wait_for_hint_dir_removed(s1_hints_dir, s3_host_id),
                         wait_for_hint_dir_removed(s2_hints_dir, s3_host_id))
@@ -1494,13 +1497,7 @@ async def test_support_max_hh_concurrency_param(manager: ScyllaClusterManager,
 
     await wait_until_hints_are_sent_from(manager, [s2], expected_count=row_count)
 
-    await manager.server_stop_gracefully(s2.server_id)
-
-    cql = await manager.get_cql_exclusive(s1)
-    results = await cql.run_async(SimpleStatement(
-        "SELECT count(*) FROM ks.t",
-        consistency_level=ConsistencyLevel.ONE))
-    assert results[0].count == row_count
+    await assert_rows_present(manager, [s1], "ks.t", "pk", range(row_count))
 
 
 async def test_ignore_invalid_hint_directories(manager: ScyllaClusterManager):
@@ -1588,22 +1585,13 @@ async def test_hints_switch_config_in_runtime_via_http_api(manager: ScyllaCluste
     await update_hh_enabled_via_http_api(manager, s1, "true")
     await wait_until_hints_are_sent_from(manager, [s1], expected_hints)
 
-    await gather_safely(*[
-        manager.server_stop_gracefully(s1.server_id),
-        manager.server_stop_gracefully(s3.server_id)])
+    await assert_rows_present(manager, [s2], "ks.t", "pk", keys_enabled)
+    await assert_rows_not_present(manager, [s2], "ks.t", "pk", keys_disabled)
+    await assert_rows_not_present(manager, [s2], "ks.t", "pk", keys_dc3_only)
 
-    cql = await manager.get_cql_exclusive(s2)
-    await assert_rows_present(cql, "ks.t", "pk", keys_enabled)
-    await assert_rows_not_present(cql, "ks.t", "pk", keys_disabled)
-    await assert_rows_not_present(cql, "ks.t", "pk", keys_dc3_only)
-
-    await manager.server_start(s3.server_id)
-    await manager.server_stop_gracefully(s2.server_id)
-
-    cql = await manager.get_cql_exclusive(s3)
-    await assert_rows_present(cql, "ks.t", "pk", keys_enabled)
-    await assert_rows_not_present(cql, "ks.t", "pk", keys_disabled)
-    await assert_rows_present(cql, "ks.t", "pk", keys_dc3_only)
+    await assert_rows_present(manager, [s3], "ks.t", "pk", keys_enabled)
+    await assert_rows_not_present(manager, [s3], "ks.t", "pk", keys_disabled)
+    await assert_rows_present(manager, [s3], "ks.t", "pk", keys_dc3_only)
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
@@ -1711,7 +1699,7 @@ async def test_hintedhandoff_sync_point_api(manager: ScyllaClusterManager):
     await wait_for_sync_point(s1, sync_point_id, 0, expect="DONE")
 
     logger.info("Verifying that hints replayed all of the data...")
-    await assert_rows_present(cql, "ks.t", "pk", keys1)
+    await assert_rows_present(manager, [s1, s2], "ks.t", "pk", keys1)
 
     logger.info("SUBTEST 2: Create a hint sync point, shutdown the waiting node and observe the failure")
 
@@ -1791,7 +1779,7 @@ async def test_hintedhandoff_sync_point_api(manager: ScyllaClusterManager):
     await wait_for_sync_point(s1, sync_point_id, 60, expect="DONE")
 
     logger.info("Verifying that hints replayed all of the data...")
-    await assert_rows_present(cql, "ks.t", "pk", keys3)
+    await assert_rows_present(manager, [s1, s2], "ks.t", "pk", keys3)
 
     logger.info("SUBTEST 4: Create a hint sync point and try to use it on another node - should fail")
 
@@ -1835,7 +1823,8 @@ async def test_hintedhandoff_sync_point_api(manager: ScyllaClusterManager):
     await asyncio.wait_for(fut, timeout=60)
 
     logger.info("Verifying that hints replayed all of the data...")
-    await assert_rows_present(cql, "ks.t", "pk", keys5)
+    # s2 is gone, so all of the rows must have ended up on s1.
+    await assert_rows_present(manager, [s1], "ks.t", "pk", keys5)
 
 
 @pytest.mark.skip_mode(mode="release", reason="error injections and the hinted handoff test API aren't available in release mode")
@@ -2116,13 +2105,8 @@ async def test_corrupted_segment(manager: ScyllaClusterManager):
     # Make sure the segment is really gone.
     assert not os.path.isfile(victim_segment)
 
-    await manager.server_stop(node1.server_id, convict=True)
-
     # Verify that node 2 received the hints that node 1 sent.
-    cql = await manager.get_cql_exclusive(node2)
-    stmt = SimpleStatement("SELECT count(*) FROM ks.tbl", consistency_level=ConsistencyLevel.ONE)
-    results = await cql.run_async(stmt)
-    row_count = results[0].count
+    row_count = len(await get_stored_keys(manager, node2, "ks.tbl", "pk"))
 
     if send_errors == 0:
         assert row_count == sent_total, f"Unexpected number of rows: {row_count} vs. {sent_total}"
@@ -2268,13 +2252,8 @@ async def test_corrupted_segment_hint_fails_before_corruption(manager: ScyllaClu
 
     send_errors_after = await get_hint_metrics(manager.metrics, node1.ip_addr, "send_errors")
 
-    await manager.server_stop(node1.server_id, convict=True)
-
     # Verify that node 2 received the sent hints.
-    cql = await manager.get_cql_exclusive(node2)
-    stmt = SimpleStatement("SELECT count(*) FROM ks.tbl", consistency_level=ConsistencyLevel.ONE)
-    results = await cql.run_async(stmt)
-    row_count = results[0].count
+    row_count = len(await get_stored_keys(manager, node2, "ks.tbl", "pk"))
 
     if send_errors_after == send_errors:
         assert row_count == expected_row_count, \
@@ -2470,18 +2449,12 @@ async def test_hints_older_than_gc_grace_are_not_replayed(manager: ScyllaCluster
     assert metrics["sent_total"] == 2, f"Unexpected number of sent hints: {metrics}"
     assert metrics["discarded"] == 2, f"Unexpected number of discarded hints: {metrics}"
 
-    await manager.server_stop_gracefully(s1.server_id)
-    cql = await manager.get_cql_exclusive(s2)
-
     for table_name, _, gc_grace_seconds in table_specs:
-        rows = await cql.run_async(SimpleStatement(
-            f"SELECT * FROM ks.{table_name}",
-            consistency_level=ConsistencyLevel.ONE))
-
         if gc_grace_seconds == gc_grace_seconds_short:
-            assert list(rows) == [], f"A hint to {table_name} has been replayed"
+            # A hint to the table must not have been replayed.
+            await assert_rows_not_present(manager, [s2], f"ks.{table_name}", "pk", [0])
         elif gc_grace_seconds == gc_grace_seconds_long:
-            assert [(row.pk, row.v) for row in rows] == [(0, 1)], \
-                f"A hint to {table_name} has NOT been replayed"
+            # A hint to the table must have been replayed.
+            await assert_rows_present(manager, [s2], f"ks.{table_name}", "pk", [0])
         else:
             pytest.fail(f"Unknown gc_grace_seconds value for {table_name}: {gc_grace_seconds}")
