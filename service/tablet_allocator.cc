@@ -757,6 +757,9 @@ class load_balancer {
 
         std::vector<shard_load> shards; // Indexed by shard_id to which a given shard_load corresponds.
 
+        // Number of tablet repairs (kind repair) this node takes part in, as master or follower.
+        size_t repair_count = 0;
+
         utils::chunked_vector<skipped_candidate> skipped_candidates;
 
         std::optional<double> capacity_per_shard() const {
@@ -1326,9 +1329,55 @@ public:
                 if (is_streaming(&trinfo)) {
                     auto& tinfo = tmap.get_tablet_info(tid);
                     apply_load(nodes, get_migration_streaming_info(topo, tinfo, trinfo));
+                    if (trinfo.transition == tablet_transition_kind::repair) {
+                        apply_repair_count(nodes, tinfo.replicas);
+                    }
                 }
             }
         }
+    }
+
+    void apply_repair_count(node_load_map& nodes, const tablet_replica_set& replicas) {
+        for (auto&& r : replicas) {
+            if (auto it = nodes.find(r.host); it != nodes.end()) {
+                ++it->second.repair_count;
+            }
+        }
+    }
+
+    // The tablet_repair_max_per_node limit of a node, 0 meaning no limit.
+    size_t tablet_repair_max_per_node(const node_load& n) const {
+        namespace ccr = db::cluster_config_registry;
+        const auto* opt = ccr::find(ccr::option_name::tablet_repair_max_per_node);
+        if (!opt || !_cluster_config_manager.is_ready()) {
+            return 0;
+        }
+        return _cluster_config_manager.resolve_integer_config(*opt, {
+            .dc_name = n.node->dc_rack().dc,
+            .rack_name = n.node->dc_rack().rack,
+            .node_uuid = n.id.uuid(),
+        });
+    }
+
+    // True if no replica host of the tablet would exceed its tablet_repair_max_per_node limit.
+    bool can_accept_repair(node_load_map& nodes, const tablet_replica_set& replicas,
+            std::unordered_map<host_id, size_t>& limits) const {
+        for (auto&& r : replicas) {
+            auto it = nodes.find(r.host);
+            if (it == nodes.end()) {
+                continue;
+            }
+            auto [lit, inserted] = limits.try_emplace(r.host, 0);
+            if (inserted) {
+                lit->second = tablet_repair_max_per_node(it->second);
+            }
+            if (lit->second && it->second.repair_count >= lit->second) {
+                lblogger.debug("Repair skipped because of the per-node repair limit on {} ({}/{})",
+                        r.host, it->second.repair_count, lit->second);
+                return false;
+            }
+        }
+        return true;
     }
 
     future<> consider_planned_load(node_load_map& nodes, const migration_plan& mplan) {
@@ -1461,12 +1510,14 @@ public:
 
         auto trinfo = tablet_transition_info(locator::tablet_transition_stage::repair,
                 locator::tablet_transition_kind::repair, tablet_replica_set(), {}, service::session_id());
+        std::unordered_map<host_id, size_t> repair_limits;
         for (auto& plan : plans) {
             co_await coroutine::maybe_yield();
             tablet_migration_streaming_info tmsi;
             tmsi = get_migration_streaming_info(topo, plan.tinfo, trinfo);
-            if (can_accept_load(nodes, tmsi)) {
+            if (can_accept_load(nodes, tmsi) && can_accept_repair(nodes, plan.tinfo.replicas, repair_limits)) {
                 apply_load(nodes, tmsi);
+                apply_repair_count(nodes, plan.tinfo.replicas);
                 ret.add(plan.gid);
             }
         }

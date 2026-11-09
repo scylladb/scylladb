@@ -257,11 +257,26 @@ future<> cluster_config_manager::refresh_fiber() {
                 return manager.apply_refresh(caches);
             });
             if (cluster_config_logger.is_enabled(logging::log_level::debug)) {
-                std::vector<sstring> cluster_scope;
-                for (const auto& [name, value] : caches.cluster_configs) {
-                    cluster_scope.push_back(format("{}={}", name, value));
-                }
-                cluster_config_logger.debug("Refreshed cluster config cache, cluster scope: {}", fmt::join(cluster_scope, ", "));
+                auto format_values = [] (const config_map& values) {
+                    std::vector<sstring> entries;
+                    for (const auto& [name, value] : values) {
+                        entries.push_back(fmt::format("{}={}", name, value));
+                    }
+                    return fmt::format("{{{}}}", fmt::join(entries, ", "));
+                };
+                auto format_scope = [&] (const auto& scope_values, auto&& format_key) {
+                    std::vector<sstring> entries;
+                    for (const auto& [key, values] : scope_values) {
+                        entries.push_back(fmt::format("{}: {}", format_key(key), format_values(values)));
+                    }
+                    return fmt::format("{{{}}}", fmt::join(entries, ", "));
+                };
+                // The keyspace and table scopes can hold thousands of entries, so they are left out.
+                cluster_config_logger.debug("Refreshed cluster config cache, cluster scope: {}, datacenter scope: {}, rack scope: {}, node scope: {}",
+                        format_values(caches.cluster_configs),
+                        format_scope(caches.dc_configs, [] (const sstring& dc) { return dc; }),
+                        format_scope(caches.rack_configs, [] (const rack_key& key) { return fmt::format("{}/{}", std::get<0>(key), std::get<1>(key)); }),
+                        format_scope(caches.node_configs, [] (const utils::UUID& id) { return fmt::to_string(id); }));
             }
         } catch (...) {
             failure = std::current_exception();

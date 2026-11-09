@@ -189,6 +189,12 @@ Available options
        acknowledged at consistency level ``ANY`` that only hints hold is lost. Hints for
        materialized views are never discarded. Default: ``true``, in effect once every node knows
        the option.
+   * - ``tablet_repair_max_per_node``
+     - integer
+     - ``CLUSTER``, ``DATACENTER``, ``RACK``, ``NODE``
+     - The maximum number of tablet repairs a node takes part in at the same time, as the repair
+       master or a follower. Applies to user-requested and automatic tablet repair. Default: ``0``,
+       no per-node limit: each shard can take part in one tablet repair.
    * - ``auto_scrub_period_seconds``
      - integer
      - ``CLUSTER``, ``KEYSPACE``, ``TABLE``
