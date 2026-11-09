@@ -2067,6 +2067,78 @@ async def test_tablet_load_and_stream_and_split_synchronization(manager: ScyllaC
 
         await check(ks)
 
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_split_finalization_vs_abandoned_load_and_stream_receiver(manager: ScyllaClusterManager):
+    cfg = {'tablet_load_stats_refresh_interval_in_seconds': 1}
+    # The split ack is logged by shard 0 only, so keep the tablets there.
+    cmdline = [
+        '--smp', '1',
+        '--logger-log-level', 'raft_topology=debug',
+        '--logger-log-level', 'table=debug',
+    ]
+    servers = await manager.servers_add(2, config=cfg, cmdline=cmdline, auto_rack_dc="dc1")
+    sender, receiver = servers
+
+    await manager.disable_tablet_balancing()
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+        keys = range(100)
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k})") for k in keys])
+        await manager.api.flush_keyspace(sender.ip_addr, ks)
+
+        sender_workdir = await manager.server_get_workdir(sender.server_id)
+        await safe_server_stop_gracefully(manager, sender.server_id)
+        move_sstables_to_upload(glob.glob(os.path.join(sender_workdir, "data", ks, "test-*"))[0])
+        await manager.server_start(sender.server_id)
+        cql = manager.get_cql()
+        await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
+        logs = [await manager.server_open_log(s.server_id) for s in servers]
+        marks = [await log.mark() for log in logs]
+
+        await asyncio.gather(*[manager.api.enable_injection(s.ip_addr, "tablet_resize_finalization_postpone", one_shot=False) for s in servers])
+        await manager.enable_tablet_balancing()
+        await cql.run_async(f"ALTER TABLE {ks}.test WITH tablets = {{'min_tablet_count': 2}}")
+        for log, mark in zip(logs, marks):
+            await log.wait_for("Setting split ready sequence number", from_mark=mark)
+
+        # The sender waits for the receiver to report the attach, so it holds its topology
+        # version, and with it finalization, until it is killed.
+        await manager.api.enable_injection(receiver.ip_addr, "stream_consumer_wait_before_add", one_shot=True)
+        load_and_stream = asyncio.create_task(manager.api.load_new_sstables(sender.ip_addr, ks, "test"))
+        await manager.api.wait_for_injection_enter(receiver.ip_addr, "stream_consumer_wait_before_add")
+
+        marks = [await log.mark() for log in logs]
+        await manager.server_stop(sender.server_id, convict=True)
+        with pytest.raises(Exception):
+            await load_and_stream
+        await manager.server_start(sender.server_id)
+        await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
+        await asyncio.gather(*[manager.api.disable_injection(s.ip_addr, "tablet_resize_finalization_postpone") for s in servers])
+
+        async def finalization_postponed():
+            for log, mark in zip(logs, marks):
+                if await log.grep("Postponing split finalization of tables", from_mark=mark):
+                    return True
+            return None
+        await wait_for(finalization_postponed, time.time() + 120)
+        assert await get_tablet_count(manager, receiver, ks, 'test') == 1
+
+        await manager.api.message_injection(receiver.ip_addr, "stream_consumer_wait_before_add")
+        await logs[1].wait_for("Stale topology detected, request has been fenced out", from_mark=marks[1])
+
+        async def split_finished():
+            return await get_tablet_count(manager, receiver, ks, 'test') == 2 or None
+        await wait_for(split_finished, time.time() + 120)
+
+        # The sender may have been killed before attaching the sstables locally, but the rows
+        # are still on the receiver, from the inserts.
+        rows = await cql.run_async(SimpleStatement(f"SELECT * FROM {ks}.test BYPASS CACHE", consistency_level=ConsistencyLevel.ALL))
+        assert sorted(r.pk for r in rows) == list(keys)
+
 async def test_update_load_stats_after_rebuild(manager: ScyllaClusterManager):
     logger.info("Bootstrapping cluster")
     cmdline = [
