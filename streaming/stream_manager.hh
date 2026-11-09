@@ -21,6 +21,7 @@
 #include "gms/endpoint_state.hh"
 #include "gms/application_state.hh"
 #include "service/topology_guard.hh"
+#include "service/fencing_token.hh"
 #include "readers/mutation_reader.hh"
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/metrics_registration.hh>
@@ -171,7 +172,8 @@ public:
     shared_ptr<stream_session> get_session(streaming::plan_id plan_id, locator::host_id from, const char* verb, std::optional<table_id> cf_id = {});
 
     mutation_reader_consumer make_streaming_consumer(
-            uint64_t estimated_partitions, stream_reason, service::frozen_topology_guard);
+            uint64_t estimated_partitions, stream_reason, service::frozen_topology_guard,
+            service::fencing_token, locator::host_id from);
 public:
     virtual future<> on_dead(inet_address endpoint, locator::host_id id, endpoint_state_ptr state, gms::permit_id) override;
     virtual future<> on_remove(inet_address endpoint, locator::host_id id, gms::permit_id) override;
