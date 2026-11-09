@@ -121,7 +121,8 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
     ms.register_stream_mutation_fragments([this, &as] (const rpc::client_info& cinfo, streaming::plan_id plan_id, table_schema_version schema_id, table_id cf_id, uint64_t estimated_partitions,
             rpc::optional<stream_reason> reason_opt,
             rpc::source<frozen_mutation_fragment, rpc::optional<stream_mutation_fragments_cmd>> source,
-            rpc::optional<service::session_id> session) {
+            rpc::optional<service::session_id> session,
+            rpc::optional<service::fencing_token>) {
         auto from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
         auto cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
 
