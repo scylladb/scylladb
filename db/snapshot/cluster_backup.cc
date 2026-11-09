@@ -166,32 +166,33 @@ static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string&
             std::unordered_set<locator::host_id> others;
         };
 
-        std::unordered_map<db::snapshot_dc_location, std::unordered_map<dht::token, dedup_state>> repair_masters;
-        std::unordered_map<locator::host_id, std::tuple<size_t, size_t, std::string>> node_sstables_dc;
+        std::unordered_multimap<sstables::sstable_id, locator::host_id> dedup_nodes;
 
-        for (const db::snapshot_node_entry& node : nodes_for_location) {
-            if (auto e = as.abort_requested_exception_ptr(); e) {
-                snap_log.warn("Abort {} requested when processing {}, {}:{}", snapshot_name, node.node, keyspace, table);
-                std::rethrow_exception(e);
+        auto node_map = nodes | std::views::transform([](auto& node) {
+            return std::make_pair(node.node, &node);
+        }) | std::ranges::to<std::unordered_map>();
+
+        for (auto& [dc, dst] : dc_locations) {
+            auto dc_nodes = nodes | std::views::filter([&](auto& n) { return n.datacenter == dc; });
+            auto racks = dc_nodes | std::views::transform(std::mem_fn(&db::snapshot_node_entry::rack)) | std::ranges::to<std::set>(); // need order
+            auto& dst_info = dst_mapping[dst];
+
+            dst_info.datacenters.emplace(dc);
+
+            for (auto& rack : racks) {
+                // we at least initially will hold all sstable data in memory. not ideal, but I can't think
+                // of a better approach, unless we add the ability to query by tablet. But then we have
+                // many more queries, which might be worse
+                auto sstables = co_await sth.get_snapshot_sstables(snapshot_name, keyspace, table, dc, rack);
+                dst_info.sstables.insert(dst_info.sstables.end(), sstables.begin(), sstables.end());
             }
-            snap_log.info("Calculating sstable set for {} node {}, {}:{}", snapshot_name, node.node, keyspace, table);
+        }
 
-            SCYLLA_ASSERT(state_filter.count(node.datacenter));
-            SCYLLA_ASSERT(dc_locations.count(node.datacenter));
-
-            auto& dst = dc_locations.at(node.datacenter);
-            auto& repair_master = repair_masters[dst];
-            auto sstables = co_await sth.get_snapshot_sstables(snapshot_name, keyspace, table, node.datacenter, node.rack);
-            auto& tablets = dc_tablets.at(node.datacenter);
-
-            // eliminate all but one of the completed repair set.
-            // for each tablet/dc, we include sstables that are either 
-            // not repaired, or if they are, if we are the first node
-            // to process the tablet.
-            sstables = sstables | std::views::filter([&](auto& e) {
-                if (e.node != node.node) {
-                    return false; // cannot claim sstable not on my node.
-                }
+        for (auto& [dst, dst_info] : dst_mapping) {
+            // partition so repaired data is at the tail
+            auto tail = std::ranges::partition(dst_info.sstables, [&](auto& e) {
+                auto& dc = node_map.at(e.node)->datacenter;
+                auto& tablets = dc_tablets.at(dc);
                 auto& ti = tablets.at(e.tablet_id);
 
                 // SCYLLADB-6079. Typo error whern reversing this condition
@@ -199,24 +200,63 @@ static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string&
                 if (e.repaired_at > ti.repaired_at || e.repaired_at == 0) {
                     return true; // must include
                 }
-                auto i = repair_master.find(ti.first_token);
-                if (i == repair_master.end()) {
-                    i = repair_master.emplace(ti.first_token, dedup_state{ .owner = node.node }).first;
-                }
-                auto include = i->second.owner == node.node;
-                if (!include) {
+                return false;
+            });
+
+            snap_log.debug("Backup location {}:{}:{}. {} sstables in repair set, {} non-repaired"
+                , dst.endpoint, dst.bucket, dst.prefix
+                , std::distance(tail.begin(), tail.end())
+                , std::distance(dst_info.sstables.begin(), tail.begin())
+                );
+
+            // tail is now repair set for this location
+            // sort by tablet and node
+            std::ranges::sort(tail, [](auto& e1, auto& e2) {
+                return std::tie(e1.tablet_id, e1.node) < std::tie(e2.tablet_id, e2.node);
+            });
+
+            auto out = tail.begin();
+            auto i = tail.begin();
+            auto end = tail.end();
+            uint64_t count = 0;
+
+            while (i != end) {
+                auto tablet = i->tablet_id;
+                auto j = std::find_if(i, end, [tablet](auto& e) { return e.tablet_id != tablet; });
+                // find all replicas for the tablet, grouped by node
+                auto replicas = std::ranges::subrange(i, j) | std::views::chunk_by([](auto& e1, auto& e2) {
+                    return e1.node == e2.node;
+                });
+                // now pick a replica based on round-robin
+                auto n = std::distance(replicas.begin(), replicas.end());
+                auto use = replicas | std::views::drop(count % n);
+
+                const auto subrange = *use.begin();
+                // subrange cannot be empty
+                auto& node = *node_map.at(subrange.begin()->node);
+
+                for (auto&& e: subrange) {
                     snap_log.debug("De-duplicating sstable {} from {}:{} for {}", e.sstable_id, node.datacenter, node.rack, node.node);
-                    i->second.others.emplace(node.node);
+                    // add all other nodes to the deduplicated list for this sstable
+                    for (auto r : replicas) {
+                        auto other_node = r.begin()->node;
+                        if (other_node != e.node) {
+                            dedup_nodes.emplace(e.sstable_id, other_node);
+                        }
+                    }
+                    *out++ = std::move(e);
                 }
-                return include; // we claimed the token range
-            }) | std::ranges::to<utils::chunked_vector<db::snapshot_sstable_entry>>();
 
-            auto& dst_info = dst_mapping[dst];
-            auto off = dst_info.sstables.size(), n = sstables.size();
-            dst_info.sstables.insert(dst_info.sstables.end(), sstables.begin(), sstables.end());
-            dst_info.datacenters.emplace(node.datacenter);
+                i = j;
+                ++count;
+            }
 
-            node_sstables_dc.emplace(node.node, std::make_tuple(off, n, node.datacenter));
+            // remove trailing empty
+            dst_info.sstables.erase(out, end);
+            // sort by node
+            std::ranges::sort(dst_info.sstables, [](auto& e1, auto& e2) {
+                return e1.node < e2.node;
+            });
         }
 
         co_await coroutine::parallel_for_each(nodes_for_location, [&](const db::snapshot_node_entry& node) -> future<>{
@@ -231,14 +271,13 @@ static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string&
             SCYLLA_ASSERT(state_filter.count(node.datacenter));
             SCYLLA_ASSERT(dc_locations.count(node.datacenter));
 
-            auto [off, n, _]= node_sstables_dc.at(node.node);
             auto filter = state_filter.at(node.datacenter);
             auto& dst = dc_locations.at(node.datacenter);
             auto& dst_info = dst_mapping[dst];
 
             // filter out sstables already backed up
-            auto sstables = std::ranges::subrange(dst_info.sstables.begin() + off, dst_info.sstables.begin() + off + n) | std::views::filter([&node, filter](auto& e) { 
-                return e.node == node.node && e.state < filter;
+            auto sstables = dst_info.sstables | std::views::filter([&node, filter](auto& e) { 
+                return node.node == e.node && e.state < filter;
             }) | std::ranges::to<utils::chunked_vector<db::snapshot_sstable_entry>>();
 
             if (sstables.empty()) {
@@ -289,7 +328,6 @@ static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string&
         // Now generate a manifest
         co_await coroutine::parallel_for_each(dst_mapping, [&](const auto& pair) -> future<> {
             auto& [dst, info] = pair;
-            auto& repair_master = repair_masters[dst];
 
             snap_log.info("Generate manifest for {} {}:{} ({}:{}/{})", snapshot_name, keyspace, table, dst.endpoint, dst.bucket, dst.prefix);
 
@@ -320,17 +358,11 @@ static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string&
 
             for (auto& s : info.sstables) {
                 manifest_json::sstable_info sst(s);
-                auto& tablet_map = dc_tablets.at(std::get<2>(node_sstables_dc.at(s.node)));
-                auto& ti = tablet_map.at(s.tablet_id);
                 // was this a de-duplicated sstable? If so, with mark additional nodes
-                if (s.repaired_at >= ti.repaired_at && s.repaired_at != 0) {
-                    auto i = repair_master.find(ti.first_token);
-                    if (i != repair_master.end()) {
-                        for (auto& n : i->second.others) {
-                            snap_log.debug("Adding additional (deduplicated) node  {} for sstable {}", n, s.sstable_id);
-                            sst.additional_nodes.push(n.to_sstring());
-                        }
-                    }
+                auto r = dedup_nodes.equal_range(s.sstable_id);
+                for (auto& n : std::ranges::subrange(r.first, r.second) | std::views::values) {
+                    snap_log.debug("Adding additional (deduplicated) node  {} for sstable {}", n, s.sstable_id);
+                    sst.additional_nodes.push(n.to_sstring());
                 }
                 manifest.sstables.push(sst);
             }
