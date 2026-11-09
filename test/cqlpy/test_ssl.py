@@ -120,12 +120,14 @@ def test_system_clients_stores_tls_info(cql):
             # session's) should be TLS 1.2.
             expected_ciphers = [normalize_cipher(cipher['name']) for cipher in ssl.create_default_context().get_ciphers()]
             deadline = time.time() + 10  # 10 seconds timeout
+            ports, rows, all_rows = set(), [], []
             while time.time() < deadline:
                 # Under test.py the framework also holds plain-text connections; check only this session's.
                 ports = {c._socket.getsockname()[1]
                          for h in session.cluster.get_connection_holders()
                          for c in h.get_connections() if c._socket}
-                rows = [row for row in session.execute("SELECT * FROM system.clients") if row.port in ports]
+                all_rows = list(session.execute("SELECT * FROM system.clients"))
+                rows = [row for row in all_rows if row.port in ports]
                 if rows and all(
                     row.ssl_enabled
                     and row.ssl_protocol in ('TLS1.2', 'TLS1.3')
@@ -134,7 +136,11 @@ def test_system_clients_stores_tls_info(cql):
                 ) and any(row.ssl_protocol == 'TLS1.2' for row in rows):
                     return
                 time.sleep(0.01)
-            pytest.fail(f"Not all connections have TLS data set correctly in system.clients after 10 seconds")
+            # Show the last poll, unfiltered too: the failing condition is otherwise invisible (SCYLLADB-6126).
+            def fmt(rs):
+                return [(r.port, r.ssl_enabled, r.ssl_protocol, r.ssl_cipher_suite) for r in rs]
+            pytest.fail("Not all connections have TLS data set correctly in system.clients after 10 seconds: "
+                        f"ports={sorted(ports)} ours(port, ssl_enabled, protocol, cipher)={fmt(rows)} all={fmt(all_rows)}")
 
 
 @contextmanager
