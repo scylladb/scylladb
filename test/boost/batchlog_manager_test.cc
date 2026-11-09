@@ -403,8 +403,9 @@ SEASTAR_TEST_CASE(test_batchlog_replay_with_cleanup) {
 // the replay. It used to be reported as successful, and the batch was then
 // deleted with its mutations never written.
 //
-// With a replication strategy other than NetworkTopologyStrategy, the replay
-// writes always were cancellable.
+// With NetworkTopologyStrategy, the replay writes use
+// datacenter_sync_write_response_handler, which used not to be cancellable,
+// so abort_batch_writes() missed them.
 static future<> do_test_batchlog_replay_write_cancelled_before_send(std::string_view replication_strategy) {
 #ifndef SCYLLA_ENABLE_ERROR_INJECTION
     return make_ready_future<>();
@@ -494,6 +495,10 @@ static future<> do_test_batchlog_replay_write_cancelled_before_send(std::string_
 
 SEASTAR_TEST_CASE(test_batchlog_replay_write_cancelled_before_send) {
     return do_test_batchlog_replay_write_cancelled_before_send("SimpleStrategy");
+}
+
+SEASTAR_TEST_CASE(test_batchlog_replay_write_cancelled_before_send_nts) {
+    return do_test_batchlog_replay_write_cancelled_before_send("NetworkTopologyStrategy");
 }
 
 SEASTAR_TEST_CASE(test_batchlog_replay_stage) {
