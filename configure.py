@@ -632,6 +632,7 @@ scylla_tests = set([
     'test/boost/object_storage_upload_test',
     'test/boost/observable_test',
     'test/boost/partitioner_test',
+    'test/boost/position_range_utils_test',
     'test/boost/pretty_printers_test',
     'test/boost/radix_tree_test',
     'test/boost/range_tombstone_list_test',
