@@ -1079,6 +1079,38 @@ void schema_applier::commit_on_shard(replica::database& db, uint64_t commit_gen)
 // (requires switching all affected subsystems to 'applier' interface first)
 future<> schema_applier::commit() {
     auto& sharded_db = _proxy.local().get_db();
+
+    // A table created with the ID of a dropped table, for example from the
+    // schema.cql of a snapshot, gets the directory of the dropped table. The
+    // removal of that directory may still be pending, because it waits until
+    // every sstable of the dropped table is destroyed. Wait for it before the
+    // table is committed on any shard. Once committed, the table accepts
+    // writes, and a flush would ask the sstables manager for an sstable of a
+    // table that is being removed, which it rejects. A failed flush aborts
+    // the node. The removal would also take the directory of the new table
+    // away. The diff can't drop and create a table with the same ID, so the
+    // removals waited for here come from earlier schema changes.
+    //
+    // The wait blocks schema changes on this node. It ends when the operations
+    // that still hold sstables of the dropped table, such as reads or streams,
+    // release them, which they do once they complete or fail because the table
+    // is gone. A warning tells if the wait happens, so that a stalled schema
+    // change can be traced to it.
+    {
+        auto& db = sharded_db.local();
+        const auto& tables_and_views = _affected_tables_and_views.tables_and_views.local();
+        for (const auto* created : {&tables_and_views.cdc.created, &tables_and_views.tables.created, &tables_and_views.views.created}) {
+            for (const schema_ptr& s : *created) {
+                auto removed = db.await_table_storage_removal(s->id());
+                if (!removed.available()) {
+                    slogger.warn("Waiting for the storage of dropped table {} to be removed before {}.{} is created with the same ID. "
+                            "The removal waits until every sstable of the dropped table is released", s->id(), s->ks_name(), s->cf_name());
+                }
+                co_await std::move(removed);
+            }
+        }
+    }
+
     // Adding and dropping tables, or changing tablet metadata, uses this
     // locking mechanism to prevent changes to tables_metadata during preemptive
     // iteration over it (e.g., tables_metadata::for_each_table_gently).

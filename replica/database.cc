@@ -1438,12 +1438,23 @@ void database::drop_table(sharded<database>& sharded_db,
     dblog.info("Dropping {}.{} {}snapshot", ks_name, cf_name, with_snapshot && auto_snapshot ? "with auto-" : "without ");
     auto& cf = *table_shards;
     sharded_db.local().remove(cf);
+    if (this_shard_id() == 0) {
+        // From now on, a table created with the same ID waits for the removal
+        // of the storage of this one. See cleanup_drop_table_on_all_shards().
+        sharded_db.local().register_table_storage_removal(cf.schema()->id());
+    }
     table_shards.clear_views();
     cf.clear_views();
 }
 
 future<> database::cleanup_drop_table_on_all_shards(sharded<database>& sharded_db, sharded<db::system_keyspace>& sys_ks,
         bool with_snapshot, global_table_ptr& table_shards) {
+    auto id = table_shards->schema()->id();
+    // If the cleanup fails, the storage of the table stays behind, as it did
+    // when drop table failed before the removal was deferred.
+    auto finish_on_failure = defer([&] () noexcept {
+        sharded_db.local().finish_table_storage_removal(id);
+    });
     co_await sharded_db.invoke_on_all([&] (database& db) -> future<> {
         auto& cf = *table_shards;
         auto uuid = cf.schema()->id();
@@ -1475,8 +1486,81 @@ future<> database::cleanup_drop_table_on_all_shards(sharded<database>& sharded_d
         return table_shards->stop();
     });
     f.get(); // re-throw exception from truncate() if any
-    co_await sys_ks.local().remove_truncation_records(table_shards->schema()->id());
-    co_await table_shards->destroy_storage();
+    co_await sys_ks.local().remove_truncation_records(id);
+    finish_on_failure.cancel();
+    sharded_db.local().schedule_table_storage_removal(sharded_db, table_shards);
+}
+
+void database::register_table_storage_removal(table_id id) {
+    auto [it, inserted] = _pending_table_storage_removals.try_emplace(id);
+    if (!inserted) {
+        // Creating a table waits for the pending removal of a dropped table with
+        // the same ID, so the table can't be dropped again before the removal is
+        // done.
+        on_internal_error(dblog, format("The storage of dropped table {} is already being removed", id));
+    }
+}
+
+void database::schedule_table_storage_removal(sharded<database>& sharded_db, const global_table_ptr& table_shards) {
+    auto id = table_shards->schema()->id();
+    auto holder = _table_storage_removal_gate.try_hold();
+    if (!holder) {
+        dblog.info("Leaving the storage of dropped table {} behind, because the database is shutting down", id);
+        finish_table_storage_removal(id);
+        return;
+    }
+    auto is_system = system_keyspace(&table_shards->get_sstables_manager() == &get_system_sstables_manager());
+    // Sstables of the table can be referenced outside of it, and the directory
+    // is removed only once they are destroyed. References can be held for an
+    // unbounded time, so the removal runs in the background.
+    (void)remove_table_storage(sharded_db, id, is_system, table_shards->get_storage_options_ptr(), std::move(*holder));
+}
+
+void database::finish_table_storage_removal(table_id id) noexcept {
+    auto removal = _pending_table_storage_removals.extract(id);
+    if (removal.empty()) {
+        on_internal_error_noexcept(dblog, format("The storage of dropped table {} has no pending removal", id));
+        return;
+    }
+    removal.mapped().done.set_value();
+}
+
+future<> database::remove_table_storage(sharded<database>& sharded_db, table_id id, system_keyspace is_system,
+        lw_shared_ptr<const data_dictionary::storage_options> storage_opts, gate::holder holder) {
+    std::exception_ptr ex;
+    try {
+        co_await sharded_db.invoke_on_all([id, is_system] (database& db) {
+            auto& manager = db.get_sstables_manager(is_system);
+            manager.close_table(id);
+            return manager.await_table_sstables_destroyed(id);
+        });
+        co_await get_sstables_manager(is_system).destroy_table_storage(*storage_opts);
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    try {
+        co_await sharded_db.invoke_on_all([id, is_system] (database& db) {
+            db.get_sstables_manager(is_system).reopen_table(id);
+        });
+    } catch (...) {
+        if (!ex) {
+            ex = std::current_exception();
+        }
+    }
+    if (ex) {
+        dblog.warn("Failed to remove the storage of dropped table {}: {}", id, ex);
+    }
+    finish_table_storage_removal(id);
+}
+
+future<> database::await_table_storage_removal(table_id id) {
+    auto it = _pending_table_storage_removals.find(id);
+    if (it == _pending_table_storage_removals.end()) {
+        return make_ready_future<>();
+    }
+    // Lets a test know that the caller waits for a pending removal.
+    utils::get_local_injector().inject("await_table_storage_removal_pending", [] {});
+    return it->second.done.get_shared_future();
 }
 
 future<> database::legacy_drop_table_on_all_shards(sharded<database>& sharded_db, sharded<db::system_keyspace>& sys_ks,
@@ -1751,10 +1835,6 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
 
 future<> table::init_storage() {
     _storage_opts = co_await _sstables_manager.init_table_storage(*_schema, *_storage_opts);
-}
-
-future<> table::destroy_storage() {
-    return _sstables_manager.destroy_table_storage(*_storage_opts);
 }
 
 column_family& database::find_column_family(const schema_ptr& schema) {
@@ -3008,6 +3088,8 @@ future<> database::stop() {
     co_await _memtable_controller.shutdown();
     dblog.info("Stopping querier cache");
     co_await _querier_cache.stop();
+    dblog.info("Waiting for the removal of the storage of dropped tables");
+    co_await _table_storage_removal_gate.close();
     dblog.info("Closing user sstables manager");
     co_await _user_sstables_manager->close();
     dblog.info("Closing system sstables manager");

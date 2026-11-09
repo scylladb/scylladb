@@ -913,7 +913,6 @@ public:
     const storage_options& get_storage_options() const noexcept { return *_storage_opts; }
     lw_shared_ptr<const storage_options> get_storage_options_ptr() const noexcept { return _storage_opts; }
     future<> init_storage();
-    future<> destroy_storage();
 
     seastar::named_gate& async_gate() { return _async_gate; }
 
@@ -1852,6 +1851,18 @@ private:
     bool _shutdown = false;
     bool _enable_autocompaction_toggle = false;
     bool _vnodes_cleanup_allowed = false;
+
+    struct pending_table_storage_removal {
+        shared_promise<> done;
+    };
+    // The storage of a dropped table is removed only when every sstable of the
+    // table is destroyed on every shard, so that a caller that still holds an
+    // sstable doesn't lose its files. A table created with the ID of a dropped
+    // table gets the same directory, so its creation waits for the pending
+    // removal. Drop table runs on shard 0, so the removals are tracked there.
+    std::unordered_map<table_id, pending_table_storage_removal> _pending_table_storage_removals;
+    seastar::named_gate _table_storage_removal_gate{"database::table_storage_removal"};
+
     querier_cache _querier_cache;
 
     std::unique_ptr<db::large_data_handler> _large_data_handler;
@@ -2301,6 +2312,21 @@ public:
     static future<> legacy_drop_table_on_all_shards(sharded<database>& sharded_db, sharded<db::system_keyspace>& sys_ks,
             sstring ks_name, sstring cf_name,
             bool with_snapshot = true);
+    // Waits until the storage of a dropped table is removed. Returns at once
+    // if no removal is pending.
+    future<> await_table_storage_removal(table_id id);
+private:
+    // Registers the pending removal of the storage of a table. Called by
+    // drop_table() on shard 0, when the table is removed from the metadata.
+    void register_table_storage_removal(table_id id);
+    // Starts the registered removal in the background, once the table is
+    // truncated and stopped.
+    void schedule_table_storage_removal(sharded<database>& sharded_db, const global_table_ptr& table_shards);
+    future<> remove_table_storage(sharded<database>& sharded_db, table_id id, system_keyspace is_system,
+            lw_shared_ptr<const data_dictionary::storage_options> storage_opts, gate::holder holder);
+    // Completes the registered removal, and wakes up its waiters.
+    void finish_table_storage_removal(table_id id) noexcept;
+public:
 
     const dirty_memory_manager_logalloc::region_group& dirty_memory_region_group() const {
         return _dirty_memory_manager.region_group();
