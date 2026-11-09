@@ -6348,6 +6348,35 @@ future<> storage_service::restore_tablets(table_id table, sstring snap_name) {
     slogger.info("Restoring {} finished", table);
 }
 
+future<std::vector<table_id>> storage_service::tablet_split_ready() {
+    auto holder = _async_gate.hold();
+
+    // Make sure the fence set by the coordinator before this call is already
+    // in force on this node, so nothing fenced out can be added later.
+    {
+        auto group0_holder = _group0->hold_group0_gate();
+        co_await _group0->group0_server().read_barrier(&_group0_as);
+    }
+
+    std::vector<table_id> ready;
+    auto tm = get_token_metadata_ptr();
+    for (const auto& [base, group] : tm->tablets().all_table_groups()) {
+        if (!tm->tablets().get_tablet_map(base).needs_split()) {
+            continue;
+        }
+        bool split = co_await _db.map_reduce0([group] (replica::database& db) {
+            return std::ranges::all_of(group, [&db] (table_id id) {
+                auto t = db.get_tables_metadata().get_table_if_exists(id);
+                return !t || t->storage_groups_split_mode();
+            });
+        }, true, std::logical_and<>());
+        if (split) {
+            ready.push_back(base);
+        }
+    }
+    co_return ready;
+}
+
 future<locator::load_stats> storage_service::load_stats_for_tablet_based_tables() {
     auto holder = _async_gate.hold();
 
@@ -7354,6 +7383,11 @@ void storage_service::init_messaging_service() {
     ser::storage_service_rpc_verbs::register_table_load_stats(&_messaging.local(), [this] (raft::server_id dst_id) {
         return handle_raft_rpc(dst_id, [] (auto& ss) mutable {
             return ss.load_stats_for_tablet_based_tables();
+        });
+    });
+    ser::storage_service_rpc_verbs::register_tablet_split_ready(&_messaging.local(), [this] (rpc::opt_time_point, raft::server_id dst_id) {
+        return handle_raft_rpc(dst_id, [] (auto& ss) {
+            return ss.tablet_split_ready();
         });
     });
     ser::storage_service_rpc_verbs::register_table_load_stats_v1(&_messaging.local(), [this] (raft::server_id dst_id) {
