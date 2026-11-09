@@ -811,12 +811,6 @@ bool position_range::is_all_clustered_rows(const schema& s) const {
     return _start.is_before_all_clustered_rows(s) && _end.is_after_all_clustered_rows(s);
 }
 
-// Assumes that the bounds of `r` are of 'clustered' type
-// and that `r` is non-empty (the left bound is smaller than the right bound).
-//
-// If `r` does not contain any keys, returns nullopt.
-std::optional<query::clustering_range> position_range_to_clustering_range(const position_range& r, const schema&);
-
 template <> struct fmt::formatter<position_range> : fmt::formatter<string_view> {
     auto format(const position_range& range, fmt::format_context& ctx) const {
         return fmt::format_to(ctx.out(), "{{{}, {}}}", range.start(), range.end());
