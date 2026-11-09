@@ -676,7 +676,8 @@ async def test_hints_consistency_during_decommission(manager: ScyllaClusterManag
         await manager.api.disable_injection(server1.ip_addr, "hinted_handoff_pause_hint_replay")
 
         logger.info("Wait until hints are replayed from node 1")
-        await await_sync_point(manager.api.client, server1.ip_addr, sync_point, timeout=30)
+        assert await await_sync_point(manager.api.client, server1.ip_addr, sync_point, timeout=30), \
+            "Hints were not replayed before streaming was unpaused"
 
         # Unpause streaming and let decommission finish
         logger.info("Unpause streaming")
