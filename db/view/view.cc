@@ -37,6 +37,7 @@
 #include "replica/streaming_reader_lifecycle_policy.hh"
 #include "utils/exceptions.hh"
 #include "keys/clustering_bounds_comparator.hh"
+#include "mutation/position_range_utils.hh"
 #include "cql3/cql_config.hh"
 #include "cql3/util.hh"
 #include "cql3/restrictions/statement_restrictions.hh"
@@ -1662,50 +1663,59 @@ future<view_update_builder> make_view_update_builder(
     co_return builder;
 }
 
+// The ranges are computed as position ranges and converted to clustering ranges only at the end.
+// interval<clustering_key_prefix> can't be used for this, it orders bounds by key prefix
+// (scylladb#8157, scylladb#22817): ((0, 1), (0)], the range of `a = 0 AND b > 1`, would sort
+// before [(0, 1, 0), (0, 1, 0)] although it lies after it, and the resulting slice would be
+// out of order.
 future<query::clustering_row_ranges> calculate_affected_clustering_ranges(data_dictionary::database db,
         const schema& base,
         const dht::decorated_key& key,
         const mutation_partition& mp,
         const std::vector<view_ptr>& views) {
-    // WARNING: interval<clustering_key_prefix_view> is unsafe - refer to scylladb#22817 and scylladb#21604
-    utils::chunked_vector<interval<clustering_key_prefix_view>> row_ranges;
-    utils::chunked_vector<interval<clustering_key_prefix_view>> view_row_ranges;
-    clustering_key_prefix_view::tri_compare cmp(base);
+    position_range_vector view_ranges;
     if (mp.partition_tombstone() || !mp.row_tombstones().empty()) {
         for (auto&& v : views) {
             // FIXME: #2371
             if (v->view_info()->restrictions(db).has_unrestricted_clustering_columns()) {
-                view_row_ranges.push_back(interval<clustering_key_prefix_view>::make_open_ended_both_sides());
+                view_ranges.clear();
+                view_ranges.push_back(position_range::all_clustered_rows());
                 break;
             }
             for (auto&& r : v->view_info()->partition_slice(db).default_row_ranges()) {
-                view_row_ranges.push_back(r.transform(std::mem_fn(&clustering_key_prefix::view)));
+                view_ranges.push_back(position_range::from_range(r));
                 co_await coroutine::maybe_yield();
             }
         }
+        // The ranges of different views are not ordered relative to each other. There are few of them.
+        sort_position_ranges(base, view_ranges);
+        view_ranges = co_await deoverlap_position_ranges(base, std::move(view_ranges));
     }
+
+    position_range_vector tombstone_ranges;
     if (mp.partition_tombstone()) {
-        std::swap(row_ranges, view_row_ranges);
+        tombstone_ranges = std::move(view_ranges);
     } else {
         // FIXME: Optimize, as most often than not clustering keys will not be restricted.
+        // The range tombstones are sorted and don't overlap, and neither do view_ranges,
+        // so the intersections come out sorted, as deoverlap_position_ranges() requires.
         for (auto&& rt : mp.row_tombstones()) {
-            interval<clustering_key_prefix_view> rtr(
-                    bound_view::to_interval_bound<interval>(rt.start_bound()),
-                    bound_view::to_interval_bound<interval>(rt.end_bound()));
-            for (auto&& vr : view_row_ranges) {
-                // WARNING: interval<clustering_key_prefix_view>::intersection can return incorrect results - refer to scylladb#8157 and scylladb#21604
-                auto overlap = rtr.intersection(vr, cmp);
-                if (overlap) {
-                    row_ranges.push_back(std::move(overlap).value());
+            position_range rtr(position_in_partition(rt.position()), position_in_partition(rt.end_position()));
+            for (auto&& vr : view_ranges) {
+                if (auto overlap = position_range_intersection(base, rtr, vr)) {
+                    tombstone_ranges.push_back(std::move(*overlap));
                 }
                 co_await coroutine::maybe_yield();
             }
         }
+        tombstone_ranges = co_await deoverlap_position_ranges(base, std::move(tombstone_ranges));
     }
 
+    // Rows are sorted, so these ranges are sorted too.
+    position_range_vector row_ranges;
     for (auto&& row : mp.clustered_rows()) {
         if (update_requires_read_before_write(db, base, views, key, row)) {
-            row_ranges.emplace_back(row.key());
+            row_ranges.emplace_back(position_in_partition::before_key(row.key()), position_in_partition::after_key(base, row.key()));
         }
         co_await coroutine::maybe_yield();
     }
@@ -1717,12 +1727,13 @@ future<query::clustering_row_ranges> calculate_affected_clustering_ranges(data_d
     // content, in case the view includes a column that is not included in
     // this mutation.
 
+    auto ranges = co_await merge_position_ranges(base, std::move(tombstone_ranges), std::move(row_ranges));
     query::clustering_row_ranges result_ranges;
-    // FIXME: scylladb#22817 - interval<clustering_key_prefix_view>::deoverlap can return incorrect results
-    auto deoverlapped_ranges = interval<clustering_key_prefix_view>::deoverlap(std::move(row_ranges), cmp);
-    result_ranges.reserve(deoverlapped_ranges.size());
-    for (auto&& r : deoverlapped_ranges) {
-        result_ranges.emplace_back(std::move(r).transform([] (auto&& ckv) { return clustering_key_prefix(ckv); }));
+    result_ranges.reserve(ranges.size());
+    for (auto&& r : ranges) {
+        if (auto cr = position_range_to_clustering_range(r, base)) {
+            result_ranges.push_back(std::move(*cr));
+        }
         co_await coroutine::maybe_yield();
     }
     co_return result_ranges;
