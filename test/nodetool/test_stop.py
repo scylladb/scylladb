@@ -32,6 +32,15 @@ def test_stop_reshard(nodetool):
             [f"error processing arguments: Stopping compaction of type RESHARD is disallowed"])
 
 
+# A splice runs as part of regular compaction, so it's stopped with REGULAR or COMPACTION
+def test_stop_splice(nodetool):
+    check_nodetool_fails_with(
+            nodetool,
+            ("stop", "SPLICE"),
+            {},
+            ["error processing arguments: Compaction type SPLICE cannot be stopped on its own, stop REGULAR instead"])
+
+
 # Cassandra calls UPGRADE, UPGRADE_SSTABLES, which the scylla-code doesn't recognize
 def test_stop_upgrade(nodetool):
     check_compaction_type(nodetool, "UPGRADE")

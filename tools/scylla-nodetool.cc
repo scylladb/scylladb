@@ -810,6 +810,7 @@ void print_compactionhistory_log(const std::vector<history_entry>& history) {
             {"Reshape", {"Reshaping", "Reshaped"}},
             {"Reshard", {"Resharding", "Resharded"}},
             {"Split", {"Splitting", "Split"}},
+            {"Splice", {"Splicing", "Spliced"}},
     };
 
     auto print_line = [] (const history_entry& e, int64_t timestamp, std::string_view msg) {

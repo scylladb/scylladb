@@ -36,6 +36,7 @@ enum class compaction_type {
     Split = 8,
     Major = 9,
     RewriteComponent = 10,
+    Splice = 11, // Gives the sstables of several disjoint runs one run identifier, without rewriting their data
 };
 
 using compaction_type_set = enum_set<super_enum<compaction_type,
@@ -49,7 +50,8 @@ using compaction_type_set = enum_set<super_enum<compaction_type,
         compaction_type::Reshape,
         compaction_type::Split,
         compaction_type::Major,
-        compaction_type::RewriteComponent
+        compaction_type::RewriteComponent,
+        compaction_type::Splice
         >>;
 
 struct compaction_completion_desc {
@@ -151,8 +153,13 @@ public:
 
         sstables::update_sstable_id update_id = sstables::update_sstable_id::yes;
     };
+    // Splices the runs of the input sstables into one, the run named by the descriptor's
+    // run_identifier. The sstables of the other runs get that identifier by having their Scylla
+    // component rewritten. Their data isn't read or written. The runs must not overlap one another.
+    struct splice {
+    };
 private:
-    using options_variant = std::variant<regular, cleanup, upgrade, scrub, reshard, reshape, split, major, component_rewrite>;
+    using options_variant = std::variant<regular, cleanup, upgrade, scrub, reshard, reshape, split, major, component_rewrite, splice>;
 
 private:
     options_variant _options;
@@ -196,6 +203,10 @@ public:
 
     static compaction_type_options make_split(mutation_writer::classify_by_token_group classifier) {
         return compaction_type_options(split{std::move(classifier)});
+    }
+
+    static compaction_type_options make_splice() {
+        return compaction_type_options(splice{});
     }
 
     template <typename... Visitor>

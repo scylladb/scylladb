@@ -37,6 +37,8 @@ std::vector<sstring> valid_compaction_types_for_stop() {
         case compaction::compaction_type::Validation:
         case compaction::compaction_type::Index_build:
         case compaction::compaction_type::Reshard:
+        // A splice runs as part of a regular compaction task, so it's stopped with it.
+        case compaction::compaction_type::Splice:
             return false;
         default:
             return true;
@@ -79,6 +81,9 @@ std::expected<compaction::compaction_type_set, sstring> parse_compaction_types_t
         return std::unexpected(format("Compaction type {} is unsupported", type_name));
     case compaction_type::Reshard:
         return std::unexpected(format("Stopping compaction of type {} is disallowed", type_name));
+    case compaction_type::Splice:
+        // Tasks are stopped by their type, and a splice runs in a regular compaction task.
+        return std::unexpected(format("Compaction type {} cannot be stopped on its own, stop REGULAR instead", type_name));
     default:
         break;
     }

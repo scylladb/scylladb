@@ -1215,6 +1215,11 @@ public:
         return _cloned_to_sstable_filename;
     }
 
+    // For when the sstable this one was cloned into is deleted instead of replacing it.
+    void reset_cloned_to_sstable_filename() noexcept {
+        _cloned_to_sstable_filename.reset();
+    }
+
     // Drops all evictable in-memory caches of on-disk content.
     future<> drop_caches();
 

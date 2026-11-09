@@ -31,6 +31,7 @@
 #include "compaction/exceptions.hh"
 #include "dht/i_partitioner.hh"
 #include "sstables/exceptions.hh"
+#include "sstables/storage.hh"
 #include "sstables/sstables.hh"
 #include "sstables/sstable_writer.hh"
 #include "sstables/progress_monitor.hh"
@@ -144,6 +145,7 @@ static const std::unordered_map<compaction_type, compaction_names> compaction_ty
     { compaction_type::Split, {"SPLIT", "Split"} },
     { compaction_type::Major, {"MAJOR", "Major"} },
     { compaction_type::RewriteComponent, {"REWRITE_COMPONENT", "RewriteComponent"} },
+    { compaction_type::Splice, {"SPLICE", "Splice"} },
 };
 
 sstring compaction_name(compaction_type type) {
@@ -2173,6 +2175,7 @@ compaction_type compaction_type_options::type() const {
         compaction_type::Split,
         compaction_type::Major,
         compaction_type::RewriteComponent,
+        compaction_type::Splice,
     };
     static_assert(std::variant_size_v<compaction_type_options::options_variant> == std::size(index_to_type));
     return index_to_type[_options.index()];
@@ -2211,6 +2214,9 @@ static std::unique_ptr<compaction> make_compaction(compaction_group_view& table_
         }
         std::unique_ptr<compaction> operator()(compaction_type_options::component_rewrite) {
             throw std::runtime_error("component_rewrite compaction should be handled separately");
+        }
+        std::unique_ptr<compaction> operator()(compaction_type_options::splice) {
+            throw std::runtime_error("splice compaction should be handled separately");
         }
     } visitor_factory{table_s, std::move(descriptor), cdata, progress_monitor};
 
@@ -2357,6 +2363,112 @@ future<compaction_result> rewrite_sstables_component(compaction_descriptor descr
     });
 }
 
+// Splices the runs of the input sstables into one run, the one named by the descriptor's run
+// identifier. Every sstable of the other runs is replaced by a copy whose Scylla component stores
+// that identifier. Only that component is written; the Data component and the others are linked.
+// So no data is read or written, unless the sstables are on object storage, which copies them.
+// The sstables which already belong to the named run, in memory and on disk, are left as they are.
+//
+// The runs must not overlap one another, as the fragments of a run must not. It's up to the
+// compaction strategy to pick such runs, which it does when compacting them together would
+// only rewrite their data without merging any of it, e.g. for the runs of two merged tablets.
+static future<compaction_result> splice_sstable_runs(compaction_descriptor descriptor, compaction_data& cdata, compaction_group_view& table_s) {
+    auto schema = table_s.schema();
+    const auto run_identifier = descriptor.run_identifier;
+    const auto prefix = fmt::format("[{} {}.{} {}]", compaction_type::Splice, schema->ks_name(), schema->cf_name(), cdata.compaction_uuid);
+
+    // An sstable is rewritten unless it belongs to the named run both in memory and on disk. The
+    // two differ if the Scylla component stores no run identifier, or if the sstable set gave
+    // the sstable a new one in memory because it overlapped its run. Going by the in-memory one
+    // only would leave such an sstable out of the run once it's loaded again.
+    auto on_disk_run_identifier = [] (const sstables::shared_sstable& sst) -> std::optional<sstables::run_id> {
+        auto* metadata = sst->get_scylla_metadata();
+        return metadata ? metadata->get_optional_run_identifier() : std::nullopt;
+    };
+    auto to_rewrite = descriptor.sstables
+            | std::views::filter([&] (const sstables::shared_sstable& sst) {
+                return sst->run_identifier() != run_identifier || on_disk_run_identifier(sst) != run_identifier;
+            })
+            | std::ranges::to<std::vector>();
+    for (auto& sst : to_rewrite) {
+        if (!sst->has_scylla_component()) {
+            on_internal_error(clogger, fmt::format("{} Cannot splice {} into run {}: it has no Scylla component", prefix, sst, run_identifier));
+        }
+    }
+
+    // Only the rewritten sstables count as the input and the output. The others aren't touched,
+    // and counting them as input only would make the splice look like it dropped their data.
+    auto result = compaction_result {
+        .shard_id = this_shard_id(),
+        .type = compaction_type::Splice,
+        .sstables_in = extract_basic_info_from_sstables(to_rewrite),
+        .stats = {
+            .started_at = db_clock::now(),
+            .start_size = total_bytes_on_disk(to_rewrite),
+        },
+    };
+    cdata.compaction_size = result.stats.start_size;
+
+    // The log lines start like those of the other compaction types, which tools parse.
+    clogger.debug("{} Splicing [{}] into run {}, out of {} runs of {} sstables",
+            prefix, fmt::join(to_rewrite | std::views::transform([] (auto sst) { return to_string(sst, true); }), ","),
+            run_identifier, descriptor.fan_in(), descriptor.sstables.size());
+
+    // The usual descriptor creator can't be used, since it doesn't preserve the sstable version.
+    auto creator = [&table_s] (sstables::shared_sstable sst) {
+        return table_s.make_sstable(sst->state(), sst->get_version());
+    };
+    auto modifier = [run_identifier] (sstables::sstable& sst) {
+        sst.set_run_identifier(run_identifier);
+    };
+
+    std::vector<sstables::shared_sstable> new_sstables;
+    new_sstables.reserve(to_rewrite.size());
+    std::exception_ptr ex;
+    try {
+        for (auto& sst : to_rewrite) {
+            if (cdata.is_stop_requested()) {
+                // The compaction manager catches this exception and reschedules the compaction.
+                throw compaction_stopped_exception(schema->ks_name(), schema->cf_name(), cdata.stop_requested);
+            }
+            // Object storage names the objects of an sstable after its identifier, so a copy can't keep it.
+            auto update_id = sst->get_storage().is_object_storage() ? sstables::update_sstable_id::yes : sstables::update_sstable_id::no;
+            new_sstables.push_back(co_await sst->link_with_rewritten_component(creator, component_type::Scylla, modifier, update_id));
+        }
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    if (ex) [[unlikely]] {
+        // Nothing else knows the new sstables yet, so they have to be deleted here. Their sources
+        // stay in the table, so they must not point to them anymore, or deleting a source later
+        // would hand its large data entries over to a deleted sstable.
+        for (size_t i = 0; i < new_sstables.size(); ++i) {
+            to_rewrite[i]->reset_cloned_to_sstable_filename();
+            auto& sst = new_sstables[i];
+            try {
+                co_await sst->unlink();
+            } catch (...) {
+                clogger.error("{} Failed to delete {} after a failed splice: {}", prefix, sst, std::current_exception());
+            }
+        }
+        std::rethrow_exception(ex);
+    }
+
+    co_await seastar::async([&] {
+        descriptor.replacer({std::move(to_rewrite), new_sstables});
+    });
+
+    result.new_sstables = std::move(new_sstables);
+    result = finalize_compaction_result(std::move(result));
+    const auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(result.stats.ended_at - result.stats.started_at);
+    clogger.debug("{} Spliced {} sstables to [{}]. {} to {} in {}ms. {} runs spliced into run {}.",
+            prefix, result.sstables_in.size(),
+            fmt::join(result.new_sstables | std::views::transform([] (auto sst) { return to_string(sst, false); }), ","),
+            utils::pretty_printed_data_size(result.stats.start_size), utils::pretty_printed_data_size(result.stats.end_size),
+            duration.count(), descriptor.fan_in(), run_identifier);
+    co_return result;
+}
+
 future<compaction_result>
 compact_sstables(compaction_descriptor descriptor, compaction_data& cdata, compaction_group_view& table_s, compaction_progress_monitor& progress_monitor) {
     if (descriptor.sstables.empty()) {
@@ -2370,6 +2482,9 @@ compact_sstables(compaction_descriptor descriptor, compaction_data& cdata, compa
     }
     if (descriptor.options.type() == compaction_type::RewriteComponent) {
         return rewrite_sstables_component(std::move(descriptor), table_s);
+    }
+    if (descriptor.options.type() == compaction_type::Splice) {
+        return splice_sstable_runs(std::move(descriptor), cdata, table_s);
     }
     return compaction::run(make_compaction(table_s, std::move(descriptor), cdata, progress_monitor));
 }
