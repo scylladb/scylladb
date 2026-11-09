@@ -62,6 +62,26 @@ def test_cdc_log_entries_use_cdc_streams(scylla_only, cql, test_keyspace):
 
     assert(log_stream_ids.issubset(stream_ids))
 
+def test_cdc_streams_clustering_order(scylla_only, skip_without_tablets, cql, test_keyspace_tablets):
+    '''Test that system.cdc_streams returns the streams of a table in clustering
+    order, with stream ids compared as unsigned bytes, and that restricting
+    stream_id selects the right streams, also when their tokens have different
+    signs.'''
+    schema = "pk int primary key"
+    extra = " with cdc = {'enabled': true} and tablets = {'min_tablet_count': 4}"
+    with new_test_table(cql, test_keyspace_tablets, schema, extra) as table:
+        ks, cf = table.split('.')
+        rows = list(cql.execute(f"select timestamp, stream_state, stream_id from system.cdc_streams where keyspace_name = '{ks}' and table_name = '{cf}'"))
+        keys = [(r.timestamp, r.stream_state, r.stream_id) for r in rows]
+        assert keys == sorted(keys)
+
+        ts = rows[0].timestamp
+        streams = sorted(r.stream_id for r in rows if r.timestamp == ts and r.stream_state == 0)
+        assert any(s[0] < 0x80 for s in streams) and any(s[0] >= 0x80 for s in streams)
+        stmt = cql.prepare("select stream_id from system.cdc_streams where keyspace_name = ? and table_name = ? and timestamp = ? and stream_state = 0 and stream_id > ?")
+        for s in streams:
+            assert [r.stream_id for r in cql.execute(stmt, [ks, cf, ts, s])] == [x for x in streams if x > s]
+
 
 # Test for #10473 - reading logs (from sstable) after dropping
 # column in base.
