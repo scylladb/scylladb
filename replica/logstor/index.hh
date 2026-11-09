@@ -191,6 +191,11 @@ private:
 
 public:
 
+    // The number of entries in one batch of a scan whose caller has no reason to choose another
+    // number, and in one page of a range erase. A batch or a page runs without a yield, so this
+    // number also limits the time of one batch or page.
+    static constexpr size_t default_scan_batch_size = 1024;
+
     class token_range_scan;
 
     // A scanned_entry gives the visit of a scan access to one entry of the index. The entry is
@@ -434,7 +439,7 @@ public:
     future<> drain_cache() {
         if (_cache_used) {
             auto scan = this->scan();
-            while (scan.next_batch(1024, [this] (const scanned_entry& e) { _cache_tracker->evict(e._e); })) {
+            while (scan.next_batch(default_scan_batch_size, [this] (const scanned_entry& e) { _cache_tracker->evict(e._e); })) {
                 co_await coroutine::maybe_yield();
             }
         }
@@ -577,7 +582,7 @@ public:
     // Erases the entries of the token range a page at a time, with a yield between the pages. Each
     // page seeks both of its ends, so that no iterator lives from one page to the next.
     future<> erase(dht::token_range tr) {
-        static constexpr size_t page_size = 1024;
+        static constexpr size_t page_size = default_scan_batch_size;
         auto dispose = make_entry_disposer();
         std::optional<primary_index_key> next_key;
         while (true) {
