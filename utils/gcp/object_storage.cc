@@ -563,7 +563,9 @@ utils::gcp::storage::client::impl::impl(const utils::http::url_info& url, std::o
     , _unlimited(std::numeric_limits<ssize_t>::max())
     , _limits(memory ? *memory : _unlimited)
     , _client(std::make_unique<utils::http::dns_connection_factory>(url.host, url.port, url.is_https(), gcp_storage, certs), 100, seastar::http::client::retry_requests::yes)
-{}
+{
+    _client.set_connection_reset_policy(std::make_unique<object_storage_connection_reset_policy>());
+}
 
 utils::gcp::storage::client::impl::impl(std::string_view endpoint, std::optional<google_credentials> c, seastar::semaphore* memory, shared_ptr<seastar::tls::certificate_credentials> certs)
     : impl(utils::http::parse_simple_url(endpoint.empty() ? STORAGE_APIS_URI : endpoint), std::move(c), memory, std::move(certs))

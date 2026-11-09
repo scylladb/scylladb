@@ -31,4 +31,11 @@ public:
     static bool from_exception_ptr(std::exception_ptr exception);
 };
 
+// Keeps the connection after an error status: the client reads the whole body of such a
+// reply before it raises unexpected_status_error.
+class object_storage_connection_reset_policy final : public seastar::http::connection_reset_policy {
+public:
+    [[nodiscard]] bool should_reset(std::exception_ptr error) const override;
+};
+
 } // namespace utils::gcp::storage
