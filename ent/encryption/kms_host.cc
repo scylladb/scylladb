@@ -1012,7 +1012,6 @@ future<bytes> encryption::kms_host::impl::find_key(const id_cache_key& k) {
 
     auto query = rjson::empty_object();
     rjson::add(query, "CiphertextBlob", enc);
-    rjson::add(query, "KeyId", kid);
 
     auto response = co_await post("Decrypt", k.aws_assume_role_arn, query);
     auto data = base64_decode(rjson::get<std::string>(response, "Plaintext"));
