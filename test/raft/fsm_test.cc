@@ -3196,6 +3196,35 @@ BOOST_AUTO_TEST_CASE(test_leaseguard_transfers_leadership_on_clock_loss) {
     BOOST_CHECK(sent_timeout_now(f.fsm.get_output()));
 }
 
+// A transfer started on clock loss is not visible to the server's "stepdown already
+// in progress" check, so an operator stepdown may come while it is in flight. The
+// log limiter is given back once when the stepdown is cancelled, so it must be
+// consumed once too, or the group never accepts writes again.
+BOOST_AUTO_TEST_CASE(test_leaseguard_stepdown_during_clock_loss_transfer_keeps_writes) {
+    raft::bounded_clock_mock clock;
+    clock.set(lease_t0, lease_err);
+    clock_loss_fixture f(clock, true);
+    const auto limit = f.fsm.log_limiter_available();
+
+    clock.set_unsynchronized();
+    f.fsm.tick();
+    clock.advance_monotonic(lease_above_stepdown_wait);
+    f.fsm.tick();
+    BOOST_REQUIRE(sent_timeout_now(f.fsm.get_output()));
+    BOOST_REQUIRE(f.fsm.leadership_transfer_active());
+
+    f.fsm.transfer_leadership(ELECTION_TIMEOUT);
+    (void)f.fsm.get_output();
+
+    // The follower never campaigns, so the stepdown times out and is cancelled.
+    while (f.fsm.leadership_transfer_active()) {
+        f.fsm.tick();
+        (void)f.fsm.get_output();
+    }
+    BOOST_CHECK(f.fsm.is_leader());
+    BOOST_CHECK_EQUAL(f.fsm.log_limiter_available(), limit);
+}
+
 // ... but only if the target can actually do what we cannot. A follower whose
 // clock is equally broken is no improvement, so we keep leading.
 BOOST_AUTO_TEST_CASE(test_leaseguard_no_transfer_when_follower_clock_also_broken) {
