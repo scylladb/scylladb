@@ -1605,10 +1605,15 @@ public:
             auto created_at = api::new_timestamp();
 
             auto emit_stream_set = [&] (db_clock::time_point ts, cdc::stream_state kind, const auto& sids) -> future<> {
-                for (const auto& sid : sids) {
-                    clustering_row cr(make_clustering_key(ts, kind, sid));
-                    cr.apply(row_marker(created_at));
-                    co_await result.emit_row(std::move(cr));
+                auto first_non_negative = std::ranges::partition_point(sids, [] (const cdc::stream_id& sid) {
+                    return dht::token::to_int64(sid.token()) < 0;
+                });
+                for (auto part : {std::ranges::subrange(first_non_negative, sids.end()), std::ranges::subrange(sids.begin(), first_non_negative)}) {
+                    for (const auto& sid : part) {
+                        clustering_row cr(make_clustering_key(ts, kind, sid));
+                        cr.apply(row_marker(created_at));
+                        co_await result.emit_row(std::move(cr));
+                    }
                 }
             };
 
