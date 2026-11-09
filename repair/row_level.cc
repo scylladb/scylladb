@@ -2821,7 +2821,7 @@ future<repair_update_system_table_response> repair_service::repair_update_system
         db::replay_position high_rp;
         auto t = local_db.get_tables_metadata().get_table_if_exists(req.table_uuid);
         if (t) {
-            high_rp = t->highest_flushed_replay_position();
+            high_rp = t->highest_flushed_replay_position(req.range);
             co_await _sys_ks.local().save_commitlog_cleanup_record(req.table_uuid, req.range, high_rp);
         }
         auto& gc_state = local_db.get_compaction_manager().get_shared_tombstone_gc_state();

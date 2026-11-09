@@ -101,6 +101,11 @@ class compaction_group : public compaction::compaction_backlog_source {
     std::unique_ptr<compaction_group_logstor_state> _logstor_state;
 
     db::replay_position _lowest_rp;
+    // The highest replay position of the memtables of this group which were
+    // flushed to sstables. Unlike table::_highest_flushed_rp, it is updated
+    // only once the flushed sstables are on disk and in the sstable set, so a
+    // mutation of this group at or below it is in an sstable at any moment.
+    db::replay_position _highest_flushed_rp;
     friend class table;
 private:
     std::unique_ptr<compaction_group_view> make_compacting_view();
@@ -187,6 +192,12 @@ public:
 
     const dht::token_range& token_range() const noexcept {
         return _token_range;
+    }
+
+    // The highest replay position of this group's data which is in sstables.
+    // Invalid (default-constructed) if nothing of this group was flushed yet.
+    const db::replay_position& highest_flushed_replay_position() const noexcept {
+        return _highest_flushed_rp;
     }
 
     void set_tombstone_gc_enabled(bool tombstone_gc_enabled) noexcept {

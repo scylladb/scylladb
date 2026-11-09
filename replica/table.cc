@@ -2238,6 +2238,11 @@ table::seal_active_memtable(compaction_group& cg, flush_permit&& flush_permit) n
     co_await std::move(previous_flush);
     // keep `op` alive until after previous_flush resolves
 
+    // Flushes of the group run concurrently, and a later sealed memtable may
+    // land first. The watermark may only advance once every memtable sealed
+    // before this one is in sstables too, which previous_flush waited for.
+    cg._highest_flushed_rp = std::max(cg._highest_flushed_rp, old->replay_position());
+
     // FIXME: release commit log
     // FIXME: provide back-pressure to upper layers
 }
@@ -4286,6 +4291,22 @@ logalloc::occupancy_stats table::occupancy() const {
 
 db::replay_position table::highest_flushed_replay_position() const {
     return _highest_flushed_rp;
+}
+
+db::replay_position table::highest_flushed_replay_position(const dht::token_range& range) const {
+    // The storage groups of a range are flushed independently, so only the
+    // lowest of their flushed positions covers the whole range: a mutation
+    // of the range at or below it is in an sstable whichever group owns it.
+    // A group which was never flushed has the invalid position, which is the
+    // lowest one, so a range with such a group gets no valid position.
+    std::optional<db::replay_position> rp;
+    for (const auto& sg : storage_groups_for_token_range(range)) {
+        for (const auto& cg : sg->compaction_groups_immediate()) {
+            const auto& cg_rp = cg->highest_flushed_replay_position();
+            rp = rp ? std::min(*rp, cg_rp) : cg_rp;
+        }
+    }
+    return rp.value_or(db::replay_position());
 }
 
 class snapshot_writer {

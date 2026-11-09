@@ -1214,7 +1214,15 @@ public:
     future<bool> snapshot_exists(sstring name);
 
     db::replay_position set_low_replay_position_mark();
+    // The highest replay position flushed to sstables on this shard, across
+    // the whole table. It is updated when a memtable is sealed, before its
+    // sstable is written, so it is only meaningful after an awaited flush.
     db::replay_position highest_flushed_replay_position() const;
+    // The highest replay position at or below which every mutation of the
+    // given token range on this shard is in an sstable. Unlike the overload
+    // above, it only counts completed flushes, so it is safe to read at any
+    // time. Invalid if some storage group of the range was never flushed.
+    db::replay_position highest_flushed_replay_position(const dht::token_range&) const;
 
     future<std::pair<std::vector<sstables::shared_sstable>, sstable_list_permit>> snapshot_sstables();
 

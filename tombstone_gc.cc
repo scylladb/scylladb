@@ -293,14 +293,19 @@ future<> shared_tombstone_gc_state::flush_pending_repair_time_update(sharded<rep
         auto shard_maps = make_lw_shared<per_table_history_maps>(shared_gc_state.get_reconcile_history_maps());
         for (auto& x : pending_updates) {
             auto& table = x.first;
-            db::replay_position high_rp;
             auto t = localdb.get_tables_metadata().get_table_if_exists(table);
-            if (t) {
-                high_rp = t->highest_flushed_replay_position();
-            }
             for (auto& update : x.second) {
                 co_await coroutine::maybe_yield();
                 if (update.shard == this_shard_id()) {
+                    // The position must cover the repaired range only: the pending
+                    // updates are flushed again whenever the tablet metadata is reloaded,
+                    // and a table-wide position would then move the record of this
+                    // range past its unflushed writes once another range of the table
+                    // flushes on this shard, losing them on commitlog replay.
+                    db::replay_position high_rp;
+                    if (t) {
+                        high_rp = t->highest_flushed_replay_position(update.range);
+                    }
                     co_await local_sys_ks.save_commitlog_cleanup_record(table, update.range, high_rp);
                     do_update_repair_time(*shard_maps, table, update.range, update.time, high_rp);
                     dblog.debug("Flush pending repair time for tombstone gc: table={} range={} repair_time={}",
