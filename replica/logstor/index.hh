@@ -168,7 +168,7 @@ class primary_index final {
     size_t _key_count = 0;
     uint64_t _live_record_bytes = 0;
 
-    // Each read guard holds an operation of this phaser, so that await_pending_reads() can wait
+    // Each read guard holds an operation of this phaser, so that await_read_guards() can wait
     // for the guards that exist.
     mutable utils::phased_barrier _reads_phaser{"logstor_primary_index"};
 
@@ -209,7 +209,7 @@ class primary_index final {
         return _cache_tracker && _cache_enabled;
     }
 
-    index_read_guard start_read() const {
+    index_read_guard make_read_guard() const {
         return index_read_guard(_reads_phaser.start());
     }
 
@@ -356,7 +356,7 @@ public:
                     return std::move(*cached);
                 }
             }
-            return guarded_location{.location = e.entry().location, .guard = start_read()};
+            return guarded_location{.location = e.entry().location, .guard = make_read_guard()};
         });
     }
 
@@ -397,7 +397,9 @@ public:
         return true;
     }
 
-    future<> await_pending_reads() {
+    // Waits until the read guards that exist now are destroyed. A guard made later does not delay
+    // the wait.
+    future<> await_read_guards() {
         return _reads_phaser.advance_and_await();
     }
 
@@ -510,7 +512,7 @@ public:
             }
 
             batch next{
-                .guard = _index->start_read(),
+                .guard = _index->make_read_guard(),
                 .first_token = current->key().token(),
                 .last_token = current->key().token(),
             };
