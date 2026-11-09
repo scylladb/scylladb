@@ -13,7 +13,9 @@ from test.pylib.skip_reason_plugin import SkipReasonPlugin
 from test.pylib.skip_types import SkipType
 
 
-pytest_plugins = []
+# TODO: remove test.pylib.xdist_stop (and its test) once a pytest-xdist release
+# with pytest-dev/pytest-xdist#1395 is pinned in test/pyproject.toml.
+pytest_plugins = ["test.pylib.xdist_stop"]
 
 def dynamic_scope() -> _pytest.scope._ScopeName:
     """Dynamic scope for fixtures which rely on a current test.py suite/test.
