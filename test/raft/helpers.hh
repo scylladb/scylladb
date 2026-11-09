@@ -91,6 +91,9 @@ public:
         SCYLLA_ASSERT(is_leader());
         return bool(leader_state().stepdown);
     }
+    ssize_t log_limiter_available() const {
+        return leader_state().log_limiter_semaphore->available_units();
+    }
 };
 
 // NOTE: it doesn't compare data contents, just the data type
