@@ -97,7 +97,8 @@ class SSTablesOnLocalStorage:
         topo(rf = 3, nodes = 5, racks = 1, dcs = 1),
         topo(rf = 1, nodes = 4, racks = 2, dcs = 1),
         topo(rf = 3, nodes = 6, racks = 2, dcs = 1),
-        topo(rf = 2, nodes = 8, racks = 4, dcs = 2)
+        topo(rf = 2, nodes = 8, racks = 4, dcs = 2),
+        pytest.param(topo(rf = 3, nodes = 3, racks = 3, dcs = 1, sc = True), marks=pytest.mark.tier2, id='strong'),
     ])
 async def test_refresh_with_streaming_scopes(build_mode: str, manager: ScyllaClusterManager, topology):
     '''Check that refreshing of a cluster with stream scopes works'''
