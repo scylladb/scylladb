@@ -185,8 +185,24 @@ class primary_index final {
     // manager is the only subscriber.
     space_accounting_subscriber& _space_accounting;
 
-    auto find_key(this auto& self, const primary_index_key& key) {
-        return self._entries.find(key, primary_index_key_cmp{});
+    // Returns a reference to the entry of the key in the tree, or nullopt if the index does not
+    // have the key. The reference is valid until the next insert into or erase from the tree.
+    auto find_entry(this auto& self, const primary_index_key& key) -> std::optional<decltype(*self._entries.begin())> {
+        auto it = self._entries.find(key, primary_index_key_cmp{});
+        if (it == self._entries.end()) {
+            return std::nullopt;
+        }
+        return *it;
+    }
+
+    // Returns a reference to the entry of the key only if the entry still holds `location`, or
+    // nullopt. The reference has the same lifetime as the reference that find_entry() returns.
+    auto find_entry_at(this auto& self, const primary_index_key& key, record_location location) -> decltype(self.find_entry(key)) {
+        auto e = self.find_entry(key);
+        if (!e || e->_e.location != location) {
+            return std::nullopt;
+        }
+        return e;
     }
 
     bool reads_cache() const noexcept {
@@ -265,28 +281,26 @@ public:
     }
 
     bool update_record_location(const primary_index_key& key, record_location old_location, record_location new_location) {
-        auto it = find_key(key);
-        if (it != _entries.end()) {
-            if (it->_e.location == old_location) {
-                it->_e.location = new_location;
-                space_accounting_on_record_moved(old_location, new_location);
-                // The cached partition is still valid (same data, new location on
-                // disk after compaction moved it) — do not evict the cache here.
-                return true;
-            }
+        auto e = find_entry_at(key, old_location);
+        if (!e) {
+            return false;
         }
-        return false;
+        e->_e.location = new_location;
+        space_accounting_on_record_moved(old_location, new_location);
+        // The cached partition is still valid (same data, new location on
+        // disk after compaction moved it) — do not evict the cache here.
+        return true;
     }
 
     bool erase(const primary_index_key& key, record_location loc) {
-        auto it = find_key(key);
-        if (it != _entries.end() && it->_e.location == loc) {
-            with_allocator(_tree_allocator, [&] {
-                it.erase_and_dispose(dht::raw_token_less_comparator{}, [this] (primary_index_entry* e) noexcept { dispose_entry(e); });
-            });
-            return true;
+        auto e = find_entry_at(key, loc);
+        if (!e) {
+            return false;
         }
-        return false;
+        with_allocator(_tree_allocator, [&] {
+            iterator(&*e).erase_and_dispose(dht::raw_token_less_comparator{}, [this] (primary_index_entry* erased) noexcept { dispose_entry(erased); });
+        });
+        return true;
     }
 
     // Erases the entries of the token range a page at a time, with a yield between the pages. Each
@@ -336,17 +350,14 @@ public:
     // not, returns the location of the record with a guard. The entry has only the hash of the key,
     // so the caller compares the key of a cached partition with its own.
     std::optional<read_lookup_result> lookup_for_read(const primary_index_key& key, const schema& target_schema, use_cache uses_cache) const {
-        auto it = find_key(key);
-        if (it == _entries.end()) {
-            return std::nullopt;
-        }
-
-        if (reads_cache() && uses_cache) {
-            if (auto cached = _cache_tracker->read_partition(*it, target_schema)) {
-                return std::move(*cached);
+        return find_entry(key).transform([&] (const primary_index_entry& e) -> read_lookup_result {
+            if (reads_cache() && uses_cache) {
+                if (auto cached = _cache_tracker->read_partition(e, target_schema)) {
+                    return std::move(*cached);
+                }
             }
-        }
-        return guarded_location{.location = it->entry().location, .guard = start_read()};
+            return guarded_location{.location = e.entry().location, .guard = start_read()};
+        });
     }
 
     struct dump_lookup_result {
@@ -359,25 +370,16 @@ public:
     // touches the cache's LRU nor counts a cache hit or miss, so that inspecting a table
     // does not perturb its cache.
     std::optional<dump_lookup_result> lookup_for_dump(const primary_index_key& key, schema_ptr target_schema) const {
-        auto it = find_key(key);
-        if (it == _entries.end()) {
-            return std::nullopt;
-        }
-
-        dump_lookup_result result{.entry = it->entry()};
-        if (_cache_tracker) {
-            result.cached_mutation = _cache_tracker->peek(*it, std::move(target_schema));
-        }
-        return result;
+        return find_entry(key).transform([&] (const primary_index_entry& e) {
+            return dump_lookup_result{
+                .entry = e.entry(),
+                .cached_mutation = _cache_tracker ? _cache_tracker->peek(e, std::move(target_schema)) : std::nullopt,
+            };
+        });
     }
 
     bool is_record_alive(const primary_index_key& key, record_location location) const {
-        auto it = find_key(key);
-        if (it != _entries.end()) {
-            return it->_e.location == location;
-        } else {
-            return false;
-        }
+        return find_entry_at(key, location).has_value();
     }
 
     bool populate_cache(const primary_index_key& key, record_location read_location, const schema_ptr& schema, const partition_key& pk,
@@ -386,13 +388,12 @@ public:
             return false;
         }
 
-        auto it = find_key(key);
-        if (it == _entries.end() || it->entry().location != read_location) {
+        auto e = find_entry_at(key, read_location);
+        if (!e) {
             return false;
         }
-
         _cache_used = true;
-        _cache_tracker->populate(*it, schema, pk, partition);
+        _cache_tracker->populate(*e, schema, pk, partition);
         return true;
     }
 
