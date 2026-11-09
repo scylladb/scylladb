@@ -193,7 +193,9 @@ static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string&
                 }
                 auto& ti = tablets.at(e.tablet_id);
 
-                if (e.repaired_at < ti.repaired_at || e.repaired_at == 0) {
+                // SCYLLADB-6079. Typo error whern reversing this condition
+                // This should be in sync with repair::is_repaired
+                if (e.repaired_at > ti.repaired_at || e.repaired_at == 0) {
                     return true; // must include
                 }
                 auto i = repair_master.find(ti.first_token);
