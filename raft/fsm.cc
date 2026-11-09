@@ -1628,9 +1628,13 @@ void fsm::transfer_leadership(logical_clock::duration timeout, server_id target)
         leader_state().leadership_transfer_target.reset();
     }
 
+    // A transfer in flight, e.g. one started on clock loss, already holds the log
+    // limiter, which is given back only once.
+    if (!leader_state().stepdown) {
+        // Stop new requests from coming in
+        leader_state().log_limiter_semaphore->consume(_config.max_log_size);
+    }
     leader_state().stepdown = _clock.now() + timeout;
-    // Stop new requests from coming in
-    leader_state().log_limiter_semaphore->consume(_config.max_log_size);
     // If there is a fully up-to-date eligible replica make it start an election.
     //
     // Prefer one whose clock still works: the reason we transfer automatically
