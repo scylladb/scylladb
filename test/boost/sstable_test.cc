@@ -496,6 +496,40 @@ SEASTAR_TEST_CASE(test_link_with_rewritten_component_bytes_on_disk) {
     return test_env::do_with_async(do_test_link_with_rewritten_component_size);
 }
 
+// A modifier of link_with_rewritten_component() can change the run identifier with
+// sstable::set_run_identifier(). The rewritten sstable is known by the new identifier in
+// memory, and stores it in its Scylla component, so it keeps it when loaded again.
+SEASTAR_TEST_CASE(test_link_with_rewritten_component_run_identifier) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto random_spec = tests::make_random_schema_specification(
+            "ks",
+            std::uniform_int_distribution<size_t>(1, 4),
+            std::uniform_int_distribution<size_t>(2, 4),
+            std::uniform_int_distribution<size_t>(2, 8),
+            std::uniform_int_distribution<size_t>(2, 8));
+        auto random_schema = tests::random_schema{tests::random::get_int<uint32_t>(), *random_spec};
+        auto schema = random_schema.schema();
+        const auto muts = tests::generate_random_mutations(random_schema, 2).get();
+
+        auto sst = make_sstable_containing(env.make_sstable(schema, sstable::version_types::me), muts).get();
+        auto new_run_id = sstables::run_id::create_random_id();
+        BOOST_REQUIRE(sst->run_identifier() != new_run_id);
+
+        auto creator = [&env, schema] (shared_sstable sst) {
+            return env.make_sstable(schema, sst->get_version());
+        };
+        auto modifier = [new_run_id] (sstable& sst) {
+            sst.set_run_identifier(new_run_id);
+        };
+        auto new_sst = sst->link_with_rewritten_component(creator, component_type::Scylla, modifier, sstables::update_sstable_id::no).get();
+        BOOST_REQUIRE(new_sst->run_identifier() == new_run_id);
+        BOOST_REQUIRE(new_sst->sstable_identifier() == sst->sstable_identifier());
+
+        auto reloaded_sst = env.reusable_sst(new_sst).get();
+        BOOST_REQUIRE(reloaded_sst->run_identifier() == new_run_id);
+    });
+}
+
 // Tests for reading a large partition for which the index contains a
 // "promoted index", i.e., a sample of the column names inside the partition,
 // with which we can avoid reading the entire partition when we look only

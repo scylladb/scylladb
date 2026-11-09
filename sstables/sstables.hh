@@ -1100,6 +1100,13 @@ public:
         _run_identifier = run_id::create_random_id();
     }
 
+    // Changes the run identifier both in memory and in the Scylla metadata, so that it is
+    // stored on disk once the Scylla component is written, e.g. by a modifier passed to
+    // link_with_rewritten_component().
+    // Sstable sets index their sstables by run identifier, so this must not be called on an
+    // sstable which is in a set.
+    void set_run_identifier(run_id identifier);
+
     double get_compression_ratio() const;
 
     const sstables::compression& get_compression() const {
