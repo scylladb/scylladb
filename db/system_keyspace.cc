@@ -3172,16 +3172,13 @@ static bool must_have_tokens(service::node_state nst) {
     }
 }
 
+// system.topology is read a page at a time. The page is materialized as one
+// uninterruptible step, so this is the granularity at which the read can be
+// preempted, and it should stay well below the size of a large cluster.
+static constexpr int32_t topology_read_page_size = 32;
+
 future<service::topology> system_keyspace::load_topology_state(const std::unordered_set<locator::host_id>& force_load_hosts) {
-    auto rs = co_await execute_cql(
-        format("SELECT * FROM system.{} WHERE key = '{}'", TOPOLOGY, TOPOLOGY));
-    SCYLLA_ASSERT(rs);
-
     service::topology_state_machine::topology_type ret;
-
-    if (rs->empty()) {
-        co_return ret;
-    }
 
     // Static columns repeat on every clustering row, so take them off the
     // first row seen rather than going back to the beginning of the result.
@@ -3436,11 +3433,12 @@ future<service::topology> system_keyspace::load_topology_state(const std::unorde
         return stop_iteration::no;
     };
 
-    for (auto& row : *rs) {
-        if (process_row(row) == stop_iteration::yes) {
-            break;
-        }
-    }
+    co_await _qp.query_internal(
+            format("SELECT * FROM system.{} WHERE key = '{}'", TOPOLOGY, TOPOLOGY),
+            db::consistency_level::ONE, {}, topology_read_page_size,
+            [&] (const cql3::untyped_result_set_row& row) {
+        return make_ready_future<stop_iteration>(process_row(row));
+    });
 
     if (!ret.tstate) {
         // Any remaining transition_nodes must be in rebuilding state.
