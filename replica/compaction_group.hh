@@ -554,6 +554,7 @@ public:
 
     virtual locator::combined_load_stats table_load_stats() const = 0;
     virtual bool all_storage_groups_split() = 0;
+    virtual bool storage_groups_split_mode() = 0;
     virtual future<> split_all_storage_groups(tasks::task_info tablet_split_task_info) = 0;
     virtual future<> maybe_split_compaction_group_of(size_t idx) = 0;
     virtual future<std::vector<sstables::shared_sstable>> maybe_split_new_sstable(const sstables::shared_sstable& sst) = 0;

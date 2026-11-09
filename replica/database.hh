@@ -731,6 +731,8 @@ public:
     // Precondition: table needs tablet splitting.
     // Returns true if all storage of table is ready for splitting.
     bool all_storage_groups_split();
+    // Puts every storage group on this shard in split mode and returns true if all of them are split.
+    bool storage_groups_split_mode();
     future<> split_all_storage_groups(tasks::task_info tablet_split_task_info);
 
     // Splits compaction group of a single tablet, if and only if the underlying table has

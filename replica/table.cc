@@ -821,6 +821,7 @@ public:
     }
 
     bool all_storage_groups_split() override { return true; }
+    bool storage_groups_split_mode() override { return true; }
     future<> split_all_storage_groups(tasks::task_info tablet_split_task_info) override { return make_ready_future(); }
     future<> maybe_split_compaction_group_of(size_t idx) override { return make_ready_future(); }
     future<std::vector<sstables::shared_sstable>> maybe_split_new_sstable(const sstables::shared_sstable& sst) override {
@@ -1006,6 +1007,7 @@ public:
 
     locator::combined_load_stats table_load_stats() const override;
     bool all_storage_groups_split() override;
+    bool storage_groups_split_mode() override;
     future<> split_all_storage_groups(tasks::task_info tablet_split_task_info) override;
     future<> maybe_split_compaction_group_of(size_t idx) override;
     future<std::vector<sstables::shared_sstable>> maybe_split_new_sstable(const sstables::shared_sstable& sst) override;
@@ -1417,10 +1419,7 @@ bool tablet_storage_group_manager::all_storage_groups_split() {
         return true;
     }
 
-    bool split_ready = true;
-    for (const storage_group_ptr& sg : _storage_groups | std::views::values) {
-        split_ready &= sg->set_split_mode();
-    }
+    bool split_ready = storage_groups_split_mode();
 
     // The table replica will say to coordinator that its split status is ready by
     // mirroring the sequence number from tablet metadata into its local state,
@@ -1433,8 +1432,20 @@ bool tablet_storage_group_manager::all_storage_groups_split() {
     return split_ready;
 }
 
+bool tablet_storage_group_manager::storage_groups_split_mode() {
+    bool split_ready = true;
+    for (const storage_group_ptr& sg : _storage_groups | std::views::values) {
+        split_ready &= sg->set_split_mode();
+    }
+    return split_ready;
+}
+
 bool table::all_storage_groups_split() {
     return _sg_manager->all_storage_groups_split();
+}
+
+bool table::storage_groups_split_mode() {
+    return _sg_manager->storage_groups_split_mode();
 }
 
 future<compaction::compaction_type_options::split> tablet_storage_group_manager::split_compaction_options() const noexcept {
