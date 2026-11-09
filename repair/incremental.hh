@@ -21,5 +21,6 @@ struct incremental_repair_meta {
 namespace repair {
 
 bool is_repaired(int64_t sstables_repaired_at, const sstables::shared_sstable& sst);
+bool is_repaired(int64_t sstables_repaired_at, int64_t sstable_stats_repaired_at);
 
 }
