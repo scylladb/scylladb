@@ -9,6 +9,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <seastar/core/shared_future.hh>
 #include <seastar/core/file.hh>
 #include <seastar/core/rwlock.hh>
@@ -28,14 +29,13 @@
 
 namespace replica {
 
-class database;
-
 namespace logstor {
 
 class compaction_manager;
 class segment_set;
 class primary_index;
 class index_read_guard;
+class recovery_catalog;
 
 static constexpr uint64_t default_segment_size = 128 * 1024;
 static constexpr uint64_t default_file_size = 32 * 1024 * 1024;
@@ -59,6 +59,24 @@ struct segment_manager_config {
     utils::updateable_value<float> compaction_max_shares;
     seastar::scheduling_group separator_sg;
     seastar::scheduling_group split_compaction_sg;
+};
+
+// What a recovery found on disk, and what it did with it.
+struct recovery_summary {
+    uint64_t found_segments{0};
+    // The segments that hold a record of an index. Recovery gives them back to their compaction
+    // groups.
+    uint64_t used_segments{0};
+    // The segments that recovery puts on the free list: the found segments below the configured
+    // count that hold no record of an index.
+    uint64_t free_segments{0};
+    // The records of a tablet that is not on this shard, which recovery drops.
+    uint64_t dropped_records{0};
+    // The full segments that fit no single compaction group of this shard. start() separates their
+    // records one by one.
+    uint64_t separated_segments{0};
+    // The sequence of the first segment that is allocated after recovery.
+    segment_sequence next_segment_seq{0};
 };
 
 // What the logstor of one shard is using. Every field is shard wide and covers every table, unlike
@@ -116,8 +134,18 @@ public:
     segment_manager(const segment_manager&) = delete;
     segment_manager& operator=(const segment_manager&) = delete;
 
-    future<> do_recovery(replica::database&);
-    future<> do_recovery_for_test();
+    // The catalog must live until start() returns: start() separates through it the records of
+    // the segments that recovery could not give whole to a compaction group.
+    future<recovery_summary> do_recovery(recovery_catalog&);
+
+    // The index a record found on disk goes into, or nullptr to drop the record.
+    using index_resolver = std::function<primary_index*(const record_header&)>;
+
+    // Rebuilds indexes from the records on disk the way that recovery does. The rebuild scans every
+    // segment of the allocated files and offers each record to the index that the resolver names,
+    // and the index decides by its conflict resolution rules which entry to keep. Nothing may
+    // write, separate or compact while the rebuild runs.
+    future<> rebuild_index_from_disk(index_resolver);
 
     future<> start();
     future<> stop();
@@ -161,7 +189,7 @@ public:
 
     // Create an output stream to write a segment (for receiving from remote node)
     // Allocates a new local segment and returns an output stream for writing to the segment.
-    future<std::unique_ptr<segment_stream_sink>> create_segment_output_stream(replica::database&);
+    future<std::unique_ptr<segment_stream_sink>> create_segment_output_stream(recovery_catalog&);
 
     friend class segment_manager_impl;
 
