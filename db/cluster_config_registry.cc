@@ -104,6 +104,17 @@ constexpr std::array registry_options = {
         .default_value = int64_t(0),
         .valid_range = integer_range{.min = 0, .max = std::numeric_limits<uint32_t>::max()},
     },
+    // The tablet repair scheduler resolves it for each replica host of a candidate repair,
+    // against the last repair the host took part in.
+    option{
+        .name = option_name::tablet_repair_intensity,
+        .description = "The percentage of time a node spends in tablet repair. After the last tablet repair a node took "
+                "part in finishes, the node takes part in no new tablet repair until it has rested for the time that "
+                "repair took, scaled by (100 - value) / value. 100 means no rest",
+        .scopes = node_oriented_scopes,
+        .default_value = int64_t(100),
+        .valid_range = integer_range{.min = 1, .max = 100},
+    },
     // Migrated from the db::config option of the same name. The tablet load balancer reads
     // it on the group0 leader and applies it to the whole cluster, so only the CLUSTER scope
     // makes sense. The range matches the unsigned entry; 0 would scale every table's tablet

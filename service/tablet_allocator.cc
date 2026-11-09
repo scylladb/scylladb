@@ -99,6 +99,8 @@ void load_balancer_stats_manager::setup_metrics(load_balancer_cluster_stats& sta
             stats.auto_repair_enabled_nr),
         sm::make_counter("repairs_produced", sm::description("number of repairs produced by the load balancer"),
                          stats.repairs_produced),
+        sm::make_counter("repairs_skipped_cooldown", sm::description("number of tablet repair candidates skipped because a replica node was resting after its last repair, as set by tablet_repair_intensity"),
+                         stats.repairs_skipped_cooldown),
     });
 }
 
@@ -986,6 +988,7 @@ class load_balancer {
     size_t _migrating_candidates; // Number of candidate replicas skipped because tablet is migrating.
     locator::load_stats_ptr _table_load_stats;
     load_balancer_stats_manager& _stats;
+    const tablet_repair_history& _repair_history;
     std::unordered_set<host_id> _skiplist;
     bool _use_table_aware_balancing = true;
     double _initial_scale = 1;
@@ -1084,6 +1087,7 @@ public:
             db::system_keyspace* sys_ks,
             locator::load_stats_ptr table_load_stats,
             load_balancer_stats_manager& stats,
+            const tablet_repair_history& repair_history,
             uint64_t target_tablet_size,
             unsigned tablets_per_shard_goal,
             std::unordered_set<host_id> skiplist)
@@ -1096,6 +1100,7 @@ public:
         , _sys_ks(sys_ks)
         , _table_load_stats(std::move(table_load_stats))
         , _stats(stats)
+        , _repair_history(repair_history)
         , _skiplist(std::move(skiplist))
         , _size_based_balance_threshold(db.get_config().size_based_balance_threshold_percentage() / 100.0)
         , _force_capacity_based_balancing(db.get_config().force_capacity_based_balancing())
@@ -1345,12 +1350,12 @@ public:
         }
     }
 
-    // The tablet_repair_max_per_node limit of a node, 0 meaning no limit.
-    size_t tablet_repair_max_per_node(const node_load& n) const {
-        namespace ccr = db::cluster_config_registry;
-        const auto* opt = ccr::find(ccr::option_name::tablet_repair_max_per_node);
+    // The value of a node-oriented integer option for a node, or nullopt before the cluster
+    // config manager is ready.
+    std::optional<int64_t> node_integer_option(std::string_view name, const node_load& n) const {
+        const auto* opt = db::cluster_config_registry::find(name);
         if (!opt || !_cluster_config_manager.is_ready()) {
-            return 0;
+            return std::nullopt;
         }
         return _cluster_config_manager.resolve_integer_config(*opt, {
             .dc_name = n.node->dc_rack().dc,
@@ -1359,21 +1364,49 @@ public:
         });
     }
 
-    // True if no replica host of the tablet would exceed its tablet_repair_max_per_node limit.
+    // The tablet_repair_max_per_node limit of a node, 0 meaning no limit.
+    size_t tablet_repair_max_per_node(const node_load& n) const {
+        return node_integer_option(db::cluster_config_registry::option_name::tablet_repair_max_per_node, n).value_or(0);
+    }
+
+    // The time until which tablet_repair_intensity keeps a node out of new tablet repairs:
+    // after the last repair it took part in, which took t, it rests for t * (100 - p) / p.
+    std::chrono::steady_clock::time_point repair_cooldown_until(host_id host, const node_load& n) const {
+        auto it = _repair_history.find(host);
+        if (it == _repair_history.end()) {
+            return std::chrono::steady_clock::time_point::min();
+        }
+        auto intensity = node_integer_option(db::cluster_config_registry::option_name::tablet_repair_intensity, n).value_or(100);
+        return it->second.end + it->second.elapsed * (100 - intensity) / intensity;
+    }
+
+    struct repair_node_limits {
+        size_t max_per_node;
+        std::chrono::steady_clock::time_point cooldown_until;
+    };
+
+    // True if no replica host of the tablet is at its tablet_repair_max_per_node limit or
+    // resting after its last repair.
     bool can_accept_repair(node_load_map& nodes, const tablet_replica_set& replicas,
-            std::unordered_map<host_id, size_t>& limits) const {
+            std::unordered_map<host_id, repair_node_limits>& limits, std::chrono::steady_clock::time_point now) {
         for (auto&& r : replicas) {
             auto it = nodes.find(r.host);
             if (it == nodes.end()) {
                 continue;
             }
-            auto [lit, inserted] = limits.try_emplace(r.host, 0);
+            auto [lit, inserted] = limits.try_emplace(r.host);
             if (inserted) {
-                lit->second = tablet_repair_max_per_node(it->second);
+                lit->second = {tablet_repair_max_per_node(it->second), repair_cooldown_until(r.host, it->second)};
             }
-            if (lit->second && it->second.repair_count >= lit->second) {
+            if (lit->second.max_per_node && it->second.repair_count >= lit->second.max_per_node) {
                 lblogger.debug("Repair skipped because of the per-node repair limit on {} ({}/{})",
-                        r.host, it->second.repair_count, lit->second);
+                        r.host, it->second.repair_count, lit->second.max_per_node);
+                return false;
+            }
+            if (now < lit->second.cooldown_until) {
+                lblogger.debug("Repair skipped because {} rests after its last repair for {} more",
+                        r.host, std::chrono::duration_cast<std::chrono::milliseconds>(lit->second.cooldown_until - now));
+                ++_stats.for_cluster().repairs_skipped_cooldown;
                 return false;
             }
         }
@@ -1510,12 +1543,13 @@ public:
 
         auto trinfo = tablet_transition_info(locator::tablet_transition_stage::repair,
                 locator::tablet_transition_kind::repair, tablet_replica_set(), {}, service::session_id());
-        std::unordered_map<host_id, size_t> repair_limits;
+        std::unordered_map<host_id, repair_node_limits> repair_limits;
+        auto now = std::chrono::steady_clock::now();
         for (auto& plan : plans) {
             co_await coroutine::maybe_yield();
             tablet_migration_streaming_info tmsi;
             tmsi = get_migration_streaming_info(topo, plan.tinfo, trinfo);
-            if (can_accept_load(nodes, tmsi) && can_accept_repair(nodes, plan.tinfo.replicas, repair_limits)) {
+            if (can_accept_load(nodes, tmsi) && can_accept_repair(nodes, plan.tinfo.replicas, repair_limits, now)) {
                 apply_load(nodes, tmsi);
                 apply_repair_count(nodes, plan.tinfo.replicas);
                 ret.add(plan.gid);
@@ -4862,13 +4896,14 @@ class tablet_allocator_impl : public tablet_allocator::impl
     bool _stopped = false;
     bool _use_tablet_aware_balancing = true;
     locator::load_stats_ptr _load_stats;
+    tablet_repair_history _repair_history;
 private:
     load_balancer make_load_balancer(token_metadata_ptr tm,
             service::topology* topology,
             db::system_keyspace* sys_ks,
             locator::load_stats_ptr table_load_stats,
             std::unordered_set<host_id> skiplist) {
-        load_balancer lb(_db, _cluster_config_manager.local(), tm, topology, sys_ks, std::move(table_load_stats), _load_balancer_stats,
+        load_balancer lb(_db, _cluster_config_manager.local(), tm, topology, sys_ks, std::move(table_load_stats), _load_balancer_stats, _repair_history,
             _db.get_config().target_tablet_size_in_bytes(),
             _db.get_config().tablets_per_shard_goal(),
             std::move(skiplist));
@@ -4911,6 +4946,12 @@ public:
 
     locator::load_stats_ptr get_load_stats() {
         return _load_stats;
+    }
+
+    void record_tablet_repair(const tablet_replica_set& replicas, std::chrono::steady_clock::time_point start, std::chrono::steady_clock::time_point end) {
+        for (const auto& r : replicas) {
+            _repair_history[r.host] = tablet_repair_record{.end = end, .elapsed = end - start};
+        }
     }
 
     void set_use_tablet_aware_balancing(bool use_tablet_aware_balancing) {
@@ -5062,6 +5103,7 @@ public:
     void on_leadership_lost() {
         _load_balancer_stats.unregister();
         _load_stats = {};
+        _repair_history.clear();
     }
 
     load_balancer_stats_manager& stats() {
@@ -5209,6 +5251,11 @@ void tablet_allocator::set_load_stats(locator::load_stats_ptr load_stats) {
 
 locator::load_stats_ptr tablet_allocator::get_load_stats() {
     return impl().get_load_stats();
+}
+
+void tablet_allocator::record_tablet_repair(const locator::tablet_replica_set& replicas,
+        std::chrono::steady_clock::time_point start, std::chrono::steady_clock::time_point end) {
+    impl().record_tablet_repair(replicas, start, end);
 }
 
 void tablet_allocator::set_use_table_aware_balancing(bool use_tablet_aware_balancing) {
