@@ -638,8 +638,11 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_cache_survives_index_rebalan
     index.drain_cache().get();
 }
 
-// The scan tests that look only at what a batch covered use this visit, which does nothing.
-static const auto no_visit = [] (const primary_index::scanned_entry&) {};
+// Returns a visit that counts the entries of a batch into `count`, for the scan tests that look
+// only at what a batch covered.
+static auto count_visit(size_t& count) {
+    return [&count] (const primary_index::scanned_entry&) { ++count; };
+}
 
 SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_scan_resumes_across_batches_by_token) {
     auto schema = make_logstor_schema();
@@ -650,29 +653,29 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_scan_resumes_across_batches_
     insert_same_token_keys(index, *schema, 19, 200, 2);
 
     auto scan = index.scan();
+    size_t visited = 0;
 
-    auto batch0 = scan.next_batch(3, no_visit);
+    auto batch0 = scan.next_batch(3, count_visit(visited));
     BOOST_REQUIRE(batch0);
     BOOST_REQUIRE_EQUAL(batch0->first_token, dht::token::from_int64(7));
     BOOST_REQUIRE_EQUAL(batch0->last_token, dht::token::from_int64(7));
-    BOOST_REQUIRE_EQUAL(batch0->entry_count, 2u);
-    BOOST_REQUIRE(!batch0->exhausted);
+    BOOST_REQUIRE_EQUAL(visited, 2u);
 
-    auto batch1 = scan.next_batch(3, no_visit);
+    visited = 0;
+    auto batch1 = scan.next_batch(3, count_visit(visited));
     BOOST_REQUIRE(batch1);
     BOOST_REQUIRE_EQUAL(batch1->first_token, dht::token::from_int64(11));
     BOOST_REQUIRE_EQUAL(batch1->last_token, dht::token::from_int64(11));
-    BOOST_REQUIRE_EQUAL(batch1->entry_count, 3u);
-    BOOST_REQUIRE(!batch1->exhausted);
+    BOOST_REQUIRE_EQUAL(visited, 3u);
 
-    auto batch2 = scan.next_batch(3, no_visit);
+    visited = 0;
+    auto batch2 = scan.next_batch(3, count_visit(visited));
     BOOST_REQUIRE(batch2);
     BOOST_REQUIRE_EQUAL(batch2->first_token, dht::token::from_int64(19));
     BOOST_REQUIRE_EQUAL(batch2->last_token, dht::token::from_int64(19));
-    BOOST_REQUIRE_EQUAL(batch2->entry_count, 2u);
-    BOOST_REQUIRE(batch2->exhausted);
+    BOOST_REQUIRE_EQUAL(visited, 2u);
 
-    BOOST_REQUIRE(!scan.next_batch(3, no_visit));
+    BOOST_REQUIRE(!scan.next_batch(3, count_visit(visited)));
 }
 
 SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_scan_keeps_oversized_same_token_batch_intact) {
@@ -683,20 +686,22 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_scan_keeps_oversized_same_to
     insert_same_token_keys(index, *schema, 29, 100, 1);
 
     auto scan = index.scan();
+    size_t visited = 0;
 
-    auto batch0 = scan.next_batch(2, no_visit);
+    auto batch0 = scan.next_batch(2, count_visit(visited));
     BOOST_REQUIRE(batch0);
     BOOST_REQUIRE_EQUAL(batch0->first_token, dht::token::from_int64(23));
     BOOST_REQUIRE_EQUAL(batch0->last_token, dht::token::from_int64(23));
-    BOOST_REQUIRE_EQUAL(batch0->entry_count, 5u);
-    BOOST_REQUIRE(!batch0->exhausted);
+    BOOST_REQUIRE_EQUAL(visited, 5u);
 
-    auto batch1 = scan.next_batch(2, no_visit);
+    visited = 0;
+    auto batch1 = scan.next_batch(2, count_visit(visited));
     BOOST_REQUIRE(batch1);
     BOOST_REQUIRE_EQUAL(batch1->first_token, dht::token::from_int64(29));
     BOOST_REQUIRE_EQUAL(batch1->last_token, dht::token::from_int64(29));
-    BOOST_REQUIRE_EQUAL(batch1->entry_count, 1u);
-    BOOST_REQUIRE(batch1->exhausted);
+    BOOST_REQUIRE_EQUAL(visited, 1u);
+
+    BOOST_REQUIRE(!scan.next_batch(2, count_visit(visited)));
 }
 
 SEASTAR_THREAD_TEST_CASE(test_logstor_cache_survives_lsa_compaction_before_exchange) {

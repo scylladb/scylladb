@@ -473,9 +473,6 @@ public:
         // `guard` keeps the locations of the visited entries readable. Hold it until all reads
         // of the records are complete.
         //
-        // `entry_count` is the number of entries visited.
-        // `exhausted` tells whether this batch reached the end of the requested range.
-        //
         // Each batch contains all entries for every token it includes. If adding the next token
         // would exceed `max_entries`, the scan stops before that token instead of breaking the
         // token group in half (except if the first token itself exceeds `max_entries`, in which
@@ -484,17 +481,11 @@ public:
             index_read_guard guard;
             dht::token first_token;
             dht::token last_token;
-            bool exhausted;
-            size_t entry_count;
         };
 
         token_range_scan(const primary_index& index, dht::token_range range) noexcept
             : _index(&index)
             , _range(std::move(range)) {
-        }
-
-        bool exhausted() const noexcept {
-            return _exhausted;
         }
 
         // Visits the entries of the next batch in index order, with `visit(const scanned_entry&)`,
@@ -521,10 +512,9 @@ public:
                 .guard = _index->start_read(),
                 .first_token = current->key().token(),
                 .last_token = current->key().token(),
-                .exhausted = false,
-                .entry_count = 0,
             };
 
+            size_t entry_count = 0;
             while (current != end) {
                 auto token = current->key().token();
                 auto token_end = current;
@@ -533,7 +523,7 @@ public:
                     ++token_end;
                     ++token_entry_count;
                 }
-                if (next.entry_count != 0 && next.entry_count + token_entry_count > max_entries) {
+                if (entry_count != 0 && entry_count + token_entry_count > max_entries) {
                     break;
                 }
 
@@ -541,11 +531,10 @@ public:
                 for (; current != token_end; ++current) {
                     visit(scanned_entry(*_index, *current));
                 }
-                next.entry_count += token_entry_count;
+                entry_count += token_entry_count;
             }
 
-            next.exhausted = current == end;
-            if (next.exhausted) {
+            if (current == end) {
                 _exhausted = true;
                 _last_token.reset();
             } else {
