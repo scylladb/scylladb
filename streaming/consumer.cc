@@ -19,6 +19,7 @@
 #include "sstables/sstables.hh"
 #include "sstables/sstables_manager.hh"
 #include "debug.hh"
+#include "utils/error_injection.hh"
 
 namespace streaming {
 
@@ -82,6 +83,7 @@ mutation_reader_consumer make_streaming_consumer(sstring origin,
                     std::rethrow_exception(ep);
                 }).then([cf, sst, offstrategy, origin, on_sstable_written, check_fence, cfg] -> future<std::vector<sstables::shared_sstable>> {
                     auto on_add = [sst, origin, on_sstable_written, check_fence, cfg] (sstables::shared_sstable loading_sst) -> future<> {
+                        co_await utils::get_local_injector().inject("stream_consumer_wait_before_add", utils::wait_for_message(std::chrono::minutes(5)));
                         if (check_fence) {
                             check_fence();
                         }
