@@ -2353,6 +2353,7 @@ async def do_test_snapshot_on_all_nodes(manager: ScyllaClusterManager,
             insert_stmt.consistency_level = ConsistencyLevel.ALL
             await asyncio.gather(*(cql.run_async(insert_stmt, (str(i), i)) for i in range(100)))
             if do_repair:
+                await manager.api.keyspace_flush(servers[0].ip_addr, ks, cf)
                 await manager.api.repair(servers[0].ip_addr, ks, cf)
             if do_snapshot:
                 await manager.api.take_cluster_snapshot(servers[0].ip_addr, ks, tag=snapshot_name, tables=[cf])
@@ -2479,25 +2480,35 @@ async def test_cluster_snapshot_backup_to_new_location(manager: ScyllaClusterMan
     await do_test_snapshot_on_all_nodes(manager, partial(run_double_cluster_backup, object_storage), object_storage)
 
 
-async def run_cluster_backup_and_check_redundancy(object_storage, manager: ScyllaClusterManager, snapshot_name: str, ks: str, cf:str, servers: list[ServerInfo]):
+async def run_cluster_backup_and_check_redundancy(object_storage, rf, manager: ScyllaClusterManager, snapshot_name: str, ks: str, cf:str, servers: list[ServerInfo]):
     """
     Helper
     """
     manifest = await run_cluster_backup(object_storage, 'ninjax', manager, snapshot_name, ks, cf, servers)
     tablet_to_node = { t['id']: set() for t in manifest['tablets'] }
+    all_nodes = set()
     for sst in manifest['sstables']:
         tablet_to_node[sst['tablet_id']].add(sst['node'])
+        all_nodes.add(sst['node'])
 
     for k, nodes in tablet_to_node.items():
         assert len(nodes) <= 1, f"tablet {k} not pruned"
 
+    print(all_nodes)
+    assert len(all_nodes) >= rf
 
+@pytest.mark.parametrize("topology", [
+        topo(rf = 1, nodes = 3, racks = 1, dcs = 1),
+        topo(rf = 3, nodes = 5, racks = 1, dcs = 1),
+        topo(rf = 1, nodes = 4, racks = 2, dcs = 1),
+        topo(rf = 3, nodes = 6, racks = 2, dcs = 1),
+    ])
 @pytest.mark.asyncio
-async def test_cluster_snapshot_repair_set_unique(manager: ScyllaClusterManager, object_storage):
+async def test_cluster_snapshot_repair_set_unique(manager: ScyllaClusterManager, object_storage, topology):
     """
     Tests a cluster snapshot reduces the snapshot sstable set by the current repair set for each tablet
     """
-    await do_test_snapshot_on_all_nodes(manager, partial(run_cluster_backup_and_check_redundancy, object_storage), object_storage, True, True)
+    await do_test_snapshot_on_all_nodes(manager, partial(run_cluster_backup_and_check_redundancy, object_storage, topology.rf), object_storage, True, True, topology)
 
 
 @pytest.mark.asyncio
@@ -3119,7 +3130,7 @@ async def test_backup_to_per_dc_endpoints(manager: ScyllaClusterManager, object_
         async with new_test_keyspace(manager, "WITH REPLICATION = { 'replication_factor' : 3 } AND tablets = {'initial': 20 }") as ks:
             async with new_test_table(manager, ks, "pk text primary key, value int", "") as tbl:
                 cf = tbl.split('.')[1]
-                cql = manager.get_cql()
+                cql, _ = await manager.get_ready_cql(servers_1 + servers_2)
                 insert_stmt = cql.prepare(f"INSERT INTO {ks}.{cf} (pk, value) VALUES (?, ?)")
                 insert_stmt.consistency_level = ConsistencyLevel.ALL
                 await asyncio.gather(*(cql.run_async(insert_stmt, (str(i), i)) for i in range(100)))
