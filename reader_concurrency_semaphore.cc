@@ -1265,7 +1265,7 @@ reader_concurrency_semaphore::inactive_read_handle reader_concurrency_semaphore:
         _blessed_permit = nullptr;
         maybe_wake_execution_loop();
     }
-    if (!should_evict_inactive_read()) {
+    if (!should_evict_inactive_read(*permit)) {
       try {
         permit->aux_data().ir.emplace(std::move(reader), range);
         permit->unlink();
@@ -1500,11 +1500,15 @@ void reader_concurrency_semaphore::evict_readers_in_background() {
     // This is safe since stop() closes _gate;
     (void)with_gate(_close_readers_gate, [this] {
         return repeat([this] {
-            if (_inactive_reads.empty() || !should_evict_inactive_read()) {
+            auto it = std::ranges::find_if(_inactive_reads, [this] (const reader_permit::impl& permit) {
+                return should_evict_inactive_read(permit);
+            });
+            if (it == _inactive_reads.end()) {
                 _evicting = false;
                 return make_ready_future<stop_iteration>(stop_iteration::yes);
             }
-            return detach_inactive_reader(_inactive_reads.front(), evict_reason::permit).close().then([] {
+
+            return detach_inactive_reader(*it, evict_reason::permit).close().then([] {
                 return stop_iteration::no;
             });
         });
@@ -1556,15 +1560,23 @@ reader_concurrency_semaphore::can_admit_read(const reader_permit::impl& permit) 
     return {can_admit::yes, reason::all_ok};
 }
 
-bool reader_concurrency_semaphore::should_evict_inactive_read() const noexcept {
-    if (_resources.memory < 0 || _resources.count < 0) {
+bool reader_concurrency_semaphore::should_evict_inactive_read(const reader_permit::impl& permit) const noexcept {
+    if (_resources.memory < 0 && permit.resources().memory) {
         return true;
     }
-    if (_wait_list.empty()) {
-        return false;
+    if (_resources.count < 0 && permit.resources().count) {
+        return true;
     }
-    const auto r = can_admit_read(_wait_list.front()).why;
-    return r == reason::memory_resources || r == reason::count_resources;
+    if (!_wait_list.empty()) {
+        const auto r = can_admit_read(_wait_list.front()).why;
+        if (r == reason::memory_resources && permit.resources().memory) {
+            return true;
+        }
+        if (r == reason::count_resources && permit.resources().count) {
+            return true;
+        }
+    }
+    return false;
 }
 
 future<> reader_concurrency_semaphore::do_wait_admission(reader_permit::impl& permit) {

@@ -344,7 +344,7 @@ private:
     struct admit_result { can_admit decision; reason why; };
     admit_result can_admit_read(const reader_permit::impl& permit) const noexcept;
 
-    bool should_evict_inactive_read() const noexcept;
+    bool should_evict_inactive_read(const reader_permit::impl& permit) const noexcept;
 
     void maybe_admit_waiters() noexcept;
 
