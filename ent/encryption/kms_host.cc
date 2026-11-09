@@ -1013,10 +1013,26 @@ future<bytes> encryption::kms_host::impl::find_key(const id_cache_key& k) {
 
     auto query = rjson::empty_object();
     rjson::add(query, "CiphertextBlob", enc);
-    rjson::add(query, "KeyId", kid);
+    // don't send keyid, in case we shift region or whatnot. 
+    // Decrypt call will resolve symmetric key from just data.
 
     auto response = co_await post("Decrypt", k.aws_assume_role_arn, query);
     auto data = base64_decode(rjson::get<std::string>(response, "Plaintext"));
+    auto used_id = rjson::get<std::string>(response, "KeyId");
+
+    // KeyID is returned as a Key ARN (https://docs.aws.amazon.com/kms/latest/developerguide/concepts.html#key-id-key-ARN)
+    // arn:<partition>:kms:<region>:<account-id>:key/<key-id>
+    auto pos2 = used_id.find_last_of('/');
+    if (pos2 == id_type::npos) {
+        throw std::invalid_argument(format("Not a valid key id: {}", used_id));
+    }
+    // Ensure we got the same UUID back from the decrypt as we recorded on encrypt
+    // just to be paranoid.
+    auto v1 = kid.substr(kid.size() - 36);
+    auto v2 = used_id.substr(pos2+1);
+    if (v1 != v2) {
+        throw std::invalid_argument(fmt::format("Decrypt call return mismatched key: {} vs used {}", v2, v1));
+    }
 
     // we know nothing about key type etc, so just return data.
     co_return data;
