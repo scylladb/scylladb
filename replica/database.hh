@@ -635,6 +635,8 @@ private:
     sstables::shared_sstable make_sstable(sstables::sstable_state state);
     sstables::shared_sstable make_sstable(sstables::sstable_state state, sstables::sstable_version_types version);
 
+    future<> flush_on_timer();
+
 public:
     void on_flush_timer();
     void deregister_metrics();

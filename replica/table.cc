@@ -3707,13 +3707,38 @@ table::table(schema_ptr schema, config config, lw_shared_ptr<const storage_optio
 
 void table::on_flush_timer() {
     tlogger.debug("on table {}.{} flush timer, period {}ms", _schema->ks_name(), _schema->cf_name(), _schema->memtable_flush_period());
-    (void)with_gate(_async_gate, [this] {
-        return flush().finally([this] {
-            if (_schema->memtable_flush_period() > 0) {
-                _flush_timer.rearm(timer<lowres_clock>::clock::now() + std::chrono::milliseconds(_schema->memtable_flush_period()));
+    // Not a coroutine lambda: with_gate() doesn't keep the closure alive across suspension points.
+    (void)with_gate(_async_gate, [this] { return flush_on_timer(); });
+}
+
+future<> table::flush_on_timer() {
+    const auto period = std::chrono::milliseconds(_schema->memtable_flush_period());
+    const auto now = lowres_clock::now();
+    // Earliest time any compaction group's active memtable becomes a period old.
+    auto next = lowres_clock::time_point::max();
+    if (!_pending_flushes_phaser.is_closed()) {
+        auto op = _pending_flushes_phaser.start();
+        co_await parallel_foreach_compaction_group([&] (compaction_group& cg) -> future<> {
+            const auto due = cg.memtables()->back()->created_at() + period;
+            // Memtable was created recently (another trigger flushed): wait until it is a period old.
+            if (due > now) {
+                next = std::min(next, due);
+                co_return;
+            }
+            if (cg.memtables()->back()->empty()) {
+                next = std::min(next, now + period);
+                co_return;
+            }
+            co_await cg.flush();
+            // A non-flushable list keeps its memtable; never re-arm before now + period.
+            next = std::min(next, std::max(cg.memtables()->back()->created_at(), now) + period);
+        }).finally([&] {
+            // set_schema() re-arms the timer itself on every schema change.
+            if (_schema->memtable_flush_period() > 0 && !_flush_timer.armed() && !_async_gate.is_closed()) {
+                _flush_timer.rearm(next == lowres_clock::time_point::max() ? now + period : next);
             }
         });
-    });
+    }
 }
 
 // The following functions return true if we should return the tablet size of a tablet in
