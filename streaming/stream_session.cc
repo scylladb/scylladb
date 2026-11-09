@@ -23,6 +23,7 @@
 #include "streaming/stream_session_state.hh"
 #include "streaming/table_check.hh"
 #include "service/migration_manager.hh"
+#include "service/storage_proxy.hh"
 #include "mutation_writer/multishard_writer.hh"
 #include "sstables/sstable_set.hh"
 #include "db/view/view_update_checks.hh"
@@ -87,8 +88,18 @@ public:
 };
 
 mutation_reader_consumer
-stream_manager::make_streaming_consumer(uint64_t estimated_partitions, stream_reason reason, service::frozen_topology_guard topo_guard) {
-    return streaming::make_streaming_consumer("streaming", _db, _view_builder, _view_building_worker, estimated_partitions, reason, is_offstrategy_supported(reason), topo_guard);
+stream_manager::make_streaming_consumer(uint64_t estimated_partitions, stream_reason reason, service::frozen_topology_guard topo_guard,
+        service::fencing_token fence, locator::host_id from) {
+    // Runs before the attach and again with the sstable_add_gate of the target group held.
+    // So either the attach is fenced out, or the tablet split ready check sees the group
+    // as non-empty.
+    auto check_fence = [&mm = _mm, fence, from] {
+        if (auto stale = mm.local().get_storage_proxy().check_fence(fence, from)) {
+            throw std::move(*stale);
+        }
+    };
+    return streaming::make_streaming_consumer("streaming", _db, _view_builder, _view_building_worker, estimated_partitions, reason, is_offstrategy_supported(reason), topo_guard,
+            {}, std::move(check_fence));
 }
 
 void stream_manager::init_messaging_service_handler(abort_source& as) {
@@ -122,7 +133,7 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
             rpc::optional<stream_reason> reason_opt,
             rpc::source<frozen_mutation_fragment, rpc::optional<stream_mutation_fragments_cmd>> source,
             rpc::optional<service::session_id> session,
-            rpc::optional<service::fencing_token>) {
+            rpc::optional<service::fencing_token> fence_opt) {
         auto from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
         auto cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
 
@@ -130,8 +141,9 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
 
         auto reason = reason_opt ? *reason_opt: stream_reason::unspecified;
         service::frozen_topology_guard topo_guard = session.value_or(service::default_session_id);
+        auto fence = fence_opt.value_or(service::fencing_token{});
         sslog.trace("Got stream_mutation_fragments from {} reason {}, session {}", from, int(reason), session);
-        return _mm.local().get_schema_for_write(schema_id, src, cpu_id, _ms.local(), as).then([this, from, estimated_partitions, plan_id, cf_id, source, reason, topo_guard, &as] (schema_ptr s) mutable {
+        return _mm.local().get_schema_for_write(schema_id, src, cpu_id, _ms.local(), as).then([this, from, estimated_partitions, plan_id, cf_id, source, reason, topo_guard, fence, &as] (schema_ptr s) mutable {
             auto permit = _db.local().get_reader_concurrency_semaphore().make_tracking_only_permit(s, "stream-session", db::no_timeout, {});
             struct stream_mutation_fragments_cmd_status {
                 bool got_cmd = false;
@@ -273,7 +285,7 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
             (void)do_with(std::move(result_handling_cont), [&] (auto& result_handling) {
                 return mutation_writer::distribute_reader_and_consume_on_shards(s, sharder,
                     make_generating_reader_v1(s, permit, std::move(get_next_mutation_fragment)),
-                    make_streaming_consumer(estimated_partitions, reason, topo_guard),
+                    make_streaming_consumer(estimated_partitions, reason, topo_guard, fence, from),
                     std::move(op)
                 ).then_wrapped(std::ref(result_handling)).handle_exception([s, plan_id, from, sink] (std::exception_ptr ep) mutable -> future<> {
                     auto level = seastar::log_level::error;
