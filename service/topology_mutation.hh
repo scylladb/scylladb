@@ -190,6 +190,7 @@ public:
     topology_request_tracking_mutation_builder& set_prepare_migration_data(const sstring& ks_name,
             const std::unordered_map<table_id, size_t>& tables);
     topology_request_tracking_mutation_builder& set_restore_tablets_data(const table_id& tid, const sstring& snapshot_name);
+    topology_request_tracking_mutation_builder& set_restore_repair(bool repair);
 
     canonical_mutation build() { return canonical_mutation{std::move(_m)}; }
 };

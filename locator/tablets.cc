@@ -138,6 +138,8 @@ write_replica_set_selector get_selector_for_writes(tablet_transition_stage stage
             return write_replica_set_selector::next;
         case tablet_transition_stage::restore:
             return write_replica_set_selector::previous;
+        case tablet_transition_stage::restore_repair:
+            return write_replica_set_selector::previous;
     }
     on_internal_error(tablet_logger, format("Invalid tablet transition stage: {}", static_cast<int>(stage)));
 }
@@ -176,6 +178,8 @@ read_replica_set_selector get_selector_for_reads(tablet_transition_stage stage) 
         case tablet_transition_stage::end_migration:
             return read_replica_set_selector::next;
         case tablet_transition_stage::restore:
+            return read_replica_set_selector::previous;
+        case tablet_transition_stage::restore_repair:
             return read_replica_set_selector::previous;
     }
     on_internal_error(tablet_logger, format("Invalid tablet transition stage: {}", static_cast<int>(stage)));
@@ -370,7 +374,8 @@ tablet_storage_state get_tablet_storage_state(const tablet_replica& replica, con
         case tablet_transition_stage::sc_remove_pending:                       [[fallthrough]];
         case tablet_transition_stage::repair:                                  [[fallthrough]];
         case tablet_transition_stage::end_repair:                              [[fallthrough]];
-        case tablet_transition_stage::restore:
+        case tablet_transition_stage::restore:                                 [[fallthrough]];
+        case tablet_transition_stage::restore_repair:
             return as_replica;
         case tablet_transition_stage::cleanup:
             return is_leaving ? being_cleaned : as_replica;
@@ -1066,6 +1071,7 @@ static const std::unordered_map<tablet_transition_stage, sstring> tablet_transit
     {tablet_transition_stage::revert_migration, "revert_migration"},
     {tablet_transition_stage::end_migration, "end_migration"},
     {tablet_transition_stage::restore, "restore"},
+    {tablet_transition_stage::restore_repair, "restore_repair"},
 };
 
 static const std::unordered_map<sstring, tablet_transition_stage> tablet_transition_stage_from_name = std::invoke([] {
@@ -1095,6 +1101,7 @@ bool can_cancel_tablet_transition(tablet_transition_stage stage) {
         case tablet_transition_stage::end_migration:
         case tablet_transition_stage::end_repair:
         case tablet_transition_stage::restore:
+        case tablet_transition_stage::restore_repair:
             return false;
     }
     on_internal_error(tablet_logger, format("Invalid tablet transition stage: {}", static_cast<int>(stage)));

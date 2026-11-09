@@ -2561,15 +2561,19 @@ future<gc_clock::time_point> repair_service::repair_tablet(gms::gossip_address_m
     std::vector<shard_id> shards;
     std::optional<shard_id> master_shard_id;
     auto& topology = guard.get_token_metadata()->get_topology();
-    auto hosts_filter = info.repair_task_info ? info.repair_task_info->repair_hosts_filter : std::unordered_set<locator::host_id>{};
-    auto dcs_filter = info.repair_task_info ? info.repair_task_info->repair_dcs_filter : std::unordered_set<sstring>{};
-    auto incremental_mode = info.repair_task_info ? info.repair_task_info->repair_incremental_mode : locator::tablet_repair_incremental_mode::disabled;
+    // A tablet being restored can carry a user's repair request, which runs once the restore is
+    // done. Its filters and mode do not apply to the repair that is part of the restore.
+    bool restore_repair = stage == locator::tablet_transition_stage::restore_repair;
+    auto* repair_task_info = restore_repair ? nullptr : info.repair_task_info.get();
+    auto hosts_filter = repair_task_info ? repair_task_info->repair_hosts_filter : std::unordered_set<locator::host_id>{};
+    auto dcs_filter = repair_task_info ? repair_task_info->repair_dcs_filter : std::unordered_set<sstring>{};
+    auto incremental_mode = repair_task_info ? repair_task_info->repair_incremental_mode : locator::tablet_repair_incremental_mode::disabled;
     for (auto& r : replicas) {
         auto shard = r.shard;
         if (r.host != myhostid) {
             if (!hosts_filter.empty() || !dcs_filter.empty()) {
                 auto dc = topology.get_datacenter(r.host);
-                if (!info.repair_task_info || !info.repair_task_info->selected_by_filters(r, topology)) {
+                if (!repair_task_info || !repair_task_info->selected_by_filters(r, topology)) {
                     rlogger.debug("repair[{}]: Check node={} from dc={} hosts_filter={} dcs_filter={} skipped",
                         id.uuid(), r.host, dc, hosts_filter, dcs_filter);
                     continue;
@@ -2608,7 +2612,8 @@ future<gc_clock::time_point> repair_service::repair_tablet(gms::gossip_address_m
                 .set_keyspace(keyspace_name)
                 .set_parent_info(global_tablet_repair_task_info)
                 .set_is_abortable(tasks::is_abortable::yes)
-                .set_is_user_task(tasks::is_user_task::yes)
+                .set_is_internal(tasks::is_internal(restore_repair))
+                .set_is_user_task(tasks::is_user_task(!restore_repair))
                 .set_workload_fn([metas_size = task_metas.size()] () { return make_ready_future<std::optional<double>>(metas_size); });
     auto task = co_await std::move(task_builder).build([module = _repair_module, id, keyspace_name, table_names, metas = std::move(task_metas), ranges_parallelism, &flush_time, &should_flush_and_flush_failed, &topo_guard, sched_info = std::move(sched_info), skip_flush = rebuild_replicas.has_value()] (tasks::task_manager::task::impl& self) mutable -> future<> {
         auto& rs = module->get_repair_service();
