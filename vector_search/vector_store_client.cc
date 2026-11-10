@@ -643,19 +643,21 @@ struct vector_store_client::impl {
                       });
                   })
         , _primary_clients(
-                  vslogger,
+                  vslogger, "primary",
                   [this]() {
                       _dns.trigger_refresh();
                   },
                   unreachable_node_detection_time_in_ms, _truststore)
 
         , _secondary_clients(
-                  vslogger,
+                  vslogger, "secondary",
                   [this]() {
                       _dns.trigger_refresh();
                   },
                   unreachable_node_detection_time_in_ms, _truststore) {
         register_metrics();
+        _primary_clients.set_endpoints(_primary_uris);
+        _secondary_clients.set_endpoints(_secondary_uris);
     }
 
     void register_metrics() {
@@ -707,6 +709,7 @@ struct vector_store_client::impl {
     void handle_uris_changed(seastar::sstring uris_csv, std::vector<uri>& uris, clients& clients) {
         clients.clear();
         uris = parse_uris_no_throw(uris_csv);
+        clients.set_endpoints(uris);
         _dns.hosts(get_hosts(_primary_uris, _secondary_uris));
     }
 

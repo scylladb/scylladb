@@ -14,6 +14,7 @@
 
 import json
 import socket
+import time
 from http import HTTPStatus
 
 import pytest
@@ -141,3 +142,71 @@ def test_requests_unavailable(cql, vector_table, vector_store_mock):
     # The port is closed now, so a connection to it is refused.
     with config_value_context(cql, "vector_store_primary_uri", f"http://{host}:{port}"):
         assert_counted(cql, "ann", "unavailable", ann_query(vector_table))
+
+
+###############################################################################
+# Per-endpoint metrics, which show a broken endpoint even while the failover
+# to another endpoint keeps the queries working:
+#   - scylla_vector_store_endpoint_requests{role, endpoint, status}: one
+#     increment per attempt to an endpoint;
+#   - scylla_vector_store_endpoint_addresses{role, endpoint}: the number of
+#     addresses resolved for the endpoint, 0 when its host does not resolve.
+###############################################################################
+
+def endpoint_requests_metric(cql, endpoint, status):
+    return ScyllaMetrics.query(cql).get("scylla_vector_store_endpoint_requests",
+                                        {"role": "primary", "endpoint": endpoint, "status": status}) or 0
+
+
+def endpoint_addresses_metric(cql, endpoint):
+    return ScyllaMetrics.query(cql).get("scylla_vector_store_endpoint_addresses", {"role": "primary", "endpoint": endpoint})
+
+
+def closed_port(host):
+    """A port nothing listens on, so a connection to it is refused."""
+    with socket.socket() as s:
+        s.bind((host, 0))
+        return s.getsockname()[1]
+
+
+def wait_for(condition, timeout=30):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if condition():
+            return True
+        time.sleep(0.5)
+    return condition()
+
+
+def test_endpoint_failover_counted(cql, vector_table, vector_store_mock):
+    """With one dead and one working endpoint the queries succeed, and the dead endpoint is counted as unavailable."""
+    host = cql.hosts[0].endpoint.address
+    good = f"{host}:{vector_store_mock.port}"
+    dead = f"{host}:{closed_port(host)}"
+    vector_store_mock.set_next_ann_response(200, ann_response(5))
+    with config_value_context(cql, "vector_store_primary_uri", f"http://{good},http://{dead}"):
+        before = (requests_metric(cql, "ann", "ok"), requests_metric(cql, "ann", "unavailable"))
+        queries = 0
+        # The client picks the first endpoint at random, so it tries the dead one sooner or later.
+        while endpoint_requests_metric(cql, dead, "unavailable") == 0 and queries < 30:
+            cql.execute(ann_query(vector_table))
+            queries += 1
+        assert endpoint_requests_metric(cql, dead, "unavailable") > 0, f"dead endpoint not counted after {queries} queries"
+        assert endpoint_requests_metric(cql, dead, "ok") == 0
+        assert endpoint_requests_metric(cql, good, "ok") >= queries
+        # The failover hides the dead endpoint from the per-call counter.
+        assert (requests_metric(cql, "ann", "ok"), requests_metric(cql, "ann", "unavailable")) == (before[0] + queries, before[1])
+
+
+def test_endpoint_series_follow_uris(cql, vector_store_mock):
+    """Each configured URI has its own series, including one whose host does not resolve; a removed URI loses them."""
+    host = cql.hosts[0].endpoint.address
+    good = f"{host}:{vector_store_mock.port}"
+    unresolved = "vector-store.invalid:6080"
+    with config_value_context(cql, "vector_store_primary_uri", f"http://{good},http://{unresolved}"):
+        metrics = ScyllaMetrics.query(cql)
+        assert metrics.label_values("scylla_vector_store_endpoint_requests", "endpoint") == {good, unresolved}
+        assert metrics.label_values("scylla_vector_store_endpoint_requests", "status") == {"ok", "unavailable"}
+        assert wait_for(lambda: endpoint_addresses_metric(cql, good) == 1), "the mock endpoint did not resolve"
+        assert endpoint_addresses_metric(cql, unresolved) == 0
+    assert ScyllaMetrics.query(cql).label_values("scylla_vector_store_endpoint_requests", "endpoint") == {good}
