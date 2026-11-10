@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
+from test import DEBUG_MODES
 import pytest
 import requests
 from .util import new_materialized_view, new_test_table, unique_name, sleep_till_whole_second
@@ -164,10 +165,10 @@ def test_keyspace_1(cql, this_dc, has_tablets, test_keyspace):
         name = unique_name()
         cql.execute("CREATE KEYSPACE " + name + " WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 } AND TABLETS = {'enabled': true, 'initial': 1 }")
         yield name
+        cql.execute("DROP KEYSPACE " + name)
     else:
         # The regular test_keyspace is fine, no need to create another one
         yield test_keyspace
-    cql.execute("DROP KEYSPACE " + name)
 
 @pytest.mark.parametrize("compaction_strategy", ["LeveledCompactionStrategy", "SizeTieredCompactionStrategy", "TimeWindowCompactionStrategy"])
 def test_compactionstats_after_major_compaction(scylla_only, cql, test_keyspace_1, compaction_strategy):
@@ -210,3 +211,15 @@ def test_nodetool_py_compact(cql, test_keyspace):
         nodetool.compact(cql, table, flush_memtables=True)
         nodetool.compact_keyspace(cql, test_keyspace, flush_memtables=False)
         nodetool.compact_keyspace(cql, test_keyspace, flush_memtables=True)
+
+
+def get_compaction_class(cql, table):
+    ks, cf = table.split('.')
+    return cql.execute(f"SELECT compaction FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = '{cf}'").one().compaction['class']
+
+# Test that a table created without a compaction option uses Scylla's
+# default compaction strategy, IncrementalCompactionStrategy.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_default_compaction_strategy(scylla_only, cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, v int") as table:
+        assert get_compaction_class(cql, table).endswith('IncrementalCompactionStrategy')

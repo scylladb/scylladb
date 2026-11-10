@@ -10,10 +10,16 @@
 # unit tests from Cassandra (cassandra_tests), and its interaction with
 # other features (filtering, secondary indexes, etc.) in other test files.
 
+from test import DEBUG_MODES
+from concurrent.futures import ThreadPoolExecutor
+
 import pytest
 
-from .util import new_test_table, unique_key_int, sleep_till_whole_second
+from .util import new_test_table, unique_key_int, sleep_till_whole_second, new_named_table
 from . import nodetool
+from .nodetool import flush, flush_all
+from cassandra.protocol import InvalidRequest
+from cassandra.query import SimpleStatement
 
 @pytest.fixture(scope="module")
 def table_int_desc(cql, test_keyspace):
@@ -148,3 +154,222 @@ def test_reversed_read_purgeable_range_tombstone(cql, test_keyspace):
         sleep_till_whole_second()
         assert list(cql.execute(f"SELECT c FROM {table} WHERE p = 0 AND c <= 2 ORDER BY c DESC LIMIT 1")) == [(0,)]
         assert list(cql.execute(f"SELECT c FROM {table} WHERE p = 0")) == [(0,), (4,)]
+
+
+# Ported from scylla-dtest cql_additional_tests.py::TestCQL::test_order_by.
+# ORDER BY a single clustering column in both directions, then on a table
+# with two clustering columns: ORDER BY an unknown column, the second
+# clustering column alone or the partition key is rejected, ORDER BY the
+# first clustering column works in both directions.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("test_keyspace", ["vnodes"], indirect=True)
+def test_order_by_non_clustering_column(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "k int, c int, v int, PRIMARY KEY (k, c)") as table:
+        for x in range(10):
+            cql.execute(f"INSERT INTO {table} (k, c, v) VALUES (0, {x}, {x})")
+        assert list(cql.execute(f"SELECT v FROM {table} WHERE k = 0 ORDER BY c DESC")) == [(x,) for x in range(9, -1, -1)]
+    with new_test_table(cql, test_keyspace, "k int, c1 int, c2 int, v int, PRIMARY KEY (k, c1, c2)") as table:
+        for x in range(4):
+            for y in range(2):
+                cql.execute(f"INSERT INTO {table} (k, c1, c2, v) VALUES (0, {x}, {y}, {x * 2 + y})")
+        for col in ['c', 'c2', 'k']:
+            with pytest.raises(InvalidRequest):
+                cql.execute(f"SELECT v FROM {table} WHERE k = 0 ORDER BY {col} DESC")
+        assert list(cql.execute(f"SELECT v FROM {table} WHERE k = 0 ORDER BY c1 DESC")) == [(x,) for x in range(7, -1, -1)]
+        assert list(cql.execute(f"SELECT v FROM {table} WHERE k = 0 ORDER BY c1")) == [(x,) for x in range(8)]
+
+# A multi-column slice (b, c, d, e) > (...) on clustering columns with mixed
+# ASC and DESC order returns exactly the rows after the given tuple, in the
+# table's clustering order (CASSANDRA-7281).
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_tuple_slice_mixed_order_columns(cql, test_keyspace_vnodes):
+    with new_named_table(cql, test_keyspace_vnodes, "foo", "a int, b int, c int, d int , e int, PRIMARY KEY (a, b, c, d, e)",
+                         "WITH CLUSTERING ORDER BY (b DESC, c ASC, d DESC, e ASC)") as table:
+        for row in [(0, 2, 0, 0, 0), (0, 1, 0, 0, 0), (0, 0, 0, 0, 0), (0, 0, 1, 2, -1), (0, 0, 1, 1, -1), (0, 0, 1, 1, 0),
+                    (0, 0, 1, 1, 1), (0, 0, 1, 0, 2), (0, 0, 2, 1, -3), (0, 0, 2, 0, 3), (0, -1, 2, 2, 2)]:
+            cql.execute(f"INSERT INTO {table} (a, b, c, d, e) VALUES {row};")
+        assert list(cql.execute(f"SELECT * FROM {table} WHERE a=0 AND (b, c, d, e) > (0, 1, 1, 0);")) == [
+            (0, 2, 0, 0, 0), (0, 1, 0, 0, 0), (0, 0, 1, 2, -1), (0, 0, 1, 1, 1), (0, 0, 2, 1, -3), (0, 0, 2, 0, 3)]
+
+# ORDER BY a clustering column is rejected in a scan without a partition key
+# restriction (CASSANDRA-4246).
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_order_by_without_partition_key(cql, test_keyspace_vnodes):
+    with new_named_table(cql, test_keyspace_vnodes, "test", "k1 int, k2 int, v int, PRIMARY KEY (k1, k2)") as table:
+        for i in range(3):
+            cql.execute(f"INSERT INTO {table} (k1, k2, v) VALUES ({i}, {i}, {i})")
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"SELECT * FROM {table} ORDER BY k2")
+
+# ORDER BY on a table with a DESC clustering column, and on one with
+# (c1 ASC, c2 DESC): the clustering order and its exact reverse are allowed,
+# any other combination of directions or of columns is rejected.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_order_by_reversed_comparator(cql, test_keyspace_vnodes):
+    with new_named_table(cql, test_keyspace_vnodes, "test", "k int, c int, v int, PRIMARY KEY (k, c)",
+                         "WITH CLUSTERING ORDER BY (c DESC)") as table:
+        for x in range(10):
+            cql.execute(f"INSERT INTO {table} (k, c, v) VALUES (0, {x}, {x})")
+        assert list(cql.execute(f"SELECT c, v FROM {table} WHERE k = 0 ORDER BY c ASC")) == [(x, x) for x in range(10)]
+        assert list(cql.execute(f"SELECT c, v FROM {table} WHERE k = 0 ORDER BY c DESC")) == [(x, x) for x in range(9, -1, -1)]
+    with new_named_table(cql, test_keyspace_vnodes, "test2", "k int, c1 int, c2 int, v text, PRIMARY KEY (k, c1, c2)",
+                         "WITH CLUSTERING ORDER BY (c1 ASC, c2 DESC)") as table:
+        for x in range(10):
+            for y in range(10):
+                cql.execute(f"INSERT INTO {table} (k, c1, c2, v) VALUES (0, {x}, {y}, '{x}{y}')")
+        select = f"SELECT c1, c2, v FROM {table} WHERE k = 0"
+        for order_by in ["c1 ASC, c2 ASC", "c1 DESC, c2 DESC"]:
+            with pytest.raises(InvalidRequest):
+                cql.execute(f"{select} ORDER BY {order_by}")
+        expected = [(x, y, f"{x}{y}") for x in range(10) for y in range(9, -1, -1)]
+        assert list(cql.execute(f"{select} ORDER BY c1 ASC")) == expected
+        assert list(cql.execute(f"{select} ORDER BY c1 ASC, c2 DESC")) == expected
+        assert list(cql.execute(f"{select} ORDER BY c1 DESC, c2 ASC")) == [(x, y, f"{x}{y}") for x in range(9, -1, -1) for y in range(10)]
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"{select} ORDER BY c2 DESC, c1 ASC")
+
+# A text partition key with clustering order (c1 ASC, c2 DESC): the default
+# order, ORDER BY the clustering order and its reverse; ORDER BY only the
+# second column, or with directions not matching the clustering order, is
+# rejected.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_order_by_multiordering(cql, test_keyspace_vnodes):
+    with new_named_table(cql, test_keyspace_vnodes, "test", "k text, c1 int, c2 int, PRIMARY KEY (k, c1, c2)",
+                         "WITH CLUSTERING ORDER BY (c1 ASC, c2 DESC)") as table:
+        for i in range(2):
+            for j in range(2):
+                cql.execute(f"INSERT INTO {table}(k, c1, c2) VALUES ('foo', {i}, {j})")
+        select = f"SELECT c1, c2 FROM {table} WHERE k = 'foo'"
+        assert list(cql.execute(select)) == [(0, 1), (0, 0), (1, 1), (1, 0)]
+        assert list(cql.execute(f"{select} ORDER BY c1 ASC, c2 DESC")) == [(0, 1), (0, 0), (1, 1), (1, 0)]
+        assert list(cql.execute(f"{select} ORDER BY c1 DESC, c2 ASC")) == [(1, 0), (1, 1), (0, 0), (0, 1)]
+        for order_by in ["c2 DESC", "c2 ASC", "c1 ASC, c2 ASC"]:
+            with pytest.raises(InvalidRequest):
+                cql.execute(f"{select} ORDER BY {order_by}")
+
+# LIMIT 1 on a partition with clustering order (c1 ASC, c2 DESC) returns
+# the first row in that order (CASSANDRA-4882).
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_limit_with_mixed_clustering_order(cql, test_keyspace_vnodes):
+    with new_named_table(cql, test_keyspace_vnodes, "test", "k int, c1 int, c2 int, v int, PRIMARY KEY (k, c1, c2)",
+                         "WITH CLUSTERING ORDER BY (c1 ASC, c2 DESC)") as table:
+        for row in [(0, 0, 0, 0), (0, 1, 1, 1), (0, 0, 2, 2), (0, 1, 3, 3)]:
+            cql.execute(f"INSERT INTO {table} (k, c1, c2, v) VALUES {row};")
+        assert list(cql.execute(f"select * from {table} where k = 0 limit 1;")) == [(0, 0, 2, 2)]
+
+# With an IN restriction, ORDER BY does not need the ordering columns to be
+# selected (CASSANDRA-4911), also with IN on the partition key, and with
+# writetime() selected (CASSANDRA-8286). Without ORDER BY, IN on the
+# partition key returns the partitions sorted by key value. Paging is
+# disabled, as ORDER BY with IN on the partition key needs it.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_in_order_by_without_selecting(cql, test_keyspace_vnodes):
+    with new_named_table(cql, test_keyspace_vnodes, "test", "k int, c1 int, c2 int, v int, PRIMARY KEY (k, c1, c2)") as table:
+        for row in [(0, 0, 0, 0), (0, 0, 1, 1), (0, 0, 2, 2), (1, 1, 0, 3), (1, 1, 1, 4), (1, 1, 2, 5)]:
+            cql.execute(f"INSERT INTO {table}(k, c1, c2, v) VALUES {row}")
+        def select(what, where):
+            return [tuple(r) for r in cql.execute(SimpleStatement(f"SELECT {what} FROM {table} WHERE {where}", fetch_size=None))]
+        assert select("*", "k=0 AND c1 = 0 AND c2 IN (2, 0)") == [(0, 0, 0, 0), (0, 0, 2, 2)]
+        assert select("*", "k=0 AND c1 = 0 AND c2 IN (2, 0) ORDER BY c1 ASC, c2 ASC") == [(0, 0, 0, 0), (0, 0, 2, 2)]
+        assert select("v", "k=0 AND c1 = 0 AND c2 IN (2, 0)") == [(0,), (2,)]
+        assert select("v", "k=0 AND c1 = 0 AND c2 IN (2, 0) ORDER BY c1 ASC") == [(0,), (2,)]
+        assert select("v", "k=0 AND c1 = 0 AND c2 IN (2, 0) ORDER BY c1 DESC") == [(2,), (0,)]
+        assert select("v", "k IN (1, 0)") == [(0,), (1,), (2,), (3,), (4,), (5,)]
+        assert select("v", "k IN (1, 0) ORDER BY c1 ASC") == [(0,), (1,), (2,), (3,), (4,), (5,)]
+        results = select("writetime(v)", "k IN (1, 0) ORDER BY c1 ASC")
+        assert results == sorted(results)
+
+# IN on the last clustering column with ORDER BY DESC of the first one
+# returns the rows in descending order.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_in_with_desc_order(cql, test_keyspace_vnodes):
+    with new_named_table(cql, test_keyspace_vnodes, "test", "k int, c1 int, c2 int, PRIMARY KEY (k, c1, c2)") as table:
+        for c2 in range(3):
+            cql.execute(f"INSERT INTO {table}(k, c1, c2) VALUES (0, 0, {c2})")
+        assert list(cql.execute(f"SELECT * FROM {table} WHERE k=0 AND c1 = 0 AND c2 IN (2, 0) ORDER BY c1 DESC")) == [(0, 0, 2), (0, 0, 0)]
+
+# IN on a DESC clustering column of a table with a composite partition key,
+# with one value and with a value that does not exist (CASSANDRA-7105).
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_in_on_desc_clustering_column(cql, test_keyspace_vnodes):
+    with new_named_table(cql, test_keyspace_vnodes, "test", "a int, b int, c int, PRIMARY KEY ((a, b), c)",
+                         "with clustering order by (c desc)") as table:
+        cql.execute(f"INSERT INTO {table} (a, b, c) VALUES (1, 2, 3)")
+        cql.execute(f"INSERT INTO {table} (a, b, c) VALUES (4, 5, 6)")
+        assert list(cql.execute(f"SELECT * FROM {table} WHERE a=1 AND b=2 AND c IN (3)")) == [(1, 2, 3)]
+        assert list(cql.execute(f"SELECT * FROM {table} WHERE a=1 AND b=2 AND c IN (3, 4)")) == [(1, 2, 3)]
+
+# now() can be written into a DESC timeuuid clustering column
+# (CASSANDRA-5386).
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_now_into_desc_clustering_column(cql, test_keyspace_vnodes):
+    with new_named_table(cql, test_keyspace_vnodes, "test", "k int, c timeuuid, v int, PRIMARY KEY (k, c)",
+                         "WITH CLUSTERING ORDER BY (c DESC)") as table:
+        cql.execute(f"INSERT INTO {table} (k, c, v) VALUES (0, now(), 0);")
+        assert len(list(cql.execute(f"SELECT * FROM {table} WHERE k = 0"))) == 1
+
+# dateOf() of a DESC timeuuid clustering column can be selected in a full
+# scan.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_function_on_desc_clustering_column(cql, test_keyspace_vnodes):
+    with new_named_table(cql, test_keyspace_vnodes, "test", "k int, t timeuuid, PRIMARY KEY (k, t)",
+                         "WITH CLUSTERING ORDER BY (t DESC)") as table:
+        for i in range(5):
+            cql.execute(f"INSERT INTO {table} (k, t) VALUES ({i}, now())")
+        assert len(list(cql.execute(f"SELECT dateOf(t) FROM {table}"))) == 5
+
+# Ported from dtest reversed_queries_test.py (vnodes keyspaces, like the
+# dtests):
+
+# A query in ascending order of a table with descending clustering order
+# returns the rows in ascending order.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_reversed_query_on_table_with_reversed_order(cql, test_keyspace_vnodes):
+    with new_test_table(cql, test_keyspace_vnodes, 'pk int, ck int, v int, PRIMARY KEY (pk, ck)', 'WITH CLUSTERING ORDER BY (ck DESC)') as table:
+        stmt = cql.prepare(f'INSERT INTO {table} (pk, ck, v) VALUES (?, ?, ?)')
+        for i in range(100):
+            cql.execute(stmt, (0, i, -i))
+        assert [tuple(r) for r in cql.execute(f'SELECT ck, v FROM {table} WHERE pk = 0 ORDER BY ck ASC')] == [(i, -i) for i in range(100)]
+
+def is_debug_build(cql):
+    """Whether the server is a debug build of Scylla, from system.versions,
+    which Cassandra does not have."""
+    try:
+        return cql.execute("SELECT build_mode FROM system.versions WHERE key = 'local'").one().build_mode in DEBUG_MODES
+    except Exception:
+        return False
+
+# A reversed query finds the row near the end of a range covered by many
+# overlapping range tombstones (100000 of them, written concurrently),
+# bypassing the cache: from the memtable, and after a flush from the sstable.
+# A dtest node's memtable may also get flushed while the tombstones pile up,
+# so the scenario is repeated with the tombstones flushed to an sstable of
+# their own before the row is written.
+# Each tombstone overlaps all the earlier ones, so writing them is too slow
+# for a debug build, which gets 10000 of them.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_reversed_query_with_overlapping_range_tombstones(cql, test_keyspace_vnodes):
+    count = 10000 if is_debug_build(cql) else 100000
+    for flush_tombstones in [False, True]:
+        with new_test_table(cql, test_keyspace_vnodes, 'pk int, ck int, v int, PRIMARY KEY (pk, ck)') as table:
+            stmt = cql.prepare(f'DELETE FROM {table} WHERE pk = 0 AND ck >= ? AND ck < ?')
+            # As the dtest's run_concurrently(10, run_deletes): ten workers,
+            # each deleting its own i = worker_id, worker_id + 10, ... in
+            # order, one statement at a time.
+            def run_deletes(worker_id):
+                for i in range(worker_id, count, 10):
+                    cql.execute(stmt, (i, i + count))
+            with ThreadPoolExecutor(max_workers=10) as executor:
+                for f in [executor.submit(run_deletes, w) for w in range(10)]:
+                    f.result()
+            if flush_tombstones:
+                flush(cql, table)
+            ck = 2 * count - 10
+            cql.execute(f'INSERT INTO {table} (pk, ck, v) VALUES (0, {ck}, 42)')
+            query = f'SELECT ck, v FROM {table} WHERE pk = 0 ORDER BY ck DESC LIMIT 1 BYPASS CACHE'
+            assert [tuple(r) for r in cql.execute(query, trace=True)] == [(ck, 42)]
+            flush(cql, table)
+            assert [tuple(r) for r in cql.execute(query)] == [(ck, 42)]
+    # The node's other tables, like the queries' traces, are flushed too, as
+    # when a dtest node stops.
+    flush_all(cql)

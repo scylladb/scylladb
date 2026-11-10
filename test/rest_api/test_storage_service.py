@@ -6,6 +6,7 @@ import pytest
 import sys
 import requests
 import time
+import uuid
 
 # Use the util.py library from ../cqlpy:
 from ..cqlpy.util import unique_name, new_test_table, new_test_keyspace, new_materialized_view, new_secondary_index
@@ -1078,3 +1079,71 @@ def test_disable_autocompaction_doesnt_block_user_initiated_compactions(cql, thi
                 resp.raise_for_status()
 
                 wait_for_log(logfile, to_find, timeout=180)
+# Online scrub (in the default ABORT mode) of a table with deleted rows and a
+# collection column, and of the views of its secondary indexes, keeps the
+# number of sstables and all the data (read with and without the indexes).
+def test_storage_service_keyspace_scrub_keeps_data(cql, this_dc, rest_api):
+    with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}") as keyspace:
+        with new_test_table(cql, keyspace, "key text PRIMARY KEY, gender text, state text, birth_year bigint, uuids list<uuid>") as table:
+            cf = table.split('.')[1]
+            index_views = []
+            for column in ['gender', 'state', 'birth_year']:
+                cql.execute(f"CREATE INDEX {cf}_{column}_idx ON {table}({column})")
+                index_views.append(f"{cf}_{column}_idx_index")
+            # Let the index builds finish before writing: a build that ends
+            # later writes view rows, which would make the flush below miss
+            # them and scrub, which flushes first, add an sstable.
+            deadline = time.time() + 60
+            while len(list(cql.execute(f"SELECT index_name FROM system.\"IndexInfo\" WHERE table_name = '{keyspace}'"))) < 3:
+                assert time.time() < deadline, "index builds did not finish"
+                time.sleep(0.1)
+            the_uuid = uuid.uuid4()
+            users = {}
+            for i in range(1, 9):
+                users[f'user{i}'] = ('f' if i % 2 else 'm', 'TX' if i % 2 else 'CA', 1978 if i % 2 else 1982, [the_uuid, uuid.uuid4()])
+            insert = cql.prepare(f"INSERT INTO {table} (key, gender, state, birth_year, uuids) VALUES (?, ?, ?, ?, ?)")
+            for key, values in users.items():
+                cql.execute(insert, (key,) + values)
+            for key in ['user1', 'user5', 'user7']:
+                cql.execute(f"DELETE FROM {table} WHERE key = '{key}'")
+                del users[key]
+            queries = {
+                f"SELECT * FROM {table}": users.keys(),
+                f"SELECT * FROM {table} WHERE state = 'TX'": [k for k, v in users.items() if v[1] == 'TX'],
+                f"SELECT * FROM {table} WHERE gender = 'f'": [k for k, v in users.items() if v[0] == 'f'],
+                f"SELECT * FROM {table} WHERE birth_year = 1978": [k for k, v in users.items() if v[2] == 1978],
+                f"SELECT * FROM {table} WHERE uuids CONTAINS {the_uuid} ALLOW FILTERING": users.keys(),
+            }
+            def check_data():
+                for query, keys in queries.items():
+                    rows = list(cql.execute(query))
+                    assert sorted(r.key for r in rows) == sorted(keys), query
+                    for r in rows:
+                        assert (r.gender, r.state, r.birth_year, r.uuids) == users[r.key]
+            def sstable_counts():
+                counts = {}
+                for t in [cf] + index_views:
+                    resp = rest_api.send("GET", f"column_family/metrics/live_ss_table_count/{keyspace}:{t}")
+                    resp.raise_for_status()
+                    counts[t] = resp.json()
+                return counts
+
+            # The view updates of the writes may lag behind them.
+            deadline = time.time() + 60
+            while True:
+                try:
+                    check_data()
+                    break
+                except AssertionError:
+                    if time.time() > deadline:
+                        raise
+                    time.sleep(0.1)
+            rest_api.send("POST", f"storage_service/keyspace_flush/{keyspace}").raise_for_status()
+            counts = sstable_counts()
+            assert all(counts.values()), counts
+            for _ in range(2):
+                resp = rest_api.send("GET", f"storage_service/keyspace_scrub/{keyspace}", {"cf": ",".join([cf] + index_views)})
+                resp.raise_for_status()
+                assert resp.json() == 0
+                assert sstable_counts() == counts
+                check_data()

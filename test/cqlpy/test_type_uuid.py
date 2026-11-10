@@ -11,7 +11,9 @@
 # timeuuid is a separate type and may
 #############################################################################
 
-from .util import new_test_table, unique_key_int
+from test import DEBUG_MODES
+from .util import new_named_table, new_test_table, unique_key_int
+from cassandra.protocol import InvalidRequest, SyntaxException
 
 import pytest
 import uuid
@@ -144,3 +146,33 @@ def test_uuid_order_version7(cql, table1):
         uuid.UUID(u2),
         uuid.UUID(u1),
     ] == [x.u for x in cql.execute(f"SELECT u FROM {table1} where p={p}")]
+
+
+# Tests ported from scylla-dtest's cql_additional_tests.py. Like the dtests,
+# they run in a keyspace with vnodes, and keep the dtests' table names.
+
+# A timeuuid clustering column: an unquoted date is a syntax error; rows
+# written with now() are selected by slices and equality on their values;
+# dateOf() of a non-timeuuid is rejected; dateOf(), unixTimestampOf(),
+# maxTimeuuid() and minTimeuuid() work. The dtest slept a second between
+# the now() inserts; each now() is unique anyway.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_timeuuid_restrictions_and_functions(cql, test_keyspace_vnodes):
+    with new_named_table(cql, test_keyspace_vnodes, "test", "k int, t timeuuid, PRIMARY KEY (k, t)") as table:
+        with pytest.raises(SyntaxException):
+            cql.execute(f"INSERT INTO {table} (k, t) VALUES (0, 2012-11-07 18:18:22-0800)")
+        for i in range(4):
+            cql.execute(f"INSERT INTO {table} (k, t) VALUES (0, now())")
+        res = list(cql.execute(f"SELECT * FROM {table}"))
+        assert len(res) == 4
+        dates = [d[1] for d in res]
+        def count(where):
+            return len(list(cql.execute(f"SELECT * FROM {table} WHERE k = 0 AND {where}")))
+        assert count(f"t >= {dates[0]}") == 4
+        assert count(f"t < {dates[0]}") == 0
+        assert count(f"t > {dates[0]} AND t <= {dates[2]}") == 2
+        assert count(f"t = {dates[0]}") == 1
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"SELECT dateOf(k) FROM {table} WHERE k = 0 AND t = {dates[0]}")
+        cql.execute(f"SELECT dateOf(t), unixTimestampOf(t) FROM {table} WHERE k = 0 AND t = {dates[0]}")
+        cql.execute(f"SELECT t FROM {table} WHERE k = 0 AND t > maxTimeuuid(1234567) AND t < minTimeuuid('2012-11-07 18:18:22-0800')")

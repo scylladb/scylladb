@@ -173,7 +173,8 @@ def testNamelessIndex(cql, test_keyspace):
 
         execute(cql, table, "DROP INDEX %s_birth_year_idx")
 
-        assert_invalid(cql, table, "SELECT id FROM users WHERE birth_year = 42")
+        # Without the index, the query needs ALLOW FILTERING.
+        assert_invalid_message(cql, table, "ALLOW FILTERING", "SELECT id FROM %s WHERE birth_year = 42")
 
 # Test range queries with 2ndary indexes (CASSANDRA-4257),
 # migrated from cql_tests.py:TestCQL.range_query_2ndary_test()

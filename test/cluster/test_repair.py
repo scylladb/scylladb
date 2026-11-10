@@ -11,18 +11,22 @@ import asyncio
 import json
 import random
 import uuid
+import os
+import re
 
 from cassandra.cluster import ConsistencyLevel
 from cassandra.policies import FallthroughRetryPolicy
 from cassandra.protocol import ServerError
 from cassandra.query import SimpleStatement
 
+from test import DEBUG_MODES
 from test.pylib.internal_types import ServerInfo
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import HTTPError
 from test.pylib.tablets import get_tablet_replica
 from test.pylib.util import wait_for_cql_and_get_hosts
-from test.cluster.util import new_test_keyspace, reconnect_driver, FeatureConfig
+from test.cluster.util import new_test_keyspace, reconnect_driver, run_nodetool, FeatureConfig
+from test.cluster.dtest_helpers import create_cf, dtest_session, insert_c1c2, query_c1c2
 
 
 logger = logging.getLogger(__name__)
@@ -1075,3 +1079,221 @@ async def test_shutdown_during_repair_write(manager: ScyllaClusterManager, stora
             rows = await cql.run_async(SimpleStatement(f"SELECT pk, v FROM {ks}.test",
                                                        consistency_level=ConsistencyLevel.ONE), host=host)
             assert sorted((r.pk, r.v) for r in rows) == [(0, 0), (1, 1)]
+
+
+# The TestRepair dtests: hinted handoff off and a batch commitlog, vnodes.
+DTEST_REPAIR_CONFIG = {"hinted_handoff_enabled": False, "commitlog_sync": "batch", "commitlog_sync_batch_window_in_ms": 2,
+                       "tablets_mode_for_new_keyspaces": "disabled", "num_tokens": 256}
+
+
+async def stop_node(manager: ScyllaClusterManager, server: ServerInfo) -> None:
+    """ccm's node.stop(wait_other_notice=True)."""
+    await manager.server_stop_gracefully(server.server_id)
+    await manager.others_not_see_server(server.ip_addr)
+
+
+async def start_node(manager: ScyllaClusterManager, server: ServerInfo) -> None:
+    """ccm's node.start(wait_other_notice=True, wait_for_binary_proto=True)."""
+    await manager.server_start(server.server_id)
+    await manager.servers_see_each_other(await manager.running_servers())
+
+
+async def check_rows_on_node(manager: ScyllaClusterManager, node: ServerInfo, rows: int, found=(), missings=(), restart=True) -> None:
+    """TestRepair.check_rows_on_node(): with every other node stopped, the
+    node alone has `rows` rows, the `found` keys and not the `missings`."""
+    stopped = [s for s in await manager.running_servers() if s.server_id != node.server_id]
+    for s in stopped:
+        await stop_node(manager, s)
+    # The dtests' sessions default to CL=ONE.
+    session = dtest_session(await manager.get_cql_exclusive(node))
+    try:
+        session.execute("USE ks")
+        result = list(session.execute(f"SELECT * FROM cf LIMIT {rows * 2}"))
+        assert len(result) == rows, len(result)
+        for k in found:
+            query_c1c2(session, k, ConsistencyLevel.ONE)
+        for k in missings:
+            res = list(session.execute(SimpleStatement(f"SELECT c1, c2 FROM cf WHERE key='k{k}'", consistency_level=ConsistencyLevel.ONE)))
+            assert len([x for x in res if len(x) != 0]) == 0, res
+    finally:
+        session.cluster.shutdown()
+    if restart:
+        for s in stopped:
+            await start_node(manager, s)
+
+
+def use_ks_cf(cql, replication: str, cf_options: dict) -> None:
+    """The keyspace ks (with USE) and the dtests' create_cf(session, "cf",
+    columns={"c1": "text", "c2": "text"}, ...)."""
+    cql.execute(f"CREATE KEYSPACE ks WITH replication = {replication}")
+    cql.cluster.control_connection.wait_for_schema_agreement(wait_time=120)
+    cql.execute("USE ks")
+    if "compaction" in cf_options:
+        cql.execute("CREATE COLUMNFAMILY cf (key varchar PRIMARY KEY, c1 text, c2 text) WITH comment='test cf' "
+                    f"AND compaction={cf_options['compaction']} AND compression = {{}}")
+        cql.execute(SimpleStatement("SELECT * FROM cf LIMIT 1", consistency_level=ConsistencyLevel.ONE))
+    else:
+        create_cf(cql, "cf", {"c1": "text", "c2": "text"}, **cf_options)
+
+
+async def flush_all_nodes(manager: ScyllaClusterManager) -> None:
+    """ccm's cluster.flush()."""
+    for s in await manager.running_servers():
+        await run_nodetool(manager, s, "flush")
+
+
+async def simple_repair(manager: ScyllaClusterManager, metrics=()) -> dict:
+    """TestRepair._simple_repair(): three nodes (rack1-3), node3 misses key
+    1000, `nodetool repair ks` on node1 brings it; returns node1's metrics
+    after the repair."""
+    servers = await manager.servers_add(3, config=DTEST_REPAIR_CONFIG,
+                                        property_file=[{"dc": "datacenter1", "rack": f"rack{i + 1}"} for i in range(3)])
+    node1, node2, node3 = servers
+    cql = dtest_session(manager.get_cql())
+    use_ks_cf(cql, "{'class':'NetworkTopologyStrategy', 'replication_factor':3}", {"read_repair": 0.0})
+    insert_c1c2(cql, keys=range(1000), consistency=ConsistencyLevel.ALL)
+    await run_nodetool(manager, node3, "flush")
+    await stop_node(manager, node3)
+    insert_c1c2(cql, keys=(1000,), consistency=ConsistencyLevel.TWO)
+    await start_node(manager, node3)
+    insert_c1c2(cql, keys=range(1001, 2001), consistency=ConsistencyLevel.ALL)
+    await flush_all_nodes(manager)
+    await check_rows_on_node(manager, node3, 2000, missings=[1000])
+    await check_rows_on_node(manager, node1, 2001, found=[1000])
+    await check_rows_on_node(manager, node2, 2001, found=[1000])
+    await run_nodetool(manager, node1, "repair", "ks")
+    node1_metrics = await manager.metrics.query(node1.ip_addr)
+    data = {m: node1_metrics.get(m) or 0 for m in metrics}
+    await check_rows_on_node(manager, node3, 2001, found=[1000], restart=False)
+    return data
+
+
+# Ported from scylla-dtest repair_test.py::TestRepair::test_two_consecutive_repair.
+# The first repair of a node that missed a key transfers rows (node1's
+# scylla_repair_tx_row_bytes > 0); after the nodes restart, a second repair
+# transfers nothing.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+async def test_two_consecutive_repair(manager: ScyllaClusterManager):
+    metric_name = "scylla_repair_tx_row_bytes"
+    metric_data = (await simple_repair(manager, [metric_name]))[metric_name]
+    assert metric_data > 0, f"Got incorrect metric value '{metric_data}'"
+    # cluster.start(): the nodes check_rows_on_node() left stopped.
+    servers = await manager.all_servers()
+    running = {s.server_id for s in await manager.running_servers()}
+    for s in servers:
+        if s.server_id not in running:
+            await manager.server_start(s.server_id)
+    node1 = servers[0]
+    await run_nodetool(manager, node1, "repair", "ks")
+    metric_data = (await manager.metrics.query(node1.ip_addr)).get(metric_name) or 0
+    assert metric_data == 0, f"Got incorrect value '{metric_data}'"
+
+
+# Ported from scylla-dtest repair_test.py::TestRepair::test_dc_repair.
+# Three DCs (dc1: two racks, dc2, dc3) with RF {dc1: 2, dc2: 1, dc3: 1}:
+# node2 misses key 1000; a repair of dc1 and dc2 from node1 brings it.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+async def test_dc_repair(manager: ScyllaClusterManager):
+    servers = await manager.servers_add(4, config=DTEST_REPAIR_CONFIG, property_file=[
+        {"dc": "dc1", "rack": "rack1"}, {"dc": "dc1", "rack": "rack2"}, {"dc": "dc2", "rack": "rack1"}, {"dc": "dc3", "rack": "rack1"}])
+    node1, node2, node3, node4 = servers
+    cql = dtest_session(manager.get_cql())
+    use_ks_cf(cql, "{'class': 'NetworkTopologyStrategy', 'dc1': 2, 'dc2': 1, 'dc3':1}", {"read_repair": 0.0})
+    insert_c1c2(cql, keys=range(1000), consistency=ConsistencyLevel.ALL)
+    await run_nodetool(manager, node2, "flush")
+    await stop_node(manager, node2)
+    insert_c1c2(cql, keys=(1000,), consistency=ConsistencyLevel.THREE)
+    await start_node(manager, node2)
+    insert_c1c2(cql, keys=range(1001, 2001), consistency=ConsistencyLevel.ALL)
+    await flush_all_nodes(manager)
+    await check_rows_on_node(manager, node2, 2000, missings=[1000])
+    for node in [node1, node3, node4]:
+        await check_rows_on_node(manager, node, 2001, found=[1000])
+    # ccm's node1.repair(keyspace="ks", dcs=["dc1", "dc2"]).
+    await run_nodetool(manager, node1, "repair", "ks", "--in-dc", "dc1,dc2")
+    await check_rows_on_node(manager, node2, 2001, found=[1000], restart=False)
+
+
+def list_of_sstables(workdir: str) -> list[str]:
+    """The dtests' get_list_of_sstables(node, "ks", "cf", suffix=".db"):
+    the .db files of the table's directory, in os.walk() order."""
+    ks_path = os.path.join(workdir, "data", "ks")
+    pat = re.compile(r"cf-[0-9a-f]", re.IGNORECASE)
+    files = []
+    for dirpath, dirnames, filenames in os.walk(ks_path):
+        if pat.match(os.path.basename(dirpath)):
+            files += [os.path.join(dirpath, f) for f in filenames if f.endswith(".db")]
+        for dirname in list(dirnames):
+            if not pat.match(dirname):
+                dirnames.remove(dirname)
+    return files
+
+
+# Ported from scylla-dtest repair_test.py::TestRepair::test_repair_with_disabled_compaction.
+# With compaction disabled (TWCS), a repair from node2 adds sstable files on
+# node3, which missed two keys (#7525: one sstable for all followers).
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+async def test_repair_with_disabled_compaction(manager: ScyllaClusterManager):
+    servers = await manager.servers_add(3, config=DTEST_REPAIR_CONFIG,
+                                        property_file=[{"dc": "datacenter1", "rack": f"rack{i + 1}"} for i in range(3)])
+    node1, node2, node3 = servers
+    cql = dtest_session(manager.get_cql())
+    use_ks_cf(cql, "{'class':'NetworkTopologyStrategy', 'replication_factor':3}",
+              {"compaction": "{'class': 'TimeWindowCompactionStrategy', 'enabled': 'false'}"})
+    insert_c1c2(cql, keys=range(1000), consistency=ConsistencyLevel.ALL)
+    await run_nodetool(manager, node3, "flush")
+    await stop_node(manager, node3)
+    insert_c1c2(cql, keys=(1001, 2001), consistency=ConsistencyLevel.TWO)
+    await start_node(manager, node3)
+    insert_c1c2(cql, keys=range(2001), consistency=ConsistencyLevel.ALL)
+    await flush_all_nodes(manager)
+    workdir = await manager.server_get_workdir(node3.server_id)
+    before = list_of_sstables(workdir)
+    await run_nodetool(manager, node2, "repair", "ks")
+    after = list_of_sstables(workdir)
+    assert before < after, "Number of sstables should have increased because of the repair"
+
+
+# A node that missed an overwrite of a row whose other columns are null
+# (it was down) reads the old value alone at CL=ONE, and after a
+# "nodetool repair" on it reads the new value, again alone.
+# Ported from scylla-dtest cql_additional_tests.py::TestCQL::test_quorum_with_null;
+# like on the dtest's nodes, new keyspaces use vnodes.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+async def test_repair_fixes_overwritten_row_with_nulls(manager: ScyllaClusterManager):
+    servers = await manager.servers_add(3, config={'tablets_mode_for_new_keyspaces': 'disabled'}, auto_rack_dc="dc1")
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:
+        table = f"{ks}.test1"
+        await cql.run_async(f"CREATE TABLE {table} (k int, c1 int, v1 int, v2 int, v3 int, PRIMARY KEY (k, c1));")
+        # Every replica has the first value, and at least two the second.
+        await cql.run_async(SimpleStatement(f"INSERT INTO {table} (k, c1,v3) VALUES (1, 123,456)", consistency_level=ConsistencyLevel.ALL))
+        # All tables of all nodes, as the dtest's cluster.flush().
+        for s in servers:
+            await manager.api.flush_all_keyspaces(s.ip_addr)
+        stale, updated = servers[0], servers[1:]
+        await manager.server_stop_gracefully(stale.server_id)
+        await manager.others_not_see_server(stale.ip_addr)
+        await cql.run_async(SimpleStatement(f"INSERT INTO {table} (k, c1,v3) VALUES (1, 123,768)", consistency_level=ConsistencyLevel.QUORUM))
+        for s in updated:
+            await manager.server_stop_gracefully(s.server_id)
+        await manager.server_start(stale.server_id)
+        stale_cql = await manager.get_cql_exclusive(stale)
+        query = SimpleStatement(f"SELECT * FROM {table} WHERE k = 1 and c1=123", consistency_level=ConsistencyLevel.ONE)
+        assert [r.v3 for r in await stale_cql.run_async(query)] == [456]
+        for s in updated:
+            await manager.server_start(s.server_id)
+        await manager.servers_see_each_other(servers)
+        # "nodetool repair" of all keyspaces, as the dtest's node.repair().
+        exe = await manager.server_get_exe(stale.server_id)
+        proc = await asyncio.create_subprocess_exec(exe, "nodetool", "repair", "-h", stale.ip_addr)
+        assert await proc.wait() == 0
+        for s in updated:
+            await manager.server_stop_gracefully(s.server_id)
+        assert [r.v3 for r in await stale_cql.run_async(query)] == [768]
+        for s in updated:
+            await manager.server_start(s.server_id)
+        await manager.servers_see_each_other(servers)
+        # All nodes were down at some point; a new session drops the keyspace.
+        await reconnect_driver(manager)
+        await wait_for_cql_and_get_hosts(manager.get_cql(), servers, time.time() + 60)

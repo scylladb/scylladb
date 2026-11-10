@@ -6,13 +6,29 @@
 # Tests aggregation functions COUNT(), MIN(), MAX(), SUM()
 #############################################################################
 
+from test import DEBUG_MODES
 import pytest
 import math
 from decimal import Decimal
-from .util import new_test_table, unique_key_int, project, new_type
+from contextlib import contextmanager
+from .util import new_named_table, new_test_table, unique_key_int, project, new_type, new_cql, unique_name
+from cassandra.query import SimpleStatement
 from cassandra.util import Date
 from cassandra.protocol import InvalidRequest, SyntaxException
 from .cassandra_tests.porting import assert_invalid_message
+
+
+# The dtests' sessions USE their keyspace and create user types by their
+# unqualified name; this creates one so and yields its qualified name.
+@contextmanager
+def new_type_after_use(cql, keyspace, name, fields):
+    with new_cql(cql) as session:
+        session.execute(f"USE {keyspace}")
+        session.execute(f"CREATE TYPE {name} {fields}")
+    try:
+        yield f"{keyspace}.{name}"
+    finally:
+        cql.execute(f"DROP TYPE {keyspace}.{name}")
 
 @pytest.fixture(scope="module")
 def table1(cql, test_keyspace):
@@ -332,3 +348,76 @@ def test_bind_variable_on_aggregate(cql, test_keyspace):
         # With GROUP BY, there is a result row for each group.
         stmt = cql.prepare(f"select c, max(m)[?] from {table} where p = ? group by c")
         assert [(1, 10), (2, 11)] == list(cql.execute(stmt, [1, p]))
+
+# Ported from scylla-dtest cql_additional_tests.py::TestCQL::test_min_and_max_on_sets_and_udt.
+# min() and max() on a set<ascii> column, on a UDT column, and on set<int>
+# and set<blob> columns compare values lexicographically. Reproduces #6768.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("test_keyspace", ["vnodes"], indirect=True)
+def test_min_max_set_ascii_and_udt(cql, test_keyspace):
+    with new_type_after_use(cql, test_keyspace, unique_name(), "(first text, second int, third int)") as typ, \
+         new_test_table(cql, test_keyspace, f"id int PRIMARY KEY, s1 set<int>, s2 set<blob>, my_asc set<ascii>, my_type {typ}") as table:
+        cql.execute(f"INSERT INTO {table} (id, my_asc) VALUES (1, {{'hi', 'im', 'ascii'}})")
+        cql.execute(f"INSERT INTO {table} (id, my_asc) VALUES (2, {{'im', 'ascii', 'too'}})")
+        assert list(cql.execute(f"select max(my_asc) FROM {table}"))[0][0] == {'ascii', 'im', 'too'}
+        assert list(cql.execute(f"select min(my_asc) FROM {table}"))[0][0] == {'ascii', 'hi', 'im'}
+
+        cql.execute(f"INSERT INTO {table} (id, s1, s2, my_type) VALUES (1, {{-1, 1}}, {{0xff, 0x01}}, {{first:'a', second: 2, third: 3}})")
+        cql.execute(f"INSERT INTO {table} (id, s1, s2, my_type) VALUES (2, {{-2, 2}}, {{0xfe, 0x02}}, {{first:'b', second: 5, third: 6}})")
+        mx = list(cql.execute(f"select max(my_type) FROM {table}"))[0][0]
+        mn = list(cql.execute(f"select min(my_type) FROM {table}"))[0][0]
+        assert (mx.first, mx.second, mx.third) == ('b', 5, 6)
+        assert (mn.first, mn.second, mn.third) == ('a', 2, 3)
+
+        assert [tuple(r) for r in cql.execute(f"select max(s1), max(s2) FROM {table}")] == [({-1, 1}, {b"\x02", b"\xfe"})]
+
+# Ported from scylla-dtest cql_additional_tests.py::TestCQL::test_large_count.
+# COUNT(*) must add up the rows of all pages when the rows span several
+# pages: with a 10000-row page size, count just below, at and just above
+# the page size, and a bit after that.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("test_keyspace", ["vnodes"], indirect=True)
+def test_count_paged(cql, test_keyspace):
+    def count(table):
+        return list(cql.execute(SimpleStatement(f"SELECT COUNT(*) FROM {table}", fetch_size=10000)))
+    with new_test_table(cql, test_keyspace, "k int, v int, PRIMARY KEY (k)") as table:
+        for k in range(1, 10000):
+            cql.execute(f"INSERT INTO {table}(k) VALUES ({k})")
+        assert count(table) == [(9999,)]
+        cql.execute(f"INSERT INTO {table}(k) VALUES (10000)")
+        assert count(table) == [(10000,)]
+        cql.execute(f"INSERT INTO {table}(k) VALUES (10001)")
+        assert count(table) == [(10001,)]
+        for k in range(10002, 15001):
+            cql.execute(f"INSERT INTO {table}(k) VALUES ({k})")
+        assert count(table) == [(15000,)]
+
+
+# Tests ported from scylla-dtest's cql_additional_tests.py. Like the dtests,
+# they run in a keyspace with vnodes, and keep the dtests' table names.
+
+# COUNT(*) of a partition counts rows also when a column is null, and
+# COUNT(1) works with IN on the partition key.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_count_rows_with_nulls_and_in(cql, test_keyspace_vnodes):
+    with new_named_table(cql, test_keyspace_vnodes, "events", "kind text, time int, value1 int, value2 int, PRIMARY KEY(kind, time)") as table:
+        full = f"INSERT INTO {table} (kind, time, value1, value2) VALUES ('ev1', {{}}, {{}}, {{}})"
+        no_v2 = f"INSERT INTO {table} (kind, time, value1) VALUES ('ev1', {{}}, {{}})"
+        cql.execute(full.format(0, 0, 0))
+        cql.execute(full.format(1, 1, 1))
+        cql.execute(no_v2.format(2, 2))
+        cql.execute(full.format(3, 3, 3))
+        cql.execute(no_v2.format(4, 4))
+        cql.execute(f"INSERT INTO {table} (kind, time, value1, value2) VALUES ('ev2', 0, 0, 0)")
+        assert list(cql.execute(f"SELECT COUNT(*) FROM {table} WHERE kind = 'ev1'")) == [(5,)]
+        assert list(cql.execute(f"SELECT COUNT(1) FROM {table} WHERE kind IN ('ev1', 'ev2') AND time=0")) == [(2,)]
+
+# Aggregates selected together with a plain column, which takes its value
+# from the first row, with filtering, and on one partition.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+def test_aggregates_with_plain_column(cql, test_keyspace_vnodes):
+    with new_named_table(cql, test_keyspace_vnodes, "together", "a int, b int, c int, PRIMARY KEY ((a), c)") as table:
+        for row in [(1, 2, 3), (2, 4, 6), (3, 6, 9), (3, 8, 10)]:
+            cql.execute(f"INSERT INTO {table} (a, b, c) VALUES {row}")
+        assert list(cql.execute(f"SELECT sum(c), avg(b), min(c), a  FROM {table} WHERE b>2 ALLOW FILTERING")) == [(25, 6, 6, 2)]
+        assert list(cql.execute(f"SELECT count(c), max(b)  FROM {table} WHERE a = 3 ")) == [(2, 8)]

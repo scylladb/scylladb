@@ -597,20 +597,37 @@ def _has_marker_expression(pytest_args: list[str]) -> bool:
     return False
 
 
+def _default_marker_expression() -> str:
+    # By path: the source tree is not on sys.path of the run scripts.
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "pylib", "default_markers.py")
+    namespace = {}
+    with open(path) as f:
+        exec(f.read(), namespace)
+    return namespace["DEFAULT_MARKER_EXPRESSION"]
+
+
 def _prepare_pytest_args(pytest_args: list[str]) -> list[str]:
     """Prepare pytest arguments for runpy wrappers.
 
-    By default, runpy wrappers skip tests marked ``tier2`` to keep
-    local and per-PR runs focused and fast.
-
-    Marker policy:
-    * if no marker expression is provided, add ``-m 'not tier2'``;
-    * if marker expression is provided, keep it unchanged.
+    Without a marker expression, leave out what test.py and CI's PR stage
+    leave out by default (test/pylib/default_markers.py).  A marker
+    expression given on the command line is kept unchanged.  A run that only
+    names tests by id (path::name) runs them whatever their markers, as
+    test.py does; with a file or directory argument too, the default applies
+    to the whole run, since pytest cannot apply a marker expression to some
+    arguments only.
     """
     prepared_args = list(pytest_args)
-    if _has_marker_expression(prepared_args):
+    named = [arg for arg in prepared_args if "::" in arg]
+    # A directory counts as a test path only inside the test tree: option
+    # values such as --basetemp's are directories too.
+    test_tree = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    paths = [arg for arg in prepared_args if not arg.startswith("-") and "::" not in arg
+             and (arg.endswith(".py") or (os.path.isdir(arg) and
+                                          os.path.abspath(arg).startswith(test_tree + os.sep)))]
+    if _has_marker_expression(prepared_args) or (named and not paths):
         return prepared_args
-    return ["-m", "not tier2"] + prepared_args
+    return ["-m", _default_marker_expression()] + prepared_args
 
 def run_pytest(pytest_dir, additional_parameters):
     global run_with_temporary_dir_pids

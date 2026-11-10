@@ -9,8 +9,9 @@
 # for the cast() function are in test_cast_data.py.
 ###############################################################################
 
+from test import DEBUG_MODES
 import pytest
-from .util import new_test_table, unique_key_int
+from .util import is_scylla, new_test_table, unique_key_int
 from datetime import datetime
 from cassandra.protocol import InvalidRequest
 
@@ -320,3 +321,16 @@ def test_snake_case_json_function_names(cql, table1):
     result = cql.execute(f'SELECT to_json(i), tojson(i) FROM {table1} WHERE p = {p}')
     assert result.column_names[0] == 'system.to_json(i)'
     assert list(result) == [('17', '17')]
+
+# Time conversion functions applied to a null timeuuid return null.
+@pytest.mark.skip_mode(mode=["dev", *DEBUG_MODES], reason="scylla-dtest gates on it in release mode only")
+@pytest.mark.parametrize("test_keyspace", ["vnodes"], indirect=True)
+def test_time_functions_on_null(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "k int PRIMARY KEY, t timeuuid") as table:
+        cql.execute(f"INSERT INTO {table} (k) VALUES (0)")
+        functions = ['toTimestamp', 'toDate', 'toUnixTimestamp']
+        if is_scylla(cql):
+            # Removed in Cassandra 5.0
+            functions += ['dateOf', 'unixTimestampOf']
+        for f in functions:
+            assert list(cql.execute(f"SELECT {f}(t) FROM {table} WHERE k = 0")) == [(None,)]

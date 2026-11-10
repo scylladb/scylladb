@@ -16,12 +16,14 @@ import collections
 import json
 import re
 import ssl
+import subprocess
 from contextlib import contextmanager
 
 from cassandra.auth import PlainTextAuthProvider
 from cassandra.cluster import Cluster, ConsistencyLevel, ExecutionProfile, EXEC_PROFILE_DEFAULT
 from cassandra.policies import RoundRobinPolicy
 
+from test import TOP_SRC_DIR
 from test.pylib.driver_utils import safe_driver_shutdown
 
 def random_string(length=10, chars=string.ascii_uppercase + string.digits):
@@ -205,6 +207,19 @@ def new_test_table(cql, keyspace, schema, extra=""):
         cql.execute("DROP TABLE " + table)
         previously_used_table_names.append(table_name)
 
+# Like new_test_table(), but the table gets the given name instead of a
+# unique one, for tests that need a specific table name (for example one
+# that is also a CQL keyword, like "users"). Each test keyspace belongs to one
+# test module, so the name only needs to be unique within the module.
+@contextmanager
+def new_named_table(cql, keyspace, name, schema, extra=""):
+    table = keyspace + "." + name
+    cql.execute("CREATE TABLE " + table + "(" + schema + ")" + extra)
+    try:
+        yield table
+    finally:
+        cql.execute("DROP TABLE " + table)
+
 # A utility function for creating a new temporary user-defined type.
 @contextmanager
 def new_type(cql, keyspace, cmd, name=None):
@@ -337,6 +352,31 @@ def new_cql(cql):
         yield session
     finally:
         session.shutdown()
+
+# run_cqlsh() runs the in-tree cqlsh (bin/cqlsh) against the server the given
+# cql session is connected to, with the same credentials, executing the given
+# ';'-separated commands. Returns the subprocess.CompletedProcess, with text
+# stdout and stderr. cqlsh may leave files in its working directory (e.g.,
+# COPY FROM's error files), so tests should pass a temporary directory as cwd.
+# cqlsh prints timestamps in UTC unless TZ says otherwise, so TZ is set to UTC
+# to keep its output independent of the environment.
+# run_cqlsh_at() is the same for any address and port, with the given extra
+# cqlsh arguments instead of the session's credentials.
+def run_cqlsh_at(address, port, cmds, args=(), cwd=None, env=None, timeout=300):
+    full_env = {**os.environ, 'TZ': 'UTC', **(env or {})}
+    return subprocess.run([str(TOP_SRC_DIR / 'bin' / 'cqlsh'), *args, address, str(port), '-e', cmds],
+                          cwd=cwd, env=full_env, capture_output=True, text=True, timeout=timeout)
+
+def run_cqlsh(cql, cmds, cwd=None, env=None, timeout=300):
+    endpoint = cql.hosts[0].endpoint
+    auth = cql.cluster.auth_provider
+    args = ['-u', auth.username, '-p', auth.password]
+    env = dict(env or {})
+    if cql.cluster.ssl_context is not None:
+        args.append('--ssl')
+        # Like the cql fixture, don't validate the server's certificate.
+        env['SSL_VALIDATE'] = 'false'
+    return run_cqlsh_at(endpoint.address, endpoint.port, cmds, args, cwd=cwd, env=env, timeout=timeout)
 
 def project(column_name_string, rows):
     """Returns a list of column values from each of the rows."""

@@ -251,6 +251,9 @@ class CppTestCase(pytest.Item):
         args = [str(self.parent.exe_path), *test_args, *self.test_custom_args]
         timeout = TIMEOUT_DEBUG if self.parent.build_mode in DEBUG_MODES else TIMEOUT
         env = {**os.environ, **self.parent.test_env}
+        if self.config.getoption("--coverage-per-test", default=None) and "LLVM_PROFILE_FILE" in os.environ:
+            # --coverage-per-test points LLVM_PROFILE_FILE at this test's own directory.
+            env["LLVM_PROFILE_FILE"] = os.environ["LLVM_PROFILE_FILE"]
 
         with output_file.open(mode="w", encoding="utf-8") as output_handle:
             p = subprocess.Popen(
