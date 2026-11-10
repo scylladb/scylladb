@@ -10,6 +10,7 @@ import re
 import time
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field, replace
+from datetime import datetime, timezone
 from typing import Any, cast
 
 import pytest
@@ -1261,6 +1262,155 @@ async def test_repair_overwrites_stale_cached_partition(manager: ScyllaClusterMa
         # And node2 must serve the new value out of its own storage.
         rows = await read_locally(cql, hosts[1], f"SELECT v FROM {table} WHERE pk = 1")
         assert rows[0].v == 200, "node2 served a stale cached value after repair"
+
+
+async def get_injection_params(manager: ScyllaClusterManager, server: Any, injection: str) -> dict[str, str]:
+    """Return the parameters that the code set on the enabled `injection` of `server`.
+
+    Each shard keeps its own parameters, and the function asserts that all the
+    shards that set them agree.
+    """
+    result = await manager.api.get_injection(server.ip_addr, injection)
+    assert all(shard["enabled"] for shard in result), f"injection {injection} is not enabled: {result}"
+    per_shard = [{item["key"]: item["value"] for item in shard["parameters"]}
+                 for shard in result if shard.get("parameters")]
+    assert per_shard, f"no shard set parameters on {injection}: {result}"
+    assert all(params == per_shard[0] for params in per_shard), f"the shards disagree: {result}"
+    return per_shard[0]
+
+
+async def set_config_on_all(cql: Any, hosts: list[Any], name: str, value: str) -> None:
+    """Set the live-update config item `name` to `value` on every host."""
+    for host in hosts:
+        await cql.run_async(f"UPDATE system.config SET value = '{value}' WHERE name = '{name}'", host=host)
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_repair_compares_compacted_partitions(manager: ScyllaClusterManager):
+    """Test that repair compares logstor partitions after it compacts them.
+
+    Node1 stores a batch that deletes the partition at timestamp 2000 and
+    inserts a row at timestamp 1000, so its record keeps the row that the
+    tombstone shadows. Node2 stores only the delete. The two records hold the
+    same data, but they are not equal as stored.
+
+    With enable_compacting_data_for_streaming_and_repair on (the default), the
+    compacting reader removes the shadowed row from the stream of node1, so the
+    two streams are equal and repair sends nothing. With the item off, the
+    stream of node1 keeps the row, and repair sends the partition. The second
+    repair shows that the compaction is what made the streams equal.
+    """
+    servers, cql, hosts = await create_logstor_cluster(manager)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+        table = f"{ks}.test"
+
+        await write_only_on(manager, servers, cql, hosts, ks, "test", 0, [
+            f"BEGIN UNLOGGED BATCH "
+            f"DELETE FROM {table} USING TIMESTAMP 2000 WHERE pk = 1; "
+            f"INSERT INTO {table} (pk, v) VALUES (1, 'a') USING TIMESTAMP 1000; "
+            f"APPLY BATCH"])
+        await write_only_on(manager, servers, cql, hosts, ks, "test", 1,
+                            [f"DELETE FROM {table} USING TIMESTAMP 2000 WHERE pk = 1"])
+
+        # The test needs records that differ only in the shadowed row.
+        shadowed = await read_record(cql, hosts[0], table, 1)
+        assert shadowed is not None and shadowed.kinds == (PARTITION_START, CLUSTERING_ROW, PARTITION_END), \
+            f"node1 does not store the shadowed row: {shadowed}"
+        assert shadowed.tombstone_timestamp() == 2000, f"node1: {shadowed}"
+        deleted = await read_record(cql, hosts[1], table, 1)
+        assert deleted is not None and deleted.kinds == (PARTITION_START, PARTITION_END), f"node2: {deleted}"
+        assert deleted.tombstone_timestamp() == 2000, f"node2: {deleted}"
+
+        # Each tablet has its own repair master, which can be either node, so the
+        # rows that repair sent are counted on both nodes.
+        async def rows_sent(repair_once) -> int:
+            before = [await manager.metrics.query(server.ip_addr) for server in servers]
+            await repair_once()
+            after = [await manager.metrics.query(server.ip_addr) for server in servers]
+            return sum(metric_delta(b, a, 'scylla_repair_tx_row_nr') for b, a in zip(before, after))
+
+        async def repair():
+            await manager.api.repair(servers[0].ip_addr, ks, "test")
+
+        for server in servers:
+            await manager.api.enable_injection(server.ip_addr, "maybe_compact_for_streaming", one_shot=False)
+        await flush_records_to_segments(manager, servers)
+        before = await read_all_records(cql, hosts, table)
+
+        sent = await rows_sent(repair)
+        for server in servers:
+            assert await get_injection_params(manager, server, "maybe_compact_for_streaming") == {
+                    "compaction_enabled": "true", "compaction_can_gc": "false"}
+        assert sent == 0, f"repair sent {sent} rows of a partition that differs only in shadowed data"
+        after = await read_all_records(cql, hosts, table)
+        for host, old, new in zip(hosts, before, after):
+            assert log_segments(new) == log_segments(old), f"host {host} rewrote a record that holds the same data"
+
+        await set_config_on_all(cql, hosts, "enable_compacting_data_for_streaming_and_repair", "0")
+        sent = await rows_sent(repair)
+        for server in servers:
+            assert await get_injection_params(manager, server, "maybe_compact_for_streaming") == {
+                    "compaction_enabled": "false", "compaction_can_gc": "false"}
+        assert sent > 0, "repair without compaction did not send the partition"
+
+        await check_converged(cql, hosts, table, {1: Deleted(2000)})
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_repair_does_not_purge_logstor_tombstones(manager: ScyllaClusterManager):
+    """Test that repair of a logstor table purges no tombstone from the stream.
+
+    Node1 stores v1 at timestamp 2000 with a TTL of one second, and node2
+    stores v2 at timestamp 1000. The table uses the immediate tombstone GC mode,
+    so the expired row of node1 can be purged as soon as it expires, and
+    enable_tombstone_gc_for_streaming_and_repair is on.
+
+    If the stream of node1 purged the expired row, node1 would send nothing,
+    and node2 would send its row at timestamp 1000. The logstor index of node1
+    keeps the expired record at timestamp 2000, so node1 would refuse that row,
+    and the replicas would never converge. The stream of a logstor table keeps
+    the expired row as dead data, so repair merges the two versions and both
+    replicas store the merged record, in which v2 is live.
+    """
+    servers, cql, hosts = await create_logstor_cluster(manager)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v1 text, v2 text)"
+                            " WITH storage_engine = 'logstor' AND tombstone_gc = {'mode': 'immediate'}")
+        table = f"{ks}.test"
+        await set_config_on_all(cql, hosts, "enable_tombstone_gc_for_streaming_and_repair", "1")
+
+        await write_only_on(manager, servers, cql, hosts, ks, "test", 0,
+                            [f"INSERT INTO {table} (pk, v1) VALUES (1, 'a') USING TIMESTAMP 2000 AND TTL 1"])
+        await write_only_on(manager, servers, cql, hosts, ks, "test", 1,
+                            [f"INSERT INTO {table} (pk, v2) VALUES (1, 'b') USING TIMESTAMP 1000"])
+
+        # Wait until the row of node1 expires. A read of the row cannot show this,
+        # because node2, which holds v2, can answer it, so the wait uses the
+        # expiry of the row marker in the record of node1.
+        rows = await cql.run_async(f"SELECT * FROM MUTATION_FRAGMENTS({table}) WHERE pk = 1", host=hosts[0])
+        markers = [json.loads(row.metadata)['marker'] for row in rows
+                   if row.mutation_source.startswith(LOG_SOURCE_PREFIX) and row.mutation_fragment_kind == CLUSTERING_ROW]
+        assert len(markers) == 1 and markers[0]['timestamp'] == 2000 and 'expiry' in markers[0], f"node1: {markers}"
+        expiry = datetime.strptime(markers[0]['expiry'], '%Y-%m-%d %H:%M:%Sz').replace(tzinfo=timezone.utc).timestamp()
+        await asyncio.sleep(max(0.0, expiry + 1 - time.time()))
+
+        for server in servers:
+            await manager.api.enable_injection(server.ip_addr, "maybe_compact_for_streaming", one_shot=False)
+        await manager.api.repair(servers[0].ip_addr, ks, "test")
+        for server in servers:
+            assert await get_injection_params(manager, server, "maybe_compact_for_streaming") == {
+                    "compaction_enabled": "true", "compaction_can_gc": "false"}
+
+        records = await check_converged(cql, hosts, table, {1: LIVE})
+        assert records[1].cell_values().get('v2') == 'b', f"v2 is lost from the merged record: {records[1]}"
+        assert records[1].cell_values().get('v1') is None, f"the expired v1 is live again: {records[1]}"
+
+        rows = await cql.run_async(SimpleStatement(f"SELECT v1, v2 FROM {table} WHERE pk = 1",
+                                                   consistency_level=ConsistencyLevel.ALL))
+        assert [(row.v1, row.v2) for row in rows] == [(None, 'b')]
 
 
 #############################################################################
