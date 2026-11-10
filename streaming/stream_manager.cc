@@ -13,6 +13,7 @@
 #include "gms/gossiper.hh"
 #include "streaming/stream_manager.hh"
 #include "streaming/stream_result_future.hh"
+#include "streaming/stream_blob.hh"
 #include "utils/log.hh"
 #include "streaming/stream_session_state.hh"
 #include <seastar/core/metrics.hh>
@@ -76,6 +77,8 @@ stream_manager::stream_manager(db::config& cfg,
         sm::make_gauge("finished_percentage", [this] { return _finished_percentage[streaming::stream_reason::replace]; },
                 sm::description("Finished percentage of node operation on this shard"), {ops_label_type("replace"), basic_level}),
     });
+
+    register_tablet_streaming_metrics(_metrics);
 }
 
 future<> stream_manager::start(abort_source& as) {

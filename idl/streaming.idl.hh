@@ -115,6 +115,7 @@ class stream_blob_meta {
     service::frozen_topology_guard topo_guard;
     std::optional<sstables::sstable_state> sstable_state;
     std::optional<streaming::stream_sstable_meta> sstable_meta [[version 2026.3]];
+    streaming::stream_reason reason [[version 2027.1]];
 };
 
 class node_and_shard {
@@ -130,6 +131,7 @@ class stream_files_request {
     dht::token_range range;
     std::vector<streaming::node_and_shard> targets;
     service::frozen_topology_guard topo_guard;
+    streaming::stream_reason reason [[version 2027.1]];
 };
 
 class clone_sstable_request {
