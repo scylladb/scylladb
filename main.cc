@@ -148,6 +148,7 @@
 #include "tools/utils.hh"
 #include "schema/compression_initializer.hh"
 #include "schema/speculative_retry_initializer.hh"
+#include "tools/webshell/webshell.hh"
 
 
 namespace fs = std::filesystem;
@@ -2986,11 +2987,14 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             auto alternator_listeners = db::get_listeners(*cfg, configured_listeners, db::listener_config::protocol_type::alternator);
             alternator::controller alternator_ctl(gossiper, proxy, ss, mm, sys_dist_ks, sys_ks, cdc_generation_service, service_memory_limiter, auth_service, sl_controller, vector_store_client, timeout_cfg, *cfg, alternator_listeners, dbcfg.statement_scheduling_group);
 
+            auto webshell_listeners = db::get_listeners(*cfg, configured_listeners, db::listener_config::protocol_type::webshell);
+            tools::webshell::controller webshell_ctl(qp, auth_service, sl_controller, timeout_cfg, *cfg, webshell_listeners, dbcfg.statement_scheduling_group);
+
             // Follow the option from here on. Registered after the controllers are built
             // so that it is torn down before them, and on shard 0 only: applying a set of
             // listeners fans out to every shard by itself.
             auto listeners_registration = cluster_config_manager.local().register_config_callback(sstring(db::cluster_config_registry::option_name::listeners),
-                    [&cfg, &cql_server_ctl, &alternator_ctl] (const db::cluster_config_manager::lookup_context&,
+                    [&cfg, &cql_server_ctl, &alternator_ctl, &webshell_ctl] (const db::cluster_config_manager::lookup_context&,
                             std::optional<sstring> value) -> future<> {
                 const auto* option = db::cluster_config_registry::find(db::cluster_config_registry::option_name::listeners);
                 db::listener_configs configured;
@@ -3017,6 +3021,13 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                             db::get_listeners(*cfg, configured, db::listener_config::protocol_type::alternator));
                 } catch (...) {
                     startlog.error("Failed to apply the Alternator listeners, keeping the previous ones: {}",
+                            std::current_exception());
+                }
+                try {
+                    co_await webshell_ctl.apply_listeners(
+                            db::get_listeners(*cfg, configured, db::listener_config::protocol_type::webshell));
+                } catch (...) {
+                    startlog.error("Failed to apply the Web Shell listeners, keeping the previous ones: {}",
                             std::current_exception());
                 }
             });
@@ -3053,6 +3064,11 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             // on yet: the controller holds off starting the server until a change to the
             // listeners gives it one.
             ss.local().register_protocol_server(alternator_ctl, true).get();
+
+            // Like Alternator, registered and asked to start even when there is
+            // nothing for it to listen on: the Web Shell is served only on the
+            // listeners the "listeners" option spells out, which may come later.
+            ss.local().register_protocol_server(webshell_ctl, true).get();
 
             stop_signal.ready();
             supervisor::notify("serving");
