@@ -6363,6 +6363,25 @@ future<std::vector<table_id>> storage_service::tablet_split_ready() {
         }, true, std::logical_and<>());
         if (split) {
             ready.push_back(base);
+            continue;
+        }
+        // The ack reported through the load stats is sticky, so an unsplit sstable
+        // which landed after it would keep the table acked but never split. Take the
+        // ack back and let the split monitor split the table and ack it again.
+        bool withdrawn = co_await _db.map_reduce0([group] (replica::database& db) {
+            bool withdrawn = false;
+            for (auto id : group) {
+                if (auto t = db.get_tables_metadata().get_table_if_exists(id)) {
+                    withdrawn |= t->withdraw_split_ack();
+                }
+            }
+            return withdrawn;
+        }, false, std::logical_or<>());
+        if (withdrawn) {
+            slogger.info("Withdrawing split ack of tables {}, not split on all shards", group);
+            for (auto id : group) {
+                register_tablet_split_candidate(id);
+            }
         }
     }
     co_return ready;

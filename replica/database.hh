@@ -733,6 +733,9 @@ public:
     bool all_storage_groups_split();
     // Puts every storage group on this shard in split mode and returns true if all of them are split.
     bool storage_groups_split_mode();
+    // Makes the replica report the split as not done until the storage groups are split again.
+    // Returns whether there was an ack to withdraw.
+    bool withdraw_split_ack();
     future<> split_all_storage_groups(tasks::task_info tablet_split_task_info);
 
     // Splits compaction group of a single tablet, if and only if the underlying table has

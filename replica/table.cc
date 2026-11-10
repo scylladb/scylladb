@@ -822,6 +822,7 @@ public:
 
     bool all_storage_groups_split() override { return true; }
     bool storage_groups_split_mode() override { return true; }
+    bool withdraw_split_ack() override { return false; }
     future<> split_all_storage_groups(tasks::task_info tablet_split_task_info) override { return make_ready_future(); }
     future<> maybe_split_compaction_group_of(size_t idx) override { return make_ready_future(); }
     future<std::vector<sstables::shared_sstable>> maybe_split_new_sstable(const sstables::shared_sstable& sst) override {
@@ -1008,6 +1009,11 @@ public:
     locator::combined_load_stats table_load_stats() const override;
     bool all_storage_groups_split() override;
     bool storage_groups_split_mode() override;
+    bool withdraw_split_ack() override {
+        bool acked = _split_ready_seq_number == tablet_map().resize_decision().sequence_number;
+        _split_ready_seq_number = std::numeric_limits<locator::resize_decision::seq_number_t>::min();
+        return acked;
+    }
     future<> split_all_storage_groups(tasks::task_info tablet_split_task_info) override;
     future<> maybe_split_compaction_group_of(size_t idx) override;
     future<std::vector<sstables::shared_sstable>> maybe_split_new_sstable(const sstables::shared_sstable& sst) override;
@@ -1446,6 +1452,10 @@ bool table::all_storage_groups_split() {
 
 bool table::storage_groups_split_mode() {
     return _sg_manager->storage_groups_split_mode();
+}
+
+bool table::withdraw_split_ack() {
+    return _sg_manager->withdraw_split_ack();
 }
 
 future<compaction::compaction_type_options::split> tablet_storage_group_manager::split_compaction_options() const noexcept {
