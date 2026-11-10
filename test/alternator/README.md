@@ -19,6 +19,13 @@ listening on http://localhost:8000, just run `pytest` in this directory.
 The `--url` option can be used to specify a different address where Alternator
 is listening. Use the `--aws` option to run tests against AWS DynamoDB.
 
+The `alternator-client` variants use this URL as a discovery seed and send
+requests to the node addresses returned by `/localnodes`. Those addresses
+must be reachable from the test process. When using a proxy or port forward
+that cannot reach the advertised addresses, exclude these variants with
+`pytest --url URL -k 'not alternator-client'` to keep using boto3 through the
+supplied endpoint.
+
 More conveniently, instead of starting ScyllaDB on your own, we have a
 script `test/alternator/run` which does all the work necessary to start
 ScyllaDB with Alternator, and then runs `pytest` against it. The ScyllaDB
