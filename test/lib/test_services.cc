@@ -653,6 +653,17 @@ future<> test_env_compaction_manager::perform_compaction(shared_ptr<compaction::
     co_await task->run_compaction();
 }
 
+future<> test_env_compaction_manager::perform_compaction_as_task(shared_ptr<compaction::compaction_task_executor> executor) {
+    _cm._tasks.push_back(*executor);
+    auto unregister_task = defer([executor] noexcept {
+        executor->release();
+        executor->unlink();
+        executor->switch_state(compaction::compaction_task_executor::state::none);
+    });
+    auto task = co_await _cm.start_compaction_task(executor, {.type = "test compaction"}, tasks::make_empty_task_info());
+    co_await task->done();
+}
+
 bool test_env_compaction_manager::is_compaction_state_gate_closed(compaction::compaction_group_view& table_s) {
     return _cm.get_compaction_state(&table_s).gate.is_closed();
 }

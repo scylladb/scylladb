@@ -95,6 +95,9 @@ public:
     void propagate_replacement(compaction::compaction_group_view& table_s, const std::vector<shared_sstable>& removed, const std::vector<shared_sstable>& added);
 
     future<> perform_compaction(shared_ptr<compaction::compaction_task_executor> task);
+    // Like perform_compaction(), but runs the task the way the compaction manager does, as a task
+    // of the task manager.
+    future<> perform_compaction_as_task(shared_ptr<compaction::compaction_task_executor> task);
 
     bool is_compaction_state_gate_closed(compaction::compaction_group_view& table_s);
     future<> close_compaction_state_gate(compaction::compaction_group_view& table_s);
