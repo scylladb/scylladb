@@ -855,6 +855,33 @@ SEASTAR_TEST_CASE(test_groups_erase_persisted_state_above_markers) {
     });
 }
 
+// The truncate record is stamped by this node's clock, not by the leader's truncated_at, so a
+// plain erase takes it with the row, and a record written after another is stamped above it.
+SEASTAR_TEST_CASE(test_groups_erase_persisted_state_takes_truncate_record) {
+    return do_with_cql_env_strongly_consistent([] (cql_test_env& env) -> future<> {
+        cql3::query_processor& qp = env.local_qp();
+        raft::group_id gid{utils::UUID_gen::get_time_UUID()};
+        const auto ahead = api::new_timestamp()
+                + std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::hours(1)).count();
+        truncate_record record{.truncated_at = ahead, .last_truncate_request_id = utils::make_random_uuid(),
+                .truncate_index = raft::index_t(3)};
+        co_await raft_groups_storage::store_truncate_record(env.local_db(), gid, test_shard, record);
+        const auto loaded = co_await raft_groups_storage::load_truncate_record(qp, gid, test_shard);
+        BOOST_CHECK_EQUAL(loaded.truncated_at, ahead);
+        BOOST_CHECK_EQUAL(loaded.written_at, record.written_at);
+        BOOST_CHECK_LT(loaded.written_at, ahead);
+
+        truncate_record next{.truncated_at = ahead + 1, .last_truncate_request_id = utils::make_random_uuid(),
+                .truncate_index = raft::index_t(5), .written_at = loaded.written_at};
+        co_await raft_groups_storage::store_truncate_record(env.local_db(), gid, test_shard, next);
+        BOOST_CHECK_GT(next.written_at, loaded.written_at);
+        BOOST_CHECK_EQUAL((co_await raft_groups_storage::load_truncate_record(qp, gid, test_shard)).truncate_index, raft::index_t(5));
+
+        co_await raft_groups_storage::erase_persisted_state(qp, gid, test_shard);
+        BOOST_CHECK_EQUAL((co_await raft_groups_storage::load_truncate_record(qp, gid, test_shard)).truncated_at, api::min_timestamp);
+    });
+}
+
 // Every stored index is held by a record, and the reference it hands out is a
 // clone at the start of the segment the batch was written to.
 SEASTAR_TEST_CASE(test_groups_store_and_get_replay_positions) {

@@ -10,6 +10,7 @@
 
 #include "service/raft/raft_state_machine.hh"
 #include "mutation/frozen_mutation.hh"
+#include "mutation/timestamp.hh"
 #include <functional>
 #include <unordered_map>
 #include <variant>
@@ -17,6 +18,7 @@
 #include "service/strong_consistency/raft_groups_storage.hh"
 #include "utils/loading_cache.hh"
 #include "utils/estimated_histogram.hh"
+#include "utils/UUID.hh"
 
 namespace db {
 class system_keyspace;
@@ -65,10 +67,15 @@ struct resize_marker {
     api::timestamp_type timestamp;
 };
 
+struct truncate_command {
+    api::timestamp_type truncated_at;
+    utils::UUID request_id;
+};
+
 struct raft_command {
     // Note: needs to be default-constructible to use with ser::deserialize, which is why the
     // marker, and not the write, comes first.
-    std::variant<resize_marker, write_mutation> change;
+    std::variant<resize_marker, write_mutation, truncate_command> change;
 };
 
 // Builds the mutation which records `marker` in the system.raft_groups row of the group `gid`
@@ -83,6 +90,12 @@ std::unique_ptr<raft_state_machine> make_state_machine(locator::global_tablet_id
     raft_groups_storage& storage,
     raft_resize_tracker& resize_tracker,
     lw_shared_ptr<state_machine_stats> stats);
+
+// Applies the truncate_command `tc`, committed at `idx` in the log of the group `gid`, which
+// serves `tablet`, on this shard. Returns once the record is durable. A no-op when `record`
+// already carries tc.request_id.
+future<> apply_truncate_command(replica::database& db, locator::global_tablet_id tablet, raft::group_id gid,
+        raft::index_t idx, const truncate_command& tc, truncate_record& record);
 
 // Resolves schemas for frozen mutations and upgrades them to the current schema if needed.
 //

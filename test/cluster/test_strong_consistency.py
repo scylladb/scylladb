@@ -12,7 +12,7 @@ from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import gather_safely, unique_name, wait_for, Host
 from test.cluster.util import ensure_raft_group_leader_on, get_topology_coordinator, create_new_test_keyspace, new_test_keyspace, new_test_table
 from test.pylib.internal_types import HostID, ServerInfo
-from cassandra import InvalidRequest, ReadTimeout, Unavailable, WriteTimeout
+from cassandra import InvalidRequest, ReadTimeout, Unavailable, WriteTimeout, WriteFailure
 from cassandra.cluster import ConsistencyLevel
 from cassandra.connection import UnixSocketEndPoint
 from cassandra.policies import FallthroughRetryPolicy, WhiteListRoundRobinPolicy
@@ -4080,3 +4080,272 @@ async def test_non_pure_pk_function_shard_bounce_is_at_most_one(manager: ScyllaC
             assert not offenders, (
                 f"{len(offenders)} of {STATEMENTS_CNT} {kind}s with uuid() as the key were bounced between shards more "
                 f"than once (bounces per request: {offenders}): the receiving shard evaluated uuid() again")
+
+async def select_rows(cql, stmt: str, **kwargs):
+    """A read forwarded to the group's leader fails with a read failure while a node the
+    forwarding node still takes for alive is down or just restarted, so retry it."""
+    return await wait_for(lambda: cql.run_async(stmt, **kwargs), time.time() + 60)
+
+async def count_rows_by_key(cql, ks: str, table: str, keys) -> int:
+    """Strongly consistent reads target one partition, so count key by key."""
+    rows = await asyncio.gather(*[select_rows(cql, f"SELECT pk FROM {ks}.{table} WHERE pk = {k}") for k in keys])
+    return sum(len(r) for r in rows)
+
+
+async def get_topology_coordinator_server(manager: ScyllaClusterManager, servers) -> ServerInfo:
+    coord_host_id = await get_topology_coordinator(manager)
+    host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
+    return next(s for s, hid in zip(servers, host_ids) if hid == coord_host_id)
+
+
+async def test_truncate_basic(manager: ScyllaClusterManager):
+    """TRUNCATE goes through the raft log of each tablet: every tablet is empty afterwards, writes
+    issued after it are visible, and every replica records the truncate in system.raft_groups once
+    its state machine applies the entry."""
+    servers = await manager.servers_add(3, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
+    (cql, hosts) = await manager.get_ready_cql(servers)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 4} AND consistency = 'global'") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        keys = range(200)
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in keys])
+
+        await cql.run_async(f"TRUNCATE TABLE {ks}.test")
+        assert await count_rows_by_key(cql, ks, 'test', keys) == 0
+
+        # The tablets keep taking writes right after the truncate
+        new_keys = range(1000, 1010)
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in new_keys])
+        assert await count_rows_by_key(cql, ks, 'test', new_keys) == len(new_keys)
+
+        # Success means every tablet's group committed its entry; a replica records the truncate
+        # only once its state machine applies it, which may be a moment later.
+        table_id = await manager.get_table_id(ks, 'test')
+        group_ids = {r.raft_group_id for r in await cql.run_async(f"SELECT raft_group_id FROM system.tablets WHERE table_id = {table_id}")}
+        assert len(group_ids) == 4
+        for host in hosts:
+            async def all_groups_recorded():
+                rows = await cql.run_async("SELECT group_id, last_truncate_request_id, truncate_index FROM system.raft_groups", host=host)
+                recorded = {r.group_id for r in rows if r.last_truncate_request_id is not None and r.truncate_index > 0}
+                return group_ids <= recorded or None
+            await wait_for(all_groups_recorded, time.time() + 60)
+
+
+async def wait_for_truncate_records(cql, group_ids, above: dict | None = None) -> dict:
+    """Waits until every group has a truncate_index above the one in `above` (0 if absent) and
+    returns them. The record is written by the state machine a moment after TRUNCATE returns."""
+    async def recorded():
+        rows = await cql.run_async("SELECT group_id, truncate_index FROM system.raft_groups")
+        indexes = {r.group_id: r.truncate_index for r in rows
+                   if r.group_id in group_ids and r.truncate_index and r.truncate_index > (above or {}).get(r.group_id, 0)}
+        return indexes if len(indexes) == len(group_ids) else None
+    return await wait_for(recorded, time.time() + 60)
+
+
+async def kill_and_restart(manager: ScyllaClusterManager, servers):
+    """A kill, not a shutdown: the memtables are not flushed, so the replay finds every write
+    of the test table in the commitlog. All servers stop before any starts."""
+    for s in servers:
+        await manager.server_stop(s.server_id, convict=False)
+    await asyncio.gather(*[manager.server_start(s.server_id) for s in servers])
+    return await manager.get_ready_cql(servers)
+
+
+@pytest.mark.parametrize("flush_table", [True, False])
+async def test_truncate_record_survives_replay(manager: ScyllaClusterManager, flush_table: bool):
+    """The node is killed while the commitlog still holds the writes the truncate dropped. The
+    record is durable by the time the truncate returns, so the replay drops the entries at or
+    below the recorded truncate index and keeps the writes after it, whether they are still in
+    the commitlog or already in an sstable the replayed truncate would otherwise delete."""
+    server = await manager.server_add(config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE)
+    (cql, hosts) = await manager.get_ready_cql([server])
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 4} AND consistency = 'global'") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        keys = range(200)
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in keys])
+
+        await cql.run_async(f"TRUNCATE TABLE {ks}.test")
+        new_keys = range(1000, 1010)
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in new_keys])
+
+        table_id = await manager.get_table_id(ks, 'test')
+        group_ids = {r.raft_group_id for r in await cql.run_async(f"SELECT raft_group_id FROM system.tablets WHERE table_id = {table_id}")}
+        await wait_for_truncate_records(cql, group_ids)
+        if flush_table:
+            await manager.api.keyspace_flush(server.ip_addr, ks, 'test')
+
+        (cql, hosts) = await kill_and_restart(manager, [server])
+
+        assert await count_rows_by_key(cql, ks, 'test', keys) == 0
+        assert await count_rows_by_key(cql, ks, 'test', new_keys) == len(new_keys)
+
+
+@pytest.mark.parametrize("flush_table", [True, False])
+async def test_truncate_twice_survives_replay(manager: ScyllaClusterManager, flush_table: bool):
+    """Two truncates with writes between them, then a kill. The replay has to tell the second
+    truncate from a retry of the first and drop the writes between them too, keeping only the
+    writes after the second one, in the commitlog or already flushed."""
+    server = await manager.server_add(config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE)
+    (cql, hosts) = await manager.get_ready_cql([server])
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 4} AND consistency = 'global'") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        table_id = await manager.get_table_id(ks, 'test')
+        group_ids = {r.raft_group_id for r in await cql.run_async(f"SELECT raft_group_id FROM system.tablets WHERE table_id = {table_id}")}
+
+        keys_a, keys_b, keys_c = range(100), range(1000, 1100), range(2000, 2010)
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in keys_a])
+        await cql.run_async(f"TRUNCATE TABLE {ks}.test")
+        first = await wait_for_truncate_records(cql, group_ids)
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in keys_b])
+        await cql.run_async(f"TRUNCATE TABLE {ks}.test")
+        await wait_for_truncate_records(cql, group_ids, above=first)
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in keys_c])
+        if flush_table:
+            await manager.api.keyspace_flush(server.ip_addr, ks, 'test')
+
+        (cql, hosts) = await kill_and_restart(manager, [server])
+
+        assert await count_rows_by_key(cql, ks, 'test', keys_a) == 0
+        assert await count_rows_by_key(cql, ks, 'test', keys_b) == 0
+        assert await count_rows_by_key(cql, ks, 'test', keys_c) == len(keys_c)
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_truncate_replays_entry_when_record_not_flushed(manager: ScyllaClusterManager):
+    """The node is killed after the tablet was emptied but before the truncate record was
+    written. The entry is still in the commitlog: the replay applies the writes it finds
+    below the entry and then the entry itself, which drops them again."""
+    server = await manager.server_add(config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE)
+    (cql, hosts) = await manager.get_ready_cql([server])
+    log = await manager.server_open_log(server.server_id)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        keys = range(200)
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in keys])
+
+        await manager.api.enable_injection(server.ip_addr, 'truncate_apply_before_record', one_shot=True)
+        trunc_future = cql.run_async(f"TRUNCATE TABLE {ks}.test")
+        await log.wait_for('truncating tablet')
+
+        # The TRUNCATE may still be waiting for the entry's apply; the kill ends it either way.
+        await manager.server_stop(server.server_id, convict=False)
+        trunc_future.cancel()
+        await manager.server_start(server.server_id)
+        (cql, hosts) = await manager.get_ready_cql([server])
+
+        assert await count_rows_by_key(cql, ks, 'test', keys) == 0
+        rows = await cql.run_async("SELECT truncate_index FROM system.raft_groups")
+        assert any(r.truncate_index for r in rows)
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_truncate_in_one_batch_with_writes_survives_replay(manager: ScyllaClusterManager):
+    """The followers are cut off while writes and the truncate are appended on the leader, so
+    once reconnected they get all of it in one batch whose header commit_idx is below the
+    writes. Nothing is written after it and every node is killed: the replay floor from the
+    batch headers is below the truncate, and the record alone has to keep the writes from
+    going back to raft and being applied again."""
+    servers = await manager.servers_add(3, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
+    (cql, hosts) = await manager.get_ready_cql(servers)
+    host_ids = {await manager.get_host_id(s.server_id): s for s in servers}
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        table_id = await manager.get_table_id(ks, 'test')
+        group_id = str((await cql.run_async(f"SELECT raft_group_id FROM system.tablets WHERE table_id = {table_id}"))[0].raft_group_id)
+        await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES (1000, 1000);")
+
+        async def leader_of():
+            for s in servers:
+                try:
+                    r = await manager.api.get_raft_leader(s.ip_addr, group_id)
+                except Exception:
+                    continue
+                if r and uuid.UUID(r).int != 0:
+                    return r
+            return None
+        leader = host_ids[await wait_for(leader_of, time.time() + 60)]
+        followers = [s for s in servers if s.server_id != leader.server_id]
+        leader_log = await manager.server_open_log(leader.server_id)
+        mark = await leader_log.mark()
+
+        for f in followers:
+            await manager.api.enable_injection(f.ip_addr, "raft_drop_incoming_append_entries_for_specified_group",
+                                               one_shot=False, parameters={"value": group_id})
+        keys = range(20)
+        inserts = [cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in keys]
+        await asyncio.sleep(0.5)
+        trunc = cql.run_async(f"TRUNCATE TABLE {ks}.test")
+        await leader_log.wait_for("adding a truncate", from_mark=mark, timeout=60)
+        for f in followers:
+            await manager.api.disable_injection(f.ip_addr, "raft_drop_incoming_append_entries_for_specified_group")
+        await asyncio.gather(*inserts, trunc)
+
+        async def recorded_everywhere():
+            for h in hosts:
+                rows = await cql.run_async("SELECT group_id, truncate_index FROM system.raft_groups", host=h)
+                if not any(str(r.group_id) == group_id and r.truncate_index for r in rows):
+                    return None
+            return True
+        await wait_for(recorded_everywhere, time.time() + 60)
+        assert await count_rows_by_key(cql, ks, 'test', keys) == 0
+
+        (cql, hosts) = await kill_and_restart(manager, servers)
+        assert await count_rows_by_key(cql, ks, 'test', keys) == 0
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_truncate_coordinator_crash_dedup(manager: ScyllaClusterManager):
+    """The topology coordinator is killed right after the tablet's truncate entry is committed. The
+    new coordinator re-drives the request and the group gets a second entry with the same request
+    id, which the state machine applies as a no-op: a row written between the two entries survives."""
+    servers = await manager.servers_add(3, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
+    (cql, hosts) = await manager.get_ready_cql(servers)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        keys = range(100)
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in keys])
+
+        coord = await get_topology_coordinator_server(manager, servers)
+        coord_log = await manager.server_open_log(coord.server_id)
+        other = next(s for s in servers if s != coord)
+        other_host = next(h for h in hosts if h.address == other.ip_addr)
+
+        await manager.api.enable_injection(coord.ip_addr, 'truncate_sc_crash_after_tablet_commit', one_shot=True)
+        trunc_future = cql.run_async(f"TRUNCATE TABLE {ks}.test", host=other_host)
+        await coord_log.wait_for('truncate_sc_crash_after_tablet_commit hit, killing the node')
+        await manager.server_stop(coord.server_id, convict=False)
+
+        # The entry is committed and two replicas are up, so the tablet serves reads and writes
+        # while the request waits for a new coordinator. This write is ordered after the first
+        # entry and a read observed it, so the entry the re-driven request adds must not drop it.
+        # The write goes to the group's leader, which may still be the killed node until the
+        # group elects a new one, so retry until it succeeds.
+        async def insert_marker_row():
+            try:
+                await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES (9999, 9999);", host=other_host)
+                return True
+            except (WriteFailure, WriteTimeout):
+                return None
+        await wait_for(insert_marker_row, time.time() + 60)
+        rows = await select_rows(cql, f"SELECT c FROM {ks}.test WHERE pk = 9999", host=other_host)
+        assert [r.c for r in rows] == [9999]
+
+        await manager.server_start(coord.server_id)
+        await trunc_future
+
+        assert await count_rows_by_key(cql, ks, 'test', keys) == 0
+        rows = await select_rows(cql, f"SELECT c FROM {ks}.test WHERE pk = 9999")
+        assert [r.c for r in rows] == [9999]
+
+        # The same two entries and the write between them are now replayed from the commitlog
+        # on every replica. The second entry must be a no-op there as well.
+        (cql, hosts) = await kill_and_restart(manager, servers)
+        assert await count_rows_by_key(cql, ks, 'test', keys) == 0
+        rows = await select_rows(cql, f"SELECT c FROM {ks}.test WHERE pk = 9999")
+        assert [r.c for r in rows] == [9999]
+
