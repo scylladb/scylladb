@@ -1005,6 +1005,15 @@ const data_dictionary::storage_options& schema_applier::keyspace_storage_options
 future<> schema_applier::create_table_storage() {
     auto& db = _proxy.local().get_db().local();
     const auto& diff = _affected_tables_and_views.tables_and_views.local();
+    if (diff.cdc.created.empty() && diff.tables.created.empty() && diff.views.created.empty()) {
+        co_return;
+    }
+    // A removal of the storage of a dropped table with the same ID as a
+    // created table may be in progress. The lock is held until commit() has
+    // constructed the table objects on every shard, see
+    // replica::database::remove_unused_table_storage().
+    utils::get_local_injector().enter("schema_applier_lock_table_dirs");
+    _table_dir_lock = co_await db.lock_table_dirs();
     auto create = [&] (const std::vector<schema_ptr>& created) {
         return max_concurrent_for_each(created, max_concurrent, [&] (const schema_ptr& s) -> future<> {
             auto& mgr = db.get_sstables_manager(*s);
@@ -1136,6 +1145,7 @@ future<> schema_applier::commit() {
     });
     // unlock as some functions in post_commit() may read data under those locks
     _metadata_locks = nullptr;
+    _table_dir_lock.reset();
 }
 
 future<> schema_applier::finalize_tables_and_views() {
@@ -1255,6 +1265,7 @@ future<> schema_applier::post_commit() {
 }
 
 future<> schema_applier::destroy() {
+    _table_dir_lock.reset();
     co_await _affected_user_types.stop();
     co_await _affected_tables_and_views.tables_and_views.stop();
     co_await _pending_token_metadata.destroy();

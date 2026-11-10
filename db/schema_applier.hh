@@ -187,6 +187,9 @@ class schema_applier {
     affected_tables_and_views _affected_tables_and_views;
 
     std::unique_ptr<replica::tables_metadata_lock_on_all_shards> _metadata_locks;
+    // Held from the creation of the directories of the created tables until
+    // the tables are added, see create_table_storage().
+    std::optional<replica::database::table_dir_lock> _table_dir_lock;
 
     functions_change_batch_all_shards _functions_batch; // includes aggregates
     // Set during prepare() when the incoming mutations touch a cluster-config table, so
