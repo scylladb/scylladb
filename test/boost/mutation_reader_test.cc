@@ -4681,6 +4681,26 @@ public:
     }
 };
 
+// Check that the multishard reader's buffer hint saves shard reader fills
+// when partitions are larger than a shard reader's buffer.
+//
+// The multishard reader reads from one shard until it reaches a partition
+// which belongs to another shard. A visit to a shard is such a run of
+// consecutive partitions from that shard in the multishard reader's output.
+// Every shard reader fill admits the shard's reader and is followed by its
+// eviction (by evicting_semaphore_factory), so the number of admissions on a
+// shard's semaphore is the number of fills.
+//
+// Requirements:
+//  1. A shard which the multishard reader didn't visit is never read from.
+//  2. On a visited shard, the reader is admitted at least once, and is
+//     evicted as many times as it was admitted.
+//  3. With the hint, a visit to a shard costs at most one shard reader fill,
+//     even when the partition doesn't fit in a shard reader's buffer.
+//  4. Without the hint, shard readers fill buffers of the default size, so a
+//     partition larger than that needs several fills per visit: when the
+//     multishard reader's buffer is larger than a shard reader's buffer, it
+//     takes more fills than with the hint.
 SEASTAR_TEST_CASE(test_multishard_reader_buffer_hint_large_partitions) {
     return do_with_cql_env_thread([] (cql_test_env& env) {
         simple_schema ss;
