@@ -1948,7 +1948,7 @@ future<> compaction_manager_impl::do_compaction(logstor_group& cg, compaction_ba
                 compaction_buffer(_sm, co_await _sm._compaction_buffer_pool.allocate(as), cg),
                 [this, &index, &nonempty_segments] (compaction_buffer& cb) -> future<compaction_buffer_stats> {
             co_await _sm.for_each_record(nonempty_segments, [&index, &cb] (const chunk_record& record) {
-                if (!index.is_record_alive(record.header.index_key(), record.location)) {
+                if (!index.is_record_live(record.header.index_key(), record.location)) {
                     cb.stats.records_skipped++;
                     return make_ready_future<>();
                 }
@@ -2058,7 +2058,7 @@ future<> compaction_manager_impl::do_split_compaction(logstor_group& src, mutati
                 },
                 [this, &index, &classifier, &nonempty_segments] (split_buffer_pair& bufs) -> future<compaction_buffer_stats> {
             co_await _sm.for_each_record(nonempty_segments, [&index, &bufs, &classifier] (const chunk_record& record) {
-                if (!index.is_record_alive(record.header.index_key(), record.location)) {
+                if (!index.is_record_live(record.header.index_key(), record.location)) {
                     return make_ready_future<>();
                 }
                 auto& cb = bufs.bufs[classifier(record.header.key.token())];
@@ -2484,7 +2484,7 @@ future<> segment_manager_impl::separate_segment_records(recovery_catalog& catalo
         const auto& header = record.header;
         auto key = header.index_key();
         auto* index = catalog.index(header.table);
-        if (!index || !index->is_record_alive(key, record.location)) {
+        if (!index || !index->is_record_live(key, record.location)) {
             return make_ready_future<>();
         }
         auto* cg = catalog.find(header.table, key.token()).group;

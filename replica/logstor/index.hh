@@ -292,8 +292,8 @@ public:
         return true;
     }
 
-    bool erase(const primary_index_key& key, record_location loc) {
-        auto e = find_entry_at(key, loc);
+    bool erase(const primary_index_key& key, record_location location) {
+        auto e = find_entry_at(key, location);
         if (!e) {
             return false;
         }
@@ -378,7 +378,7 @@ public:
         });
     }
 
-    bool is_record_alive(const primary_index_key& key, record_location location) const {
+    bool is_record_live(const primary_index_key& key, record_location location) const {
         return find_entry_at(key, location).has_value();
     }
 
@@ -478,7 +478,7 @@ public:
         //
         // Each batch contains all entries for every token it includes. If adding the next token
         // would exceed `max_entries`, the scan stops before that token instead of breaking the
-        // token group in half (except if the first token itself exceeds `max_entries`, in which
+        // token run in half (except if the first token itself exceeds `max_entries`, in which
         // case the batch will contain only that token).
         struct batch {
             index_read_guard guard;
@@ -583,7 +583,7 @@ private:
 
     void space_accounting_on_record_freed(record_location location) noexcept {
         if (location.size > _live_record_bytes) {
-            on_fatal_internal_error(logstor_logger, format("freeing a record of {} bytes from an index holding {} live record bytes",
+            on_fatal_internal_error(logstor_logger, fmt::format("freeing a record of {} bytes from an index holding {} live record bytes",
                     location.size, _live_record_bytes));
         }
         _space_accounting.on_free_record(location);
