@@ -2375,6 +2375,8 @@ table::stop() noexcept {
         co_await _logstor_index->drain_cache();
     }
     _cache.refresh_snapshot();
+    // The writers of the table are drained, so it no longer uses its storage.
+    _sstables_manager.close_table(_schema->id());
 }
 static seastar::metrics::label_instance node_table_metrics("__per_table", "node");
 void table::set_metrics() {
@@ -3698,6 +3700,8 @@ table::table(schema_ptr schema, config config, lw_shared_ptr<const storage_optio
     set_metrics();
 
     update_tombstone_gc_rf_one();
+
+    _sstables_manager.open_table(_schema->id());
 }
 
 void table::on_flush_timer() {

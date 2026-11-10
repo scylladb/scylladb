@@ -9,6 +9,8 @@
 
 #pragma once
 
+#include <unordered_map>
+
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/sharded.hh>
 #include <seastar/core/gate.hh>
@@ -169,6 +171,25 @@ private:
     list_type _active;
     list_type _undergoing_close;
 
+    // The users of the storage of a table on this shard. See open_table().
+    struct table_storage_users {
+        // Every open table object, and every sstable of the table that is not
+        // destroyed yet.
+        size_t count = 0;
+        // The table objects opened and closed on this shard so far.
+        uint64_t opens = 0;
+        uint64_t closes = 0;
+        // The table objects that are open.
+        uint64_t open_tables() const noexcept {
+            return opens - closes;
+        }
+    };
+    using table_storage_users_map = std::unordered_map<table_id, table_storage_users>;
+    table_storage_users_map _tables;
+    // Signalled when the count of a table reaches zero, and when a table
+    // object opens a table.
+    seastar::condition_variable _table_storage_users_changed;
+
     // Total reclaimable memory used by components of sstables in _active list
     size_t _total_reclaimable_memory{0};
     // Total memory reclaimed so far across all sstables
@@ -326,6 +347,23 @@ public:
     // To be called by the sstable to signal its unlinking
     void on_unlink(sstable* sst);
 
+    // The manager counts the users of the storage of each table on this
+    // shard: the table object, from open_table() until close_table(), and
+    // every sstable of the table, from its construction until it is
+    // destroyed. The storage of a dropped table is removed only when it has
+    // no user on any shard. The count covers every sstable with the table's
+    // schema ID, not only those in the table's sstable set.
+
+    // Called by the constructor of a table object.
+    void open_table(table_id id);
+    // Called when the table object stops, after its writers are drained.
+    void close_table(table_id id) noexcept;
+    // Waits until the storage of the table on this shard has no user, or
+    // until a table object opens the table. Returns whether it has no user.
+    future<bool> await_table_storage_unused(table_id id);
+    // Tells if the storage of the table on this shard has a user.
+    bool table_storage_in_use(table_id id) const noexcept;
+
     std::vector<std::filesystem::path> get_local_directories(const data_dictionary::storage_options::local& so) const;
 
     sstable_compressor_factory& get_compressor_factory() const { return _compressor_factory; }
@@ -363,6 +401,7 @@ private:
     // Unlink the sstable from _reclaimed, if it is linked. Erasing by key would
     // remove an arbitrary sstable with the same total_memory_reclaimed().
     void erase_from_reclaimed(sstable* sst) noexcept;
+    void release_table_storage_user(table_storage_users_map::iterator it) noexcept;
 private:
     db::large_data_handler& get_large_data_handler() const {
         return _large_data_handler;

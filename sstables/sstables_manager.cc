@@ -434,6 +434,7 @@ void sstables_manager::erase_from_reclaimed(sstable* sst) noexcept {
 }
 
 void sstables_manager::add(sstable* sst) {
+    ++_tables[sst->get_schema()->id()].count;
     _active.push_back(*sst);
 }
 
@@ -454,8 +455,48 @@ void sstables_manager::deactivate(sstable* sst) {
     });
 }
 
+void sstables_manager::open_table(table_id id) {
+    auto& users = _tables[id];
+    ++users.count;
+    ++users.opens;
+    // Wakes up the removal of the storage of the table, if it waits.
+    _table_storage_users_changed.broadcast();
+}
+
+void sstables_manager::close_table(table_id id) noexcept {
+    auto it = _tables.find(id);
+    if (it == _tables.end() || it->second.open_tables() == 0) {
+        on_internal_error_noexcept(smlogger, format("Closing table {}, which is not open", id));
+        return;
+    }
+    ++it->second.closes;
+    release_table_storage_user(it);
+}
+
+void sstables_manager::release_table_storage_user(table_storage_users_map::iterator it) noexcept {
+    if (--it->second.count != 0) {
+        return;
+    }
+    _tables.erase(it);
+    _table_storage_users_changed.broadcast();
+}
+
+future<bool> sstables_manager::await_table_storage_unused(table_id id) {
+    co_await _table_storage_users_changed.wait([this, id] {
+        auto it = _tables.find(id);
+        return it == _tables.end() || it->second.count == 0 || it->second.open_tables() != 0;
+    });
+    co_return !table_storage_in_use(id);
+}
+
+bool sstables_manager::table_storage_in_use(table_id id) const noexcept {
+    auto it = _tables.find(id);
+    return it != _tables.end() && it->second.count != 0;
+}
+
 void sstables_manager::remove(sstable* sst) {
     _undergoing_close.erase(_undergoing_close.iterator_to(*sst));
+    release_table_storage_user(_tables.find(sst->get_schema()->id()));
     delete sst;
     _components_memory_change_event.signal();
     maybe_done();
