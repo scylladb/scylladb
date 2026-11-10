@@ -410,6 +410,11 @@ struct coordinator::operation_ctx {
     raft_server raft_server;
 };
 
+static std::exception_ptr make_table_dropped_error(const schema& s) {
+    return std::make_exception_ptr(exceptions::invalid_request_exception(
+            fmt::format("unconfigured table {}", s.cf_name())));
+}
+
 static need_redirect redirect_to_leader(locator::tablet_replica target, groups_manager& gm, raft::group_id group_id) {
     return {
         .target = target,
@@ -584,7 +589,7 @@ auto coordinator::mutate(schema_ptr schema,
                 || try_catch<raft::stopped_error>(ex)) {
             if (!_db.column_family_exists(schema->id())) {
                 ++get_stats().write_errors_table_dropped;
-                return std::make_exception_ptr(replica::no_such_column_family(schema->ks_name(), schema->cf_name()));
+                return make_table_dropped_error(*schema);
             }
             logger.debug("mutate(): request timed out with error {}, table {}.{}, token {}, {}",
                 ex, schema->ks_name(), schema->cf_name(), token, state_fmt);
@@ -603,10 +608,12 @@ auto coordinator::mutate(schema_ptr schema,
             logger.trace("mutate(): no live replica, table {}.{}, token {}", schema->ks_name(), schema->cf_name(), token);
             ++get_stats().write_errors_unavailable;
             return ex;
-        } else if (try_catch<replica::no_such_column_family>(ex)) {
+        } else if (try_catch<replica::no_such_column_family>(ex)
+                // The exception type doesn't say which table is missing.
+                && !_db.column_family_exists(schema->id())) {
             logger.trace("mutate(): table {}.{} was dropped, token {}", schema->ks_name(), schema->cf_name(), token);
             ++get_stats().write_errors_table_dropped;
-            return ex;
+            return make_table_dropped_error(*schema);
         } else if (auto* too_big = try_catch<raft::command_is_too_big_error>(ex)) {
             logger.trace("mutate(): command of {} bytes exceeds the limit of {}, table {}.{}, token {}",
                 too_big->command_size, too_big->limit, schema->ks_name(), schema->cf_name(), token);
@@ -827,7 +834,7 @@ auto coordinator::query(schema_ptr schema,
                 || try_catch<raft::stopped_error>(ex)) {
             if (!_db.column_family_exists(schema->id())) {
                 ++get_stats().read_errors_table_dropped;
-                return std::make_exception_ptr(replica::no_such_column_family(schema->ks_name(), schema->cf_name()));
+                return make_table_dropped_error(*schema);
             }
             logger.debug("query(): request timed out with error {}, table {}.{}, read cmd {}",
                 ex, schema->ks_name(), schema->cf_name(), cmd);
@@ -837,10 +844,12 @@ auto coordinator::query(schema_ptr schema,
             logger.trace("query(): no live replica, table {}.{}, read cmd {}", schema->ks_name(), schema->cf_name(), cmd);
             ++get_stats().read_errors_unavailable;
             return ex;
-        } else if (try_catch<replica::no_such_column_family>(ex)) {
+        } else if (try_catch<replica::no_such_column_family>(ex)
+                // The exception type doesn't say which table is missing.
+                && !_db.column_family_exists(schema->id())) {
             logger.trace("query(): table {}.{} was dropped, read cmd {}", schema->ks_name(), schema->cf_name(), cmd);
             ++get_stats().read_errors_table_dropped;
-            return ex;
+            return make_table_dropped_error(*schema);
         } else {
             logger.debug("query(): unknown exception {}, table {}.{}, read cmd {}",
                 ex, schema->ks_name(), schema->cf_name(), cmd);
