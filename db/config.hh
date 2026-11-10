@@ -394,6 +394,8 @@ public:
     named_value<uint32_t> permissions_validity_in_ms;
     named_value<uint32_t> permissions_update_interval_in_ms;
     named_value<uint32_t> permissions_cache_max_entries;
+    named_value<uint32_t> verified_password_cache_max_entries;
+    named_value<uint32_t> verified_password_cache_validity_in_ms;
     named_value<string_map> server_encryption_options;
     named_value<string_map> client_encryption_options;
     named_value<string_map> alternator_encryption_options;

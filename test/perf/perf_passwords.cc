@@ -9,16 +9,20 @@
 #include <seastar/testing/perf_tests.hh>
 
 #include "auth/passwords.hh"
+#include "auth/verified_password_cache.hh"
 #include "utils/crypt_sha512.hh"
 
-// Cost of verifying a CQL password against a stored SHA-512 salted hash.
-// "fresh" models a login with credentials not seen before, "repeated" a
-// reconnect with the same credentials, and "wrong" a failed login.
+// Cost of verifying a CQL password against a stored SHA-512 salted hash,
+// the way PasswordAuthenticator does it. "fresh" models a login with
+// credentials not seen before, "repeated" a reconnect with the same
+// credentials, and "wrong" a failed login of a role whose correct password
+// is cached.
 template <size_t PasswordLength>
 struct password_fixture {
     const sstring password = make_password('p');
     const sstring wrong_password = make_password('q');
     const sstring salted_hash = auth::passwords::detail::hash_with_salt(password, "$6$aaaabbbbccccdddd");
+    auth::verified_password_cache cache{utils::updateable_value<uint32_t>(1000), utils::updateable_value<uint32_t>(3600 * 1000)};
 
     static sstring make_password(char c) {
         sstring p(PasswordLength, c);
@@ -32,15 +36,19 @@ struct password_fixture {
     }
 
     future<> check_fresh() {
-        perf_tests::do_not_optimize(co_await auth::passwords::check(password, salted_hash));
+        auth::verified_password_cache empty_cache{utils::updateable_value<uint32_t>(1000), utils::updateable_value<uint32_t>(3600 * 1000)};
+        perf_tests::do_not_optimize(co_await empty_cache.check("role", password, salted_hash));
     }
 
     future<> check_repeated() {
-        perf_tests::do_not_optimize(co_await auth::passwords::check(password, salted_hash));
+        perf_tests::do_not_optimize(co_await cache.check("role", password, salted_hash));
     }
 
     future<> check_wrong() {
-        perf_tests::do_not_optimize(co_await auth::passwords::check(wrong_password, salted_hash));
+        if (!cache.size()) {
+            co_await cache.check("role", password, salted_hash);
+        }
+        perf_tests::do_not_optimize(co_await cache.check("role", wrong_password, salted_hash));
     }
 };
 

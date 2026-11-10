@@ -2511,6 +2511,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                     .ldap_bind_dn = cfg->ldap_bind_dn(),
                     .ldap_bind_passwd = cfg->ldap_bind_passwd(),
                     .permissions_update_interval_in_ms = cfg->permissions_update_interval_in_ms,
+                    .verified_password_cache_max_entries = cfg->verified_password_cache_max_entries,
+                    .verified_password_cache_validity_in_ms = cfg->verified_password_cache_validity_in_ms,
                 };
             };
 

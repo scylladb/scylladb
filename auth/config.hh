@@ -29,6 +29,8 @@ struct config {
     seastar::sstring ldap_bind_dn;
     seastar::sstring ldap_bind_passwd;
     utils::updateable_value<uint32_t> permissions_update_interval_in_ms;
+    utils::updateable_value<uint32_t> verified_password_cache_max_entries;
+    utils::updateable_value<uint32_t> verified_password_cache_validity_in_ms;
     std::chrono::milliseconds ldap_reconnect_backoff_min{std::chrono::seconds(1)};
     std::chrono::milliseconds ldap_reconnect_backoff_max{std::chrono::seconds(32)};
 };

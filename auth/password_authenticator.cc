@@ -14,6 +14,7 @@
 #include <string_view>
 #include <optional>
 
+#include <seastar/core/metrics.hh>
 #include <seastar/core/seastar.hh>
 #include <seastar/core/sleep.hh>
 #include <variant>
@@ -54,7 +55,18 @@ password_authenticator::password_authenticator(cql3::query_processor& qp, ::serv
     , _superuser_name(cfg.auth_superuser_name)
     , _superuser_salted_password(cfg.auth_superuser_salted_password)
     , _stopped(make_ready_future<>()) 
-{}
+    , _verified_passwords(cfg.verified_password_cache_max_entries, cfg.verified_password_cache_validity_in_ms)
+{
+    namespace sm = seastar::metrics;
+    _metrics.add_group("auth_verified_password_cache", {
+        sm::make_counter("hits", [this] { return _verified_passwords.get_stats().hits; },
+                sm::description("Logins whose password matched a cached verification, skipping the password hash")),
+        sm::make_counter("misses", [this] { return _verified_passwords.get_stats().misses; },
+                sm::description("Logins which found no matching cached verification and computed the password hash")),
+        sm::make_counter("evictions", [this] { return _verified_passwords.get_stats().evictions; },
+                sm::description("Cached verifications removed before they expired, to stay within the size limit or because the cache configuration changed")),
+    });
+}
 
 static bool has_salted_hash(const cql3::untyped_result_set_row& row) {
     return !row.get_or<sstring>(SALTED_HASH, "").empty();
@@ -198,7 +210,7 @@ future<authenticated_user> password_authenticator::authenticate(
             throw exceptions::authentication_exception("Username and/or password are incorrect");
         }
         const auto& salted_hash = role->salted_hash;
-        const bool password_match = co_await passwords::check(password, salted_hash);
+        const bool password_match = co_await _verified_passwords.check(username, password, salted_hash);
         if (!password_match) {
             throw exceptions::authentication_exception("Username and/or password are incorrect");
         }
