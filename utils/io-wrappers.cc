@@ -8,6 +8,7 @@
 
 #include "io-wrappers.hh"
 #include "seekable_source.hh"
+#include "bytes_ostream.hh"
 #include <seastar/util/internal/iovec_utils.hh>
 #include <seastar/util/memory-data-sink.hh>
 #include <seastar/util/memory-data-source.hh>
@@ -177,6 +178,16 @@ file create_noop_file() {
 
 data_sink create_memory_sink(std::vector<seastar::temporary_buffer<char>>& bufs) {
     return data_sink(std::make_unique<seastar::util::memory_data_sink>(bufs, 128*1024));
+}
+
+inline void append_buffers(bytes_ostream& out, std::span<temporary_buffer<char>> bufs) {
+    for (auto& buf : bufs) {
+        out.write(buf.get(), buf.size());
+    }
+}
+
+data_sink create_memory_sink(bytes_ostream& out) {
+    return data_sink(std::make_unique<seastar::util::basic_memory_data_sink<bytes_ostream>>(out, 128*1024));
 }
 
 data_source create_memory_source(std::vector<seastar::temporary_buffer<char>> bufs) {
