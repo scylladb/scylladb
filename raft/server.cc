@@ -262,6 +262,7 @@ public:
     bool is_alive() const override;
     term_t get_current_term() const override;
     future<> read_barrier(seastar::abort_source* as) override;
+    future<> wait_for_apply(index_t idx, seastar::abort_source* as) override;
     void wait_until_candidate() override;
     future<> wait_election_done() override;
     future<> wait_log_idx_term(std::pair<index_t, term_t> idx_log) override;
@@ -498,11 +499,6 @@ private:
     // Log Matching Property every log that had (snap_idx, snap_term) also had
     // eid, so the snapshot includes it.
     std::optional<index_t> committed_entry_fate(entry_id eid);
-    // Wait for a read barrier index to be applied. The index
-    // is typically already committed, so we don't worry about the
-    // term.
-    future<> wait_for_apply(index_t idx, abort_source*);
-
     void check_not_aborted();
     // The state machine cannot be used after it's aborted.
     // This getter either returns the state machine, or throws

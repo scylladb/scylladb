@@ -328,7 +328,8 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
         .ticker = std::move(ticker),
         .rpc = rpc_ref,
         .persistence = persistence_ref,
-        .state_machine = state_machine_ref
+        .state_machine = state_machine_ref,
+        .default_op_timeout_in_ms = utils::updateable_value<uint32_t>(60000)
     }, get_tick_interval());
 
     // Publish the persistence only now, past every throw above: the raft::server
@@ -1143,6 +1144,116 @@ void groups_manager::update(token_metadata_ptr new_tm) {
 
     // A group whose tablet left this shard is never replayed, so release its segments.
     schedule_raft_groups_deletion(false, log_disposition::release);
+}
+
+future<> groups_manager::wait_for_committed_writes(table_id table, std::optional<locator::tablet_id> tablet, lowres_clock::duration timeout) {
+    if (const auto ms = utils::get_local_injector().inject_parameter<uint32_t>("sc_committed_writes_wait_timeout_ms")) {
+        timeout = std::chrono::milliseconds(*ms);
+    }
+    co_await container().invoke_on_all([table, tablet, timeout] (groups_manager& gm) {
+        return gm.wait_for_committed_writes_on_shard(table, tablet, timeout);
+    });
+}
+
+future<> groups_manager::wait_for_committed_writes_on_shard(table_id table, std::optional<locator::tablet_id> tablet, lowres_clock::duration timeout) {
+    if (!_features.strongly_consistent_tables || !_started) {
+        co_return;
+    }
+    const auto deadline = lowres_clock::now() + timeout;
+    const auto timeout_ms = std::chrono::duration_cast<std::chrono::milliseconds>(timeout).count();
+    const auto tm = _db.get_token_metadata_ptr();
+    const auto& tablets = tm->tablets();
+    if (!tablets.has_tablet_map(table) || !tablets.get_tablet_map(table).has_raft_info()) {
+        co_return;
+    }
+    const auto& tmap = tablets.get_tablet_map(table);
+    const locator::tablet_replica this_replica{.host = tm->get_my_id(), .shard = this_shard_id()};
+
+    std::vector<std::pair<global_tablet_id, raft::group_id>> groups;
+    for (const auto tid : tmap.tablet_ids()) {
+        if (tablet && tid != *tablet) {
+            continue;
+        }
+        if (hosts_raft_group(tmap.get_tablet_info(tid), tmap.get_tablet_transition_info(tid), this_replica)) {
+            groups.emplace_back(global_tablet_id{table, tid}, tmap.get_tablet_raft_info(tid).group_id);
+        }
+        co_await coroutine::maybe_yield();
+    }
+    logger.debug("wait_for_committed_writes({}): waiting for the apply of {} groups", table, groups.size());
+
+    co_await coroutine::parallel_for_each(groups, [&] (const auto& entry) -> future<> {
+        const auto [tablet, gid] = entry;
+        // Published token metadata which update() hasn't processed yet, or the group of
+        // a tablet that is still being added to this shard: nothing of it is flushed.
+        const auto git = _raft_groups.find(gid);
+        if (git == _raft_groups.end()) {
+            logger.debug("wait_for_committed_writes({}): group {} of tablet {} not started yet, skipping", table, gid, tablet);
+            co_return;
+        }
+        // The tablet left this shard and its group is being deleted: nothing of it to
+        // flush here. The gate closes before the group is erased, and acquire_server()
+        // treats a closed gate of an existing table as an internal error.
+        if (git->second.gate->is_closed()) {
+            logger.debug("wait_for_committed_writes({}): group {} of tablet {} is stopping, skipping", table, gid, tablet);
+            co_return;
+        }
+        abort_on_expiry aoe(deadline);
+        try {
+            const auto server = co_await acquire_server(table, gid, aoe.abort_source());
+            co_await server.server().wait_for_apply(server.server().get_status().commit_idx, &aoe.abort_source());
+        } catch (const raft::request_aborted&) {
+            logger.warn("wait_for_committed_writes: the replica of tablet {} (raft group {}) didn't apply the writes committed "
+                    "before the wait within {} ms; a snapshot taken now may miss writes acked right before it",
+                    tablet, gid, timeout_ms);
+        } catch (const abort_requested_exception&) {
+            // acquire_server() gave up waiting for the server to start.
+            logger.warn("wait_for_committed_writes: the raft server of tablet {} (group {}) didn't start within {} ms; "
+                    "a snapshot taken now may miss writes acked right before it",
+                    tablet, gid, timeout_ms);
+        } catch (const raft::stopped_error&) {
+            // The tablet left this shard meanwhile: nothing of it to flush here.
+            logger.debug("wait_for_committed_writes({}): group {} of tablet {} stopped, skipping", table, gid, tablet);
+        } catch (const replica::no_such_column_family&) {
+            // The table was dropped meanwhile.
+        } catch (...) {
+            logger.warn("wait_for_committed_writes: waiting for the apply of tablet {} (raft group {}) failed: {}; "
+                    "a snapshot taken now may miss writes acked right before it", tablet, gid, std::current_exception());
+        }
+    });
+}
+
+future<> groups_manager::refresh_leader_timestamp(global_tablet_id tablet) {
+    co_await container().invoke_on_all([tablet] (groups_manager& gm) {
+        gm.refresh_leader_timestamp_on_shard(tablet);
+    });
+}
+
+void groups_manager::refresh_leader_timestamp_on_shard(global_tablet_id tablet) {
+    if (!_features.strongly_consistent_tables || !_started) {
+        return;
+    }
+    const auto tm = _db.get_token_metadata_ptr();
+    const auto& tablets = tm->tablets();
+    if (!tablets.has_tablet_map(tablet.table) || !tablets.get_tablet_map(tablet.table).has_raft_info()) {
+        return;
+    }
+    const auto& tmap = tablets.get_tablet_map(tablet.table);
+    const auto gid = tmap.get_tablet_raft_info(tablet.tablet).group_id;
+    const auto it = _raft_groups.find(gid);
+    if (it == _raft_groups.end() || !it->second.leader_info) {
+        return;
+    }
+    const auto table = _db.get_tables_metadata().get_table_if_exists(tablet.table);
+    if (!table) {
+        return;
+    }
+    const auto max_timestamp = table->get_max_timestamp_for_token_range(tmap.get_token_range(tablet.tablet));
+    auto& info = *it->second.leader_info;
+    if (max_timestamp && *max_timestamp > info.last_timestamp) {
+        logger.debug("refresh_leader_timestamp({}, group_id={}): raising last_timestamp from {} to {}, the data attached outside of raft",
+                tablet, gid, info.last_timestamp, *max_timestamp);
+        info.last_timestamp = *max_timestamp;
+    }
 }
 
 future<raft_server> groups_manager::acquire_server(table_id table_id, raft::group_id group_id, abort_source& as) {
