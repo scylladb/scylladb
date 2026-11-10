@@ -981,6 +981,19 @@ class CounterLoad:
         return after
 
 
+async def finish_tablet_migrations(manager: ScyllaClusterManager, servers: list[ServerInfo]):
+    """Disable tablet balancing and wait until every node applied the end of the last migration.
+
+    A tablet migration gives its pending replica the negated rack ID, so the migrations must
+    be over before checking which counter IDs the nodes write under. disable_tablet_balancing()
+    waits for the active migrations to finish, but only as seen by the node that it asks, and
+    another node may apply the end of a migration later (SCYLLADB-6164). A read barrier on
+    every node waits until it applied it.
+    """
+    await manager.disable_tablet_balancing()
+    await asyncio.gather(*(read_barrier(manager.api, s.ip_addr) for s in servers))
+
+
 async def test_migration_with_counters(manager: ScyllaClusterManager, scale_timeout):
     """Verify that counters keep their values through a vnodes-to-tablets migration (SCYLLADB-5413).
 
@@ -1064,8 +1077,7 @@ async def test_migration_with_counters(manager: ScyllaClusterManager, scale_time
         assert applied > 10 * failed, f"Too few increments succeeded in the background: {applied} applied, {failed} failed"
 
         await verify_migration_status(manager, servers[0], ks, expected_status='tablets', expected_node_statuses={})
-        # A tablet migration gives its pending replica the negated rack ID, so finish any before checking the IDs.
-        await manager.disable_tablet_balancing()
+        await finish_tablet_migrations(manager, servers)
         await load.run_checked_rounds(rounds, writer_ids())
 
 
@@ -1147,8 +1159,7 @@ async def test_migration_rollback_with_counters(manager: ScyllaClusterManager):
         await manager.api.finalize_vnode_tablet_migration(servers[0].ip_addr, ks)
         await verify_migration_status(manager, servers[0], ks, expected_status='tablets', expected_node_statuses={})
         await wait_for_pow2_convergence(manager, servers[0], ks, 'counters')
-        # A tablet migration gives its pending replica the negated rack ID, so finish any before checking the IDs.
-        await manager.disable_tablet_balancing()
+        await finish_tablet_migrations(manager, servers)
         await load.run_checked_rounds(rounds, writer_ids())
 
 
