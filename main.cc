@@ -2061,11 +2061,10 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 scrub_period_registrations.stop().get();
             });
 
-            const auto& scrub_period_opt = *db::cluster_config_registry::find(db::cluster_config_registry::option_name::auto_scrub_period_seconds);
-            cluster_config_manager.invoke_on_all([&db, &scrub_period_opt] (db::cluster_config_manager& ccm) {
+            cluster_config_manager.invoke_on_all([&db] (db::cluster_config_manager& ccm) {
                 scrub_period_registrations.local() = ccm.register_config_callback(
-                        sstring(scrub_period_opt.name),
-                        [&db, &scrub_period_opt] (const db::cluster_config_manager::lookup_context& ctx, std::optional<sstring> value) {
+                        sstring(db::cluster_config_registry::option_name::auto_scrub_period_seconds),
+                        [&db] (const db::cluster_config_registry::option& scrub_period_opt, const db::cluster_config_manager::lookup_context& ctx, std::optional<sstring> value) {
                     const auto& tables = db.local().get_tables_metadata();
                     auto id = tables.get_table_id_if_exists({*ctx.keyspace_name, *ctx.table_name});
                     if (!id) {
@@ -2081,6 +2080,21 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                         period = seconds;
                     }
                     t->set_scrub_period(period);
+                    return make_ready_future<>();
+                });
+            }).get();
+
+            // Must stop before cluster_config_manager, which the registrations point to.
+            sharded<db::cluster_config_manager::config_callback_registration> background_reclaim_goal_registrations;
+            background_reclaim_goal_registrations.start().get();
+            auto stop_background_reclaim_goal_registrations = defer([&] () noexcept {
+                background_reclaim_goal_registrations.stop().get();
+            });
+            background_reclaim_goal_registrations.invoke_on_all([] (db::cluster_config_manager::config_callback_registration& registration) {
+                registration = cluster_config_manager.local().register_config_callback(
+                        sstring(db::cluster_config_registry::option_name::lsa_background_reclaim_goal_in_mb),
+                        [] (const db::cluster_config_registry::option& opt, const db::cluster_config_manager::lookup_context&, std::optional<sstring> value) {
+                    logalloc::shard_tracker().set_background_reclaim_goal_in_mb(db::cluster_config_registry::to_integer(opt, value));
                     return make_ready_future<>();
                 });
             }).get();
