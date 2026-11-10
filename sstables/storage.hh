@@ -171,7 +171,13 @@ public:
 
 std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, schema_ptr schema, const data_dictionary::storage_options& s_opts, sstable_state state);
 future<object_storage_reference_names> list_object_storage_references(object_storage_client& client, sstring bucket, std::string_view prefix, sstable_id sid);
-future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_storage(const sstables_manager&, const schema&, const data_dictionary::storage_options& so);
+// Returns the storage options of a table, given the storage options of its
+// keyspace. For local storage, they name the directory of the table.
+lw_shared_ptr<const data_dictionary::storage_options> make_table_storage_options(const sstables_manager&, const schema&, const data_dictionary::storage_options& keyspace_so);
+// Creates the storage of a table, given the storage options of the table, see
+// make_table_storage_options(). For local storage, creates the directory of
+// the table in every data directory.
+future<> init_table_storage(const sstables_manager&, const data_dictionary::storage_options& so);
 future<> destroy_table_storage(const data_dictionary::storage_options& so);
 future<> init_keyspace_storage(const sstables_manager&, const data_dictionary::storage_options& so, sstring ks_name);
 

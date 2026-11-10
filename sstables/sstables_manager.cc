@@ -513,8 +513,12 @@ void sstables_manager::unplug_sstables_registry() noexcept {
     _sstables_registry.reset();
 }
 
-future<lw_shared_ptr<const data_dictionary::storage_options>> sstables_manager::init_table_storage(const schema& s, const data_dictionary::storage_options& so) {
-    return sstables::init_table_storage(*this, s, so);
+lw_shared_ptr<const data_dictionary::storage_options> sstables_manager::make_table_storage_options(const schema& s, const data_dictionary::storage_options& keyspace_so) const {
+    return sstables::make_table_storage_options(*this, s, keyspace_so);
+}
+
+future<> sstables_manager::init_table_storage(const data_dictionary::storage_options& so) {
+    return sstables::init_table_storage(*this, so);
 }
 
 future<> sstables_manager::init_keyspace_storage(const data_dictionary::storage_options& so, sstring dir) {

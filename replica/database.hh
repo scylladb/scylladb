@@ -2426,7 +2426,7 @@ public:
 };
 
 // A helper function to parse the directory name back
-// into name and uuid of the table (see init_table_storage())
+// into name and uuid of the table (see make_table_storage_options())
 std::pair<sstring, table_id> parse_table_directory_name(const sstring&);
 
 } // namespace replica

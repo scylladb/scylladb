@@ -1271,7 +1271,11 @@ void database::add_column_family(keyspace& ks, schema_ptr schema, column_family:
 
     // avoid self-reporting
     auto& sst_manager = get_sstables_manager(*schema);
-    auto cf = make_lw_shared<column_family>(schema, std::move(cfg), ks.metadata()->get_storage_options_ptr(), _compaction_manager,
+    // The table has the path of its directory from the start, so that it can
+    // flush as soon as it accepts writes. The caller creates the directory,
+    // see schema_applier::update() and make_column_family_directory().
+    auto storage_opts = sst_manager.make_table_storage_options(*schema, ks.metadata()->get_storage_options());
+    auto cf = make_lw_shared<column_family>(schema, std::move(cfg), std::move(storage_opts), _compaction_manager,
             schema->logstor_enabled() ? _logstor.get() : nullptr, sst_manager, *_cl_stats, _row_cache_tracker, erm, &ks);
     cf->set_durable_writes(ks.metadata()->durable_writes());
 
@@ -1750,7 +1754,7 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
 }
 
 future<> table::init_storage() {
-    _storage_opts = co_await _sstables_manager.init_table_storage(*_schema, *_storage_opts);
+    return _sstables_manager.init_table_storage(*_storage_opts);
 }
 
 future<> table::destroy_storage() {

@@ -1378,29 +1378,21 @@ std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, schem
     }, s_opts.value);
 }
 
-static future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_storage(const sstables_manager& mgr, const schema& s, const data_dictionary::storage_options::local& so) {
-    std::vector<sstring> dirs;
-    for (const auto& dd : mgr.get_config().data_file_directories) {
+static lw_shared_ptr<const data_dictionary::storage_options> make_table_storage_options(const sstables_manager& mgr, const schema& s, const data_dictionary::storage_options::local&) {
+    data_dictionary::storage_options nopts;
+    const auto& data_dirs = mgr.get_config().data_file_directories;
+    if (!data_dirs.empty()) {
         auto uuid_sstring = s.id().to_sstring();
         boost::erase_all(uuid_sstring, "-");
-        auto dir = format("{}/{}/{}-{}", dd, s.ks_name(), s.cf_name(), uuid_sstring);
-        dirs.emplace_back(std::move(dir));
+        nopts.value = data_dictionary::storage_options::local {
+            .dir = fs::path(format("{}/{}/{}-{}", data_dirs[0], s.ks_name(), s.cf_name(), uuid_sstring)),
+        };
     }
-    co_await coroutine::parallel_for_each(dirs, [] (sstring dir) -> future<> {
-        co_await io_check([&dir] { return recursive_touch_directory(dir); });
-        co_await io_check([&dir] { return touch_directory(dir + "/upload"); });
-        co_await io_check([&dir] { return touch_directory(dir + "/staging"); });
-    });
-
-    data_dictionary::storage_options nopts;
-    nopts.value = data_dictionary::storage_options::local {
-        .dir = fs::path(std::move(dirs[0])),
-    };
-    co_return make_lw_shared<const data_dictionary::storage_options>(std::move(nopts));
+    return make_lw_shared<const data_dictionary::storage_options>(std::move(nopts));
 }
 
 std::vector<std::filesystem::path> get_local_directories(const std::vector<sstring>& data_file_directories, const data_dictionary::storage_options::local& so) {
-    // see how this path is formatted by init_table_storage() above
+    // see how this path is formatted by make_table_storage_options() above
     auto table_dir = so.dir.parent_path().filename() / so.dir.filename();
     return data_file_directories
             | std::views::transform([&table_dir] (const auto& datadir) {
@@ -1409,18 +1401,42 @@ std::vector<std::filesystem::path> get_local_directories(const std::vector<sstri
             | std::ranges::to<std::vector<std::filesystem::path>>();
 }
 
-static future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_storage(const sstables_manager& mgr, const schema& s, const data_dictionary::storage_options::object_storage& so) {
+static lw_shared_ptr<const data_dictionary::storage_options> make_table_storage_options(const sstables_manager& mgr, const schema& s, const data_dictionary::storage_options::object_storage& so) {
     data_dictionary::storage_options nopts;
     nopts.value = data_dictionary::storage_options::object_storage {
         .bucket = so.bucket,
         .endpoint = so.endpoint,
         .type = so.type
     };
-    co_return make_lw_shared<const data_dictionary::storage_options>(std::move(nopts));
+    return make_lw_shared<const data_dictionary::storage_options>(std::move(nopts));
 }
 
-future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_storage(const sstables_manager& mgr, const schema& s, const data_dictionary::storage_options& so) {
-    co_return co_await std::visit([&mgr, &s] (const auto& so) { return init_table_storage(mgr, s, so); }, so.value);
+lw_shared_ptr<const data_dictionary::storage_options> make_table_storage_options(const sstables_manager& mgr, const schema& s, const data_dictionary::storage_options& so) {
+    return std::visit([&mgr, &s] (const auto& so) { return make_table_storage_options(mgr, s, so); }, so.value);
+}
+
+future<> init_table_storage(const sstables_manager& mgr, const data_dictionary::storage_options& so) {
+    co_await std::visit(overloaded_functor {
+        [&mgr] (const data_dictionary::storage_options::local& so) -> future<> {
+            const auto& data_dirs = mgr.get_config().data_file_directories;
+            if (data_dirs.empty()) {
+                co_return;
+            }
+            if (so.dir.empty()) {
+                on_internal_error(sstlog, "Non-table local storage options");
+            }
+            auto dirs = get_local_directories(data_dirs, so);
+            co_await coroutine::parallel_for_each(dirs, [] (const fs::path& path) -> future<> {
+                auto dir = path.native();
+                co_await io_check([&dir] { return recursive_touch_directory(dir); });
+                co_await io_check([&dir] { return touch_directory(dir + "/upload"); });
+                co_await io_check([&dir] { return touch_directory(dir + "/staging"); });
+            });
+        },
+        [] (const data_dictionary::storage_options::object_storage&) -> future<> {
+            co_return;
+        }
+    }, so.value);
 }
 
 future<> init_keyspace_storage(const sstables_manager& mgr, const data_dictionary::storage_options& so, sstring ks_name) {
