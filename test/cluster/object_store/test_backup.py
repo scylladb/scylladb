@@ -27,6 +27,7 @@ from test.pylib.util import unique_name, wait_all, wait_for_view
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas, get_tablet_count
 from cassandra import ReadFailure
 from cassandra.cluster import ConsistencyLevel
+from cassandra.query import SimpleStatement
 from collections import Counter, defaultdict
 from test.pylib.util import wait_for
 from test.pylib.rest_client import HTTPError
@@ -2378,62 +2379,92 @@ async def do_test_snapshot_on_all_nodes(manager: ScyllaClusterManager,
                 #todo: clear snapshot
                 pass
 
-async def run_cluster_backup(object_storage, prefix: str, manager: ScyllaClusterManager, snapshot_name: str, ks: str, cf:str, servers: list[ServerInfo]):
+async def do_run_cluster_backup(object_storages: dict, manager: ScyllaClusterManager, snapshot_name: str, ks: str, cf:str, servers: list[ServerInfo]):
     """
     Helper to run a cluster backup
     """
+
+    dcs = { s.datacenter for s in servers }
+    read_cl = ConsistencyLevel.LOCAL_QUORUM
+    if len(dcs) > 1:
+        read_cl = ConsistencyLevel.QUORUM
+
     cql = manager.get_cql()
     s = servers[0]
 
-    backup_tid = await manager.api.backup_cluster_snapshot(s.ip_addr, ks, snapshot_name, s.datacenter, 
-                                                           object_storage.address, object_storage.bucket_name,
-                                                           prefix, tables = [cf])
+    backup_tid = await manager.api.backup_cluster_snapshot_to_locations(s.ip_addr, ks, snapshot_name, [
+        {
+            "datacenter": dc,
+            "endpoint": o.address,
+            "bucket": o.bucket_name,
+            "prefix": prefix
+        } for dc, (o, prefix) in object_storages.items()
+    ], tables = [cf])
 
     backup_status = await manager.api.wait_task(s.ip_addr, backup_tid)
     assert backup_status is not None and backup_status.get('state') == 'done', "Cluster backup failed"
 
-    snap = list(cql.execute(f"SELECT * FROM system_distributed.snapshots WHERE name = '{snapshot_name}'"))
+    snap = list(cql.execute(SimpleStatement(f"SELECT * FROM system_distributed.snapshots WHERE name = '{snapshot_name}'"
+                                            , consistency_level=read_cl)))
     assert len(snap) == 1
 
-    table_id = await manager.get_table_or_view_id(ks, cf)
+    manifests = []
+    for object_storage, prefix in set(object_storages.values()):
+        dcs = { dc for dc, (o, _) in object_storages.items() if o == object_storage }
+        objects = set(os.path.basename(o.key) for o in
+                      object_storage.get_resource().Bucket(object_storage.bucket_name).
+                      objects.filter(Prefix=f"{prefix}/sstables"))
 
-    objects = set(os.path.basename(o.key) for o in
-                  object_storage.get_resource().Bucket(object_storage.bucket_name).
-                  objects.filter(Prefix=f"{prefix}/sstables"))
+        manifest_obj = object_storage.get_resource().Bucket(object_storage.bucket_name).Object(f"{prefix}/snapshots/{ks}/{cf}/{snapshot_name}/manifest.json").get()
+        manifest = json.load(manifest_obj['Body'])
 
-    manifest_obj = object_storage.get_resource().Bucket(object_storage.bucket_name).Object(f"{prefix}/snapshots/{ks}/{cf}/{snapshot_name}/manifest.json").get()
-    manifest = json.load(manifest_obj['Body'])
+        manifest_sstables = [sst['toc_name'] for sst in manifest['sstables']]
 
-    manifest_sstables = [sst['toc_name'] for sst in manifest['sstables']]
+        # every sstable the manifest names must have made it into the bucket
+        missing = [sst for sst in manifest['sstables'] if sst['toc_name'] not in objects]
+        assert not missing, f"manifest references sstables that were not uploaded: {[(sst['node'], sst['toc_name']) for sst in missing]}"
 
-    # every sstable the manifest names must have made it into the bucket
-    missing = [sst for sst in manifest['sstables'] if sst['toc_name'] not in objects]
-    assert not missing, f"manifest references sstables that were not uploaded: {[(sst['node'], sst['toc_name']) for sst in missing]}"
+        for dc in dcs:
+            locations = list(cql.execute(SimpleStatement(
+                f"SELECT * FROM system_distributed.snapshot_remote_locations WHERE snapshot_name = '{snapshot_name}' AND datacenter = '{dc}'"
+                , consistency_level=read_cl)))
+            assert len(locations) == 1
+            assert locations[0].state >= 3
+            assert locations[0].endpoint == object_storage.address
+            assert locations[0].bucket == object_storage.bucket_name
+            assert locations[0].prefix == prefix
 
-    for ss in servers:
-        locations = list(cql.execute(f"SELECT * FROM system_distributed.snapshot_remote_locations WHERE snapshot_name = '{snapshot_name}' AND datacenter = '{s.datacenter}'"))
-        assert len(locations) == 1
-        assert locations[0].state >= 3
-        assert locations[0].endpoint == object_storage.address
-        assert locations[0].bucket == object_storage.bucket_name
-        assert locations[0].prefix == prefix
+        for ss in servers:
+            if not ss.datacenter in dcs:
+                continue
 
-        sstables = list(cql.execute(f"""
-                    SELECT * FROM system_distributed.snapshot_sstables WHERE 
-                    snapshot_name = '{snapshot_name}' AND \"keyspace\" = '{ks}' AND
-                    \"table\" = '{cf}' AND datacenter = '{ss.datacenter}' AND
-                    rack = '{ss.rack}'
-                    """))
+            sstables = list(cql.execute(SimpleStatement(f"""
+                        SELECT * FROM system_distributed.snapshot_sstables WHERE 
+                        snapshot_name = '{snapshot_name}' AND \"keyspace\" = '{ks}' AND
+                        \"table\" = '{cf}' AND datacenter = '{ss.datacenter}' AND
+                        rack = '{ss.rack}'
+                        """, consistency_level=read_cl)))
 
-        for sstable in sstables:
-            assert (not sstable.toc_name in manifest_sstables) or sstable.state >= 3, \
-                    f"{sstable.toc_name} of node {sstable.node} is in the manifest, but was not backed up (state {sstable.state})"
+            for sstable in sstables:
+                assert (not sstable.toc_name in manifest_sstables) or sstable.state >= 3, \
+                        f"{sstable.toc_name} of node {sstable.node} is in the manifest, but was not backed up (state {sstable.state})"
 
-        for sstable in sstables:
-            assert sstable.state < 3 or sstable.toc_name in objects
-            assert sstable.state < 3 or sstable.toc_name in manifest_sstables
+            for sstable in sstables:
+                assert sstable.state < 3 or sstable.toc_name in objects
+                assert sstable.state < 3 or sstable.toc_name in manifest_sstables
 
-    return manifest
+        manifests.append(manifest)
+
+    return manifests
+
+async def run_cluster_backup(object_storage, prefix: str, manager: ScyllaClusterManager, snapshot_name: str, ks: str, cf:str, servers: list[ServerInfo]):
+    """
+    Helper to run a cluster backup
+    """
+    s = servers[0]
+    manifests = await do_run_cluster_backup({ s.datacenter: (object_storage, prefix) for s in servers }, manager, snapshot_name, ks, cf, servers)
+    assert len(manifests) == 1
+    return manifests[0]
 
 @pytest.mark.asyncio
 async def test_cluster_snapshot_backup(manager: ScyllaClusterManager, object_storage):
@@ -2561,6 +2592,19 @@ async def test_cluster_snapshot_backup_several_nodes_per_rack(manager: ScyllaClu
     """
     topology = topo(rf = 2, nodes = 4, racks = 2, dcs = 1)
     await do_test_snapshot_on_all_nodes(manager, partial(run_cluster_backup, object_storage, 'gothel'),
+                                        object_storage, True, True, topology)
+
+@pytest.mark.parametrize("topology", [
+        topo(rf = 1, nodes = 4, racks = 2, dcs = 2),
+        topo(rf = 2, nodes = 4, racks = 1, dcs = 2),
+        topo(rf = 3, nodes = 6, racks = 3, dcs = 2),
+    ])
+@pytest.mark.asyncio
+async def test_cluster_snapshot_backup_multi_dc(manager: ScyllaClusterManager, object_storage, topology):
+    """
+    Tests a cluster snapshot is backed up in full with a homogenous multi dc cluster
+    """
+    await do_test_snapshot_on_all_nodes(manager, partial(run_cluster_backup, object_storage, 'bamse'),
                                         object_storage, True, True, topology)
 
 
@@ -3061,3 +3105,46 @@ async def test_restore_tablets_fails_when_the_snapshot_does_not_hold_the_compone
             refs = sstable_refs(object_storage, sid)
             assert not any(r.startswith('nodes/') for r in refs), f'The failed restore left node references of sstable {sid}: {sorted(refs)}'
         assert_objects_intact(crafted, bucket_objects(object_storage), 'the failed restore')
+
+
+async def test_backup_to_per_dc_endpoints(manager: ScyllaClusterManager, object_storage):
+    """
+    Tests that backup from multiple dc:s to endpoint only known by each dc works
+    """
+    cmdline = [ '--logger-log-level', 'sstables_loader=debug:sstable_directory=trace:snapshots=debug' ]
+    servers_1 = await manager.servers_add(3, cmdline=cmdline, config={
+        'object_storage_endpoints': object_storage.create_endpoint_conf()
+    }, property_file=[
+        {"dc": "dc1", "rack": "rack1"},
+        {"dc": "dc1", "rack": "rack2"},
+        {"dc": "dc1", "rack": "rack3"},
+    ])
+
+    # create a proxy with different endpoint address for the object storage
+    # so first dc cannot see second dc:s destination and vice versa
+    async with await object_storage.create_proxy() as proxy:
+        servers_2 = await manager.servers_add(3, cmdline=cmdline, config={
+            'object_storage_endpoints': proxy.create_endpoint_conf()
+        }, property_file=[
+            {"dc": "dc2", "rack": "rack1"},
+            {"dc": "dc2", "rack": "rack2"},
+            {"dc": "dc2", "rack": "rack3"},
+        ])
+
+        snapshot_name = unique_name('snap_')
+
+        async with new_test_keyspace(manager, "WITH REPLICATION = { 'replication_factor' : 3 } AND tablets = {'initial': 20 }") as ks:
+            async with new_test_table(manager, ks, "pk text primary key, value int", "") as tbl:
+                cf = tbl.split('.')[1]
+                cql = manager.get_cql()
+                insert_stmt = cql.prepare(f"INSERT INTO {ks}.{cf} (pk, value) VALUES (?, ?)")
+                insert_stmt.consistency_level = ConsistencyLevel.ALL
+                await asyncio.gather(*(cql.run_async(insert_stmt, (str(i), i)) for i in range(100)))
+                await manager.api.take_cluster_snapshot(servers_1[0].ip_addr, ks, tag=snapshot_name, tables=[cf])
+                manifests = await do_run_cluster_backup({ 'dc1': (object_storage, 'tomtetroll'), 'dc2': (proxy, 'bollhav') }, manager, snapshot_name, ks, cf, servers_1 + servers_2)
+                assert len(manifests) == 2
+
+                log_file = await manager.server_open_log(servers_1[0].server_id)
+                lines = await log_file.grep(r'Endpoint .* not defined on this node. Will attempt call via remote node')
+                assert len(lines) == 1
+
