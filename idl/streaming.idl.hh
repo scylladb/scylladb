@@ -62,6 +62,8 @@ enum class stream_reason : uint8_t {
     rebuild,
     repair,
     replace,
+    tablet_migration,
+    tablet_rebuild,
 };
 
 enum class stream_mutation_fragments_cmd : uint8_t {
@@ -84,6 +86,7 @@ enum class stream_blob_cmd : uint8_t {
 enum class file_ops : uint16_t {
     stream_sstables,
     load_sstables,
+    stream_logstor_segments,
 };
 
 class stream_blob_data {
