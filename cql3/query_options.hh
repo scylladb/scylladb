@@ -15,6 +15,7 @@
 #include "mutation/timestamp.hh"
 #include "bytes.hh"
 #include "db/consistency_level_type.hh"
+#include "db/timeout_clock.hh"
 #include "service/query_state.hh"
 #include "service/pager/paging_state.hh"
 #include "cql3/values.hh"
@@ -88,6 +89,9 @@ private:
     unset_bind_variable_vector _unset;
     const bool _skip_metadata;
     std::optional<locator::tablet_version_block> _tablet_version_block;
+    // The deadline the request carries from another shard or node, if it was
+    // bounced or forwarded here with one.
+    std::optional<db::timeout_clock::time_point> _deadline;
     const specific_options _options;
     std::optional<std::vector<query_options>> _batch_options;
     // We must use the same microsecond-precision timestamp for
@@ -225,6 +229,14 @@ public:
 
     std::optional<locator::tablet_version_block> get_tablet_version_block() const noexcept {
         return _tablet_version_block;
+    }
+
+    void set_deadline(db::timeout_clock::time_point deadline) noexcept {
+        _deadline = deadline;
+    }
+
+    std::optional<db::timeout_clock::time_point> get_deadline() const noexcept {
+        return _deadline;
     }
 
     // Mainly for the sake of BatchQueryOptions

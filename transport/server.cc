@@ -430,7 +430,9 @@ void cql_server::init_messaging_service() {
 
             co_await utils::get_local_injector().inject("wait_before_handling_forwarded_request", utils::wait_for_message(60s));
 
-            co_return co_await container().invoke_on(shard, [src_host, req = std::move(req)] (cql_server& shard_svc) mutable -> future<forward_cql_execute_response> {
+            // The RPC timeout carries the request's deadline.
+            std::optional<db::timeout_clock::time_point> deadline = timeout;
+            co_return co_await container().invoke_on(shard, [src_host, req = std::move(req), deadline] (cql_server& shard_svc) mutable -> future<forward_cql_execute_response> {
                 service::client_state cs(shard_svc._auth_service,
                     &shard_svc._sl_controller,
                     std::move(req.client_state),
@@ -443,7 +445,7 @@ void cql_server::init_messaging_service() {
                 service::query_state qs(cs, trace_state_ptr, empty_service_permit());
                 tracing::trace(qs.get_trace_state(), "Handling forwarded CQL request from {} on shard {}", src_host, this_shard_id());
 
-                auto f = co_await coroutine::as_future(shard_svc.handle_forward_execute(qs, req));
+                auto f = co_await coroutine::as_future(shard_svc.handle_forward_execute(qs, req, deadline));
                 if (f.failed()) {
                     auto eptr = f.get_exception();
                     if (auto* prepared_not_found_eptr = try_catch<exceptions::prepared_query_not_found_exception>(eptr)) {
@@ -510,7 +512,7 @@ future<> cql_server::uninit_messaging_service() {
 }
 
 future<forward_cql_execute_response> cql_server::handle_forward_execute(
-    service::query_state& qs, forward_cql_execute_request& req)
+    service::query_state& qs, forward_cql_execute_request& req, std::optional<db::timeout_clock::time_point> deadline)
 {
     auto opcode = static_cast<cql_binary_opcode>(req.opcode);
 
@@ -540,6 +542,7 @@ future<forward_cql_execute_response> cql_server::handle_forward_execute(
         req.dialect,
         api::missing_timestamp,
         std::move(req.cached_fn_calls),
+        deadline,
         handling_node_bounce::yes));
 
     if (auto* bounce_msg = std::get_if<cql_server::result_with_bounce>(&result)) {
@@ -1697,6 +1700,7 @@ static future<cql_server::process_fn_return_type>
 process_query_internal(service::client_state& client_state, sharded<cql3::query_processor>& qp, request_reader in,
         uint16_t stream, cql_protocol_version_type version,
         service_permit permit, tracing::trace_state_ptr trace_state, bool init_trace, cql3::computed_function_values cached_pk_fn_calls,
+        std::optional<db::timeout_clock::time_point> deadline,
         cql3::dialect dialect, cql_sg_stats& sg_stats, api::timestamp_type request_start_timestamp,
         // Only EXECUTE takes memory here; a QUERY is already charged for parsing
         // up front. Taken to share one signature across the process_fn's.
@@ -1716,6 +1720,9 @@ process_query_internal(service::client_state& client_state, sharded<cql3::query_
     record_client_timestamp_drift(sg_stats, init_trace, request_start_timestamp, options.get_specific_options().timestamp);
     if (!cached_pk_fn_calls.empty()) {
         options.set_cached_pk_function_calls(std::move(cached_pk_fn_calls));
+    }
+    if (deadline) {
+        options.set_deadline(*deadline);
     }
     auto skip_metadata = options.skip_metadata();
 
@@ -1891,6 +1898,7 @@ static future<cql_server::process_fn_return_type>
 process_execute_internal(service::client_state& client_state, sharded<cql3::query_processor>& qp, request_reader in,
         uint16_t stream, cql_protocol_version_type version,
         service_permit permit, tracing::trace_state_ptr trace_state, bool init_trace, cql3::computed_function_values cached_pk_fn_calls,
+        std::optional<db::timeout_clock::time_point> deadline,
         cql3::dialect dialect, cql_sg_stats& sg_stats, api::timestamp_type request_start_timestamp,
         semaphore& memory_available) {
     utils::result_with_exception_ptr<bytes> cache_key_bytes = in.read_short_bytes();
@@ -1933,6 +1941,9 @@ process_execute_internal(service::client_state& client_state, sharded<cql3::quer
     record_client_timestamp_drift(sg_stats, init_trace, request_start_timestamp, options.get_specific_options().timestamp);
     if (!cached_pk_fn_calls.empty()) {
         options.set_cached_pk_function_calls(std::move(cached_pk_fn_calls));
+    }
+    if (deadline) {
+        options.set_deadline(*deadline);
     }
 
     if (client_state.is_protocol_extension_set(cql_protocol_extension::TABLETS_ROUTING_V2_EXPERIMENTAL)) {
@@ -2004,7 +2015,7 @@ process_execute_internal(service::client_state& client_state, sharded<cql3::quer
 static future<cql_server::process_fn_return_type>
 process_batch_internal(service::client_state& client_state, sharded<cql3::query_processor>& qp, request_reader in,
         uint16_t stream, cql_protocol_version_type version,
-        service_permit permit, tracing::trace_state_ptr trace_state, bool init_trace, cql3::computed_function_values cached_pk_fn_calls, cql3::dialect dialect, cql_sg_stats& sg_stats, api::timestamp_type request_start_timestamp,
+        service_permit permit, tracing::trace_state_ptr trace_state, bool init_trace, cql3::computed_function_values cached_pk_fn_calls, std::optional<db::timeout_clock::time_point> deadline, cql3::dialect dialect, cql_sg_stats& sg_stats, api::timestamp_type request_start_timestamp,
         // Never paged, so nothing here re-derives a statement. See above.
         semaphore&) {
     const utils::result_with_exception_ptr<int8_t> type = in.read_byte();
@@ -2128,6 +2139,9 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
     if (!cached_pk_fn_calls.empty()) {
         options.set_cached_pk_function_calls(std::move(cached_pk_fn_calls));
     }
+    if (deadline) {
+        options.set_deadline(*deadline);
+    }
 
     if (init_trace && trace_state) {
         tracing::add_prepared_query_options(trace_state, options);
@@ -2179,7 +2193,8 @@ static bytes_ostream copy_istream(fragmented_temporary_buffer::istream is) {
 future<cql_server::process_fn_return_type>
 cql_server::process(uint16_t stream, request_reader in, service::client_state& client_state, service_permit permit,
         tracing::trace_state_ptr trace_state, cql_binary_opcode opcode, cql_protocol_version_type version, cql3::dialect dialect,
-        api::timestamp_type request_start_timestamp, cql3::computed_function_values cached_fn_calls, handling_node_bounce bounced)
+        api::timestamp_type request_start_timestamp, cql3::computed_function_values cached_fn_calls, std::optional<db::timeout_clock::time_point> deadline,
+        handling_node_bounce bounced)
 {
     fragmented_temporary_buffer::istream is = in.get_stream();
 
@@ -2201,7 +2216,7 @@ cql_server::process(uint16_t stream, request_reader in, service::client_state& c
     bool init_trace = (bool)!bounced; // If the request was bounced, we already started the trace in the handler
     auto& sg_stats = get_cql_sg_stats();
     auto msg = co_await coroutine::try_future(process_fn(client_state, _query_processor, in, stream,
-        version, permit, trace_state, init_trace, std::move(cached_fn_calls), dialect, sg_stats, request_start_timestamp, _memory_available));
+        version, permit, trace_state, init_trace, std::move(cached_fn_calls), deadline, dialect, sg_stats, request_start_timestamp, _memory_available));
     while (auto* bounce_msg = std::get_if<cql_server::result_with_bounce>(&msg)) {
         auto shard = (*bounce_msg)->target_shard();
         auto&& cached_vals = (*bounce_msg)->take_cached_pk_function_calls();
@@ -2213,14 +2228,17 @@ cql_server::process(uint16_t stream, request_reader in, service::client_state& c
             auto sg = _config.bounce_request_smp_service_group;
             auto gcs = client_state.move_to_other_shard();
             auto gt = tracing::global_trace_state_ptr(trace_state);
-            msg = co_await container().invoke_on(shard, sg, [&, stream, dialect, version, request_start_timestamp] (cql_server& server) -> future<process_fn_return_type> {
+            if (auto bounce_deadline = (*bounce_msg)->timeout()) {
+                deadline = bounce_deadline;
+            }
+            msg = co_await container().invoke_on(shard, sg, [&, stream, dialect, version, request_start_timestamp, deadline] (cql_server& server) -> future<process_fn_return_type> {
                 bytes_ostream linearization_buffer;
                 request_reader in(is, linearization_buffer);
                 auto local_client_state = gcs.get(&server._abort_source);
                 auto local_trace_state = gt.get();
                 auto& local_sg_stats = server.get_cql_sg_stats();
                 co_return co_await process_fn(local_client_state, server._query_processor, in, stream, version,
-                        /* FIXME */empty_service_permit(), std::move(local_trace_state), false, cached_vals, dialect, local_sg_stats, request_start_timestamp,
+                        /* FIXME */empty_service_permit(), std::move(local_trace_state), false, cached_vals, deadline, dialect, local_sg_stats, request_start_timestamp,
                         server._memory_available);
             });
         } else {

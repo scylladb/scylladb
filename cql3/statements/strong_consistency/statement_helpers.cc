@@ -33,7 +33,7 @@ future<::shared_ptr<cql_transport::messages::result_message>> redirect_statement
         co_return qp.bounce_to_node(target, std::move(func_values_cache), timeout, is_write, std::move(on_forwarding_finished));
     }
     ++(is_write ? stats.write_shard_bounces : stats.read_shard_bounces);
-    co_return qp.bounce_to_shard(target.shard, std::move(func_values_cache));
+    co_return qp.bounce_to_shard(target.shard, std::move(func_values_cache), true, timeout);
 }
 
 bool is_strongly_consistent(data_dictionary::database db, std::string_view ks_name) {
