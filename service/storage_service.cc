@@ -5632,14 +5632,11 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
             }
         }
 
-        // Split of the pending replica's compaction group is handled by the
-        // split monitor (process_tablet_split_candidate) and by split-on-attach
-        // (maybe_split_new_sstable in add_new_sstable_and_update_cache) which
-        // splits every incoming sstable before it is loaded into the compaction
-        // group.  There is no need to block the streaming stage on a full
-        // compaction-group split here — doing so would hold a streaming slot on
-        // the coordinator while the split compaction runs, preventing it from
-        // scheduling further migrations.
+        // The pending replica's compaction group is split by the split monitor, at
+        // the latest once the readiness check before finalization withdraws a stale
+        // ack. Waiting for that here would hold a streaming slot on the coordinator
+        // while the split compaction runs, preventing it from scheduling further
+        // migrations.
         co_await utils::get_local_injector().inject("pause_after_streaming_tablet", utils::wait_for_message{std::chrono::minutes(1)});
         co_return tablet_operation_result();
     });
