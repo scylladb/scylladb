@@ -46,8 +46,7 @@ static_assert(std::variant_size_v<config_value> == 4);
 // The two resolution domains. CLUSTER is the shared last step of both chains, so it belongs
 // to both sets; an option that wants only part of a chain spells its scopes out.
 constexpr scope_set table_oriented_scopes = scope_set::of<scope::cluster, scope::keyspace, scope::table>();
-// Unused until the first node-oriented option ships.
-[[maybe_unused]] constexpr scope_set node_oriented_scopes = scope_set::of<scope::cluster, scope::datacenter, scope::rack, scope::node>();
+constexpr scope_set node_oriented_scopes = scope_set::of<scope::cluster, scope::datacenter, scope::rack, scope::node>();
 
 // The scopes that place an option in one domain or the other, i.e. each set without CLUSTER.
 constexpr scope_set table_only_scopes = scope_set::of<scope::keyspace, scope::table>();
@@ -95,6 +94,26 @@ constexpr std::array registry_options = {
         .default_value = int64_t(0),
         .custom_parser = parse_auto_scrub_period_seconds,
         .custom_expected_description = "0 or an integer from 3600 to 4294967295",
+    },
+    // The tablet repair scheduler resolves it for each replica host of a candidate repair.
+    option{
+        .name = option_name::tablet_repair_max_per_node,
+        .description = "The maximum number of tablet repairs a node takes part in at the same time, as the repair master or "
+                "a follower. 0 means no per-node limit: each shard can take part in one tablet repair",
+        .scopes = node_oriented_scopes,
+        .default_value = int64_t(0),
+        .valid_range = integer_range{.min = 0, .max = std::numeric_limits<uint32_t>::max()},
+    },
+    // The tablet repair scheduler resolves it for each replica host of a candidate repair,
+    // against the last repair the host took part in.
+    option{
+        .name = option_name::tablet_repair_intensity,
+        .description = "The percentage of time a node spends in tablet repair. After the last tablet repair a node took "
+                "part in finishes, the node takes part in no new tablet repair until it has rested for the time that "
+                "repair took, scaled by (100 - value) / value. 100 means no rest",
+        .scopes = node_oriented_scopes,
+        .default_value = int64_t(100),
+        .valid_range = integer_range{.min = 1, .max = 100},
     },
     // Migrated from the db::config option of the same name. The tablet load balancer reads
     // it on the group0 leader and applies it to the whole cluster, so only the CLUSTER scope
@@ -386,7 +405,14 @@ bool to_boolean(const option& opt, const std::optional<seastar::sstring>& value)
 }
 
 int64_t to_integer(const option& opt, const std::optional<seastar::sstring>& value) {
-    return to_native<int64_t>(opt, value_type::integer, "integer", value, parse_integer);
+    auto v = to_native<int64_t>(opt, value_type::integer, "integer", value, parse_integer);
+    if (opt.valid_range && (v < opt.valid_range->min || v > opt.valid_range->max)) {
+        cluster_config_registry_logger.warn(
+                "Ignoring out-of-range stored value {} for integer config '{}', using default: expected between {} and {}",
+                v, opt.name, opt.valid_range->min, opt.valid_range->max);
+        return std::get<int64_t>(opt.default_value);
+    }
+    return v;
 }
 
 double to_floating_point(const option& opt, const std::optional<seastar::sstring>& value) {

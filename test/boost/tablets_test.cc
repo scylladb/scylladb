@@ -8142,6 +8142,182 @@ SEASTAR_THREAD_TEST_CASE(test_tablet_auto_repair_threshold_cluster_config) {
     }, std::move(cfg_in)).get();
 }
 
+// Three nodes in three racks with four shards each and twelve RF=3 tablets, tablet i on shard
+// i % 4 of every node, so every tablet repair involves every node and, without a per-node
+// limit, the per-shard streaming limit allows four repairs per node. plan() runs the repair
+// scheduler once and applies the repairs it schedules.
+class repair_concurrency_checker {
+    cql_test_env& _e;
+    topology_builder _topo;
+    std::vector<host_id> _hosts;
+    table_id _table;
+    static constexpr unsigned shard_count = 4;
+    static constexpr size_t tablet_count = 12;
+public:
+    explicit repair_concurrency_checker(cql_test_env& e)
+        : _e(e)
+        , _topo(e)
+    {
+        auto dc1 = _topo.dc();
+        for (int i = 0; i < 3; ++i) {
+            if (i) {
+                _topo.start_new_rack();
+            }
+            _hosts.push_back(_topo.add_node(node_state::normal, shard_count));
+        }
+        auto ks_name = add_keyspace(_e, {{dc1, 3}}, tablet_count);
+        _table = add_table(_e, ks_name).get();
+    }
+
+    host_id host(size_t i) const {
+        return _hosts.at(i);
+    }
+
+    void refresh_config() {
+        _e.cluster_config_manager().local().refresh().get();
+    }
+
+    // Records a repair on host i that took `elapsed` and finished `ago` before now.
+    void record_repair(size_t i, std::chrono::steady_clock::duration ago, std::chrono::steady_clock::duration elapsed) {
+        auto end = std::chrono::steady_clock::now() - ago;
+        _e.get_tablet_allocator().local().record_tablet_repair({tablet_replica{host(i), 0}}, end - elapsed, end);
+    }
+
+    uint64_t repairs_skipped_cooldown() {
+        return _e.get_tablet_allocator().local().stats().for_cluster().repairs_skipped_cooldown;
+    }
+
+    // Rebuilds the tablet map with no repair in progress.
+    void reset() {
+        mutate_tablets(_e, [&] (tablet_metadata& tmeta) -> future<> {
+            tablet_map tmap(tablet_count);
+            for (auto tid : tmap.tablet_ids()) {
+                tablet_replica_set replicas;
+                for (auto h : _hosts) {
+                    replicas.push_back(tablet_replica{h, shard_id(tid.value() % shard_count)});
+                }
+                tmap.set_tablet(tid, tablet_info{std::move(replicas)});
+            }
+            tmeta.set_tablet_map(_table, std::move(tmap));
+            co_return;
+        });
+    }
+
+    // Returns the number of repairs the plan scheduled per host.
+    std::unordered_map<host_id, size_t> plan() {
+        auto& stm = _e.shared_token_metadata().local();
+        auto& topology = _e.get_topology_state_machine().local()._topology;
+        auto plan = _e.get_tablet_allocator().local().balance_tablets(stm.get(), &topology,
+                &_e.get_system_keyspace().local(), _topo.get_load_stats()).get();
+        BOOST_REQUIRE(plan.migrations().empty());
+        std::unordered_map<host_id, size_t> repairs;
+        auto& tmap = stm.get()->tablets().get_tablet_map(_table);
+        for (const auto& gid : plan.repair_plan().repairs()) {
+            for (const auto& r : tmap.get_tablet_info(gid.tablet).replicas) {
+                ++repairs[r.host];
+            }
+        }
+        stm.mutate_token_metadata([&] (token_metadata& tm) {
+            return apply_repair_transitions(tm, plan);
+        }).get();
+        return repairs;
+    }
+
+    // True if the plan scheduled n repairs on every host.
+    bool plan_has(size_t n) {
+        auto repairs = plan();
+        return std::ranges::all_of(_hosts, [&] (host_id h) { return repairs[h] == n; });
+    }
+};
+
+// tablet_repair_max_per_node bounds the tablet repairs a node takes part in, counting both the
+// repairs a plan schedules and those already in progress, and a node-scope value applies to
+// every repair involving that node.
+SEASTAR_THREAD_TEST_CASE(test_tablet_repair_max_per_node) {
+    cql_test_config cfg_in;
+    cfg_in.db_config->auto_repair_enabled_default(true);
+    cfg_in.db_config->auto_repair_threshold_default_in_seconds(1);
+    do_with_cql_env_thread([] (auto& e) {
+        repair_concurrency_checker checker(e);
+
+        checker.reset();
+        BOOST_REQUIRE(checker.plan_has(4));
+
+        e.execute_cql("ALTER CLUSTER WITH tablet_repair_max_per_node = 2").get();
+        checker.refresh_config();
+        checker.reset();
+        BOOST_REQUIRE(checker.plan_has(2));
+        // Shards 2 and 3 are free, but every node is already in two repairs.
+        BOOST_REQUIRE(checker.plan_has(0));
+
+        e.execute_cql(format("ALTER NODE {} WITH tablet_repair_max_per_node = 1", checker.host(0))).get();
+        checker.refresh_config();
+        checker.reset();
+        BOOST_REQUIRE(checker.plan_has(1));
+
+        e.execute_cql(format("ALTER NODE {} WITH tablet_repair_max_per_node = null", checker.host(0))).get();
+        e.execute_cql("ALTER CLUSTER WITH tablet_repair_max_per_node = null").get();
+        checker.refresh_config();
+        checker.reset();
+        BOOST_REQUIRE(checker.plan_has(4));
+    }, std::move(cfg_in)).get();
+}
+
+// tablet_repair_intensity keeps a node out of new tablet repairs after its last repair, for the
+// repair's duration scaled by (100 - value) / value, with the node's own value. Every tablet has
+// every node as a replica, so one resting node holds back every repair.
+SEASTAR_THREAD_TEST_CASE(test_tablet_repair_intensity) {
+    cql_test_config cfg_in;
+    cfg_in.db_config->auto_repair_enabled_default(true);
+    cfg_in.db_config->auto_repair_threshold_default_in_seconds(1);
+    do_with_cql_env_thread([] (auto& e) {
+        using namespace std::chrono_literals;
+        repair_concurrency_checker checker(e);
+
+        // No rest at the default, even right after a repair.
+        checker.record_repair(0, 0s, 10s);
+        checker.reset();
+        BOOST_REQUIRE(checker.plan_has(4));
+        BOOST_REQUIRE_EQUAL(checker.repairs_skipped_cooldown(), 0);
+
+        // At 50 a 10s repair is followed by 10s of rest, of which 9s are left.
+        e.execute_cql("ALTER CLUSTER WITH tablet_repair_intensity = 50").get();
+        checker.refresh_config();
+        checker.record_repair(0, 1s, 10s);
+        checker.reset();
+        BOOST_REQUIRE(checker.plan_has(0));
+        BOOST_REQUIRE(checker.repairs_skipped_cooldown() > 0);
+
+        // The rest is over 10s after the end.
+        checker.record_repair(0, 11s, 10s);
+        checker.reset();
+        BOOST_REQUIRE(checker.plan_has(4));
+
+        // A node value applies to that node only: at 10 the rest after a 10s repair is 90s.
+        e.execute_cql(format("ALTER NODE {} WITH tablet_repair_intensity = 10", checker.host(1))).get();
+        checker.refresh_config();
+        checker.record_repair(0, 11s, 10s);
+        checker.record_repair(1, 11s, 10s);
+        checker.reset();
+        BOOST_REQUIRE(checker.plan_has(0));
+
+        // Removing the values ends the rest at once.
+        e.execute_cql(format("ALTER NODE {} WITH tablet_repair_intensity = null", checker.host(1))).get();
+        e.execute_cql("ALTER CLUSTER WITH tablet_repair_intensity = null").get();
+        checker.refresh_config();
+        checker.reset();
+        BOOST_REQUIRE(checker.plan_has(4));
+
+        // A value outside 1-100 written around the CQL validation is treated as the default.
+        e.local_qp().execute_internal("UPDATE system_schema.scylla_clusters SET configs['tablet_repair_intensity'] = '0' "
+                "WHERE cluster_name = 'cluster'", cql3::query_processor::cache_internal::no).get();
+        checker.refresh_config();
+        checker.record_repair(0, 11s, 10s);
+        checker.reset();
+        BOOST_REQUIRE(checker.plan_has(4));
+    }, std::move(cfg_in)).get();
+}
+
 void run_tablet_manual_repair_rf1(cql_test_env& e) {
     topology_builder topo(e);
 

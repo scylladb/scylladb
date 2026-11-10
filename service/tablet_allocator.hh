@@ -106,6 +106,7 @@ struct load_balancer_cluster_stats {
     uint64_t auto_repair_enabled_nr = 0;
 
     uint64_t repairs_produced = 0;
+    uint64_t repairs_skipped_cooldown = 0;
 };
 
 using dc_name = sstring;
@@ -356,6 +357,13 @@ public:
 
 class migration_notifier;
 
+// The last tablet repair a node took part in: when it finished and how long it took.
+struct tablet_repair_record {
+    std::chrono::steady_clock::time_point end;
+    std::chrono::steady_clock::duration elapsed;
+};
+using tablet_repair_history = std::unordered_map<locator::host_id, tablet_repair_record>;
+
 class tablet_allocator {
 public:
     struct config {
@@ -403,6 +411,12 @@ public:
     void set_load_stats(locator::load_stats_ptr);
 
     locator::load_stats_ptr get_load_stats();
+
+    // Records a finished tablet repair for its replica hosts. The repair scheduler keeps
+    // each host out of new tablet repairs for a rest proportional to the repair's duration,
+    // as tablet_repair_intensity dictates.
+    void record_tablet_repair(const locator::tablet_replica_set& replicas,
+            std::chrono::steady_clock::time_point start, std::chrono::steady_clock::time_point end);
 
     load_balancer_stats_manager& stats();
 

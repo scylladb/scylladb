@@ -183,6 +183,20 @@ SEASTAR_THREAD_TEST_CASE(test_cluster_config_registry_converts_values_and_applie
     BOOST_REQUIRE_EQUAL(ccr::to_integer(integer_option, sstring("-42")), -42);
     BOOST_REQUIRE_EQUAL(ccr::to_integer(integer_option, sstring("42x")), 7);
 
+    // A stored value outside the option's valid_range degrades to the default, as text that
+    // does not parse does.
+    const auto ranged_integer_option = ccr::option{
+        .name = "test_ranged_integer_option",
+        .scopes = ccr::scope_set::of<ccr::scope::cluster>(),
+        .default_value = int64_t(100),
+        .valid_range = ccr::integer_range{.min = 1, .max = 100},
+    };
+    BOOST_REQUIRE_EQUAL(ccr::to_integer(ranged_integer_option, sstring("1")), 1);
+    BOOST_REQUIRE_EQUAL(ccr::to_integer(ranged_integer_option, sstring("100")), 100);
+    BOOST_REQUIRE_EQUAL(ccr::to_integer(ranged_integer_option, sstring("0")), 100);
+    BOOST_REQUIRE_EQUAL(ccr::to_integer(ranged_integer_option, sstring("-5")), 100);
+    BOOST_REQUIRE_EQUAL(ccr::to_integer(ranged_integer_option, sstring("101")), 100);
+
     // validate_value() must agree with the converter: it accepts what to_integer() parses
     // and rejects what to_integer() would degrade to the default. Both use the CQL bigint
     // parser, so the accepted range is that of a signed 64-bit integer.

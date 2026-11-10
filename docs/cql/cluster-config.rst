@@ -211,6 +211,22 @@ Available options
        acknowledged at consistency level ``ANY`` that only hints hold is lost. Hints for
        materialized views are never discarded. Default: ``true``, in effect once every node knows
        the option.
+   * - ``tablet_repair_max_per_node``
+     - integer
+     - ``CLUSTER``, ``DATACENTER``, ``RACK``, ``NODE``
+     - The maximum number of tablet repairs a node takes part in at the same time, as the repair
+       master or a follower. Applies to user-requested and automatic tablet repair. Default: ``0``,
+       no per-node limit: each shard can take part in one tablet repair.
+   * - ``tablet_repair_intensity``
+     - integer
+     - ``CLUSTER``, ``DATACENTER``, ``RACK``, ``NODE``
+     - The percentage of time a node spends in tablet repair, from ``1`` to ``100``. After the last
+       tablet repair a node took part in finishes, the node takes part in no new tablet repair
+       until it has rested for the time that repair took, scaled by ``(100 - value) / value``: at
+       ``25`` a repair of one minute is followed by three minutes of rest, so repairing a table
+       takes about four times longer and the node spends a quarter of the time on repair. A tablet
+       is repaired only once every replica node has rested, and a change applies at the next
+       scheduling decision. Default: ``100``, no rest.
    * - ``auto_scrub_period_seconds``
      - integer
      - ``CLUSTER``, ``KEYSPACE``, ``TABLE``
