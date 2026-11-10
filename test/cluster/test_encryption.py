@@ -20,6 +20,7 @@ from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.internal_types import ServerInfo
 from test.pylib.util import wait_for_cql_and_get_hosts
 from test.pylib.tablets import get_all_tablet_replicas
+from test.pylib.sstable_files import glob_live_sstable_files
 
 from test.pylib import nodetool
 
@@ -299,10 +300,10 @@ async def test_reboot(manager, key_provider):
                       restart=restart)
 
 def get_sstables(node_workdir, ks:str, table:str, sst_type = None):
-    """Glob sstable files (of type) at node_workdir"""
+    """Glob sstable files (of type) of live sstables at node_workdir"""
     base_pattern = os.path.join(node_workdir, "data", f"{ks}*", f"{table}-*", f"*{'-' + sst_type if sst_type else ''}.db")
-    sstables = glob.glob(base_pattern)
-    return sstables
+    # The files of the sstables deleted by e.g. upgrade_sstables can still be there.
+    return glob_live_sstable_files(base_pattern)
 
 async def get_sstable_metadata(manager: ScyllaClusterManager, server: ServerInfo, keyspace: str, column_family: str):
     """Load scylla metadata component sstables for server and cf"""

@@ -1505,9 +1505,10 @@ void database::schedule_table_storage_removal(sharded<database>& sharded_db, con
         return;
     }
     auto is_system = system_keyspace(&table_shards->get_sstables_manager() == &get_system_sstables_manager());
-    // Sstables of the table can be referenced outside of it, and the directory
-    // is removed only once they are destroyed. References can be held for an
-    // unbounded time, so the removal runs in the background.
+    // Truncate deletes the sstables of the table, but the files of each are
+    // removed only when the last reference to it is dropped. References can
+    // be held outside of the table, for an unbounded time, so the removal
+    // runs in the background.
     auto seq = ++_table_storage_removal_seq;
     auto done = make_lw_shared<shared_promise<>>();
     _table_storage_removals.insert_or_assign(id, table_storage_removal{seq, done});

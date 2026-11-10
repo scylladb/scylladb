@@ -365,6 +365,7 @@ public:
 
     // mark_for_deletion() specifies that the sstable is no longer needed, so
     // all of its files will be deleted when the in-memory object is destroyed.
+    // unlink() also sets the mark while the files of the sstable still exist.
     void mark_for_deletion() {
         _marked_for_deletion = mark_for_deletion::marked;
     }
@@ -469,7 +470,11 @@ public:
     // Delete the sstable by unlinking all sstable files
     // Ignores all errors.
     // When deletion is provided, it indicates the call is part of an atomic
-    // deletion sequence that has already been committed.
+    // deletion sequence that has already been committed. Readers may still
+    // hold the sstable then, so the storage only records the intent to delete
+    // durably, and deletes the files when the sstable is destroyed, i.e. when
+    // the last reference to it is dropped. Otherwise, the files are deleted
+    // before unlink() returns on local storage.
     future<> unlink(const atomic_deletion* deletion = nullptr) noexcept;
 
     db::large_data_handler& get_large_data_handler() {

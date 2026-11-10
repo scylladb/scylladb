@@ -140,6 +140,10 @@ public:
     virtual future<> change_state(const sstable& sst, sstable_state to, generation_type generation, delayed_commit_changes* delay) = 0;
     // runs in async context
     virtual void open(sstable& sst) = 0;
+    // Records durably that the sstable is deleted. If it leaves files on
+    // storage, it marks the sstable for deletion, and destroy() deletes them.
+    // With `deletion` set, the files must survive until destroy(), because
+    // readers may still hold the sstable.
     // Must never return an exceptional future when `deletion` is null:
     // implementations are expected to catch and log any errors internally.
     // With `deletion` set, a failure that may leave the sstable on storage is
@@ -150,6 +154,8 @@ public:
     virtual future<data_source> make_data_or_index_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt) const = 0;
     virtual future<data_source> make_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt) const = 0;
     virtual future<data_sink> make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) = 0;
+    // Called when the last reference to the sstable is dropped. Deletes the
+    // files of an sstable that is marked for deletion.
     virtual future<> destroy(const sstable& sst) = 0;
     virtual std::unique_ptr<atomic_deletion_impl> make_atomic_deletion_impl() const = 0;
     virtual bool operator==(const storage&) const noexcept = 0;

@@ -6242,19 +6242,16 @@ void cleanup_during_offstrategy_incremental_compaction_fn(test_env& env) {
 
     BOOST_REQUIRE_EQUAL(sstables_closed, sstables_nr);
 
-    // For filesystem_storage, wipe() (invoked from unlink() during compaction's
-    // delete_atomically) has already removed the on-disk files by the time the
-    // _on_delete callback fires, so the checks below are effectively a
-    // regression tripwire.
-    //
-    // For object_storage backends (S3/GCS), wipe() only marks the sstable for
-    // deletion and updates its registry entry; the actual DELETE requests are
-    // issued later from _storage->destroy(), which runs fire-and-forget from
+    // wipe() (invoked from unlink() during compaction's atomic deletion) only
+    // marks the sstable for deletion: for filesystem_storage, it renames the
+    // TOC to a temporary TOC, and for object_storage backends (S3/GCS), it
+    // updates the registry entry of the sstable. The files or objects are
+    // removed later by _storage->destroy(), which runs fire-and-forget from
     // sstables_manager::deactivate() when the last shared_sstable reference is
     // dropped. So `sstables_deleted == sstables_nr` (i.e., all _on_delete
-    // callbacks fired) does not imply the objects have been deleted from the
-    // bucket. Poll exists() with a bounded retry budget to let the fire-and-
-    // forget destroy chain complete.
+    // callbacks fired) does not imply that the files or objects are gone.
+    // Poll exists() with a bounded retry budget to let the fire-and-forget
+    // destroy chain complete.
     using namespace std::chrono_literals;
     for (const auto& component_location : deleted_filenames) {
         for (int i = 0; i < 100 && scylla_storage.exists(component_location).get(); ++i) {

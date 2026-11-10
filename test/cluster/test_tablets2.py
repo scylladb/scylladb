@@ -606,9 +606,14 @@ async def test_tablet_cleanup_failure(manager: ScyllaClusterManager):
         node_workdir = await manager.server_get_workdir(servers[0].server_id)
         table_dir = glob.glob(os.path.join(node_workdir, "data", ks, "test-*"))[0]
         logger.info(f"Table dir: {table_dir}")
-        ssts = glob.glob(os.path.join(table_dir, "*-Data.db"))
         logger.info("Guarantee source node of migration left no sstables undeleted")
-        assert len(ssts) == 0
+        # The cleanup deletes the sstables, but their files are removed in the
+        # background, once the last reference to each sstable is dropped.
+        async def no_sstables_left():
+            ssts = glob.glob(os.path.join(table_dir, "*-Data.db"))
+            logger.info(f"Sstables left: {ssts}")
+            return True if not ssts else None
+        await wait_for(no_sstables_left, time.time() + 60)
 
 async def test_tablet_resharding(manager: ScyllaClusterManager):
     cmdline = ['--smp=3']
