@@ -7,3 +7,8 @@ extra_scylla_cmdline_options:
   - '--tablets-initial-scale-factor=1'
   - '--logstor-disk-size-in-mb=8'
   - '--logstor-file-size-in-mb=4'
+extra_scylla_config_options:
+  # Accept either a TLS client certificate (subject CN mapped to a role) or a
+  # username/password pair, so the Web Shell client-certificate tests and all
+  # the tests relying on password authentication can share the same server.
+  authenticator: CertificateOrPasswordAuthenticator
