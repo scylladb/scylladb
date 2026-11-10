@@ -98,7 +98,7 @@ future<> file_manager::stop() {
     });
 }
 
-std::optional<file_id_t> file_manager::file_id_of(std::string_view file_name) {
+std::optional<file_id_t> file_manager::file_id_of(std::string_view file_name) const {
     const std::string prefix = file_name_prefix();
     const std::string_view suffix = "-Data.db";
     if (!file_name.starts_with(prefix) || !file_name.ends_with(suffix) || file_name.size() <= prefix.size() + suffix.size()) {
@@ -143,11 +143,11 @@ future<file_id_t> file_manager::recovery::open_found_files() {
 
     std::set<file_id_t> found_file_ids;
     std::vector<sstring> temporary_files;
-    const std::string prefix = file_name_prefix();
+    const std::string prefix = files.file_name_prefix();
     co_await lister::scan_dir(files._cfg.base_dir, lister::dir_entry_types::of<directory_entry_type::regular>(),
             [&] (fs::path dir, directory_entry de) {
         if (de.name.starts_with(prefix)) {
-            if (auto file_id = file_id_of(de.name)) {
+            if (auto file_id = files.file_id_of(de.name)) {
                 found_file_ids.insert(*file_id);
             } else if (de.name.ends_with(".tmp")) {
                 temporary_files.push_back((dir / de.name).string());
@@ -155,7 +155,7 @@ future<file_id_t> file_manager::recovery::open_found_files() {
         }
         return make_ready_future<>();
     });
-    logstor_logger.info("Recovery: found {} files for shard {} in {}", found_file_ids.size(), this_shard_id(), files._cfg.base_dir.string());
+    logstor_logger.info("Recovery: found {} files for shard {} in {}", found_file_ids.size(), files._cfg.shard, files._cfg.base_dir.string());
 
     // A temporary file is a format that did not finish. format_file() makes a new one.
     co_await coroutine::parallel_for_each(temporary_files.begin(), temporary_files.end(), [] (const sstring& path) {

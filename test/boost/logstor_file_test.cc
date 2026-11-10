@@ -25,6 +25,7 @@
 #include <seastar/core/gate.hh>
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/core/seastar.hh>
+#include <seastar/core/shard_id.hh>
 #include <seastar/core/temporary_buffer.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/util/defer.hh>
@@ -49,6 +50,7 @@ file_manager_config make_config(const tmpdir& dir, uint64_t file_count, bool for
         uint64_t file_size = test_file_size) {
     return file_manager_config{
         .base_dir = dir.path(),
+        .shard = this_shard_id(),
         .file_size = file_size,
         .file_count = file_count,
         .format_sg = default_scheduling_group(),
@@ -249,6 +251,64 @@ SEASTAR_THREAD_TEST_CASE(test_file_manager_recovers_a_prepared_directory) {
         auto recovery = files.start_recovery();
         BOOST_REQUIRE_THROW(recovery.open_found_files().get(), std::runtime_error);
     }
+}
+
+// Checks that two file managers of different shards share the base directory, and that each file
+// manager makes, finds and removes only the files of its own shard.
+SEASTAR_THREAD_TEST_CASE(test_file_manager_touches_only_the_files_of_its_shard) {
+    tmpdir dir;
+    auto config = [&] (unsigned shard, uint64_t file_count) {
+        auto cfg = make_config(dir, file_count, true);
+        cfg.shard = shard;
+        return cfg;
+    };
+    auto data_file = [&] (unsigned shard, file_id_t file_id) { return dir.path() / fmt::format("ls_{}-{}-Data.db", shard, file_id); };
+    auto temporary_file = [&] (unsigned shard, file_id_t file_id) { return dir.path() / fmt::format("ls_{}-{}-Data.db.tmp", shard, file_id); };
+
+    // Shard 0 formats three files on startup. Shard 1 starts after it, so a recovery of shard 1 that
+    // found the files of shard 0 would find three files instead of none, and retire file 2 of shard 0.
+    {
+        file_manager files_0(config(0, 3));
+        auto stop_0 = defer([&files_0] noexcept { files_0.stop().get(); });
+        BOOST_REQUIRE_EQUAL(recover(files_0), 0);
+        file_manager files_1(config(1, 2));
+        auto stop_1 = defer([&files_1] noexcept { files_1.stop().get(); });
+        BOOST_REQUIRE_EQUAL(recover(files_1), 0);
+        BOOST_REQUIRE_EQUAL(files_1.file_path(1), data_file(1, 1));
+    }
+    for (file_id_t file_id = 0; file_id < 3; ++file_id) {
+        BOOST_REQUIRE(on_disk(data_file(0, file_id)));
+    }
+    for (file_id_t file_id = 0; file_id < 2; ++file_id) {
+        BOOST_REQUIRE(on_disk(data_file(1, file_id)));
+    }
+
+    // The recovery of shard 0 on a disk of one file retires its files 1 and 2, and removes its
+    // temporary file. The files of shard 1 stay.
+    make_file(temporary_file(0, 3));
+    make_file(temporary_file(1, 3));
+    {
+        file_manager files_0(config(0, 1));
+        auto stop_0 = defer([&files_0] noexcept { files_0.stop().get(); });
+        BOOST_REQUIRE_EQUAL(recover(files_0, 1), 3);
+        BOOST_REQUIRE_EQUAL(files_0.allocated_file_count(), 1);
+    }
+    BOOST_REQUIRE(on_disk(data_file(0, 0)));
+    BOOST_REQUIRE(!on_disk(data_file(0, 1)));
+    BOOST_REQUIRE(!on_disk(data_file(0, 2)));
+    BOOST_REQUIRE(!on_disk(temporary_file(0, 3)));
+    BOOST_REQUIRE(on_disk(data_file(1, 0)));
+    BOOST_REQUIRE(on_disk(data_file(1, 1)));
+    BOOST_REQUIRE(on_disk(temporary_file(1, 3)));
+
+    // The recovery of shard 1 finds its two files and removes its temporary file.
+    {
+        file_manager files_1(config(1, 2));
+        auto stop_1 = defer([&files_1] noexcept { files_1.stop().get(); });
+        BOOST_REQUIRE_EQUAL(recover(files_1, 2), 2);
+    }
+    BOOST_REQUIRE(!on_disk(temporary_file(1, 3)));
+    BOOST_REQUIRE(on_disk(data_file(0, 0)));
 }
 
 // Checks the format on startup: the end of the recovery formats the files that the recovery did not

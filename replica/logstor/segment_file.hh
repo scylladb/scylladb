@@ -22,7 +22,6 @@
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/core/scheduling.hh>
 #include <seastar/core/semaphore.hh>
-#include <seastar/core/shard_id.hh>
 #include <seastar/core/shared_future.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/util/log.hh>
@@ -98,6 +97,9 @@ private:
 // The configuration of the segment files of one shard.
 struct file_manager_config {
     std::filesystem::path base_dir;
+    // The file manager puts this shard in the names of its files, and it makes, finds and removes
+    // only the files of this shard, so that the files of all the shards can share the base directory.
+    unsigned shard;
     uint64_t file_size;
     // The file count of the configuration. A new file is allocated only below it. Recovery can
     // find more files, from an earlier, larger configuration.
@@ -109,7 +111,7 @@ struct file_manager_config {
 };
 
 // The segment files of one shard. A file holds a fixed count of segments, and is named
-// ls_{shard_id}-{file_id}-Data.db in the base directory. The segment manager owns one file manager
+// ls_{shard}-{file_id}-Data.db in the base directory. The segment manager owns one file manager
 // for the life of the shard.
 //
 // A file goes through these states, in this order:
@@ -226,13 +228,13 @@ private:
 
     const std::unique_ptr<char[], seastar::free_deleter> _zero_buf;
 
-    // The file names are ls_{shard_id}-{file_id}-Data.db
-    static sstring file_name_prefix() {
-        return fmt::format("ls_{}-", this_shard_id());
+    // The file names are ls_{shard}-{file_id}-Data.db
+    sstring file_name_prefix() const {
+        return fmt::format("ls_{}-", _cfg.shard);
     }
 
     // The file id in a file name of this shard, or none if the name is not one.
-    static std::optional<file_id_t> file_id_of(std::string_view file_name);
+    std::optional<file_id_t> file_id_of(std::string_view file_name) const;
 
     // Fails with an internal error when the recovery is not at the expected step.
     void check_recovery_step(recovery_step expected, std::string_view call) const;
