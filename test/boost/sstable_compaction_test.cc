@@ -275,6 +275,35 @@ SEASTAR_FIXTURE_TEST_CASE(compaction_manager_basic_gcs_test, gcs_fixture, *tests
                                    });
 }
 
+// A compaction which fails with a storage_io_error.
+class storage_io_error_compaction_task : public compaction::compaction_task_executor {
+    gate::holder _hold;
+public:
+    storage_io_error_compaction_task(compaction::compaction_manager& cm, compaction::compaction_group_view& t)
+        : compaction::compaction_task_executor(cm, compaction::throw_if_stopping::no, &t, compaction::compaction_type::Compaction, "storage_io_error")
+        , _hold(hold_compaction_state_gate())
+    {}
+protected:
+    virtual future<compaction::compaction_manager::compaction_stats_opt> do_run() override {
+        setup_new_compaction();
+        co_await coroutine::maybe_yield();
+        throw storage_io_error(EIO, "injected storage io error");
+    }
+};
+
+// A storage_io_error makes the compaction manager stop while the failed compaction is still
+// registered with the task manager. Stopping aborts that task, which used to crash with the
+// task manager of the test environment, as it isn't owned by a sharded<task_manager>.
+SEASTAR_TEST_CASE(compaction_manager_stops_on_storage_io_error_test) {
+    return test_env::do_with_async([](test_env& env) {
+        auto cf = env.make_table_for_tests(table_for_tests::make_default_schema());
+        auto close_cf = deferred_stop(cf);
+        auto& tcm = env.test_compaction_manager();
+        auto task = make_shared<storage_io_error_compaction_task>(tcm.get_compaction_manager(), cf.as_compaction_group_view());
+        BOOST_REQUIRE_THROW(tcm.perform_compaction_as_task(task).get(), storage_io_error);
+    });
+}
+
 static void regular_compaction_quarantines_malformed_sstable(test_env& env, sstable_version_types version, compress_sstable compress) {
     sstables::scoped_no_abort_on_malformed_sstable_error no_abort;
     simple_schema ss;

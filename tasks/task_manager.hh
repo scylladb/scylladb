@@ -85,6 +85,9 @@ private:
     optimized_optional<seastar::abort_source::subscription> _abort_subscription;
     utils::updateable_value<uint32_t> _task_ttl;
     utils::updateable_value<uint32_t> _user_task_ttl;
+    // Set by the constructor for testing. Such a task manager isn't owned by a sharded<task_manager>,
+    // so it has no container() and keeps track of the tasks of its own shard only.
+    bool _local_only = false;
     netw::messaging_service* _messaging = nullptr;
 public:
     class task_not_found : public std::exception {
@@ -502,6 +505,7 @@ public:
     };
 public:
     task_manager(config cfg, seastar::abort_source& as) noexcept;
+    // For testing. The task manager isn't owned by a sharded<task_manager>.
     task_manager() noexcept;
 
     // Returns empty host_id if local info isn't resolved yet.
@@ -516,6 +520,10 @@ public:
     tasks_collection& get_tasks_collection() noexcept;
     const tasks_collection& get_tasks_collection() const noexcept;
     future<std::vector<task_id>> get_virtual_task_children(task_id parent_id);
+    // Whether the task manager was constructed for testing, without a sharded<task_manager>.
+    bool is_local_only() const noexcept {
+        return _local_only;
+    }
 
     std::set<locator::host_id> get_nodes(service::storage_service& ss) const;
 
