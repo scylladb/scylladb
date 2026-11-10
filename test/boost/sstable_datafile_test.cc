@@ -15,6 +15,7 @@
 #include <seastar/core/align.hh>
 #include <seastar/core/aligned_buffer.hh>
 #include <seastar/util/closeable.hh>
+#include <seastar/util/short_streams.hh>
 #include <seastar/testing/test_fixture.hh>
 
 #include "sstables/sstables.hh"
@@ -299,6 +300,87 @@ SEASTAR_TEST_CASE(datafile_generation_16_s3, *boost::unit_test::precondition(tes
 
 SEASTAR_FIXTURE_TEST_CASE(datafile_generation_16_gs, gcs_fixture, *check_run_test_decorator("ENABLE_GCP_STORAGE_TEST", true)) {
     return test_datafile_generation_16(test_env_config{ .storage = make_test_object_storage_options("GS") });
+}
+
+// A read at an offset goes through the caller's file, so it fetches only the
+// range asked for instead of streaming the object from there (SCYLLADB-5592).
+static future<> test_object_storage_source_reads_through_file(test_env_config cfg) {
+    class counting_file_impl : public file_impl {
+        file _file;
+    public:
+        size_t reads = 0;
+        explicit counting_file_impl(file f) : _file(std::move(f)) {}
+        future<size_t> write_dma(uint64_t pos, const void* buffer, size_t len, io_intent* intent) override {
+            return get_file_impl(_file)->write_dma(pos, buffer, len, intent);
+        }
+        future<size_t> write_dma(uint64_t pos, std::vector<iovec> iov, io_intent* intent) override {
+            return get_file_impl(_file)->write_dma(pos, std::move(iov), intent);
+        }
+        future<size_t> read_dma(uint64_t pos, void* buffer, size_t len, io_intent* intent) override {
+            ++reads;
+            return get_file_impl(_file)->read_dma(pos, buffer, len, intent);
+        }
+        future<size_t> read_dma(uint64_t pos, std::vector<iovec> iov, io_intent* intent) override {
+            ++reads;
+            return get_file_impl(_file)->read_dma(pos, std::move(iov), intent);
+        }
+        future<temporary_buffer<uint8_t>> dma_read_bulk(uint64_t offset, size_t range_size, io_intent* intent) override {
+            ++reads;
+            return get_file_impl(_file)->dma_read_bulk(offset, range_size, intent);
+        }
+        future<> flush() override { return get_file_impl(_file)->flush(); }
+        future<struct stat> stat() override { return get_file_impl(_file)->stat(); }
+        future<> truncate(uint64_t length) override { return get_file_impl(_file)->truncate(length); }
+        future<> discard(uint64_t offset, uint64_t length) override { return get_file_impl(_file)->discard(offset, length); }
+        future<> allocate(uint64_t position, uint64_t length) override { return get_file_impl(_file)->allocate(position, length); }
+        future<uint64_t> size() override { return get_file_impl(_file)->size(); }
+        future<> close() override { return get_file_impl(_file)->close(); }
+        std::unique_ptr<seastar::file_handle_impl> dup() override { return get_file_impl(_file)->dup(); }
+        subscription<directory_entry> list_directory(std::function<future<> (directory_entry de)> next) override {
+            return get_file_impl(_file)->list_directory(std::move(next));
+        }
+    };
+
+    return test_env::do_with_async([] (test_env& env) {
+        auto s = uncompressed_schema();
+
+        auto mtp = make_lw_shared<replica::memtable>(s);
+        for (int i = 0; i < 0x80; ++i) {
+            auto key = partition_key::from_exploded(*s, {to_bytes("key" + to_sstring(i))});
+            mutation m(s, key);
+            m.set_clustered_cell(clustering_key::make_empty(), to_bytes("col2"), i, api::max_timestamp);
+            mtp->apply(std::move(m));
+        }
+        auto sst = make_sstable_containing(env.make_sstable(s), mtp).get();
+
+        auto f = sstables::test(sst).open_file(component_type::Data, open_flags::ro, {}).get();
+        auto size = f.size().get();
+        auto whole = f.dma_read_bulk<char>(0, size).get();
+        BOOST_REQUIRE_EQUAL(whole.size(), size);
+
+        const uint64_t offset = size / 2;
+        const uint64_t len = 100;
+        auto counting = make_shared<counting_file_impl>(f);
+        auto src = sst->get_storage().make_data_or_index_source(*sst, component_type::Data, file(counting), offset, len, {}).get();
+        auto in = input_stream<char>(std::move(src));
+        auto read = util::read_entire_stream_contiguous(in).get();
+        in.close().get();
+
+        BOOST_REQUIRE_EQUAL(read, sstring(whole.get() + offset, len));
+        BOOST_REQUIRE_GT(counting->reads, 0);
+
+        f.close().get();
+        sst->destroy().get();
+    }, std::move(cfg));
+}
+
+SEASTAR_TEST_CASE(object_storage_source_reads_through_file_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
+    return test_object_storage_source_reads_through_file(test_env_config{ .storage = make_test_object_storage_options("S3") });
+}
+
+SEASTAR_FIXTURE_TEST_CASE(object_storage_source_reads_through_file_gs, gcs_fixture, *check_run_test_decorator("ENABLE_GCP_STORAGE_TEST", true)) {
+    return test_object_storage_source_reads_through_file(test_env_config{ .storage = make_test_object_storage_options("GS") });
 }
 
 // mutation_reader for sstable keeping all the required objects alive.

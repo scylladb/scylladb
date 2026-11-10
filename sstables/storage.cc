@@ -838,9 +838,6 @@ public:
     s3_storage(schema_ptr schema, shared_ptr<sstables::object_storage_client> client, sstring bucket, std::optional<sstring> loc, data_dictionary::storage_options::object_storage_layout layout, seastar::abort_source* as)
         : object_storage_base("S3", std::move(schema), std::move(client), std::move(bucket), std::move(loc), layout, as)
     {}
-
-    future<data_source> make_data_or_index_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt) const override;
-    future<data_source> make_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt) const override;
 };
 
 object_name object_storage_base::make_object_name(const sstable& sst, component_type type) const {
@@ -1003,19 +1000,9 @@ object_storage_base::make_data_or_index_source(sstable& sst, component_type type
 }
 
 future<data_source>
-object_storage_base::make_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options) const {
-    co_return co_await maybe_wrap_source(sst, type, _client->make_download_source(make_object_name(sst, type), abort_source()), offset, len);
-}
-
-future<data_source>
-s3_storage::make_data_or_index_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options options) const {
-    co_return co_await make_source(sst, type, std::move(f), offset, len, std::move(options));
-}
-
-future<data_source>
-s3_storage::make_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options options) const {
+object_storage_base::make_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options options) const {
     if (offset == 0) {
-        co_return co_await object_storage_base::make_source(sst, type, std::move(f), offset, len, std::move(options));
+        co_return co_await maybe_wrap_source(sst, type, _client->make_download_source(make_object_name(sst, type), abort_source()), offset, len);
     }
     // Reuse the file passed in by the caller.The file is already wrapped with
     // the configured file_io_extensions (applied at open_component time), so
