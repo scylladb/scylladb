@@ -16,7 +16,7 @@ from cassandra import InvalidRequest, ReadTimeout, Unavailable, WriteTimeout, Wr
 from cassandra.cluster import ConsistencyLevel
 from cassandra.connection import UnixSocketEndPoint
 from cassandra.policies import FallthroughRetryPolicy, WhiteListRoundRobinPolicy
-from cassandra.query import SimpleStatement, BoundStatement
+from cassandra.query import BatchStatement, SimpleStatement, BoundStatement
 from test.pylib.tablets import get_all_tablet_replicas, get_tablet_info, get_tablet_replicas
 from test.pylib.driver_utils import safe_shutting_down
 from test.pylib.rest_client import read_barrier, ScyllaMetrics, ScyllaMetricsLine
@@ -907,6 +907,180 @@ async def test_forward_cql_prepare_exception_passthrough(manager: ScyllaClusterM
             assert prepared_not_found_after > prepared_not_found_before
         finally:
             await manager.api.message_injection(forwarder.ip_addr, "group0_state_machine::block_apply")
+
+
+@pytest.mark.skip_mode('release', "error injections aren't enabled in release mode")
+@pytest.mark.parametrize("opcode", ['QUERY', 'EXECUTE', 'BATCH'])
+async def test_forwarded_write_keeps_its_deadline(manager: ScyllaClusterManager, scale_timeout, opcode: str):
+    """
+    A write forwarded to the leader keeps the deadline it got on the node that forwarded it,
+    whether it comes in a QUERY, an EXECUTE or a BATCH request. Once that deadline has passed,
+    the leader doesn't apply the write, whose client was already told that it timed out
+    (SCYLLADB-6160).
+    """
+    injection = "wait_before_handling_forwarded_request"
+    shift_injection = "forward_cql_shift_deadline_seconds"
+    timeout_ms = scale_timeout(1000)
+    # A BATCH request can't set its own timeout, so every opcode uses the configured one.
+    config = DEFAULT_CONFIG | {'write_request_timeout_in_ms': timeout_ms}
+    leader, forwarder = await manager.servers_add(2, config=config, cmdline=DEFAULT_CMDLINE,
+                                                  property_file=[{'dc': 'dc1', 'rack': 'rack1'}, {'dc': 'dc2', 'rack': 'rack1'}])
+    (cql, hosts) = await manager.get_ready_cql([leader, forwarder])
+    leader_host, forwarder_host = hosts
+
+    ks_opts = "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': 1} AND tablets = {'initial': 1} AND consistency = 'global'"
+    ks = await create_new_test_keyspace(cql, ks_opts, host=leader_host)
+    table = f"{ks}.test"
+    await cql.run_async(f"CREATE TABLE {table} (pk int PRIMARY KEY, v int)", host=leader_host)
+    await read_barrier(manager.api, forwarder.ip_addr)
+    insert = cql.prepare(f"INSERT INTO {table} (pk, v) VALUES (?, ?)")
+    if opcode == 'QUERY':
+        statement = SimpleStatement(f"INSERT INTO {table} (pk, v) VALUES (1, 1)")
+    elif opcode == 'EXECUTE':
+        statement = insert.bind([1, 1])
+    else:
+        statement = BatchStatement()
+        statement.add(insert, [1, 1])
+    statement.retry_policy = FallthroughRetryPolicy()
+    select = SimpleStatement(f"SELECT v FROM {table} WHERE pk = 1", consistency_level=ConsistencyLevel.QUORUM)
+
+    async def leader_write_timeouts() -> int:
+        metrics = await manager.metrics.query(leader.ip_addr)
+        return metrics.get('scylla_strong_consistency_coordinator_write_errors', {'reason': 'timeout'}) or 0
+
+    timeouts_before = await leader_write_timeouts()
+    logger.info("Make the forwarding node send a wall-clock deadline an hour later, so that only the RPC timeout bounds the write")
+    await manager.api.enable_injection(forwarder.ip_addr, shift_injection, one_shot=False, parameters={'value': 3600})
+    await manager.api.enable_injection(leader.ip_addr, injection, one_shot=True)
+    try:
+        logger.info("Write through the forwarding node, held on the leader before the leader executes it")
+        write = asyncio.ensure_future(cql.run_async(statement, host=forwarder_host))
+        await manager.api.wait_for_injection_enter(leader.ip_addr, injection)
+        with pytest.raises(WriteTimeout, match="while forwarding"):
+            await write
+
+        logger.info("Release the write after the leader's copy of its deadline has passed too")
+        await asyncio.sleep(timeout_ms / 1000)
+        await manager.api.message_injection(leader.ip_addr, injection)
+    finally:
+        await manager.api.disable_injection(leader.ip_addr, injection)
+        await manager.api.disable_injection(forwarder.ip_addr, shift_injection)
+
+    logger.info("Wait until the leader has either timed the write out or applied it")
+
+    async def leader_finished_write() -> bool | None:
+        timed_out = await leader_write_timeouts() > timeouts_before
+        applied = bool(await cql.run_async(select, host=leader_host))
+        return timed_out or applied or None
+    await wait_for(leader_finished_write, time.time() + 60)
+
+    rows = await cql.run_async(select, host=leader_host)
+    assert not rows
+
+
+@pytest.mark.skip_mode('release', "error injections aren't enabled in release mode")
+@pytest.mark.parametrize("kind", ['insert', 'select'])
+async def test_forwarded_request_arriving_after_its_deadline(manager: ScyllaClusterManager, kind: str):
+    """
+    A request that reaches the leader after its deadline times out there, even though the
+    forwarding RPC, which counts its timeout from the request's arrival, still has time left.
+    A write is not applied (SCYLLADB-6160).
+    """
+    injection = "forward_cql_shift_deadline_seconds"
+    timeout_s = 60
+    query, timeout_error, errors_metric = {
+        'insert': ("INSERT INTO {table} (pk, v) VALUES (1, 1) USING TIMEOUT {timeout_s}s", WriteTimeout, 'write_errors'),
+        'select': ("SELECT v FROM {table} WHERE pk = 0 USING TIMEOUT {timeout_s}s", ReadTimeout, 'read_errors')}[kind]
+    leader, forwarder = await manager.servers_add(2, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE,
+                                                  property_file=[{'dc': 'dc1', 'rack': 'rack1'}, {'dc': 'dc2', 'rack': 'rack1'}])
+    (cql, hosts) = await manager.get_ready_cql([leader, forwarder])
+    leader_host, forwarder_host = hosts
+
+    ks_opts = "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': 1} AND tablets = {'initial': 1} AND consistency = 'global'"
+    ks = await create_new_test_keyspace(cql, ks_opts, host=leader_host)
+    table = f"{ks}.test"
+    await cql.run_async(f"CREATE TABLE {table} (pk int PRIMARY KEY, v int)", host=leader_host)
+    await cql.run_async(f"INSERT INTO {table} (pk, v) VALUES (0, 0)", host=leader_host)
+    await read_barrier(manager.api, forwarder.ip_addr)
+    statement = SimpleStatement(query.format(table=table, timeout_s=timeout_s),
+                                consistency_level=ConsistencyLevel.QUORUM, retry_policy=FallthroughRetryPolicy())
+
+    async def leader_timeouts() -> int:
+        metrics = await manager.metrics.query(leader.ip_addr)
+        return metrics.get(f'scylla_strong_consistency_coordinator_{errors_metric}', {'reason': 'timeout'}) or 0
+
+    timeouts_before = await leader_timeouts()
+    await manager.api.enable_injection(forwarder.ip_addr, injection, one_shot=False, parameters={'value': -(timeout_s + 1)})
+    try:
+        logger.info(f"Send the {kind} through the forwarding node, which forwards it with a wall-clock deadline that passed a second ago")
+        start = time.time()
+        with pytest.raises(timeout_error, match=f"Query timed out for {table}"):
+            await cql.run_async(statement, host=forwarder_host)
+        elapsed = time.time() - start
+    finally:
+        await manager.api.disable_injection(forwarder.ip_addr, injection)
+
+    logger.info(f"The {kind} failed after {elapsed:.3f}s, check that the leader timed it out before its {timeout_s}s timeout")
+    assert elapsed < timeout_s / 2
+    assert await leader_timeouts() == timeouts_before + 1
+    if kind == 'insert':
+        rows = await cql.run_async(SimpleStatement(f"SELECT v FROM {table} WHERE pk = 1",
+                                                   consistency_level=ConsistencyLevel.QUORUM), host=leader_host)
+        assert not rows
+
+
+@pytest.mark.skip_mode('release', "error injections aren't enabled in release mode")
+@pytest.mark.parametrize("kind", ['insert', 'select', 'non_linearizable_select'])
+async def test_shard_bounced_request_keeps_its_deadline(manager: ScyllaClusterManager, scale_timeout, kind: str):
+    """
+    A write, a linearizable read or a non-linearizable read bounced to the shard of its tablet
+    keeps the deadline it got on the shard that bounced it. Once that deadline has passed, the
+    request times out instead of being executed (SCYLLADB-6160).
+    """
+    injection = "sc_wait_before_bounce_to_shard"
+    select = "SELECT v FROM {table} WHERE pk = {pk} USING TIMEOUT {timeout_ms}ms"
+    query, consistency_level, timeout_error = {
+        'insert': ("INSERT INTO {table} (pk, v) VALUES ({pk}, {pk}) USING TIMEOUT {timeout_ms}ms", ConsistencyLevel.QUORUM, WriteTimeout),
+        'select': (select, ConsistencyLevel.QUORUM, ReadTimeout),
+        'non_linearizable_select': (select, ConsistencyLevel.ONE, ReadTimeout)}[kind]
+    server = await manager.server_add(config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE)
+    cql, _ = await manager.get_ready_cql([server])
+
+    ks_opts = "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1} AND consistency = 'global'"
+    ks = await create_new_test_keyspace(cql, ks_opts)
+    table = f"{ks}.test"
+    await cql.run_async(f"CREATE TABLE {table} (pk int PRIMARY KEY, v int)")
+    logger.info("Write once, so that the requests below don't wait for the first leader")
+    await cql.run_async(f"INSERT INTO {table} (pk, v) VALUES (-1, -1)")
+    timeout_ms = scale_timeout(1000)
+    await manager.api.enable_injection(server.ip_addr, injection, one_shot=False)
+    try:
+        logger.info(f"Send text statements, which land on random shards, until a {kind} lands on a shard other than its tablet's")
+        for pk in range(30):
+            request = asyncio.ensure_future(cql.run_async(SimpleStatement(
+                query.format(table=table, pk=pk, timeout_ms=timeout_ms),
+                consistency_level=consistency_level, retry_policy=FallthroughRetryPolicy())))
+            held = asyncio.ensure_future(manager.api.wait_for_injection_enter(server.ip_addr, injection))
+            await asyncio.wait([request, held], return_when=asyncio.FIRST_COMPLETED)
+            if held.done():
+                break
+            held.cancel()
+            await request
+        else:
+            pytest.fail(f"None of the {kind}s was bounced to another shard")
+
+        logger.info(f"Release the {kind} of pk={pk}, held before its bounce, after its deadline has passed")
+        await asyncio.sleep(2 * timeout_ms / 1000)
+        await manager.api.message_injection(server.ip_addr, injection)
+        with pytest.raises(timeout_error, match=f"Query timed out for {table}"):
+            await request
+    finally:
+        await manager.api.disable_injection(server.ip_addr, injection)
+
+    if kind == 'insert':
+        rows = await cql.run_async(SimpleStatement(f"SELECT v FROM {table} WHERE pk = {pk}",
+                                                   consistency_level=ConsistencyLevel.QUORUM))
+        assert not rows
 
 
 @pytest.mark.skip_mode("release", "error injections aren't enabled in release mode")

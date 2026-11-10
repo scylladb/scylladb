@@ -2281,6 +2281,9 @@ cql_server::process(uint16_t stream, request_reader in, service::client_state& c
                 .cached_fn_calls = std::move(cached_vals),
                 .deadline = to_wall_clock((*bounce_msg)->timeout().value()),
             };
+            if (const auto shift = utils::get_local_injector().inject_parameter<int64_t>("forward_cql_shift_deadline_seconds")) {
+                *req.deadline += std::chrono::seconds(*shift);
+            }
 
             auto response = co_await forward_cql(
                 target_host, shard, (*bounce_msg)->timeout().value(), (*bounce_msg)->is_write().value(),
