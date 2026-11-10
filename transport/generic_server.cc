@@ -255,6 +255,7 @@ server::server(const sstring& server_name, logging::logger& logger, config cfg)
     // start with concurrency - 1, each listen() adds 1.
     , _conns_cpu_concurrency_semaphore(_prev_conns_cpu_concurrency - 1, named_semaphore_exception_factory{"connections cpu concurrency semaphore"})
     , _shutdown_timeout(std::chrono::seconds{cfg.shutdown_timeout_in_seconds})
+    , _listen_backlog(cfg.listen_backlog)
 {
 }
 
@@ -356,6 +357,7 @@ server::listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_bu
     lo.reuse_address = true;
     lo.unix_domain_socket_permissions = unix_domain_socket_permissions;
     lo.proxy_protocol = proxy_protocol;
+    lo.listen_backlog = _listen_backlog;
     if (is_shard_aware) {
         lo.lba = server_socket::load_balancing_algorithm::port;
     }

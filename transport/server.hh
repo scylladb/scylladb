@@ -127,6 +127,7 @@ struct cql_server_config {
     utils::updateable_value<bool> cql_in_bind_variable_name_uses_uppercase_operator;
     utils::updateable_value<uint32_t> uninitialized_connections_semaphore_cpu_concurrency;
     utils::updateable_value<uint32_t> request_timeout_on_shutdown_in_seconds;
+    uint32_t listen_backlog = 100;
 };
 
 /**

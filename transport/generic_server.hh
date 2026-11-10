@@ -91,6 +91,7 @@ public:
 struct config {
     utils::updateable_value<uint32_t> uninitialized_connections_semaphore_cpu_concurrency;
     utils::updateable_value<uint32_t> shutdown_timeout_in_seconds;
+    uint32_t listen_backlog = 100;
 };
 
 // A generic TCP socket server.
@@ -128,6 +129,7 @@ private:
     uint32_t _prev_conns_cpu_concurrency;
     named_semaphore _conns_cpu_concurrency_semaphore;
     std::chrono::seconds _shutdown_timeout;
+    uint32_t _listen_backlog;
 public:
     server(const sstring& server_name, logging::logger& logger, config cfg);
 
