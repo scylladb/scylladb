@@ -54,6 +54,19 @@ async def safe_server_stop_gracefully(manager, server_id, timeout: float = 60, r
         cql = await reconnect_driver(manager)
     return cql
 
+# Moves the sstables of a stopped node's table to the upload directory of dst_table_dir, or its
+# own, and returns the moved files.
+def move_sstables_to_upload(table_dir: str, dst_table_dir: str | None = None) -> list[str]:
+    upload_dir = os.path.join(dst_table_dir or table_dir, "upload")
+    moved_files = []
+    for sst in glob.glob(os.path.join(table_dir, "*-Data.db")):
+        for src_path in glob.glob(sst.removesuffix("-Data.db") + "*"):
+            dst_path = os.path.join(upload_dir, os.path.basename(src_path))
+            logger.info(f"Moving sstable file {src_path} to {dst_path}")
+            os.rename(src_path, dst_path)
+            moved_files.append(dst_path)
+    return moved_files
+
 async def safe_rolling_restart(manager, servers, with_down):
     # https://github.com/scylladb/python-driver/issues/230 is not fixed yet, so for sake of CI stability,
     # driver must be reconnected after rolling restart of servers.
@@ -1213,18 +1226,6 @@ async def test_tablet_load_and_stream(manager: ScyllaClusterManager, primary_rep
     dst_table_dir = glob.glob(os.path.join(node_workdir, "data", ks2, "test-*"))[0]
     logger.info(f"Dst table dir: {dst_table_dir}")
 
-    def move_sstables_to_upload(table_dir: str, dst_table_dir: str):
-        logger.info("Moving sstables to upload dir of destination table")
-        table_upload_dir = os.path.join(dst_table_dir, "upload")
-        moved_files = []
-        for sst in glob.glob(os.path.join(table_dir, "*-Data.db")):
-            for src_path in glob.glob(os.path.join(table_dir, sst.removesuffix("-Data.db") + "*")):
-                dst_path = os.path.join(table_upload_dir, os.path.basename(src_path))
-                logger.info(f"Moving sstable file {src_path} to {dst_path}")
-                os.rename(src_path, dst_path)
-                moved_files.append(dst_path)
-        return moved_files
-
     moved_sstable_files = move_sstables_to_upload(table_dir, dst_table_dir)
 
     await manager.server_start(servers[0].server_id)
@@ -2028,15 +2029,6 @@ async def test_tablet_load_and_stream_and_split_synchronization(manager: ScyllaC
 
         table_dir = glob.glob(os.path.join(node_workdir, "data", ks, "test-*"))[0]
         logger.info(f"Table dir: {table_dir}")
-
-        def move_sstables_to_upload(table_dir: str):
-            logger.info("Moving sstables to upload dir")
-            table_upload_dir = os.path.join(table_dir, "upload")
-            for sst in glob.glob(os.path.join(table_dir, "*-Data.db")):
-                for src_path in glob.glob(os.path.join(table_dir, sst.removesuffix("-Data.db") + "*")):
-                    dst_path = os.path.join(table_upload_dir, os.path.basename(src_path))
-                    logger.info(f"Moving sstable file {src_path} to {dst_path}")
-                    os.rename(src_path, dst_path)
 
         move_sstables_to_upload(table_dir)
 
