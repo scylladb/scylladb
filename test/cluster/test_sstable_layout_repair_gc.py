@@ -14,6 +14,7 @@ import pytest
 
 from test.cluster.util import new_test_keyspace
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
+from test.pylib.sstable_files import glob_live_sstable_files
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +41,9 @@ def tombstone_drop_time(scylla_path: str, workdir: str, table_dir: str) -> int:
     res = subprocess.run(
         [scylla_path, "sstable", "dump-statistics",
          "--scylla-yaml-file", os.path.join(workdir, "conf", "scylla.yaml")]
-        + glob.glob(os.path.join(table_dir, "*-Data.db")),
+        # The files of the sstables deleted by the rewrite of the sstables
+        # that an incremental repair marks as repaired can still be there.
+        + glob_live_sstable_files(os.path.join(table_dir, "*-Data.db")),
         text=True, capture_output=True, check=True)
     drop_times = [int(t) for sst in json.loads(res.stdout)["sstables"].values()
                   for t in sst["stats"]["estimated_tombstone_drop_time"]]
