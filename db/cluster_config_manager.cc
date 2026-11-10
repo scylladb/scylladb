@@ -73,6 +73,16 @@ void cluster_config_manager::config_callback_registration::unregister() noexcept
     _callback_id = 0;
 }
 
+future<> cluster_config_manager::config_callback_registration::stop() {
+    if (!_owner) {
+        return make_ready_future<>();
+    }
+    auto& owner = *_owner;
+    const auto callback_id = _callback_id;
+    unregister();
+    return owner.wait_for_callback_invocation(callback_id);
+}
+
 cluster_config_manager::config_change_listener::config_change_listener(cluster_config_manager& owner) noexcept
     : _owner(owner) {
 }
@@ -397,6 +407,13 @@ future<> cluster_config_manager::run_config_callbacks() {
             // be idempotent.
             const auto& last_pushed = _config_callbacks[callback_idx].last_pushed;
             if (auto it = last_pushed.find(target); it == last_pushed.end() || it->second != resolved) {
+                _invoking_callback_id = _config_callbacks[callback_idx].id;
+                auto invocation_done = seastar::defer([this] noexcept {
+                    _invoking_callback_id = 0;
+                    if (auto done = std::exchange(_invocation_done, std::nullopt)) {
+                        done->set_value();
+                    }
+                });
                 co_await on_change(ctx, resolved);
             }
             pushed_this_pass.emplace(std::move(target), std::move(resolved));
@@ -420,6 +437,18 @@ void cluster_config_manager::unregister_config_callback(uint64_t callback_id) no
     if (!_callbacks_in_progress) {
         sweep_unregistered_callbacks();
     }
+}
+
+// The returned future does not refer to the manager, so a waiter may resume after the
+// manager is stopped.
+future<> cluster_config_manager::wait_for_callback_invocation(uint64_t callback_id) {
+    if (_invoking_callback_id != callback_id) {
+        return make_ready_future<>();
+    }
+    if (!_invocation_done) {
+        _invocation_done.emplace();
+    }
+    return _invocation_done->get_shared_future();
 }
 
 void cluster_config_manager::sweep_unregistered_callbacks() noexcept {
