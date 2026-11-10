@@ -64,7 +64,8 @@ from boto3.dynamodb.types import Binary
 from botocore.exceptions import ClientError
 from packaging.version import Version
 
-from test.alternator.test_export import make_s3_client, new_s3_bucket, unknown_export_id
+from test.alternator.test_export import (arn_with_part, make_s3_client, new_s3_bucket,
+                                         unknown_export_id)
 from test.alternator.test_gsi import assert_index_scan as assert_gsi_scan
 from test.alternator.test_import import (GROUND_TRUTH_ITEMS, GROUND_TRUTH_SCHEMA,
                                          delete_table_afterwards,
@@ -79,6 +80,8 @@ from test.pylib.skip_types import skip_env
 
 NOT_IMPLEMENTED = 'SCYLLADB-6170'
 NO_ACCOUNT_ID = 'Alternator has no AWS account id for S3BucketOwner'
+# The reason which test_export.py gives for the same checks of an export ARN.
+ARN_PARTS = 'Alternator does not check the partition, service, region or account of an ARN'
 
 # Botocore added StartBulkPutItems, DescribeBulkOperation, ListBulkOperations
 # and CancelBulkOperation in version 1.43.124.
@@ -313,6 +316,10 @@ WRITES_TABLE = {
     'StreamSpecification': {'StreamEnabled': True, 'StreamViewType': 'NEW_AND_OLD_IMAGES'},
 }
 
+# A value `levels` deep: maps, with a string at the end.
+def nested(levels):
+    return 'leaf' if levels == 1 else {'m': nested(levels - 1)}
+
 # Records which fail validation one by one. Each is reported with its
 # itemIndex, and DynamoDB reads the rest of the object. The report row of
 # some of them also has the record's item as newImage.
@@ -327,20 +334,36 @@ RECORD_ERRORS = [
      'An expression attribute value used in expression is not defined', False),
     (record({'p': 'r', 'c': Decimal(6)}, 'attribute_not_exists(p)', {'#unused': 'x'}),
      'Value provided in ExpressionAttributeNames unused in expressions', False),
+    (record({'p': 'r', 'c': Decimal(10)}, 'attribute_not_exists(p)', values={':unused': 'x'}),
+     'Value provided in ExpressionAttributeValues unused in expressions', False),
+    (record({'p': 'r', 'c': Decimal(13)}, ''), 'The expression can not be empty', False),
+    (record({'p': 'r', 'c': Decimal(14), 'm': nested(33)}),
+     'Nesting Levels have exceeded supported limits', True),
     (record({'p': 'r', 'c': Decimal(7), 'g': Decimal(7)}), 'Type mismatch for Index Key g', True),
     (record({'p': 'r', 'c': Decimal(8), 'g': ''}), 'empty string value', True),
     # boto3 cannot serialize an empty set.
     ('{"Item": {"p": {"S": "r"}, "c": {"N": "9"}, "s": {"SS": []}}}', 'may not be empty', False),
 ]
 ERRORS_SEED = [{'p': 'seeded', 'c': Decimal(0)}]
+# Records which DynamoDB writes, although they look wrong: it ignores
+# ExpressionAttributeNames and ExpressionAttributeValues without a
+# ConditionExpression, which PutItem refuses. An item may nest 32 levels
+# deep. (item, names, values)
+ODD_WRITES = [
+    ({'p': 'r', 'c': Decimal(15)}, {'#a': 'p'}, None),
+    ({'p': 'r', 'c': Decimal(16)}, None, {':v': 'x'}),
+    ({'p': 'r', 'c': Decimal(17), 'm': nested(32)}, None, None),
+]
 
 def record_error_lines():
     return ([record({'p': 'r', 'c': Decimal(0)})]
             + [line for line, _, _ in RECORD_ERRORS]
-            # A condition failure, which is not reported: the scenario
-            # requests only the ERROR report.
+            # Condition failures on an existing and on a missing item, which
+            # are not reported: the scenario requests only the ERROR report.
             + [record({'p': 'seeded', 'c': Decimal(0)}, 'attribute_not_exists(p)'),
-               record({'p': 'r', 'c': Decimal(11)})])
+               record({'p': 'r', 'c': Decimal(12)}, 'attribute_exists(p)'),
+               record({'p': 'r', 'c': Decimal(11)})]
+            + [record(item, None, names, values) for item, names, values in ODD_WRITES])
 
 # Records after which DynamoDB cannot find the next record boundary. It
 # reports them without an itemIndex and stops reading the object. Each one
@@ -356,6 +379,15 @@ OBJECT_ERRORS = {
                        '"Item": {"p": {"S": "x"}, "c": {"N": "2"}}}', 'Expected character'),
     'invalid-number': ('{"Item": {"p": {"S": "x"}, "c": {"N": "abc"}}}',
                        'Expected a valid numeric'),
+    'unknown-type': ('{"Item": {"p": {"S": "x"}, "c": {"N": "1"}, "v": {"X": "1"}}}',
+                     'Expected DynamoDB type to be one of'),
+    'invalid-base64': ('{"Item": {"p": {"S": "x"}, "c": {"N": "1"}, "b": {"B": "!!!"}}}',
+                       'Expected a binary value in base64'),
+    'number-condition': ('{"Item": {"p": {"S": "x"}, "c": {"N": "1"}}, "ConditionExpression": 5}',
+                         'Expected a quoted char sequence'),
+    'item-not-a-map': ('{"Item": "x"}', 'Expected character'),
+    'null-item': ('{"Item": null}', 'Expected character'),
+    'not-an-object': ('[1, 2]', 'Unexpected token'),
     # A record cut at the end of its object, as an interrupted upload leaves it.
     'truncated': (record({'p': 'x', 'c': Decimal(1)})[:-9], 'Unexpected end of item'),
 }
@@ -393,25 +425,39 @@ ION_LINES = [
     # Not reported: the scenario requests only the CONDITION_CHECK_FAILURE
     # report.
     '$ion_1_0 {Item:{p:"missing-sort-key"}}',
+    # A record may go over two lines.
+    '$ion_1_0 {Item:{p:"two-lines",\nc:1.}}',
+    # A DYNAMODB_JSON record is also valid Ion, so DynamoDB reads it as an Ion
+    # struct and refuses it: its key p is a struct, not a string. Not
+    # reported either.
+    record({'p': 'json', 'c': Decimal(1)}),
 ]
 ION_WRITTEN = [ION_TYPES_ITEM, {'p': 'no-marker', 'c': Decimal(1)},
-               {'p': 'guarded', 'c': Decimal(1), 'status': 'DONE'}]
-# Ion values of an unsupported type. Even an int stops the object: an Ion
-# number must be a decimal. Each one gets its own object, between two valid
-# records.
-ION_OBJECT_ERRORS = {
-    'int': 'i:7',
-    'float': 'f:1.5e0',
-    'timestamp': 't:2020-01-01T00:00Z',
-    'symbol': 's:abc',
-    'clob': 'x:{{"text"}}',
-    'sexp': 'x:(a b)',
-    'typed-null': 'x:null.string',
-    'other-annotation': 'x:foo::"x"',
-}
+               {'p': 'guarded', 'c': Decimal(1), 'status': 'DONE'},
+               {'p': 'two-lines', 'c': Decimal(1)}]
 
 def ion_record(p, c, *extra):
     return '$ion_1_0 {Item:{' + ','.join([f'p:"{p}"', f'c:{c}.', *extra]) + '}}'
+
+# Ion records which stop their object: a value of an unsupported type (even
+# an int, because an Ion number must be a decimal), and the structure errors
+# which also stop a DYNAMODB_JSON object. Each one gets its own object,
+# between two valid records.
+ION_OBJECT_ERRORS = {
+    **{name: ion_record(name, 1, value) for name, value in {
+        'int': 'i:7',
+        'float': 'f:1.5e0',
+        'timestamp': 't:2020-01-01T00:00Z',
+        'symbol': 's:abc',
+        'clob': 'x:{{"text"}}',
+        'sexp': 'x:(a b)',
+        'typed-null': 'x:null.string',
+        'other-annotation': 'x:foo::"x"',
+    }.items()},
+    'unknown-field': '$ion_1_0 {Item:{p:"unknown-field",c:1.},Extra:1.}',
+    'missing-item': '$ion_1_0 {ConditionExpression:"attribute_not_exists(p)"}',
+    'duplicate-item': '$ion_1_0 {Item:{p:"duplicate-item",c:1.},Item:{p:"duplicate-item",c:3.}}',
+}
 
 VECTOR_TABLE = {
     'KeySchema': [{'AttributeName': 'p', 'KeyType': 'HASH'}],
@@ -606,6 +652,12 @@ def bulk_operations(dynamodb, dynamodbstreams, need_bulk_put_items_in_botocore):
             gzip.compress((record({'p': 'm', 'c': Decimal(c)}) + '\n').encode()) for c in (0, 1)))
         s3.put_object(Bucket=bucket, Key=f'{prefix}crlf.json.gz', Body=gzip.compress('\r\n'.join(
             record({'p': 'crlf', 'c': Decimal(c)}) for c in (0, 1)).encode()))
+        # The documentation asks for one record per line, but DynamoDB reads
+        # a stream of JSON values: a record may go over two lines, and two
+        # records may share one line.
+        s3.put_object(Bucket=bucket, Key=f'{prefix}stream.json.gz', Body=gzip.compress((
+            record({'p': 'stream', 'c': Decimal(0)}).replace(', "c"', ',\n"c"') + ' '
+            + record({'p': 'stream', 'c': Decimal(1)})).encode()))
         # A 1,000-character ClientToken is valid: the documentation gives no
         # maximum length.
         scenarios['errors'].request = request(
@@ -615,9 +667,8 @@ def bulk_operations(dynamodb, dynamodbstreams, need_bulk_put_items_in_botocore):
 
         prefix = upload_lines(s3, bucket, ION_LINES, context='ion', name='00-types',
                               extension='.ion', compression='ZSTD')
-        for name, value in ION_OBJECT_ERRORS.items():
-            upload_lines(s3, bucket, [ion_record(name, 0), ion_record(name, 1, value),
-                                      ion_record(name, 2)],
+        for name, line in ION_OBJECT_ERRORS.items():
+            upload_lines(s3, bucket, [ion_record(name, 0), line, ion_record(name, 2)],
                          prefix=prefix, name=name, extension='.ion', compression='ZSTD')
         # TableName may be the table's ARN.
         scenarios['ion'].request = request(
@@ -852,12 +903,17 @@ def changed(request, path, value):
                  id='input_prefix_too_long'),
     pytest.param((IN, 'S3BucketOwner'), '1' * 11, "'inputS3Configuration.s3BucketOwner'.*pattern",
                  id='input_owner_not_12_digits'),
+    # The pattern must match the whole value.
+    pytest.param((IN, 'S3BucketOwner'), '1' * 13, "'inputS3Configuration.s3BucketOwner'.*pattern",
+                 id='input_owner_13_digits'),
     pytest.param((OUT, 'OutputType'), None, "'outputS3Configuration.outputType'.*must not be null",
                  id='no_output_type'),
     pytest.param((OUT, 'OutputType'), ['WARNING'], "'outputS3Configuration.outputType'.*enum",
                  id='bad_output_type'),
     pytest.param((OUT, 'S3Bucket'), '-nope!', "'outputS3Configuration.s3Bucket'.*pattern",
                  id='output_bucket_bad_chars'),
+    pytest.param((OUT, 'S3Bucket'), 'x' * 256, "'outputS3Configuration.s3Bucket'.*length",
+                 id='output_bucket_too_long'),
     pytest.param((OUT, 'S3KeyPrefix'), 'p' * 1025, "'outputS3Configuration.s3KeyPrefix'",
                  id='output_prefix_too_long'),
     pytest.param((OUT, 'S3BucketOwner'), 'abc', "'outputS3Configuration.s3BucketOwner'.*pattern",
@@ -866,13 +922,23 @@ def changed(request, path, value):
                  id='bad_sse_algorithm'),
     pytest.param((OUT, 'S3SseKmsKeyId'), '', "'outputS3Configuration.s3SseKmsKeyId'.*length",
                  id='empty_kms_key'),
+    pytest.param((OUT, 'S3SseKmsKeyId'), 'k' * 2049,
+                 "'outputS3Configuration.s3SseKmsKeyId'.*2048", id='kms_key_too_long'),
     pytest.param(('MaxWriteRequestUnits',), 1023, "'maxWriteRequestUnits'.*1024",
                  id='max_write_request_units_1023'),
     pytest.param(('MaxWriteRequestUnits',), 0, "'maxWriteRequestUnits'.*1024",
                  id='max_write_request_units_0'),
     pytest.param(('PerformanceTier',), 'TURBO', "'performanceTier'.*enum", id='bad_tier'),
-    # The tier names are case-sensitive.
+    # The enum values are case-sensitive.
     pytest.param(('PerformanceTier',), 'standard', "'performanceTier'.*enum", id='lower_case_tier'),
+    pytest.param((IN, 'InputFormat'), 'ion', "'inputS3Configuration.inputFormat'.*enum",
+                 id='lower_case_input_format'),
+    pytest.param((IN, 'InputCompressionType'), 'gzip',
+                 "'inputS3Configuration.inputCompressionType'.*enum", id='lower_case_compression'),
+    pytest.param((OUT, 'OutputType'), ['error'], "'outputS3Configuration.outputType'.*enum",
+                 id='lower_case_output_type'),
+    pytest.param((OUT, 'S3SseAlgorithm'), 'aes256', "'outputS3Configuration.s3SseAlgorithm'.*enum",
+                 id='lower_case_sse_algorithm'),
     pytest.param(('ClientToken',), '$', "'clientToken'.*pattern", id='token_dollar'),
     pytest.param(('ClientToken',), 'a$b', "'clientToken'.*pattern", id='token_with_dollar'),
     pytest.param(('ClientToken',), '', "'clientToken'.*pattern", id='empty_token'),
@@ -881,11 +947,16 @@ def changed(request, path, value):
     pytest.param(('TableName',), 't' * 256, "'tableName'.*255", id='table_name_too_long'),
     pytest.param(('TableName',), 't' * 1025, "'tableName'.*1024", id='table_name_above_1024'),
     pytest.param(('TableName',), 'not a table!', "'tableName'.*pattern", id='table_name_bad_chars'),
+    # The documented minimum length is 1, but a table name has at least 3
+    # characters.
+    pytest.param(('TableName',), 'ab', "'tableName'.*greater than or equal to 3",
+                 id='table_name_too_short'),
 ])
 def test_start_validation(dynamodb, path, value, message):
     request = changed(valid_request(), path, value)
     with pytest.raises(ClientError, match=f'ValidationException.*{message}'):
         dynamodb.meta.client.start_bulk_put_items(**request)
+
 
 # Invalid members which DynamoDB refuses only after it finds the table, so
 # test_table_s is the target. The bucket does not exist, so a request which
@@ -901,11 +972,47 @@ def test_start_validation(dynamodb, path, value, message):
                  id='kms_without_key'),
     pytest.param((OUT, 'S3SseKmsKeyId'), 'some-key', 'S3SseAlgorithm is required',
                  id='key_without_algorithm'),
+    # The documentation gives S3KeyPrefix only a maximum of 1,024
+    # characters. With a table, DynamoDB refuses fewer than 3 characters, and
+    # more than 948 for the input or 824 for the output.
+    pytest.param((IN, 'S3KeyPrefix'), '', "'inputS3Configuration.s3KeyPrefix'.*equal to 3",
+                 id='empty_input_prefix'),
+    pytest.param((IN, 'S3KeyPrefix'), 'ab', "'inputS3Configuration.s3KeyPrefix'.*equal to 3",
+                 id='short_input_prefix'),
+    pytest.param((OUT, 'S3KeyPrefix'), '', "'outputS3Configuration.s3KeyPrefix'.*equal to 3",
+                 id='empty_output_prefix'),
+    pytest.param((OUT, 'S3KeyPrefix'), 'ab', "'outputS3Configuration.s3KeyPrefix'.*equal to 3",
+                 id='short_output_prefix'),
+    pytest.param((IN, 'S3KeyPrefix'), 'p' * 949, 'InputS3Configuration.S3KeyPrefix is invalid',
+                 id='input_prefix_949'),
+    pytest.param((OUT, 'S3KeyPrefix'), 'p' * 825, 'OutputS3Configuration.S3KeyPrefix is invalid',
+                 id='output_prefix_825'),
 ])
 def test_start_validation_on_table(dynamodb, test_table_s, path, value, message):
     request = changed(valid_request(test_table_s.name), path, value)
     with pytest.raises(ClientError, match=f'ValidationException.*{message}'):
         dynamodb.meta.client.start_bulk_put_items(**request)
+
+# Values at the limits which DynamoDB accepts. It checks some limits only
+# when the table exists (see test_start_validation_on_table), so the target
+# is test_table_s. The input bucket does not exist, so the operation fails
+# within seconds. The documentation gives no maximum of MaxWriteRequestUnits,
+# and a ClientToken may hold spaces.
+@pytest.mark.xfail(reason=NOT_IMPLEMENTED)
+@pytest.mark.parametrize('changes', [
+    pytest.param({(IN, 'S3KeyPrefix'): 'abc', (OUT, 'S3KeyPrefix'): 'abc'}, id='minimum'),
+    pytest.param({(IN, 'S3Bucket'): 'x' * 255, (IN, 'S3KeyPrefix'): 'p' * 948,
+                  (OUT, 'S3KeyPrefix'): 'p' * 824, ('MaxWriteRequestUnits',): 2**63 - 1,
+                  ('ClientToken',): f' {random_string(20)} '}, id='maximum'),
+])
+def test_start_at_limits(dynamodb, test_table_s, changes):
+    client = dynamodb.meta.client
+    request = valid_request(test_table_s.name)
+    for path, value in changes.items():
+        request = changed(request, path, value)
+    samples = []
+    wait_for_operations(client, {start_in_quota(client, request)['BulkOperationArn']: samples})
+    assert samples[-1]['FailureCode'] == 'S3NoSuchBucket'
 
 # A KMS key ID is refused with the AES256 algorithm.
 @pytest.mark.xfail(reason=NOT_IMPLEMENTED)
@@ -937,13 +1044,35 @@ def test_start_missing_table(dynamodb, test_table_s, by):
     with pytest.raises(ClientError, match='ResourceNotFoundException.*not found'):
         dynamodb.meta.client.start_bulk_put_items(**valid_request(name))
 
-# The limit of a table name also holds inside an ARN. The ARN has the
-# caller's region and account: DynamoDB checks them before the name.
+# A TableName ARN must name a table of the caller's partition, service,
+# region and account, so that a request cannot write into a table of the same
+# name elsewhere. The limit of a table name also holds inside an ARN. In the
+# ARN of a missing table, `value` changes the part at index `part` (see
+# arn_with_part()).
 @pytest.mark.xfail(reason=NOT_IMPLEMENTED)
-def test_start_arn_table_name_too_long(dynamodb, test_table_s):
-    arn = get_table_arn(test_table_s).rpartition('/')[0] + '/' + 't' * 256
-    with pytest.raises(ClientError, match='ValidationException.*ARN.*255'):
-        dynamodb.meta.client.start_bulk_put_items(**valid_request(arn))
+@pytest.mark.parametrize('part,value,error', [
+    pytest.param(1, lambda old: 'aws-cn', 'ValidationException.*Invalid AWS partition',
+                 id='other_partition', marks=pytest.mark.xfail(reason=ARN_PARTS)),
+    pytest.param(2, lambda old: 's3', 'ValidationException.*Invalid vendor code',
+                 id='other_service', marks=pytest.mark.xfail(reason=ARN_PARTS)),
+    pytest.param(3, lambda old: 'us-west-2' if old != 'us-west-2' else 'us-east-2',
+                 'ValidationException.*Invalid AWS region', id='other_region',
+                 marks=pytest.mark.xfail(reason=ARN_PARTS)),
+    pytest.param(4, lambda old: '123456789012', 'AccessDeniedException', id='other_account',
+                 marks=pytest.mark.xfail(reason=NO_ACCOUNT_ID)),
+    pytest.param(5, lambda old: 'tablex/' + old.partition('/')[2],
+                 'ValidationException.*Invalid resource type', id='not_a_table'),
+    pytest.param(5, lambda old: old + '/index/gsi',
+                 "ValidationException.*'tableName'.*Valid ARN format", id='index_arn'),
+    pytest.param(5, lambda old: 'table/' + 't' * 256, 'ValidationException.*ARN.*255',
+                 id='name_too_long'),
+])
+def test_start_bad_table_arn(dynamodb, test_table_s, part, value, error):
+    arn = get_table_arn(test_table_s).rpartition('/')[0] + '/' + unique_table_name()
+    old = arn.split(':', 5)[part]
+    request = valid_request(arn_with_part(arn, part, value(old)))
+    with pytest.raises(ClientError, match=error):
+        dynamodb.meta.client.start_bulk_put_items(**request)
 
 # A well-formed ARN of an operation which does not exist.
 def unknown_operation_arn(table):
@@ -967,6 +1096,16 @@ def unknown_operation_arn(table):
                  'ValidationException.*Bulk operation ARN is invalid', id='bad_operation_id'),
     pytest.param(unknown_operation_arn, 'ResourceNotFoundException.*does not exist',
                  id='unknown'),
+    # The caller must be in the account of the operation.
+    pytest.param(lambda table: arn_with_part(unknown_operation_arn(table), 4, '123456789012'),
+                 'AccessDeniedException', id='other_account',
+                 marks=pytest.mark.xfail(reason=NO_ACCOUNT_ID)),
+    pytest.param(lambda table: arn_with_part(unknown_operation_arn(table), 1, 'aws-cn'),
+                 'ValidationException.*Bulk operation ARN is invalid', id='other_partition',
+                 marks=pytest.mark.xfail(reason=ARN_PARTS)),
+    pytest.param(lambda table: arn_with_part(unknown_operation_arn(table), 2, 's3'),
+                 'ValidationException.*Bulk operation ARN is invalid', id='other_service',
+                 marks=pytest.mark.xfail(reason=ARN_PARTS)),
 ])
 def test_bad_operation_arn(dynamodb, test_table_s, operation, make_arn, error):
     arn = make_arn(test_table_s)
@@ -1135,8 +1274,12 @@ def test_writes_indexes(bulk_operations, dynamodb):
     assert usage['GlobalSecondaryIndexes'] == {'gsi': {'BulkPutBytes': 3 * KB}}
     assert usage['LocalSecondaryIndexes'] == {'lsi': {'BulkPutBytes': 2 * KB}}
     # Every record which reaches the table is metered, also a condition
-    # failure: at least 1 KB each.
+    # failure: at least 1 KB each. An item above 1 KB is metered at its size,
+    # not rounded up to whole KB. The DynamoDB JSON of a record is longer
+    # than its item, so the line lengths give an upper limit.
     assert table_bytes(scenario.final) >= (len(WRITES) + len(GROUND_TRUTH_ITEMS)) * KB
+    lines = [line for line in write_records() + dynamodb_json_lines(GROUND_TRUTH_ITEMS) if line]
+    assert table_bytes(scenario.final) <= sum(max(KB, len(line.encode())) for line in lines)
 
 # Each written item makes a stream record, as an application write does. A
 # condition failure makes none. The table is new, so its stream from
@@ -1189,7 +1332,7 @@ def test_errors(bulk_operations):
     records = record_error_lines()
     # Records after an object-stopping record are not counted. The
     # stopping record is.
-    assert final['ProcessedItemCount'] == len(records) + 2 * len(OBJECT_ERRORS) + 6
+    assert final['ProcessedItemCount'] == len(records) + 2 * len(OBJECT_ERRORS) + 8
     assert final['FailedItemCount'] == len(RECORD_ERRORS) + len(OBJECT_ERRORS)
     assert set(scenario.output.reports) == {'errors'}
     report = report_by_location(scenario.output, 'errors', bucket)
@@ -1212,20 +1355,25 @@ def test_errors(bulk_operations):
         key('empty'): ('FULLY_PROCESSED', []),
         key('members'): ('FULLY_PROCESSED', [[0, 1]]),
         key('crlf'): ('FULLY_PROCESSED', [[0, 1]]),
+        key('stream'): ('FULLY_PROCESSED', [[0, 1]]),
         **{key(name): ('PARTIALLY_PROCESSED', [[0, 0]]) for name in OBJECT_ERRORS},
     }
     written = ([{'p': 'r', 'c': Decimal(0)}, {'p': 'r', 'c': Decimal(11)}] + ERRORS_SEED
-               + [{'p': p, 'c': Decimal(c)} for p in ('w', 'm', 'crlf') for c in (0, 1)]
+               + [item for item, _, _ in ODD_WRITES]
+               + [{'p': p, 'c': Decimal(c)} for p in ('w', 'm', 'crlf', 'stream') for c in (0, 1)]
                + [{'p': name, 'c': Decimal(0)} for name in OBJECT_ERRORS])
     assert multiset(scenario.items) == multiset(written)
-    # A record which fails validation is not metered. The condition failure
-    # on "seeded" is: it reached the table. The seed itself is not written
-    # by the operation.
-    assert table_bytes(final) == (len(written) - len(ERRORS_SEED) + 1) * KB
+    # A record which fails validation is not metered, also not on the GSI.
+    # The two condition failures are metered: they reached the table, and a
+    # missing item counts as 1 KB. The seed itself is not written by the
+    # operation.
+    assert table_bytes(final) == (len(written) - len(ERRORS_SEED) + 2) * KB
+    assert usage_of(final)['BulkPutBytes'] == table_bytes(final)
 
-# Ion input: the supported types and conditions, and the unsupported types,
-# which stop their object. Only the requested CONDITION_CHECK_FAILURE report
-# is written, although records fail validation too.
+# Ion input: the supported types and conditions, and the unsupported types
+# and structure errors, which stop their object. Only the requested
+# CONDITION_CHECK_FAILURE report is written, although records fail
+# validation too, so the messages of the Ion errors are not checked.
 @pytest.mark.xfail(reason=NOT_IMPLEMENTED)
 def test_ion(bulk_operations):
     scenario = bulk_operations.scenarios['ion']
@@ -1233,7 +1381,8 @@ def test_ion(bulk_operations):
     final = scenario.final
     assert final['BulkOperationStatus'] == 'COMPLETED_WITH_ERRORS'
     assert final['ProcessedItemCount'] == len(ION_LINES) + 2 * len(ION_OBJECT_ERRORS)
-    assert final['FailedItemCount'] == 1 + len(ION_OBJECT_ERRORS)
+    # The record without its sort key and the DYNAMODB_JSON record fail alone.
+    assert final['FailedItemCount'] == 2 + len(ION_OBJECT_ERRORS)
     goods = [{'p': name, 'c': Decimal(0)} for name in ION_OBJECT_ERRORS]
     assert multiset(scenario.items) == multiset(ION_WRITTEN + ION_SEED[:1] + goods)
     assert set(scenario.output.reports) == {'condition-check-failures'}
@@ -1334,6 +1483,7 @@ def test_unreadable_objects(bulk_operations):
     bucket, final = bulk_operations.bucket, scenario.final
     assert final['BulkOperationStatus'] == 'FAILED'
     assert final['FailureCode'] == 'ValidationException'
+    assert 'failed validation checks' in final['FailureMessage']
     assert final['ProcessedInputBytes'] < final['TotalInputBytes']
     assert final['ProcessedItemCount'] == 4 and final['FailedItemCount'] == 2
     assert table_bytes(final) == 2 * KB
@@ -1421,10 +1571,10 @@ def test_cancel_midway(bulk_operations):
     assert final['ProcessedItemCount'] == len(expected)
     assert table_bytes(final) == len(expected) * KB
 
-# Cancelling an operation which has ended is refused, also when the
-# operation ended because it was cancelled.
+# Cancelling an operation which has ended is refused, whatever its terminal
+# status, also when the operation ended because it was cancelled.
 @pytest.mark.xfail(reason=NOT_IMPLEMENTED)
-@pytest.mark.parametrize('name', ['writes', 'cancel_early'])
+@pytest.mark.parametrize('name', ['writes', 'errors', 'missing_bucket', 'cancel_early'])
 def test_cancel_finished(bulk_operations, dynamodb, name):
     scenario = bulk_operations.scenarios[name]
     status = scenario.final['BulkOperationStatus']
@@ -1448,23 +1598,27 @@ def test_concurrent_starts(bulk_operations):
     assert by_status == {} and len(failed) + len(scenario.start_errors) == 1
     for op in failed:
         assert op.samples[-1]['FailureCode'] == 'ResourceInUseException'
+        assert 'another bulk operation is in progress' in op.samples[-1]['FailureMessage']
         assert op.output.keys == []
     assert completed.output.manifest
     assert scenario.items == [{'p': 'small', 'c': Decimal(1)}]
 
 # Once an operation ended, its table accepts a new one. The new operation
 # names a missing bucket, so it fails within seconds for that reason, not
-# with ResourceInUseException.
+# with ResourceInUseException. Its ClientToken differs from the old one only
+# in case: a token is case-sensitive, so it is a new token.
 @pytest.mark.xfail(reason=NOT_IMPLEMENTED)
 @pytest.mark.parametrize('name', ['empty_prefix', 'missing_bucket', 'cancel_early'])
 def test_table_free_after_end(bulk_operations, dynamodb, name):
     client = dynamodb.meta.client
     scenario = bulk_operations.scenarios[name]
     assert scenario.final['BulkOperationStatus'] in TERMINAL_STATUSES
-    request = changed(scenario.request, ('ClientToken',), random_string(20))
+    request = changed(scenario.request, ('ClientToken',), scenario.start['ClientToken'].swapcase())
     request[IN]['S3Bucket'] = unique_bucket_name()
+    arn = start_in_quota(client, request)['BulkOperationArn']
+    assert arn != scenario.arn
     samples = []
-    wait_for_operations(client, {start_in_quota(client, request)['BulkOperationArn']: samples})
+    wait_for_operations(client, {arn: samples})
     assert samples[-1]['FailureCode'] == 'S3NoSuchBucket'
 
 # A table with a vector index: the Accelerated tier is refused, the Standard
@@ -1575,3 +1729,8 @@ def test_list_paging(bulk_operations, dynamodb):
     paged = [s['BulkOperationArn'] for s in list_through(client, bulk_operations.arns, MaxResults=4)]
     assert len(paged) == len(set(paged)), 'an operation was returned on two pages'
     assert bulk_operations.arns <= set(paged)
+    # A NextToken means that more operations follow, so no page after the
+    # first one is empty. This reads the whole listing of the account, with
+    # the default page size, so that it also has several pages on Alternator.
+    pages = list(client.get_paginator('list_bulk_operations').paginate())
+    assert all(page['BulkOperationsSummaryList'] for page in pages[1:])
