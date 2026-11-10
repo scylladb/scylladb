@@ -2335,6 +2335,9 @@ private:
             noncopyable_function<future<> ()> remove_storage);
     // Runs func while no table directory is being removed.
     future<> with_table_dir_lock(noncopyable_function<future<> ()> func);
+    // Removes the directory of a dropped table for clear_snapshot(), unless
+    // the storage of the table has a user on some shard.
+    future<> remove_dropped_table_dir(std::string_view ks_name, table_id id, std::filesystem::path table_dir);
 public:
 
     const dirty_memory_manager_logalloc::region_group& dirty_memory_region_group() const {

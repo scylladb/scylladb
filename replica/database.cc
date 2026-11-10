@@ -1454,6 +1454,9 @@ void database::drop_table(sharded<database>& sharded_db,
 future<> database::cleanup_drop_table_on_all_shards(sharded<database>& sharded_db, sharded<db::system_keyspace>& sys_ks,
         bool with_snapshot, global_table_ptr& table_shards) {
     auto id = table_shards->schema()->id();
+    // The table is removed from the metadata, but still running. Lets a test
+    // act on it in this state.
+    co_await utils::get_local_injector().inject("cleanup_drop_table_wait", utils::wait_for_message(60s));
     co_await sharded_db.invoke_on_all([&] (database& db) -> future<> {
         auto& cf = *table_shards;
         auto uuid = cf.schema()->id();
@@ -1485,6 +1488,9 @@ future<> database::cleanup_drop_table_on_all_shards(sharded<database>& sharded_d
         return table_shards->stop();
     });
     f.get(); // re-throw exception from truncate() if any
+    utils::get_local_injector().inject("cleanup_drop_table_fail", [] {
+        throw std::runtime_error("cleanup_drop_table_fail injection");
+    });
     co_await sys_ks.local().remove_truncation_records(id);
     // If the cleanup failed above, the storage of the table stays behind, as
     // it did before the removal was deferred.
@@ -3751,14 +3757,29 @@ future<> database::clear_snapshot(sstring tag, std::vector<sstring> keyspace_nam
                         auto id_opt = _tables_metadata.get_table_id_if_exists(std::make_pair(ks_name, cf_name));
                         auto dropped = !id_opt || (cf_uuid != id_opt);
                         if (dropped) {
-                            dblog.info("Removing dropped table dir {}", table_dir);
-                            sstables::remove_table_directory_if_has_no_snapshots(table_dir).get();
+                            remove_dropped_table_dir(ks_name, cf_uuid, table_dir).get();
                         }
                     }
                 }
             }
         });
     });
+}
+
+future<> database::remove_dropped_table_dir(std::string_view ks_name, table_id id, fs::path table_dir) {
+    auto is_system = system_keyspace(is_system_table(ks_name));
+    auto removed = co_await remove_unused_table_storage(container(), id, is_system, [&table_dir] {
+        dblog.info("Removing dropped table dir {}", table_dir);
+        return sstables::remove_table_directory_if_has_no_snapshots(table_dir);
+    });
+    if (!removed) {
+        // The table may still be running: drop table removes it from the
+        // metadata before it truncates and stops it. Or callers may still
+        // hold sstables of the table, and need their files. The removal of
+        // the storage of the table, or a later clear_snapshot(), removes the
+        // directory once the storage has no user.
+        dblog.info("Leaving dropped table dir {} behind, because its storage is in use", table_dir);
+    }
 }
 
 future<> database::flush_non_system_column_families() {
