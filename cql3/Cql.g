@@ -1101,9 +1101,15 @@ alterClusterStatement returns [std::unique_ptr<cql3::statements::alter_cluster_c
  * (nullopt), everything else is a value to store. The string literal 'null' is a plain
  * value, not the keyword, which is why this reads propertyValue's is_null_keyword flag
  * instead of comparing the text.
+ *
+ * A structured option may also be given a literal - a map, a set or list, or the
+ * {name: value} form whose names need no quotes - which is rendered here into the text
+ * its codec reads, so that it need not be written out as a string.
  */
-configPropertyValue returns [std::optional<sstring> val]
-    : v=propertyValue { if (!v.is_null_keyword) { $val = std::move(v.value); } }
+configPropertyValue returns [std::optional<cql3::statements::alter_cluster_config_statement::config_value> val]
+    : v=propertyValue { if (!v.is_null_keyword) { $val = cql3::statements::alter_cluster_config_statement::config_value{std::move(v.value)}; } }
+    | c=collectionLiteral { $val = cql3::statements::alter_cluster_config_statement::config_value{cql3::expr::structured_literal_to_text(std::move(c), get_error_sink()), true}; }
+    | u=usertypeLiteral { $val = cql3::statements::alter_cluster_config_statement::config_value{cql3::expr::structured_literal_to_text(std::move(u), get_error_sink()), true}; }
     ;
 
 /**

@@ -51,11 +51,37 @@ enum class value_type {
     integer,
     floating_point,
     boolean,
+    // A value with internal structure - a map, or a map of maps - rather than a scalar.
+    // The stored form is still text, so every layer below the option itself keeps handling
+    // one string; what makes the value structured is that only the option knows how to read
+    // it. See structured_codec.
+    structured,
+};
+
+// The default of a structured option, in the same canonical form a stored override takes.
+// A distinct type rather than a second std::string_view so that the variant alternative,
+// and therefore option::type(), tells a structured option apart from a plain text one.
+struct structured_default {
+    std::string_view canonical;
 };
 
 // A config value in its native type. One alternative per value_type, in the same order;
 // option::type() is the index of the active alternative.
-using config_value = std::variant<std::string_view, int64_t, double, bool>;
+using config_value = std::variant<std::string_view, int64_t, double, bool, structured_default>;
+
+// What a structured option knows about its own values, and the registry does not. Both
+// functions take the value as written by the user; canonicalize() is only ever called on a
+// value that validate() has already accepted.
+//
+// The registry deliberately does not interpret the text: an option that spells out listening
+// sockets and one that spells out a routing table share no syntax, and giving the registry a
+// syntax of its own would mean every such option encoding itself twice.
+struct structured_codec {
+    // nullopt when the value is well-formed, otherwise a human-readable reason.
+    std::optional<seastar::sstring> (*validate)(std::string_view);
+    // The canonical stored form of an accepted value.
+    seastar::sstring (*canonicalize)(std::string_view);
+};
 
 // The names of the registered options, for the subsystems that consume them. A consumer
 // looks its option up by one of these rather than by a bare literal, so that the registry
@@ -66,6 +92,7 @@ inline constexpr std::string_view auto_repair_enabled = "auto_repair_enabled";
 inline constexpr std::string_view auto_repair_threshold_in_seconds = "auto_repair_threshold_in_seconds";
 inline constexpr std::string_view repair_hints_batchlog_flush_discard_unreplayed_hints = "repair_hints_batchlog_flush_discard_unreplayed_hints";
 inline constexpr std::string_view auto_scrub_period_seconds = "auto_scrub_period_seconds";
+inline constexpr std::string_view listeners = "listeners";
 
 }
 
@@ -107,6 +134,10 @@ struct option {
     // an integer option, and the default must fall within it. A db_config option bound to an
     // integral db::config entry narrower than int64_t must declare one that fits the entry's type.
     std::optional<integer_range> valid_range = std::nullopt;
+    // Non-null exactly when type() is value_type::structured, and null otherwise - the
+    // registry validates and canonicalizes a scalar itself, and cannot do either for a
+    // structured value. Enforced by a static_assert over the registry.
+    const structured_codec* codec = nullptr;
 
     constexpr value_type type() const {
         return static_cast<value_type>(default_value.index());
@@ -161,6 +192,10 @@ bool to_boolean(const option& opt, const std::optional<seastar::sstring>& value)
 int64_t to_integer(const option& opt, const std::optional<seastar::sstring>& value);
 double to_floating_point(const option& opt, const std::optional<seastar::sstring>& value);
 seastar::sstring to_text(const option& opt, const std::optional<seastar::sstring>& value);
+// The canonical text of a structured option, for the owning subsystem to decode with the
+// same parser its codec validates with. Unlike the scalar accessors this hands back text
+// rather than a parsed value: the registry has no type to parse it into.
+seastar::sstring to_structured(const option& opt, const std::optional<seastar::sstring>& value);
 
 // Returns the canonical text to persist for a value that has already passed
 // validate_value(). CQL literals are case-preserving but case-insensitive (the BOOLEAN

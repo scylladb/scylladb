@@ -8,6 +8,8 @@
 
 #include "generic_server.hh"
 
+#include "utils/on_internal_error.hh"
+
 #include <exception>
 #include <fmt/ranges.h>
 #include <seastar/core/when_all.hh>
@@ -261,6 +263,14 @@ server::server(const sstring& server_name, logging::logger& logger, config cfg)
 future<> server::stop() {
     co_await shutdown();
     co_await std::exchange(_all_connections_stopped, make_ready_future<>());
+    // Only here, rather than in shutdown(): a listener's gate empties when the last
+    // connection accepted on it is gone, and shutdown() gives up waiting for the
+    // connections after a timeout, so closing the gates there could wait forever for
+    // connections it had already stopped waiting for.
+    for (auto&& [name, l] : _listeners) {
+        co_await l.connections_gate.close();
+    }
+    _listeners.clear();
 }
 
 future<> server::shutdown() {
@@ -275,11 +285,13 @@ future<> server::shutdown() {
     size_t nr = 0;
     size_t nr_total = _listeners.size();
     _logger.debug("abort accept nr_total={}", nr_total);
-    for (auto&& l : _listeners) {
-        l.abort_accept();
+    for (auto&& [name, l] : _listeners) {
+        l.socket.abort_accept();
         _logger.debug("abort accept {} out of {} done", ++nr, nr_total);
     }
-     co_await std::move(_listeners_stopped);
+    for (auto&& [name, l] : _listeners) {
+        co_await std::move(l.accept_loop);
+    }
 
     // Shutdown RX side of the connections, so no new requests could be received.
     // Leave the TX side so the responses to ongoing requests could be sent.
@@ -299,6 +311,7 @@ future<> server::shutdown() {
         _logger.info("Timed out waiting for connections shutdown.");
     }
 
+
     // Either all requests stopped or a timeout occurred, do the full shutdown of the connections.
     size_t nr_conn = 0;
     auto nr_conn_total = _connections_list.size();
@@ -313,43 +326,77 @@ future<> server::shutdown() {
 }
 
 future<>
-server::listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_builder> builder, bool is_shard_aware, bool keepalive, std::optional<file_permissions> unix_domain_socket_permissions, bool proxy_protocol, std::function<server&()> get_shard_instance) {
-    // Note: We are making the assumption that if builder is provided it will be the same for each
-    // invocation, regardless of address etc. In general, only CQL server will call this multiple times,
-    // and if TLS, it will use the same cert set.
-    // Could hold certs in a map<addr, certs> and ensure separation, but then we will for all
-    // current uses of this class create duplicate reloadable certs for shard 0, which is
-    // kind of what we wanted to avoid in the first place...
-    if (builder && !_credentials) {
-        if (!get_shard_instance || this_shard_id() == 0) {
-            _credentials = co_await builder->build_reloadable_server_credentials([this, get_shard_instance = std::move(get_shard_instance)](const tls::credentials_builder& b, const std::unordered_set<sstring>& files, std::exception_ptr ep) -> future<> {
-                // A reload can fire while the server is being shut down, and
-                // there is nothing left to reload into then. Holding the gate
-                // keeps this server and its peers on the other shards alive for
-                // the duration of the reload - sharded<> destroys the instances
-                // only once stop() completed on all of them, and stop() waits
-                // for the gate.
-                if (_gate.is_closed()) {
-                    co_return;
-                }
-                seastar::gate::holder holder(_gate);
-                if (ep) {
-                    _logger.warn("Exception loading {}: {}", files, ep);
-                } else {
-                    if (get_shard_instance) {
-                        co_await smp::invoke_on_others([&]() {
-                            auto& s = get_shard_instance();
-                            if (s._credentials) {
-                                b.rebuild(*s._credentials);
-                            }
-                        });
-
-                    }
-                    _logger.info("Reloaded {}", files);
-                }
-            });
+server::listen(const sstring& name, socket_address addr, std::shared_ptr<seastar::tls::credentials_builder> builder, bool is_shard_aware, bool keepalive, std::optional<file_permissions> unix_domain_socket_permissions, bool proxy_protocol, std::function<server&()> get_shard_instance) {
+    // Credentials are built once per builder, and shared by every listener that
+    // was given that same builder - the caller is expected to hand out one
+    // builder per distinct set of TLS options, and the same builder on every
+    // shard, so that shard 0's reloadable credentials can rebuild the others.
+    shared_ptr<seastar::tls::server_credentials> credentials;
+    if (builder) {
+        // Reserve the entry before building anything, so that a concurrent
+        // listener sharing this builder waits for our credentials rather than
+        // building a second, unreloadable set of its own.
+        auto [it, inserted] = _credentials.try_emplace(builder.get());
+        auto& entry = it->second;
+        if (!inserted) {
+            // Someone else is building, or has already built, the credentials
+            // for this builder.
+            credentials = co_await entry.credentials.get_shared_future();
         } else {
-            _credentials = builder->build_server_credentials();
+            entry.builder = builder;
+            try {
+                if (!get_shard_instance || this_shard_id() == 0) {
+                    credentials = co_await builder->build_reloadable_server_credentials([this, key = builder.get(), get_shard_instance = std::move(get_shard_instance)](const tls::credentials_builder& b, const std::unordered_set<sstring>& files, std::exception_ptr ep) -> future<> {
+                        // A reload can fire while the server is being shut down, and
+                        // there is nothing left to reload into then. Holding the gate
+                        // keeps this server and its peers on the other shards alive for
+                        // the duration of the reload - sharded<> destroys the instances
+                        // only once stop() completed on all of them, and stop() waits
+                        // for the gate.
+                        if (_gate.is_closed()) {
+                            co_return;
+                        }
+                        seastar::gate::holder holder(_gate);
+                        if (ep) {
+                            _logger.warn("Exception loading {}: {}", files, ep);
+                        } else {
+                            if (get_shard_instance) {
+                                co_await smp::invoke_on_others([&]() -> future<> {
+                                    auto& s = get_shard_instance();
+                                    auto it = s._credentials.find(key);
+                                    if (it == s._credentials.end()) {
+                                        return make_ready_future<>();
+                                    }
+                                    // The future is normally ready, since a reload can
+                                    // only fire once shard 0 finished building; if a
+                                    // listener on this shard is still building, we wait
+                                    // for it and rebuild what it produces. Note this is
+                                    // a plain continuation rather than a coroutine, as
+                                    // the lambda copy this shard was handed is free to
+                                    // go away as soon as it returned the future.
+                                    return it->second.credentials.get_shared_future().then([&b](shared_ptr<seastar::tls::server_credentials> creds) {
+                                        b.rebuild(*creds);
+                                    });
+                                });
+
+                            }
+                            _logger.info("Reloaded {}", files);
+                        }
+                    });
+                } else {
+                    // Only shard 0 watches the certificate files; the other shards
+                    // are rebuilt by the callback registered above.
+                    credentials = builder->build_server_credentials();
+                }
+            } catch (...) {
+                // Fail whoever is waiting for us, and drop the entry so that a
+                // later listen() with this builder can try again.
+                auto ex = std::current_exception();
+                entry.credentials.set_exception(ex);
+                _credentials.erase(builder.get());
+                std::rethrow_exception(ex);
+            }
+            entry.credentials.set_value(credentials);
         }
     }
     listen_options lo;
@@ -362,21 +409,74 @@ server::listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_bu
     server_socket ss;
     bool is_tls = false;
     try {
-        ss = builder
-            ? is_tls = true, seastar::tls::listen(_credentials, addr, lo)
+        ss = credentials
+            ? is_tls = true, seastar::tls::listen(credentials, addr, lo)
             : seastar::listen(addr, lo);
     } catch (...) {
         throw std::runtime_error(format("{} error while listening on {} -> {:t}", _server_name, addr, std::current_exception()));
     }
-    _listeners.emplace_back(std::move(ss));
+    auto [it, inserted] = _listeners.try_emplace(name, std::move(ss), addr, name);
+    if (!inserted) {
+        on_internal_error(_logger, format("{}: a listener called {} is already being served", _server_name, name));
+    }
     // Each listener's do_accepts loop needs at least 1 unit to accept.
     _conns_cpu_concurrency_semaphore.signal(1);
-    _listeners_stopped = when_all(std::move(_listeners_stopped), do_accepts(_listeners.size() - 1, keepalive, addr, is_tls)).discard_result();
+    it->second.accept_loop = do_accepts(it->second, keepalive, is_tls);
 }
 
-future<> server::do_accepts(int which, bool keepalive, socket_address server_addr, bool is_tls) {
+std::optional<socket_address> server::listener_address(const sstring& name) const {
+    auto it = _listeners.find(name);
+    return it == _listeners.end() ? std::nullopt : std::make_optional(it->second.addr);
+}
+
+future<> server::unlisten(const sstring& name) {
+    auto it = _listeners.find(name);
+    if (it == _listeners.end()) {
+        co_return;
+    }
+    auto& listener = it->second;
+    _logger.info("Stopping listening on {} ({})", listener.addr, name);
+
+    // Stop accepting first, so that the set of connections to drain stops growing. The
+    // flag goes up before the abort, so that the accept loop reads the abort as being
+    // asked to stop rather than as a failure to log and carry on from.
+    listener.stopping = true;
+    listener.socket.abort_accept();
+    co_await std::move(listener.accept_loop);
+    // The unit listen() gave this listener's accept loop.
+    _conns_cpu_concurrency_semaphore.consume(1);
+
+    co_await drain_connections_of(listener.addr, listener.connections_gate);
+    _listeners.erase(it);
+}
+
+future<> server::drain_connections_of(socket_address addr, seastar::named_gate& connections_gate) {
+    // Shut down the read side, so that no new request arrives on these connections, and
+    // leave the write side alone so the responses to the requests already in flight can
+    // still be sent - the same order, and for the same reason, as shutdown() uses for the
+    // server as a whole.
+    co_await for_each_gently([addr] (connection& c) {
+        if (c._server_addr != addr) {
+            return;
+        }
+        if (!c.shutdown_input()) {
+            c.shutdown_output();
+        }
+    });
+
+    // Then wait for them to finish. Every connection accepted on this listener holds its
+    // gate, so closing it is exactly "when the last of them is done".
+    try {
+        co_await connections_gate.close();
+    } catch (...) {
+        _logger.warn("Failed draining the connections of the listener on {}: {:t}", addr, std::current_exception());
+    }
+}
+
+future<> server::do_accepts(listener_entry& listener, bool keepalive, bool is_tls) {
+    const socket_address server_addr = listener.addr;
     co_await coroutine::switch_to(get_scheduling_group_for_new_connection());
-    while (!_gate.is_closed()) {
+    while (!_gate.is_closed() && !listener.stopping) {
         seastar::gate::holder holder(_gate);
         bool shed = false;
         size_t waiters_at_block = 0;
@@ -396,9 +496,9 @@ future<> server::do_accepts(int which, bool keepalive, socket_address server_add
                     }
                 }
             }
-            accept_result cs_sa = co_await _listeners[which].accept();
+            accept_result cs_sa = co_await listener.socket.accept();
             co_await coroutine::switch_to(get_scheduling_group_for_new_connection());
-            if (_gate.is_closed()) {
+            if (_gate.is_closed() || listener.stopping) {
                 break;
             }
             auto fd = std::move(cs_sa.connection);
@@ -407,6 +507,11 @@ future<> server::do_accepts(int which, bool keepalive, socket_address server_add
             fd.set_keepalive(keepalive);
             auto conn = make_connection(server_addr, std::move(fd), std::move(addr),
                     _conns_cpu_concurrency_semaphore, std::move(units));
+            // What ties this connection to the listener it arrived on: the address
+            // selects it when that listener is taken away, and the hold is what makes
+            // taking the listener away wait for it.
+            conn->_server_addr = server_addr;
+            conn->_hold_listener = listener.connections_gate.hold();
             if (shed) {
                 // We establish a connection even during shedding to notify the client;
                 // otherwise, they might hang waiting for a response.
@@ -450,6 +555,10 @@ future<> server::do_accepts(int which, bool keepalive, socket_address server_add
                 });
             });
         } catch (...) {
+            if (listener.stopping) {
+                // The abort that unlisten() asked for, rather than a failure.
+                break;
+            }
             _logger.debug("accept failed: {:t}", std::current_exception());
         }
     }

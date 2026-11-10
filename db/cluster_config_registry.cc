@@ -28,6 +28,7 @@
 #include "types/types.hh"
 #include "utils/chunked_string.hh"
 #include "utils/log.hh"
+#include "db/listener_config.hh"
 #include "utils/on_internal_error.hh"
 
 namespace db::cluster_config_registry {
@@ -41,13 +42,13 @@ static_assert(std::is_same_v<std::variant_alternative_t<size_t(value_type::text)
 static_assert(std::is_same_v<std::variant_alternative_t<size_t(value_type::integer), config_value>, int64_t>);
 static_assert(std::is_same_v<std::variant_alternative_t<size_t(value_type::floating_point), config_value>, double>);
 static_assert(std::is_same_v<std::variant_alternative_t<size_t(value_type::boolean), config_value>, bool>);
-static_assert(std::variant_size_v<config_value> == 4);
+static_assert(std::is_same_v<std::variant_alternative_t<size_t(value_type::structured), config_value>, structured_default>);
+static_assert(std::variant_size_v<config_value> == 5);
 
 // The two resolution domains. CLUSTER is the shared last step of both chains, so it belongs
 // to both sets; an option that wants only part of a chain spells its scopes out.
 constexpr scope_set table_oriented_scopes = scope_set::of<scope::cluster, scope::keyspace, scope::table>();
-// Unused until the first node-oriented option ships.
-[[maybe_unused]] constexpr scope_set node_oriented_scopes = scope_set::of<scope::cluster, scope::datacenter, scope::rack, scope::node>();
+constexpr scope_set node_oriented_scopes = scope_set::of<scope::cluster, scope::datacenter, scope::rack, scope::node>();
 
 // The scopes that place an option in one domain or the other, i.e. each set without CLUSTER.
 constexpr scope_set table_only_scopes = scope_set::of<scope::keyspace, scope::table>();
@@ -58,6 +59,13 @@ constexpr scope_set node_only_scopes = scope_set::of<scope::datacenter, scope::r
 constexpr bool is_single_domain(scope_set scopes) {
     return !(scopes.intersects(table_only_scopes) && scopes.intersects(node_only_scopes));
 }
+
+// The codec of the "listeners" option. Its two halves live beside listener_config, which is
+// what they parse into; the registry only holds them together.
+constexpr structured_codec listeners_codec{
+    .validate = &db::validate_listeners,
+    .canonicalize = &db::canonicalize_listeners,
+};
 
 // Defined below, with the other parsers and validators.
 // Declared here so that the automatic scrub period option may take their address.
@@ -108,6 +116,16 @@ constexpr std::array registry_options = {
         .kind = option_kind::db_config,
         .valid_range = integer_range{.min = 1, .max = std::numeric_limits<uint32_t>::max()},
     },
+    option{
+        .name = option_name::listeners,
+        .description = "The client-facing sockets to listen on, as a map of listener name to listener configuration",
+        .scopes = node_oriented_scopes,
+        // Empty: no listeners of its own, so a node falls back on the per-protocol options
+        // in scylla.yaml. Not a set of default listeners, because those depend on options
+        // the registry cannot see.
+        .default_value = structured_default{"{}"},
+        .codec = &listeners_codec,
+    },
 };
 
 constexpr bool all_registry_options_are_single_domain() {
@@ -150,6 +168,21 @@ constexpr bool all_registry_options_have_consistent_ranges() {
 
 static_assert(all_registry_options_have_consistent_ranges(),
         "A cluster config option's valid_range must belong to an integer option and contain its default");
+
+// A structured option is exactly the one that brings its own validator, since the registry
+// cannot check a value whose syntax it does not know; a scalar option must not bring one,
+// since the registry would then have two answers for what its values mean.
+constexpr bool all_registry_options_have_the_right_codec() {
+    for (const auto& opt : registry_options) {
+        if ((opt.type() == value_type::structured) != (opt.codec != nullptr)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static_assert(all_registry_options_have_the_right_codec(),
+        "A structured cluster config option must carry a codec, and a scalar one must not");
 
 // Empty in production. When a test injects options via add_test_only_option(), this holds
 // registry_options followed by the injected ones, and options()/find() consult it instead of
@@ -246,9 +279,12 @@ static std::optional<seastar::sstring> validate_with_custom_parser(const option&
     return validate_with(opt.custom_parser, opt.custom_expected_description, value);
 }
 
-// Nothing above the registry bounds a text value (it is a map cell in a schema table), and it
-// is echoed by DESCRIBE, so cap it here.
+// Nothing above the registry bounds a stored value (it is a map cell in a schema table), and
+// it is echoed by DESCRIBE, so cap it here. A structured value gets a larger budget: it spells
+// out a whole set of objects rather than one scalar, so a handful of listeners with their own
+// TLS options runs past what is a generous bound for a scalar.
 constexpr size_t max_text_value_length = 4096;
+constexpr size_t max_structured_value_length = 64 * 1024;
 
 // A text value is otherwise unconstrained, but it has to survive being echoed back as CQL.
 // DESCRIBE renders every effective value both as a property right-hand side and inside a
@@ -257,9 +293,9 @@ constexpr size_t max_text_value_length = 4096;
 // of the value into CQL; a `*/` would end the block comment. Neither can be escaped inside
 // a CQL string literal, so they are rejected at the door instead - the alternative is a
 // dump that silently stops being replayable.
-std::optional<seastar::sstring> validate_text(std::string_view value) {
-    if (value.size() > max_text_value_length) {
-        return fmt::format("must not exceed {} bytes", max_text_value_length);
+std::optional<seastar::sstring> validate_text_form(std::string_view value, size_t max_length) {
+    if (value.size() > max_length) {
+        return fmt::format("must not exceed {} bytes", max_length);
     }
     if (value.find('\n') != std::string_view::npos || value.find('\r') != std::string_view::npos) {
         return seastar::sstring("must not contain a line break");
@@ -280,6 +316,14 @@ static T custom_parse_as(const option& opt, std::string_view value) {
                    "cluster config '{}' has a custom parser returning a type other than the one it declares",
                    opt.name));
     }
+}
+
+std::optional<seastar::sstring> validate_text(std::string_view value) {
+    return validate_text_form(value, max_text_value_length);
+}
+
+std::optional<seastar::sstring> validate_structured_text(std::string_view value) {
+    return validate_text_form(value, max_structured_value_length);
 }
 
 // Shared implementation of the typed to_*() accessors: checks that the option was registered
@@ -376,6 +420,13 @@ std::optional<seastar::sstring> validate_value(const option& opt, std::string_vi
         return validate_floating_point(value);
     case value_type::boolean:
         return validate_boolean(value);
+    case value_type::structured:
+        // Length and the DESCRIBE-driven bans still apply - a structured value is echoed
+        // the same way a text one is - but the shape is the option's own business.
+        if (auto error = validate_structured_text(value)) {
+            return error;
+        }
+        return opt.codec->validate(value);
     }
 
     __builtin_unreachable();
@@ -404,12 +455,27 @@ seastar::sstring to_text(const option& opt, const std::optional<seastar::sstring
     return value ? *value : seastar::sstring(std::get<std::string_view>(opt.default_value));
 }
 
+seastar::sstring to_structured(const option& opt, const std::optional<seastar::sstring>& value) {
+    // Like to_text(), not routed through to_native(): there is nothing to parse here, and
+    // the default is held as a string_view rather than the returned sstring.
+    if (opt.type() != value_type::structured) {
+        utils::on_internal_error(fmt::format(
+                "cluster config '{}' read through the structured accessor but registered with a different type",
+                opt.name));
+    }
+    return value ? *value : seastar::sstring(std::get<structured_default>(opt.default_value).canonical);
+}
+
 seastar::sstring canonicalize_value(const option& opt, std::string_view value) {
     switch (opt.type()) {
     case value_type::text:
     case value_type::integer:
     case value_type::floating_point:
         return seastar::sstring(value);
+    case value_type::structured:
+        // Only reached after validate_value() accepted the input, which is the contract
+        // the codec's canonicalize() is written against.
+        return opt.codec->canonicalize(value);
     case value_type::boolean:
         // Only reached after validate_value() accepted the input, so the parse cannot fail.
         try {
@@ -434,9 +500,15 @@ namespace {
 
 // Per-shard half of add_test_only_option_on_all_shards().
 void add_test_only_option(option opt) {
-    // Same invariant registry_options is static_asserted against. An injected option that
+    // Same invariants registry_options is static_asserted against. An injected option that
     // mixed the two domains would resolve through a precedence chain that does not exist,
-    // so reject it here rather than let a test build a nonsensical registry.
+    // and one whose codec disagreed with its type would crash on the first value written to
+    // it, so reject both here rather than let a test build a nonsensical registry.
+    if ((opt.type() == value_type::structured) != (opt.codec != nullptr)) {
+        utils::on_internal_error(fmt::format(
+                "test-only cluster config option '{}': a structured option must carry a codec, "
+                "and a scalar one must not", opt.name));
+    }
     if (!is_single_domain(opt.scopes)) {
         utils::on_internal_error(fmt::format(
                 "test-only cluster config option '{}' mixes table-oriented and node-oriented scopes", opt.name));
