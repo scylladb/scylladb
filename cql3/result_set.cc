@@ -14,6 +14,7 @@
 #include "utils/hashers.hh"
 #include "utils/rjson.hh"
 #include "cql3/result_set.hh"
+#include "cql3/query_result_printer.hh"
 
 namespace cql3 {
 
@@ -255,29 +256,33 @@ void print_query_results_text(std::ostream& os, const cql3::result& result) {
     }
 }
 
+void print_query_result_row_json(rjson::streaming_writer& writer, const std::vector<lw_shared_ptr<column_specification>>& column_metadata,
+        const std::vector<managed_bytes_opt>& row) {
+    writer.StartObject();
+    for (size_t i = 0; i < row.size(); ++i) {
+        writer.Key(column_metadata[i]->name->text());
+        // An absent cell is null. A present but empty one is a value, if the
+        // type has such a value (e.g. an empty string). For other types, an
+        // empty value is malformed, and null is all we can report about it.
+        if (!row[i] || (row[i]->empty() && !can_serialize_empty_value_to_json(*column_metadata[i]->type))) {
+            writer.Null();
+            continue;
+        }
+        const auto value = to_json_string(*column_metadata[i]->type, *row[i]);
+        const auto type = to_json_type(*column_metadata[i]->type, *row[i]);
+        writer.RawValue(value, type);
+    }
+    writer.EndObject();
+}
+
 void print_query_results_json(std::ostream& os, const cql3::result& result) {
-    const auto& metadata = result.get_metadata();
-    const auto& column_metadata = metadata.get_names();
+    const auto& column_metadata = result.get_metadata().get_names();
 
     rjson::streaming_writer writer(os);
 
     writer.StartArray();
     for (const auto& row : result.result_set().rows()) {
-        writer.StartObject();
-        for (size_t i = 0; i < row.size(); ++i) {
-            writer.Key(column_metadata[i]->name->text());
-            // An absent cell is null. A present but empty one is a value, if the
-            // type has such a value (e.g. an empty string). For other types, an
-            // empty value is malformed, and null is all we can report about it.
-            if (!row[i] || (row[i]->empty() && !can_serialize_empty_value_to_json(*column_metadata[i]->type))) {
-                writer.Null();
-                continue;
-            }
-            const auto value = to_json_string(*column_metadata[i]->type, *row[i]);
-            const auto type = to_json_type(*column_metadata[i]->type, *row[i]);
-            writer.RawValue(value, type);
-        }
-        writer.EndObject();
+        print_query_result_row_json(writer, column_metadata, row);
     }
     writer.EndArray();
 }
