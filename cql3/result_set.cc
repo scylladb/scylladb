@@ -266,7 +266,10 @@ void print_query_results_json(std::ostream& os, const cql3::result& result) {
         writer.StartObject();
         for (size_t i = 0; i < row.size(); ++i) {
             writer.Key(column_metadata[i]->name->text());
-            if (!row[i] || row[i]->empty()) {
+            // An absent cell is null. A present but empty one is a value, if the
+            // type has such a value (e.g. an empty string). For other types, an
+            // empty value is malformed, and null is all we can report about it.
+            if (!row[i] || (row[i]->empty() && !can_serialize_empty_value_to_json(*column_metadata[i]->type))) {
                 writer.Null();
                 continue;
             }
