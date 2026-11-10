@@ -107,7 +107,8 @@ Every listener takes the following keys.
      - Description
    * - ``protocol``
      - *mandatory*
-     - The protocol to serve: ``cql`` or ``alternator``.
+     - The protocol to serve: ``cql``, ``alternator`` or ``webshell`` (the
+       :doc:`Web Shell </operating-scylla/admin-tools/webshell>`).
    * - ``port``
      - *mandatory*
      - The TCP port to listen on. Must not be zero.
@@ -117,8 +118,9 @@ Every listener takes the following keys.
        whichever address of the node is in it. A network is what makes one value work
        for every node when the option is set for a whole cluster, a datacenter or a
        rack; a node refuses to start when none of its addresses is in that network, or
-       when more than one is. Defaults to ``rpc_address`` for ``cql``, and to
-       ``alternator_address`` for ``alternator``.
+       when more than one is. Defaults to ``rpc_address`` for ``cql``, to
+       ``alternator_address`` for ``alternator``, and to ``localhost`` for
+       ``webshell``.
    * - ``shard_aware``
      - ``false``
      - Serve the shard-aware variant of the protocol. CQL only.
@@ -140,7 +142,8 @@ Every listener takes the following keys.
      - ``false``
      - Encrypt the connections with TLS. Either a boolean, selecting the
        protocol's default encryption options (``client_encryption_options`` for
-       ``cql``, ``alternator_encryption_options`` for ``alternator``), or a map
+       ``cql`` and ``webshell``, ``alternator_encryption_options`` for
+       ``alternator``), or a map
        spelling the encryption options out for this listener alone. An option
        name the node does not know is rejected.
    * - ``keepalive``
@@ -189,14 +192,17 @@ spelled out for one listener.
 Limitations
 ===========
 
-``keepalive`` is accepted for CQL listeners only. Alternator listeners are
-served by an HTTP server whose keepalive setting applies to the server as a
-whole rather than to an individual listener, so a per-listener value cannot be
-honoured; setting ``keepalive`` on an ``alternator`` listener is rejected at
-startup rather than silently ignored.
+``keepalive`` is accepted for CQL listeners only. Alternator and Web Shell
+listeners are served by an HTTP server whose keepalive setting applies to the
+server as a whole rather than to an individual listener, so a per-listener value
+cannot be honoured; setting ``keepalive`` on an ``alternator`` or ``webshell``
+listener is rejected at startup rather than silently ignored.
 
 ``shard_aware`` and ``shard_aware_listener`` are likewise CQL-only, since
-Alternator has no shard-aware variant.
+neither Alternator nor the Web Shell has a shard-aware variant.
+
+The Web Shell has no per-protocol options in ``scylla.yaml``: it is served only on
+the ``webshell`` listeners of the ``listeners`` option.
 
 Applying changes
 ================

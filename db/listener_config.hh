@@ -35,11 +35,13 @@ struct listener_config {
     enum class protocol_type {
         cql,
         alternator,
+        webshell,
     };
 
     protocol_type protocol = protocol_type::cql;
     /// Address to listen on. Empty means the protocol's default address:
-    /// rpc_address for CQL, alternator_address for Alternator.
+    /// rpc_address for CQL, alternator_address for Alternator, localhost for
+    /// the Web Shell.
     sstring address;
     uint16_t port = 0;
     /// Serve the shard-aware variant of the protocol. CQL only.
@@ -53,8 +55,8 @@ struct listener_config {
     bool proxy_protocol = false;
     /// Encrypt the connections with TLS. When set, but tls_options is empty,
     /// the protocol's default encryption options are used:
-    /// client_encryption_options for CQL, alternator_encryption_options for
-    /// Alternator.
+    /// client_encryption_options for CQL and the Web Shell,
+    /// alternator_encryption_options for Alternator.
     bool tls = false;
     std::unordered_map<sstring, sstring> tls_options;
     /// Enable TCP keepalive. Unset means the rpc_keepalive default.

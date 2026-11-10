@@ -29,6 +29,8 @@ std::string_view to_string(listener_config::protocol_type p) {
         return "cql";
     case listener_config::protocol_type::alternator:
         return "alternator";
+    case listener_config::protocol_type::webshell:
+        return "webshell";
     }
     return "unknown";
 }
@@ -40,7 +42,10 @@ static listener_config::protocol_type parse_protocol(const sstring& s) {
     if (s == "alternator") {
         return listener_config::protocol_type::alternator;
     }
-    throw std::invalid_argument(fmt::format("Bad listener configuration: unknown protocol '{}', expected 'cql' or 'alternator'", s));
+    if (s == "webshell") {
+        return listener_config::protocol_type::webshell;
+    }
+    throw std::invalid_argument(fmt::format("Bad listener configuration: unknown protocol '{}', expected 'cql', 'alternator' or 'webshell'", s));
 }
 
 listener_config listener_config::decode(const YAML::Node& node) {
@@ -409,6 +414,10 @@ listener_configs get_listeners(const config& cfg, const listener_configs& config
         return legacy_cql_listeners(cfg);
     case listener_config::protocol_type::alternator:
         return legacy_alternator_listeners(cfg);
+    case listener_config::protocol_type::webshell:
+        // The Web Shell has no per-protocol options: it is served only on the
+        // listeners the "listeners" option spells out.
+        return {};
     }
     return {};
 }
