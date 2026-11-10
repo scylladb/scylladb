@@ -1267,16 +1267,6 @@ async def test_queries_when_shutting_down(manager: ScyllaClusterManager, target:
         # Acceptable. It doesn't matter what the result is.
         logger.debug(f"Exception when awaiting write: {e}")
 
-    # We need to disable the injections to be able to drop the keyspace and table.
-    await asyncio.gather(*[asyncio.create_task(manager.api.disable_injection(
-        follower.ip_addr,
-        "raft_drop_incoming_append_entries_for_specified_group"
-    )) for follower in followers])
-    await asyncio.gather(*[asyncio.create_task(manager.api.disable_injection(
-        follower.ip_addr,
-        "avoid_being_raft_leader"
-    )) for follower in followers])
-
 
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
 async def test_abort_state_machine_apply_after_dropping_table(manager: ScyllaClusterManager):
@@ -1889,28 +1879,22 @@ async def test_unavailable_errors_metrics(manager: ScyllaClusterManager):
     await cql.run_async(f"INSERT INTO {table} (pk, c) VALUES (0, 0)", host=non_replica_host)
 
     await manager.server_stop(replica.server_id, convict=True)
-    try:
-        await manager.server_not_sees_other_server(non_replica.ip_addr, replica.ip_addr)
+    await manager.server_not_sees_other_server(non_replica.ip_addr, replica.ip_addr)
 
-        # The driver retries a request refused with Unavailable one time by default.
-        # Without retries, each request is refused and counted once.
-        no_retry = FallthroughRetryPolicy()
+    # The driver retries a request refused with Unavailable one time by default.
+    # Without retries, each request is refused and counted once.
+    no_retry = FallthroughRetryPolicy()
+    with pytest.raises(Unavailable, match="All replicas of tablet 0 are down"):
+        await cql.run_async(SimpleStatement(f"INSERT INTO {table} (pk, c) VALUES (0, 1)",
+                                            retry_policy=no_retry), host=non_replica_host)
+    for cl in (ConsistencyLevel.QUORUM, ConsistencyLevel.ONE):
         with pytest.raises(Unavailable, match="All replicas of tablet 0 are down"):
-            await cql.run_async(SimpleStatement(f"INSERT INTO {table} (pk, c) VALUES (0, 1)",
+            await cql.run_async(SimpleStatement(f"SELECT * FROM {table} WHERE pk = 0", consistency_level=cl,
                                                 retry_policy=no_retry), host=non_replica_host)
-        for cl in (ConsistencyLevel.QUORUM, ConsistencyLevel.ONE):
-            with pytest.raises(Unavailable, match="All replicas of tablet 0 are down"):
-                await cql.run_async(SimpleStatement(f"SELECT * FROM {table} WHERE pk = 0", consistency_level=cl,
-                                                    retry_policy=no_retry), host=non_replica_host)
 
-        metrics = await manager.metrics.query(non_replica.ip_addr)
-        assert metrics.get('scylla_strong_consistency_coordinator_write_errors', {'reason': 'unavailable'}) == 1
-        assert metrics.get('scylla_strong_consistency_coordinator_read_errors', {'reason': 'unavailable'}) == 2  # QUORUM, ONE
-    finally:
-        # The replica may be the only group0 voter, and dropping the table needs a
-        # group0 quorum.
-        await manager.server_start(replica.server_id)
-        await manager.get_ready_cql(servers)
+    metrics = await manager.metrics.query(non_replica.ip_addr)
+    assert metrics.get('scylla_strong_consistency_coordinator_write_errors', {'reason': 'unavailable'}) == 1
+    assert metrics.get('scylla_strong_consistency_coordinator_read_errors', {'reason': 'unavailable'}) == 2  # QUORUM, ONE
 
 @pytest.mark.asyncio
 async def test_redirected_requests_latency_metrics(manager: ScyllaClusterManager):
