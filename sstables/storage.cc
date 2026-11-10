@@ -601,8 +601,9 @@ future<> filesystem_storage::wipe(sstable& sst, const atomic_deletion* deletion)
         return fmt::to_string(sst.toc_filename());
     }();
 
-    // The mark means that the TOC is renamed to a temporary TOC, and that the
-    // other files may still be there. destroy() removes them.
+    // unlink() set the mark. It stays only if the TOC is renamed to a
+    // temporary TOC and the other files may still be there. destroy() removes
+    // them then.
     std::exception_ptr ex;
     bool renamed = false;
     try {
@@ -612,7 +613,6 @@ future<> filesystem_storage::wipe(sstable& sst, const atomic_deletion* deletion)
             sst.unmark_for_deletion();
         } else {
             renamed = true;
-            sst.mark_for_deletion();
             // An atomic deletion removes sstables from a table, but readers that
             // hold an sstable can still open its components by name. So their
             // files are removed only by destroy(), when the last reference is
@@ -658,7 +658,7 @@ future<> filesystem_storage::destroy(const sstable& sst) {
     // An sstable that is destroyed before it is sealed can't be sealed anymore.
     co_await remove_temp_dir_of_unsealed();
 
-    // The mark is set only if wipe() renamed the TOC to a temporary TOC and
+    // wipe() keeps the mark only if it renamed the TOC to a temporary TOC and
     // the other files may still be there. Without the mark, the sstable must
     // survive, for example on shutdown.
     if (!sst.marked_for_deletion()) {

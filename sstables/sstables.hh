@@ -1187,6 +1187,13 @@ public:
         return _unlinked_at;
     }
 
+    // Whether the files of the sstable may be gone. An sstable that is
+    // unlinked and still marked for deletion keeps its files until it is
+    // destroyed (see unlink()).
+    bool files_may_be_gone() const noexcept {
+        return _unlinked_at && !marked_for_deletion();
+    }
+
     // The sstable identifier identifies the sstable globally across all nodes, shards, and over time.
     // When the sstable is created, the sstable identifier is equal to the sstable generation,
     // but over time, e.g. when a sstable is migrated across shards or nodes, its identifier
