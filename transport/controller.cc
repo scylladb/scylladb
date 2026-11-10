@@ -271,7 +271,8 @@ future<> controller::do_start_server() {
               .max_relations_in_where_clause = cfg.max_relations_in_where_clause,
               .cql_in_bind_variable_name_uses_uppercase_operator = cfg.cql_in_bind_variable_name_uses_uppercase_operator,
               .uninitialized_connections_semaphore_cpu_concurrency = cfg.uninitialized_connections_semaphore_cpu_concurrency,
-              .request_timeout_on_shutdown_in_seconds = cfg.request_timeout_on_shutdown_in_seconds
+              .request_timeout_on_shutdown_in_seconds = cfg.request_timeout_on_shutdown_in_seconds,
+              .listen_backlog = cfg.native_transport_listen_backlog()
             };
         });
 

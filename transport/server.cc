@@ -327,7 +327,7 @@ cql_server::cql_server(sharded<cql3::query_processor>& qp, auth::service& auth_s
         qos::service_level_controller& sl_controller, gms::gossiper& g, scheduling_group_key stats_key,
         maintenance_socket_enabled used_by_maintenance_socket,
         netw::messaging_service& ms)
-    : server("CQLServer", clogger, generic_server::config{std::move(config.uninitialized_connections_semaphore_cpu_concurrency), config.request_timeout_on_shutdown_in_seconds})
+    : server("CQLServer", clogger, generic_server::config{std::move(config.uninitialized_connections_semaphore_cpu_concurrency), config.request_timeout_on_shutdown_in_seconds, config.listen_backlog})
     , _query_processor(qp)
     , _ms(ms)
     , _config(std::move(config))
