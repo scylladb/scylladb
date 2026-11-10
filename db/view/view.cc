@@ -940,26 +940,6 @@ void view_updates::do_delete_old_entry(const partition_key& base_key, const clus
     _op_count += view_rows.size();
 }
 
-/*
- * Atomic cells have equal liveness if they're either both dead, or both non-expiring,
- * or have exactly the same expiration. Comparing liveness is useful for view-virtual
- * cells, as generating updates from them is not needed if their livenesses match.
- */
-static bool atomic_cells_liveness_equal(atomic_cell_view left, atomic_cell_view right) {
-    if (left.is_live() != right.is_live()) {
-        return false;
-    }
-    if (left.is_live()) {
-        if (left.is_live_and_has_ttl() != right.is_live_and_has_ttl()) {
-            return false;
-        }
-        if (left.is_live_and_has_ttl() && left.expiry() != right.expiry()) {
-            return false;
-        }
-    }
-    return true;
-}
-
 bool view_updates::can_skip_view_updates(const clustering_or_static_row& update, const clustering_or_static_row& existing) const {
     const row& existing_row = existing.cells();
     const row& updated_row = update.cells();
@@ -991,9 +971,6 @@ bool view_updates::can_skip_view_updates(const clustering_or_static_row& update,
         atomic_cell_view updated_cell_view = updated_cell->as_atomic_cell(cdef);
 
         // We cannot skip when a selected column is changed
-        if (view_it->second->is_view_virtual()) {
-            return atomic_cells_liveness_equal(existing_cell_view, updated_cell_view);
-        }
         return compare_atomic_cell_for_merge(existing_cell_view, updated_cell_view) == 0;
     });
 }
