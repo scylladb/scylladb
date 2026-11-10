@@ -2689,6 +2689,11 @@ async def test_split_and_intranode_synchronization(manager: ScyllaClusterManager
 
         await manager.api.disable_injection(server.ip_addr, "tablet_resize_finalization_postpone")
 
+        # The streamed sstables are not split, so the shard takes its ack back and the
+        # coordinator postpones the split, until the split monitor is let through.
+        mark, _ = await log.wait_for("Withdrawing split ack of tables", from_mark=mark)
+        await manager.api.disable_injection(server.ip_addr, "split_sstable_force_stop_exception")
+
         async def finished_splitting():
             tablet_count = await get_tablet_count(manager, server, ks, 'test')
             return tablet_count >= expected_tablet_count or None

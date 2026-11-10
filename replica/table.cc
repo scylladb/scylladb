@@ -1516,7 +1516,10 @@ future<> tablet_storage_group_manager::maybe_split_compaction_group_of(size_t id
 future<std::vector<sstables::shared_sstable>>
 tablet_storage_group_manager::maybe_split_new_sstable(const sstables::shared_sstable& sst) {
     co_await utils::get_local_injector().inject("maybe_split_new_sstable_wait", utils::wait_for_message(120s));
-    if (!tablet_map().needs_split()) {
+    // An old coordinator finalizes a split on the ack alone, so an sstable attached
+    // behind the ack has to be split here. Once the cluster rechecks readiness before
+    // finalization, an unsplit sstable only postpones the finalization.
+    if (!tablet_map().needs_split() || _t.get_sstables_manager().get_features().tablet_split_ready_check) {
         co_return std::vector<sstables::shared_sstable>{sst};
     }
 

@@ -522,9 +522,10 @@ async def test_node_restart_while_tablet_split(manager: ScyllaClusterManager, vo
                 mark, _ = await log.wait_for(f"Detected tablet split for table {cf}, increasing from 1 to 2 tablets", from_mark=mark)
                 await assert_resize_task_info(table_id, lambda response: len(response) == 2 and all(r.resize_task_info is None for r in response))
 
-# Verify that new sstable produced by repair cannot be split, if disk utilization level is critical.
+# Verify that a new sstable produced by repair is attached as is while disk utilization is
+# critical, and that the split is finished once the level drops.
 @pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
-async def test_repair_failure_on_split_rejection(manager: ScyllaClusterManager, volumes_factory: Callable) -> None:
+async def test_repair_attaches_unsplit_sstable_on_critical_disk(manager: ScyllaClusterManager, volumes_factory: Callable) -> None:
     cmd = [*global_cmdline,
            "--logger-log-level", "compaction=debug"]
     async with space_limited_servers(manager, volumes_factory, ["20M"]*3, cmdline=cmd) as servers:
@@ -564,6 +565,11 @@ async def test_repair_failure_on_split_rejection(manager: ScyllaClusterManager, 
                     await manager.api.disable_injection(servers[0].ip_addr, "database_apply")
 
                 await generate_repair_work()
+
+                # Let the node ack the split first, so that the repair's sstable lands behind the ack.
+                await run_split()
+                await log.wait_for(f"Setting split ready sequence number to .* for table {ks}.{table}", from_mark=mark)
+
                 await manager.api.enable_injection(servers[0].ip_addr, "maybe_split_new_sstable_wait", one_shot=True)
 
                 token = 'all'
@@ -573,9 +579,6 @@ async def test_repair_failure_on_split_rejection(manager: ScyllaClusterManager, 
                 # and the test itself waits up to 600s for that injection below. Give the call a
                 # timeout comfortably above that deadline so the client does not time out (SCYLLADB-3214).
                 repair_task = asyncio.create_task(manager.api.tablet_repair(servers[0].ip_addr, ks, table, token, timeout=900))
-
-                # Emit split decision during repair.
-                await run_split()
 
                 await manager.api.wait_for_injection_enter(servers[0].ip_addr, "maybe_split_new_sstable_wait",
                                                            deadline=time.time() + 600.0)
@@ -589,11 +592,12 @@ async def test_repair_failure_on_split_rejection(manager: ScyllaClusterManager, 
 
                     await manager.api.message_injection(servers[0].ip_addr, "maybe_split_new_sstable_wait")
 
-                    # Expect repair to fail when splitting new sstables
+                    # The new sstable is attached as is. The drain aborts the repair and the
+                    # coordinator retries it; the test must not await it here, since every retry
+                    # writes to the full disk.
                     await log.wait_for("Repair for tablet migration of .* failed", from_mark=mark)
-                    await log.wait_for(r"Failed to load SSTable.*critical disk utilization", from_mark=mark)
-
                     assert await log.grep(f"compaction.*Split {cf}", from_mark=mark) == []
+                    assert await log.grep("Failed to load SSTable", from_mark=mark) == []
 
                 logger.info("With blob file removed, wait for DB to drop below the critical disk utilization level")
                 mark, _ = await log.wait_for("Dropped below the critical disk utilization level", from_mark=mark)
@@ -601,14 +605,16 @@ async def test_repair_failure_on_split_rejection(manager: ScyllaClusterManager, 
                     mark, _ = await log.wait_for("compaction_manager - Enabled", from_mark=mark)
 
                 # Keep resize finalization postponed until the node has left the critical disk
-                # utilization mode. A failed tablet repair ends its transition after a 1s back-off,
-                # and since all replicas are already split-ready, the coordinator would otherwise
-                # finalize the split while the disk is still full, before the mark above
-                # (SCYLLADB-4684).
+                # utilization mode. If the drain aborted the repair before the attach, all replicas
+                # are split, and the split could be finalized before the mark below, so the final
+                # wait would miss it.
                 await manager.api.disable_injection(coord_serv.ip_addr, "tablet_resize_finalization_postpone")
 
                 await repair_task
 
+                # The unsplit sstable makes the node take its split ack back, then it splits
+                # the sstable now that it can, and the split is finalized.
+                mark, _ = await log.wait_for("Withdrawing split ack of tables", from_mark=mark)
                 mark, _ = await log.wait_for(f"Detected tablet split for table {cf}", from_mark=mark)
 
 # Since we create 20M volumes, we need to reduce the commitlog segment size
