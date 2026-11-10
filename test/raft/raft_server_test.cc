@@ -1225,6 +1225,43 @@ SEASTAR_THREAD_TEST_CASE(test_add_entry_append_succeeds_only_in_current_term) {
 #endif
 }
 
+// An abort requested while add_entry() is held before the append keeps the entry out
+// of the log, even though the memory permit wait that follows doesn't need to block.
+// Refs: SCYLLADB-6160.
+SEASTAR_THREAD_TEST_CASE(test_add_entry_aborted_before_append_is_not_appended) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    std::cerr << "Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n";
+    return;
+#else
+    raft::server::configuration srv_config {
+        .enable_forwarding = false,
+    };
+    test_case test_config {
+        .nodes = 1,
+        .config = std::vector<raft::server::configuration>(1, srv_config),
+    };
+    auto cluster = get_default_cluster(std::move(test_config));
+    cluster.start_all().get();
+    auto stop = defer([&cluster] noexcept { cluster.stop_all().get(); });
+
+    auto& server = cluster.get_server(0);
+    server.wait_for_leader(nullptr).get();
+    const auto [before_idx, term] = server.log_last_idx_term();
+
+    constexpr auto block_add_entry = "block_raft_add_entry_before_waiting_for_memory";
+    std::optional<scoped_error_injection> blocked_add_entry{block_add_entry};
+    seastar::abort_source as;
+    auto f_add_entry = server.add_entry(create_command(42), raft::wait_type::committed, &as);
+    wait_for_injection_enter(block_add_entry).get();
+
+    as.request_abort();
+    blocked_add_entry.reset();
+    BOOST_REQUIRE_THROW(f_add_entry.get(), raft::request_aborted);
+    BOOST_REQUIRE_EQUAL(server.log_last_idx_term().first, before_idx);
+    BOOST_REQUIRE_EQUAL(server.log_last_idx_term().second, term);
+#endif
+}
+
 // A configuration change completes even when the entry that completes it is
 // gone from the log before this server reports it committed.
 //

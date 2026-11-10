@@ -926,6 +926,13 @@ future<entry_id> server_impl::add_entry_on_leader(command cmd, seastar::abort_so
         // case only.
         co_await coroutine::return_exception(raft::not_a_leader(_fsm->current_leader()));
     }
+    // The memory permit wait looks at `as` only while it blocks. An abort
+    // requested before or after it must still keep the entry out of the log.
+    if (as && as->abort_requested()) [[unlikely]] {
+        co_await coroutine::return_exception(request_aborted(format(
+                "Abort requested before appending entry on leader in term: {}, on server: {}",
+                append_in_term, _id)));
+    }
     logger.trace("[{}] adding entry after waiting for memory permit", _tag);
 
     const log_entry& e = _fsm->add_entry(std::move(cmd));
