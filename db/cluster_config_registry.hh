@@ -154,9 +154,9 @@ std::optional<seastar::sstring> validate_value(const option& opt, std::string_vi
 // Each helper reports an internal error (utils::on_internal_error) when the option's type
 // does not match, so a mismatched call is a programming error rather than a silent conversion.
 // A present `value` is expected to have passed validate_value() (every override written
-// through the CQL path has); text that fails to parse anyway - a row corrupted or written
-// out-of-band - is logged and treated as absent, so a bad row degrades to the default
-// instead of failing the read.
+// through the CQL path has); text that fails to parse anyway, or an integer outside the
+// option's valid_range - a row corrupted or written out-of-band - is logged and treated as
+// absent, so a bad row degrades to the default instead of failing the read.
 bool to_boolean(const option& opt, const std::optional<seastar::sstring>& value);
 int64_t to_integer(const option& opt, const std::optional<seastar::sstring>& value);
 double to_floating_point(const option& opt, const std::optional<seastar::sstring>& value);

@@ -386,7 +386,14 @@ bool to_boolean(const option& opt, const std::optional<seastar::sstring>& value)
 }
 
 int64_t to_integer(const option& opt, const std::optional<seastar::sstring>& value) {
-    return to_native<int64_t>(opt, value_type::integer, "integer", value, parse_integer);
+    auto v = to_native<int64_t>(opt, value_type::integer, "integer", value, parse_integer);
+    if (opt.valid_range && (v < opt.valid_range->min || v > opt.valid_range->max)) {
+        cluster_config_registry_logger.warn(
+                "Ignoring out-of-range stored value {} for integer config '{}', using default: expected between {} and {}",
+                v, opt.name, opt.valid_range->min, opt.valid_range->max);
+        return std::get<int64_t>(opt.default_value);
+    }
+    return v;
 }
 
 double to_floating_point(const option& opt, const std::optional<seastar::sstring>& value) {
