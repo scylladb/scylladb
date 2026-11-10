@@ -397,6 +397,8 @@ For a given registration, the manager invokes callbacks serially on the local sh
 
 Destroying a registration while a refresh callback pass is in progress is safe: unregistration takes effect immediately for subsequent invocations and deferred cleanup guarantees iteration stability. This avoids stale callback pointers being invoked after subsystem teardown.
 
+Destroying a registration, or calling `unregister()`, does not wait for an invocation that is suspended at that point: it keeps running. A consumer whose callback can suspend and uses state that is destroyed before the manager stops must await the registration's `stop()` first. `stop()` unregisters the callback and resolves once the invocation in flight, if any, has returned. It must not be awaited from inside the callback itself.
+
 A native option registers a callback when its consumer must react to changes (see [Native Cluster Config Options](#native-cluster-config-options)).
 
 Join and restart follow the same sequencing: receive authoritative topology/schema state first, refresh the manager from schema-backed metadata, then re-invoke the callbacks.

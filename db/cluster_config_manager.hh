@@ -22,6 +22,7 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/gate.hh>
 #include <seastar/core/sharded.hh>
+#include <seastar/core/shared_future.hh>
 
 #include "schema/schema_fwd.hh"
 #include "service/migration_listener.hh"
@@ -105,12 +106,17 @@ public:
     // default until it arrives.
     //
     // The callback is registered on, and invoked only on, the calling shard. The caller owns
-    // its safety there: captures must be valid on that shard and outlive the manager. Register
+    // its safety there: captures must be valid on that shard until the registration is stopped
+    // (see config_callback_registration). Register
     // on every shard (invoke_on_all) for per-shard behavior, or on one shard to fire once. A
     // pass that fails midway is retried and re-delivers what the failed pass delivered, so the
     // callback must be idempotent.
     using config_callback_function = std::function<future<>(const lookup_context&, std::optional<sstring>)>;
 
+    // Owns one registered callback. unregister() and the destructor only prevent further
+    // invocations: one that is suspended at that point keeps running. A consumer whose
+    // callback can suspend and uses state that is destroyed before the manager stops must
+    // await stop() before destroying that state.
     class config_callback_registration {
     public:
         config_callback_registration() noexcept = default;
@@ -121,6 +127,11 @@ public:
         ~config_callback_registration();
 
         void unregister() noexcept;
+        // Unregisters and waits for an invocation of the callback that is in flight. When
+        // it resolves the callback is not running and is not invoked again; the manager
+        // may destroy the closure later. Must not be awaited from inside the callback
+        // itself: use unregister() there.
+        future<> stop();
 
     private:
         friend class cluster_config_manager;
@@ -188,6 +199,7 @@ private:
     future<> apply_refresh(const scope_caches& caches);
     future<> run_config_callbacks();
     void unregister_config_callback(uint64_t callback_id) noexcept;
+    future<> wait_for_callback_invocation(uint64_t callback_id);
     void sweep_unregistered_callbacks() noexcept;
 
     void signal_ready();
@@ -273,6 +285,12 @@ private:
     // Set when the first callback pass starts on this shard, never cleared. A registration
     // made before that is delivered by the startup pass; a later one has to request a pass.
     bool _callback_pass_started = false;
+    // The id of the callback this shard's pass is awaiting, 0 when none. A shard runs one
+    // pass at a time and a pass awaits one callback at a time.
+    uint64_t _invoking_callback_id = 0;
+    // Engaged while a config_callback_registration::stop() waits for that invocation,
+    // resolved when it returns.
+    std::optional<shared_promise<>> _invocation_done;
     std::vector<config_callback> _config_callbacks;
 };
 

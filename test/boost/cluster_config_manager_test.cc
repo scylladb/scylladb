@@ -1243,4 +1243,114 @@ SEASTAR_TEST_CASE(test_callback_owning_registrations_is_destroyed_on_stop) {
     });
 }
 
+namespace {
+
+// A callback for ks.t1 that reports when it is entered and then waits to be released.
+struct blocking_callback {
+    promise<> entered;
+    promise<> release;
+    unsigned calls = 0;
+    bool returned = false;
+
+    db::cluster_config_manager::config_callback_function make(sstring ks) {
+        return [this, ks = std::move(ks)] (const db::cluster_config_manager::lookup_context& ctx, std::optional<sstring>) -> future<> {
+            if (ctx.keyspace_name != ks || ctx.table_name != "t1") {
+                return make_ready_future<>();
+            }
+            ++calls;
+            entered.set_value();
+            return release.get_future().then([this] {
+                returned = true;
+            });
+        };
+    }
+};
+
+}
+
+// SCYLLADB-6139: stop() on a registration resolves only after the invocation in flight
+// returned, and the callback is not invoked afterwards.
+SEASTAR_TEST_CASE(test_registration_stop_waits_for_in_flight_callback) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE KEYSPACE ks_stop WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}").get();
+        e.execute_cql("CREATE TABLE ks_stop.t1 (pk int PRIMARY KEY)").get();
+        e.execute_cql("ALTER TABLE ks_stop.t1 WITH auto_repair_enabled = true").get();
+
+        auto& mgr = e.cluster_config_manager();
+        mgr.local().refresh().get();
+
+        blocking_callback cb;
+        // Registered after the first pass, so the registration requests a pass of its own.
+        auto registration = mgr.local().register_config_callback("auto_repair_enabled", cb.make("ks_stop"));
+        cb.entered.get_future().get();
+
+        auto stopped = registration.stop();
+        for (int i = 0; i < 10; ++i) {
+            seastar::yield().get();
+        }
+        BOOST_REQUIRE(!stopped.available());
+        BOOST_REQUIRE(!cb.returned);
+
+        cb.release.set_value();
+        stopped.get();
+        BOOST_REQUIRE(cb.returned);
+
+        e.execute_cql("ALTER TABLE ks_stop.t1 WITH auto_repair_enabled = false").get();
+        mgr.local().refresh().get();
+        BOOST_REQUIRE_EQUAL(cb.calls, 1u);
+    });
+}
+
+// stop() waits only for its own callback: it resolves at once when no invocation of it is
+// in flight, also while the pass is awaiting another callback.
+SEASTAR_TEST_CASE(test_registration_stop_does_not_wait_for_other_callbacks) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE KEYSPACE ks_stop2 WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}").get();
+        e.execute_cql("CREATE TABLE ks_stop2.t1 (pk int PRIMARY KEY)").get();
+        e.execute_cql("ALTER TABLE ks_stop2.t1 WITH auto_repair_enabled = true").get();
+
+        auto& mgr = e.cluster_config_manager();
+        auto noop = [] (const db::cluster_config_manager::lookup_context&, std::optional<sstring>) {
+            return make_ready_future<>();
+        };
+        auto idle_registration = mgr.local().register_config_callback("auto_repair_enabled", noop);
+        auto other_registration = mgr.local().register_config_callback("auto_repair_enabled", noop);
+        mgr.local().refresh().get();
+
+        BOOST_REQUIRE(idle_registration.stop().available());
+        // A second stop(), on the now empty handle, is a no-op.
+        BOOST_REQUIRE(idle_registration.stop().available());
+
+        blocking_callback cb;
+        auto registration = mgr.local().register_config_callback("auto_repair_enabled", cb.make("ks_stop2"));
+        cb.entered.get_future().get();
+        BOOST_REQUIRE(other_registration.stop().available());
+
+        cb.release.set_value();
+        registration.stop().get();
+    });
+}
+
+// stop() resolves, without an error, when the invocation it waits for fails.
+SEASTAR_TEST_CASE(test_registration_stop_resolves_when_callback_fails) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE KEYSPACE ks_stop3 WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}").get();
+        e.execute_cql("CREATE TABLE ks_stop3.t1 (pk int PRIMARY KEY)").get();
+        e.execute_cql("ALTER TABLE ks_stop3.t1 WITH auto_repair_enabled = true").get();
+
+        auto& mgr = e.cluster_config_manager();
+        mgr.local().refresh().get();
+
+        blocking_callback cb;
+        auto registration = mgr.local().register_config_callback("auto_repair_enabled", cb.make("ks_stop3"));
+        cb.entered.get_future().get();
+
+        auto stopped = registration.stop();
+        BOOST_REQUIRE(!stopped.available());
+        cb.release.set_exception(std::runtime_error("injected callback failure"));
+        stopped.get();
+        BOOST_REQUIRE(!cb.returned);
+    });
+}
+
 BOOST_AUTO_TEST_SUITE_END()
