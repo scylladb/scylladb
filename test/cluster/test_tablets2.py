@@ -2931,3 +2931,101 @@ async def test_split_ack_waits_for_write_waiting_for_memory(manager: ScyllaClust
         assert await get_tablet_count(manager, server, ks, 'test') == 2
         rows = await cql.run_async(f"SELECT pk, c FROM {ks}.test")
         assert [(r.pk, r.c) for r in rows] == [(0, 0)]
+
+
+@pytest.mark.parametrize("source", ['load_and_stream', 'repair'])
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_split_finalization_rechecks_replicas(manager: ScyllaClusterManager, source: str):
+    # The split ack is logged by shard 0 only, so keep the tablets there. Hints would bring the
+    # missed writes back before repair does.
+    cmdline = ['--smp', '1', '--hinted-handoff-enabled', '0']
+    servers = await manager.servers_add(2, config={'tablet_load_stats_refresh_interval_in_seconds': 1}, cmdline=cmdline, auto_rack_dc="dc1")
+
+    await manager.disable_tablet_balancing()
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}") as ks:
+        tables = ['held', 'free']
+        keys = range(100)
+        for t in tables:
+            await cql.run_async(f"CREATE TABLE {ks}.{t} (pk int PRIMARY KEY, c int) WITH tablets = {{'min_tablet_count': 1}}")
+
+        # Load-and-stream sends the sstable to the primary replica, so that one takes the hit.
+        primary = (await get_all_tablet_replicas(manager, servers[0], ks, 'held'))[0].replicas[0][0]
+        host_ids = [await manager.api.get_host_id(s.ip_addr) for s in servers]
+        hit, other = servers if host_ids[0] == primary else servers[::-1]
+        if source == 'repair':
+            # The hit replica misses the writes to the held table, so that repair has to send them.
+            await manager.api.enable_injection(hit.ip_addr, "database_apply", one_shot=False, parameters={"ks_name": ks, "cf_name": "held", "what": "throw"})
+
+        for t in tables:
+            stmt = cql.prepare(f"INSERT INTO {ks}.{t} (pk, c) VALUES (?, ?)")
+            stmt.consistency_level = ConsistencyLevel.ONE
+            await asyncio.gather(*[cql.run_async(stmt, (k, k)) for k in keys])
+
+        if source == 'load_and_stream':
+            # Move the hit replica's sstables of the held table to its upload directory, so that
+            # they can be loaded back later.
+            await manager.api.flush_keyspace(hit.ip_addr, ks)
+            workdir = await manager.server_get_workdir(hit.server_id)
+            await safe_server_stop_gracefully(manager, hit.server_id)
+            move_sstables_to_upload(glob.glob(os.path.join(workdir, "data", ks, "held-*"))[0])
+            await manager.server_start(hit.server_id)
+            cql = manager.get_cql()
+            await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+        else:
+            await manager.api.disable_injection(hit.ip_addr, "database_apply")
+            await manager.api.flush_keyspace(other.ip_addr, ks)
+
+        logs = {s.server_id: await manager.server_open_log(s.server_id) for s in servers}
+        marks = {s.server_id: await logs[s.server_id].mark() for s in servers}
+
+        # Let the replicas split and ack both tables, but keep the balancer from finalizing.
+        await asyncio.gather(*[manager.api.enable_injection(s.ip_addr, "tablet_resize_finalization_postpone", one_shot=False) for s in servers])
+        await manager.enable_tablet_balancing()
+        for t in tables:
+            await cql.run_async(f"ALTER TABLE {ks}.{t} WITH tablets = {{'min_tablet_count': 2}}")
+        for s in servers:
+            for t in tables:
+                await logs[s.server_id].wait_for(f"Setting split ready sequence number to .* for table {ks}.{t}", from_mark=marks[s.server_id])
+
+        # Hold the hit replica's second split, so that the held table stays postponed.
+        await manager.api.enable_injection(hit.ip_addr, "split_storage_groups_wait", one_shot=True)
+
+        # Put an unsplit sstable of the held table into a main group of the hit replica,
+        # behind its ack.
+        if source == 'load_and_stream':
+            await manager.api.load_new_sstables(hit.ip_addr, ks, "held", primary_replica=True)
+        else:
+            await manager.api.tablet_repair(hit.ip_addr, ks, "held", "all")
+
+        marks = {s.server_id: await logs[s.server_id].mark() for s in servers}
+        await asyncio.gather(*[manager.api.disable_injection(s.ip_addr, "tablet_resize_finalization_postpone") for s in servers])
+
+        held_id = (await cql.run_async(f"SELECT id FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = 'held'"))[0].id
+        async def postponed():
+            for s in servers:
+                if await logs[s.server_id].grep(f"Postponing split finalization of tables .*{held_id}", from_mark=marks[s.server_id]):
+                    return True
+            return None
+        await wait_for(postponed, time.time() + 120)
+
+        async def free_split():
+            return await get_tablet_count(manager, hit, ks, 'free') == 2 or None
+        await wait_for(free_split, time.time() + 120)
+        await manager.api.wait_for_injection_enter(hit.ip_addr, "split_storage_groups_wait")
+        assert await get_tablet_count(manager, hit, ks, 'held') == 1
+
+        await manager.api.message_injection(hit.ip_addr, "split_storage_groups_wait")
+        await logs[hit.server_id].wait_for(f"Setting split ready sequence number to .* for table {ks}.held", from_mark=marks[hit.server_id])
+
+        async def held_split():
+            return await get_tablet_count(manager, hit, ks, 'held') == 2 or None
+        await wait_for(held_split, time.time() + 120)
+
+        # Nothing landed on the other replica, so it must not have withdrawn its ack.
+        assert not await logs[other.server_id].grep("Setting split ready sequence number", from_mark=marks[other.server_id])
+
+        for t in tables:
+            rows = await cql.run_async(SimpleStatement(f"SELECT pk, c FROM {ks}.{t} BYPASS CACHE", consistency_level=ConsistencyLevel.ALL))
+            assert sorted((r.pk, r.c) for r in rows) == [(k, k) for k in keys]
