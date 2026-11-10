@@ -389,6 +389,45 @@ repair_row make_repair_row_from_disk(
         bool freeze_now = false);
 void flush_rows(schema_ptr s, std::list<repair_row>& rows, lw_shared_ptr<repair_writer>& writer, std::optional<small_table_optimization_params> small_table_optimization = std::nullopt, repair_meta* rm = nullptr);
 
+struct fragments_limiter {
+    sstring ks;
+    sstring cf;
+    size_t max_fragments_size;
+    size_t max_fragments_nr;
+    size_t fragments_size = 0;
+    size_t fragments_nr = 0;
+    // Max fragments size and number are allowed in a single repair_row_on_wire
+    // which is sent as a rpc stream message
+    static constexpr size_t _max_fragments_size = 240 * 1024;
+    static constexpr size_t _max_fragments_nr = 32 * 1024;
+    fragments_limiter(sstring keyspace, sstring table);
+    void reset(size_t size) {
+        fragments_size = size;
+        fragments_nr = 1;
+    };
+    void add(size_t size) {
+        fragments_size += size;
+        ++fragments_nr;
+    }
+    bool no_split(size_t size) {
+        return (fragments_size + size) < max_fragments_size && (fragments_nr + 1) < max_fragments_nr;
+    }
+};
+
+// Packs frozen fragments into repair_row_on_wire messages, split by fragments_limiter.
+class rows_on_wire_builder {
+    const schema& _s;
+    fragments_limiter _limiter;
+    bool _msg_split;
+    lw_shared_ptr<const decorated_key_with_hash> _last_dk_with_hash;
+    std::optional<repair_row_on_wire> _cur;
+public:
+    rows_on_wire_builder(const schema& s, bool msg_split);
+    // Returns the previous message once mf starts a new one.
+    std::optional<repair_row_on_wire> add(const lw_shared_ptr<const decorated_key_with_hash>& dk_with_hash, frozen_mutation_fragment mf);
+    std::optional<repair_row_on_wire> finish();
+};
+
 // A struct to hold the first and last token of a tablet.
 struct tablet_token_range {
     int64_t first_token;

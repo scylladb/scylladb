@@ -483,6 +483,14 @@ async def run_tablet_repair_multiple_rows_merge(manager: ScyllaClusterManager, i
     rows_query = [(r.pk, r.ck, r.data) for r in results]
     assert sorted(rows) == sorted(rows_query)
 
+    # The master sent rows to both peers from one buffer: check the other peer too.
+    await manager.server_start(servers[2].server_id)
+    await manager.server_stop_gracefully(servers[1].server_id)
+    hosts = await wait_for_cql_and_get_hosts(cql, [servers[2]], time.time() + 60)
+    results = await cql.run_async(SimpleStatement(f"SELECT * from {ks}.test", consistency_level=ConsistencyLevel.ONE), host=hosts[0])
+    rows_query = [(r.pk, r.ck, r.data) for r in results]
+    assert sorted(rows) == sorted(rows_query)
+
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_tablet_repair_multiple_rows_merge_fragments_nr(manager: ScyllaClusterManager):
     await run_tablet_repair_multiple_rows_merge(manager, "row_level_repair_max_fragments_nr", "10")

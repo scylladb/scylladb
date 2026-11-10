@@ -91,6 +91,12 @@ public:
         }
         return *fm;
     }
+    // Moves the frozen form out, leaving the row without data: only for its last use.
+    frozen_mutation_fragment take_frozen_mutation() {
+        auto fm = std::move(get_frozen_mutation());
+        _fm = std::monostate();
+        return fm;
+    }
     const frozen_mutation_fragment& get_frozen_mutation() const {
         auto* fm = std::get_if<frozen_mutation_fragment>(&_fm);
         if (!fm) {

@@ -467,6 +467,81 @@ SEASTAR_THREAD_TEST_CASE(repair_row_freezes_on_demand) {
     BOOST_REQUIRE((*dirty.get_frozen_mutation().representation().begin()).data() == fm_data);
 }
 
+// Packs rows into wire messages as put_row_diff does: copies for one of several peers, moves for a sole peer.
+static repair_rows_on_wire pack_rows_on_wire(const schema& s, std::list<repair_row>& rows, bool msg_split, bool move) {
+    repair_rows_on_wire out;
+    rows_on_wire_builder builder(s, msg_split);
+    for (repair_row& r : rows) {
+        r.freeze_for_send(s);
+        if (auto m = builder.add(r.get_dk_with_hash(), move ? r.take_frozen_mutation() : frozen_mutation_fragment(r.get_frozen_mutation()))) {
+            out.push_back(std::move(*m));
+        }
+    }
+    if (auto m = builder.finish()) {
+        out.push_back(std::move(*m));
+    }
+    return out;
+}
+
+SEASTAR_THREAD_TEST_CASE(repair_rows_on_wire_builder_packs_rows) {
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    reader_permit permit = semaphore.make_permit();
+    simple_schema ss;
+    schema_ptr s = ss.schema();
+    const uint64_t seed = 0;
+    repair_hasher hasher(seed, s);
+    auto pkeys = ss.make_pkeys(3);
+    // Partition 0 has three ~100 KiB rows, so the 240 KiB message limit splits it after two.
+    const std::vector<size_t> value_sizes[] = {{100 * 1024, 100 * 1024, 100 * 1024}, {1, 1, 1}, {1}};
+    std::list<repair_row> rows;
+    std::vector<frozen_mutation_fragment> expected;
+    for (size_t p = 0; p < pkeys.size(); ++p) {
+        auto dk = make_lw_shared<const decorated_key_with_hash>(*s, pkeys[p], seed);
+        for (size_t c = 0; c < value_sizes[p].size(); ++c) {
+            auto mf = ss.make_row(permit, ss.make_ckey(c), sstring(value_sizes[p][c], 'v'));
+            expected.push_back(freeze(*s, mf));
+            rows.push_back(make_repair_row_from_disk(dk, hasher, *s, std::move(mf)));
+        }
+    }
+    // {partition, use_last_partition_key, fragments} per message.
+    using shape = std::vector<std::tuple<size_t, bool, size_t>>;
+    auto check = [&](const repair_rows_on_wire& msgs, const shape& want) {
+        BOOST_REQUIRE_EQUAL(msgs.size(), want.size());
+        auto exp = expected.begin();
+        auto msg = msgs.begin();
+        for (auto& [p, use_last, nr] : want) {
+            BOOST_REQUIRE_EQUAL(msg->use_last_partition_key(), use_last);
+            if (!use_last) {
+                BOOST_REQUIRE(msg->get_key().equal(*s, pkeys[p].key()));
+            }
+            BOOST_REQUIRE_EQUAL(msg->get_mutation_fragments().size(), nr);
+            for (auto& fm : msg->get_mutation_fragments()) {
+                BOOST_REQUIRE(fm.representation() == (exp++)->representation());
+            }
+            ++msg;
+        }
+    };
+    const shape split = {{0, false, 2}, {0, true, 1}, {1, false, 3}, {2, false, 1}};
+    const shape unsplit = {{0, false, 3}, {1, false, 3}, {2, false, 1}};
+
+    check(pack_rows_on_wire(*s, rows, false, false), unsplit);
+    // Several peers: each gets its own copy and the rows stay intact for the next one.
+    check(pack_rows_on_wire(*s, rows, true, false), split);
+    auto msgs = pack_rows_on_wire(*s, rows, true, false);
+    check(msgs, split);
+    // The receiver rebuilds the same rows, in order.
+    auto received = to_repair_rows_list(std::move(msgs), s, seed, repair_master::yes, permit, hasher).get();
+    BOOST_REQUIRE_EQUAL(received.size(), rows.size());
+    for (auto r = rows.begin(), rr = received.begin(); r != rows.end(); ++r, ++rr) {
+        BOOST_REQUIRE(r->hash() == rr->hash());
+    }
+    // A sole peer takes the frozen rows: same messages, rows left empty.
+    check(pack_rows_on_wire(*s, rows, true, true), split);
+    for (auto& r : rows) {
+        BOOST_REQUIRE_THROW(r.get_frozen_mutation(), std::runtime_error);
+    }
+}
+
 SEASTAR_TEST_CASE(test_tablet_token_range_count) {
     {
         // Simple case: one large range covers a smaller one
