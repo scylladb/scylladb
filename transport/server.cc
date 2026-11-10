@@ -418,6 +418,19 @@ cql_server::cql_server(sharded<cql3::query_processor>& qp, auth::service& auth_s
 
 cql_server::~cql_server() = default;
 
+static db_clock::time_point to_wall_clock(db::timeout_clock::time_point deadline) {
+    const auto now = lowres_system_clock::now();
+    // capped, as a deadline far in the future would overflow
+    const auto left = std::min<lowres_system_clock::duration>(deadline - db::timeout_clock::now(), lowres_system_clock::time_point::max() - now);
+    return db_clock::time_point(std::chrono::floor<db_clock::duration>((now + left).time_since_epoch()));
+}
+
+static db::timeout_clock::time_point from_wall_clock(db_clock::time_point deadline) {
+    const auto now = db::timeout_clock::now();
+    const lowres_system_clock::duration left = deadline.time_since_epoch() - lowres_system_clock::now().time_since_epoch();
+    return now + std::min<db::timeout_clock::duration>(left, db::timeout_clock::time_point::max() - now);
+}
+
 future<> cql_server::stop() {
     co_await when_all_succeed(uninit_messaging_service(), server::stop()).discard_result();
 }
@@ -430,8 +443,13 @@ void cql_server::init_messaging_service() {
 
             co_await utils::get_local_injector().inject("wait_before_handling_forwarded_request", utils::wait_for_message(60s));
 
-            // The RPC timeout carries the request's deadline.
+            // The RPC timeout starts when the request is read here, so it leaves out the time the request spent
+            // on its way. The wall-clock deadline counts that time, but is shifted by the skew between the nodes' clocks.
             std::optional<db::timeout_clock::time_point> deadline = timeout;
+            if (req.deadline) {
+                const auto wall_clock_deadline = from_wall_clock(*req.deadline);
+                deadline = deadline ? std::min(*deadline, wall_clock_deadline) : wall_clock_deadline;
+            }
             co_return co_await container().invoke_on(shard, [src_host, req = std::move(req), deadline] (cql_server& shard_svc) mutable -> future<forward_cql_execute_response> {
                 service::client_state cs(shard_svc._auth_service,
                     &shard_svc._sl_controller,
@@ -2261,6 +2279,7 @@ cql_server::process(uint16_t stream, request_reader in, service::client_state& c
                 .client_state = client_state,
                 .trace_info = tracing::make_trace_info(trace_state),
                 .cached_fn_calls = std::move(cached_vals),
+                .deadline = to_wall_clock((*bounce_msg)->timeout().value()),
             };
 
             auto response = co_await forward_cql(

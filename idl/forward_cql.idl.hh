@@ -38,6 +38,8 @@ struct forward_cql_execute_request {
     // Cached PK function call values (e.g. now(), uuid()) that must stay
     // consistent across forwarding hops.
     std::unordered_map<uint8_t, bytes_opt> cached_fn_calls;
+    // The request's deadline by the forwarding node's wall clock.
+    std::optional<db_clock::time_point> deadline [[version 2027.1]];
 };
 
 enum class forward_cql_status : uint8_t {

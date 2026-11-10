@@ -10,6 +10,7 @@
 
 #include "bytes_ostream.hh"
 #include "cql3/dialect.hh"
+#include "db_clock.hh"
 #include "service/client_state.hh"
 #include "tracing/tracing.hh"
 #include "cql3/query_options.hh"
@@ -25,6 +26,7 @@ struct forward_cql_execute_request {
     service::forwarded_client_state client_state;
     std::optional<tracing::trace_info> trace_info;
     cql3::computed_function_values cached_fn_calls;
+    std::optional<db_clock::time_point> deadline;
 };
 
 enum class forward_cql_status : uint8_t {
