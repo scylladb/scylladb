@@ -2988,7 +2988,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             alternator::controller alternator_ctl(gossiper, proxy, ss, mm, sys_dist_ks, sys_ks, cdc_generation_service, service_memory_limiter, auth_service, sl_controller, vector_store_client, timeout_cfg, *cfg, alternator_listeners, dbcfg.statement_scheduling_group);
 
             auto webshell_listeners = db::get_listeners(*cfg, configured_listeners, db::listener_config::protocol_type::webshell);
-            tools::webshell::controller webshell_ctl(qp, auth_service, sl_controller, timeout_cfg, *cfg, webshell_listeners, dbcfg.statement_scheduling_group);
+            tools::webshell::controller webshell_ctl(qp, auth_service, sl_controller, timeout_cfg, gossiper, *cfg, webshell_listeners, dbcfg.statement_scheduling_group);
 
             // Follow the option from here on. Registered after the controllers are built
             // so that it is torn down before them, and on shard 0 only: applying a set of

@@ -30,6 +30,10 @@ namespace db {
 class config;
 }
 
+namespace gms {
+class gossiper;
+}
+
 class updateable_timeout_config;
 
 namespace tools::webshell {
@@ -47,6 +51,7 @@ class controller : public protocol_server {
     sharded<auth::service>& _auth_service;
     sharded<qos::service_level_controller>& _sl_controller;
     sharded<updateable_timeout_config>& _timeout_config;
+    sharded<gms::gossiper>& _gossiper;
     const db::config& _config;
     db::listener_configs _listeners;
 
@@ -70,7 +75,7 @@ class controller : public protocol_server {
 public:
     controller(sharded<cql3::query_processor>& qp, sharded<auth::service>& auth_service,
             sharded<qos::service_level_controller>& sl_controller, sharded<updateable_timeout_config>& timeout_config,
-            const db::config& config, db::listener_configs listeners, scheduling_group sg);
+            sharded<gms::gossiper>& gossiper, const db::config& config, db::listener_configs listeners, scheduling_group sg);
 
     virtual sstring name() const override;
     virtual sstring protocol() const override;
