@@ -85,6 +85,12 @@ public:
         }
         return *_fm;
     }
+    // Moves the frozen form out; the row must be re-frozen before reuse.
+    frozen_mutation_fragment take_frozen_mutation() {
+        auto fm = std::move(get_frozen_mutation());
+        _fm.reset();
+        return fm;
+    }
     const frozen_mutation_fragment& get_frozen_mutation() const {
         if (!_fm) {
             throw std::runtime_error("empty frozen_mutation_fragment");
