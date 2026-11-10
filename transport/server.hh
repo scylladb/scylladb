@@ -206,6 +206,23 @@ public:
     const cql3::cql_metadata_id_type& get_response_metadata_id() const;
 };
 
+class cql_server;
+
+// Keeps the forward_cql verbs registered across CQL server restarts and routes them
+// to the running server, so restarting neither re-registers them nor waits for them.
+class forward_cql_handler {
+    netw::messaging_service& _ms;
+    cql_server* _server = nullptr;
+
+    cql_server& server();
+public:
+    explicit forward_cql_handler(netw::messaging_service& ms) : _ms(ms) {}
+    future<> register_verbs();
+    future<> stop();
+    void attach(cql_server& s) noexcept { _server = &s; }
+    void detach() noexcept { _server = nullptr; }
+};
+
 class cql_server : public seastar::peering_sharded_service<cql_server>, public generic_server::server {
 private:
     struct transport_stats {
@@ -235,6 +252,8 @@ private:
     semaphore& _memory_available;
     const uint32_t _total_memory;
     seastar::metrics::metric_groups _metrics;
+    // Held by forwarded requests; stop() waits for them after the controller detached us.
+    seastar::named_gate _forward_gate{"cql_server::forward"};
     std::unique_ptr<event_notifier> _notifier;
 private:
     client_options_cache_type _connection_options_keys_and_values;
@@ -254,6 +273,7 @@ public:
             maintenance_socket_enabled used_by_maintenance_socket,
             netw::messaging_service& ms);
     ~cql_server();
+    future<> shutdown() override;
     future<> stop();
 
 public:
@@ -393,8 +413,7 @@ private:
     friend class type_codec;
 
 private:
-    void init_messaging_service();
-    future<> uninit_messaging_service();
+    friend class forward_cql_handler;
     future<forward_cql_execute_response> handle_forward_execute(service::query_state& qs, forward_cql_execute_request& req);
 
     future<foreign_ptr<std::unique_ptr<cql_transport::response>>> forward_cql(locator::host_id target_host, unsigned target_shard, seastar::lowres_clock::time_point timeout,

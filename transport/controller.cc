@@ -290,10 +290,27 @@ future<> controller::do_start_server() {
             start_listening_on_maintenance_socket(*cserver).get();
         }
 
+        if (!_used_by_maintenance_socket && !_forward_cql) {
+            auto fwd = std::make_unique<sharded<forward_cql_handler>>();
+            fwd->start(std::ref(_messaging)).get();
+            auto stop_fwd = defer([&fwd] noexcept { fwd->stop().get(); });
+            fwd->invoke_on_all(&forward_cql_handler::register_verbs).get();
+            stop_fwd.cancel();
+            _forward_cql = std::move(fwd);
+        }
+        // Runs before on_error, so a failed start never stops an attached server.
+        auto on_error_detach = defer([this] noexcept {
+            if (_forward_cql) {
+                _forward_cql->invoke_on_all([] (forward_cql_handler& h) { h.detach(); }).get();
+            }
+        });
         if (!_used_by_maintenance_socket) {
+            // Attach before announcing readiness, so forwarded requests find the server.
+            _forward_cql->invoke_on_all([&cserver] (forward_cql_handler& h) { h.attach(cserver->local()); }).get();
             set_cql_ready(true).get();
         }
 
+        on_error_detach.cancel();
         on_error.cancel();
         on_error_unsub.cancel();
         _server = std::move(cserver);
@@ -310,6 +327,9 @@ future<> controller::stop_server() {
         _listen_addresses.clear();
         co_await do_stop_server();
         co_await _bg_stops.close();
+        if (_forward_cql) {
+            co_await _forward_cql->stop();
+        }
     }
 }
 
@@ -330,6 +350,10 @@ future<> controller::do_stop_server() {
     }
 
     std::exception_ptr ex;
+
+    if (_forward_cql) {
+        co_await _forward_cql->invoke_on_all([] (forward_cql_handler& h) { h.detach(); });
+    }
 
     try {
         co_await set_cql_ready(false);
