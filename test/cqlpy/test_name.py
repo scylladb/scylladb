@@ -286,9 +286,10 @@ def test_access_table_forbidden_chars(cql, test_keyspace):
     bad_name = f'{unique_name()}$bad!'
     # We expect to see an error that the table doesn't exist - not that it
     # has a forbidden name. The does-not-exist error is slightly different
-    # between different versions of Cassandra and Scylla: Cassandra 3 says
-    # "does not exist", Cassandra 4 and 5 say "doesn't exist", and Scylla says
-    # "unconfigured table". We'll allow all of these in the test.
+    # between different versions of Cassandra and Scylla: Cassandra 3 and
+    # Scylla say "does not exist", Cassandra 4 and 5 say "doesn't exist", and
+    # older Scylla versions say "unconfigured table". We'll allow all of these
+    # in the test.
     with pytest.raises(InvalidRequest, match='does not exist|doesn\'t exist|unconfigured table'):
         cql.execute(f'SELECT * FROM {test_keyspace}."{bad_name}"')
     with pytest.raises(InvalidRequest, match='does not exist|doesn\'t exist|unconfigured table'):
