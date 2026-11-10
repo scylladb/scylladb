@@ -15,6 +15,7 @@
 #include <seastar/core/smp.hh>
 #include <seastar/util/short_streams.hh>
 #include <seastar/util/closeable.hh>
+#include <seastar/util/defer.hh>
 
 #include "sstables/checksum_utils.hh"
 #include "sstables/generation_type.hh"
@@ -35,6 +36,7 @@
 #include "replica/database.hh"
 #include "test/boost/sstable_test.hh"
 #include "test/lib/tmpdir.hh"
+#include "utils/error_injection.hh"
 #include "partition_slice_builder.hh"
 #include "sstables/sstable_mutation_reader.hh"
 #include "sstables/binary_search.hh"
@@ -529,6 +531,49 @@ SEASTAR_TEST_CASE(test_link_with_rewritten_component_run_identifier) {
         BOOST_REQUIRE(reloaded_sst->run_identifier() == new_run_id);
     });
 }
+
+#ifdef SCYLLA_ENABLE_ERROR_INJECTION
+// If link_with_rewritten_component() fails to open the sealed copy, it deletes the copy,
+// rather than leaving it on disk to be loaded alongside the original.
+SEASTAR_TEST_CASE(test_link_with_rewritten_component_open_failure) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto random_spec = tests::make_random_schema_specification(
+            "ks",
+            std::uniform_int_distribution<size_t>(1, 4),
+            std::uniform_int_distribution<size_t>(2, 4),
+            std::uniform_int_distribution<size_t>(2, 8),
+            std::uniform_int_distribution<size_t>(2, 8));
+        auto random_schema = tests::random_schema{tests::random::get_int<uint32_t>(), *random_spec};
+        auto schema = random_schema.schema();
+        const auto muts = tests::generate_random_mutations(random_schema, 2).get();
+
+        auto sst = make_sstable_containing(env.make_sstable(schema, sstable::version_types::me), muts).get();
+        auto dir = std::filesystem::path(fmt::to_string(sst->toc_filename())).parent_path();
+        auto list_tocs = [&] {
+            std::vector<std::string> tocs;
+            for (auto& e : std::filesystem::directory_iterator(dir)) {
+                if (e.path().filename().string().ends_with("TOC.txt")) {
+                    tocs.push_back(e.path().filename().string());
+                }
+            }
+            return tocs;
+        };
+        const auto tocs_before = list_tocs();
+        BOOST_REQUIRE_EQUAL(tocs_before.size(), 1);
+
+        auto creator = [&env, schema] (shared_sstable sst) {
+            return env.make_sstable(schema, sst->get_version());
+        };
+        auto& injector = utils::get_local_injector();
+        injector.enable("link_with_rewritten_component_open_fail");
+        auto disable_injection = defer([&] () noexcept { injector.disable("link_with_rewritten_component_open_fail"); });
+        BOOST_REQUIRE_THROW(sst->link_with_rewritten_component(creator, component_type::Scylla, [] (sstable&) {}, sstables::update_sstable_id::no).get(),
+                std::runtime_error);
+
+        BOOST_REQUIRE_EQUAL(list_tocs(), tocs_before);
+    });
+}
+#endif
 
 // Tests for reading a large partition for which the index contains a
 // "promoted index", i.e., a sample of the column names inside the partition,

@@ -1889,7 +1889,26 @@ future<shared_sstable> sstable::link_with_rewritten_component(std::function<shar
         });
 
         new_sst->seal_sstable(false).get();
-        new_sst->open_data().get();
+        // Sealing cleared the mark which deletes an unsealed sstable once it's dropped. So if the
+        // copy can't be opened, it has to be deleted here, or it would be left on disk and loaded
+        // alongside this sstable.
+        std::exception_ptr open_ex;
+        try {
+            utils::get_local_injector().inject("link_with_rewritten_component_open_fail", [] {
+                throw std::runtime_error{"link_with_rewritten_component_open_fail error injection"};
+            });
+            new_sst->open_data().get();
+        } catch (...) {
+            open_ex = std::current_exception();
+        }
+        if (open_ex) {
+            try {
+                new_sst->unlink().get();
+            } catch (...) {
+                sstlog.error("Failed to delete {} after failing to open it: {}", new_sst->toc_filename(), std::current_exception());
+            }
+            std::rethrow_exception(open_ex);
+        }
 
         _cloned_to_sstable_filename = new_sst->component_basename(component_type::Data);
         return new_sst;
