@@ -106,6 +106,10 @@ add_perf_test(perf_mutation_readers
     types
     utils)
 add_perf_test(perf_mutation_fragment)
+add_perf_test(perf_passwords
+  LIBRARIES
+    auth
+    utils)
 add_perf_test(perf_vint)
 add_perf_test(perf_row_cache_reads)
 add_perf_test(perf_generic_server)
