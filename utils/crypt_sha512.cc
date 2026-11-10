@@ -107,6 +107,7 @@ static void processblock(struct sha512 *s, const uint8_t *buf)
 	s->h[5] += f;
 	s->h[6] += g;
 	s->h[7] += h;
+	explicit_bzero(W, sizeof W);
 }
 
 static void pad(struct sha512 *s)
@@ -361,21 +362,41 @@ static seastar::future<char *> sha512crypt(const char *key, const char *setting,
 #endif
 	p = to64(p, md[63], 2);
 	*p = 0;
+	/* the coroutine frame lives on the heap, scrub key-derived state from it */
+	explicit_bzero(&ctx, sizeof ctx);
+	explicit_bzero(md, sizeof md);
+	explicit_bzero(kmd, sizeof kmd);
+	explicit_bzero(smd, sizeof smd);
 	co_return output;
 }
 
-seastar::future<const char *> __crypt_sha512(const char *key, const char *setting, char *output)
+/* known-answer test result, -1 until the test completes on this thread */
+static thread_local int self_test_result = -1;
+
+static seastar::future<> self_test()
 {
 	static const char testkey[] = "Xy01@#\x01\x02\x80\x7f\xff\r\n\x81\t !";
 	static const char testsetting[] = "$6$rounds=1234$abc0123456789$";
 	static const char testhash[] = "$6$rounds=1234$abc0123456789$BCpt8zLrc/RcyuXmCDOE1ALqMXB2MH6n1g891HhFj8.w7LxGv.FTkqq6Vxc/km3Y0jE0j24jY5PIv/oOu6reg1";
 	char testbuf[128];
-	char *p, *q;
+	char *q;
 
-	p = co_await sha512crypt(key, setting, output);
-	/* self test and stack cleanup */
 	q = co_await sha512crypt(testkey, testsetting, testbuf);
-	if (!p || q != testbuf || memcmp(testbuf, testhash, sizeof testhash))
+	/* failing to compute the hash says nothing about its correctness, so retry on the next call */
+	if (q == testbuf)
+		self_test_result = !memcmp(testbuf, testhash, sizeof testhash);
+}
+
+seastar::future<const char *> __crypt_sha512(const char *key, const char *setting, char *output)
+{
+	char *p;
+
+	if (self_test_result < 0)
+		co_await self_test();
+	if (self_test_result != 1)
+		co_return "*";
+	p = co_await sha512crypt(key, setting, output);
+	if (!p)
 		co_return "*";
 	co_return p;
 }
