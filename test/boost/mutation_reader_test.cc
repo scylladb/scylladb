@@ -3855,16 +3855,25 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_clear_tombstone_in_discontinued_p
         reader.fill_buffer().get();
         BOOST_REQUIRE(!reader.is_end_of_stream());
         std::vector<range_tombstone_change> tombs;
+        size_t partition_starts = 0;
+        size_t partition_ends = 0;
         {
             auto mf_opt = reader().get();
             BOOST_REQUIRE(mf_opt->is_partition_start());
+            ++partition_starts;
         }
         while (auto mf_opt = reader().get()) {
             if (mf_opt->is_range_tombstone_change()) {
                 tombs.push_back(std::move(mf_opt->as_range_tombstone_change()));
+            } else if (mf_opt->is_partition_start()) {
+                ++partition_starts;
+            } else if (mf_opt->is_end_of_partition()) {
+                ++partition_ends;
             }
         }
 
+        // The discontinued partition is closed, even if the stream ends there.
+        BOOST_REQUIRE_EQUAL(partition_ends, partition_starts);
         BOOST_REQUIRE_EQUAL(tombs.size(), 2);
 
         BOOST_REQUIRE(tombs.front().equal(*schema, first_rtc));
