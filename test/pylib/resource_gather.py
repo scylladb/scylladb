@@ -421,7 +421,8 @@ def setup_cgroup(is_required: bool) -> None:
         propagate_subtree_controls(CGROUP_TESTS)
 
 
-def setup_worker_cgroup() -> None:
+def setup_worker_cgroup() -> bool:
+    """Put this process in its worker's cgroup; return whether it is there."""
     from test.pylib.util import get_xdist_worker_id
     worker_id = get_xdist_worker_id() or "master"
     # this method is creating the worker cgroup, but the main cgroup is created in the master thread, so this is just to
@@ -445,6 +446,8 @@ def setup_worker_cgroup() -> None:
             f.write(str(os.getpid()))
     except Exception as e:
         logger.warning(f"Could not move worker process to cgroup {worker_cgroup_path_default}: {e}")
+        return False
+    return True
 
 
 class SystemResourceMonitor:

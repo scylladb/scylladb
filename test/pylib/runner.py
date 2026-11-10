@@ -491,6 +491,9 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     worker_cgroups = needs_worker_cgroups(session.config)
     temp_dir = pathlib.Path(session.config.getoption("--tmpdir")).absolute()
 
+    if not is_xdist_worker and dynamic_scheduler_needs_cgroups(session.config):
+        require_scheduler_cgroups(session.config)
+
     # Run stuff just once for the main pytest process (not in xdist workers).
     if not is_xdist_worker:
         sched_dir.prepare()
@@ -520,6 +523,38 @@ def pytest_sessionstart(session: pytest.Session) -> None:
         setup_worker_cgroup()
 
 
+def dynamic_scheduler_needs_cgroups(config: pytest.Config) -> bool:
+    """Whether the dynamic scheduler runs this session, and so needs worker cgroups."""
+    distributed = hasattr(config, "workerinput") or config.getoption("dist", "no") != "no"
+    return bool(config.getoption("--dynamic-scheduler") and distributed)
+
+
+def require_scheduler_cgroups(config: pytest.Config) -> None:
+    """Set up the cgroups the dynamic scheduler reads, or stop the session.
+
+    Without them the scheduler sees no load and no memory and learns nothing, so it
+    would run blind.  Falling back to the old scheduling silently would hide that, so
+    the user is told to choose it.
+    """
+    try:
+        setup_cgroup(is_required=True)
+        if setup_worker_cgroup():
+            return
+        reason = "could not move test.py into its cgroup"
+    except Exception as e:
+        reason = f"{type(e).__name__}: {e}"
+    rerun = "--no-dynamic-scheduler"
+    if config.getoption("--gather-metrics"):
+        rerun += " --no-gather-metrics"
+    pytest.exit("The dynamic scheduler can't run here: it measures the tests in cgroups, and this\n"
+                "process can't create them.\n"
+                "  - To fix it, give test.py write access to cgroup v2, e.g. run it in a delegated\n"
+                "    scope: systemd-run --user --scope -p Delegate=yes ./test.py ...\n"
+                f"  - Or run with the previous scheduler: add {rerun}\n"
+                f"(error: {reason})",
+                returncode=pytest.ExitCode.USAGE_ERROR)
+
+
 def needs_worker_cgroups(config: pytest.Config) -> bool:
     """Whether each worker runs in a cgroup of its own that per-test measurements read.
 
@@ -529,10 +564,7 @@ def needs_worker_cgroups(config: pytest.Config) -> bool:
     whatever --gather-metrics says, but only when xdist distributes the tests: a serial
     session has no scheduler to feed.
     """
-    if config.getoption("--gather-metrics"):
-        return True
-    distributed = hasattr(config, "workerinput") or config.getoption("dist", "no") != "no"
-    return bool(config.getoption("--dynamic-scheduler") and distributed)
+    return bool(config.getoption("--gather-metrics")) or dynamic_scheduler_needs_cgroups(config)
 
 
 @pytest.hookimpl(tryfirst=True)
