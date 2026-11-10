@@ -410,6 +410,7 @@ public:
     void add(logstor_group&) override;
 
     void submit(logstor_group&) override;
+    future<> compact(logstor_group&) override;
     future<> stop_ongoing_compactions(logstor_group&) override;
     future<> remove(logstor_group&) override;
     future<compaction_reenabler> disable_compaction(logstor_group&) override;
@@ -1730,6 +1731,10 @@ void compaction_manager_impl::submit(logstor_group& cg) {
     (void)submit_normal_compaction(cg, explicit_batch_limits()).handle_exception([table_id = cg.table_id()] (std::exception_ptr ep) {
         logstor_logger.debug("logstor compaction for table {} failed: {}. Ignored", table_id, ep);
     });
+}
+
+future<> compaction_manager_impl::compact(logstor_group& cg) {
+    return submit_normal_compaction(cg, explicit_batch_limits());
 }
 
 future<> compaction_manager_impl::stop_ongoing_compactions(logstor_group& cg) {

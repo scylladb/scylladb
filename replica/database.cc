@@ -3163,7 +3163,15 @@ future<> database::trigger_logstor_compaction_on_all_shards(sharded<database>& s
     });
 }
 
-void database::trigger_logstor_compaction(bool major) {
+future<> database::trigger_logstor_compaction(bool major) {
+    if (major) {
+        // A copy, because holding the tables lock for the whole compaction would block creating and dropping tables.
+        auto tables = _tables_metadata.get_column_families_copy();
+        co_await coroutine::parallel_for_each(tables, [] (auto& entry) {
+            return entry.second->major_logstor_compaction();
+        });
+        co_return;
+    }
     _tables_metadata.for_each_table([&] (table_id id, const lw_shared_ptr<table> tp) {
         if (tp->uses_logstor()) {
             tp->trigger_logstor_compaction();

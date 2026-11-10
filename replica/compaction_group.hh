@@ -268,6 +268,8 @@ public:
     // Triggers regular compaction.
     void trigger_compaction();
     void trigger_logstor_compaction();
+    // Compacts the group's logstor segments until a compaction frees none, and returns when done.
+    future<> major_logstor_compaction();
     bool compaction_disabled() const;
     future<unsigned> estimate_pending_compactions() const;
 

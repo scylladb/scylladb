@@ -444,6 +444,9 @@ public:
 
     virtual void submit(logstor_group&) = 0;
 
+    // Runs one compaction of the group, as submit() does, and returns when it is done.
+    virtual future<> compact(logstor_group&) = 0;
+
     virtual future<> submit_split_compaction(logstor_group& src, mutation_writer::classify_by_token_group, split_target_group) = 0;
 
     virtual future<> stop_ongoing_compactions(logstor_group&) = 0;

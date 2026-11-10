@@ -812,6 +812,44 @@ async def test_compaction(manager: ScyllaClusterManager):
             await manager.api.logstor_compaction(servers[0].ip_addr)
         await wait_for(segments_compacted, time.time() + 60)
 
+async def test_major_compaction(manager: ScyllaClusterManager):
+    """
+    Reproduces https://scylladb.atlassian.net/browse/SCYLLADB-5640: a major logstor compaction compacts every
+    segment that can be reclaimed, more than one batch, and returns when it is done.
+    """
+    cmdline = ['--logger-log-level', 'logstor=debug', '--smp=1']
+    # 0 disables automatic compaction, so the only compaction is the one the test asks for
+    cfg = {'experimental_features': ['logstor'], 'logstor_compaction_trigger_threshold': 0}
+    servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
+    server = servers[0]
+    cql = manager.get_cql()
+
+    async def segments_compacted() -> int:
+        metrics = await manager.metrics.query(server.ip_addr)
+        segments_in = metrics.get("scylla_logstor_sm_compaction_segments_in") or 0
+        segments_out = metrics.get("scylla_logstor_sm_compaction_segments_out") or 0
+        return segments_in - segments_out
+
+    async with new_test_keyspace(manager, "WITH tablets={'initial':1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+
+        # each value fills a segment, so each overwrite leaves one dead segment behind
+        value = 'x' * (120 * 1024)
+        for i in range(10):
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({i}, '{value}')")
+        # more dead segments than one compaction batch, at most 8 segments, can take
+        overwrites = 20
+        for _ in range(overwrites):
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES (100, '{value}')")
+        await manager.api.logstor_flush(server.ip_addr)
+
+        await manager.api.logstor_compaction(server.ip_addr, major=True)
+        assert await segments_compacted() == overwrites - 1
+
+        # nothing is left to reclaim, so another major compaction compacts nothing
+        await manager.api.logstor_compaction(server.ip_addr, major=True)
+        assert await segments_compacted() == overwrites - 1
+
 async def test_drop_table(manager: ScyllaClusterManager):
     """
     Test that DROP TABLE works properly with logstor tables.
