@@ -233,6 +233,16 @@ private:
     future<> update_tablets();
     future<> merge_functions();
     future<> merge_aggregates();
+    // The storage options of a keyspace, as they are once the change is
+    // committed.
+    const data_dictionary::storage_options& keyspace_storage_options(std::string_view ks_name) const;
+    // Creates the storage of the tables and views that the change creates.
+    // commit() adds them, and they accept writes from then on. A write can be
+    // flushed at any time, so the directory of a table must exist before the
+    // table is added. Like the directory of a created keyspace, it is created
+    // before commit(), so that a failure to create it leaves the in-memory
+    // schema unchanged.
+    future<> create_table_storage();
 
     void commit_tables_and_views();
     future<> finalize_tables_and_views();
