@@ -7,8 +7,14 @@
 from cassandra.query import SimpleStatement, ConsistencyLevel
 
 from test.pylib.manager_client import ManagerClient
+<<<<<<< HEAD
 from test.cluster.conftest import skip_mode
 from test.pylib.util import wait_for_view
+||||||| parent of bd09b1a5ae (test/cluster/mv/test_mv_staging: wait for the staging backlog of all shards)
+from test.pylib.util import wait_for_view
+=======
+from test.pylib.util import wait_for, wait_for_view
+>>>>>>> bd09b1a5ae (test/cluster/mv/test_mv_staging: wait for the staging backlog of all shards)
 from test.pylib.internal_types import ServerInfo
 from test.cluster.util import new_test_keyspace, wait_for_cql_and_get_hosts
 
@@ -111,5 +117,20 @@ async def test_staging_backlog_processed_after_restart(manager: ManagerClient):
 
         await s0_log.wait_for(f"Processed {ks}.tab", from_mark=s0_mark, timeout=60)
         hosts = await wait_for_cql_and_get_hosts(cql, [servers[0]], time.time() + 60)
+
+        # Each shard processes its own staging sstables and logs its own
+        # "Processed" line, so the line above only means that one shard is
+        # done. Wait until the staging backlog of all shards is gone.
+        staging_dir = os.path.join(await get_table_dir(manager, servers[0], ks, "tab"), "staging")
+        async def staging_empty():
+            return not os.listdir(staging_dir) or None
+        await wait_for(staging_empty, time.time() + 60)
+
+        # Assert view backlog was processed on server 0. View updates from
+        # staging sstables are applied before the sstables leave staging,
+        # so the view is complete once the staging directory is empty.
+        await manager.server_stop_gracefully(servers[1].server_id)
         await assert_row_count_on_host(cql, hosts[0], ks, "tab", 1000)
         await assert_row_count_on_host(cql, hosts[0], ks, "mv", 1000)
+        await manager.server_start(servers[1].server_id)
+        await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
