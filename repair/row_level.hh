@@ -379,6 +379,24 @@ future<std::list<repair_row>> to_repair_rows_list(repair_rows_on_wire rows,
         reader_permit permit, repair_hasher hasher);
 void flush_rows(schema_ptr s, std::list<repair_row>& rows, lw_shared_ptr<repair_writer>& writer, std::optional<small_table_optimization_params> small_table_optimization = std::nullopt, repair_meta* rm = nullptr);
 
+// Batch-size targets for send_full_set_rpc_stream_batched, ~8KiB/frame. Exposed here
+// (not as .cc-local statics) so unit tests reference the real values, not magic numbers.
+inline constexpr size_t hash_batch_max_count = 1024;   // 1024 * 8B hashes ~= 8KiB
+inline constexpr size_t row_batch_max_count = 32;      // rows vary in size; rough approximation
+// Secondary byte cap so large/wide rows can't balloon a batch past row_batch_max_count's
+// ~8KiB intent; matches the hash batch target.
+inline constexpr size_t row_batch_max_bytes = 8 * 1024;
+
+// Pure batch-grouping helpers behind send_hashes_batched/send_rows_batched (row_level.cc),
+// exposed for unit testing. repair_row_on_wire is declared in repair.hh (included above).
+future<std::vector<std::vector<uint64_t>>> batch_hashes_for_wire(const repair_hash_set& hashes);
+future<std::vector<std::list<repair_row_on_wire>>> batch_rows_for_wire(repair_rows_on_wire& rows);
+
+// Pure diff-detect-algorithm selection logic, exposed for unit testing (see
+// get_common_diff_detect_algorithm in row_level.cc for the RPC-fetching wrapper).
+row_level_diff_detect_algorithm select_diff_detect_algorithm(
+        std::vector<std::vector<row_level_diff_detect_algorithm>> nodes_algorithms, bool allow_batched);
+
 // A struct to hold the first and last token of a tablet.
 struct tablet_token_range {
     int64_t first_token;
@@ -387,3 +405,12 @@ struct tablet_token_range {
 
 // Function to count the number of ranges in ranges1 covered by the merged ranges of ranges2.
 future<size_t> count_finished_tablets(utils::chunked_vector<tablet_token_range> ranges1, utils::chunked_vector<tablet_token_range> ranges2);
+
+struct decoded_row_hashes {
+    repair_hash_set hashes;
+    size_t diff_size; // Size of the symmetric difference with the local set.
+};
+
+// Rebuilds a peer's row hashes from its sketch and `local`, the row hashes the
+// sketch is compared against; nullopt if the sketch does not decode.
+future<std::optional<decoded_row_hashes>> decode_peer_row_hashes(const repair_hash_set& local, repair_hash_sketch peer_sketch, repair_hash peer_combined_hash, size_t max_cells);

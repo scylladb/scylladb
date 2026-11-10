@@ -31,6 +31,17 @@ class repair_sync_boundary {
     position_in_partition position;
 };
 
+struct repair_hash_sketch {
+    utils::chunked_vector<int16_t> counts;
+    utils::chunked_vector<uint64_t> key_sums;
+    utils::chunked_vector<uint32_t> check_sums;
+};
+
+struct get_combined_row_hash_with_sketch_response {
+    repair_hash hash;
+    std::optional<repair_hash_sketch> sketch;
+};
+
 struct get_sync_boundary_response {
     std::optional<repair_sync_boundary> boundary;
     repair_hash row_buf_combined_csum;
@@ -42,6 +53,7 @@ struct get_sync_boundary_response {
 enum class row_level_diff_detect_algorithm : uint8_t {
     send_full_set,
     send_full_set_rpc_stream,
+    send_full_set_rpc_stream_batched,
 };
 
 enum class repair_stream_cmd : uint8_t {
@@ -53,6 +65,8 @@ enum class repair_stream_cmd : uint8_t {
     end_of_current_rows,
     get_full_row_hashes,
     put_rows_done,
+    hash_data_batch,
+    row_data_batch,
 };
 
 struct repair_hash_with_cmd {
@@ -65,6 +79,16 @@ struct repair_row_on_wire_with_cmd {
     partition_key_and_mutation_fragments row;
 };
 
+struct repair_hash_with_cmd_batch {
+    repair_stream_cmd cmd;
+    std::vector<uint64_t> hashes;
+};
+
+struct repair_row_on_wire_with_cmd_batch {
+    repair_stream_cmd cmd;
+    std::list<partition_key_and_mutation_fragments> rows;
+};
+
 enum class repair_row_level_start_status: uint8_t {
     ok,
     no_such_column_family,
@@ -72,6 +96,7 @@ enum class repair_row_level_start_status: uint8_t {
 
 struct repair_row_level_start_response {
     repair_row_level_start_status status;
+    std::optional<uint64_t> estimated_partitions [[version 2027.1]];
 };
 
 namespace locator {
@@ -109,7 +134,7 @@ verb [[with_client_info]] repair_update_system_table (repair_update_system_table
 verb [[with_client_info]] repair_flush_hints_batchlog (repair_flush_hints_batchlog_request req [[ref]]) -> repair_flush_hints_batchlog_response;
 verb [[with_client_info]] repair_get_full_row_hashes (uint32_t repair_meta_id, shard_id dst_shard_id [[version 5.2]]) -> repair_hash_set;
 verb [[with_client_info]] repair_get_combined_row_hash (uint32_t repair_meta_id, std::optional<repair_sync_boundary> common_sync_boundary, shard_id dst_shard_id [[version 5.2]]) -> get_combined_row_hash_response;
-verb [[with_client_info]] repair_get_sync_boundary (uint32_t repair_meta_id, std::optional<repair_sync_boundary> skipped_sync_boundary, shard_id dst_shard_id [[version 5.2]]) -> get_sync_boundary_response;
+verb [[with_client_info]] repair_get_sync_boundary (uint32_t repair_meta_id, std::optional<repair_sync_boundary> skipped_sync_boundary, shard_id dst_shard_id [[version 5.2]], std::optional<uint64_t> estimated_partitions [[version 2027.1]]) -> get_sync_boundary_response;
 verb [[with_client_info]] repair_get_row_diff (uint32_t repair_meta_id, repair_hash_set set_diff, bool needs_all_rows, shard_id dst_shard_id [[version 5.2]]) -> repair_rows_on_wire;
 verb [[with_client_info]] repair_put_row_diff (uint32_t repair_meta_id, repair_rows_on_wire row_diff, shard_id dst_shard_id [[version 5.2]]);
 verb [[with_client_info]] repair_row_level_start (uint32_t repair_meta_id, sstring keyspace_name, sstring cf_name, dht::token_range range, row_level_diff_detect_algorithm algo, uint64_t max_row_buf_size, uint64_t seed, unsigned remote_shard, unsigned remote_shard_count, unsigned remote_ignore_msb, sstring remote_partitioner_name, table_schema_version schema_version, streaming::stream_reason reason [[version 4.1.0]], gc_clock::time_point compaction_time [[version 5.2]], shard_id dst_shard_id [[version 5.2]], service::frozen_topology_guard topo_guard [[version 2025.1]], std::optional<int64_t> repaired_at [[version 2025.4]], locator::tablet_repair_incremental_mode incremental_mode [[version 2025.4]]) -> repair_row_level_start_response [[version 4.2.0]];
@@ -120,3 +145,4 @@ verb [[with_client_info]] repair_get_diff_algorithms () -> std::vector<row_level
 verb [[with_client_info]] repair_update_compaction_ctrl (locator::global_tablet_id gid, service::frozen_topology_guard topo_guard);
 verb [[with_client_info]] repair_update_repaired_at_for_merge(table_id);
 verb [[with_client_info]] repair_get_table_size(table_id table) -> uint64_t;
+verb [[with_client_info]] repair_get_combined_row_hash_with_sketch (uint32_t repair_meta_id, std::optional<repair_sync_boundary> common_sync_boundary, shard_id dst_shard_id, uint32_t sketch_cells, repair_hash master_hash) -> get_combined_row_hash_with_sketch_response;
