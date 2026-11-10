@@ -214,8 +214,8 @@ async def test_no_quorum_times_out_and_relaxed_read_answers(manager: ScyllaClust
 
             # Both relaxed reads and all four timeouts land on the survivor: the non-replica only
             # forwards the requests, and a forwarding timeout is not a coordinator error of its own.
-            # The survivor times a forwarded request out on its own clock, a moment after the
-            # forwarder has already answered the client, hence the short wait.
+            # The survivor times a forwarded request out at about the time the forwarder
+            # answers the client, and may count it a moment later, hence the short wait.
             async def counted() -> bool | None:
                 m = await manager.metrics.query(alive.ip_addr)
                 return ((m.get(READ_COUNT, {'read_type': 'non_linearizable'}) or 0) >= relaxed_reads_before + 2

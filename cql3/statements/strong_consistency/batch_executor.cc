@@ -60,7 +60,7 @@ batch_executor::commit(const batch_statement& batch, query_processor& qp, servic
 
     validate_write_consistency_level(options.get_consistency());
 
-    auto timeout = db::timeout_clock::now() + batch.get_timeout(qs.get_client_state(), options);
+    auto timeout = request_deadline(options, batch.get_timeout(qs.get_client_state(), options));
 
     // Build partition keys for all statements and validate they all target the same partition
     std::optional<dht::decorated_key> batch_key;

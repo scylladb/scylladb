@@ -438,6 +438,18 @@ static need_redirect redirect_to_replica(locator::tablet_replica target) {
     return { .target = target };
 }
 
+// Returns the error of the abort if one was requested or the deadline has passed, null otherwise. The clock
+// is compared as well, because abort_on_expiry fires only when the reactor next polls its timers.
+static std::exception_ptr check_aborted(abort_on_expiry<db::timeout_clock>& aoe, db::timeout_clock::time_point timeout) {
+    if (db::timeout_clock::now() >= timeout) {
+        aoe.abort_source().request_abort_ex(seastar::timed_out_error());
+    }
+    if (!aoe.abort_source().abort_requested()) {
+        return nullptr;
+    }
+    return aoe.abort_source().abort_requested_exception_ptr();
+}
+
 auto coordinator::create_operation_ctx(const schema& schema, const dht::token& token, abort_source& as, bool needs_leader,
         const tracing::trace_state_ptr& trace_state)
     -> future<value_or_redirect<operation_ctx>>
@@ -651,14 +663,14 @@ auto coordinator::mutate(schema_ptr schema,
         // it must not survive into the next one.
         ts_with_term = nullptr;
 
-        // A retry may come straight back here without suspending on anything that
-        // observes the deadline, so observe it before retrying.
-        if (aoe.abort_source().abort_requested()) {
-            co_await coroutine::return_exception_ptr(filter_error(aoe.abort_source().abort_requested_exception_ptr()));
-        }
-
         co_await utils::get_local_injector().inject("sc_coordinator_wait_before_begin_mutate",
             utils::wait_for_message(5min));
+
+        // A retry may come straight back here without suspending on anything that
+        // observes the deadline, so observe it before retrying.
+        if (auto ex = check_aborted(aoe, timeout)) {
+            co_await coroutine::return_exception_ptr(filter_error(std::move(ex)));
+        }
 
         auto disposition = op->raft_server.begin_mutate(aoe.abort_source());
         if (const auto* not_a_leader = get_if<raft::not_a_leader>(&disposition)) {
@@ -884,8 +896,8 @@ auto coordinator::query(schema_ptr schema,
         // For linearizable reads we may need to forward to the raft leader.
         while (true) {
             // See mutate() for why the deadline is checked here.
-            if (aoe.abort_source().abort_requested()) {
-                co_await coroutine::return_exception_ptr(filter_error(aoe.abort_source().abort_requested_exception_ptr()));
+            if (auto ex = check_aborted(aoe, timeout)) {
+                co_await coroutine::return_exception_ptr(filter_error(std::move(ex)));
             }
 
             auto disposition = op.raft_server.begin_read(aoe.abort_source());
@@ -942,6 +954,11 @@ auto coordinator::query(schema_ptr schema,
             co_await coroutine::return_exception_ptr(filter_error(std::move(f).get_exception()));
         }
         tracing::trace(trace_state, "The read barrier on raft group {} completed", op.replicas.group_id());
+    }
+
+    // The local query can succeed even if its deadline has already passed.
+    if (auto ex = check_aborted(aoe, timeout)) {
+        co_await coroutine::return_exception_ptr(filter_error(std::move(ex)));
     }
 
     // We're either a raft leader or it's a non-linearizable read. In both cases we can directly execute the read on this replica.

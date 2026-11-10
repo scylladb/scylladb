@@ -36,6 +36,11 @@ future<::shared_ptr<cql_transport::messages::result_message>> redirect_statement
     co_return qp.bounce_to_shard(target.shard, std::move(func_values_cache), true, timeout);
 }
 
+db::timeout_clock::time_point request_deadline(const query_options& options, db::timeout_clock::duration timeout) {
+    const auto deadline = db::timeout_clock::now() + timeout;
+    return std::min(deadline, options.get_deadline().value_or(deadline));
+}
+
 bool is_strongly_consistent(data_dictionary::database db, std::string_view ks_name) {
     const auto* tablet_aware_rs = db.find_keyspace(ks_name).get_replication_strategy().maybe_as_tablet_aware();
     return tablet_aware_rs && tablet_aware_rs->get_consistency() != data_dictionary::consistency_config_option::eventual;

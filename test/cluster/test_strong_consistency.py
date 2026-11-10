@@ -979,7 +979,8 @@ async def test_timed_out_queries(manager: ScyllaClusterManager):
     async def try_query_with_timeout(exception_type, stmt: str, error_injection_name: str, timeout_sec: float, add_timeout: bool):
         await manager.api.enable_injection(s1.ip_addr, error_injection_name, one_shot=True)
 
-        request_timeout_ms = 100
+        # A read bounced to the shard of its tablet must not time out before it reaches the injection.
+        request_timeout_ms = 1000
 
         stmt_fut = cql.run_async(f"{stmt} USING TIMEOUT {request_timeout_ms}ms" if add_timeout else stmt)
         await manager.api.wait_for_injection_enter(s1.ip_addr, error_injection_name)
