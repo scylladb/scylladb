@@ -56,15 +56,6 @@ future<utils::chunked_vector<mutation>> alter_type_statement::prepare_announceme
         throw exceptions::invalid_request_exception(format("No user type named {} exists.", _name.to_cql_string()));
     }
 
-    for (auto&& schema : ks.metadata()->cf_meta_data() | std::views::values) {
-        for (auto&& column : schema->partition_key_columns()) {
-            if (column.type->references_user_type(_name.get_keyspace(), _name.get_user_type_name())) {
-                throw exceptions::invalid_request_exception(format("Cannot add new field to type {} because it is used in the partition key column {} of table {}.{}",
-                    _name.to_cql_string(), column.name_as_text(), schema->ks_name(), schema->cf_name()));
-            }
-        }
-    }
-
     auto&& updated = make_updated_type(sp.data_dictionary(), to_update->second);
     // Now, we need to announce the type update to basically change it for new tables using this type,
     // but we also need to find all existing user types and CF using it and change them.
@@ -186,6 +177,16 @@ user_type alter_type_statement::add_or_alter::do_alter(data_dictionary::database
 
 user_type alter_type_statement::add_or_alter::make_updated_type(data_dictionary::database db, user_type to_update) const
 {
+    auto&& ks = db.find_keyspace(keyspace());
+    for (auto&& schema : ks.metadata()->cf_meta_data() | std::views::values) {
+        for (auto&& column : schema->partition_key_columns()) {
+            if (column.type->references_user_type(_name.get_keyspace(), _name.get_user_type_name())) {
+                throw exceptions::invalid_request_exception(format("Cannot add new field to type {} because it is used in the partition key column {} of table {}.{}",
+                    _name.to_cql_string(), column.name_as_text(), schema->ks_name(), schema->cf_name()));
+            }
+        }
+    }
+
     return _is_add ? do_add(db, to_update) : do_alter(db, to_update);
 }
 

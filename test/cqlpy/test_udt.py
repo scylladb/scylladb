@@ -15,6 +15,7 @@ import time
 import pytest
 from cassandra.protocol import InvalidRequest
 from .util import new_test_table, unique_key_int, new_type
+from . import nodetool
 
 # In test_select_collection_element.py we test that we can select
 # WRITETIME(col[key]) and TTL(col[key]) for an element in a map and a set,
@@ -170,16 +171,19 @@ def test_ttl_frozen_udt(cql, test_keyspace):
 
 # Both Scylla and Cassandra refuse to ALTER TYPE ... ADD a field to a UDT
 # used in a partition key (CASSANDRA-15933, tested in cassandra_tests/'s
-# AlterTest.testAlterTypeUsedInPartitionKey). Scylla also refuses to rename
-# a field of such a UDT, while Cassandra allows it - renaming a field
-# doesn't change the serialized partition key. So this test is Scylla-only.
+# AlterTest.testAlterTypeUsedInPartitionKey), but renaming a field of such
+# a UDT is allowed - it doesn't change the serialized partition key.
+# Reproduces issue #9633 (SCYLLADB-6273), where Scylla refused the rename
+# as well.
 # It replaces dtest's udtencoding_test.py::test_udt_change_in_partition_key
 # (see SCYLLADB-1929).
-def test_alter_type_rename_used_in_partition_key(cql, test_keyspace, scylla_only):
+def test_alter_type_rename_used_in_partition_key(cql, test_keyspace):
     with new_type(cql, test_keyspace, '(v1 int)') as typ, new_type(cql, test_keyspace, '(city text)') as other:
         with new_test_table(cql, test_keyspace, f'pk frozen<{typ}>, ck int, val {other}, PRIMARY KEY(pk, ck)') as table:
-            with pytest.raises(InvalidRequest, match=table.split('.')[1]):
-                cql.execute(f'ALTER TYPE {typ} RENAME v1 TO v1_renamed')
+            cql.execute(f'INSERT INTO {table} (pk, ck) VALUES ({{v1: 1}}, 2)')
+            nodetool.flush(cql, table)
+            cql.execute(f'ALTER TYPE {typ} RENAME v1 TO v1_renamed')
+            assert list(cql.execute(f'SELECT pk.v1_renamed, ck FROM {table} WHERE pk = {{v1_renamed: 1}}')) == [(1, 2)]
             # Only the partition key's UDT is protected, not other UDTs of the table.
             cql.execute(f'ALTER TYPE {other} ADD zip int')
 
