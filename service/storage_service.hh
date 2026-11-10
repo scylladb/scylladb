@@ -244,6 +244,8 @@ private:
     future<> cleanup_tablet(locator::global_tablet_id);
     // Handler for table load stats RPC.
     future<locator::load_stats> load_stats_for_tablet_based_tables();
+    // Returns the base tables which need a split and whose co-location group is split on all shards of this node.
+    future<std::vector<table_id>> tablet_split_ready();
     future<> process_tablet_split_candidate(table_id) noexcept;
     void register_tablet_split_candidate(table_id) noexcept;
     future<> run_tablet_split_monitor();
