@@ -49,7 +49,7 @@ elif [[ "${ARCH}" = "aarch64" ]]; then
     LLVM_TARGET_ARCH=AArch64
     # Based on https://community.arm.com/arm-community-blogs/b/tools-software-ides-blog/posts/compiler-flags-across-architectures-march-mtune-and-mcpu
     # and https://github.com/aws/aws-graviton-getting-started/blob/main/c-c%2B%2B.md
-    LLVM_CXX_FLAGS="-march=armv8.2-a+crc+crypto"
+    LLVM_CXX_FLAGS="-march=armv8.2-a+crc+crypto+rcpc+dotprod"
     # The sanitizers' fast unwinder reads return addresses out of the frame
     # records on the stack. Where the unwound code was built with pointer
     # authentication - as everything Fedora ships for aarch64 is, it builds with
