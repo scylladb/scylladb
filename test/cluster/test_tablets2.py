@@ -2777,3 +2777,88 @@ async def test_split_ack_waits_for_write_waiting_for_memory(manager: ScyllaClust
         assert await get_tablet_count(manager, server, ks, 'test') == 2
         rows = await cql.run_async(f"SELECT pk, c FROM {ks}.test")
         assert [(r.pk, r.c) for r in rows] == [(0, 0)]
+
+
+# The split ack a replica reports through the load stats is sticky. If an unsplit sstable lands
+# in a main group after it, finalization must not go ahead on that ack: the coordinator rechecks
+# the replicas and postpones the table, while other tables in the round are finalized. The replica
+# takes its ack back and splits the sstable, while a replica whose groups are split keeps its ack.
+# Split-on-attach would split the sstable before it lands, so it is skipped with an injection.
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_split_finalization_rechecks_replicas(manager: ScyllaClusterManager):
+    # The split ack is logged by shard 0 only, so keep the tablets there.
+    cmdline = ['--smp', '1']
+    servers = await manager.servers_add(2, config={'tablet_load_stats_refresh_interval_in_seconds': 1}, cmdline=cmdline, auto_rack_dc="dc1")
+    loader, hit = servers
+
+    await manager.disable_tablet_balancing()
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}") as ks:
+        tables = ['held', 'free']
+        keys = range(100)
+        for t in tables:
+            await cql.run_async(f"CREATE TABLE {ks}.{t} (pk int PRIMARY KEY, c int) WITH tablets = {{'min_tablet_count': 1}}")
+            await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.{t} (pk, c) VALUES ({k}, {k})") for k in keys])
+        await manager.api.flush_keyspace(loader.ip_addr, ks)
+
+        # Move the loader's sstables of the held table to its upload directory, so that they
+        # can be loaded back to both replicas later.
+        workdir = await manager.server_get_workdir(loader.server_id)
+        cql = await safe_server_stop_gracefully(manager, loader.server_id)
+        move_sstables_to_upload(glob.glob(os.path.join(workdir, "data", ks, "held-*"))[0])
+        await manager.server_start(loader.server_id)
+        cql = manager.get_cql()
+        await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
+        logs = [await manager.server_open_log(s.server_id) for s in servers]
+        marks = [await log.mark() for log in logs]
+
+        # Let the replicas split and ack both tables, but keep the balancer from finalizing.
+        await asyncio.gather(*[manager.api.enable_injection(s.ip_addr, "tablet_resize_finalization_postpone", one_shot=False) for s in servers])
+        await manager.enable_tablet_balancing()
+        for t in tables:
+            await cql.run_async(f"ALTER TABLE {ks}.{t} WITH tablets = {{'min_tablet_count': 2}}")
+        for log, mark in zip(logs, marks):
+            for t in tables:
+                await log.wait_for(f"Setting split ready sequence number to .* for table {ks}.{t}", from_mark=mark)
+
+        # Put an unsplit sstable of the held table into a main group of the hit replica,
+        # behind its ack.
+        await manager.api.enable_injection(hit.ip_addr, "maybe_split_new_sstable_skip", one_shot=False)
+        await manager.api.load_new_sstables(loader.ip_addr, ks, "held")
+        await manager.api.disable_injection(hit.ip_addr, "maybe_split_new_sstable_skip")
+
+        marks = [await log.mark() for log in logs]
+        # Hold the hit replica's second split, so that the held table stays postponed.
+        await manager.api.enable_injection(hit.ip_addr, "split_storage_groups_wait", one_shot=True)
+        await asyncio.gather(*[manager.api.disable_injection(s.ip_addr, "tablet_resize_finalization_postpone") for s in servers])
+
+        held_id = (await cql.run_async(f"SELECT id FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = 'held'"))[0].id
+        async def postponed():
+            for log, mark in zip(logs, marks):
+                if await log.grep(f"Postponing split finalization of tables .*{held_id}", from_mark=mark):
+                    return True
+            return None
+        await wait_for(postponed, time.time() + 120)
+
+        async def free_split():
+            return await get_tablet_count(manager, hit, ks, 'free') == 2 or None
+        await wait_for(free_split, time.time() + 120)
+        await manager.api.wait_for_injection_enter(hit.ip_addr, "split_storage_groups_wait")
+        assert await get_tablet_count(manager, hit, ks, 'held') == 1
+
+        await manager.api.message_injection(hit.ip_addr, "split_storage_groups_wait")
+        await logs[1].wait_for(f"Setting split ready sequence number to .* for table {ks}.held", from_mark=marks[1])
+
+        async def held_split():
+            return await get_tablet_count(manager, hit, ks, 'held') == 2 or None
+        await wait_for(held_split, time.time() + 120)
+
+        # The loader split the loaded sstable on attach, so its groups stayed split and it
+        # must not have withdrawn its ack.
+        assert not await logs[0].grep("Setting split ready sequence number", from_mark=marks[0])
+
+        for t in tables:
+            rows = await cql.run_async(SimpleStatement(f"SELECT pk, c FROM {ks}.{t} BYPASS CACHE", consistency_level=ConsistencyLevel.ALL))
+            assert sorted((r.pk, r.c) for r in rows) == [(k, k) for k in keys]

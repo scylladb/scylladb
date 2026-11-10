@@ -1504,7 +1504,8 @@ future<> tablet_storage_group_manager::maybe_split_compaction_group_of(size_t id
 future<std::vector<sstables::shared_sstable>>
 tablet_storage_group_manager::maybe_split_new_sstable(const sstables::shared_sstable& sst) {
     co_await utils::get_local_injector().inject("maybe_split_new_sstable_wait", utils::wait_for_message(120s));
-    if (!tablet_map().needs_split()) {
+    // Attaches the sstable unsplit, as if split-on-attach were gone.
+    if (!tablet_map().needs_split() || utils::get_local_injector().enter("maybe_split_new_sstable_skip")) {
         co_return std::vector<sstables::shared_sstable>{sst};
     }
 
