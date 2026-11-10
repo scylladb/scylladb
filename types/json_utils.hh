@@ -32,3 +32,11 @@ inline sstring to_json_string(const abstract_type& t, const bytes_opt& b) {
 }
 
 rjson::type to_json_type(const abstract_type &t, managed_bytes_view bv);
+
+// Whether to_json_string() can serialize a present but zero-length (empty)
+// value of the given type.
+// For the string types and blob, an empty value is a value in its own right
+// (an empty string, an empty blob). For all other types, it is a malformed
+// serialization of a value (an int of 0 bytes is not an int) and
+// to_json_string() rejects it.
+bool can_serialize_empty_value_to_json(const abstract_type& t);

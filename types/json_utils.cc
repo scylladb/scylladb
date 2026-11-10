@@ -19,6 +19,7 @@
 #include "types/listlike_partial_deserializing_iterator.hh"
 #include "utils/managed_bytes.hh"
 #include "utils/chunked_string.hh"
+#include "utils/on_internal_error.hh"
 #include "exceptions/exceptions.hh"
 #include <limits>
 #include <utility>
@@ -698,4 +699,44 @@ struct to_json_type_visitor {
 
 rjson::type to_json_type(const abstract_type &t, managed_bytes_view bv) {
     return visit(t, to_json_type_visitor(bv));
+}
+
+bool can_serialize_empty_value_to_json(const abstract_type& t) {
+    // No default: on purpose, so the compiler reminds us to update this when a
+    // new type is added.
+    switch (t.get_kind()) {
+        case abstract_type::kind::ascii:
+        case abstract_type::kind::bytes:
+        case abstract_type::kind::empty:
+        case abstract_type::kind::utf8:
+            return true;
+        case abstract_type::kind::boolean:
+        case abstract_type::kind::byte:
+        case abstract_type::kind::counter:
+        case abstract_type::kind::date:
+        case abstract_type::kind::decimal:
+        case abstract_type::kind::double_kind:
+        case abstract_type::kind::duration:
+        case abstract_type::kind::float_kind:
+        case abstract_type::kind::inet:
+        case abstract_type::kind::int32:
+        case abstract_type::kind::list:
+        case abstract_type::kind::long_kind:
+        case abstract_type::kind::map:
+        case abstract_type::kind::set:
+        case abstract_type::kind::short_kind:
+        case abstract_type::kind::simple_date:
+        case abstract_type::kind::time:
+        case abstract_type::kind::timestamp:
+        case abstract_type::kind::timeuuid:
+        case abstract_type::kind::tuple:
+        case abstract_type::kind::user:
+        case abstract_type::kind::uuid:
+        case abstract_type::kind::varint:
+        case abstract_type::kind::vector:
+            return false;
+        case abstract_type::kind::reversed:
+            return can_serialize_empty_value_to_json(*static_cast<const reversed_type_impl&>(t).underlying_type());
+    }
+    utils::on_internal_error(fmt::format("can_serialize_empty_value_to_json(): unexpected type kind {}", static_cast<int>(t.get_kind())));
 }
