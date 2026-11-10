@@ -114,13 +114,14 @@ logging::logger elogger("alternator-executor");
 // Alternator adds to tables:
 //
 // Tags storing the "ReadCapacityUnits" and "WriteCapacityUnits"
-// configured for a table with BillingMode=PROVISIONED.
+// configured for a table with BillingMode=PROVISIONED, or for a GSI in its view.
 const sstring RCU_TAG_KEY("system:provisioned_rcu");
 const sstring WCU_TAG_KEY("system:provisioned_wcu");
 // Tags storing the "ReadUnitsPerSecond" and "WriteUnitsPerSecond" of a table's
 // WarmThroughput. Alternator has nothing to pre-warm, so these are only
 // remembered and reported back - the Terraform AWS Provider needs
 // DescribeTable to return the warm throughput a table was configured with.
+// Each GSI's view carries the GSI's own pair.
 const sstring WARM_READ_TAG_KEY("system:warm_read_units");
 const sstring WARM_WRITE_TAG_KEY("system:warm_write_units");
 // Tag storing the table's original creation time, in milliseconds since the
@@ -354,6 +355,41 @@ double get_table_creation_time(const schema &schema) {
     return 0.0;
 }
 
+// Whether a WarmThroughput is missing both ReadUnitsPerSecond and
+// WriteUnitsPerSecond, so that it configures nothing.
+static bool has_no_warm_throughput_units(const rjson::value& warm) {
+    return !rjson::find(warm, "ReadUnitsPerSecond") && !rjson::find(warm, "WriteUnitsPerSecond");
+}
+
+// Unlike CreateTable, UpdateTable refuses a GSI's WarmThroughput which
+// configures nothing, in a Create and in an Update alike.
+static void check_gsi_warm_throughput_units(const rjson::value& gsi, std::string_view index_name) {
+    if (const rjson::value* warm = rjson::find(gsi, "WarmThroughput"); warm && warm->IsObject() && has_no_warm_throughput_units(*warm)) {
+        throw api_error::validation(fmt::format("One or more parameter values were invalid: "
+            "WarmThroughput must have at least one of ReadUnitsPerSecond or WriteUnitsPerSecond specified for index: {}", index_name));
+    }
+}
+
+// Complete, in the response of CreateTable or UpdateTable, the WarmThroughput
+// which the request gave to the table or to a GSI. It appears in the response
+// only when the request configured one, which echoing the request back already
+// achieves - but the request carries only the units, and DynamoDB reports a
+// Status with them. Alternator's CreateTable is synchronous and the response
+// already says TableStatus ACTIVE, so the warm throughput is active with it.
+static void complete_warm_throughput(rjson::value& parent) {
+    rjson::value* warm = rjson::find(parent, "WarmThroughput");
+    if (!warm || !warm->IsObject()) {
+        return;
+    }
+    if (has_no_warm_throughput_units(*warm)) {
+        // DynamoDB leaves out a WarmThroughput which configures nothing.
+        // The removal invalidates warm.
+        rjson::remove_member(parent, "WarmThroughput");
+    } else if (!rjson::find(*warm, "Status")) {
+        rjson::add(*warm, "Status", "ACTIVE");
+    }
+}
+
 void executor::supplement_table_info(rjson::value& descr, const schema& schema, service::storage_proxy& sp) {
     auto creation_time = get_table_creation_time(schema);
 
@@ -361,21 +397,14 @@ void executor::supplement_table_info(rjson::value& descr, const schema& schema, 
     rjson::add(descr, "TableStatus", "ACTIVE");
     rjson::add(descr, "TableId", rjson::from_string(schema.id().to_sstring()));
 
-    // A WarmThroughput appears in this response only when the request
-    // configured one, which echoing the request back already achieves - but the
-    // request carries only the units, and DynamoDB reports a Status with them.
-    // Alternator's CreateTable is synchronous and this response already says
-    // TableStatus ACTIVE, so the warm throughput is active with it.
-    rjson::value* warm = rjson::find(descr, "WarmThroughput");
-    if (warm && warm->IsObject() && !rjson::find(*warm, "Status")) {
-        rjson::add(*warm, "Status", "ACTIVE");
-    }
+    complete_warm_throughput(descr);
 
     // DynamoDB reports every GSI's ProvisionedThroughput here - zeros in
     // PAY_PER_REQUEST mode - so fill in what the request left out.
     rjson::value* gsis = rjson::find(descr, "GlobalSecondaryIndexes");
     if (gsis && gsis->IsArray()) {
         for (rjson::value& g : gsis->GetArray()) {
+            complete_warm_throughput(g);
             rjson::value* throughput = rjson::find(g, "ProvisionedThroughput");
             if (!throughput) {
                 rjson::value t = rjson::empty_object();
@@ -557,8 +586,8 @@ static std::optional<std::pair<int, int>> get_provisioned_throughput(const std::
     }
 }
 
-// Read the WarmThroughput units stored in a table's tags, or nullopt when the
-// table never had any configured. Both units are optional in a request, and a
+// Read the WarmThroughput units stored in a table's or a view's tags, or nullopt
+// when none were ever configured. Both units are optional in a request, and a
 // request configuring just one of them is remembered - DynamoDB fills the other
 // with the baseline every table has, Alternator has none and leaves it zero.
 static std::optional<std::pair<int, int>> get_warm_throughput(const std::map<sstring, sstring>* tags_ptr) {
@@ -584,10 +613,10 @@ static std::optional<std::pair<int, int>> get_warm_throughput(const std::map<sst
     return std::make_pair(read_units.value_or(0), write_units.value_or(0));
 }
 
-// Remember a WarmThroughput given in a CreateTable or UpdateTable request.
-// Returns whether the request carried one at all.
-static bool add_warm_throughput_tags(std::map<sstring, sstring>& tags, const rjson::value& request) {
-    const rjson::value* warm = rjson::find(request, "WarmThroughput");
+// Remember the WarmThroughput member of a CreateTable or UpdateTable request, or
+// of a GSI given in one. Returns whether there was one at all.
+static bool add_warm_throughput_tags(std::map<sstring, sstring>& tags, const rjson::value& value) {
+    const rjson::value* warm = rjson::find(value, "WarmThroughput");
     if (!warm || !warm->IsObject()) {
         return false;
     }
@@ -699,12 +728,12 @@ future<std::variant<rjson::value, api_error>> executor::fill_table_description(s
                         rjson::add(view_entry, "IndexStatus", "ACTIVE");
                         // DynamoDB reports a GSI's WarmThroughput only once the
                         // index is ACTIVE - while it is still being built the
-                        // structure is absent. An LSI has none. See the base
-                        // table's WarmThroughput above for why the values are
-                        // zeros.
+                        // structure is absent. An LSI has none. Like the base
+                        // table's above, the values are only remembered.
+                        const auto [index_warm_read, index_warm_write] = get_warm_throughput(view_tags_ptr).value_or(std::make_pair(0, 0));
                         rjson::value warm_throughput = rjson::empty_object();
-                        rjson::add(warm_throughput, "ReadUnitsPerSecond", 0);
-                        rjson::add(warm_throughput, "WriteUnitsPerSecond", 0);
+                        rjson::add(warm_throughput, "ReadUnitsPerSecond", index_warm_read);
+                        rjson::add(warm_throughput, "WriteUnitsPerSecond", index_warm_write);
                         rjson::add(warm_throughput, "Status", "ACTIVE");
                         rjson::add(view_entry, "WarmThroughput", std::move(warm_throughput));
                     } else {
@@ -1450,6 +1479,32 @@ static billing_mode_type verify_billing_mode(const rjson::value& request) {
     return billing_mode_type();
 }
 
+// Store a table's billing mode in its tags, the way DescribeTable reads it
+// back: the capacities in PROVISIONED mode, no capacities in PAY_PER_REQUEST
+// mode. Only in PAY_PER_REQUEST mode does it also suit a GSI's view: in
+// PROVISIONED mode a GSI has capacities of its own, not the table's.
+static void set_billing_mode_tags(std::map<sstring, sstring>& tags, const billing_mode_type& bm) {
+    if (bm.provisioned) {
+        tags[RCU_TAG_KEY] = std::to_string(bm.rcu);
+        tags[WCU_TAG_KEY] = std::to_string(bm.wcu);
+    } else {
+        tags.erase(RCU_TAG_KEY);
+        tags.erase(WCU_TAG_KEY);
+    }
+}
+
+// Return a copy of a view with its tags changed by modify().
+static view_ptr view_with_modified_tags(const schema_ptr& view, std::invocable<std::map<sstring, sstring>&> auto&& modify) {
+    std::map<sstring, sstring> tags;
+    if (const auto* tags_ptr = db::get_tags_of_table(view)) {
+        tags = *tags_ptr;
+    }
+    modify(tags);
+    schema_builder builder(view);
+    builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(std::move(tags)));
+    return view_ptr(builder.build());
+}
+
 // Validate that a AttributeDefinitions parameter in CreateTable is valid, and
 // throws user-facing api_error::validation if it's not.
 // In particular, verify that the same AttributeName doesn't appear more than
@@ -2097,16 +2152,18 @@ enum class gsi_creator { create_table, update_table };
 
 // A GSI carries its own ProvisionedThroughput, separate from the base table's.
 // DynamoDB requires it when, and only when, the table is PROVISIONED, and
-// always wants both capacities in it. Verify that, and store the throughput in
-// the view's tags the way the base table's is stored, so that DescribeTable can
-// report it back. Like the base table's, the values themselves are not enforced.
+// always wants both capacities in it, each at least 1. Verify that - except
+// for zero capacities, which Alternator deliberately accepts, unlike DynamoDB -
+// and store the throughput in the view's tags the way the base table's is
+// stored, so that DescribeTable can report it back. Like the base table's, the
+// values themselves are not enforced.
 static void validate_and_store_gsi_provisioned_throughput(std::map<sstring, sstring>& tags,
         const rjson::value& index, std::string_view index_name, bool table_provisioned,
         gsi_creator creator) {
     const rjson::value* throughput = rjson::find(index, "ProvisionedThroughput");
     std::optional<int> rcu, wcu;
     if (throughput) {
-        // A throughput which is there must be complete and at least 1, and
+        // A throughput which is there must be complete and not negative, and
         // DynamoDB checks both before the billing mode below - it rejects such
         // a throughput even on a table which may carry none at all.
         rcu = get_int_attribute(*throughput, "ReadCapacityUnits");
@@ -2115,13 +2172,19 @@ static void validate_and_store_gsi_provisioned_throughput(std::map<sstring, sstr
             throw api_error::validation(fmt::format("One or more parameter values were invalid: "
                 "Both ReadCapacityUnits and WriteCapacityUnits must be specified for index: {}", index_name));
         }
-        if (*rcu < 1 || *wcu < 1) {
+        // Incompatible with DynamoDB on purpose: zeros are accepted, as
+        // Alternator only remembers the values, and Scylla Migrator copies the
+        // zeros DynamoDB reports for a PAY_PER_REQUEST table's GSIs into the
+        // GSIs of a PAY_PER_REQUEST table it creates.
+        if (*rcu < 0 || *wcu < 0) {
             throw api_error::validation(fmt::format("One or more parameter values were invalid: "
-                "ReadCapacityUnits and WriteCapacityUnits must be at least 1 for index: {}", index_name));
+                "ReadCapacityUnits and WriteCapacityUnits must not be negative for index: {}", index_name));
         }
     }
     if (!table_provisioned) {
-        if (throughput) {
+        // Also incompatible on purpose: zeros, which DynamoDB refuses here as
+        // below 1, are taken as no throughput at all.
+        if (throughput && (*rcu != 0 || *wcu != 0)) {
             throw api_error::validation(creator == gsi_creator::create_table
                 ? fmt::format("One or more parameter values were invalid: ProvisionedThroughput should not be "
                     "specified for index: {} when BillingMode is PAY_PER_REQUEST", index_name)
@@ -2304,6 +2367,7 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
 
             auto tags = make_gsi_tags(composite_gsi_keys_supported, spurious_base_key_added_as_range_key, view_hash_keys, view_range_keys);
             validate_and_store_gsi_provisioned_throughput(tags, g, index_name, bm.provisioned, gsi_creator::create_table);
+            add_warm_throughput_tags(tags, g);
             view_builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(std::move(tags)));
             view_builders.emplace_back(std::move(view_builder));
         }
@@ -2440,10 +2504,7 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
     if (tags && tags->IsArray()) {
         update_tags_map(*tags, tags_map, update_tags_action::add_tags);
     }
-    if (bm.provisioned) {
-        tags_map[RCU_TAG_KEY] = std::to_string(bm.rcu);
-        tags_map[WCU_TAG_KEY] = std::to_string(bm.wcu);
-    }
+    set_billing_mode_tags(tags_map, bm);
     add_warm_throughput_tags(tags_map, request);
     set_table_creation_time(tags_map, db_clock::now());
     builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(tags_map));
@@ -2753,11 +2814,22 @@ future<executor::request_return_type> executor::update_table(client_state& clien
         }
     }
 
+    // Unlike CreateTable, DynamoDB refuses an update to a WarmThroughput which
+    // is missing both ReadUnitsPerSecond and WriteUnitsPerSecond.
+    if (const rjson::value* warm = rjson::find(request, "WarmThroughput"); warm && warm->IsObject() && has_no_warm_throughput_units(*warm)) {
+        co_await coroutine::return_exception(api_error::validation("One or more parameter values were invalid: "
+                "WarmThroughput must have at least one of ReadUnitsPerSecond or WriteUnitsPerSecond specified"));
+    }
+
     bool empty_request = true;
+    // UpdateTable can switch a table only to PAY_PER_REQUEST: it refuses a
+    // ProvisionedThroughput above, and verify_billing_mode() refuses
+    // BillingMode=PROVISIONED without one. The switch to PROVISIONED is #19718.
+    std::optional<billing_mode_type> billing_mode;
 
     if (rjson::find(request, "BillingMode")) {
         empty_request = false;
-        verify_billing_mode(request);
+        billing_mode = verify_billing_mode(request);
     }
 
     // Note: audit_info is captured by reference into the invoke_on() lambda and written on shard 0.
@@ -2765,7 +2837,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
     // the entire duration of invoke_on(). Only the unique_ptr itself is read/written cross-shard —
     // no concurrent access occurs since the caller is suspended during invoke_on().
     co_return co_await _mm.container().invoke_on(0, [&p = _proxy.container(), request = std::move(request), gt = tracing::global_trace_state_ptr(std::move(trace_state)), enforce_authorization = bool(_enforce_authorization),
-                warn_authorization = bool(_warn_authorization), client_state_other_shard = client_state.move_to_other_shard(), empty_request, &e = this->container(), &audit_info]
+                warn_authorization = bool(_warn_authorization), client_state_other_shard = client_state.move_to_other_shard(), empty_request, billing_mode, &e = this->container(), &audit_info]
                                                 (service::migration_manager& mm) mutable -> future<executor::request_return_type> {
         // Materialize the shard-local copy once; every get() creates a whole
         // new client_state.
@@ -2790,16 +2862,23 @@ future<executor::request_return_type> executor::update_table(client_state& clien
 
             schema_builder builder(tab);
 
+            // The table's tags hold its WarmThroughput and its billing mode.
             // DynamoDB accepts an UpdateTable carrying only WarmThroughput.
             // Alternator has no throughput caps and nothing to pre-warm, so it
             // just remembers the request for DescribeTable to report back.
-            std::map<sstring, sstring> warm_tags;
+            std::map<sstring, sstring> table_tags;
             if (const auto* tags_ptr = db::get_tags_of_table(tab)) {
-                warm_tags = *tags_ptr;
+                table_tags = *tags_ptr;
             }
-            if (add_warm_throughput_tags(warm_tags, request)) {
+            const bool warm_throughput_given = add_warm_throughput_tags(table_tags, request);
+            if (warm_throughput_given) {
                 empty_request = false;
-                builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(std::move(warm_tags)));
+            }
+            if (billing_mode) {
+                set_billing_mode_tags(table_tags, *billing_mode);
+            }
+            if (warm_throughput_given || billing_mode) {
+                builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(std::move(table_tags)));
             }
 
             rjson::value* stream_specification = rjson::find(request, "StreamSpecification");
@@ -3099,17 +3178,18 @@ future<executor::request_return_type> executor::update_table(client_state& clien
             schema = builder.build();
             std::vector<view_ptr> new_views;
             std::vector<std::string> dropped_views;
+            // The existing views whose tags this request changes.
+            std::vector<view_ptr> updated_views;
 
             if (gsi_updates) {
                 if (!gsi_updates->IsArray()) {
                     co_return api_error::validation("GlobalSecondaryIndexUpdates must be an array");
                 }
                 if (gsi_updates->Size() > 1) {
-                    // Although UpdateTable takes an array of operations and could
-                    // support multiple Create and/or Delete operations in one
-                    // command, DynamoDB doesn't actually allows this, and throws
-                    // a LimitExceededException if this is attempted.
-                    co_return api_error::limit_exceeded("GlobalSecondaryIndexUpdates only allows one index creation or deletion");
+                    // DynamoDB refuses several Create or Delete operations in one
+                    // command with a LimitExceededException. It accepts several
+                    // WarmThroughput Updates, which Alternator does not support yet.
+                    co_return api_error::limit_exceeded("GlobalSecondaryIndexUpdates only allows one index creation, update or deletion");
                 }
                 if (vector_index_updates && vector_index_updates->IsArray() &&
                     vector_index_updates->Size() && gsi_updates->Size()) {
@@ -3217,6 +3297,8 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                         const bool table_provisioned = get_provisioned_throughput(db::get_tags_of_table(schema)).has_value();
                         auto tags = make_gsi_tags(composite_gsi_keys_supported, spurious_base_key_added_as_range_key, view_hash_keys, view_range_keys);
                         validate_and_store_gsi_provisioned_throughput(tags, it->value, index_name, table_provisioned, gsi_creator::update_table);
+                        check_gsi_warm_throughput_units(it->value, index_name);
+                        add_warm_throughput_tags(tags, it->value);
                         view_builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(std::move(tags)));
                         // Note below we don't need to add virtual columns, as all
                         // base columns were copied to view. TODO: reconsider the need
@@ -3236,19 +3318,59 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                         }
                         dropped_views.emplace_back(vname);
                     } else if (op == "Update") {
-                        co_return api_error::validation("GlobalSecondaryIndexUpdates Update not yet supported");
+                        elogger.trace("Updating GSI {}", index_name);
+                        const auto gsi_view = p.local().data_dictionary().try_find_table(keyspace_name, vname);
+                        if (!gsi_view) {
+                            co_return api_error::resource_not_found(fmt::format("No GSI {} in table {}", index_name, table_name));
+                        }
+                        // An Update can change only a GSI's WarmThroughput so
+                        // far - changing its ProvisionedThroughput is still
+                        // issue #19718.
+                        const rjson::value* warm = rjson::find(it->value, "WarmThroughput");
+                        if (!warm || !warm->IsObject()) {
+                            co_return api_error::validation("GlobalSecondaryIndexUpdates Update supports only WarmThroughput");
+                        }
+                        check_gsi_warm_throughput_units(it->value, index_name);
+                        // DynamoDB refuses a GSI's WarmThroughput update together
+                        // with another change of the GSI, or with a BillingMode -
+                        // even the one which the table already has. An Update
+                        // with no other change has only IndexName and WarmThroughput.
+                        if (it->value.MemberCount() != 2 || billing_mode) {
+                            co_return api_error::validation(fmt::format("One or more parameter values were invalid: "
+                                "WarmThroughput must be the only operation in the request for index: {}", index_name));
+                        }
+                        // Only this GSI's tags change, so update its view here.
+                        updated_views.push_back(view_with_modified_tags(gsi_view->schema(),
+                                [&] (auto& tags) { add_warm_throughput_tags(tags, it->value); }));
                     } else {
                         co_return api_error::validation(fmt::format("GlobalSecondaryIndexUpdates supports a Create, Delete or Update operation, saw '{}'", op));
                     }
                 }
             }
 
+            // A switch to PAY_PER_REQUEST also erases the stored capacities of
+            // the table's GSIs: DynamoDB reports zeros for a GSI in that mode,
+            // and so does DescribeTable for a GSI without stored capacities.
+            // A GSI Update, which changed its view above, cannot come with a
+            // BillingMode.
+            if (billing_mode && !billing_mode->provisioned) {
+                for (const view_ptr& view : p.local().data_dictionary().find_column_family(tab).views()) {
+                    // Skip a GSI which this request deletes, and a GSI
+                    // without stored capacities.
+                    if (std::ranges::contains(dropped_views, std::string_view(view->cf_name())) || !get_provisioned_throughput(db::get_tags_of_table(view))) {
+                        continue;
+                    }
+                    updated_views.push_back(view_with_modified_tags(view,
+                            [&] (auto& tags) { set_billing_mode_tags(tags, *billing_mode); }));
+                }
+            }
+
             if (empty_request) {
-                co_return api_error::validation("UpdateTable requires one of GlobalSecondaryIndexUpdates, VectorIndexUpdates, StreamSpecification or BillingMode to be specified");
+                co_return api_error::validation("UpdateTable requires one of GlobalSecondaryIndexUpdates, VectorIndexUpdates, StreamSpecification, BillingMode or WarmThroughput to be specified");
             }
 
             co_await verify_permission(enforce_authorization, warn_authorization, local_client_state, schema, auth::permission::ALTER, e.local()._stats);
-            auto m = co_await service::prepare_column_family_update_announcement(p.local(), schema, std::vector<view_ptr>(), group0_guard.write_timestamp());
+            auto m = co_await service::prepare_column_family_update_announcement(p.local(), schema, std::move(updated_views), group0_guard.write_timestamp());
             for (view_ptr view : new_views) {
                 auto m2 = co_await service::prepare_new_view_announcement(p.local(), view, group0_guard.write_timestamp());
                 std::move(m2.begin(), m2.end(), std::back_inserter(m));
@@ -3292,6 +3414,10 @@ future<executor::request_return_type> executor::update_table(client_state& clien
         co_await wait_for_schema_agreement_after_ddl(mm, p.local().local_db());
 
         rjson::value status = rjson::empty_object();
+        // UpdateTable has no GlobalSecondaryIndexes parameter, and DynamoDB
+        // ignores one. Do not echo it back: supplement_table_info() reads this
+        // member as the GSI list which CreateTable validated.
+        rjson::remove_member(request, "GlobalSecondaryIndexes");
         supplement_table_info(request, *schema, p.local());
         rjson::add(status, "TableDescription", std::move(request));
         co_return rjson::print(std::move(status));
