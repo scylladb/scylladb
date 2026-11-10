@@ -20,6 +20,7 @@
 #include "sstables/partition_index_cache.hh"
 #include "sstables/sstables.hh"
 #include "object_storage_client.hh"
+#include "data_dictionary/data_dictionary.hh"
 #include "db/config.hh"
 #include "db/object_storage_endpoint_param.hh"
 #include "gms/feature.hh"
@@ -298,6 +299,9 @@ shared_sstable sstables_manager::make_sstable(schema_ptr schema,
         db_clock::time_point now,
         io_error_handler_gen error_handler_gen,
         size_t buffer_size) {
+    if (auto it = _tables.find(schema->id()); it != _tables.end() && it->second.closed() && it->second.count == 0) {
+        throw data_dictionary::no_such_column_family(schema->id());
+    }
     return make_lw_shared<sstable>(std::move(schema), storage, generation, sid, state, v, f, get_large_data_handler(), get_corrupt_data_handler(), *this, now, std::move(error_handler_gen), buffer_size);
 }
 
@@ -477,7 +481,11 @@ void sstables_manager::release_table_storage_user(table_storage_users_map::itera
     if (--it->second.count != 0) {
         return;
     }
-    _tables.erase(it);
+    if (!it->second.closed()) {
+        // No table object opened the table on this shard, or its storage was
+        // already removed, so there is nothing to keep closed.
+        _tables.erase(it);
+    }
     _table_storage_users_changed.broadcast();
 }
 
@@ -492,6 +500,21 @@ future<bool> sstables_manager::await_table_storage_unused(table_id id) {
 bool sstables_manager::table_storage_in_use(table_id id) const noexcept {
     auto it = _tables.find(id);
     return it != _tables.end() && it->second.count != 0;
+}
+
+void sstables_manager::forget_table(table_id id) noexcept {
+    auto it = _tables.find(id);
+    if (it == _tables.end()) {
+        return;
+    }
+    if (it->second.open_tables() != 0) {
+        on_internal_error_noexcept(smlogger, format("Forgetting table {}, which is open", id));
+        return;
+    }
+    it->second.opens = it->second.closes = 0;
+    if (it->second.count == 0) {
+        _tables.erase(it);
+    }
 }
 
 void sstables_manager::remove(sstable* sst) {

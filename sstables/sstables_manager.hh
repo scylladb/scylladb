@@ -183,6 +183,13 @@ private:
         uint64_t open_tables() const noexcept {
             return opens - closes;
         }
+        // Tells if a table object was opened, and none is open. While the
+        // table is closed and the count is zero, make_sstable() fails for the
+        // table, so that the count can't go up again until a table object
+        // opens the table.
+        bool closed() const noexcept {
+            return opens != 0 && opens == closes;
+        }
     };
     using table_storage_users_map = std::unordered_map<table_id, table_storage_users>;
     table_storage_users_map _tables;
@@ -353,6 +360,11 @@ public:
     // destroyed. The storage of a dropped table is removed only when it has
     // no user on any shard. The count covers every sstable with the table's
     // schema ID, not only those in the table's sstable set.
+    //
+    // Once close_table() is called, no user can be added after the count
+    // reaches zero, until a table object opens the table again: make_sstable()
+    // fails for the table. A running table always holds a unit through
+    // open_table(), so it is never refused.
 
     // Called by the constructor of a table object.
     void open_table(table_id id);
@@ -363,6 +375,11 @@ public:
     future<bool> await_table_storage_unused(table_id id);
     // Tells if the storage of the table on this shard has a user.
     bool table_storage_in_use(table_id id) const noexcept;
+    // Forgets that a table object was opened, so that sstables of a closed
+    // table can be created again, once its storage is removed, or when a
+    // test reuses the schema of a stopped table. Drops the entry of the table
+    // once it has no user. The table must not be open.
+    void forget_table(table_id id) noexcept;
 
     std::vector<std::filesystem::path> get_local_directories(const data_dictionary::storage_options::local& so) const;
 
