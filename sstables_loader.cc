@@ -1633,6 +1633,41 @@ static void check_one_location_for_strongly_consistent(const replica::table& t, 
     }
 }
 
+// The tablet-aware restore registers the copies of a tablet, and marks the sstables a
+// replica attached, per datacenter and rack: system_distributed.snapshot_sstables is
+// keyed by them, not by host. So a rack is expected to hold one replica of a tablet.
+// Two replicas in one rack query the same rows and run concurrently, and each skips
+// the rows the other has marked by then, so how the copies split between them depends
+// on timing: both may attach everything, or one everything and the other nothing. A
+// repair after the restore covers that for an eventually consistent table; nothing
+// would for a strongly consistent one, whose replicas would differ from then on.
+// Refuse the restore of such a table.
+//
+// TODO: mark the attached sstables per host, so that every replica attaches its copy;
+// that changes the schema of system_distributed.snapshot_sstables.
+static future<> check_one_replica_per_rack_for_strongly_consistent(const replica::table& t) {
+    const auto erm = t.get_effective_replication_map();
+    const auto& tm = erm->get_token_metadata();
+    const auto& tmap = tm.tablets().get_tablet_map(t.schema()->id());
+    if (!tmap.has_raft_info()) {
+        co_return;
+    }
+    const auto& topo = tm.get_topology();
+    for (const auto tablet : tmap.tablet_ids()) {
+        std::unordered_set<locator::endpoint_dc_rack> racks;
+        for (const auto& replica : tmap.get_tablet_info(tablet).replicas) {
+            const auto& location = topo.get_location(replica.host);
+            if (!racks.insert(location).second) {
+                throw std::invalid_argument(fmt::format("Cannot restore {}.{}: tablet {} has two replicas in rack {} of datacenter {}, "
+                        "and the tablet-aware restore attaches one copy per rack, which would leave one of them empty; "
+                        "nothing repairs a strongly consistent table afterwards, so its replicas would differ",
+                        t.schema()->ks_name(), t.schema()->cf_name(), tablet, location.rack, location.dc));
+            }
+        }
+        co_await coroutine::maybe_yield();
+    }
+}
+
 future<tasks::task_id> sstables_loader::restore_tablets(table_id tid, sstring keyspace, sstring table, sstring snap_name, std::vector<tablet_restore_location> locations) {
     if (!_db.local().features().tablet_aware_restore) {
         throw std::runtime_error("Cannot restore tablets. Feature 'TABLET_AWARE_RESTORE' is not available in cluster");
@@ -1645,6 +1680,7 @@ future<tasks::task_id> sstables_loader::restore_tablets(table_id tid, sstring ke
     check_datacenter_coverage(_db.local().find_column_family(tid), locations);
     check_endpoints(_db.local().find_column_family(tid), locations);
     check_one_location_for_strongly_consistent(_db.local().find_column_family(tid), locations);
+    co_await check_one_replica_per_rack_for_strongly_consistent(_db.local().find_column_family(tid));
 
     db::snapshot_table_helper sth(_sys_dist_ks.qp());
     manifest_summary summary = { .tablet_count = 0, .nr_sstables = 0 };

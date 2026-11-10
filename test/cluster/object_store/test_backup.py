@@ -1020,6 +1020,24 @@ async def test_restore_tablets_without_any_manifests_refused_strongly_consistent
         rows = list(cql.execute(stmt))
         assert not rows, f"a refused restore registered its location: {rows}"
 
+
+async def test_restore_tablets_two_replicas_per_rack_refused_strongly_consistent(build_mode: str, manager: ScyllaClusterManager, object_storage):
+    """A tablet-aware restore of a strongly consistent table is refused when a tablet has two replicas in one rack.
+
+    The restore registers the copies and marks the attached sstables per rack, so of two
+    replicas in one rack the first to restore takes everything and the second stays
+    empty; nothing repairs a strongly consistent table afterwards.
+    """
+    topology = topo(rf = 2, nodes = 2, racks = 1, dcs = 1)
+    servers, host_ids = await create_cluster(topology, manager, logger, object_storage, extra_config=SC_CONFIG)
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 2}} AND tablets = {{'initial': 1}}{ks_consistency_opts(True)}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test ( pk text primary key, value int );")
+        locations = [{"datacenter": servers[0].datacenter, "endpoint": object_storage.address, "bucket": object_storage.bucket_name, "prefix": "nothing", "manifests": ["nothing/manifest.json"]}]
+        with pytest.raises(HTTPError, match="has two replicas in rack"):
+            await manager.api.restore_tablets_multidc(servers[0].ip_addr, ks, 'test', 'nothing', locations)
+
 @pytest.mark.parametrize("topology", [topo(rf = 2, nodes = 2, racks = 2, dcs = 1)])
 async def test_restore_tablets_completions_do_not_collide(build_mode: str, manager: ScyllaClusterManager,
                                                           s3_storage, topology):
