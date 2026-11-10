@@ -1158,6 +1158,50 @@ async def test_concurrent_modify_tags(manager: ScyllaClusterManager, op):
     finally:
         alternators[0].meta.client.delete_table(TableName=table_name)
 
+@pytest.mark.skip_mode(mode='release', reason='dev mode is enough for this test')
+@pytest.mark.skip_mode(mode='debug', reason='dev mode is enough for this test')
+async def test_ddl_waiting_for_group0_does_not_hold_shutdown(manager: ScyllaClusterManager):
+    """A CreateTable that waits for group0 must not hold up a graceful
+       shutdown. The test removes the group0 quorum, so CreateTable waits in
+       group0, and then stops the node. The stop must end long before the
+       group0 timeout, and CreateTable must fail.
+    """
+    config = alternator_config | {'group0_raft_op_timeout_in_ms': 600_000}
+    servers = await manager.servers_add(3, config=config, auto_rack_dc='dc1')
+    alternator = get_alternator(servers[0].ip_addr)
+
+    async def create_table_count():
+        metrics = await manager.metrics.query(servers[0].ip_addr)
+        return metrics.get('scylla_alternator_operation', {'op': 'CreateTable'}) or 0
+
+    async def create_table_started():
+        return await create_table_count() > before or None
+
+    # Stop the other two nodes, so that group0 has no quorum.
+    await asyncio.gather(*(manager.server_stop_gracefully(s.server_id) for s in servers[1:]))
+
+    # Start a CreateTable, and wait until the node counts it.
+    before = await create_table_count()
+    create = asyncio.create_task(asyncio.to_thread(alternator.meta.client.create_table,
+        TableName=unique_table_name(), BillingMode='PAY_PER_REQUEST',
+        KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+        AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'N'}]))
+    await wait_for(create_table_started, time.time() + 60)
+
+    # Without a quorum, the request waits in group0 for the group0 timeout.
+    await asyncio.sleep(1)
+    assert not create.done()
+
+    # The stop must not wait for the group0 timeout.
+    await manager.server_stop_gracefully(servers[0].server_id, timeout=120)
+    try:
+        await create
+        pytest.fail("CreateTable succeeded without a group0 quorum")
+    except ClientError as e:
+        assert e.response['Error']['Code'] == 'InternalServerError'
+    except (botocore.exceptions.ConnectionError, botocore.exceptions.HTTPClientError):
+        pass  # The server can close the connection before it sends the reply.
+
 async def nodes_with_data(manager, ks, cf, host):
     """Retrieves a set of node uuids which contain *any* data for the given
        table. If the table uses tablets, we use the system.tablets (via

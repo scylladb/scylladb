@@ -10,14 +10,16 @@ from typing import Tuple
 
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import gather_safely, unique_name, wait_for, Host
-from test.cluster.util import ensure_raft_group_leader_on, get_topology_coordinator, new_test_keyspace, new_test_table
+from test.cluster.util import ensure_raft_group_leader_on, get_topology_coordinator, create_new_test_keyspace, new_test_keyspace, new_test_table
 from test.pylib.internal_types import HostID, ServerInfo
 from cassandra import InvalidRequest, ReadTimeout, Unavailable, WriteTimeout
 from cassandra.cluster import ConsistencyLevel
-from cassandra.policies import FallthroughRetryPolicy
+from cassandra.connection import UnixSocketEndPoint
+from cassandra.policies import FallthroughRetryPolicy, WhiteListRoundRobinPolicy
 from cassandra.protocol import ServerError
 from cassandra.query import SimpleStatement, BoundStatement
 from test.pylib.tablets import get_all_tablet_replicas, get_tablet_info, get_tablet_replicas
+from test.pylib.driver_utils import safe_shutting_down
 from test.pylib.rest_client import read_barrier, ScyllaMetrics, ScyllaMetricsLine
 
 import asyncio
@@ -1357,17 +1359,16 @@ async def test_abort_state_machine_apply_after_dropping_table(manager: ScyllaClu
             await manager.api.disable_injection(target_server.ip_addr, block_barrier_injection)
 
 
-@pytest.mark.skip_bug(
-    link="https://scylladb.atlassian.net/browse/SCYLLADB-4459",
-    reason="apply() fails on the group0 barrier joined by the shutdown",
-)
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
 async def test_abort_state_machine_apply_during_shutdown(manager: ScyllaClusterManager):
     """
     This test verifies that ongoing executions of state_machine::apply are
-    aborted when a node is shutting down.
+    aborted when a node is shutting down. The resumed apply() needs the group0
+    barrier, so the shutdown must stop the Raft group before it stops the barrier.
 
     For a similar scenario after dropping a table, see test_abort_state_machine_apply_after_dropping_table.
+
+    Reproduces SCYLLADB-4459.
     """
 
     cmdline = DEFAULT_CMDLINE + ["--logger-log-level", "sc_state_machine=debug:raft=debug"]
@@ -1413,15 +1414,19 @@ async def test_abort_state_machine_apply_during_shutdown(manager: ScyllaClusterM
         mark = await log.mark()
 
         stop_task = asyncio.create_task(manager.server_stop_gracefully(target_server.server_id))
-        # Wait until the Raft group has started being removed.
-        await log.wait_for(rf"schedule_raft_group_deletion\(\): starting aborting raft server for group id {group_id}", from_mark=mark)
-        mark = await log.mark()
+        try:
+            # Wait until the Raft group has started being removed.
+            await log.wait_for(rf"schedule_raft_group_deletion\(\): group id {group_id}: starting", from_mark=mark)
+            mark = await log.mark()
+        finally:
+            # At this point, the Raft server should already be getting aborted,
+            # so we can resume state_machine::apply. If the wait failed, resume it
+            # anyway, so that the shutdown does not wait for it.
+            await manager.api.message_injection(target_server.ip_addr, wait_before_apply_injection)
 
-        # At this point, the Raft server should already be getting aborted,
-        # so we can resume state_machine::apply.
-        await manager.api.message_injection(target_server.ip_addr, wait_before_apply_injection)
-        # Verify that state_machine::apply was really aborted.
-        await log.wait_for(rf"apply\(\): execution for tablet \S+, group_id={group_id} aborted", from_mark=mark)
+        # Verify that state_machine::apply reached the group0 barrier and was aborted.
+        await log.wait_for(rf"apply\(\): waiting for the group0 barrier for tablet \S+, group_id={group_id}",
+                           rf"apply\(\): execution for tablet \S+, group_id={group_id} aborted", from_mark=mark)
 
         # The test framework should verify that we haven't observed any errors
         # during the stopping procedure.
@@ -1430,9 +1435,98 @@ async def test_abort_state_machine_apply_during_shutdown(manager: ScyllaClusterM
         await manager.server_start(target_server.server_id)
         cql, [target_host] = await manager.get_ready_cql([target_server])
 
-        rows = await cql.run_async(f"SELECT * FROM {table} WHERE pk = 0", host=target_host)
+        # The leader serves linearizable reads. To read the target's own data,
+        # catch up with a read barrier on the target and read at ONE.
+        await read_barrier(manager.api, target_server.ip_addr, group_id=group_id, timeout=30)
+        rows = await cql.run_async(SimpleStatement(f"SELECT * FROM {table} WHERE pk = 0",
+                                                   consistency_level=ConsistencyLevel.ONE), host=target_host)
         assert len(rows) == 1
         assert rows[0].v == 13
+
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+async def test_write_resumed_during_shutdown_succeeds(manager: ScyllaClusterManager):
+    """
+    A graceful shutdown lets the requests running on its CQL server finish. A
+    strongly consistent write that resumes while the CQL server stops must
+    succeed: the node's Raft groups stop only after the CQL server. With two
+    replicas, the leader also needs the stopping node's vote to commit it.
+    """
+
+    # One shard, so that the write runs on the shard of its connection. A request
+    # moved to another shard uses the abort source of that shard's CQL server,
+    # which the shutdown requests as soon as that shard has no connections
+    # (SCYLLADB-5405).
+    cmdline = DEFAULT_CMDLINE + ["--smp", "1"]
+    leader_server = await manager.server_add(config=DEFAULT_CONFIG, cmdline=cmdline,
+                                             property_file={"dc": "dc1", "rack": "rack1"})
+    config = DEFAULT_CONFIG | {"error_injections_at_startup": ["avoid_being_raft_leader"]}
+    target_server = await manager.server_add(config=config, cmdline=cmdline,
+                                             property_file={"dc": "dc1", "rack": "rack2"})
+
+    cql, [_, target_host] = await manager.get_ready_cql([leader_server, target_server])
+    target_host_id = await manager.get_host_id(target_server.server_id)
+
+    wait_before_acquire_injection = "sc_coordinator_wait_before_acquire_server"
+
+    ks = await create_new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1} AND consistency = 'global'")
+    table_name = "my_table"
+    table = f"{ks}.{table_name}"
+
+    await cql.run_async(f"CREATE TABLE {table} (pk int PRIMARY KEY, v int)")
+
+    group_id = await get_table_raft_group_id(manager, ks, table_name)
+    leader_host_id = await wait_for_leader(manager, leader_server, group_id)
+    assert leader_host_id != target_host_id
+
+    # Hold the write on the target before it takes the target's Raft group.
+    await manager.api.enable_injection(target_server.ip_addr, wait_before_acquire_injection, one_shot=True)
+    log = await manager.server_open_log(target_server.server_id)
+    mark = await log.mark()
+    write = cql.run_async(SimpleStatement(f"INSERT INTO {table} (pk, v) VALUES (0, 13)",
+                                          retry_policy=FallthroughRetryPolicy()), host=target_host)
+    await manager.api.wait_for_injection_enter(target_server.ip_addr, wait_before_acquire_injection)
+
+    stop_task = asyncio.create_task(manager.server_stop_gracefully(target_server.server_id))
+    try:
+        await log.wait_for("Shutting down native transport server", from_mark=mark)
+    finally:
+        # Resume the write while the CQL server stops, or, if the wait failed,
+        # so that the shutdown does not wait for it.
+        await manager.api.message_injection(target_server.ip_addr, wait_before_acquire_injection)
+
+    await write
+    await stop_task
+
+async def test_maintenance_socket_write_after_drain(manager: ScyllaClusterManager):
+    """
+    A drain stops the transport, the strongly consistent groups and the
+    database, but the CQL server of the maintenance socket keeps running.
+    A strongly consistent write that comes through it must fail with a
+    timeout, and the node must stay up.
+
+    Reproduces SCYLLADB-2423.
+    """
+
+    server = await manager.server_add(config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE)
+    cql = manager.get_cql()
+
+    ks = await create_new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1} AND consistency = 'global'")
+    table = f"{ks}.my_table"
+    await cql.run_async(f"CREATE TABLE {table} (pk int PRIMARY KEY, v int)")
+
+    await manager.api.drain(server.ip_addr)
+
+    socket_endpoint = UnixSocketEndPoint(await manager.server_get_maintenance_socket_path(server.server_id))
+    maintenance_cluster = manager.con_gen([socket_endpoint],
+                                          load_balancing_policy=WhiteListRoundRobinPolicy([socket_endpoint]))
+    with safe_shutting_down(maintenance_cluster):
+        maintenance_cql = maintenance_cluster.connect()
+        insert = SimpleStatement(f"INSERT INTO {table} (pk, v) VALUES (0, 13)",
+                                 consistency_level=ConsistencyLevel.QUORUM, retry_policy=FallthroughRetryPolicy())
+        with pytest.raises(WriteTimeout):
+            await maintenance_cql.run_async(insert)
+
+    assert await manager.server_is_alive(server.server_id), "the node died after the refused write"
 
 async def test_leader_cache_eliminates_redirect(manager: ScyllaClusterManager):
     """

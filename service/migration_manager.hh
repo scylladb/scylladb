@@ -114,7 +114,8 @@ public:
     //              unavailable voters.
     //              If not set, the default timeout is used (from the Scylla config parameter
     //              `group0_raft_op_timeout_in_ms`, which defaults to one minute).
-    future<group0_guard> start_group0_operation(std::optional<raft_timeout> timeout = std::nullopt);
+    //   as      -- Optional. Aborts the operation, like the drain of the migration manager.
+    future<group0_guard> start_group0_operation(std::optional<raft_timeout> timeout = std::nullopt, abort_source* as = nullptr);
 
     // Ensure all non-system tables have committed_by_group0 = true in
     // system_schema.scylla_tables. Tables created before the
@@ -133,8 +134,9 @@ public:
     //              unavailable voters, which 
     //              If not set, the default timeout is used (from the Scylla config parameter
     //              `group0_raft_op_timeout_in_ms`, which defaults to one minute).
+    //   as      -- Optional. Aborts the operation, like the drain of the migration manager.
     template<typename mutation_type = schema_change>
-    future<> announce(utils::chunked_vector<mutation> schema, group0_guard, std::string_view description, std::optional<raft_timeout> timeout = std::nullopt);
+    future<> announce(utils::chunked_vector<mutation> schema, group0_guard, std::string_view description, std::optional<raft_timeout> timeout = std::nullopt, abort_source* as = nullptr);
 
     void passive_announce(table_schema_version version);
 
@@ -170,7 +172,7 @@ private:
     future<> passive_announce();
 
     template<typename mutation_type = schema_change>
-    future<> announce_with_raft(utils::chunked_vector<mutation> schema, group0_guard, std::string_view description, std::optional<raft_timeout> timeout);
+    future<> announce_with_raft(utils::chunked_vector<mutation> schema, group0_guard, std::string_view description, std::optional<raft_timeout> timeout, abort_source* as);
 
 public:
     // Returns schema of given version, either from cache or from remote node identified by 'from'.
@@ -201,14 +203,14 @@ public:
 };
 
 extern template
-future<> migration_manager::announce_with_raft<schema_change>(utils::chunked_vector<mutation> schema, group0_guard, std::string_view description, std::optional<raft_timeout> timeout);
+future<> migration_manager::announce_with_raft<schema_change>(utils::chunked_vector<mutation> schema, group0_guard, std::string_view description, std::optional<raft_timeout> timeout, abort_source* as);
 extern template
-future<> migration_manager::announce_with_raft<topology_change>(utils::chunked_vector<mutation> schema, group0_guard, std::string_view description, std::optional<raft_timeout> timeout);
+future<> migration_manager::announce_with_raft<topology_change>(utils::chunked_vector<mutation> schema, group0_guard, std::string_view description, std::optional<raft_timeout> timeout, abort_source* as);
 
 extern template
-future<> migration_manager::announce<schema_change>(utils::chunked_vector<mutation> schema, group0_guard, std::string_view description, std::optional<raft_timeout> timeout = std::nullopt);
+future<> migration_manager::announce<schema_change>(utils::chunked_vector<mutation> schema, group0_guard, std::string_view description, std::optional<raft_timeout> timeout = std::nullopt, abort_source* as = nullptr);
 extern template
-future<> migration_manager::announce<topology_change>(utils::chunked_vector<mutation> schema, group0_guard, std::string_view description, std::optional<raft_timeout> timeout = std::nullopt);
+future<> migration_manager::announce<topology_change>(utils::chunked_vector<mutation> schema, group0_guard, std::string_view description, std::optional<raft_timeout> timeout = std::nullopt, abort_source* as = nullptr);
 
 utils::chunked_vector<mutation> prepare_keyspace_update_announcement(replica::database& db, lw_shared_ptr<keyspace_metadata> ksm, api::timestamp_type ts);
 

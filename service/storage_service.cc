@@ -2024,9 +2024,6 @@ future<> storage_service::stop_transport() {
         seastar::async([this] {
             slogger.info("Stop transport: starts");
 
-            slogger.debug("shutting down migration manager");
-            _migration_manager.invoke_on_all(&service::migration_manager::drain).get();
-
             shutdown_protocol_servers().get();
             slogger.info("Stop transport: shutdown rpc and cql server done");
 
@@ -3091,7 +3088,7 @@ future<> storage_service::do_drain() {
     //
     // This has to happen before stop_transport() below: the transfer is done with Raft RPCs,
     // which need messaging_service to be up. That is also why it is not a part of
-    // groups_manager::stop(), which runs only after the transport is gone.
+    // groups_manager::stop_all_shards(), which runs only after the transport is gone.
     try {
         co_await _groups_manager.container().invoke_on_all(
                 &strong_consistency::groups_manager::stepdown_leaders);
@@ -3102,6 +3099,16 @@ future<> storage_service::do_drain() {
 
     // Need to stop transport before group0, otherwise RPCs may fail with raft_group_not_found.
     co_await stop_transport();
+
+    // apply() of a strongly consistent group can wait for the group0 barrier of the
+    // migration manager. The drain below joins that barrier, and group0 stops later.
+    // A wait that outlives either of them ends in an internal error, so the groups stop
+    // first. Both stop after the transport: the CQL server lets its requests finish
+    // first, and the other nodes see this node as down before its groups go away.
+    co_await _groups_manager.stop_all_shards();
+
+    slogger.debug("shutting down migration manager");
+    co_await _migration_manager.invoke_on_all(&service::migration_manager::drain);
 
     // Cancel write handlers that have pending remote targets so they release
     // their ERMs (and the associated token_metadata versions). Without this,
@@ -3253,13 +3260,17 @@ future<> storage_service::reset_cleanup_needed() {
 }
 
 future<sstring> storage_service::wait_for_topology_request_completion(utils::UUID id, bool require_entry,
-                                                                     std::optional<lowres_clock::time_point> deadline) {
+                                                                     std::optional<lowres_clock::time_point> deadline,
+                                                                     abort_source* as) {
     // Lets a test delay the caller between submitting the request and its first
     // read of system.topology_requests.
     co_await utils::get_local_injector().inject("topology_request_pause_before_wait",
             utils::wait_for_message(std::chrono::minutes(5)));
+    abort_source wait_as;
+    const auto group0_sub = utils::chain_abort_source(wait_as, _group0_as);
+    const auto caller_sub = utils::chain_abort_source(wait_as, as);
     co_return co_await _topology_state_machine.wait_for_request_completion(_sys_ks.local(),
-            _group0->client(), _group0_as, id, require_entry, deadline);
+            _group0->client(), wait_as, id, require_entry, deadline);
 }
 
 future<> storage_service::abort_topology_request(utils::UUID request_id) {
@@ -3268,13 +3279,16 @@ future<> storage_service::abort_topology_request(utils::UUID request_id) {
     });
 }
 
-future<> storage_service::wait_for_topology_not_busy() {
+future<> storage_service::wait_for_topology_not_busy(abort_source* as) {
     // Must be called on shard 0: the topology state machine is only loaded and signalled there.
     SCYLLA_ASSERT(this_shard_id() == 0);
     // Observe the locally applied state. Re-reading through a group0 guard on each wakeup would
     // advance past the idle moment, which is only milliseconds wide while the coordinator retries
     // a failed rebuild.
-    co_await _topology_state_machine.await_not_busy();
+    abort_source wait_as;
+    const auto group0_sub = utils::chain_abort_source(wait_as, _group0_as);
+    const auto caller_sub = utils::chain_abort_source(wait_as, as);
+    co_await _topology_state_machine.await_not_busy(wait_as);
 }
 
 future<> storage_service::alter_table_with_tablet_hints(table_id tid,
@@ -6800,7 +6814,7 @@ future<> storage_service::do_await_topology_quiesced() {
                         request_id, error, attempts, elapsed_s());
         }
         // Wait locally for topology to settle before resubmitting.
-        co_await _topology_state_machine.await_not_busy();
+        co_await _topology_state_machine.await_not_busy(_group0_as);
         co_await _topology_state_machine.event.when([this] {
             return get_token_metadata_ptr()->tablets().is_idle();
         });
@@ -6822,7 +6836,7 @@ future<> storage_service::await_topology_quiesced() {
             || !_feature_service.topology_global_request_queue) {
         // Old behavior — fallback for mixed-version clusters.
         co_await _group0->group0_server().read_barrier(&_group0_as);
-        co_await _topology_state_machine.await_not_busy();
+        co_await _topology_state_machine.await_not_busy(_group0_as);
         co_return;
     }
 

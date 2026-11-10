@@ -189,6 +189,9 @@ future<> controller::stop_server() {
         if (!_ssg) {
             return;
         }
+        // A DDL request can wait for group0 for up to group0_raft_op_timeout_in_ms, and
+        // _server.stop() waits for the running requests. So end these waits first.
+        _executor.invoke_on_all(&executor::request_stop).get();
         _server.stop().get();
         _executor.stop().get();
         _listen_addresses.clear();
