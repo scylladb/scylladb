@@ -270,6 +270,30 @@ def test_create_table_already_exists(dynamodb, test_table):
     with pytest.raises(ClientError, match='ResourceInUseException.*Table.*already exists'):
         create_table(dynamodb, test_table.name)
 
+# We have several tests that check the response of CreateTable. These tests
+# assume that they can find that response in `table.meta.data` of the `table`
+# object returned by new_test_table(). This test checks that
+# table.meta.data really holds CreateTable's response immediately after
+# new_test_table() returns - so those tests can rely on it.
+def test_create_table_response_in_meta_data(dynamodb):
+    # Capture the TableDescription that CreateTable really returned, to
+    # compare it to table.meta.data.
+    responses = []
+    def capture(parsed, **kwargs):
+        responses.append(parsed['TableDescription'])
+    event_name = 'after-call.dynamodb.CreateTable'
+    dynamodb.meta.client.meta.events.register(event_name, capture)
+    try:
+        with new_test_table(dynamodb,
+                KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+                AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
+            # Check that table.meta.data is exactly the TableDescription
+            # returned by the one CreateTable call:
+            assert len(responses) == 1
+            assert table.meta.data == responses[0]
+    finally:
+        dynamodb.meta.client.meta.events.unregister(event_name, capture)
+
 # Test that BillingMode error path works as expected - only the values
 # PROVISIONED or PAY_PER_REQUEST are allowed. The former requires
 # ProvisionedThroughput to be set, the latter forbids it.

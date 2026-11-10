@@ -2093,36 +2093,10 @@ def test_streams_batch_overwrite_different(test_table_ss_keys_only, test_table_s
 # just do multiple tests on its setup.
 @pytest.fixture(scope="module")
 def test_table_stream_with_result(dynamodb, dynamodbstreams):
-    tablename = unique_table_name()
-    result = dynamodb.meta.client.create_table(TableName=tablename,
-        Tags=TAGS,
-        BillingMode='PAY_PER_REQUEST',
-        StreamSpecification={'StreamEnabled': True, 'StreamViewType': 'KEYS_ONLY'},
-        KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' },
-                    { 'AttributeName': 'c', 'KeyType': 'RANGE' }
-        ],
-        AttributeDefinitions=[
-                    { 'AttributeName': 'p', 'AttributeType': 'S' },
-                    { 'AttributeName': 'c', 'AttributeType': 'S' },
-        ])
-    waiter = dynamodb.meta.client.get_waiter('table_exists')
-    waiter.config.delay = 1
-    waiter.config.max_attempts = 200
-    waiter.wait(TableName=tablename)
-    table = dynamodb.Table(tablename)
-    yield result, table
-    while True:
-        try:
-            table.delete()
-            return
-        except ClientError as ce:
-            # if the table has a stream currently being created we cannot
-            # delete the table immediately. Again, only with real dynamo
-            if ce.response['Error']['Code'] == 'ResourceInUseException':
-                print('Could not delete table yet. Sleeping 5s.')
-                time.sleep(5)
-                continue;
-            raise
+    with create_stream_test_table(dynamodb, StreamViewType='KEYS_ONLY') as table:
+        # boto3 fills table.meta.data with the TableDescription returned by
+        # CreateTable (see create_test_table()).
+        yield table.meta.data, table
 
 # Wait for a table to return to "ACTIVE" status. We need to call this after
 # doing an UpdateTable to a table - because before this wait finishes we are
@@ -2140,8 +2114,8 @@ def wait_for_status_active(table):
 # returned by ListStreams. Reproduces issue #7157.
 def test_latest_stream_arn(test_table_stream_with_result, dynamodbstreams):
     (result, table) = test_table_stream_with_result
-    assert 'LatestStreamArn' in result['TableDescription']
-    arn_in_create_table = result['TableDescription']['LatestStreamArn']
+    assert 'LatestStreamArn' in result
+    arn_in_create_table = result['LatestStreamArn']
     # Check that ListStreams returns the same stream ARN as returned
     # by the original CreateTable
     (arn_in_list_streams, label) = wait_for_active_stream(dynamodbstreams, table)
@@ -2162,8 +2136,8 @@ def test_latest_stream_arn(test_table_stream_with_result, dynamodbstreams):
 # returned by ListStreams. Reproduces issue #7162.
 def test_latest_stream_label(test_table_stream_with_result, dynamodbstreams):
     (result, table) = test_table_stream_with_result
-    assert 'LatestStreamLabel' in result['TableDescription']
-    label_in_create_table = result['TableDescription']['LatestStreamLabel']
+    assert 'LatestStreamLabel' in result
+    label_in_create_table = result['LatestStreamLabel']
     # Check that ListStreams returns the same stream label as returned
     # by the original CreateTable
     (arn, label) = wait_for_active_stream(dynamodbstreams, table)
@@ -2185,8 +2159,8 @@ def test_stream_specification(test_table_stream_with_result, dynamodbstreams):
     # StreamSpecification as set in test_table_stream_with_result:
     stream_specification = {'StreamEnabled': True, 'StreamViewType': 'KEYS_ONLY'}
     (result, table) = test_table_stream_with_result
-    assert 'StreamSpecification' in result['TableDescription']
-    assert stream_specification == result['TableDescription']['StreamSpecification']
+    assert 'StreamSpecification' in result
+    assert stream_specification == result['StreamSpecification']
     # Check that DescribeTable also includes the same StreamSpecification:
     desc = table.meta.client.describe_table(TableName=table.name)['Table']
     assert 'StreamSpecification' in desc
