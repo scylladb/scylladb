@@ -25,6 +25,8 @@
 #include "utils/histogram_metrics_helper.hh"
 #include "utils/abstract_formatter.hh"
 #include "tracing/trace_state.hh"
+#include <seastar/core/sleep.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 
 #include <fmt/ranges.h>
 #include <fmt/std.h>
@@ -124,6 +126,11 @@ void stats::register_stats() {
             {reason_label("dropped_entry"), sg_label})
             .set_skip_when_empty(),
 
+        sm::make_counter("write_retries", write_retries_handoff_bounce,
+            sm::description("number of times strong consistency write requests were retried"),
+            {reason_label("handoff_bounce"), sg_label})
+            .set_skip_when_empty(),
+
         sm::make_counter("write_node_bounces", write_node_bounces,
             sm::description("number of strong consistency write requests bounced to another node"), {sg_label})
             .set_skip_when_empty(),
@@ -182,6 +189,11 @@ void stats::register_stats() {
         sm::make_counter("read_retries", read_retries_stale_leader,
             sm::description("number of times strong consistency read requests were retried"),
             {reason_label("stale_leader"), sg_label})
+            .set_skip_when_empty(),
+
+        sm::make_counter("read_retries", read_retries_handoff_bounce,
+            sm::description("number of times strong consistency read requests were retried"),
+            {reason_label("handoff_bounce"), sg_label})
             .set_skip_when_empty(),
 
         sm::make_counter("read_node_bounces", read_node_bounces,
@@ -298,6 +310,10 @@ replica_set_view serving_replicas(const locator::tablet_info& tinfo, const locat
 //
 // The selector looks replicas up in the tablet's metadata in place, and owns the
 // effective replication map it was built from, which keeps that metadata alive.
+//
+// A request handed off to a child of a resize runs in a group the tablet map does not name, so
+// the selector can be pinned to it. A child has the replicas of the tablet it replaces, which is
+// not in transition while it is resized, so the rest of the selector holds for the child as is.
 class coordinator::replica_selector {
     locator::effective_replication_map_ptr _erm;
     const locator::tablet_map& _tablet_map;
@@ -308,15 +324,20 @@ class coordinator::replica_selector {
     const locator::tablet_transition_info* _trinfo;
     // The replicas the request may be served by.
     replica_set_view _serving;
+    // The tablet's own group, or the child the request was handed off to.
+    raft::group_id _group_id;
 
 public:
-    replica_selector(locator::effective_replication_map_ptr erm, table_id table, const dht::token& token)
+    // `handoff_group` overrides the group the token resolves to in the tablet map.
+    replica_selector(locator::effective_replication_map_ptr erm, table_id table, const dht::token& token,
+            std::optional<raft::group_id> handoff_group = std::nullopt)
         : _erm(std::move(erm))
         , _tablet_map(_erm->get_token_metadata().tablets().get_tablet_map(table))
         , _tablet_id(_tablet_map.get_tablet_id(token))
         , _tablet_info(_tablet_map.get_tablet_info(_tablet_id))
         , _trinfo(_tablet_map.get_tablet_transition_info(_tablet_id))
         , _serving(serving_replicas(_tablet_info, _trinfo))
+        , _group_id(handoff_group.value_or(_tablet_map.get_tablet_raft_info(_tablet_id).group_id))
     {}
 
     locator::tablet_id tablet_id() const {
@@ -324,7 +345,7 @@ public:
     }
 
     raft::group_id group_id() const {
-        return _tablet_map.get_tablet_raft_info(_tablet_id).group_id;
+        return _group_id;
     }
 
     // Formats " at stage X" while the tablet migrates and nothing otherwise, for log
@@ -434,7 +455,7 @@ static need_redirect redirect_to_replica(locator::tablet_replica target) {
 }
 
 auto coordinator::create_operation_ctx(const schema& schema, const dht::token& token, abort_source& as, bool needs_leader,
-        const tracing::trace_state_ptr& trace_state)
+        const tracing::trace_state_ptr& trace_state, std::optional<raft::group_id> handoff_group)
     -> future<value_or_redirect<operation_ctx>>
 {
     const auto* table = schema.maybe_table();
@@ -456,7 +477,7 @@ auto coordinator::create_operation_ctx(const schema& schema, const dht::token& t
                 schema.ks_name(), schema.cf_name()));
     }
 
-    replica_selector replicas(std::move(erm), schema.id(), token);
+    replica_selector replicas(std::move(erm), schema.id(), token, handoff_group);
 
     if (!replicas.may_serve_here()) {
         const auto group_id = replicas.group_id();
@@ -512,6 +533,87 @@ coordinator::coordinator(groups_manager& groups_manager, replica::database& db, 
     , _stats_key(stats_key)
 {
 }
+
+// Tracks a request moving between a parent being resized and the child which covers its token.
+// Remains empty if no resize is in progress. The hop count is kept because a child bounces the
+// request back while the leaders are not co-located, which can repeat.
+class handoff_state {
+    // A request which keeps bouncing traces only this many hops, and is warned about every this
+    // many hops.
+    static constexpr unsigned max_traced_hops = 32;
+
+    const tracing::trace_state_ptr& _trace_state;
+    std::optional<raft::group_id> _group;
+    // The timestamp the write got from the parent, carried over so that the child hands out a
+    // higher one. Reads have no timestamp to carry, so they leave this unset.
+    std::optional<api::timestamp_type> _parent_timestamp;
+    unsigned _hops = 0;
+
+    bool traced() const {
+        return _hops <= max_traced_hops;
+    }
+
+    void trace_cutoff() const {
+        if (_hops == max_traced_hops) {
+            tracing::trace(_trace_state, "The request keeps bouncing between the parent and child raft groups, "
+                    "further hops are not traced");
+        }
+    }
+
+public:
+    // `trace_state` must outlive this object.
+    explicit handoff_state(const tracing::trace_state_ptr& trace_state)
+        : _trace_state(trace_state)
+    {}
+
+    // The child the request is currently addressed to, or nullopt while it is addressed to the
+    // parent.
+    std::optional<raft::group_id> group() const { return _group; }
+    std::optional<api::timestamp_type> parent_timestamp() const { return _parent_timestamp; }
+
+    // Parent -> child. `ts` is the timestamp the parent handed out, for a write.
+    void take_over(raft::group_id parent, raft::group_id child, std::optional<api::timestamp_type> ts = std::nullopt) {
+        _group = child;
+        _parent_timestamp = ts;
+        ++_hops;
+        if (traced()) {
+            tracing::trace(_trace_state, "Handing the request off from raft group {} to its child {}", parent, child);
+        }
+        trace_cutoff();
+    }
+
+    // Child -> parent. Retrying against the parent is what finds the node leading both, so the
+    // request goes back there rather than being forwarded to either leader. Returns whether the
+    // bounce counts as a retry: the first one does not, because a child bounces requests until
+    // its leader is co-located with the parent's.
+    bool bounce_back() {
+        ++_hops;
+        if (traced()) {
+            tracing::trace(_trace_state, "This replica doesn't lead raft group {}, bouncing the request back to its parent",
+                    *_group);
+        }
+        trace_cutoff();
+        _group = std::nullopt;
+        _parent_timestamp = std::nullopt;
+        return _hops > 2;
+    }
+
+    // Reports a request which keeps bouncing. This is not an error: the leaders are being brought
+    // together concurrently, and the request has nowhere else to go until they are.
+    void warn_if_stuck(std::string_view op, const schema& s, locator::tablet_id tid) const {
+        // Zero hops is not a bounce at all: a request which never got handed off reaches this on
+        // its way out of the loop, e.g. when the tablet map stopped showing the resize between the
+        // two.
+        if (_hops == 0 || _hops % max_traced_hops != 0) {
+            return;
+        }
+        static thread_local logging::logger::rate_limit rate_limit(std::chrono::seconds(10));
+        logger.log(log_level::warn, rate_limit,
+            "{}: request to table {}.{}, tablet {} has bounced between the parent and child "
+            "raft groups {} times during a tablet resize",
+            op, s.ks_name(), s.cf_name(), tid, _hops);
+    }
+};
 
 auto coordinator::mutate(schema_ptr schema,
         const dht::token& token,
@@ -622,22 +724,13 @@ auto coordinator::mutate(schema_ptr schema,
         }
     };
 
-    auto op_result_future = co_await coroutine::as_future(
-            create_operation_ctx(*schema, token, aoe.abort_source(), true, trace_state));
+    std::optional<operation_ctx> op_storage;
+    bool build_ctx = true;
 
-    if (op_result_future.failed()) {
-        co_await coroutine::return_exception_ptr(filter_error(std::move(op_result_future).get_exception()));
-    }
-
-    auto op_result = std::move(op_result_future).get();
-
-    if (auto* redirect = get_if<need_redirect>(&op_result)) {
-        // A redirected request is timed where it is executed.
-        mark_write_latency.cancel();
-        co_return std::move(*redirect);
-    }
-    op = &get<operation_ctx>(op_result);
-    table_stats = op->raft_server.table_stats();
+    // While the tablet this token belongs to is being resized, the write may have to move to the
+    // child covering its token and, if the leaders are not co-located yet, back again. Each move
+    // rebuilds the context against the group the request goes to next.
+    handoff_state handoff(trace_state);
 
     while (true) {
         // `disposition` below is local to one iteration, so the pointer into
@@ -645,16 +738,68 @@ auto coordinator::mutate(schema_ptr schema,
         ts_with_term = nullptr;
 
         // A retry may come straight back here without suspending on anything that
-        // observes the deadline, so observe it before retrying.
+        // observes the deadline, so observe it before retrying. A round in which the resize
+        // turns out to be over may even complete on ready futures alone, so we yield first and
+        // let the timer which expires the deadline run.
+        co_await coroutine::maybe_yield();
         if (aoe.abort_source().abort_requested()) {
             co_await coroutine::return_exception_ptr(filter_error(aoe.abort_source().abort_requested_exception_ptr()));
+        }
+
+        if (build_ctx) {
+            build_ctx = false;
+            // The context below is replaced, so the pointer into it must not survive either.
+            op = nullptr;
+            auto op_result_future = co_await coroutine::as_future(
+                    create_operation_ctx(*schema, token, aoe.abort_source(), true, trace_state, handoff.group()));
+
+            if (op_result_future.failed()) {
+                co_await coroutine::return_exception_ptr(filter_error(std::move(op_result_future).get_exception()));
+            }
+
+            auto op_result = std::move(op_result_future).get();
+
+            if (auto* redirect = get_if<need_redirect>(&op_result)) {
+                // A redirected request is timed where it is executed.
+                mark_write_latency.cancel();
+                co_return std::move(*redirect);
+            }
+            op_storage.emplace(std::move(get<operation_ctx>(op_result)));
+            op = &*op_storage;
+            table_stats = op->raft_server.table_stats();
+            handoff.warn_if_stuck("mutate()", *schema, op->replicas.tablet_id());
         }
 
         co_await utils::get_local_injector().inject("sc_coordinator_wait_before_begin_mutate",
             utils::wait_for_message(5min));
 
+        if (const auto parent_timestamp = handoff.parent_timestamp()) {
+            // We lift this child's clock above the timestamp the write got from the parent,
+            // so that begin_mutate() below hands out a higher one and the write stays ordered
+            // after everything committed there. If we do not lead this group, it does nothing,
+            // and begin_mutate() hands out no timestamp either.
+            op->raft_server.advance_leader_timestamp(*parent_timestamp);
+        }
         auto disposition = op->raft_server.begin_mutate(aoe.abort_source());
         if (const auto* not_a_leader = get_if<raft::not_a_leader>(&disposition)) {
+            if (handoff.group()) {
+                // A handed-off write has to be timestamped by the clock of the node which led
+                // the parent, so we retry against the parent rather than forward the write.
+                logger.debug("mutate(): add_entry, got not_a_leader {}, table {}.{}, {}, handoff_group {}",
+                    *not_a_leader, schema->ks_name(), schema->cf_name(), state_fmt, *handoff.group());
+                // We delay the retry rather than busy-loop, and report an aborted sleep as a
+                // timeout like any other.
+                auto sleep_result = co_await coroutine::as_future(
+                        seastar::sleep_abortable(10ms, aoe.abort_source()));
+                if (sleep_result.failed()) {
+                    co_await coroutine::return_exception_ptr(filter_error(std::move(sleep_result).get_exception()));
+                }
+                if (handoff.bounce_back()) {
+                    ++get_stats().write_retries_handoff_bounce;
+                }
+                build_ctx = true;
+                continue;
+            }
             const auto leader_host_id = locator::host_id{not_a_leader->leader.uuid()};
             const auto* target = op->replicas.find_replica(leader_host_id);
             if (!target) {
@@ -721,6 +866,26 @@ auto coordinator::mutate(schema_ptr schema,
         // which cells from the second entry are visible while the first entry
         // still wins on the cells they share. Such a history is not
         // linearizable.
+        //
+        // The same holds for the check below: a write which found start_resize not yet applied
+        // has to be appended to the parent's log ahead of the end_resize marker, and that marker
+        // is appended once start_resize is already set.
+        if (_groups_manager.should_handoff_writes(op->replicas.group_id())) {
+            if (const auto child = _groups_manager.group_for_handoff(schema, token)) {
+                logger.debug("mutate(): handing off the write to table {}.{}, {} from parent {} to child {}",
+                    schema->ks_name(), schema->cf_name(), state_fmt, op->replicas.group_id(), *child);
+                handoff.take_over(op->replicas.group_id(), *child, ts_with_term->timestamp);
+            } else {
+                // The resize is already over in the current tablet map, so we start over: the
+                // next create_operation_ctx() resolves the token to the group serving it now.
+                tracing::trace(trace_state, "The tablet map no longer shows raft group {} resizing, starting over",
+                        op->replicas.group_id());
+            }
+            build_ctx = true;
+            continue;
+        }
+
+        // Generated only once the write is known to stay in this group.
         write_mutation write {
             .mutation{mutation_gen(ts_with_term->timestamp)}
         };
@@ -850,78 +1015,105 @@ auto coordinator::query(schema_ptr schema,
         }
     };
 
-    auto op_result_future = co_await coroutine::as_future(create_operation_ctx(
-        *schema,
-        ranges[0].start()->value().token(),
-        aoe.abort_source(),
-        rtype == read_type::linearizable,
-        trace_state));
+    std::optional<operation_ctx> op_storage;
+    bool build_ctx = true;
 
-    if (op_result_future.failed()) {
-        co_await coroutine::return_exception_ptr(filter_error(std::move(op_result_future).get_exception()));
-    }
+    // During a tablet resize the read may have to move to a child raft group, which rebuilds the
+    // context against the child. Only a linearizable read is handed off; a non-linearizable one
+    // builds its context once.
+    handoff_state handoff(trace_state);
+    const auto token = ranges[0].start()->value().token();
 
-    auto op_result = std::move(op_result_future).get();
+    while (true) {
+        // See mutate() for why we yield and check the deadline here.
+        co_await coroutine::maybe_yield();
+        if (aoe.abort_source().abort_requested()) {
+            co_await coroutine::return_exception_ptr(filter_error(aoe.abort_source().abort_requested_exception_ptr()));
+        }
 
-    if (auto* redirect = get_if<need_redirect>(&op_result)) {
-        // A redirected request is timed where it is executed.
-        mark_read_latency.cancel();
-        co_return std::move(*redirect);
-    }
-    auto& op = get<operation_ctx>(op_result);
-    table_stats = op.raft_server.table_stats();
+        if (build_ctx) {
+            build_ctx = false;
+            auto op_result_future = co_await coroutine::as_future(create_operation_ctx(
+                *schema, token, aoe.abort_source(), rtype == read_type::linearizable, trace_state, handoff.group()));
 
-    if (rtype == read_type::linearizable) {
-        // For linearizable reads we may need to forward to the raft leader.
-        while (true) {
-            // See mutate() for why the deadline is checked here.
-            if (aoe.abort_source().abort_requested()) {
-                co_await coroutine::return_exception_ptr(filter_error(aoe.abort_source().abort_requested_exception_ptr()));
+            if (op_result_future.failed()) {
+                co_await coroutine::return_exception_ptr(filter_error(std::move(op_result_future).get_exception()));
             }
 
-            auto disposition = op.raft_server.begin_read(aoe.abort_source());
-            if (const auto* not_a_leader = get_if<raft::not_a_leader>(&disposition)) {
-                const auto leader_host_id = locator::host_id{not_a_leader->leader.uuid()};
-                const auto* target = op.replicas.find_replica(leader_host_id);
-                if (!target) {
-                    // A leader outside the serving set: a replica a migration demoted,
-                    // leading for one commit. Forget it and wait for the next one; see
-                    // mutate().
-                    logger.debug("query(): table {}.{}, tablet {}, reported leader {} cannot be the leader{}, "
-                        "waiting for a new leader",
-                        schema->ks_name(), schema->cf_name(), op.replicas.tablet_id(), leader_host_id,
-                        op.replicas.stage_suffix());
-                    tracing::trace(trace_state, "The reported leader {} can't lead{}, waiting for a new leader",
-                        leader_host_id, op.replicas.stage_suffix());
+            auto op_result = std::move(op_result_future).get();
 
-                    ++get_stats().read_retries_stale_leader;
-                    future<> f = co_await coroutine::as_future(
-                            op.raft_server.server().wait_for_leader(&aoe.abort_source(), true));
-                    if (f.failed()) {
-                        co_await coroutine::return_exception_ptr(filter_error(std::move(f).get_exception()));
-                    }
-                    continue;
-                }
-                tracing::trace(trace_state, "This replica doesn't lead raft group {}, redirecting to the leader {}",
-                        op.replicas.group_id(), *target);
+            if (auto* redirect = get_if<need_redirect>(&op_result)) {
                 // A redirected request is timed where it is executed.
                 mark_read_latency.cancel();
-                co_return redirect_to_leader(*target, _groups_manager, op.replicas.group_id());
+                co_return std::move(*redirect);
             }
-            if (auto* wait_for_leader = get_if<raft_server::need_wait_for_leader>(&disposition)) {
-                ++get_stats().read_retries_wait_for_leader;
-                if (trace_state) {
-                    tracing::trace(trace_state, "Waiting for a leader of raft group {}: no leader is known, this replica is {} of its configuration",
-                            op.replicas.group_id(),
-                            op.raft_server.server().get_configuration().contains(op.raft_server.server().id()) ? "a member" : "not a member");
+            op_storage.emplace(std::move(get<operation_ctx>(op_result)));
+            table_stats = op_storage->raft_server.table_stats();
+            handoff.warn_if_stuck("query()", *schema, op_storage->replicas.tablet_id());
+        }
+        auto& op = *op_storage;
+
+        if (rtype != read_type::linearizable) {
+            break;
+        }
+
+        // For linearizable reads we may need to forward to the raft leader.
+        auto disposition = op.raft_server.begin_read(aoe.abort_source());
+        if (const auto* not_a_leader = get_if<raft::not_a_leader>(&disposition)) {
+            if (handoff.group()) {
+                // As in mutate(), we retry against the parent rather than forward the read.
+                logger.debug("query(): got not_a_leader {}, table {}.{}, tablet {}, handoff_group {}",
+                    *not_a_leader, schema->ks_name(), schema->cf_name(), op.replicas.tablet_id(), *handoff.group());
+                auto sleep_result = co_await coroutine::as_future(
+                        seastar::sleep_abortable(10ms, aoe.abort_source()));
+                if (sleep_result.failed()) {
+                    co_await coroutine::return_exception_ptr(filter_error(std::move(sleep_result).get_exception()));
                 }
-                future<> f = co_await coroutine::as_future(std::move(wait_for_leader->future));
+                if (handoff.bounce_back()) {
+                    ++get_stats().read_retries_handoff_bounce;
+                }
+                build_ctx = true;
+                continue;
+            }
+            const auto leader_host_id = locator::host_id{not_a_leader->leader.uuid()};
+            const auto* target = op.replicas.find_replica(leader_host_id);
+            if (!target) {
+                // A leader outside the serving set: a replica a migration demoted,
+                // leading for one commit. Forget it and wait for the next one; see
+                // mutate().
+                logger.debug("query(): table {}.{}, tablet {}, reported leader {} cannot be the leader{}, "
+                    "waiting for a new leader",
+                    schema->ks_name(), schema->cf_name(), op.replicas.tablet_id(), leader_host_id,
+                    op.replicas.stage_suffix());
+                tracing::trace(trace_state, "The reported leader {} can't lead{}, waiting for a new leader",
+                    leader_host_id, op.replicas.stage_suffix());
+
+                ++get_stats().read_retries_stale_leader;
+                future<> f = co_await coroutine::as_future(
+                        op.raft_server.server().wait_for_leader(&aoe.abort_source(), true));
                 if (f.failed()) {
                     co_await coroutine::return_exception_ptr(filter_error(std::move(f).get_exception()));
                 }
                 continue;
             }
-            break;
+            tracing::trace(trace_state, "This replica doesn't lead raft group {}, redirecting to the leader {}",
+                    op.replicas.group_id(), *target);
+            // A redirected request is timed where it is executed.
+            mark_read_latency.cancel();
+            co_return redirect_to_leader(*target, _groups_manager, op.replicas.group_id());
+        }
+        if (auto* wait_for_leader = get_if<raft_server::need_wait_for_leader>(&disposition)) {
+            ++get_stats().read_retries_wait_for_leader;
+            if (trace_state) {
+                tracing::trace(trace_state, "Waiting for a leader of raft group {}: no leader is known, this replica is {} of its configuration",
+                        op.replicas.group_id(),
+                        op.raft_server.server().get_configuration().contains(op.raft_server.server().id()) ? "a member" : "not a member");
+            }
+            future<> f = co_await coroutine::as_future(std::move(wait_for_leader->future));
+            if (f.failed()) {
+                co_await coroutine::return_exception_ptr(filter_error(std::move(f).get_exception()));
+            }
+            continue;
         }
 
         co_await utils::get_local_injector().inject("sc_coordinator_wait_before_query_read_barrier",
@@ -933,9 +1125,29 @@ auto coordinator::query(schema_ptr schema,
             co_await coroutine::return_exception_ptr(filter_error(std::move(f).get_exception()));
         }
         tracing::trace(trace_state, "The read barrier on raft group {} completed", op.replicas.group_id());
+        // Once the parent's writes are handed off, its reads follow. We check after the barrier,
+        // which may be what applies start_resize; the parent's barrier applies every write the
+        // parent acknowledged, and the child's barrier, run once the read is rebuilt against the
+        // child, covers the child's own entries. If the tablet map no longer shows the resize,
+        // the read is rebuilt against the group serving the token now.
+        if (!handoff.group() && _groups_manager.should_handoff_writes(op.replicas.group_id())) {
+            if (const auto child = _groups_manager.group_for_handoff(schema, token)) {
+                logger.debug("query(): handing off the read of table {}.{}, tablet {} from parent {} to child {} after the parent's read barrier",
+                    schema->ks_name(), schema->cf_name(), op.replicas.tablet_id(), op.replicas.group_id(), *child);
+                handoff.take_over(op.replicas.group_id(), *child);
+            } else {
+                tracing::trace(trace_state, "The tablet map no longer shows raft group {} resizing, starting over",
+                        op.replicas.group_id());
+            }
+            build_ctx = true;
+            continue;
+        }
+        break;
     }
+    auto& op = *op_storage;
 
-    // We're either a raft leader or it's a non-linearizable read. In both cases we can directly execute the read on this replica.
+    // We're either a raft leader whose read barrier has completed, or it's a non-linearizable
+    // read. In both cases we can directly execute the read on this replica.
     auto query_future = co_await coroutine::as_future(_db.query(schema, cmd,
         query::result_options::only_result(), ranges, trace_state, timeout));
 
