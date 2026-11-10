@@ -66,6 +66,7 @@
 #include "readers/queue.hh"
 #include "readers/filtering.hh"
 #include "readers/mutation_fragment_v1_stream.hh"
+#include "readers/compacting.hh"
 #include "readers/from_mutations.hh"
 #include "repair/hash.hh"
 #include "repair/decorated_key_with_hash.hh"
@@ -2029,10 +2030,24 @@ private:
     // Splits a converged partition mutation into repair rows, with the same
     // fragment selection as read_rows_from_disk() (no empty partition_start and no
     // partition_end), and marks the rows dirty on the master.
+    // When enable_compacting_data_for_streaming_and_repair is on, compacts the
+    // partition first, as the streaming reader does, and never purges a tombstone.
     future<std::list<repair_row>> refragment_partition_for_logstor(const dht::decorated_key& dk, mutation m) {
         auto dk_with_hash = make_lw_shared<const decorated_key_with_hash>(*_schema, dk, _seed);
         std::list<repair_row> rows;
-        auto rd = mutation_fragment_v1_stream(make_mutation_reader_from_mutations(_schema, _permit, std::move(m)));
+        auto& table = _db.local().find_column_family(_schema->id());
+        auto gc_state = table.get_tombstone_gc_state();
+        auto reader = make_mutation_reader_from_mutations(_schema, _permit, std::move(m));
+        if (table.get_config().enable_compacting_data_for_streaming_and_repair()) {
+            // The streaming reader of each replica compacts its partitions in the same way (see
+            // table::make_streaming_reader()). So the converged rows get the same hashes as the
+            // rows of a replica that already stores the converged partition, and repair does not
+            // send the partition to that replica.
+            // The compaction also removes the data that the merged tombstones cover, so that the
+            // master and the followers do not store it.
+            reader = make_compacting_reader(std::move(reader), _compaction_time, can_never_purge, gc_state);
+        }
+        auto rd = mutation_fragment_v1_stream(std::move(reader));
         std::exception_ptr ex;
         try {
             while (mutation_fragment_opt mfopt = co_await rd()) {

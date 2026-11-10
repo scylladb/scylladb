@@ -10,6 +10,7 @@ import re
 import time
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field, replace
+from datetime import datetime, timezone
 from typing import Any, cast
 
 import pytest
@@ -314,11 +315,10 @@ def check_record(record: Record) -> None:
 def check_deleted_record(record: Record, timestamp: int) -> None:
     """Assert `record` is a partition deleted at `timestamp`.
 
-    A converged record may still physically contain the row the tombstone
-    deletes, because merging applies the tombstone but does not purge the data it
-    shadows. So what has to hold is that the tombstone is stored, and that
-    nothing in the record is newer than it - at equal timestamps the tombstone
-    wins.
+    Repair compacts the converged partition, which removes the data that the
+    tombstone covers, but a record that repair did not write can still hold such
+    data. So what has to hold is that the tombstone is stored, and that nothing
+    in the record is newer than it - at equal timestamps the tombstone wins.
     """
     assert record.tombstone_timestamp() == timestamp, f"expected a tombstone at {timestamp}: {record}"
     assert (record.marker_timestamp or 0) <= timestamp, f"row marker survived the tombstone: {record}"
@@ -934,10 +934,9 @@ async def test_repair_window_never_splits_partition(manager: ScyllaClusterManage
                 await stack.enter_async_context(inject_error(manager.api, server.ip_addr, "repair_tiny_max_row_buf_size"))
             await manager.api.repair(servers[0].ip_addr, ks, "test")
 
-        # The cells are checked below rather than through `expected`: w may
-        # legitimately still be present in the record, shadowed by the tombstone,
-        # so the converged cell set is not fixed.
-        records = await check_converged(cql, hosts, f"{ks}.test", {pk: LIVE for pk in keys})
+        # Repair compacts the converged partition, so the tombstone removes w,
+        # and v is the only cell that is left.
+        records = await check_converged(cql, hosts, f"{ks}.test", {pk: {'v': 'new'} for pk in keys})
         # The converged record must still carry the partition tombstone next to
         # the newer row. A record that only kept the row reads the same to a
         # client, but has lost the deletion: a later write of w at a timestamp
@@ -945,10 +944,6 @@ async def test_repair_window_never_splits_partition(manager: ScyllaClusterManage
         for pk, record in records.items():
             assert record.kinds == (PARTITION_START, CLUSTERING_ROW, PARTITION_END), f"pk {pk}: {record}"
             assert record.tombstone_timestamp() == 2000, f"pk {pk}: tombstone lost from the converged record: {record}"
-            assert record.cell_values()['v'] == 'new', f"pk {pk}: {record}"
-            # w may still be present in the record, shadowed by the tombstone,
-            # but it must never be newer than the tombstone that deleted it.
-            assert record.cell_timestamps().get('w', 0) < 2000, f"pk {pk}: w survived the tombstone: {record}"
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
@@ -1321,6 +1316,147 @@ async def test_repair_overwrites_stale_cached_partition(manager: ScyllaClusterMa
         # And node2 must serve the new value out of its own storage.
         rows = await read_locally(cql, hosts[1], f"SELECT v FROM {table} WHERE pk = 1")
         assert rows[0].v == 200, "node2 served a stale cached value after repair"
+
+
+async def get_injection_params(manager: ScyllaClusterManager, server: Any, injection: str) -> dict[str, str]:
+    """Return the parameters that the code set on the enabled `injection` of `server`.
+
+    Each shard keeps its own parameters, and the function asserts that all the
+    shards that set them agree.
+    """
+    result = await manager.api.get_injection(server.ip_addr, injection)
+    assert all(shard["enabled"] for shard in result), f"injection {injection} is not enabled: {result}"
+    per_shard = [{item["key"]: item["value"] for item in shard["parameters"]}
+                 for shard in result if shard.get("parameters")]
+    assert per_shard, f"no shard set parameters on {injection}: {result}"
+    assert all(params == per_shard[0] for params in per_shard), f"the shards disagree: {result}"
+    return per_shard[0]
+
+
+async def set_config_on_all(cql: Any, hosts: list[Any], name: str, value: str) -> None:
+    """Set the live-update config item `name` to `value` on every host."""
+    for host in hosts:
+        await cql.run_async(f"UPDATE system.config SET value = '{value}' WHERE name = '{name}'", host=host)
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_repair_does_not_purge_logstor_tombstones(manager: ScyllaClusterManager):
+    """Test that repair of a logstor table purges no tombstone from the stream.
+
+    Node1 stores v1 at timestamp 2000 with a TTL of one second, and node2
+    stores v2 at timestamp 1000. The table uses the immediate tombstone GC mode,
+    so the expired row of node1 can be purged as soon as it expires, and
+    enable_tombstone_gc_for_streaming_and_repair is on.
+
+    If the stream of node1 purged the expired row, node1 would send nothing,
+    and node2 would send its row at timestamp 1000. The logstor index of node1
+    keeps the expired record at timestamp 2000, so node1 would refuse that row,
+    and the replicas would never converge. The stream of a logstor table keeps
+    the expired row as dead data, so repair merges the two versions and both
+    replicas store the merged record, in which v2 is live.
+    """
+    servers, cql, hosts = await create_logstor_cluster(manager)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v1 text, v2 text)"
+                            " WITH storage_engine = 'logstor' AND tombstone_gc = {'mode': 'immediate'}")
+        table = f"{ks}.test"
+        await set_config_on_all(cql, hosts, "enable_tombstone_gc_for_streaming_and_repair", "1")
+
+        await write_only_on(manager, servers, cql, hosts, ks, "test", 0,
+                            [f"INSERT INTO {table} (pk, v1) VALUES (1, 'a') USING TIMESTAMP 2000 AND TTL 1"])
+        await write_only_on(manager, servers, cql, hosts, ks, "test", 1,
+                            [f"INSERT INTO {table} (pk, v2) VALUES (1, 'b') USING TIMESTAMP 1000"])
+
+        # Wait until the row of node1 expires. A read of the row cannot show this,
+        # because node2, which holds v2, can answer it, so the wait uses the
+        # expiry of the row marker in the record of node1.
+        rows = await cql.run_async(f"SELECT * FROM MUTATION_FRAGMENTS({table}) WHERE pk = 1", host=hosts[0])
+        markers = [json.loads(row.metadata)['marker'] for row in rows
+                   if row.mutation_source.startswith(LOG_SOURCE_PREFIX) and row.mutation_fragment_kind == CLUSTERING_ROW]
+        assert len(markers) == 1 and markers[0]['timestamp'] == 2000 and 'expiry' in markers[0], f"node1: {markers}"
+        expiry = datetime.strptime(markers[0]['expiry'], '%Y-%m-%d %H:%M:%Sz').replace(tzinfo=timezone.utc).timestamp()
+        await asyncio.sleep(max(0.0, expiry + 1 - time.time()))
+
+        for server in servers:
+            await manager.api.enable_injection(server.ip_addr, "maybe_compact_for_streaming", one_shot=False)
+        await manager.api.repair(servers[0].ip_addr, ks, "test")
+        for server in servers:
+            assert await get_injection_params(manager, server, "maybe_compact_for_streaming") == {
+                    "compaction_enabled": "true", "compaction_can_gc": "false"}
+
+        records = await check_converged(cql, hosts, table, {1: LIVE})
+        assert records[1].cell_values().get('v2') == 'b', f"v2 is lost from the merged record: {records[1]}"
+        assert records[1].cell_values().get('v1') is None, f"the expired v1 is live again: {records[1]}"
+
+        rows = await cql.run_async(SimpleStatement(f"SELECT v1, v2 FROM {table} WHERE pk = 1",
+                                                   consistency_level=ConsistencyLevel.ALL))
+        assert [(row.v1, row.v2) for row in rows] == [(None, 'b')]
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_repair_compacts_converged_partition(manager: ScyllaClusterManager):
+    """Test that repair compacts a converged partition before it writes or hashes it.
+
+    One node stores a live row at timestamp 1000, and the other node deletes the
+    partition at timestamp 2000. The streaming reader of each node compacts, so
+    the repair master must compact the merged partition in the same way:
+
+    - The converged record holds only the tombstone, and not the dead row.
+    - The record of the node that deleted the partition already is the converged
+      partition, so repair must not rewrite it. As a follower, that node must
+      have the same row hashes as the converged partition, so the master sends it
+      nothing. As the repair master, that node must keep its own rows instead of
+      the merged ones.
+
+    Half of the keys have the tombstone on node1 and the other half on node2.
+    The keyspace has one tablet, so one node is the repair master of all the
+    keys, and both cases happen.
+
+    The repair stats show the second point also when a write of an identical
+    record does not move the record: the master pulls the version of each key
+    from the follower, and sends only the tombstones to the follower, for the
+    keys whose live row is on the follower.
+    """
+    servers, cql, hosts = await create_logstor_cluster(manager)
+
+    keys = range(8)
+
+    def deleter(pk: int) -> int:
+        """The index of the node that deletes `pk`. The other node stores the live row."""
+        return pk % 2
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}"
+                                          " AND tablets = {'initial': 1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v int) WITH storage_engine = 'logstor'")
+        table = f"{ks}.test"
+
+        for node in range(2):
+            await write_only_on(manager, servers, cql, hosts, ks, "test", node, [
+                f"DELETE FROM {table} USING TIMESTAMP 2000 WHERE pk = {pk}" if deleter(pk) == node else
+                f"INSERT INTO {table} (pk, v) VALUES ({pk}, {pk}) USING TIMESTAMP 1000"
+                for pk in keys])
+
+        # A rewrite of a record shows only after the record leaves the active segment.
+        await flush_records_to_segments(manager, servers)
+        before = await read_all_records(cql, hosts, table)
+        logs = await mark_logs(manager, servers)
+
+        await manager.api.repair(servers[0].ip_addr, ks, "test")
+
+        # The keyspace has one tablet, so repair logs one stats line.
+        stats = await read_repair_stats(logs, 1)
+        assert stats['rx_row_nr'] == len(keys), f"the master did not pull one row of each key: {stats}"
+        assert stats['tx_row_nr'] == len(keys) // 2, \
+            f"the master sent more than the tombstones that the follower does not have: {stats}"
+
+        records = await check_converged(cql, hosts, table, {pk: Deleted(2000) for pk in keys})
+        after = await read_all_records(cql, hosts, table)
+        for pk in keys:
+            assert records[pk].kinds == (PARTITION_START, PARTITION_END), \
+                f"pk {pk}: the converged record kept the dead row: {records[pk]}"
+            assert after[deleter(pk)][pk].source == before[deleter(pk)][pk].source, \
+                f"pk {pk}: repair rewrote the record that already was the converged partition"
 
 
 #############################################################################
