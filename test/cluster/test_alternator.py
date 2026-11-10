@@ -2208,3 +2208,34 @@ async def test_alternator_ttl_expiration_during_drain(manager: ScyllaClusterMana
     async def item_expired():
         return True if 'Item' not in table.get_item(Key={'p': 1}, ConsistentRead=True) else None
     assert await wait_for(item_expired, time.time() + 60)
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_timestamp_attribute_tag_requires_feature(manager: ScyllaClusterManager):
+    """
+    Verify that the system:timestamp_attribute tag can't be set - in
+    CreateTable or TagResource - until all nodes support it (the
+    ALTERNATOR_TIMESTAMP_ATTRIBUTE cluster feature). A node that doesn't
+    support it would store the attribute instead of using it as the write
+    timestamp. We simulate a cluster where not all nodes support it by
+    suppressing the feature.
+    """
+    config = alternator_config | {'error_injections_at_startup': [{'name': 'suppress_features', 'value': 'ALTERNATOR_TIMESTAMP_ATTRIBUTE'}]}
+    server = await manager.server_add(config=config)
+    alternator = get_alternator(server.ip_addr)
+    table_def = dict(
+        BillingMode='PAY_PER_REQUEST',
+        KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+        AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}])
+    tag = {'Key': 'system:timestamp_attribute', 'Value': 'ts'}
+    with pytest.raises(ClientError, match='ValidationException.*not yet supported'):
+        alternator.create_table(TableName='tbl_ts1', Tags=[tag], **table_def)
+    table = alternator.create_table(TableName='tbl_ts2', **table_def)
+    arn = table.meta.client.describe_table(TableName=table.name)['Table']['TableArn']
+    with pytest.raises(ClientError, match='ValidationException.*not yet supported'):
+        table.meta.client.tag_resource(ResourceArn=arn, Tags=[tag])
+    # Other tags can still be set, and removing the tag is allowed:
+    table.meta.client.tag_resource(ResourceArn=arn, Tags=[{'Key': 'hello', 'Value': 'world'}])
+    table.meta.client.untag_resource(ResourceArn=arn, TagKeys=['system:timestamp_attribute'])
+    assert table.meta.client.list_tags_of_resource(ResourceArn=arn)['Tags'] == [{'Key': 'hello', 'Value': 'world'}]
+    table.delete()
