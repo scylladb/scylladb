@@ -6,7 +6,9 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
+#include <array>
 #include <ranges>
+#include <span>
 #include <sstream>
 
 #include <seastar/core/seastar.hh>
@@ -265,19 +267,6 @@ public:
         } catch (broken_semaphore&) {
             throw webshell_error(reply::status_type::service_unavailable, "Server shutting down");
         }
-    }
-};
-
-// Answers the requests which name no endpoint.
-class not_found_handler : public gated_handler {
-public:
-    explicit not_found_handler(request_control& request_control)
-        : gated_handler("not-found", request_control)
-    {}
-
-protected:
-    virtual future<std::unique_ptr<reply>> do_handle(const sstring& path, std::unique_ptr<request> req, std::unique_ptr<reply> rep, request_permit) override {
-        throw webshell_error(reply::status_type::not_found, seastar::format("No such endpoint: {} {}", req->_method, path));
     }
 };
 
@@ -1072,6 +1061,69 @@ protected:
 
 } // anonymous namespace
 
+namespace {
+
+// The files of the web interface, embedded in the executable.
+#pragma clang diagnostic push
+// #embed is a C23 feature, which clang supports in C++ as an extension.
+#pragma clang diagnostic ignored "-Wc23-extensions"
+constexpr unsigned char favicon_ico[] = {
+#embed "resources/favicon.ico"
+};
+constexpr unsigned char webshell_css[] = {
+#embed "resources/webshell.css"
+};
+constexpr unsigned char webshell_html[] = {
+#embed "resources/webshell.html"
+};
+constexpr unsigned char webshell_js[] = {
+#embed "resources/webshell.js"
+};
+#pragma clang diagnostic pop
+
+struct resource {
+    std::string_view name;
+    std::string_view content_type;
+    std::span<const unsigned char> content;
+};
+
+constexpr std::array resources{
+    resource{"favicon.ico", "image/vnd.microsoft.icon", favicon_ico},
+    resource{"webshell.css", "text/css", webshell_css},
+    resource{"webshell.html", "text/html", webshell_html},
+    resource{"webshell.js", "text/javascript", webshell_js},
+};
+
+/// Serves the files of the web interface, which are embedded in the executable.
+///
+/// The web interface is a single page application, its page is served on /.
+class resource_handler : public gated_handler {
+public:
+    explicit resource_handler(request_control& request_control)
+        : gated_handler("resource", request_control)
+    { }
+
+protected:
+    virtual future<std::unique_ptr<reply>> do_handle(const sstring& path, std::unique_ptr<request> req, std::unique_ptr<reply> rep, request_permit) override {
+        const auto name = path == "/" ? std::string_view("webshell.html") : std::string_view(path).substr(1);
+        const auto it = std::ranges::find(resources, name, &resource::name);
+        if (it == resources.end() || httpd::str2type(req->_method) != operation_type::GET) {
+            throw webshell_error(reply::status_type::not_found, seastar::format("No such endpoint or file: {} {}", req->_method, path));
+        }
+
+        rep->set_status(reply::status_type::ok);
+        // The web interface uses no resources of other origins, nor inline
+        // scripts or styles, and is never to be embedded into another page.
+        rep->add_header("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'");
+        rep->add_header("X-Content-Type-Options", "nosniff");
+        rep->add_header("Cache-Control", "no-cache");
+        rep->write_body(it->content_type, sstring(reinterpret_cast<const char*>(it->content.data()), it->content.size()));
+        co_return std::move(rep);
+    }
+};
+
+} // anonymous namespace
+
 server::server(cql3::query_processor& qp, auth::service& auth_service, qos::service_level_controller& sl_controller,
         updateable_timeout_config& timeout_config, gms::gossiper& gossiper)
     : _qp(qp)
@@ -1086,7 +1138,9 @@ server::server(cql3::query_processor& qp, auth::service& auth_service, qos::serv
 }
 
 void server::set_routes(routes& r) {
-    r.add_default_handler(new not_found_handler(_request_control));
+    // Every request which names no endpoint is looked up as a file of the web
+    // interface.
+    r.add_default_handler(new resource_handler(_request_control));
     r.put(operation_type::POST, "/query", new query_handler(_request_control, *this));
     r.put(operation_type::GET, "/query", new method_not_allowed_handler(_request_control, "POST"));
 
