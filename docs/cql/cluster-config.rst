@@ -219,6 +219,15 @@ Available options
        at that scope even if a broader scope enabled it, whereas ``NULL`` removes the value and
        falls back to the broader scope. See
        :doc:`Automatic Scrub </operating-scylla/procedures/maintenance/automatic-scrub>`.
+   * - ``repair_hints_batchlog_flush_timeout_in_seconds``
+     - integer
+     - ``CLUSTER``
+     - A repair of a table with ``tombstone_gc`` in ``repair`` mode first asks every node to flush
+       its hints and replay its batchlog, and gives up on a node that has not finished within this
+       many seconds. Raise it when nodes accumulate hints faster than they can replay them within
+       the default, for example after a node stayed down for a long time. Must be between ``1``
+       and ``315360000`` (ten years). Default: ``300``, in effect once every node runs a version
+       that knows the option.
 
 .. _cql-cluster-config-yaml-options:
 
