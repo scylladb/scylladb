@@ -18,6 +18,7 @@ namespace replica {
 class database;
 class keyspace;
 class table;
+struct seal_boundaries;
 using column_family = table;
 class memtable_list;
 class keyspace_change;

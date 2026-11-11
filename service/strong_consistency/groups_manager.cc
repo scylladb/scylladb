@@ -479,6 +479,26 @@ table_metrics& groups_manager::get_table_metrics(const schema& s) {
         table_metrics_reporting(_db.get_config())).first->second;
 }
 
+void groups_manager::register_seal_boundaries_provider(replica::table& t) {
+    if (!_seal_provider_tables.insert(t.schema()->id()).second) {
+        return;
+    }
+    t.set_seal_boundaries_provider([this] (raft::group_id id) {
+        return seal_boundaries_for(id);
+    });
+}
+
+std::optional<replica::seal_boundaries> groups_manager::seal_boundaries_for(raft::group_id id) const {
+    const auto it = _raft_groups.find(id);
+    if (it == _raft_groups.end() || !it->second.storage) {
+        return std::nullopt;
+    }
+    const auto& storage = *it->second.storage;
+    const auto promoted = storage.promoted_seal() ? storage.promoted_seal()->ts : api::min_timestamp;
+    const auto newest = storage.seals().empty() ? promoted : storage.seals().back().ts;
+    return replica::seal_boundaries{promoted, newest};
+}
+
 void groups_manager::drop_dropped_tables_metrics() {
     std::erase_if(_table_metrics, [this] (const auto& entry) {
         return !_db.has_schema(entry.first.first, entry.first.second);
@@ -1116,6 +1136,7 @@ void groups_manager::schedule_raft_group_start(global_tablet_id tablet, raft::gr
         _starting_groups.push_back(state);
     }
     const auto range = token_range_of_group(tm->tablets().get_tablet_map(tablet.table), tablet.tablet, id);
+    register_seal_boundaries_provider(_db.find_column_family(tablet.table));
     chain_control_op(state, id, [this, &state, tablet, id, tm = std::move(tm), range, g = state.gate,
             m = metrics.weak_from_this(), server_stats = metrics.server_stats(),
             rpc_stats = metrics.rpc_stats(), apply_stats = metrics.apply_stats()] () mutable -> future<> {
@@ -1440,6 +1461,13 @@ future<> groups_manager::stop_shard() {
         co_await _raft_groups.begin()->second.server_control_op.get_future();
     }
     _started = false;
+
+    // The database outlives this object, and flushes at shutdown classify sstables.
+    for (const auto id : _seal_provider_tables) {
+        if (auto t = _db.get_tables_metadata().get_table_if_exists(id)) {
+            t->set_seal_boundaries_provider({});
+        }
+    }
 
     logger.info("stop_shard() completed");
 }

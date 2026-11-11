@@ -10,6 +10,7 @@
 
 #include "locator/abstract_replication_strategy_fwd.hh"
 #include "locator/token_metadata.hh"
+#include "raft/raft_fwd.hh"
 #include "index/secondary_index_manager.hh"
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/sstring.hh>
@@ -490,6 +491,15 @@ public:
     }
 };
 
+// Seals of a strongly consistent tablet's Raft group. No sstable spans a seal.
+struct seal_boundaries {
+    api::timestamp_type promoted; // api::min_timestamp while no seal is promoted
+    api::timestamp_type newest;   // pending or promoted
+};
+
+// Returns nothing when the group does not run on this shard.
+using seal_boundaries_provider = std::function<std::optional<seal_boundaries>(raft::group_id)>;
+
 class table : public enable_lw_shared_from_this<table>
             , public weakly_referencable<table> {
 public:
@@ -554,6 +564,7 @@ private:
     // The storage_group_manager manages either a single storage_group for vnodes or per-tablet storage_group for tablets.
     // It contains and manages both the compaction_groups list and the storage_groups vector.
     std::unique_ptr<storage_group_manager> _sg_manager;
+    seal_boundaries_provider _seal_boundaries_provider;
     // Storage groups whose truncate_tablet_locally() is between swapping the sstables and
     // retiring the memtables, see wait_for_tablet_truncate().
     std::vector<const storage_group*> _truncating_storage_groups;
@@ -1171,6 +1182,13 @@ public:
     // new memtable without yielding, and flushes the old ones in the background. A flush
     // of the table started after the call waits for them.
     void rotate_memtables(dht::token_range range);
+    void set_seal_boundaries_provider(seal_boundaries_provider provider) {
+        _seal_boundaries_provider = std::move(provider);
+    }
+    // The seals of the range's tablet, read from its Raft group: nothing while they are
+    // not known, i.e. before the strong consistency layer registers its provider, or while
+    // the group does not run on this shard.
+    std::optional<seal_boundaries> seal_boundaries_for(const dht::token_range& range) const;
     future<const_mutation_partition_ptr> find_partition(schema_ptr, reader_permit permit, const dht::decorated_key& key) const;
     future<const_row_ptr> find_row(schema_ptr, reader_permit permit, const dht::decorated_key& partition_key, clustering_key clustering_key) const;
     shard_id shard_for_reads(dht::token t) const;

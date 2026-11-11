@@ -22,6 +22,7 @@
 #include <seastar/util/noncopyable_function.hh>
 
 #include <source_location>
+#include <unordered_set>
 
 namespace db {
 class system_keyspace;
@@ -188,6 +189,8 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     abort_source _as;
 
     tablet_group_leader_cache _leader_cache;
+    // The tables given a seal boundaries provider, to take it back in stop().
+    std::unordered_set<table_id> _seal_provider_tables;
 
     // Keeps the flush handler registered. The handler forwards each round's
     // position to every group; see raft_commitlog::closed_up_to().
@@ -208,6 +211,11 @@ class groups_manager : public peering_sharded_service<groups_manager> {
 
     // Creates them if the table does not have any yet.
     table_metrics& get_table_metrics(const schema& s);
+
+    void register_seal_boundaries_provider(replica::table& t);
+
+    // Read from the group's storage; nothing while the group does not run on this shard.
+    std::optional<replica::seal_boundaries> seal_boundaries_for(raft::group_id id) const;
 
     // A table keeps its metrics until it is dropped, even once its last tablet
     // has left this shard, or the sum over the shards would go backwards.
