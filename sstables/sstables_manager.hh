@@ -128,6 +128,15 @@ public:
     std::vector<sstring> endpoints(sstring type = "") const noexcept;
 };
 
+// How the sstables manager may reclaim bloom filter memory of a table's
+// sstables when it is over components_memory_reclaim_threshold.
+//   none: never; the filters are pinned in memory (but count toward the threshold).
+//   evict: evict whole filters.
+//   downgrade: switch to a smaller filter, if the sstable has one, evict otherwise.
+enum class bloom_filter_eviction_policy { none, evict, downgrade };
+
+std::optional<bloom_filter_eviction_policy> parse_bloom_filter_eviction_policy(std::string_view);
+
 class sstables_manager {
     using list_type = boost::intrusive::list<sstable,
             boost::intrusive::member_hook<sstable, sstable::manager_list_link_type, &sstable::_manager_list_link>,
@@ -149,6 +158,10 @@ public:
         utils::updateable_value<double> memory_reclaim_threshold = utils::updateable_value<double>(0.2);
         utils::updateable_value<double> memory_reclaim_reload_headroom = utils::updateable_value<double>(0);
         utils::updateable_value<uint32_t> memory_reclaim_min_residency_in_s = utils::updateable_value<uint32_t>(0);
+        // Half-life of the decayed bloom filter usefulness rates.
+        utils::updateable_value<uint32_t> bloom_filter_usefulness_half_life_in_s = utils::updateable_value<uint32_t>(300);
+        // The policy of tables without one of their own, see set_bloom_filter_eviction_policy().
+        bloom_filter_eviction_policy default_bloom_filter_eviction_policy = bloom_filter_eviction_policy::evict;
         const std::vector<sstring>& data_file_directories;
         utils::updateable_value<sstring> format = utils::updateable_value<sstring>(fmt::to_string(sstable_version_types::me));
         utils::updateable_value<uint32_t> large_data_records_per_sstable = utils::updateable_value<uint32_t>(10);
@@ -182,8 +195,14 @@ private:
     seastar::condition_variable _components_memory_change_event;
     future<> _components_reloader_status = make_ready_future<>();
     // Wakes up the reclaim/reload fiber periodically, so components held back
-    // by the minimum residency get reloaded once it passes.
+    // by the minimum residency get reloaded once it passes. Also scores the
+    // usefulness of the bloom filters, when the cost-based reclaim is active.
     timer<lowres_clock> _components_reload_timer;
+    // Per-table bloom filter eviction policies, overriding the default.
+    std::unordered_map<table_id, bloom_filter_eviction_policy> _bloom_filter_eviction_policies;
+    // Set by the periodic scoring: the cost-based reclaim may consider swaps.
+    bool _filter_swap_requested = false;
+    lowres_clock::time_point _last_pinned_filters_warning;
 
     bool _closing = false;
     promise<> _done;
@@ -326,6 +345,10 @@ public:
 
     scheduling_group maintenance_sg() const noexcept { return _maintenance_sg; }
 
+    // Set the bloom filter eviction policy of a table, std::nullopt resets it
+    // to the default of the manager.
+    void set_bloom_filter_eviction_policy(table_id table, std::optional<bloom_filter_eviction_policy> policy);
+
     // To be called by the sstable to signal its unlinking
     void on_unlink(sstable* sst);
 
@@ -359,6 +382,21 @@ private:
     future<> maybe_reload_components();
     size_t get_components_memory_reclaim_threshold() const;
     size_t get_memory_available_for_reclaimable_components() const;
+
+    bloom_filter_eviction_policy get_bloom_filter_eviction_policy(const sstable& sst) const;
+    // The legacy reclaim (evict the largest filter, reload the smallest) is
+    // used when every table's policy is `evict`, the cost-based one otherwise.
+    bool use_legacy_filter_reclaim() const;
+    // Before switching back to the legacy reclaim: make the sstables changed
+    // by the cost-based reclaim fit its bookkeeping.
+    future<> prepare_legacy_filter_reclaim();
+    void score_filters();
+    // Cost-based reclaim: take the steps (filter downgrades or evictions)
+    // which add the least index lookups per byte of memory freed, and when
+    // there is room, the steps back which save the most lookups per byte.
+    future<> rebalance_filters(bool allow_swap);
+    // Returns false if the level couldn't be changed (e.g. the load failed).
+    future<bool> change_filter_level(sstable& sst, unsigned level);
     // Reclaim memory from the SSTable and remove it from the memory tracking metrics.
     // The method is idempotent and for an sstable that is deleted, it is called both
     // during unlink and during deactivation.

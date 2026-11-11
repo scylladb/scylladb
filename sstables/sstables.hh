@@ -724,6 +724,13 @@ private:
     unsigned _filter_level = 0;
     lowres_clock::time_point _filter_level_changed_at;
     bool _component_memory_reload_disabled = false;
+    // Usefulness of the bloom filter: decayed rate (per second) of filter
+    // checks done by reads for keys this sstable doesn't have. Each such check
+    // costs an index lookup, unless the filter rejects it.
+    double _absent_check_rate = 0;
+    bool _absent_check_rate_valid = false;
+    uint64_t _last_scored_absent_checks = 0;
+    lowres_clock::time_point _last_scored_at;
     std::optional<db_clock::time_point> _unlinked_at;
     const bool _ignore_component_digest_mismatch;
 
@@ -887,6 +894,7 @@ private:
     lowres_clock::time_point components_reclaimed_at() const { return _components_reclaimed_at; }
     bool component_memory_reload_disabled() const { return _component_memory_reload_disabled; }
 
+public:
     // Bloom filter levels: the filters available on disk which can be kept
     // in memory, level 0 being the full one. Reclaiming memory from the
     // filter means switching to a higher level, the level
@@ -906,6 +914,16 @@ private:
     // for level filter_level_count(), drop it. Keeps the reclaim accounting
     // of the sstable in sync. Returns the change of the filter memory.
     future<ssize_t> set_filter_level(unsigned level);
+    // The decayed rate of absent-key filter checks, see update_absent_check_rate().
+    // Not valid until the sstable was scored twice.
+    double absent_check_rate() const { return _absent_check_rate; }
+    bool absent_check_rate_valid() const { return _absent_check_rate_valid; }
+    // Fold the absent-key checks since the last call into the decayed rate.
+    // Absent-key checks are the rejected checks plus the false positives (index
+    // lookups which found nothing), so they can be counted at any filter level,
+    // including evicted (when every absent-key check becomes an index lookup).
+    void update_absent_check_rate(std::chrono::seconds half_life);
+private:
 
     static bool is_component_rewrite_supported(component_type type);
     // Must be called in a seastar thread

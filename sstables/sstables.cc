@@ -2430,6 +2430,26 @@ future<ssize_t> sstable::set_filter_level(unsigned level) {
     co_return ssize_t(now) - before;
 }
 
+void sstable::update_absent_check_rate(std::chrono::seconds half_life) {
+    const auto now = lowres_clock::now();
+    const uint64_t absent_checks = _filter_tracker.rejections + _filter_tracker.false_positive;
+    if (_last_scored_at != lowres_clock::time_point{}) {
+        const double dt = std::chrono::duration<double>(now - _last_scored_at).count();
+        if (dt > 0) {
+            const double sample = double(absent_checks - _last_scored_absent_checks) / dt;
+            if (_absent_check_rate_valid) {
+                const double alpha = 1.0 - std::exp2(-dt / std::max(1.0, double(half_life.count())));
+                _absent_check_rate += alpha * (sample - _absent_check_rate);
+            } else {
+                _absent_check_rate = sample;
+                _absent_check_rate_valid = true;
+            }
+        }
+    }
+    _last_scored_at = now;
+    _last_scored_absent_checks = absent_checks;
+}
+
 void sstable::init_filter_levels() {
     _filter_levels.clear();
     _filter_level = 0;

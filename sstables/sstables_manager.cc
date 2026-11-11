@@ -111,7 +111,11 @@ sstables_manager::sstables_manager(
 {
     _components_reloader_status = components_reclaim_reload_fiber();
     _components_reload_timer.set_callback([this] {
-        if (!_reclaimed.empty()) {
+        if (!use_legacy_filter_reclaim()) {
+            score_filters();
+            _filter_swap_requested = true;
+            _components_memory_change_event.signal();
+        } else if (!_reclaimed.empty()) {
             _components_memory_change_event.signal();
         }
     });
@@ -403,6 +407,11 @@ future<> sstables_manager::components_reclaim_reload_fiber() {
             co_return;
         }
 
+        if (!use_legacy_filter_reclaim()) {
+            co_await rebalance_filters(std::exchange(_filter_swap_requested, false));
+            continue;
+        }
+        co_await prepare_legacy_filter_reclaim();
         if (_total_reclaimable_memory > get_components_memory_reclaim_threshold()) {
             // reclaim memory to bring total memory usage under threshold
             co_await maybe_reclaim_components();
@@ -458,6 +467,264 @@ future<> sstables_manager::maybe_reload_components() {
         memory_available = reload_limit > _total_reclaimable_memory ? reload_limit - _total_reclaimable_memory : 0;
         // The set may have changed while reloading.
         sstable_to_reload = _reclaimed.begin();
+    }
+}
+
+std::optional<bloom_filter_eviction_policy> parse_bloom_filter_eviction_policy(std::string_view s) {
+    if (s == "none") {
+        return bloom_filter_eviction_policy::none;
+    } else if (s == "evict") {
+        return bloom_filter_eviction_policy::evict;
+    } else if (s == "downgrade") {
+        return bloom_filter_eviction_policy::downgrade;
+    }
+    return std::nullopt;
+}
+
+void sstables_manager::set_bloom_filter_eviction_policy(table_id table, std::optional<bloom_filter_eviction_policy> policy) {
+    if (policy) {
+        _bloom_filter_eviction_policies[table] = *policy;
+    } else {
+        _bloom_filter_eviction_policies.erase(table);
+    }
+    _components_memory_change_event.signal();
+}
+
+bloom_filter_eviction_policy sstables_manager::get_bloom_filter_eviction_policy(const sstable& sst) const {
+    auto it = _bloom_filter_eviction_policies.find(sst.get_schema()->id());
+    return it == _bloom_filter_eviction_policies.end() ? _config.default_bloom_filter_eviction_policy : it->second;
+}
+
+bool sstables_manager::use_legacy_filter_reclaim() const {
+    if (_config.default_bloom_filter_eviction_policy != bloom_filter_eviction_policy::evict) {
+        return false;
+    }
+    return std::ranges::all_of(_bloom_filter_eviction_policies, [] (const auto& e) {
+        return e.second == bloom_filter_eviction_policy::evict;
+    });
+}
+
+future<> sstables_manager::prepare_legacy_filter_reclaim() {
+    // The legacy reload only considers the sstables in _reclaimed, which the
+    // cost-based reclaim doesn't maintain. Evict the filters it downgraded,
+    // then track all evicted ones.
+    for (auto& sst : _active) {
+        if (sst.filter_level() > 0 && !sst.filter_evicted() && !sst.component_memory_reload_disabled()) {
+            co_await change_filter_level(sst, sst.filter_level_count());
+        }
+    }
+    for (auto& sst : _active) {
+        if (sst.filter_evicted() && sst.total_memory_reclaimed() > 0 && !sst._manager_set_link.is_linked()
+                && !sst.component_memory_reload_disabled()) {
+            _reclaimed.insert(sst);
+        }
+    }
+}
+
+void sstables_manager::score_filters() {
+    const auto half_life = std::chrono::seconds(_config.bloom_filter_usefulness_half_life_in_s());
+    for (auto& sst : _active) {
+        sst.update_absent_check_rate(half_life);
+    }
+}
+
+future<bool> sstables_manager::change_filter_level(sstable& sst, unsigned level) {
+    const unsigned old_level = sst.filter_level();
+    const size_t old_memory = sst.total_reclaimable_memory_size();
+    const size_t new_memory = sst.filter_memory_at_level(level);
+    // Reserve the growth up-front, so concurrent loads don't overshoot.
+    const size_t reservation = new_memory > old_memory ? new_memory - old_memory : 0;
+    _total_reclaimable_memory += reservation;
+    erase_from_reclaimed(&sst);
+    auto sst_ptr = sst.shared_from_this();
+    ssize_t delta = 0;
+    bool failed = false;
+    try {
+        delta = co_await sst_ptr->set_filter_level(level);
+    } catch (...) {
+        sstlog.warn("Failed to change the bloom filter level of {} from {} to {}: {}", sst.get_filename(), old_level, level, std::current_exception());
+        failed = true;
+    }
+    _total_reclaimable_memory -= reservation;
+    if (failed) {
+        co_return false;
+    }
+    if (sst_ptr->component_memory_reload_disabled() || delta == 0) {
+        co_return true;
+    }
+    _total_reclaimable_memory += delta;
+    _total_memory_reclaimed -= delta;
+    sstables_stats::on_filter_reclaimed_bytes_change(-delta);
+    if (level >= sst.filter_level_count()) {
+        sstables_stats::on_filter_eviction();
+        smlogger.info("Reclaimed {} bytes of memory from components of {}. Total memory reclaimed so far is {} bytes",
+                -delta, sst.get_filename(), _total_memory_reclaimed);
+    } else if (level > old_level) {
+        sstables_stats::on_filter_downgrade();
+        smlogger.debug("Downgraded the bloom filter of {} from level {} to {}, freeing {} bytes", sst.get_filename(), old_level, level, -delta);
+    } else if (old_level >= sst.filter_level_count()) {
+        sstables_stats::on_filter_reload(delta);
+        smlogger.debug("Reloaded the bloom filter of {} at level {}, {} bytes", sst.get_filename(), level, delta);
+    } else {
+        sstables_stats::on_filter_upgrade(delta);
+        smlogger.debug("Upgraded the bloom filter of {} from level {} to {}, using {} more bytes", sst.get_filename(), old_level, level, delta);
+    }
+    co_return true;
+}
+
+future<> sstables_manager::rebalance_filters(bool allow_swap) {
+    const size_t threshold = get_components_memory_reclaim_threshold();
+    const size_t reload_limit = threshold * (1.0 - _config.memory_reclaim_reload_headroom());
+    const auto min_residency = std::chrono::seconds(_config.memory_reclaim_min_residency_in_s());
+
+    struct step {
+        sstable* sst;
+        unsigned level;
+        // Index lookups per second added (down) or saved (up), per byte freed (down) or used (up).
+        double cost_per_byte;
+        size_t bytes;
+    };
+    // Sstables not scored yet (just written or loaded) are assumed to be the
+    // most useful: recent data is read the most.
+    auto rate_of = [] (const sstable& sst) {
+        // 10^12 checks/s: more than any real rate, small enough to multiply with byte counts.
+        return sst.absent_check_rate_valid() ? sst.absent_check_rate() : 1e12;
+    };
+    auto next_down = [&] (sstable& sst) -> std::optional<step> {
+        const auto policy = get_bloom_filter_eviction_policy(sst);
+        if (policy == bloom_filter_eviction_policy::none || sst.filter_evicted() || sst.component_memory_reload_disabled()) {
+            return std::nullopt;
+        }
+        const unsigned cur = sst.filter_level();
+        const unsigned next = policy == bloom_filter_eviction_policy::downgrade ? cur + 1 : sst.filter_level_count();
+        const size_t cur_mem = sst.total_reclaimable_memory_size();
+        const size_t next_mem = sst.filter_memory_at_level(next);
+        if (cur_mem <= next_mem) {
+            return std::nullopt;
+        }
+        const double dfp = sst.filter_fp_rate_at_level(next) - sst.filter_fp_rate_at_level(cur);
+        return step{&sst, next, rate_of(sst) * dfp / double(cur_mem - next_mem), cur_mem - next_mem};
+    };
+    auto next_up = [&] (sstable& sst) -> std::optional<step> {
+        const auto policy = get_bloom_filter_eviction_policy(sst);
+        const unsigned cur = sst.filter_level();
+        if (cur == 0 || sst.filter_level_count() == 0 || sst.component_memory_reload_disabled()) {
+            return std::nullopt;
+        }
+        // Tables which may not downgrade only go back to the full filter.
+        const unsigned next = policy == bloom_filter_eviction_policy::downgrade ? cur - 1 : 0;
+        const size_t cur_mem = sst.total_reclaimable_memory_size();
+        const size_t next_mem = sst.filter_memory_at_level(next);
+        if (next_mem <= cur_mem) {
+            return std::nullopt;
+        }
+        const double dfp = sst.filter_fp_rate_at_level(cur) - sst.filter_fp_rate_at_level(next);
+        return step{&sst, next, rate_of(sst) * dfp / double(next_mem - cur_mem), next_mem - cur_mem};
+    };
+    auto residency_passed = [&] (const sstable& sst) {
+        return lowres_clock::now() - sst.filter_level_changed_at() >= min_residency;
+    };
+    auto cheapest_down = [&] (bool respect_residency, const std::unordered_set<const sstable*>& exclude) {
+        std::optional<step> best;
+        for (auto& sst : _active) {
+            if (exclude.contains(&sst) || (respect_residency && !residency_passed(sst))) {
+                continue;
+            }
+            auto s = next_down(sst);
+            // Among equally useful filters (e.g. never read), free the most bytes.
+            if (s && (!best || s->cost_per_byte < best->cost_per_byte
+                    || (s->cost_per_byte == best->cost_per_byte && s->bytes > best->bytes))) {
+                best = s;
+            }
+        }
+        return best;
+    };
+    auto best_up = [&] (size_t max_bytes) {
+        std::optional<step> best;
+        for (auto& sst : _active) {
+            if (!residency_passed(sst)) {
+                continue;
+            }
+            auto s = next_up(sst);
+            if (s && s->bytes <= max_bytes && (!best || s->cost_per_byte > best->cost_per_byte)) {
+                best = s;
+            }
+        }
+        return best;
+    };
+
+    // Over the threshold: take the cheapest steps down.
+    while (_total_reclaimable_memory > threshold) {
+        auto s = cheapest_down(false, {});
+        if (!s) {
+            if (lowres_clock::now() - _last_pinned_filters_warning > std::chrono::minutes(10)) {
+                _last_pinned_filters_warning = lowres_clock::now();
+                smlogger.warn("Bloom filters use {} bytes of memory, over the components_memory_reclaim_threshold of {} bytes, "
+                        "but all reclaimable filter memory was reclaimed already: the rest belongs to tables with bloom_filter_eviction_policy=none",
+                        _total_reclaimable_memory, threshold);
+            }
+            break;
+        }
+        if (!co_await change_filter_level(*s->sst, s->level)) {
+            // Retried on the next wakeup.
+            break;
+        }
+        co_await coroutine::maybe_yield();
+    }
+    // Below the threshold minus the headroom: take the most useful steps up.
+    while (_total_reclaimable_memory < reload_limit) {
+        auto s = best_up(reload_limit - _total_reclaimable_memory);
+        if (!s) {
+            break;
+        }
+        if (!co_await change_filter_level(*s->sst, s->level)) {
+            // Retried on the next wakeup.
+            break;
+        }
+        co_await coroutine::maybe_yield();
+    }
+    // Periodically: swap a step up for steps down which cost at most half of
+    // what the step up saves. Lets the filters follow the usefulness, without
+    // waiting for a threshold crossing. At most one swap per scoring period.
+    if (!allow_swap) {
+        co_return;
+    }
+    auto up = best_up(std::numeric_limits<size_t>::max());
+    if (!up) {
+        co_return;
+    }
+    const size_t needed = _total_reclaimable_memory + up->bytes;
+    size_t to_free = needed > reload_limit ? needed - reload_limit : 0;
+    std::vector<step> downs;
+    double down_cost = 0;
+    std::unordered_set<const sstable*> used{up->sst};
+    while (to_free > 0) {
+        auto s = cheapest_down(true, used);
+        if (!s) {
+            co_return;
+        }
+        used.insert(s->sst);
+        down_cost += s->cost_per_byte * s->bytes;
+        to_free = s->bytes >= to_free ? 0 : to_free - s->bytes;
+        downs.push_back(*s);
+    }
+    if (up->cost_per_byte * up->bytes <= 2 * down_cost) {
+        co_return;
+    }
+    // Hold all the planned sstables: changing a level suspends, and an
+    // sstable can be released meanwhile.
+    auto up_ptr = up->sst->shared_from_this();
+    std::vector<std::pair<shared_sstable, unsigned>> planned_downs;
+    for (auto& d : downs) {
+        planned_downs.emplace_back(d.sst->shared_from_this(), d.level);
+    }
+    for (auto& [sst, level] : planned_downs) {
+        if (!co_await change_filter_level(*sst, level)) {
+            co_return;
+        }
+    }
+    if (_total_reclaimable_memory + up->bytes <= threshold) {
+        co_await change_filter_level(*up_ptr, up->level);
     }
 }
 
