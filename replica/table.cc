@@ -2301,6 +2301,33 @@ table::seal_active_memtable(compaction_group& cg, flush_permit&& flush_permit) n
     // FIXME: provide back-pressure to upper layers
 }
 
+std::optional<seal_boundaries> table::seal_boundaries_for(const dht::token_range& range) const {
+    if (!_seal_boundaries_provider) {
+        return std::nullopt;
+    }
+    const auto& tmap = _erm->get_token_metadata().tablets().get_tablet_map(_schema->id());
+    // The range is a tablet's, or a part of one during a split; the map names the parent
+    // until the split is finalized.
+    const auto tid = tmap.get_tablet_id(range.end() ? range.end()->value() : dht::maximum_token());
+    const auto boundaries = _seal_boundaries_provider(tmap.get_tablet_raft_info(tid).group_id);
+    if (!boundaries || !tmap.has_raft_resize_info(tid)) {
+        return boundaries;
+    }
+    // During a resize the children's writes land in the parent's storage, and the children
+    // seal them. The promoted seal stays the parent's: a child is promoted only once the map
+    // names it, and the children's writes are all above the parent's seals. The newest seal
+    // is the newest of the three groups, so nothing is ever merged across a child's seal.
+    auto combined = *boundaries;
+    for (const auto child : tmap.get_raft_resize_info(tid).new_gids) {
+        const auto child_boundaries = _seal_boundaries_provider(child);
+        if (!child_boundaries) {
+            return std::nullopt;
+        }
+        combined.newest = std::max(combined.newest, child_boundaries->newest);
+    }
+    return combined;
+}
+
 void table::rotate_memtables(dht::token_range range) {
     struct rotation {
         compaction_group_ptr cg;
