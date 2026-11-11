@@ -1555,10 +1555,13 @@ public:
     // Returns true if any of the sstables requires cleanup.
     bool requires_cleanup(const sstables::sstable_set& set) const;
 
+    // Open an fd per component so the files stay readable after unlink (file-based streaming).
+    using open_component_files = bool_class<class open_component_files_tag>;
     // Takes snapshot of current storage state (includes memtable and sstables) from
     // all compaction groups that overlap with a given token range. The output is
     // a list of SSTables that represent the snapshot.
-    future<utils::chunked_vector<sstables::sstable_files_snapshot>> take_storage_snapshot(dht::token_range tr);
+    future<utils::chunked_vector<sstables::sstable_files_snapshot>> take_storage_snapshot(dht::token_range tr,
+            open_component_files open_files = open_component_files::yes);
 
     // Takes snapshot of current sstable set all compaction groups.
     future<utils::chunked_vector<sstables::shared_sstable>> take_sstable_set_snapshot();
