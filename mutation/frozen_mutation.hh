@@ -280,6 +280,11 @@ public:
 };
 
 frozen_mutation_fragment freeze(const schema& s, const mutation_fragment& mf);
+// Same bytes as freeze() of a mutation_fragment of the respective kind.
+frozen_mutation_fragment freeze(const schema& s, const partition_start& ps);
+frozen_mutation_fragment freeze(const schema& s, const static_row& sr);
+frozen_mutation_fragment freeze(const schema& s, const clustering_row& cr);
+frozen_mutation_fragment freeze(const schema& s, const range_tombstone& rt);
 
 class frozen_mutation_fragment_v2 {
     bytes_ostream _bytes;
