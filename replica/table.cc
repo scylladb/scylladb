@@ -4202,7 +4202,8 @@ void tablet_storage_group_manager::update_effective_replication_map(
 }
 
 // This function is called in the topology::transition_state::tablet_resize_finalization transition which
-// guarantees there is no tablet repair. The cm.stop_and_disable_compaction() ensures no compaction is running.
+// guarantees there is no tablet repair. The rewrite stops compaction only on views holding a candidate; compaction
+// elsewhere cannot create one, as it never writes repaired_at above sstables_repaired_at.
 future<> table::update_repaired_at_for_merge() {
     if (!uses_tablets()) {
         co_return;
@@ -4211,10 +4212,6 @@ future<> table::update_repaired_at_for_merge() {
         co_return;
     }
     constexpr int64_t new_repaired_at = 0;
-
-    auto modifier = [] (sstables::sstable& new_sst) {
-        new_sst.update_repaired_at(new_repaired_at);
-    };
 
     auto sgs = storage_groups();
     for (auto& [id, sg] : sgs) {
@@ -4225,19 +4222,17 @@ future<> table::update_repaired_at_for_merge() {
         // storage group share the same tablet ID, so any CG's
         // get_sstables_repaired_at() returns the merged value.
         auto sstables_repaired_at = sg->main_compaction_group()->get_sstables_repaired_at();
+        // The filter runs more than once per sstable, so log in the modifier.
         auto filter = [&] (const sstables::shared_sstable& sst) {
-            auto filtered = sst->get_stats_metadata().repaired_at > sstables_repaired_at;
-            if (filtered) {
-                tlogger.info("Updating repaired_at for tablet merge sstable={} old={} new={} sstables_repaired_at={} group_id={} range={}",
-                             sst->get_filename(), sst->get_stats_metadata().repaired_at, new_repaired_at, sstables_repaired_at, id, sg->token_range());
-            } else {
-                tlogger.debug("Skipped repaired_at update for tablet merge sstable={} repaired_at={} sstables_repaired_at={} group_id={} range={}",
-                              sst->get_filename(), sst->get_stats_metadata().repaired_at, sstables_repaired_at, id, sg->token_range());
-            }
-            return filtered;
+            return sst->get_stats_metadata().repaired_at > sstables_repaired_at;
+        };
+        auto modifier = [&] (sstables::sstable& new_sst) {
+            tlogger.info("Updating repaired_at for tablet merge sstable={} old={} new={} sstables_repaired_at={} group_id={} range={}",
+                         new_sst.get_filename(), new_sst.get_stats_metadata().repaired_at, new_repaired_at, sstables_repaired_at, id, sg->token_range());
+            new_sst.update_repaired_at(new_repaired_at);
         };
         co_await perform_component_rewrite(*sg, tasks::make_empty_task_info(), std::move(filter),
-                sstables::component_type::Statistics, modifier);
+                sstables::component_type::Statistics, std::move(modifier));
         tlogger.info("Completed updating repaired_at={} for tablet merge in compaction group_id={} range {}",
                      new_repaired_at, id, sg->token_range());
     }
