@@ -1266,13 +1266,11 @@ SEASTAR_TEST_CASE(test_tablet_metadata_hint) {
             replica::update_tablet_metadata_change_hint(incremental_hint, new_mut);
 
             muts.emplace_back(new_mut);
-            auto full_hint_opt = replica::get_tablet_metadata_change_hint(muts);
+            auto full_hint = replica::get_tablet_metadata_change_hint(muts);
 
+            BOOST_REQUIRE_EQUAL(bool(full_hint), bool(expected_hint));
             if (expected_hint) {
-                BOOST_REQUIRE(full_hint_opt);
-                BOOST_REQUIRE_EQUAL(*full_hint_opt, incremental_hint);
-            } else {
-                BOOST_REQUIRE(!full_hint_opt);
+                BOOST_REQUIRE_EQUAL(full_hint, incremental_hint);
             }
             BOOST_REQUIRE_EQUAL(incremental_hint, expected_hint);
         };
@@ -1460,6 +1458,60 @@ SEASTAR_TEST_CASE(test_tablet_metadata_hint_split_with_tombstone) {
     }, tablet_cql_test_config());
 }
 
+
+// A topology_change command without tablet mutations, like the fence_version bump
+// before a tablet barrier, must not rebuild the tablet maps.
+SEASTAR_TEST_CASE(test_topology_change_without_tablet_mutations_keeps_tablet_metadata) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto table = add_table(e).get();
+        auto& client = e.get_raft_group0_client();
+        auto disable_balancing = [&] {
+            abort_source as;
+            auto guard = client.start_operation(as).get();
+            topology_mutation_builder builder(guard.write_timestamp());
+            builder.set_tablet_balancing_enabled(false);
+            auto cmd = client.prepare_command(topology_change{{builder.build()}}, guard, "test: disable tablet balancing");
+            client.add_entry(std::move(cmd), std::move(guard), as).get();
+        };
+        // The first command stops the balancer from replacing tablet maps under the test.
+        disable_balancing();
+        auto map_before = e.local_token_metadata_ptr()->tablets().all_tables_ungrouped().at(table).get();
+        disable_balancing();
+
+        auto tm = e.local_token_metadata_ptr();
+        BOOST_REQUIRE_EQUAL(tm->tablets(), read_tablet_metadata(e.local_qp()).get());
+        BOOST_REQUIRE(tm->tablets().all_tables_ungrouped().at(table).get() == map_before);
+    }, tablet_cql_test_config());
+}
+
+// A topology_change command without tablet mutations must still recompute the state
+// that depends on the topology alone: the views that are built on every node.
+SEASTAR_TEST_CASE(test_topology_change_without_tablet_mutations_updates_built_views) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        // The view building coordinator cannot build tablet views in this environment, so use a vnodes view.
+        e.execute_cql("CREATE KEYSPACE ksv WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}").get();
+        e.execute_cql("CREATE TABLE ksv.t (p int PRIMARY KEY, v int)").get();
+        e.execute_cql("CREATE MATERIALIZED VIEW ksv.mv AS SELECT * FROM ksv.t WHERE v IS NOT NULL AND p IS NOT NULL PRIMARY KEY (v, p)").get();
+        auto view = e.local_db().find_schema("ksv", "mv")->id();
+        auto& gc_state = e.local_db().get_compaction_manager().get_shared_tombstone_gc_state();
+        BOOST_REQUIRE(eventually_true([&] { return !gc_state.is_view_being_built(view); }));
+
+        // A new node has no build status for the view yet.
+        topology_builder topo(e);
+        auto host = topo.add_node();
+        BOOST_REQUIRE(gc_state.is_view_being_built(view));
+
+        // Excluded nodes don't count.
+        auto& client = e.get_raft_group0_client();
+        abort_source as;
+        auto guard = client.start_operation(as).get();
+        topology_mutation_builder builder(guard.write_timestamp());
+        builder.add_ignored_nodes({raft::server_id(host.uuid())});
+        auto cmd = client.prepare_command(topology_change{{builder.build()}}, guard, "test: exclude node");
+        client.add_entry(std::move(cmd), std::move(guard), as).get();
+        BOOST_REQUIRE(!gc_state.is_view_being_built(view));
+    }, tablet_cql_test_config());
+}
 
 SEASTAR_TEST_CASE(test_get_shard) {
     return do_with_cql_env_thread([] (cql_test_env& e) {

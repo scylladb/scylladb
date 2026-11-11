@@ -792,7 +792,8 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
 
 future<> storage_service::topology_transition(state_change_hint hint) {
     SCYLLA_ASSERT(this_shard_id() == 0);
-    const bool tablets_changed = hint.tablets_hint.has_value();
+    // An engaged hint may be empty, if the command has no tablet mutations.
+    const bool tablets_changed = hint.tablets_hint && *hint.tablets_hint;
     co_await topology_state_load(std::move(hint)); // reload new state
     if (!tablets_changed) {
         // A tablets change reloads the view building state, which recomputes this.

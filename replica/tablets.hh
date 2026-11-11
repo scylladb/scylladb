@@ -86,7 +86,8 @@ future<> save_tablet_metadata(replica::database&, const locator::tablet_metadata
 /// Extract a tablet metadata change hint from the tablet mutations.
 ///
 /// Mutations which don't mutate the tablet table are ignored.
-std::optional<locator::tablet_metadata_change_hint> get_tablet_metadata_change_hint(const utils::chunked_vector<canonical_mutation>&);
+/// The hint is empty if none of the mutations does.
+locator::tablet_metadata_change_hint get_tablet_metadata_change_hint(const utils::chunked_vector<canonical_mutation>&);
 
 /// Update the tablet metadata change hint, with the changes represented by the tablet mutation.
 ///
