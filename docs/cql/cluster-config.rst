@@ -201,6 +201,20 @@ Available options
        automatic repair. Default: ``86400``. Until the deprecated
        ``auto_repair_threshold_default_in_seconds`` option is removed, a node that sets it in
        ``scylla.yaml`` uses that value when no scope sets this option.
+   * - ``auto_repair_threshold_size_fraction``
+     - floating point
+     - ``CLUSTER``, ``KEYSPACE``, ``TABLE``
+     - Repair a tablet once the average unrepaired size of its replicas reaches this fraction of
+       their average SSTable size, without waiting for ``auto_repair_threshold_in_seconds``. Accepts
+       a number from ``0`` to ``1``; ``0`` disables the size-based trigger. Default: ``0.1``. See
+       :doc:`automatic repair </features/automatic-repair>`.
+   * - ``auto_repair_threshold_min_size_in_bytes``
+     - integer
+     - ``CLUSTER``, ``KEYSPACE``, ``TABLE``
+     - Floor below which ``auto_repair_threshold_size_fraction`` is not consulted, so that a nearly
+       empty tablet is not repaired over and over for a handful of bytes. A tablet holding less
+       unrepaired data than this waits for the repair interval or for a manual repair. Accepts ``0``
+       or more. Default: ``10485760`` (10 MiB).
    * - ``repair_hints_batchlog_flush_discard_unreplayed_hints``
      - boolean
      - ``CLUSTER``

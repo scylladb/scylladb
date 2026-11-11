@@ -2561,6 +2561,34 @@ utils::file_size_stats compaction_group::live_sstable_disk_space_used() const no
     return _main_sstables->get_file_size_stats() + _maintenance_sstables->get_file_size_stats();
 }
 
+uint64_t compaction_group::unrepaired_disk_space_used() const {
+    auto sstables_repaired_at = get_sstables_repaired_at();
+    // is_repaired() needs an sstable's repaired_at to be both non-zero and no greater than
+    // the group's, so while the group's is zero nothing it holds can be repaired and the
+    // answer is simply everything. Worth special-casing: it is the state of every tablet
+    // until its first incremental repair, and the permanent state of a cluster that never
+    // runs one, and it saves walking the sstables one by one to reach the same total.
+    if (!sstables_repaired_at) {
+        return _main_sstables->bytes_on_disk() + _maintenance_sstables->bytes_on_disk();
+    }
+    auto sum_unrepaired = [&] (const sstables::sstable_set& set) {
+        uint64_t ret = 0;
+        // for_each_sstable() walks the set in place, while all() materializes a list for
+        // some set types - time_series_sstable_set copies its whole list on every call -
+        // and this runs for every tablet on every load stats refresh.
+        //
+        // No per-sstable logging for the same reason: at debug level it would bury the real
+        // repair logs under one line per sstable per tablet every refresh.
+        set.for_each_sstable([&] (const sstables::shared_sstable& sst) {
+            if (!repair::is_repaired(sstables_repaired_at, sst, std::nullopt)) {
+                ret += sst->bytes_on_disk();
+            }
+        });
+        return ret;
+    };
+    return sum_unrepaired(*_main_sstables) + sum_unrepaired(*_maintenance_sstables);
+}
+
 uint64_t storage_group::live_disk_space_used() const {
     auto cgs = const_cast<storage_group&>(*this).compaction_groups_immediate();
     return std::ranges::fold_left(cgs | std::views::transform(std::mem_fn(&compaction_group::live_disk_space_used)), uint64_t(0), std::plus{});
@@ -2572,6 +2600,18 @@ uint64_t storage_group::data_size() const {
         size += cg->data_size();
     });
     return size;
+}
+
+uint64_t storage_group::unrepaired_disk_space_used() const {
+    auto cgs = const_cast<storage_group&>(*this).compaction_groups_immediate();
+    return std::ranges::fold_left(cgs | std::views::transform(std::mem_fn(&compaction_group::unrepaired_disk_space_used)), uint64_t(0), std::plus{});
+}
+
+uint64_t storage_group::live_sstable_disk_space_used() const {
+    auto cgs = const_cast<storage_group&>(*this).compaction_groups_immediate();
+    return std::ranges::fold_left(cgs | std::views::transform([] (const compaction_group_ptr& cg) {
+        return uint64_t(cg->live_sstable_disk_space_used().on_disk);
+    }), uint64_t(0), std::plus{});
 }
 
 uint64_t compaction_group::total_disk_space_used() const noexcept {
@@ -3822,6 +3862,8 @@ locator::combined_load_stats tablet_storage_group_manager::table_load_stats() co
     table_stats.split_ready_seq_number = _split_ready_seq_number;
 
     locator::tablet_load_stats tablet_stats;
+    locator::tablet_unrepaired_load_stats tablet_unrepaired_stats;
+    const bool report_unrepaired_sizes = _t.get_sstables_manager().get_features().tablet_unrepaired_load_stats;
 
     for_each_storage_group([&] (size_t id, storage_group& sg) {
         auto tid = locator::tablet_id(id);
@@ -3883,11 +3925,23 @@ locator::combined_load_stats tablet_storage_group_manager::table_load_stats() co
             // Make sure the token range is in the form (a, b]
             SCYLLA_ASSERT(!trange.start()->is_inclusive() && trange.end()->is_inclusive());
             tablet_stats.tablet_sizes[gid.table][trange] = tablet_size;
+            // Reported under the same filter as the tablet size, so that the two are always
+            // reported together. The sstable total travels with the unrepaired size so that
+            // the fraction the trigger takes is of the data repair can classify; the tablet
+            // size above also counts logstor data, which it cannot.
+            if (report_unrepaired_sizes) {
+                tablet_unrepaired_stats.unrepaired_sizes[gid.table][trange] = locator::tablet_unrepaired_size{
+                    .unrepaired_size = sg.unrepaired_disk_space_used(),
+                    .sstables_size = sg.live_sstable_disk_space_used(),
+                    .sstables_repaired_at = sg.main_compaction_group()->get_sstables_repaired_at(),
+                };
+            }
         }
     });
     return locator::combined_load_stats{
         .table_ls = std::move(table_stats),
-        .tablet_ls = std::move(tablet_stats)
+        .tablet_ls = std::move(tablet_stats),
+        .tablet_unrepaired_ls = std::move(tablet_unrepaired_stats)
     };
 }
 

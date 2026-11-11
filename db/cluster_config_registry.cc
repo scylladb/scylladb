@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cmath>
 #include <limits>
 #include <string>
 #include <string_view>
@@ -62,6 +63,7 @@ constexpr bool is_single_domain(scope_set scopes) {
 // Defined below, with the other parsers and validators.
 // Declared here so that the automatic scrub period option may take their address.
 config_value parse_auto_scrub_period_seconds(std::string_view value);
+config_value parse_auto_repair_threshold_size_fraction(std::string_view value);
 
 // The tablet repair scheduler reads auto_repair_enabled and auto_repair_threshold_in_seconds on demand.
 // When no scope stores an override it falls back to the deprecated yaml options
@@ -107,6 +109,25 @@ constexpr std::array registry_options = {
         .default_value = int64_t(100),
         .kind = option_kind::db_config,
         .valid_range = integer_range{.min = 1, .max = std::numeric_limits<uint32_t>::max()},
+    },
+    option{
+        .name = option_name::auto_repair_threshold_size_fraction,
+        .description = "Trigger automatic repair for a tablet once the average unrepaired size of its "
+                       "replicas reaches this fraction of their average SSTable size. 0 disables the "
+                       "size-based trigger, leaving only the time-based one",
+        .scopes = table_oriented_scopes,
+        .default_value = 0.1,
+        .custom_parser = parse_auto_repair_threshold_size_fraction,
+        .custom_expected_description = "a number between 0 and 1",
+    },
+    option{
+        .name = option_name::auto_repair_threshold_min_size_in_bytes,
+        .description = "Floor for the size-based automatic repair trigger: a tablet is not repaired on "
+                       "the size threshold until the average unrepaired size of its replicas reaches "
+                       "this many bytes, however large a fraction of the tablet that is",
+        .scopes = table_oriented_scopes,
+        .default_value = int64_t(10 * 1024 * 1024),
+        .valid_range = integer_range{.min = 0, .max = std::numeric_limits<int64_t>::max()},
     },
 };
 
@@ -238,6 +259,24 @@ config_value parse_auto_scrub_period_seconds(std::string_view value) {
     auto parsed = parse_integer(value);
     if (parsed != 0 && (parsed < min_auto_scrub_period_seconds || parsed > max_auto_scrub_period_seconds)) {
         throw marshal_exception("expected 0 or an integer between 3600 and 4294967295");
+    }
+    return parsed;
+}
+
+// The trigger compares this against the ratio of a tablet's unrepaired data to its total,
+// which cannot exceed 1 - the unrepaired bytes are a subset of the bytes the total counts.
+// A larger threshold would be stored and then never fire, and a table that also sets
+// auto_repair_threshold_in_seconds to 0 would be left never repaired at all, with nothing to
+// say why.
+//
+// NaN needs rejecting explicitly rather than by the range test: it compares false against
+// everything, so it is neither below 0 nor above 1, and a NaN threshold would then make every
+// comparison the consumer writes false too - leaving the trigger looking enabled while it can
+// never fire. The infinities compare normally, so the range test catches them.
+config_value parse_auto_repair_threshold_size_fraction(std::string_view value) {
+    auto parsed = parse_floating_point(value);
+    if (std::isnan(parsed) || parsed < 0.0 || parsed > 1.0) {
+        throw marshal_exception("expected a number between 0 and 1");
     }
     return parsed;
 }

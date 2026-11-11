@@ -281,6 +281,10 @@ public:
     // For logstor it is the size of the live records in the segments the group owns, without the dead
     // records and the free space of those segments.
     uint64_t data_size() const noexcept;
+    // Bytes on disk held by the sstables that incremental repair has not covered yet,
+    // i.e. the ones classified as anything but repaired. Logstor data is not counted:
+    // it is not classified by repair state.
+    uint64_t unrepaired_disk_space_used() const;
     uint64_t total_disk_space_used() const noexcept;
     // Space taken by the logstor segments this group owns. Zero for a table that doesn't use logstor.
     size_t logstor_disk_space_used() const noexcept;
@@ -417,6 +421,12 @@ public:
     uint64_t live_disk_space_used() const;
     // The sum of compaction_group::data_size() over the groups of this storage group.
     uint64_t data_size() const;
+    // Sum of compaction_group::unrepaired_disk_space_used() over the group's
+    // compaction groups.
+    uint64_t unrepaired_disk_space_used() const;
+    // Sum of compaction_group::live_sstable_disk_space_used().on_disk over the group's
+    // compaction groups: the sstable bytes unrepaired_disk_space_used() is a part of.
+    uint64_t live_sstable_disk_space_used() const;
 
     void for_each_compaction_group(std::function<void(const compaction_group_ptr&)> action) const;
     utils::small_vector<compaction_group_ptr, 3> compaction_groups_immediate();
