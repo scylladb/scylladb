@@ -659,6 +659,9 @@ async def test_table_disk_space_metrics(manager: ScyllaClusterManager):
 
     async with new_test_keyspace(manager, "WITH tablets={'initial':1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+        # Automatic compaction can free the segments that the overwrites kill before the test counts
+        # them, so it is off. The test runs compaction through the API.
+        await manager.api.disable_autocompaction(server.ip_addr, ks, "test")
 
         insert = cql.prepare(f"INSERT INTO {ks}.test (pk, v) VALUES (?, ?)")
         value = 'x' * value_size
@@ -781,6 +784,8 @@ async def test_compaction(manager: ScyllaClusterManager):
 
     async with new_test_keyspace(manager, "WITH tablets={'initial':1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+        # Automatic compaction is off, so that the compaction that the test runs takes the dead segments.
+        await manager.api.disable_autocompaction(servers[0].ip_addr, ks, "test")
 
         # write few segments with unique keys, then few segments with overwrites.
         # write large values so each write fills a single segment.
@@ -964,6 +969,9 @@ async def test_table_removal_during_logstor_compaction(manager: ScyllaClusterMan
 
     async with new_test_keyspace(manager, "WITH tablets={'initial':1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+        # Automatic compaction is off, so that it does not take the dead segments before the
+        # compaction that the test pauses.
+        await manager.api.disable_autocompaction(server.ip_addr, ks, "test")
 
         value_size = 30 * 1024
         base_value = 'a' * value_size
@@ -1258,6 +1266,9 @@ async def test_tablet_migration_with_compaction(manager: ScyllaClusterManager):
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets={'initial': 1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+        # Automatic compaction is off, so that the dead segments are still there for the compaction that
+        # runs while the streaming is paused.
+        await manager.api.disable_autocompaction(s1.ip_addr, ks, "test")
 
         value_size = 30 * 1024
         nrows = 20
