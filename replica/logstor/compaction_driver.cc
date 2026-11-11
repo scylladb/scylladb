@@ -7,10 +7,9 @@
  */
 #include "replica/logstor/compaction_driver.hh"
 #include "replica/logstor/compaction.hh"
-#include <chrono>
 #include <exception>
 #include <utility>
-#include <seastar/core/sleep.hh>
+#include <seastar/core/with_scheduling_group.hh>
 #include <seastar/coroutine/as_future.hh>
 #include <seastar/util/log.hh>
 
@@ -32,15 +31,28 @@ compaction_driver::compaction_driver(host& h, config cfg)
 void compaction_driver::start(disk_geometry geometry) {
     _geometry = geometry;
     refresh_free_segment_watermarks();
+    _limits = make_compaction_limits(_free_segment_watermarks);
+
+    _held_back.adopt(consume_units(_job_slots, max_auto_compaction_parallelism - _limits.auto_parallelism));
+
+    logstor_logger.debug("Compaction parallelism {}, up to {} segments per compaction",
+            _limits.auto_parallelism, _limits.batch_cap);
+
     _trigger_threshold_observer.emplace(_cfg.trigger_threshold.observe([this] (double new_threshold) {
         logstor_logger.debug("Compaction trigger threshold changed to {}", new_threshold);
         refresh_free_segment_watermarks();
         schedule();
     }));
+    _completion = shared_future(with_scheduling_group(_cfg.sg, [this] {
+        return run();
+    }).handle_exception([] (std::exception_ptr ep) {
+        logstor_logger.warn("The automatic compaction driver stopped after a failure: {}", ep);
+    }));
 }
 
 void compaction_driver::request_stop() noexcept {
     _stopping = true;
+    _work_wanted.broken();
 }
 
 future<> compaction_driver::stop() {
@@ -65,96 +77,116 @@ double compaction_driver::shares_demand() const noexcept {
 
 void compaction_driver::refresh_free_segment_watermarks() noexcept {
     _free_segment_watermarks = make_free_segment_watermarks(_geometry.segment_count, _cfg.trigger_threshold());
-    _limits = make_compaction_limits(_free_segment_watermarks);
 
-    logstor_logger.debug("Free segment target {} (stop at {}), compaction parallelism {}, up to {} segments per compaction",
-            _free_segment_watermarks.low, _free_segment_watermarks.high,
-            _limits.auto_parallelism, _limits.batch_cap);
+    logstor_logger.debug("Free segment target {} (stop at {})",
+            _free_segment_watermarks.low, _free_segment_watermarks.high);
 }
 
 bool compaction_driver::should_run() noexcept {
-    const auto running = active();
-
-    if (_stopping) {
-        if (running) {
-            logstor_logger.debug("Stopping auto compaction: admission closed");
-        }
-        return false;
-    }
-
     const auto available_segments = _host.sample().available_segments;
     const auto watermarks = _free_segment_watermarks;
+    const auto wanted = auto_compaction_wanted(_running, available_segments, watermarks);
 
-    if (!auto_compaction_wanted(running, available_segments, watermarks)) {
-        if (running) {
-            logstor_logger.debug("Stopping auto compaction: available segments {} is above high watermark {}",
-                    available_segments, watermarks.high);
-        }
-        return false;
-    }
-
-    if (!running) {
+    if (_running && !wanted) {
+        logstor_logger.debug("Stopping auto compaction: available segments {} is above high watermark {}",
+                available_segments, watermarks.high);
+    } else if (!_running && wanted) {
         logstor_logger.debug("Starting auto compaction: available segments {} is below the free segment target {}",
                 available_segments, watermarks.low);
     }
-    return true;
+    _running = wanted;
+    return wanted;
 }
 
 void compaction_driver::schedule() {
-    if (_host.can_submit_compaction() && should_run() && !active()) {
-        _completion = shared_future(run().handle_exception([] (std::exception_ptr ep) {
-            logstor_logger.warn("Automatic logstor compaction failed: {}. Ignored", ep);
-        }));
+    if (_wait == wait_reason::trigger && should_run()) {
+        _work_wanted.signal();
+    }
+}
+
+future<> compaction_driver::wait_for_work(wait_reason reason, std::chrono::milliseconds timeout) {
+    _wait = reason;
+    auto f = co_await coroutine::as_future(_work_wanted.wait(timeout));
+    _wait = wait_reason::nothing;
+    if (f.failed()) {
+        // The wait ended by a timeout or because request_stop() broke the condition variable, and
+        // the loop checks the conditions again in both cases.
+        f.ignore_ready_future();
     }
 }
 
 future<> compaction_driver::run() {
-    // The parallelism is snapshotted for the whole run. It only changes with the free-segment
-    // target, which is a rarely moved live-updatable setting, and holding back the difference to
-    // the semaphore's static size for the duration of the run is what lets the drain below wait
-    // for exactly the jobs this run submitted.
-    const auto parallelism = _limits.auto_parallelism;
-    auto held_back = co_await get_units(_job_slots, max_auto_compaction_parallelism - parallelism);
+    ranking_state ranking;
 
-    std::vector<candidate> pending;
-
-    while (_host.can_submit_compaction() && should_run()) {
-        auto units = co_await get_units(_job_slots, 1);
-
-        if (!_host.can_submit_compaction() || !should_run()) {
-            break;
+    while (!_stopping) {
+        auto f = co_await coroutine::as_future(run_step(ranking));
+        if (f.failed()) {
+            // A failure of one step, for example a bad_alloc in a ranking, must not stop automatic
+            // compaction on the shard until a restart. So the driver drops its ranking, waits, and
+            // starts again.
+            logstor_logger.warn("Automatic compaction failed: {}. It starts again in {}",
+                    f.get_exception(), failure_retry_delay);
+            ranking = {};
+            co_await wait_for_work(wait_reason::failure, failure_retry_delay);
         }
-
-        if (pending.empty()) {
-            auto ranked = co_await _host.find_top_compaction_candidates(automatic_batch_limits(), parallelism,
-                    automatic_compaction_allowed);
-            pending = std::move(ranked.candidates);
-            if (pending.empty()) {
-                co_await seastar::sleep(std::chrono::milliseconds(100));
-                continue;
-            }
-        }
-
-        auto c = std::move(pending.back());
-        pending.pop_back();
-        // can_start() confirms that the group is still registered, so the driver can read it.
-        if (!_host.can_start(c.group) || !automatic_compaction_allowed(*c.group)) {
-            continue;
-        }
-
-        start_job(std::move(c), std::move(units));
     }
 
-    // Wait for submitted jobs to complete.
-    co_await get_units(_job_slots, parallelism);
+    co_await wait_for_jobs_in_flight();
+}
+
+future<> compaction_driver::run_step(ranking_state& ranking) {
+    if (!_host.can_submit_compaction() || !should_run()) {
+        // Compaction is disabled on the shard, or the free segments are above the target. The
+        // driver waits until a segment allocation finds them below the target.
+        ranking = {};
+        co_await wait_for_work(wait_reason::trigger);
+        co_return;
+    }
+
+    auto slot = co_await get_units(_job_slots, 1);
+    if (_stopping || !should_run()) {
+        co_return;
+    }
+
+    if (ranking.candidates.empty() && !co_await rank(ranking)) {
+        slot.return_all();
+        co_await wait_for_work(wait_reason::candidates, empty_ranking_delay);
+        co_return;
+    }
+
+    auto c = std::move(ranking.candidates.back());
+    ranking.candidates.pop_back();
+    // can_start() confirms that the group is still registered, so the driver can read it.
+    if (!_host.can_start(c.group) || !automatic_compaction_allowed(*c.group)) {
+        co_return;
+    }
+
+    start_job(std::move(c), std::move(slot));
+}
+
+future<bool> compaction_driver::rank(ranking_state& ranking) {
+    auto ranked = co_await _host.find_top_compaction_candidates(automatic_batch_limits(), _limits.auto_parallelism,
+            automatic_compaction_allowed);
+    if (_stopping) {
+        co_return false;
+    }
+    if (ranked.candidates.empty()) {
+        co_return false;
+    }
+
+    ranking = {.candidates = std::move(ranked.candidates)};
+    co_return true;
 }
 
 void compaction_driver::start_job(candidate c, semaphore_units<> units) {
-    // The slot is released only once the job is done, which is what wakes this fiber up to
-    // submit the next candidate.
     (void)_host.submit_normal_compaction(*c.group, automatic_batch_limits()).handle_exception([] (std::exception_ptr ep) {
         logstor_logger.warn("Automatic logstor compaction failed: {}. Ignored", ep);
     }).finally([units = std::move(units)] {});
+}
+
+future<> compaction_driver::wait_for_jobs_in_flight() {
+    _held_back.return_all();
+    co_await get_units(_job_slots, max_auto_compaction_parallelism);
 }
 
 } // namespace replica::logstor

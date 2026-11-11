@@ -9,11 +9,14 @@
 
 #include "replica/logstor/compaction_policy.hh"
 #include "utils/updateable_value.hh"
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <vector>
+#include <seastar/core/condition-variable.hh>
 #include <seastar/core/future.hh>
+#include <seastar/core/scheduling.hh>
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/shared_future.hh>
 #include <seastar/util/noncopyable_function.hh>
@@ -66,6 +69,7 @@ public:
 
     struct config {
         utils::updateable_value<double> trigger_threshold;
+        seastar::scheduling_group sg;
     };
 
     // The segment count is known only after segment_manager_impl is constructed, so it comes
@@ -77,12 +81,13 @@ public:
     compaction_driver(host&, config);
 
     void start(disk_geometry);
-    // Starts no more runs. stop() waits for the run in flight.
+    // Wakes the driver, which then starts no more jobs. stop() waits for the jobs in flight.
     void request_stop() noexcept;
     // The caller must call request_stop() first.
     future<> stop();
 
-    // Starts a run if the free segments are below the target and no run is active.
+    // Wakes the driver when it waits for the free segments to fall below the target, and they are
+    // below the target now.
     void schedule();
 
     // Returns the limits of automatic compaction.
@@ -105,26 +110,62 @@ private:
     // Cached result of make_free_segment_watermarks(). should_run() calls it on every segment
     // allocation, so the cache avoids the same computation on each allocation.
     free_segment_watermarks _free_segment_watermarks{};
+    // Whether the free level is in the band where automatic compaction runs, see
+    // auto_compaction_wanted().
+    bool _running{false};
+    // The limits that the free-segment target gives when the driver starts. The driver computes
+    // them only once, so a later change of the trigger threshold does not change them.
     compaction_limits _limits{};
 
+    // The future of run(), which starts once and runs for the lifetime of the shard.
     shared_future<> _completion{make_ready_future<>()};
-    // Sized for the static maximum; a run holds back the difference between it and the current
-    // limit for its duration, see run().
+    // The slots of the automatic jobs. The size is max_auto_compaction_parallelism, which leaves
+    // compaction buffers for a split compaction. The driver holds back the difference between the
+    // size and the parallelism that the free-segment target allows.
     seastar::semaphore _job_slots{max_auto_compaction_parallelism};
+    semaphore_units<> _held_back{consume_units(_job_slots, 0)};
 
-    bool active() const noexcept {
-        return !_completion.available();
-    }
+    // The longest time that the driver waits when no event wakes it.
+    static constexpr auto wait_timeout = std::chrono::seconds(10);
+    // The time that the driver waits after a ranking that found no batch. Nothing signals the end
+    // of a job, so the driver ranks again after this time.
+    static constexpr auto empty_ranking_delay = std::chrono::milliseconds(100);
+    // The time that the driver waits after a failed step before it starts again. A failure that
+    // repeats, for example under memory pressure, then logs at most once in this time.
+    static constexpr auto failure_retry_delay = std::chrono::seconds(1);
+    // The reason the driver waits, and the condition variable that it waits on. schedule() signals
+    // it when the free segments fall below the target. Nothing signals a wait for candidates or a
+    // wait after a failure, so only the delay or a stop ends it.
+    enum class wait_reason {
+        nothing,
+        trigger,
+        candidates,
+        failure,
+    };
+    wait_reason _wait{wait_reason::nothing};
+    seastar::condition_variable _work_wanted;
 
-    // Refreshes the cached free segment watermarks and the compaction limits derived from them.
-    // Called from start() and whenever the trigger threshold changes; the segment count and the
-    // configured batch bound are fixed for the lifetime of the segment manager, so the threshold
-    // is the only other input.
+    // The candidates of the last ranking, worst first. When `candidates` is empty, the driver has no
+    // ranking, and its next step ranks again.
+    struct ranking_state {
+        std::vector<candidate> candidates;
+    };
+
+    // Refreshes the cached free segment watermarks. Called from start() and whenever the trigger
+    // threshold changes.
     void refresh_free_segment_watermarks() noexcept;
     bool should_run() noexcept;
+    future<> wait_for_work(wait_reason, std::chrono::milliseconds timeout = wait_timeout);
     future<> run();
+    // Runs one step of the driver: a wait for work, a ranking, or the start of one job.
+    future<> run_step(ranking_state& ranking);
+    // Ranks the groups into `ranking`. Returns false when no group has a batch, or when the driver
+    // stops.
+    future<bool> rank(ranking_state& ranking);
     // Submits the job of `c`, which holds `units` of the driver's semaphore until it finishes.
     void start_job(candidate c, semaphore_units<> units);
+    // Waits for the jobs still in flight, so that the end of run() is the end of the driver.
+    future<> wait_for_jobs_in_flight();
 };
 
 } // namespace replica::logstor

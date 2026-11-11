@@ -383,6 +383,7 @@ public:
         }))
         , _driver(*this, compaction_driver::config{
                 .trigger_threshold = _cfg.trigger_compaction_threshold,
+                .sg = _cfg.compaction_sg,
             })
     {}
 
