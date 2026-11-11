@@ -49,4 +49,8 @@ bool object_storage_retry_strategy::from_exception_ptr(std::exception_ptr except
         [](const std::system_error& ex) { return http::from_system_error(ex) == http::retryable::yes; });
 }
 
+bool object_storage_connection_reset_policy::should_reset(std::exception_ptr error) const {
+    return !try_catch<seastar::httpd::unexpected_status_error>(error);
+}
+
 } // namespace utils::gcp::storage

@@ -112,4 +112,9 @@ seastar::future<bool> default_aws_retry_strategy::should_retry(std::exception_pt
     co_return should_retry;
 }
 
+bool aws_connection_reset_policy::should_reset(std::exception_ptr error) const {
+    const auto type = aws_error::from_exception_ptr(std::move(error)).get_error_type();
+    return type == aws_error_type::NETWORK_CONNECTION || type == aws_error_type::UNKNOWN;
+}
+
 } // namespace aws
