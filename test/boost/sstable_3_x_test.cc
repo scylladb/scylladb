@@ -3008,6 +3008,7 @@ static mutation_reader compacted_sstable_reader(test_env& env, schema_ptr s,
         return compacted_sst;
     };
     desc.replacer = replacer_fn_no_op();
+    desc.gc_state = cf->try_get_compaction_group_view_with_static_sharding().get_tombstone_gc_state();
     auto cdata = compaction::compaction_manager::create_compaction_data();
     compaction::compaction_progress_monitor progress_monitor;
     compaction::compact_sstables(std::move(desc), cdata, cf->try_get_compaction_group_view_with_static_sharding(), progress_monitor).get();
