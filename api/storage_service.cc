@@ -493,17 +493,17 @@ void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>&
 
             utils::chunked_vector<sstring> manifests;
             if (location.HasMember("manifests")) {
-            if (!location["manifests"].IsArray()) {
-                throw httpd::bad_param_exception("backup location 'manifests' must be an array");
-            }
+                if (!location["manifests"].IsArray()) {
+                    throw httpd::bad_param_exception("backup location 'manifests' must be an array");
+                }
 
-            manifests = location["manifests"].GetArray() |
-                std::views::transform([] (const auto& m) { return sstring(rjson::to_string_view(m)); }) |
-                std::ranges::to<utils::chunked_vector<sstring>>();
+                manifests = location["manifests"].GetArray() |
+                    std::views::transform([] (const auto& m) { return sstring(rjson::to_string_view(m)); }) |
+                    std::ranges::to<utils::chunked_vector<sstring>>();
 
-            if (manifests.empty()) {
-                throw httpd::bad_param_exception("backup location 'manifests' array must not be empty");
-            }
+                if (manifests.empty()) {
+                    throw httpd::bad_param_exception("backup location 'manifests' array must not be empty");
+                }
             } else {
                 // Without manifests the location holds a backup made by /storage_service/tablets/backup,
                 // which writes one manifest per table at a path derived from the snapshot name.
