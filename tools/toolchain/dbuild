@@ -200,10 +200,6 @@ fi
 containers_conf="$(mktemp)"
 tmpfiles+=("$containers_conf")
 cat > "$containers_conf" <<EOF
-[engine]
-static_dir = "$HOME/.local/share/containers/storage/libpod"
-volume_path = "$HOME/.local/share/containers/storage/libpod"
-
 [containers]
 # netns = private, the default, doesn't work in nested containers,
 # but we need to use port forwarded networking for our mocks etc.
@@ -227,20 +223,39 @@ label = false
 
 EOF
 
+# Nested containers (e.g. mock services started by test.py) get a container
+# store of their own rather than sharing the host's.  The host's engine is
+# updated independently of the frozen toolchain, and when it picks a different
+# storage driver than the nested engine, the nested engine refuses the store:
+#   database graph driver "vfs" does not match our graph driver "overlay":
+#       database configuration mismatch
+# Sharing the store also had the nested engine, whose runroot is new on every
+# dbuild run, "refresh" the host's containers as if the machine had rebooted.
+#
+# The store is keyed by the storage driver, which is what makes stores
+# incompatible, so that all toolchain images using the same driver share a
+# store and do not pull the same images over and over.
+nested_storage_driver=overlay
+nested_graphroot="$XDG_CACHE_HOME/scylladb/dbuild-containers-storage/$nested_storage_driver"
+mkdir -p "$nested_graphroot"
+
 storage_conf="$(mktemp)"
 tmpfiles+=("$storage_conf")
 cat > "$storage_conf" <<EOF
 
 [storage]
-driver = "overlay"
+driver = "$nested_storage_driver"
 runroot = "/run/containers/storage"
-graphroot = "$HOME/.local/share/containers/storage"
+graphroot = "$nested_graphroot"
+# Under docker, the nested engine runs rootless, and a rootless engine
+# ignores graphroot in the system storage.conf, defaulting to
+# ~/.local/share/containers/storage, which is not mounted.
+rootless_storage_path = "$nested_graphroot"
 
 EOF
 
 if grep -q 'cgroup2.*/sys/fs/cgroup ' /proc/mounts; then
     docker_common_args+=(
-        -v "$HOME/.local/share/containers:$HOME/.local/share/containers"
         -v "$containers_conf:/etc/containers/containers.conf.d/nested.conf"
         -v "$storage_conf:/etc/containers/storage.conf"
         --pids-limit -1
