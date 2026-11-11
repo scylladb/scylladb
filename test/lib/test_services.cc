@@ -79,7 +79,7 @@ public:
     future<lw_shared_ptr<const sstables::sstable_set>> maintenance_sstable_set() const override {
         co_return co_await table().try_get_compaction_group_view_with_static_sharding().maintenance_sstable_set();
     }
-    lw_shared_ptr<const sstables::sstable_set> sstable_set_for_tombstone_gc() const override {
+    lw_shared_ptr<const sstables::sstable_set> sstable_set_for_tombstone_gc(const ::schema&) const override {
         return table().try_get_compaction_group_with_static_sharding()->main_sstables();
     }
     // compaction_backlog_source: the group has a single backlog tracker, so its backlog
@@ -87,7 +87,7 @@ public:
     lw_shared_ptr<const sstables::sstable_set> sstables_for_backlog() const override {
         return table().try_get_compaction_group_with_static_sharding()->main_sstables();
     }
-    bool skip_memtable_for_tombstone_gc() const noexcept override { return false; }
+    bool skip_memtable_for_tombstone_gc(const ::schema&) const noexcept override { return false; }
     std::unordered_set<sstables::shared_sstable> fully_expired_sstables(const std::vector<sstables::shared_sstable>& sstables, gc_clock::time_point query_time) const override {
         return compaction::get_fully_expired_sstables(*this, sstables, query_time);
     }

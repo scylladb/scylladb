@@ -104,8 +104,8 @@ public:
     virtual bool compaction_enforce_min_threshold() const noexcept override { return false; }
     virtual future<lw_shared_ptr<const sstables::sstable_set>> main_sstable_set() const override { co_return make_lw_shared<const sstables::sstable_set>(_main_set); }
     virtual future<lw_shared_ptr<const sstables::sstable_set>> maintenance_sstable_set() const override { co_return make_lw_shared<const sstables::sstable_set>(_maintenance_set); }
-    virtual lw_shared_ptr<const sstables::sstable_set> sstable_set_for_tombstone_gc() const override { return make_lw_shared<const sstables::sstable_set>(_main_set); }
-    virtual bool skip_memtable_for_tombstone_gc() const noexcept override { return false; }
+    virtual lw_shared_ptr<const sstables::sstable_set> sstable_set_for_tombstone_gc(const ::schema&) const override { return make_lw_shared<const sstables::sstable_set>(_main_set); }
+    virtual bool skip_memtable_for_tombstone_gc(const ::schema&) const noexcept override { return false; }
     virtual std::unordered_set<sstables::shared_sstable> fully_expired_sstables(const std::vector<sstables::shared_sstable>& sstables, gc_clock::time_point compaction_time) const override { return {}; }
     virtual const std::vector<sstables::shared_sstable>& compacted_undeleted_sstables() const noexcept override { return _compacted_undeleted_sstables; }
     virtual compaction::compaction_strategy& get_compaction_strategy() const noexcept override { return _compaction_strategy; }
