@@ -1514,6 +1514,11 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "as soon as the next sstable is written.")
     , components_memory_reclaim_min_residency_in_s(this, "components_memory_reclaim_min_residency_in_s", liveness::LiveUpdate, value_status::Used, 300,
         "Minimum time, in seconds, a reclaimed sstable component (bloom filter) stays reclaimed before it is loaded back into memory.")
+    , bloom_filter_downgrade_max_partition_size_in_kb(this, "bloom_filter_downgrade_max_partition_size_in_kb", liveness::LiveUpdate, value_status::Used, 4,
+        "Sstables (of the `mu` format and later) whose mean partition size (uncompressed, as reported by nodetool tablestats "
+        "and the large partition warnings) is below this many KiB get smaller bloom filters written next to the full one. "
+        "When bloom filters use too much memory, the sstables manager can switch to a smaller filter instead of evicting it "
+        "(see bloom_filter_eviction_policy). Small partitions mean many keys per byte of data, i.e. large filters relative to the data.")
     , large_memory_allocation_warning_threshold(this, "large_memory_allocation_warning_threshold", value_status::Used, (size_t(128) << 10) + 1, "Warn about memory allocations above this size; set to zero to disable.")
     , enable_deprecated_partitioners(this, "enable_deprecated_partitioners", value_status::Used, false, "Enable the byteordered and random partitioners. These partitioners are deprecated and will be removed in a future version.")
     , enable_keyspace_column_family_metrics(this, "enable_keyspace_column_family_metrics", value_status::Used, false, "Enable per keyspace and per column family metrics reporting.")

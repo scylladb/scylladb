@@ -396,6 +396,7 @@ static auto configure_sstables_manager(const db::config& cfg, const database_con
         .memory_reclaim_threshold = cfg.components_memory_reclaim_threshold,
         .memory_reclaim_reload_headroom = cfg.components_memory_reclaim_reload_headroom,
         .memory_reclaim_min_residency_in_s = cfg.components_memory_reclaim_min_residency_in_s,
+        .bloom_filter_downgrade_max_partition_size_in_kb = cfg.bloom_filter_downgrade_max_partition_size_in_kb,
         .default_bloom_filter_eviction_policy = sstables::bloom_filter_eviction_policy::downgrade,
         .data_file_directories = cfg.data_file_directories(),
         .format = cfg.sstable_format,

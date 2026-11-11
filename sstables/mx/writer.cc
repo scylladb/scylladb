@@ -1994,6 +1994,7 @@ void writer::consume_end_of_stream() {
     // Only then can the remaining buffered index writes be resolved and replayed
     // into the trie writers (which write to Partitions.db / Rows.db), so this must
     // happen before those writers are closed.
+    const uint64_t uncompressed_data_size = _data_writer->offset();
     close_data_writer();
     if (_bti_partition_index_writer) {
         flush_ready_index_writes();
@@ -2021,7 +2022,7 @@ void writer::consume_end_of_stream() {
   }
 
     if (_delayed_filter) {
-        _sst.build_delayed_filter(_num_partitions_consumed);
+        _sst.build_delayed_filter(_num_partitions_consumed, uncompressed_data_size);
     } else {
         _sst.maybe_rebuild_filter_from_index(_num_partitions_consumed);
     }

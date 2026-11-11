@@ -722,6 +722,17 @@ private:
     std::vector<filter_level_info> _filter_levels;
     // The level currently in memory, _filter_levels.size() means evicted.
     unsigned _filter_level = 0;
+    // The levels of a multi-level Filter.db (`mu` and later), from its header.
+    struct filter_disk_level {
+        uint32_t hashes;
+        uint32_t buckets_per_element;
+        uint64_t word_count;
+        uint64_t offset;
+        uint32_t crc;
+    };
+    std::vector<filter_disk_level> _filter_disk_levels;
+    // The extra, smaller filters built while writing the sstable.
+    std::vector<utils::filter_ptr> _extra_filters;
     lowres_clock::time_point _filter_level_changed_at;
     bool _component_memory_reload_disabled = false;
     // Usefulness of the bloom filter: decayed rate (per second) of filter
@@ -812,6 +823,11 @@ private:
     future<> read_filter(sstable_open_config cfg = {});
     // Read the bloom filter of the given level from disk.
     future<utils::filter_ptr> read_filter_level(unsigned level);
+    future<> read_multilevel_filter_header();
+    future<utils::filter_ptr> read_multilevel_filter_level(unsigned level);
+    void write_multilevel_filter();
+    // Create the extra, smaller bloom filters written with the sstable.
+    void create_extra_filters(uint64_t num_partitions);
     // Set up _filter_levels after the sstable's filter was loaded.
     void init_filter_levels();
 
@@ -822,7 +838,9 @@ private:
     // This should be called only before an sstable is sealed.
     void maybe_rebuild_filter_from_index(uint64_t num_partitions);
 
-    void build_delayed_filter(uint64_t num_partitions);
+    // uncompressed_data_size is used to decide whether to write extra, smaller
+    // filters, see bloom_filter_downgrade_max_partition_size_in_kb.
+    void build_delayed_filter(uint64_t num_partitions, uint64_t uncompressed_data_size);
 
     future<> update_info_for_opened_data(sstable_open_config cfg = {});
 

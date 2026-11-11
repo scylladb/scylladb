@@ -158,6 +158,9 @@ public:
         utils::updateable_value<double> memory_reclaim_threshold = utils::updateable_value<double>(0.2);
         utils::updateable_value<double> memory_reclaim_reload_headroom = utils::updateable_value<double>(0);
         utils::updateable_value<uint32_t> memory_reclaim_min_residency_in_s = utils::updateable_value<uint32_t>(0);
+        // Write extra, smaller bloom filters for sstables (of formats which
+        // support it) whose mean partition size is below this.
+        utils::updateable_value<uint32_t> bloom_filter_downgrade_max_partition_size_in_kb = utils::updateable_value<uint32_t>(4);
         // Half-life of the decayed bloom filter usefulness rates.
         utils::updateable_value<uint32_t> bloom_filter_usefulness_half_life_in_s = utils::updateable_value<uint32_t>(300);
         // The policy of tables without one of their own, see set_bloom_filter_eviction_policy().

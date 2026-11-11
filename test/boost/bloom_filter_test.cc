@@ -585,3 +585,125 @@ SEASTAR_TEST_CASE(test_rebuild_from_temporary_hashes) {
         }
     });
 }
+
+namespace {
+
+// Write a `mu` sstable with `partitions` partitions of one row each, with a
+// value of `value_size` bytes.
+shared_sstable make_mu_sstable(test_env& env, simple_schema& ss, unsigned partitions, size_t value_size) {
+    utils::chunked_vector<mutation> muts;
+    const sstring value(value_size, 'v');
+    for (unsigned i = 0; i < partitions; ++i) {
+        auto m = ss.new_mutation(format("pk{:06d}", i));
+        ss.add_row(m, ss.make_ckey("ck"), value);
+        muts.push_back(std::move(m));
+    }
+    return make_sstable_containing(env.make_sstable(ss.schema(), sstables::sstable_version_types::mu), std::move(muts)).get();
+}
+
+void require_no_false_negatives(simple_schema& ss, const shared_sstable& sst, unsigned partitions) {
+    for (unsigned i = 0; i < partitions; ++i) {
+        auto pk = ss.make_pkey(format("pk{:06d}", i));
+        BOOST_REQUIRE(sst->filter_has_key(*ss.schema(), pk.key()));
+    }
+}
+
+}
+
+// Small partitions get smaller filters written next to the full one; each of
+// them can be loaded alone and has no false negatives.
+SEASTAR_TEST_CASE(test_mu_multilevel_bloom_filter) {
+    return test_env::do_with_async([] (test_env& env) {
+        simple_schema ss;
+        const unsigned partitions = 2000;
+        auto sst = make_mu_sstable(env, ss, partitions, 16);
+
+        BOOST_REQUIRE_EQUAL(sst->filter_level_count(), 3);
+        BOOST_REQUIRE_EQUAL(sst->filter_level(), 0);
+        for (unsigned level = 1; level < sst->filter_level_count(); ++level) {
+            BOOST_REQUIRE_LT(sst->filter_memory_at_level(level), sst->filter_memory_at_level(level - 1));
+            BOOST_REQUIRE_GT(sst->filter_fp_rate_at_level(level), sst->filter_fp_rate_at_level(level - 1));
+        }
+
+        for (unsigned level = 0; level < sst->filter_level_count(); ++level) {
+            sst->set_filter_level(level).get();
+            BOOST_REQUIRE_EQUAL(sst->filter_level(), level);
+            require_no_false_negatives(ss, sst, partitions);
+        }
+
+        // evict, then back to the full filter
+        sst->set_filter_level(sst->filter_level_count()).get();
+        BOOST_REQUIRE(sst->filter_evicted());
+        BOOST_REQUIRE_EQUAL(sst->filter_memory_size(), 0);
+        sst->set_filter_level(0).get();
+        BOOST_REQUIRE_EQUAL(sst->filter_level(), 0);
+        require_no_false_negatives(ss, sst, partitions);
+    });
+}
+
+// Large partitions only get the full filter: reclaiming means evicting.
+SEASTAR_TEST_CASE(test_mu_large_partitions_single_level_bloom_filter) {
+    return test_env::do_with_async([] (test_env& env) {
+        simple_schema ss;
+        auto sst = make_mu_sstable(env, ss, 20, 8192);
+        BOOST_REQUIRE_EQUAL(sst->filter_level_count(), 1);
+    });
+}
+
+// With the downgrade policy, the manager reclaims filter memory by switching
+// to smaller filters before evicting any, and goes back up when there is room.
+SEASTAR_TEST_CASE(test_sstable_manager_downgrades_bloom_filters) {
+    return test_env::do_with_async([] (test_env& env) {
+        simple_schema ss;
+        auto& sst_mgr = env.manager();
+        sst_mgr.set_bloom_filter_eviction_policy(ss.schema()->id(), bloom_filter_eviction_policy::downgrade);
+
+        auto sst1 = make_mu_sstable(env, ss, 2000, 16);
+        auto sst2 = make_mu_sstable(env, ss, 2000, 16);
+        const size_t full = sst1->filter_memory_at_level(0) + sst2->filter_memory_at_level(0);
+        BOOST_REQUIRE_EQUAL(sst_mgr.get_total_reclaimable_memory(), full);
+
+        // A threshold a bit below the total: one downgrade is enough, nothing is evicted.
+        const double available = 1'000'000;
+        env.db_config().components_memory_reclaim_threshold.set(0.9 * full / available);
+        REQUIRE_EVENTUALLY_EQUAL<bool>([&] { return sst_mgr.get_total_reclaimable_memory() <= 0.9 * full; }, true);
+        BOOST_REQUIRE_EQUAL(sst1->filter_level() + sst2->filter_level(), 1);
+        BOOST_REQUIRE(!sst1->filter_evicted());
+        BOOST_REQUIRE(!sst2->filter_evicted());
+
+        // No room at all: everything is evicted eventually.
+        env.db_config().components_memory_reclaim_threshold.set(0);
+        REQUIRE_EVENTUALLY_EQUAL<bool>([&] { return sst1->filter_evicted() && sst2->filter_evicted(); }, true);
+        BOOST_REQUIRE_EQUAL(sst_mgr.get_total_reclaimable_memory(), 0);
+        BOOST_REQUIRE_EQUAL(sst_mgr.get_total_memory_reclaimed(), full);
+
+        // Room again: back to the full filters.
+        env.db_config().components_memory_reclaim_threshold.set(1);
+        REQUIRE_EVENTUALLY_EQUAL<bool>([&] { return sst1->filter_level() == 0 && sst2->filter_level() == 0; }, true);
+        BOOST_REQUIRE_EQUAL(sst_mgr.get_total_reclaimable_memory(), full);
+        BOOST_REQUIRE_EQUAL(sst_mgr.get_total_memory_reclaimed(), 0);
+    }, {
+        .available_memory = 1'000'000
+    });
+}
+
+// Tables with the none policy are never reclaimed from, the others are.
+SEASTAR_TEST_CASE(test_sstable_manager_pinned_bloom_filters) {
+    return test_env::do_with_async([] (test_env& env) {
+        simple_schema pinned_ss("ks", "pinned");
+        simple_schema other_ss("ks", "other");
+        auto& sst_mgr = env.manager();
+        sst_mgr.set_bloom_filter_eviction_policy(pinned_ss.schema()->id(), bloom_filter_eviction_policy::none);
+        sst_mgr.set_bloom_filter_eviction_policy(other_ss.schema()->id(), bloom_filter_eviction_policy::evict);
+
+        auto pinned = make_mu_sstable(env, pinned_ss, 2000, 16);
+        auto other = make_mu_sstable(env, other_ss, 2000, 16);
+
+        env.db_config().components_memory_reclaim_threshold.set(0);
+        REQUIRE_EVENTUALLY_EQUAL<bool>([&] { return other->filter_evicted(); }, true);
+        BOOST_REQUIRE_EQUAL(pinned->filter_level(), 0);
+        BOOST_REQUIRE(!pinned->filter_evicted());
+    }, {
+        .available_memory = 1'000'000
+    });
+}

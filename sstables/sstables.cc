@@ -40,6 +40,7 @@
 #include <seastar/coroutine/as_future.hh>
 
 #include "utils/bloom_calculations.hh"
+#include "utils/crc.hh"
 #include "utils/error_injection.hh"
 #include "utils/exceptions.hh"
 #include "utils/to_string.hh"
@@ -2186,10 +2187,22 @@ static inline utils::filter_format get_filter_format(sstable_version_types versi
                : utils::filter_format::k_l_format;
 }
 
+static bool has_multilevel_filter(sstable_version_types v) {
+    return v >= sstable_version_types::mu;
+}
+
 future<> sstable::read_filter(sstable_open_config cfg) {
     if (!cfg.load_bloom_filter || !has_component(component_type::Filter)) {
         _components->filter = std::make_unique<utils::filter::always_present_filter>();
         return make_ready_future<>();
+    }
+
+    if (has_multilevel_filter(_version)) {
+        return read_multilevel_filter_header().then([this] {
+            return read_multilevel_filter_level(0);
+        }).then([this] (utils::filter_ptr filter) {
+            _components->filter = std::move(filter);
+        });
     }
 
     return seastar::async([this] () mutable {
@@ -2201,8 +2214,200 @@ future<> sstable::read_filter(sstable_open_config cfg) {
     });
 }
 
+// Multi-level bloom filter component (Filter.db) of the `mu` format and later.
+//
+// Big-endian layout:
+//   u8 level_count
+//   per level: u32 hash_count, u32 buckets_per_element, u64 word_count, u64 offset, u32 crc32
+//   per level, at its offset: word_count u64 bitset words
+// Level 0 is the filter built with the table's bloom_filter_fp_chance, the
+// others are smaller. Each level carries the crc32 of its words, so a level can
+// be loaded alone and still be verified.
+static constexpr size_t multilevel_filter_level_header_size = 4 + 4 + 8 + 8 + 4;
+
+static int filter_buckets_per_element(double fp_chance) {
+    namespace bc = utils::bloom_calculations;
+    return bc::compute_bloom_spec(int(bc::probs.size()) - 1, fp_chance).buckets_per_element;
+}
+
+// Bits per key of the extra, smaller filter levels: 70% and 50% of the full one.
+static std::vector<int> extra_filter_buckets_per_element(double fp_chance) {
+    std::vector<int> ret;
+    const int full = filter_buckets_per_element(fp_chance);
+    for (double ratio : {0.7, 0.5}) {
+        const int b = std::max(2, int(std::lround(full * ratio)));
+        if (b < (ret.empty() ? full : ret.back())) {
+            ret.push_back(b);
+        }
+    }
+    return ret;
+}
+
+void sstable::create_extra_filters(uint64_t num_partitions) {
+    namespace bc = utils::bloom_calculations;
+    _extra_filters.clear();
+    for (int b : extra_filter_buckets_per_element(_schema->bloom_filter_fp_chance())) {
+        _extra_filters.push_back(utils::filter::create_filter(bc::opt_k_per_buckets[b], num_partitions, b, get_filter_format(_version)));
+    }
+}
+
+void sstable::write_multilevel_filter() {
+    struct level {
+        utils::filter::murmur3_bloom_filter* filter;
+        uint32_t buckets_per_element;
+    };
+    std::vector<level> levels;
+    levels.push_back({downcast_ptr<utils::filter::murmur3_bloom_filter>(_components->filter.get()),
+            uint32_t(filter_buckets_per_element(_schema->bloom_filter_fp_chance()))});
+    auto extra_buckets = extra_filter_buckets_per_element(_schema->bloom_filter_fp_chance());
+    for (size_t i = 0; i < _extra_filters.size() && i < extra_buckets.size(); ++i) {
+        levels.push_back({downcast_ptr<utils::filter::murmur3_bloom_filter>(_extra_filters[i].get()), uint32_t(extra_buckets[i])});
+    }
+
+    std::vector<filter_disk_level> disk_levels;
+    auto digest = do_write_simple_with_digest(component_type::Filter, [&levels, &disk_levels] (version_types, file_writer& w) {
+        auto write_be = [&w] <typename T> (T v) {
+            std::array<char, sizeof(T)> buf;
+            seastar::write_be<T>(buf.data(), v);
+            w.write(buf.data(), buf.size());
+        };
+        uint64_t offset = 1 + levels.size() * multilevel_filter_level_header_size;
+        write_be(uint8_t(levels.size()));
+        for (auto& l : levels) {
+            const auto& words = l.filter->bits().get_storage();
+            // The crc covers the level's metadata as well as its words, so a
+            // level read alone is fully verified.
+            utils::crc32 crc;
+            crc.process_be(uint32_t(l.filter->num_hashes()));
+            crc.process_be(l.buckets_per_element);
+            crc.process_be(uint64_t(words.size()));
+            for (auto word : words) {
+                crc.process_be(word);
+                seastar::thread::maybe_yield();
+            }
+            write_be(uint32_t(l.filter->num_hashes()));
+            write_be(l.buckets_per_element);
+            write_be(uint64_t(words.size()));
+            write_be(offset);
+            write_be(crc.get());
+            disk_levels.push_back({uint32_t(l.filter->num_hashes()), l.buckets_per_element, uint64_t(words.size()), offset, crc.get()});
+            offset += words.size() * sizeof(uint64_t);
+        }
+        for (auto& l : levels) {
+            for (auto word : l.filter->bits().get_storage()) {
+                write_be(word);
+                seastar::thread::maybe_yield();
+            }
+        }
+    }, sstable_buffer_size);
+    _components_digests.map[component_type::Filter] = digest;
+    // The levels of the written file, so the sstable can switch between them
+    // without reading the header back.
+    _filter_disk_levels = std::move(disk_levels);
+    _extra_filters.clear();
+}
+
+future<> sstable::read_multilevel_filter_header() {
+    co_await do_read_simple(component_type::Filter, [this] (version_types, file f) -> future<> {
+        const uint64_t size = co_await f.size();
+        auto r = file_random_access_reader(f, size, sstable_buffer_size);
+        std::exception_ptr ex;
+        try {
+            auto count_buf = co_await r.read_exactly(1);
+            if (count_buf.size() != 1) {
+                throw malformed_sstable_exception("truncated multi-level bloom filter header");
+            }
+            const unsigned count = uint8_t(count_buf[0]);
+            auto buf = co_await r.read_exactly(count * multilevel_filter_level_header_size);
+            if (buf.size() != count * multilevel_filter_level_header_size) {
+                throw malformed_sstable_exception("truncated multi-level bloom filter header");
+            }
+            _filter_disk_levels.clear();
+            const char* p = buf.get();
+            for (unsigned i = 0; i < count; ++i) {
+                filter_disk_level l;
+                l.hashes = seastar::read_be<uint32_t>(p); p += 4;
+                l.buckets_per_element = seastar::read_be<uint32_t>(p); p += 4;
+                l.word_count = seastar::read_be<uint64_t>(p); p += 8;
+                l.offset = seastar::read_be<uint64_t>(p); p += 8;
+                l.crc = seastar::read_be<uint32_t>(p); p += 4;
+                if (l.word_count == 0 || l.hashes == 0) {
+                    throw malformed_sstable_exception(format("bloom filter level {} is empty", i));
+                }
+                if (l.offset > size || l.word_count > (size - l.offset) / sizeof(uint64_t)) {
+                    throw malformed_sstable_exception(format("bloom filter level {} extends past the end of the file", i));
+                }
+                _filter_disk_levels.push_back(l);
+            }
+            if (_filter_disk_levels.empty()) {
+                throw malformed_sstable_exception("multi-level bloom filter without levels");
+            }
+        } catch (...) {
+            ex = std::current_exception();
+        }
+        co_await r.close();
+        maybe_rethrow_exception(std::move(ex));
+    });
+}
+
+future<utils::filter_ptr> sstable::read_multilevel_filter_level(unsigned level) {
+    if (_filter_disk_levels.empty()) {
+        // E.g. loaded from another shard's open info, which carries the
+        // filter but not the levels.
+        co_await read_multilevel_filter_header();
+    }
+    if (level >= _filter_disk_levels.size()) {
+        on_internal_error(sstlog, format("{} has no bloom filter level {}", get_filename(), level));
+    }
+    const auto l = _filter_disk_levels[level];
+    utils::chunked_vector<uint64_t> words;
+    words.reserve(l.word_count);
+    co_await do_read_simple(component_type::Filter, [this, &words, &l] (version_types, file f) -> future<> {
+        const uint64_t size = co_await f.size();
+        auto r = file_random_access_reader(f, size, sstable_buffer_size);
+        std::exception_ptr ex;
+        try {
+            co_await r.seek(l.offset);
+            utils::crc32 crc;
+            crc.process_be(l.hashes);
+            crc.process_be(l.buckets_per_element);
+            crc.process_be(l.word_count);
+            uint64_t left = l.word_count;
+            while (left) {
+                const uint64_t batch = std::min<uint64_t>(left, sstable_buffer_size / sizeof(uint64_t));
+                auto buf = co_await r.read_exactly(batch * sizeof(uint64_t));
+                if (buf.size() != batch * sizeof(uint64_t)) {
+                    throw malformed_sstable_exception("truncated bloom filter level");
+                }
+                for (uint64_t i = 0; i < batch; ++i) {
+                    auto word = seastar::read_be<uint64_t>(buf.get() + i * sizeof(uint64_t));
+                    crc.process_be(word);
+                    words.push_back(word);
+                }
+                left -= batch;
+                co_await coroutine::maybe_yield();
+            }
+            if (crc.get() != l.crc) {
+                throw malformed_sstable_exception(format("bloom filter level crc mismatch: expected {:#x}, got {:#x}", l.crc, crc.get()));
+            }
+        } catch (...) {
+            ex = std::current_exception();
+        }
+        co_await r.close();
+        maybe_rethrow_exception(std::move(ex));
+    });
+    auto nr_bits = words.size() * std::numeric_limits<uint64_t>::digits;
+    large_bitset bs(nr_bits, std::move(words));
+    co_return utils::filter::create_filter(l.hashes, std::move(bs), get_filter_format(_version));
+}
+
+
 void sstable::write_filter() {
     if (!has_component(component_type::Filter)) {
+        return;
+    }
+    if (has_multilevel_filter(_version)) {
+        write_multilevel_filter();
         return;
     }
 
@@ -2297,10 +2502,19 @@ void sstable::maybe_rebuild_filter_from_index(uint64_t num_partitions) {
     _components->filter.swap(optimal_filter);
 }
 
-void sstable::build_delayed_filter(uint64_t num_partitions) {
+void sstable::build_delayed_filter(uint64_t num_partitions, uint64_t uncompressed_data_size) {
     auto optimal_filter = utils::i_filter::get_filter(num_partitions, _schema->bloom_filter_fp_chance(), get_filter_format(_version));
     sstlog.debug("Building delayed bloom filter {}: {} filter bytes. sstable origin: {}", filename(component_type::Filter),
         downcast_ptr<utils::filter::bloom_filter>(optimal_filter.get())->bits().memory_size(), _origin);
+
+    // Small partitions mean many keys per byte of data, so large filters
+    // relative to the data: write smaller filters too, which the filter
+    // memory reclaim can switch to instead of evicting the filter.
+    _extra_filters.clear();
+    const uint64_t max_partition_size = uint64_t(_manager.get_config().bloom_filter_downgrade_max_partition_size_in_kb()) * 1024;
+    if (has_multilevel_filter(_version) && num_partitions > 0 && uncompressed_data_size / num_partitions < max_partition_size) {
+        create_extra_filters(num_partitions);
+    }
 
     auto hashes_file = open_file(component_type::TemporaryHashes, open_flags::ro).get();
     auto hashes_file_closer = deferred_close(hashes_file);
@@ -2329,6 +2543,9 @@ void sstable::build_delayed_filter(uint64_t num_partitions) {
             hash[1] = seastar::le_to_cpu(hash[1]);
             auto hashed_key = utils::hashed_key(hash);
             optimal_filter->add(hashed_key);
+            for (auto& f : _extra_filters) {
+                f->add(hashed_key);
+            }
             processed_hashes++;
         }
         if (buf.size() < batch_size_bytes) {
@@ -2394,6 +2611,9 @@ future<> sstable::reload_reclaimed_components() {
 }
 
 future<utils::filter_ptr> sstable::read_filter_level(unsigned level) {
+    if (has_multilevel_filter(_version)) {
+        return read_multilevel_filter_level(level);
+    }
     if (level != 0) {
         on_internal_error(sstlog, format("{} has no bloom filter level {}", get_filename(), level));
     }
@@ -2462,6 +2682,20 @@ void sstable::init_filter_levels() {
         return;
     }
     namespace bc = utils::bloom_calculations;
+    if (has_multilevel_filter(_version) && !_filter_disk_levels.empty()) {
+        auto fp_rate = [] (const filter_disk_level& l) {
+            const auto b = std::min<size_t>(l.buckets_per_element, bc::probs.size() - 1);
+            const auto k = std::min<size_t>(l.hashes, bc::probs[b].size() - 1);
+            return bc::probs[b][k];
+        };
+        const auto& l0 = _filter_disk_levels[0];
+        for (const auto& l : _filter_disk_levels) {
+            // Scale the actual memory of the loaded level 0 by the bitset sizes.
+            const size_t level_memory = l0.word_count ? memory * l.word_count / l0.word_count : 0;
+            _filter_levels.push_back({level_memory, fp_rate(l)});
+        }
+        return;
+    }
     auto spec = bc::compute_bloom_spec(int(bc::probs.size()) - 1, _schema->bloom_filter_fp_chance());
     _filter_levels.push_back({memory, bc::probs[spec.buckets_per_element][spec.K]});
 }
