@@ -4103,26 +4103,26 @@ future<result<storage_proxy::unique_response_handler_vector>> storage_proxy::mut
     });
 }
 
-future<result<>> storage_proxy::mutate_begin(unique_response_handler_vector ids, db::consistency_level cl,
+future<result<>> storage_proxy::mutate_begin(unique_response_handler_vector ids, db::consistency_level cl, db::write_type type,
                                      tracing::trace_state_ptr trace_state, std::optional<clock_type::time_point> timeout_opt) {
-    return utils::result_parallel_for_each<result<>>(ids, [this, cl, timeout_opt] (unique_response_handler& protected_response) {
+    return utils::result_parallel_for_each<result<>>(ids, [this, cl, type, timeout_opt] (unique_response_handler& protected_response) {
         auto response_id = protected_response.id;
-        // This function, mutate_begin(), is called after a preemption point
-        // so it's possible that other code besides our caller just ran. In
-        // particular, Scylla may have noticed that a remote node went down,
-        // called storage_proxy::on_down(), and removed some of the ongoing
-        // handlers, including this id. If this happens, we need to ignore
-        // this id - not try to look it up or start a send.
+        // This function, mutate_begin(), is called after a preemption point,
+        // so other code may have run since mutate_prepare() registered the
+        // handler. cancel_write_handlers() (on_down(), abort_batch_writes(),
+        // abort_view_writes()) and the shutdown paths complete handlers
+        // through timeout_cb(), which removes them. Such a write was never
+        // sent, and timeout_cb() hints its targets only when CL was achieved
+        // or CL=ANY, so above ANY it was not hinted either. Report a timeout,
+        // which the callers of cancellable writes act on: batchlog replay
+        // keeps the batch and hint replay keeps the hint. A CL=ANY write may
+        // have achieved CL with hints, but its outcome went away with the
+        // handler, and a timeout is the safe report.
         if (!_response_handlers.contains(response_id)) {
             protected_response.release(); // Don't try to remove this id again
-            // Requests that time-out normally below after response_wait()
-            // result in an exception (see ~abstract_write_response_handler())
-            // However, here we no longer have the handler or its information
-            // to put in the exception. The exception is not needed for
-            // correctness (e.g., hints are written by timeout_cb(), not
-            // because of an exception here).
-            slogger.debug("unstarted write cancelled for id {}", response_id);
-            return make_ready_future<result<>>(bo::success());
+            slogger.debug("write {} cancelled before it was sent", response_id);
+            return make_ready_future<result<>>(mutation_write_timeout_exception(
+                    "Write cancelled before it was sent", cl, 0, 0, type));
         }
         // it is better to send first and hint afterwards to reduce latency
         // but request may complete before hint_to_dead_endpoints() is called and
@@ -4430,10 +4430,15 @@ storage_proxy::mutate_internal(Range mutations, db::consistency_level cl, tracin
     utils::latency_counter lc;
     lc.start();
 
-    return mutate_prepare(mutations, cl, type, tr_state, std::move(permit), allow_limit, std::move(options)).then(utils::result_wrap([this, cl, timeout_opt, tracker = std::move(cdc_tracker),
+    return mutate_prepare(mutations, cl, type, tr_state, std::move(permit), allow_limit, std::move(options)).then(utils::result_wrap([this, cl, type, timeout_opt, tracker = std::move(cdc_tracker),
             tr_state] (storage_proxy::unique_response_handler_vector ids) mutable {
         register_cdc_operation_result_tracker(ids, tracker);
-        return mutate_begin(std::move(ids), cl, tr_state, timeout_opt);
+        // The handlers are registered and the writes are not sent yet.
+        // cancel_write_handlers() can run here.
+        return utils::get_local_injector().inject("storage_proxy_mutate_begin_wait", utils::wait_for_message(60s))
+                .then([this, cl, type, timeout_opt, tr_state, ids = std::move(ids)] () mutable {
+            return mutate_begin(std::move(ids), cl, type, tr_state, timeout_opt);
+        });
     })).then_wrapped([this, p = shared_from_this(), lc, tr_state] (future<result<>> f) mutable {
         return p->mutate_end(std::move(f), lc, get_stats(), std::move(tr_state));
     });
@@ -4619,7 +4624,7 @@ storage_proxy::mutate_atomically_result(utils::chunked_vector<mutation> mutation
                 return _p.make_write_response_handler(_ermp, cl, db::write_type::BATCH_LOG, std::make_unique<shared_mutation>(m), _batchlog_endpoints, {}, {}, _trace_state, _stats, permit, std::monostate(), is_cancellable::no);
             }).then(utils::result_wrap([this, cl] (unique_response_handler_vector ids) {
                 _p.register_cdc_operation_result_tracker(ids, _cdc_tracker);
-                return _p.mutate_begin(std::move(ids), cl, _trace_state, _timeout);
+                return _p.mutate_begin(std::move(ids), cl, db::write_type::BATCH_LOG, _trace_state, _timeout);
             }));
         }
         future<result<>> sync_write_to_batchlog() {
@@ -4651,7 +4656,7 @@ storage_proxy::mutate_atomically_result(utils::chunked_vector<mutation> mutation
                     tracing::trace(_trace_state, "Sending batch mutations");
                     utils::get_local_injector().inject("storage_proxy_fail_send_batch", [] { throw std::runtime_error("Error injection: failing to send batch"); });
                     _p.register_cdc_operation_result_tracker(ids, _cdc_tracker);
-                    return _p.mutate_begin(std::move(ids), _cl, _trace_state, _timeout);
+                    return _p.mutate_begin(std::move(ids), _cl, db::write_type::BATCH, _trace_state, _timeout);
                 })).then(utils::result_wrap([this] {
                     return utils::then_ok_result<result<>>(async_remove_from_batchlog());
                 }));
@@ -4740,8 +4745,8 @@ future<> storage_proxy::send_to_endpoint(
             permit,
             std::monostate(), // TODO: Pass the correct enforcement type
             cancellable);
-    }).then(utils::result_wrap([this, cl, tr_state = std::move(tr_state), timeout = std::move(timeout)] (unique_response_handler_vector ids) mutable {
-        return mutate_begin(std::move(ids), cl, std::move(tr_state), std::move(timeout));
+    }).then(utils::result_wrap([this, cl, type, tr_state = std::move(tr_state), timeout = std::move(timeout)] (unique_response_handler_vector ids) mutable {
+        return mutate_begin(std::move(ids), cl, type, std::move(tr_state), std::move(timeout));
     })).then_wrapped([p = shared_from_this(), lc, &stats] (future<result<>> f) {
         return p->mutate_end(std::move(f), lc, stats, nullptr).then(utils::result_into_future<result<>>);
     });

@@ -15,6 +15,7 @@
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/error_injection.hh"
+#include "test/lib/eventually.hh"
 #include "test/lib/log.hh"
 
 #include <seastar/core/future-util.hh>
@@ -395,6 +396,104 @@ SEASTAR_TEST_CASE(test_batchlog_replay_no_cleanup) {
 
 SEASTAR_TEST_CASE(test_batchlog_replay_with_cleanup) {
     return run_batchlog_cleanup_with_failed_batches_test(false, db::batchlog_manager::post_replay_cleanup::yes);
+}
+
+// A batchlog replay write that abort_batch_writes() cancels after
+// mutate_prepare() registered it and before mutate_begin() sent it must fail
+// the replay. It used to be reported as successful, and the batch was then
+// deleted with its mutations never written.
+//
+// With a replication strategy other than NetworkTopologyStrategy, the replay
+// writes always were cancellable.
+static future<> do_test_batchlog_replay_write_cancelled_before_send(std::string_view replication_strategy) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    return make_ready_future<>();
+#endif
+
+    cql_test_config cfg;
+    cfg.db_config->batchlog_replay_cleanup_after_replays.set_value("9999999", utils::config_file::config_source::Internal);
+    cfg.batchlog_replay_timeout = 0s;
+    cfg.batchlog_delay = 9999h;
+
+    return do_with_cql_env_thread([replication_strategy] (cql_test_env& env) -> void {
+        auto& bm = env.batchlog_manager().local();
+
+        env.execute_cql(format("CREATE KEYSPACE ks1 WITH replication = {{'class': '{}', 'replication_factor': 1}} AND tablets = {{'enabled': 'false'}}",
+                replication_strategy)).get();
+        env.execute_cql("CREATE TABLE ks1.tbl (pk bigint PRIMARY KEY, v text)").get();
+
+        // Leave a batch in the batchlog, with none of its mutations written.
+        {
+            scoped_error_injection error_injection("storage_proxy_fail_send_batch");
+
+            const std::vector<std::string_view> queries = {
+                "INSERT INTO ks1.tbl (pk, v) VALUES (0, 'value');",
+                "INSERT INTO ks1.tbl (pk, v) VALUES (1, 'value');",
+            };
+            bool injected_exception_thrown = false;
+            try {
+                env.execute_batch(
+                        queries,
+                        cql3::statements::batch_statement::type::LOGGED,
+                        std::make_unique<cql3::query_options>(db::consistency_level::ONE, std::vector<cql3::raw_value>())).get();
+            } catch (std::runtime_error& ex) {
+                BOOST_REQUIRE_EQUAL(std::string(ex.what()), "Error injection: failing to send batch");
+                injected_exception_thrown = true;
+            }
+            BOOST_REQUIRE(injected_exception_thrown);
+        }
+
+        const auto batchlog_query = format("SELECT id FROM {}.{}", db::system_keyspace::NAME, db::system_keyspace::BATCHLOG_V2);
+        const auto table_query = "SELECT pk FROM ks1.tbl";
+
+        auto get_write_attempts = [&] () -> uint64_t {
+            return env.batchlog_manager().map_reduce0([] (const db::batchlog_manager& bm) {
+                return bm.get_stats().write_attempts;
+            }, uint64_t(0), std::plus<uint64_t>{}).get();
+        };
+
+        assert_that(env.execute_cql(batchlog_query).get()).is_rows().with_size(1);
+        assert_that(env.execute_cql(table_query).get()).is_rows().with_size(0);
+        BOOST_REQUIRE_EQUAL(get_write_attempts(), 0);
+
+        {
+            scoped_error_injection pause("storage_proxy_mutate_begin_wait");
+
+            auto replay = bm.do_batch_log_replay(db::batchlog_manager::post_replay_cleanup::no);
+
+            // The replay has registered its write handlers and is about to send.
+            // It runs on any one shard.
+            REQUIRE_EVENTUALLY_EQUAL(std::function<size_t()>([&] {
+                return env.get_storage_proxy().map_reduce0([] (const service::storage_proxy&) {
+                    return utils::get_local_injector().waiters("storage_proxy_mutate_begin_wait");
+                }, size_t(0), std::plus<size_t>{}).get();
+            }), size_t(1));
+
+            // What the batchlog manager drain does.
+            env.get_storage_proxy().invoke_on_all([] (service::storage_proxy& sp) {
+                return sp.abort_batch_writes();
+            }).get();
+
+            utils::get_local_injector().receive_message_on_all("storage_proxy_mutate_begin_wait").get();
+            BOOST_REQUIRE(replay.get() == db::all_batches_replayed::no);
+        }
+
+        // The replay tried to write both mutations of the batch. They were not
+        // sent, so the batch has to stay for the next replay.
+        BOOST_REQUIRE_EQUAL(get_write_attempts(), 2);
+        assert_that(env.execute_cql(batchlog_query).get()).is_rows(tests::dump_to_logs::yes).with_size(1);
+        assert_that(env.execute_cql(table_query).get()).is_rows().with_size(0);
+
+        const auto all_replayed = bm.do_batch_log_replay(db::batchlog_manager::post_replay_cleanup::no).get();
+        BOOST_REQUIRE(all_replayed == db::all_batches_replayed::yes);
+
+        assert_that(env.execute_cql(batchlog_query).get()).is_rows(tests::dump_to_logs::yes).with_size(0);
+        assert_that(env.execute_cql(table_query).get()).is_rows().with_size(2);
+    }, cfg);
+}
+
+SEASTAR_TEST_CASE(test_batchlog_replay_write_cancelled_before_send) {
+    return do_test_batchlog_replay_write_cancelled_before_send("SimpleStrategy");
 }
 
 SEASTAR_TEST_CASE(test_batchlog_replay_stage) {
