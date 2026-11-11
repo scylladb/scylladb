@@ -957,6 +957,9 @@ private:
     future<> update_topology_with_local_metadata(raft::server&);
 
     struct state_change_hint {
+        // If engaged, describes all the changes to the tablet metadata, which is
+        // then updated incrementally. An empty hint means that nothing changed.
+        // Otherwise, the tablet metadata is rebuilt from system.tablets.
         std::optional<locator::tablet_metadata_change_hint> tablets_hint;
     };
 
