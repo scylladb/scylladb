@@ -830,25 +830,38 @@ async def test_major_compaction(manager: ScyllaClusterManager):
         segments_out = metrics.get("scylla_logstor_sm_compaction_segments_out") or 0
         return segments_in - segments_out
 
+    async def segments_read() -> int:
+        metrics = await manager.metrics.query(server.ip_addr)
+        return metrics.get("scylla_logstor_sm_compaction_segments_in") or 0
+
+    async def table_segments(ks: str) -> int:
+        metrics = await manager.metrics.query(server.ip_addr)
+        return int(metrics.get("scylla_column_family_logstor_segments", {'ks': ks, 'cf': 'test'}) or 0)
+
     async with new_test_keyspace(manager, "WITH tablets={'initial':1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
 
         # each value fills a segment, so each overwrite leaves one dead segment behind
         value = 'x' * (120 * 1024)
-        for i in range(10):
+        unique_keys = 10
+        for i in range(unique_keys):
             await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({i}, '{value}')")
         # more dead segments than one compaction batch, at most 8 segments, can take
         overwrites = 20
         for _ in range(overwrites):
             await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES (100, '{value}')")
         await manager.api.logstor_flush(server.ip_addr)
+        assert await table_segments(ks) == unique_keys + overwrites
 
         await manager.api.logstor_compaction(server.ip_addr, major=True)
         assert await segments_compacted() == overwrites - 1
+        # only the segments with live data are left, one per key
+        assert await table_segments(ks) == unique_keys + 1
 
-        # nothing is left to reclaim, so another major compaction compacts nothing
+        # nothing is left to reclaim, so another major compaction does not even read a segment
+        read_before = await segments_read()
         await manager.api.logstor_compaction(server.ip_addr, major=True)
-        assert await segments_compacted() == overwrites - 1
+        assert await segments_read() == read_before
 
 async def test_drop_table(manager: ScyllaClusterManager):
     """
