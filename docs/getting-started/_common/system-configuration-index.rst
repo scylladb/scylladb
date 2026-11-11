@@ -44,6 +44,8 @@ The following scripts are available for you to run for configuring ScyllaDB. Som
      - Sets up coredump facilities for ScyllaDB. This may include uninstalling existing crash reporting software for compatibility reasons.
    * - scylla_io_setup
      - Benchmarks the disks and generates the io.conf and io_properties.yaml files.
+   * - scylla_gnutls_setup
+     - Benchmarks TLS encryption with and without ``GNUTLS_CPUID_OVERRIDE`` and, if a value is clearly faster on this CPU, writes it to ``/etc/scylla.d/gnutls.conf``. It leaves a gnutls.conf it did not write alone, so creating one by hand opts out.
    * - scylla_ntp_setup
      - Configures Network Time Protocol
    * - scylla_prepare
