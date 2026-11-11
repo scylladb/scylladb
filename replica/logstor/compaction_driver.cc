@@ -98,6 +98,13 @@ bool compaction_driver::should_run() noexcept {
     return wanted;
 }
 
+void compaction_driver::notify_group_idle() noexcept {
+    ++_idle_notifications;
+    if (_wait == wait_reason::candidates) {
+        _work_wanted.signal();
+    }
+}
+
 void compaction_driver::schedule() {
     if (_wait == wait_reason::trigger && should_run()) {
         _work_wanted.signal();
@@ -127,6 +134,7 @@ future<> compaction_driver::run() {
             logstor_logger.warn("Automatic compaction failed: {}. It starts again in {}",
                     f.get_exception(), failure_retry_delay);
             ranking = {};
+            _empty_ranking_start.reset();
             co_await wait_for_work(wait_reason::failure, failure_retry_delay);
         }
     }
@@ -139,6 +147,7 @@ future<> compaction_driver::run_step(ranking_state& ranking) {
         // Compaction is disabled on the shard, or the free segments are above the target. The
         // driver waits until a segment allocation finds them below the target.
         ranking = {};
+        _empty_ranking_start.reset();
         co_await wait_for_work(wait_reason::trigger);
         co_return;
     }
@@ -150,7 +159,7 @@ future<> compaction_driver::run_step(ranking_state& ranking) {
 
     if (ranking.candidates.empty() && !co_await rank(ranking)) {
         slot.return_all();
-        co_await wait_for_work(wait_reason::candidates, empty_ranking_delay);
+        co_await wait_for_candidates();
         co_return;
     }
 
@@ -165,12 +174,20 @@ future<> compaction_driver::run_step(ranking_state& ranking) {
 }
 
 future<bool> compaction_driver::rank(ranking_state& ranking) {
+    // The driver reads the count before the ranking, because the ranking can yield, so that a group
+    // that becomes idle during the ranking wakes the driver.
+    const auto before = ranking_start{
+        .idle_notifications = _idle_notifications,
+    };
     auto ranked = co_await _host.find_top_compaction_candidates(automatic_batch_limits(), _limits.auto_parallelism,
             automatic_compaction_allowed);
     if (_stopping) {
         co_return false;
     }
     if (ranked.candidates.empty()) {
+        // No group has a batch with a net gain, or each such group is compacting, as on a shard
+        // with one compaction group while its job runs.
+        _empty_ranking_start = before;
         co_return false;
     }
 
@@ -178,10 +195,20 @@ future<bool> compaction_driver::rank(ranking_state& ranking) {
     co_return true;
 }
 
+future<> compaction_driver::wait_for_candidates() {
+    // A group that became idle during the ranking can have a batch now.
+    if (_empty_ranking_start && _idle_notifications != _empty_ranking_start->idle_notifications) {
+        co_return;
+    }
+    co_await wait_for_work(wait_reason::candidates, empty_ranking_delay);
+}
+
 void compaction_driver::start_job(candidate c, semaphore_units<> units) {
     (void)_host.submit_normal_compaction(*c.group, automatic_batch_limits()).handle_exception([] (std::exception_ptr ep) {
         logstor_logger.warn("Automatic logstor compaction failed: {}. Ignored", ep);
-    }).finally([units = std::move(units)] {});
+    }).finally([this, units = std::move(units)] {
+        notify_group_idle();
+    });
 }
 
 future<> compaction_driver::wait_for_jobs_in_flight() {

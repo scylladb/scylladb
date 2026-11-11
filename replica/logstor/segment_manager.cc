@@ -1655,7 +1655,9 @@ future<> compaction_manager_impl::submit_group_compaction(logstor_group& cg, std
             logstor_logger.warn("logstor compaction failed: {}", ep);
             return make_exception_future<>(std::move(ep));
         }));
-        co_return co_await state->completion.get_future();
+        auto f = co_await coroutine::as_future(state->completion.get_future());
+        _driver.notify_group_idle();
+        co_return co_await std::move(f);
     }
 
     co_await coroutine::return_exception(std::runtime_error("logstor compaction submission is closed"));
@@ -1731,8 +1733,8 @@ compaction_reenabler compaction_manager_impl::hold_compaction_disabled(logstor_g
     return compaction_reenabler([this, &cg] {
         // The group can be removed while compaction of it is disabled.
         auto it = _groups.find(&cg);
-        if (it != _groups.end()) {
-            --it->second->compaction_disabled_counter;
+        if (it != _groups.end() && --it->second->compaction_disabled_counter == 0) {
+            _driver.notify_group_idle();
         }
     });
 }

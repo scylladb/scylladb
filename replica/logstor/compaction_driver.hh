@@ -97,6 +97,10 @@ public:
     // compaction.
     compaction_batch_limits explicit_batch_limits() const noexcept;
 
+    // Tells a driver that waits for candidates that a group can be ranked again: its compaction
+    // ended, or compaction on it was enabled again.
+    void notify_group_idle() noexcept;
+
     double shares_demand() const noexcept;
 
 private:
@@ -127,15 +131,16 @@ private:
 
     // The longest time that the driver waits when no event wakes it.
     static constexpr auto wait_timeout = std::chrono::seconds(10);
-    // The time that the driver waits after a ranking that found no batch. Nothing signals the end
-    // of a job, so the driver ranks again after this time.
+    // The time that the driver waits after a ranking that found no batch, when no group becomes
+    // idle. Writes can give a group a batch, and nothing signals that, so the driver ranks again
+    // after this time.
     static constexpr auto empty_ranking_delay = std::chrono::milliseconds(100);
     // The time that the driver waits after a failed step before it starts again. A failure that
     // repeats, for example under memory pressure, then logs at most once in this time.
     static constexpr auto failure_retry_delay = std::chrono::seconds(1);
     // The reason the driver waits, and the condition variable that it waits on. schedule() signals
-    // it when the free segments fall below the target. Nothing signals a wait for candidates or a
-    // wait after a failure, so only the delay or a stop ends it.
+    // it when the free segments fall below the target, and notify_group_idle() when a group can be
+    // ranked again. Nothing signals a wait after a failure, so only the delay or a stop ends it.
     enum class wait_reason {
         nothing,
         trigger,
@@ -144,6 +149,14 @@ private:
     };
     wait_reason _wait{wait_reason::nothing};
     seastar::condition_variable _work_wanted;
+    // Counts the calls of notify_group_idle(), so that a call while the driver ranks is not lost.
+    uint64_t _idle_notifications{0};
+    // The state before the last ranking that came back empty. The driver does not wait for
+    // candidates when a group became idle during the ranking.
+    struct ranking_start {
+        uint64_t idle_notifications;
+    };
+    std::optional<ranking_start> _empty_ranking_start;
 
     // The candidates of the last ranking, worst first. When `candidates` is empty, the driver has no
     // ranking, and its next step ranks again.
@@ -162,6 +175,8 @@ private:
     // Ranks the groups into `ranking`. Returns false when no group has a batch, or when the driver
     // stops.
     future<bool> rank(ranking_state& ranking);
+    // Waits after an empty ranking until the candidates can have changed.
+    future<> wait_for_candidates();
     // Submits the job of `c`, which holds `units` of the driver's semaphore until it finishes.
     void start_job(candidate c, semaphore_units<> units);
     // Waits for the jobs still in flight, so that the end of run() is the end of the driver.
