@@ -52,6 +52,16 @@ static_assert(max_segments_per_compaction >= min_segments_per_compaction);
 // half as many jobs.
 constexpr double compaction_batch_extension_tolerance = 0.8;
 
+// The fraction of the efficiency of the best batch that a batch must keep to start while another
+// compaction job runs. The first job always starts, so the gate cannot stop compaction. The gate
+// limits the write amplification of parallel jobs when the groups of a shard hold different amounts
+// of dead records, see compaction_driver::refuse_marginal(). When the groups are similar, it
+// refuses nothing.
+//
+// The bar is relative, because an absolute bar of one segment reclaimed per segment copied refuses
+// every batch on a disk that is more than half full.
+constexpr double compaction_marginal_admission_ratio = 0.75;
+
 // Watermarks, in available segments, that drive automatic compaction. It starts once the number of
 // available segments drops below `low` - the free-segment target - and stops once it is back at
 // `high`. Both are zero when the trigger is disabled.

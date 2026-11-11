@@ -7,7 +7,10 @@
  */
 #include "replica/logstor/compaction_driver.hh"
 #include "replica/logstor/compaction.hh"
+#include <algorithm>
 #include <exception>
+#include <optional>
+#include <ranges>
 #include <utility>
 #include <seastar/core/with_scheduling_group.hh>
 #include <seastar/coroutine/as_future.hh>
@@ -21,6 +24,20 @@ extern seastar::logger logstor_logger;
 // with nodetool disableautocompaction.
 static bool automatic_compaction_allowed(const logstor_group& group) noexcept {
     return !group.automatic_compaction_disabled();
+}
+
+// Returns the best of the `scores` that copy data, or nothing when no score copies data. A batch of
+// dead segments has an infinite efficiency, so it does not set the bar, because no batch that
+// copies data can reach a fraction of an infinite efficiency.
+template <std::ranges::input_range Scores>
+static std::optional<compaction_candidate_score> best_copying_score(Scores&& scores) {
+    std::optional<compaction_candidate_score> best;
+    for (const compaction_candidate_score& score : scores) {
+        if (score.live_bytes != 0 && (!best || *best < score)) {
+            best = score;
+        }
+    }
+    return best;
 }
 
 compaction_driver::compaction_driver(host& h, config cfg)
@@ -170,6 +187,15 @@ future<> compaction_driver::run_step(ranking_state& ranking) {
         co_return;
     }
 
+    if (auto bar = admission_bar(ranking); bar && refuse_marginal(c, *bar)) {
+        // The driver takes the candidates best first, so no later candidate passes either, and the
+        // bar does not change until a job ends. Wait for one job to end, and then rank again.
+        ranking = {};
+        slot.return_all();
+        co_await wait_for_job_end();
+        co_return;
+    }
+
     start_job(std::move(c), std::move(slot));
 }
 
@@ -191,7 +217,12 @@ future<bool> compaction_driver::rank(ranking_state& ranking) {
         co_return false;
     }
 
-    ranking = {.candidates = std::move(ranked.candidates)};
+    // The bar is computed first, because the initializer of `candidates` moves the candidates.
+    auto bar = best_copying_score(ranked.candidates | std::views::transform(&candidate::score));
+    ranking = {
+        .candidates = std::move(ranked.candidates),
+        .bar = bar,
+    };
     co_return true;
 }
 
@@ -203,12 +234,44 @@ future<> compaction_driver::wait_for_candidates() {
     co_await wait_for_work(wait_reason::candidates, empty_ranking_delay);
 }
 
+std::optional<compaction_candidate_score> compaction_driver::admission_bar(const ranking_state& ranking) const {
+    if (_jobs_in_flight.empty()) {
+        return std::nullopt;
+    }
+    // A job in flight that reclaims better than the best of the ranking also sets the bar. The
+    // ranking skips a group that is compacting, so without the jobs in flight, a ranking made while
+    // the best group compacts would admit the next best group, even a very poor one.
+    return std::max(ranking.bar, best_copying_score(_jobs_in_flight));
+}
+
+future<> compaction_driver::wait_for_job_end() {
+    // The semaphore has one more free unit only when a job ends.
+    auto job_ended = co_await get_units(_job_slots, _job_slots.available_units() + 1);
+}
+
+bool compaction_driver::refuse_marginal(const candidate& c, const compaction_candidate_score& admission_bar) {
+    // A parallel job can take only a group that is not compacting. When one group holds the dead
+    // records of the shard, the other jobs rewrite groups with almost no dead records, so a
+    // parallel job must reclaim almost as well as the best batch.
+    if (c.score.efficiency_at_least(admission_bar, compaction_marginal_admission_ratio)) {
+        return false;
+    }
+    ++_stats.batches_refused;
+    return true;
+}
+
 void compaction_driver::start_job(candidate c, semaphore_units<> units) {
+    auto job = _jobs_in_flight.insert(_jobs_in_flight.end(), c.score);
     (void)_host.submit_normal_compaction(*c.group, automatic_batch_limits()).handle_exception([] (std::exception_ptr ep) {
-        logstor_logger.warn("Automatic logstor compaction failed: {}. Ignored", ep);
-    }).finally([this, units = std::move(units)] {
-        notify_group_idle();
+        logstor_logger.debug("An automatic compaction job failed: {}. Ignored", ep);
+    }).finally([this, job, units = std::move(units)] {
+        on_job_end(job);
     });
+}
+
+void compaction_driver::on_job_end(std::list<compaction_candidate_score>::iterator job) noexcept {
+    _jobs_in_flight.erase(job);
+    notify_group_idle();
 }
 
 future<> compaction_driver::wait_for_jobs_in_flight() {

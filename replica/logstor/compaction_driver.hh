@@ -12,6 +12,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <list>
 #include <optional>
 #include <vector>
 #include <seastar/core/condition-variable.hh>
@@ -78,6 +79,10 @@ public:
         uint64_t segment_count;
     };
 
+    struct driver_stats {
+        uint64_t batches_refused{0};
+    };
+
     compaction_driver(host&, config);
 
     void start(disk_geometry);
@@ -102,12 +107,14 @@ public:
     void notify_group_idle() noexcept;
 
     double shares_demand() const noexcept;
+    const driver_stats& stats() const noexcept { return _stats; }
 
 private:
     host& _host;
     config _cfg;
     disk_geometry _geometry{};
     bool _stopping{false};
+    driver_stats _stats;
     // Registered in start(), because the watermarks need the segment count.
     std::optional<utils::observer<double>> _trigger_threshold_observer;
 
@@ -128,6 +135,8 @@ private:
     // size and the parallelism that the free-segment target allows.
     seastar::semaphore _job_slots{max_auto_compaction_parallelism};
     semaphore_units<> _held_back{consume_units(_job_slots, 0)};
+    // The scores of the automatic jobs in flight, for the marginal admission gate.
+    std::list<compaction_candidate_score> _jobs_in_flight;
 
     // The longest time that the driver waits when no event wakes it.
     static constexpr auto wait_timeout = std::chrono::seconds(10);
@@ -158,10 +167,12 @@ private:
     };
     std::optional<ranking_start> _empty_ranking_start;
 
-    // The candidates of the last ranking, worst first. When `candidates` is empty, the driver has no
-    // ranking, and its next step ranks again.
+    // The candidates of the last ranking, worst first, and the best batch of the ranking that
+    // copies data, which the marginal admission gate measures against. When `candidates` is empty,
+    // the driver has no ranking, and its next step ranks again.
     struct ranking_state {
         std::vector<candidate> candidates;
+        std::optional<compaction_candidate_score> bar;
     };
 
     // Refreshes the cached free segment watermarks. Called from start() and whenever the trigger
@@ -177,8 +188,17 @@ private:
     future<bool> rank(ranking_state& ranking);
     // Waits after an empty ranking until the candidates can have changed.
     future<> wait_for_candidates();
+    // Returns the bar that the marginal admission gate measures a candidate of `ranking` against:
+    // the best batch of the ranking that copies data, or a job in flight that reclaims better. It
+    // returns nothing while no job runs, so that the first job always starts.
+    std::optional<compaction_candidate_score> admission_bar(const ranking_state& ranking) const;
+    future<> wait_for_job_end();
+    // Returns true when the marginal admission gate refuses `c`, a batch that would run next to the
+    // jobs in flight, against `admission_bar`. It counts each refusal in batches_refused.
+    bool refuse_marginal(const candidate& c, const compaction_candidate_score& admission_bar);
     // Submits the job of `c`, which holds `units` of the driver's semaphore until it finishes.
     void start_job(candidate c, semaphore_units<> units);
+    void on_job_end(std::list<compaction_candidate_score>::iterator job) noexcept;
     // Waits for the jobs still in flight, so that the end of run() is the end of the driver.
     future<> wait_for_jobs_in_flight();
 };
