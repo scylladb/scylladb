@@ -132,3 +132,28 @@ def test_udf_udt_literal_argument_column_name(cql, test_keyspace, scylla_only):
                 rs = cql.execute(f'SELECT {test_keyspace}.{f}({{"A": 1, b: 2}}) FROM {table}')
                 assert rs.column_names == [f'{test_keyspace}.{f}({{"A":1, b:2}})']
                 assert list(rs) == [(7,)]
+
+# Test that an empty collection passed to a function is an empty collection,
+# not a null. In a non-frozen collection column, an empty collection is the
+# same as null, but a function argument isn't a column, and should be able to
+# distinguish the two. A null collection, e.g., an unset column, should still
+# be passed as a null.
+# Reproduces #11286 (an empty collection literal passed to a function was
+# passed as null).
+@pytest.mark.parametrize("typ,literal,empty", [("list<text>", "[]", []), ("set<text>", "{}", set()), ("map<text, text>", "{}", {})])
+def test_udf_empty_collection_argument(cql, test_keyspace, has_java_udf, typ, literal, empty):
+    if has_java_udf:
+        size_body = "LANGUAGE java AS 'return val == null ? \"null\" : \"size \" + val.size();'"
+        called_body = "LANGUAGE java AS 'return \"called\";'"
+    else:
+        size_body = "LANGUAGE lua AS 'if val == nil then return \"null\" end local n = 0 for _ in pairs(val) do n = n + 1 end return \"size \" .. n'"
+        called_body = "LANGUAGE lua AS 'return \"called\"'"
+    with new_test_table(cql, test_keyspace, f"p int PRIMARY KEY, v {typ}") as table:
+        cql.execute(f"INSERT INTO {table} (p) VALUES (1)")
+        with new_function(cql, test_keyspace, f"(val {typ}) CALLED ON NULL INPUT RETURNS text {size_body}") as size, \
+             new_function(cql, test_keyspace, f"(val {typ}) RETURNS NULL ON NULL INPUT RETURNS text {called_body}") as called:
+            assert list(cql.execute(f"SELECT {test_keyspace}.{size}({literal}) FROM {table}")) == [("size 0",)]
+            assert list(cql.execute(f"SELECT {test_keyspace}.{called}({literal}) FROM {table}")) == [("called",)]
+            stmt = cql.prepare(f"SELECT {test_keyspace}.{size}(?) FROM {table}")
+            assert list(cql.execute(stmt, [empty])) == [("size 0",)]
+            assert list(cql.execute(f"SELECT {test_keyspace}.{size}(v) FROM {table}")) == [("null",)]
