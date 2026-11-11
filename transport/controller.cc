@@ -6,6 +6,8 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
+#include <fstream>
+#include <limits>
 #include "utils/assert.hh"
 #include <grp.h>
 #include "transport/controller.hh"
@@ -29,6 +31,41 @@ using namespace seastar;
 namespace cql_transport {
 
 static logging::logger logger("cql_server_controller");
+
+static uint32_t read_somaxconn() {
+    std::ifstream f("/proc/sys/net/core/somaxconn");
+    uint32_t somaxconn;
+    if (f >> somaxconn) {
+        return somaxconn;
+    }
+    return 0;
+}
+
+// A reconnecting shard-aware client opens one connection per shard, so this
+// many entries per shard hold a burst of as many clients.
+static constexpr uint32_t listen_backlog_per_shard = 64;
+
+uint32_t compute_listen_backlog(uint32_t configured, unsigned shard_count, uint32_t somaxconn) {
+    if (configured > uint32_t(std::numeric_limits<int>::max())) {
+        throw std::invalid_argument(format("native_transport_listen_backlog {} is larger than the maximum of {}",
+                configured, std::numeric_limits<int>::max()));
+    }
+    if (configured) {
+        return configured;
+    }
+    // The floor is Seastar's default backlog. The kernel caps the backlog at
+    // net.core.somaxconn, and staying within it keeps Seastar from warning
+    // about a value the user didn't choose.
+    auto backlog = std::max(listen_backlog_per_shard * shard_count, generic_server::default_listen_backlog);
+    if (somaxconn) {
+        backlog = std::min(backlog, somaxconn);
+    }
+    return backlog;
+}
+
+uint32_t compute_listen_backlog(const db::config& cfg) {
+    return compute_listen_backlog(cfg.native_transport_listen_backlog(), this_smp_shard_count(), read_somaxconn());
+}
 
 controller::controller(sharded<auth::service>& auth, sharded<service::migration_notifier>& mn,
         sharded<gms::gossiper>& gossiper, sharded<cql3::query_processor>& qp, sharded<service::memory_limiter>& ml,
@@ -246,6 +283,7 @@ future<> controller::do_start_server() {
         smp_service_group_config cql_server_smp_service_group_config;
         cql_server_smp_service_group_config.max_nonlocal_requests = 5000;
         auto bounce_request_smp_service_group = create_smp_service_group(cql_server_smp_service_group_config).get();
+        auto backlog = compute_listen_backlog(cfg);
         auto get_cql_server_config = sharded_parameter([&] {
             std::optional<uint16_t> shard_aware_transport_port;
             if (cfg.native_shard_aware_transport_port.is_set()) {
@@ -272,7 +310,7 @@ future<> controller::do_start_server() {
               .cql_in_bind_variable_name_uses_uppercase_operator = cfg.cql_in_bind_variable_name_uses_uppercase_operator,
               .uninitialized_connections_semaphore_cpu_concurrency = cfg.uninitialized_connections_semaphore_cpu_concurrency,
               .request_timeout_on_shutdown_in_seconds = cfg.request_timeout_on_shutdown_in_seconds,
-              .listen_backlog = cfg.native_transport_listen_backlog()
+              .listen_backlog = backlog
             };
         });
 
