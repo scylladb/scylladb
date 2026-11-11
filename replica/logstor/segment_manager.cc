@@ -354,9 +354,9 @@ private:
         }
     };
 
+    // The score of the batch that one group offers, from a ranking. The job selects its batch again.
     struct compaction_candidate {
         logstor_group* group;
-        std::vector<log_segment_id> segments;
         compaction_candidate_score score;
     };
 
@@ -436,8 +436,6 @@ private:
 
     bool should_run_auto_compaction() noexcept;
     future<> run_auto_compaction();
-
-    std::optional<compaction_candidate> select_segments_for_compaction(logstor_group&, const compaction_batch_limits&);
 
     // What automatic compaction may take.
     compaction_batch_limits automatic_batch_limits() const noexcept {
@@ -1789,29 +1787,6 @@ compaction_reenabler compaction_manager_impl::disable_compaction_no_wait(logstor
     });
 }
 
-std::optional<compaction_manager_impl::compaction_candidate>
-compaction_manager_impl::select_segments_for_compaction(logstor_group& cg, const compaction_batch_limits& limits) {
-    const auto segment_size = _sm.get_segment_size();
-    auto batch = select_compaction_batch(cg.logstor_segments(), segment_size, limits);
-    if (!batch) {
-        return std::nullopt;
-    }
-
-    auto candidate = compaction_candidate{
-        .group = &cg,
-        .segments = batch->segments
-            | std::views::transform([this] (const segment_descriptor* desc) { return _sm.desc_to_segment_id(*desc); })
-            | std::ranges::to<std::vector<log_segment_id>>(),
-        .score = batch->score,
-    };
-
-    logstor_logger.trace("Selected segments {} for compaction with n_in {} n_out {} reclaimed {} efficiency {}",
-            candidate.segments, candidate.score.n_in, candidate.score.n_out,
-            candidate.score.reclaimed(), candidate.score.efficiency(segment_size));
-
-    return candidate;
-}
-
 future<std::vector<compaction_manager_impl::compaction_candidate>>
 compaction_manager_impl::find_top_compaction_candidates(size_t max_candidates) {
     top_compaction_candidates<compaction_candidate> best_candidates(max_candidates);
@@ -1836,9 +1811,9 @@ compaction_manager_impl::find_top_compaction_candidates(size_t max_candidates) {
             continue;
         }
 
-        auto candidate = select_segments_for_compaction(*it->first, limits);
-        if (candidate) {
-            best_candidates.push(std::move(*candidate));
+        auto batch = select_compaction_batch(it->first->logstor_segments(), _sm.get_segment_size(), limits);
+        if (batch) {
+            best_candidates.push(compaction_candidate{.group = it->first, .score = batch->score});
         }
     }
 
@@ -2047,13 +2022,18 @@ struct split_buffer_pair {
 };
 
 future<> compaction_manager_impl::do_compaction(logstor_group& cg, compaction_batch_limits limits, abort_source& as) {
-    auto candidate = select_segments_for_compaction(cg, limits);
-    if (!candidate) {
+    const auto segment_size = _sm.get_segment_size();
+    auto batch = select_compaction_batch(cg.logstor_segments(), segment_size, limits);
+    if (!batch) {
         co_return;
     }
-    auto segments = std::move(candidate->segments);
+    auto segments = batch->segments
+            | std::views::transform([this] (const segment_descriptor* desc) { return _sm.desc_to_segment_id(*desc); })
+            | std::ranges::to<std::vector<log_segment_id>>();
 
-    logstor_logger.trace("Starting compaction of segments {} in compaction group {}", segments, cg.table_id());
+    logstor_logger.trace("Starting compaction of segments {} of table {}: {} in, {} out, {} reclaimed, efficiency {}",
+            segments, cg.table_id(), batch->score.n_in, batch->score.n_out, batch->score.reclaimed(),
+            batch->score.efficiency(segment_size));
 
     auto& index = cg.logstor_index();
 
