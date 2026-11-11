@@ -9,6 +9,7 @@
 #pragma once
 
 #include <array>
+#include <cmath>
 #include <limits>
 #include <tuple>
 #include <unordered_map>
@@ -432,6 +433,15 @@ struct tablet_token_range {
 
 // Function to count the number of ranges in ranges1 covered by the merged ranges of ranges2.
 future<size_t> count_finished_tablets(utils::chunked_vector<tablet_token_range> ranges1, utils::chunked_vector<tablet_token_range> ranges2);
+
+// Stride of the extension of a sketch that did not decode, as a multiple of
+// its cells: 1.7 cells per differing hash of its estimate, which covers the
+// estimate's 1% lower quantile of 0.8 at 256 cells for the 1.3 to 1.4 cells
+// per hash the decode needs; at least 2.
+inline uint32_t repair_sketch_extension_stride(size_t failed_cells, size_t estimated_diff) {
+    double stride = std::ceil(1.7 * estimated_diff / failed_cells);
+    return uint32_t(std::clamp<double>(stride, 2, 1 << 16));
+}
 
 struct decoded_row_hashes {
     repair_hash_set hashes;

@@ -798,6 +798,7 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::REPAIR_GET_FULL_ROW_HASHES:
     case messaging_verb::REPAIR_GET_COMBINED_ROW_HASH:
     case messaging_verb::REPAIR_GET_COMBINED_ROW_HASH_AND_SKETCH:
+    case messaging_verb::REPAIR_GET_ROW_HASH_SKETCH_EXTENSION:
     case messaging_verb::REPAIR_GET_SYNC_BOUNDARY:
     case messaging_verb::REPAIR_GET_ROW_DIFF:
     case messaging_verb::REPAIR_PUT_ROW_DIFF:

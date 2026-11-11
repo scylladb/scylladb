@@ -26,6 +26,13 @@
 // of a 16-bit check value of each hash; the check value, together with the
 // hash mapping to the cell at all, tells a cell with one hash from a
 // coincidence of several.
+//
+// Sketches nest: cell i of a sub-table of a sketch with s times as many cells
+// holds hashes that land in cell i / s of the smaller one, so the larger sketch
+// folds into the smaller by adding each run of s cells, and a receiver that
+// already has the smaller sketch can rebuild the larger from all but one cell
+// of each run (an extension).
+struct repair_hash_sketch_extension;
 struct repair_hash_sketch {
     static constexpr unsigned hash_count = 4;
     static constexpr size_t cell_bytes = sizeof(int16_t) + sizeof(uint64_t) + sizeof(uint16_t);
@@ -87,6 +94,32 @@ struct repair_hash_sketch {
         double centered = squares - sum * sum / cells();
         return std::max(0.0, centered / (hash_count * (1.0 - double(hash_count) / cells())));
     }
+
+    // Folds into a sketch of `cells` cells; cells() must be a multiple of it.
+    repair_hash_sketch fold(size_t cells) const {
+        auto folded = with_cells(cells);
+        const size_t sub = this->cells() / hash_count;
+        const size_t fsub = folded.cells() / hash_count;
+        const size_t stride = sub / fsub;
+        for (unsigned j = 0; j < hash_count; ++j) {
+            for (size_t i = 0; i < sub; ++i) {
+                auto from = j * sub + i;
+                auto to = j * fsub + i / stride;
+                folded.counts[to] += counts[from];
+                folded.key_sums[to] ^= key_sums[from];
+                folded.check_sums[to] ^= check_sums[from];
+            }
+        }
+        return folded;
+    }
+
+    // The cells of this sketch a receiver holding its fold to `base_cells` cells
+    // lacks: all but the last of each run of cells() / base_cells.
+    repair_hash_sketch_extension strip(size_t base_cells) const;
+
+    // Rebuilds the sketch `ext` was stripped from, given its fold to base.
+    // nullopt if the shapes do not match.
+    static std::optional<repair_hash_sketch> extended(const repair_hash_sketch& base, const repair_hash_sketch_extension& ext);
 
     struct difference {
         utils::chunked_vector<uint64_t> added;   // hashed into this sketch only
@@ -163,3 +196,59 @@ private:
                 && index(key_sums[i], i / (cells() / hash_count)) == i;
     }
 };
+
+struct repair_hash_sketch_extension {
+    uint32_t stride;              // cells of the extended sketch over the base's
+    repair_hash_sketch partial;   // (stride - 1) / stride of its cells, in order
+};
+
+inline repair_hash_sketch_extension repair_hash_sketch::strip(size_t base_cells) const {
+    const size_t sub = cells() / hash_count;
+    const size_t bsub = base_cells / hash_count;
+    const size_t stride = sub / bsub;
+    auto ext = repair_hash_sketch_extension{uint32_t(stride), with_cells(cells() - base_cells)};
+    size_t o = 0;
+    for (unsigned j = 0; j < hash_count; ++j) {
+        for (size_t i = 0; i < sub; ++i) {
+            if (i % stride + 1 == stride) {
+                continue;
+            }
+            auto from = j * sub + i;
+            ext.partial.counts[o] = counts[from];
+            ext.partial.key_sums[o] = key_sums[from];
+            ext.partial.check_sums[o] = check_sums[from];
+            ++o;
+        }
+    }
+    return ext;
+}
+
+inline std::optional<repair_hash_sketch> repair_hash_sketch::extended(const repair_hash_sketch& base, const repair_hash_sketch_extension& ext) {
+    if (ext.stride < 2 || !base.well_formed() || !ext.partial.well_formed()
+            || ext.partial.cells() != base.cells() * (ext.stride - 1)) {
+        return std::nullopt;
+    }
+    const size_t stride = ext.stride;
+    const size_t bsub = base.cells() / hash_count;
+    const size_t sub = bsub * stride;
+    auto s = with_cells(base.cells() * stride);
+    size_t o = 0;
+    for (unsigned j = 0; j < hash_count; ++j) {
+        for (size_t g = 0; g < bsub; ++g) {
+            auto last = j * sub + g * stride + stride - 1;
+            s.counts[last] = base.counts[j * bsub + g];
+            s.key_sums[last] = base.key_sums[j * bsub + g];
+            s.check_sums[last] = base.check_sums[j * bsub + g];
+            for (size_t t = 0; t + 1 < stride; ++t, ++o) {
+                auto i = j * sub + g * stride + t;
+                s.counts[i] = ext.partial.counts[o];
+                s.key_sums[i] = ext.partial.key_sums[o];
+                s.check_sums[i] = ext.partial.check_sums[o];
+                s.counts[last] -= s.counts[i];
+                s.key_sums[last] ^= s.key_sums[i];
+                s.check_sums[last] ^= s.check_sums[i];
+            }
+        }
+    }
+    return s;
+}

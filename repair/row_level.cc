@@ -210,6 +210,7 @@ struct row_level_repair_metrics {
     uint64_t sketch_fallback_nr{0};
     uint64_t sketch_declined_nr{0};
     uint64_t sketch_in_sync_nr{0};
+    uint64_t sketch_extended_nr{0};
     row_level_repair_metrics() {
         namespace sm = seastar::metrics;
         _metrics.add_group("repair", {
@@ -245,6 +246,8 @@ struct row_level_repair_metrics {
                             sm::description("Total number of times a follower differing from the master sent no sketch because it would cost more than its row hash list.")),
             sm::make_counter("sketch_in_sync_nr", sketch_in_sync_nr,
                             sm::description("Total number of times a follower matched the master's combined hash and sent no sketch.")),
+            sm::make_counter("sketch_extended_nr", sketch_extended_nr,
+                            sm::description("Total number of row hash sketch extensions received on this shard, each growing a sketch that did not decode to a size estimated from it.")),
         });
     }
 };
@@ -1973,8 +1976,33 @@ public:
         co_return resp;
     }
 
+    // RPC API: grows the follower's sketch of base_cells cells, which the master
+    // holds, to stride times as many, sized for the difference estimated from
+    // it. nullopt if the follower declines.
+    future<std::optional<repair_hash_sketch_extension>>
+    get_row_hash_sketch_extension(locator::host_id remote_node, shard_id dst_cpu_id, uint32_t base_cells, uint32_t stride) {
+        auto ext = co_await ser::repair_rpc_verbs::send_repair_get_row_hash_sketch_extension(&_messaging, remote_node, _repair_meta_id, dst_cpu_id, base_cells, stride);
+        stats().rpc_call_nr++;
+        if (ext) {
+            _metrics.rx_sketch_cells_nr += ext->partial.cells();
+        }
+        co_return ext;
+    }
+
+    // RPC handler
+    future<std::optional<repair_hash_sketch_extension>>
+    get_row_hash_sketch_extension_handler(uint32_t base_cells, uint32_t stride) {
+        auto gate_held = _gate.hold();
+        if (stride < 2 || !base_cells || base_cells % repair_hash_sketch::hash_count
+                || !sketch_is_worth(uint64_t(base_cells) * (stride - 1))) {
+            co_return std::nullopt;
+        }
+        auto sketch = co_await working_row_sketch(size_t(base_cells) * stride);
+        co_return sketch.strip(base_cells);
+    }
+
     // A sketch is sent only when it is smaller than the row hash list it replaces.
-    bool sketch_is_worth(uint32_t cells) const {
+    bool sketch_is_worth(uint64_t cells) const {
         return cells && repair_hash_sketch::bytes(cells) < _working_row_buf.size() * sizeof(uint64_t);
     }
 
@@ -3192,6 +3220,18 @@ future<> repair_service::init_ms_handlers() {
             });
         });
     });
+    ser::repair_rpc_verbs::register_repair_get_row_hash_sketch_extension(&ms, [this] (const rpc::client_info& cinfo, uint32_t repair_meta_id,
+            shard_id dst_cpu_id, uint32_t base_cells, uint32_t stride) {
+        auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
+        auto shard = get_dst_shard_id(src_cpu_id, dst_cpu_id);
+        auto from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+        return container().invoke_on(shard, [from, repair_meta_id, base_cells, stride] (repair_service& local_repair) {
+            auto rm = local_repair.get_repair_meta(from, repair_meta_id);
+            return rm->get_row_hash_sketch_extension_handler(base_cells, stride).then([rm] (std::optional<repair_hash_sketch_extension> ext) {
+                return ext;
+            });
+        });
+    });
     ser::repair_rpc_verbs::register_repair_get_sync_boundary(&ms, [this] (const rpc::client_info& cinfo, uint32_t repair_meta_id,
             std::optional<repair_sync_boundary> skipped_sync_boundary, rpc::optional<shard_id> dst_cpu_id_opt) {
         auto src_cpu_id = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
@@ -3806,6 +3846,14 @@ private:
         return h.known() ? h.cells() : 256;
     }
 
+    // Whether extending a sketch of `cells` cells for an estimated difference
+    // costs less than the follower's row hash list, which has about as many rows
+    // as the master's.
+    static bool extension_is_worth(size_t cells, size_t estimated_diff, const repair_hash_set& local_at_compare) {
+        auto stride = repair_sketch_extension_stride(cells, estimated_diff);
+        return repair_hash_sketch::bytes(cells * (stride - 1)) < local_at_compare.size() * sizeof(uint64_t);
+    }
+
     // Records the follower's measured differences. Must run inside a seastar thread.
     void record_sketch_history(repair_meta& master, unsigned node_idx, const repair_hash_set& peer,
             const repair_hash_set& local_at_compare, std::vector<std::optional<decoded_row_hashes>>& recovered) {
@@ -3813,10 +3861,18 @@ private:
     }
 
     // Decodes every follower's sketch against the master's compare-time rows,
-    // before any rows move. Must run inside a seastar thread.
+    // before any rows move. Sketches that do not peel are extended together, to a
+    // size from their own estimate of the difference, at the cost of the new cells
+    // only; the extension is extended once more if it does not peel either. Must
+    // run inside a seastar thread.
     void decode_sketches(repair_meta& master, const std::vector<repair_hash>& combined_hashes,
             std::vector<std::optional<repair_hash_sketch>>& sketches, const repair_hash_set& local_at_compare,
             std::vector<std::optional<decoded_row_hashes>>& recovered) {
+        struct retry {
+            unsigned node_idx;
+            size_t estimated_diff;
+        };
+        std::vector<retry> retries;
         for (unsigned node_idx = 0; node_idx < _all_live_peer_nodes.size(); node_idx++) {
             auto& sketch = sketches[node_idx + 1];
             if (!sketch) {
@@ -3824,13 +3880,57 @@ private:
             }
             const auto& node = _all_live_peer_nodes[node_idx];
             const auto cells = sketch->cells();
-            size_t estimated_diff = 0;
-            if (!utils::get_local_injector().enter("repair_row_hash_sketch_decode_fail")) {
-                recovered[node_idx] = decode_peer_row_hashes(local_at_compare, std::move(*sketch), combined_hashes[node_idx + 1], &estimated_diff).get();
+            if (utils::get_local_injector().enter("repair_row_hash_sketch_decode_fail")) {
+                ++_metrics.sketch_fallback_nr;
+                continue;
             }
+            size_t estimated_diff = 0;
+            recovered[node_idx] = decode_peer_row_hashes(local_at_compare, *sketch, combined_hashes[node_idx + 1], &estimated_diff).get();
             rlogger.debug("Row hash sketch from {}: cells={} decoded={} estimated_diff={}", node, cells, bool(recovered[node_idx]), estimated_diff);
             if (recovered[node_idx]) {
                 record_sketch_history(master, node_idx, recovered[node_idx]->hashes, local_at_compare, recovered);
+                ++_metrics.sketch_decoded_nr;
+                continue;
+            }
+            // A sketch that does not peel still measures the difference. Extending it
+            // for that beats the full list unless the difference is most of the rows;
+            // the follower applies the same size check and may decline.
+            if (estimated_diff && extension_is_worth(cells, estimated_diff, local_at_compare)) {
+                retries.push_back(retry{node_idx, estimated_diff});
+            } else {
+                ++_metrics.sketch_fallback_nr;
+            }
+        }
+        if (retries.empty()) {
+            return;
+        }
+        parallel_for_each(retries, coroutine::lambda([&] (retry& rt) -> future<> {
+            auto& ns = master.all_nodes()[rt.node_idx + 1];
+            const auto& node = _all_live_peer_nodes[rt.node_idx];
+            auto& sketch = *sketches[rt.node_idx + 1];
+            auto est = rt.estimated_diff;
+            for (int attempt = 0; attempt < 2 && !recovered[rt.node_idx]; ++attempt) {
+                if (attempt && !(est && extension_is_worth(sketch.cells(), est, local_at_compare))) {
+                    break;
+                }
+                auto stride = repair_sketch_extension_stride(sketch.cells(), est);
+                auto ext = co_await master.get_row_hash_sketch_extension(node, ns.shard, sketch.cells(), stride);
+                if (!ext) {
+                    break;
+                }
+                auto grown = repair_hash_sketch::extended(sketch, *ext);
+                if (!grown) {
+                    break;
+                }
+                ++_metrics.sketch_extended_nr;
+                sketch = std::move(*grown);
+                recovered[rt.node_idx] = co_await decode_peer_row_hashes(local_at_compare, sketch, combined_hashes[rt.node_idx + 1], &est);
+                rlogger.debug("Extended row hash sketch from {}: cells={} decoded={} estimated_diff={}", node, sketch.cells(), bool(recovered[rt.node_idx]), est);
+            }
+        })).get();
+        for (auto& rt : retries) {
+            if (recovered[rt.node_idx]) {
+                record_sketch_history(master, rt.node_idx, recovered[rt.node_idx]->hashes, local_at_compare, recovered);
                 ++_metrics.sketch_decoded_nr;
             } else {
                 ++_metrics.sketch_fallback_nr;
