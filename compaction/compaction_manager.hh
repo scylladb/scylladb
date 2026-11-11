@@ -400,6 +400,8 @@ public:
     //
     // The caller is responsible for iterating storage_group -> compaction_group
     // -> view to cover the desired range; the filter is applied per view.
+    // Views with no match are skipped without the barrier; `filter` may run
+    // more than once per sstable, so it must be free of side effects.
     //
     // Returns a map from each old sstable to its rewritten replacement.
     future<std::unordered_map<sstables::shared_sstable, sstables::shared_sstable>> perform_component_rewrite(

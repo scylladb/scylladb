@@ -2156,6 +2156,21 @@ compaction_manager::rewrite_sstables_component(compaction_group_view& t,
         co_return std::nullopt;
     }
 
+    // Skip the stop on views with no candidate; filters must be side-effect free as they run twice.
+    {
+        bool has_candidate = false;
+        for (auto& sst : co_await get_all_sstables(t)) {
+            if (filter(sst)) {
+                has_candidate = true;
+                break;
+            }
+            co_await coroutine::maybe_yield();
+        }
+        if (!has_candidate) {
+            co_return std::nullopt;
+        }
+    }
+
     // Capture candidates from view `t` and register them as compacting while
     // compaction is disabled on `t`, so that:
     //   1) every captured sstable belongs to `t`'s compaction group (no
@@ -2243,8 +2258,9 @@ private:
 };
 
 static future<std::vector<sstables::shared_sstable>> get_all_sstables(compaction_group_view& t) {
-    auto main_set = co_await t.main_sstable_set();
+    // Maintenance first: offstrategy moves sstables to main, so a concurrent move can't hide one from both captures.
     auto maintenance_set = co_await t.maintenance_sstable_set();
+    auto main_set = co_await t.main_sstable_set();
     auto s = *main_set->all() | std::ranges::to<std::vector>();
     auto maintenance_sstables = maintenance_set->all();
     s.insert(s.end(), maintenance_sstables->begin(), maintenance_sstables->end());
