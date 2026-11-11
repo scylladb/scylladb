@@ -54,6 +54,7 @@
 #include "replica/logstor/write_buffer.hh"
 #include "utils/disk-error-handler.hh"
 #include "utils/error_injection.hh"
+#include "utils/exceptions.hh"
 #include "utils/serialized_action.hh"
 #include "replica/logstor/recovery_catalog.hh"
 
@@ -465,7 +466,6 @@ class segment_pool {
     size_t _capacity;
     size_t _reserved_for_compaction;
     seastar::condition_variable _segment_available;
-    seastar::condition_variable _room_available;
 
 public:
 
@@ -484,10 +484,11 @@ public:
         co_return;
     }
 
-    // The replenisher stops when its wait in put() fails with abort_requested_exception.
+    // The caller must stop the consumers and the replenisher first. A consumer that still waits is
+    // a bug, and broken() fails it.
     future<> stop() {
-        _room_available.broken(std::make_exception_ptr(abort_requested_exception()));
         _segment_available.broken();
+        _segments.clear();
         co_return;
     }
 
@@ -495,8 +496,10 @@ public:
         return _segments.size() >= _capacity;
     }
 
-    future<> put(seg_ptr seg) {
-        co_await _room_available.wait([this] { return !full(); });
+    void put(seg_ptr seg) {
+        if (full()) [[unlikely]] {
+            on_internal_error(logstor_logger, "Attempted to put a segment into a full segment pool");
+        }
         _segments.push_back(std::move(seg));
         _segment_available.broadcast();
         _stats.segments_put++;
@@ -516,7 +519,6 @@ public:
         _stats.segments_get[static_cast<size_t>(src)]++;
         auto seg = std::move(_segments.front());
         _segments.pop_front();
-        _room_available.signal();
         co_return seg;
     }
 
@@ -613,6 +615,7 @@ class segment_manager_impl {
     segment_sequence _next_segment_seq{1};
 
     seastar::gate _async_gate;
+    // The reserve replenisher keeps `_segment_pool` full.
     future<> _reserve_replenisher{make_ready_future<>()};
 
     // The used segments that recovery could not give whole to a compaction group, and the catalog
@@ -633,7 +636,10 @@ class segment_manager_impl {
     // Fails with an internal error when the segment manager is not at the expected stage.
     void check_lifecycle(lifecycle expected, std::string_view call) const;
 
-    seastar::condition_variable _segment_freed_cv;
+    bool _replenisher_stopping{false};
+    // Wakes the replenisher. Signal it when a segment goes out of the pool, when a segment becomes
+    // free, and when the replenisher must stop.
+    seastar::condition_variable _replenisher_wakeup;
 
     write_buffer_pool _compaction_buffer_pool;
     write_buffer_pool _separator_buffer_pool;
@@ -845,6 +851,7 @@ public:
 private:
 
     future<> replenish_reserve();
+    // Returns an empty pointer if the replenisher must stop while it waits for a free segment.
     future<seg_ptr> allocate_segment();
     // Returns true if the segment can be opened without a wait for the format of its file.
     bool is_segment_ready(log_segment_id);
@@ -888,6 +895,7 @@ private:
 
     future<seg_ptr> get_segment(write_source src) {
         seg_ptr seg = co_await _segment_pool.get_segment(src);
+        _replenisher_wakeup.signal();
         auto& desc = get_segment_descriptor(seg->id());
         desc.seq = allocate_segment_seq();
         seg->start(make_segment_ref(seg->id()), desc.seq);
@@ -1239,10 +1247,12 @@ future<> segment_manager_impl::stop() {
     co_await _compaction_buffer_pool.stop();
     co_await _separator_buffer_pool.stop();
 
-    logstor_logger.debug("Stopping segment pool");
-    co_await _segment_pool.stop();
-    _segment_freed_cv.broken();
+    // All the consumers of the segment pool stopped. Stop the producer next, and then the pool.
+    logstor_logger.debug("Stopping reserve replenisher and segment pool");
+    _replenisher_stopping = true;
+    _replenisher_wakeup.signal();
     co_await std::move(_reserve_replenisher);
+    co_await _segment_pool.stop();
 
     co_await _file_mgr.stop();
 
@@ -1476,25 +1486,33 @@ future<> segment_manager_impl::switch_active_segment() {
     logstor_logger.trace("Switched active segment to {} seq {}", _active_segment->id(), _active_segment->seq_num());
 }
 
+// Allocates segments into the pool until the replenisher must stop. At a stop, the allocation in
+// progress completes, and no new one starts.
 future<> segment_manager_impl::replenish_reserve() {
     while (true) {
-        bool retry = false;
-        try {
-            auto seg = co_await allocate_segment();
-            co_await _segment_pool.put(std::move(seg));
-        } catch (abort_requested_exception&) {
-            logstor_logger.debug("Reserve replenisher stopping due to abort");
+        co_await _replenisher_wakeup.wait([this] { return _replenisher_stopping || !_segment_pool.full(); });
+        if (_replenisher_stopping) {
             break;
-        } catch (...) {
-            retry = true;
-            ++_stats.segment_allocation_failures;
-            static thread_local logger::rate_limit replenish_failure_rate_limit(std::chrono::seconds(10));
-            logstor_logger.log(log_level::warn, replenish_failure_rate_limit, "Cannot allocate a segment for the segment pool: {:t}. Trying again", std::current_exception());
         }
 
-        if (retry) {
-            co_await seastar::sleep(std::chrono::seconds(1));
+        auto seg_f = co_await coroutine::as_future(allocate_segment());
+        if (seg_f.failed()) {
+            ++_stats.segment_allocation_failures;
+            static thread_local logger::rate_limit replenish_failure_rate_limit(std::chrono::seconds(10));
+            logstor_logger.log(log_level::warn, replenish_failure_rate_limit, "Cannot allocate a segment for the segment pool: {:t}. Trying again", seg_f.get_exception());
+            // The timeout is the usual result, so the wait does not throw it.
+            auto wait_f = co_await coroutine::as_future(_replenisher_wakeup.wait(std::chrono::seconds(1), [this] {
+                return _replenisher_stopping;
+            }));
+            wait_f.ignore_ready_future();
+            continue;
         }
+
+        auto seg = seg_f.get();
+        if (!seg) {
+            break;
+        }
+        _segment_pool.put(std::move(seg));
     }
 
     logstor_logger.debug("Reserve replenisher stopped");
@@ -1506,6 +1524,10 @@ bool segment_manager_impl::is_segment_ready(log_segment_id seg_id) {
 
 future<seg_ptr> segment_manager_impl::allocate_segment() {
     auto make_segment = [this] (log_segment_id seg_id) -> future<seg_ptr> {
+        utils::get_local_injector().inject("logstor_allocate_segment_fail", [] {
+            throw std::runtime_error("segment allocation failed by injection");
+        });
+
         auto seg_loc = segment_id_to_file_location(seg_id);
         auto file = co_await _file_mgr.get_file_for_new_segment(seg_loc.file_id);
         auto seg = make_lw_shared<writeable_segment>(seg_id, std::move(file), seg_loc.file_offset, _cfg.segment_size);
@@ -1551,16 +1573,18 @@ future<seg_ptr> segment_manager_impl::allocate_segment() {
         }
 
         // No free segment. Compaction can free segments later, so wait and try again.
-        // Timeout is the expected common case; avoid a real C++ throw per iteration.
-        auto f = co_await coroutine::as_future(_segment_freed_cv.wait(std::chrono::seconds(5)));
+        // The timeout is the usual result, so the wait does not throw it.
+        auto f = co_await coroutine::as_future(_replenisher_wakeup.wait(std::chrono::seconds(5), [this] {
+            return _replenisher_stopping || !_free_segments.empty();
+        }));
         if (f.failed()) {
             auto ep = f.get_exception();
-            if (try_catch<seastar::broken_condition_variable>(ep)) {
-                co_return coroutine::return_exception(abort_requested_exception());
-            }
             if (!try_catch<seastar::condition_variable_timed_out>(ep)) {
                 co_await coroutine::return_exception_ptr(std::move(ep));
             }
+        }
+        if (_replenisher_stopping) {
+            co_return nullptr;
         }
     }
 }
@@ -1585,7 +1609,7 @@ void segment_manager_impl::free_segment(log_segment_id segment_id) noexcept {
         // _free_segments is pre-reserved to fit every configured segment (see the constructor), so
         // this should never grow the vector.
         _free_segments.push_back(segment_id);
-        _segment_freed_cv.signal();
+        _replenisher_wakeup.signal();
     }
 
     _stats.segments_freed++;

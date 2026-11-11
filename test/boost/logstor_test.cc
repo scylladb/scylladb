@@ -19,6 +19,7 @@
 #include <vector>
 #include <fmt/format.h>
 #include <seastar/core/memory.hh>
+#include <seastar/core/metrics_api.hh>
 #include <seastar/core/seastar.hh>
 #include <seastar/util/closeable.hh>
 #include <seastar/core/semaphore.hh>
@@ -4053,6 +4054,59 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_range_reader_serves_a_reversed_read) {
             env.make_reader(query::full_partition_range, bypassing));
     BOOST_REQUIRE_EQUAL(stats.partition_hits, hits + ms.size());
     BOOST_REQUIRE_EQUAL(stats.partition_misses, misses);
+}
+
+// Returns the value of the segment manager metric `name` on this shard.
+uint64_t segment_manager_metric(std::string_view name) {
+    uint64_t value = 0;
+    for (const auto& [family_name, family] : seastar::metrics::impl::get_value_map()) {
+        for (const auto& [labels, metric] : family) {
+            if (metric && metric->get_id().group_name() == "logstor_sm" && metric->get_id().name() == name) {
+                value += metric->get_function()().ui();
+            }
+        }
+    }
+    return value;
+}
+
+// Checks that a store whose reserve replenisher keeps failing to allocate a segment still stops.
+SEASTAR_THREAD_TEST_CASE(test_logstor_stops_while_segment_allocation_fails) {
+    if constexpr (!std::is_same_v<utils::error_injection_type, utils::error_injection<true>>) {
+        return;
+    }
+
+    auto schema = make_kv_schema();
+    tmpdir dir;
+
+    // The store has more segments than the segment pool holds, so that the replenisher allocates
+    // new segments and does not wait for a freed one.
+    constexpr size_t segment_size = 128 * 1024;
+    constexpr size_t file_size = 32 * segment_size;
+    shared_logstor_cache cache;
+    logstor ls(make_test_logstor_config(dir.path(), {
+        .segment_size = segment_size,
+        .file_size = file_size,
+        .disk_size = 8 * file_size,
+    }), cache.shared_tracker);
+    test_recovery_catalog no_tables;
+    ls.do_recovery(no_tables).get();
+    ls.start().get();
+    auto stop_store = seastar::defer([&ls] noexcept { ls.stop().get(); });
+
+    utils::get_local_injector().enable("logstor_allocate_segment_fail");
+    auto disable_injection = seastar::defer([] noexcept {
+        utils::get_local_injector().disable("logstor_allocate_segment_fail");
+    });
+
+    {
+        test_logstor_group cg(schema, ls);
+        write_and_flush_segment(ls, cg, make_kv_mutation(schema, "pk0", "value"));
+    }
+    // The replenisher tries to replace the segments the write took, fails, and waits before the next
+    // attempt. The count grows before that wait, so the stop starts during it.
+    BOOST_REQUIRE(eventually_true([] { return segment_manager_metric("segment_allocation_failures") > 0; }));
+
+    ls.stop().get();
 }
 
 // Checks that the store continues with free segments when it cannot allocate a new segment, because
