@@ -3158,6 +3158,14 @@ void table::trigger_compaction() {
     });
 }
 
+void table::trigger_compaction(dht::token_range range) {
+    for (const auto& sg : storage_groups_for_token_range(std::move(range))) {
+        for (auto& cg : sg->compaction_groups_immediate()) {
+            try_trigger_compaction(*cg);
+        }
+    }
+}
+
 void table::trigger_logstor_compaction() {
     for_each_compaction_group([] (compaction_group& cg) {
         cg.trigger_logstor_compaction();

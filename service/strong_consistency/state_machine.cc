@@ -117,6 +117,8 @@ public:
         co_await _db.apply_in_memory(m, m.schema()->table(),
                 _persistence.pin_raft_groups_for_apply(idx), db::no_timeout);
         _persistence.promote_seal(s);
+        // The sstables up to the seal may be merged now.
+        _db.find_column_family(_tablet.table).trigger_compaction(_range);
     }
 
     future<> apply(raft::log_entry_ptr_list command) override {

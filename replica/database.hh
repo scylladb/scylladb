@@ -1315,6 +1315,8 @@ public:
 
     void start_compaction();
     void trigger_compaction();
+    // Of the compaction groups of the storage groups overlapping the range.
+    void trigger_compaction(dht::token_range range);
     void try_trigger_compaction(compaction_group& cg) noexcept;
     void trigger_logstor_compaction();
     // Triggers offstrategy compaction, if needed, in the background.
