@@ -2363,6 +2363,67 @@ SEASTAR_TEST_CASE(test_query_tombstone_gc) {
     });
 }
 
+// Replicas holding the same data must return the same query results, however old
+// their commitlogs are, or their digests never match and read repair never ends.
+SEASTAR_TEST_CASE(test_query_tombstone_gc_ignores_commitlog) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        const auto keyspace_name = get_name();
+        const auto table_name = "tbl";
+
+        env.execute_cql(std::format("CREATE KEYSPACE {} WITH"
+                " replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND"
+                " tablets = {{'enabled': 'false'}}", keyspace_name)).get();
+        env.execute_cql(std::format("CREATE TABLE {}.{} (pk int, ck int, v int, PRIMARY KEY (pk, ck))"
+                " WITH compaction = {{'class': 'NullCompactionStrategy'}}"
+                " AND gc_grace_seconds = 0 AND tombstone_gc = {{'mode': 'timeout'}}", keyspace_name, table_name)).get();
+
+        auto& db = env.local_db();
+        auto& tbl = db.find_column_family(keyspace_name, table_name);
+        const auto schema = tbl.schema();
+
+        // The commitlog is per shard, so all keys are owned by this one.
+        auto next_local_key = [&, pk = 0] () mutable {
+            while (true) {
+                const auto v = pk++;
+                auto dk = dht::decorate_key(*schema, partition_key::from_single_value(*schema, int32_type->decompose(v)));
+                if (tbl.shard_for_reads(dk.token()) == this_shard_id()) {
+                    return std::pair(v, std::move(dk));
+                }
+            }
+        };
+        const auto [pinning_pk, pinning_dk] = next_local_key();
+        const auto [expired_pk, expired_dk] = next_local_key();
+        const auto [absent_pk, absent_dk] = next_local_key();
+
+        // Written first, so that the table's oldest commitlog entry is not newer than the expired row.
+        env.execute_cql(std::format("INSERT INTO {}.{} (pk, ck, v) VALUES ({}, 0, 0)", keyspace_name, table_name, pinning_pk)).get();
+        env.execute_cql(std::format("INSERT INTO {}.{} (pk, ck, v) VALUES ({}, 0, 0) USING TTL 1", keyspace_name, table_name, expired_pk)).get();
+
+        auto cmd = query::read_command(schema->id(), schema->version(), schema->full_slice(), db.get_query_max_result_size(), query::tombstone_limit::max);
+        cmd.timestamp = gc_clock::now() + std::chrono::hours(1);
+
+        // The commitlog holds back gc_before for the table.
+        BOOST_REQUIRE(tbl.get_tombstone_gc_state().get_gc_before_for_key(schema, expired_dk, cmd.timestamp) < cmd.timestamp);
+
+        const auto digest_opts = query::result_options::only_digest(query::digest_algorithm::xxHash);
+        auto query_digest = [&] (const dht::decorated_key& dk) {
+            const auto res = std::get<0>(db.query(schema, cmd, digest_opts, {dht::partition_range::make_singular(dk)}, {}, db::no_timeout).get());
+            return *res->digest();
+        };
+        auto query_data_on_all_shards_digest = [&] (const dht::decorated_key& dk) {
+            const auto res = std::get<0>(replica::query_data_on_all_shards(env.db(), schema, cmd, {dht::partition_range::make_singular(dk)}, digest_opts,
+                    {}, db::no_timeout).get());
+            return *res->digest();
+        };
+        BOOST_CHECK(query_digest(expired_dk) == query_digest(absent_dk));
+        BOOST_CHECK(query_data_on_all_shards_digest(expired_dk) == query_data_on_all_shards_digest(absent_dk));
+
+        const auto pr = dht::partition_range::make_singular(expired_dk);
+        BOOST_CHECK(std::get<0>(db.query_mutations(schema, cmd, pr, {}, db::no_timeout).get()).partitions().empty());
+        BOOST_CHECK(std::get<0>(replica::query_mutations_on_all_shards(env.db(), schema, cmd, {pr}, {}, db::no_timeout).get())->partitions().empty());
+    });
+}
+
 SEASTAR_TEST_CASE(test_tombstone_gc_state_gc_mode) {
     const auto compact_range = dht::token_range::make(dht::token(100), dht::token(200));
 
