@@ -7,6 +7,7 @@
  */
 
 #include "utils/assert.hh"
+#include <seastar/core/on_internal_error.hh>
 #include "keys/clustering_key_filter.hh"
 #include "keys/clustering_ranges_walker.hh"
 #include "mutation/mutation.hh"
@@ -31,6 +32,7 @@
 #include "readers/upgrading_consumer.hh"
 #include "tombstone_gc.hh"
 #include <seastar/core/coroutine.hh>
+#include <seastar/util/defer.hh>
 #include <stack>
 
 extern logging::logger mrlog;
@@ -1424,6 +1426,25 @@ private:
     // Compacted stream
     bool _has_compacted_partition_start = false;
 
+    // The fragment being compacted in place; re-emitted as is if the compactor
+    // emits it, saving a fragment allocation.
+    const void* _in_place = nullptr;
+    bool _emit_in_place = false;
+
+    template <typename T>
+    void emit(T&& frag) {
+        maybe_push_partition_start();
+        if (&frag == _in_place) {
+            _emit_in_place = true;
+        } else {
+            // The in-place fragment is pushed last, so it must be emitted last.
+            if (_emit_in_place) {
+                on_internal_error(mrlog, "compacting_reader: fragment emitted after the in-place one");
+            }
+            push_mutation_fragment(mutation_fragment_v2(*_schema, _permit, std::move(frag)));
+        }
+    }
+
     void maybe_push_partition_start() {
         if (_has_compacted_partition_start) {
             push_mutation_fragment(mutation_fragment_v2(*_schema, _permit, std::move(_last_uncompacted_partition_start)));
@@ -1443,18 +1464,15 @@ public: // Needed for CompactedFragmentsConsumer concept
         maybe_push_partition_start();
     }
     stop_iteration consume(static_row&& sr, tombstone, bool) {
-        maybe_push_partition_start();
-        push_mutation_fragment(mutation_fragment_v2(*_schema, _permit, std::move(sr)));
+        emit(std::move(sr));
         return stop_iteration::no;
     }
     stop_iteration consume(clustering_row&& cr, row_tombstone, bool) {
-        maybe_push_partition_start();
-        push_mutation_fragment(mutation_fragment_v2(*_schema, _permit, std::move(cr)));
+        emit(std::move(cr));
         return stop_iteration::no;
     }
     stop_iteration consume(range_tombstone_change&& rtc) {
-        maybe_push_partition_start();
-        push_mutation_fragment(mutation_fragment_v2(*_schema, _permit, std::move(rtc)));
+        emit(std::move(rtc));
         return stop_iteration::no;
     }
     stop_iteration consume_end_of_partition() {
@@ -1498,18 +1516,25 @@ public:
                 // This problem doesn't exist when we want more fragments, in this
                 // case we'll keep reading until the compactor emits something or
                 // we read EOS, and thus we'll know where we are.
+                auto compact_in_place = [this] (auto& frag) {
+                    _in_place = &frag;
+                    auto reset = defer([this] () noexcept { _in_place = nullptr; });
+                    _compactor.consume(std::move(frag), *this, _gc_consumer);
+                };
                 while (!_reader.is_buffer_empty() && !is_buffer_full()) {
                     auto mf = _reader.pop_mutation_fragment();
                     _last_uncompacted_kind = mf.mutation_fragment_kind();
+                    // Don't leak a matched in-place fragment into the next call if consume() throws.
+                    auto reset_emit = defer([this] () noexcept { _emit_in_place = false; });
                     switch (mf.mutation_fragment_kind()) {
                     case mutation_fragment_v2::kind::static_row:
-                        _compactor.consume(std::move(mf).as_static_row(), *this, _gc_consumer);
+                        mf.mutate_as_static_row(*_schema, compact_in_place);
                         break;
                     case mutation_fragment_v2::kind::clustering_row:
-                        _compactor.consume(std::move(mf).as_clustering_row(), *this, _gc_consumer);
+                        mf.mutate_as_clustering_row(*_schema, compact_in_place);
                         break;
                     case mutation_fragment_v2::kind::range_tombstone_change:
-                        _compactor.consume(std::move(mf).as_range_tombstone_change(), *this, _gc_consumer);
+                        mf.mutate_as_range_tombstone_change(*_schema, compact_in_place);
                         break;
                     case mutation_fragment_v2::kind::partition_start:
                         _last_uncompacted_partition_start = std::move(mf).as_partition_start();
@@ -1524,6 +1549,9 @@ public:
                     case mutation_fragment_v2::kind::partition_end:
                         _compactor.consume_end_of_partition(*this, _gc_consumer);
                         break;
+                    }
+                    if (std::exchange(_emit_in_place, false)) {
+                        push_mutation_fragment(std::move(mf));
                     }
                 }
             });
