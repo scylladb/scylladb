@@ -149,6 +149,14 @@ adjust_bin() {
 #!/bin/bash -e
 [[ -z "\$LD_PRELOAD" ]] || { echo "\$0: not compatible with LD_PRELOAD" >&2; exit 110; }
 export GNUTLS_SYSTEM_PRIORITY_FILE="\${GNUTLS_SYSTEM_PRIORITY_FILE-$prefix/libreloc/gnutls.config}"
+# hide AES+PMULL, keep SHA (0x58; 0x18 if no SHA512; none if no SHA1/2): nettle's aarch64 AES-GCM is ~4x faster (SCYLLADB-5387)
+if [[ \$HOSTTYPE == aarch64 ]] && grep -qw sha1 /proc/cpuinfo && grep -qw sha2 /proc/cpuinfo; then
+    if grep -qw sha512 /proc/cpuinfo; then
+        export GNUTLS_CPUID_OVERRIDE=0x58
+    else
+        export GNUTLS_CPUID_OVERRIDE=0x18
+    fi
+fi
 export LD_LIBRARY_PATH="$prefix/libreloc"
 export UBSAN_OPTIONS="${UBSAN_OPTIONS:+$UBSAN_OPTIONS:}suppressions=$prefix/libexec/ubsan-suppressions.supp"
 export LSAN_OPTIONS="${LSAN_OPTIONS:+$LSAN_OPTIONS:}suppressions=$prefix/libexec/lsan-suppressions.supp"
