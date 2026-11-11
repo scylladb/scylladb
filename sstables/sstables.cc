@@ -1336,6 +1336,7 @@ future<> sstable::read_compression() {
     }
 
     co_await read_simple_and_verify_digest<component_type::CompressionInfo>(_components->compression);
+    _components->compression.init_min_compression_saving_percent_from_options();
     compressor_ptr compressor;
     try {
         // Interprets the algorithm name and options read from the component.
