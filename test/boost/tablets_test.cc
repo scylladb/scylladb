@@ -7980,6 +7980,34 @@ SEASTAR_TEST_CASE(test_rotate_memtables_keeps_flushed_position_behind) {
     }, tablet_cql_test_config());
 }
 
+// Tombstone GC of a strongly consistent table runs in repair mode, where the promoted seal
+// fences it, or not at all; the modes purging on time alone are refused.
+SEASTAR_TEST_CASE(test_strongly_consistent_table_tombstone_gc_mode) {
+    cql_test_config cfg = tablet_cql_test_config();
+    cfg.db_config->experimental_features(
+        {db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES},
+        db::config::config_source::CommandLine
+    );
+
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("create keyspace sc_ks with replication = {'class': 'NetworkTopologyStrategy',"
+                      " 'replication_factor': 1} and tablets = {'initial': 1} and consistency = 'global'").get();
+        for (const auto mode : {"timeout", "immediate"}) {
+            BOOST_REQUIRE_THROW(e.execute_cql(format("create table sc_ks.cf (pk int primary key)"
+                    " with tombstone_gc = {{'mode': '{}'}}", mode)).get(), exceptions::configuration_exception);
+        }
+        e.execute_cql("create table sc_ks.cf (pk int primary key) with tombstone_gc = {'mode': 'repair'}").get();
+        for (const auto mode : {"timeout", "immediate"}) {
+            BOOST_REQUIRE_THROW(e.execute_cql(format("alter table sc_ks.cf with tombstone_gc = {{'mode': '{}'}}", mode)).get(),
+                    exceptions::configuration_exception);
+        }
+        e.execute_cql("alter table sc_ks.cf with tombstone_gc = {'mode': 'disabled'}").get();
+        BOOST_REQUIRE(e.local_db().find_schema("sc_ks", "cf")->tombstone_gc_options().mode() == tombstone_gc_mode::disabled);
+        e.execute_cql("create table sc_ks.cf2 (pk int primary key)").get();
+        BOOST_REQUIRE(e.local_db().find_schema("sc_ks", "cf2")->tombstone_gc_options().mode() == tombstone_gc_mode::repair);
+    }, cfg);
+}
+
 namespace {
 
 future<> test_create_keyspace(sstring ks_name, std::optional<bool> tablets_opt, const cql_test_config& cfg, uint64_t initial_tablets = 0, sstring replication_strategy = "NetworkTopologyStrategy") {

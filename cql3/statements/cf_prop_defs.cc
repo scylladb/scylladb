@@ -174,6 +174,11 @@ void cf_prop_defs::validate(const data_dictionary::database db, sstring ks_name,
 
     auto tombstone_gc_options = get_tombstone_gc_options(schema_extensions);
     validate_tombstone_gc_options(tombstone_gc_options, db, ks_name);
+    if (tombstone_gc_options && tombstone_gc_options->mode() != tombstone_gc_mode::repair
+            && tombstone_gc_options->mode() != tombstone_gc_mode::disabled
+            && strong_consistency::is_strongly_consistent(db, ks_name)) {
+        throw exceptions::configuration_exception("tombstone_gc option with mode other than repair or disabled not supported in strongly consistent keyspaces");
+    }
 
     validate_minimum_int(KW_DEFAULT_TIME_TO_LIVE, 0, DEFAULT_DEFAULT_TIME_TO_LIVE);
     validate_minimum_int(KW_PAXOSGRACESECONDS, 0, DEFAULT_GC_GRACE_SECONDS);
