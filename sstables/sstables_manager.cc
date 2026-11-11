@@ -110,6 +110,12 @@ sstables_manager::sstables_manager(
     , _signal_gate("sstables_manager::signal")
 {
     _components_reloader_status = components_reclaim_reload_fiber();
+    _components_reload_timer.set_callback([this] {
+        if (!_reclaimed.empty()) {
+            _components_memory_change_event.signal();
+        }
+    });
+    _components_reload_timer.arm_periodic(std::chrono::seconds(10));
 }
 
 sstables_manager::~sstables_manager() {
@@ -410,13 +416,22 @@ future<> sstables_manager::components_reclaim_reload_fiber() {
 future<> sstables_manager::maybe_reload_components() {
     // Reload bloom filters from the smallest to largest so as to maximize
     // the number of bloom filters being reloaded.
-    auto memory_available = get_memory_available_for_reclaimable_components();
-    while (!_reclaimed.empty() && memory_available > 0) {
-        auto sstable_to_reload = _reclaimed.begin();
+    // Reload only below the threshold minus a headroom, and only components
+    // reclaimed long enough ago: otherwise the next sstable written pushes the
+    // memory over the threshold again and a just-reloaded filter is reclaimed.
+    const size_t reload_limit = get_components_memory_reclaim_threshold() * (1.0 - _config.memory_reclaim_reload_headroom());
+    const auto min_residency = std::chrono::seconds(_config.memory_reclaim_min_residency_in_s());
+    auto memory_available = reload_limit > _total_reclaimable_memory ? reload_limit - _total_reclaimable_memory : 0;
+    auto sstable_to_reload = _reclaimed.begin();
+    while (sstable_to_reload != _reclaimed.end() && memory_available > 0) {
         const size_t reclaimed_memory = sstable_to_reload->total_memory_reclaimed();
         if (reclaimed_memory > memory_available) {
             // cannot reload anymore sstables
             break;
+        }
+        if (lowres_clock::now() - sstable_to_reload->components_reclaimed_at() < min_residency) {
+            ++sstable_to_reload;
+            continue;
         }
 
         // Increment the total memory before reloading to prevent any parallel
@@ -440,7 +455,9 @@ future<> sstables_manager::maybe_reload_components() {
         _total_memory_reclaimed -= reclaimed_memory;
         sstables_stats::on_filter_reload(reclaimed_memory);
         sstables_stats::on_filter_reclaimed_bytes_change(-int64_t(reclaimed_memory));
-        memory_available = get_memory_available_for_reclaimable_components();
+        memory_available = reload_limit > _total_reclaimable_memory ? reload_limit - _total_reclaimable_memory : 0;
+        // The set may have changed while reloading.
+        sstable_to_reload = _reclaimed.begin();
     }
 }
 
@@ -525,6 +542,7 @@ future<utils::chunked_vector<sstable_snapshot_metadata>> sstables_manager::take_
 
 future<> sstables_manager::close() noexcept {
     _closing = true;
+    _components_reload_timer.cancel();
     maybe_done();
     co_await _done.get_future();
     co_await _sstable_metadata_concurrency_sem.stop();

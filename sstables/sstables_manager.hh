@@ -13,6 +13,7 @@
 #include <seastar/core/sharded.hh>
 #include <seastar/core/gate.hh>
 #include <seastar/core/metrics.hh>
+#include <seastar/core/timer.hh>
 
 #include "utils/assert.hh"
 #include "utils/disk-error-handler.hh"
@@ -146,6 +147,8 @@ public:
         size_t column_index_size = 64 << 10;
         utils::updateable_value<uint32_t> column_index_auto_scale_threshold_in_kb = utils::updateable_value<uint32_t>(10240);
         utils::updateable_value<double> memory_reclaim_threshold = utils::updateable_value<double>(0.2);
+        utils::updateable_value<double> memory_reclaim_reload_headroom = utils::updateable_value<double>(0);
+        utils::updateable_value<uint32_t> memory_reclaim_min_residency_in_s = utils::updateable_value<uint32_t>(0);
         const std::vector<sstring>& data_file_directories;
         utils::updateable_value<sstring> format = utils::updateable_value<sstring>(fmt::to_string(sstable_version_types::me));
         utils::updateable_value<uint32_t> large_data_records_per_sstable = utils::updateable_value<uint32_t>(10);
@@ -178,6 +181,9 @@ private:
     // Condition variable that needs to be notified when an sstable is created or deleted
     seastar::condition_variable _components_memory_change_event;
     future<> _components_reloader_status = make_ready_future<>();
+    // Wakes up the reclaim/reload fiber periodically, so components held back
+    // by the minimum residency get reloaded once it passes.
+    timer<lowres_clock> _components_reload_timer;
 
     bool _closing = false;
     promise<> _done;

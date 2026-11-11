@@ -2365,6 +2365,7 @@ size_t sstable::reclaim_memory_from_components() {
 
     _total_reclaimable_memory.reset();
     _total_memory_reclaimed += memory_reclaimed_this_iteration;
+    _components_reclaimed_at = lowres_clock::now();
     return memory_reclaimed_this_iteration;
 }
 

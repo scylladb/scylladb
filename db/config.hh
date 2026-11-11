@@ -449,6 +449,8 @@ public:
     named_value<double> sstable_summary_ratio;
     named_value<uint64_t> sstable_summary_max_partitions_per_page;
     named_value<double> components_memory_reclaim_threshold;
+    named_value<double> components_memory_reclaim_reload_headroom;
+    named_value<uint32_t> components_memory_reclaim_min_residency_in_s;
     named_value<size_t> large_memory_allocation_warning_threshold;
     named_value<bool> enable_deprecated_partitioners;
     named_value<bool> enable_keyspace_column_family_metrics;

@@ -1508,6 +1508,12 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "A summary entry is forced (breaking the index page) once this many partitions accumulate, which prevents "
         "pathologically large index pages.")
     , components_memory_reclaim_threshold(this, "components_memory_reclaim_threshold", liveness::LiveUpdate, value_status::Used, .2, "Ratio of available memory for all in-memory components of SSTables in a shard beyond which the memory will be reclaimed from components until it falls back under the threshold. Currently, this limit is only enforced for bloom filters.")
+    , components_memory_reclaim_reload_headroom(this, "components_memory_reclaim_reload_headroom", liveness::LiveUpdate, value_status::Used, .05,
+        "Reclaimed sstable components (bloom filters) are loaded back into memory only while their memory stays below "
+        "components_memory_reclaim_threshold minus this fraction of it. Prevents reloading filters only to reclaim them again "
+        "as soon as the next sstable is written.")
+    , components_memory_reclaim_min_residency_in_s(this, "components_memory_reclaim_min_residency_in_s", liveness::LiveUpdate, value_status::Used, 300,
+        "Minimum time, in seconds, a reclaimed sstable component (bloom filter) stays reclaimed before it is loaded back into memory.")
     , large_memory_allocation_warning_threshold(this, "large_memory_allocation_warning_threshold", value_status::Used, (size_t(128) << 10) + 1, "Warn about memory allocations above this size; set to zero to disable.")
     , enable_deprecated_partitioners(this, "enable_deprecated_partitioners", value_status::Used, false, "Enable the byteordered and random partitioners. These partitioners are deprecated and will be removed in a future version.")
     , enable_keyspace_column_family_metrics(this, "enable_keyspace_column_family_metrics", value_status::Used, false, "Enable per keyspace and per column family metrics reporting.")

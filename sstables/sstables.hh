@@ -18,6 +18,7 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/enum.hh>
+#include <seastar/core/lowres_clock.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <unordered_set>
 #include <unordered_map>
@@ -703,6 +704,8 @@ private:
     mutable std::optional<size_t> _total_reclaimable_memory{0};
     // Total memory reclaimed so far from this sstable
     size_t _total_memory_reclaimed{0};
+    // When memory was last reclaimed from the components of this sstable.
+    lowres_clock::time_point _components_reclaimed_at;
     std::optional<db_clock::time_point> _unlinked_at;
     const bool _ignore_component_digest_mismatch;
 
@@ -859,6 +862,7 @@ private:
     future<> reload_reclaimed_components();
     // Disable reload of components for this sstable
     void disable_component_memory_reload();
+    lowres_clock::time_point components_reclaimed_at() const { return _components_reclaimed_at; }
 
     static bool is_component_rewrite_supported(component_type type);
     // Must be called in a seastar thread
