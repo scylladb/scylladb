@@ -16,6 +16,7 @@ import pytest
 import logging
 from test.pylib.tablets import get_tablet_count, get_tablet_replica
 from test.pylib.util import wait_for
+from test.pylib.rest_client import ScyllaMetricsLine
 
 logger = logging.getLogger(__name__)
 
@@ -878,6 +879,111 @@ async def test_automatic_compaction_skips_a_table_with_autocompaction_disabled(m
             if await table_segments("skipped") < skipped_segments:
                 return True
         await wait_for(compacted, time.time() + 60)
+
+@pytest.mark.parametrize("enable_later", [False, True])
+async def test_automatic_compaction_follows_the_utilization_threshold(manager: ScyllaClusterManager, enable_later: bool):
+    """
+    Automatic compaction compacts a segment only when at most logstor_compaction_utilization_threshold
+    of the segment is live. The test makes segments on both sides of the threshold in one table,
+    while the free level of a small disk is above the anchor. Compaction takes the segments under
+    the threshold without a request, and it leaves the segments over the threshold, although a
+    compaction of any batch with a net gain takes them.
+
+    With `enable_later`, automatic compaction of the table is off while the test makes the segments
+    over the threshold. Turning it on again must not compact them.
+    """
+    threshold = 0.5
+    # The fewest candidates that a group must have for a job above the anchor,
+    # min_segments_per_compaction.
+    min_batch = 8
+    # A segment holds 15 or 16 records, so each set of keys fills about 10 segments of the 64 of the
+    # disk, and the free level stays above the anchor.
+    keys_per_set = 160
+    value_size = 8000
+
+    cmdline = ['--logger-log-level', 'logstor=debug', '--smp=1']
+    cfg = {
+        'logstor_disk_size_in_mb': 8,
+        'logstor_file_size_in_mb': 1,
+        'logstor_compaction_utilization_threshold': threshold,
+        # A minimum at the threshold keeps the threshold constant above the anchor. The default
+        # curve falls to its minimum one segment above the anchor, which is not the threshold that
+        # this test is about.
+        'logstor_compaction_min_utilization_threshold': threshold,
+        'experimental_features': ['logstor']
+    }
+    server = await manager.server_add(cmdline=cmdline, config=cfg)
+    cql = manager.get_cql()
+
+    async def get(name: str) -> float:
+        metrics = await manager.metrics.query(server.ip_addr)
+        value = metrics.get(f"scylla_logstor_sm_{name}")
+        assert value is not None, f"{name} is not exported"
+        return float(value)
+
+    async def segments_at_most(utilization: float) -> float:
+        # The segment_utilization histogram is cumulative, so the bucket with the upper bound
+        # `utilization` counts the segments with at most that utilization.
+        metrics = await manager.metrics.query(server.ip_addr)
+        for line in metrics.lines_by_prefix("scylla_logstor_sm_segment_utilization_bucket"):
+            bucket = ScyllaMetricsLine.from_string(line)
+            if bucket is not None and float(bucket.labels["le"]) == pytest.approx(utilization):
+                return bucket.value
+        assert False, f"segment_utilization has no bucket with the upper bound {utilization}"
+
+    async with new_test_keyspace(manager, "WITH tablets={'initial':1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+        if enable_later:
+            await manager.api.disable_autocompaction(server.ip_addr, ks, "test")
+        stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, v) VALUES (?, ?)")
+
+        async def write(keys, value_char: str):
+            value = value_char * value_size
+            for pk in keys:
+                await cql.run_async(stmt, [pk, value])
+
+        # Set A fills its own segments, and then set B fills its own.
+        set_a = range(keys_per_set)
+        set_b = range(keys_per_set, 2 * keys_per_set)
+        await write(set_a, 'a')
+        await write(set_b, 'a')
+
+        # Overwrite a third of the records of each segment of A, which leaves A about 2/3 live, over
+        # the threshold, and two thirds of the records of each segment of B, which leaves B about
+        # 1/3 live, under the threshold.
+        await write([pk for pk in set_a if pk % 3 == 0], 'b')
+        if enable_later:
+            # Automatic compaction ranks the group when it is on again, and finds nothing under
+            # the threshold.
+            await manager.api.enable_autocompaction(server.ip_addr, ks, "test")
+            await asyncio.sleep(1)
+            assert await get("compaction_segments_in") == 0, "turning automatic compaction on compacted segments over the threshold"
+        await write([pk for pk in set_b if pk % 3 != 0], 'b')
+
+        # Compaction takes B on its own. A group keeps fewer candidates than the minimum batch.
+        async def compacted_under_threshold():
+            under = await segments_at_most(threshold)
+            if await get("compaction_segments_in") > 0 and under < min_batch:
+                return True
+        await wait_for(compacted_under_threshold, time.time() + 60)
+        assert await get("compaction_utilization_threshold") == pytest.approx(threshold)
+
+        # The end of each job makes the driver rank the group again at once, so the driver has
+        # ranked A after the last job. 8 segments of A hold less than 7 segments of live data, so a
+        # compaction that ignores the threshold takes them.
+        await asyncio.sleep(1)
+        # The bucket bound 13/16 is between the segments of A, which are about 2/3 live, and a full
+        # segment, which is more than 7/8 live.
+        a_max_utilization = 13 / 16
+        over = await segments_at_most(a_max_utilization) - await segments_at_most(threshold)
+        assert over >= min_batch, "compaction took segments over the threshold"
+
+        rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test")
+        assert len(rows) == 2 * keys_per_set
+        for row in rows:
+            in_a = row.pk < keys_per_set
+            overwritten = (row.pk % 3 == 0) if in_a else (row.pk % 3 != 0)
+            assert row.v == ('b' if overwritten else 'a') * value_size
 
 async def test_drop_table(manager: ScyllaClusterManager):
     """
