@@ -18,9 +18,9 @@
 #include "utils/sorting.hh"
 
 static ::shared_ptr<cql3::cql3_type::raw> parse_raw(const sstring& str) {
-    // In general it's a bad idea to use the default dialect, but type parsing
-    // should be dialect-agnostic.
-    return cql3::util::do_with_parser(str, cql3::dialect{},
+    // A stored type was accepted when it was created, so parse it under the
+    // internal dialect, without the client limits.
+    return cql3::util::do_with_parser(str, cql3::internal_dialect(),
         [] (cql3_parser::CqlParser& parser) {
             return parser.comparator_type(true);
         });

@@ -115,6 +115,7 @@ std::optional<user_type> create_type_statement::make_type(query_processor& qp) c
 
     auto type = create_type(db);
     check_for_duplicate_names(type);
+    cql3_type::check_nesting(*type, get_prepare_context().get_dialect().max_type_nesting);
     return type;
 }
 
