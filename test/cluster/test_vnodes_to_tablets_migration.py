@@ -3815,6 +3815,10 @@ async def test_migration_with_views(manager: ScyllaClusterManager, rf: int, num_
 
         logger.info("Starting vnodes-to-tablets migration (creating tablet maps)")
         await manager.api.create_vnode_tablet_migration(server.ip_addr, ks)
+        # The request returns once `server` applied the new tablet maps, but
+        # get_base_table() below may query another node, which may apply them
+        # later (SCYLLADB-6204). A read barrier on every node waits for that.
+        await asyncio.gather(*(read_barrier(manager.api, s.ip_addr) for s in servers))
 
         logger.info("Verifying the tablet maps of the base table and the views")
         await verify_tablet_map_boundaries(manager, server, ks, 'test', vnode_boundaries)
