@@ -52,6 +52,8 @@ struct segment_manager_config {
     // fragmentation and of not reserving space up front.
     bool sparse_files = false;
     bool compaction_enabled = true;
+    // The space floor as a fraction of the disk, see compaction_space_floor().
+    utils::updateable_value<double> compaction_space_floor{0.03};
     // A segment is a candidate for automatic compaction while its utilization is at most this.
     // A value outside [0, 1] applies as the nearest bound.
     utils::updateable_value<double> compaction_utilization_threshold{0.5};

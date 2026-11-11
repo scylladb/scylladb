@@ -75,6 +75,8 @@ public:
     };
 
     struct config {
+        // The space floor as a fraction of the disk, see compaction_space_floor().
+        utils::updateable_value<double> space_floor;
         // See utilization_threshold_curve.
         utils::updateable_value<double> utilization_threshold;
         seastar::scheduling_group sg;
@@ -127,11 +129,11 @@ private:
     bool _stopping{false};
     driver_stats _stats;
 
-    // compaction_space_floor() for this disk, and the limits derived from it. The segment count and
-    // the configured batch bound are fixed for the lifetime of the segment manager, so both are
-    // computed once, in start().
+    // compaction_space_floor() for this disk, and the limits derived from it. set_space_floor()
+    // computes them again when the configuration changes.
     uint64_t _space_floor{0};
     compaction_limits _limits{};
+    std::optional<utils::observer<double>> _space_floor_observer;
 
     // The future of run(), which starts once and runs for the lifetime of the shard.
     shared_future<> _completion{make_ready_future<>()};
@@ -153,17 +155,21 @@ private:
     // repeats, for example under memory pressure, then logs at most once in this time.
     static constexpr auto failure_retry_delay = std::chrono::seconds(1);
     // The reason the driver waits, and the condition variable that it waits on. A controller tick
-    // signals it when the backlog changes, and notify_group_idle() when a group can be ranked
-    // again. Nothing signals a wait after a failure, so only the delay or a stop ends it.
+    // signals it when the backlog changes, notify_group_idle() when a group can be ranked again,
+    // and the end of a job when the marginal admission gate waits for one. Nothing signals a wait
+    // after a failure, so only the delay or a stop ends it.
     enum class wait_reason {
         nothing,
         candidates,
         failure,
+        job_end,
     };
     wait_reason _wait{wait_reason::nothing};
     seastar::condition_variable _work_wanted;
     // Counts the calls of notify_group_idle(), so that a call while the driver ranks is not lost.
     uint64_t _idle_notifications{0};
+    // Counts the automatic jobs that ended, for the marginal admission gate.
+    uint64_t _jobs_ended{0};
     // The inputs of the selection that can give a group a batch. They are the segments under the
     // threshold, as the backlog estimates them, the dead segments, and the limits that decide how
     // many candidates a batch needs and can take. The dead segments count apart, because they do
@@ -209,6 +215,7 @@ private:
         std::optional<compaction_candidate_score> bar;
     };
 
+    void set_space_floor(double fraction) noexcept;
     void tick_rate_controller() noexcept;
     future<> wait_for_work(wait_reason, std::chrono::milliseconds timeout = wait_timeout);
     future<> run();

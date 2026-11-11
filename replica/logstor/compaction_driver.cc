@@ -48,13 +48,11 @@ compaction_driver::compaction_driver(host& h, config cfg)
 
 void compaction_driver::start(disk_geometry geometry) {
     _geometry = geometry;
-    _space_floor = compaction_space_floor(_geometry.segment_count);
-    _limits = make_compaction_limits(_space_floor);
-
-    _held_back.adopt(consume_units(_job_slots, max_auto_compaction_parallelism - _limits.auto_parallelism));
-
-    logstor_logger.debug("Compaction space floor {} segments, compaction parallelism {}, up to {} segments per compaction",
-            _space_floor, _limits.auto_parallelism, _limits.batch_cap);
+    set_space_floor(_cfg.space_floor());
+    _space_floor_observer.emplace(_cfg.space_floor.observe([this] (double fraction) {
+        logstor_logger.info("Updating the compaction space floor to {}", fraction);
+        set_space_floor(fraction);
+    }));
 
     tick_rate_controller();
     _rate_timer.arm_periodic(compaction_rate_control_period);
@@ -69,6 +67,29 @@ void compaction_driver::request_stop() noexcept {
     _stopping = true;
     _rate_timer.cancel();
     _work_wanted.broken();
+}
+
+void compaction_driver::set_space_floor(double fraction) noexcept {
+    if (fraction > max_space_floor_fraction) {
+        logstor_logger.warn("logstor_compaction_space_floor {} is above the maximum of {}. The maximum is used",
+                fraction, max_space_floor_fraction);
+    }
+    _space_floor = compaction_space_floor(_geometry.segment_count, fraction);
+    _limits = make_compaction_limits(_space_floor);
+
+    // The jobs in flight keep their slots. When the parallelism decreases, the semaphore goes below
+    // zero, and no job starts until enough of them end. After the stop, run() waits for all the slots.
+    if (!_stopping) {
+        const auto held_back = max_auto_compaction_parallelism - _limits.auto_parallelism;
+        if (_held_back.count() > held_back) {
+            _held_back.return_units(_held_back.count() - held_back);
+        } else {
+            _held_back.adopt(consume_units(_job_slots, held_back - _held_back.count()));
+        }
+    }
+
+    logstor_logger.debug("Compaction space floor {} segments, compaction parallelism {}, up to {} segments per compaction",
+            _space_floor, _limits.auto_parallelism, _limits.batch_cap);
 }
 
 future<> compaction_driver::stop() {
@@ -177,6 +198,19 @@ future<> compaction_driver::run_step(ranking_state& ranking) {
         co_return;
     }
 
+    // set_space_floor() can change the limits after the ranking, while rank() yields or while the
+    // candidates wait for a slot. A job with the old batch cap can hold more than its part of the
+    // new space floor, so the driver ranks again.
+    if (ranking.limits.batch_cap != _limits.batch_cap) {
+        ranking = {};
+        co_return;
+    }
+    // A lower parallelism can leave the slot of this step above the new limit. The slot goes back,
+    // and the semaphore keeps the next step waiting until enough jobs end.
+    if (_jobs_in_flight.size() >= _limits.auto_parallelism) {
+        co_return;
+    }
+
     auto c = std::move(ranking.candidates.back());
     ranking.candidates.pop_back();
     // can_start() confirms that the group is still registered, so the driver can read it.
@@ -247,8 +281,12 @@ std::optional<compaction_candidate_score> compaction_driver::admission_bar(const
 }
 
 future<> compaction_driver::wait_for_job_end() {
-    // The semaphore has one more free unit only when a job ends.
-    auto job_ended = co_await get_units(_job_slots, _job_slots.available_units() + 1);
+    // The wait counts the jobs that end, and not the free slots, because a change of the space
+    // floor also changes the slots.
+    const auto jobs_ended = _jobs_ended;
+    while (_jobs_ended == jobs_ended && !_stopping) {
+        co_await wait_for_work(wait_reason::job_end);
+    }
 }
 
 bool compaction_driver::refuse_marginal(const candidate& c, const compaction_candidate_score& admission_bar) {
@@ -273,6 +311,10 @@ void compaction_driver::start_job(candidate c, compaction_batch_limits limits, s
 
 void compaction_driver::on_job_end(std::list<compaction_candidate_score>::iterator job) noexcept {
     _jobs_in_flight.erase(job);
+    ++_jobs_ended;
+    if (_wait == wait_reason::job_end) {
+        _work_wanted.signal();
+    }
     notify_group_idle();
 }
 

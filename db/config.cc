@@ -1013,8 +1013,12 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , logstor_sparse_files(this, "logstor_sparse_files", value_status::Used, false,
         "Create logstor data files as sparse files. When disabled, each file is preallocated and fully written with zeros, guaranteeing space is available and avoiding fragmentation. "
         "When enabled, the file is only extended to its nominal size, so unwritten regions consume no disk space. Useful for tests, where the disk space and I/O of formatting files is wasteful.")
+    , logstor_compaction_space_floor(this, "logstor_compaction_space_floor", liveness::LiveUpdate, value_status::Used, 0.03,
+        "The free space, as a fraction of the logstor disk, at which logstor compaction takes any segment from which it can reclaim space, at logstor_compaction_max_shares. Writes can still use this space. "
+        "A smaller value leaves more of the disk for data, but less room for a burst of writes until compaction reclaims again. "
+        "It is at least two compaction batches and at most 0.25.")
     , logstor_compaction_utilization_threshold(this, "logstor_compaction_utilization_threshold", liveness::LiveUpdate, value_status::Used, 0.5,
-        "A logstor segment is compacted when the fraction of it that holds live data is at most this value, while about 6% of the segments are free. "
+        "A logstor segment is compacted when the fraction of it that holds live data is at most this value, while twice logstor_compaction_space_floor of the disk is free. "
         "Compaction runs while a compaction group has a batch of candidates with a net gain. Below that free level the threshold increases towards 1. A higher value frees space sooner, at a higher write amplification. "
         "A value of 0 compacts only segments with no live data, and a value of 1 compacts any segment from which compaction can reclaim space.")
     , logstor_compaction_max_shares(this, "logstor_compaction_max_shares", liveness::LiveUpdate, value_status::Used, 2000,
