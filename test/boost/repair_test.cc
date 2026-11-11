@@ -485,4 +485,68 @@ SEASTAR_TEST_CASE(test_row_hash_sketch_rejects_malformed) {
     co_return;
 }
 
+// Rebuilding a peer's set from its sketch: exact across a range of differences,
+// and rejected on a wrong combined hash.
+SEASTAR_TEST_CASE(test_decode_peer_row_hashes) {
+    std::mt19937_64 rng(3);
+    for (size_t d : {0, 1, 10, 100, 1000}) {
+        for (int trial = 0; trial < 5; ++trial) {
+            std::vector<repair_hash> rows;
+            for (int i = 0; i < 5000; ++i) {
+                rows.emplace_back(rng());
+            }
+            repair_hash_set reference(rows.begin(), rows.end());
+            repair_hash_set peer = reference;
+            for (size_t i = 0; i < d; ++i) {
+                if (i % 2) {
+                    peer.emplace(rng());
+                } else {
+                    peer.erase(rows[rng() % rows.size()]);
+                }
+            }
+            auto sketch = repair_hash_sketch::with_cells(std::max<size_t>(256, 2 * d));
+            repair_hash combined;
+            for (auto& h : peer) {
+                sketch.add(h.hash);
+                combined.add(h);
+            }
+            auto wrong = combined;
+            wrong.add(repair_hash(1));
+            BOOST_REQUIRE(!co_await decode_peer_row_hashes(reference, sketch, wrong));
+            size_t est = 0;
+            auto decoded = co_await decode_peer_row_hashes(reference, std::move(sketch), combined, &est);
+            BOOST_REQUIRE(decoded);
+            BOOST_REQUIRE(decoded->hashes == peer);
+            size_t expected = 0;
+            for (auto& h : reference) {
+                expected += !peer.contains(h);
+            }
+            for (auto& h : peer) {
+                expected += !reference.contains(h);
+            }
+            BOOST_REQUIRE_EQUAL(decoded->diff_size, expected);
+            if (d >= 100) {
+                BOOST_REQUIRE_GT(est, expected * 7 / 10);
+                BOOST_REQUIRE_LT(est, expected * 13 / 10);
+            }
+        }
+    }
+    // Malformed, and a difference far larger than the sketch.
+    repair_hash_set reference;
+    auto bad = repair_hash_sketch::with_cells(256);
+    bad.key_sums.pop_back();
+    BOOST_REQUIRE(!co_await decode_peer_row_hashes(reference, std::move(bad), repair_hash()));
+    auto small = repair_hash_sketch::with_cells(256);
+    repair_hash combined;
+    for (int i = 0; i < 2000; ++i) {
+        repair_hash h(rng());
+        small.add(h.hash);
+        combined.add(h);
+    }
+    size_t est = 0;
+    BOOST_REQUIRE(!co_await decode_peer_row_hashes(reference, std::move(small), combined, &est));
+    BOOST_REQUIRE_GT(est, 1400u);
+    BOOST_REQUIRE_LT(est, 2600u);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
