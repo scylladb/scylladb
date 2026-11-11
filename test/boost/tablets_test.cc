@@ -7980,6 +7980,119 @@ SEASTAR_TEST_CASE(test_rotate_memtables_keeps_flushed_position_behind) {
     }, tablet_cql_test_config());
 }
 
+// The sstables of a strongly consistent tablet are classified by its seals: compaction
+// never merges sstables from both sides of a seal, and merges them once the seal is promoted.
+//
+// Nothing seals the group yet, so the test stands in a provider which pretends the seals
+// are at the max timestamps of chosen sstables.
+SEASTAR_TEST_CASE(test_seal_sstable_classifier) {
+    cql_test_config cfg = tablet_cql_test_config();
+    cfg.db_config->experimental_features(
+        {db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES},
+        db::config::config_source::CommandLine
+    );
+
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("create keyspace sc_ks with replication = {'class': 'NetworkTopologyStrategy',"
+                      " 'replication_factor': 1} and tablets = {'initial': 1} and consistency = 'global'").get();
+        e.execute_cql("create table sc_ks.cf (pk int, ck int, v int, primary key (pk, ck))"
+                      " with compaction = {'class': 'NullCompactionStrategy'}").get();
+
+        const auto table = e.local_db().find_schema("sc_ks", "cf")->id();
+        const auto& tmap = e.local_db().get_token_metadata().tablets().get_tablet_map(table);
+        const auto tablet = tmap.first_tablet();
+        const auto shard = tmap.get_tablet_info(tablet).replicas[0].shard;
+        const auto range = tmap.get_token_range(tablet);
+
+        const auto write_rows = [&] (int from, int to) {
+            for (int ck = from; ck < to; ck++) {
+                e.execute_cql(format("insert into sc_ks.cf (pk, ck, v) values (0, {}, 1)", ck),
+                        std::make_unique<cql3::query_options>(db::consistency_level::QUORUM,
+                                std::vector<cql3::raw_value>{})).get();
+            }
+        };
+        const auto rotate = [&] {
+            e.db().invoke_on(shard, [&] (replica::database& db) {
+                db.find_column_family(table).rotate_memtables(range);
+            }).get();
+        };
+        const auto compact = [&] {
+            e.db().invoke_on(shard, [&] (replica::database& db) {
+                return db.find_column_family(table).compact_all_sstables(tasks::make_empty_task_info());
+            }).get();
+        };
+        // The max timestamps of the tablet's sstables, oldest first.
+        const auto max_timestamps = [&] {
+            return e.db().invoke_on(shard, [&] (replica::database& db) {
+                std::vector<api::timestamp_type> ts;
+                for (const auto& sst : *db.find_column_family(table).get_sstables()) {
+                    ts.push_back(sst->get_stats_metadata().max_timestamp);
+                }
+                std::ranges::sort(ts);
+                return ts;
+            }).get();
+        };
+        const auto pretend_seals = [&] (api::timestamp_type promoted, api::timestamp_type newest) {
+            e.db().invoke_on(shard, [&, promoted, newest] (replica::database& db) {
+                db.find_column_family(table).set_seal_boundaries_provider([promoted, newest] (raft::group_id) {
+                    return replica::seal_boundaries{.promoted = promoted, .newest = newest};
+                });
+            }).get();
+        };
+        // How many sstables tombstone GC consults when compacting the oldest one.
+        const auto gc_set_size_of_oldest = [&] {
+            return e.db().invoke_on(shard, [&] (replica::database& db) {
+                auto& t = db.find_column_family(table);
+                const auto oldest = std::ranges::min(*t.get_sstables(), {}, [] (const sstables::shared_sstable& sst) {
+                    return sst->get_stats_metadata().max_timestamp;
+                });
+                return t.compaction_group_view_for_sstable(oldest).sstable_set_for_tombstone_gc(*t.schema())->size();
+            }).get();
+        };
+
+        write_rows(0, 10);
+        rotate();
+        write_rows(10, 20);
+        replica::database::flush_table_on_all_shards(e.db(), "sc_ks", "cf").get();
+        BOOST_REQUIRE_EQUAL(max_timestamps().size(), 2);
+
+        // The group has no seals: everything is unrepaired and merges.
+        compact();
+        BOOST_REQUIRE_EQUAL(max_timestamps().size(), 1);
+
+        // Five more sstables, six with the merged one.
+        for (int i = 2; i < 7; i++) {
+            write_rows(i * 10, (i + 1) * 10);
+            if (i < 6) {
+                rotate();
+            }
+        }
+        replica::database::flush_table_on_all_shards(e.db(), "sc_ks", "cf").get();
+        const auto cuts = max_timestamps();
+        BOOST_REQUIRE_EQUAL(cuts.size(), 6);
+
+        // A promoted seal after the second sstable and a pending one after the fourth: two
+        // sstables in each tier. The repaired ones merge, the repairing ones are left alone,
+        // the unrepaired ones merge.
+        pretend_seals(cuts[1], cuts[3]);
+        // Tombstone GC of a repaired sstable consults the repaired sstables only, and the
+        // seals say which those are.
+        BOOST_REQUIRE_EQUAL(gc_set_size_of_oldest(), 2);
+        compact();
+        BOOST_REQUIRE(max_timestamps() == (std::vector{cuts[1], cuts[2], cuts[3], cuts[5]}));
+
+        // The pending seal is promoted: its sstables merge with the repaired ones.
+        pretend_seals(cuts[3], cuts[3]);
+        compact();
+        BOOST_REQUIRE(max_timestamps() == (std::vector{cuts[3], cuts[5]}));
+
+        // A promoted seal after the last sstable: all of it merges.
+        pretend_seals(cuts[5], cuts[5]);
+        compact();
+        BOOST_REQUIRE(max_timestamps() == (std::vector{cuts[5]}));
+    }, cfg);
+}
+
 // Tombstone GC of a strongly consistent table runs in repair mode, where the promoted seal
 // fences it, or not at all; the modes purging on time alone are refused.
 SEASTAR_TEST_CASE(test_strongly_consistent_table_tombstone_gc_mode) {

@@ -954,8 +954,28 @@ private:
         };
     }
 
+    // No sstable spans a seal, so the max timestamp says which seal interval it is in.
+    repair_classifier_func make_seal_sstable_classifier_func() const {
+        return [this] (const sstables::shared_sstable& sst, int64_t) {
+            const auto boundaries = _t.seal_boundaries_for(compaction_group_for_sstable(sst).token_range());
+            // Seals unknown, e.g. right after a restart: nothing may be compacted meanwhile.
+            if (!boundaries) {
+                return repair_sstable_classification::repairing;
+            }
+            const auto max_timestamp = sst->get_stats_metadata().max_timestamp;
+            if (max_timestamp <= boundaries->promoted) {
+                return repair_sstable_classification::repaired;
+            }
+            if (max_timestamp <= boundaries->newest) {
+                return repair_sstable_classification::repairing;
+            }
+            return repair_sstable_classification::unrepaired;
+        };
+    }
+
     storage_group_ptr allocate_storage_group(const locator::tablet_map& tmap, locator::tablet_id tid, dht::token_range range) const {
-        auto cg = make_lw_shared<compaction_group>(_t, tid.value(), std::move(range), make_repair_sstable_classifier_func());
+        auto classifier = tmap.has_raft_info() ? make_seal_sstable_classifier_func() : make_repair_sstable_classifier_func();
+        auto cg = make_lw_shared<compaction_group>(_t, tid.value(), std::move(range), std::move(classifier));
         auto sg = make_lw_shared<storage_group>(std::move(cg));
         if (tmap.needs_split()) {
             sg->set_split_mode();
@@ -6054,7 +6074,7 @@ lw_shared_ptr<sstables::sstable_set> compaction_group::make_repaired_sstable_set
     auto set = make_lw_shared<sstables::sstable_set>(make_main_sstable_set());
     auto sstables_repaired_at = get_sstables_repaired_at();
     for (auto& sst : *_main_sstables->all()) {
-        if (repair::is_repaired(sstables_repaired_at, sst)) {
+        if (_repair_sstable_classifier(sst, sstables_repaired_at) == repair_sstable_classification::repaired) {
             set->insert(sst);
         }
     }
