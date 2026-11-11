@@ -485,6 +485,33 @@ SEASTAR_TEST_CASE(test_row_hash_sketch_rejects_malformed) {
     co_return;
 }
 
+// A sketch folds into a smaller one of the same hashes, and is rebuilt exactly
+// from that smaller one plus an extension; a mismatched extension is rejected.
+SEASTAR_TEST_CASE(test_row_hash_sketch_extends) {
+    std::mt19937_64 rng(4);
+    for (size_t stride : {2, 3, 7}) {
+        auto small = repair_hash_sketch::with_cells(256);
+        auto big = repair_hash_sketch::with_cells(256 * stride);
+        for (int i = 0; i < 20000; ++i) {
+            auto h = rng();
+            small.add(h);
+            big.add(h);
+        }
+        auto folded = big.fold(256);
+        BOOST_REQUIRE(folded.counts == small.counts && folded.key_sums == small.key_sums && folded.check_sums == small.check_sums);
+        auto ext = big.strip(256);
+        BOOST_REQUIRE_EQUAL(ext.stride, stride);
+        BOOST_REQUIRE_EQUAL(ext.partial.cells(), 256 * (stride - 1));
+        auto grown = repair_hash_sketch::extended(small, ext);
+        BOOST_REQUIRE(grown);
+        BOOST_REQUIRE(grown->counts == big.counts && grown->key_sums == big.key_sums && grown->check_sums == big.check_sums);
+        BOOST_REQUIRE(!repair_hash_sketch::extended(repair_hash_sketch::with_cells(512), ext));
+        ext.stride = 1;
+        BOOST_REQUIRE(!repair_hash_sketch::extended(small, ext));
+    }
+    co_return;
+}
+
 // Rebuilding a peer's set from its sketch: exact across a range of differences,
 // and rejected on a wrong combined hash.
 SEASTAR_TEST_CASE(test_decode_peer_row_hashes) {
