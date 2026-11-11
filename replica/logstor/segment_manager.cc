@@ -409,7 +409,8 @@ public:
 
 private:
     // compaction_driver::host
-    future<compaction_driver::ranking> find_top_compaction_candidates(const compaction_batch_limits&, size_t max_candidates) override;
+    future<compaction_driver::ranking> find_top_compaction_candidates(const compaction_batch_limits&, size_t max_candidates,
+            compaction_driver::host::group_filter filter) override;
     bool can_start(const logstor_group*) const noexcept override;
     compaction_driver::shard_sample sample() const noexcept override;
 
@@ -1736,7 +1737,8 @@ compaction_reenabler compaction_manager_impl::disable_compaction_no_wait(logstor
 }
 
 future<compaction_driver::ranking>
-compaction_manager_impl::find_top_compaction_candidates(const compaction_batch_limits& limits, size_t max_candidates) {
+compaction_manager_impl::find_top_compaction_candidates(const compaction_batch_limits& limits, size_t max_candidates,
+        compaction_driver::host::group_filter filter) {
     top_compaction_candidates<compaction_driver::candidate> best_candidates(max_candidates);
 
     std::vector<logstor_group*> group_snapshot;
@@ -1754,7 +1756,7 @@ compaction_manager_impl::find_top_compaction_candidates(const compaction_batch_l
         }
 
         auto& state = *it->second;
-        if (state.running() || state.compaction_disabled_counter > 0) {
+        if (state.running() || state.compaction_disabled_counter > 0 || !filter(*cg)) {
             continue;
         }
 

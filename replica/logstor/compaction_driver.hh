@@ -16,6 +16,7 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/shared_future.hh>
+#include <seastar/util/noncopyable_function.hh>
 
 namespace replica::logstor {
 
@@ -46,12 +47,16 @@ public:
     // The services that the driver needs from the compaction manager.
     class host {
     public:
+        // Returns true when a ranking may take the group.
+        using group_filter = noncopyable_function<bool (const logstor_group&)>;
+
         virtual ~host() = default;
         // Returns true when compaction is enabled and admission is open.
         virtual bool can_submit_compaction() const noexcept = 0;
-        // Returns the best `max_candidates` groups, ranked by the batch that each group would run
-        // under `limits`.
-        virtual future<ranking> find_top_compaction_candidates(const compaction_batch_limits& limits, size_t max_candidates) = 0;
+        // Returns the best `max_candidates` of the groups that `filter` accepts, ranked by the
+        // batch that each group would run under `limits`.
+        virtual future<ranking> find_top_compaction_candidates(const compaction_batch_limits& limits, size_t max_candidates,
+                group_filter filter) = 0;
         // Returns true when the group of a candidate is still registered, idle and enabled. The
         // function only compares `group`, because the group can be gone.
         virtual bool can_start(const logstor_group* group) const noexcept = 0;

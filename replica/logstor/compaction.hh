@@ -489,6 +489,12 @@ public:
 
     virtual table_id table_id() const noexcept = 0;
 
+    // Returns true when automatic compaction of the table is off, for example after nodetool
+    // disableautocompaction. A compaction that is asked for explicitly still runs.
+    virtual bool automatic_compaction_disabled() const noexcept {
+        return false;
+    }
+
     virtual primary_index& logstor_index() noexcept = 0;
     virtual const primary_index& logstor_index() const noexcept = 0;
 

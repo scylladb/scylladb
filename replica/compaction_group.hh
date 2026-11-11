@@ -267,7 +267,11 @@ public:
     const std::vector<sstables::shared_sstable>& compacted_undeleted_sstables() const noexcept;
     // Triggers regular compaction.
     void trigger_compaction();
+    // Submits a compaction of the logstor segments of the group. It runs also when the user turned
+    // off automatic compaction of the table, as a major compaction of sstables does.
     void trigger_logstor_compaction();
+    // Returns true when the user turned off automatic compaction of the table.
+    bool is_auto_compaction_disabled_by_user() const noexcept;
     bool compaction_disabled() const;
     future<unsigned> estimate_pending_compactions() const;
 

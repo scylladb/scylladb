@@ -812,6 +812,71 @@ async def test_compaction(manager: ScyllaClusterManager):
             await manager.api.logstor_compaction(servers[0].ip_addr)
         await wait_for(segments_compacted, time.time() + 60)
 
+async def test_automatic_compaction_skips_a_table_with_autocompaction_disabled(manager: ScyllaClusterManager):
+    """
+    After disable_autocompaction on a logstor table, automatic compaction does not take the
+    segments of the table, and a compaction through the logstor compaction API still does.
+
+    A second table with automatic compaction on shows that automatic compaction ran. Its dead
+    segments are fewer than the dead segments of the first table, so a ranking that ignores the
+    setting takes the first table before the second.
+    """
+    cmdline = ['--logger-log-level', 'logstor=debug', '--smp=1']
+    cfg = {
+        'experimental_features': ['logstor'],
+        'logstor_disk_size_in_mb': 8,
+        'logstor_file_size_in_mb': 1,
+        'enable_keyspace_column_family_metrics': True,
+        # Automatic compaction starts only below the free-segment target. A target of 90% of the
+        # disk makes it run at the free level of this test.
+        'logstor_compaction_trigger_threshold': 0.9,
+    }
+    server = await manager.server_add(cmdline=cmdline, config=cfg)
+    cql = manager.get_cql()
+
+    async def segments_in() -> float:
+        metrics = await manager.metrics.query(server.ip_addr)
+        return metrics.get("scylla_logstor_sm_compaction_segments_in") or 0
+
+    async with new_test_keyspace(manager, "WITH tablets={'initial':1}") as ks:
+        async def table_segments(table: str) -> int:
+            metrics = await manager.metrics.query(server.ip_addr)
+            return int(metrics.get("scylla_column_family_logstor_segments", {'ks': ks, 'cf': table}) or 0)
+
+        async def overwrite(table: str, keys: int):
+            # A segment holds 15 or 16 records, and each key is written twice, so the segments of
+            # the first values hold only dead records.
+            stmt = cql.prepare(f"INSERT INTO {ks}.{table} (pk, v) VALUES (?, ?)")
+            for value in ['a' * 8000, 'b' * 8000]:
+                for i in range(keys):
+                    await cql.run_async(stmt, [i, value])
+
+        for table in ["skipped", "control"]:
+            await cql.run_async(f"CREATE TABLE {ks}.{table} (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+        await manager.api.disable_autocompaction(server.ip_addr, ks, "skipped")
+
+        # About 10 dead segments, more than the batch cap of this disk.
+        await overwrite("skipped", 160)
+        await manager.api.logstor_flush(server.ip_addr)
+        skipped_segments = await table_segments("skipped")
+        assert await segments_in() == 0, "automatic compaction took segments of a table with automatic compaction disabled"
+
+        # About 3 dead segments. A batch of dead segments copies nothing, and the ranking prefers
+        # the batch that reclaims more segments, so a job on this table shows that the driver
+        # ranked the groups while the table with automatic compaction off had the better batch.
+        await overwrite("control", 48)
+        async def automatic_compaction_ran():
+            if await segments_in() > 0:
+                return True
+        await wait_for(automatic_compaction_ran, time.time() + 60)
+        assert await table_segments("skipped") == skipped_segments, "automatic compaction took segments of a table with automatic compaction disabled"
+
+        await manager.api.logstor_compaction(server.ip_addr)
+        async def compacted():
+            if await table_segments("skipped") < skipped_segments:
+                return True
+        await wait_for(compacted, time.time() + 60)
+
 async def test_drop_table(manager: ScyllaClusterManager):
     """
     Test that DROP TABLE works properly with logstor tables.

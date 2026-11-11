@@ -1272,6 +1272,7 @@ public:
     explicit compaction_group_logstor_state(compaction_group& cg) noexcept;
 
     ::table_id table_id() const noexcept override;
+    bool automatic_compaction_disabled() const noexcept override;
 
     logstor::primary_index& logstor_index() noexcept override;
     const logstor::primary_index& logstor_index() const noexcept override;
@@ -1311,6 +1312,10 @@ logstor::primary_index& compaction_group_logstor_state::logstor_index() noexcept
 
 const logstor::primary_index& compaction_group_logstor_state::logstor_index() const noexcept {
     return _cg->get_logstor_index();
+}
+
+bool compaction_group_logstor_state::automatic_compaction_disabled() const noexcept {
+    return _cg->is_auto_compaction_disabled_by_user();
 }
 
 logstor::compaction_manager& compaction_group_logstor_state::logstor_compaction_manager() noexcept {
@@ -3036,9 +3041,13 @@ void compaction_group::trigger_compaction() {
 }
 
 void compaction_group::trigger_logstor_compaction() {
-    if (!_async_gate.is_closed() && !_t.is_auto_compaction_disabled_by_user() && _t.uses_logstor()) {
+    if (!_async_gate.is_closed() && _t.uses_logstor()) {
         get_logstor_compaction_manager().submit(as_logstor_group());
     }
+}
+
+bool compaction_group::is_auto_compaction_disabled_by_user() const noexcept {
+    return _t.is_auto_compaction_disabled_by_user();
 }
 
 void table::trigger_offstrategy_compaction() {

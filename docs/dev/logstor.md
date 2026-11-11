@@ -68,6 +68,7 @@ Only step 4 writes to the disk - all other steps only update in-memory metadata.
 3. Compaction picks segments for compaction from the segment set. It chooses segments with the lowest utilization such that compacting them results in net gain of free segments.
 4. It reads the segments, finding all live records, and writing them into a write buffer. When the buffer is full it is flushed into a new segment, and for each recording updating the index location to the new location.
 5. After all live records are rewritten the old segments are freed.
+6. Automatic compaction skips the compaction groups of a table whose automatic compaction is off, for example after `nodetool disableautocompaction`. A compaction that is asked for through the logstor compaction API still runs.
 
 ## Usage
 

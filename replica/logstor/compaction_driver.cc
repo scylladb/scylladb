@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 #include "replica/logstor/compaction_driver.hh"
+#include "replica/logstor/compaction.hh"
 #include <chrono>
 #include <exception>
 #include <utility>
@@ -16,6 +17,12 @@
 namespace replica::logstor {
 
 extern seastar::logger logstor_logger;
+
+// Returns true when automatic compaction may take the group. A table can turn it off, for example
+// with nodetool disableautocompaction.
+static bool automatic_compaction_allowed(const logstor_group& group) noexcept {
+    return !group.automatic_compaction_disabled();
+}
 
 compaction_driver::compaction_driver(host& h, config cfg)
     : _host(h)
@@ -119,7 +126,8 @@ future<> compaction_driver::run() {
         }
 
         if (pending.empty()) {
-            auto ranked = co_await _host.find_top_compaction_candidates(automatic_batch_limits(), parallelism);
+            auto ranked = co_await _host.find_top_compaction_candidates(automatic_batch_limits(), parallelism,
+                    automatic_compaction_allowed);
             pending = std::move(ranked.candidates);
             if (pending.empty()) {
                 co_await seastar::sleep(std::chrono::milliseconds(100));
@@ -129,8 +137,8 @@ future<> compaction_driver::run() {
 
         auto c = std::move(pending.back());
         pending.pop_back();
-
-        if (!_host.can_start(c.group)) {
+        // can_start() confirms that the group is still registered, so the driver can read it.
+        if (!_host.can_start(c.group) || !automatic_compaction_allowed(*c.group)) {
             continue;
         }
 
