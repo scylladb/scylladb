@@ -286,47 +286,7 @@ cleanup() {
     rm -f "${tmpfiles[@]}"
 }
 
-if [[ -n "$interactive" || -n "$is_podman" ]]; then
-    # If --interactive was given on the command line, we can't run in detached mode
-    # as it will be impossible to interact with the container.
-
-    # We also avoid detached mode with podman, which doesn't need it
-    # (it does not proxy SIGTERM) and doesn't work well with it.
-    $tool run --rm "${docker_common_args[@]}"
-    ret=$?
-    cleanup
-    exit $ret
-fi
-
-container=$(
-    $tool run \
-       "--detach=true" \
-       "${docker_common_args[@]}"
-)
-
-kill_it() {
-    if [[ -n "$container" ]]; then
-        $tool rm -f "$container" > /dev/null
-        container=
-    fi
-    cleanup
-}
-
-trap kill_it SIGTERM SIGINT SIGHUP EXIT
-
-$tool logs --follow "$container"
-
-if [[ -n "$container" ]]; then
-    exitcode="$($tool wait "$container")"
-else
-    exitcode=99
-fi
-
-kill_it
-
-trap - SIGTERM SIGINT SIGHUP EXIT
-
-# after "docker kill", docker wait will not print anything
-[[ -z "$exitcode" ]] && exitcode=1
-
-exit "$exitcode"
+$tool run --rm "${docker_common_args[@]}"
+ret=$?
+cleanup
+exit $ret
