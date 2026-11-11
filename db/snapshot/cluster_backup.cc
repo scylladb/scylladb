@@ -51,8 +51,12 @@ std::string db::snapshot::sstables_location(std::string_view prefix) {
 }
 
 std::string db::snapshot::snapshot_meta_location(std::string_view prefix, const replica::table& t, std::string_view snapshot_name) {
+    return snapshot_meta_location(prefix, t.schema()->ks_name(), t.schema()->cf_name(), snapshot_name);
+}
+
+std::string db::snapshot::snapshot_meta_location(std::string_view prefix, std::string_view ks_name, std::string_view cf_name, std::string_view snapshot_name) {
     auto pp = prefix.empty() ? "" : "/";
-    return fmt::format("{}{}{}/{}/{}/{}",  prefix, pp, "snapshots", t.schema()->ks_name(), t.schema()->cf_name(), snapshot_name);
+    return fmt::format("{}{}{}/{}/{}/{}",  prefix, pp, "snapshots", ks_name, cf_name, snapshot_name);
 }
 
 std::string db::snapshot::snapshot_prefix_from_manifest(std::string_view manifest_path) {
