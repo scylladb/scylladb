@@ -62,6 +62,7 @@ constexpr bool is_single_domain(scope_set scopes) {
 // Defined below, with the other parsers and validators.
 // Declared here so that the automatic scrub period option may take their address.
 config_value parse_auto_scrub_period_seconds(std::string_view value);
+config_value parse_bloom_filter_eviction_policy(std::string_view value);
 
 // The tablet repair scheduler reads auto_repair_enabled and auto_repair_threshold_in_seconds on demand.
 // When no scope stores an override it falls back to the deprecated yaml options
@@ -95,6 +96,19 @@ constexpr std::array registry_options = {
         .default_value = int64_t(0),
         .custom_parser = parse_auto_scrub_period_seconds,
         .custom_expected_description = "0 or an integer from 3600 to 4294967295",
+    },
+    // Consumed by the sstables manager of each shard, see sstables::bloom_filter_eviction_policy.
+    option{
+        .name = option_name::bloom_filter_eviction_policy,
+        .description = "How memory is reclaimed from the bloom filters of the table's sstables, when the bloom filters of a shard "
+                "use more memory than components_memory_reclaim_threshold. none: never, the filters stay in memory (but count "
+                "toward the threshold, so other tables give up more). evict: evict whole filters. downgrade: switch to a smaller "
+                "filter with a higher false-positive rate, if the sstable has one, evict otherwise. The filters which save the "
+                "least index lookups per byte of memory are reclaimed first",
+        .scopes = table_oriented_scopes,
+        .default_value = std::string_view("downgrade"),
+        .custom_parser = parse_bloom_filter_eviction_policy,
+        .custom_expected_description = "one of none, evict, downgrade",
     },
     // Migrated from the db::config option of the same name. The tablet load balancer reads
     // it on the group0 leader and applies it to the whole cluster, so only the CLUSTER scope
@@ -240,6 +254,16 @@ config_value parse_auto_scrub_period_seconds(std::string_view value) {
         throw marshal_exception("expected 0 or an integer between 3600 and 4294967295");
     }
     return parsed;
+}
+
+config_value parse_bloom_filter_eviction_policy(std::string_view value) {
+    // The returned view must outlive the value: return the literals.
+    for (std::string_view policy : {std::string_view("none"), std::string_view("evict"), std::string_view("downgrade")}) {
+        if (value == policy) {
+            return policy;
+        }
+    }
+    throw marshal_exception("expected one of none, evict, downgrade");
 }
 
 static std::optional<seastar::sstring> validate_with_custom_parser(const option& opt, std::string_view value) {

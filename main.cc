@@ -2062,6 +2062,32 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 });
             }).get();
 
+            static sharded<std::optional<db::cluster_config_manager::config_callback_registration>> bloom_filter_eviction_policy_registrations;
+            bloom_filter_eviction_policy_registrations.start(std::nullopt).get();
+            auto stop_bloom_filter_eviction_policy_registrations = defer_verbose_shutdown("bloom filter eviction policy config callbacks", [] {
+                bloom_filter_eviction_policy_registrations.stop().get();
+            });
+
+            const auto& bf_policy_opt = *db::cluster_config_registry::find(db::cluster_config_registry::option_name::bloom_filter_eviction_policy);
+            cluster_config_manager.invoke_on_all([&db, &bf_policy_opt] (db::cluster_config_manager& ccm) {
+                bloom_filter_eviction_policy_registrations.local() = ccm.register_config_callback(
+                        sstring(bf_policy_opt.name),
+                        [&db, &bf_policy_opt] (const db::cluster_config_manager::lookup_context& ctx, std::optional<sstring> value) {
+                    const auto& tables = db.local().get_tables_metadata();
+                    auto id = tables.get_table_id_if_exists({*ctx.keyspace_name, *ctx.table_name});
+                    if (!id) {
+                        return make_ready_future<>();
+                    }
+                    auto t = tables.get_table_if_exists(id);
+                    if (!t) {
+                        return make_ready_future<>();
+                    }
+                    auto policy = sstables::parse_bloom_filter_eviction_policy(db::cluster_config_registry::to_text(bf_policy_opt, value));
+                    t->get_sstables_manager().set_bloom_filter_eviction_policy(id, policy);
+                    return make_ready_future<>();
+                });
+            }).get();
+
             checkpoint(stop_signal, "starting repair service");
             auto max_memory_repair = memory::stats().total_memory() * 0.1;
             auto repair_config = sharded_parameter([&] {

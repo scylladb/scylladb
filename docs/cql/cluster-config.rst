@@ -197,6 +197,17 @@ Available options
        at that scope even if a broader scope enabled it, whereas ``NULL`` removes the value and
        falls back to the broader scope. See
        :doc:`Automatic Scrub </operating-scylla/procedures/maintenance/automatic-scrub>`.
+   * - ``bloom_filter_eviction_policy``
+     - text
+     - ``CLUSTER``, ``KEYSPACE``, ``TABLE``
+     - How memory is reclaimed from the bloom filters of the table's sstables when the bloom
+       filters of a shard use more memory than ``components_memory_reclaim_threshold``.
+       ``none``: never, the filters stay in memory (they still count toward the threshold, so
+       other tables give up more). ``evict``: evict whole filters. ``downgrade``: switch to a
+       smaller filter with a higher false-positive rate if the sstable has one, evict otherwise.
+       The filters which save the least index lookups per byte of memory are reclaimed first.
+       When every table is ``evict``, the filters are reclaimed largest-first, as before this
+       option existed. Default: ``downgrade``.
 
 .. _cql-cluster-config-yaml-options:
 
