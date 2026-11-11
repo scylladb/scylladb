@@ -706,6 +706,24 @@ private:
     size_t _total_memory_reclaimed{0};
     // When memory was last reclaimed from the components of this sstable.
     lowres_clock::time_point _components_reclaimed_at;
+
+public:
+    // A bloom filter variant available on disk for this sstable, see
+    // set_filter_level(). Level 0 is the filter built with the table's
+    // bloom_filter_fp_chance, the following ones are smaller, with higher
+    // false-positive rates.
+    struct filter_level_info {
+        size_t memory_size;
+        double fp_rate;
+    };
+private:
+    // The filter levels available on disk. Empty when the sstable has no
+    // filter (or it was not loaded), so there is nothing to reclaim.
+    std::vector<filter_level_info> _filter_levels;
+    // The level currently in memory, _filter_levels.size() means evicted.
+    unsigned _filter_level = 0;
+    lowres_clock::time_point _filter_level_changed_at;
+    bool _component_memory_reload_disabled = false;
     std::optional<db_clock::time_point> _unlinked_at;
     const bool _ignore_component_digest_mismatch;
 
@@ -785,6 +803,10 @@ private:
     void validate_sstable_identifier() const;
 
     future<> read_filter(sstable_open_config cfg = {});
+    // Read the bloom filter of the given level from disk.
+    future<utils::filter_ptr> read_filter_level(unsigned level);
+    // Set up _filter_levels after the sstable's filter was loaded.
+    void init_filter_levels();
 
     void write_filter();
     // Rebuild a bloom filter from the index with the given number of
@@ -863,6 +885,27 @@ private:
     // Disable reload of components for this sstable
     void disable_component_memory_reload();
     lowres_clock::time_point components_reclaimed_at() const { return _components_reclaimed_at; }
+    bool component_memory_reload_disabled() const { return _component_memory_reload_disabled; }
+
+    // Bloom filter levels: the filters available on disk which can be kept
+    // in memory, level 0 being the full one. Reclaiming memory from the
+    // filter means switching to a higher level, the level
+    // filter_level_count() meaning no filter in memory (evicted). Formats
+    // before `mu` have at most one level, so reclaiming means evicting.
+    unsigned filter_level_count() const { return _filter_levels.size(); }
+    unsigned filter_level() const { return _filter_level; }
+    bool filter_evicted() const { return _filter_level >= filter_level_count(); }
+    size_t filter_memory_at_level(unsigned level) const {
+        return level < _filter_levels.size() ? _filter_levels[level].memory_size : 0;
+    }
+    double filter_fp_rate_at_level(unsigned level) const {
+        return level < _filter_levels.size() ? _filter_levels[level].fp_rate : 1.0;
+    }
+    lowres_clock::time_point filter_level_changed_at() const { return _filter_level_changed_at; }
+    // Switch the in-memory filter to the given level: load it from disk or,
+    // for level filter_level_count(), drop it. Keeps the reclaim accounting
+    // of the sstable in sync. Returns the change of the filter memory.
+    future<ssize_t> set_filter_level(unsigned level);
 
     static bool is_component_rewrite_supported(component_type type);
     // Must be called in a seastar thread

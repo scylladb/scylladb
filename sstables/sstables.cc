@@ -39,6 +39,7 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/as_future.hh>
 
+#include "utils/bloom_calculations.hh"
 #include "utils/error_injection.hh"
 #include "utils/exceptions.hh"
 #include "utils/to_string.hh"
@@ -2092,6 +2093,7 @@ future<> sstable::open_data(sstable_open_config cfg) noexcept {
     _stats.on_open_for_reading();
 
     _total_reclaimable_memory.reset();
+    init_filter_levels();
     _manager.increment_total_reclaimable_memory(this);
 }
 
@@ -2366,6 +2368,8 @@ size_t sstable::reclaim_memory_from_components() {
     _total_reclaimable_memory.reset();
     _total_memory_reclaimed += memory_reclaimed_this_iteration;
     _components_reclaimed_at = lowres_clock::now();
+    _filter_level = filter_level_count();
+    _filter_level_changed_at = _components_reclaimed_at;
     return memory_reclaimed_this_iteration;
 }
 
@@ -2384,7 +2388,62 @@ future<> sstable::reload_reclaimed_components() {
     co_await read_filter();
     _total_reclaimable_memory.reset();
     _total_memory_reclaimed -= _components->filter->memory_size();
+    _filter_level = 0;
+    _filter_level_changed_at = lowres_clock::now();
     sstlog.info("Reloaded bloom filter of {}", get_filename());
+}
+
+future<utils::filter_ptr> sstable::read_filter_level(unsigned level) {
+    if (level != 0) {
+        on_internal_error(sstlog, format("{} has no bloom filter level {}", get_filename(), level));
+    }
+    return seastar::async([this] {
+        sstables::filter filter;
+        read_simple_and_verify_digest<component_type::Filter>(filter).get();
+        auto nr_bits = filter.buckets.elements.size() * std::numeric_limits<typename decltype(filter.buckets.elements)::value_type>::digits;
+        large_bitset bs(nr_bits, std::move(filter.buckets.elements));
+        return utils::filter::create_filter(filter.hashes, std::move(bs), get_filter_format(_version));
+    });
+}
+
+future<ssize_t> sstable::set_filter_level(unsigned level) {
+    if (_component_memory_reload_disabled || level == _filter_level || _filter_levels.empty()) {
+        co_return 0;
+    }
+    const ssize_t before = total_reclaimable_memory_size();
+    if (level >= filter_level_count()) {
+        reclaim_memory_from_components();
+        co_return ssize_t(total_reclaimable_memory_size()) - before;
+    }
+    auto filter = co_await read_filter_level(level);
+    if (_component_memory_reload_disabled) {
+        // No longer tracked (e.g. unlinked) while we were loading.
+        co_return 0;
+    }
+    _components->filter = std::move(filter);
+    _total_reclaimable_memory.reset();
+    const size_t full = _filter_levels[0].memory_size;
+    const size_t now = total_reclaimable_memory_size();
+    _total_memory_reclaimed = full > now ? full - now : 0;
+    _filter_level = level;
+    _filter_level_changed_at = lowres_clock::now();
+    co_return ssize_t(now) - before;
+}
+
+void sstable::init_filter_levels() {
+    _filter_levels.clear();
+    _filter_level = 0;
+    if (!_components->filter) {
+        return;
+    }
+    const size_t memory = _components->filter->memory_size();
+    if (memory == 0) {
+        // always-present filter: nothing in memory, nothing to reclaim
+        return;
+    }
+    namespace bc = utils::bloom_calculations;
+    auto spec = bc::compute_bloom_spec(int(bc::probs.size()) - 1, _schema->bloom_filter_fp_chance());
+    _filter_levels.push_back({memory, bc::probs[spec.buckets_per_element][spec.K]});
 }
 
 void sstable::disable_component_memory_reload() {
@@ -2394,6 +2453,7 @@ void sstable::disable_component_memory_reload() {
     }
 
     _total_memory_reclaimed = 0;
+    _component_memory_reload_disabled = true;
 }
 
 bool sstable::is_component_rewrite_supported(component_type type) {
@@ -2468,6 +2528,7 @@ future<> sstable::load(sstables::foreign_sstable_open_info info) noexcept {
     validate_partitioner();
     co_await update_info_for_opened_data();
     _total_reclaimable_memory.reset();
+    init_filter_levels();
     _manager.increment_total_reclaimable_memory(this);
 }
 
