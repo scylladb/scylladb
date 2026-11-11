@@ -9,6 +9,7 @@
 #include "replica/memtable.hh"
 #include "readers/from_fragments.hh"
 #include "repair/hash.hh"
+#include "repair/hash_sketch.hh"
 #include "repair/row.hh"
 #include "repair/writer.hh"
 #include "repair/reader.hh"
@@ -19,6 +20,8 @@
 #include "service/storage_proxy.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
 #include <boost/lexical_cast.hpp>
+#include <random>
+#include <set>
 #undef SEASTAR_TESTING_MAIN
 #include <seastar/testing/test_case.hh>
 #include <seastar/util/short_streams.hh>
@@ -406,6 +409,80 @@ SEASTAR_TEST_CASE(test_tablet_token_range_count) {
         BOOST_REQUIRE(co_await count_finished_tablets(r1, r2_empty) == 0);
         BOOST_REQUIRE(co_await count_finished_tablets(r1_empty, r2) == 0);
     }
+}
+
+// Two sketches of sets with a symmetric difference of d hashes; subtracting and
+// peeling must list exactly the difference once the sketch has 2 cells per hash.
+SEASTAR_TEST_CASE(test_row_hash_sketch_lists_difference) {
+    std::mt19937_64 rng(1);
+    for (size_t d : {0, 1, 3, 50, 500, 5000}) {
+        for (int trial = 0; trial < 10; ++trial) {
+            size_t cells = std::max<size_t>(256, 2 * d);
+            auto a = repair_hash_sketch::with_cells(cells);
+            auto b = repair_hash_sketch::with_cells(cells);
+            for (int i = 0; i < 20000; ++i) {
+                auto h = rng();
+                a.add(h);
+                b.add(h);
+            }
+            std::set<uint64_t> only_a, only_b;
+            for (size_t i = 0; i < d; ++i) {
+                auto h = rng();
+                if (i % 2) {
+                    a.add(h);
+                    only_a.insert(h);
+                } else {
+                    b.add(h);
+                    only_b.insert(h);
+                }
+            }
+            a.subtract(b);
+            auto diff = std::move(a).decode();
+            BOOST_REQUIRE(diff);
+            BOOST_REQUIRE(std::set<uint64_t>(diff->added.begin(), diff->added.end()) == only_a);
+            BOOST_REQUIRE(std::set<uint64_t>(diff->removed.begin(), diff->removed.end()) == only_b);
+        }
+    }
+    co_return;
+}
+
+// A sketch far too small to peel still estimates the difference it holds, for
+// hashes all on one side or on both sides. Relative deviation is about
+// sqrt(2 / cells), 9% at 256 cells.
+SEASTAR_TEST_CASE(test_row_hash_sketch_estimates_difference) {
+    std::mt19937_64 rng(2);
+    for (bool one_sided : {false, true}) {
+        for (size_t d : {300, 1000, 10000, 100000}) {
+            auto a = repair_hash_sketch::with_cells(256);
+            auto b = repair_hash_sketch::with_cells(256);
+            for (size_t i = 0; i < d; ++i) {
+                (one_sided || i % 2 ? a : b).add(rng());
+            }
+            a.subtract(b);
+            auto est = a.estimate_difference();
+            BOOST_REQUIRE_GT(est, 0.7 * d);
+            BOOST_REQUIRE_LT(est, 1.3 * d);
+            BOOST_REQUIRE(!std::move(a).decode());
+        }
+    }
+    co_return;
+}
+
+SEASTAR_TEST_CASE(test_row_hash_sketch_rejects_malformed) {
+    auto s = repair_hash_sketch::with_cells(256);
+    BOOST_REQUIRE(s.well_formed());
+    BOOST_REQUIRE_EQUAL(s.cells(), 256);
+    BOOST_REQUIRE_EQUAL(repair_hash_sketch::with_cells(5).cells(), 8);
+    s.key_sums.pop_back();
+    BOOST_REQUIRE(!s.well_formed());
+    BOOST_REQUIRE(!repair_hash_sketch{}.well_formed());
+    // Counts without hashes: nothing is pure and the cells do not empty.
+    auto bad = repair_hash_sketch::with_cells(256);
+    for (size_t i = 0; i < bad.cells(); ++i) {
+        bad.counts[i] = 1;
+    }
+    BOOST_REQUIRE(!std::move(bad).decode());
+    co_return;
 }
 
 BOOST_AUTO_TEST_SUITE_END()
