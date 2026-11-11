@@ -2641,17 +2641,30 @@ compaction_manager::rewrite_sstables_component(compaction_group_view& t,
     //      cross-CG routing mismatch), and
     //   2) no other operation can move them to a different CG or pick them up
     //      for a different compaction while the rewrite is in flight.
+    // Skip the stop on views with no candidate; the map runs each filter once (the merge filter logs).
+    std::unordered_map<sstables::shared_sstable, bool> matched;
+    for (auto& sst : co_await get_all_sstables(t)) {
+        matched.emplace(sst, filter(sst));
+        co_await coroutine::maybe_yield();
+    }
+    if (std::ranges::none_of(matched, [] (auto& e) { return e.second; })) {
+        co_return std::nullopt;
+    }
+
     std::vector<sstables::shared_sstable> sstables;
     compacting_sstable_registration compacting(*this, get_compaction_state(&t));
-    co_await run_with_compaction_disabled(t, [&t, &sstables, &compacting, &filter] () -> future<> {
+    co_await run_with_compaction_disabled(t, [&t, &sstables, &compacting, &filter, &matched] () -> future<> {
         auto candidates = co_await get_all_sstables(t);
         for (auto& sst : candidates) {
-            if (filter(sst)) {
+            auto it = matched.find(sst);
+            if (it != matched.end() ? it->second : filter(sst)) {
                 sstables.push_back(sst);
             }
         }
         compacting.register_compacting(sstables);
     }, "component_rewrite");
+    // Don't pin unselected sstables while the rewrite runs.
+    matched = {};
 
     if (sstables.empty()) {
         co_return std::nullopt;

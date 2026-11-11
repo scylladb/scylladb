@@ -12,6 +12,7 @@
 #include <seastar/core/future-util.hh>
 #include <seastar/core/align.hh>
 #include <seastar/core/condition-variable.hh>
+#include <seastar/core/sleep.hh>
 #include <seastar/core/loop.hh>
 #include <seastar/util/closeable.hh>
 #include <seastar/util/short_streams.hh>
@@ -7113,6 +7114,89 @@ SEASTAR_TEST_CASE(test_perform_component_rewrite_multiple_sstables) {
         // Verify that the 5 sstables we didn't rewrite still exist
         for (auto& sst : sstables_to_keep) {
             BOOST_REQUIRE(current_sstables->contains(sst));
+        }
+    });
+}
+
+// A component rewrite must not stop ongoing compactions of views that have no candidate.
+SEASTAR_TEST_CASE(test_component_rewrite_skips_barrier_on_views_without_candidates) {
+    return test_env::do_with_async([] (test_env& env) {
+        using namespace std::chrono_literals;
+        simple_schema ss;
+        auto s = ss.schema();
+        auto mut = mutation(s, ss.make_pkey(0));
+        mut.partition().apply_insert(*s, ss.make_ckey(0), ss.new_timestamp());
+        auto sst = make_sstable_containing(env.make_sstable(s), {mut}).get();
+
+        auto table = env.make_table_for_tests(s);
+        auto close_table = deferred_stop(table);
+        table->disable_auto_compaction().get();
+        table->add_sstable_and_update_cache(sst).get();
+
+        auto& holding = table->compaction_group_view_for_sstable(sst);
+        std::vector<compaction::compaction_group_view*> others;
+        table->parallel_foreach_compaction_group_view([&] (compaction::compaction_group_view& v) -> future<> {
+            if (&v != &holding) {
+                others.push_back(&v);
+            }
+            return make_ready_future<>();
+        }).get();
+        BOOST_REQUIRE(!others.empty());
+
+        auto& cm = table->get_compaction_manager();
+        auto modifier = [] (sstable& sst) {
+            sst.mutate_sstable_level(1);
+        };
+
+        // Hold a compaction on `view` until it is stopped or released; `stopped` is captured before returning.
+        auto hold = [&] (compaction::compaction_group_view& view, bool& started, bool& stopped, bool& release) {
+            return run_compaction_task(env, sstables::run_id::create_random_id(), view,
+                    [&started, &stopped, &release] (compaction::compaction_data& d) -> future<> {
+                started = true;
+                while (!release && !d.is_stop_requested()) {
+                    co_await seastar::sleep(1ms);
+                }
+                stopped = d.is_stop_requested();
+            });
+        };
+
+        auto wait_started = [] (bool& started) {
+            for (int i = 0; !started && i < 10000; ++i) {
+                seastar::sleep(1ms).get();
+            }
+            BOOST_REQUIRE(started);
+        };
+
+        // A rewrite on a view with no candidate must not stop that view's own compactions.
+        {
+            bool started = false, stopped = false, release = false;
+            auto held = hold(*others.front(), started, stopped, release);
+            {
+                // Drain before the bools go out of scope, even if wait_started() throws.
+                auto drain = defer([&] () noexcept { release = true; try { held.get(); } catch (...) {} });
+                wait_started(started);
+                auto res = cm.perform_component_rewrite(*others.front(), tasks::make_empty_task_info(),
+                        [] (const sstables::shared_sstable&) { return true; },
+                        component_type::Statistics, modifier).get();
+                BOOST_REQUIRE(res.empty());
+                BOOST_REQUIRE(!held.available());
+            }
+            BOOST_REQUIRE(!stopped);
+        }
+
+        // Positive control: the view with a candidate does stop its compactions.
+        {
+            bool started = false, stopped = false, release = false;
+            auto held = hold(holding, started, stopped, release);
+            {
+                auto drain = defer([&] () noexcept { release = true; try { held.get(); } catch (...) {} });
+                wait_started(started);
+                auto res = cm.perform_component_rewrite(holding, tasks::make_empty_task_info(),
+                        [sst] (const sstables::shared_sstable& c) { return c == sst; },
+                        component_type::Statistics, modifier).get();
+                BOOST_REQUIRE_EQUAL(res.size(), 1u);
+            }
+            BOOST_REQUIRE(stopped);
         }
     });
 }
