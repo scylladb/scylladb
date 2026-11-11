@@ -1075,3 +1075,215 @@ async def test_shutdown_during_repair_write(manager: ScyllaClusterManager, stora
             rows = await cql.run_async(SimpleStatement(f"SELECT pk, v FROM {ks}.test",
                                                        consistency_level=ConsistencyLevel.ONE), host=host)
             assert sorted((r.pk, r.v) for r in rows) == [(0, 0), (1, 1)]
+
+
+SKETCH_METRICS = ("rx_sketch_cells_nr", "sketch_decoded_nr", "sketch_fallback_nr", "sketch_extended_nr",
+                  "sketch_reference_hit_nr", "sketch_in_sync_nr", "sketch_declined_nr", "rx_hashes_nr", "rx_row_nr")
+
+
+async def sketch_metrics(manager, servers):
+    """Repair sketch metrics per server id."""
+    out = {}
+    for s in servers:
+        m = await manager.metrics.query(s.ip_addr)
+        out[s.server_id] = {k: m.get(f"scylla_repair_{k}") or 0 for k in SKETCH_METRICS}
+    return out
+
+
+async def repair_metrics_delta(manager, servers, repair):
+    """Runs repair() and returns (master, delta): the master is the server that
+    received the sketches, or the row hash lists, and delta its metrics delta.
+    Followers also count received hashes (the ones the master pulls by), so the
+    master is the one with the most sketch activity, then the most hashes."""
+    before = await sketch_metrics(manager, servers)
+    await repair()
+    after = await sketch_metrics(manager, servers)
+    delta = {sid: {k: after[sid][k] - before[sid][k] for k in SKETCH_METRICS} for sid in after}
+    master = max(delta, key=lambda sid: (delta[sid]["rx_sketch_cells_nr"] + delta[sid]["sketch_in_sync_nr"] + delta[sid]["sketch_declined_nr"], delta[sid]["rx_hashes_nr"]))
+    return master, delta[master]
+
+
+async def rows_received(manager, servers):
+    return sum(v["rx_row_nr"] for v in (await sketch_metrics(manager, servers)).values())
+
+
+async def sketch_servers(manager, config=None):
+    """3 nodes, one shard each, no hints."""
+    cmdline = ["--smp", "1", "--hinted-handoff-enabled", "0"]
+    servers = await manager.servers_add(3, cmdline=cmdline, config=config or {}, auto_rack_dc="dc1")
+    cql = manager.get_cql()
+    await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    return servers, cql
+
+
+def sketch_keyspace(manager, tablets):
+    tablets_opt = "{'initial': 1}" if tablets else "{'enabled': false}"
+    return new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 3}} AND tablets = {tablets_opt}")
+
+
+async def fill_table(cql, ks, rows):
+    cql.execute(f"CREATE TABLE {ks}.tbl (pk int PRIMARY KEY, v int)")
+    insert = cql.prepare(f"INSERT INTO {ks}.tbl (pk, v) VALUES (?, ?)")
+    insert.consistency_level = ConsistencyLevel.ALL
+    for start in range(0, rows, 2000):
+        await asyncio.gather(*[cql.run_async(insert, (pk, pk)) for pk in range(start, min(rows, start + 2000))])
+
+
+async def write_skipping(manager, cql, ks, skipped, pks, cl, value):
+    """Writes (pk, value(pk)) for pk in pks while the replicas in `skipped` fail to apply."""
+    for s in skipped:
+        await manager.api.enable_injection(s.ip_addr, "database_apply", False, parameters={"ks_name": ks, "cf_name": "tbl", "what": "throw"})
+    stmt = cql.prepare(f"INSERT INTO {ks}.tbl (pk, v) VALUES (?, ?)")
+    stmt.consistency_level = cl
+    await asyncio.gather(*[cql.run_async(stmt, (pk, value(pk))) for pk in pks])
+    for s in skipped:
+        await manager.api.disable_injection(s.ip_addr, "database_apply")
+
+
+async def flush_all(manager, servers, ks):
+    for s in servers:
+        await manager.api.keyspace_flush(s.ip_addr, ks)
+
+
+def repair_call(manager, servers, ks, tablets):
+    if tablets:
+        return lambda: manager.api.tablet_repair(servers[0].ip_addr, ks, "tbl", "all", incremental_mode="disabled")
+    return lambda: manager.api.repair(servers[0].ip_addr, ks, "tbl")
+
+
+@pytest.mark.parametrize("tablets", [True, False])
+@pytest.mark.parametrize("decode_fails", [False, True])
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_repair_row_hash_sketch(manager: ScyllaClusterManager, tablets: bool, decode_fails: bool):
+    """One replica diverges both ways (rows it has newer versions of, and rows only
+    it has). Its sketch decodes and it streams no row hash list; the other replica
+    matches the master and sends nothing. With decoding made to fail by error
+    injection the master falls back to the list. A second repair moves no rows.
+    The vnode case uses one token per node, so three ranges of 2000 rows."""
+    servers, cql = await sketch_servers(manager, None if tablets else {"num_tokens": 1})
+    rows = 2000 if tablets else 6000
+    async with sketch_keyspace(manager, tablets) as ks:
+        await fill_table(cql, ks, rows)
+        await write_skipping(manager, cql, ks, servers[2:], range(0, 20), ConsistencyLevel.QUORUM, lambda pk: -pk)
+        await write_skipping(manager, cql, ks, servers[:2], range(20, 40), ConsistencyLevel.ONE, lambda pk: -pk)
+        await flush_all(manager, servers, ks)
+        if decode_fails:
+            for s in servers:
+                await manager.api.enable_injection(s.ip_addr, "repair_row_hash_sketch_decode_fail", one_shot=False)
+
+        repair = repair_call(manager, servers, ks, tablets)
+        master, m = await repair_metrics_delta(manager, servers, repair)
+        if tablets:
+            # 80 differing hashes fit the 256-cell sketch; the other follower is in sync.
+            assert m["rx_sketch_cells_nr"] == 256 and m["sketch_in_sync_nr"] == 1, m
+            if decode_fails:
+                assert m["sketch_decoded_nr"] == 0 and m["sketch_fallback_nr"] == 1, m
+                assert m["rx_hashes_nr"] >= rows, m
+            else:
+                assert m["sketch_decoded_nr"] == 1 and m["sketch_fallback_nr"] == 0, m
+                assert m["rx_hashes_nr"] < rows, m
+        else:
+            # Three ranges of unequal size: a small one may decline the sketch.
+            assert m["sketch_in_sync_nr"] >= 1, m
+            if decode_fails:
+                assert m["sketch_decoded_nr"] == 0 and m["sketch_fallback_nr"] >= 1, m
+            else:
+                assert m["sketch_decoded_nr"] >= 1 and m["sketch_fallback_nr"] == 0, m
+                assert m["rx_hashes_nr"] < rows, m
+
+        rx_rows = await rows_received(manager, servers)
+        await repair()
+        assert await rows_received(manager, servers) == rx_rows
+
+
+async def test_repair_row_hash_sketch_extended(manager: ScyllaClusterManager):
+    """A difference larger than the first sketch decodes once the sketch is extended
+    to a size from the first one's estimate, and the follower streams no row hash list."""
+    servers, cql = await sketch_servers(manager)
+    rows = 20000
+    async with sketch_keyspace(manager, True) as ks:
+        await fill_table(cql, ks, rows)
+        # 500 rows overwritten on the last replica only: 1000 differing hashes.
+        await write_skipping(manager, cql, ks, servers[:2], range(500), ConsistencyLevel.ONE, lambda pk: -pk)
+        await flush_all(manager, servers, ks)
+
+        master, m = await repair_metrics_delta(manager, servers, repair_call(manager, servers, ks, True))
+        assert m["sketch_extended_nr"] == 1 and m["sketch_decoded_nr"] == 1 and m["sketch_fallback_nr"] == 0, m
+        # 1.7 x an estimate of 1000 within about 20%, rounded up to a multiple of the
+        # 256-cell first sketch, minus the 256 cells the master already has.
+        assert 256 + 4 * 256 <= m["rx_sketch_cells_nr"] <= 256 + 8 * 256, m
+        assert m["rx_hashes_nr"] < rows, m
+
+
+async def test_repair_row_hash_sketch_declined(manager: ScyllaClusterManager):
+    """A follower whose row hash list is smaller than the requested sketch sends no
+    sketch, and the master streams the list."""
+    servers, cql = await sketch_servers(manager)
+    async with sketch_keyspace(manager, True) as ks:
+        await fill_table(cql, ks, 200)   # 200 x 8 bytes < 256 x 12
+        await write_skipping(manager, cql, ks, servers[:2], range(10), ConsistencyLevel.ONE, lambda pk: -pk)
+        await flush_all(manager, servers, ks)
+
+        master, m = await repair_metrics_delta(manager, servers, repair_call(manager, servers, ks, True))
+        assert m["sketch_declined_nr"] == 1 and m["rx_sketch_cells_nr"] == 0, m
+        assert m["sketch_decoded_nr"] == 0 and m["sketch_fallback_nr"] == 0, m
+        assert m["rx_hashes_nr"] >= 200, m
+
+
+async def test_repair_row_hash_sketch_reference(manager: ScyllaClusterManager):
+    """Two replicas missing the same rows, twice. When the up-to-date replica is the
+    master, the second follower's sketch is peeled against the first follower's: on
+    the first, cold repair against its sketch, on the second against the rows it
+    recovered, with a first sketch of the minimum size thanks to the history kept
+    per table and host pair. When a stale replica is the master, the other stale
+    one matches it and sends no sketch."""
+    servers, cql = await sketch_servers(manager)
+    rows = 20000
+    async with sketch_keyspace(manager, True) as ks:
+        await fill_table(cql, ks, rows)
+        repair = repair_call(manager, servers, ks, True)
+
+        # 500 rows only the first replica has: 500 differing hashes, over the 256-cell first sketch.
+        await write_skipping(manager, cql, ks, servers[1:], range(rows, rows + 500), ConsistencyLevel.ONE, lambda pk: pk)
+        await flush_all(manager, servers, ks)
+        master, m = await repair_metrics_delta(manager, servers, repair)
+        fresh_master = master == servers[0].server_id
+        assert m["sketch_fallback_nr"] == 0 and m["rx_hashes_nr"] < rows, m
+        assert m["sketch_extended_nr"] == 1, m
+        if fresh_master:
+            assert m["sketch_decoded_nr"] == 2 and m["sketch_reference_hit_nr"] == 1, m
+        else:
+            assert m["sketch_decoded_nr"] == 1 and m["sketch_in_sync_nr"] == 1, m
+
+        await write_skipping(manager, cql, ks, servers[1:], range(rows + 500, rows + 1000), ConsistencyLevel.ONE, lambda pk: pk)
+        await flush_all(manager, servers, ks)
+        master2, m = await repair_metrics_delta(manager, servers, repair)
+        assert master2 == master
+        assert m["sketch_fallback_nr"] == 0 and m["sketch_extended_nr"] == 0 and m["rx_hashes_nr"] < rows, m
+        if fresh_master:
+            # The first follower's sketch is sized from history (1.5 x 500 cells, rounded to 752) and decodes
+            # against the master; the second follower's history against the first is zero,
+            # so it sends the 256-cell minimum and decodes against the first follower's rows.
+            assert m["sketch_decoded_nr"] == 2 and m["sketch_reference_hit_nr"] == 1, m
+            assert m["rx_sketch_cells_nr"] == 752 + 256, m
+        else:
+            assert m["sketch_decoded_nr"] == 1 and m["sketch_in_sync_nr"] == 1, m
+            assert m["rx_sketch_cells_nr"] == 752, m
+
+        rx_rows = await rows_received(manager, servers)
+        await repair()
+        assert await rows_received(manager, servers) == rx_rows
+
+
+async def test_repair_row_hash_sketch_disabled(manager: ScyllaClusterManager):
+    """With enable_repair_row_hash_sketch off the master asks for no sketch and
+    streams the row hash list."""
+    servers, cql = await sketch_servers(manager, {"enable_repair_row_hash_sketch": False})
+    async with sketch_keyspace(manager, True) as ks:
+        await fill_table(cql, ks, 2000)
+        await write_skipping(manager, cql, ks, servers[:2], range(20), ConsistencyLevel.ONE, lambda pk: -pk)
+        await flush_all(manager, servers, ks)
+
+        master, m = await repair_metrics_delta(manager, servers, repair_call(manager, servers, ks, True))
+        assert m["rx_sketch_cells_nr"] == 0 and m["sketch_decoded_nr"] == 0 and m["sketch_fallback_nr"] == 0, m
+        assert m["rx_hashes_nr"] >= 2000, m

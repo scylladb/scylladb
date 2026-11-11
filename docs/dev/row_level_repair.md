@@ -78,7 +78,9 @@ set as the current_sync_boundary.
 
 Request combined hashes from all nodes between last_sync_boundary and
 current_sync_boundary. If the combined hashes from all nodes are identical,
-data is synced, goto Step A. If not, request the full hashes from peers.
+data is synced, goto Step A. If not, decode the row hash sketches that came
+with the combined hashes (see [repair_row_hash_sketch.md](repair_row_hash_sketch.md)),
+and request the full hashes from the peers whose sketch did not decode.
 
 At this point, the repair master knows exactly what rows are missing. Request the
 missing rows from peer nodes.
