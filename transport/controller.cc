@@ -272,7 +272,14 @@ future<> controller::do_start_server() {
               .cql_in_bind_variable_name_uses_uppercase_operator = cfg.cql_in_bind_variable_name_uses_uppercase_operator,
               .uninitialized_connections_semaphore_cpu_concurrency = cfg.uninitialized_connections_semaphore_cpu_concurrency,
               .request_timeout_on_shutdown_in_seconds = cfg.request_timeout_on_shutdown_in_seconds,
+              // Hold a reconnect burst, but no more than the node can initialize before
+              // clients time out (~5 s). A shard completes ~65 TLS handshakes and logins
+              // per second, so 64 per shard drains in ~1 s with the whole CPU. The 5x
+              // margin covers sl:driver getting only part of the CPU under load. 4096 is
+              // the default net.core.somaxconn, which caps the backlog anyway.
               .listen_backlog = cfg.native_transport_listen_backlog()
+                      ? cfg.native_transport_listen_backlog()
+                      : std::min(64 * this_smp_shard_count(), 4096u)
             };
         });
 

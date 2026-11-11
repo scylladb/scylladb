@@ -1275,8 +1275,9 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Like native_transport_port_proxy_protocol, but clients-side port number (modulo smp) is used to route the connection to the specific shard.")
     , native_shard_aware_transport_port_ssl_proxy_protocol(this, "native_shard_aware_transport_port_ssl_proxy_protocol", value_status::Used, 0,
         "Like native_transport_port_ssl_proxy_protocol, but clients-side port number (modulo smp) is used to route the connection to the specific shard.")
-    , native_transport_listen_backlog(this, "native_transport_listen_backlog", liveness::MustRestart, value_status::Used, 100,
+    , native_transport_listen_backlog(this, "native_transport_listen_backlog", liveness::MustRestart, value_status::Used, 0,
         "Length of the accept queue of the CQL native transport listening sockets, i.e. the backlog passed to listen(). "
+        "By default (or when set to 0), 64 per shard, capped at 4096. "
         "When the queue is full, the kernel drops incoming connection requests and clients retransmit them after a delay. "
         "Raise it if the TcpExtListenOverflows kernel counter grows during client connection storms. "
         "The kernel caps the value at net.core.somaxconn.")
