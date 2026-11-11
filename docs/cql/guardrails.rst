@@ -151,7 +151,8 @@ Write Consistency Level Guardrails
 
 These two parameters control which consistency levels (CL) are allowed for
 write operations (``INSERT``, ``UPDATE``, ``DELETE``, and ``BATCH``
-statements).
+statements). They apply only to writes sent by clients. Writes that ScyllaDB
+issues internally are not affected.
 
 Be aware that adding warnings to CQL responses can significantly increase
 network traffic and reduce overall throughput.
@@ -201,7 +202,7 @@ guardrail violations:
 
 Additionally, ScyllaDB exposes the
 ``scylla_cql_writes_per_consistency_level`` metric, labeled by consistency
-level, which tracks the total number of write requests per CL. This metric is
+level, which tracks the total number of client write requests per CL. This metric is
 useful for understanding the current write-CL distribution across the cluster
 *before* deciding which levels to warn on or disallow. For example, querying
 this metric can reveal whether any application is inadvertently using ``ANY``
