@@ -27,6 +27,7 @@
 #include "mutation/frozen_mutation.hh"
 #include "utils/hash.hh"
 #include "repair/hash.hh"
+#include "repair/hash_sketch.hh"
 #include "utils/stall_free.hh"
 #include "repair/sync_boundary.hh"
 #include "tasks/types.hh"
@@ -188,6 +189,21 @@ struct get_sync_boundary_response {
 
 // Return value of the REPAIR_GET_COMBINED_ROW_HASH RPC verb
 using get_combined_row_hash_response = repair_hash;
+
+// REPAIR_GET_COMBINED_ROW_HASH_AND_SKETCH: the master's own combined hash, and the
+// sketch size it wants back.
+struct repair_sketch_request {
+    repair_hash master_hash;
+    uint32_t cells;
+};
+
+// Its reply: the follower's combined hash, and a sketch of its working rows
+// unless its hash matches the master's or the sketch would cost more than the
+// full hash list.
+struct repair_sketch_response {
+    repair_hash hash;
+    std::optional<repair_hash_sketch> sketch;
+};
 
 struct node_repair_meta_id {
     locator::host_id ip;

@@ -31,6 +31,22 @@ class repair_sync_boundary {
     position_in_partition position;
 };
 
+struct repair_hash_sketch {
+    utils::chunked_vector<int16_t> counts;
+    utils::chunked_vector<uint64_t> key_sums;
+    utils::chunked_vector<uint16_t> check_sums;
+};
+
+struct repair_sketch_request {
+    repair_hash master_hash;
+    uint32_t cells;
+};
+
+struct repair_sketch_response {
+    repair_hash hash;
+    std::optional<repair_hash_sketch> sketch;
+};
+
 struct get_sync_boundary_response {
     std::optional<repair_sync_boundary> boundary;
     repair_hash row_buf_combined_csum;
@@ -109,6 +125,7 @@ verb [[with_client_info]] repair_update_system_table (repair_update_system_table
 verb [[with_client_info]] repair_flush_hints_batchlog (repair_flush_hints_batchlog_request req [[ref]]) -> repair_flush_hints_batchlog_response;
 verb [[with_client_info]] repair_get_full_row_hashes (uint32_t repair_meta_id, shard_id dst_shard_id [[version 5.2]]) -> repair_hash_set;
 verb [[with_client_info]] repair_get_combined_row_hash (uint32_t repair_meta_id, std::optional<repair_sync_boundary> common_sync_boundary, shard_id dst_shard_id [[version 5.2]]) -> get_combined_row_hash_response;
+verb [[with_client_info]] repair_get_combined_row_hash_and_sketch (uint32_t repair_meta_id, std::optional<repair_sync_boundary> common_sync_boundary, shard_id dst_shard_id, repair_sketch_request request) -> repair_sketch_response;
 verb [[with_client_info]] repair_get_sync_boundary (uint32_t repair_meta_id, std::optional<repair_sync_boundary> skipped_sync_boundary, shard_id dst_shard_id [[version 5.2]]) -> get_sync_boundary_response;
 verb [[with_client_info]] repair_get_row_diff (uint32_t repair_meta_id, repair_hash_set set_diff, bool needs_all_rows, shard_id dst_shard_id [[version 5.2]]) -> repair_rows_on_wire;
 verb [[with_client_info]] repair_put_row_diff (uint32_t repair_meta_id, repair_rows_on_wire row_diff, shard_id dst_shard_id [[version 5.2]]);

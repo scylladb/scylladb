@@ -8,6 +8,12 @@
 
 #pragma once
 
+#include <array>
+#include <limits>
+#include <tuple>
+#include <unordered_map>
+#include "utils/hash.hh"
+
 #include <vector>
 #include "gms/gossip_address_map.hh"
 #include "gms/inet_address.hh"
@@ -113,8 +119,46 @@ struct repair_task_progress {
 
 class repair_service : public seastar::peering_sharded_service<repair_service> {
 public:
+    // Row hash differences a repair of a table measured between two hosts' rows
+    // (the master's at compare time, or another follower's) in the last rounds
+    // where the follower differed from the master, zeros included. Sizes the
+    // first sketch of a round. Kept for the process lifetime, so the next repair
+    // of the table starts from what the last one saw. Empty means unknown.
+    struct sketch_history {
+        std::array<uint32_t, 4> diffs{};
+        uint8_t next = 0;
+        uint8_t count = 0;
+        void record(size_t d) {
+            diffs[next++ % diffs.size()] = std::min<size_t>(d, std::numeric_limits<uint32_t>::max() / 4);
+            count = std::min<uint8_t>(count + 1, diffs.size());
+        }
+        bool known() const {
+            return count > 0;
+        }
+        // 1.5 cells per differing hash, at least 256. The k=4 decode fails under
+        // 0.2% of the time at 1.5x from 256 differences up, and a failed decode is
+        // retried with a sketch sized from its own estimate.
+        uint32_t cells() const {
+            uint32_t d = 0;
+            for (unsigned i = 0; i < count; ++i) {
+                d = std::max(d, diffs[i]);
+            }
+            return std::max<uint32_t>(256, d + d / 2);
+        }
+    };
+    // The difference between two hosts' rows is symmetric, so the pair is
+    // unordered: the same history serves whichever of the two is the master.
+    sketch_history& get_sketch_history(table_id t, locator::host_id a, locator::host_id b) {
+        // Entries of dropped tables are never removed; keep the map bounded.
+        if (!_sketch_history.contains(t) && _sketch_history.size() >= 1024) {
+            _sketch_history.clear();
+        }
+        return _sketch_history[t][std::make_tuple(std::min(a, b), std::max(a, b))];
+    }
+
     struct config {
         utils::updateable_value<bool> enable_small_table_optimization_for_rbno = utils::updateable_value<bool>(true);
+        utils::updateable_value<bool> enable_repair_row_hash_sketch = utils::updateable_value<bool>(true);
         utils::updateable_value<uint64_t> small_table_optimization_for_rbno_max_table_size = utils::updateable_value<uint64_t>(1073741824);
         utils::updateable_value<uint32_t> repair_hints_batchlog_flush_cache_time_in_ms = utils::updateable_value<uint32_t>(60*1000);
         utils::updateable_value<double> repair_partition_count_estimation_ratio = utils::updateable_value<double>(0.1);
@@ -124,6 +168,7 @@ public:
     };
 
 private:
+    std::unordered_map<table_id, std::unordered_map<std::tuple<locator::host_id, locator::host_id>, sketch_history, utils::tuple_hash>> _sketch_history;
     sharded<service::topology_state_machine>& _tsm;
     sharded<gms::gossiper>& _gossiper;
     netw::messaging_service& _messaging;
@@ -387,3 +432,16 @@ struct tablet_token_range {
 
 // Function to count the number of ranges in ranges1 covered by the merged ranges of ranges2.
 future<size_t> count_finished_tablets(utils::chunked_vector<tablet_token_range> ranges1, utils::chunked_vector<tablet_token_range> ranges2);
+
+struct decoded_row_hashes {
+    repair_hash_set hashes;
+    size_t diff_size; // size of the symmetric difference with the reference set
+};
+
+// Rebuilds a peer's row hashes from its sketch and `reference`, a set of row
+// hashes close to the peer's. Accepts the result only if the peeled difference is
+// consistent with the reference and the rebuilt set reproduces the peer's combined
+// hash; nullopt otherwise. If given, `estimated_diff` receives the sketch's own
+// estimate of the symmetric difference, which is valid even when decoding fails.
+future<std::optional<decoded_row_hashes>> decode_peer_row_hashes(const repair_hash_set& reference, repair_hash_sketch peer_sketch,
+        repair_hash peer_combined_hash, size_t* estimated_diff = nullptr);
