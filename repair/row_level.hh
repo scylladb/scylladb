@@ -455,3 +455,9 @@ struct decoded_row_hashes {
 // estimate of the symmetric difference, which is valid even when decoding fails.
 future<std::optional<decoded_row_hashes>> decode_peer_row_hashes(const repair_hash_set& reference, repair_hash_sketch peer_sketch,
         repair_hash peer_combined_hash, size_t* estimated_diff = nullptr);
+
+// Rebuilds a peer's row hashes from a reference set and the peeled difference of
+// the peer's sketch minus a sketch of the reference set, with the same checks as
+// decode_peer_row_hashes.
+future<std::optional<decoded_row_hashes>> rebuild_peer_row_hashes(const repair_hash_set& reference, repair_hash_sketch::difference diff,
+        repair_hash peer_combined_hash);
