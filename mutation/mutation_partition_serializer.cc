@@ -247,10 +247,9 @@ void serialize_mutation_fragments(const schema& s, tombstone partition_tombstone
     std::move(clustering_rows).end_rows().end_mutation_partition();
 }
 
-frozen_mutation_fragment freeze(const schema& s, const mutation_fragment& mf)
-{
-    bytes_ostream out;
-    ser::writer_of_mutation_fragment<bytes_ostream> writer(out);
+template <typename Output>
+static void write_fragment(Output& out, const schema& s, const mutation_fragment& mf) {
+    ser::writer_of_mutation_fragment<Output> writer(out);
     mf.visit(seastar::make_visitor(
         [&] (const clustering_row& cr) {
             return write_row(std::move(writer).start_fragment_clustering_row().start_row(), s, cr.key(), cr.cells(), cr.marker(), cr.tomb())
@@ -275,7 +274,18 @@ frozen_mutation_fragment freeze(const schema& s, const mutation_fragment& mf)
             return std::move(writer).write_fragment_partition_end(pe);
         }
     )).end_mutation_fragment();
+}
+
+frozen_mutation_fragment freeze(const schema& s, const mutation_fragment& mf) {
+    bytes_ostream out;
+    write_fragment(out, s, mf);
     return frozen_mutation_fragment(std::move(out));
+}
+
+size_t frozen_size(const schema& s, const mutation_fragment& mf) {
+    seastar::measuring_output_stream out;
+    write_fragment(out, s, mf);
+    return out.size();
 }
 
 frozen_mutation_fragment_v2 freeze(const schema& s, const mutation_fragment_v2& mf) {
