@@ -201,6 +201,24 @@ BOOST_AUTO_TEST_CASE(inet_address) {
     }
 }
 
+// chunked_vector is not contiguous, so integral elements take the per-element path.
+template <typename T>
+static void test_chunked_vector_round_trip() {
+    utils::chunked_vector<T> v;
+    for (int i = 0; i < 3000; ++i) {
+        v.push_back(T(i * 7919));
+    }
+    auto buf = ser::serialize_to_buffer<bytes>(v);
+    auto res = ser::deserialize_from_buffer(buf, std::type_identity<utils::chunked_vector<T>>{});
+    BOOST_CHECK(res == v);
+}
+
+BOOST_AUTO_TEST_CASE(chunked_vector_of_integers_round_trip) {
+    test_chunked_vector_round_trip<int16_t>();
+    test_chunked_vector_round_trip<uint32_t>();
+    test_chunked_vector_round_trip<uint64_t>();
+}
+
 template <typename T>
 static void test_vector_deserializer(const std::vector<T>& v) {
     auto buf = ser::serialize_to_buffer<bytes>(v);
