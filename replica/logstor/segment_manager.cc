@@ -50,6 +50,7 @@
 #include <seastar/util/closeable.hh>
 #include <seastar/core/condition-variable.hh>
 #include <seastar/coroutine/as_future.hh>
+#include <seastar/coroutine/try_future.hh>
 #include "replica/logstor/write_buffer.hh"
 #include "utils/disk-error-handler.hh"
 #include "utils/error_injection.hh"
@@ -455,11 +456,16 @@ static sstring write_source_to_string(write_source src) {
     return "unknown";
 }
 
+// Holds the segments that are ready for writes. The reserve replenisher is the only producer. The
+// last segments in the pool are the compaction reserve, and only compaction takes them, because
+// compaction must always get a segment to free segments.
 class segment_pool {
 
-    seastar::queue<seg_ptr> _segments;
+    seastar::circular_buffer<seg_ptr> _segments;
+    size_t _capacity;
     size_t _reserved_for_compaction;
     seastar::condition_variable _segment_available;
+    seastar::condition_variable _room_available;
 
 public:
 
@@ -470,7 +476,7 @@ public:
     } _stats;
 
     segment_pool(size_t pool_size, size_t reserved_for_compaction)
-        : _segments(pool_size)
+        : _capacity(pool_size)
         , _reserved_for_compaction(reserved_for_compaction)
     {}
 
@@ -478,36 +484,40 @@ public:
         co_return;
     }
 
+    // The replenisher stops when its wait in put() fails with abort_requested_exception.
     future<> stop() {
-        _segments.abort(std::make_exception_ptr(abort_requested_exception()));
+        _room_available.broken(std::make_exception_ptr(abort_requested_exception()));
         _segment_available.broken();
         co_return;
     }
 
+    bool full() const noexcept {
+        return _segments.size() >= _capacity;
+    }
+
     future<> put(seg_ptr seg) {
-        co_await _segments.push_eventually(std::move(seg));
+        co_await _room_available.wait([this] { return !full(); });
+        _segments.push_back(std::move(seg));
         _segment_available.broadcast();
         _stats.segments_put++;
     }
 
     future<seg_ptr> get_segment(write_source src) {
-        seg_ptr seg;
-        if (src == write_source::compaction) {
-            _stats.segments_get[static_cast<size_t>(src)]++;
-            co_return co_await _segments.pop_eventually();
+        const size_t reserved = src == write_source::compaction ? 0 : _reserved_for_compaction;
+        if (_segments.size() <= reserved && src == write_source::normal_write) {
+            _stats.normal_segments_wait++;
         }
-        if (_segments.size() <= _reserved_for_compaction) {
-            if (src == write_source::normal_write) {
-                _stats.normal_segments_wait++;
-            }
-            while (_segments.size() <= _reserved_for_compaction) {
-                co_await _segment_available.wait([this] {
-                    return _segments.size() > _reserved_for_compaction;
-                });
-            }
+        // A put wakes each waiter, and the first one takes the segment. The others wait again.
+        while (_segments.size() <= reserved) {
+            co_await coroutine::try_future(_segment_available.wait([this, reserved] {
+                return _segments.size() > reserved;
+            }));
         }
         _stats.segments_get[static_cast<size_t>(src)]++;
-        co_return _segments.pop();
+        auto seg = std::move(_segments.front());
+        _segments.pop_front();
+        _room_available.signal();
+        co_return seg;
     }
 
     size_t available_segment_count(write_source src) const noexcept {
