@@ -599,10 +599,12 @@ def test_rbac_updatetable(dynamodb, cql):
 
 # Above in test_rbac_updatetable() we checked UpdateTable's operation to
 # change BillingMode, and that it requires the ALTER permissions. But
-# UpdateTable has a more interesting ability - to *create* and to *delete*
-# a GSI from the base table. In this test we verify that this ability too
-# requires ALTER permissions on the affected table - i.e., any UpdateTable
-# invocation requires ALTER permissions.
+# UpdateTable has a more interesting ability - to *create*, *update* and
+# *delete* a GSI of the base table. In this test we verify that this ability
+# too requires ALTER permissions on the affected table - i.e., any UpdateTable
+# invocation requires ALTER permissions. For a GSI Update, this is also what
+# CQL requires for ALTER MATERIALIZED VIEW: ALTER on the base table, not on
+# the view.
 # This observation can be surprising - why doesn't creating a GSI require
 # CREATE permissions and dropping a GSI require DROP permissions? It turns
 # out that requiring ALTER permissions makes sense if you consider the
@@ -628,6 +630,11 @@ def test_rbac_updatetable_gsi(dynamodb, cql):
                 }
             }
         ]}
+    update_gsi = {
+        'GlobalSecondaryIndexUpdates': [
+            {  'Update': { 'IndexName': 'hello',
+                'WarmThroughput': { 'ReadUnitsPerSecond': 13000, 'WriteUnitsPerSecond': 5000 } } }
+        ]}
     delete_gsi = {
         'GlobalSecondaryIndexUpdates': [
             {  'Delete': { 'IndexName': 'hello' } }
@@ -644,6 +651,17 @@ def test_rbac_updatetable_gsi(dynamodb, cql):
                     authorized(lambda: tab.meta.client.update_table(TableName=tab.name,
                         **create_gsi))
                 wait_for_gsi(tab, 'hello')
+                # Without ALTER permissions on the table, UpdateTable GSI
+                # Update won't work - although the role has ALTER on the GSI
+                # itself, auto-granted when it created the GSI. An Update can
+                # be repeated, so unlike the Delete below it needs no special
+                # care for permissions which are still cached.
+                unauthorized(lambda: tab.meta.client.update_table(TableName=tab.name,
+                    **update_gsi))
+                # With ALTER permissions on the table, it works.
+                with temporary_grant(cql, 'ALTER', cql_table_name(tab), role):
+                    authorized(lambda: tab.meta.client.update_table(TableName=tab.name,
+                        **update_gsi))
                 # Without ALTER permissions, UpdateTable GSI Delete won't work.
                 # Note that the GSI Delete operation checks for the existence
                 # of the GSI before checking the permissions, so we needed to

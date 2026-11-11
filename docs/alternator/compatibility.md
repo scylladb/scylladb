@@ -20,7 +20,17 @@ not yet supported by Scylla. The BillingMode and ProvisionedThroughput options
 on a table need to be valid but are ignored, and ScyllaDB behaves like DynamoDB's
 `BillingMode=PAY_PER_REQUEST`: All requests are accepted without a per-table
 throughput cap. The values provisioned for a table and for each of its GSIs
-are remembered and returned by `DescribeTable`, but are not enforced.
+are remembered and returned by `DescribeTable`, but are not enforced. Unlike
+DynamoDB, which requires at least 1, Alternator also accepts zero capacities
+for a GSI. `DescribeTable` reports zeros for a GSI of a `PAY_PER_REQUEST`
+table, and for a GSI created before Alternator stored GSI capacities, so a
+description copied back into `CreateTable` is accepted. On a
+`PAY_PER_REQUEST` table, zeros count as no throughput at all.
+
+`UpdateTable` can switch a table to `BillingMode=PAY_PER_REQUEST`, and
+`DescribeTable` then reports zero capacities for the table and for its GSIs.
+The switch to `BillingMode=PROVISIONED` is not supported yet
+(<https://github.com/scylladb/scylladb/issues/19718>).
 
 ## Load balancing
 
@@ -515,10 +525,12 @@ they should be easy to detect. Here is a list of these unimplemented features:
 * Alternator does not support the table option WarmThroughput that can be
   used to check or guarantee that the database has "warmed" to handle a
   particular throughput. Alternator has no throughput caps and nothing to
-  pre-warm, so a table's WarmThroughput is remembered and returned by
-  `DescribeTable` but otherwise ignored; a table which never set one reports
-  zero units, as does each of its active GSIs. This table option was added to
-  DynamoDB in November 2024.
+  pre-warm, so a WarmThroughput set on a table or on any of its GSIs is
+  remembered and returned by `DescribeTable` but otherwise ignored; a table or
+  an active GSI which never set one reports zero units. An UpdateTable request
+  can change the WarmThroughput of only one GSI, while DynamoDB accepts several
+  GSI updates in one request. This table option was added to DynamoDB in
+  November 2024.
   <https://github.com/scylladb/scylladb/issues/21853>
 
 * Alternator does not support the table option MultiRegionConsistency
