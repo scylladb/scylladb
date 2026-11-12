@@ -57,9 +57,26 @@
 # this type.
 #
 # Tests in other files pin Alternator behaviour that Hermes uses:
+#  - A4, test_vector.py, test_vector_index_in_schema_indexes: a vector index
+#    has an entry in system_schema.indexes, so Hermes refuses its table.
+#  - A14, test/cluster/test_alternator.py,
+#    test_alternator_upgrade_index_key_column: an older table keeps the own
+#    column of an index key, and PutItem continues to write it.
 #  - A18, test_metrics.py,
 #    test_reads_before_write_and_write_using_lwt_metrics: which values of the
 #    write isolation make a plain write use LWT.
+#  - A20, test_ttl.py, test_ttl_expiration_cql_write: TTL expires an item
+#    that CQL wrote.
+#  - Section 1, test_cql_rbac.py, test_rbac_cql_write: the permissions that
+#    Hermes needs.
+#
+# Open gap: test.py cannot run a version older than 2025.1. So no test has a
+# table in which a GSI key attribute that is not also an LSI key has its own
+# column: only such older versions created this table.
+# test_alternator_upgrade_index_key_column creates the nearest table on
+# 2025.1, with a GSI and an LSI on the same attribute. There the GSI reads its
+# key from the own column too. PutItem handles all these tables with the same
+# code, which does not check the type of the index.
 #
 # Open gap: A18 "Plain CQL writes are safe beside the API's, unless every
 # write is LWT." This is about concurrent writes, and this test suite cannot
@@ -69,11 +86,14 @@
 # read.
 
 import json
+import random
+import time
 from decimal import Decimal
 
 import pytest
+from cassandra.query import BatchStatement, BatchType
 
-from .util import new_test_table, random_string, client_no_transform
+from .util import new_test_table, random_string, client_no_transform, full_query, full_scan, multiset, get_table_arn
 
 # All tests in this file are scylla-only (they access CQL internals)
 @pytest.fixture(scope="function", autouse=True)
@@ -347,7 +367,8 @@ def test_table_naming(cql, test_table_s):
 # and the LSI have no entry in system_schema.indexes. Hermes assumes, in A5:
 # "A view's key columns that are not base keys are GSI/LSI key attributes,
 # with the type their index declares." In A4, it refuses a table with an
-# entry in system_schema.indexes.
+# entry in system_schema.indexes (see
+# test_vector.py::test_vector_index_in_schema_indexes).
 def test_index_naming(cql, table_with_indexes):
     table_name = table_with_indexes.name
     ks = 'alternator_' + table_name
@@ -422,3 +443,243 @@ def test_index_key_not_schema_column(dynamodb, cql, table_with_indexes):
     # (type byte 0x00 followed by raw UTF-8 bytes).
     assert attrs['x'] == b'\x00' + b'hello'
     assert attrs['y'] == b'\x00' + b'world'
+
+# The tests below write rows through CQL, with the statements that Hermes
+# uses, and check that Alternator reads them as items.
+
+# The underlying CQL table of an Alternator table.
+def cql_table(table):
+    return f'"alternator_{table.name}"."{table.name}"'
+
+# A write time in microseconds, one minute in the past. Hermes gives such a
+# time to an item that it copies from a scan of a DynamoDB table.
+def past_timestamp():
+    return int(time.time() * 1_000_000) - 60_000_000
+
+# A random key for an item of the table. All its key attributes are strings.
+def new_key(table):
+    return {k['AttributeName']: random_string() for k in table.key_schema}
+
+# Write an item as Hermes does: set the key columns and the whole ":attrs"
+# map, with the given write time.
+def cql_insert(cql, table, key):
+    columns = [*key, ':attrs']
+    names = ', '.join(f'"{c}"' for c in columns)
+    marks = ', '.join('?' for _ in columns)
+    return cql.prepare(f'INSERT INTO {cql_table(table)} ({names}) VALUES ({marks}) USING TIMESTAMP ?')
+
+def cql_put(cql, table, key, attrs, ts):
+    cql.execute(cql_insert(cql, table, key), [*key.values(), attrs, ts])
+
+# Write several items of one partition as a load of Hermes does: one
+# UNLOGGED batch of the same INSERT statements.
+def cql_put_batch(cql, table, items, ts):
+    batch = BatchStatement(batch_type=BatchType.UNLOGGED)
+    for key, attrs in items:
+        batch.add(cql_insert(cql, table, key), [*key.values(), attrs, ts])
+    cql.execute(batch)
+
+# Delete an item as Hermes does: delete its row, with the given write time.
+def cql_delete(cql, table, key, ts):
+    where = ' AND '.join(f'"{c}" = ?' for c in key)
+    stmt = cql.prepare(f'DELETE FROM {cql_table(table)} USING TIMESTAMP ? WHERE {where}')
+    cql.execute(stmt, [ts, *key.values()])
+
+# Test that PutItem stores a number key in the bytes that its text gives, as
+# test_attrs_encoding checks for a number in ":attrs". PutItem serializes a
+# key with other code than ":attrs". Hermes writes these bytes for a number
+# key. If PutItem wrote other bytes, then as A8 says, "Hermes's number keys
+# would land in partitions Alternator does not look in". Each number starts
+# with a random integer, so that no other test writes a key with the same
+# bytes. Each number has its own hash key in test_table_sn, because a range
+# key compares by value: 5.5 and 5.50 would be the same row.
+def test_number_key_encoding(cql, test_table_n, test_table_sn):
+    r = str(random.randrange(10**8, 10**9))
+    # DynamoDB's canonical form, and other forms.
+    canonical = [r, r + '000', r + '.5', '-' + r + '.25']
+    other = [r + '.50', r + 'E+3']
+    # The driver sends Decimal(n) with the scale of the text.
+    hash_select = cql.prepare(f'SELECT decimalAsBlob(p) FROM {cql_table(test_table_n)} WHERE p = ?')
+    range_select = cql.prepare(f'SELECT decimalAsBlob(c) FROM {cql_table(test_table_sn)} WHERE p = ? AND c = ?')
+    # The bytes of each number as a hash key and as a range key.
+    stored = {}
+    with client_no_transform(test_table_n.meta.client) as client:
+        for n in canonical + other:
+            p = random_string()
+            client.put_item(TableName=test_table_n.name, Item={'p': {'N': n}})
+            client.put_item(TableName=test_table_sn.name, Item={'p': {'S': p}, 'c': {'N': n}})
+            rows = [cql.execute(hash_select, [Decimal(n)]).one(), cql.execute(range_select, [p, Decimal(n)]).one()]
+            stored[n] = [row and row[0] for row in rows]
+    # As in test_attrs_encoding: a change of these bytes needs a plan for the
+    # existing keys, and Hermes must follow it.
+    for n in canonical:
+        assert stored[n] == [_serialize_number(n)] * 2, n
+    # SCYLLADB-1575 can change the bytes of these forms.
+    for n in other:
+        assert stored[n] == [_serialize_number(n)] * 2, n
+
+# Test that a row which Hermes writes through CQL is the item that it wrote.
+# The test writes a row, then writes it again one microsecond later without
+# one attribute, and writes a second row with an empty ":attrs". It uses a
+# table with only a hash key and a table with a hash key and a range key.
+# Hermes assumes:
+#  - A12 "Alternator reads that as exactly the item written: an attribute the
+#    item no longer has is gone, as after `PutItem`".
+#  - A13 "An item with only its key is a row with its marker and an empty
+#    `:attrs`; `GetItem` returns the key attributes alone."
+#  - A17 "an item stamped in the past is a live item".
+#  - A10, for the JSON of type 4: "Alternator reads it by parsing, so member
+#    order and spacing do not matter; numbers inside are strings as given;
+#    binary inside is base64".
+@pytest.mark.parametrize('table_name', ['test_table_s', 'test_table_ss'])
+def test_cql_write_is_an_item(request, cql, table_name):
+    table = request.getfixturevalue(table_name)
+    key = new_key(table)
+    ts = past_timestamp()
+    attrs = {
+        's': b'\x00' + 'héllo ☃'.encode(),
+        'b': b'\x01\x00\x01\xff',
+        'bool': b'\x02\x01',
+        'n': b'\x03' + _serialize_number('1.5'),
+        # Spaces, and members out of order: Alternator parses the JSON.
+        'l': b'\x04' + b'{"L": [ {"S": "x"}, {"N": "1.50"} ]}',
+        'm': b'\x04' + b'{"M":{"b":{"N":"2"},"a":{"S":"y"}}}',
+        'null': b'\x04' + b'{"NULL":true}',
+        'ss': b'\x04' + b'{"SS":["b","a"]}',
+        'ns': b'\x04' + b'{"NS":["2","1.50"]}',
+        'bs': b'\x04' + b'{"BS":["/w==","AA=="]}',
+    }
+    expected = {**key, 's': 'héllo ☃', 'b': b'\x00\x01\xff', 'bool': True,
+                'n': Decimal('1.5'), 'l': ['x', Decimal('1.5')],
+                'm': {'a': 'y', 'b': Decimal('2')}, 'null': None, 'ss': {'a', 'b'},
+                'ns': {Decimal('1.5'), Decimal('2')}, 'bs': {b'\x00', b'\xff'}}
+    cql_put(cql, table, key, attrs, ts)
+    assert table.get_item(Key=key, ConsistentRead=True)['Item'] == expected
+    del attrs['s']
+    del expected['s']
+    cql_put(cql, table, key, attrs, ts + 1)
+    assert table.get_item(Key=key, ConsistentRead=True)['Item'] == expected
+    key = new_key(table)
+    cql_put(cql, table, key, {}, ts)
+    assert table.get_item(Key=key, ConsistentRead=True)['Item'] == key
+
+# Test that a CQL delete of the row of an item is a DeleteItem: after it,
+# GetItem, Query and Scan do not find the item. On a table with only a hash
+# key, the delete is a partition tombstone. Then a PutItem of the same key,
+# with the server's write time, makes a visible item. A later CQL write or
+# delete with an older write time does not change this item, and after a
+# DeleteItem, it does not bring the item back. This lets Hermes copy a table
+# while the application writes to it. Hermes assumes:
+#  - A16 "`DELETE ... USING TIMESTAMP` (a row tombstone, or a partition
+#    tombstone for a table with no range key) removes the item for `GetItem`,
+#    `Query`, `Scan` and the indexes." test_cql_write_updates_indexes checks
+#    the indexes.
+#  - A17 "a later write through the API, stamped by the server, wins over
+#    Hermes's older stamp".
+@pytest.mark.parametrize('table_name', ['test_table_s', 'test_table_ss'])
+def test_cql_delete_is_deleteitem(request, cql, table_name):
+    table = request.getfixturevalue(table_name)
+    key = new_key(table)
+    ts = past_timestamp()
+    cql_put(cql, table, key, {'a': b'\x00x'}, ts)
+    assert table.get_item(Key=key, ConsistentRead=True)['Item'] == {**key, 'a': 'x'}
+    cql_delete(cql, table, key, ts + 1)
+    assert 'Item' not in table.get_item(Key=key, ConsistentRead=True)
+    assert full_query(table, KeyConditionExpression='p = :p',
+                      ExpressionAttributeValues={':p': key['p']}) == []
+    assert full_scan(table, FilterExpression='p = :p',
+                     ExpressionAttributeValues={':p': key['p']}) == []
+    table.put_item(Item={**key, 'a': 'y'})
+    assert table.get_item(Key=key, ConsistentRead=True)['Item'] == {**key, 'a': 'y'}
+    cql_put(cql, table, key, {'b': b'\x00z'}, ts + 2)
+    cql_delete(cql, table, key, ts + 3)
+    assert table.get_item(Key=key, ConsistentRead=True)['Item'] == {**key, 'a': 'y'}
+    table.delete_item(Key=key)
+    cql_put(cql, table, key, {'a': b'\x00x'}, ts + 4)
+    assert 'Item' not in table.get_item(Key=key, ConsistentRead=True)
+
+# Wait until a query of an index finds exactly the expected items. Unlike
+# assert_index_query() in test_gsi.py, this also waits for an item to leave
+# the index.
+def assert_index_query_eventually(table, index_name, expected, **kwargs):
+    for _ in range(100):
+        got = full_query(table, IndexName=index_name, ConsistentRead=False, **kwargs)
+        if multiset(got) == multiset(expected):
+            return
+        time.sleep(0.1)
+    got = full_query(table, IndexName=index_name, ConsistentRead=False, **kwargs)
+    assert multiset(got) == multiset(expected)
+
+# Test that the GSI and the LSI of a table follow the rows that Hermes writes
+# through CQL. The first write is an UNLOGGED batch of two items of one
+# partition, as in a load of Hermes. A rewrite of the row without the GSI key
+# removes the item from the GSI, and a CQL delete of the row removes the item
+# from both indexes. Hermes assumes:
+#  - A15 "On newer tables the GSI and LSI keys are computed from `:attrs`
+#    (`extract_from_attrs_column_computation`), so a CQL write of `:attrs`
+#    updates the indexes as `PutItem` would".
+#  - A16 "`DELETE ... USING TIMESTAMP` (a row tombstone, or a partition
+#    tombstone for a table with no range key) removes the item for `GetItem`,
+#    `Query`, `Scan` and the indexes."
+def test_cql_write_updates_indexes(cql, table_with_indexes):
+    table = table_with_indexes
+    key = {'p': random_string(), 'c': random_string()}
+    x = random_string()
+    y = random_string()
+    ts = past_timestamp()
+    full = {'x': b'\x00' + x.encode(), 'y': b'\x00' + y.encode()}
+    item = {**key, 'x': x, 'y': y}
+    def check(gsi_items, lsi_items, x=x, y=y):
+        assert_index_query_eventually(table, 'gsi1', gsi_items,
+            KeyConditionExpression='x = :x', ExpressionAttributeValues={':x': x})
+        assert_index_query_eventually(table, 'lsi1', lsi_items,
+            KeyConditionExpression='p = :p AND y = :y',
+            ExpressionAttributeValues={':p': key['p'], ':y': y})
+    key2 = {'p': key['p'], 'c': random_string()}
+    x2 = random_string()
+    y2 = random_string()
+    cql_put_batch(cql, table, [(key, full), (key2, {'x': b'\x00' + x2.encode(), 'y': b'\x00' + y2.encode()})], ts)
+    check([item], [item])
+    check([{**key2, 'x': x2, 'y': y2}], [{**key2, 'x': x2, 'y': y2}], x2, y2)
+    cql_put(cql, table, key, {'y': full['y']}, ts + 1)
+    check([], [{**key, 'y': y}])
+    cql_put(cql, table, key, full, ts + 2)
+    check([item], [item])
+    cql_delete(cql, table, key, ts + 3)
+    check([], [])
+
+# Decode the "scylla_tags" schema extension of a table: a map of strings,
+# serialized with 32-bit little-endian counts and lengths.
+def decode_tags(b):
+    strings = []
+    pos = 4
+    while pos < len(b):
+        n = int.from_bytes(b[pos:pos + 4], 'little')
+        strings.append(b[pos + 4:pos + 4 + n].decode())
+        pos += 4 + n
+    assert int.from_bytes(b[:4], 'little') * 2 == len(strings)
+    return dict(zip(strings[::2], strings[1::2]))
+
+# Test where Hermes finds the write isolation of a table. Hermes assumes:
+#  - A18 "At start Hermes reads `system:write_isolation` from the table's tags
+#    and, without one, `alternator_write_isolation` from `system.config`."
+#  - A19 "The table's tags are the `scylla_tags` entry of
+#    `system_schema.tables.extensions`, a map with 32-bit little-endian
+#    lengths, with keys such as `system:write_isolation`."
+def test_write_isolation_location(dynamodb, cql):
+    with new_test_table(dynamodb,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
+        table.meta.client.tag_resource(ResourceArn=get_table_arn(table),
+            Tags=[{'Key': 'system:write_isolation', 'Value': 'forbid_rmw'}])
+        row = cql.execute(
+            "SELECT extensions FROM system_schema.tables "
+            "WHERE keyspace_name = %s AND table_name = %s",
+            ['alternator_' + table.name, table.name]).one()
+        assert decode_tags(row.extensions['scylla_tags'])['system:write_isolation'] == 'forbid_rmw'
+    value = cql.execute(
+        "SELECT value FROM system.config WHERE name = 'alternator_write_isolation'").one().value
+    # system.config gives a string value in double quotes.
+    assert value.strip('"') in ['a', 'always', 'always_use_lwt',
+        'f', 'forbid', 'forbid_rmw', 'o', 'only_rmw_uses_lwt',
+        'u', 'unsafe', 'unsafe_rmw']
