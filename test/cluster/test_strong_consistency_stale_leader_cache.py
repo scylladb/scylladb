@@ -64,7 +64,9 @@ async def test_stale_leader_cache_costs_one_hop_after_stepdown(manager: ScyllaCl
         # the bootstrap pick and the targeted stepdowns below transfer leadership without a tick.
         config = config | {'error_injections_at_startup': [
             {'name': 'strongly-consistent-raft-group-tick-interval-in-ms', 'value': '1000'}]}
-    servers = await manager.servers_add(4, config=config, cmdline=DEFAULT_CMDLINE, auto_rack_dc='dc1')
+    # The leader cache is per shard of the coordinator: with one shard every write through the
+    # non-replica sees the same cache, whichever connection the driver picks.
+    servers = await manager.servers_add(4, config=config, cmdline=DEFAULT_CMDLINE + ['--smp=1'], auto_rack_dc='dc1')
     cql, hosts = await manager.get_ready_cql(servers)
     host_ids = await gather_safely(*(manager.get_host_id(s.server_id) for s in servers))
     by_host_id = dict(zip(host_ids, zip(servers, hosts)))
@@ -84,9 +86,6 @@ async def test_stale_leader_cache_costs_one_hop_after_stepdown(manager: ScyllaCl
             await ensure_raft_group_leader_on(manager, old_leader_server, group_id, timeout_seconds=WAIT_TIMEOUT_S)
             logger.info(f"group {group_id}: leader {old_leader_id}, next leader {new_leader_id}, non-replica {non_replica_id}")
 
-            # The leader cache is per shard of the coordinator. A bound statement carries a routing
-            # key, so the driver pins every pk=0 request to the same shard of the non-replica; a
-            # plain string statement would land on a random shard and see a random cache.
             # Appending to a list only adds cells, so unlike l[i] = ? or l = l - ? it needs no
             # read-before-write, which SC tables reject ("don't support data prefetch").
             append = cql.prepare(f"UPDATE {table} SET l = l + ? WHERE pk = ?")
