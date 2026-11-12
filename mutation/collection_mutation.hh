@@ -305,6 +305,9 @@ constexpr size_t gentle_collection_min_size = 128 * 1024;
 // Serializes the given collection of cells to a sequence of bytes ready to be sent over the CQL protocol.
 bytes_ostream serialize_for_cql(const abstract_type&, collection_mutation_view);
 
+// The size of serialize_for_cql()'s output, computed without materializing it.
+size_t serialized_size_for_cql(const abstract_type&, collection_mutation_view);
+
 // Like serialize_for_cql, but uses an extended format that embeds per-element
 // timestamps and expiries, for use with WRITETIME(col[key]) / TTL(col[key])
 // and WRITETIME(col.field) / TTL(col.field) selectors.
