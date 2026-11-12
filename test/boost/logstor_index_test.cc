@@ -578,6 +578,30 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_drain_cache_preserves_index_
     BOOST_REQUIRE(!lookup_exists(index, key1, schema));
 }
 
+// Checks that the destructor of the index evicts the cached partitions of its entries, so that an
+// index can be destroyed without drain_cache() first.
+SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_destructor_evicts_cached_partitions) {
+    auto schema = make_logstor_schema();
+    shared_logstor_cache cache;
+    std::optional<primary_index> index(std::in_place, noop_space_accounting, &cache.logstor_tracker, true);
+
+    auto key0 = make_primary_index_key(*schema, "pk0");
+    auto key1 = make_primary_index_key(*schema, "pk1");
+    index->insert(key0, make_index_entry(1, 0, 10, 1));
+    index->insert(key1, make_index_entry(1, 10, 10, 1));
+    populate(*index, key0, make_mutation(schema, "pk0", "v0"));
+    populate(*index, key1, make_mutation(schema, "pk1", "v1"));
+
+    const auto& stats = cache.shared_tracker.get_stats();
+    BOOST_REQUIRE_EQUAL(stats.partitions, 2u);
+    const auto removals_before = stats.partition_removals;
+
+    index.reset();
+
+    BOOST_REQUIRE_EQUAL(stats.partitions, 0u);
+    BOOST_REQUIRE_EQUAL(stats.partition_removals, removals_before + 2);
+}
+
 SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_cache_survives_index_rebalancing) {
     auto schema = make_logstor_schema();
     shared_logstor_cache cache;

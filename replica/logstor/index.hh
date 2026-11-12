@@ -221,8 +221,17 @@ public:
         , _space_accounting(space_accounting)
         {}
 
+    // Evicts the cached partition of each entry, because an entry must not be destroyed while it
+    // links to a cached partition. Does not report the records of the entries to the space
+    // accounting.
     ~primary_index() {
-        with_allocator(_tree_allocator, [this] { _entries.clear(); });
+        with_allocator(_tree_allocator, [this] {
+            _entries.clear_and_dispose([this] (primary_index_entry* e) noexcept {
+                if (e->_cached_entry) {
+                    _cache_tracker->evict(*e);
+                }
+            });
+        });
     }
 
     enum class insert_result {
