@@ -509,8 +509,9 @@ public:
     /// Try to evict an inactive read.
     ///
     /// Return true if an inactive read was evicted and false otherwise
-    /// (if there was no reader to evict).
-    bool try_evict_one_inactive_read(evict_reason = evict_reason::manual);
+    /// (if there was no reader to evict). The returned future resolves after
+    /// the evicted reader is closed.
+    future<bool> try_evict_one_inactive_read(evict_reason = evict_reason::manual);
 
     /// Clear all inactive reads.
     void clear_inactive_reads();

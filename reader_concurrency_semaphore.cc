@@ -1324,12 +1324,13 @@ mutation_reader_opt reader_concurrency_semaphore::unregister_inactive_read(inact
     return std::move(irp->reader);
 }
 
-bool reader_concurrency_semaphore::try_evict_one_inactive_read(evict_reason reason) {
+future<bool> reader_concurrency_semaphore::try_evict_one_inactive_read(evict_reason reason) {
     if (_inactive_reads.empty()) {
-        return false;
+        co_return false;
     }
-    evict(_inactive_reads.front(), reason);
-    return true;
+    auto reader = detach_inactive_reader(_inactive_reads.front(), reason);
+    co_await reader.close();
+    co_return true;
 }
 
 void reader_concurrency_semaphore::clear_inactive_reads() {
