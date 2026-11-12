@@ -17,7 +17,7 @@ from test.pylib.rest_client import get_host_api_address, read_barrier
 from test.pylib.util import gather_safely, wait_for_cql_and_get_hosts
 from test.cluster.util import check_system_topology_and_cdc_generations_v3_consistency, \
         check_token_ring_and_group0_consistency, delete_discovery_state_and_group0_id, delete_raft_group_data, \
-        reconnect_driver, wait_for_cdc_generations_publishing
+        find_recovery_leader_after_apply_committed, reconnect_driver, wait_for_cdc_generations_publishing
 
 async def get_group0_schema_version(cql: Session, h: Host) -> UUID | None:
     rs = await cql.run_async("select value from system.scylla_local where key = 'group0_schema_version'", host=h)
@@ -109,18 +109,15 @@ async def test_raft_recovery_entry_loss(manager: ScyllaClusterManager):
 
     logging.info('Starting the recovery procedure')
 
-    logging.info(f'Restarting {live_servers}')
-    await manager.rolling_restart(live_servers)
-
-    await reconnect_driver(manager)
-    cql, _ = await manager.get_ready_cql(live_servers)
+    logging.info(f'Finding the recovery leader among {live_servers}')
+    recovery_leader = await find_recovery_leader_after_apply_committed(manager, live_servers)
+    assert recovery_leader.server_id == live_servers[1].server_id, \
+        f'{live_servers[1]} has the newest group 0 state, but {recovery_leader} was chosen as the recovery leader'
 
     logging.info(f'Deleting the persistent discovery state and group 0 ID on {live_servers}')
     await gather_safely(*(delete_discovery_state_and_group0_id(cql, h) for h in hosts))
 
-    # FIXME: check that the way to identify the leader works when it's implemented (whatever it will be).
-
-    recovery_leader_id = await manager.get_host_id(live_servers[1].server_id)
+    recovery_leader_id = await manager.get_host_id(recovery_leader.server_id)
 
     async def set_recovery_leader(srv: ServerInfo):
         await manager.server_update_config(srv.server_id, 'recovery_leader', recovery_leader_id)

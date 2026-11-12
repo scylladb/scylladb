@@ -333,7 +333,8 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
         .ticker = std::move(ticker),
         .rpc = rpc_ref,
         .persistence = persistence_ref,
-        .state_machine = state_machine_ref
+        .state_machine = state_machine_ref,
+        .default_op_timeout_in_ms = utils::updateable_value<uint32_t>(60000)
     }, get_tick_interval());
 
     // Publish the persistence only now, past every throw above: the raft::server
