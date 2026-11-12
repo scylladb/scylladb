@@ -160,9 +160,10 @@ public:
     // Cannot be called until previous set_configuration() completes
     // otherwise throws conf_change_in_progress exception.
     //
-    // Waits until configuration completes, i.e. the server left the joint
-    // configuration. The server will apply a dummy entry to
-    // make sure this happens.
+    // Waits until configuration completes, i.e. the non-joint C_new is
+    // committed. A change that leaves the voter set unchanged is that single
+    // entry; any other is two, a joint C_old + C_new entry and then C_new.
+    // The server will apply a dummy entry to make sure this happens.
     //
     // Note: committing a dummy entry extends the opportunity for
     // uncertainty, thus commit_status_unknown exception may be
@@ -197,7 +198,8 @@ public:
     // adverse effects to the configuration.
     //
     // If forwarding is enabled and this is a follower, and the returned future resolves without exception,
-    // this means that a dummy entry appended after non-joint configuration entry was committed by the leader.
+    // this means that a dummy entry appended after the non-joint configuration entry (the only entry
+    // of a change that leaves the voter set unchanged) was committed by the leader.
     // The local commit index is not necessarily up-to-date yet and the state of the local state machine
     // replica may still come from before the configuration entry.
     // (exception: if no server was actually added or removed, then nothing gets committed and the leader responds immediately).
@@ -224,6 +226,17 @@ public:
 
     // Return the currently known configuration
     virtual raft::configuration get_configuration() const = 0;
+
+    // Whether the entry that produced the configuration get_configuration()
+    // returns is known committed on this server. A configuration loaded from a
+    // snapshot counts as committed. Synchronous, so it is consistent with
+    // get_configuration() called in the same continuation.
+    //
+    // After a restart it can stay false until the first leader heartbeat: the
+    // commit index starts from the snapshot index or the persisted commit
+    // index, whichever is higher, and persisting the latter is optional, so a
+    // configuration entry in the log tail reads as uncommitted until then.
+    virtual bool is_configuration_committed() const = 0;
 
     // Load persisted state and start background work that needs
     // to run for this Raft server to function; The object cannot
@@ -258,6 +271,15 @@ public:
     // raft::stopped_error
     //     Thrown if abort() was called on the server instance.
     virtual future<> read_barrier(seastar::abort_source* as) = 0;
+
+    // Like read_barrier(), but returns once the local commit index, rather
+    // than the applied index, reaches the leader's commit index. So it doesn't
+    // wait for the local state machine, however far behind that is. Use it to
+    // learn what the leader has committed, e.g. for is_configuration_committed(),
+    // not before a read from the state machine.
+    //
+    // Exceptions: the same as read_barrier().
+    virtual future<> commit_barrier(seastar::abort_source* as) = 0;
 
     // Initiate leader stepdown process.
     // If target is specified, the leadership transfer will be attempted to that target only.
