@@ -143,6 +143,57 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_abandoned_handle_clos
     }
 }
 
+// An inactive read evicted on TTL must not be closed in the timer callback:
+// timer callbacks run in the reactor's poller context, outside of any task
+// quota, so the (potentially expensive) close would stall the reactor.
+SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_ttl_eviction_does_not_close_reader_in_timer_callback) {
+    class close_tracking_reader : public mutation_reader::impl {
+        std::optional<bool>& _closed_in_task;
+    public:
+        close_tracking_reader(schema_ptr s, reader_permit permit, std::optional<bool>& closed_in_task)
+            : impl(std::move(s), std::move(permit))
+            , _closed_in_task(closed_in_task)
+        { }
+        virtual future<> fill_buffer() override { return make_ready_future<>(); }
+        virtual future<> next_partition() override { return make_ready_future<>(); }
+        virtual future<> fast_forward_to(const dht::partition_range&) override { return make_ready_future<>(); }
+        virtual future<> fast_forward_to(position_range) override { return make_ready_future<>(); }
+        virtual future<> close() noexcept override {
+            _closed_in_task = engine().current_task() != nullptr;
+            return make_ready_future<>();
+        }
+    };
+
+    simple_schema s;
+    reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::no_limits{}, get_name(), reader_concurrency_semaphore::register_metrics::no);
+    auto stop_sem = deferred_stop(semaphore);
+
+    auto permit = semaphore.make_tracking_only_permit(s.schema(), get_name(), db::no_timeout, {});
+
+    std::optional<bool> evicted_in_task;
+    std::optional<bool> closed_in_task;
+    std::optional<reader_concurrency_semaphore::evict_reason> evict_reason;
+
+    auto handle = semaphore.register_inactive_read(make_mutation_reader<close_tracking_reader>(s.schema(), permit, closed_in_task));
+    BOOST_REQUIRE(handle);
+
+    // Timer callbacks run outside of any task, engine().current_task() is null there.
+    semaphore.set_notify_handler(handle, [&] (reader_concurrency_semaphore::evict_reason reason) {
+        evict_reason = reason;
+        evicted_in_task = engine().current_task() != nullptr;
+    }, std::nullopt);
+    permit.set_timeout(db::timeout_clock::now() + std::chrono::milliseconds(10));
+
+    BOOST_REQUIRE(eventually_true([&] { return closed_in_task.has_value(); }));
+
+    BOOST_REQUIRE(evict_reason == reader_concurrency_semaphore::evict_reason::time);
+    // Sanity check: the eviction itself did happen in the timer callback.
+    BOOST_REQUIRE(evicted_in_task == false);
+    BOOST_REQUIRE(*closed_in_task);
+    BOOST_REQUIRE(!handle);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().time_based_evictions, 1);
+}
+
 // This unit test passes a read through admission again-and-again, just
 // like an evictable reader would be during its lifetime. When readmitted
 // the read sometimes has to wait and sometimes not. This is to check that

@@ -13,6 +13,7 @@
 #include <seastar/util/log.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
+#include <seastar/coroutine/as_future.hh>
 #include <seastar/core/metrics.hh>
 #include <utility>
 
@@ -244,9 +245,10 @@ private:
                 maybe_dump_reader_permit_diagnostics(_semaphore, "timed out", this);
                 break;
             case state::inactive:
-                _semaphore.evict(*this, reader_concurrency_semaphore::evict_reason::time);
-                // Return here on purpose. The evicted permit is destroyed when closing a reader.
-                // As a consequence, any member access beyond this point is invalid.
+                _semaphore.detach_and_evict_in_background(*this, reader_concurrency_semaphore::evict_reason::time);
+                // Return here on purpose. The evicted permit is destroyed when the
+                // eviction loop closes the reader, don't make assumptions about
+                // its lifetime beyond this point.
                 return;
             case state::evicted:
             case state::preemptive_aborted:
@@ -1011,6 +1013,17 @@ namespace {
 struct stop_execution_loop {
 };
 
+struct stop_eviction_loop {
+};
+
+future<> close_queued_reader(mutation_reader reader, std::string_view semaphore_name) noexcept {
+    // Don't let a failed close kill the eviction loop.
+    auto f = co_await coroutine::as_future(reader.close());
+    if (f.failed()) {
+        rcslog.warn("[semaphore {}] failed to close reader: {}", semaphore_name, f.get_exception());
+    }
+}
+
 }
 
 future<> reader_concurrency_semaphore::execution_loop() noexcept {
@@ -1335,7 +1348,7 @@ future<bool> reader_concurrency_semaphore::try_evict_one_inactive_read(evict_rea
 
 void reader_concurrency_semaphore::clear_inactive_reads() {
     while (!_inactive_reads.empty()) {
-        evict(_inactive_reads.front(), evict_reason::manual);
+        detach_and_evict_in_background(_inactive_reads.front(), evict_reason::manual);
     }
 }
 
@@ -1378,7 +1391,12 @@ future<> reader_concurrency_semaphore::stop() noexcept {
     SCYLLA_ASSERT(!_stopped);
     _stopped = true;
     clear_inactive_reads();
+    // The eviction loop has to be alive while waiting for the permits:
+    // the permits of evicted reads are destroyed when it closes their readers.
     co_await _permit_gate.close();
+    // No permits left, so no inactive or evicted reads either, the eviction
+    // loop is idle. Stop it, it releases its _close_readers_gate holder on exit.
+    _eviction_cv.broken(std::make_exception_ptr(stop_eviction_loop{}));
     // Gate for closing readers is only closed after waiting for all reads, as the evictable
     // readers might take the inactive registration path and find the gate closed.
     co_await _close_readers_gate.close();
@@ -1421,8 +1439,54 @@ mutation_reader reader_concurrency_semaphore::detach_inactive_reader(reader_perm
     return std::move(irp->reader);
 }
 
-void reader_concurrency_semaphore::evict(reader_permit::impl& permit, evict_reason reason) noexcept {
-    close_reader(detach_inactive_reader(permit, reason));
+void reader_concurrency_semaphore::detach_and_evict_in_background(reader_permit::impl& permit, evict_reason reason) noexcept {
+    auto reader = detach_inactive_reader(permit, reason);
+    try {
+        _readers_to_close.push_back(std::move(reader));
+    } catch (...) {
+        // Failed to allocate room in the queue, close in the foreground.
+        close_reader(std::move(reader));
+        return;
+    }
+    _eviction_cv.signal();
+}
+
+void reader_concurrency_semaphore::maybe_start_eviction_loop() {
+    if (_eviction_loop_started) {
+        return;
+    }
+    // The loop holds _close_readers_gate until it exits, stop() waits for it via the gate.
+    (void)with_gate(_close_readers_gate, [this] { return eviction_loop(); });
+    // Set only after with_gate() succeeded, so the loop can be started on a retry, if it throws.
+    _eviction_loop_started = true;
+}
+
+future<> reader_concurrency_semaphore::eviction_loop() noexcept {
+    while (true) {
+        try {
+            co_await _eviction_cv.when([this] {
+                return !_readers_to_close.empty() || (!_inactive_reads.empty() && should_evict_inactive_read());
+            });
+        } catch (stop_eviction_loop) {
+            co_return;
+        }
+
+        while (true) {
+            if (!_readers_to_close.empty()) {
+                // Close queued readers first: they hold on to memory but are
+                // dead already. Closing them might free up enough resources
+                // to spare evicting more inactive reads below.
+                auto reader = std::move(_readers_to_close.front());
+                _readers_to_close.pop_front();
+                co_await close_queued_reader(std::move(reader), _name);
+            } else if (!_inactive_reads.empty() && should_evict_inactive_read()) {
+                co_await close_queued_reader(detach_inactive_reader(_inactive_reads.front(), evict_reason::permit), _name);
+            } else {
+                break;
+            }
+            co_await coroutine::maybe_yield();
+        }
+    }
 }
 
 void reader_concurrency_semaphore::close_reader(mutation_reader reader) {
@@ -1492,24 +1556,9 @@ future<> reader_concurrency_semaphore::enqueue_waiter(reader_permit::impl& permi
     return fut;
 }
 
-void reader_concurrency_semaphore::evict_readers_in_background() {
-    if (_evicting) {
-        return;
-    }
-    _evicting = true;
-    // Evict inactive readers in the background while wait list isn't empty
-    // This is safe since stop() closes _gate;
-    (void)with_gate(_close_readers_gate, [this] {
-        return repeat([this] {
-            if (_inactive_reads.empty() || !should_evict_inactive_read()) {
-                _evicting = false;
-                return make_ready_future<stop_iteration>(stop_iteration::yes);
-            }
-            return detach_inactive_reader(_inactive_reads.front(), evict_reason::permit).close().then([] {
-                return stop_iteration::no;
-            });
-        });
-    });
+void reader_concurrency_semaphore::evict_readers_in_background() noexcept {
+    // The eviction loop evicts inactive reads while should_evict_inactive_read() is true.
+    _eviction_cv.signal();
 }
 
 reader_concurrency_semaphore::admit_result
@@ -1753,6 +1802,10 @@ void reader_concurrency_semaphore::on_permit_preemptive_aborted() noexcept {
 }
 
 void reader_concurrency_semaphore::on_permit_created(reader_permit::impl& permit) {
+    // Readers (and so inactive reads and readers to close) cannot exist
+    // without a permit, so the eviction loop is guaranteed to be running by
+    // the time it is needed. Failing to start it fails the permit creation.
+    maybe_start_eviction_loop();
     _permit_gate.enter();
     _permit_list.push_back(permit);
     ++_stats.total_permits;

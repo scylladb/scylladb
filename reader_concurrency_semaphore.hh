@@ -14,6 +14,7 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/gate.hh>
 #include <seastar/core/condition-variable.hh>
+#include <seastar/core/chunked_fifo.hh>
 #include <seastar/core/metrics_registration.hh>
 #include <seastar/util/log.hh>
 #include "reader_permit.hh"
@@ -296,6 +297,12 @@ private:
     permit_list_type _ready_list;
     condition_variable _ready_list_cv;
     permit_list_type _inactive_reads;
+    // Readers to be closed by the eviction loop.
+    // Not stored in the permit: the permit might be registered as inactive
+    // again, before the eviction loop gets to close the reader.
+    chunked_fifo<mutation_reader> _readers_to_close;
+    // Wakes the eviction loop, see eviction_loop().
+    condition_variable _eviction_cv;
     // Stores permits that are not in any of the above list.
     permit_list_type _permit_list;
 
@@ -310,7 +317,7 @@ private:
     stats _stats;
     std::optional<seastar::metrics::metric_groups> _metrics;
     bool _stopped = false;
-    bool _evicting = false;
+    bool _eviction_loop_started = false;
     named_gate _close_readers_gate;
     named_gate _permit_gate;
     std::optional<future<>> _execution_loop_future;
@@ -319,7 +326,9 @@ private:
 private:
     void do_detach_inactive_reader(reader_permit::impl&, evict_reason reason) noexcept;
     [[nodiscard]] mutation_reader detach_inactive_reader(reader_permit::impl&, evict_reason reason) noexcept;
-    void evict(reader_permit::impl&, evict_reason reason) noexcept;
+    // Detach the inactive read synchronously and hand its reader over to the
+    // eviction loop to be closed.
+    void detach_and_evict_in_background(reader_permit::impl&, evict_reason reason) noexcept;
 
     enum class reason { all_ok = 0, ready_list, need_cpu_permits, memory_resources, count_resources };
     reason has_available_units(const resources& r) const;
@@ -332,7 +341,7 @@ private:
     // the permit is admitted (popped from the queue).
     enum class wait_on { admission, memory };
     future<> enqueue_waiter(reader_permit::impl& permit, wait_on wait);
-    void evict_readers_in_background();
+    void evict_readers_in_background() noexcept;
     future<> do_wait_admission(reader_permit::impl& permit);
 
     // Check whether permit can be admitted or not.
@@ -379,6 +388,13 @@ private:
     void close_reader(mutation_reader reader);
 
     future<> execution_loop() noexcept;
+
+    void maybe_start_eviction_loop();
+    // Closes the queued readers (_readers_to_close) and evicts
+    // inactive reads to free up resources for waiters, see evict_readers_in_background().
+    // Readers are closed in the foreground, one at a time. Holds _close_readers_gate
+    // until it exits, which happens when stop() breaks _eviction_cv.
+    future<> eviction_loop() noexcept;
 
     uint64_t get_serialize_limit() const;
     uint64_t get_kill_limit() const;
