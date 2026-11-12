@@ -315,6 +315,10 @@ public:
     // to consume the future even if the upload fails, or seastar reports it as an ignored
     // exceptional future.
     std::pair<data_sink, future<sstring>> make_upload_sink_and_get_etag(sstring object_name, object_metadata = {}, seastar::abort_source* = nullptr);
+    // Uploads the data into temporary "piece" objects, then copies each of them into the
+    // target object as one of its parts. A piece is closed once it has max_parts_per_piece
+    // parts (maximum_parts_in_piece if not given), or before it would grow past
+    // maximum_part_size, the largest part S3 accepts.
     data_sink make_upload_jumbo_sink(sstring object_name, object_metadata = {}, std::optional<unsigned> max_parts_per_piece = {}, seastar::abort_source* = nullptr);
     // Same etag contract as make_upload_sink_and_get_etag() above.
     std::pair<data_sink, future<sstring>> make_upload_jumbo_sink_and_get_etag(sstring object_name, object_metadata = {}, std::optional<unsigned> max_parts_per_piece = {},

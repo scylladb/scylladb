@@ -48,6 +48,7 @@
 #include "utils/s3/credentials_providers/instance_profile_credentials_provider.hh"
 #include "utils/s3/credentials_providers/sts_assume_role_credentials_provider.hh"
 #include "utils/div_ceil.hh"
+#include "utils/error_injection.hh"
 #include "utils/http.hh"
 #include "utils/memory_data_sink.hh"
 #include "utils/chunked_vector.hh"
@@ -1667,13 +1668,26 @@ class client::upload_jumbo_sink final : public upload_sink_base {
     static constexpr tag piece_tag = { .key = "kind", .value = "piece" };
 
     const unsigned _maximum_parts_in_piece;
+    // A full piece becomes one part of the target object with a single UploadPartCopy,
+    // which S3 refuses for a source larger than maximum_part_size. The part count alone
+    // does not keep a piece under that, since parts are only bounded from below, so the
+    // size of a piece is bounded as well.
+    const size_t _maximum_piece_size;
     std::unique_ptr<upload_sink> _current;
+    size_t _current_piece_size = 0;
 
-    future<> maybe_flush() {
+    future<> start_next_piece() {
+        auto next = std::make_unique<upload_sink>(_client, format("{}_{}", _object_name, parts_count() + 1), object_metadata{}, piece_tag, _as);
+        _current_piece_size = 0;
+        co_await upload_part(std::exchange(_current, std::move(next)));
+        s3l.trace("Initiated {} piece (upload_id {})", parts_count(), _upload_id);
+    }
+
+    future<> put_into_current_piece(std::span<temporary_buffer<char>> data, size_t size) {
+        _current_piece_size += size;
+        co_await _current->put(data);
         if (_current->parts_count() >= _maximum_parts_in_piece) {
-            auto next = std::make_unique<upload_sink>(_client, format("{}_{}", _object_name, parts_count() + 1), object_metadata{}, piece_tag, _as);
-            co_await upload_part(std::exchange(_current, std::move(next)));
-            s3l.trace("Initiated {} piece (upload_id {})", parts_count(), _upload_id);
+            co_await start_next_piece();
         }
     }
 
@@ -1681,12 +1695,28 @@ public:
     upload_jumbo_sink(shared_ptr<client> cln, sstring object_name, object_metadata metadata, std::optional<unsigned> max_parts_per_piece, seastar::abort_source* as)
         : upload_sink_base(std::move(cln), std::move(object_name), std::move(metadata), std::nullopt, as)
         , _maximum_parts_in_piece(max_parts_per_piece.value_or(maximum_parts_in_piece))
+        // Uploading 5 GiB is too much for a test, so tests can lower the limit.
+        , _maximum_piece_size(utils::get_local_injector().inject_parameter<size_t>("s3_jumbo_sink_maximum_piece_size").value_or(maximum_part_size))
         , _current(std::make_unique<upload_sink>(_client, format("{}_{}", _object_name, parts_count()), object_metadata{}, piece_tag, _as))
     {}
 
     virtual future<> put(std::span<temporary_buffer<char>> data) override {
-        co_await _current->put(std::move(data));
-        co_await maybe_flush();
+        size_t size = 0;
+        for (const auto& buf : data) {
+            size += buf.size();
+        }
+        // Checked before the data goes into the piece rather than after, so that the
+        // piece never grows past the limit, whatever the size of the buffers put.
+        if (_current_piece_size != 0 && _current_piece_size + size > _maximum_piece_size) {
+            // The buffers data refers to may only live until this first suspends
+            // (data_sink::put(temporary_buffer<char>) passes a span over its own
+            // argument), so take them before starting the next piece.
+            std::vector<temporary_buffer<char>> bufs(std::make_move_iterator(data.begin()), std::make_move_iterator(data.end()));
+            co_await start_next_piece();
+            co_await put_into_current_piece(bufs, size);
+        } else {
+            co_await put_into_current_piece(data, size);
+        }
     }
 
     virtual future<> do_flush() override {
