@@ -790,12 +790,25 @@ future<bool> groups_manager::truncate_tablet_group(raft::group_id gid, utils::UU
     }
 
     auto& as = guard.abort_source();
+    const auto res = co_await append_command(*srv, gid, as, [&] (api::timestamp_type ts, raft::term_t term) {
+        logger.info("truncate_strongly_consistent_tablet: group {}: adding a truncate at {} by request {}, term {}",
+                gid, ts, request_id, term);
+        return raft_command{.change = truncate_command{.truncated_at = ts, .request_id = request_id}};
+    });
+    if (res == append_result::commit_status_unknown) {
+        // Maybe committed. The retry carries the same request id, so a second entry is a no-op.
+        logger.debug("truncate_strongly_consistent_tablet: group {}: the commit status of the truncate is unknown, asking for a retry", gid);
+    }
+    co_return res == append_result::committed;
+}
 
+future<groups_manager::append_result> groups_manager::append_command(raft_server& srv, raft::group_id gid, abort_source& as,
+        noncopyable_function<raft_command(api::timestamp_type, raft::term_t)> make_command) {
     while (true) {
-        auto disposition = srv->begin_mutate(as);
+        auto disposition = srv.begin_mutate(as);
         if (std::holds_alternative<raft::not_a_leader>(disposition)) {
-            logger.debug("truncate_strongly_consistent_tablet: group {} is not led by this replica", gid);
-            co_return false;
+            logger.debug("append_command: group {} is not led by this replica", gid);
+            co_return append_result::not_leader;
         }
         if (auto* wait_for_leader = std::get_if<raft_server::need_wait_for_leader>(&disposition)) {
             co_await std::move(wait_for_leader->future);
@@ -805,27 +818,20 @@ future<bool> groups_manager::truncate_tablet_group(raft::group_id gid, utils::UU
 
         // No suspension between begin_mutate() and add_entry(), see coordinator::mutate().
         raft::command raft_cmd;
-        ser::serialize(raft_cmd, raft_command{.change = truncate_command{
-            .truncated_at = ts_with_term.timestamp,
-            .request_id = request_id,
-        }});
-        logger.info("truncate_strongly_consistent_tablet: group {}: adding a truncate at {} by request {}, term {}",
-                gid, ts_with_term.timestamp, request_id, ts_with_term.term);
+        ser::serialize(raft_cmd, make_command(ts_with_term.timestamp, ts_with_term.term));
         auto res = co_await coroutine::as_future(
-                srv->server().add_entry(std::move(raft_cmd), raft::wait_type::committed, &as));
+                srv.server().add_entry(std::move(raft_cmd), raft::wait_type::committed, &as));
         if (!res.failed()) {
-            co_return true;
+            co_return append_result::committed;
         }
 
         auto ex = res.get_exception();
         if (try_catch<raft::not_a_leader>(ex) || try_catch<raft::dropped_entry>(ex)) {
-            logger.debug("truncate_strongly_consistent_tablet: group {}: add_entry failed with {}, retrying", gid, ex);
+            logger.debug("append_command: group {}: add_entry failed with {}, retrying", gid, ex);
             continue;
         }
         if (try_catch<raft::commit_status_unknown>(ex)) {
-            // Maybe committed. The retry carries the same request id, so a second entry is a no-op.
-            logger.debug("truncate_strongly_consistent_tablet: group {}: the commit status of the truncate is unknown, asking for a retry", gid);
-            co_return false;
+            co_return append_result::commit_status_unknown;
         }
         std::rethrow_exception(std::move(ex));
     }

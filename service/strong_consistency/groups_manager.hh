@@ -275,6 +275,10 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     // nullopt if this node holds no replica of the tablet or the table is gone.
     std::optional<shard_id> find_shard_for_tablet(locator::global_tablet_id tablet, raft::group_id expected_gid) const;
 
+    enum class append_result { committed, not_leader, commit_status_unknown };
+    future<append_result> append_command(raft_server& srv, raft::group_id gid, abort_source& as,
+            noncopyable_function<raft_command(api::timestamp_type, raft::term_t)> make_command);
+
     // Appends a truncate of the group's tablet to the log of the group `gid` if this replica
     // leads it, and tells whether the entry is committed. Runs on the shard hosting the group.
     // Waits until the entry commits or the topology session of `frozen_guard` closes.
