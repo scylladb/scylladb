@@ -9,6 +9,7 @@
 
 #include "dht/i_partitioner.hh"
 #include <functional>
+#include <limits>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <optional>
 #include "dht/token.hh"
@@ -26,6 +27,42 @@
 namespace replica::logstor {
 
 extern seastar::logger logstor_logger;
+
+// Holds the first and the last raw token of a token range. Both bounds are inclusive. The index
+// orders its entries by raw token, so these are the bounds of the entries in the range.
+struct raw_token_bounds {
+    int64_t first;
+    int64_t last;
+
+    // Returns the bounds of `range`, or nullopt when the range holds no token.
+    static std::optional<raw_token_bounds> of(const dht::token_range& range) noexcept {
+        raw_token_bounds bounds{std::numeric_limits<int64_t>::min(), std::numeric_limits<int64_t>::max()};
+        if (range.start()) {
+            const auto raw = range.start()->value().raw();
+            if (range.start()->is_inclusive()) {
+                bounds.first = raw;
+            } else if (raw == std::numeric_limits<int64_t>::max()) {
+                return std::nullopt;
+            } else {
+                bounds.first = raw + 1;
+            }
+        }
+        if (range.end()) {
+            const auto raw = range.end()->value().raw();
+            if (range.end()->is_inclusive()) {
+                bounds.last = raw;
+            } else if (raw == std::numeric_limits<int64_t>::min()) {
+                return std::nullopt;
+            } else {
+                bounds.last = raw - 1;
+            }
+        }
+        if (bounds.first > bounds.last) {
+            return std::nullopt;
+        }
+        return bounds;
+    }
+};
 
 // One entry in the primary index B+tree.
 //
@@ -320,8 +357,10 @@ public:
         std::optional<primary_index_key> next_key;
         while (true) {
             const bool done = with_allocator(_tree_allocator, [&] {
-                auto begin = next_key ? _entries.lower_bound(*next_key, primary_index_key_cmp{}) : position_at_range_start(tr);
-                auto end = position_at_range_end(tr);
+                auto [begin, end] = range_positions(tr);
+                if (next_key) {
+                    begin = _entries.lower_bound(*next_key, primary_index_key_cmp{});
+                }
 
                 auto page_end = begin;
                 for (size_t i = 0; i < page_size && page_end != end; ++i, ++page_end);
@@ -517,8 +556,7 @@ public:
                 return std::nullopt;
             }
 
-            auto current = _index->position_at_range_start(unread_range());
-            auto end = _index->position_at_range_end(_range);
+            auto [current, end] = _index->range_positions(unread_range());
             if (current == end) {
                 _exhausted = true;
                 _last_token.reset();
@@ -624,20 +662,16 @@ private:
         --_key_count;
     }
 
-    auto position_at_range_start(this auto& self, const dht::token_range& tr) -> decltype(self._entries.begin()) {
-        return tr.start()
-                ? (tr.start()->is_inclusive()
-                    ? self._entries.lower_bound(tr.start()->value().raw(), primary_index_key_cmp{})
-                    : self._entries.upper_bound(tr.start()->value().raw(), primary_index_key_cmp{}))
-                : self._entries.begin();
-    }
-
-    auto position_at_range_end(this auto& self, const dht::token_range& tr) -> decltype(self._entries.end()) {
-        return tr.end()
-                ? (tr.end()->is_inclusive()
-                    ? self._entries.upper_bound(tr.end()->value().raw(), primary_index_key_cmp{})
-                    : self._entries.lower_bound(tr.end()->value().raw(), primary_index_key_cmp{}))
-                : self._entries.end();
+    // Returns the first entry in `tr` and the entry after the last entry in `tr`, or end() for both
+    // when the range holds no token.
+    auto range_positions(this auto& self, const dht::token_range& tr)
+            -> std::pair<decltype(self._entries.begin()), decltype(self._entries.end())> {
+        const auto bounds = raw_token_bounds::of(tr);
+        if (!bounds) {
+            return {self._entries.end(), self._entries.end()};
+        }
+        return {self._entries.lower_bound(bounds->first, primary_index_key_cmp{}),
+                self._entries.upper_bound(bounds->last, primary_index_key_cmp{})};
     }
 };
 
