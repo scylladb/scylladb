@@ -1843,6 +1843,11 @@ def testInfinity(cql, test_keyspace):
 
             execute(cql, table, "truncate %s")
 
+# Reproduces SCYLLADB-5163: Scylla sums float values in a float, so the sum
+# depends on the order in which the rows are added. With tablets, the order
+# happens to give the expected result, but with vnodes it doesn't. So the
+# xfail isn't strict.
+@pytest.mark.xfail(reason="SCYLLADB-5163", strict=False)
 def testSumPrecision(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(bucket int primary key, v1 float, v2 double, v3 decimal)") as table:
         for i in range(1, 18):
