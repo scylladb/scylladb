@@ -1995,8 +1995,12 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
         }
 
         auto& ctl = snap_ctl.local();
-        auto task_id = co_await ctl.start_global_backup(std::move(dclocs), std::move(ks_tables), std::move(snapshot_name), move_files);
-        co_return json::json_return_type(fmt::to_string(task_id));
+        try {
+            auto task_id = co_await ctl.start_global_backup(std::move(dclocs), std::move(ks_tables), std::move(snapshot_name), move_files);
+            co_return json::json_return_type(fmt::to_string(task_id));
+        } catch (const std::invalid_argument& e) {
+            throw httpd::bad_param_exception(e.what());
+        }
     });
 
     cf::get_true_snapshots_size.set(r, [&snap_ctl] (std::unique_ptr<http::request> req) {
