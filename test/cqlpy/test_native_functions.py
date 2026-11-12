@@ -318,5 +318,14 @@ def test_snake_case_json_function_names(cql, table1):
     p = unique_key_int()
     cql.execute(f"INSERT INTO {table1} (p, i) VALUES ({p}, from_json('17'))")
     result = cql.execute(f'SELECT to_json(i), tojson(i) FROM {table1} WHERE p = {p}')
-    assert result.column_names[0] == 'system.to_json(i)'
     assert list(result) == [('17', '17')]
+
+# The result column of to_json() or tojson() is named after the name used in
+# the query. Cassandra names it after whichever of the two names was first
+# used with the same argument type since the node started, which is a bug
+# (CASSANDRA-21881). Selecting both names in one query exposes it every time.
+def test_snake_case_json_function_column_names(cql, table1, cassandra_bug):
+    p = unique_key_int()
+    cql.execute(f'INSERT INTO {table1} (p, i) VALUES ({p}, 17)')
+    result = cql.execute(f'SELECT to_json(i), tojson(i) FROM {table1} WHERE p = {p}')
+    assert result.column_names == ['system.to_json(i)', 'system.tojson(i)']
