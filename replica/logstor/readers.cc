@@ -191,7 +191,7 @@ class logstor_single_key_reader : public logstor_reader_base {
         }
         auto partition = decode_record_value(record.value, *_table_schema, record.header);
         if (_use_cache) {
-            _index.populate_cache(key, where.location, _table_schema, _dk.key(), partition);
+            _index.populate_cache(where.guard, key, where.location, _table_schema, _dk.key(), partition);
         }
         tracing::trace(_trace_state, "logstor_single_key_reader: fetched key {}", _dk);
         begin(std::move(partition));
