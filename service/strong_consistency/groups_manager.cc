@@ -621,7 +621,8 @@ future<std::unordered_map<raft::group_id, api::timestamp_type>> groups_manager::
             const auto gid = tmap.get_tablet_raft_info(tid).group_id;
             const auto it = _raft_groups.find(gid);
             // A migrating tablet is skipped: its new replica is not in the replica set yet.
-            if (it == _raft_groups.end() || !it->second.leader_info || tmap.get_tablet_transition_info(tid)) {
+            if (it == _raft_groups.end() || !it->second.leader_info || !it->second.storage
+                    || it->second.storage->seals().empty() || tmap.get_tablet_transition_info(tid)) {
                 continue;
             }
             const global_tablet_id tablet{table, tid};
@@ -1002,6 +1003,13 @@ future<> groups_manager::seal_proposer::run() {
 }
 
 future<> groups_manager::seal_proposer::round() {
+    const auto min_applied = co_await _gm.min_applied_timestamps();
+    for (const auto& [gid, ts] : min_applied) {
+        if (const auto it = _gm._raft_groups.find(gid); it != _gm._raft_groups.end()) {
+            co_await maybe_promote(gid, it->second, ts);
+        }
+    }
+
     std::vector<raft::group_id> led;
     for (const auto& [gid, state] : _gm._raft_groups) {
         if (state.leader_info) {
@@ -1054,6 +1062,22 @@ future<> groups_manager::seal_proposer::append(raft_server& srv, raft::group_id 
         }
         logger.debug("seal_proposer: group {}: the command was not committed: {}", gid, std::current_exception());
     }
+}
+
+future<> groups_manager::seal_proposer::maybe_promote(raft::group_id gid, raft_group_state& state, api::timestamp_type min_applied) {
+    auto srv = try_acquire_server(state);
+    if (!srv || !state.storage) {
+        co_return;
+    }
+    const auto& seals = state.storage->seals();
+    const auto seal = std::ranges::find_if(seals | std::views::reverse, [&] (const raft_seal& s) { return s.ts <= min_applied; });
+    if (seal == seals.rend()) {
+        co_return;
+    }
+    co_await append(*srv, gid, [gid, idx = seal->idx] (api::timestamp_type, raft::term_t term) {
+        logger.debug("seal_proposer: group {}: promoting the seal at {}, term {}", gid, idx, term);
+        return raft_command{.change = promote_command{.seal_idx = idx}};
+    });
 }
 
 // The raft group configuration implied by a tablet's replica set and the stage its

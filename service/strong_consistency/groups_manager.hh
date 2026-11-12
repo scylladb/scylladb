@@ -192,9 +192,10 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     // The tables given a seal boundaries provider, to take it back in stop().
     std::unordered_set<table_id> _seal_provider_tables;
 
-    // Seals the data of the groups this shard leads: a seal is appended to a group's log once
-    // enough has been written since the last one, or the oldest unsealed write is old enough,
-    // while fewer than max_pending_seals wait for their promotion.
+    // Seals the data of the groups this shard leads, and promotes the seals: a seal is appended
+    // to a group's log once enough has been written since the last one, or the oldest unsealed
+    // write is old enough, while fewer than max_pending_seals wait for their promotion. The
+    // newest seal every replica has applied is promoted.
     class seal_proposer {
         groups_manager& _gm;
         future<> _fiber = make_ready_future<>();
@@ -202,6 +203,8 @@ class groups_manager : public peering_sharded_service<groups_manager> {
         future<> run();
         future<> round();
         future<> maybe_seal(raft::group_id gid, raft_group_state& state);
+        // `min_applied` is the newest change every replica of the group has applied.
+        future<> maybe_promote(raft::group_id gid, raft_group_state& state, api::timestamp_type min_applied);
         // Appends the command with a timeout, and logs a failure instead of throwing,
         // so that one group does not hold back the round.
         future<> append(raft_server& srv, raft::group_id gid,
@@ -245,8 +248,9 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     // The newest change this shard has applied for each of `groups`, which it must host.
     future<applied_timestamp_per_group> get_applied_timestamps(const tablet_per_group& groups) const;
 
-    // For every group this shard leads, the newest change all of its replicas have applied,
-    // so the newest seal which may be promoted. Groups a replica did not answer for are left out.
+    // For every group this shard leads with a seal to promote, the newest change all of its
+    // replicas have applied, so the newest seal which may be promoted. Groups a replica did
+    // not answer for are left out.
     future<std::unordered_map<raft::group_id, api::timestamp_type>> min_applied_timestamps();
 
     // A table keeps its metrics until it is dropped, even once its last tablet
