@@ -69,6 +69,19 @@ Only step 4 writes to the disk - all other steps only update in-memory metadata.
 4. It reads the segments, finding all live records, and writing them into a write buffer. When the buffer is full it is flushed into a new segment, and for each recording updating the index location to the new location.
 5. After all live records are rewritten the old segments are freed.
 
+**Automatic compaction:**
+1. A segment is a candidate when its utilization (live record bytes / segment size) is at most the utilization threshold, `logstor_compaction_utilization_threshold` (default 0.5).
+2. The threshold is a function of the free level, the number of available segments on the shard, and it is linear between three points:
+   - At the space floor (`logstor_compaction_space_floor`, default 3% of the disk, at least two batches and at most a quarter of the disk) and below, the threshold is 1.
+   - At the anchor (twice the space floor, at most half of the disk), the threshold is the configured value.
+   - At the ceiling (one segment above the anchor) and above, the threshold is a minimum, `logstor_compaction_min_utilization_threshold` (default 0.1).
+
+   So the free level stays near the anchor as long as the threshold that holds it there is above the minimum. Below the anchor, a full disk compacts fuller segments. Above the anchor, a disk with free space compacts only emptier segments, which costs less write amplification. The minimum makes sure that a segment with a few long-lived records is compacted at any free level, which bounds the space that such segments hold.
+3. One driver per shard runs while a compaction group has a batch of candidates with a net gain. Nothing throttles it: the threshold decides what it compacts, and the CPU shares decide how fast.
+4. The CPU shares of the compaction scheduling group are 50, the floor of the sstable compaction controller, while the free level is at or above the anchor, and increase linearly to `logstor_compaction_max_shares` at the space floor. So when compaction does not keep up with the writes, the free level decreases below the anchor and compaction gets more CPU.
+5. A job that runs next to another job starts only if its batch reclaims at least 75% of what the best batch of the shard reclaims per byte copied.
+6. Automatic compaction skips the compaction groups of a table whose automatic compaction is off, for example after `nodetool disableautocompaction`. A compaction that is asked for through the logstor compaction API still runs.
+
 ## Usage
 
 ### Enabling Logstor

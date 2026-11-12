@@ -39,6 +39,7 @@ class recovery_catalog;
 
 static constexpr uint64_t default_segment_size = 128 * 1024;
 static constexpr uint64_t default_file_size = 32 * 1024 * 1024;
+static constexpr double default_compaction_min_utilization_threshold = 0.1;
 
 /// Configuration for the segment manager
 struct segment_manager_config {
@@ -52,11 +53,20 @@ struct segment_manager_config {
     // fragmentation and of not reserving space up front.
     bool sparse_files = false;
     bool compaction_enabled = true;
-    size_t max_segments_per_compaction = 32;
-    utils::updateable_value<double> trigger_compaction_threshold{0.05};
+    // The space floor as a fraction of the disk, see compaction_space_floor().
+    utils::updateable_value<double> compaction_space_floor{0.03};
+    // A segment is a candidate for automatic compaction while its utilization is at most this.
+    // A value outside [0, 1] applies as the nearest bound.
+    utils::updateable_value<double> compaction_utilization_threshold{0.5};
+    // The threshold at the ceiling of the threshold curve and above, see
+    // utilization_threshold_curve. At or above compaction_utilization_threshold the threshold is
+    // constant above the anchor.
+    utils::updateable_value<double> compaction_min_utilization_threshold{default_compaction_min_utilization_threshold};
     seastar::scheduling_group compaction_sg;
     utils::updateable_value<float> compaction_static_shares;
-    utils::updateable_value<float> compaction_max_shares;
+    // The shares of the compaction scheduling group at the space floor, see
+    // compaction_rate_controller.
+    utils::updateable_value<float> compaction_max_shares{2000};
     seastar::scheduling_group separator_sg;
     seastar::scheduling_group split_compaction_sg;
 };

@@ -176,9 +176,9 @@ public:
         const auto record_bytes = desc.record_bytes(_segment_size);
         const auto old_bucket = utilization_bucket_of(record_bytes + freed_bytes, _segment_size);
         const auto new_bucket = utilization_bucket_of(record_bytes, _segment_size);
-        _stats.free_from_segment(freed_bytes, old_bucket, new_bucket);
+        _stats.free_from_segment(freed_bytes, record_bytes, old_bucket, new_bucket);
         if (_shard_stats) {
-            _shard_stats->free_from_segment(freed_bytes, old_bucket, new_bucket);
+            _shard_stats->free_from_segment(freed_bytes, record_bytes, old_bucket, new_bucket);
         }
     }
 
@@ -443,6 +443,7 @@ public:
     virtual future<> remove(logstor_group&) = 0;
 
     virtual void submit(logstor_group&) = 0;
+    virtual void on_automatic_compaction_enabled() noexcept = 0;
 
     virtual future<> submit_split_compaction(logstor_group& src, mutation_writer::classify_by_token_group, split_target_group) = 0;
 
@@ -488,6 +489,12 @@ public:
     virtual ~logstor_group() = default;
 
     virtual table_id table_id() const noexcept = 0;
+
+    // Returns true when automatic compaction of the table is off, for example after nodetool
+    // disableautocompaction. A compaction that is asked for explicitly still runs.
+    virtual bool automatic_compaction_disabled() const noexcept {
+        return false;
+    }
 
     virtual primary_index& logstor_index() noexcept = 0;
     virtual const primary_index& logstor_index() const noexcept = 0;

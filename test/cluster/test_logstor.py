@@ -16,6 +16,7 @@ import pytest
 import logging
 from test.pylib.tablets import get_tablet_count, get_tablet_replica
 from test.pylib.util import wait_for
+from test.pylib.rest_client import ScyllaMetricsLine
 
 logger = logging.getLogger(__name__)
 
@@ -659,6 +660,9 @@ async def test_table_disk_space_metrics(manager: ScyllaClusterManager):
 
     async with new_test_keyspace(manager, "WITH tablets={'initial':1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+        # Automatic compaction can free the segments that the overwrites kill before the test counts
+        # them, so it is off. The test runs compaction through the API.
+        await manager.api.disable_autocompaction(server.ip_addr, ks, "test")
 
         insert = cql.prepare(f"INSERT INTO {ks}.test (pk, v) VALUES (?, ?)")
         value = 'x' * value_size
@@ -781,6 +785,8 @@ async def test_compaction(manager: ScyllaClusterManager):
 
     async with new_test_keyspace(manager, "WITH tablets={'initial':1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+        # Automatic compaction is off, so that the compaction that the test runs takes the dead segments.
+        await manager.api.disable_autocompaction(servers[0].ip_addr, ks, "test")
 
         # write few segments with unique keys, then few segments with overwrites.
         # write large values so each write fills a single segment.
@@ -811,6 +817,173 @@ async def test_compaction(manager: ScyllaClusterManager):
                 return True
             await manager.api.logstor_compaction(servers[0].ip_addr)
         await wait_for(segments_compacted, time.time() + 60)
+
+async def test_automatic_compaction_skips_a_table_with_autocompaction_disabled(manager: ScyllaClusterManager):
+    """
+    After disable_autocompaction on a logstor table, automatic compaction does not take the
+    segments of the table, and a compaction through the logstor compaction API still does.
+
+    A second table with automatic compaction on shows that automatic compaction ran. Its dead
+    segments are fewer than the dead segments of the first table, so a ranking that ignores the
+    setting takes the first table before the second.
+    """
+    cmdline = ['--logger-log-level', 'logstor=debug', '--smp=1']
+    cfg = {
+        'experimental_features': ['logstor'],
+        'logstor_disk_size_in_mb': 8,
+        'logstor_file_size_in_mb': 1,
+        'enable_keyspace_column_family_metrics': True,
+    }
+    server = await manager.server_add(cmdline=cmdline, config=cfg)
+    cql = manager.get_cql()
+
+    async def segments_in() -> float:
+        metrics = await manager.metrics.query(server.ip_addr)
+        return metrics.get("scylla_logstor_sm_compaction_segments_in") or 0
+
+    async with new_test_keyspace(manager, "WITH tablets={'initial':1}") as ks:
+        async def table_segments(table: str) -> int:
+            metrics = await manager.metrics.query(server.ip_addr)
+            return int(metrics.get("scylla_column_family_logstor_segments", {'ks': ks, 'cf': table}) or 0)
+
+        async def overwrite(table: str, keys: int):
+            # A segment holds 15 or 16 records, and each key is written twice, so the segments of
+            # the first values hold only dead records.
+            stmt = cql.prepare(f"INSERT INTO {ks}.{table} (pk, v) VALUES (?, ?)")
+            for value in ['a' * 8000, 'b' * 8000]:
+                for i in range(keys):
+                    await cql.run_async(stmt, [i, value])
+
+        for table in ["skipped", "control"]:
+            await cql.run_async(f"CREATE TABLE {ks}.{table} (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+        await manager.api.disable_autocompaction(server.ip_addr, ks, "skipped")
+
+        # About 10 dead segments, more than the batch cap of this disk.
+        await overwrite("skipped", 160)
+        await manager.api.logstor_flush(server.ip_addr)
+        skipped_segments = await table_segments("skipped")
+        assert await segments_in() == 0, "automatic compaction took segments of a table with automatic compaction disabled"
+
+        # About 3 dead segments. A batch of dead segments copies nothing, and the ranking prefers
+        # the batch that reclaims more segments, so a job on this table shows that the driver
+        # ranked the groups while the table with automatic compaction off had the better batch.
+        await overwrite("control", 48)
+        async def automatic_compaction_ran():
+            if await segments_in() > 0:
+                return True
+        await wait_for(automatic_compaction_ran, time.time() + 60)
+        assert await table_segments("skipped") == skipped_segments, "automatic compaction took segments of a table with automatic compaction disabled"
+
+        await manager.api.logstor_compaction(server.ip_addr)
+        async def compacted():
+            if await table_segments("skipped") < skipped_segments:
+                return True
+        await wait_for(compacted, time.time() + 60)
+
+@pytest.mark.parametrize("enable_later", [False, True])
+async def test_automatic_compaction_follows_the_utilization_threshold(manager: ScyllaClusterManager, enable_later: bool):
+    """
+    Automatic compaction compacts a segment only when at most logstor_compaction_utilization_threshold
+    of the segment is live. The test makes segments on both sides of the threshold in one table,
+    while the free level of a small disk is above the anchor. Compaction takes the segments under
+    the threshold without a request, and it leaves the segments over the threshold, although a
+    compaction of any batch with a net gain takes them.
+
+    With `enable_later`, automatic compaction of the table is off while the test makes the segments
+    over the threshold. Turning it on again must not compact them.
+    """
+    threshold = 0.5
+    # The fewest candidates that a group must have for a job above the anchor,
+    # min_segments_per_compaction.
+    min_batch = 8
+    # A segment holds 15 or 16 records, so each set of keys fills about 10 segments of the 64 of the
+    # disk, and the free level stays above the anchor.
+    keys_per_set = 160
+    value_size = 8000
+
+    cmdline = ['--logger-log-level', 'logstor=debug', '--smp=1']
+    cfg = {
+        'logstor_disk_size_in_mb': 8,
+        'logstor_file_size_in_mb': 1,
+        'logstor_compaction_utilization_threshold': threshold,
+        # A minimum at the threshold keeps the threshold constant above the anchor. The default
+        # curve falls to its minimum one segment above the anchor, which is not the threshold that
+        # this test is about.
+        'logstor_compaction_min_utilization_threshold': threshold,
+        'experimental_features': ['logstor']
+    }
+    server = await manager.server_add(cmdline=cmdline, config=cfg)
+    cql = manager.get_cql()
+
+    async def get(name: str) -> float:
+        metrics = await manager.metrics.query(server.ip_addr)
+        value = metrics.get(f"scylla_logstor_sm_{name}")
+        assert value is not None, f"{name} is not exported"
+        return float(value)
+
+    async def segments_at_most(utilization: float) -> float:
+        # The segment_utilization histogram is cumulative, so the bucket with the upper bound
+        # `utilization` counts the segments with at most that utilization.
+        metrics = await manager.metrics.query(server.ip_addr)
+        for line in metrics.lines_by_prefix("scylla_logstor_sm_segment_utilization_bucket"):
+            bucket = ScyllaMetricsLine.from_string(line)
+            if bucket is not None and float(bucket.labels["le"]) == pytest.approx(utilization):
+                return bucket.value
+        assert False, f"segment_utilization has no bucket with the upper bound {utilization}"
+
+    async with new_test_keyspace(manager, "WITH tablets={'initial':1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+        if enable_later:
+            await manager.api.disable_autocompaction(server.ip_addr, ks, "test")
+        stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, v) VALUES (?, ?)")
+
+        async def write(keys, value_char: str):
+            value = value_char * value_size
+            for pk in keys:
+                await cql.run_async(stmt, [pk, value])
+
+        # Set A fills its own segments, and then set B fills its own.
+        set_a = range(keys_per_set)
+        set_b = range(keys_per_set, 2 * keys_per_set)
+        await write(set_a, 'a')
+        await write(set_b, 'a')
+
+        # Overwrite a third of the records of each segment of A, which leaves A about 2/3 live, over
+        # the threshold, and two thirds of the records of each segment of B, which leaves B about
+        # 1/3 live, under the threshold.
+        await write([pk for pk in set_a if pk % 3 == 0], 'b')
+        if enable_later:
+            # Automatic compaction ranks the group when it is on again, and finds nothing under
+            # the threshold.
+            await manager.api.enable_autocompaction(server.ip_addr, ks, "test")
+            await asyncio.sleep(1)
+            assert await get("compaction_segments_in") == 0, "turning automatic compaction on compacted segments over the threshold"
+        await write([pk for pk in set_b if pk % 3 != 0], 'b')
+
+        # Compaction takes B on its own. A group keeps fewer candidates than the minimum batch.
+        async def compacted_under_threshold():
+            under = await segments_at_most(threshold)
+            if await get("compaction_segments_in") > 0 and under < min_batch:
+                return True
+        await wait_for(compacted_under_threshold, time.time() + 60)
+        assert await get("compaction_utilization_threshold") == pytest.approx(threshold)
+
+        # The end of each job makes the driver rank the group again at once, so the driver has
+        # ranked A after the last job. 8 segments of A hold less than 7 segments of live data, so a
+        # compaction that ignores the threshold takes them.
+        await asyncio.sleep(1)
+        # The bucket bound 13/16 is between the segments of A, which are about 2/3 live, and a full
+        # segment, which is more than 7/8 live.
+        a_max_utilization = 13 / 16
+        over = await segments_at_most(a_max_utilization) - await segments_at_most(threshold)
+        assert over >= min_batch, "compaction took segments over the threshold"
+
+        rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test")
+        assert len(rows) == 2 * keys_per_set
+        for row in rows:
+            in_a = row.pk < keys_per_set
+            overwritten = (row.pk % 3 == 0) if in_a else (row.pk % 3 != 0)
+            assert row.v == ('b' if overwritten else 'a') * value_size
 
 async def test_drop_table(manager: ScyllaClusterManager):
     """
@@ -899,6 +1072,9 @@ async def test_table_removal_during_logstor_compaction(manager: ScyllaClusterMan
 
     async with new_test_keyspace(manager, "WITH tablets={'initial':1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+        # Automatic compaction is off, so that it does not take the dead segments before the
+        # compaction that the test pauses.
+        await manager.api.disable_autocompaction(server.ip_addr, ks, "test")
 
         value_size = 30 * 1024
         base_value = 'a' * value_size
@@ -1193,6 +1369,9 @@ async def test_tablet_migration_with_compaction(manager: ScyllaClusterManager):
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets={'initial': 1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+        # Automatic compaction is off, so that the dead segments are still there for the compaction that
+        # runs while the streaming is paused.
+        await manager.api.disable_autocompaction(s1.ip_addr, ks, "test")
 
         value_size = 30 * 1024
         nrows = 20

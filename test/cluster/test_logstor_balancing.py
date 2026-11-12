@@ -5,9 +5,9 @@
 #
 
 # Tests for the sizes the tablet balancer sees for logstor tables. A logstor tablet reports the live
-# record bytes of the segments its group owns, and not the space of those segments: compaction keeps
-# every shard's pool nearly full, so the space follows the churn of the shard, not the data of the
-# tablet.
+# record bytes of the segments its group owns, and not the space of those segments: the dead records
+# stay in the segments until compaction reclaims them, so the space follows the churn of the shard,
+# not the data of the tablet.
 
 import asyncio
 import logging
@@ -134,6 +134,9 @@ async def test_tablet_split_trigger_by_size(manager: ScyllaClusterManager):
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+        # Automatic compaction can free the segments of the deleted values, and the test checks that
+        # the merge comes from the live records alone, so it is off.
+        await manager.api.disable_autocompaction(servers[0].ip_addr, ks, "test")
 
         assert await get_tablet_count(manager, servers[0], ks, 'test') == 1
 
@@ -196,6 +199,10 @@ async def test_balance_by_live_bytes(manager: ScyllaClusterManager):
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 8}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+        # Automatic compaction can free the overwritten segments as fast as the churn fills them, so
+        # it is off.
+        for s in servers:
+            await manager.api.disable_autocompaction(s.ip_addr, ks, "test")
 
         heavy_host = await manager.get_host_id(servers[0].server_id)
         tablets = await keys_by_tablet(manager, servers[0], ks, 'test', heavy_keys_per_tablet)
@@ -209,13 +216,23 @@ async def test_balance_by_live_bytes(manager: ScyllaClusterManager):
 
         # Overwrite the data until most of the segments of both pools are in use, while their live data
         # is not the same: the heavy node holds about 24 segments of live records and the light node
-        # about 8, out of 64.
+        # about 8, out of 64. Automatic compaction is off, so a node whose pool is full blocks its
+        # writes, and a flush on that node waits for a segment that nothing frees. With the
+        # compaction reserve, the pool is full at 56 segments in use.
+        #
+        # The heavy node fills about three times as fast as the light node, so each round overwrites
+        # only the keys of the nodes that are not full enough yet. An overwrite of all the keys of the
+        # heavy node takes about 25 segments and can fill its pool, so each round overwrites at most
+        # `keys_per_round` keys of each node. Such a round takes about 7 segments, so the last round
+        # of a node ends below 48 and leaves room for the flush that follows.
+        keys_per_round = 12
+        keys_of_server = [keys_on[await manager.get_host_id(s.server_id)] for s in servers]
         async def pools_full() -> bool:
             in_use = [await segments_in_use(manager, s) for s in servers]
             logger.info(f"segments in use: {in_use}")
             if all(n >= 40 for n in in_use):
                 return True
-            await write(cql, ks, all_keys, value)
+            await write(cql, ks, [pk for n, keys in zip(in_use, keys_of_server) if n < 40 for pk in keys[:keys_per_round]], value)
         await wait_for(pools_full, time.time() + 120)
 
         await flush_and_refresh(manager, servers)
@@ -223,6 +240,7 @@ async def test_balance_by_live_bytes(manager: ScyllaClusterManager):
         logger.info(f"live bytes before balancing: {live_before}")
 
         servers.append(await manager.server_add(cmdline=cmdline, config=balancing_cfg, property_file={'dc': 'dc1', 'rack': 'r1'}))
+        await manager.api.disable_autocompaction(servers[-1].ip_addr, ks, "test")
         await flush_and_refresh(manager, servers)
         await manager.enable_tablet_balancing()
         await manager.api.quiesce_topology(servers[0].ip_addr)
@@ -294,6 +312,9 @@ async def test_tablet_sizes_reach_coordinator(manager: ScyllaClusterManager):
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v text) WITH storage_engine = 'logstor'")
+        # Automatic compaction can free the overwritten segments before the test checks that the space
+        # grew, so it is off. The test runs compaction through the API.
+        await manager.api.disable_autocompaction(servers[0].ip_addr, ks, "test")
         table_id = await manager.get_table_id(ks, 'test')
         labels = {'ks': ks, 'cf': 'test'}
 

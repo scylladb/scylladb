@@ -1022,10 +1022,19 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , logstor_sparse_files(this, "logstor_sparse_files", value_status::Used, false,
         "Create logstor data files as sparse files. When disabled, each file is preallocated and fully written with zeros, guaranteeing space is available and avoiding fragmentation. "
         "When enabled, the file is only extended to its nominal size, so unwritten regions consume no disk space. Useful for tests, where the disk space and I/O of formatting files is wasteful.")
-    , logstor_compaction_trigger_threshold(this, "logstor_compaction_trigger_threshold", liveness::LiveUpdate, value_status::Used, 0.05,
-        "Trigger automatic logstor compaction when the number of available segments drops below this fraction of the total number of logstor segments. A value of 0 disables the trigger threshold.")
+    , logstor_compaction_space_floor(this, "logstor_compaction_space_floor", liveness::LiveUpdate, value_status::Used, 0.03,
+        "The free space, as a fraction of the logstor disk, at which logstor compaction takes any segment from which it can reclaim space, at logstor_compaction_max_shares. Writes can still use this space. "
+        "A smaller value leaves more of the disk for data, but less room for a burst of writes until compaction reclaims again. "
+        "It is at least two compaction batches and at most 0.25.")
+    , logstor_compaction_utilization_threshold(this, "logstor_compaction_utilization_threshold", liveness::LiveUpdate, value_status::Used, 0.5,
+        "A logstor segment is compacted when the fraction of it that holds live data is at most this value, while twice logstor_compaction_space_floor of the disk is free. "
+        "When less of the disk is free, compaction also takes fuller segments. When more is free, it takes only segments under logstor_compaction_min_utilization_threshold. "
+        "A higher value frees space sooner, at a higher write amplification. 0 compacts only segments with no live data, and 1 compacts any segment from which compaction can reclaim space.")
+    , logstor_compaction_min_utilization_threshold(this, "logstor_compaction_min_utilization_threshold", liveness::LiveUpdate, value_status::Used, 0.1,
+        "The utilization threshold of logstor compaction while more than twice logstor_compaction_space_floor of the disk is free. It limits the space that segments with a few long-lived records hold, "
+        "at a lower write amplification than logstor_compaction_utilization_threshold. A value at or above logstor_compaction_utilization_threshold keeps that threshold also when more of the disk is free.")
     , logstor_compaction_max_shares(this, "logstor_compaction_max_shares", liveness::LiveUpdate, value_status::Used, 2000,
-        "Maximum CPU shares the logstor compaction controller gives the logstor compaction scheduling group, reached at full space pressure. ")
+        "Maximum CPU shares of the logstor compaction scheduling group, reached at logstor_compaction_space_floor. As the free space falls from twice the space floor to the space floor, the shares increase linearly from 50.")
     , file_cache_size_in_mb(this, "file_cache_size_in_mb", value_status::Unused, 512,
         "Total memory to use for SSTable-reading buffers.")
     , memtable_flush_queue_size(this, "memtable_flush_queue_size", value_status::Unused, 4,
