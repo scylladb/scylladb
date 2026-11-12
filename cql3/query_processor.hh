@@ -602,6 +602,9 @@ private:
     future<::shared_ptr<cql_transport::messages::result_message>>
     process_authorized_statement(const ::shared_ptr<cql_statement> statement, service::query_state& query_state, const query_options& options, std::optional<service::group0_guard> guard);
 
+    // What get_statement() sets on a statement after prepare(). Takes the query.
+    static void finish_prepare(statements::prepared_statement& p, utils::chunked_string&& query, prepared_for_driver for_driver);
+
     /*!
      * \brief created a state object for paging
      *
