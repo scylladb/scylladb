@@ -50,6 +50,8 @@ ICS merges SSTables of approximately the same size, like the deprecated
 
 Compaction is triggered when there are two or more runs of roughly the same size. These runs are incrementally compacted with each other, producing a new SSTable run, while incrementally releasing space as soon as each SSTable in the input run is processed and compacted. This method eliminates the high temporary space amplification problem of STCS by limiting the overhead to twice the (constant) fragment size, per shard.
 
+Some runs of one tier may not overlap each other, for example the runs of two tablets that were merged into one. Compacting such runs together would only rewrite their data. ICS splices them instead: it treats their SSTables as a single run from then on, and nothing is read or written. Runs of the tier that overlap the spliced runs are not part of the splice. The splice is kept in memory only, so ICS splices the runs again after a restart.
+
 Incremental Compaction Strategy benefits
 ----------------------------------------
 * Greatly reduces the temporary space amplification which is typical of size-tiered compaction, resulting in more disk space being available for storing user data.
