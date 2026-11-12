@@ -10,7 +10,7 @@ from test.pylib.rest_client import inject_error_one_shot, read_barrier
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas, get_tablet_count
 from test.pylib.util import wait_for
 from test.cluster.util import new_test_keyspace, create_new_test_keyspace, feature_configs, FeatureConfigurations, \
-    FeatureConfig, count_rows
+    FeatureConfig, count_rows, reconnect_driver
 
 import pytest
 import asyncio
@@ -777,3 +777,107 @@ async def test_gc_sstable_release_during_tablet_merge(manager: ScyllaClusterMana
 
         # Unblock the merge fiber to let cleanup proceed
         await manager.api.message_injection(server.ip_addr, "merge_completion_fiber")
+
+
+async def create_table_with_two_ics_runs(manager: ScyllaClusterManager, server: ServerInfo, ks: str):
+    """
+    Creates the table `test` with two tablets on `server`, each holding a single ICS run of
+    similar size, and disables auto-compaction for it, so that pending compactions stay pending.
+    """
+    cql = manager.get_cql()
+    # min_threshold=2 makes ICS compact any two runs of similar size.
+    await cql.run_async(f"""CREATE TABLE {ks}.test (pk int PRIMARY KEY, c text)
+                           WITH compaction = {{'class': 'IncrementalCompactionStrategy', 'min_threshold': 2}}
+                           AND tablets = {{'min_tablet_count': 2}}""")
+    # Not done with the 'enabled' compaction option, which replaces ICS with NullCompactionStrategy.
+    # The REST API disables it only in memory, so only until the restart.
+    await manager.api.disable_autocompaction(server.ip_addr, ks, 'test')
+    value = 'x' * 1024
+    await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, '{value}')") for k in range(1000)])
+    await manager.api.flush_keyspace(server.ip_addr, ks)
+    # Leaves each tablet with a single run.
+    await manager.api.keyspace_compaction(server.ip_addr, ks)
+
+
+async def get_pending_compactions(manager: ScyllaClusterManager, server: ServerInfo, ks: str):
+    return await manager.api.client.get_json(f"/column_family/metrics/pending_compactions/{ks}:test", host=server.ip_addr)
+
+
+async def get_data_sizes(manager: ScyllaClusterManager, server: ServerInfo, ks: str) -> list[int]:
+    """Returns the sizes of the Data components of the sstables of the table `test`, sorted."""
+    info = await manager.api.get_sstable_info(server.ip_addr, ks, 'test')
+    return sorted(sst['data_size'] for shard in info for sst in shard['sstables'])
+
+
+async def get_sstable_generations(manager: ScyllaClusterManager, server: ServerInfo, ks: str) -> list[str]:
+    """Returns the generations of the sstables of the table `test`, sorted."""
+    info = await manager.api.get_sstable_info(server.ip_addr, ks, 'test')
+    return sorted(str(sst['generation']) for shard in info for sst in shard['sstables'])
+
+
+async def merge_tablets(manager: ScyllaClusterManager, server: ServerInfo, ks: str):
+    """Merges the two tablets of the table `test` into one, and waits for the merge completion fiber."""
+    log = await manager.server_open_log(server.server_id)
+    mark = await log.mark()
+    # Makes the merge completion fiber log once it's done.
+    await inject_error_on(manager, "replica_merge_completion_wait", [server])
+    await manager.get_cql().run_async(f"ALTER TABLE {ks}.test WITH tablets = {{'min_tablet_count': 1}}")
+    await manager.enable_tablet_balancing()
+    await log.wait_for('Merge completion fiber finished', from_mark=mark)
+    await manager.disable_tablet_balancing()
+    assert await get_tablet_count(manager, server, ks, 'test') == 1
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_ics_splices_runs_after_merge(manager: ScyllaClusterManager, storage_config: FeatureConfig):
+    """
+    Each of two sibling tablets holds a single ICS run, so after they're merged, the merged
+    tablet holds two disjoint runs of similar size. ICS would compact them together, which
+    would just rewrite their data. Instead, the compaction it picks splices them: their
+    sstables get one run identifier in memory, and nothing is read or written. The identifier
+    isn't stored on disk, so the runs are spliced again after a restart.
+    Reproduces SCYLLADB-3584.
+    """
+    cfg = storage_config.get_cluster_cfg({'enable_tablets': True, 'tablet_load_stats_refresh_interval_in_seconds': 1})
+    cmdline = ['--smp', '1', '--logger-log-level', 'compaction=debug:compaction_manager=debug']
+    server = await manager.server_add(cmdline=cmdline, config=cfg)
+    await manager.disable_tablet_balancing()
+
+    keyspace_opts = storage_config.get_keyspace_opts(
+        "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}")
+    async with new_test_keyspace(manager, keyspace_opts) as ks:
+        await create_table_with_two_ics_runs(manager, server, ks)
+        assert await get_pending_compactions(manager, server, ks) == 0
+        data_sizes = await get_data_sizes(manager, server, ks)
+        generations = await get_sstable_generations(manager, server, ks)
+
+        log = await manager.server_open_log(server.server_id)
+        mark = await log.mark()
+        await merge_tablets(manager, server, ks)
+        # The two runs of the merged tablet fall into one bucket, so ICS has a job for them.
+        assert await get_pending_compactions(manager, server, ks) == 1
+
+        await manager.api.enable_autocompaction(server.ip_addr, ks, 'test')
+        await log.wait_for(f'Spliced 2 runs of {ks}.test', from_mark=mark)
+        assert await get_pending_compactions(manager, server, ks) == 0
+        # The runs were spliced, not compacted, so the sstables are as they were.
+        assert await log.grep(f'\\[Compact {ks}.test', from_mark=mark) == []
+        assert await get_data_sizes(manager, server, ks) == data_sizes
+        assert await get_sstable_generations(manager, server, ks) == generations
+        cql = manager.get_cql()
+        history = await cql.run_async(f"SELECT compaction_type FROM system.compaction_history "
+                                      f"WHERE keyspace_name = '{ks}' AND columnfamily_name = 'test' ALLOW FILTERING")
+        assert [r.compaction_type for r in history if r.compaction_type != 'Major'] == []
+        assert (await cql.run_async(f"SELECT COUNT(*) FROM {ks}.test"))[0].count == 1000
+
+        # The splice isn't stored on disk, so the restarted node loads two runs, and splices
+        # them again. Auto-compaction is enabled after a restart.
+        mark = await log.mark()
+        await manager.server_restart(server.server_id)
+        cql = await reconnect_driver(manager)
+        await log.wait_for(f'Spliced 2 runs of {ks}.test', from_mark=mark)
+        assert await get_pending_compactions(manager, server, ks) == 0
+        assert await log.grep(f'\\[Compact {ks}.test', from_mark=mark) == []
+        assert await get_data_sizes(manager, server, ks) == data_sizes
+        assert await get_sstable_generations(manager, server, ks) == generations
+        assert (await cql.run_async(f"SELECT COUNT(*) FROM {ks}.test"))[0].count == 1000
