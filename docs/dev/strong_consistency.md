@@ -545,8 +545,12 @@ registry still has it, otherwise, after a group0 barrier that brings its table a
 what the leader announced from, its own table schema with the announced mapping to upgrade
 by. The barrier is what tells an older version from one the replica has not received yet; it
 is the only dependency on group0 left on the apply path, and commitlog replay, which cannot
-run it, treats an unknown version as older once its mapping names no column the table never
-had (SCYLLADB-2479).
+run it, treats an unknown version as older once its mapping names only columns the table
+has, with their types (SCYLLADB-2479). A column the table dropped, or has with another type,
+does not count: the version may have added it back, and converting its writes by the table's
+schema would lose their cells. Replay then
+leaves the first such write and every entry above it in the log, with the floor stopping at
+the entry before, and the state machine applies them after the barrier.
 
 The row in `system.raft_groups` persists the `schema_changed` in effect at `snapshot_idx`,
 with the index of its entry, written with the descriptor by the release of the record holding

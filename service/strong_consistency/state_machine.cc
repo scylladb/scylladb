@@ -300,12 +300,16 @@ public:
     }
 };
 
-// True if every column `mapping` names is, or was, a column of `s`: the mapping is then
-// of an older version of `s` and converts to it without losing a column `s` never had.
-static bool column_mapping_fits(const column_mapping& mapping, const schema& s) {
-    return std::ranges::all_of(mapping.columns(), [&s] (const column_mapping_entry& entry) {
-        return s.get_column_definition(entry.name())
-                || s.dropped_columns().contains(sstring(to_string_view(entry.name())));
+// True if every column `mapping` names is a column of `s`, of the same type, or, with
+// `or_dropped`, is one of any type or was one: the mapping is then of an older version
+// of `s` and converts to it without losing a column `s` never had. A dropped column can
+// be added back, with another type too, so the second form only tells once a barrier
+// has ruled out a version newer than `s`.
+static bool column_mapping_fits(const column_mapping& mapping, const schema& s, bool or_dropped) {
+    return std::ranges::all_of(mapping.columns(), [&] (const column_mapping_entry& entry) {
+        const auto* def = s.get_column_definition(entry.name());
+        return (def && (or_dropped || *def->type == *entry.type()))
+                || (or_dropped && s.dropped_columns().contains(sstring(to_string_view(entry.name()))));
     });
 }
 
@@ -342,10 +346,15 @@ future<schema_ptr> schema_store::resolve_and_upgrade(table_id table, const schem
         if (!entry.schema) {
             // The version is older than the table's: it is not the table's, and the barrier
             // above brought the table at least to what the leader announced from. Replay
-            // runs no barrier, so there the mapping itself has to tell.
+            // runs no barrier, so there the mapping itself has to tell, and a column the
+            // table only dropped, or has with another type, does not: the version may have
+            // added it back.
             // `db.find_schema()` may throw `replica::no_such_column_family` if the table was already dropped.
             entry.schema = _db.find_schema(table);
-            if (!column_mapping_fits(announced.mapping, *entry.schema)) {
+            if (!_barrier_trigger && !column_mapping_fits(announced.mapping, *entry.schema, false)) {
+                co_return nullptr;
+            }
+            if (!column_mapping_fits(announced.mapping, *entry.schema, true)) {
                 on_internal_error(logger, fmt::format("schema version {} of table {} is unknown, and its column "
                         "mapping names columns the table's schema {} never had",
                         announced.version, table, entry.schema->version()));

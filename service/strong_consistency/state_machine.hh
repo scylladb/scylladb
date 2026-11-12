@@ -140,7 +140,10 @@ public:
     // Returns the schema that `m`, announced under `announced`, should be applied with;
     // `m` has to carry the announced version.
     // If that version is older than the table's schema, `m` is upgraded in place to the
-    // returned schema using the announced column mapping.
+    // returned schema using the announced column mapping. Returns null, with `m` as it
+    // was, when there is no barrier and the mapping names a column the table does not
+    // have, or has with another type: the version may be newer than the table's, so
+    // only the barrier can tell.
     future<schema_ptr> resolve_and_upgrade(table_id table, const schema_changed& announced, frozen_mutation& m);
 };
 
