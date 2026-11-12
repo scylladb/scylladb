@@ -1796,6 +1796,31 @@ protected:
                 cmlog.debug("{}: sstables={} can_proceed={} auto_compaction={}", *this, descriptor.sstables.size(), can_proceed(), t.is_auto_compaction_disabled_by_user());
                 co_return std::nullopt;
             }
+            if (descriptor.splice) {
+                // Nothing is read or written, so this isn't run as a compaction: the sstables are
+                // given their new run identifier right away, and the strategy is asked again.
+                // sstable_set_lock is still held, so the sstables can't be picked by anything
+                // else meanwhile, and nothing else picks sstables from a set captured before.
+                auto fan_in = descriptor.fan_in();
+                std::exception_ptr ex;
+                try {
+                    co_await t.set_run_identifier(std::move(descriptor.sstables), descriptor.run_identifier);
+                    cmlog.debug("Spliced {} runs of {} into run {}: sstables={}", fan_in, t, descriptor.run_identifier, old_sstables);
+                    continue;
+                } catch (...) {
+                    ex = std::current_exception();
+                }
+                // A failed splice is handled like a failed compaction: waiters on compaction_done
+                // are woken up, and the task retries after a backoff, without holding
+                // sstable_set_lock meanwhile.
+                sstable_set_units.return_all();
+                automatic_scrub_exclusion.reset();
+                finish_compaction(state::failed);
+                if ((co_await maybe_retry(std::move(ex))) == stop_iteration::yes) {
+                    co_return std::nullopt;
+                }
+                continue;
+            }
             if (!_cm.can_register_compaction(t, weight, descriptor.fan_in())) {
                 cmlog.debug("Refused compaction job ({} sstable(s)) of weight {} for {}, postponing it...",
                     descriptor.sstables.size(), weight, t);
@@ -1905,6 +1930,10 @@ future<> compaction_manager::maybe_wait_for_sstable_count_reduction(compaction_g
     auto num_runs_for_compaction = [&, this] -> future<size_t> {
         auto cs = t.get_compaction_strategy();
         auto desc = co_await cs.get_sstables_for_compaction(t, get_strategy_control());
+        if (desc.splice) {
+            // A splice reduces the number of runs right away, and that of sstables not at all.
+            co_return 0;
+        }
         co_return std::ranges::size(desc.sstables
             | std::views::transform(std::mem_fn(&sstables::sstable::run_identifier))
             | std::ranges::to<std::unordered_set>());

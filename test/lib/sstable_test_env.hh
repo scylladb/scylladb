@@ -106,6 +106,10 @@ public:
     future<> submit_automatic_scrub(compaction::compaction_group_view& t);
     future<> reevaluate_automatic_scrub();
 
+    // Marks those of the sstables which hold data outside of the owned ranges as requiring
+    // cleanup, the way cleanup does before it compacts them.
+    void mark_sstables_requiring_cleanup(compaction::compaction_group_view& t, const std::vector<shared_sstable>& sstables, compaction::owned_ranges_ptr owned_ranges);
+
     std::unordered_map<compaction::compaction_group_view*, compaction::compaction_state>& get_compaction_state() {
         return _cm._compaction_state;
     }

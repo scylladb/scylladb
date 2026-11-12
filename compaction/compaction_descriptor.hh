@@ -237,6 +237,11 @@ struct compaction_descriptor {
     // The options passed down to the compaction code.
     // This also selects the kind of compaction to do.
     compaction_type_options options = compaction_type_options::make_regular();
+    // If set, the sstables are to be spliced instead of compacted: they are given the run
+    // identifier in memory, see compaction_group_view::set_run_identifier(), and nothing is read
+    // or written. A compaction strategy sets it when compacting the sstables would only rewrite
+    // them, since their runs don't overlap one another. Only regular compaction supports it.
+    bool splice = false;
     // If engaged, compaction will cleanup the input sstables by skipping non-owned ranges.
     compaction::owned_ranges_ptr owned_ranges;
     // Required for reshard compaction.

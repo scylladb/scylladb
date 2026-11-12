@@ -311,7 +311,7 @@ void corrupt_sstable(sstables::shared_sstable sst, component_type type = compone
 
 class simple_schema;
 
-// Adds count same-size sstables to cf, so STCS puts them in one bucket.
+// Adds count same-size, overlapping sstables to cf, so STCS puts them in one bucket.
 // Must be called in a seastar thread.
 std::vector<shared_sstable> add_same_size_sstables(test_env& env, table_for_tests& cf, simple_schema& ss, sstables::sstable_version_types version,
         uint32_t count);
