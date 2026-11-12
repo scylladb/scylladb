@@ -941,6 +941,9 @@ private:
                     }
                 } else {
                     co_await injector.inject("storage_proxy::handle_read", utils::wait_for_message(std::chrono::minutes{1}));
+                    injector.inject("storage_proxy::handle_read_abort", [] {
+                        throw abort_requested_exception();
+                    });
                 }
             }
         }
@@ -6615,8 +6618,13 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
     const auto to_token_range = [] (const dht::partition_range& r) { return r.transform(std::mem_fn(&dht::ring_position::token)); };
 
     for (;;) {
-        std::vector<::shared_ptr<abstract_read_executor>> exec;
-        std::unordered_map<abstract_read_executor*, std::vector<dht::token_range>> ranges_per_exec;
+        struct range_read {
+            dht::partition_range range;
+            host_id_vector_replica_set live_endpoints;
+            ::shared_ptr<abstract_read_executor> executor;
+            std::vector<dht::token_range> vnode_ranges;
+        };
+        std::vector<range_read> exec;
         dht::partition_range_vector ranges = ranges_to_vnodes(concurrency_factor);
         dht::partition_range_vector::iterator i = ranges.begin();
 
@@ -6754,16 +6762,50 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
                 throw;
             }
 
-            exec.push_back(::make_shared<never_speculating_read_executor>(schema, cf, p, erm, cmd, std::move(range), cl, std::move(filtered_endpoints), trace_state, permit, std::monostate()));
-            ranges_per_exec.emplace(exec.back().get(), std::move(merged_ranges));
+            auto executor = ::make_shared<never_speculating_read_executor>(schema, cf, p, erm, cmd, range, cl,
+                    std::move(filtered_endpoints), trace_state, permit, std::monostate());
+            exec.push_back(range_read{std::move(range), std::move(live_endpoints), std::move(executor), std::move(merged_ranges)});
         }
 
         query::result_merger merger(cmd->get_row_limit(), cmd->partition_limit);
         merger.reserve(exec.size());
 
-        auto wrapped_result = co_await utils::result_map_reduce(exec.begin(), exec.end(), [timeout] (::shared_ptr<abstract_read_executor>& rex) {
-            return rex->execute(timeout);
-        }, std::move(merger));
+        auto execute_range_read = [&] (range_read& read) -> future<result<foreign_ptr<lw_shared_ptr<query::result>>>> {
+            for (;;) {
+                auto result = co_await read.executor->execute(timeout);
+                if (result) {
+                    co_return std::move(result);
+                }
+
+                // A draining replica can abort the read or close the RPC connection.
+                // Retry the whole range with a fresh resolver, so that data, digests
+                // and read repair all use the same replacement replica set.
+                auto previous_size = read.live_endpoints.size();
+                result.error().accept([&] (const auto& ex) {
+                    if constexpr (std::is_base_of_v<read_failure_exception, std::decay_t<decltype(ex)>>) {
+                        for (const auto& failure : ex.failed_replicas) {
+                            auto removed = std::ranges::remove(read.live_endpoints, failure.replica);
+                            read.live_endpoints.erase(removed.begin(), removed.end());
+                        }
+                    }
+                });
+                if (read.live_endpoints.size() == previous_size
+                        || clock_type::now() >= timeout
+                        || !is_sufficient_live_nodes(cl, *erm, read.live_endpoints)) {
+                    co_return std::move(result);
+                }
+
+                // For merged vnode ranges, live_endpoints is the intersection of
+                // their replicas. A replacement must cover the entire merged range.
+                auto targets = filter_replicas_for_read(cl, *erm, read.live_endpoints, {}, pcf);
+                tracing::trace(trace_state, "Retrying range read for {} with targets {}", read.range, targets);
+                get_stats().read_retries++;
+                read.executor = ::make_shared<never_speculating_read_executor>(schema, cf, p, erm, cmd, read.range, cl,
+                        std::move(targets), trace_state, permit, std::monostate());
+            }
+        };
+
+        auto wrapped_result = co_await utils::result_map_reduce(exec.begin(), exec.end(), execute_range_read, std::move(merger));
 
         if (!wrapped_result) {
             auto error = std::move(wrapped_result).assume_error();
@@ -6784,8 +6826,8 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
                 // 1) The list of replicas is determined for each vnode
                 // separately and thus this makes lookups more convenient.
                 // 2) On the next page the ranges might not be merged.
-                for (auto& r : ranges_per_exec[e.get()]) {
-                    used_replicas.emplace(std::move(r), e->used_targets() | std::ranges::to<std::vector<locator::host_id>>());
+                for (auto& r : e.vnode_ranges) {
+                    used_replicas.emplace(std::move(r), e.executor->used_targets() | std::ranges::to<std::vector<locator::host_id>>());
                 }
             }
             co_return query_partition_key_range_concurrent_result{std::move(results), std::move(used_replicas)};
