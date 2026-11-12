@@ -14,8 +14,10 @@
 #include "replica/database.hh"
 #include "sstables/shared_sstable.hh"
 #include "sstables/sstables.hh"
+#include "sstables/sstable_directory.hh"
 #include "sstables/sstables_manager.hh"
 #include "sstables/storage.hh"
+#include "dht/auto_refreshing_sharder.hh"
 
 // Restores the backup sstable `sstable` into `table`. A table on object storage clones
 // the components inside the object storage: they do not go through this node. A table
@@ -56,4 +58,34 @@ future<std::vector<std::vector<minimal_sst_info>>> download_sstables(replica::ta
         downloaded[min_info.shard].emplace_back(std::move(min_info));
     });
     co_return downloaded;
+}
+
+future<sstables::shared_sstable> attach_downloaded_sstable(replica::table& table, const minimal_sst_info& min_info, logging::logger& logger) {
+    logger.debug("Adding downloaded SSTable gen={} to the table {}.{} on shard {}", min_info.generation, table.schema()->ks_name(), table.schema()->cf_name(), this_shard_id());
+    auto& sst_manager = table.get_sstables_manager();
+    auto sst = sst_manager.make_sstable(
+        table.schema(), table.get_storage_options(), min_info.generation, min_info.sid, sstables::sstable_state::normal, min_info.version, min_info.format);
+    sst->set_sstable_level(0);
+    auto units = co_await sst_manager.dir_semaphore().get_units(1);
+    // The sstable was downloaded for this shard, which is why it was submitted here,
+    // so there is nothing to work out: declare this shard its owner.
+    sstables::sstable_open_config cfg {
+        .current_shard_as_sstable_owner = true,
+        .unsealed_sstable = true,
+    };
+    // Unused given current_shard_as_sstable_owner, but load() wants a sharder.
+    dht::auto_refreshing_sharder sharder(table.shared_from_this());
+    co_await sst->load(sharder, cfg);
+    // load() takes the sstable_id from Scylla.db, or from the generation, so the
+    // sstable has one by now.
+    if (!sst->sstable_identifier()) {
+        on_internal_error(logger, fmt::format("Downloaded sstable {} has no sstable_id", sst->get_filename()));
+    }
+    co_await table.add_new_sstable_and_update_cache(sst, [&sst_manager, sst] (sstables::shared_sstable loading_sst) -> future<> {
+        if (loading_sst == sst) {
+            auto writer_cfg = sst_manager.configure_writer(loading_sst->get_origin());
+            co_await loading_sst->seal_sstable(writer_cfg.backup);
+        }
+    });
+    co_return sst;
 }
