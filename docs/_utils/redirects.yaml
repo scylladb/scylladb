@@ -31,6 +31,29 @@
 /stable/using-scylla/drivers/cql-drivers/scylla-cpp-driver.html: https://docs.scylladb.com/stable/drivers/cql-drivers.html
 /stable/using-scylla/drivers/cql-drivers/scylla-rust-driver.html: https://docs.scylladb.com/stable/drivers/cql-drivers.html
 
+# Move the Integrations and Connectors section to the unversioned Get Started documentation
+
+/stable/using-scylla/integrations/index.html: https://docs.scylladb.com/stable/get-started/integrations/index.html
+/stable/using-scylla/integrations/integration-spark.html: https://docs.scylladb.com/stable/get-started/integrations/integration-spark.html
+/stable/using-scylla/integrations/integration-kairos.html: https://docs.scylladb.com/stable/get-started/integrations/integration-kairos.html
+/stable/using-scylla/integrations/integration-presto.html: https://docs.scylladb.com/stable/get-started/integrations/integration-presto.html
+/stable/using-scylla/integrations/integration-elasticsearch.html: https://docs.scylladb.com/stable/get-started/integrations/integration-elasticsearch.html
+/stable/using-scylla/integrations/integration-k8.html: https://docs.scylladb.com/stable/get-started/integrations/integration-k8.html
+/stable/using-scylla/integrations/integration-janus.html: https://docs.scylladb.com/stable/get-started/integrations/integration-janus.html
+/stable/using-scylla/integrations/integration-datadog.html: https://docs.scylladb.com/stable/get-started/integrations/integration-datadog.html
+/stable/using-scylla/integrations/integration-kafka.html: https://docs.scylladb.com/stable/get-started/integrations/integration-kafka.html
+/stable/using-scylla/integrations/integration-iota.html: https://docs.scylladb.com/stable/get-started/integrations/integration-iota.html
+/stable/using-scylla/integrations/integration-spring.html: https://docs.scylladb.com/stable/get-started/integrations/integration-spring.html
+/stable/using-scylla/integrations/integration-ansible.html: https://docs.scylladb.com/stable/get-started/integrations/integration-ansible.html
+/stable/using-scylla/integrations/integration-databricks.html: https://docs.scylladb.com/stable/get-started/integrations/integration-databricks.html
+/stable/using-scylla/integrations/integration-jaeger.html: https://docs.scylladb.com/stable/get-started/integrations/integration-jaeger.html
+/stable/using-scylla/integrations/integration-mindsdb.html: https://docs.scylladb.com/stable/get-started/integrations/integration-mindsdb.html
+/stable/using-scylla/integrations/sink-kafka-connector.html: https://docs.scylladb.com/stable/get-started/integrations/sink-kafka-connector.html
+/stable/using-scylla/integrations/kafka-connector.html: https://docs.scylladb.com/stable/get-started/integrations/kafka-connector.html
+/stable/using-scylla/integrations/sink-config.html: https://docs.scylladb.com/stable/get-started/integrations/sink-config.html
+/stable/using-scylla/integrations/scylla-cdc-source-connector.html: https://docs.scylladb.com/stable/get-started/integrations/scylla-cdc-source-connector.html
+/stable/using-scylla/integrations/scylla-cdc-source-connector-quickstart.html: https://docs.scylladb.com/stable/get-started/integrations/scylla-cdc-source-connector-quickstart.html
+
 # Redirect 2025.1 upgrade guides that are not on master but were indexed by Google (404 reported)
 
 /master/upgrade/upgrade-guides/upgrade-guide-from-2024.x-to-2025.1/upgrade-guide-from-2024.x-to-2025.1.html: https://docs.scylladb.com/manual/stable/upgrade/index.html
