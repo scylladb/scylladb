@@ -211,7 +211,7 @@ class GSServer(GSFront):
         return ["-scheme", "http", "-log-level", "debug", "--port", f'{port}', '-public-host', '127.0.0.1']
 
     async def start(self):
-        self.server = DockerizedServer("docker.io/fsouza/fake-gcs-server:1.52.3", self.tmpdir, 
+        self.server = DockerizedServer("docker.io/fsouza/fake-gcs-server:1.54.0", self.tmpdir, 
                                        logfilenamebase="fake-gcs-server",
                                        image_args=self._image_args,
                                        success_string="server started at",
