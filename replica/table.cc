@@ -3006,6 +3006,12 @@ void table::trigger_logstor_compaction() {
     });
 }
 
+future<> table::major_logstor_compaction() {
+    return parallel_foreach_logstor_compaction_group([] (compaction_group& cg) {
+        return cg.major_logstor_compaction();
+    });
+}
+
 void table::try_trigger_compaction(compaction_group& cg) noexcept {
     try {
         cg.trigger_compaction();
@@ -3041,6 +3047,21 @@ void compaction_group::trigger_compaction() {
 void compaction_group::trigger_logstor_compaction() {
     if (!_async_gate.is_closed() && !_t.is_auto_compaction_disabled_by_user() && _t.uses_logstor()) {
         get_logstor_compaction_manager().submit(as_logstor_group());
+    }
+}
+
+future<> compaction_group::major_logstor_compaction() {
+    // A compaction either frees segments or finds nothing left to compact. Check the gate between
+    // compactions: stop() closes it and waits for its holders before it removes the group from the
+    // logstor compaction manager.
+    auto segments = logstor_segments().segment_count();
+    while (!_async_gate.is_closed()) {
+        co_await get_logstor_compaction_manager().compact(as_logstor_group());
+        const auto remaining = logstor_segments().segment_count();
+        if (remaining >= segments) {
+            break;
+        }
+        segments = remaining;
     }
 }
 

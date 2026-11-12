@@ -1368,7 +1368,7 @@
                "parameters":[
                   {
                      "name":"major",
-                     "description":"When true, perform a major compaction",
+                     "description":"When true, compact every logstor compaction group until a compaction frees no segment, and return when it is done. When false, start one compaction round in the background",
                      "required":false,
                      "allowMultiple":false,
                      "type":"boolean",
