@@ -227,6 +227,8 @@ struct rf_change_completion_info {
     sstring ks_name;
     sstring error;
     std::unordered_map<sstring, sstring> saved_ks_props;
+    // The request's initiating_host; set for the auto-RF reconciler's own requests.
+    utils::UUID initiating_host;
 };
 
 struct rf_change_abort_info {
@@ -401,6 +403,11 @@ public:
     future<migration_plan> balance_tablets(locator::token_metadata_ptr, service::topology*, db::system_keyspace*, locator::load_stats_ptr = {}, std::unordered_set<locator::host_id> = {});
 
     void set_load_stats(locator::load_stats_ptr);
+
+    /// Installs new_stats only if old_stats are still installed. For a caller which derives
+    /// new stats from the installed ones and may yield meanwhile: stats installed in between
+    /// are newer than anything derived from the old ones.
+    bool replace_load_stats(const locator::load_stats_ptr& old_stats, locator::load_stats_ptr new_stats);
 
     locator::load_stats_ptr get_load_stats();
 

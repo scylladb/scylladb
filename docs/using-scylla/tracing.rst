@@ -9,12 +9,40 @@ Tracing is a ScyllaDB tool meant to help debugging and analyzing internal flows 
 * **Probalistic Tracing** randomly chooses a request to be traced with some defined probability.
 * **Slow Query Logging** - records queries with handling time above the specified threshold.
 
-.. note:: If you're planning to use either **probabilistic tracing** or **slow query logging** (see below), it's advisable to change the ``replication_factor`` of the  ``system_traces`` keyspace to ``ALL``:
-          
-          If you use ``NetworkTopologyStrategy``, we recommend using a replication factor for each datacenter equal to the number 
-          of nodes in that datacenter. Alternatively, you can use ``EverywhereReplicationStrategy``. See :doc:`How to Safely Increase the Replication Factor </kb/rf-increase>` for details on changing the RF.
+.. _tracing-system-traces-replication:
 
-          Such configuration will speed up reads and writes (if combined with a reasonable consistency level, such as ONE or LOCAL_ONE).
+Replication of the system_traces Keyspace
+.........................................
+
+**Tablets**
+
+On a cluster where tablets are enabled by default, the ``system_traces`` keyspace uses tablets, unless it
+was created before an upgrade to a release with automatic replication. Where it uses tablets,
+``DESCRIBE KEYSPACE system_traces`` shows ``tablets = {'enabled': true}``.
+
+Its replication is managed automatically, in the same way as the audit table's (see
+:ref:`Replication of the Audit Table <audit-table-replication>`, including its known limitation),
+with a goal of two replicas per data center instead of three.
+
+If you plan to use **probabilistic tracing** or **slow query logging**, you can raise it beyond the goal
+with ``ALTER KEYSPACE system_traces``, one rack (or one step of a numeric replication factor) per statement.
+Racks that the other tablets keyspaces replicate to are kept, and a numeric replication factor up to the
+largest one of theirs. Beyond that, the change is undone.
+
+**Vnodes**
+
+Where ``system_traces`` uses vnodes, as on a cluster where tablets are not the default, and if you're
+planning to use either **probabilistic tracing** or **slow query logging** (see below), it's advisable to
+change the ``replication_factor`` of the ``system_traces`` keyspace to ``ALL``:
+
+* If you use ``NetworkTopologyStrategy``, we recommend using a replication factor for each datacenter equal
+  to the number of nodes in that datacenter.
+* Alternatively, you can use ``EverywhereReplicationStrategy``.
+
+See :doc:`How to Safely Increase the Replication Factor </kb/rf-increase>` for details on changing the RF.
+
+Such configuration will speed up reads and writes (if combined with a reasonable consistency level, such as
+ONE or LOCAL_ONE).
 
 User Defined CQL Query Tracing 
 ..............................
@@ -132,7 +160,7 @@ If we need trace points for a specific session, we can query the ``events`` tabl
 
 Storing 
 ^^^^^^^
-Traces are stored in the ``system_traces`` keyspace for 24 hours. This setting cannot be changed. The keyspace consists of two tables with a replication factor of 2:
+Traces are stored in the ``system_traces`` keyspace for 24 hours. This setting cannot be changed. On tablets, the keyspace is replicated to up to two replicas per data center (see :ref:`above <tracing-system-traces-replication>`); on vnodes, with a replication factor of 2. The traces are kept in two of its tables:
 
 * ``sessions`` table contains a single row for each tracing session.
 * ``events`` table contains a single row for each trace point.
