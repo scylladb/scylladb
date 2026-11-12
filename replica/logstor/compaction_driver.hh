@@ -81,6 +81,13 @@ public:
         utils::updateable_value<double> utilization_threshold;
         utils::updateable_value<double> min_utilization_threshold;
         seastar::scheduling_group sg;
+        // The longest time that the driver waits when no event wakes it. The timeout covers what
+        // the events do not show: a segment that crosses the threshold inside one bucket of the
+        // utilization histogram, which does not change the backlog estimate.
+        std::chrono::milliseconds wait_timeout = std::chrono::seconds(10);
+        // The time that the driver waits after a failed step before it starts again. A failure that
+        // repeats, for example under memory pressure, then logs at most once in this time.
+        std::chrono::milliseconds failure_retry_delay = std::chrono::seconds(1);
     };
 
     // The segment count is known only after segment_manager_impl is constructed, so it comes
@@ -149,14 +156,6 @@ private:
     // The scores of the automatic jobs in flight, for the marginal admission gate.
     std::list<compaction_candidate_score> _jobs_in_flight;
 
-    // The longest time that the driver waits when no event wakes it. The events signal
-    // _work_wanted, and the timeout covers what they do not show: a segment that crosses the
-    // threshold inside one bucket of the utilization histogram, which does not change the
-    // backlog estimate.
-    static constexpr auto wait_timeout = std::chrono::seconds(10);
-    // The time that the driver waits after a failed step before it starts again. A failure that
-    // repeats, for example under memory pressure, then logs at most once in this time.
-    static constexpr auto failure_retry_delay = std::chrono::seconds(1);
     // The reason the driver waits, and the condition variable that it waits on. A controller tick
     // signals it when the backlog changes, notify_group_idle() when a group can be ranked again,
     // and the end of a job when the marginal admission gate waits for one. Nothing signals a wait
@@ -217,7 +216,7 @@ private:
 
     void set_space_floor(double fraction) noexcept;
     void tick_rate_controller() noexcept;
-    future<> wait_for_work(wait_reason, std::chrono::milliseconds timeout = wait_timeout);
+    future<> wait_for_work(wait_reason, std::chrono::milliseconds timeout);
     future<> run();
     // Runs one step of the driver: a wait for work, a ranking, or the start of one job.
     future<> run_step(ranking_state& ranking);

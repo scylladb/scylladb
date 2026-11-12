@@ -167,10 +167,10 @@ future<> compaction_driver::run() {
             // compaction on the shard until a restart. So the driver drops its ranking, waits, and
             // starts again.
             logstor_logger.warn("Automatic compaction failed: {}. It starts again in {}",
-                    f.get_exception(), failure_retry_delay);
+                    f.get_exception(), _cfg.failure_retry_delay);
             ranking = {};
             _empty_ranking_start.reset();
-            co_await wait_for_work(wait_reason::failure, failure_retry_delay);
+            co_await wait_for_work(wait_reason::failure, _cfg.failure_retry_delay);
         }
     }
 
@@ -183,7 +183,7 @@ future<> compaction_driver::run_step(ranking_state& ranking) {
         // reclaim.
         ranking = {};
         _empty_ranking_start.reset();
-        co_await wait_for_work(wait_reason::candidates);
+        co_await wait_for_work(wait_reason::candidates, _cfg.wait_timeout);
         co_return;
     }
 
@@ -267,7 +267,7 @@ future<> compaction_driver::wait_for_candidates() {
     if (_empty_ranking_start && _idle_notifications != _empty_ranking_start->idle_notifications) {
         co_return;
     }
-    co_await wait_for_work(wait_reason::candidates);
+    co_await wait_for_work(wait_reason::candidates, _cfg.wait_timeout);
 }
 
 std::optional<compaction_candidate_score> compaction_driver::admission_bar(const ranking_state& ranking) const {
@@ -285,7 +285,7 @@ future<> compaction_driver::wait_for_job_end() {
     // floor also changes the slots.
     const auto jobs_ended = _jobs_ended;
     while (_jobs_ended == jobs_ended && !_stopping) {
-        co_await wait_for_work(wait_reason::job_end);
+        co_await wait_for_work(wait_reason::job_end, _cfg.wait_timeout);
     }
 }
 
