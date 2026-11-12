@@ -54,6 +54,7 @@ namespace {
 cql_test_config enable_tablets() {
     cql_test_config cfg;
     cfg.initial_tablets = 1;
+    cfg.need_remote_proxy = true; // DROP TABLE on tablets cleans view building state via proxy remote
     return cfg;
 }
 
