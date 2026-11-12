@@ -341,6 +341,7 @@ private:
         uint64_t separator_buffers_flushed{0};
         uint64_t separator_segments_freed{0};
         uint64_t separator_flush_failures{0};
+        uint64_t auto_compaction_wait_timeouts{0};
     } _stats;
 
     compaction_shares_controller _shares_controller;
@@ -370,6 +371,15 @@ private:
     // Sized for the static maximum; a run holds back the difference between it and the current
     // limit for its duration, see run_auto_compaction().
     seastar::semaphore _auto_compaction_sem{max_auto_compaction_parallelism};
+    // Bumped and signalled when a compaction succeeds or is re-enabled. A group is not a candidate
+    // while it compacts or is disabled, so this lets run_auto_compaction() pick it again without polling.
+    uint64_t _compaction_events{0};
+    seastar::condition_variable _compaction_event;
+
+    void notify_compaction_event() noexcept {
+        ++_compaction_events;
+        _compaction_event.signal();
+    }
 
     bool auto_compaction_active() const noexcept {
         return !_auto_compaction_completion.available();
@@ -412,9 +422,13 @@ public:
     void submit(logstor_group&) override;
     future<> stop_ongoing_compactions(logstor_group&) override;
     future<> remove(logstor_group&) override;
+    uint64_t auto_compaction_wait_timeouts() const noexcept override {
+        return _stats.auto_compaction_wait_timeouts;
+    }
+
     future<compaction_reenabler> disable_compaction(logstor_group&) override;
     compaction_reenabler disable_compaction_no_wait(logstor_group&) override;
-    future<> submit_normal_compaction(logstor_group&, compaction_batch_limits limits);
+    future<> submit_normal_compaction(logstor_group&, compaction_batch_limits limits, bool follow_empty_batches = false);
     future<> submit_split_compaction(logstor_group&, mutation_writer::classify_by_token_group, split_target_group) override;
 
     void schedule_auto_compaction();
@@ -460,7 +474,7 @@ private:
     future<std::vector<compaction_candidate>> find_top_compaction_candidates(size_t);
 
     future<> submit_group_compaction(logstor_group&, std::function<future<>(group_compaction_state&)>, scheduling_group);
-    future<> do_compaction(logstor_group&, compaction_batch_limits, abort_source&);
+    future<> do_compaction(logstor_group&, compaction_batch_limits, abort_source&, bool follow_empty_batches);
     future<> do_split_compaction(logstor_group&, mutation_writer::classify_by_token_group, split_target_group, abort_source&);
 
     group_compaction_state& get_group_state(logstor_group&);
@@ -478,6 +492,7 @@ future<> compaction_manager_impl::stop() {
         co_return;
     }
     _admission_closed = true;
+    notify_compaction_event();
 
     for (auto& [cg, state] : _groups) {
         state->as.request_abort();
@@ -598,9 +613,9 @@ struct separator_task {
     utils::phased_barrier::operation write_op;
 };
 
-// The largest read buffer of a segment scan. It is the largest segment size today
-// (segment_descriptor_hist_options), so a scan reads a segment in one buffer.
-static constexpr size_t max_scan_buffer_size = 128 * 1024;
+// The largest read buffer of a segment scan. It is the largest segment size, so a scan reads a
+// segment in one buffer.
+static constexpr size_t max_scan_buffer_size = max_segment_size;
 
 class segment_manager_impl {
 
@@ -1095,11 +1110,11 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
     }
 
     // The free space of a segment is bucketed by segment_descriptor_hist, which indexes a
-    // fixed-size bucket array without checking its bounds. A segment larger than the histogram's
-    // maximum would compute an out of range bucket for a fully free segment.
-    if (config.segment_size > segment_descriptor_hist_options.max_size) {
+    // fixed-size bucket array without checking its bounds, and keys an empty segment above any
+    // free space up to max_segment_size. A larger segment would break either.
+    if (config.segment_size > max_segment_size) {
         throw exceptions::configuration_exception(fmt::format("Segment size {} must be less than or equal to {}",
-                config.segment_size, segment_descriptor_hist_options.max_size));
+                config.segment_size, max_segment_size));
     }
 
     if (_configured_max_segments == 0) {
@@ -1183,6 +1198,8 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
                        sm::description("Counts number of segments freed by the separator.")),
         sm::make_counter("separator_flush_failures", _compaction_mgr.get_stats().separator_flush_failures,
                        sm::description("Counts number of logstor separator flush failures.")),
+        sm::make_counter("auto_compaction_wait_timeouts", _compaction_mgr.get_stats().auto_compaction_wait_timeouts,
+                       sm::description("Counts number of times automatic compaction found nothing to compact and waited for the poll interval to expire.")),
         sm::make_counter("separator_task_failures", _stats.separator_task_failures,
                        sm::description("Counts number of logstor separator task failures.")),
         sm::make_gauge("separator_buffers_in_use", [this] { return _separator_buffer_pool.used_buffer_count(); },
@@ -1708,15 +1725,20 @@ future<> compaction_manager_impl::submit_group_compaction(logstor_group& cg, std
             logstor_logger.warn("logstor compaction failed: {}", ep);
             return make_exception_future<>(std::move(ep));
         }));
-        co_return co_await state->completion.get_future();
+        // Signal once the group is no longer running, or the woken scan would skip it.
+        auto f = co_await coroutine::as_future(state->completion.get_future());
+        if (!f.failed()) {
+            notify_compaction_event();
+        }
+        co_return co_await std::move(f);
     }
 
     co_await coroutine::return_exception(std::runtime_error("logstor compaction submission is closed"));
 }
 
-future<> compaction_manager_impl::submit_normal_compaction(logstor_group& cg, compaction_batch_limits limits) {
-    co_await submit_group_compaction(cg, [this, &cg, limits] (group_compaction_state& state) {
-        return do_compaction(cg, limits, state.as);
+future<> compaction_manager_impl::submit_normal_compaction(logstor_group& cg, compaction_batch_limits limits, bool follow_empty_batches) {
+    co_await submit_group_compaction(cg, [this, &cg, limits, follow_empty_batches] (group_compaction_state& state) {
+        return do_compaction(cg, limits, state.as, follow_empty_batches);
     }, _cfg.compaction_sg);
 }
 
@@ -1727,7 +1749,7 @@ future<> compaction_manager_impl::submit_split_compaction(logstor_group& src, mu
 }
 
 void compaction_manager_impl::submit(logstor_group& cg) {
-    (void)submit_normal_compaction(cg, explicit_batch_limits()).handle_exception([table_id = cg.table_id()] (std::exception_ptr ep) {
+    (void)submit_normal_compaction(cg, explicit_batch_limits(), true).handle_exception([table_id = cg.table_id()] (std::exception_ptr ep) {
         logstor_logger.debug("logstor compaction for table {} failed: {}. Ignored", table_id, ep);
     });
 }
@@ -1774,8 +1796,8 @@ future<compaction_reenabler> compaction_manager_impl::disable_compaction(logstor
 
     co_return compaction_reenabler([this, &cg] {
         auto it = _groups.find(&cg);
-        if (it != _groups.end()) {
-            --it->second->compaction_disabled_counter;
+        if (it != _groups.end() && --it->second->compaction_disabled_counter == 0) {
+            notify_compaction_event();
         }
     });
 }
@@ -1787,8 +1809,8 @@ compaction_reenabler compaction_manager_impl::disable_compaction_no_wait(logstor
 
     return compaction_reenabler([this, &cg] {
         auto it = _groups.find(&cg);
-        if (it != _groups.end()) {
-            --it->second->compaction_disabled_counter;
+        if (it != _groups.end() && --it->second->compaction_disabled_counter == 0) {
+            notify_compaction_event();
         }
     });
 }
@@ -1903,11 +1925,25 @@ future<> compaction_manager_impl::run_auto_compaction() {
         }
 
         if (pending.empty()) {
+            const auto events = _compaction_events;
             pending = co_await find_top_compaction_candidates(parallelism);
             if (pending.empty()) {
-                co_await seastar::sleep(std::chrono::milliseconds(100));
+                // The timeout covers groups that become candidates by other means, and backs off
+                // after failures, which do not signal.
+                auto f = co_await coroutine::as_future(_compaction_event.wait(std::chrono::milliseconds(100), [&] {
+                    return _compaction_events != events || _admission_closed;
+                }));
+                if (f.failed()) {
+                    ++_stats.auto_compaction_wait_timeouts;
+                }
+                f.ignore_ready_future();
                 continue;
             }
+        }
+
+        // The scan yields, so the admission may have closed meanwhile.
+        if (!can_submit_compaction()) {
+            break;
         }
 
         auto candidate = std::move(pending.back());
@@ -2050,7 +2086,7 @@ struct split_buffer_pair {
     }
 };
 
-future<> compaction_manager_impl::do_compaction(logstor_group& cg, compaction_batch_limits limits, abort_source& as) {
+future<> compaction_manager_impl::do_compaction(logstor_group& cg, compaction_batch_limits limits, abort_source& as, bool follow_empty_batches) {
     auto candidate = select_segments_for_compaction(cg, limits);
     if (!candidate) {
         co_return;
@@ -2063,26 +2099,29 @@ future<> compaction_manager_impl::do_compaction(logstor_group& cg, compaction_ba
 
     auto nonempty_segments = segments
             | std::views::filter([this] (log_segment_id seg_id) {
-                auto& desc = _sm.get_segment_descriptor(seg_id);
-                return desc.record_bytes(_sm.get_segment_size()) > 0;
+                return !_sm.get_segment_descriptor(seg_id).empty();
             })
             | std::ranges::to<std::vector<log_segment_id>>();
 
     // with_closeable() returns the buffer to the pool on every way out, including the ones that
     // throw - a compaction that fails part way through simply discards what it had buffered.
-    auto cb_stats = co_await with_closeable(
-            compaction_buffer(_sm, co_await _sm._compaction_buffer_pool.allocate(as), cg),
-            [this, &index, &nonempty_segments] (compaction_buffer& cb) -> future<compaction_buffer_stats> {
-        co_await _sm.for_each_record(nonempty_segments, [&index, &cb] (const chunk_record& record) {
-            if (!index.is_record_alive(record.header.index_key(), record.location)) {
-                cb.stats.records_skipped++;
-                return make_ready_future<>();
-            }
-            return cb.rewrite_record(index, record.location, record.header, record.bytes);
+    // Empty segments need no buffer, which would wait on the pool, or a flush.
+    compaction_buffer_stats cb_stats;
+    if (!nonempty_segments.empty()) {
+        cb_stats = co_await with_closeable(
+                compaction_buffer(_sm, co_await _sm._compaction_buffer_pool.allocate(as), cg),
+                [this, &index, &nonempty_segments] (compaction_buffer& cb) -> future<compaction_buffer_stats> {
+            co_await _sm.for_each_record(nonempty_segments, [&index, &cb] (const chunk_record& record) {
+                if (!index.is_record_alive(record.header.index_key(), record.location)) {
+                    cb.stats.records_skipped++;
+                    return make_ready_future<>();
+                }
+                return cb.rewrite_record(index, record.location, record.header, record.bytes);
+            });
+            co_await cb.flush();
+            co_return cb.stats;
         });
-        co_await cb.flush();
-        co_return cb.stats;
-    });
+    }
 
     const size_t compaction_segments_in = segments.size();
     const size_t compaction_segments_out = cb_stats.flush_count;
@@ -2091,7 +2130,11 @@ future<> compaction_manager_impl::do_compaction(logstor_group& cg, compaction_ba
 
     // wait for read operations that use the old locations
     co_await index.await_pending_reads();
+    co_await utils::get_local_injector().inject("logstor_compaction_delay", std::chrono::milliseconds(5));
     co_await utils::get_local_injector().inject("logstor_compaction_wait_before_remove_segments", utils::wait_for_message(std::chrono::seconds{60}));
+
+    // An all-empty batch takes no buffer, which was the job's only abort check.
+    as.check();
 
     // Free the compacted segments
     auto& ss = cg.logstor_segments();
@@ -2109,6 +2152,11 @@ future<> compaction_manager_impl::do_compaction(logstor_group& cg, compaction_ba
     _stats.records_rewritten += cb_stats.records_rewritten;
     _stats.records_skipped += cb_stats.records_skipped;
     _stats.bytes_read += nonempty_segments.size() * _sm.get_segment_size();
+
+    // Empty segments are batched apart from the others; a single explicit compaction takes the next batch too.
+    if (follow_empty_batches && nonempty_segments.empty()) {
+        co_await do_compaction(cg, limits, as, true);
+    }
 }
 
 future<> compaction_manager_impl::do_split_compaction(logstor_group& src, mutation_writer::classify_by_token_group classifier, split_target_group target_group, abort_source& as) {
@@ -2170,8 +2218,7 @@ future<> compaction_manager_impl::do_split_compaction(logstor_group& src, mutati
 
         auto nonempty_segments = batch
                 | std::views::filter([this] (log_segment_id seg_id) {
-                    auto& desc = _sm.get_segment_descriptor(seg_id);
-                    return desc.record_bytes(_sm.get_segment_size()) > 0;
+                    return !_sm.get_segment_descriptor(seg_id).empty();
                 })
                 | std::ranges::to<std::vector<log_segment_id>>();
 
@@ -2995,5 +3042,5 @@ future<> logstor_group::close_separator() {
 
 template<>
 size_t hist_key<replica::logstor::segment_descriptor>(const replica::logstor::segment_descriptor& desc) {
-    return desc.free_space;
+    return desc.empty() ? replica::logstor::segment_descriptor_hist_options.max_size : desc.free_space;
 }

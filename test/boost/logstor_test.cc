@@ -1160,11 +1160,11 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_failed_compaction_returns_its_buffer_to_th
     auto pk1_v0 = make_kv_mutation(schema, "pk1", "v1", api::timestamp_type(2));
     auto pk0_v1 = make_kv_mutation(schema, "pk0", "v0-new", api::timestamp_type(3));
 
-    write_and_flush_segment(ls, cg, pk0_v0);
-    write_and_flush_segment(ls, cg, pk1_v0);
+    // No segment is left empty, which compaction would take on its own without rewriting anything.
+    write_and_flush_segment(ls, cg, std::array{pk0_v0, pk1_v0});
     write_and_flush_segment(ls, cg, pk0_v1);
 
-    BOOST_REQUIRE_EQUAL(cg.logstor_segments().segment_count(), 3u);
+    BOOST_REQUIRE_EQUAL(cg.logstor_segments().segment_count(), 2u);
 
     const auto pk0 = make_index_key(*schema, pk0_v1.decorated_key());
     const auto pk1 = make_index_key(*schema, pk1_v0.decorated_key());
@@ -1183,7 +1183,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_failed_compaction_returns_its_buffer_to_th
     setup_guard = ls.get_compaction_manager().disable_compaction(cg).get();
 
     // Nothing was flushed, so the group and the index are unchanged.
-    BOOST_REQUIRE_EQUAL(cg.logstor_segments().segment_count(), 3u);
+    BOOST_REQUIRE_EQUAL(cg.logstor_segments().segment_count(), 2u);
     BOOST_REQUIRE(cg.logstor_index().get(pk0)->location == pk0_before->location);
     BOOST_REQUIRE(cg.logstor_index().get(pk1)->location == pk1_before->location);
 
@@ -3102,6 +3102,35 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_select_compaction_batch) {
     BOOST_REQUIRE(!select_compaction_batch(empty, segment_size, compaction_batch_limits{.batch_cap = min_segments_per_compaction}));
 }
 
+// A segment that holds one small record shares the top free-space bucket with the empty ones, and
+// within a bucket the order is by when a segment last moved. Compacting an empty segment costs no
+// I/O, so the empty ones have to be taken first whatever that order is.
+SEASTAR_THREAD_TEST_CASE(test_logstor_select_compaction_batch_takes_empty_segments_first) {
+    constexpr uint64_t segment_size = 128 * 1024;
+    constexpr size_t record_size = 1024;
+    constexpr size_t count = min_segments_per_compaction;
+
+    std::deque<segment_descriptor> descs;
+    segment_set segments{segment_size};
+    for (size_t i = 0; i < 2 * count; ++i) {
+        auto& desc = descs.emplace_back();
+        desc.reset(segment_size);
+        desc.on_write(record_size, 1);
+        segments.add_segment(desc);
+    }
+    // The segments added first are at the back of the bucket; empty them the way an overwrite does.
+    for (size_t i = 0; i < count; ++i) {
+        descs[i].on_free(record_size, 1);
+        segments.update_segment(descs[i], record_size);
+    }
+
+    auto batch = select_compaction_batch(segments, segment_size, compaction_batch_limits{.batch_cap = count});
+    BOOST_REQUIRE(batch);
+    BOOST_REQUIRE_EQUAL(batch->segments.size(), count);
+    BOOST_REQUIRE_EQUAL(batch->score.live_bytes, 0u);
+    BOOST_REQUIRE_EQUAL(batch->score.n_out, 0u);
+}
+
 // A segment set does not walk its segments to get its statistics. It updates them when it links or
 // unlinks a segment, and when a record is freed. Thus, each of these paths must keep the statistics
 // equal to the segments in the set, and to the shard-wide statistics.
@@ -3468,6 +3497,54 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_disabled_group_does_not_compact_on_submit)
     assert_that(*actual_pk0).is_equal_to(pk0_v1);
     assert_that(*actual_pk1).is_equal_to(pk1_v1);
     assert_that(*actual_pk2).is_equal_to(pk2_v0);
+}
+
+// Automatic compaction runs one job per group at a time, so a group that needs many batches gets
+// the next one only once the loop notices the previous one finished. It has to notice right away:
+// with a single group, any idle time between batches caps how fast space is reclaimed.
+SEASTAR_THREAD_TEST_CASE(test_logstor_auto_compaction_starts_the_next_batch_when_one_finishes) {
+    if constexpr (!std::is_same_v<utils::error_injection_type, utils::error_injection<true>>) {
+        return;
+    }
+
+    auto schema = make_kv_schema();
+    tmpdir dir;
+
+    // Disabled while the segments are set up, so that nothing compacts them early.
+    utils::updateable_value_source<double> threshold(0.0);
+    auto cfg = make_test_logstor_config(dir.path());
+    cfg.segment_manager_cfg.trigger_compaction_threshold = utils::updateable_value<double>(threshold);
+
+    shared_logstor_cache cache;
+    logstor ls(std::move(cfg), cache.shared_tracker);
+    ls.do_recovery_for_test().get();
+    ls.start().get();
+    auto stop_store = seastar::defer([&ls] noexcept { ls.stop().get(); });
+
+    test_logstor_group cg(schema, ls);
+
+    // Every overwrite leaves the segment of the previous version empty.
+    constexpr size_t segment_count = 100;
+    for (size_t i = 0; i < segment_count; ++i) {
+        write_and_flush_segment(ls, cg, make_kv_mutation(schema, "pk0", format("v{}", i), api::timestamp_type(i + 1)));
+    }
+    BOOST_REQUIRE_EQUAL(cg.logstor_segments().segment_count(), segment_count);
+
+    // A job that is still running when the loop scans for the next batch, as one that does I/O is.
+    utils::get_local_injector().enable("logstor_compaction_delay");
+    auto disable_delay = seastar::defer([] noexcept { utils::get_local_injector().disable("logstor_compaction_delay"); });
+
+    // A target the disk cannot reach, so that compaction runs until nothing is left to reclaim.
+    // Every wait that ends by the poll timeout is a batch that did not start right away.
+    const auto timeouts_before = ls.get_compaction_manager().auto_compaction_wait_timeouts();
+    threshold.set(0.9);
+    // Only a guard against a hang.
+    const auto deadline = seastar::lowres_clock::now() + std::chrono::seconds(60);
+    while (cg.logstor_segments().segment_count() > 1 && seastar::lowres_clock::now() < deadline) {
+        seastar::sleep(std::chrono::milliseconds(1)).get();
+    }
+    BOOST_REQUIRE_EQUAL(cg.logstor_segments().segment_count(), 1u);
+    BOOST_REQUIRE_EQUAL(ls.get_compaction_manager().auto_compaction_wait_timeouts(), timeouts_before);
 }
 
 // Split compaction hands every segment of a group to the group its records belong to after the

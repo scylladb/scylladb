@@ -63,7 +63,13 @@ using split_target_group = std::function<logstor_group&(log_segment_id, dht::tok
 // is the same back-pressure it already takes when its own flush is in flight.
 constexpr size_t separator_flush_reserve = 16;
 
-inline constexpr log_heap_options segment_descriptor_hist_options(4 * 1024, 3, 128 * 1024);
+// The largest segment size the free-space histogram admits.
+inline constexpr size_t max_segment_size = 128 * 1024;
+
+// Segments are keyed by free space, except that an empty one is keyed at max_size, above any free
+// space. The top free-space bucket is ~4 KiB wide, and an empty segment, which compacts without any
+// I/O, must not be ordered behind one that still holds a small record.
+inline constexpr log_heap_options segment_descriptor_hist_options(4 * 1024, 3, 2 * max_segment_size);
 
 struct segment_descriptor : public log_heap_hook<segment_descriptor_hist_options> {
     // free_space = segment_size - record_bytes
@@ -80,6 +86,10 @@ struct segment_descriptor : public log_heap_hook<segment_descriptor_hist_options
     // The sequence of the latest use of the segment, which each valid chunk of the segment also
     // has, except between get_segment() and the write of the first chunk. reset() keeps it.
     segment_sequence seq{0};
+
+    bool empty() const noexcept {
+        return record_count == 0;
+    }
 
     void reset(size_t segment_size) noexcept {
         free_space = segment_size;
@@ -450,6 +460,9 @@ public:
 
     virtual future<compaction_reenabler> disable_compaction(logstor_group&) = 0;
     virtual compaction_reenabler disable_compaction_no_wait(logstor_group&) = 0;
+
+    // How many times automatic compaction found nothing to do and waited out its poll interval.
+    virtual uint64_t auto_compaction_wait_timeouts() const noexcept = 0;
 };
 
 // A compaction group in logstor.
