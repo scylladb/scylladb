@@ -677,6 +677,15 @@ async def new_test_keyspace(manager: ScyllaClusterManager, opts, host=None):
         # https://github.com/scylladb/python-driver/issues/317
         await manager.get_cql().run_async("DROP KEYSPACE IF EXISTS " + keyspace, host=host)
 
+async def create_new_test_table(cql: Session, keyspace, schema, extra="", host=None):
+    """
+    A utility function for creating a new table with a given schema.
+    Returns the table's name qualified with the keyspace name.
+    """
+    table = keyspace + "." + unique_name()
+    await cql.run_async(f"CREATE TABLE {table} ({schema}) {extra}", host=host)
+    return table
+
 previously_used_table_names = []
 @asynccontextmanager
 async def new_test_table(manager: ScyllaClusterManager, keyspace, schema, extra="", host=None, reuse_tables=True):
