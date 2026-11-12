@@ -3310,9 +3310,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         bool has_peer = std::ranges::any_of(tinfo.replicas, [&] (const locator::tablet_replica& r) {
                             return r.host != dst && (!filtered || tinfo.repair_task_info->selected_by_filters(r, topo));
                         });
+                        // A single replica has nothing to sync with, but its repair still
+                        // records the flush time, see repair_service::repair_tablet().
+                        bool single_replica = !filtered && tinfo.replicas.size() == 1;
                         // The flush time becomes the tablet's repair time, whatever the
                         // gc mode of the table, so every repair needs a real flush.
-                        bool needs_flush = table && has_peer;
+                        bool needs_flush = table && (has_peer || single_replica);
                         tablet_repair_flush_info flush{tablet_repair_flush_mode::skip};
                         if (needs_flush) {
                             // The caller's frame, and with it everything captured

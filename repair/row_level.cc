@@ -2901,7 +2901,8 @@ future<repair_flush_hints_batchlog_response> repair_service::repair_flush_hints_
     co_return resp;
 }
 
-// The first half of a tablet's incremental repair: with the tablet's compaction paused,
+// The first half of a tablet's incremental repair, shared by the row-level
+// repair and the single-replica shortcut: with the tablet's compaction paused,
 // its sstables are snapshotted (which flushes the memtable), and the unrepaired
 // ones (all of them in full mode) are collected, marked as being repaired, so
 // that the unrepaired compaction leaves them alone until the coordinator's
@@ -3011,6 +3012,19 @@ future<std::unordered_map<sstables::shared_sstable, sstables::shared_sstable>> r
     // view's compaction group at capture time, and no concurrent compaction
     // can move the inputs to a different group mid-rewrite.
     co_return co_await table.perform_component_rewrite(range, tasks::make_empty_task_info(), filter, sstables::component_type::Statistics, modifier);
+}
+
+// The incremental repair of a tablet with a single replica: both halves, back
+// to back, with nothing to synchronize in between.
+future<> repair_service::promote_single_replica_tablet_sstables(locator::global_tablet_id gid, dht::token_range range, int64_t sstables_repaired_at, bool full,
+        service::frozen_topology_guard topo_guard) {
+    auto& table = get_db().local().find_column_family(gid.table);
+    auto captured = co_await capture_sstables_for_incremental_repair(table, gid, range, sstables_repaired_at, full, false, topo_guard);
+    std::vector<sstables::shared_sstable> candidates;
+    captured.sst_set->for_each_sstable([&] (const sstables::shared_sstable& sst) {
+        candidates.push_back(sst);
+    });
+    co_await rewrite_sstables_repaired_at(table, range, candidates, sstables_repaired_at, topo_guard);
 }
 
 future<> repair_service::init_ms_handlers() {
@@ -4157,6 +4171,53 @@ repair_service::update_history(tasks::task_id repair_id, table_id table_id, dht:
             co_return std::nullopt;
         }
     });
+}
+
+future<bool> repair_service::repair_single_replica_range(shard_repair_state& rstate, sstring cf_name, table_id table_id, dht::token_range range, gc_clock::time_point flush_time) {
+    // Only for regular repairs: node operations have to sync the data to the
+    // new replicas.
+    if (rstate.reason() != streaming::stream_reason::repair) {
+        co_return false;
+    }
+    auto erm = rstate.get_erm();
+    auto my_host_id = erm->get_topology().my_host_id();
+    auto end_token = range.end() ? range.end()->value() : dht::maximum_token();
+    auto replicas = erm->get_natural_replicas(end_token);
+    if (replicas.size() != 1 || replicas.front() != my_host_id) {
+        co_return false;
+    }
+    // The nodes to record the repair history on.
+    std::vector<locator::host_id> nodes{my_host_id};
+
+    rlogger.debug("repair[{}]: Repair {} out of {} ranges, keyspace={}, table={}, range={}, status=skipped_single_replica, hints_batchlog_flushed={}, flush_time={}",
+            rstate.global_repair_id.uuid(), rstate.ranges_index, rstate.ranges_size(), rstate.get_keyspace(), cf_name, range, rstate.hints_batchlog_flushed, flush_time);
+
+    if (!rstate.hints_batchlog_flushed) {
+        // Recording the repair time is all this repair does, so without the
+        // flush it has failed, unlike a row-level repair, which has still
+        // synchronized the data (see row_level_repair::update_system_repair_table()).
+        if (rstate.needs_flush_before_repair) {
+            rstate.nr_failed_ranges++;
+            rlogger.warn("repair[{}]: Repair {} out of {} ranges, keyspace={}, table={}, range={}, status=failed_single_replica: hints and batchlog were not flushed",
+                    rstate.global_repair_id.uuid(), rstate.ranges_index, rstate.ranges_size(), rstate.get_keyspace(), cf_name, range);
+        }
+        co_return true;
+    }
+
+    auto repair_time_opt = co_await update_history(rstate.global_repair_id.uuid(), table_id, range, flush_time, false);
+    if (!repair_time_opt) {
+        co_return true;
+    }
+    repair_update_system_table_request req{rstate.global_repair_id.uuid(), table_id, rstate.get_keyspace(), std::move(cf_name), range, *repair_time_opt};
+    co_await coroutine::parallel_for_each(nodes, [&rstate, &req] (locator::host_id node) -> future<> {
+        try {
+            co_await ser::repair_rpc_verbs::send_repair_update_system_table(&rstate.messaging.local(), node, req);
+            rlogger.debug("repair[{}]: Finished to update system.repair_history table of node {}", rstate.global_repair_id.uuid(), node);
+        } catch (...) {
+            rlogger.warn("repair[{}]: Failed to update system.repair_history table of node {}: {:t}", rstate.global_repair_id.uuid(), node, std::current_exception());
+        }
+    });
+    co_return true;
 }
 
 future<> repair_service::cleanup_history(tasks::task_id repair_id) {

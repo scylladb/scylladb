@@ -243,6 +243,14 @@ public:
     future<> cleanup_history(tasks::task_id repair_id);
     future<> load_history();
 
+    // Record a range which has a single replica (e.g. a range of an RF=1 table)
+    // as repaired, without running row-level repair. Such ranges have nothing
+    // to be repaired, but the hints and batchlog flush done before the repair
+    // still has to be recorded in the repair history, to allow repair-mode
+    // tombstone gc to purge tombstones written before the flush.
+    // Returns false (doing nothing) if this node is not the only replica of the range.
+    future<bool> repair_single_replica_range(shard_repair_state& rstate, sstring cf_name, table_id table_id, dht::token_range range, gc_clock::time_point flush_time);
+
     // Repair a single local range, multiple column families.
     // Comparable to RepairSession in Origin
     future<> repair_range(shard_repair_state& rstate, const dht::token_range& range, table_info table, gc_clock::time_point flush_time);
@@ -290,12 +298,20 @@ public:
     future<std::unordered_map<sstables::shared_sstable, sstables::shared_sstable>> rewrite_sstables_repaired_at(replica::table& table,
             dht::token_range range, const std::vector<sstables::shared_sstable>& candidates, int64_t sstables_repaired_at,
             service::frozen_topology_guard topo_guard);
+    // The incremental repair of a tablet with a single replica: promotes the
+    // tablet's local sstables to repaired, as the row-level repair does for a
+    // tablet with more replicas. Runs on the shard owning the tablet.
+    future<> promote_single_replica_tablet_sstables(locator::global_tablet_id gid, dht::token_range range, int64_t sstables_repaired_at, bool full,
+            service::frozen_topology_guard topo_guard);
 
 private:
     struct tablet_repair_result {
         gc_clock::time_point flush_time;
         bool should_flush_and_flush_failed;
     };
+    future<tablet_repair_result> repair_single_replica_tablet(repair_uniq_id id, locator::global_tablet_id gid, sstring keyspace, std::vector<sstring> tables,
+            dht::token_range range, shard_id shard, int64_t sstables_repaired_at, locator::tablet_repair_incremental_mode incremental_mode, service::frozen_topology_guard topo_guard,
+            service::tablet_repair_flush_info flush);
     future<tablet_repair_result> run_tablet_repair(sstring keyspace, std::vector<sstring> tables, std::vector<tablet_repair_task_meta> metas, std::optional<int> ranges_parallelism, service::frozen_topology_guard topo_guard, service::tablet_repair_flush_info flush, tablet_repair_sched_info sched_info, streaming::stream_reason reason, tasks::task_info parent_data, repair_uniq_id id);
     future<> run_user_requested_repair(lw_shared_ptr<locator::global_static_effective_replication_map> germs, std::vector<sstring> cfs, dht::token_range_vector ranges, std::vector<sstring> hosts, std::vector<sstring> data_centers, std::unordered_set<locator::host_id> ignore_nodes, bool small_table_optimization, std::optional<int> ranges_parallelism, abort_source& as, sstring keyspace, tasks::task_info parent_data, repair_uniq_id id);
     future<> run_data_sync_repair(size_t& cfs_size, dht::token_range_vector ranges, std::unordered_map<dht::token_range, repair_neighbors> neighbors, streaming::stream_reason reason, abort_source& as, service::frozen_topology_guard frozen_topology_guard, sstring keyspace, tasks::task_info task_data, repair_uniq_id id);
