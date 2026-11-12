@@ -33,6 +33,7 @@
 #include "utils/exceptions.hh"
 #include "utils/on_internal_error.hh"
 #include <seastar/core/lowres_clock.hh>
+#include <seastar/core/sleep.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/as_future.hh>
@@ -56,6 +57,16 @@ static constexpr auto group_teardown_timeout = std::chrono::seconds(60);
 
 // How long the leader waits for a replica to report its applied timestamps.
 static constexpr auto applied_timestamps_rpc_timeout = std::chrono::seconds(5);
+
+// A group's data is sealed once this much was written since its last seal, or the oldest
+// unsealed write is this old, and at most this many seals wait for promotion at a time.
+static constexpr uint64_t seal_bytes = 32 << 20;
+static constexpr auto seal_interval = std::chrono::minutes(1);
+static constexpr size_t max_pending_seals = 4;
+static constexpr auto seal_proposer_tick = std::chrono::minutes(1);
+// How long the leader waits for a seal or a promotion to commit, so that a group
+// without a quorum does not hold the others back.
+static constexpr auto seal_append_timeout = std::chrono::seconds(10);
 
 static raft::server_id to_server_id(host_id host_id) {
     return raft::server_id{host_id.uuid()};
@@ -267,7 +278,7 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
         *commitlog, tablet.table, std::move(replayed_data),
         [this](db::cf_id_type id, db::replay_position pos) { request_flush(id, pos); });
 
-    auto state_machine = make_state_machine(tablet, std::move(range), group_id, _db, _mm, _sys_ks, *storage, _resize_tracker, std::move(apply_stats));
+    auto state_machine = make_state_machine(tablet, range, group_id, _db, _mm, _sys_ks, *storage, _resize_tracker, std::move(apply_stats));
 
     auto& state_machine_ref = *state_machine;
     auto rpc = std::make_unique<rpc_impl>(state_machine_ref, _ms, _raft_gr.failure_detector(), group_id, my_id,
@@ -284,6 +295,14 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
         // The repair history is not persisted.
         if (const auto& promoted = storage->promoted_seal()) {
             record_promoted_seal(*table, range, promoted->ts);
+        }
+        // Replay skips the state machine, so count the writes it put back as unsealed when
+        // the table holds a change newer than the newest seal. Their size is unknown.
+        const auto newest_seal = storage->seals().empty()
+                ? (storage->promoted_seal() ? storage->promoted_seal()->ts : api::min_timestamp)
+                : storage->seals().back().ts;
+        if (table->get_max_timestamp_for_token_range(range) > newest_seal) {
+            storage->note_write(0);
         }
     }
     if (!snapshot.id) {
@@ -956,6 +975,87 @@ future<> groups_manager::leader_info_updater(raft_group_state& state, table_id t
     }
 }
 
+void groups_manager::seal_proposer::start() {
+    _fiber = run();
+}
+
+future<> groups_manager::seal_proposer::stop() {
+    co_await std::move(_fiber);
+}
+
+future<> groups_manager::seal_proposer::run() {
+    while (true) {
+        try {
+            co_await sleep_abortable(seal_proposer_tick, _gm._as);
+        } catch (const sleep_aborted&) {
+            co_return;
+        }
+        try {
+            co_await round();
+        } catch (...) {
+            if (_gm._as.abort_requested()) {
+                co_return;
+            }
+            logger.warn("seal_proposer: a round failed: {}", std::current_exception());
+        }
+    }
+}
+
+future<> groups_manager::seal_proposer::round() {
+    std::vector<raft::group_id> led;
+    for (const auto& [gid, state] : _gm._raft_groups) {
+        if (state.leader_info) {
+            led.push_back(gid);
+        }
+    }
+    for (const auto gid : led) {
+        if (const auto it = _gm._raft_groups.find(gid); it != _gm._raft_groups.end()) {
+            co_await maybe_seal(gid, it->second);
+        }
+    }
+}
+
+future<> groups_manager::seal_proposer::maybe_seal(raft::group_id gid, raft_group_state& state) {
+    auto srv = try_acquire_server(state);
+    if (!srv || !state.storage) {
+        co_return;
+    }
+    // The parent of a resize hands its writes off to its children once it applies start_resize.
+    // A seal appended after that would be stamped above the children's writes, and promoting it
+    // would vouch for data its log does not carry. The children's seals cover the parent's
+    // unsealed tail once the resize is finalized.
+    if (_gm._resize_tracker.is_resizing(gid)) {
+        co_return;
+    }
+    const auto& storage = *state.storage;
+    const auto& unsealed = storage.unsealed();
+    if (storage.seals().size() >= max_pending_seals || !unsealed.first_applied_at) {
+        co_return;
+    }
+    if (unsealed.bytes < seal_bytes && lowres_clock::now() - *unsealed.first_applied_at < seal_interval) {
+        co_return;
+    }
+    // Whatever the outcome, the next round sees it: a second seal would only cut an empty memtable.
+    co_await append(*srv, gid, [gid] (api::timestamp_type ts, raft::term_t term) {
+        logger.debug("seal_proposer: group {}: adding a seal at {}, term {}", gid, ts, term);
+        return raft_command{.change = seal_command{.timestamp = ts}};
+    });
+}
+
+future<> groups_manager::seal_proposer::append(raft_server& srv, raft::group_id gid,
+        noncopyable_function<raft_command(api::timestamp_type, raft::term_t)> make_command) {
+    abort_on_expiry aoe(lowres_clock::now() + seal_append_timeout);
+    const auto stop_sub = utils::chain_abort_source(aoe.abort_source(), _gm._as);
+    try {
+        co_await _gm.append_command(srv, gid, aoe.abort_source(), std::move(make_command));
+    } catch (...) {
+        if (_gm._as.abort_requested()) {
+            throw;
+        }
+        logger.debug("seal_proposer: group {}: the command was not committed: {}", gid, std::current_exception());
+    }
+}
+
 // The raft group configuration implied by a tablet's replica set and the stage its
 // migration is in; see "Strongly-consistent tablets" in docs/dev/topology-over-raft.md.
 //
@@ -1544,6 +1644,8 @@ void groups_manager::start() {
     if (_pending_tm) {
         update(std::move(_pending_tm));
     }
+
+    _seal_proposer.start();
 }
 
 future<> groups_manager::stepdown_leaders() {
@@ -1615,6 +1717,8 @@ future<> groups_manager::stop_shard() {
         co_return;
     }
     logger.info("stop_shard() enter");
+
+    co_await _seal_proposer.stop();
 
     // The segments must survive so replay can recover the log.
     schedule_raft_groups_deletion(true, log_disposition::keep);

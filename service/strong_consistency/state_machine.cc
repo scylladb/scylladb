@@ -202,6 +202,7 @@ public:
                 }
                 ++_db.get_stats().total_writes;
                 _stats->apply_latency.add(lc.stop().latency());
+                _persistence.note_write(mut.representation().size());
                 _persistence.note_applied(command[i]->idx);
             }
         } catch (replica::no_such_column_family&) {

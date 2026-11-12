@@ -384,7 +384,15 @@ void raft_groups_storage::release_all() {
     }
 }
 
+void raft_groups_storage::note_write(uint64_t bytes) {
+    _unsealed.bytes += bytes;
+    if (!_unsealed.first_applied_at) {
+        _unsealed.first_applied_at = lowres_clock::now();
+    }
+}
+
 void raft_groups_storage::add_seal(raft_seal seal) {
+    _unsealed = {};
     if (_promoted_seal && seal.idx <= _promoted_seal->idx) {
         return;
     }

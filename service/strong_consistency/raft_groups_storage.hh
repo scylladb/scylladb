@@ -18,6 +18,7 @@
 #include <functional>
 
 #include <seastar/core/future.hh>
+#include <seastar/core/lowres_clock.hh>
 
 #include "seastarx.hh"
 #include "raft_commitlog.hh"
@@ -65,6 +66,14 @@ struct raft_seal {
     api::timestamp_type ts;
 
     bool operator==(const raft_seal&) const = default;
+};
+
+// What the group has applied since its last seal. In memory only: after a restart, the
+// writes replay put back count as present, from the start of the group, with no size.
+struct unsealed_writes {
+    uint64_t bytes = 0;
+    // When the first of them was applied, nothing while there is none.
+    std::optional<lowres_clock::time_point> first_applied_at;
 };
 
 // Builds the mutation which records `seal` in the system.raft_groups row of the
@@ -125,6 +134,7 @@ class raft_groups_storage : public raft::persistence {
     // Oldest first.
     std::vector<raft_seal> _seals;
     std::optional<raft_seal> _promoted_seal;
+    unsealed_writes _unsealed;
 
     // The future of the currently executing (or already finished) write operation.
     //
@@ -183,6 +193,10 @@ public:
     // adding the same seal twice keeps one copy and a promoted seal stays out. Only in
     // memory: make_seal_mutation() writes the row.
     void add_seal(raft_seal seal);
+    void note_write(uint64_t bytes);
+    const unsealed_writes& unsealed() const noexcept {
+        return _unsealed;
+    }
     // Makes room for one more seal, so that the next add_seal() does not allocate.
     void reserve_seal() {
         _seals.reserve(_seals.size() + 1);
