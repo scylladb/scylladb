@@ -2486,6 +2486,124 @@ async def test_cluster_snapshot_repair_set_unique(manager: ScyllaClusterManager,
     await do_test_snapshot_on_all_nodes(manager, partial(run_cluster_backup_and_check_redundancy, object_storage), object_storage, True, True)
 
 
+def cluster_backup_location(server: ServerInfo, object_storage, prefix: str) -> dict:
+    return {'datacenter': server.datacenter, 'endpoint': object_storage.address, 'bucket': object_storage.bucket_name, 'prefix': prefix}
+
+
+async def create_tables_with_data(cql, keyspaces: list[str], tables: list[str]):
+    for ks in keyspaces:
+        for cf in tables:
+            await cql.run_async(f"CREATE TABLE {ks}.{cf} (pk text primary key, value int)")
+            await asyncio.gather(*(cql.run_async(f"INSERT INTO {ks}.{cf} (pk, value) VALUES ('{i}', {i})") for i in range(10)))
+
+
+@pytest.mark.asyncio
+async def test_cluster_backup_tables_across_keyspaces(manager: ScyllaClusterManager, object_storage):
+    """
+    Tests that one cluster snapshot and one backup cover a list of tables that spans keyspaces:
+    a whole keyspace and a single table of another one, and nothing else.
+    """
+    servers, _ = await create_cluster(topo(rf=3, nodes=3, racks=3, dcs=1), manager, logger, object_storage)
+    server = servers[0]
+    cql = manager.get_cql()
+    snapshot_name = unique_name('snap_')
+    prefix = unique_name('across_')
+    ks_opts = "WITH REPLICATION = { 'replication_factor' : 3 } AND tablets = {'initial': 2 }"
+
+    async with new_test_keyspace(manager, ks_opts) as ks1, new_test_keyspace(manager, ks_opts) as ks2:
+        await create_tables_with_data(cql, [ks1, ks2], ['t1', 't2'])
+
+        tables = [{'keyspace': ks1}, {'keyspace': ks2, 'table': 't1'}]
+        expected = {(ks1, 't1'), (ks1, 't2'), (ks2, 't1')}
+
+        await manager.api.take_cluster_snapshot_of_tables(server.ip_addr, snapshot_name, tables)
+        tid = await manager.api.backup_cluster_snapshot_of_tables(server.ip_addr, snapshot_name,
+                                                                  [cluster_backup_location(server, object_storage, prefix)], tables)
+        status = await manager.api.wait_task(server.ip_addr, tid)
+        assert status is not None and status['state'] == 'done', f"Cluster backup failed: {status}"
+
+        snapshots = list(cql.execute(f"SELECT * FROM system_distributed.snapshots WHERE name = '{snapshot_name}'"))
+        assert len(snapshots) == 1
+
+        snapshot_tables = {(r.keyspace_name, r.table_name) for r in
+                           cql.execute(f"SELECT keyspace_name, table_name FROM system_distributed.snapshot_tables WHERE snapshot_name = '{snapshot_name}'")}
+        assert snapshot_tables == expected
+
+        manifests = set(bucket_objects(object_storage, f'{prefix}/snapshots/'))
+        assert manifests == {f'{prefix}/snapshots/{ks}/{cf}/{snapshot_name}/manifest.json' for ks, cf in expected}
+
+        bucket = object_storage.get_resource().Bucket(object_storage.bucket_name)
+        for key in manifests:
+            manifest = json.load(bucket.Object(key).get()['Body'])
+            assert manifest['sstables'], f"{key} lists no sstables"
+
+
+@pytest.mark.asyncio
+async def test_cluster_snapshot_and_backup_reject_bad_table_list(manager: ScyllaClusterManager, object_storage):
+    """
+    Tests that both endpoints refuse a malformed table list, and one given together with
+    the keyspace or table query parameters, before they snapshot or upload anything.
+    """
+    servers, _ = await create_cluster(topo(rf=3, nodes=3, racks=3, dcs=1), manager, logger, object_storage)
+    server = servers[0]
+    cql = manager.get_cql()
+    snapshot_name = unique_name('snap_')
+    prefix = unique_name('rejected_')
+    locations = [cluster_backup_location(server, object_storage, prefix)]
+
+    async def assert_rejected(tables, extra_params):
+        with pytest.raises(HTTPError) as e:
+            await manager.api.client.post("/storage_service/tablets/snapshots", host=server.ip_addr,
+                                          params={'tag': snapshot_name} | extra_params, json={'tables': tables})
+        assert e.value.code == 400, f"snapshot of {tables} with {extra_params}: {e.value}"
+        with pytest.raises(HTTPError) as e:
+            await manager.api.client.post("/storage_service/tablets/backup", host=server.ip_addr,
+                                          params={'snapshot': snapshot_name} | extra_params, json={'locations': locations, 'tables': tables})
+        assert e.value.code == 400, f"backup of {tables} with {extra_params}: {e.value}"
+
+    async with new_test_keyspace(manager, "WITH REPLICATION = { 'replication_factor' : 3 } AND tablets = {'initial': 2 }") as ks:
+        await create_tables_with_data(cql, [ks], ['t1'])
+        valid = [{'keyspace': ks, 'table': 't1'}]
+
+        for tables in ([], [{'table': 't1'}], [{'keyspace': ''}], [{'keyspace': ks, 'table': 1}], [ks], f'{ks}.t1'):
+            await assert_rejected(tables, {})
+        await assert_rejected(valid, {'keyspace': ks})
+        await assert_rejected(valid, {'keyspace': ks, 'table': 't1'})
+
+        assert not list(cql.execute(f"SELECT * FROM system_distributed.snapshots WHERE name = '{snapshot_name}'"))
+        assert not bucket_objects(object_storage, f'{prefix}/')
+
+
+@pytest.mark.asyncio
+async def test_cluster_backup_rejects_table_missing_from_snapshot(manager: ScyllaClusterManager, object_storage):
+    """
+    Tests that a backup of an existing snapshot is refused when it names a table the snapshot
+    does not contain, uploads nothing, and leaves the snapshot fit for a backup of its own tables.
+    """
+    servers, _ = await create_cluster(topo(rf=3, nodes=3, racks=3, dcs=1), manager, logger, object_storage)
+    server = servers[0]
+    cql = manager.get_cql()
+    snapshot_name = unique_name('snap_')
+    prefix = unique_name('subset_')
+    locations = [cluster_backup_location(server, object_storage, prefix)]
+
+    async with new_test_keyspace(manager, "WITH REPLICATION = { 'replication_factor' : 3 } AND tablets = {'initial': 2 }") as ks:
+        await create_tables_with_data(cql, [ks], ['t1', 't2'])
+        in_snapshot = [{'keyspace': ks, 'table': 't1'}]
+        await manager.api.take_cluster_snapshot_of_tables(server.ip_addr, snapshot_name, in_snapshot)
+
+        with pytest.raises(HTTPError, match=f'{ks}.t2') as e:
+            await manager.api.backup_cluster_snapshot_of_tables(server.ip_addr, snapshot_name, locations,
+                                                                in_snapshot + [{'keyspace': ks, 'table': 't2'}])
+        assert e.value.code == 400
+        assert not bucket_objects(object_storage, f'{prefix}/')
+
+        tid = await manager.api.backup_cluster_snapshot_of_tables(server.ip_addr, snapshot_name, locations, in_snapshot)
+        status = await manager.api.wait_task(server.ip_addr, tid)
+        assert status is not None and status['state'] == 'done', f"Cluster backup failed: {status}"
+        assert set(bucket_objects(object_storage, f'{prefix}/snapshots/')) == {f'{prefix}/snapshots/{ks}/t1/{snapshot_name}/manifest.json'}
+
+
 @pytest.mark.asyncio
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_queued_backup_task_is_abortable(manager: ScyllaClusterManager, object_storage):
