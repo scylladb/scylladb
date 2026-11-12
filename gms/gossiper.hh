@@ -117,6 +117,21 @@ private:
     bool _enabled = false;
     semaphore _callback_running{1};
     semaphore _apply_state_locally_semaphore{100};
+    struct pending_state {
+        endpoint_state state;
+        // Whether the state carries an application state that gossip has to
+        // be considered busy with until it is applied (see _msg_processing).
+        // Sticky: set once, cleared only when the state is applied or dropped.
+        bool critical;
+    };
+    // Pending endpoint states waiting to be applied, coalesced per endpoint:
+    // at most one entry per endpoint is kept, and each arriving state is
+    // merged into it key by key (see queue_state_apply()). This bounds
+    // both the apply backlog and its memory consumption at O(cluster size)
+    // even when application cannot keep up with incoming gossip.
+    std::unordered_map<inet_address, pending_state> _pending_state_applies;
+    // Endpoints an apply fiber is currently running for.
+    std::unordered_set<inet_address> _applying_states;
     seastar::gate _background_msg;
     std::unordered_map<gms::inet_address, syn_msg_pending> _syn_handlers;
     std::unordered_map<gms::inet_address, ack_msg_pending> _ack_handlers;
@@ -534,11 +549,21 @@ public:
     // Get live members synchronized to all shards
     future<std::set<inet_address>> get_unreachable_members_synchronized();
 
-    future<> apply_state_locally(std::map<inet_address, endpoint_state> map);
-
 private:
+    // Queues the received endpoint states for application by the per-endpoint
+    // applier fibers. Does not wait for them to be applied.
+    void queue_state_applies(std::map<inet_address, endpoint_state> map);
+    void queue_state_apply(inet_address ep, endpoint_state state);
     future<> do_apply_state_locally(gms::inet_address node, endpoint_state remote_state, bool shadow_round);
     future<> apply_state_locally_in_shadow_round(std::unordered_map<inet_address, endpoint_state> map);
+    // Spawns a background fiber applying pending states of the given endpoint
+    // until none remain. At most one such fiber runs per endpoint. On failure
+    // to spawn, the pending state is dropped; gossip re-delivers it.
+    void spawn_state_applier(inet_address ep) noexcept;
+    // Discards the pending state of the given endpoint, if any, keeping
+    // _msg_processing in sync.
+    void drop_pending_state(inet_address ep) noexcept;
+    future<> apply_pending_states(inet_address ep, gate::holder gh);
 
     // Must be called under lock_endpoint.
     future<> apply_new_states(inet_address addr, endpoint_state local_state, const endpoint_state& remote_state, permit_id, bool shadow_round);
@@ -671,9 +696,12 @@ private:
     future<> wait_for_gossip(std::chrono::milliseconds, std::optional<int32_t> = {}) const;
 
     uint64_t _nr_run = 0;
+    // Number of received endpoint states carrying a critical application
+    // state that are queued for or undergoing application. Gossip is not
+    // settled while this is non-zero. Note that it counts the actual work,
+    // not the message handlers: those hand the states over to the per-endpoint
+    // applier fibers and return without waiting for them.
     uint64_t _msg_processing = 0;
-
-    class msg_proc_guard;
 private:
     abort_source& _abort_source;
     const locator::shared_token_metadata& _shared_token_metadata;
