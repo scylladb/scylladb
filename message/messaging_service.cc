@@ -137,6 +137,7 @@
 #include "idl/mapreduce_request.dist.hh"
 #include "idl/mapreduce_request.dist.impl.hh"
 #include "idl/storage_service.dist.impl.hh"
+#include "idl/sstable_dicts.dist.impl.hh"
 #include "idl/join_node.dist.impl.hh"
 #include "idl/tasks.dist.impl.hh"
 #include "idl/forward_cql.dist.impl.hh"

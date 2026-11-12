@@ -24,6 +24,7 @@ class compaction_manager;
 
 namespace sstables {
 class storage_manager;
+class dictionary_service;
 }
 
 namespace service {
@@ -104,6 +105,8 @@ future<> set_server_snitch(http_context& ctx, sharded<locator::snitch_ptr>& snit
 future<> unset_server_snitch(http_context& ctx);
 future<> set_server_storage_service(http_context& ctx, sharded<service::storage_service>& ss, sharded<db::snapshot_ctl>&, service::raft_group0_client&);
 future<> unset_server_storage_service(http_context& ctx);
+future<> set_server_sstable_dicts(http_context& ctx, sharded<sstables::dictionary_service>& dicts, service::raft_group0_client&);
+future<> unset_server_sstable_dicts(http_context& ctx);
 future<> set_server_client_routes(http_context& ctx, sharded<service::client_routes_service>& cr);
 future<> unset_server_client_routes(http_context& ctx);
 future<> set_server_sstables_loader(http_context& ctx, sharded<sstables_loader>& sst_loader);
