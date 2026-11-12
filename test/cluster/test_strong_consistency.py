@@ -755,7 +755,11 @@ async def test_forward_cql_prepared_with_bound_values(manager: ScyllaClusterMana
             traced_execute = cql.execute(stmt, (0,), host=non_leader_host, trace=True)
             res = await cql.run_async(f"SELECT value FROM {table} WHERE pk = 0")
             assert len(res) == 1 and res[0].value == 0
-            trace = traced_execute.get_query_trace()
+            # Trace events are written at CL=ANY, so right after the query only one
+            # replica of system_traces may have them. Read them at CL=ALL: the
+            # driver's default CL=LOCAL_ONE may read a replica that doesn't have
+            # them yet, and see no events.
+            trace = traced_execute.response_future.get_query_trace(query_cl=ConsistencyLevel.ALL)
             for event in trace.events:
                 logger.info(f"Trace event: {event.description}")
                 assert "Prepared statement not found on target" not in event.description
@@ -3633,7 +3637,11 @@ async def test_write_paused_across_leadership_change(manager: ScyllaClusterManag
 
             # Assert that no forwarding to a different node took place
             # and everything was executed within the coordinator
-            trace = paused_write_result.get_query_trace()
+            # Trace events are written at CL=ANY, so right after the query only one
+            # replica of system_traces may have them. Read them at CL=ALL: the
+            # driver's default CL=LOCAL_ONE may read a replica that doesn't have
+            # them yet, and see no events.
+            trace = paused_write_result.response_future.get_query_trace(query_cl=ConsistencyLevel.ALL)
             sources = frozenset(event.source for event in trace.events)
             assert sources == frozenset([leader_server.ip_addr])
 
