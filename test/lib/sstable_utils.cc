@@ -269,14 +269,9 @@ void slightly_corrupt_sstable(sstables::shared_sstable sst, component_type compo
     auto block_offset = align_down(corrupt_offset, dma_align);
     auto buf = seastar::temporary_buffer<char>::aligned(mem_align, dma_align);
     f.dma_read(block_offset, buf.get_write(), dma_align).get();
-    if (scylla_with_digest) {
-        buf.get_write()[corrupt_offset - block_offset] ^= 1u;
-    } else {
-        // Flip one bit in the last byte of the file to corrupt it minimally.
-        // Using a single-bit flip avoids creating values that overflow
-        // during parsing.
-        buf.get_write()[corrupt_offset - block_offset] += 1;
-    }
+    // Flip one bit of that byte to corrupt the file minimally. Using a
+    // single-bit flip avoids creating values that overflow during parsing.
+    buf.get_write()[corrupt_offset - block_offset] ^= 1u;
     f.dma_write(block_offset, buf.get(), dma_align).get();
     f.truncate(size).get();
 }
