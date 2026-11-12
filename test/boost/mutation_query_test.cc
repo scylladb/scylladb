@@ -31,6 +31,10 @@
 #include "readers/from_mutations.hh"
 #include "mutation/mutation_rebuilder.hh"
 #include "readers/mutation_source.hh"
+#include "replica/memtable.hh"
+#include "db/row_cache.hh"
+#include "test/lib/log.hh"
+#include "types/set.hh"
 
 using namespace std::literals::chrono_literals;
 
@@ -601,4 +605,138 @@ SEASTAR_THREAD_TEST_CASE(test_reverse_range_tombstones) {
     auto slice = partition_slice_builder(*query_schema).reversed().build();
     reconcilable_result result = mutation_query(query_schema, semaphore.make_permit(), src, query::full_partition_range, slice, query::max_rows, query::max_partitions, now);
     assert_that(result.partitions().at(0).mut().unfreeze(query_schema)).is_equal_to(reverse(m));
+}
+
+static std::string digest_of(schema_ptr s, reader_permit permit, const mutation_source& source, gc_clock::time_point query_time) {
+    auto slice = make_full_slice(*s);
+    slice.options.set<query::partition_slice::option::with_digest>();
+    query::result_memory_limiter l(std::numeric_limits<ssize_t>::max());
+    query::result::builder builder(slice, query::result_options{query::result_request::only_digest, query::digest_algorithm::xxHash},
+            l.new_digest_read(query::max_result_size(query::result_memory_limiter::maximum_result_size), query::short_read::no).get(), query::max_tombstones);
+    {
+        auto querier = replica::querier(source, s, std::move(permit), query::full_partition_range, slice, {}, tombstone_gc_state::for_tests());
+        auto close_querier = deferred_close(querier);
+        querier.consume_page(query_result_builder(*s, builder), std::numeric_limits<uint32_t>::max(), std::numeric_limits<uint32_t>::max(), query_time).get();
+    }
+    auto r = builder.build();
+    return fmt::format("{:02x} last_modified={}", fmt::join(r.digest()->get(), ""), r.last_modified());
+}
+
+namespace {
+
+// Rows whose cells expire while hashes cached by row::prepare_hash() are kept (SCYLLADB-6240).
+struct cached_hash_env {
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    schema_ptr s = schema_builder(this_smp_shard_count(), "ks", "cf")
+                           .with_column("pk", int32_type, column_kind::partition_key)
+                           .with_column("ck", int32_type, column_kind::clustering_key)
+                           .with_column("st", int32_type, column_kind::static_column)
+                           .with_column("st_live", int32_type, column_kind::static_column)
+                           .with_column("v", int32_type)
+                           .with_column("live", int32_type)
+                           .with_column("set", set_type_impl::get_instance(int32_type, true))
+                           .set_gc_grace_seconds(86400) // expired cells stay as dead cells instead of being purged
+                           .build();
+    partition_key pk = partition_key::from_single_value(*s, int32_type->decompose(0));
+    clustering_key ck = clustering_key::from_single_value(*s, int32_type->decompose(0));
+    gc_clock::time_point write_time = gc_clock::now();
+    gc_clock::duration ttl = std::chrono::seconds(10);
+    gc_clock::time_point before_expiry = write_time + std::chrono::seconds(5);
+    gc_clock::time_point after_expiry = write_time + std::chrono::seconds(60);
+
+    const column_definition& col(const char* name) const {
+        return *s->get_column_definition(name);
+    }
+    atomic_cell expiring(bytes_view value, atomic_cell::collection_member cm = atomic_cell::collection_member::no) const {
+        return atomic_cell::make_live(*int32_type, 1, value, write_time + ttl, ttl, cm);
+    }
+    atomic_cell plain(bytes_view value, atomic_cell::collection_member cm = atomic_cell::collection_member::no) const {
+        return atomic_cell::make_live(*int32_type, 1, value, cm);
+    }
+    // Set elements carry an empty value.
+    collection_mutation set_of(std::vector<std::pair<int32_t, atomic_cell_view>> cells) const {
+        collection_mutation_writer w(tombstone{});
+        for (auto& [k, c] : cells) {
+            auto key = int32_type->decompose(k);
+            w.push_back(bytes_view(key), c);
+        }
+        return std::move(w).finish();
+    }
+    mutation base() const {
+        mutation m(s, pk);
+        m.set_clustered_cell(ck, col("live"), plain(int32_type->decompose(1))); // keeps the row live
+        return m;
+    }
+
+    // Digests via memtable and cache must match a cold read, which has no cached hashes.
+    void check(sstring name, const mutation& m, gc_clock::time_point query_time) {
+        auto mt = make_lw_shared<replica::memtable>(s);
+        mt->apply(m);
+        cache_tracker tracker;
+        row_cache cache(s, snapshot_source([src = mt->as_data_source()] {
+            return src;
+        }),
+                tracker);
+        auto cache_source =
+                mutation_source([&cache](schema_ptr s, reader_permit permit, const dht::partition_range& range, const query::partition_slice& slice) {
+                    return cache.make_reader(std::move(s), std::move(permit), range, slice);
+                });
+        digest_of(s, semaphore.make_permit(), cache_source, query_time);
+        BOOST_REQUIRE_GT(tracker.partitions(), 0); // the next cache read must not fall through to the memtable
+        auto cold = digest_of(s, semaphore.make_permit(), make_source({m}), query_time);
+        auto memtable = digest_of(s, semaphore.make_permit(), mt->as_data_source(), query_time);
+        auto cached = digest_of(s, semaphore.make_permit(), cache_source, query_time);
+        testlog.info("{}: cold={} memtable={} cache={}", name, cold, memtable, cached);
+        BOOST_CHECK_MESSAGE(cold == memtable, name + ": memtable digest differs from cold read");
+        BOOST_CHECK_MESSAGE(cold == cached, name + ": cache digest differs from cold read");
+    }
+};
+
+} // anonymous namespace
+
+SEASTAR_THREAD_TEST_CASE(test_cached_cell_hash_digest_before_expiry) {
+    cached_hash_env env;
+    {
+        auto m = env.base();
+        m.set_clustered_cell(env.ck, env.col("v"), env.expiring(int32_type->decompose(1)));
+        env.check("atomic ttl", m, env.before_expiry);
+    }
+    {
+        auto m = env.base();
+        m.set_clustered_cell(env.ck, env.col("set"),
+                env.set_of({{1, env.expiring({}, atomic_cell::collection_member::yes)}, {2, env.plain({}, atomic_cell::collection_member::yes)}}));
+        env.check("set element ttl", m, env.before_expiry);
+    }
+    {
+        auto m = env.base();
+        m.set_static_cell(env.col("st"), env.expiring(int32_type->decompose(1)));
+        m.set_static_cell(env.col("st_live"), env.plain(int32_type->decompose(1)));
+        env.check("static ttl", m, env.before_expiry);
+    }
+}
+
+// The two expected failures are the memtable and cache checks; drop the decorator with the SCYLLADB-6240 fix.
+SEASTAR_THREAD_TEST_CASE(test_stale_cached_cell_hash_expired_cell, *boost::unit_test::expected_failures(2)) {
+    cached_hash_env env;
+    auto m = env.base();
+    m.set_clustered_cell(env.ck, env.col("v"), env.expiring(int32_type->decompose(1)));
+    env.check("atomic ttl, expired", m, env.after_expiry);
+}
+
+// The two expected failures are the memtable and cache checks; drop the decorator with the SCYLLADB-6240 fix.
+SEASTAR_THREAD_TEST_CASE(test_stale_cached_cell_hash_expired_collection_element, *boost::unit_test::expected_failures(2)) {
+    cached_hash_env env;
+    auto m = env.base();
+    m.set_clustered_cell(env.ck, env.col("set"),
+            env.set_of({{1, env.expiring({}, atomic_cell::collection_member::yes)}, {2, env.plain({}, atomic_cell::collection_member::yes)}}));
+    env.check("set element ttl, expired", m, env.after_expiry);
+}
+
+// The two expected failures are the memtable and cache checks; drop the decorator with the SCYLLADB-6240 fix.
+SEASTAR_THREAD_TEST_CASE(test_stale_cached_cell_hash_expired_static_cell, *boost::unit_test::expected_failures(2)) {
+    cached_hash_env env;
+    auto m = env.base();
+    m.set_static_cell(env.col("st"), env.expiring(int32_type->decompose(1)));
+    m.set_static_cell(env.col("st_live"), env.plain(int32_type->decompose(1))); // the static row stays live, so it is hashed
+    env.check("static ttl, expired", m, env.after_expiry);
 }
