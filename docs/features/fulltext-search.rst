@@ -2,6 +2,10 @@
 Full-Text Search in ScyllaDB
 =================================
 
+.. note::
+
+    This feature is currently available only in `ScyllaDB Cloud <https://cloud.docs.scylladb.com/>`_.
+
 What Is Full-Text Search
 -------------------------
 
