@@ -3699,6 +3699,81 @@ SEASTAR_THREAD_TEST_CASE(test_appending_hash_row_collection_digest) {
     BOOST_REQUIRE_EQUAL(digest(buffered_xx_hasher()), expected);
 }
 
+// The hashing walk reports a collection's last_update(); check it on random collections,
+// including elements split across fragments (the fallback path) and cached cell hashes.
+SEASTAR_THREAD_TEST_CASE(test_collection_hash_last_update) {
+    auto map_type = map_type_impl::get_instance(int32_type, bytes_type, true);
+    auto s = schema_builder(this_smp_shard_count(), "ks", "cf").with_column("pk", int32_type, column_kind::partition_key).with_column("m", map_type).build();
+    auto& def = *s->get_column_definition(to_bytes("m"));
+    std::mt19937 rng(tests::random::get_int<uint32_t>());
+    auto rand_int = [&](int64_t lo, int64_t hi) {
+        return std::uniform_int_distribution<int64_t>(lo, hi)(rng);
+    };
+    bool saw_fragmented = false;
+    for (int iter = 0; iter < 50; ++iter) {
+        collection_mutation_writer w(rand_int(0, 1) ? tombstone(rand_int(-1000, 1000), gc_clock::now()) : tombstone());
+        const auto count = iter % 10 == 0 ? 0 : rand_int(1, 60);
+        for (int32_t i = 0; i < count; ++i) {
+            const auto key_bytes = int32_type->decompose(i);
+            const auto key = managed_bytes_view(key_bytes);
+            const auto ts = rand_int(-1000, 1000);
+            switch (rand_int(0, 3)) {
+            case 0:
+                w.push_back(key, atomic_cell::make_dead(ts, gc_clock::now()));
+                break;
+            case 1:
+                w.push_back(key, atomic_cell::make_live(*bytes_type, ts, bytes(rand_int(0, 20000), 'x'), gc_clock::now() + std::chrono::seconds(100),
+                                         std::chrono::seconds(100), atomic_cell::collection_member::yes));
+                break;
+            case 2:
+                // Counter updates always take the fallback path.
+                w.push_back(key, atomic_cell::make_live_counter_update(ts, i));
+                break;
+            default:
+                w.push_back(key, atomic_cell::make_live(*bytes_type, ts, bytes(rand_int(0, 20000), 'x'), atomic_cell::collection_member::yes));
+            }
+        }
+        row r;
+        r.apply(def, atomic_cell_or_collection(std::move(w).finish()));
+        auto cm = r.find_cell(def.id)->as_collection_mutation();
+        const auto expected_ts = cm.last_update(*def.type);
+
+        // Expected digest from an independent iterator walk.
+        xx_hasher cellh;
+        feed_hash(cellh, cm.tomb());
+        for (auto&& [key, cell] : cm) {
+            saw_fragmented |= cell.serialize().current_fragment().size() != cell.serialize().size_bytes();
+            feed_hash(cellh, key);
+            feed_hash(cellh, cell, def);
+        }
+        const auto expected_hash = cellh.finalize_uint64();
+
+        xx_hasher h;
+        api::timestamp_type ts = 0;
+        feed_hash(h, cm, def, &ts);
+        BOOST_REQUIRE_EQUAL(h.finalize_uint64(), expected_hash);
+        BOOST_REQUIRE_EQUAL(ts, expected_ts);
+
+        const query::column_id_vector columns{def.id};
+        xx_hasher expected_row_h;
+        feed_hash(expected_row_h, expected_hash);
+        const auto expected_row = expected_row_h.finalize_uint64();
+        auto check_row = [&](auto h) {
+            max_timestamp max_ts;
+            appending_hash<row>{}(h, r, *s, column_kind::regular_column, columns, max_ts);
+            BOOST_REQUIRE_EQUAL(h.finalize_uint64(), expected_row);
+            BOOST_REQUIRE_EQUAL(max_ts.max, expected_ts);
+        };
+        check_row(xx_hasher());
+        check_row(buffered_xx_hasher());
+        r.prepare_hash(*s, column_kind::regular_column);
+        BOOST_REQUIRE(r.cell_hash_for(def.id));
+        check_row(xx_hasher());
+        check_row(buffered_xx_hasher());
+    }
+    BOOST_REQUIRE(saw_fragmented);
+}
+
 SEASTAR_THREAD_TEST_CASE(test_mutation_consume) {
     std::mt19937 engine(tests::random::get_int<uint32_t>());
 

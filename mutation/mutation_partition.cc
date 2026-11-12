@@ -723,9 +723,9 @@ void write_counter_cell(RowWriter& w, const query::partition_slice& slice, ::ato
 
 // Collection elements feed many tiny fields, so buffer them; noinline keeps the 4 KB
 // buffer out of callers' frames. Same digest as xx_hasher.
-[[gnu::noinline]] static uint64_t collection_cell_digest(collection_mutation_view cm, const column_definition& def) {
+[[gnu::noinline]] static uint64_t collection_cell_digest(collection_mutation_view cm, const column_definition& def, api::timestamp_type* max_ts = nullptr) {
     buffered_xx_hasher h;
-    feed_hash(h, cm, def);
+    feed_hash(h, cm, def, max_ts);
     return h.finalize_uint64();
 }
 
@@ -765,16 +765,18 @@ void appending_hash<row>::operator()(Hasher& h, const row& cells, const schema& 
             }
         } else {
             auto cm = cell_and_hash->cell.as_collection_mutation();
-            max_ts.update(cm.last_update(*def.type));
+            api::timestamp_type last_update = api::missing_timestamp;
             if constexpr (query::using_hash_of_hash_v<Hasher>) {
                 if (cell_and_hash->hash) {
+                    last_update = cm.last_update(*def.type);
                     feed_hash(h, *cell_and_hash->hash);
                 } else {
-                    feed_hash(h, collection_cell_digest(cm, def));
+                    feed_hash(h, collection_cell_digest(cm, def, &last_update));
                 }
             } else {
-                feed_hash(h, cm, def);
+                feed_hash(h, cm, def, &last_update);
             }
+            max_ts.update(last_update);
         }
     }
 }

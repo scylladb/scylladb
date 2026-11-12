@@ -18,23 +18,30 @@
 
 template<>
 struct appending_hash<collection_mutation_view> {
+    // If max_ts is set, also stores what cell.last_update() returns, saving a second walk.
     template<typename Hasher>
-    void operator()(Hasher& h, collection_mutation_view cell, const column_definition& cdef) const {
-        ::feed_hash(h, cell.tomb());
+    void operator()(Hasher& h, collection_mutation_view cell, const column_definition& cdef, api::timestamp_type* max_ts = nullptr) const {
+        const auto tomb = cell.tomb();
+        ::feed_hash(h, tomb);
+        api::timestamp_type max = tomb.timestamp;
         cell.for_each_element([&] (managed_bytes_view key, atomic_cell_view value) {
-            if (!feed_contiguous(h, key, value.serialize())) {
+            if (!feed_contiguous(h, key, value.serialize(), max)) {
                 ::feed_hash(h, key);
                 ::feed_hash(h, value, cdef);
+                max = std::max(max, value.timestamp());
             }
             return true;
         });
+        if (max_ts) {
+            *max_ts = max;
+        }
     }
 
 private:
     // Feeds what feed_hash(key) and appending_hash<atomic_cell_view> feed, reading
     // the fields in place: the fragmented accessors dominate hashing large collections.
     template<typename Hasher>
-    static bool feed_contiguous(Hasher& h, managed_bytes_view key, managed_bytes_view cell) {
+    static bool feed_contiguous(Hasher& h, managed_bytes_view key, managed_bytes_view cell, api::timestamp_type& max) {
         using act = atomic_cell_type;
         const auto k = key.current_fragment();
         const auto c = cell.current_fragment();
@@ -55,7 +62,9 @@ private:
         };
         ::feed_hash(h, k);
         ::feed_hash(h, live);
-        ::feed_hash(h, seastar::read_be<api::timestamp_type>(p + act::timestamp_offset));
+        const auto ts = seastar::read_be<api::timestamp_type>(p + act::timestamp_offset);
+        ::feed_hash(h, ts);
+        max = std::max(max, ts);
         if (live) {
             if (expiring) {
                 ::feed_hash(h, time_at(act::expiry_offset));
