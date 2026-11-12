@@ -37,7 +37,7 @@ import requests
 from botocore.exceptions import ClientError
 
 from test.alternator.test_cql_rbac import new_dynamodb, new_dynamodb_streams, new_role
-from test.alternator.util import random_string, new_test_table, is_aws, scylla_config_read, scylla_config_temporary, get_signed_request, unique_table_name, metrics, get_metrics, get_metric, check_increases_metric, check_increases_metric_exact, check_increases_operation, check_table_increases_operation
+from test.alternator.util import random_string, new_test_table, is_aws, scylla_config_read, scylla_config_temporary, get_signed_request, unique_table_name, metrics, get_metrics, get_metric, check_increases_metric, check_increases_metric_exact, check_increases_operation, check_table_increases_operation, get_table_arn
 from test.pylib.skip_types import skip_env
 from test.alternator.test_streams import wait_for_active_stream
 from test.alternator.test_export import accepted_export_row, export_metadata, unstarted_export_arn
@@ -1231,6 +1231,17 @@ def test_reads_before_write_and_write_using_lwt_metrics(dynamodb, test_table_s, 
             with check_increases_metric_exact(metrics, table_lwt, [[1, cf]]):
                 test_table_s.delete_item(Key={'p': p},
                     ConditionExpression='attribute_exists(p)')
+    # Unconditional PutItem and DeleteItem: with 'only_rmw_uses_lwt', they
+    # neither read before the write nor use LWT. Hermes, which writes items
+    # with plain CQL writes, relies on this (see the header of
+    # test_encoding.py), as A18 says: "With the other isolations Hermes
+    # assumes a plain write is no different from what Alternator itself does
+    # for a write that needs no read". The end of the test checks the other
+    # values of the tag.
+    with check_increases_metric_exact(metrics, table_rbw, [[0, cf]]):
+        with check_increases_metric_exact(metrics, table_lwt, [[0, cf]]):
+            test_table_s.put_item(Item={'p': p})
+            test_table_s.delete_item(Key={'p': p})
     # With the 'always_use_lwt' write isolation policy, even unconditional
     # writes use LWT, so write_using_lwt is incremented but reads_before_write
     # is not. Create a temporary table with that policy and verify.
@@ -1243,6 +1254,20 @@ def test_reads_before_write_and_write_using_lwt_metrics(dynamodb, test_table_s, 
         with check_increases_metric_exact(metrics, table_rbw, [[0, lwt_cf]]):
             with check_increases_metric_exact(metrics, table_lwt, [[1, lwt_cf]]):
                 lwt_table.put_item(Item={'p': p})
+        # Of all the values of the tag, only the three forms of
+        # 'always_use_lwt' make an unconditional PutItem and DeleteItem use
+        # LWT. Hermes refuses its plain CQL writes on a table with any of
+        # these three values (see the header of test_encoding.py).
+        arn = get_table_arn(lwt_table)
+        for value, uses_lwt in [('a', 1), ('always', 1), ('always_use_lwt', 1),
+                                ('o', 0), ('only_rmw_uses_lwt', 0),
+                                ('f', 0), ('forbid', 0), ('forbid_rmw', 0),
+                                ('u', 0), ('unsafe', 0), ('unsafe_rmw', 0)]:
+            lwt_table.meta.client.tag_resource(ResourceArn=arn,
+                Tags=[{'Key': 'system:write_isolation', 'Value': value}])
+            with check_increases_metric_exact(metrics, table_lwt, [[2 * uses_lwt, lwt_cf]]):
+                lwt_table.put_item(Item={'p': p})
+                lwt_table.delete_item(Key={'p': p})
 
 # Regression test for #31262: PutItem, UpdateItem and DeleteItem must count an
 # LWT shard bounce in both the global and the per-table metric.

@@ -30,19 +30,50 @@
 #   4 (NOT_SUPPORTED_YET) followed by the JSON encoding of the full typed
 #   DynamoDB value (e.g., {"NULL":true} or {"L":[...]}).
 # - There is also the byte 5 (FLOAT32VECTOR). This encoding is not checked
-#   in this file, it is checked in test_vector.py::test_vector_encoding.
+#   in this file, it is checked in test_vector.py::test_float32vector_encoding.
 #
 # The order of entries in the alternator_type enum is critical: the numeric
 # value of each type is written to disk, so it must not change.
 #
 # This file is related to issue #19770.
+#
+# This encoding is also an interface to an external tool. Hermes, ScyllaDB's
+# tool for migration from DynamoDB, copies items into Alternator tables
+# through CQL. Its contract with Alternator,
+# https://github.com/scylladb/scylla-hermes/blob/main/docs/alternator-encoding-contract.md,
+# says: "It writes the items straight into the CQL table that Alternator
+# keeps underneath each Alternator table, in the same bytes `PutItem` would
+# have stored." The contract numbers what Hermes assumes as A1 to A21 and
+# keeps these numbers stable. The tests below quote the assumptions that they
+# pin, word for word, with their numbers.
+#
+# So a change of what PutItem writes can break Hermes, even when a newer
+# version still reads the old data. For example, if PutItem wrote a number
+# hash key in other bytes, a copied item and a later PutItem of the same item
+# would go to two partitions. Such a change is allowed. But if a test in this
+# file, or a test in the list below, fails, tell the maintainers of Hermes
+# before you change the test, so that Hermes follows the change before it
+# ships. SCYLLADB-1575 (number normalization) is a known planned change of
+# this type.
+#
+# Tests in other files pin Alternator behaviour that Hermes uses:
+#  - A18, test_metrics.py,
+#    test_reads_before_write_and_write_using_lwt_metrics: which values of the
+#    write isolation make a plain write use LWT.
+#
+# Open gap: A18 "Plain CQL writes are safe beside the API's, unless every
+# write is LWT." This is about concurrent writes, and this test suite cannot
+# test the isolation between concurrent writes (see the header of
+# test_write_isolation.py). The tests pin only where the write isolation of a
+# table is stored, and which isolations use LWT for a write that needs no
+# read.
 
 import json
 from decimal import Decimal
 
 import pytest
 
-from .util import new_test_table, random_string
+from .util import new_test_table, random_string, client_no_transform
 
 # All tests in this file are scylla-only (they access CQL internals)
 @pytest.fixture(scope="function", autouse=True)
@@ -121,6 +152,8 @@ def _serialize_number(s):
 # Multiple N values are stored to exercise _serialize_number() with diverse
 # inputs: positive scale, zero, negative unscaled, negative scale, and a
 # large number whose unscaled value requires multiple bytes.
+# Hermes assumes, in section 2.2: "`:attrs` is `map<text, blob>`: the
+# attribute name, then one type byte and the value."
 def test_attrs_encoding(dynamodb, cql, test_table_ss):
     p = random_string()
     c = random_string()
@@ -200,12 +233,62 @@ def test_attrs_encoding(dynamodb, cql, test_table_ss):
     assert attrs['a_bs'][0:1] == b'\x04'
     assert json.loads(attrs['a_bs'][1:]) == {'BS': ['AQ==']}
 
+    # The bytes of a number come from its text, without normalization. Hermes
+    # assumes, in A7: "The scale is taken from the text (`1.50` scale 2,
+    # `1E+3` scale −3), leading zeros and a `+` are accepted, `-0` is zero
+    # with no sign, and the varint is minimal." For a number in a set or a
+    # list, it assumes in A10: "numbers inside are strings as given".
+    # client_no_transform() makes boto3 send each text as it is.
+    # DynamoDB's canonical form: Hermes gets numbers in this form from
+    # DynamoDB, and writes their bytes.
+    canonical = [
+        '1.5', '1000', '-12.34', '1' + '0' * 125, '0.' + '0' * 129 + '1',
+        '12345678901234567890123456789012345678',
+        '-12345678901234567890123456789012345678',
+        '-0.12345678901234567890123456789012345678',
+    ]
+    # Other forms, which DynamoDB does not give. Hermes's start-up check
+    # writes them.
+    other = ['1.50', '1E+3', '1e-130', '-0', '0.000', '007.700', '+42', '9.9E+125']
+    numbers = canonical + other
+    p = random_string()
+    c = random_string()
+    # Each number is also the name of its attribute.
+    item = {n: {'N': n} for n in numbers}
+    item.update({'p': {'S': p}, 'c': {'S': c},
+                 'ns': {'NS': ['1.50', '2']},
+                 'l': {'L': [{'S': 'x'}, {'N': '1.50'}]}})
+    with client_no_transform(test_table_ss.meta.client) as client:
+        client.put_item(TableName=test_table_ss.name, Item=item)
+    rows = list(cql.execute(
+        f'SELECT ":attrs" FROM "{ks}"."{test_table_ss.name}" WHERE p = %s AND c = %s',
+        [p, c]
+    ))
+    assert len(rows) == 1
+    attrs = rows[0][0]
+    # PutItem stored these bytes for each number in this form so far, and
+    # Hermes writes them for each number that it copies. If these bytes
+    # change, SCYLLADB-1575 included, a later PutItem of a number key in this
+    # form goes to another partition than the existing item. So such a change
+    # needs a plan for the existing keys, and Hermes must follow it.
+    for n in canonical:
+        assert attrs[n] == b'\x03' + _serialize_number(n)
+    # SCYLLADB-1575 can change the bytes of these forms.
+    for n in other:
+        assert attrs[n] == b'\x03' + _serialize_number(n)
+    assert attrs['ns'][0:1] == b'\x04'
+    assert sorted(json.loads(attrs['ns'][1:])['NS']) == ['1.50', '2']
+    assert attrs['l'][0:1] == b'\x04'
+    assert json.loads(attrs['l'][1:]) == {'L': [{'S': 'x'}, {'N': '1.50'}]}
+
 # Test that both hash keys and range keys of all three DynamoDB key types
 # (S, B, N) are stored as the correct native CQL types. Specifically:
 #   S (string) -> CQL text
 #   B (binary) -> CQL blob
 #   N (number) -> CQL decimal
 # These type mappings are part of the on-disk format and must not change.
+# Hermes assumes, in A2, key columns "typed `text`, `blob` or `decimal` for
+# S, B, N, holding the plain CQL value with no type byte."
 def test_key_column_types(dynamodb, cql, test_table_sn, test_table_b, test_table_ss, test_table_sb):
     def get_col_type(table, col_name):
         ks = 'alternator_' + table.name
@@ -239,7 +322,8 @@ def test_key_column_types(dynamodb, cql, test_table_sn, test_table_b, test_table
 
 # Test that Alternator tables use the expected keyspace and table names in
 # the underlying CQL schema. This naming convention must remain stable, as
-# changing it would break access to existing data.
+# changing it would break access to existing data. Hermes assumes, in A1:
+# "An Alternator table `T` is CQL keyspace `alternator_T`, table `T`."
 # See also test_cql_schema.py::test_cql_keyspace_and_table which tests this
 # in a different way.
 def test_table_naming(cql, test_table_s):
@@ -256,6 +340,14 @@ def test_table_naming(cql, test_table_s):
 # These naming conventions must remain stable, as changing them would break
 # access to existing data. See also test_cql_schema.py::test_alternator_aux_tables
 # which tests related properties in a different way.
+# The test also checks base_table_name, because Hermes assumes, in A1: "Its
+# GSIs and LSIs are materialized views in that keyspace whose
+# `base_table_name` is `T`; Hermes finds them by `base_table_name`, not by
+# view name." It also checks the key columns of the views, and that the GSI
+# and the LSI have no entry in system_schema.indexes. Hermes assumes, in A5:
+# "A view's key columns that are not base keys are GSI/LSI key attributes,
+# with the type their index declares." In A4, it refuses a table with an
+# entry in system_schema.indexes.
 def test_index_naming(cql, table_with_indexes):
     table_name = table_with_indexes.name
     ks = 'alternator_' + table_name
@@ -265,15 +357,27 @@ def test_index_naming(cql, table_with_indexes):
     # special characters such as '!' and ':', so we look them up in the
     # system table rather than attempting to query the views directly).
     rows = list(cql.execute(
-        "SELECT view_name FROM system_schema.views "
+        "SELECT view_name, base_table_name FROM system_schema.views "
         f"WHERE keyspace_name = '{ks}' AND view_name = '{gsi_view}'"
     ))
     assert len(rows) == 1, f"Expected GSI view '{gsi_view}' not found in system_schema.views"
+    assert rows[0].base_table_name == table_name
     rows = list(cql.execute(
-        "SELECT view_name FROM system_schema.views "
+        "SELECT view_name, base_table_name FROM system_schema.views "
         f"WHERE keyspace_name = '{ks}' AND view_name = '{lsi_view}'"
     ))
     assert len(rows) == 1, f"Expected LSI view '{lsi_view}' not found in system_schema.views"
+    assert rows[0].base_table_name == table_name
+    def index_keys(view):
+        rows = cql.execute("SELECT column_name, kind, type FROM system_schema.columns "
+                           "WHERE keyspace_name = %s AND table_name = %s", [ks, view])
+        return {(r.column_name, r.type) for r in rows
+                if r.kind in ('partition_key', 'clustering') and r.column_name not in ('p', 'c')}
+    assert index_keys(gsi_view) == {('x', 'text')}
+    assert index_keys(lsi_view) == {('y', 'text')}
+    assert list(cql.execute("SELECT index_name FROM system_schema.indexes "
+                            "WHERE keyspace_name = %s AND table_name = %s",
+                            [ks, table_name])) == []
 
 # Test that GSI/LSI key attributes that are not base-table key attributes
 # are NOT stored as separate CQL schema columns in the base table - they are
@@ -283,18 +387,27 @@ def test_index_naming(cql, table_with_indexes):
 # LSI key columns (and before an even earlier change, also GSI key columns) were
 # added as real schema columns. Now all non-base-table-key attributes, including
 # GSI and LSI key attributes, are stored in ":attrs".
+# The test checks the full list of columns of the base table, because Hermes
+# refuses a table of another shape. It assumes, in A2: "At most one
+# `partition_key` column (the hash key) and one `clustering` column (the
+# range key)". In A3: "One `regular` column named `:attrs`, type exactly
+# `map<text, blob>`, non-frozen." In A4: "No `static` columns." It takes any
+# other regular column as "an index key attribute's own column", so a new
+# table must have none.
 def test_index_key_not_schema_column(dynamodb, cql, table_with_indexes):
     table = table_with_indexes
     ks = 'alternator_' + table.name
-    # Neither "x" (GSI key) nor "y" (LSI key) must appear as columns in the
-    # base table's CQL schema.
-    for attr in ('x', 'y'):
-        rows = list(cql.execute(
-            "SELECT column_name FROM system_schema.columns "
-            f"WHERE keyspace_name = '{ks}' AND table_name = '{table.name}' "
-            f"AND column_name = '{attr}'"
-        ))
-        assert rows == [], f"Attribute '{attr}' (GSI/LSI key) should not be a schema column, but found: {rows}"
+    # The base table has only its key columns and ":attrs". Thus neither "x"
+    # (GSI key) nor "y" (LSI key) is a column.
+    rows = cql.execute(
+        "SELECT column_name, kind, type FROM system_schema.columns "
+        f"WHERE keyspace_name = '{ks}' AND table_name = '{table.name}'"
+    )
+    assert {(r.column_name, r.kind, r.type) for r in rows} == {
+        ('p', 'partition_key', 'text'),
+        ('c', 'clustering', 'text'),
+        (':attrs', 'regular', 'map<text, blob>'),
+    }
     # Write an item with both "x" and "y" set, then confirm they are stored in ":attrs".
     p = random_string()
     c = random_string()
