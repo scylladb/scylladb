@@ -40,22 +40,6 @@ void everywhere_replication_strategy::validate_options(const gms::feature_servic
     }
 }
 
-sstring everywhere_replication_strategy::sanity_check_read_replicas(const effective_replication_map& erm, const host_id_vector_replica_set& read_replicas) const {
-    const auto replication_factor = erm.get_replication_factor();
-    if (const auto& topo_info = erm.get_token_metadata().get_topology_change_info(); topo_info && topo_info->read_new) {
-        if (read_replicas.size() > replication_factor + 1) {
-            return seastar::format(
-                    "everywhere_replication_strategy: the number of replicas for everywhere_replication_strategy is {}, "
-                    "cannot be higher than replication factor {} + 1 during the 'read from new replicas' stage of a topology change",
-                    read_replicas.size(), replication_factor);
-        }
-    } else if (read_replicas.size() > replication_factor) {
-        return seastar::format("everywhere_replication_strategy: the number of replicas for everywhere_replication_strategy is {}, cannot be higher than replication factor {}", read_replicas.size(), replication_factor);
-    }
-    return {};
-}
-
-
 // Note: signature must match the class_registry signature defined and used by abstract_replication_strategy::to_qualified_class_name
 using registry = class_registrator<abstract_replication_strategy, everywhere_replication_strategy, replication_strategy_params, const locator::topology*>;
 static registry registrator("org.apache.cassandra.locator.EverywhereStrategy");
