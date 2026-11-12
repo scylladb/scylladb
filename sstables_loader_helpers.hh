@@ -48,6 +48,10 @@ struct minimal_sst_info {
 future<std::vector<std::vector<minimal_sst_info>>> download_sstables(replica::table& table,
         const std::vector<sstables::shared_sstable>& sstables, std::string_view snapshot_tag, logging::logger& logger);
 
+// Makes a downloaded sstable part of `table` and seals it. Must run on the shard
+// the sstable was downloaded for.
+future<sstables::shared_sstable> attach_downloaded_sstable(replica::table& table, const minimal_sst_info& min_info, logging::logger& logger);
+
 template <std::ranges::input_range Range, typename T = std::ranges::range_value_t<Range>>
 seastar::future<std::tuple<std::vector<T>, std::vector<T>>>
 get_sstables_for_tablet(Range&& ranges, const dht::token_range& token_range, auto&& get_first, auto&& get_last) {

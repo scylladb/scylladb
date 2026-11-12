@@ -211,8 +211,6 @@ private:
     host_id_vector_replica_set get_all_endpoints(const dht::token& token) const;
 };
 
-static future<sstables::shared_sstable> attach_downloaded_sstable(replica::table& table, const minimal_sst_info& min_info);
-
 class tablet_sstable_streamer : public sstable_streamer {
     sharded<replica::database>& _db;
     const locator::tablet_map& _tablet_map;
@@ -251,7 +249,7 @@ private:
                 auto& table = _db.local().find_column_family(ks, cf);
                 auto stream_guard = table.stream_in_progress();
                 for (const auto& min_info : shard_ssts) {
-                    co_await attach_downloaded_sstable(table, min_info);
+                    co_await attach_downloaded_sstable(table, min_info, llog);
                 }
             });
         if (progress) {
@@ -906,38 +904,6 @@ future<tasks::task_id> sstables_loader::download_new_sstables(sstring ks_name, s
     co_return task->id();
 }
 
-// Makes a downloaded sstable part of `table` and seals it. Must run on the shard
-// the sstable was downloaded for.
-static future<sstables::shared_sstable> attach_downloaded_sstable(replica::table& table, const minimal_sst_info& min_info) {
-    llog.debug("Adding downloaded SSTable gen={} to the table {}.{} on shard {}", min_info.generation, table.schema()->ks_name(), table.schema()->cf_name(), this_shard_id());
-    auto& sst_manager = table.get_sstables_manager();
-    auto sst = sst_manager.make_sstable(
-        table.schema(), table.get_storage_options(), min_info.generation, min_info.sid, sstables::sstable_state::normal, min_info.version, min_info.format);
-    sst->set_sstable_level(0);
-    auto units = co_await sst_manager.dir_semaphore().get_units(1);
-    // The sstable was downloaded for this shard, which is why it was submitted here,
-    // so there is nothing to work out: declare this shard its owner.
-    sstables::sstable_open_config cfg {
-        .current_shard_as_sstable_owner = true,
-        .unsealed_sstable = true,
-    };
-    // Unused given current_shard_as_sstable_owner, but load() wants a sharder.
-    dht::auto_refreshing_sharder sharder(table.shared_from_this());
-    co_await sst->load(sharder, cfg);
-    // load() takes the sstable_id from Scylla.db, or from the generation, so the
-    // sstable has one by now.
-    if (!sst->sstable_identifier()) {
-        on_internal_error(llog, fmt::format("Downloaded sstable {} has no sstable_id", sst->get_filename()));
-    }
-    co_await table.add_new_sstable_and_update_cache(sst, [&sst_manager, sst] (sstables::shared_sstable loading_sst) -> future<> {
-        if (loading_sst == sst) {
-            auto writer_cfg = sst_manager.configure_writer(loading_sst->get_origin());
-            co_await loading_sst->seal_sstable(writer_cfg.backup);
-        }
-    });
-    co_return sst;
-}
-
 // Joins a backup location's prefix with a path that is relative to it, the same
 // way cluster-wide backup composes its object keys (db/snapshot/cluster_backup.cc).
 static sstring join_path(std::string_view prefix, std::string_view relative_path) {
@@ -1112,7 +1078,7 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
             // After the guard on purpose: the test needs the DROP to meet a guarded attach.
             co_await utils::get_local_injector().inject("pause_attach_sstable", utils::wait_for_message(60s));
             co_await max_concurrent_for_each(shard_ssts, 16, [&sth, &table, snap_name, keyspace_name, table_name, datacenter, rack](const auto& min_info) -> future<> {
-                sstables::shared_sstable attached_sst = co_await attach_downloaded_sstable(table, min_info);
+                sstables::shared_sstable attached_sst = co_await attach_downloaded_sstable(table, min_info, llog);
                 // Use the sstable_id of the backup sstable, not of the clone. A retried
                 // restore looks for this sstable_id to skip the sstables which are
                 // already restored.
