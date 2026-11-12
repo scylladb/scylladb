@@ -17,6 +17,7 @@
 #include "idl/strong_consistency/state_machine.dist.impl.hh"
 #include "replica/database.hh"
 #include "service/migration_manager.hh"
+#include "service/raft/raft_group_registry.hh"
 #include "db/system_keyspace.hh"
 #include "utils/error_injection.hh"
 #include "schema/schema_registry.hh"
@@ -70,7 +71,17 @@ class state_machine : public raft_state_machine {
             utils::get_local_injector().disable("raft_drop_incoming_append_entries_for_specified_group");
         }
         logger.debug("apply(): waiting for the group0 barrier for tablet {}, group_id={}", _tablet, _group_id);
-        co_await _mm.get_group0_barrier().trigger(false, &_as);
+        while (true) {
+            try {
+                co_await _mm.get_group0_barrier().trigger(false, &_as);
+                co_return;
+            } catch (const raft_operation_timeout_error& e) {
+                // The write cannot be applied without the schema, and an error out of
+                // apply() ends the group (on_internal_error for SC), so wait again.
+                logger.warn("apply(): the group0 barrier for tablet {}, group_id={} timed out, retrying: {}",
+                    _tablet, _group_id, e.what());
+            }
+        }
     }
 
 public:
