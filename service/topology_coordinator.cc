@@ -1077,6 +1077,15 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             break;
         case global_topology_request::keyspace_rf_change: {
             rtlogger.info("keyspace_rf_change requested");
+            if (utils::get_local_injector().is_enabled("pause-before-handling-keyspace-rf-change")) {
+                // Release the guard so that concurrent group0 changes (e.g. DROP KEYSPACE) can be
+                // applied while paused. The request is not consumed; the next iteration picks it up.
+                // Only meaningful as a one-shot injection: a persistent one would pause every
+                // iteration until disabled.
+                release_guard(std::move(guard));
+                co_await utils::get_local_injector().inject("pause-before-handling-keyspace-rf-change", utils::wait_for_message(5min, &_as));
+                co_return;
+            }
             sstring ks_name;
             std::unordered_map<sstring, sstring> saved_ks_props;
             if (_topo_sm._topology.new_keyspace_rf_change_ks_name) {
