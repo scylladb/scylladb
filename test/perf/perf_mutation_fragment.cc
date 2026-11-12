@@ -20,6 +20,8 @@
 #include "compaction/compaction_garbage_collector.hh"
 #include "types/set.hh"
 #include "mutation/frozen_mutation.hh"
+#include "mutation_query.hh"
+#include "query/query-result.hh"
 #include <random>
 
 namespace tests {
@@ -334,9 +336,10 @@ protected:
     }
 
 public:
-    large_set() {
+    large_set() : large_set(10000) {}
+    explicit large_set(size_t n) {
         std::mt19937_64 rng(42);
-        std::vector<int64_t> keys(10000);
+        std::vector<int64_t> keys(n);
         for (auto& k : keys) {
             k = int64_t(rng() >> 2);
         }
@@ -391,5 +394,21 @@ PERF_TEST_F(large_set, hash) {
 // Read repair: replica results arrive frozen and are unfrozen (and refrozen).
 PERF_TEST_F(large_set, unfreeze) { perf_tests::do_not_optimize(_frozen->unfreeze(_s)); }
 PERF_TEST_F(large_set, freeze) { perf_tests::do_not_optimize(freeze(*_m)); }
+
+class large_set_100k : public large_set {
+public:
+    large_set_100k() : large_set(100000) {}
+};
+
+// A read of one row holding the set, through compact_for_query<query_result_builder> (includes the mutation copy).
+static query::result query_large_set(const mutation& m, query::result_request request) {
+    auto slice = m.schema()->full_slice();
+    return query_mutation(mutation(m), slice, query::max_rows, gc_clock::now(), query::result_options{request, query::digest_algorithm::xxHash});
+}
+
+PERF_TEST_F(large_set, query_digest) { perf_tests::do_not_optimize(query_large_set(*_m, query::result_request::only_digest)); }
+PERF_TEST_F(large_set, query_data) { perf_tests::do_not_optimize(query_large_set(*_m, query::result_request::result_and_digest)); }
+PERF_TEST_F(large_set_100k, query_digest) { perf_tests::do_not_optimize(query_large_set(*_m, query::result_request::only_digest)); }
+PERF_TEST_F(large_set_100k, query_data) { perf_tests::do_not_optimize(query_large_set(*_m, query::result_request::result_and_digest)); }
 
 }
