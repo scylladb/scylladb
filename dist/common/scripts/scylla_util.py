@@ -182,6 +182,112 @@ def hex2list(hex_str):
         i += 1
     return ",".join(cpu_list)
 
+def parse_cpu_list(cpu_list):
+    """Expand a cpu list like '0,2-7,17-24' into a set of CPU ids."""
+    cpus = set()
+    for group in cpu_list.split(','):
+        group = group.strip()
+        if not group:
+            continue
+        beg, _, end = group.partition('-')
+        cpus.update(range(int(beg), int(end or beg) + 1))
+    return cpus
+
+def cpu_list_to_str(cpus):
+    """Collapse a set of CPU ids into a cpu list like '0,2-7,17-24'."""
+    groups = []
+    for cpu in sorted(cpus):
+        if groups and groups[-1][1] == cpu - 1:
+            groups[-1][1] = cpu
+        else:
+            groups.append([cpu, cpu])
+    return ','.join(str(beg) if beg == end else f'{beg}-{end}' for beg, end in groups)
+
+def systemd_version():
+    """Major version of the running systemd, e.g. 254."""
+    return int(out('systemctl --version', timeout=SYSTEMCTL_TIMEOUT).split()[1])
+
+# AllowedCPUs= needs systemd v244 and the cgroup v2 cpuset controller.
+ALLOWED_CPUS_MIN_SYSTEMD = 244
+
+# scylla_prepare runs these before Scylla starts. A stuck systemctl must not
+# block the start.
+SYSTEMCTL_TIMEOUT = 30
+
+def parse_cpuset_conf(text):
+    """Parse the text of cpuset.conf. Return (cpuset, smp): the --cpuset value
+    as a cpu list like '0,2-7' and the --smp value as an int. Each is None when
+    the option is not set or its value is not valid, so that
+    scylla_cpuset_setup sees a change and rewrites a broken value. The last
+    CPUSET= line wins, as in systemd's EnvironmentFile=."""
+    lines = re.findall(r'^\s*CPUSET=(.*)$', text, flags=re.MULTILINE)
+    if not lines:
+        return None, None
+
+    def value(option, pattern):
+        match = re.search(rf'--{option}(?:=|\s+)([^\s"\']+)', lines[-1])
+        if match and re.fullmatch(pattern, match.group(1)):
+            return match.group(1)
+        return None
+
+    cpuset = value('cpuset', r'\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*')
+    smp = value('smp', r'\d+')
+    return cpuset, int(smp) if smp else None
+
+def cpuset_conf_cpus(root='/'):
+    """The --cpuset value of /etc/scylla.d/cpuset.conf, or None when the file
+    is missing or does not pin Scylla to a cpuset."""
+    conf = Path(root) / 'etc/scylla.d/cpuset.conf'
+    if not conf.exists():
+        return None
+    return parse_cpuset_conf(conf.read_text())[0]
+
+def setup_helper_slice_cpuset(cpuset, root='/', always_reload=True):
+    """Pin scylla-helper.slice to the CPUs outside Scylla's cpuset.
+
+    cpuset is the --cpuset value of cpuset.conf, or None when Scylla is not
+    pinned. Without a spare CPU, give an existing drop-in every online CPU
+    instead of removing it: when AllowedCPUs= goes away, the kernel leaves the
+    running helpers on the old CPUs. Without systemd v244 or the cgroup v2
+    cpuset controller, AllowedCPUs= cannot apply, so remove the drop-in. Do
+    nothing without a running systemd (container images).
+
+    With always_reload=False, run daemon-reload only when the drop-in changed.
+    """
+    root = Path(root)
+    if not (root / 'run/systemd/system').is_dir():
+        return
+    dropin = root / 'etc/systemd/system/scylla-helper.slice.d/cpuset.conf'
+    old = dropin.read_text() if dropin.exists() else None
+    online = parse_cpu_list((root / 'sys/devices/system/cpu/online').read_text())
+    free_cpus = online - parse_cpu_list(cpuset) if cpuset else set()
+    controllers = root / 'sys/fs/cgroup/cgroup.controllers'
+    new = None
+    created_dir = False
+    if ((free_cpus or old is not None)
+            and controllers.exists() and 'cpuset' in controllers.read_text().split()
+            and systemd_version() >= ALLOWED_CPUS_MIN_SYSTEMD):
+        new = f'[Slice]\nAllowedCPUs={cpu_list_to_str(free_cpus or online)}\n'
+        if new != old:
+            created_dir = not dropin.parent.exists()
+            dropin.parent.mkdir(parents=True, exist_ok=True)
+            dropin.write_text(new)
+    elif old is not None:
+        dropin.unlink()
+    # The slice limits apply to the running helpers on daemon-reload.
+    if always_reload or new != old:
+        try:
+            systemd_unit.reload(timeout=SYSTEMCTL_TIMEOUT)
+        except Exception:
+            # Put the old drop-in back, so that the next run sees a change
+            # and reloads again. Remove the directory if this run made it.
+            if old is None:
+                dropin.unlink(missing_ok=True)
+                if created_dir:
+                    dropin.parent.rmdir()
+            else:
+                dropin.write_text(old)
+            raise
 
 SYSTEM_PARTITION_UUIDS = [
         '21686148-6449-6e6f-744e-656564454649', # BIOS boot partition
@@ -456,8 +562,8 @@ class systemd_unit:
         return run('systemctl {} unmask {}'.format(self.ctlparam, self._unit), shell=True, check=True)
 
     @classmethod
-    def reload(cls):
-        run('systemctl daemon-reload', shell=True, check=True)
+    def reload(cls, timeout=None):
+        run(['systemctl', 'daemon-reload'], check=True, timeout=timeout)
 
     @classmethod
     def available(cls, unit):
