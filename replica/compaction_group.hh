@@ -562,6 +562,9 @@ public:
     virtual locator::combined_load_stats table_load_stats() const = 0;
     virtual bool all_storage_groups_split() = 0;
     virtual future<> split_all_storage_groups(tasks::task_info tablet_split_task_info) = 0;
+    // Completes the split of every storage group which is in split mode, whether the split is
+    // still requested or was revoked.
+    virtual future<> finish_started_splits(tasks::task_info info) = 0;
     virtual future<> maybe_split_compaction_group_of(size_t idx) = 0;
     virtual future<std::vector<sstables::shared_sstable>> maybe_split_new_sstable(const sstables::shared_sstable& sst) = 0;
     virtual dht::token_range get_token_range_after_split(const dht::token&) const noexcept = 0;
