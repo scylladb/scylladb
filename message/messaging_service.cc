@@ -1202,15 +1202,10 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
             return true;
         }
 
-        if (must_helper(_cfg.encrypt)) {
-            return true;
-        }
-
-        // #9653 - if our idea of dc/rack for bind address differs from our official endpoint
-        // address, we cannot trust downgrading. Compression needs no such check: the peer
-        // filters only plaintext connections by their source address.
-        return broadcast_address != laddr
-                && (!is_same_dc(laddr) || (_cfg.encrypt == encrypt_what::rack && !is_same_rack(laddr)));
+        // #9653 - the peer's plaintext filter places a connection by its source address, normally laddr.
+        // The peer maps a laddr other than the broadcast address only through its prefer_local cache,
+        // which this node cannot see, so a laddr other than the broadcast address means TLS.
+        return broadcast_address != laddr || must_helper(_cfg.encrypt);
     }();
 
     auto must_compress = [&] {
