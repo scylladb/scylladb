@@ -10,7 +10,13 @@
 import os
 import sys
 import argparse
-from scylla_util import is_container, sysconfig_parser
+from scylla_util import is_container, sysconfig_parser, parse_cpuset_conf, cpuset_conf_cpus, setup_helper_slice_cpuset
+
+def cpuset_conf_changed(text, cpuset, smp):
+    """True when the cpuset.conf text does not set the --cpuset and --smp
+    values of the command line. Each value is a string, or None."""
+    conf_cpuset, conf_smp = parse_cpuset_conf(text)
+    return conf_cpuset != cpuset or (str(conf_smp) if conf_smp is not None else None) != smp
 
 if __name__ == '__main__':
     if not is_container() and os.getuid() > 0:
@@ -26,16 +32,11 @@ if __name__ == '__main__':
         parser.print_help()
         sys.exit(1)
 
-    cpuset = smp = None
-    try:
-        cfg = sysconfig_parser('/etc/scylla.d/cpuset.conf')
-        line = cfg.get('CPUSET')
-        cpuset_args = parser.parse_args(line.split())
-        cpuset = cpuset_args.cpuset
-        smp = cpuset_args.smp
-    except:
-        pass
-    if cpuset != args.cpuset or smp != args.smp:
+    # sysconfig_parser creates the file when it is missing.
+    cfg = sysconfig_parser('/etc/scylla.d/cpuset.conf')
+    with open('/etc/scylla.d/cpuset.conf') as f:
+        changed = cpuset_conf_changed(f.read(), args.cpuset, args.smp)
+    if changed:
         if os.path.exists('/etc/scylla.d/perftune.yaml'):
             os.remove('/etc/scylla.d/perftune.yaml')
 
@@ -44,3 +45,11 @@ if __name__ == '__main__':
                 smp='--smp {} '.format(args.smp) if args.smp else '' \
                 ))
         cfg.commit()
+
+    # On cloud images this runs at first boot, after the package install.
+    # Read the cpuset back from the file, as scylla_prepare does, so that
+    # both pin the slice from the same value.
+    try:
+        setup_helper_slice_cpuset(cpuset_conf_cpus())
+    except Exception as e:
+        print(f'Warning: could not pin scylla-helper.slice: {e}', file=sys.stderr)
