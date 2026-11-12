@@ -733,14 +733,14 @@ public:
         }
     }
 
-    // Returns the location of the record of a key in the private index, which the index finds the
-    // way a read that bypasses the cache does.
-    record_location private_location(const primary_index_key& key) const {
-        auto location = tests::logstor::lookup_location(*_private_index, key, *_schema);
-        if (!location) [[unlikely]] {
+    // Returns the location of the record of a key in the private index with its read guard, which
+    // the index finds the way a read that bypasses the cache does.
+    primary_index::guarded_location private_location(const primary_index_key& key) const {
+        auto where = tests::logstor::lookup_guarded_location(*_private_index, key, *_schema);
+        if (!where) [[unlikely]] {
             on_internal_error(logstor_logger, "key of the dataset is missing from the index");
         }
-        return *location;
+        return std::move(*where);
     }
 
     // Copies the index entries of the keys into _private_index, in the order populate() issues the
@@ -777,7 +777,7 @@ public:
         for (unsigned i = 0; i < count; ++i) {
             primary_index_key key{random_key()};
             _private_index->insert(key, index_entry{
-                .location = private_location(key),
+                .location = private_location(key).location,
                 .timestamp = api::new_timestamp(),
             });
         }
@@ -859,12 +859,12 @@ public:
     void do_cache_populate(unsigned count) {
         const primary_index_key key{_mutation->decorated_key()};
         for (unsigned i = 0; i < count; ++i) {
-            const auto location = private_location(key);
+            const auto where = private_location(key);
             _private_index->insert(key, index_entry{
-                .location = location,
+                .location = where.location,
                 .timestamp = api::new_timestamp(),
             });
-            if (!_private_index->populate_cache(key, location, _mutation->schema(), _mutation->key(), *_partition)) [[unlikely]] {
+            if (!_private_index->populate_cache(where.guard, key, where.location, _mutation->schema(), _mutation->key(), *_partition)) [[unlikely]] {
                 on_internal_error(logstor_logger, "the entry of the prepared partition was not populated");
             }
         }

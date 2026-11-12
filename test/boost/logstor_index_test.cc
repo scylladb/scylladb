@@ -78,9 +78,9 @@ mutation make_mutation(schema_ptr schema, sstring pk, sstring value) {
 }
 
 void populate(primary_index& index, const primary_index_key& key, const mutation& m) {
-    auto location = lookup_location(index, key, *m.schema());
-    BOOST_REQUIRE(location);
-    BOOST_REQUIRE(index.populate_cache(key, *location, m.schema(), m.key(), to_single_row_partition(mutation(m))));
+    auto where = lookup_guarded_location(index, key, *m.schema());
+    BOOST_REQUIRE(where);
+    BOOST_REQUIRE(index.populate_cache(where->guard, key, where->location, m.schema(), m.key(), to_single_row_partition(mutation(m))));
 }
 
 mutation lookup_mutation(primary_index& index, const primary_index_key& key, schema_ptr schema) {
@@ -1037,7 +1037,9 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_cache_disabled_index_does_not_read_or_popu
     BOOST_REQUIRE(!index.insert(key, make_index_entry(1, 0, 10, 1)).previous_entry);
 
     auto m = make_mutation(schema, "pk0", "v0");
-    BOOST_REQUIRE(!index.populate_cache(key, *lookup_location(index, key, *schema), schema, m.key(), to_single_row_partition(mutation(m))));
+    auto where = lookup_guarded_location(index, key, *schema);
+    BOOST_REQUIRE(where);
+    BOOST_REQUIRE(!index.populate_cache(where->guard, key, where->location, schema, m.key(), to_single_row_partition(mutation(m))));
     BOOST_REQUIRE_EQUAL(cache.shared_tracker.partitions(), 0);
     BOOST_REQUIRE(!lookup_exists(index, key, schema));
     BOOST_REQUIRE(!scan_read_cached(index, key, *schema));

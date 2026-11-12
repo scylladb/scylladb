@@ -391,13 +391,18 @@ public:
         return find_entry_at(key, location).has_value();
     }
 
-    bool populate_cache(const primary_index_key& key, record_location read_location, const schema_ptr& schema, const partition_key& pk,
-            const single_row_partition& partition) const {
+    // Admits `partition`, which the caller read from `location`, to the cache, if the entry of `key`
+    // still holds `location`. Returns false if the index does not read the cache or the entry holds
+    // another location. The caller must hold a read guard from before the lookup that gave `location`.
+    // Without the guard, the segment of `location` can be freed, and a newer record of the key can
+    // get the same location, so that the cache would link the older partition to the newer record.
+    bool populate_cache(const index_read_guard&, const primary_index_key& key, record_location location, const schema_ptr& schema,
+            const partition_key& pk, const single_row_partition& partition) const {
         if (!reads_cache()) {
             return false;
         }
 
-        auto e = find_entry_at(key, read_location);
+        auto e = find_entry_at(key, location);
         if (!e) {
             return false;
         }

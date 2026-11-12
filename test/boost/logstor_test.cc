@@ -3513,9 +3513,9 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_single_key_reader_rejects_a_cached_partiti
 
     auto& index = env.cg->logstor_index();
     primary_index_key key(ms[0].decorated_key());
-    auto location = lookup_location(index, key, *env.schema);
-    BOOST_REQUIRE(location);
-    BOOST_REQUIRE(index.populate_cache(key, *location, ms[1].schema(), ms[1].key(), to_single_row_partition(mutation(ms[1]))));
+    auto where = lookup_guarded_location(index, key, *env.schema);
+    BOOST_REQUIRE(where);
+    BOOST_REQUIRE(index.populate_cache(where->guard, key, where->location, ms[1].schema(), ms[1].key(), to_single_row_partition(mutation(ms[1]))));
 
     auto rd = env.make_reader(singular_range(ms[0]));
     auto close_rd = deferred_close(rd);
