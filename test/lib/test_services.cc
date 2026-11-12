@@ -129,6 +129,9 @@ public:
     future<> on_compaction_completion(compaction::compaction_completion_desc desc, sstables::offstrategy offstrategy) override {
         return table().try_get_compaction_group_view_with_static_sharding().on_compaction_completion(std::move(desc), offstrategy);
     }
+    future<> set_run_identifier(std::vector<sstables::shared_sstable> sstables, sstables::run_id run_identifier) override {
+        return table().try_get_compaction_group_view_with_static_sharding().set_run_identifier(std::move(sstables), run_identifier);
+    }
     bool is_auto_compaction_disabled_by_user() const noexcept override {
         return table().is_auto_compaction_disabled_by_user();
     }
