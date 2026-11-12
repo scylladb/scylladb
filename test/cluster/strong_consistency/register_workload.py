@@ -697,7 +697,8 @@ async def reader_task(workload: RegisterWorkload, cql, reader_id: int) -> None:
 
 
 # A disruptor is started together with the workload and is expected to stop
-# itself once workload.stop_event is set.
+# itself once workload.stop_event is set.  It may also set the event itself,
+# once it has done what the test needs, to end the run early.
 DisruptorFactory = Callable[[], Awaitable[None]]
 
 
@@ -707,7 +708,8 @@ async def run_workload(
     duration_s: float,
     disruptors: Sequence[tuple[str, DisruptorFactory]] = (),
 ) -> list[BaseException]:
-    """Run writers, readers and the given disruptors for ``duration_s``.
+    """Run writers, readers and the given disruptors for ``duration_s``, or
+    until a disruptor sets ``workload.stop_event``, whichever comes first.
 
     Returns the exceptions raised by the tasks; an empty list means every task
     finished cleanly.  Errors are returned rather than raised so that the
@@ -726,7 +728,8 @@ async def run_workload(
         async with asyncio.TaskGroup() as tg:
             async def stop_timer():
                 try:
-                    await asyncio.sleep(duration_s)
+                    with contextlib.suppress(TimeoutError):
+                        await asyncio.wait_for(workload.stop_event.wait(), duration_s)
                 finally:
                     workload.stop_event.set()
 
