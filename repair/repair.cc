@@ -500,7 +500,7 @@ std::chrono::seconds repair_hints_batchlog_flush_timeout(const db::cluster_confi
 
 future<repair_service::flush_hints_result> repair_service::flush_hints(repair_uniq_id id,
         sstring keyspace, std::vector<sstring> cfs,
-        std::unordered_set<locator::host_id> ignore_nodes, abort_source& as) {
+        std::unordered_set<locator::host_id> ignore_nodes, abort_source& as, bool force) {
     auto& db = get_db().local();
     auto uuid = id.uuid();
     flush_hints_result res;
@@ -512,7 +512,7 @@ future<repair_service::flush_hints_result> repair_service::flush_hints(repair_un
         }
     }
 
-    if (res.needed) {
+    if (res.needed || force) {
         auto waiting_nodes = db.get_token_metadata().get_topology().get_all_host_ids();
         std::erase_if(waiting_nodes, [&] (const auto& addr) {
             return ignore_nodes.contains(addr);
@@ -1581,7 +1581,7 @@ future<> repair_service::run_user_requested_repair(
         } else {
             participants = get_hosts_participating_in_repair(_gossiper.local(), germs->get(), keyspace, ranges, data_centers, hosts, ignore_nodes).get();
         }
-        auto flush = flush_hints(id, keyspace, cfs, ignore_nodes, task_as).get();
+        auto flush = flush_hints(id, keyspace, cfs, ignore_nodes, task_as, false).get();
         auto hints_batchlog_flushed = flush.flushed;
         auto flush_time = flush.flush_time;
 
@@ -2757,7 +2757,6 @@ future<repair_service::tablet_repair_result> repair_service::run_tablet_repair(
                 auto hosts = std::vector<sstring>();
                 std::unordered_set<locator::host_id> ignore_nodes;;
                 bool hints_batchlog_flushed = false;
-                bool needs_flush_before_repair = false;
                 gc_clock::time_point flush_time;
                 auto delay = utils::get_local_injector().inject_parameter<uint32_t>("repair_tablet_repair_task_delay");
                 if (delay) {
@@ -2766,8 +2765,7 @@ future<repair_service::tablet_repair_result> repair_service::run_tablet_repair(
                 }
                 switch (flush.mode) {
                 case service::tablet_repair_flush_mode::flush: {
-                    auto res = co_await rs.flush_hints(id, m.keyspace_name, tables, ignore_nodes, rs.get_repair_module().abort_source());
-                    needs_flush_before_repair = res.needed;
+                    auto res = co_await rs.flush_hints(id, m.keyspace_name, tables, ignore_nodes, rs.get_repair_module().abort_source(), true);
                     hints_batchlog_flushed = res.flushed;
                     flush_time = res.flush_time;
                     break;
@@ -2775,7 +2773,6 @@ future<repair_service::tablet_repair_result> repair_service::run_tablet_repair(
                 case service::tablet_repair_flush_mode::skip:
                     break;
                 case service::tablet_repair_flush_mode::flushed:
-                    needs_flush_before_repair = true;
                     hints_batchlog_flushed = flush.time.has_value();
                     flush_time = flush.time.value_or(gc_clock::time_point());
                     break;
@@ -2805,7 +2802,9 @@ future<repair_service::tablet_repair_result> repair_service::run_tablet_repair(
                     }
                 }
                 shard_flush_time = shard_flush_time == gc_clock::time_point() ? flush_time : std::min(shard_flush_time, flush_time);
-                flush_failed = flush_failed || (needs_flush_before_repair && !hints_batchlog_flushed);
+                // A tablet repair records its flush time as the repair time, whatever the gc mode
+                // of the table: without a flush, there is no repair time to record.
+                flush_failed = flush_failed || (flush.mode != service::tablet_repair_flush_mode::skip && !hints_batchlog_flushed);
             }
             if (error) {
                 co_await coroutine::return_exception_ptr(std::move(error));
