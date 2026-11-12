@@ -1797,6 +1797,27 @@ future<> get_snapshot_details(std::unordered_map<sstring, db::snapshot_ctl::db_s
     }
 }
 
+// The tables a cluster snapshot or backup request names, as (keyspace, table) pairs.
+// A keyspace given without tables is paired with an empty table name.
+static std::unordered_multimap<sstring, sstring> parse_cluster_snapshot_tables(const http::request& req) {
+    auto keyspaces = split(req.get_query_param("keyspace"), ",");
+    auto tables = split(req.get_query_param("table"), ",");
+    if (keyspaces.size() != 1 && !tables.empty()) {
+        throw httpd::bad_param_exception("Cannot name tables without naming exactly one keyspace");
+    }
+
+    std::unordered_multimap<sstring, sstring> ks_tables;
+    for (const auto& ks : keyspaces) {
+        if (tables.empty()) {
+            ks_tables.emplace(ks, sstring{});
+        }
+        for (const auto& table : tables) {
+            ks_tables.emplace(ks, table);
+        }
+    }
+    return ks_tables;
+}
+
 void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_ctl) {
     ss::get_snapshot_details.set(r, [&snap_ctl](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto result = co_await snap_ctl.local().get_snapshot_details();
@@ -1844,15 +1865,14 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
     ss::take_cluster_snapshot.set(r, [&snap_ctl](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         apilog.info("take_cluster_snapshot: {}", req->get_query_params());
         auto tag = req->get_query_param("tag");
-        auto column_families = split(req->get_query_param("table"), ",");
         db::snapshot_options opts = {
             // Note: not published/active. Retain as internal option, but...
             .skip_flush = get_query_param<bool>(*req, "skip_flush"),
         };
 
-        std::vector<sstring> keynames = split(req->get_query_param("keyspace"), ",");
+        auto ks_tables = parse_cluster_snapshot_tables(*req);
         try {
-            co_await snap_ctl.local().take_cluster_column_family_snapshot(keynames, column_families, tag, opts);
+            co_await snap_ctl.local().take_cluster_column_family_snapshot(std::move(ks_tables), tag, opts);
             co_return json_void();
         } catch (...) {
             apilog.error("take_cluster_snapshot failed: {:t}", std::current_exception());
@@ -1902,8 +1922,7 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
     });
 
     ss::start_global_backup.set(r, [&snap_ctl] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
-        auto column_families = split(req->get_query_param("table"), ",");
-        std::vector<sstring> keynames = split(req->get_query_param("keyspace"), ",");
+        auto ks_tables = parse_cluster_snapshot_tables(*req);
         auto snapshot_name = req->get_query_param("snapshot");
         auto move_files = get_query_param<bool>(*req, "move_files");
 
@@ -1937,7 +1956,7 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
         }
 
         auto& ctl = snap_ctl.local();
-        auto task_id = co_await ctl.start_global_backup(std::move(dclocs), std::move(keynames), std::move(column_families), std::move(snapshot_name), move_files);
+        auto task_id = co_await ctl.start_global_backup(std::move(dclocs), std::move(ks_tables), std::move(snapshot_name), move_files);
         co_return json::json_return_type(fmt::to_string(task_id));
     });
 
