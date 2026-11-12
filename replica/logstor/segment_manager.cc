@@ -422,6 +422,9 @@ private:
     group_compaction_state& get_group_state(logstor_group&);
     group_compaction_state* find_group_state(logstor_group&) noexcept;
 
+    // Disables compaction of the group until the returned reenabler is destroyed.
+    compaction_reenabler hold_compaction_disabled(logstor_group&, group_compaction_state&);
+
 };
 
 future<> compaction_manager_impl::stop() {
@@ -1710,26 +1713,23 @@ future<compaction_reenabler> compaction_manager_impl::disable_compaction(logstor
         co_return compaction_reenabler();
     }
 
-    ++state->compaction_disabled_counter;
+    auto reenabler = hold_compaction_disabled(cg, *state);
 
     // Wait for any ongoing compaction to finish before disabling
     auto f = co_await coroutine::as_future(state->completion.get_future());
     f.ignore_ready_future();
 
-    co_return compaction_reenabler([this, &cg] {
-        auto it = _groups.find(&cg);
-        if (it != _groups.end()) {
-            --it->second->compaction_disabled_counter;
-        }
-    });
+    co_return reenabler;
 }
 
 compaction_reenabler compaction_manager_impl::disable_compaction_no_wait(logstor_group& cg) {
-    auto& state = get_group_state(cg);
+    return hold_compaction_disabled(cg, get_group_state(cg));
+}
 
+compaction_reenabler compaction_manager_impl::hold_compaction_disabled(logstor_group& cg, group_compaction_state& state) {
     ++state.compaction_disabled_counter;
-
     return compaction_reenabler([this, &cg] {
+        // The group can be removed while compaction of it is disabled.
         auto it = _groups.find(&cg);
         if (it != _groups.end()) {
             --it->second->compaction_disabled_counter;
