@@ -724,7 +724,34 @@ void write_simple(bytes_ostream& out, std::type_identity_t<T> val) {
     out.write(bytes_view(val_ptr, sizeof(T)));
 }
 
-void write_collection_value(bytes_ostream& out, atomic_cell_value_view val) {
+namespace {
+
+// Stands in for bytes_ostream to size the CQL serialization without materializing it.
+struct size_counter {
+    size_t size = 0;
+    void write(bytes_view v) {
+        size += v.size();
+    }
+    struct place_holder {};
+    place_holder write_place_holder(size_t n) {
+        size += n;
+        return {};
+    }
+};
+
+void write_collection_size(size_counter::place_holder, int) {
+}
+
+template <typename T>
+void write_simple(size_counter& out, std::type_identity_t<T>) {
+    out.size += sizeof(T);
+}
+
+} // namespace
+
+template <typename Out>
+    requires std::same_as<Out, bytes_ostream> || std::same_as<Out, size_counter>
+void write_collection_value(Out& out, atomic_cell_value_view val) {
     write_simple<int32_t>(out, int32_t(val.size_bytes()));
     for (auto&& frag : fragment_range(val)) {
         out.write(frag);
@@ -3719,8 +3746,9 @@ std::optional<data_type> abstract_type::update_user_type(const shared_ptr<const 
     return visit(*this, visitor{updated});
 }
 
-static bytes_ostream serialize_for_cql_aux(const map_type_impl&, collection_mutation_view v) {
-    bytes_ostream out;
+template <typename Out>
+static Out serialize_for_cql_aux(const map_type_impl&, collection_mutation_view v) {
+    Out out;
     auto len_slot = out.write_place_holder(collection_size_len());
     auto tomb = v.tomb();
     int elements = 0;
@@ -3736,8 +3764,9 @@ static bytes_ostream serialize_for_cql_aux(const map_type_impl&, collection_muta
     return out;
 }
 
-static bytes_ostream serialize_for_cql_aux(const set_type_impl&, collection_mutation_view v) {
-    bytes_ostream out;
+template <typename Out>
+static Out serialize_for_cql_aux(const set_type_impl&, collection_mutation_view v) {
+    Out out;
     auto len_slot = out.write_place_holder(collection_size_len());
     auto tomb = v.tomb();
     int elements = 0;
@@ -3752,8 +3781,9 @@ static bytes_ostream serialize_for_cql_aux(const set_type_impl&, collection_muta
     return out;
 }
 
-static bytes_ostream serialize_for_cql_aux(const list_type_impl&, collection_mutation_view v) {
-    bytes_ostream out;
+template <typename Out>
+static Out serialize_for_cql_aux(const list_type_impl&, collection_mutation_view v) {
+    Out out;
     auto len_slot = out.write_place_holder(collection_size_len());
     auto tomb = v.tomb();
     int elements = 0;
@@ -3768,10 +3798,11 @@ static bytes_ostream serialize_for_cql_aux(const list_type_impl&, collection_mut
     return out;
 }
 
-static bytes_ostream serialize_for_cql_aux(const user_type_impl& type, collection_mutation_view v) {
+template <typename Out>
+static Out serialize_for_cql_aux(const user_type_impl& type, collection_mutation_view v) {
     SCYLLA_ASSERT(type.is_multi_cell());
 
-    bytes_ostream out;
+    Out out;
     auto tomb = v.tomb();
 
     size_t curr_field_pos = 0;
@@ -3806,18 +3837,28 @@ static bytes_ostream serialize_for_cql_aux(const user_type_impl& type, collectio
     return out;
 }
 
-bytes_ostream serialize_for_cql(const abstract_type& type, collection_mutation_view v) {
+// Return by value so the output can't alias.
+template <typename Out>
+static Out serialize_for_cql_to(const abstract_type& type, collection_mutation_view v) {
     throwing_assert(type.is_multi_cell());
 
     return visit(type, make_visitor(
-        [&] (const map_type_impl& ctype) { return serialize_for_cql_aux(ctype, v); },
-        [&] (const set_type_impl& ctype) { return serialize_for_cql_aux(ctype, v); },
-        [&] (const list_type_impl& ctype) { return serialize_for_cql_aux(ctype, v); },
-        [&] (const user_type_impl& utype) { return serialize_for_cql_aux(utype, v); },
-        [&] (const abstract_type& o) -> bytes_ostream {
+        [&] (const map_type_impl& ctype) { return serialize_for_cql_aux<Out>(ctype, v); },
+        [&] (const set_type_impl& ctype) { return serialize_for_cql_aux<Out>(ctype, v); },
+        [&] (const list_type_impl& ctype) { return serialize_for_cql_aux<Out>(ctype, v); },
+        [&] (const user_type_impl& utype) { return serialize_for_cql_aux<Out>(utype, v); },
+        [&] (const abstract_type& o) -> Out {
             throw std::runtime_error(format("attempted to serialize a collection of cells with type: {}", o.name()));
         }
     ));
+}
+
+bytes_ostream serialize_for_cql(const abstract_type& type, collection_mutation_view v) {
+    return serialize_for_cql_to<bytes_ostream>(type, v);
+}
+
+size_t serialized_size_for_cql(const abstract_type& type, collection_mutation_view v) {
+    return serialize_for_cql_to<size_counter>(type, v).size;
 }
 
 bytes_ostream serialize_for_cql_with_timestamps(const abstract_type& type, collection_mutation_view v) {
