@@ -68,6 +68,13 @@ static constexpr auto seal_proposer_tick = std::chrono::minutes(1);
 // without a quorum does not hold the others back.
 static constexpr auto seal_append_timeout = std::chrono::seconds(10);
 
+// Tests shorten the intervals, or lengthen the seal one to hold seals back.
+static std::chrono::milliseconds injectable_interval(const char* name, std::chrono::milliseconds dflt) {
+    return utils::get_local_injector().inject_parameter<int64_t>(name)
+            .transform([] (int64_t ms) { return std::chrono::milliseconds(ms); })
+            .value_or(dflt);
+}
+
 static raft::server_id to_server_id(host_id host_id) {
     return raft::server_id{host_id.uuid()};
 };
@@ -987,7 +994,7 @@ future<> groups_manager::seal_proposer::stop() {
 future<> groups_manager::seal_proposer::run() {
     while (true) {
         try {
-            co_await sleep_abortable(seal_proposer_tick, _gm._as);
+            co_await sleep_abortable(injectable_interval("sc_seal_proposer_tick_in_ms", seal_proposer_tick), _gm._as);
         } catch (const sleep_aborted&) {
             co_return;
         }
@@ -1040,7 +1047,8 @@ future<> groups_manager::seal_proposer::maybe_seal(raft::group_id gid, raft_grou
     if (storage.seals().size() >= max_pending_seals || !unsealed.first_applied_at) {
         co_return;
     }
-    if (unsealed.bytes < seal_bytes && lowres_clock::now() - *unsealed.first_applied_at < seal_interval) {
+    if (unsealed.bytes < seal_bytes
+            && lowres_clock::now() - *unsealed.first_applied_at < injectable_interval("sc_seal_interval_in_ms", seal_interval)) {
         co_return;
     }
     // Whatever the outcome, the next round sees it: a second seal would only cut an empty memtable.
