@@ -2046,27 +2046,15 @@ class scylla_active_sstables(gdb.Command):
         gdb.Command.__init__(self, 'scylla active-sstables', gdb.COMMAND_USER, gdb.COMPLETE_COMMAND)
 
     def invoke(self, arg, from_tty):
-        try:
-            sizeof_index_entry = int(gdb.parse_and_eval('sizeof(sstables::index_entry)'))
-            sizeof_entry = int(gdb.parse_and_eval('sizeof(sstables::partition_index_cache::entry)'))
-
-            def count_index_lists(sst):
-                index_lists_size = 0
-                for key, entry in intrusive_btree(std_unique_ptr(sst['_index_cache']).get()['_entries']):
-                    index_entries = std_vector(entry['list'])
-                    index_lists_size += sizeof_entry
-                    for e in index_entries:
-                        index_lists_size += sizeof_index_entry
-                        index_lists_size += e['_key']['_size']
-                        index_lists_size += e['_promoted_index_bytes']['_size']
-                return index_lists_size
-        except Exception:
-            count_index_lists = None
+        def count_index_lists(sst):
+            # Each cache entry already accounts for itself and its page's memory.
+            cache = std_unique_ptr(sst['_index_cache']).get().dereference()
+            return sum(int(e['_size_in_allocator']) for e in bplus_tree(cache['_cache']))
 
         sstables = dict()  # name -> sstable*
         for sst in find_active_sstables():
             schema = schema_ptr(sst['_schema'])
-            id = '%s#%d' % (schema.table_name(), sst['_generation'])
+            id = '%s#%s' % (schema.table_name(), sst['_generation'])
             if id in sstables:
                 sst, count = sstables[id]
                 sstables[id] = (sst, count + 1)
@@ -2075,8 +2063,7 @@ class scylla_active_sstables(gdb.Command):
 
         total_index_lists_size = 0
         for id, (sst, count) in sstables.items():
-            if count_index_lists:
-                total_index_lists_size += count_index_lists(sst)
+            total_index_lists_size += count_index_lists(sst)
             gdb.write('sstable %s, readers=%d data_file_size=%d\n' % (id, count, sst['_data_file_size']))
 
         gdb.write('sstable_count=%d, total_index_lists_size=%d\n' % (len(sstables), total_index_lists_size))
@@ -5780,15 +5767,16 @@ class scylla_sstable_index_cache(gdb.Command):
             loaded_pages += 1
             page = page.get_with_type(partition_index_page_type)
             gdb.write("[{}]: [\n".format(int(n['_key'])))
-            for entry in chunked_managed_vector(page['_entries']):
-                entry = entry['_ptr'].dereference()['_value']
-                key = entry['_key']
-                token = std_optional(entry['_token'])
-                if token:
-                    token = str(int(token.get()['_data']))
-                else:
-                    token = 'null'
-                position = int(entry['_position'])
+            # Keys are packed into _key_storage; entry i spans [key_offset[i], key_offset[i+1]).
+            key_storage = managed_bytes(page['_key_storage']).get()
+            entries = list(chunked_managed_vector(page['_entries']))
+            for i, entry in enumerate(entries):
+                end = int(entries[i + 1]['key_offset']) if i + 1 < len(entries) else len(key_storage)
+                key = key_storage[int(entry['key_offset']):end].hex()
+                token = int(entry['raw_token'])
+                # raw_token is disengaged when equal to INT64_MIN.
+                token = 'null' if token == -2**63 else str(token)
+                position = int(entry['data_file_offset'])
 
                 gdb.write("  {{ key: {}, token: {}, position: {} }}\n".format(key, token, position))
             gdb.write(']\n')
