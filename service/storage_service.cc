@@ -5571,6 +5571,72 @@ future<> storage_service::clone_locally_tablet_storage(locator::global_tablet_id
     rtlogger.debug("Successfully loaded storage of tablet {} into pending replica {}", tablet, pending);
 }
 
+// Tells whether a tablet persisted in the given stage of an intra-node migration needs its
+// storage cloned into the pending shard on startup.
+//
+// Lists every stage with no default, so that adding a stage requires deciding it here.
+static bool intranode_migration_needs_clone_on_startup(locator::tablet_transition_stage stage) {
+    switch (stage) {
+        // The clone is acknowledged only by a node that sees the streaming stage, so it has
+        // that stage persisted. Reads use the leaving shard, so startup loads the sstables
+        // there, the previously cloned ones included.
+        case locator::tablet_transition_stage::streaming:
+            return true;
+        // Nothing was cloned yet. The clone happens in the streaming stage.
+        case locator::tablet_transition_stage::allow_write_both_read_old:
+        case locator::tablet_transition_stage::write_both_read_old:
+            return false;
+        // Reads use the pending shard, so startup loads the sstables there.
+        case locator::tablet_transition_stage::write_both_read_new:
+        case locator::tablet_transition_stage::use_new:
+        case locator::tablet_transition_stage::cleanup:
+        case locator::tablet_transition_stage::end_migration:
+            return false;
+        // The migration is rolled back: the pending shard is cleaned up and the leaving
+        // shard keeps the tablet.
+        case locator::tablet_transition_stage::cleanup_target:
+        case locator::tablet_transition_stage::revert_migration:
+            return false;
+        // Not stages of an intra-node migration.
+        case locator::tablet_transition_stage::write_both_read_old_fallback_cleanup:
+        case locator::tablet_transition_stage::rebuild_repair:
+        case locator::tablet_transition_stage::sc_rollback:
+        case locator::tablet_transition_stage::sc_remove_pending:
+        case locator::tablet_transition_stage::repair:
+        case locator::tablet_transition_stage::end_repair:
+        case locator::tablet_transition_stage::restore:
+            return false;
+    }
+    on_internal_error(slogger, format("Invalid tablet transition stage: {}", static_cast<int>(stage)));
+}
+
+future<> storage_service::clone_tablets_in_intranode_migration() {
+    auto tm = get_token_metadata_ptr();
+    const auto my_id = tm->get_my_id();
+    for (const auto& [table, tmap] : tm->tablets().all_tables_ungrouped()) {
+        for (const auto& [tid, trinfo] : tmap->transitions()) {
+            if (trinfo.transition != locator::tablet_transition_kind::intranode_migration
+                    || !intranode_migration_needs_clone_on_startup(trinfo.stage)
+                    || !trinfo.pending_replica || trinfo.pending_replica->host != my_id) {
+                continue;
+            }
+            auto leaving = locator::get_leaving_replica(tmap->get_tablet_info(tid), trinfo);
+            if (!leaving) {
+                on_internal_error(slogger, format("Tablet {} in intra-node migration has no leaving replica", locator::global_tablet_id{table, tid}));
+            }
+            // A logstor table migrates by file streaming, into files the pending shard owns
+            // and recovers by itself on startup.
+            if (_db.local().find_column_family(table).uses_logstor()) {
+                continue;
+            }
+            auto tablet = locator::global_tablet_id{table, tid};
+            rtlogger.info("Cloning tablet {} in intra-node migration at stage {} from shard {} to {}",
+                    tablet, trinfo.stage, leaving->shard, trinfo.pending_replica->shard);
+            co_await clone_locally_tablet_storage(tablet, *leaving, *trinfo.pending_replica);
+        }
+    }
+}
+
 // Streams data to the pending tablet replica of a given tablet on this node.
 // The source tablet replica is determined from the current transition info of the tablet.
 future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {

@@ -2405,6 +2405,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             sys_ks.local().drop_truncation_rp_records().get();
             sys_ks.local().drop_all_commitlog_cleanup_records().get();
 
+            checkpoint(stop_signal, "cloning tablets in intra-node migration");
+            ss.local().clone_tablets_in_intranode_migration().get();
+
             db.invoke_on_all([] (replica::database& db) {
                 db.get_tables_metadata().for_each_table([] (table_id, lw_shared_ptr<replica::table> table) {
                     replica::table& t = *table;
