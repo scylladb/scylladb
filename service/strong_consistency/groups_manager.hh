@@ -192,6 +192,28 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     // The tables given a seal boundaries provider, to take it back in stop().
     std::unordered_set<table_id> _seal_provider_tables;
 
+    // Seals the data of the groups this shard leads: a seal is appended to a group's log once
+    // enough has been written since the last one, or the oldest unsealed write is old enough,
+    // while fewer than max_pending_seals wait for their promotion.
+    class seal_proposer {
+        groups_manager& _gm;
+        future<> _fiber = make_ready_future<>();
+
+        future<> run();
+        future<> round();
+        future<> maybe_seal(raft::group_id gid, raft_group_state& state);
+        // Appends the command with a timeout, and logs a failure instead of throwing,
+        // so that one group does not hold back the round.
+        future<> append(raft_server& srv, raft::group_id gid,
+                noncopyable_function<raft_command(api::timestamp_type, raft::term_t)> make_command);
+    public:
+        explicit seal_proposer(groups_manager& gm) : _gm(gm) {}
+        void start();
+        // The manager's abort source must be requested first.
+        future<> stop();
+    };
+    seal_proposer _seal_proposer{*this};
+
     // Keeps the flush handler registered. The handler forwards each round's
     // position to every group; see raft_commitlog::closed_up_to().
     std::optional<db::commitlog::flush_handler_anchor> _flush_handler;
