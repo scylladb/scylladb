@@ -38,7 +38,8 @@ from test.pylib.coverage_utils import coverage_dir
 from test.pylib.ldap_server import start_ldap
 from test.pylib.s3mock_server import S3MockServer
 from test.pylib.resource_gather import setup_cgroup, setup_worker_cgroup, get_resource_gather, SystemResourceMonitor, \
-    SCYLLA_TEST_CGROUP_BASE_ENV, gather_host_info, summarize_resource_utilization
+    SCYLLA_TEST_CGROUP_BASE_ENV, gather_host_info, summarize_resource_utilization, gather_oom_kill_evidence, read_oom_kill, \
+    CGROUP_TESTS
 from test.pylib.db.writer import SQLiteWriter, DEFAULT_DB_NAME, HOST_INFO_TABLE
 from test.pylib.host_registry import HostRegistry
 from test.pylib.s3_proxy import S3ProxyServer
@@ -154,6 +155,10 @@ CLUSTER_KEY = pytest.StashKey[ScyllaCluster | None]()
 # pytest_runtest_makereport copies a failed phase's server logs from them,
 # then deletes their files.
 RECYCLED_CLUSTERS_KEY = pytest.StashKey[list[ScyllaCluster]]()
+
+# The oom_kill counter of each xdist worker cgroup before the worker started,
+# in the controller config's stash, keyed by the worker id.
+OOM_KILL_BASELINES_KEY = pytest.StashKey[dict[str, int | None]]()
 
 # Set by the `manager` fixture from after_test()'s result: this test's seastar
 # IO counter totals, keyed by metric name (SeastarIOMetricName).
@@ -459,6 +464,26 @@ def pytest_sessionstart(session: pytest.Session) -> None:
         setup_worker_cgroup()
 
 
+# optionalhook=True on the xdist hooks: sessions with -p no:xdist do not register the xdist hookspecs.
+@pytest.hookimpl(optionalhook=True)
+def pytest_testnodedown(node, error) -> None:
+    """Log cgroup memory evidence when an xdist worker dies unexpectedly.
+
+    A worker that the OOM killer or a cgroup memory limit stops leaves no
+    traceback and no core. The evidence goes to the controller log, next to
+    the "worker crashed" failure.
+    """
+    if error is None:
+        return
+    try:
+        worker_id = node.gateway.id
+        baseline = node.config.stash.get(OOM_KILL_BASELINES_KEY, {}).get(worker_id)
+        evidence = gather_oom_kill_evidence(worker_id, baseline)
+        logger.warning("xdist worker %s died unexpectedly: %s\n%s", worker_id, error, evidence)
+    except Exception:
+        logger.warning("Failed to gather diagnostics for a dead xdist worker", exc_info=True)
+
+
 @pytest.hookimpl(tryfirst=True)
 def pytest_runtest_logreport(report):
     """Add custom XML attributes to JUnit testcase elements.
@@ -635,6 +660,15 @@ def pytest_configure(config: pytest.Config) -> None:
 def pytest_configure_node(node) -> None:
     if node.config.getoption("--exe-url"):
         node.workerinput["exe_path"] = str(node.config.option.exe_path)
+
+    # The oom_kill counter is cumulative for the life of the worker cgroup, which
+    # can remain from an earlier session. A cgroup that does not exist yet starts at 0.
+    worker_cgroup = CGROUP_TESTS / node.gateway.id
+    try:
+        baseline = read_oom_kill(worker_cgroup) if worker_cgroup.exists() else 0
+    except OSError:
+        baseline = None
+    node.config.stash.setdefault(OOM_KILL_BASELINES_KEY, {})[node.gateway.id] = baseline
 
 
 class DisabledFile(pytest.File):
