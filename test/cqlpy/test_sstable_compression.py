@@ -22,14 +22,15 @@ def test_compression_class(cql, test_keyspace):
         pass
 
 # In the following tests, we use the older "sstable_compression" option name
-# (instead of the new "class") so we can have passing tests despite #8948.
-# When both Scylla and Cassandra support "class", we should modify this variable
-# to use it:
-sstable_compression = 'sstable_compression'
+# on Scylla (instead of the new "class") so we can have passing tests despite
+# #8948. Current Cassandra no longer supports the old name, so we use "class"
+# on Cassandra. When Scylla supports "class", we should always use it.
+def sstable_compression(cql):
+    return 'sstable_compression' if is_scylla(cql) else 'class'
 
 @pytest.fixture(scope="module")
 def table_lz4(cql, test_keyspace):
-    with new_test_table(cql, test_keyspace, "p int primary key, v int", "with compression = { '" + sstable_compression + "': 'LZ4Compressor' }") as table:
+    with new_test_table(cql, test_keyspace, "p int primary key, v int", "with compression = { '" + sstable_compression(cql) + "': 'LZ4Compressor' }") as table:
         yield table
 
 # Test that if we have a table with lz4 compression, it has the expected
@@ -58,7 +59,7 @@ def test_read_chunk_length(cql, table_lz4):
 # of two.
 def test_chunk_length_must_be_power_of_two(cql, test_keyspace):
     with pytest.raises(ConfigurationException, match='power of 2'):
-        with new_test_table(cql, test_keyspace, "p int primary key, v int", "with compression = { '" + sstable_compression + "': 'LZ4Compressor', 'chunk_length_in_kb': 100 }") as table:
+        with new_test_table(cql, test_keyspace, "p int primary key, v int", "with compression = { '" + sstable_compression(cql) + "': 'LZ4Compressor', 'chunk_length_in_kb': 100 }") as table:
             pass
 
 # chunk_length_in_kb cannot be zero, negative, null, or non-integer.
@@ -70,7 +71,7 @@ def test_chunk_length_invalid(cql, test_keyspace, garbage):
     # The error should usually be ConfigurationException, but strangely
     # Cassandra throws a SyntaxException in the "null" case.
     with pytest.raises((ConfigurationException, SyntaxException), match='chunk_length_in_kb'):
-        with new_test_table(cql, test_keyspace, "p int primary key, v int", "with compression = { '" + sstable_compression + "': 'LZ4Compressor', 'chunk_length_in_kb': " + garbage + " }") as table:
+        with new_test_table(cql, test_keyspace, "p int primary key, v int", "with compression = { '" + sstable_compression(cql) + "': 'LZ4Compressor', 'chunk_length_in_kb': " + garbage + " }") as table:
             pass
 
 # If a user is allowed to specify a huge number for chunk_length_in_kb, it can
@@ -82,7 +83,7 @@ def test_chunk_length_invalid(cql, test_keyspace, garbage):
 # Reproduces #9933.
 def test_huge_chunk_length(cql, test_keyspace, cassandra_bug):
     with pytest.raises(ConfigurationException, match='chunk_length_in_kb'):
-        with new_test_table(cql, test_keyspace, "p int primary key, v int", "with compression = { '" + sstable_compression + "': 'LZ4Compressor', 'chunk_length_in_kb': 1048576 }") as table:
+        with new_test_table(cql, test_keyspace, "p int primary key, v int", "with compression = { '" + sstable_compression(cql) + "': 'LZ4Compressor', 'chunk_length_in_kb': 1048576 }") as table:
             # At this point, the test already failed, as we expected the table
             # creation to have failed with ConfigurationException. But if we
             # reached here, let's really demonstrate the bug - write
@@ -93,7 +94,7 @@ def test_huge_chunk_length(cql, test_keyspace, cassandra_bug):
     # Also check the same for ALTER TABLE
     with new_test_table(cql, test_keyspace, "p int primary key, v int") as table:
         with pytest.raises(ConfigurationException, match='chunk_length_in_kb'):
-            cql.execute("ALTER TABLE " + table + " with compression = { '" + sstable_compression + "': 'LZ4Compressor', 'chunk_length_in_kb': 1048576 }")
+            cql.execute("ALTER TABLE " + table + " with compression = { '" + sstable_compression(cql) + "': 'LZ4Compressor', 'chunk_length_in_kb': 1048576 }")
 
 # Check that whatever is currently the default sstable compression algorithm
 # (for a long time it was LZ4Compressor but issue #26610 changed it to

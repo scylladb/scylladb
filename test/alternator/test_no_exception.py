@@ -19,7 +19,11 @@
 # 1. The Alternator-specific `scylla_reactor_cpp_exceptions` metric to count C++ exceptions thrown inside the implementation.
 # 2. The Alternator-specific "injections" that allow us to simulate timeouts.
 
+import time
+import urllib.parse
+
 import pytest
+import requests
 from botocore.exceptions import ClientError
 
 from test.alternator.test_streams import create_stream_test_table, wait_for_active_stream
@@ -161,6 +165,23 @@ def test_describe_table_with_timeout_in_is_view_built_no_exception(dynamodb, res
                 'Projection': { 'ProjectionType': 'ALL' }
             }]
     ) as table:
+        # The injection below fails the next read of view_build_status_v2,
+        # but not only DescribeTable reads this table: without tablets, every
+        # group0 topology update reads it too - including the one recording
+        # that the views above were built. If the injection fails that read,
+        # group0 stops on this node, and all later schema changes fail. So
+        # wait until the views are built, and these updates were applied.
+        for view in [f'{table.name}:hello', f'{table.name}!:hithere']:
+            url = f'{rest_api}/storage_service/view_build_statuses/alternator_{table.name}/{urllib.parse.quote(view, safe="")}'
+            deadline = time.time() + 60
+            while True:
+                # Don't let a stalled request outlive the deadline.
+                statuses = requests.get(url, timeout=max(deadline - time.time(), 1)).json()
+                if statuses and all(status['value'] == 'SUCCESS' for status in statuses):
+                    break
+                assert time.time() < deadline, f'View {view} was not built: {statuses}'
+                time.sleep(0.1)
+        requests.post(f'{rest_api}/raft/read_barrier', timeout=60).raise_for_status()
         with scylla_inject_error(rest_api, 'alternator_query_result_timeout', one_shot=True, parameters={ 'table_name': 'view_build_status_v2' }):
             with check_increases_metric_exact(metrics, 'scylla_reactor_cpp_exceptions', [[0, None]]):
                 with pytest.raises(ClientError, match='InternalServerError.*timeout'):
