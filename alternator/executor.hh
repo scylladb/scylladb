@@ -16,6 +16,9 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/sharded.hh>
 #include <seastar/util/noncopyable_function.hh>
+#include <optional>
+#include <utility>
+#include <vector>
 
 #include "service/migration_manager.hh"
 #include "service/client_state.hh"
@@ -121,6 +124,11 @@ class executor : public peering_sharded_service<executor> {
     abort_source _stop_as;
     // Runs db::modify_tags() on shard 0, with the _stop_as of shard 0's executor.
     future<> modify_tags(sstring ks, sstring cf, std::function<void(std::map<sstring, sstring>&)> modify);
+
+    // Owns the background fibers of S3 export (the export workers and the
+    // garbage collector). Defined in alternator/export.hh.
+    class s3_exports;
+    std::unique_ptr<s3_exports> _s3_exports;
 
     future<> cache_newly_calculated_size_on_all_shards(schema_ptr schema, std::uint64_t size_in_bytes, std::chrono::nanoseconds ttl);
     future<> fill_table_size(rjson::value &table_description, schema_ptr schema, bool deleting);

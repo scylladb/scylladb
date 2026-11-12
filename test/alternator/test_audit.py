@@ -627,19 +627,31 @@ def test_audit_query_table_operations(dynamodb, cql, alternator_audit_enabled):
         # DescribeContinuousBackups
         client.describe_continuous_backups(TableName=table.name)
         expected.append(("QUERY", "", False, ks_name, table.name, ["DescribeContinuousBackups", table.name]))
-        # ExportTableToPointInTime
-        response = client.export_table_to_point_in_time(TableArn=table_arn, S3Bucket="my-bucket")
-        export_arn = response['ExportDescription']['ExportArn']
-        expected.append(("QUERY", "", False, ks_name, table.name, ["ExportTableToPointInTime", table_arn, "my-bucket"]))
-        # DescribeExport
-        # FIXME: ExportTableToPointInTime does not create the metadata entry yet, so there is nothing
-        # to look up and the call must fail. Once it actually starts creating the export
-        # (SCYLLADB-1893), this test will start failing loudly, which is good, because that is
-        # exactly when this place needs correcting.
-        with pytest.raises(ClientError, match='ExportNotFoundException'):
-            client.describe_export(ExportArn=export_arn)
-        expected.append(("QUERY", "", True, ks_name, table.name, ["DescribeExport", export_arn]))
-        # ListExports (the table it is filtered by)
+        # ExportTableToPointInTime. Starting an export needs exactly one S3 endpoint in
+        # object_storage_endpoints, and without it the request is refused with
+        # ValidationException (test/alternator/run configures one only with the "--s3"
+        # option). Both outcomes are audited - the audit happens before the check.
+        try:
+            response = client.export_table_to_point_in_time(TableArn=table_arn, S3Bucket="my-bucket")
+            export_arn = response['ExportDescription']['ExportArn']
+            export_started = True
+        except ClientError as error:
+            assert error.response['Error']['Code'] == 'ValidationException'
+            # An export ARN in the DynamoDB format (a 14-digit start time in milliseconds, a
+            # dash and 8 hex digits) which no export has.
+            export_arn = f"{table_arn}/export/{int(time.time() * 1000):014d}-0123abcd"
+            export_started = False
+        expected.append(("QUERY", "", not export_started, ks_name, table.name, ["ExportTableToPointInTime", table_arn, "my-bucket"]))
+        # DescribeExport. If the export started, ExportTableToPointInTime above wrote the export
+        # row, so the lookup succeeds (the state of the background export is not important here).
+        # Otherwise there is no such export, and the failed lookup is audited just as well.
+        if export_started:
+            desc_export = client.describe_export(ExportArn=export_arn)
+            assert desc_export['ExportDescription']['ExportArn'] == export_arn
+        else:
+            with pytest.raises(ClientError, match='ExportNotFoundException'):
+                client.describe_export(ExportArn=export_arn)
+        expected.append(("QUERY", "", not export_started, ks_name, table.name, ["DescribeExport", export_arn]))
         client.list_exports(TableArn=table_arn)
         expected.append(("QUERY", "", False, ks_name, table.name, ["ListExports", table_arn]))
         # DescribeImport. No import was started, so the call must fail.

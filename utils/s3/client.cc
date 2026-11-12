@@ -1609,7 +1609,18 @@ public:
 
 future<> client::multipart_upload::upload_part(std::unique_ptr<upload_sink> piece_ptr) {
     if (!upload_started()) {
-        co_await start_upload();
+        std::exception_ptr ex;
+        try {
+            co_await start_upload();
+        } catch (...) {
+            ex = std::current_exception();
+        }
+        if (ex) {
+            // The piece may have started its own multipart upload, and only
+            // close() aborts it, so close the piece before it is dropped.
+            co_await piece_ptr->close();
+            co_await coroutine::return_exception_ptr(std::move(ex));
+        }
     }
 
     auto& piece = *piece_ptr;
