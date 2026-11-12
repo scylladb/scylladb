@@ -355,12 +355,6 @@ commitlog_total_space_in_mb: -1
 # enable or disable keepalive on rpc/native connections
 # rpc_keepalive: true
 
-# Set to true to have Scylla create a hard link to each sstable
-# flushed or streamed locally in a backups/ subdirectory of the
-# keyspace data.  Removing these links is the operator's
-# responsibility.
-# incremental_backups: false
-
 # Whether or not to take a snapshot before each compaction.  Be
 # careful using this option, since Scylla won't clean up the
 # snapshots for you.  Mostly useful if you're paranoid when there
