@@ -124,6 +124,16 @@ public:
         rebuild_main_set(desc.new_sstables, desc.old_sstables);
         return make_ready_future<>();
     }
+    virtual future<> set_run_identifier(std::vector<sstables::shared_sstable> sstables, sstables::run_id run_identifier) override {
+        for (auto& sst : sstables) {
+            _main_set.erase(sst);
+        }
+        for (auto& sst : sstables) {
+            sst->set_run_identifier(run_identifier);
+            _main_set.insert(sst);
+        }
+        return make_ready_future<>();
+    }
     virtual bool is_auto_compaction_disabled_by_user() const noexcept override { return false; }
     virtual bool tombstone_gc_enabled() const noexcept override { return false; }
     virtual tombstone_gc_state get_tombstone_gc_state() const noexcept override { return _tombstone_gc_state; }
