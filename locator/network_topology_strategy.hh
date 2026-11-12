@@ -57,8 +57,6 @@ public:
         return true;
     }
 
-    [[nodiscard]] sstring sanity_check_read_replicas(const effective_replication_map& erm, const host_id_vector_replica_set& read_replicas) const override;
-
 public: // tablet_aware_replication_strategy
     virtual effective_replication_map_ptr make_replication_map(table_id, token_metadata_ptr) const override;
     virtual future<tablet_map> allocate_tablets_for_new_table(schema_ptr, token_metadata_ptr, size_t tablet_count) const override;

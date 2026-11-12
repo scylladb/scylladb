@@ -33,13 +33,6 @@ size_t local_strategy::get_replication_factor(const token_metadata&) const {
     return 1;
 }
 
-sstring local_strategy::sanity_check_read_replicas(const effective_replication_map& erm, const host_id_vector_replica_set& read_replicas) const {
-    if (read_replicas.size() > 1) {
-        return seastar::format("local_strategy: the number of replicas for local_strategy is {}, cannot be higher than 1", read_replicas.size());
-    }
-    return {};
-}
-
 future<mutable_static_effective_replication_map_ptr> local_effective_replication_map::clone_gently(replication_strategy_ptr rs, token_metadata_ptr tmptr) const {
     return make_ready_future<mutable_static_effective_replication_map_ptr>(make_local_effective_replication_map_ptr(std::move(rs), std::move(tmptr)));
 }

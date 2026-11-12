@@ -1495,7 +1495,6 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             };
             spcfg.hinted_handoff_enabled = hinted_handoff_enabled;
             spcfg.available_memory = memory::stats().total_memory();
-            spcfg.maintenance_mode = maintenance_mode_enabled{cfg->maintenance_mode()};
             smp_service_group_config storage_proxy_smp_service_group_config;
             // Assuming less than 1kB per queued request, this limits storage_proxy submit_to() queues to 5MB or less
             storage_proxy_smp_service_group_config.max_nonlocal_requests = 5000;

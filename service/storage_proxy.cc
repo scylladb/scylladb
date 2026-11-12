@@ -98,7 +98,6 @@
 #include "replica/exceptions.hh"
 #include "db/operation_type.hh"
 #include "locator/util.hh"
-#include "tools/build_info.hh"
 #include "utils/labels.hh"
 #include "debug.hh"
 
@@ -125,16 +124,6 @@ utils::small_vector<locator::host_id, N> addr_vector_to_id(const gms::gossiper& 
             on_internal_error(slogger, fmt::format("addr_vector_to_id cannot map {} to host id", ip));
         }
     }) | std::ranges::to<utils::small_vector<locator::host_id, N>>();
-}
-
-// Check the effective replication map consistency:
-// we have an inconsistent effective replication map in case we the number of
-// read replicas is higher than the replication factor.
-[[maybe_unused]] void validate_read_replicas(const locator::effective_replication_map& erm, const host_id_vector_replica_set& read_replicas) {
-    const sstring error = erm.get_replication_strategy().sanity_check_read_replicas(erm, read_replicas);
-    if (!error.empty()) {
-        on_internal_error(slogger, error);
-    }
 }
 
 exceptions::request_failure_reason failure_reason_of(const replica::exception_variant& ev) {
@@ -3458,7 +3447,6 @@ storage_proxy::storage_proxy(sharded<replica::database>& db, storage_proxy::conf
     , _hints_for_views_manager(*this, _db.local().get_config().view_hints_directory(), {}, utils::updateable_value<uint32_t>(_db.local().get_config().max_hint_window_in_ms), _hints_resource_manager, _db, cfg.hints_sched_group)
     , _stats_key(stats_key)
     , _features(feat)
-    , _maintenance_mode(cfg.maintenance_mode)
     , _background_write_throttle_threahsold(cfg.available_memory / 10)
     , _mutate_stage{"storage_proxy_mutate", &storage_proxy::do_mutate}
     , _max_view_update_backlog(max_view_update_backlog)
@@ -7361,12 +7349,6 @@ host_id_vector_replica_set storage_proxy::get_endpoints_for_reading(const schema
         return host_id_vector_replica_set{my_host_id(erm)};
     }
     auto endpoints = erm.get_replicas_for_reading(token);
-    // Skip for non-debug builds and maintenance mode.
-    if constexpr (tools::build_info::is_debug_build()) {
-        if (!_maintenance_mode) {
-            validate_read_replicas(erm, endpoints);
-        }
-    }
     auto it = std::ranges::remove_if(endpoints, std::not_fn(std::bind_front(&storage_proxy::is_alive, this, std::cref(erm)))).begin();
     endpoints.erase(it, endpoints.end());
     sort_endpoints_by_proximity(erm, endpoints);
