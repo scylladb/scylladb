@@ -1799,14 +1799,42 @@ future<> get_snapshot_details(std::unordered_map<sstring, db::snapshot_ctl::db_s
 
 // The tables a cluster snapshot or backup request names, as (keyspace, table) pairs.
 // A keyspace given without tables is paired with an empty table name.
-static std::unordered_multimap<sstring, sstring> parse_cluster_snapshot_tables(const http::request& req) {
+// The 'tables' member of the body, if there is one, lists tables of any keyspaces:
+// [{"keyspace": ..., "table": ...}, ...]. Otherwise the query parameters name them.
+static std::unordered_multimap<sstring, sstring> parse_cluster_snapshot_tables(const http::request& req, const rjson::value* body) {
     auto keyspaces = split(req.get_query_param("keyspace"), ",");
     auto tables = split(req.get_query_param("table"), ",");
+    std::unordered_multimap<sstring, sstring> ks_tables;
+
+    if (const auto* body_tables = body ? rjson::find(*body, "tables") : nullptr) {
+        if (!keyspaces.empty() || !tables.empty()) {
+            throw httpd::bad_param_exception("'tables' (in body) cannot be combined with the 'keyspace' and 'table' parameters");
+        }
+        // An empty list is refused: it would select all keyspaces.
+        if (!body_tables->IsArray() || body_tables->Empty()) {
+            throw httpd::bad_param_exception("'tables' (in body) must be a non-empty JSON array");
+        }
+        for (const auto& entry : body_tables->GetArray()) {
+            if (!entry.IsObject()) {
+                throw httpd::bad_param_exception("a 'tables' entry (in body) must be a JSON object");
+            }
+            const auto* ks = rjson::find(entry, "keyspace");
+            if (!ks || !ks->IsString() || ks->GetStringLength() == 0) {
+                throw httpd::bad_param_exception("a 'tables' entry (in body) must have a non-empty 'keyspace' string member");
+            }
+            const auto* table = rjson::find(entry, "table");
+            if (table && !table->IsString()) {
+                throw httpd::bad_param_exception("the 'table' member of a 'tables' entry (in body) must be a string");
+            }
+            ks_tables.emplace(rjson::to_string_view(*ks), table ? rjson::to_string_view(*table) : std::string_view{});
+        }
+        return ks_tables;
+    }
+
     if (keyspaces.size() != 1 && !tables.empty()) {
         throw httpd::bad_param_exception("Cannot name tables without naming exactly one keyspace");
     }
 
-    std::unordered_multimap<sstring, sstring> ks_tables;
     for (const auto& ks : keyspaces) {
         if (tables.empty()) {
             ks_tables.emplace(ks, sstring{});
@@ -1870,7 +1898,16 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
             .skip_flush = get_query_param<bool>(*req, "skip_flush"),
         };
 
-        auto ks_tables = parse_cluster_snapshot_tables(*req);
+        rjson::chunked_content content = co_await util::read_entire_stream(*req->content_stream);
+        std::optional<rjson::value> body;
+        if (!std::ranges::all_of(content, &temporary_buffer<char>::empty)) {
+            body = rjson::parse(std::move(content));
+            if (!body->IsObject()) {
+                throw httpd::bad_param_exception("the body must be a JSON object");
+            }
+        }
+
+        auto ks_tables = parse_cluster_snapshot_tables(*req, body ? &*body : nullptr);
         try {
             co_await snap_ctl.local().take_cluster_column_family_snapshot(std::move(ks_tables), tag, opts);
             co_return json_void();
@@ -1922,19 +1959,21 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
     });
 
     ss::start_global_backup.set(r, [&snap_ctl] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
-        auto ks_tables = parse_cluster_snapshot_tables(*req);
         auto snapshot_name = req->get_query_param("snapshot");
         auto move_files = get_query_param<bool>(*req, "move_files");
 
         rjson::chunked_content content = co_await util::read_entire_stream(*req->content_stream);
         rjson::value parsed = rjson::parse(std::move(content));
-        if (!parsed.IsArray()) {
+        // The body is the array of locations, or an object that holds it as 'locations'.
+        const rjson::value* locations_json = parsed.IsObject() ? rjson::find(parsed, "locations") : &parsed;
+        if (!locations_json || !locations_json->IsArray()) {
             throw httpd::bad_param_exception("backup locations (in body) must be a JSON array");
         }
+        auto ks_tables = parse_cluster_snapshot_tables(*req, parsed.IsObject() ? &parsed : nullptr);
 
         std::unordered_map<sstring, db::snapshot_dc_location> dclocs;
 
-        const auto& locations = parsed.GetArray();
+        const auto& locations = locations_json->GetArray();
         for (auto& location : locations) {
             if (!location.IsObject()) {
                 throw httpd::bad_param_exception("backup location (in body) must be a JSON object");
