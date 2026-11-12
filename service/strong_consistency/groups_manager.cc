@@ -914,9 +914,11 @@ future<> groups_manager::leader_info_updater(raft_group_state& state, table_id t
                     co_return;
                 }
                 const auto truncate = co_await raft_groups_storage::load_truncate_record(_qp, gid, this_shard_id());
+                // A seal writes nothing to the table, so its timestamp is seeded from the row.
+                const auto newest_seal = seal_boundaries_for(gid).transform([] (const auto& b) { return b.newest; }).value_or(api::min_timestamp);
                 state.leader_info = leader_info {
                     .term = current_term,
-                    .last_timestamp = std::max(*last_timestamp, truncate.truncated_at)
+                    .last_timestamp = std::max({*last_timestamp, truncate.truncated_at, newest_seal})
                 };
                 logger.debug("leader_info_updater({}, group_id={}): read_barrier() completed, "
                     "new leader term {}, last_timestamp {}",
