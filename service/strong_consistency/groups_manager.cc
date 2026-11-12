@@ -65,6 +65,9 @@ static constexpr size_t max_leadership_gains = 3;
 static constexpr auto leadership_gains_window = std::chrono::minutes(1);
 static constexpr auto priority_members_hold = std::chrono::minutes(5);
 
+// How long the leader waits for a replica to report its applied seals.
+static constexpr auto applied_seals_rpc_timeout = std::chrono::seconds(5);
+
 static raft::server_id to_server_id(host_id host_id) {
     return raft::server_id{host_id.uuid()};
 };
@@ -645,6 +648,87 @@ future<groups_manager::applied_seal_per_group> groups_manager::get_applied_seals
         if (const auto boundaries = seal_boundaries_for(gid)) {
             res[gid] = boundaries->newest;
         }
+    }
+    co_return res;
+}
+
+future<std::unordered_map<raft::group_id, api::timestamp_type>> groups_manager::min_applied_seals() {
+    const auto tm = _db.get_token_metadata_ptr();
+    const auto my_host = tm->get_my_id();
+    const auto fence = service::fencing_token{tm->get_version()};
+
+    std::unordered_map<raft::group_id, std::vector<host_id>> replicas_of;
+    std::unordered_map<host_id, tablet_per_group> host_groups;
+    for (const auto& [gid, state] : _raft_groups) {
+        const auto& tablet = state.tablet;
+        if (!state.has_tablet || !state.leader_info || !tm->tablets().has_tablet_map(tablet.table)) {
+            continue;
+        }
+        const auto& tmap = tm->tablets().get_tablet_map(tablet.table);
+        // Only the groups the tablet map names: the children of a resize are promoted once the
+        // finalization makes them tablets, which table::seal_boundaries_for() relies on.
+        if (!tmap.has_raft_info() || tablet.tablet.value() >= tmap.tablet_count()
+                || tmap.get_tablet_raft_info(tablet.tablet).group_id != gid) {
+            continue;
+        }
+        auto replicas = tmap.get_tablet_info(tablet.tablet).replicas;
+        // A migrating tablet's pending replica is a member of the group but not in the replica
+        // set yet, so it is asked too. An intranode migration is skipped: the request could be
+        // served by the leaving shard on the same host.
+        if (const auto* transition = tmap.get_tablet_transition_info(tablet.tablet); transition && transition->pending_replica) {
+            const auto& pending = *transition->pending_replica;
+            if (std::ranges::contains(replicas, pending.host, &locator::tablet_replica::host)) {
+                continue;
+            }
+            replicas.push_back(pending);
+        }
+        auto& hosts = replicas_of[gid];
+        for (const auto& replica : replicas) {
+            hosts.push_back(replica.host);
+            host_groups[replica.host].emplace(gid, tablet);
+        }
+    }
+
+    std::unordered_map<host_id, applied_seal_per_group> host_seals;
+    co_await coroutine::parallel_for_each(host_groups, [&] (auto& entry) -> future<> {
+        auto& [host, groups] = entry;
+        try {
+            if (host == my_host) {
+                host_seals[host] = co_await get_applied_seals(groups);
+                co_return;
+            }
+            abort_on_expiry aoe(lowres_clock::now() + applied_seals_rpc_timeout);
+            const auto stop_sub = utils::chain_abort_source(aoe.abort_source(), _as);
+            host_seals[host] = co_await ser::groups_manager_rpc_verbs::send_get_local_applied_seals(&_ms, host,
+                    aoe.abort_source(), to_server_id(host), fence, groups);
+        } catch (...) {
+            logger.debug("min_applied_seals(): no answer from {}: {}", host, std::current_exception());
+        }
+    });
+
+    const auto applied = [&] (host_id host, raft::group_id gid) -> std::optional<api::timestamp_type> {
+        const auto answer = host_seals.find(host);
+        if (answer == host_seals.end()) {
+            return std::nullopt;
+        }
+        const auto ts = answer->second.find(gid);
+        return ts == answer->second.end() ? std::nullopt : std::optional(ts->second);
+    };
+    std::unordered_map<raft::group_id, api::timestamp_type> res;
+    for (const auto& [gid, hosts] : replicas_of) {
+        std::optional<api::timestamp_type> min_ts = api::max_timestamp;
+        for (const auto host : hosts) {
+            const auto ts = applied(host, gid);
+            if (!ts) {
+                min_ts.reset();
+                break;
+            }
+            min_ts = std::min(*min_ts, *ts);
+        }
+        if (min_ts) {
+            res[gid] = *min_ts;
+        }
+        co_await coroutine::maybe_yield();
     }
     co_return res;
 }
@@ -1439,6 +1523,7 @@ void groups_manager::update(token_metadata_ptr new_tm) {
 
             auto& state = _raft_groups[id];
             state.has_tablet = true;
+            state.tablet = tablet;
             // During a migration within the rack, both the leaving and the pending replica may
             // be listed; Raft takes whichever is a voter.
             auto priority_members = preferred_leaders(*preferred_rack,

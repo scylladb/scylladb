@@ -153,6 +153,8 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     // try_acquire_server(), acquire_server(), or from a control operation.
     struct raft_group_state : public boost::intrusive::list_base_hook<boost::intrusive::link_mode<boost::intrusive::auto_unlink>> {
         bool has_tablet = false;
+        // Set by update(). A resize child gets its parent's tablet.
+        locator::global_tablet_id tablet{table_id{}, locator::tablet_id(0)};
         lw_shared_ptr<gate> gate = nullptr;
         raft::server* server = nullptr;
         // Of the table of this tablet; expires when the table is dropped.
@@ -242,6 +244,10 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     // The newest seal this shard has applied for each of `groups`, which it must host. A group
     // that does not run here is left out.
     future<applied_seal_per_group> get_applied_seals(const tablet_per_group& groups) const;
+
+    // For every group this shard leads, the newest seal all of its replicas have applied: the
+    // newest one which may be promoted. Groups a replica did not answer for are left out.
+    future<std::unordered_map<raft::group_id, api::timestamp_type>> min_applied_seals();
 
     // A table keeps its metrics until it is dropped, even once its last tablet
     // has left this shard, or the sum over the shards would go backwards.
