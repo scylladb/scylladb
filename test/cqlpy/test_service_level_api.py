@@ -61,16 +61,10 @@ def wait_for_clients(cql, username, clients_num, wait_s = 1, timeout_s = 30):
 
     raise RuntimeError(f"Awaiting for {clients_num} clients timed out.")
 
-def wait_until_all_connections_authenticated(cql, wait_s = 1, timeout_s = 30):
-    start_time = time.time()
-    while time.time() - start_time < timeout_s:
-        result = cql.execute("SELECT COUNT(*) FROM system.clients WHERE username='anonymous' ALLOW FILTERING")
-        if result.one()[0] == 0:
-            return
-        else:
-            time.sleep(wait_s)
-    
-    raise RuntimeError(f"Awaiting for connections authentication timed out.")
+# Given connection counts as {scheduling_group: {user: count}}, as returned by
+# count_opened_connections(), return `user`'s counts as {scheduling_group: count}.
+def user_connection_counts(counts, user):
+    return {sg: users[user] for sg, users in counts.items() if user in users}
 
 # The driver creates 1 connection per shard plus 1 control connection.
 # This function returns the set of shards whose per-shard connection of `user`
@@ -129,16 +123,19 @@ def test_count_opened_cql_connections(cql, test_keyspace):
 
             with new_session(cql, user) as session:
                 wait_for_clients(cql, user, 3) # 3 from smp=2 + control connection
-                wait_until_all_connections_authenticated(cql)
                 # The connections start in sl:driver and only move to sl:{sl} once
                 # they run user load, so issue a user-table query on each of them.
                 wait_for_scheduling_group_assignment(cql, session, user, user_table, sl, get_shard_count(cql))
 
-                api_response = count_opened_connections(cql)
-                assert f"sl:{sl}" in api_response
-                assert user in api_response[f"sl:{sl}"]
-
-                table_response = count_opened_connections_from_table(cql)
+                # Compare only this user's connections, which are all
+                # authenticated by now: other clients' connections may change
+                # between the two snapshots, e.g., finish authenticating.
+                api_response = user_connection_counts(count_opened_connections(cql), user)
+                table_response = user_connection_counts(count_opened_connections_from_table(cql), user)
+                # Check that the user's per-shard connections are counted in
+                # sl:{sl} (its control connection may be too), so the
+                # comparison below can't pass on empty counts.
+                assert api_response.get(f'sl:{sl}', 0) >= get_shard_count(cql)
                 assert api_response == table_response
     finally:
         cql.execute(f"DETACH SERVICE LEVEL FROM {user}")
