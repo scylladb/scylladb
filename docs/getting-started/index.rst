@@ -10,7 +10,6 @@ Getting Started
    config-commands
    requirements
    Migrate to ScyllaDB </using-scylla/migrate-scylla>
-   Integration Solutions </using-scylla/integrations/index>
 
 .. panel-box::
   :title: ScyllaDB Requirements
@@ -47,7 +46,6 @@ Getting Started
   :class: my-panel
   
   * :doc:`Migrate to ScyllaDB </using-scylla/migrate-scylla>` - How to migrate your current database to ScyllaDB
-  * :doc:`Integrate with ScyllaDB </using-scylla/integrations/index>` - Integration solutions with ScyllaDB
   
 
 .. panel-box::

@@ -56,8 +56,8 @@ Knowledge Base
   * :doc:`Customizing CPUSET </kb/customizing-cpuset>`
   * :doc:`Recreate RAID devices </kb/raid-device>` - How to recreate your RAID devices without running scylla-setup
   * :doc:`Configure ScyllaDB Networking with Multiple NIC/IP Combinations </kb/yaml-address>` - examples for setting the different IP addresses in scylla.yaml
-  * :doc:`Kafka Sink Connector Quickstart </using-scylla/integrations/kafka-connector>`
-  * :doc:`Kafka Sink Connector Configuration </using-scylla/integrations/sink-config>`
+  * `Kafka Sink Connector Quickstart <https://docs.scylladb.com/stable/get-started/integrations/kafka-connector.html>`_
+  * `Kafka Sink Connector Configuration <https://docs.scylladb.com/stable/get-started/integrations/sink-config.html>`_
 
 
 .. panel-box::
