@@ -957,13 +957,6 @@ private:
     future<> raft_check_and_repair_cdc_streams();
     future<> update_topology_with_local_metadata(raft::server&);
 
-    struct state_change_hint {
-        // If engaged, describes all the changes to the tablet metadata, which is
-        // then updated incrementally. An empty hint means that nothing changed.
-        // Otherwise, the tablet metadata is rebuilt from system.tablets.
-        std::optional<locator::tablet_metadata_change_hint> tablets_hint;
-    };
-
     // Reloads the topology state from disk and notifies its listeners.
     // raft_group0_client::_read_apply_mutex must be held
     future<> topology_transition();
@@ -1105,7 +1098,6 @@ private:
     // (see db::schema_tables::schema_applier).
     struct topology_state_change {
         topology new_topology;
-        state_change_hint hint;
         token_metadata_ptr prev_token_metadata;
         nodes_to_notify_after_sync nodes_to_notify;
     };
@@ -1122,10 +1114,12 @@ private:
     future<> notify_nodes_after_sync(nodes_to_notify_after_sync&& nodes_to_notify);
     // Reads the topology state from system.topology and enables the cluster features it lists.
     // Must not be called under token_metadata_lock.
-    future<std::unique_ptr<topology_state_change>> load_topology_state(state_change_hint hint);
+    future<std::unique_ptr<topology_state_change>> load_topology_state();
     // Builds token metadata for the loaded topology state, without making either visible.
+    // Updates the tablet metadata with the changes in tablets_hint, or reads it from
+    // system.tablets if tablets_hint is null.
     // Must be called under token_metadata_lock, on shard 0.
-    future<mutable_token_metadata_ptr> prepare_topology_token_metadata(topology_state_change& change);
+    future<mutable_token_metadata_ptr> prepare_topology_token_metadata(topology_state_change& change, const locator::tablet_metadata_change_hint* tablets_hint);
     // Makes the loaded topology state current. Called on shard 0 in the same
     // non-preemptible section that commits the token metadata built from it.
     void commit_topology_state(topology_state_change& change) noexcept;

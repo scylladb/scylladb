@@ -994,7 +994,8 @@ future<> schema_applier::update_tablets() {
 future<> schema_applier::load_mutable_token_metadata() {
     if (_topology_change) {
         co_return co_await _pending_token_metadata.assign(
-                co_await _ss.local().prepare_topology_token_metadata(*_topology_change));
+                co_await _ss.local().prepare_topology_token_metadata(*_topology_change,
+                        _topology_reload == topology_reload::incremental ? &_tablet_hint : nullptr));
     }
     locator::mutable_token_metadata_ptr current_token_metadata = co_await _ss.local().get_mutable_token_metadata_ptr();
     if (_tablet_hint) {
@@ -1291,11 +1292,10 @@ future<> schema_applier::destroy() {
 
 future<> schema_applier::apply_persisted() {
     SCYLLA_ASSERT(this_shard_id() == 0);
-    if (_topology_reload) {
+    if (_topology_reload != topology_reload::none) {
         // Reading the topology state enables the cluster features it lists, which
         // runs feature listeners, so it is done without holding the merge_lock.
-        _topology_change = co_await _ss.local().load_topology_state(std::move(*_topology_reload));
-        _topology_reload.reset();
+        _topology_change = co_await _ss.local().load_topology_state();
     }
     std::exception_ptr post_commit_ex;
     co_await with_merge_lock([this, &post_commit_ex] () -> future<> {
