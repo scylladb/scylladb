@@ -997,6 +997,11 @@ public:
     future<> load_cdc_streams(std::optional<std::unordered_set<table_id>> changed_tables = std::nullopt);
 
     future<> do_clusterwide_vnodes_cleanup();
+    // The node-local counterpart of the above: cleans up this node's vnode
+    // based keyspaces and marks the node as clean in the topology.
+    //
+    // Must be called on shard 0.
+    future<> do_local_vnodes_cleanup();
     future<> reset_cleanup_needed();
 
     node_state get_node_state(locator::host_id id);

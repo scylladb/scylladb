@@ -50,8 +50,6 @@
 #include "column_family.hh"
 #include "utils/log.hh"
 #include "release.hh"
-#include "compaction/compaction_manager.hh"
-#include "compaction/task_manager_module.hh"
 #include "sstables/sstables.hh"
 #include "replica/database.hh"
 #include "db/extensions.hh"
@@ -712,26 +710,13 @@ rest_cdc_streams_check_and_repair(sharded<service::storage_service>& ss, std::un
 
 static
 future<json::json_return_type>
-rest_cleanup_all(http_context& ctx, sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
+rest_cleanup_all(sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
         bool global = get_query_param<bool>(*req, "global", true);
 
         apilog.info("cleanup_all global={}", global);
 
-        if (global) {
-            co_await ss.invoke_on(0, [] (service::storage_service& ss) -> future<> {
-                co_return co_await ss.do_clusterwide_vnodes_cleanup();
-            });
-            co_return json::json_return_type(0);
-        }
-        // fall back to the local cleanup if local cleanup is requested
-        auto& db = ctx.db;
-        auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
-        auto task = co_await compaction_module.start_global_cleanup_compaction(db);
-        co_await task->done();
-
-        // Mark this node as clean
-        co_await ss.invoke_on(0, [] (service::storage_service& ss) -> future<> {
-            co_await ss.reset_cleanup_needed();
+        co_await ss.invoke_on(0, [global] (service::storage_service& ss) -> future<> {
+            co_return co_await (global ? ss.do_clusterwide_vnodes_cleanup() : ss.do_local_vnodes_cleanup());
         });
 
         co_return json::json_return_type(0);
@@ -739,7 +724,7 @@ rest_cleanup_all(http_context& ctx, sharded<service::storage_service>& ss, std::
 
 static
 future<json::json_return_type>
-rest_reset_cleanup_needed(http_context& ctx, sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
+rest_reset_cleanup_needed(sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
         apilog.info("reset_cleanup_needed");
         co_await ss.invoke_on(0, [] (service::storage_service& ss) {
             return ss.reset_cleanup_needed();
@@ -1603,8 +1588,8 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::get_natural_endpoints.set(r, gated(ss, rest_bind(rest_get_natural_endpoints, ctx, ss)));
     ss::get_natural_endpoints_v2.set(r, gated(ss, rest_bind(rest_get_natural_endpoints_v2, ctx, ss)));
     ss::cdc_streams_check_and_repair.set(r, gated(ss, rest_bind(rest_cdc_streams_check_and_repair, ss)));
-    ss::cleanup_all.set(r, gated(ss, rest_bind(rest_cleanup_all, ctx, ss)));
-    ss::reset_cleanup_needed.set(r, gated(ss, rest_bind(rest_reset_cleanup_needed, ctx, ss)));
+    ss::cleanup_all.set(r, gated(ss, rest_bind(rest_cleanup_all, ss)));
+    ss::reset_cleanup_needed.set(r, gated(ss, rest_bind(rest_reset_cleanup_needed, ss)));
     ss::decommission.set(r, gated(ss, rest_bind(rest_decommission, ss, ssc)));
     ss::move.set(r, gated(ss, rest_bind(rest_move, ss)));
     ss::remove_node.set(r, gated(ss, rest_bind(rest_remove_node, ss)));
