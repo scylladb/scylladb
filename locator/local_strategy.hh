@@ -33,8 +33,6 @@ public:
     virtual bool allow_remove_node_being_replaced_from_natural_endpoints() const override {
         return false;
     }
-
-    [[nodiscard]] sstring sanity_check_read_replicas(const effective_replication_map& erm, const host_id_vector_replica_set& read_replicas) const override;
 };
 
 }
