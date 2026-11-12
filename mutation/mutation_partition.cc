@@ -700,15 +700,28 @@ void write_cell(RowWriter& w, const query::partition_slice& slice, data_type typ
         type = map_type_impl::get_instance(ctype.name_comparator(), ctype.value_comparator(), true);
     }
 
-    bytes_ostream serialized = ((type->is_map() || type->is_set() || type->is_user_type()) && type->is_multi_cell()
-                && slice.options.contains<query::partition_slice::option::send_collection_timestamps>())
-            ? serialize_for_cql_with_timestamps(*type, std::move(v))
-            : serialize_for_cql(*type, std::move(v));
-    w.add().write().skip_timestamp()
-        .skip_expiry()
-        .write_fragmented_value(std::move(serialized))
-        .skip_ttl()
-        .end_qr_cell();
+    const bool with_timestamps = (type->is_map() || type->is_set() || type->is_user_type()) && type->is_multi_cell() &&
+                                 slice.options.contains<query::partition_slice::option::send_collection_timestamps>();
+    auto wr = w.add().write().skip_timestamp().skip_expiry();
+    auto after_value = [&] {
+        if constexpr (std::same_as<std::remove_reference_t<decltype(wr._out)>, seastar::measuring_output_stream>) {
+            if (!with_timestamps) {
+                // Digest-only reads just size the result; don't materialize a possibly huge collection for that.
+                // The empty value accounts for the length prefix, then the payload is counted separately.
+                auto after = std::move(wr).write_value(bytes_view());
+                // measuring_output_stream::write() only adds the size, it never reads the data.
+                const auto sz = serialized_size_for_cql(*type, v);
+                if (sz > std::numeric_limits<uint32_t>::max()) {
+                    throw std::runtime_error("Size is too big for serialization");
+                }
+                after._out.write(nullptr, sz);
+                return after;
+            }
+        }
+        return std::move(wr).write_fragmented_value(
+                with_timestamps ? serialize_for_cql_with_timestamps(*type, std::move(v)) : serialize_for_cql(*type, std::move(v)));
+    }();
+    std::move(after_value).skip_ttl().end_qr_cell();
 }
 
 template<typename RowWriter>

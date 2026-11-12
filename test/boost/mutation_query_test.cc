@@ -30,6 +30,13 @@
 #include "partition_slice_builder.hh"
 #include "readers/from_mutations.hh"
 #include "mutation/mutation_rebuilder.hh"
+#include "mutation/collection_mutation.hh"
+#include "types/list.hh"
+#include "types/map.hh"
+#include "types/set.hh"
+#include "types/user.hh"
+#include "test/lib/random_utils.hh"
+#include "utils/UUID_gen.hh"
 #include "readers/mutation_source.hh"
 
 using namespace std::literals::chrono_literals;
@@ -563,6 +570,143 @@ SEASTAR_THREAD_TEST_CASE(test_result_size_calculation) {
     data_query(s, semaphore.make_permit(), source, query::full_partition_range, slice, result_and_digest_builder);
 
     BOOST_REQUIRE_EQUAL(digest_only_builder.memory_accounter().used_memory(), result_and_digest_builder.memory_accounter().used_memory());
+}
+
+// Random multi-cell collection of the given map, set, list or user type, with live, dead, expiring
+// and expired elements, maybe a tombstone covering some of them, and values large enough to span fragments.
+static collection_mutation make_random_collection(const abstract_type& type, std::default_random_engine& gen) {
+    constexpr api::timestamp_type tomb_ts = 1000;
+    auto now = gc_clock::now();
+    auto tomb = tests::random::get_bool(gen) ? tombstone(tomb_ts, now) : tombstone();
+    auto random_value = [&] {
+        return tests::random::get_bytes(
+                tests::random::get_int<size_t>(0, 9, gen) ? tests::random::get_int<size_t>(0, 100, gen) : tests::random::get_int<size_t>(1, 64 * 1024, gen),
+                gen);
+    };
+    auto make_cell = [&](const abstract_type& value_type, bytes value) {
+        auto ts = tests::random::get_int<api::timestamp_type>(tomb_ts - 100, tomb_ts + 100, gen);
+        switch (tests::random::get_int(0, 3, gen)) {
+        case 0:
+            return atomic_cell::make_dead(ts, now);
+        case 1:
+            return atomic_cell::make_live(value_type, ts, value, now + 1h, 1h, atomic_cell::collection_member::yes);
+        case 2:
+            return atomic_cell::make_live(value_type, ts, value, now - 1h, 1h, atomic_cell::collection_member::yes);
+        default:
+            return atomic_cell::make_live(value_type, ts, value, atomic_cell::collection_member::yes);
+        }
+    };
+    std::vector<std::pair<bytes, atomic_cell>> cells;
+    if (auto* utype = dynamic_cast<const user_type_impl*>(&type)) {
+        for (size_t i = 0; i < utype->size(); ++i) {
+            if (tests::random::get_bool(gen)) {
+                auto& ftype = *utype->type(i);
+                cells.emplace_back(serialize_field_index(i), make_cell(ftype, &ftype == int32_type.get() ? int32_type->decompose(int32_t(i)) : random_value()));
+            }
+        }
+    } else {
+        auto& ctype = static_cast<const collection_type_impl&>(type);
+        auto n = tests::random::get_int(0, 20, gen);
+        for (int i = 0; i < n; ++i) {
+            bytes key = type.is_map()   ? int32_type->decompose(int32_t(i))
+                        : type.is_set() ? random_value()
+                                        : timeuuid_type->decompose(timeuuid_native_type{utils::UUID_gen::min_time_UUID(std::chrono::milliseconds(i))});
+            auto value = type.is_set() ? bytes() : random_value();
+            cells.emplace_back(std::move(key), make_cell(*ctype.value_comparator(), std::move(value)));
+        }
+        std::ranges::sort(cells, [&](auto& a, auto& b) {
+            return ctype.name_comparator()->less(a.first, b.first);
+        });
+        auto dup = std::ranges::unique(cells, [&](auto& a, auto& b) {
+            return ctype.name_comparator()->equal(a.first, b.first);
+        });
+        cells.erase(dup.begin(), dup.end());
+    }
+    collection_mutation_writer w(tomb);
+    for (auto& [k, c] : cells) {
+        w.push_back(bytes_view(k), atomic_cell_view(c));
+    }
+    return std::move(w).finish();
+}
+
+static schema_ptr make_collections_schema() {
+    auto udt = user_type_impl::get_instance("ks", "udt", {"a", "b", "c"}, {bytes_type, int32_type, bytes_type}, true);
+    return schema_builder(this_smp_shard_count(), "ks", "collections")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("ck", int32_type, column_kind::clustering_key)
+            .with_column("sm", map_type_impl::get_instance(int32_type, bytes_type, true), column_kind::static_column)
+            .with_column("m", map_type_impl::get_instance(int32_type, bytes_type, true))
+            .with_column("s", set_type_impl::get_instance(bytes_type, true))
+            .with_column("l", list_type_impl::get_instance(bytes_type, true))
+            .with_column("u", udt)
+            .build();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_serialized_size_for_cql) {
+    auto s = make_collections_schema();
+    auto& gen = tests::random::gen();
+    for (int i = 0; i < 200; ++i) {
+        for (auto& def : s->all_columns()) {
+            if (def.is_atomic()) {
+                continue;
+            }
+            auto cm = make_random_collection(*def.type, gen);
+            collection_mutation_view v(cm);
+            BOOST_REQUIRE_EQUAL(serialized_size_for_cql(*def.type, v), serialize_for_cql(*def.type, v).size());
+            if (def.type->is_collection()) {
+                // As written for collections_as_maps.
+                auto& ctype = static_cast<const collection_type_impl&>(*def.type);
+                auto mtype = map_type_impl::get_instance(ctype.name_comparator(), ctype.value_comparator(), true);
+                BOOST_REQUIRE_EQUAL(serialized_size_for_cql(*mtype, v), serialize_for_cql(*mtype, v).size());
+            }
+        }
+    }
+}
+
+// Digest-only reads size the result without writing it; they must stop a page at exactly
+// the same row as data reads, or replicas' digests would mismatch.
+SEASTAR_THREAD_TEST_CASE(test_digest_only_result_size_with_collections) {
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    auto s = make_collections_schema();
+    auto& gen = tests::random::gen();
+    mutation m(s, partition_key::from_single_value(*s, int32_type->decompose(int32_t(0))));
+    m.set_static_cell(*s->get_column_definition("sm"), make_random_collection(*s->get_column_definition("sm")->type, gen));
+    for (int32_t ck = 0; ck < 50; ++ck) {
+        auto key = clustering_key::from_single_value(*s, int32_type->decompose(ck));
+        for (auto& def : s->regular_columns()) {
+            m.set_clustered_cell(key, def, make_random_collection(*def.type, gen));
+        }
+    }
+    mutation_source source = make_source({m});
+    query::result_memory_limiter l(std::numeric_limits<ssize_t>::max());
+
+    using opt = query::partition_slice::option;
+    using opts = query::partition_slice::option_set;
+    for (auto options : {opts(), opts::of<opt::collections_as_maps>(), opts::of<opt::send_collection_timestamps>(),
+                 opts::of<opt::collections_as_maps, opt::send_collection_timestamps>()}) {
+        query::partition_slice slice = make_full_slice(*s);
+        slice.options.add(options);
+        slice.options.set<opt::allow_short_read>();
+
+        auto run = [&](query::result_request request, uint64_t max_size) {
+            auto accounter = request == query::result_request::only_digest ? l.new_digest_read(query::max_result_size(max_size), query::short_read::yes).get()
+                                                                           : l.new_data_read(query::max_result_size(max_size), query::short_read::yes).get();
+            query::result::builder builder(slice, query::result_options{request, query::digest_algorithm::xxHash}, std::move(accounter), query::max_tombstones);
+            data_query(s, semaphore.make_permit(), source, query::full_partition_range, slice, builder);
+            auto used = builder.memory_accounter().used_memory();
+            return std::make_pair(used, builder.build());
+        };
+        auto [full_size, full] = run(query::result_request::result_and_digest, query::result_memory_limiter::unlimited_result_size);
+        BOOST_REQUIRE(!bool(full.is_short_read()));
+        for (uint64_t max_size : {uint64_t(query::result_memory_limiter::unlimited_result_size), full_size / 3, full_size / 10}) {
+            auto [data_size, data] = run(query::result_request::result_and_digest, max_size);
+            auto [digest_size, digest] = run(query::result_request::only_digest, max_size);
+            BOOST_REQUIRE_EQUAL(digest_size, data_size);
+            BOOST_REQUIRE_EQUAL(bool(digest.is_short_read()), bool(data.is_short_read()));
+            BOOST_REQUIRE(*digest.digest() == *data.digest());
+        }
+        BOOST_REQUIRE(bool(run(query::result_request::result_and_digest, full_size / 3).second.is_short_read()));
+    }
 }
 
 SEASTAR_THREAD_TEST_CASE(test_frozen_mutation_consumer) {
