@@ -223,6 +223,10 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     // The newest change this shard has applied for each of `groups`, which it must host.
     future<applied_timestamp_per_group> get_applied_timestamps(const tablet_per_group& groups) const;
 
+    // For every group this shard leads, the newest change all of its replicas have applied,
+    // so the newest seal which may be promoted. Groups a replica did not answer for are left out.
+    future<std::unordered_map<raft::group_id, api::timestamp_type>> min_applied_timestamps();
+
     // A table keeps its metrics until it is dropped, even once its last tablet
     // has left this shard, or the sum over the shards would go backwards.
     void drop_dropped_tables_metrics();
