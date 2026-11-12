@@ -814,16 +814,10 @@ prepared_cache_key_type query_processor::compute_id(
     return prepared_cache_key_type(md5_hasher::calculate(hash_target(query_string, keyspace).data()), d);
 }
 
-std::unique_ptr<prepared_statement>
-query_processor::get_statement(utils::chunked_string query, const service::client_state& client_state, dialect d, prepared_for_driver for_driver, std::optional<service::pager::query_plan> pinned_plan, std::optional<std::string_view> forced_keyspace) {
-    // Measuring allocation cost requires that no yield points exist
-    // between bytes_before and bytes_after. It needs fixing if this
-    // function is ever futurized.
-    auto bytes_before = seastar::memory::stats().total_bytes_allocated();
-    std::unique_ptr<raw::parsed_statement> statement = parse_statement(query, d);
-
+static void set_keyspace_and_plan(raw::parsed_statement& statement, const service::client_state& client_state,
+        std::optional<service::pager::query_plan>& pinned_plan, std::optional<std::string_view> forced_keyspace) {
     // Set keyspace for statement that require login
-    auto cf_stmt = dynamic_cast<raw::cf_statement*>(statement.get());
+    auto cf_stmt = dynamic_cast<raw::cf_statement*>(&statement);
     if (cf_stmt) {
         // A re-derived statement keeps the keyspace it was prepared with; the
         // connection's own may have changed since PREPARE.
@@ -836,16 +830,30 @@ query_processor::get_statement(utils::chunked_string query, const service::clien
             cf_stmt->set_pinned_plan(std::move(pinned_plan));
         }
     }
-    ++_stats.prepare_invocations;
-    auto p = statement->prepare(_db, _cql_stats, _cql_config);
+}
+
+void query_processor::finish_prepare(prepared_statement& p, utils::chunked_string& query, prepared_for_driver for_driver) {
     // The driver gets the partition key bind indices in the PREPARED metadata.
-    p->statement->_may_use_token_aware_routing = for_driver && !p->partition_key_bind_indices.empty();
-    auto audit_info = p->statement->get_audit_info();
+    p.statement->_may_use_token_aware_routing = for_driver && !p.partition_key_bind_indices.empty();
+    auto audit_info = p.statement->get_audit_info();
     if (audit_info) {
         audit_info->set_query_string(query.linearize()); // Audit system may need linearized form
-        p->statement->sanitize_audit_info();
+        p.statement->sanitize_audit_info();
     }
-    p->statement->raw_cql_statement = std::move(query);
+    p.statement->raw_cql_statement = std::move(query);
+}
+
+std::unique_ptr<prepared_statement>
+query_processor::get_statement(utils::chunked_string query, const service::client_state& client_state, dialect d, prepared_for_driver for_driver, std::optional<service::pager::query_plan> pinned_plan, std::optional<std::string_view> forced_keyspace) {
+    // Measuring allocation cost requires that no yield points exist
+    // between bytes_before and bytes_after. It needs fixing if this
+    // function is ever futurized.
+    auto bytes_before = seastar::memory::stats().total_bytes_allocated();
+    std::unique_ptr<raw::parsed_statement> statement = parse_statement(query, d);
+    set_keyspace_and_plan(*statement, client_state, pinned_plan, forced_keyspace);
+    ++_stats.prepare_invocations;
+    auto p = statement->prepare(_db, _cql_stats, _cql_config);
+    finish_prepare(*p, query, for_driver);
     auto bytes_after = seastar::memory::stats().total_bytes_allocated();
     _parsing_cost_tracker.add_sample(bytes_after - bytes_before);
     return p;
