@@ -54,6 +54,9 @@ static logging::logger logger("sc_groups_manager");
 // request holds the server by then, so all that's left is stopping it.
 static constexpr auto group_teardown_timeout = std::chrono::seconds(60);
 
+// How long the leader waits for a replica to report its applied timestamps.
+static constexpr auto applied_timestamps_rpc_timeout = std::chrono::seconds(5);
+
 static raft::server_id to_server_id(host_id host_id) {
     return raft::server_id{host_id.uuid()};
 };
@@ -577,6 +580,81 @@ future<groups_manager::applied_timestamp_per_group> groups_manager::get_applied_
             ts = std::max(ts, boundaries->newest);
         }
         res[gid] = ts;
+    }
+    co_return res;
+}
+
+future<std::unordered_map<raft::group_id, api::timestamp_type>> groups_manager::min_applied_timestamps() {
+    const auto tm = _db.get_token_metadata_ptr();
+    const auto my_host = tm->get_my_id();
+    const auto fence = service::fencing_token{tm->get_version()};
+
+    std::unordered_map<raft::group_id, std::vector<host_id>> replicas_of;
+    std::unordered_map<host_id, tablet_per_group> host_groups;
+    for (const auto& [table, _] : tm->tablets().all_table_groups()) {
+        const auto& tmap = tm->tablets().get_tablet_map(table);
+        if (!tmap.has_raft_info()) {
+            continue;
+        }
+        // Only the groups the tablet map names: the children of a resize are promoted once the
+        // finalization makes them tablets, which table::seal_boundaries_for() relies on.
+        for (const auto tid : tmap.tablet_ids()) {
+            const auto gid = tmap.get_tablet_raft_info(tid).group_id;
+            const auto it = _raft_groups.find(gid);
+            // A migrating tablet is skipped: its new replica is not in the replica set yet.
+            if (it == _raft_groups.end() || !it->second.leader_info || tmap.get_tablet_transition_info(tid)) {
+                continue;
+            }
+            const global_tablet_id tablet{table, tid};
+            auto& hosts = replicas_of[gid];
+            for (const auto& replica : tmap.get_tablet_info(tid).replicas) {
+                hosts.push_back(replica.host);
+                host_groups[replica.host].emplace(gid, tablet);
+            }
+            co_await coroutine::maybe_yield();
+        }
+    }
+
+    std::unordered_map<host_id, applied_timestamp_per_group> host_timestamps;
+    co_await coroutine::parallel_for_each(host_groups, [&] (auto& entry) -> future<> {
+        auto& [host, groups] = entry;
+        try {
+            if (host == my_host) {
+                host_timestamps[host] = co_await get_applied_timestamps(groups);
+                co_return;
+            }
+            abort_on_expiry aoe(lowres_clock::now() + applied_timestamps_rpc_timeout);
+            const auto stop_sub = utils::chain_abort_source(aoe.abort_source(), _as);
+            host_timestamps[host] = co_await ser::groups_manager_rpc_verbs::send_get_local_applied_timestamps(&_ms, host,
+                    aoe.abort_source(), to_server_id(host), fence, groups);
+        } catch (...) {
+            logger.debug("min_applied_timestamps(): no answer from {}: {}", host, std::current_exception());
+        }
+    });
+
+    const auto applied = [&] (host_id host, raft::group_id gid) -> std::optional<api::timestamp_type> {
+        const auto answer = host_timestamps.find(host);
+        if (answer == host_timestamps.end()) {
+            return std::nullopt;
+        }
+        const auto ts = answer->second.find(gid);
+        return ts == answer->second.end() ? std::nullopt : std::optional(ts->second);
+    };
+    std::unordered_map<raft::group_id, api::timestamp_type> res;
+    for (const auto& [gid, hosts] : replicas_of) {
+        std::optional<api::timestamp_type> min_ts = api::max_timestamp;
+        for (const auto host : hosts) {
+            const auto ts = applied(host, gid);
+            if (!ts) {
+                min_ts.reset();
+                break;
+            }
+            min_ts = std::min(*min_ts, *ts);
+        }
+        if (min_ts) {
+            res[gid] = *min_ts;
+        }
+        co_await coroutine::maybe_yield();
     }
     co_return res;
 }
