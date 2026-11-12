@@ -687,6 +687,16 @@ future<> test_env_compaction_manager::reevaluate_automatic_scrub() {
     return _cm.do_one_automatic_scrub_reevaluation();
 }
 
+void test_env_compaction_manager::mark_sstables_requiring_cleanup(compaction::compaction_group_view& t, const std::vector<shared_sstable>& sstables, compaction::owned_ranges_ptr owned_ranges) {
+    for (const auto& sst : sstables) {
+        _cm.update_sstable_cleanup_state(t, sst, *owned_ranges);
+    }
+    auto& cs = _cm.get_compaction_state(&t);
+    if (cs.has_sstables_requiring_cleanup()) {
+        cs.set_cleanup_owned_ranges(std::move(owned_ranges));
+    }
+}
+
 }
 
 static std::pair<int, char**> rebuild_arg_list_without(int argc, char** argv, const char* filter_out, bool exclude_positional_arg = false) {
