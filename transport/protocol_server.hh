@@ -35,6 +35,8 @@ public:
     /// Start the server.
     /// Can be called multiple times, in any state of the server.
     virtual future<> start_server() = 0;
+    /// Stop admitting new client requests while retaining services needed by admitted requests.
+    virtual future<> stop_accepting_requests() = 0;
     /// Stop the server.
     /// Can be called multiple times, in any state of the server.
     /// This variant is used on shutdown and therefore it must succeed.

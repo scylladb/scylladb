@@ -30,6 +30,7 @@
 #include <fmt/std.h>
 
 #include <algorithm>
+#include <seastar/core/sleep.hh>
 
 namespace service::strong_consistency {
 
@@ -58,6 +59,14 @@ struct read_timeout : public exceptions::read_timeout_exception {
         )
     {}
 };
+
+static future<> wait_for_leader_change(raft::server& server, raft::server_id leader, abort_source& as) {
+    // A follower can learn a new leader while staying a follower, without
+    // emitting Raft's role-change notification. Poll locally without discovery.
+    while (server.current_leader() == leader) {
+        co_await sleep_abortable(100ms, as);
+    }
+}
 
 void stats::register_stats() {
     namespace sm = seastar::metrics;
@@ -358,7 +367,7 @@ public:
         // sort_by_proximity() works on hosts, so the replica is looked up again after it.
         host_id_vector_replica_set hosts;
         _serving.for_each([&] (const locator::tablet_replica& replica) {
-            if (gossiper.is_alive(replica.host)) {
+            if (gossiper.is_alive(replica.host) && gossiper.is_query_ready(replica.host)) {
                 hosts.push_back(replica.host);
             }
         });
@@ -463,13 +472,14 @@ auto coordinator::create_operation_ctx(const schema& schema, const dht::token& t
 
     replica_selector replicas(std::move(erm), schema.id(), token);
 
-    if (!replicas.may_serve_here()) {
+    if (!replicas.may_serve_here() || _gossiper.is_draining(_gossiper.my_host_id())) {
         const auto group_id = replicas.group_id();
-        // For writes, check the leader cache to avoid an extra roundtrip.
-        // For now, reads skip the cache because any replica holding the data can serve them.
+        // Writes and linearizable reads can use the leader cache to avoid a
+        // roundtrip. Neither may select a draining node for a new query.
         if (needs_leader) {
             if (const auto cached = _groups_manager.leader_cache().get(group_id)) {
-                if (const auto* target = replicas.find_replica(*cached); target && _gossiper.is_alive(target->host)) {
+                if (const auto* target = replicas.find_replica(*cached); target && _gossiper.is_alive(target->host)
+                        && _gossiper.is_query_ready(target->host)) {
                     tracing::trace(trace_state, "This shard isn't a serving replica of tablet {} of raft group {}{}, redirecting to the cached leader {}",
                             replicas.tablet_id(), group_id, replicas.stage_suffix(), *target);
                     return make_ready_future<value_or_redirect<operation_ctx>>(
@@ -484,7 +494,7 @@ auto coordinator::create_operation_ctx(const schema& schema, const dht::token& t
         const auto target = replicas.closest_replica(_gossiper);
         if (!target) {
             return make_exception_future<value_or_redirect<operation_ctx>>(exceptions::unavailable_exception(
-                    format("All replicas of tablet {} are down", replicas.tablet_id()), db::consistency_level::ONE, 1, 0));
+                    format("All replicas of tablet {} are down or draining", replicas.tablet_id()), db::consistency_level::ONE, 1, 0));
         }
         tracing::trace(trace_state, "This shard isn't a serving replica of tablet {} of raft group {}{}, "
                 "redirecting to the closest serving replica {}{}",
@@ -664,9 +674,15 @@ auto coordinator::mutate(schema_ptr schema,
         if (const auto* not_a_leader = get_if<raft::not_a_leader>(&disposition)) {
             const auto leader_host_id = locator::host_id{not_a_leader->leader.uuid()};
             const auto* target = op->replicas.find_replica(leader_host_id);
-            if (!target) {
-                // The leader the local raft server names is outside the serving set. A
-                // migration makes sure every serving replica names a voter before the
+            const bool draining = _gossiper.is_draining(leader_host_id);
+            if (target && !draining && !_gossiper.is_query_ready(leader_host_id)) {
+                co_await coroutine::return_exception_ptr(filter_error(std::make_exception_ptr(exceptions::unavailable_exception(
+                        format("Leader {} has not synchronized shutdown", leader_host_id), db::consistency_level::ONE, 1, 0))));
+            }
+            if (!target || draining) {
+                // A draining leader must hand leadership over before we can redirect.
+                // Otherwise, the named leader is outside the serving set. A migration
+                // makes sure every serving replica names a voter before the
                 // next stage is published, so this happens in one corner only: a replica
                 // the migration demoted campaigns once more, and wins for one commit.
                 // Raft lets a server campaign as a non-voter of its newest configuration
@@ -676,10 +692,11 @@ auto coordinator::mutate(schema_ptr schema,
                 // its first commit it sees that it can't vote and hands leadership over.
                 // See "Strongly-consistent tablets" in docs/dev/topology-over-raft.md.
                 //
-                // It is a legal raft state, not an error. There is nowhere to redirect to,
-                // so tell the local server to forget that leader and wait for the next
-                // one. The wait may resolve with the same leader again, as long as it
-                // still leads; the retries end once it hands leadership over.
+                // Neither case has a leader we can redirect to. For a draining leader,
+                // wait until it changes. For the legal raft state described above, tell
+                // the local server to forget that leader and wait for the next one. That
+                // wait may resolve with the same leader again, as long as it still leads;
+                // the retries end once it hands leadership over.
                 logger.debug("mutate(): table {}.{}, tablet {}, reported leader {} cannot be the leader{}, "
                     "waiting for a new leader",
                     schema->ks_name(), schema->cf_name(), op->replicas.tablet_id(), leader_host_id,
@@ -688,8 +705,9 @@ auto coordinator::mutate(schema_ptr schema,
                     leader_host_id, op->replicas.stage_suffix());
 
                 ++get_stats().write_retries_stale_leader;
-                auto f = co_await coroutine::as_future(
-                        op->raft_server.server().wait_for_leader(&aoe.abort_source(), true));
+                auto f = co_await coroutine::as_future(draining
+                        ? wait_for_leader_change(op->raft_server.server(), not_a_leader->leader, aoe.abort_source())
+                        : op->raft_server.server().wait_for_leader(&aoe.abort_source(), true));
                 if (f.failed()) {
                     co_await coroutine::return_exception_ptr(filter_error(std::move(f).get_exception()));
                 }
@@ -892,10 +910,16 @@ auto coordinator::query(schema_ptr schema,
             if (const auto* not_a_leader = get_if<raft::not_a_leader>(&disposition)) {
                 const auto leader_host_id = locator::host_id{not_a_leader->leader.uuid()};
                 const auto* target = op.replicas.find_replica(leader_host_id);
-                if (!target) {
+                const bool draining = _gossiper.is_draining(leader_host_id);
+                if (target && !draining && !_gossiper.is_query_ready(leader_host_id)) {
+                    // Synchronization can finish without a Raft state change.
+                    co_await coroutine::return_exception_ptr(filter_error(std::make_exception_ptr(exceptions::unavailable_exception(
+                            format("Leader {} has not synchronized read shutdown", leader_host_id), db::consistency_level::ONE, 1, 0))));
+                }
+                if (!target || draining) {
                     // A leader outside the serving set: a replica a migration demoted,
-                    // leading for one commit. Forget it and wait for the next one; see
-                    // mutate().
+                    // leading for one commit, or a leader that is draining. Wait for
+                    // a new leader instead of sending another read to that node.
                     logger.debug("query(): table {}.{}, tablet {}, reported leader {} cannot be the leader{}, "
                         "waiting for a new leader",
                         schema->ks_name(), schema->cf_name(), op.replicas.tablet_id(), leader_host_id,
@@ -904,8 +928,11 @@ auto coordinator::query(schema_ptr schema,
                         leader_host_id, op.replicas.stage_suffix());
 
                     ++get_stats().read_retries_stale_leader;
-                    future<> f = co_await coroutine::as_future(
-                            op.raft_server.server().wait_for_leader(&aoe.abort_source(), true));
+                    // A draining leader can remain in office after a failed
+                    // transfer. Rediscovering it would send pings on every retry.
+                    future<> f = co_await coroutine::as_future(draining
+                            ? wait_for_leader_change(op.raft_server.server(), not_a_leader->leader, aoe.abort_source())
+                            : op.raft_server.server().wait_for_leader(&aoe.abort_source(), true));
                     if (f.failed()) {
                         co_await coroutine::return_exception_ptr(filter_error(std::move(f).get_exception()));
                     }

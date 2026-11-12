@@ -1823,7 +1823,13 @@ future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
                 std::views::transform([] (raft::server_id id) { return locator::host_id{id.uuid()}; }) |
                 std::ranges::to<std::unordered_set<locator::host_id>>();
 
-    co_await _gossiper.notify_nodes_on_up(std::move(ids));
+    // Rebuilding peers retain their replica ownership and continue serving reads.
+    for (const auto& [id, state] : _topology_state_machine._topology.transition_nodes) {
+        if (state.state == node_state::rebuilding) {
+            ids.insert(locator::host_id{id.uuid()});
+        }
+    }
+    co_await _gossiper.notify_nodes_on_up(std::move(ids), bool(_feature_service.graceful_read_shutdown));
 }
 
 future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>>
@@ -1923,6 +1929,19 @@ future<> storage_service::maybe_reconnect_to_preferred_ip(inet_address ep, inet_
 future<> storage_service::on_remove(gms::inet_address endpoint, locator::host_id host_id, gms::permit_id pid) {
     slogger.debug("endpoint={}/{} on_remove: permit_id={}", endpoint, host_id, pid);
     return make_ready_future<>();
+}
+
+future<> storage_service::on_draining(locator::host_id id, std::chrono::milliseconds timeout) {
+    slogger.debug("Waiting for coordinated requests before {} shuts down", id);
+    if (id == my_host_id()) {
+        co_await utils::get_local_injector().inject("storage_service_isolate_during_read_drain", [this] (auto& handler) -> future<> {
+            co_await handler.wait_for_message(db::timeout_clock::now() + 30s);
+            co_await isolate();
+        });
+    }
+    co_await container().invoke_on_all([timeout] (storage_service& ss) {
+        return ss._qp.proxy().drain_requests(timeout, ss._gossiper.shutdown_abort_source());
+    });
 }
 
 future<> storage_service::on_dead(gms::inet_address endpoint, locator::host_id id, gms::endpoint_state_ptr state, gms::permit_id pid) {
@@ -2048,8 +2067,7 @@ future<> storage_service::stop_transport() {
 
 future<> storage_service::drain_on_shutdown() {
     SCYLLA_ASSERT(this_shard_id() == 0);
-    return (_operation_mode == mode::DRAINING || _operation_mode == mode::DRAINED) ?
-        _drain_finished.get_future() : do_drain();
+    return start_drain();
 }
 
 void storage_service::set_group0(raft_group0& group0) {
@@ -3068,21 +3086,36 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
 }
 
 future<> storage_service::drain() {
-    return run_with_api_lock(sstring("drain"), [] (storage_service& ss) {
-        if (ss._operation_mode == mode::DRAINED) {
-            slogger.warn("Cannot drain node (did it already happen?)");
-            return make_ready_future<>();
+    return run_with_no_api_lock([] (storage_service& ss) {
+        if (ss._drain_finished) {
+            return ss.start_drain();
         }
-
-        ss.set_mode(mode::DRAINING);
-        return ss.do_drain().then([&ss] {
-            ss._drain_finished.set_value();
-            ss.set_mode(mode::DRAINED);
-        });
+        sstring operation("drain");
+        return ss.run_with_api_lock_internal(ss, [] (storage_service& ss) {
+            return ss.start_drain();
+        }, operation);
     });
 }
 
+future<> storage_service::start_drain() {
+    SCYLLA_ASSERT(this_shard_id() == 0);
+    if (!_drain_finished) {
+        promise<> finished;
+        _drain_finished.emplace(finished.get_future());
+        set_mode(mode::DRAINING);
+        do_drain().then([this] {
+            set_mode(mode::DRAINED);
+        }).forward_to(std::move(finished));
+    } else {
+        slogger.debug("Joining existing node drain");
+    }
+    return *_drain_finished;
+}
+
 future<> storage_service::do_drain() {
+    utils::get_local_injector().inject("storage_service_drain_fail", [] {
+        throw std::runtime_error("storage_service_drain_fail");
+    });
     co_await utils::get_local_injector().inject("storage_service_drain_wait", utils::wait_for_message(60s));
 
     // Hand the leadership of strongly consistent tablet groups led by this node
@@ -3098,6 +3131,27 @@ future<> storage_service::do_drain() {
     } catch (...) {
         slogger.warn("Failed to transfer Raft leadership of strongly consistent tablets: {}. Ignored.",
                 std::current_exception());
+    }
+
+    // Leadership must move before query admission stops. Retain the protocol
+    // servers and forwarding handlers until peers have received outstanding
+    // replies, including writes. Old clients need the local admission guard
+    // even when the cluster cannot yet use the new shutdown handshake.
+    co_await _gossiper.container().invoke_on_all([] (gms::gossiper& gossiper) {
+        gossiper.mark_local_query_shutdown();
+    });
+    for (auto* server : _protocol_servers) {
+        co_await server->stop_accepting_requests();
+    }
+
+    // Keep this outside stop_transport(): isolation must be able to stop transport
+    // immediately while a graceful drain is waiting for coordinator requests.
+    if (_feature_service.graceful_read_shutdown) {
+        try {
+            co_await _gossiper.prepare_shutdown(std::chrono::seconds(_db.local().get_config().request_timeout_on_shutdown_in_seconds()));
+        } catch (...) {
+            slogger.warn("Failed to prepare coordinator requests for shutdown: {:t}. Continuing shutdown.", std::current_exception());
+        }
     }
 
     // Need to stop transport before group0, otherwise RPCs may fail with raft_group_not_found.
@@ -7528,6 +7582,18 @@ storage_service::get_natural_endpoints(const sstring& keyspace, const schema_ptr
     return replicas | std::views::transform([&] (locator::host_id id) { return _address_map.get(id); }) | std::ranges::to<inet_address_vector_replica_set>();
 }
 
+future<> endpoint_lifecycle_notifier::notify_cql_change(gms::inet_address endpoint, locator::host_id hid, bool ready) {
+    return seastar::async([this, endpoint, hid, ready] {
+        _subscribers.thread_for_each([endpoint, hid, ready] (endpoint_lifecycle_subscriber* subscriber) {
+            try {
+                subscriber->on_cql_change(endpoint, hid, ready);
+            } catch (...) {
+                slogger.warn("CQL availability notification failed {}/{}: {:t}", endpoint, hid, std::current_exception());
+            }
+        });
+    });
+}
+
 future<> endpoint_lifecycle_notifier::notify_down(gms::inet_address endpoint, locator::host_id hid) {
     return seastar::async([this, endpoint, hid] {
         _subscribers.thread_for_each([endpoint, hid] (endpoint_lifecycle_subscriber* subscriber) {
@@ -7599,7 +7665,7 @@ future<> endpoint_lifecycle_notifier::notify_up(gms::inet_address endpoint, loca
 }
 
 future<> storage_service::notify_up(inet_address endpoint, locator::host_id hid) {
-    if (!_gossiper.is_cql_ready(hid) || !_gossiper.is_alive(hid)) {
+    if (!_gossiper.is_cql_ready(hid) || !_gossiper.is_alive(hid) || _gossiper.is_draining(hid)) {
         co_return;
     }
     co_await container().invoke_on_all([endpoint, hid] (auto&& ss) {
@@ -7652,7 +7718,11 @@ future<> storage_service::notify_cql_change(inet_address endpoint, locator::host
     if (ready) {
         co_await notify_up(endpoint, hid);
     } else {
-        co_await notify_down(endpoint, hid);
+        // CQL admission can stop while replica reads, writes and Raft RPCs
+        // still need this node. Notify drivers without removing RPC clients.
+        co_await container().invoke_on_all([endpoint, hid] (auto& ss) {
+            return ss._lifecycle_notifier.notify_cql_change(endpoint, hid, false);
+        });
     }
 }
 

@@ -463,6 +463,7 @@ public:
     virtual void on_leave_cluster(const gms::inet_address& endpoint, const locator::host_id& hid) override;
     virtual void on_up(const gms::inet_address& endpoint, locator::host_id hid) override;
     virtual void on_down(const gms::inet_address& endpoint, locator::host_id hid) override;
+    virtual void on_cql_change(const gms::inet_address& endpoint, locator::host_id hid, bool ready) override;
 
     virtual void on_client_routes_change(const service::client_routes_service::client_route_keys& client_route_keys) override;
 };

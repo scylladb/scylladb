@@ -52,6 +52,9 @@ public:
 
     virtual future<> on_alive(inet_address endpoint, locator::host_id id, endpoint_state_ptr state, permit_id) { return make_ready_future<>(); };
 
+    // Called after DRAINING is visible on all shards. Wait for queries selected before it and their background read replies.
+    virtual future<> on_draining(locator::host_id id, std::chrono::milliseconds timeout) { return make_ready_future<>(); }
+
     virtual future<> on_dead(inet_address endpoint, locator::host_id id, endpoint_state_ptr state, permit_id) { return make_ready_future<>(); };
 
     virtual future<> on_remove(inet_address endpoint, locator::host_id id, permit_id) { return make_ready_future<>(); };

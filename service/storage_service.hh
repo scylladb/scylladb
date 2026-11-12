@@ -627,6 +627,7 @@ public:
      */
     virtual future<> on_change(gms::inet_address endpoint, locator::host_id id, const gms::application_state_map& states, gms::permit_id) override;
     virtual future<> on_alive(gms::inet_address endpoint, locator::host_id id, gms::endpoint_state_ptr state, gms::permit_id) override;
+    virtual future<> on_draining(locator::host_id id, std::chrono::milliseconds timeout) override;
     virtual future<> on_dead(gms::inet_address endpoint, locator::host_id id, gms::endpoint_state_ptr state, gms::permit_id) override;
     virtual future<> on_remove(gms::inet_address endpoint, locator::host_id id, gms::permit_id) override;
     virtual future<> on_restart(gms::inet_address endpoint, locator::host_id id, gms::endpoint_state_ptr state, gms::permit_id) override;
@@ -790,10 +791,9 @@ public:
     future<mode> get_operation_mode();
 
     /**
-     * Shuts node off to writes, empties memtables and the commit log.
-     * There are two differences between drain and the normal shutdown hook:
-     * - Drain waits for in-progress streaming to complete
-     * - Drain flushes *all* columnfamilies (shutdown hook only flushes non-durable CFs)
+     * Stops client and internode traffic, drains local services, and flushes memtables.
+     * Shares its operation and result with process shutdown. A drained node must
+     * restart before serving requests again.
      */
     future<> drain();
 
@@ -809,8 +809,10 @@ public:
         return _isolated;
     }
 private:
-    promise<> _drain_finished;
+    std::optional<shared_future<>> _drain_finished;
     std::optional<shared_future<>> _transport_stopped;
+    // One operation and one result for REST drain and process shutdown, on shard 0.
+    future<> start_drain();
     future<> do_drain();
     /**
      * Seed data to the endpoints that will be responsible for it at the future

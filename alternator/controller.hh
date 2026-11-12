@@ -104,6 +104,7 @@ public:
     virtual sstring protocol_version() const override;
     virtual std::vector<socket_address> listen_addresses() const override;
     virtual future<> start_server() override;
+    virtual future<> stop_accepting_requests() override;
     virtual future<> stop_server() override;
     virtual future<> request_stop_server() override;
     // This virtual function is called (on each shard separately) when the

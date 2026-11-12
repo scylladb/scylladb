@@ -749,6 +749,7 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::GOSSIP_DIGEST_SYN:
     case messaging_verb::GOSSIP_DIGEST_ACK:
     case messaging_verb::GOSSIP_DIGEST_ACK2:
+    case messaging_verb::GOSSIP_PREPARE_SHUTDOWN:
     case messaging_verb::GOSSIP_SHUTDOWN:
     case messaging_verb::GOSSIP_ECHO:
     case messaging_verb::GOSSIP_GET_ENDPOINT_STATES:

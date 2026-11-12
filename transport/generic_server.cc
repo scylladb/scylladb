@@ -166,7 +166,7 @@ future<> connection::process_until_tenant_switch() {
     _tenant_switch = false;
     {
         return do_until([this] {
-            return _read_buf.eof() || _tenant_switch;
+            return _server._gate.is_closed() || _read_buf.eof() || _tenant_switch;
         }, [this] {
             return process_request();
         });
@@ -177,7 +177,7 @@ future<> connection::process()
 {
     return with_gate(_pending_requests_gate, [this] {
         return do_until([this] {
-            return _read_buf.eof();
+            return _server._gate.is_closed() || _read_buf.eof();
         }, [this] {
             return _execute_under_current_tenant([this] {
                 return process_until_tenant_switch();
@@ -260,16 +260,20 @@ server::server(const sstring& server_name, logging::logger& logger, config cfg)
 
 future<> server::stop() {
     co_await shutdown();
-    co_await std::exchange(_all_connections_stopped, make_ready_future<>());
+    co_await _all_connections_stopped.get_future();
 }
 
-future<> server::shutdown() {
-    if (_gate.is_closed()) {
-        co_return;
+future<> server::stop_accepting_requests() {
+    if (!_request_admission_stopped) {
+        promise<> stopped;
+        _request_admission_stopped.emplace(stopped.get_future());
+        do_stop_accepting_requests().forward_to(std::move(stopped));
     }
+    return _request_admission_stopped->get_future();
+}
 
-    shared_future<> connections_stopped{_gate.close()};
-    _all_connections_stopped = connections_stopped.get_future();
+future<> server::do_stop_accepting_requests() {
+    _all_connections_stopped = shared_future<>(_gate.close());
 
      // Stop all listeners.
     size_t nr = 0;
@@ -290,11 +294,24 @@ future<> server::shutdown() {
             connection.shutdown_output();
         }
     });
+}
+
+future<> server::shutdown() {
+    if (!_shutdown_finished) {
+        promise<> stopped;
+        _shutdown_finished.emplace(stopped.get_future());
+        do_shutdown().forward_to(std::move(stopped));
+    }
+    return _shutdown_finished->get_future();
+}
+
+future<> server::do_shutdown() {
+    co_await stop_accepting_requests();
 
     // Wait for the remaining requests to finish.
     _logger.debug("Waiting for connections to stop");
     try {
-        co_await connections_stopped.get_future(seastar::lowres_clock::now() + _shutdown_timeout);
+        co_await _all_connections_stopped.get_future(seastar::lowres_clock::now() + _shutdown_timeout);
     } catch (const timed_out_error& _) {
         _logger.info("Timed out waiting for connections shutdown.");
     }
