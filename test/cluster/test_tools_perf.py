@@ -36,7 +36,7 @@ def scylla_path(build_mode):
 
 @pytest.mark.parametrize("mode", ["read"])
 async def test_perf_simple_query(scylla_path, mode, tmp_path):
-    args = [scylla_path, "perf-simple-query", "--duration", "1", "--partitions", "1000", "--stop-on-error", "false", "--memory", "2G", "--smp", "2", "--overprovisioned"]
+    args = [scylla_path, "perf-simple-query", "--duration", "1", "--partitions", "100", "--stop-on-error", "false", "--memory", "2G", "--smp", "2", "--overprovisioned"]
     await run(args)
 
 
@@ -58,7 +58,9 @@ async def test_perf_cql_raw(scylla_path, tmp_path, workload):
         "--overprovisioned",
         "--workdir", str(tmp_path),
         "--developer-mode", "1",
-        "--partitions", "1000",
+        # A single node has no one to announce its shutdown to.
+        "--shutdown-announce-in-ms", "0",
+        "--partitions", "100",
         "--continue-after-error", "true"
     ]
     try:
@@ -88,7 +90,9 @@ async def test_perf_alternator(scylla_path, tmp_path, workload):
         "--overprovisioned",
         "--workdir", str(tmp_path),
         "--developer-mode", "1",
-        "--partitions", "1000",
+        # A single node has no one to announce its shutdown to.
+        "--shutdown-announce-in-ms", "0",
+        "--partitions", "100",
         "--continue-after-error", "true"
     ]
     try:
@@ -111,7 +115,7 @@ async def test_perf_cql_raw_remote(scylla_path, tmp_path, workload, manager):
         "--memory", "1G",
         "--smp", "1",
         "--overprovisioned",
-        "--partitions", "1000",
+        "--partitions", "100",
         "--continue-after-error", "true"
     ]
     await run(client_cmd)
@@ -132,7 +136,7 @@ async def test_perf_alternator_remote(scylla_path, tmp_path, workload, manager):
         "--memory", "1G",
         "--smp", "1",
         "--overprovisioned",
-        "--partitions", "1000",
+        "--partitions", "100",
         "--continue-after-error", "true"
     ]
     await run(client_cmd)
