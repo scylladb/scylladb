@@ -1515,6 +1515,49 @@ static std::optional<double> sum_s3_metric(const sstring& metric_name) {
     return total;
 }
 
+static double s3_delete_requests() {
+    return sum_s3_metric("s3_total_delete_requests").value_or(0);
+}
+
+// The jumbo sink starts its own multipart upload only when it hands the first
+// piece over. If the abort comes before that, the start fails, and the piece,
+// which already has a multipart upload of its own, must still be closed: close()
+// is what drains the piece's part uploads in flight and aborts its upload.
+// Dropping the piece without it left the upload in the bucket, or, with a part
+// upload still holding the piece's gate, failed the gate's assertion.
+SEASTAR_THREAD_TEST_CASE(test_client_jumbo_upload_abort_before_first_piece_s3) {
+    s3_test_fixture guard(make_s3_client);
+    auto cln = guard.client();
+    const auto name = guard.object_path("testabortedfirstpieceobject");
+
+    seastar::abort_source as;
+    // Two parts per piece, so that the part written below starts the piece's
+    // multipart upload but does not fill the piece.
+    auto out = output_stream<char>(cln->make_upload_jumbo_sink(name, s3::object_metadata{}, 2, &as));
+
+    static constexpr size_t chunk_size = 1_MiB;
+    auto rnd = tests::random::get_bytes(chunk_size);
+    for (size_t written = 0; written <= s3::minimum_part_size; written += chunk_size) {
+        out.write(reinterpret_cast<char*>(rnd.begin()), rnd.size()).get();
+    }
+
+    const auto deletes_before = s3_delete_requests();
+    as.request_abort_ex(upload_cancelled_marker{});
+
+    // The flush hands the piece over, and the jumbo sink cannot start its own
+    // upload with the aborted abort source.
+    BOOST_REQUIRE_EXCEPTION(out.flush().get(), std::exception, [](const std::exception& ex) {
+        return std::string_view(ex.what()).find("upload_cancelled_marker") != std::string_view::npos;
+    });
+    // The only DELETE is the abort of the piece's multipart upload: the jumbo
+    // sink has no upload to abort, and no piece object was created to remove.
+    BOOST_REQUIRE_EQUAL(s3_delete_requests() - deletes_before, 1);
+
+    // Closing flushes the sink once more, and that flush fails with the
+    // aborted abort source too.
+    out.close().handle_exception([] (std::exception_ptr) {}).get();
+}
+
 // An exception leaving the reply handler makes seastar's http client drop the
 // connection, so reporting a missing object must not raise one.
 void do_test_client_object_absent(const client_maker_function& client_maker) {
