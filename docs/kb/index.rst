@@ -15,7 +15,6 @@ Knowledge Base
 
   * :doc:`ScyllaDB Seed Nodes </kb/seed-nodes>` - Introduction on the purpose and role of Seed Nodes in ScyllaDB as well as configuration tips.
   * :doc:`Compaction </kb/compaction>` - To free up disk space and speed up reads, ScyllaDB must do compaction operations.
-  * :doc:`POSIX networking for ScyllaDB </kb/posix>` - ScyllaDB's POSIX mode works on all physical and virtual network devices and is useful for development work.
   * :doc:`Run ScyllaDB as a custom user:group </kb/custom-user>` - Configure the ScyllaDB and supporting services to run as a custom user:group.
   * :doc:`How to Set up a Swap Space Using a File </kb/set-up-swap>` - Outlines the steps you need to take to set up a swap space.
 
