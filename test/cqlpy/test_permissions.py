@@ -1569,3 +1569,93 @@ def test_create_role_with_invalid_hashed_password(cql):
             cql.execute(f"CREATE ROLE {role} WITH LOGIN = true AND HASHED PASSWORD = 'this_is_an_invalid_hash'")
     finally:
         cql.execute(f"DROP ROLE IF EXISTS {role}")
+
+@contextmanager
+def new_roles(cql, count):
+    """`count` new roles that may not log in, dropped on exit."""
+    roles = [unique_name() for _ in range(count)]
+    for role in roles:
+        cql.execute(f"CREATE ROLE {role}")
+    try:
+        yield roles
+    finally:
+        for role in roles:
+            cql.execute(f"DROP ROLE IF EXISTS {role}")
+
+def listed_permissions(session, query):
+    return {(row.role, row.resource, row.permission) for row in session.execute(query)}
+
+def creator_permissions_on_role(role):
+    return {(cql_superuser, f"<role {role}>", p) for p in ("ALTER", "DROP", "AUTHORIZE")}
+
+# The superuser cqlpy logs in as, who is granted permissions on what it creates.
+cql_superuser = "cassandra"
+
+# LIST PERMISSIONS, run by a superuser and by a role listing its own permissions
+# or those of a role granted to it.
+# Ported from dtest's auth_roles_test.py::TestAuthRoles::test_list_permissions.
+def test_list_permissions(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "id int PRIMARY KEY, val int") as table, \
+            new_user(cql) as mike, new_roles(cql, 3) as (role1, role2, role3):
+        table_resource = f"<table {table}>"
+        cql.execute(f"GRANT SELECT ON TABLE {table} TO {role1}")
+        cql.execute(f"GRANT ALTER ON TABLE {table} TO {role2}")
+        cql.execute(f"GRANT MODIFY ON TABLE {table} TO {mike}")
+        cql.execute(f"GRANT ALTER ON ROLE {role1} TO {role2}")
+        cql.execute(f"GRANT {role1} TO {role2}")
+        cql.execute(f"GRANT {role2} TO {mike}")
+
+        role1_permissions = {(role1, table_resource, "SELECT")}
+        role2_permissions = role1_permissions | {(role2, table_resource, "ALTER"), (role2, f"<role {role1}>", "ALTER")}
+        mike_permissions = role2_permissions | {(mike, table_resource, "MODIFY")}
+
+        # Other tests share this cluster, so everyone's permissions include theirs.
+        all_permissions = listed_permissions(cql, "LIST ALL PERMISSIONS")
+        assert mike_permissions <= all_permissions
+        assert creator_permissions_on_role(role1) <= all_permissions
+        assert {p for p in all_permissions if p[0] in (mike, role1, role2, role3)} == mike_permissions
+
+        assert listed_permissions(cql, f"LIST ALL PERMISSIONS OF {role1}") == role1_permissions
+        # Includes the permissions of the roles granted to it.
+        assert listed_permissions(cql, f"LIST ALL PERMISSIONS OF {role2}") == role2_permissions
+
+        # Permissions on a resource, whoever holds them.
+        assert listed_permissions(cql, f"LIST ALL PERMISSIONS ON ROLE {role1}") == \
+            creator_permissions_on_role(role1) | {(role2, f"<role {role1}>", "ALTER")}
+        # DROP on role1 was not granted to anyone, so only its creator holds it.
+        assert listed_permissions(cql, f"LIST DROP PERMISSION ON ROLE {role1}") == \
+            {(cql_superuser, f"<role {role1}>", "DROP")}
+        assert listed_permissions(cql, f"LIST ALTER PERMISSION ON ROLE {role1}") == \
+            {(cql_superuser, f"<role {role1}>", "ALTER"), (role2, f"<role {role1}>", "ALTER")}
+        assert listed_permissions(cql, f"LIST ALTER PERMISSION ON ROLE {role1} OF {role2}") == \
+            {(role2, f"<role {role1}>", "ALTER")}
+        assert listed_permissions(cql, f"LIST ALTER PERMISSION ON ROLE {role1} OF {role3}") == set()
+        assert listed_permissions(cql, f"LIST ALL PERMISSIONS ON {table} OF {mike}") == \
+            {p for p in mike_permissions if p[1] == table_resource}
+
+        # A role lists its own permissions.
+        with new_session(cql, mike) as mike_session:
+            assert listed_permissions(mike_session, f"LIST ALL PERMISSIONS OF {mike}") == mike_permissions
+
+# A role that is not a superuser may list only its own permissions and those of
+# the roles granted to it.
+# Ported from dtest's auth_roles_test.py::TestAuthRoles::test_list_permissions_validation.
+def test_list_permissions_validation(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "id int PRIMARY KEY, val int") as table, \
+            new_user(cql) as mike, new_user(cql) as john, new_roles(cql, 2) as (role1, role2):
+        table_resource = f"<table {table}>"
+        cql.execute(f"GRANT SELECT ON TABLE {table} TO {role1}")
+        cql.execute(f"GRANT ALTER ON TABLE {table} TO {role2}")
+        cql.execute(f"GRANT MODIFY ON TABLE {table} TO {john}")
+        cql.execute(f"GRANT {role1} TO {role2}")
+        cql.execute(f"GRANT {role2} TO {mike}")
+
+        with new_session(cql, mike) as mike_session:
+            assert listed_permissions(mike_session, f"LIST ALL PERMISSIONS OF {role2}") == \
+                {(role1, table_resource, "SELECT"), (role2, table_resource, "ALTER")}
+            assert listed_permissions(mike_session, f"LIST ALL PERMISSIONS OF {role1}") == \
+                {(role1, table_resource, "SELECT")}
+            with pytest.raises(Unauthorized, match="You are not authorized to view everyone's permissions"):
+                mike_session.execute("LIST ALL PERMISSIONS")
+            with pytest.raises(Unauthorized, match=f"You are not authorized to view {john}'s permissions"):
+                mike_session.execute(f"LIST ALL PERMISSIONS OF {john}")
