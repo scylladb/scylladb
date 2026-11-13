@@ -25,10 +25,16 @@
 #include "locator/tablet_metadata_guard.hh"
 #include "utils/chunked_vector.hh"
 #include "utils/disk_space_monitor.hh"
+#include "sstables/shared_sstable.hh"
+#include <unordered_set>
 
 using namespace seastar;
 
 class row_level_repair_gossip_helper;
+
+namespace sstables {
+class sstable_set;
+}
 
 namespace service {
 struct topology_state_machine;
@@ -272,6 +278,18 @@ private:
 
 public:
     future<gc_clock::time_point> repair_tablet(gms::gossip_address_map& addr_map, locator::tablet_metadata_guard& guard, locator::global_tablet_id gid, tasks::task_info global_tablet_repair_task_info, service::frozen_topology_guard topo_guard, std::optional<locator::tablet_replica_set> rebuild_replicas, locator::tablet_transition_stage stage, service::tablet_repair_flush_info flush);
+    // The two halves of a tablet's incremental repair on a replica, see
+    // capture_sstables_for_incremental_repair() in row_level.cc.
+    struct incremental_repair_capture {
+        lw_shared_ptr<sstables::sstable_set> sst_set;
+        uint64_t skipped_bytes = 0;
+        uint64_t read_bytes = 0;
+    };
+    future<incremental_repair_capture> capture_sstables_for_incremental_repair(replica::table& table, locator::global_tablet_id gid,
+            dht::token_range range, int64_t sstables_repaired_at, bool full, bool for_tablet_rebuild, service::frozen_topology_guard topo_guard);
+    future<std::unordered_map<sstables::shared_sstable, sstables::shared_sstable>> rewrite_sstables_repaired_at(replica::table& table,
+            dht::token_range range, const std::vector<sstables::shared_sstable>& candidates, int64_t sstables_repaired_at,
+            service::frozen_topology_guard topo_guard);
 
 private:
     struct tablet_repair_result {
