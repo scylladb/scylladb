@@ -26,7 +26,6 @@
 #include "service/client_state.hh"
 #include "service/qos/service_level_controller.hh"
 #include "utils/assert.hh"
-#include "timeout_config.hh"
 #include "utils/rjson.hh"
 #include "auth.hh"
 #include <cctype>
@@ -867,10 +866,12 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
         co_return api_error::unknown_operation(fmt::format("Unsupported operation {}", op));
     }
     executor::client_state client_state(service::client_state::external_tag(),
-        _auth_service, &_sl_controller, _timeout_config.current_values(), req->get_client_address());
+        _auth_service, &_sl_controller, executor::default_timeout_config(), req->get_client_address());
     if (!username.empty()) {
         client_state.set_login(auth::authenticated_user(username));
     }
+    // If the role's service level has a timeout, it replaces the timeouts
+    // from default_timeout_config().
     client_state.maybe_update_per_service_level_params();
 
     tracing::trace_state_ptr trace_state = maybe_trace_query(client_state, username, op, content, _max_users_query_size_in_trace_output.get());
@@ -930,7 +931,7 @@ void server::set_routes(routes& r) {
 //FIXME: A way to immediately invalidate the cache should be considered,
 // e.g. when the system table which stores the keys is changed.
 // For now, this propagation may take up to 1 minute.
-server::server(executor& exec, service::storage_proxy& proxy, gms::gossiper& gossiper, auth::service& auth_service, qos::service_level_controller& sl_controller, updateable_timeout_config& timeout_config)
+server::server(executor& exec, service::storage_proxy& proxy, gms::gossiper& gossiper, auth::service& auth_service, qos::service_level_controller& sl_controller)
         : _http_server("http-alternator")
         , _https_server("https-alternator")
         , _executor(exec)
@@ -983,7 +984,6 @@ server::server(executor& exec, service::storage_proxy& proxy, gms::gossiper& gos
         , _max_users_query_size_in_trace_output(1024)
         , _enabled_servers{}
         , _pending_requests("alternator::server::pending_requests")
-        , _timeout_config(timeout_config)
       , _callbacks{
         {"CreateTable", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
             return e.create_table(client_state, std::move(trace_state), std::move(permit), std::move(json_request), audit_info);

@@ -38,7 +38,6 @@ controller::controller(
         sharded<auth::service>& auth_service,
         sharded<qos::service_level_controller>& sl_controller,
         sharded<vector_search::vector_store_client>& vsc,
-        sharded<updateable_timeout_config>& timeout_config,
         const db::config& config,
         seastar::scheduling_group sg)
     : protocol_server(sg)
@@ -53,7 +52,6 @@ controller::controller(
     , _auth_service(auth_service)
     , _sl_controller(sl_controller)
     , _vsc(vsc)
-    , _timeout_config(timeout_config)
     , _config(config)
 {
 }
@@ -101,7 +99,7 @@ future<> controller::start_server() {
         _executor.start(std::ref(_gossiper), std::ref(_proxy), std::ref(_dicts), std::ref(_mm), std::ref(_sys_dist_ks), std::ref(_sys_ks),
                         sharded_parameter(get_cdc_metadata, std::ref(_cdc_gen_svc)), std::ref(_vsc), _ssg.value(),
                         sharded_parameter(get_timeout_in_ms, std::ref(_config))).get();
-        _server.start(std::ref(_executor), std::ref(_proxy), std::ref(_gossiper), std::ref(_auth_service), std::ref(_sl_controller), std::ref(_timeout_config)).get();
+        _server.start(std::ref(_executor), std::ref(_proxy), std::ref(_gossiper), std::ref(_auth_service), std::ref(_sl_controller)).get();
         // Note: from this point on, if start_server() throws for any reason,
         // it must first call stop_server() to stop the executor and server
         // services we just started - or Scylla will cause an assertion
