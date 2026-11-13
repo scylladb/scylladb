@@ -2621,9 +2621,9 @@ def test_export_error_injection_client_token_conflict_failure(cql, scylla_only, 
         assert not uploads, uploads
 
 
-# Test that a background fiber retries a failed write of the final state. While the write fails,
-# the export stays IN_PROGRESS. After the write succeeds, the export is COMPLETED.
-def test_export_error_injection_final_write_retried_in_background(dynamodb, scylla_only, rest_api, s3):
+# Test that the export fiber retries a failed write of the final state. While the write fails, the
+# export stays IN_PROGRESS. After the write succeeds, the export is COMPLETED.
+def test_export_error_injection_final_write_retried(dynamodb, scylla_only, rest_api, s3):
     injection = 'alternator_export_to_s3_final_write'
     with new_table_s(dynamodb) as table, new_s3_bucket(s3) as bucket:
         table.put_item(Item={'p': 'item'})
@@ -2635,8 +2635,8 @@ def test_export_error_injection_final_write_retried_in_background(dynamodb, scyl
                 TableArn=table_arn,
                 S3Bucket=bucket,
             )['ExportDescription']['ExportArn']
-            # The write of the export fiber fails, and one retry of the background fiber also
-            # fails. Thus the background fiber runs, and it does not give up the row.
+            # The write of the export fiber fails, and one retry also fails. Thus the fiber
+            # retries, and it does not give up the row.
             scylla_wait_for_injection_enters(rest_api, injection, 2)
             desc = client.describe_export(ExportArn=export_arn)['ExportDescription']
             assert desc['ExportStatus'] == 'IN_PROGRESS'
@@ -2647,9 +2647,9 @@ def test_export_error_injection_final_write_retried_in_background(dynamodb, scyl
         assert 'ExportManifest' in desc
         assert_listed_with_status(client, table_arn, export_arn, 'COMPLETED')
 
-        # The background fiber gives back the export slot. With a limit of one export per shard,
-        # a new export on the same shard is accepted only after that. The fiber gives the slot
-        # back shortly after the write, so retry until the deadline.
+        # The export fiber gives back the export slot. With a limit of one export per shard, a new
+        # export on the same shard is accepted only after that. The fiber gives the slot back
+        # shortly after the write, so retry until the deadline.
         with scylla_config_temporary(dynamodb, 'alternator_max_concurrent_exports_per_shard', '1'):
             deadline = time.time() + 30
             while True:
@@ -2661,7 +2661,7 @@ def test_export_error_injection_final_write_retried_in_background(dynamodb, scyl
                     break
                 except ClientError as e:
                     assert e.response['Error']['Code'] == 'LimitExceededException', e
-                    assert time.time() < deadline, 'The background fiber did not give back the export slot within 30s'
+                    assert time.time() < deadline, 'The export fiber did not give back the export slot within 30s'
                     time.sleep(0.05)
             assert wait_for_export(client, export_arn)['ExportStatus'] == 'COMPLETED'
 

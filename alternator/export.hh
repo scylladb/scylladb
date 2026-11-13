@@ -214,8 +214,8 @@ class executor::s3_exports {
     // stop() aborts it before it closes _gate, to stop the exports early.
     seastar::abort_source _as;
     // The number of export fibers running on this shard, see try_reserve_export_slot().
-    // A fiber of finish_export_in_background() also counts. It holds the slot
-    // of its export until it writes the terminal state. Until then
+    // A fiber of finish_export_in_background() also counts. A fiber holds the
+    // slot of its export until it writes the terminal state. Until then
     // DescribeExport still reports that export as IN_PROGRESS.
     size_t _running_exports = 0;
     // The time of the next periodic garbage collection round. The first value
@@ -270,13 +270,13 @@ public:
     future<> run_garbage_collector();
     // Starts a background fiber that does the export of `row`. The fiber
     // writes the result to the export row and holds `export_slot` until it
-    // finishes. If that write fails, the fiber passes the row and the slot
-    // to finish_export_in_background().
+    // finishes. It retries that write until the write applies or the node
+    // stops.
     void start_export(slot export_slot, schema_ptr schema, export_row row, std::string table_arn, std::string s3_bucket,
             std::string s3_prefix);
     // Starts a background fiber that writes the terminal state of `row`.
-    // It retries until the write succeeds or the node stops. Use it when
-    // that write fails and the caller cannot wait. The garbage collector
+    // It retries until the write succeeds or the node stops. The request
+    // path uses it when that write fails, because the request cannot wait. The garbage collector
     // does not collect IN_PROGRESS rows of the current incarnation, so
     // this node must finish them.
     // The fiber never gives up the write. It keeps `export_slot`, which the
