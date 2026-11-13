@@ -1,6 +1,10 @@
 ### a dictionary of redirections
 #old path: new path
 
+# Remove the KB about upgrading from experimental CDC (ScyllaDB 4.3)
+
+/stable/kb/cdc-experimental-upgrade.html: /stable/kb/index.html
+
 # Move the Upgrade Support (About Upgrade) page
 
 /stable/upgrade/about-upgrade.html: https://docs.scylladb.com/stable/versioning/upgrade-policy.html 
