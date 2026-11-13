@@ -41,7 +41,9 @@ static cells_map contents(const block& b) {
         BOOST_REQUIRE(b.contains(e.slot));
         BOOST_REQUIRE_EQUAL(linearized_cell(e.cell), linearized_cell(b.cell(e.slot)));
         BOOST_REQUIRE_EQUAL((e.external_storage != nullptr), b.is_external(e.slot));
-        ret.emplace(e.slot, std::pair(linearized_cell(e.cell), e.hash));
+        BOOST_REQUIRE_EQUAL(e.hash != nullptr, e.cell.size() >= block::hashed_cell_min_size);
+        BOOST_REQUIRE_EQUAL(e.hash != nullptr, b.hash(e.slot) != nullptr);
+        ret.emplace(e.slot, std::pair(linearized_cell(e.cell), e.hash_value()));
     });
     return ret;
 }
@@ -67,7 +69,8 @@ static block_ptr build_block(std::vector<std::pair<unsigned, size_t>> slots_and_
     for (auto [slot, size] : slots_and_sizes) {
         auto cell = make_cell(size, slot);
         auto hash = slot % 2 ? cell_hash_opt(cell_hash{slot + 1}) : cell_hash_opt();
-        expected.emplace(slot, std::pair(linearized_cell(managed_bytes_view(cell)), hash));
+        // Cells too small for a hash slot drop their hash.
+        expected.emplace(slot, std::pair(linearized_cell(managed_bytes_view(cell)), size >= block::hashed_cell_min_size ? hash : cell_hash_opt()));
         bld.add_copy(slot, managed_bytes_view(cell), hash);
     }
     return bld.build();
@@ -181,14 +184,40 @@ SEASTAR_THREAD_TEST_CASE(test_any_slot_order) {
 SEASTAR_THREAD_TEST_CASE(test_in_place_modification) {
     cells_map expected;
     auto b = build_block({{0, 20}, {2, builder::inline_budget + 100}, {7, 30}}, expected);
-    b->hash(2) = cell_hash{42};
+    BOOST_REQUIRE(!b->hash(0));
+    *b->hash(2) = cell_hash{42};
     expected[2].second = cell_hash{42};
+    check_contents(*b, expected);
+    // Modifying a cell invalidates its hash.
     for (unsigned slot : {0, 2, 7}) {
         auto v = b->mutable_cell(slot);
         v.current_fragment()[0] = 'x';
         expected[slot].first[0] = 'x';
     }
+    expected[2].second = {};
     check_contents(*b, expected);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_hash_slots_only_for_large_cells) {
+    constexpr auto min = block::hashed_cell_min_size;
+    for (unsigned big : {0u, 1u, 3u, nr_cells}) {
+        cells_map expected;
+        std::vector<std::pair<unsigned, size_t>> cells;
+        for (unsigned slot = 0; slot < nr_cells; ++slot) {
+            cells.emplace_back(slot, slot < big ? min + slot : min - 1 - slot);
+        }
+        auto b = build_block(cells, expected);
+        BOOST_REQUIRE_EQUAL(std::popcount(b->hashed()), big);
+        size_t inline_size = 0;
+        for (auto& [slot, size] : cells) {
+            inline_size += size;
+        }
+        BOOST_REQUIRE_EQUAL(b->storage_size(), block::storage_size_for(nr_cells, 0, big, inline_size));
+        check_contents(*b, expected);
+        auto c = b->clone();
+        check_contents(*c, expected);
+        BOOST_REQUIRE_EQUAL(c->storage_size(), b->storage_size());
+    }
 }
 
 // Reference model for tree tests: block index -> contents.
@@ -314,7 +343,7 @@ SEASTAR_THREAD_TEST_CASE(test_tree_move_and_clone) {
     auto t3 = t2.clone([] (const block& b) {
         builder bld;
         b.for_each_cell([&] (const block::cell_entry& e) {
-            bld.add_borrowed(e.slot, e.cell, e.hash);
+            bld.add_borrowed(e.slot, e.cell, e.hash_value());
         });
         return bld.build();
     });
@@ -339,9 +368,10 @@ SEASTAR_THREAD_TEST_CASE(test_lsa_migration) {
             }
             // In-place modifications survive compaction.
             auto* b = trees.back().find_block(0);
-            b->hash(b->present() & 1 ? 0 : std::countr_zero(b->present())) = cell_hash{7};
-            auto first_slot = std::countr_zero(b->present());
-            model[0][first_slot].second = cell_hash{7};
+            BOOST_REQUIRE(b->hashed());
+            auto hashed_slot = std::countr_zero(b->hashed());
+            *b->hash(hashed_slot) = cell_hash{7};
+            model[0][hashed_slot].second = cell_hash{7};
             region.full_compaction();
             check_tree(trees.back(), model);
         }

@@ -734,8 +734,9 @@ void appending_hash<row>::operator()(Hasher& h, const row& cells, const schema& 
         if (def.is_atomic()) {
             max_ts.update(cell_and_hash->cell.as_atomic_cell(def).timestamp());
             if constexpr (query::using_hash_of_hash_v<Hasher>) {
-                if (cell_and_hash->hash) {
-                    feed_hash(h, *cell_and_hash->hash);
+                auto ch = cell_and_hash->cached_hash();
+                if (ch) {
+                    feed_hash(h, *ch);
                 } else {
                     Hasher cellh;
                     feed_hash(cellh, cell_and_hash->cell.as_atomic_cell(def), def);
@@ -748,8 +749,9 @@ void appending_hash<row>::operator()(Hasher& h, const row& cells, const schema& 
             auto cm = cell_and_hash->cell.as_collection_mutation();
             max_ts.update(cm.last_update(*def.type));
             if constexpr (query::using_hash_of_hash_v<Hasher>) {
-                if (cell_and_hash->hash) {
-                    feed_hash(h, *cell_and_hash->hash);
+                auto ch = cell_and_hash->cached_hash();
+                if (ch) {
+                    feed_hash(h, *ch);
                 } else {
                     Hasher cellh;
                     feed_hash(cellh, cm, def);
@@ -766,23 +768,29 @@ template void appending_hash<row>::operator()<xx_hasher>(xx_hasher& h, const row
 
 cell_hash_opt row::cell_hash_for(column_id id) const {
     auto cah = find_cell_and_hash(id);
-    return cah ? cah->hash : cell_hash_opt();
+    return cah ? cah->cached_hash() : cell_hash_opt();
 }
 
 void row::prepare_hash(const schema& s, column_kind kind) const {
     // const to avoid removing const qualifiers on the read path
-    for_each_cell([&s, kind] (column_id id, const cell_and_hash_view& c_a_h) {
-        if (!c_a_h.hash) {
-            query::default_hasher cellh;
-            feed_hash(cellh, c_a_h.cell, s.column_at(kind, id));
-            c_a_h.hash = cell_hash{cellh.finalize_uint64()};
+    _cells.for_each_block([&s, kind] (block_index_type block_index, const block_type& block) {
+        for (auto m = block.hashed(); m; m &= m - 1) {
+            auto slot = std::countr_zero(m);
+            auto* hash = block.hash(slot);
+            if (!*hash) {
+                query::default_hasher cellh;
+                feed_hash(cellh, atomic_cell_or_collection_view(block.cell(slot)), s.column_at(kind, column_of(block_index, slot)));
+                *hash = cell_hash{cellh.finalize_uint64()};
+            }
         }
     });
 }
 
 void row::clear_hash() const {
-    for_each_cell([] (column_id, const cell_and_hash_view& c_a_h) {
-        c_a_h.hash = { };
+    _cells.for_each_block([] (block_index_type, const block_type& block) {
+        for (auto m = block.hashed(); m; m &= m - 1) {
+            *block.hash(std::countr_zero(m)) = { };
+        }
     });
 }
 
@@ -1150,7 +1158,7 @@ row::put_cell(column_id id, managed_bytes_view value, managed_bytes* stealable, 
                     return;
                 }
             }
-            builder.add_borrowed(e.slot, e.cell, e.hash, e.external_storage);
+            builder.add_borrowed(e.slot, e.cell, e.hash_value(), e.external_storage);
         });
     }
     if (!added) {
@@ -1238,7 +1246,7 @@ row::cell_appender::flush() {
             if (_builder.slots() & mask_bit<block_type::mask_type>(e.slot)) {
                 on_internal_error(mplog, format("row::cell_appender: column {} is already set", column_of(_block_index, e.slot)));
             }
-            _builder.add_borrowed(e.slot, e.cell, e.hash, e.external_storage);
+            _builder.add_borrowed(e.slot, e.cell, e.hash_value(), e.external_storage);
         });
     }
     auto new_block = _builder.build();
@@ -1276,7 +1284,7 @@ row::merge_block(const schema& s, column_kind kind, block_index_type block_index
 
     atomic_cell_or_collection_block_builder builder;
     auto add_theirs = [&] (unsigned slot) {
-        builder.add_borrowed(slot, other_block.cell(slot), other_block.hash(slot), steal ? other_block.external_storage(slot) : nullptr);
+        builder.add_borrowed(slot, other_block.cell(slot), other_block.hash_value(slot), steal ? other_block.external_storage(slot) : nullptr);
     };
 
     if (!this_block) {
@@ -1349,7 +1357,7 @@ row::merge_block(const schema& s, column_kind kind, block_index_type block_index
         } else if (!(ours & bit) || (theirs_win & bit)) {
             add_theirs(slot);
         } else {
-            builder.add_borrowed(slot, this_block->cell(slot), this_block->hash(slot), this_block->external_storage(slot));
+            builder.add_borrowed(slot, this_block->cell(slot), this_block->hash_value(slot), this_block->external_storage(slot));
         }
     }
     auto new_block = builder.build();
@@ -1886,7 +1894,7 @@ compact_and_expire_result row::compact_and_expire(
                 changed = true;
                 for (auto m = kept_before_change; m; m &= m - 1) {
                     auto slot = std::countr_zero(m);
-                    builder.add_borrowed(slot, block->cell(slot), block->hash(slot), block->external_storage(slot));
+                    builder.add_borrowed(slot, block->cell(slot), block->hash_value(slot), block->external_storage(slot));
                 }
             }
         };
@@ -1895,7 +1903,7 @@ compact_and_expire_result row::compact_and_expire(
             auto c = atomic_cell_or_collection_view(e.cell);
             auto keep = [&] {
                 if (changed) {
-                    builder.add_borrowed(e.slot, e.cell, e.hash, e.external_storage);
+                    builder.add_borrowed(e.slot, e.cell, e.hash_value(), e.external_storage);
                 } else {
                     kept_before_change |= mask_bit<block_type::mask_type>(e.slot);
                 }
