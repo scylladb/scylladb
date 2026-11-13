@@ -28,7 +28,7 @@ from cassandra.policies import FallthroughRetryPolicy
 from cassandra.pool import Host
 from cassandra.query import SimpleStatement
 
-from test.cluster.test_strong_consistency import DEFAULT_CMDLINE, DEFAULT_CONFIG, get_table_raft_group_id, wait_for_leader
+from test.cluster.test_strong_consistency import DEFAULT_CMDLINE, get_table_raft_group_id, wait_for_leader
 from test.cluster.util import ensure_raft_group_leader_on, new_test_keyspace, new_test_table, trigger_stepdown
 from test.pylib.internal_types import HostID, ServerInfo
 from test.pylib.rest_client import read_barrier
@@ -74,9 +74,9 @@ async def cluster_with_skewed_leader(manager: ScyllaClusterManager):
     """Set up a strongly consistent table whose raft group is led by a node with its clock an
     hour ahead. Of the two other replicas, only the new leader can ever take over: the third
     one never campaigns."""
-    old_leader, new_leader = await manager.servers_add(2, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE,
+    old_leader, new_leader = await manager.servers_add(2, cmdline=DEFAULT_CMDLINE,
                                                        auto_rack_dc='dc1')
-    third = await manager.server_add(config=DEFAULT_CONFIG | {'error_injections_at_startup': [AVOID_LEADERSHIP]},
+    third = await manager.server_add(config={'error_injections_at_startup': [AVOID_LEADERSHIP]},
                                      cmdline=DEFAULT_CMDLINE, property_file={'dc': 'dc1', 'rack': 'rack3'})
     cql, [old_leader_host, new_leader_host, _] = await manager.get_ready_cql([old_leader, new_leader, third])
 

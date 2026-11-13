@@ -15,7 +15,7 @@ from cassandra.policies import FallthroughRetryPolicy
 from cassandra.pool import Host
 from cassandra.query import SimpleStatement
 
-from test.cluster.test_strong_consistency import DEFAULT_CMDLINE, DEFAULT_CONFIG, expect_retry_before_timeout, \
+from test.cluster.test_strong_consistency import DEFAULT_CMDLINE, expect_retry_before_timeout, \
     get_table_raft_group_id, wait_for_leader
 from test.cluster.util import ensure_raft_group_leader_on, new_test_keyspace, new_test_table
 from test.pylib.internal_types import ServerInfo
@@ -25,7 +25,7 @@ from test.pylib.util import gather_safely, wait_for
 
 KEYSPACE_OPTS = ("WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}"
                  " AND tablets = {'initial': 1} AND consistency = 'global'")
-NO_QUORUM_CONFIG = DEFAULT_CONFIG | {'write_request_timeout_in_ms': 3000, 'read_request_timeout_in_ms': 3000}
+NO_QUORUM_CONFIG = {'write_request_timeout_in_ms': 3000, 'read_request_timeout_in_ms': 3000}
 WRITE_ERRORS = 'scylla_strong_consistency_coordinator_write_errors'
 READ_ERRORS = 'scylla_strong_consistency_coordinator_read_errors'
 READ_COUNT = 'scylla_strong_consistency_coordinator_read_latency_count'
@@ -110,7 +110,7 @@ async def test_all_replicas_down_fails_fast(manager: ScyllaClusterManager):
     as unavailable: it happens before the coordinator starts waiting for anything. Once the replicas
     are back, the acknowledged write is still there and the refused one left nothing.
     """
-    config = DEFAULT_CONFIG | {'write_request_timeout_in_ms': 10000, 'read_request_timeout_in_ms': 10000}
+    config = {'write_request_timeout_in_ms': 10000, 'read_request_timeout_in_ms': 10000}
     async with sc_table(manager, config) as (cql, host_of, table, (group_id, leader, followers, non_replica)):
         coordinator = host_of[non_replica]
         # Observe the server's Unavailable directly, without a retry exhausting the host-pinned query plan.

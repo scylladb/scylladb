@@ -12,6 +12,7 @@
 import pytest
 from cassandra.cluster import NoHostAvailable
 from cassandra.connection import DRIVER_NAME, DRIVER_VERSION
+from cassandra.protocol import ConfigurationException
 import json
 import os
 import subprocess
@@ -284,6 +285,27 @@ def skip_without_tablets(scylla_only, has_tablets):
 def skip_on_scylla_vnodes(cql, has_tablets):
     if is_scylla(cql) and not has_tablets:
         skip_env("Test needs tablets experimental feature on")
+
+# A keyspace whose tables are strongly consistent. The test is skipped on
+# Cassandra and with --vnodes, which don't support strongly consistent tables,
+# and on a build without the strongly-consistent-tables experimental feature
+# (such as an older release under --release). Any other error creating the
+# keyspace is a regression and fails the test.
+@pytest.fixture(scope="module")
+def sc_keyspace(cql, scylla_only, has_tablets):
+    if not has_tablets:
+        skip_env('Strongly consistent tables need a tablet based keyspace')
+    keyspace = unique_name()
+    try:
+        cql.execute(f"CREATE KEYSPACE {keyspace} WITH replication = "
+                    "{'class': 'NetworkTopologyStrategy', 'replication_factor': 1} "
+                    "AND tablets = {'initial': 1} AND consistency = 'global'")
+    except ConfigurationException as e:
+        if 'strongly_consistent_tables' not in str(e):
+            raise
+        skip_env('Strongly consistent tables need the strongly-consistent-tables feature on')
+    yield keyspace
+    cql.execute(f"DROP KEYSPACE {keyspace}")
 
 # Recent versions of Scylla deprecated the "WITH COMPACT STORAGE" feature,
 # but it can be enabled temporarily for a test. So to keep our old compact

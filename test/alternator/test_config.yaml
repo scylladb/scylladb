@@ -12,9 +12,6 @@ extra_scylla_cmdline_options:
   - '--tablets-initial-scale-factor=1'
 extra_scylla_config_options:
   {
-    experimental_features: [
-                             udf
-    ],
     alternator_port: 8000,
     query_tombstone_page_limit: 1000,
     alternator_write_isolation: only_rmw_uses_lwt,
