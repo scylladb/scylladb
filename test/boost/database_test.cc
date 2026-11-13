@@ -2480,6 +2480,82 @@ SEASTAR_TEST_CASE(test_tombstone_gc_state_gc_mode) {
     return make_ready_future<>();
 }
 
+// The range variant of gc_before must pass the lowest replay position of the
+// repair history entries it covers to the commitlog check, like the key variant
+// passes the position of the entry covering the key.
+SEASTAR_TEST_CASE(test_tombstone_gc_range_commitlog_check_replay_position) {
+    auto schema = schema_builder(this_smp_shard_count(), "ks", "tbl")
+        .with_column("pk", int32_type, column_kind::partition_key)
+        .with_tombstone_gc_options(tombstone_gc_options({{"mode", "repair"}, {"propagation_delay_in_seconds", "0"}}))
+        .build();
+
+    const auto now = gc_clock::now();
+    const auto repair_time = now - gc_clock::duration(std::chrono::hours(6));
+    // What the commitlog check returns when it has to consider every segment.
+    const auto commitlog_min_time = now - gc_clock::duration(std::chrono::hours(12));
+
+    std::vector<db::replay_position> seen_rps;
+    shared_tombstone_gc_state shared_state;
+    shared_state.set_gc_time_min_source([&] (const table_id&, const db::replay_position& rp) {
+        seen_rps.push_back(rp);
+        return rp.valid() ? gc_clock::time_point::max() : commitlog_min_time;
+    });
+
+    const auto range0 = dht::token_range::make({dht::token(-100), false}, {dht::token(0), true});
+    const auto range1 = dht::token_range::make({dht::token(0), false}, {dht::token(100), true});
+    const auto range2 = dht::token_range::make({dht::token(100), false}, {dht::token(200), true});
+    const auto range3 = dht::token_range::make({dht::token(200), false}, {dht::token(300), true});
+    const auto rp1 = db::replay_position(db::segment_id_type(2), 10);
+    const auto rp2 = db::replay_position(db::segment_id_type(1), 20);
+    shared_state.update_repair_time(schema->id(), range0, repair_time, std::nullopt);
+    shared_state.update_repair_time(schema->id(), range1, repair_time, rp1);
+    shared_state.update_repair_time(schema->id(), range2, repair_time, rp2);
+    shared_state.update_repair_time(schema->id(), range3, repair_time, std::nullopt);
+
+    const auto gc_state = tombstone_gc_state(shared_state);
+
+    // A range covered by entries with replay positions gets the lowest of them.
+    seen_rps.clear();
+    auto res = gc_state.get_gc_before_for_range(schema, dht::token_range::make(dht::token(50), dht::token(150)), now);
+    BOOST_REQUIRE_EQUAL(res.min_gc_before, repair_time);
+    BOOST_REQUIRE_EQUAL(res.max_gc_before, repair_time);
+    BOOST_REQUIRE(!seen_rps.empty());
+    for (const auto& rp : seen_rps) {
+        BOOST_REQUIRE(rp == std::min(rp1, rp2));
+    }
+
+    // A range within a single entry gets its position.
+    seen_rps.clear();
+    res = gc_state.get_gc_before_for_range(schema, dht::token_range::make(dht::token(10), dht::token(90)), now);
+    BOOST_REQUIRE_EQUAL(res.min_gc_before, repair_time);
+    BOOST_REQUIRE(res.knows_entire_range);
+    for (const auto& rp : seen_rps) {
+        BOOST_REQUIRE(rp == rp1);
+    }
+
+    // An entry without a replay position disables the filter for the whole range.
+    seen_rps.clear();
+    res = gc_state.get_gc_before_for_range(schema, dht::token_range::make(dht::token(150), dht::token(250)), now);
+    BOOST_REQUIRE_EQUAL(res.min_gc_before, commitlog_min_time);
+    BOOST_REQUIRE_EQUAL(res.max_gc_before, commitlog_min_time);
+    for (const auto& rp : seen_rps) {
+        BOOST_REQUIRE(!rp.valid());
+    }
+
+    // Same when the entry without a replay position precedes one with a
+    // position in token order: it must not be overridden by a later entry.
+    seen_rps.clear();
+    res = gc_state.get_gc_before_for_range(schema, dht::token_range::make(dht::token(-50), dht::token(50)), now);
+    BOOST_REQUIRE_EQUAL(res.min_gc_before, commitlog_min_time);
+    BOOST_REQUIRE_EQUAL(res.max_gc_before, commitlog_min_time);
+    BOOST_REQUIRE(!seen_rps.empty());
+    for (const auto& rp : seen_rps) {
+        BOOST_REQUIRE(!rp.valid());
+    }
+
+    return make_ready_future<>();
+}
+
 SEASTAR_TEST_CASE(test_tombstone_gc_rf_one) {
     return do_with_cql_env_thread([] (cql_test_env& env) {
         const std::string keyspace_name = get_name();
