@@ -77,13 +77,17 @@ public:
         return _current_dk;
     }
 
-    void set_current_dk(const dht::decorated_key& key);
-
-    void clear_current_dk();
+    // Sets or clears the current partition when mf starts or ends one.
+    void track_partition(const mutation_fragment& mf);
 
     void check_current_dk();
 
     void pause();
+
+private:
+    void set_current_dk(const dht::decorated_key& key);
+
+    void clear_current_dk();
 };
 
 template <> struct fmt::formatter<repair_reader::read_strategy>  : fmt::formatter<string_view> {
