@@ -24,6 +24,7 @@
 
 #include "crypt_sha512.hh"
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/preempt.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 
 /* SHA-512 from libcrypto, which picks the fastest implementation the CPU supports */
@@ -56,6 +57,18 @@ static void sha512_sum(struct sha512 *s, uint8_t *md)
 static void sha512_update(struct sha512 *s, const void *m, unsigned long len)
 {
 	s->failed |= EVP_DigestUpdate(s->ctx, m, len) != 1;
+}
+
+/*
+ * libcrypto's block functions may leave key-derived data, such as the
+ * message schedule, in their stack frames. Called from the frame which
+ * called libcrypto, this overwrites the stack below it, which those frames
+ * used.
+ */
+[[gnu::noinline]] static void scrub_stack()
+{
+	char buf[8192];
+	explicit_bzero(buf, sizeof buf);
 }
 
 static const unsigned char b64[] =
@@ -203,8 +216,13 @@ static seastar::future<char *> sha512crypt(const char *key, const char *setting,
 		else
 			hashmd(&ctx, klen, kmd);
 		sha512_sum(&ctx, md);
-		co_await seastar::coroutine::maybe_yield();
+		/* need_preempt() stays true until the task yields */
+		if (seastar::need_preempt()) {
+			scrub_stack();
+			co_await seastar::coroutine::maybe_yield();
+		}
 	}
+	scrub_stack();
 
 	if (ctx.failed) {
 		explicit_bzero(md, sizeof md);
