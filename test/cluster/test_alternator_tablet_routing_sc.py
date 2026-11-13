@@ -16,6 +16,7 @@ from test.alternator.test_tablet_routing import INFO_HEADER, VERSION_HEADER, SHO
 from test.cluster.test_alternator import alternator_config, unique_table_name
 from test.cluster.test_alternator_tablet_routing import cql_hint
 from test.cluster.test_strong_consistency import get_table_raft_group_id
+from test.cluster.test_strong_consistency_replicas_unavailable import down
 from test.cluster.util import ensure_raft_group_leader_on
 from test.pylib.rest_client import HTTPError, inject_error, read_barrier
 from test.pylib.tablets import get_all_tablet_replicas
@@ -222,16 +223,23 @@ async def test_sc_routing_remote_shard(manager):
                     block=version_block(info[2], 7, matching=False)))[1] == header
 
 
-async def test_sc_routing_nonreplica_uses_cached_leader(manager):
-    """A non-replica never asks another node; it uses a leader learned from CQL."""
-    servers = await manager.servers_add(2, config=CONFIG, cmdline=['--smp', '1'],
-        property_file=[{'dc': 'dc1', 'rack': f'r{i}'} for i in range(2)])
+async def test_sc_routing_nonreplica_uses_cached_leader(manager, build_mode):
+    """Cached and replica-local hints omit a leader already known to be down."""
+    config = CONFIG
+    if build_mode != 'release':
+        # Keep the old leader in the followers' Raft state after gossip marks
+        # it down. Bootstrap picks the first leader without waiting for a tick.
+        config = config | {'error_injections_at_startup': [
+            {'name': 'strongly-consistent-raft-group-tick-interval-in-ms', 'value': '20000'}]}
+    servers = await manager.servers_add(4, config=config, cmdline=['--smp', '1'],
+        property_file=[{'dc': 'dc1', 'rack': f'r{i % 3}'} for i in range(4)])
     await manager.disable_tablet_balancing()
-    async with sc_table(manager, servers, {'dc1': 1}, populate=False) as (name, ks):
+    async with sc_table(manager, servers, {'dc1': 3}, populate=False) as (name, ks):
         tablet, = await get_all_tablet_replicas(manager, servers[0], ks, name)
         ids = {str(await manager.get_host_id(server.server_id)): server for server in servers}
         owner = ids[str(tablet.replicas[0][0])]
-        contact = next(server for server in servers if server != owner)
+        replicas = {ids[str(host)] for host, _ in tablet.replicas}
+        contact = next(server for server in servers if server not in replicas)
         # A setup write through contact would cache the leader before the
         # first HTTP request. Populate only through the replica instead.
         cql = manager.get_cql()
@@ -252,6 +260,19 @@ async def test_sc_routing_nonreplica_uses_cached_leader(manager):
             assert (await request(session, contact, name, block=version_block(info[2], 7)))[1] is None
             assert (await request(session, contact, name,
                 block=version_block(info[2], 7, matching=False)))[1] == header
+            # Keep a read quorum after stopping the cached leader. An advisory
+            # hint must not direct clients to a host already known to be down.
+            if build_mode != 'release':
+                # Let the restarted node rediscover its leader at the normal pace.
+                await manager.server_update_config(ids[info[3][0][0]].server_id,
+                    config_options={'error_injections_at_startup': []})
+            async with down(manager, servers, [ids[info[3][0][0]]]):
+                assert await request(session, contact, name) == (expected, None)
+                if build_mode != 'release':
+                    follower = next(server for server in replicas if server != ids[info[3][0][0]])
+                    assert str(await manager.api.get_raft_leader(follower.ip_addr, group)) == info[3][0][0]
+                    assert await request(session, follower, name, consistent=False) == (expected, None)
+                    assert str(await manager.api.get_raft_leader(follower.ip_addr, group)) == info[3][0][0]
 
 
 async def test_sc_routing_local_shard_forwarding(manager):
