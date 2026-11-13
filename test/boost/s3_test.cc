@@ -18,7 +18,11 @@
 #include <seastar/core/file.hh>
 #include <seastar/core/fstream.hh>
 #include <seastar/core/sleep.hh>
+#include <seastar/core/shared_future.hh>
+#include <seastar/core/timer.hh>
 #include <seastar/http/exception.hh>
+#include <seastar/http/function_handlers.hh>
+#include <seastar/http/httpd.hh>
 #include <seastar/util/closeable.hh>
 #include <seastar/util/short_streams.hh>
 #include <seastar/core/units.hh>
@@ -39,6 +43,7 @@
 #include "utils/s3/utils/manip_s3.hh"
 #include "utils/exceptions.hh"
 #include "utils/hashers.hh"
+#include "utils/http.hh"
 #include "utils/s3/credentials_providers/aws_credentials_provider_chain.hh"
 #include "utils/s3/credentials_providers/instance_profile_credentials_provider.hh"
 #include "utils/s3/credentials_providers/sts_assume_role_credentials_provider.hh"
@@ -492,6 +497,228 @@ SEASTAR_THREAD_TEST_CASE(test_client_multipart_copy_upload_abort_minio) {
 
 SEASTAR_THREAD_TEST_CASE(test_client_multipart_copy_upload_abort_proxy) {
     do_test_client_multipart_upload_abort(make_proxy_client, true);
+}
+
+// Just enough of an S3 endpoint to start a multipart upload and take its parts,
+// which then never answers the DELETE that aborts the upload, like an endpoint
+// that has stopped responding.
+//
+// The first `failed_deletes` DELETEs are answered with a 500, which the client
+// retries; the ones after them are held until release().
+class unresponsive_to_abort_s3_server {
+    // seastar's routes do not delete their default handler, so the server owns it.
+    // Declared before _server, so that it outlives it.
+    std::unique_ptr<httpd::handler_base> _handler;
+    httpd::http_server _server{"s3_test_unresponsive_to_abort"};
+    shared_promise<> _released;
+    bool _is_released = false;
+    shared_promise<> _delete_held;
+    bool _is_delete_held = false;
+    unsigned _failed_deletes;
+    unsigned _deletes = 0;
+
+    future<std::unique_ptr<http::reply>> handle(std::unique_ptr<http::request> req, std::unique_ptr<http::reply> rep) {
+        if (req->_method == "POST" && req->has_query_param("uploads")) {
+            rep->write_body("xml", sstring("<InitiateMultipartUploadResult><UploadId>test-upload</UploadId></InitiateMultipartUploadResult>"));
+        } else if (req->_method == "PUT" && req->has_query_param("partNumber")) {
+            rep->add_header("ETag", "\"test-part\"");
+        } else if (req->_method == "DELETE" && req->has_query_param("uploadId")) {
+            if (++_deletes <= _failed_deletes) {
+                rep->set_status(http::reply::status_type::internal_server_error);
+                co_return rep;
+            }
+            if (!std::exchange(_is_delete_held, true)) {
+                _delete_held.set_value();
+            }
+            co_await _released.get_shared_future();
+            rep->set_status(http::reply::status_type::no_content);
+        } else {
+            rep->set_status(http::reply::status_type::bad_request);
+        }
+        co_return rep;
+    }
+
+public:
+    explicit unresponsive_to_abort_s3_server(unsigned failed_deletes = 0) noexcept : _failed_deletes(failed_deletes) {}
+
+    future<> start() {
+        _handler = std::make_unique<httpd::function_handler>([this] (std::unique_ptr<http::request> req, std::unique_ptr<http::reply> rep) {
+            return handle(std::move(req), std::move(rep));
+        }, "xml");
+        _server._routes.add_default_handler(_handler.get());
+        // The server only runs on this shard, so all its connections have to land here.
+        listen_options lo;
+        lo.lba = server_socket::load_balancing_algorithm::fixed;
+        lo.fixed_cpu = this_shard_id();
+        return _server.listen(socket_address(net::inet_address("127.0.0.1"), 0), lo);
+    }
+
+    future<> stop() noexcept {
+        release();
+        return _server.stop();
+    }
+
+    uint16_t port() {
+        return _server.listening_addresses().front().port();
+    }
+
+    unsigned deletes() const noexcept {
+        return _deletes;
+    }
+
+    // Resolves once a DELETE is held, so that a test can act while it hangs.
+    future<> delete_held() {
+        return _delete_held.get_shared_future();
+    }
+
+    // Answers the held DELETEs. It also resolves delete_held(), so that a test
+    // waiting for a DELETE that never came goes on, and fails, rather than hangs.
+    void release() {
+        if (!std::exchange(_is_released, true)) {
+            _released.set_value();
+        }
+        if (!std::exchange(_is_delete_held, true)) {
+            _delete_held.set_value();
+        }
+    }
+};
+
+// Counts how often the client asks its retry strategy whether to retry, so that a
+// test can tell a retry was not even considered.
+class counting_retry_strategy final : public seastar::http::retry_strategy {
+    std::unique_ptr<seastar::http::retry_strategy> _rs;
+    unsigned& _calls;
+public:
+    counting_retry_strategy(std::unique_ptr<seastar::http::retry_strategy> rs, unsigned& calls) noexcept : _rs(std::move(rs)), _calls(calls) {}
+
+    future<bool> should_retry(std::exception_ptr error, unsigned attempted_retries) const override {
+        ++_calls;
+        return _rs->should_retry(std::move(error), attempted_retries);
+    }
+};
+
+// The DELETE that aborts a multipart upload must end in bounded time even if the
+// endpoint never answers it. Otherwise closing the sink waits for it forever, and so
+// does client::close(), which waits for every request in flight (SCYLLADB-6244).
+// It must still be sent when the caller's abort source has fired - the usual way an
+// upload gets aborted on shutdown - or every such abort would leave the parts behind.
+//
+// The first `failed_deletes` DELETEs fail and are retried; the one after them hangs.
+// With `close_client_while_deleting`, the client is closed while it hangs.
+static void do_test_client_multipart_upload_abort_unresponsive_endpoint([[maybe_unused]] unsigned failed_deletes, [[maybe_unused]] std::unique_ptr<seastar::http::retry_strategy> rs,
+        [[maybe_unused]] bool close_client_while_deleting = false) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    testlog.info("Skipping, the test needs SCYLLA_ENABLE_ERROR_INJECTION to shorten the abort timeout");
+#else
+    unresponsive_to_abort_s3_server server(failed_deletes);
+    server.start().get();
+    auto stop_server = deferred_stop(server);
+
+    utils::get_local_injector().enable("s3_abort_upload_timeout_ms", false, {{"value", "1000"}});
+    auto disable_injection = defer([] () noexcept { utils::get_local_injector().disable("s3_abort_upload_timeout_ms"); });
+
+    s3::endpoint_config cfg = {
+        .port = server.port(),
+        .use_https = false,
+        .region = "local",
+    };
+    unsigned retry_decisions = 0;
+    auto cln = s3::client::make("127.0.0.1", make_lw_shared<s3::endpoint_config>(std::move(cfg)),
+                                std::make_unique<counting_retry_strategy>(std::move(rs), retry_decisions),
+                                std::make_unique<s3::noop_throttling_controller>());
+    // The test closes the client itself, and close() must not be called twice. This
+    // only closes it when an assertion failed before that.
+    bool client_closed = false;
+    auto close_client = defer([&] () noexcept {
+        if (!client_closed) {
+            cln->close().get();
+        }
+    });
+
+    seastar::abort_source as;
+    auto out = output_stream<char>(cln->make_upload_sink("/test-bucket/test-object", s3::object_metadata{}, &as));
+
+    // Enough for the sink to start the multipart upload and hand a part over to it.
+    static constexpr size_t chunk_size = 1_MiB;
+    auto rnd = tests::random::get_bytes(chunk_size);
+    for (size_t written = 0; written <= s3::minimum_part_size; written += chunk_size) {
+        out.write(reinterpret_cast<char*>(rnd.begin()), rnd.size()).get();
+    }
+
+    // Without a limit on the DELETE, the flush and close below would never end.
+    // Let the DELETE through after a while regardless, so that the test fails
+    // instead of hanging.
+    bool released_by_test = false;
+    timer<lowres_clock> give_up([&] {
+        released_by_test = true;
+        server.release();
+    });
+    give_up.arm(30s);
+
+    as.request_abort_ex(upload_cancelled_marker{});
+    // Either the flush or the close aborts the multipart upload, depending on where
+    // the cancellation catches the sink, and the DELETE doing that has to time out.
+    bool flush_failed = false;
+    auto aborted = out.flush().then_wrapped([&] (future<> f) {
+        flush_failed = f.failed();
+        f.ignore_ready_future();
+        return out.close();
+    }).handle_exception([] (std::exception_ptr ex) {
+        testlog.info("Closing the aborted upload failed: {}", ex);
+    });
+    if (close_client_while_deleting) {
+        // client::close() waits for the DELETE, so it must not depend on the
+        // endpoint answering either.
+        server.delete_held().get();
+        client_closed = true;
+        cln->close().get();
+    }
+    aborted.get();
+    // Close the client while give_up is still armed. A fix that stops waiting for the
+    // DELETE but leaves it running makes close() wait for it; give_up then fails the
+    // test rather than letting it hang.
+    if (!client_closed) {
+        client_closed = true;
+        cln->close().get();
+    }
+    give_up.cancel();
+
+    BOOST_REQUIRE(flush_failed);
+    BOOST_REQUIRE_EQUAL(server.deletes(), failed_deletes + 1);
+    // Only the 500s may be offered for a retry. The DELETE that the deadline cancelled
+    // must not be, or a further attempt could go out that nothing can cancel.
+    BOOST_REQUIRE_EQUAL(retry_decisions, failed_deletes);
+    BOOST_REQUIRE(!released_by_test);
+#endif
+}
+
+SEASTAR_THREAD_TEST_CASE(test_client_multipart_upload_abort_unresponsive_endpoint) {
+    do_test_client_multipart_upload_abort_unresponsive_endpoint(0, make_unretrying_test_retry_strategy());
+}
+
+// The DELETE that hangs is a retry. It must be cancelled as well, and not be
+// retried again once the deadline has passed.
+SEASTAR_THREAD_TEST_CASE(test_client_multipart_upload_abort_unresponsive_endpoint_retried) {
+    do_test_client_multipart_upload_abort_unresponsive_endpoint(1, make_test_retry_strategy());
+}
+
+// client::close() waits for every request in flight, so it must end in bounded time
+// too while the DELETE hangs (SCYLLADB-6244).
+SEASTAR_THREAD_TEST_CASE(test_client_close_while_multipart_upload_abort_unresponsive) {
+    do_test_client_multipart_upload_abort_unresponsive_endpoint(0, make_unretrying_test_retry_strategy(), true);
+}
+
+// A connection made for a request whose abort source has fired must not be handed
+// out. seastar's http client would send the request on it, and nothing could cancel
+// it any more, since subscribing to a source that already fired does nothing
+// (SCYLLADB-6244, SCYLLADB-6270).
+SEASTAR_THREAD_TEST_CASE(test_dns_connection_factory_honours_fired_abort_source) {
+    auto ss = seastar::listen(socket_address(net::inet_address("127.0.0.1"), 0));
+    utils::http::dns_connection_factory factory("127.0.0.1", ss.local_address().port(), false, testlog);
+    auto close_factory = defer([&] () noexcept { factory.close().get(); });
+    seastar::abort_source as;
+    as.request_abort();
+    BOOST_REQUIRE_THROW(factory.make(&as).get(), seastar::abort_requested_exception);
 }
 
 // A zero-byte component is not hypothetical. BTI's Rows.db is empty for an
