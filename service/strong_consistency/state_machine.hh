@@ -108,6 +108,10 @@ std::unique_ptr<raft_state_machine> make_state_machine(locator::global_tablet_id
     raft_resize_tracker& resize_tracker,
     lw_shared_ptr<state_machine_stats> stats);
 
+// Records a promoted seal as the repair time of the range of its group: everything up to it is
+// on every replica, which is what tombstone GC in repair mode asks the repair history for.
+void record_promoted_seal(replica::table& table, const dht::token_range& range, api::timestamp_type ts);
+
 // Applies the truncate_command `tc`, committed at `idx` in the log of the group `gid`, which
 // serves `tablet`, on this shard. Returns once the record is durable. A no-op when `record`
 // already carries tc.request_id.
