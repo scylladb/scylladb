@@ -515,6 +515,12 @@ they should be easy to detect. Here is a list of these unimplemented features:
   This feature was added to DynamoDB in August 2022.
   <https://github.com/scylladb/scylla/issues/11739>
 
+* Alternator does not support the DynamoDB feature "bulk put items", an
+  import from S3 into an existing table, and its operations
+  StartBulkPutItems, DescribeBulkOperation, ListBulkOperations and
+  CancelBulkOperation. This feature was added to DynamoDB in November 2026.
+  <https://scylladb.atlassian.net/browse/SCYLLADB-6170>
+
 * Alternator does not support the TableClass table option choosing between
   several storage options with different cost/performance characteristics.
   All Alternator tables are stored the same way. This table option was added
