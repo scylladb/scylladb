@@ -3230,6 +3230,15 @@ future<> storage_service::do_clusterwide_vnodes_cleanup() {
     rtlogger.info("cluster-wide vnodes cleanup done");
 }
 
+future<> storage_service::do_local_vnodes_cleanup() {
+    auto& compaction_module = _db.local().get_compaction_manager().get_task_manager_module();
+    auto task = co_await compaction_module.start_global_cleanup_compaction(_db);
+    co_await task->done();
+
+    // Mark this node as clean
+    co_await reset_cleanup_needed();
+}
+
 future<> storage_service::reset_cleanup_needed() {
     auto& server = _group0->group0_server();
     auto holder = _group0->hold_group0_gate();
