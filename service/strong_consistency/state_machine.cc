@@ -17,6 +17,8 @@
 #include "idl/strong_consistency/state_machine.dist.hh"
 #include "idl/strong_consistency/state_machine.dist.impl.hh"
 #include "replica/database.hh"
+#include "compaction/compaction_manager.hh"
+#include "tombstone_gc.hh"
 #include "service/migration_manager.hh"
 #include "db/system_keyspace.hh"
 #include "utils/error_injection.hh"
@@ -117,7 +119,8 @@ public:
         co_await _db.apply_in_memory(m, m.schema()->table(),
                 _persistence.pin_raft_groups_for_apply(idx), db::no_timeout);
         _persistence.promote_seal(s);
-        // The sstables up to the seal may be merged now.
+        record_promoted_seal(_db.find_column_family(_tablet.table), _range, s.ts);
+        // The sstables up to the seal may be merged now, and their tombstones purged.
         _db.find_column_family(_tablet.table).trigger_compaction(_range);
     }
 
@@ -380,6 +383,13 @@ std::unique_ptr<raft_state_machine> make_state_machine(locator::global_tablet_id
     lw_shared_ptr<state_machine_stats> stats)
 {
     return std::make_unique<state_machine>(tablet, std::move(range), gid, db, mm, sys_ks, persistence, resize_tracker, std::move(stats));
+}
+
+void record_promoted_seal(replica::table& table, const dht::token_range& range, api::timestamp_type ts) {
+    const auto time = gc_clock::time_point(std::chrono::duration_cast<gc_clock::duration>(std::chrono::microseconds(ts)));
+    // Like a repair: the commitlog segments flushed for the range do not hold gc_before down.
+    table.get_compaction_manager().get_shared_tombstone_gc_state().update_repair_time(table.schema()->id(), range, time,
+            table.highest_flushed_replay_position(range));
 }
 
 future<> apply_truncate_command(replica::database& db, locator::global_tablet_id tablet, raft::group_id gid,

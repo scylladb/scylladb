@@ -275,6 +275,14 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
     // Store the initial configuration if this is the first time we create this group
     // on this node
     const auto snapshot = co_await storage->load_snapshot_descriptor();
+    // The table may be gone: a DROP TABLE removes it before the deletion of the group is
+    // scheduled, and that waits for this start to finish.
+    if (const auto table = _db.get_tables_metadata().get_table_if_exists(tablet.table)) {
+        // The repair history is not persisted.
+        if (const auto& promoted = storage->promoted_seal()) {
+            record_promoted_seal(*table, range, promoted->ts);
+        }
+    }
     if (!snapshot.id) {
         const auto& tablet_map = tm->tablets().get_tablet_map(tablet.table);
         const auto& tablet_info = tablet_map.get_tablet_info(tablet.tablet);
