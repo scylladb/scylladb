@@ -550,6 +550,11 @@ class ScyllaCluster:
         assert not server.is_running, f"Server {server_id} is running: stop it first and then delete its files"
         server.wipe_sstables(keyspace, table)
 
+    async def server_wipe(self, server_id: ServerNum) -> None:
+        """Wipe a stopped server's data: its next start is a first boot, with a new host id, on the same IP."""
+        assert server_id in self.stopped, f"Server {server_id} unknown or running"
+        await self.stopped[server_id].wipe()
+
     def get_sstables_disk_usage(self, server_id: ServerNum, keyspace: str, table: str) -> int:
         """Measure the disk usage of sstables for the given <node, keyspace, table>."""
         assert server_id in self.servers, f"Server {server_id} unknown"
