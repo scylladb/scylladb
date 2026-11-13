@@ -1122,7 +1122,7 @@ private:
                 });
             }).get();
 
-            replica::distributed_loader::init_non_system_keyspaces(_db, _proxy, _sys_ks).get();
+            replica::distributed_loader::init_non_system_keyspaces(_db, _proxy, _sys_ks, group0_client, abort_sources.local()).get();
 
             _db.invoke_on_all([] (replica::database& db) {
                 return db.recover_logstor();

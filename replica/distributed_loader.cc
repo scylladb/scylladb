@@ -23,6 +23,7 @@
 #include "db/system_keyspace.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "db/schema_tables.hh"
+#include "service/raft/raft_group0_client.hh"
 #include "service/task_manager_module.hh"
 #include "compaction/compaction_manager.hh"
 #include "compaction/task_manager_module.hh"
@@ -591,12 +592,18 @@ future<> distributed_loader::init_system_keyspace(sharded<db::system_keyspace>& 
 }
 
 future<> distributed_loader::init_non_system_keyspaces(sharded<replica::database>& db,
-        sharded<service::storage_proxy>& proxy, sharded<db::system_keyspace>& sys_ks) {
-    return seastar::async([&db, &proxy, &sys_ks] {
+        sharded<service::storage_proxy>& proxy, sharded<db::system_keyspace>& sys_ks,
+        service::raft_group0_client& group0_client, abort_source& as) {
+    return seastar::async([&db, &proxy, &sys_ks, &group0_client, &as] {
         // Load the node's intended storage mode from topology.
         // This determines the ERM flavor and resharding direction for tables
         // under vnodes-to-tablets migration.
-        auto topology = sys_ks.local().load_topology_state({}).get();
+        auto topology = [&] {
+            // load_topology_state() reads in pages, so keep group0 from
+            // applying between them.
+            auto holder = group0_client.hold_read_apply_mutex(as).get();
+            return sys_ks.local().load_topology_state({}).get();
+        }();
         auto host_id = db.local().get_token_metadata().get_my_id();
         auto node = topology.normal_nodes.find(raft::server_id{host_id.uuid()});
         std::optional<service::storage_mode> storage_mode = node != topology.normal_nodes.end() ? node->second.intended_storage_mode : std::nullopt;

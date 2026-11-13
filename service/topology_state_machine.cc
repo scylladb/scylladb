@@ -363,7 +363,7 @@ void topology_state_machine::generate_cancel_request_update(utils::chunked_vecto
         case topology_request::replace:
             [[fallthrough]];
         case topology_request::join:
-            node_builder.set("node_state", node_state::left);
+            node_builder.mark_left();
             break;
         case topology_request::leave:
             [[fallthrough]];

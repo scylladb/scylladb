@@ -46,6 +46,7 @@ class foreign_sstable_open_info;
 namespace service {
 
 class storage_proxy;
+class raft_group0_client;
 
 }
 
@@ -82,7 +83,8 @@ class distributed_loader {
 
 public:
     static future<> init_system_keyspace(sharded<db::system_keyspace>&, sharded<locator::effective_replication_map_factory>&, sharded<replica::database>&);
-    static future<> init_non_system_keyspaces(sharded<replica::database>& db, sharded<service::storage_proxy>& proxy, sharded<db::system_keyspace>& sys_ks);
+    static future<> init_non_system_keyspaces(sharded<replica::database>& db, sharded<service::storage_proxy>& proxy, sharded<db::system_keyspace>& sys_ks,
+            service::raft_group0_client& group0_client, abort_source& as);
 
     // Scan sstables under upload directory. Return a vector with this_smp_shard_count() entries.
     // Each entry with index of idx should be accessed on shard idx only.
