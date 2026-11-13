@@ -68,6 +68,9 @@ private:
 
     future<> check_create_links_replay(const sstable& sst, const sstring& dst_dir, generation_type dst_gen, const std::vector<std::pair<sstables::component_type, sstring>>& comps) const;
     future<> remove_temp_dir();
+    // Removes the files of an sstable whose TOC is renamed to `new_toc_name`.
+    future<> remove_files(const sstable& sst, const sstring& new_toc_name, sync_dir sync);
+    future<> remove_temp_dir_of_unsealed() noexcept;
     virtual future<> create_links(const sstable& sst, const std::filesystem::path& dir) const override;
     future<> create_links_common(const sstable& sst, sstring dst_dir, generation_type dst_gen, link_mode mode) const;
     future<> touch_temp_dir(const sstable& sst);
@@ -105,7 +108,7 @@ public:
     future<data_source> make_data_or_index_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt) const override;
     future<data_source> make_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt) const override;
     virtual future<data_sink> make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) override;
-    virtual future<> destroy(const sstable& sst) override { return make_ready_future<>(); }
+    virtual future<> destroy(const sstable& sst) override;
     virtual std::unique_ptr<atomic_deletion_impl> make_atomic_deletion_impl() const override;
     virtual bool operator==(const storage&) const noexcept override;
     virtual future<> remove_by_registry_entry(entry_descriptor desc, locator::host_id node_owner) const override;
@@ -536,6 +539,58 @@ static inline fs::path parent_path(const sstring& fname) {
     return fs::canonical(fs::path(fname)).parent_path();
 }
 
+future<> filesystem_storage::remove_files(const sstable& sst, const sstring& new_toc_name, sync_dir sync) {
+    auto dir_name = parent_path(new_toc_name);
+
+    co_await coroutine::parallel_for_each(sst.all_components(), [&sst, &dir_name] (auto component) -> future<> {
+        if (component.first == component_type::TOC) {
+            // already renamed
+            co_return;
+        }
+
+        auto fname = filename(sst, dir_name.native(), sst._generation, component.second);
+        try {
+            co_await sst.sstable_write_io_check(remove_file, fname);
+        } catch (...) {
+            if (!is_system_error_errno(ENOENT)) {
+                throw;
+            }
+            sstlog.debug("Forgiving ENOENT when deleting file {}", fname);
+        }
+    });
+    // TemporaryHashes is not tracked in recognized_components (and thus
+    // not in all_components()), because it is a transient file created
+    // during SSTable writing and removed before sealing.  If the write
+    // failed before sealing, the file may still be on disk and must be
+    // cleaned up explicitly.
+    // The component is only defined for the `ms` sstable format; for
+    // older formats it is absent from the component map and looking up
+    // its filename would throw std::out_of_range.
+    // Use file_exists() to avoid a C++ exception on the common path
+    // where the file was already removed before sealing.
+    if (sstable_version_constants::get_component_map(sst.get_version()).contains(component_type::TemporaryHashes)) {
+        auto temp_hashes = filename(sst, dir_name.native(), sst._generation, component_type::TemporaryHashes);
+        if (co_await file_exists(temp_hashes)) {
+            co_await sst.sstable_write_io_check(remove_file, std::move(temp_hashes));
+        }
+    }
+    if (sync) {
+        co_await sst.sstable_write_io_check(sync_directory, dir_name.native());
+    }
+    co_await sst.sstable_write_io_check(remove_file, new_toc_name);
+}
+
+future<> filesystem_storage::remove_temp_dir_of_unsealed() noexcept {
+    if (_temp_dir) {
+        try {
+            co_await recursive_remove_directory(*_temp_dir);
+            _temp_dir.reset();
+        } catch (...) {
+            sstlog.warn("Exception when deleting temporary sstable directory {}: {:t}", *_temp_dir, std::current_exception());
+        }
+    }
+}
+
 future<> filesystem_storage::wipe(sstable& sst, const atomic_deletion* deletion) noexcept {
     auto sync = deletion ? sync_dir::no : sync_dir::yes;
     // We must be able to generate toc_filename()
@@ -546,51 +601,40 @@ future<> filesystem_storage::wipe(sstable& sst, const atomic_deletion* deletion)
         return fmt::to_string(sst.toc_filename());
     }();
 
+    // unlink() set the mark. It stays only if the TOC is renamed to a
+    // temporary TOC and the other files may still be there. destroy() removes
+    // them then.
     std::exception_ptr ex;
+    bool renamed = false;
     try {
         auto new_toc_name = co_await make_toc_temporary(name, sync);
-        if (!new_toc_name.empty()) {
-            auto dir_name = parent_path(new_toc_name);
-
-            co_await coroutine::parallel_for_each(sst.all_components(), [&sst, &dir_name] (auto component) -> future<> {
-                if (component.first == component_type::TOC) {
-                    // already renamed
-                    co_return;
-                }
-
-                auto fname = filename(sst, dir_name.native(), sst._generation, component.second);
-                try {
-                    co_await sst.sstable_write_io_check(remove_file, fname);
-                } catch (...) {
-                    if (!is_system_error_errno(ENOENT)) {
-                        throw;
-                    }
-                    sstlog.debug("Forgiving ENOENT when deleting file {}", fname);
-                }
-            });
-            // TemporaryHashes is not tracked in recognized_components (and thus
-            // not in all_components()), because it is a transient file created
-            // during SSTable writing and removed before sealing.  If the write
-            // failed before sealing, the file may still be on disk and must be
-            // cleaned up explicitly.
-            // The component is only defined for the `ms` sstable format; for
-            // older formats it is absent from the component map and looking up
-            // its filename would throw std::out_of_range.
-            // Use file_exists() to avoid a C++ exception on the common path
-            // where the file was already removed before sealing.
-            if (sstable_version_constants::get_component_map(sst.get_version()).contains(component_type::TemporaryHashes)) {
-                auto temp_hashes = filename(sst, dir_name.native(), sst._generation, component_type::TemporaryHashes);
-                if (co_await file_exists(temp_hashes)) {
-                    co_await sst.sstable_write_io_check(remove_file, std::move(temp_hashes));
-                }
+        if (new_toc_name.empty()) {
+            // There is nothing to delete.
+            sst.unmark_for_deletion();
+        } else {
+            renamed = true;
+            // An atomic deletion removes sstables from a table, but readers that
+            // hold an sstable can still open its components by name. So their
+            // files are removed only by destroy(), when the last reference is
+            // dropped. The temporary TOC records the intent: the startup scan
+            // removes an sstable with a temporary TOC, so a crash before
+            // destroy() can't bring the sstable back.
+            //
+            // Other callers own the sstable, and may rely on its files being gone
+            // when unlink() returns, e.g. before a rescan of the upload directory.
+            if (!deletion) {
+                co_await remove_files(sst, new_toc_name, sync);
+                sst.unmark_for_deletion();
             }
-            if (sync) {
-                co_await sst.sstable_write_io_check(sync_directory, dir_name.native());
-            }
-            co_await sst.sstable_write_io_check(remove_file, new_toc_name);
         }
     } catch (...) {
         ex = std::current_exception();
+        // If the TOC wasn't renamed, the sstable is still valid. Clear the mark,
+        // including one set by a caller before unlink(), so that destroy()
+        // leaves the files alone. Otherwise, destroy() tries again.
+        if (!renamed) {
+            sst.unmark_for_deletion();
+        }
         // Log and ignore the failure since there is nothing much we can do about it at this point.
         // a. Compaction will retry deleting the sstable in the next pass, and
         // b. in the future sstables_manager is planned to handle sstables deletion.
@@ -599,19 +643,45 @@ future<> filesystem_storage::wipe(sstable& sst, const atomic_deletion* deletion)
         sstlog.warn("Failed to delete {}: {:t}. Ignoring.", name, std::current_exception());
     }
 
-    if (_temp_dir) {
-        try {
-            co_await recursive_remove_directory(*_temp_dir);
-            _temp_dir.reset();
-        } catch (...) {
-            sstlog.warn("Exception when deleting temporary sstable directory {}: {:t}", *_temp_dir, std::current_exception());
-        }
+    if (!deletion) {
+        co_await remove_temp_dir_of_unsealed();
     }
 
     // The sstable may survive while others in the batch are gone, so the
     // atomic deletion must keep its pending-delete log for the replay.
     if (ex && deletion) {
         co_await coroutine::return_exception_ptr(std::move(ex));
+    }
+}
+
+future<> filesystem_storage::destroy(const sstable& sst) {
+    // An sstable that is destroyed before it is sealed can't be sealed anymore.
+    co_await remove_temp_dir_of_unsealed();
+
+    // wipe() keeps the mark only if it renamed the TOC to a temporary TOC and
+    // the other files may still be there. Without the mark, the sstable must
+    // survive, for example on shutdown.
+    if (!sst.marked_for_deletion()) {
+        co_return;
+    }
+
+    // The last reference can be dropped in any scheduling group.
+    co_await coroutine::switch_to(sst.manager().maintenance_sg());
+
+    auto new_toc_name = fmt::to_string(sst.filename(component_type::TemporaryTOC));
+    try {
+        // Not synced, so that an atomic deletion doesn't cost a directory sync
+        // per sstable (see 6f037549ac). If a crash loses the unlinks, the
+        // startup scan removes the sstable by its temporary TOC. The temporary
+        // TOC is unlinked last, and unlinks in a directory persist in the order
+        // they are issued on a journaling filesystem, so a crash can't keep
+        // components without it.
+        co_await remove_files(sst, new_toc_name, sync_dir::no);
+    } catch (...) {
+        // destroy() is called fire-and-forget from the shared_sstable deleter,
+        // so the error is not propagated. The temporary TOC makes the next
+        // startup remove what is left.
+        sstlog.warn("Failed to delete {}: {:t}. Ignoring.", new_toc_name, std::current_exception());
     }
 }
 
@@ -640,7 +710,9 @@ public:
             co_await sync_directory(dir);
         });
 
-        // Once all sstables are deleted, the log file can be removed.
+        // Once the TOCs of all sstables are renamed to temporary TOCs, and the
+        // renames are on disk, the log file can be removed: the next startup
+        // removes any sstable with a temporary TOC.
         try {
             co_await remove_file(_pending_delete_log);
             sstlog.debug("{} removed.", _pending_delete_log);
@@ -1365,29 +1437,21 @@ std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, schem
     }, s_opts.value);
 }
 
-static future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_storage(const sstables_manager& mgr, const schema& s, const data_dictionary::storage_options::local& so) {
-    std::vector<sstring> dirs;
-    for (const auto& dd : mgr.get_config().data_file_directories) {
+static lw_shared_ptr<const data_dictionary::storage_options> make_table_storage_options(const sstables_manager& mgr, const schema& s, const data_dictionary::storage_options::local&) {
+    data_dictionary::storage_options nopts;
+    const auto& data_dirs = mgr.get_config().data_file_directories;
+    if (!data_dirs.empty()) {
         auto uuid_sstring = s.id().to_sstring();
         boost::erase_all(uuid_sstring, "-");
-        auto dir = format("{}/{}/{}-{}", dd, s.ks_name(), s.cf_name(), uuid_sstring);
-        dirs.emplace_back(std::move(dir));
+        nopts.value = data_dictionary::storage_options::local {
+            .dir = fs::path(format("{}/{}/{}-{}", data_dirs[0], s.ks_name(), s.cf_name(), uuid_sstring)),
+        };
     }
-    co_await coroutine::parallel_for_each(dirs, [] (sstring dir) -> future<> {
-        co_await io_check([&dir] { return recursive_touch_directory(dir); });
-        co_await io_check([&dir] { return touch_directory(dir + "/upload"); });
-        co_await io_check([&dir] { return touch_directory(dir + "/staging"); });
-    });
-
-    data_dictionary::storage_options nopts;
-    nopts.value = data_dictionary::storage_options::local {
-        .dir = fs::path(std::move(dirs[0])),
-    };
-    co_return make_lw_shared<const data_dictionary::storage_options>(std::move(nopts));
+    return make_lw_shared<const data_dictionary::storage_options>(std::move(nopts));
 }
 
 std::vector<std::filesystem::path> get_local_directories(const std::vector<sstring>& data_file_directories, const data_dictionary::storage_options::local& so) {
-    // see how this path is formatted by init_table_storage() above
+    // see how this path is formatted by make_table_storage_options() above
     auto table_dir = so.dir.parent_path().filename() / so.dir.filename();
     return data_file_directories
             | std::views::transform([&table_dir] (const auto& datadir) {
@@ -1396,18 +1460,42 @@ std::vector<std::filesystem::path> get_local_directories(const std::vector<sstri
             | std::ranges::to<std::vector<std::filesystem::path>>();
 }
 
-static future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_storage(const sstables_manager& mgr, const schema& s, const data_dictionary::storage_options::object_storage& so) {
+static lw_shared_ptr<const data_dictionary::storage_options> make_table_storage_options(const sstables_manager& mgr, const schema& s, const data_dictionary::storage_options::object_storage& so) {
     data_dictionary::storage_options nopts;
     nopts.value = data_dictionary::storage_options::object_storage {
         .bucket = so.bucket,
         .endpoint = so.endpoint,
         .type = so.type
     };
-    co_return make_lw_shared<const data_dictionary::storage_options>(std::move(nopts));
+    return make_lw_shared<const data_dictionary::storage_options>(std::move(nopts));
 }
 
-future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_storage(const sstables_manager& mgr, const schema& s, const data_dictionary::storage_options& so) {
-    co_return co_await std::visit([&mgr, &s] (const auto& so) { return init_table_storage(mgr, s, so); }, so.value);
+lw_shared_ptr<const data_dictionary::storage_options> make_table_storage_options(const sstables_manager& mgr, const schema& s, const data_dictionary::storage_options& so) {
+    return std::visit([&mgr, &s] (const auto& so) { return make_table_storage_options(mgr, s, so); }, so.value);
+}
+
+future<> init_table_storage(const sstables_manager& mgr, const data_dictionary::storage_options& so) {
+    co_await std::visit(overloaded_functor {
+        [&mgr] (const data_dictionary::storage_options::local& so) -> future<> {
+            const auto& data_dirs = mgr.get_config().data_file_directories;
+            if (data_dirs.empty()) {
+                co_return;
+            }
+            if (so.dir.empty()) {
+                on_internal_error(sstlog, "Non-table local storage options");
+            }
+            auto dirs = get_local_directories(data_dirs, so);
+            co_await coroutine::parallel_for_each(dirs, [] (const fs::path& path) -> future<> {
+                auto dir = path.native();
+                co_await io_check([&dir] { return recursive_touch_directory(dir); });
+                co_await io_check([&dir] { return touch_directory(dir + "/upload"); });
+                co_await io_check([&dir] { return touch_directory(dir + "/staging"); });
+            });
+        },
+        [] (const data_dictionary::storage_options::object_storage&) -> future<> {
+            co_return;
+        }
+    }, so.value);
 }
 
 future<> init_keyspace_storage(const sstables_manager& mgr, const data_dictionary::storage_options& so, sstring ks_name) {

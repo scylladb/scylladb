@@ -3605,7 +3605,7 @@ future<std::optional<uint32_t>> sstable::read_digest() {
     if (_components->digest) {
         co_return *_components->digest;
     }
-    if (!has_component(component_type::Digest) || _unlinked_at) {
+    if (!has_component(component_type::Digest) || files_may_be_gone()) {
         co_return std::nullopt;
     }
     uint32_t digest;
@@ -3702,7 +3702,7 @@ future<lw_shared_ptr<checksum>> sstable::read_checksum() {
     if (_components->checksum) {
         co_return _components->checksum->shared_from_this();
     }
-    if (!has_component(component_type::CRC) || _unlinked_at) {
+    if (!has_component(component_type::CRC) || files_may_be_gone()) {
         co_return nullptr;
     }
     lw_shared_ptr<checksum> checksum;
@@ -4210,6 +4210,13 @@ sstable::unlink(const atomic_deletion* deletion) noexcept {
         co_return;
     }
 
+    // The mark says that the files of the sstable are still there, so that
+    // read_digest() and read_checksum() keep reading them (see
+    // files_may_be_gone()). It is set before _unlinked_at, so that there is
+    // no moment when the files exist but the reads skip them. wipe() clears
+    // the mark once it removes the files, or if it can't record the deletion.
+    // Otherwise, the mark stays until destroy() removes the files.
+    mark_for_deletion();
     _unlinked_at = db_clock::now();
     _on_delete(*this);
 

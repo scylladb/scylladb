@@ -919,7 +919,6 @@ public:
     const storage_options& get_storage_options() const noexcept { return *_storage_opts; }
     lw_shared_ptr<const storage_options> get_storage_options_ptr() const noexcept { return _storage_opts; }
     future<> init_storage();
-    future<> destroy_storage();
 
     seastar::named_gate& async_gate() { return _async_gate; }
 
@@ -1873,6 +1872,21 @@ private:
     bool _shutdown = false;
     bool _enable_autocompaction_toggle = false;
     bool _vnodes_cleanup_allowed = false;
+
+    // The removals of the storage of dropped tables that run in the
+    // background, by table ID, so that tests can wait for them. Drop table
+    // runs on shard 0, so they are tracked there.
+    struct table_storage_removal {
+        uint64_t seq;
+        lw_shared_ptr<shared_promise<>> done;
+    };
+    std::unordered_map<table_id, table_storage_removal> _table_storage_removals;
+    uint64_t _table_storage_removal_seq = 0;
+    seastar::named_gate _table_storage_removal_gate{"database::table_storage_removal"};
+    // Orders the removal of a table directory with the creation of one. See
+    // remove_unused_table_storage().
+    seastar::named_semaphore _table_dir_sem = {1, named_semaphore_exception_factory{"table dir"}};
+
     querier_cache _querier_cache;
 
     std::unique_ptr<db::large_data_handler> _large_data_handler;
@@ -2327,6 +2341,30 @@ public:
     static future<> legacy_drop_table_on_all_shards(sharded<database>& sharded_db, sharded<db::system_keyspace>& sys_ks,
             sstring ks_name, sstring cf_name,
             bool with_snapshot = true);
+    // Waits for the removal of the storage of a dropped table that runs in
+    // the background. Returns at once if none runs. For tests.
+    future<> await_table_storage_removal(table_id id);
+    // Orders the creation of a table with the removal of the storage of a
+    // dropped table with the same ID, see remove_unused_table_storage(). Must
+    // be called on shard 0.
+    using table_dir_lock = semaphore_units<named_semaphore_exception_factory>;
+    future<table_dir_lock> lock_table_dirs();
+private:
+    // Starts the removal of the storage of a dropped table in the background,
+    // once the table is truncated and stopped.
+    void schedule_table_storage_removal(sharded<database>& sharded_db, const global_table_ptr& table_shards);
+    future<> remove_table_storage(sharded<database>& sharded_db, table_id id, system_keyspace is_system,
+            lw_shared_ptr<const data_dictionary::storage_options> storage_opts, gate::holder holder);
+    // Removes the storage of a table with remove_storage, if the storage has
+    // no user on any shard. Returns whether it did.
+    future<bool> remove_unused_table_storage(sharded<database>& sharded_db, table_id id, system_keyspace is_system,
+            noncopyable_function<future<> ()> remove_storage);
+    // Runs func while no table directory is being removed.
+    future<> with_table_dir_lock(noncopyable_function<future<> ()> func);
+    // Removes the directory of a dropped table for clear_snapshot(), unless
+    // the storage of the table has a user on some shard.
+    future<> remove_dropped_table_dir(std::string_view ks_name, table_id id, std::filesystem::path table_dir);
+public:
 
     const dirty_memory_manager_logalloc::region_group& dirty_memory_region_group() const {
         return _dirty_memory_manager.region_group();
@@ -2452,7 +2490,7 @@ public:
 };
 
 // A helper function to parse the directory name back
-// into name and uuid of the table (see init_table_storage())
+// into name and uuid of the table (see make_table_storage_options())
 std::pair<sstring, table_id> parse_table_directory_name(const sstring&);
 
 } // namespace replica

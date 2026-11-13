@@ -9,6 +9,7 @@
 #undef SEASTAR_TESTING_MAIN
 #include <boost/test/unit_test.hpp>
 #include <seastar/testing/test_case.hh>
+#include <seastar/core/seastar.hh>
 #include <seastar/core/smp.hh>
 
 #include "dht/i_partitioner.hh"
@@ -285,6 +286,40 @@ SEASTAR_TEST_CASE(test_drop_view_update_during_shard_commit) {
         BOOST_REQUIRE_EQUAL(failed_view_updates(), failed_before);
 
         drop.get();
+    });
+}
+
+// A write reaches a newly created table on shard 0, which has committed the CREATE, and the
+// memtable is flushed before the other shards commit it. The table accepts writes as soon as it
+// is added, so its directory must exist by then. Otherwise the flush fails, and a failed flush
+// aborts the node.
+SEASTAR_TEST_CASE(test_create_table_flush_during_shard_commit) {
+    if (!can_run()) {
+        return make_ready_future<>();
+    }
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto create = start_paused_schema_change(e, "CREATE TABLE ks.t (pk int PRIMARY KEY, v int)", [] (replica::database& db) {
+            return db.has_schema("ks", "t");
+        });
+        auto& cf = e.local_db().find_column_family("ks", "t");
+        const auto& dir = std::get<data_dictionary::storage_options::local>(cf.get_storage_options().value).dir;
+        BOOST_REQUIRE(!dir.empty());
+        BOOST_REQUIRE(file_exists(dir.native()).get());
+
+        // A write coordinated on shard 0 would wait for shard 1 to commit the CREATE, so apply
+        // the mutation directly.
+        auto s = cf.schema();
+        auto pk = key_on_shard(e, s, 0);
+        mutation m(s, partition_key::from_single_value(*s, int32_type->decompose(pk)));
+        m.set_clustered_cell(clustering_key::make_empty(), "v", data_value(1), api::new_timestamp());
+        e.get_storage_proxy().local().mutate_locally(m, nullptr, db::commitlog::force_sync::no).get();
+        cf.flush().get();
+        BOOST_REQUIRE_GT(cf.sstables_count(), 0);
+
+        create.get();
+
+        assert_that(e.execute_cql(format("SELECT v FROM ks.t WHERE pk = {}", pk)).get())
+                .is_rows().with_rows({{int32_type->decompose(1)}});
     });
 }
 

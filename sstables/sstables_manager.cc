@@ -25,6 +25,7 @@
 #include "sstables/partition_index_cache.hh"
 #include "sstables/sstables.hh"
 #include "object_storage_client.hh"
+#include "data_dictionary/data_dictionary.hh"
 #include "db/config.hh"
 #include "db/object_storage_endpoint_param.hh"
 #include "gms/feature.hh"
@@ -437,6 +438,9 @@ shared_sstable sstables_manager::make_sstable(schema_ptr schema,
         db_clock::time_point now,
         io_error_handler_gen error_handler_gen,
         size_t buffer_size) {
+    if (auto it = _tables.find(schema->id()); it != _tables.end() && it->second.closed() && it->second.count == 0) {
+        throw data_dictionary::no_such_column_family(schema->id());
+    }
     return make_lw_shared<sstable>(std::move(schema), storage, generation, sid, state, v, f, get_large_data_handler(), get_corrupt_data_handler(), *this, now, std::move(error_handler_gen), buffer_size);
 }
 
@@ -573,6 +577,7 @@ void sstables_manager::erase_from_reclaimed(sstable* sst) noexcept {
 }
 
 void sstables_manager::add(sstable* sst) {
+    ++_tables[sst->get_schema()->id()].count;
     _active.push_back(*sst);
 }
 
@@ -593,8 +598,67 @@ void sstables_manager::deactivate(sstable* sst) {
     });
 }
 
+void sstables_manager::open_table(table_id id) {
+    auto& users = _tables[id];
+    ++users.count;
+    ++users.opens;
+    // Wakes up the removal of the storage of the table, if it waits.
+    _table_storage_users_changed.broadcast();
+}
+
+void sstables_manager::close_table(table_id id) noexcept {
+    auto it = _tables.find(id);
+    if (it == _tables.end() || it->second.open_tables() == 0) {
+        on_internal_error_noexcept(smlogger, format("Closing table {}, which is not open", id));
+        return;
+    }
+    ++it->second.closes;
+    release_table_storage_user(it);
+}
+
+void sstables_manager::release_table_storage_user(table_storage_users_map::iterator it) noexcept {
+    if (--it->second.count != 0) {
+        return;
+    }
+    if (!it->second.closed()) {
+        // No table object opened the table on this shard, or its storage was
+        // already removed, so there is nothing to keep closed.
+        _tables.erase(it);
+    }
+    _table_storage_users_changed.broadcast();
+}
+
+future<bool> sstables_manager::await_table_storage_unused(table_id id) {
+    co_await _table_storage_users_changed.wait([this, id] {
+        auto it = _tables.find(id);
+        return it == _tables.end() || it->second.count == 0 || it->second.open_tables() != 0;
+    });
+    co_return !table_storage_in_use(id);
+}
+
+bool sstables_manager::table_storage_in_use(table_id id) const noexcept {
+    auto it = _tables.find(id);
+    return it != _tables.end() && it->second.count != 0;
+}
+
+void sstables_manager::forget_table(table_id id) noexcept {
+    auto it = _tables.find(id);
+    if (it == _tables.end()) {
+        return;
+    }
+    if (it->second.open_tables() != 0) {
+        on_internal_error_noexcept(smlogger, format("Forgetting table {}, which is open", id));
+        return;
+    }
+    it->second.opens = it->second.closes = 0;
+    if (it->second.count == 0) {
+        _tables.erase(it);
+    }
+}
+
 void sstables_manager::remove(sstable* sst) {
     _undergoing_close.erase(_undergoing_close.iterator_to(*sst));
+    release_table_storage_user(_tables.find(sst->get_schema()->id()));
     delete sst;
     _components_memory_change_event.signal();
     maybe_done();
@@ -652,8 +716,12 @@ void sstables_manager::unplug_sstables_registry() noexcept {
     _sstables_registry.reset();
 }
 
-future<lw_shared_ptr<const data_dictionary::storage_options>> sstables_manager::init_table_storage(const schema& s, const data_dictionary::storage_options& so) {
-    return sstables::init_table_storage(*this, s, so);
+lw_shared_ptr<const data_dictionary::storage_options> sstables_manager::make_table_storage_options(const schema& s, const data_dictionary::storage_options& keyspace_so) const {
+    return sstables::make_table_storage_options(*this, s, keyspace_so);
+}
+
+future<> sstables_manager::init_table_storage(const data_dictionary::storage_options& so) {
+    return sstables::init_table_storage(*this, so);
 }
 
 future<> sstables_manager::init_keyspace_storage(const data_dictionary::storage_options& so, sstring dir) {

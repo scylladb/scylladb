@@ -187,6 +187,9 @@ class schema_applier {
     affected_tables_and_views _affected_tables_and_views;
 
     std::unique_ptr<replica::tables_metadata_lock_on_all_shards> _metadata_locks;
+    // Held from the creation of the directories of the created tables until
+    // the tables are added, see create_table_storage().
+    std::optional<replica::database::table_dir_lock> _table_dir_lock;
 
     functions_change_batch_all_shards _functions_batch; // includes aggregates
     // Set during prepare() when the incoming mutations touch a cluster-config table, so
@@ -233,6 +236,16 @@ private:
     future<> update_tablets();
     future<> merge_functions();
     future<> merge_aggregates();
+    // The storage options of a keyspace, as they are once the change is
+    // committed.
+    const data_dictionary::storage_options& keyspace_storage_options(std::string_view ks_name) const;
+    // Creates the storage of the tables and views that the change creates.
+    // commit() adds them, and they accept writes from then on. A write can be
+    // flushed at any time, so the directory of a table must exist before the
+    // table is added. Like the directory of a created keyspace, it is created
+    // before commit(), so that a failure to create it leaves the in-memory
+    // schema unchanged.
+    future<> create_table_storage();
 
     void commit_tables_and_views();
     future<> finalize_tables_and_views();

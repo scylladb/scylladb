@@ -501,6 +501,7 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_lock_works) {
             auto& cf = db.find_column_family(ks_name, cf_name);
             return cf.flush();
         }).get();
+        auto id = e.local_db().find_column_family(ks_name, cf_name).schema()->id();
 
         with_sstable_directory(e.db(), "ks", "cf", sstables::sstable_state::normal, [&] (sharded<sstable_directory>& sstdir) {
             distributed_loader_for_tests::process_sstable_dir(sstdir, {}).get();
@@ -552,6 +553,9 @@ SEASTAR_TEST_CASE(sstable_directory_test_table_lock_works) {
             // phaser with it.
             sstdir.stop().get();
             drop.get();
+            // The files of the deleted sstables are removed when the sstables
+            // are destroyed, in the background.
+            e.local_db().await_table_storage_removal(id).get();
 
             BOOST_REQUIRE(!table_exists());
 
@@ -990,9 +994,11 @@ SEASTAR_TEST_CASE(test_atomic_deletion_keeps_log_when_unlink_fails) {
         auto blocker = test(ssts[0]).filename(sstables::component_type::TemporaryTOC).native();
         touch_directory(blocker).get();
 
-        auto deletion = env.local().manager().make_atomic_deletion(ssts);
-        deletion.commit().get();
-        deletion.execute().get();
+        {
+            auto deletion = env.local().manager().make_atomic_deletion(ssts);
+            deletion.commit().get();
+            deletion.execute().get();
+        }
 
         BOOST_REQUIRE(file_exists(survivor_toc).get());
         BOOST_REQUIRE(!file_exists(deleted_toc).get());
@@ -1012,12 +1018,72 @@ SEASTAR_TEST_CASE(test_atomic_deletion_keeps_log_when_unlink_fails) {
         // With the failure gone, the replay on startup finishes the deletion.
         remove_file(blocker).get();
         ssts.clear();
+        // The files of the deleted sstable are removed in the background. Let
+        // that finish, so that it doesn't race with the scan.
+        env.local().manager().await_table_storage_unused(test_table_schema()->id()).get();
         with_sstable_directory(base, sstables::sstable_state::normal, env, [&] (sharded<sstables::sstable_directory>& sstdir) {
             auto expect_ok = distributed_loader_for_tests::process_sstable_dir(sstdir, { .throw_on_missing_toc = true, .garbage_collect = true });
             BOOST_REQUIRE_NO_THROW(expect_ok.get());
         });
         BOOST_REQUIRE(!file_exists(survivor_toc).get());
         BOOST_REQUIRE(list_logs().empty());
+    });
+}
+
+// Checks that an atomic deletion keeps the files of an sstable until the last
+// reference to it is dropped, so that readers that still hold the sstable can
+// open its components by name. Checks also that unlink() outside of an atomic
+// deletion removes the files right away.
+SEASTAR_TEST_CASE(test_atomic_deletion_defers_file_removal) {
+    return sstables::test_env::do_with_async([] (test_env& env) {
+        // Without compression, the sstable has CRC.db, which read_checksum()
+        // opens by name.
+        auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
+                .with_column("p", bytes_type, column_kind::partition_key)
+                .with_column("c", int32_type)
+                .set_compressor_params(compression_parameters::no_compression())
+                .build();
+        auto make_sst = [&] {
+            mutation m(s, tests::generate_partition_key(s));
+            m.set_clustered_cell(clustering_key::make_empty(), bytes("c"), data_value(int32_t(0)), api::timestamp_type(0));
+            return make_sstable_containing(env.make_sstable(s), {m}).get();
+        };
+        auto list_dir = [&] {
+            std::vector<sstring> files;
+            lister::scan_dir(env.tempdir().path(), lister::dir_entry_types::of<directory_entry_type::regular>(),
+                    [&files] (fs::path, directory_entry de) {
+                files.push_back(de.name);
+                return make_ready_future<>();
+            }).get();
+            return files;
+        };
+
+        auto sst = make_sst();
+        BOOST_REQUIRE(sst->has_component(component_type::CRC));
+        const auto toc = test(sst).filename(component_type::TOC).native();
+        const auto temp_toc = test(sst).filename(component_type::TemporaryTOC).native();
+        const auto data = test(sst).filename(component_type::Data).native();
+        {
+            auto deletion = env.manager().make_atomic_deletion({sst});
+            deletion.commit().get();
+            deletion.execute().get();
+        }
+        // The TOC is renamed, so that a restart removes the sstable.
+        BOOST_REQUIRE(!file_exists(toc).get());
+        BOOST_REQUIRE(file_exists(temp_toc).get());
+        BOOST_REQUIRE(file_exists(data).get());
+        BOOST_REQUIRE(sst->read_checksum().get());
+
+        sst = {};
+        env.manager().await_table_storage_unused(s->id()).get();
+        auto remaining = list_dir();
+        BOOST_REQUIRE_MESSAGE(remaining.empty(), fmt::format("Expected empty sstable dir after destroy, found: {}", remaining));
+
+        sst = make_sst();
+        sst->unlink().get();
+        remaining = list_dir();
+        BOOST_REQUIRE_MESSAGE(remaining.empty(), fmt::format("Expected empty sstable dir after unlink, found: {}", remaining));
+        BOOST_REQUIRE(!sst->read_checksum().get());
     });
 }
 

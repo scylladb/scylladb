@@ -9,6 +9,8 @@
 
 #pragma once
 
+#include <unordered_map>
+
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/sharded.hh>
 #include <seastar/core/gate.hh>
@@ -171,6 +173,32 @@ private:
     list_type _active;
     list_type _undergoing_close;
 
+    // The users of the storage of a table on this shard. See open_table().
+    struct table_storage_users {
+        // Every open table object, and every sstable of the table that is not
+        // destroyed yet.
+        size_t count = 0;
+        // The table objects opened and closed on this shard so far.
+        uint64_t opens = 0;
+        uint64_t closes = 0;
+        // The table objects that are open.
+        uint64_t open_tables() const noexcept {
+            return opens - closes;
+        }
+        // Tells if a table object was opened, and none is open. While the
+        // table is closed and the count is zero, make_sstable() fails for the
+        // table, so that the count can't go up again until a table object
+        // opens the table.
+        bool closed() const noexcept {
+            return opens != 0 && opens == closes;
+        }
+    };
+    using table_storage_users_map = std::unordered_map<table_id, table_storage_users>;
+    table_storage_users_map _tables;
+    // Signalled when the count of a table reaches zero, and when a table
+    // object opens a table.
+    seastar::condition_variable _table_storage_users_changed;
+
     // Total reclaimable memory used by components of sstables in _active list
     size_t _total_reclaimable_memory{0};
     // Total memory reclaimed so far across all sstables
@@ -312,7 +340,10 @@ public:
 
     atomic_deletion make_atomic_deletion(std::vector<shared_sstable> ssts);
     future<utils::chunked_vector<sstable_snapshot_metadata>> take_snapshot(std::vector<shared_sstable> ssts, sstring jsondir);
-    future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_storage(const schema& s, const data_dictionary::storage_options& so);
+    // See sstables::make_table_storage_options().
+    lw_shared_ptr<const data_dictionary::storage_options> make_table_storage_options(const schema& s, const data_dictionary::storage_options& keyspace_so) const;
+    // See sstables::init_table_storage().
+    future<> init_table_storage(const data_dictionary::storage_options& so);
     future<> destroy_table_storage(const data_dictionary::storage_options& so);
     future<> init_keyspace_storage(const data_dictionary::storage_options& so, sstring dir);
 
@@ -324,6 +355,33 @@ public:
 
     // To be called by the sstable to signal its unlinking
     void on_unlink(sstable* sst);
+
+    // The manager counts the users of the storage of each table on this
+    // shard: the table object, from open_table() until close_table(), and
+    // every sstable of the table, from its construction until it is
+    // destroyed. The storage of a dropped table is removed only when it has
+    // no user on any shard. The count covers every sstable with the table's
+    // schema ID, not only those in the table's sstable set.
+    //
+    // Once close_table() is called, no user can be added after the count
+    // reaches zero, until a table object opens the table again: make_sstable()
+    // fails for the table. A running table always holds a unit through
+    // open_table(), so it is never refused.
+
+    // Called by the constructor of a table object.
+    void open_table(table_id id);
+    // Called when the table object stops, after its writers are drained.
+    void close_table(table_id id) noexcept;
+    // Waits until the storage of the table on this shard has no user, or
+    // until a table object opens the table. Returns whether it has no user.
+    future<bool> await_table_storage_unused(table_id id);
+    // Tells if the storage of the table on this shard has a user.
+    bool table_storage_in_use(table_id id) const noexcept;
+    // Forgets that a table object was opened, so that sstables of a closed
+    // table can be created again, once its storage is removed, or when a
+    // test reuses the schema of a stopped table. Drops the entry of the table
+    // once it has no user. The table must not be open.
+    void forget_table(table_id id) noexcept;
 
     std::vector<std::filesystem::path> get_local_directories(const data_dictionary::storage_options::local& so) const;
 
@@ -362,6 +420,7 @@ private:
     // Unlink the sstable from _reclaimed, if it is linked. Erasing by key would
     // remove an arbitrary sstable with the same total_memory_reclaimed().
     void erase_from_reclaimed(sstable* sst) noexcept;
+    void release_table_storage_user(table_storage_users_map::iterator it) noexcept;
 private:
     db::large_data_handler& get_large_data_handler() const {
         return _large_data_handler;

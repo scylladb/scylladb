@@ -140,6 +140,10 @@ public:
     virtual future<> change_state(const sstable& sst, sstable_state to, generation_type generation, delayed_commit_changes* delay) = 0;
     // runs in async context
     virtual void open(sstable& sst) = 0;
+    // Records durably that the sstable is deleted. If it leaves files on
+    // storage, it marks the sstable for deletion, and destroy() deletes them.
+    // With `deletion` set, the files must survive until destroy(), because
+    // readers may still hold the sstable.
     // Must never return an exceptional future when `deletion` is null:
     // implementations are expected to catch and log any errors internally.
     // With `deletion` set, a failure that may leave the sstable on storage is
@@ -150,6 +154,8 @@ public:
     virtual future<data_source> make_data_or_index_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt) const = 0;
     virtual future<data_source> make_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt) const = 0;
     virtual future<data_sink> make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) = 0;
+    // Called when the last reference to the sstable is dropped. Deletes the
+    // files of an sstable that is marked for deletion.
     virtual future<> destroy(const sstable& sst) = 0;
     virtual std::unique_ptr<atomic_deletion_impl> make_atomic_deletion_impl() const = 0;
     virtual bool operator==(const storage&) const noexcept = 0;
@@ -171,7 +177,13 @@ public:
 
 std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, schema_ptr schema, const data_dictionary::storage_options& s_opts, sstable_state state);
 future<object_storage_reference_names> list_object_storage_references(object_storage_client& client, sstring bucket, std::string_view prefix, sstable_id sid);
-future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_storage(const sstables_manager&, const schema&, const data_dictionary::storage_options& so);
+// Returns the storage options of a table, given the storage options of its
+// keyspace. For local storage, they name the directory of the table.
+lw_shared_ptr<const data_dictionary::storage_options> make_table_storage_options(const sstables_manager&, const schema&, const data_dictionary::storage_options& keyspace_so);
+// Creates the storage of a table, given the storage options of the table, see
+// make_table_storage_options(). For local storage, creates the directory of
+// the table in every data directory.
+future<> init_table_storage(const sstables_manager&, const data_dictionary::storage_options& so);
 future<> destroy_table_storage(const data_dictionary::storage_options& so);
 future<> init_keyspace_storage(const sstables_manager&, const data_dictionary::storage_options& so, sstring ks_name);
 

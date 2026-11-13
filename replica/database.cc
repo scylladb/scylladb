@@ -1311,7 +1311,11 @@ void database::add_column_family(keyspace& ks, schema_ptr schema, column_family:
 
     // avoid self-reporting
     auto& sst_manager = get_sstables_manager(*schema);
-    auto cf = make_lw_shared<column_family>(schema, std::move(cfg), ks.metadata()->get_storage_options_ptr(), _compaction_manager,
+    // The table has the path of its directory from the start, so that it can
+    // flush as soon as it accepts writes. The caller creates the directory,
+    // see schema_applier::update() and make_column_family_directory().
+    auto storage_opts = sst_manager.make_table_storage_options(*schema, ks.metadata()->get_storage_options());
+    auto cf = make_lw_shared<column_family>(schema, std::move(cfg), std::move(storage_opts), _compaction_manager,
             schema->logstor_enabled() ? _logstor.get() : nullptr, sst_manager, *_cl_stats, _row_cache_tracker, erm, &ks);
     cf->set_durable_writes(ks.metadata()->durable_writes());
 
@@ -1341,23 +1345,28 @@ future<> database::make_column_family_directory(schema_ptr schema) {
 }
 
 future<> database::add_column_family_and_make_directory(schema_ptr schema, is_new_cf is_new, std::optional<service::storage_mode> storage_mode) {
-    auto lock = co_await get_tables_metadata().hold_write_lock();
-    auto& ks = find_keyspace(schema->ks_name());
-    std::exception_ptr ex;
-    try {
-        add_column_family(ks, schema, ks.make_column_family_config(*schema, *this), is_new, nullptr, storage_mode);
-    } catch (...) {
-        ex = std::current_exception();
-    }
-    // cleanup
-    if (ex && column_family_exists(schema->id())) {
-        auto& cf = find_column_family(schema);
-        co_await cf.stop();
-    }
-    if (ex) {
-        co_await coroutine::return_exception_ptr(std::move(ex));
-    }
-    co_await make_column_family_directory(schema);
+    // A removal of the storage of a dropped table with the same ID may be in
+    // progress, see remove_unused_table_storage(). The table directory lock
+    // is taken before the tables metadata lock, as the schema applier does.
+    co_await with_table_dir_lock([&] () -> future<> {
+        auto lock = co_await get_tables_metadata().hold_write_lock();
+        auto& ks = find_keyspace(schema->ks_name());
+        std::exception_ptr ex;
+        try {
+            add_column_family(ks, schema, ks.make_column_family_config(*schema, *this), is_new, nullptr, storage_mode);
+        } catch (...) {
+            ex = std::current_exception();
+        }
+        // cleanup
+        if (ex && column_family_exists(schema->id())) {
+            auto& cf = find_column_family(schema);
+            co_await cf.stop();
+        }
+        if (ex) {
+            co_await coroutine::return_exception_ptr(std::move(ex));
+        }
+        co_await make_column_family_directory(schema);
+    });
 }
 
 bool database::update_column_family(schema_ptr new_schema) {
@@ -1484,6 +1493,10 @@ void database::drop_table(sharded<database>& sharded_db,
 
 future<> database::cleanup_drop_table_on_all_shards(sharded<database>& sharded_db, sharded<db::system_keyspace>& sys_ks,
         bool with_snapshot, global_table_ptr& table_shards) {
+    auto id = table_shards->schema()->id();
+    // The table is removed from the metadata, but still running. Lets a test
+    // act on it in this state.
+    co_await utils::get_local_injector().inject("cleanup_drop_table_wait", utils::wait_for_message(60s));
     co_await sharded_db.invoke_on_all([&] (database& db) -> future<> {
         auto& cf = *table_shards;
         auto uuid = cf.schema()->id();
@@ -1515,8 +1528,110 @@ future<> database::cleanup_drop_table_on_all_shards(sharded<database>& sharded_d
         return table_shards->stop();
     });
     f.get(); // re-throw exception from truncate() if any
-    co_await sys_ks.local().remove_truncation_records(table_shards->schema()->id());
-    co_await table_shards->destroy_storage();
+    utils::get_local_injector().inject("cleanup_drop_table_fail", [] {
+        throw std::runtime_error("cleanup_drop_table_fail injection");
+    });
+    co_await sys_ks.local().remove_truncation_records(id);
+    // If the cleanup failed above, the storage of the table stays behind, as
+    // it did before the removal was deferred.
+    sharded_db.local().schedule_table_storage_removal(sharded_db, table_shards);
+}
+
+void database::schedule_table_storage_removal(sharded<database>& sharded_db, const global_table_ptr& table_shards) {
+    auto id = table_shards->schema()->id();
+    auto holder = _table_storage_removal_gate.try_hold();
+    if (!holder) {
+        dblog.info("Leaving the storage of dropped table {} behind, because the database is shutting down", id);
+        return;
+    }
+    auto is_system = system_keyspace(&table_shards->get_sstables_manager() == &get_system_sstables_manager());
+    // Truncate deletes the sstables of the table, but the files of each are
+    // removed only when the last reference to it is dropped. References can
+    // be held outside of the table, for an unbounded time, so the removal
+    // runs in the background.
+    auto seq = ++_table_storage_removal_seq;
+    auto done = make_lw_shared<shared_promise<>>();
+    _table_storage_removals.insert_or_assign(id, table_storage_removal{seq, done});
+    (void)remove_table_storage(sharded_db, id, is_system, table_shards->get_storage_options_ptr(), std::move(*holder))
+            .then_wrapped([this, id, seq, done] (future<> f) {
+        f.ignore_ready_future();
+        auto it = _table_storage_removals.find(id);
+        if (it != _table_storage_removals.end() && it->second.seq == seq) {
+            _table_storage_removals.erase(it);
+        }
+        done->set_value();
+    });
+}
+
+future<> database::remove_table_storage(sharded<database>& sharded_db, table_id id, system_keyspace is_system,
+        lw_shared_ptr<const data_dictionary::storage_options> storage_opts, gate::holder holder) {
+    try {
+        // The sstables manager of every shard wakes the wait up if a table
+        // with the same ID is created meanwhile. The new table uses the same
+        // storage, which must then stay.
+        auto unused = co_await sharded_db.map_reduce0([id, is_system] (database& db) {
+            return db.get_sstables_manager(is_system).await_table_storage_unused(id);
+        }, true, std::logical_and<bool>());
+        if (unused) {
+            unused = co_await remove_unused_table_storage(sharded_db, id, is_system, [this, is_system, storage_opts] {
+                return get_sstables_manager(is_system).destroy_table_storage(*storage_opts);
+            });
+        }
+        if (!unused) {
+            dblog.info("Leaving the storage of dropped table {} behind, because a table with the same ID was created", id);
+        }
+    } catch (...) {
+        dblog.warn("Failed to remove the storage of dropped table {}: {}", id, std::current_exception());
+    }
+}
+
+future<bool> database::remove_unused_table_storage(sharded<database>& sharded_db, table_id id, system_keyspace is_system,
+        noncopyable_function<future<> ()> remove_storage) {
+    // The lock orders the removal with the creation of a table with the same
+    // ID. Whoever creates a table holds the lock from before it creates the
+    // directory of the table until the table objects are constructed, see
+    // schema_applier::create_table_storage() and
+    // add_column_family_and_make_directory(). Each table object is a user of
+    // the storage. So if no shard has a user here, no table with the ID is
+    // created until the removal is done: its directory is not removed, and
+    // forget_table() doesn't find it open.
+    auto units = co_await get_units(_table_dir_sem, 1);
+    auto in_use = co_await sharded_db.map_reduce0([id, is_system] (database& db) {
+        return db.get_sstables_manager(is_system).table_storage_in_use(id);
+    }, false, std::logical_or<bool>());
+    if (in_use) {
+        co_return false;
+    }
+    co_await utils::get_local_injector().inject("remove_unused_table_storage_wait", utils::wait_for_message(60s));
+    co_await remove_storage();
+    co_await sharded_db.invoke_on_all([id, is_system] (database& db) {
+        db.get_sstables_manager(is_system).forget_table(id);
+    });
+    co_return true;
+}
+
+future<database::table_dir_lock> database::lock_table_dirs() {
+    if (this_shard_id() != 0) {
+        on_internal_error(dblog, "The table directory lock is taken on shard 0");
+    }
+    return get_units(_table_dir_sem, 1);
+}
+
+future<> database::with_table_dir_lock(noncopyable_function<future<> ()> func) {
+    auto shard = this_shard_id();
+    co_await container().invoke_on(0, [shard, &func] (database& db) {
+        return get_units(db._table_dir_sem, 1).then([shard, &func] (auto units) {
+            return smp::submit_to(shard, [&func] { return func(); }).finally([units = std::move(units)] {});
+        });
+    });
+}
+
+future<> database::await_table_storage_removal(table_id id) {
+    auto it = _table_storage_removals.find(id);
+    if (it == _table_storage_removals.end()) {
+        return make_ready_future<>();
+    }
+    return it->second.done->get_shared_future();
 }
 
 future<> database::legacy_drop_table_on_all_shards(sharded<database>& sharded_db, sharded<db::system_keyspace>& sys_ks,
@@ -1790,11 +1905,7 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
 }
 
 future<> table::init_storage() {
-    _storage_opts = co_await _sstables_manager.init_table_storage(*_schema, *_storage_opts);
-}
-
-future<> table::destroy_storage() {
-    return _sstables_manager.destroy_table_storage(*_storage_opts);
+    return _sstables_manager.init_table_storage(*_storage_opts);
 }
 
 column_family& database::find_column_family(const schema_ptr& schema) {
@@ -3048,6 +3159,8 @@ future<> database::stop() {
     co_await _memtable_controller.shutdown();
     dblog.info("Stopping querier cache");
     co_await _querier_cache.stop();
+    dblog.info("Waiting for the removal of the storage of dropped tables");
+    co_await _table_storage_removal_gate.close();
     dblog.info("Closing user sstables manager");
     co_await _user_sstables_manager->close();
     dblog.info("Closing system sstables manager");
@@ -3685,14 +3798,29 @@ future<> database::clear_snapshot(sstring tag, std::vector<sstring> keyspace_nam
                         auto id_opt = _tables_metadata.get_table_id_if_exists(std::make_pair(ks_name, cf_name));
                         auto dropped = !id_opt || (cf_uuid != id_opt);
                         if (dropped) {
-                            dblog.info("Removing dropped table dir {}", table_dir);
-                            sstables::remove_table_directory_if_has_no_snapshots(table_dir).get();
+                            remove_dropped_table_dir(ks_name, cf_uuid, table_dir).get();
                         }
                     }
                 }
             }
         });
     });
+}
+
+future<> database::remove_dropped_table_dir(std::string_view ks_name, table_id id, fs::path table_dir) {
+    auto is_system = system_keyspace(is_system_table(ks_name));
+    auto removed = co_await remove_unused_table_storage(container(), id, is_system, [&table_dir] {
+        dblog.info("Removing dropped table dir {}", table_dir);
+        return sstables::remove_table_directory_if_has_no_snapshots(table_dir);
+    });
+    if (!removed) {
+        // The table may still be running: drop table removes it from the
+        // metadata before it truncates and stops it. Or callers may still
+        // hold sstables of the table, and need their files. The removal of
+        // the storage of the table, or a later clear_snapshot(), removes the
+        // directory once the storage has no user.
+        dblog.info("Leaving dropped table dir {} behind, because its storage is in use", table_dir);
+    }
 }
 
 future<> database::flush_non_system_column_families() {

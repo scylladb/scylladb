@@ -12,6 +12,7 @@ from test.cluster.tasks.task_manager_client import TaskManagerClient
 from test.cluster.util import reconnect_driver, get_topology_coordinator, ensure_group0_leader_on, new_test_keyspace, new_test_table, trigger_stepdown, create_new_test_keyspace
 from test.pylib.util import wait_for_cql_and_get_hosts
 from test.pylib.rest_client import read_barrier
+from test.pylib.sstable_files import glob_live_sstable_files
 
 from cassandra.query import ConsistencyLevel, SimpleStatement
 
@@ -77,8 +78,9 @@ def get_sstables_repaired_at(m, token):
 
 def get_sstables(workdir, ks, table):
     base_pattern = os.path.join(workdir, "data", f"{ks}*", f"{table}-*","*-Data.db")
-    sstables = glob.glob(base_pattern)
-    return sstables
+    # The files of the sstables deleted by e.g. compaction or by the rewrite
+    # of the sstables that a repair marks as repaired can still be there.
+    return glob_live_sstable_files(base_pattern)
 
 async def get_sst_status(run, log, from_mark=None):
     sst_add = await log.grep(rf'.*Added sst.*for incremental repair', from_mark=from_mark)
