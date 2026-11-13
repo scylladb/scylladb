@@ -182,6 +182,24 @@ def test_cluster_config_rejects_invalid_boolean_value(cql, scylla_only):
             cql.execute(f"ALTER TABLE {ks}.tbl WITH auto_repair_enabled = 'yes'")
 
 
+# auto_repair_threshold_in_seconds must be 0 or positive at every scope; 0 itself is accepted.
+def test_cluster_config_rejects_negative_auto_repair_threshold(cql, scylla_only):
+    with new_config_test_keyspace(cql) as ks, cluster_config_cleanup(cql):
+        cql.execute(f"CREATE TABLE {ks}.tbl (pk int PRIMARY KEY)")
+
+        with pytest.raises(InvalidRequest, match="between 0 and"):
+            cql.execute("ALTER CLUSTER WITH auto_repair_threshold_in_seconds = -5")
+        with pytest.raises(ConfigurationException, match="between 0 and"):
+            cql.execute(f"ALTER KEYSPACE {ks} WITH auto_repair_threshold_in_seconds = -5")
+        with pytest.raises(ConfigurationException, match="between 0 and"):
+            cql.execute(f"ALTER TABLE {ks}.tbl WITH auto_repair_threshold_in_seconds = -5")
+
+        cql.execute("ALTER CLUSTER WITH auto_repair_threshold_in_seconds = 0")
+        cql.execute("ALTER CLUSTER WITH auto_repair_threshold_in_seconds = null")
+        cql.execute(f"ALTER KEYSPACE {ks} WITH auto_repair_threshold_in_seconds = 0")
+        cql.execute(f"ALTER TABLE {ks}.tbl WITH auto_repair_threshold_in_seconds = 0")
+
+
 # `= NULL` removes a stored override; the string literal `= 'null'` is an ordinary value.
 # propertyValue renders both as the text "null", so only the parser's null-keyword flag
 # tells them apart - without it a quoted 'null' would silently erase the override at the

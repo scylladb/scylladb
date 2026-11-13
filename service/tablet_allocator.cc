@@ -1257,7 +1257,8 @@ public:
         }
         // A threshold of 0 disables time-based auto repair. The time since the last repair is
         // never negative, so comparing against 0 would select every tablet on every round.
-        // Negative values are not rejected by the registry yet and are treated as 0.
+        // A negative value, rejected by the registry but possibly stored by an older version,
+        // is treated as 0.
         if (settings.threshold <= std::chrono::seconds::zero()) {
             lblogger.debug("Skipped auto repair for tablet={}: time-based auto repair is disabled", gid);
             co_return false;
