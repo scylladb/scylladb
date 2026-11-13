@@ -1740,6 +1740,11 @@ static constexpr std::string_view node_shutdown_failure_message =
 
 future<executor::request_return_type> executor::export_table_to_point_in_time(client_state& client_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
     _stats.api_operations.export_table_to_point_in_time++;
+    // A node of an older version does not run exports, and it does not run the garbage collector
+    // of exports. The SEP of the export asks to refuse an export until all nodes support it.
+    if (!_proxy.features().alternator_export_to_s3) {
+        co_return api_error::unknown_operation("ExportTableToPointInTime not yet supported. Upgrade all nodes to a version that supports it.");
+    }
 
     // Required parameter
     auto table_arn = get_non_empty_string_attribute(request, "TableArn");

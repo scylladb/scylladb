@@ -35,7 +35,7 @@ from test.cluster.util import get_replication, FeatureConfig
 from test.pylib.internal_types import ServerInfo
 from test.pylib.object_storage import Storage, StorageFactory
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
-from test.pylib.util import wait_for
+from test.pylib.util import wait_for, wait_for_feature
 from test.pylib.rest_client import inject_error
 from test.pylib.tablets import get_all_tablet_replicas
 from test.pylib.tablets import get_tablet_replica
@@ -2378,6 +2378,37 @@ async def test_export_fails_when_the_node_stops(manager: ScyllaClusterManager, o
     assert all(key.endswith('/_started') for key in keys), keys
     uploads = export_multipart_uploads(object_storage)
     assert len(uploads) == upload_count, uploads
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_export_refused_until_all_nodes_support_it(manager: ScyllaClusterManager, object_storage_factory):
+    """ExportTableToPointInTime is refused in a rolling upgrade, until ALTERNATOR_EXPORT_TO_S3 is enabled.
+
+    The first node acts as an old version, because it does not announce the feature. The second
+    node refuses an export. After the first node restarts with the feature, as if it is upgraded,
+    the second node runs the export.
+    """
+    object_storage = await object_storage_factory('s3')
+    config = alternator_config | {'object_storage_endpoints': object_storage.create_endpoint_conf()}
+    old_config = config | {'error_injections_at_startup': [{'name': 'suppress_features', 'value': 'ALTERNATOR_EXPORT_TO_S3'}]}
+    servers = [await manager.server_add(config=old_config), await manager.server_add(config=config)]
+    table = get_alternator(servers[1].ip_addr).create_table(TableName=unique_table_name(),
+        BillingMode='PAY_PER_REQUEST',
+        KeySchema=[ {'AttributeName': 'p', 'KeyType': 'HASH' } ],
+        AttributeDefinitions=[ {'AttributeName': 'p', 'AttributeType': 'N' } ])
+    client = table.meta.client
+    table_arn = client.describe_table(TableName=table.name)['Table']['TableArn']
+    with pytest.raises(ClientError, match='UnknownOperationException.*Upgrade all nodes'):
+        client.export_table_to_point_in_time(TableArn=table_arn, S3Bucket=object_storage.bucket_name)
+
+    await manager.server_update_config(servers[0].server_id, 'error_injections_at_startup', [])
+    await manager.server_restart(servers[0].server_id)
+    cql, hosts = await manager.get_ready_cql(servers)
+    await wait_for_feature('ALTERNATOR_EXPORT_TO_S3', cql, hosts[1], time.time() + 60)
+    export_arn = client.export_table_to_point_in_time(
+        TableArn=table_arn, S3Bucket=object_storage.bucket_name)['ExportDescription']['ExportArn']
+    desc = await describe_finished_export(servers[1], export_arn)
+    assert desc['ExportStatus'] == 'COMPLETED', desc
 
 
 # The garbage collector takes the export of a node which stays down only after that node was
