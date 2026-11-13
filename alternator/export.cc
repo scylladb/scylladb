@@ -182,11 +182,23 @@ static future<bool> update_export(db::system_distributed_keyspace& sdks, const e
     co_return co_await helper.update_export(row, old_export_status, old_node_id, ttl);
 }
 
+// Makes `row` a FAILED row. update_export() writes all columns, so this also clears the fields
+// that only a COMPLETED row has.
+static void set_failed(export_row& row, std::string_view failure_code, std::string_view failure_message) {
+    row.export_status = "FAILED";
+    row.failure_code = sstring(failure_code);
+    row.failure_message = sstring(failure_message);
+    row.completed_at = db_clock::now();
+    row.export_manifest = std::nullopt;
+    row.item_count = std::nullopt;
+    row.billed_size_bytes = std::nullopt;
+}
+
 // One attempt of write_final_export_row(). The conditional update fails if there is no row
 // (the export can fail before the row is written). Then we insert the row. If the insert
 // fails, a row exists that we must not overwrite, unless it is our IN_PROGRESS row.
 static future<bool> try_write_final_export_row(db::system_distributed_keyspace& sdks, const export_row& row) {
-    // Tests fail this write, to reach finish_export_in_background().
+    // Tests fail this write, to make write_final_export_row() retry it.
     utils::get_local_injector().inject("alternator_export_to_s3_final_write",
             [] { throw std::runtime_error("injected failure alternator_export_to_s3_final_write"); });
     // Tests make the update miss the row, as the case below does.
@@ -219,9 +231,8 @@ static future<bool> try_write_final_export_row(db::system_distributed_keyspace& 
 // an earlier attempt that timed out applied.
 // Throws if `as` is aborted (the node stops). Then the garbage collector of the next
 // incarnation collects the row.
-// The retries can take long, so only the fiber of finish_export_in_background() uses this. A
-// caller that cannot wait writes with try_write_final_export_row() and hands the retries to
-// that fiber.
+// The retries can take long. The request path cannot wait, so it writes with
+// try_write_final_export_row() and hands the retries to finish_export_in_background().
 static future<bool> write_final_export_row(db::system_distributed_keyspace& sdks, const export_row& row, abort_source& as) {
     constexpr std::chrono::seconds first_retry_delay{1};
     constexpr std::chrono::seconds max_retry_delay{60};
@@ -1476,11 +1487,8 @@ static future<> collect_export_row(service::storage_proxy& proxy, db::system_dis
     // The write must set the TTL too: it writes all non-key columns.
     xlogger.debug("Marking export row {} as FAILED", exp.export_arn);
     auto failed_export_row = exp;
-    failed_export_row.export_status = "FAILED";
+    set_failed(failed_export_row, "NodeFailure", "The node that was performing the export has failed before the export could finish.");
     failed_export_row.node_id = self_node_id.to_string();
-    failed_export_row.failure_code = "NodeFailure";
-    failed_export_row.failure_message = "The node that was performing the export has failed before the export could finish.";
-    failed_export_row.completed_at = db_clock::now();
     if (!co_await update_export(sdks, failed_export_row, exp.export_status, exp.node_id, export_row_ttl)) {
         // A different node took the row first. Skip it.
         xlogger.debug("Failed to update export row {} to FAILED, it may have been updated by another node", exp.export_arn);
@@ -2243,7 +2251,7 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
         }
 
         xlogger.debug("Launching background export fiber for ClientToken {}", client_token);
-        _s3_exports->start_export(std::move(*export_slot), std::move(s3_client), schema, erow, table_arn, s3_bucket, s3_prefix);
+        _s3_exports->start_export(*export_slot, std::move(s3_client), schema, erow, table_arn, s3_bucket, s3_prefix);
         co_return std::move(response);
     }
     catch (...) {
@@ -2283,17 +2291,12 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
     }
     auto* e = try_catch<std::exception>(failure);
     if (_s3_exports->abort_requested()) {
-        erow.failure_code = sstring(node_shutdown_failure_code);
-        erow.failure_message = sstring(node_shutdown_failure_message);
+        set_failed(erow, node_shutdown_failure_code, node_shutdown_failure_message);
     } else if (gossip_restarted) {
-        erow.failure_code = "NodeFailure";
-        erow.failure_message = e ? e->what() : "Unknown error";
+        set_failed(erow, "NodeFailure", e ? e->what() : "Unknown error");
     } else {
-        erow.failure_code = "Exception";
-        erow.failure_message = e ? e->what() : "Unknown error";
+        set_failed(erow, "Exception", e ? e->what() : "Unknown error");
     }
-    erow.export_status = "FAILED";
-    erow.completed_at = db_clock::now();
     try {
         if (co_await try_write_final_export_row(_sdks, erow)) {
             xlogger.warn("Export {} failed before it started, with {}: {}", erow.export_arn, *erow.failure_code,
@@ -2306,10 +2309,10 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
         }
     } catch (...) {
         // This write must not be given up (see write_final_export_row()). The request cannot
-        // wait, so a background fiber retries it, with the export slot of this request. Only
-        // start_export() can throw after it takes that slot, and it throws only before it starts
-        // its export fiber. If it throws because the gate is closed, the fiber below does not
-        // start either.
+        // wait, so a background fiber retries it, with the export slot of this request.
+        // start_export() takes that slot only when its export fiber starts, so if it throws, this
+        // request still holds the slot. If it throws because the gate is closed, the fiber below
+        // does not start either.
         xlogger.warn("Export {}: failed to write the FAILED state, retrying in the background: {}",
                 erow.export_arn, std::current_exception());
         _s3_exports->finish_export_in_background(std::move(*export_slot), erow);
@@ -2804,9 +2807,9 @@ static sstring format_manifest_time(db_clock::time_point tp) {
 // The worker changes the row from IN_PROGRESS to COMPLETED or FAILED. The garbage collector
 // changes the row of a dead incarnation from IN_PROGRESS to FAILED. Each write is
 // conditional on the pair, so a late worker cannot overwrite a takeover.
-// Returns the row whose terminal state still has to be written, if that write failed. The
-// caller retries it in a background fiber (see finish_export_in_background()).
-static future<std::optional<export_row>> run_export(
+// The fiber retries the write of the terminal state until it applies or the node stops (see
+// write_final_export_row()). The caller holds the export slot until the fiber ends.
+static future<> run_export(
         service::storage_proxy& proxy,
         db::system_distributed_keyspace& sdks,
         stats& stats,
@@ -2960,29 +2963,14 @@ static future<std::optional<export_row>> run_export(
         auto manifest_summary_content = rjson::print(summary);
         auto manifest_summary_key = co_await put_manifest("manifest-summary", std::move(manifest_summary_content));
 
-        row.export_status = "COMPLETED";
+        // Set COMPLETED only after all uploads. If an upload throws, the status stays IN_PROGRESS,
+        // and the code after this block writes FAILED.
         row.export_manifest = manifest_summary_key;
+        row.export_status = "COMPLETED";
         // Increase the metric before the final write below makes the row COMPLETED. Then a client
         // that sees COMPLETED in DescribeExport also sees this export in the metric.
         ++stats.s3_exports.completed;
         xlogger.info("Export {} completed with {} items", row.export_arn, item_count);
-        // The data and the manifests are in S3, so a failure of this write should not make a
-        // completed export FAILED. The write must not be given up either, and this fiber must not
-        // wait for the retries: hand them to the caller, which retries them in another fiber.
-        bool updated;
-        try {
-            updated = co_await try_write_final_export_row(sdks, row);
-        } catch (...) {
-            xlogger.warn("Export {}: failed to write the COMPLETED state, retrying in the background: {}",
-                    row.export_arn, std::current_exception());
-            co_return std::move(row);
-        }
-        if (!updated) {
-            // The garbage collector took the row. A write of FAILED does not apply either.
-            xlogger.warn("Export {} completed, but the garbage collector took its row before", row.export_arn);
-            co_return std::nullopt;
-        }
-        co_return std::nullopt;
     } catch (const std::exception& e) {
         if (as.abort_requested()) {
             failure_code = node_shutdown_failure_code;
@@ -2994,32 +2982,19 @@ static future<std::optional<export_row>> run_export(
         failure_message = "Unknown error";
     }
 
-    // The export failed. Report it.
-    row.completed_at = db_clock::now();
-    ++stats.s3_exports.failed;
-    xlogger.warn("Export {} failed with {}: {}", row.export_arn, failure_code, failure_message);
-    row.export_status = "FAILED";
-    row.failure_code = std::move(failure_code);
-    row.failure_message = std::move(failure_message);
-    // The failure can occur after the success path set these fields (e.g. if the COMPLETED
-    // write failed). update_export() writes all columns, so clear them.
-    row.export_manifest = std::nullopt;
-    row.item_count = std::nullopt;
-    row.billed_size_bytes = std::nullopt;
-    bool updated;
-    try {
-        updated = co_await try_write_final_export_row(sdks, row);
+    if (row.export_status != "COMPLETED") {
+        // The success path sets the fields of a COMPLETED row before it uploads the manifests,
+        // and set_failed() clears them.
+        set_failed(row, failure_code, failure_message);
+        ++stats.s3_exports.failed;
+        xlogger.warn("Export {} failed with {}: {}", row.export_arn, failure_code, failure_message);
     }
-    catch (...) {
-        // This write must not be given up, and this fiber must not wait for the retries (see the
-        // COMPLETED write above). Hand them to the caller.
-        xlogger.warn("Export {}: failed to write the FAILED state, retrying in the background: {}",
-                row.export_arn, std::current_exception());
-        co_return std::move(row);
+    // A failure of this write must not make a COMPLETED export FAILED: its data and manifests are
+    // in S3. The write must not be given up either.
+    if (!co_await write_final_export_row(sdks, row, as)) {
+        xlogger.warn("Export {}: the write of {} did not apply. The garbage collector took the row, or an "
+                "earlier attempt that timed out applied", row.export_arn, row.export_status);
     }
-    xlogger.debug("Export {} failed with {} items{}", row.export_arn, item_count,
-            updated ? "" : ", but the row is not ours any more");
-    co_return std::nullopt;
 }
 
 // Reads the live configuration on each call. If the limit decreases below the number of
@@ -3031,53 +3006,46 @@ auto executor::s3_exports::try_reserve_export_slot() -> std::optional<slot> {
     return slot(_running_exports);
 }
 
-void executor::s3_exports::start_export(slot export_slot, export_s3_client s3_client, schema_ptr schema, export_row row,
+void executor::s3_exports::start_export(slot& export_slot, export_s3_client s3_client, schema_ptr schema, export_row row,
         std::string table_arn, std::string s3_bucket, std::string s3_prefix) {
-    // Fire-and-forget, in the gate. `run_export()` writes failures to the export row, so an
-    // exception from it is unexpected (e.g. bad_alloc). It can leave the row IN_PROGRESS, which
-    // the garbage collector does not take while this node runs. Then write FAILED to the row in
-    // the background, from a copy of the row as it is before the export starts. If this copy
-    // throws, or with_gate() throws because the gate is closed (it throws at once, it does not
-    // return a failed future), the fiber does not start, and the caller writes FAILED.
-    // The `then_wrapped` continuation holds the export slot until the fiber finishes, or gives
-    // it to finish_export_in_background(). run_export() cannot hold it, because it cannot name
-    // the `slot` type.
+    // The copy of the row for an unexpected failure, see export_fiber(). If this copy throws, or
+    // with_gate() throws because the gate is closed (it throws at once, it does not return a
+    // failed future), the fiber does not start, and the caller writes FAILED.
     auto failed_row = row;
-    auto export_arn = row.export_arn;
     (void)with_gate(_gate, [&] {
         ++_e._stats.s3_exports.started;
-        return futurize_invoke(run_export, _e._proxy, _e._sdks, _e._stats, _as, std::move(schema), std::move(row), std::move(s3_client),
-                std::move(table_arn), std::move(s3_bucket), std::move(s3_prefix))
-                .then_wrapped([this, export_slot = std::move(export_slot), failed_row = std::move(failed_row)]
-                        (future<std::optional<export_row>> f) mutable {
-            std::optional<export_row> unwritten;
-            if (f.failed()) {
-                xlogger.error("Background export fiber for {} failed unexpectedly, writing FAILED in the background: {}",
-                        failed_row.export_arn, f.get_exception());
-                ++_e._stats.s3_exports.failed;
-                failed_row.export_status = "FAILED";
-                failed_row.completed_at = db_clock::now();
-                if (_as.abort_requested()) {
-                    failed_row.failure_code = sstring(node_shutdown_failure_code);
-                    failed_row.failure_message = sstring(node_shutdown_failure_message);
-                } else {
-                    failed_row.failure_code = "Exception";
-                    failed_row.failure_message = "Unknown error";
-                }
-                unwritten = std::move(failed_row);
-            } else {
-                unwritten = f.get();
-            }
-            // The write of the terminal state failed, or did not happen. Retry it in a fiber that
-            // takes the export slot, so that the row is never given up. The slot goes back when
-            // that fiber ends, or when this continuation returns.
-            if (unwritten) {
-                finish_export_in_background(std::move(export_slot), std::move(*unwritten));
-            }
-        }).handle_exception([export_arn = std::move(export_arn)] (std::exception_ptr ep) {
-            xlogger.error("Background export fiber for {} failed unexpectedly: {}", export_arn, ep);
-        });
+        return export_fiber(std::move(export_slot), std::move(s3_client), std::move(schema), std::move(row),
+                std::move(failed_row), std::move(table_arn), std::move(s3_bucket), std::move(s3_prefix));
     });
+}
+
+future<> executor::s3_exports::export_fiber(slot export_slot, export_s3_client s3_client, schema_ptr schema, export_row row,
+        export_row failed_row, std::string table_arn, std::string s3_bucket, std::string s3_prefix) {
+    try {
+        co_await run_export(_e._proxy, _e._sdks, _e._stats, _as, std::move(schema), std::move(row), std::move(s3_client),
+                std::move(table_arn), std::move(s3_bucket), std::move(s3_prefix));
+        co_return;
+    } catch (...) {
+        if (_as.abort_requested()) {
+            // The node stops while run_export() retries the write of the final state. The garbage
+            // collector of the next incarnation collects the row.
+            xlogger.debug("Export {}: the node stops before the write of the final state", failed_row.export_arn);
+            co_return;
+        }
+        xlogger.error("Export fiber for {} failed unexpectedly, writing FAILED: {}", failed_row.export_arn,
+                std::current_exception());
+    }
+    // run_export() writes the result of the export, so an exception from it is unexpected (for
+    // example, bad_alloc). The row can stay IN_PROGRESS, which the garbage collector does not
+    // take while this node runs. Thus write FAILED from the copy of the row before the export.
+    ++_e._stats.s3_exports.failed;
+    set_failed(failed_row, "Exception", "Unknown error");
+    try {
+        co_await write_final_export_row(_e._sdks, failed_row, _as);
+    } catch (...) {
+        xlogger.debug("Export {}: the node stops before the write of FAILED: {}", failed_row.export_arn,
+                std::current_exception());
+    }
 }
 
 // The fiber of finish_export_in_background() below. It owns `row`. It starts in the scheduling
