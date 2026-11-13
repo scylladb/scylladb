@@ -77,13 +77,17 @@ public:
         return _current_dk;
     }
 
-    void set_current_dk(const dht::decorated_key& key);
-
-    void clear_current_dk();
+    // Tracks the current partition from mf; false if repair makes no row from mf.
+    bool track_partition(const mutation_fragment& mf);
 
     void check_current_dk();
 
     void pause();
+
+private:
+    void set_current_dk(const dht::decorated_key& key);
+
+    void clear_current_dk();
 };
 
 template <> struct fmt::formatter<repair_reader::read_strategy>  : fmt::formatter<string_view> {

@@ -21,10 +21,51 @@ struct appending_hash<collection_mutation_view> {
     template<typename Hasher>
     void operator()(Hasher& h, collection_mutation_view cell, const column_definition& cdef) const {
         ::feed_hash(h, cell.tomb());
-        for (auto&& [key, value] : cell) {
-            ::feed_hash(h, key);
-            ::feed_hash(h, value, cdef);
+        cell.for_each_element([&] (managed_bytes_view key, atomic_cell_view value) {
+            if (!feed_contiguous(h, key, value.serialize())) {
+                ::feed_hash(h, key);
+                ::feed_hash(h, value, cdef);
+            }
+            return true;
+        });
+    }
+
+private:
+    // Feeds what feed_hash(key) and appending_hash<atomic_cell_view> feed, reading
+    // the fields in place: the fragmented accessors dominate hashing large collections.
+    template<typename Hasher>
+    static bool feed_contiguous(Hasher& h, managed_bytes_view key, managed_bytes_view cell) {
+        using act = atomic_cell_type;
+        const auto k = key.current_fragment();
+        const auto c = cell.current_fragment();
+        if (k.size() != key.size_bytes() || c.size() != cell.size_bytes() || c.empty()) {
+            return false;
         }
+        const auto p = reinterpret_cast<const char*>(c.data());
+        const auto flags = p[0];
+        const bool live = flags & act::LIVE_FLAG;
+        const bool expiring = live && (flags & act::EXPIRY_FLAG);
+        const size_t fixed = !live ? act::dead_serialized_size() : expiring ? act::live_expiring_serialized_size(0) : act::live_serialized_size(0);
+        // Truncated cells take the checked path, which throws.
+        if ((flags & act::COUNTER_UPDATE_FLAG) || c.size() < fixed) {
+            return false;
+        }
+        auto time_at = [p] (unsigned offset) {
+            return gc_clock::time_point(gc_clock::duration(seastar::read_be<int64_t>(p + offset)));
+        };
+        ::feed_hash(h, k);
+        ::feed_hash(h, live);
+        ::feed_hash(h, seastar::read_be<api::timestamp_type>(p + act::timestamp_offset));
+        if (live) {
+            if (expiring) {
+                ::feed_hash(h, time_at(act::expiry_offset));
+                ::feed_hash(h, gc_clock::duration(seastar::read_be<int32_t>(p + act::ttl_offset)));
+            }
+            ::feed_hash(h, c.substr(fixed));
+        } else {
+            ::feed_hash(h, time_at(act::deletion_time_offset));
+        }
+        return true;
     }
 };
 
