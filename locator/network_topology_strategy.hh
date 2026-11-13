@@ -108,4 +108,8 @@ private:
     std::vector<sstring> _datacenteres;
     size_t _rep_factor;
 };
+
+// The strategy of erm as NetworkTopologyStrategy. An internal error for any other strategy.
+const network_topology_strategy& as_network_topology_strategy(const effective_replication_map& erm);
+
 } // namespace locator

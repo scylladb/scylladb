@@ -516,6 +516,7 @@ future<tablet_metadata> tablet_metadata::copy() const {
     copy._base_table = _base_table;
 
     copy._balancing_enabled = _balancing_enabled;
+    copy._datacenters = _datacenters;
 
     co_return copy;
 }
@@ -637,6 +638,8 @@ tablet_map::tablet_map(utils::chunked_vector<dht::raw_token> last_tokens, bool w
     if (with_raft_info) {
         _raft_info.resize(_tablet_ids.tablet_count());
     }
+    // Zero counts match the empty replica sets. The mutators mark the counts of each tablet they change dirty.
+    _dc.counts.resize(_tablet_ids.tablet_count());
 }
 
 tablet_map::tablet_map(size_t tablet_count, bool with_raft_info, tablet_map::initialized_later)
@@ -646,6 +649,7 @@ tablet_map::tablet_map(size_t tablet_count, bool with_raft_info, tablet_map::ini
     if (with_raft_info) {
         _raft_info.resize(tablet_count);
     }
+    _dc.counts.resize(tablet_count);
 }
 
 tablet_layout tablet_id_map::get_layout(const utils::chunked_vector<dht::raw_token>& last_tokens) {
@@ -672,7 +676,8 @@ tablet_layout tablet_map::get_layout() const {
 
 tablet_map tablet_map::clone() const {
     return tablet_map(_tablet_ids, _tablets, _transitions, _resize_decision, _resize_task_info,
-                      _raft_info, _raft_resizes, _target_pow2_tablet_count);
+                      _raft_info, _raft_resizes, _target_pow2_tablet_count,
+                      _dc);
 }
 
 future<tablet_map> tablet_map::clone_gently() const {
@@ -706,10 +711,28 @@ future<tablet_map> tablet_map::clone_gently() const {
         co_await coroutine::maybe_yield();
     }
 
+    dc_counts_state dc;
+    dc.counts.reserve(_dc.counts.size());
+    for (const auto& c : _dc.counts) {
+        dc.counts.emplace_back(c);
+        co_await coroutine::maybe_yield();
+    }
+    dc.transitions.reserve(_dc.transitions.size());
+    for (const auto& [id, c] : _dc.transitions) {
+        dc.transitions.emplace(id, c);
+        co_await coroutine::maybe_yield();
+    }
+    dc.dirty.reserve(_dc.dirty.size());
+    for (auto id : _dc.dirty) {
+        dc.dirty.emplace_back(id);
+        co_await coroutine::maybe_yield();
+    }
+
     co_return tablet_map(std::move(ids), std::move(tablets), std::move(transitions),
                          _resize_decision, _resize_task_info, std::move(raft_info),
                          std::move(raft_resizes),
-                         _target_pow2_tablet_count);
+                         _target_pow2_tablet_count,
+                         std::move(dc));
 }
 
 void tablet_map::check_tablet_id(tablet_id id) const {
@@ -855,17 +878,20 @@ const utils::chunked_vector<dht::raw_token>& tablet_map::get_sorted_raw_tokens()
 void tablet_map::set_tablet(tablet_id id, tablet_info info) {
     check_tablet_id(id);
     _tablets[size_t(id)] = std::move(info);
+    mark_dc_counts_dirty(id);
 }
 
 void tablet_map::emplace_tablet(tablet_id id, dht::token last_token, tablet_info info) {
     check_tablet_id(id);
     _tablet_ids.push_back(last_token, id);
     _tablets[size_t(id)] = std::move(info);
+    mark_dc_counts_dirty(id);
 }
 
 void tablet_map::set_tablet_transition_info(tablet_id id, tablet_transition_info info) {
     check_tablet_id(id);
     _transitions.insert_or_assign(id, std::move(info));
+    mark_dc_counts_dirty(id);
 }
 
 void tablet_map::set_resize_decision(locator::resize_decision decision) {
@@ -879,6 +905,7 @@ void tablet_map::set_resize_task_info(tablet_task_info task_info) {
 void tablet_map::clear_tablet_transition_info(tablet_id id) {
     check_tablet_id(id);
     _transitions.erase(id);
+    mark_dc_counts_dirty(id);
 }
 
 future<> tablet_map::for_each_tablet(seastar::noncopyable_function<future<>(tablet_id, const tablet_info&)> func) const {
@@ -948,6 +975,9 @@ future<> tablet_map::for_each_sibling_tablets(seastar::noncopyable_function<futu
 }
 
 void tablet_map::clear_transitions() {
+    for (const auto& [id, _] : _transitions) {
+        mark_dc_counts_dirty(id);
+    }
     _transitions.clear();
 }
 
@@ -966,6 +996,9 @@ bool tablet_map::has_replica(tablet_id tid, tablet_replica r) const {
 future<> tablet_map::clear_gently() {
     co_await utils::clear_gently(_tablets);
     co_await utils::clear_gently(_tablet_ids);
+    co_await utils::clear_gently(_dc.counts);
+    co_await utils::clear_gently(_dc.transitions);
+    co_await utils::clear_gently(_dc.dirty);
 }
 
 const tablet_transition_info* tablet_map::get_tablet_transition_info(tablet_id id) const {
@@ -974,6 +1007,160 @@ const tablet_transition_info* tablet_map::get_tablet_transition_info(tablet_id i
         return nullptr;
     }
     return &i->second;
+}
+
+// Whether reads of a tablet with the given transition, or none, use tablet_transition_info::next.
+static bool reads_next(const tablet_transition_info* info) {
+    if (!info) {
+        return false;
+    }
+    switch (info->reads) {
+        case read_replica_set_selector::previous:
+            return false;
+        case read_replica_set_selector::next:
+            return true;
+    }
+    on_internal_error(tablet_logger, format("Invalid read replica selector: {}", static_cast<int>(info->reads)));
+}
+
+// Whether writes of a tablet with the given transition, or none, use tablet_transition_info::next.
+static bool writes_next(const tablet_transition_info* info) {
+    if (!info) {
+        return false;
+    }
+    switch (info->writes) {
+        case write_replica_set_selector::previous:
+            [[fallthrough]];
+        case write_replica_set_selector::both:
+            return false;
+        case write_replica_set_selector::next:
+            return true;
+    }
+    on_internal_error(tablet_logger, format("Invalid write replica selector: {}", static_cast<int>(info->writes)));
+}
+
+const tablet_replica_set& tablet_map::get_replicas_for_reading(tablet_id tablet) const {
+    auto* info = get_tablet_transition_info(tablet);
+    return reads_next(info) ? info->next : get_tablet_info(tablet).replicas;
+}
+
+const tablet_replica_set& tablet_map::get_replicas_for_writing(tablet_id tablet) const {
+    auto* info = get_tablet_transition_info(tablet);
+    return writes_next(info) ? info->next : get_tablet_info(tablet).replicas;
+}
+
+const tablet_replica* tablet_map::get_pending_replica(tablet_id tablet) const {
+    auto* info = get_tablet_transition_info(tablet);
+    if (!info || info->transition == tablet_transition_kind::intranode_migration) {
+        return nullptr;
+    }
+    switch (info->writes) {
+        case write_replica_set_selector::previous:
+            return nullptr;
+        case write_replica_set_selector::both:
+            return info->pending_replica ? &*info->pending_replica : nullptr;
+        case write_replica_set_selector::next:
+            return nullptr;
+    }
+    on_internal_error(tablet_logger, format("Invalid write replica selector: {}", static_cast<int>(info->writes)));
+}
+
+size_t tablet_dc_dictionary::index_of_or_add(const sstring& dc) {
+    if (auto i = index_of(dc)) {
+        return *i;
+    }
+    _names.push_back(dc);
+    return _names.size() - 1;
+}
+
+std::optional<size_t> tablet_dc_dictionary::index_of(const sstring& dc) const {
+    auto it = std::ranges::find(_names, dc);
+    if (it == _names.end()) {
+        return std::nullopt;
+    }
+    return std::distance(_names.begin(), it);
+}
+
+void tablet_map::mark_dc_counts_dirty(tablet_id id) {
+    auto& counts = _dc.counts[id.value()];
+    if (!counts.dirty) {
+        counts.dirty = true;
+        _dc.dirty.push_back(id);
+    }
+}
+
+static tablet_dc_counts count_replicas_per_dc(const tablet_replica_set& replicas, const topology& topo, tablet_dc_dictionary& dcs) {
+    tablet_dc_counts counts;
+    for (const auto& r : replicas) {
+        // Like topology::get_datacenter(), falls back to the configured location of this node.
+        const auto* node = topo.find_node(r.host);
+        if (!node && !topo.is_me(r.host)) {
+            tablet_logger.debug("Datacenter of tablet replica {} is unknown: host not in topology", r);
+            counts.unknown = true;
+            continue;
+        }
+        const auto& dc = node ? node->dc_rack().dc : topo.get_datacenter();
+        if (!counts.add_replica(dcs.index_of_or_add(dc))) {
+            on_internal_error(tablet_logger, format("More than {} replicas of a tablet in datacenter {}, out of {} replicas",
+                    std::numeric_limits<tablet_dc_counts_vector::value_type>::max(), dc, replicas.size()));
+        }
+    }
+    return counts;
+}
+
+future<size_t> tablet_map::update_dc_counts(const topology& topo, tablet_dc_dictionary& dcs) {
+    // A tablet changed during a yield after its recompute is appended to the list, so this
+    // loop recomputes it too. The list is cleared only after the last tablet, so a throw
+    // leaves has_dirty_dc_counts() true instead of serving stale counts.
+    size_t unknown = 0;
+    for (size_t i = 0; i < _dc.dirty.size(); ++i) {
+        auto id = _dc.dirty[i];
+        auto& counts = _dc.counts[id.value()];
+        counts = count_replicas_per_dc(_tablets[id.value()].replicas, topo, dcs);
+        bool is_unknown = counts.unknown;
+        if (auto* trinfo = get_tablet_transition_info(id)) {
+            auto [it, _] = _dc.transitions.insert_or_assign(id, count_replicas_per_dc(trinfo->next, topo, dcs));
+            is_unknown |= it->second.unknown;
+        } else {
+            _dc.transitions.erase(id);
+        }
+        unknown += is_unknown;
+        co_await coroutine::maybe_yield();
+    }
+    _dc.dirty.clear();
+    co_return unknown;
+}
+
+void tablet_map::check_dc_counts_updated(tablet_id tablet) const {
+    if (has_dirty_dc_counts()) [[unlikely]] {
+        on_internal_error(tablet_logger, format("Per-datacenter replica counts of tablet {} read before update_dc_counts()", tablet));
+    }
+}
+
+const tablet_dc_counts& tablet_map::transition_dc_counts(tablet_id tablet) const {
+    auto it = _dc.transitions.find(tablet);
+    if (it == _dc.transitions.end()) [[unlikely]] {
+        on_internal_error(tablet_logger, format("Tablet {} is in transition but has no per-datacenter counts for it", tablet));
+    }
+    return it->second;
+}
+
+tablet_map::replicas_and_dc_counts tablet_map::get_replicas_and_dc_counts_for_reading(tablet_id tablet) const {
+    check_dc_counts_updated(tablet);
+    auto* info = get_tablet_transition_info(tablet);
+    if (reads_next(info)) {
+        return {info->next, transition_dc_counts(tablet)};
+    }
+    return {get_tablet_info(tablet).replicas, _dc.counts[tablet.value()]};
+}
+
+tablet_map::replicas_and_dc_counts tablet_map::get_replicas_and_dc_counts_for_writing(tablet_id tablet) const {
+    check_dc_counts_updated(tablet);
+    auto* info = get_tablet_transition_info(tablet);
+    if (writes_next(info)) {
+        return {info->next, transition_dc_counts(tablet)};
+    }
+    return {get_tablet_info(tablet).replicas, _dc.counts[tablet.value()]};
 }
 
 const tablet_raft_info& tablet_map::get_tablet_raft_info(tablet_id id) const {
@@ -1241,12 +1428,28 @@ size_t tablet_id_map::external_memory_usage() const {
     return _buckets.external_memory_usage() +_last_tokens.external_memory_usage();
 }
 
+// Estimates the external memory usage of std::unordered_map<>.
+// Does not include external memory usage of elements.
+template <typename K, typename V>
+static size_t estimate_external_memory_usage(const std::unordered_map<K, V>& map) {
+    return map.bucket_count() * sizeof(void*) + map.size() * (sizeof(std::pair<const K, V>) + 8);
+}
+
 size_t tablet_map::external_memory_usage() const {
     size_t result = _tablets.external_memory_usage();
     result += _tablet_ids.external_memory_usage();
     for (auto&& tablet : _tablets) {
         result += tablet.replicas.external_memory_usage();
     }
+    result += _dc.counts.external_memory_usage();
+    for (const auto& counts : _dc.counts) {
+        result += counts.external_memory_usage();
+    }
+    result += estimate_external_memory_usage(_dc.transitions);
+    for (const auto& [_, counts] : _dc.transitions) {
+        result += counts.external_memory_usage();
+    }
+    result += _dc.dirty.external_memory_usage();
     return result;
 }
 
@@ -1571,13 +1774,6 @@ std::optional<tablet_range_splitter_for_reads::range_split_result> tablet_range_
     return {};
 }
 
-// Estimates the external memory usage of std::unordered_map<>.
-// Does not include external memory usage of elements.
-template <typename K, typename V>
-static size_t estimate_external_memory_usage(const std::unordered_map<K, V>& map) {
-    return map.bucket_count() * sizeof(void*) + map.size() * (sizeof(std::pair<const K, V>) + 8);
-}
-
 size_t tablet_metadata::external_memory_usage() const {
     size_t result = estimate_external_memory_usage(_tablets);
     for (auto&& [id, map] : _tablets) {
@@ -1626,6 +1822,11 @@ class tablet_effective_replication_map : public effective_replication_map {
     table_id _table;
     tablet_sharder _sharder;
     mutable const tablet_map* _tmap = nullptr;
+    // Indexes into tablet_metadata::datacenters(), resolved once per erm. Disengaged for a
+    // datacenter which holds no tablet replica. _schema_dc_indexes is indexed like
+    // network_topology_strategy::get_datacenters().
+    std::optional<size_t> _local_dc_index;
+    utils::small_vector<std::optional<size_t>, 4> _schema_dc_indexes;
 private:
     host_id_vector_replica_set to_host_set(const tablet_replica_set& replicas) const {
         host_id_vector_replica_set result;
@@ -1643,25 +1844,37 @@ private:
         return *_tmap;
     }
 
+    // Picks the counts of the local datacenter and of the datacenters the schema lists. A
+    // datacenter the schema does not list holds replicas while the tablets and the schema
+    // disagree during an RF change, and gets no slot in per_dc.
+    token_replication_factor::datacenter_counts make_datacenter_counts(const tablet_replica_set& replicas, const tablet_dc_counts& counts) const {
+        if (counts.unknown) [[unlikely]] {
+            // A replica host was not in topology when the tablet was loaded. The loader already
+            // reported it, and storage_proxy does not ask for the counts in maintenance mode.
+            throw std::runtime_error(format("Datacenter of a replica in {} is unknown: the host was not in topology when the tablet was loaded", replicas));
+        }
+        token_replication_factor::datacenter_counts result;
+        result.local = _local_dc_index ? counts.at_or_zero(*_local_dc_index) : 0;
+        result.per_dc.reserve(_schema_dc_indexes.size());
+        for (const auto& i : _schema_dc_indexes) {
+            result.per_dc.push_back(i ? counts.at_or_zero(*i) : 0);
+        }
+        return result;
+    }
+
+    // counts is set when the caller asked for with_datacenters::yes.
+    replicas_with_rf make_replicas_with_rf(const tablet_replica_set& replicas, const tablet_dc_counts* counts) const {
+        replicas_with_rf result{to_host_set(replicas), {.total = replicas.size()}};
+        if (counts) {
+            result.rf.dcs = make_datacenter_counts(replicas, *counts);
+        }
+        return result;
+    }
+
     const tablet_replica_set& get_replicas_for_write(dht::token search_token) const {
         auto&& tablets = get_tablet_map();
         auto tablet = tablets.get_tablet_id(search_token);
-        auto* info = tablets.get_tablet_transition_info(tablet);
-        auto&& replicas = std::invoke([&] () -> const tablet_replica_set& {
-            if (!info) {
-                return tablets.get_tablet_info(tablet).replicas;
-            }
-            switch (info->writes) {
-                case write_replica_set_selector::previous:
-                    [[fallthrough]];
-                case write_replica_set_selector::both:
-                    return tablets.get_tablet_info(tablet).replicas;
-                case write_replica_set_selector::next: {
-                    return info->next;
-                }
-            }
-            on_internal_error(tablet_logger, format("Invalid write replica selector: {}", static_cast<int>(info->writes)));
-        });
+        auto&& replicas = tablets.get_replicas_for_writing(tablet);
         tablet_logger.trace("get_replicas_for_write({}): table={}, tablet={}, replicas={}", search_token, _table, tablet, replicas);
         return replicas;
     }
@@ -1669,46 +1882,20 @@ private:
     host_id_vector_topology_change get_pending_helper(const token& search_token) const {
         auto&& tablets = get_tablet_map();
         auto tablet = tablets.get_tablet_id(search_token);
-        auto&& info = tablets.get_tablet_transition_info(tablet);
-        if (!info || info->transition == tablet_transition_kind::intranode_migration) {
+        const auto* replica = tablets.get_pending_replica(tablet);
+        if (!replica) {
             return {};
         }
-        switch (info->writes) {
-            case write_replica_set_selector::previous:
-                return {};
-            case write_replica_set_selector::both: {
-                if (!info->pending_replica) {
-                    return {};
-                }
-                tablet_logger.trace("get_pending_endpoints({}): table={}, tablet={}, replica={}",
-                                    search_token, _table, tablet, *info->pending_replica);
-                return {info->pending_replica->host};
-            }
-            case write_replica_set_selector::next:
-                return {};
-        }
-        on_internal_error(tablet_logger, format("Invalid write replica selector: {}", static_cast<int>(info->writes)));
+        tablet_logger.trace("get_pending_endpoints({}): table={}, tablet={}, replica={}", search_token, _table, tablet, *replica);
+        return {replica->host};
     }
 
-    host_id_vector_replica_set get_for_reading_helper(const token& search_token) const {
+    const tablet_replica_set& get_replicas_for_read(dht::token search_token) const {
         auto&& tablets = get_tablet_map();
         auto tablet = tablets.get_tablet_id(search_token);
-        auto&& info = tablets.get_tablet_transition_info(tablet);
-        auto&& replicas = std::invoke([&] () -> const tablet_replica_set& {
-            if (!info) {
-                return tablets.get_tablet_info(tablet).replicas;
-            }
-            switch (info->reads) {
-                case read_replica_set_selector::previous:
-                    return tablets.get_tablet_info(tablet).replicas;
-                case read_replica_set_selector::next: {
-                    return info->next;
-                }
-            }
-            on_internal_error(tablet_logger, format("Invalid read replica selector: {}", static_cast<int>(info->reads)));
-        });
-        tablet_logger.trace("get_endpoints_for_reading({}): table={}, tablet={}, replicas={}", search_token, _table, tablet, replicas);
-        return to_host_set(replicas);
+        auto&& replicas = tablets.get_replicas_for_reading(tablet);
+        tablet_logger.trace("get_replicas_for_read({}): table={}, tablet={}, replicas={}", search_token, _table, tablet, replicas);
+        return replicas;
     }
 
 
@@ -1720,7 +1907,13 @@ public:
             : effective_replication_map(std::move(rs), std::move(tmptr), replication_factor)
             , _table(table)
             , _sharder(*_tmptr, table)
-    { }
+    {
+        const auto& dcs = _tmptr->tablets().datacenters();
+        _local_dc_index = dcs.index_of(get_topology().get_datacenter());
+        for (const auto& dc : as_network_topology_strategy(*this).get_datacenters()) {
+            _schema_dc_indexes.push_back(dcs.index_of(dc));
+        }
+    }
 
     virtual ~tablet_effective_replication_map() = default;
 
@@ -1754,7 +1947,31 @@ public:
     }
 
     virtual host_id_vector_replica_set get_replicas_for_reading(const token& search_token, bool is_vnode = false) const override {
-        return get_for_reading_helper(search_token);
+        return to_host_set(get_replicas_for_read(search_token));
+    }
+
+    // The replication factor is the size of the tablet's replica set. The schema and the tablet
+    // replica sets disagree while a replication factor change migrates tablets.
+    virtual replicas_with_rf get_read_replicas_with_rf(const token& search_token, with_datacenters dcs) const override {
+        if (!dcs) {
+            return make_replicas_with_rf(get_replicas_for_read(search_token), nullptr);
+        }
+        auto&& tablets = get_tablet_map();
+        auto tablet = tablets.get_tablet_id(search_token);
+        auto [replicas, counts] = tablets.get_replicas_and_dc_counts_for_reading(tablet);
+        tablet_logger.trace("get_replicas_for_read({}): table={}, tablet={}, replicas={}", search_token, _table, tablet, replicas);
+        return make_replicas_with_rf(replicas, &counts);
+    }
+
+    virtual replicas_with_rf get_write_replicas_with_rf(const token& search_token, with_datacenters dcs) const override {
+        if (!dcs) {
+            return make_replicas_with_rf(get_replicas_for_write(search_token), nullptr);
+        }
+        auto&& tablets = get_tablet_map();
+        auto tablet = tablets.get_tablet_id(search_token);
+        auto [replicas, counts] = tablets.get_replicas_and_dc_counts_for_writing(tablet);
+        tablet_logger.trace("get_replicas_for_write({}): table={}, tablet={}, replicas={}", search_token, _table, tablet, replicas);
+        return make_replicas_with_rf(replicas, &counts);
     }
 
     std::optional<tablet_routing_info> check_locality(const token& search_token, unsigned original_shard) const override {

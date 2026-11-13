@@ -169,7 +169,7 @@ static future<> test_basic_operations(app_template& app) {
         testlog.info("Saved in {:.6f} [ms]", time_to_save.count() * 1000);
 
         auto time_to_read = duration_in_seconds([&] {
-            tm2 = read_tablet_metadata(e.local_qp()).get();
+            tm2 = read_tablet_metadata(e.local_qp(), e.local_db().get_token_metadata().get_topology()).get();
         });
         SCYLLA_ASSERT(tm == tm2);
 
@@ -283,12 +283,12 @@ static future<> test_basic_operations(app_template& app) {
         using clk = std::chrono::high_resolution_clock;
 
         const auto start_full_reload = clk::now();
-        const auto tm_full_reload = read_tablet_metadata(e.local_qp()).get();
+        const auto tm_full_reload = read_tablet_metadata(e.local_qp(), e.local_db().get_token_metadata().get_topology()).get();
         const auto end_full_reload = clk::now();
         const auto full_reload_duration = std::chrono::duration<double, std::milli>(end_full_reload - start_full_reload);
 
         const auto start_partial_reload = clk::now();
-        update_tablet_metadata(e.local_db(), e.local_qp(), tm, hint).get();
+        update_tablet_metadata(e.local_db(), e.local_qp(), tm, hint, e.local_db().get_token_metadata().get_topology()).get();
         const auto end_partial_reload = clk::now();
         const auto partial_reload_duration = std::chrono::duration<double, std::milli>(end_partial_reload - start_partial_reload);
 
