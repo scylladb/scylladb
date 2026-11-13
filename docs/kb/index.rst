@@ -15,9 +15,6 @@ Knowledge Base
 
   * :doc:`ScyllaDB Seed Nodes </kb/seed-nodes>` - Introduction on the purpose and role of Seed Nodes in ScyllaDB as well as configuration tips.
   * :doc:`Compaction </kb/compaction>` - To free up disk space and speed up reads, ScyllaDB must do compaction operations.
-  * :doc:`DPDK mode </kb/dpdk-hardware>` - Learn to select and configure networking for DPDK mode
-  * :doc:`POSIX networking for ScyllaDB </kb/posix>` - ScyllaDB's POSIX mode works on all physical and virtual network devices and is useful for development work.
-  * :doc:`System Limits </kb/system-limits>` - Outlines the system limits which should be set or removed
   * :doc:`Run ScyllaDB as a custom user:group </kb/custom-user>` - Configure the ScyllaDB and supporting services to run as a custom user:group.
   * :doc:`How to Set up a Swap Space Using a File </kb/set-up-swap>` - Outlines the steps you need to take to set up a swap space.
 
@@ -35,7 +32,6 @@ Knowledge Base
   * :doc:`Snapshots and Disk Utilization </kb/disk-utilization>` - How snapshots affect disk utilization
   * :doc:`ScyllaDB Snapshots </kb/snapshots>` - What ScyllaDB snapshots are, what they are used for, and how they get created and removed.
   * :doc:`How does ScyllaDB LWT Differ from Apache Cassandra ? </kb/lwt-differences>` - How does ScyllaDB's implementation of lightweight transactions differ from Apache Cassandra?
-  * :doc:`If a query does not reveal enough results </kb/cqlsh-results>`
   * :doc:`How to Change gc_grace_seconds for a Table </kb/gc-grace-seconds>` - How to change the ``gc_grace_seconds`` parameter and prevent data resurrection.
   * :doc:`How to flush old tombstones from a table </kb/tombstones-flush>` - How to remove old tombstones from SSTables.
   * :doc:`How to Safely Increase the Replication Factor </kb/rf-increase>`
@@ -51,7 +47,6 @@ Knowledge Base
   :class: my-panel
 
   * :doc:`NTP configuration for ScyllaDB </kb/ntp>` - ScyllaDB depends on an accurate system clock. Learn to configure NTP for your data store and applications.
-  * :doc:`ScyllaDB and Spark integration </kb/scylla-and-spark-integration>` - How to run an example Spark application that uses ScyllaDB to store data?
   * :doc:`Map CPUs to ScyllaDB Shards </kb/map-cpu>` - Mapping between CPUs and ScyllaDB shards
   * :doc:`Customizing CPUSET </kb/customizing-cpuset>`
   * :doc:`Recreate RAID devices </kb/raid-device>` - How to recreate your RAID devices without running scylla-setup

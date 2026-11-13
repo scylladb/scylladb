@@ -23,7 +23,5 @@ See Also
 
 :doc:`Change Data Capture (CDC) </features/cdc/index>`
 
-:doc:`Upgrading from experimental CDC </kb/cdc-experimental-upgrade>`
-
 .. include:: nodetool-index.rst
 
