@@ -4,10 +4,10 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 
-# Tablet repairs of tables with tombstone_gc = {'mode': 'repair'} need hints
-# and batchlog flushed on all nodes first. The topology coordinator does that
-# flush once for all the tablet repairs it starts and passes the flush time
-# to the replica, instead of each repair asking every node itself.
+# Tablet repairs need hints and batchlog flushed on all nodes first: the time
+# of the flush becomes the tablet's repair time. The topology coordinator does
+# that flush once for all the tablet repairs it starts and passes the flush
+# time to the replica, instead of each repair asking every node itself.
 
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.repair import load_tablet_repair_time, create_table_insert_data_for_repair
@@ -112,15 +112,17 @@ async def test_repair_fails_and_recovers_when_flush_fails(manager: ScyllaCluster
     await wait_for(all_repaired, time.time() + 300)
 
 
-async def test_no_flush_for_table_without_repair_tombstone_gc(manager: ScyllaClusterManager):
+async def test_flush_for_table_without_repair_tombstone_gc(manager: ScyllaClusterManager):
     """
-    A table that does not use repair mode tombstone GC needs no flush, so the
-    coordinator neither runs a round nor asks any node to flush.
+    A table that does not use repair mode tombstone GC is flushed for too, so
+    that its tablets record the time of a real flush as their repair time, not
+    the epoch, which would make them due for repair again on every round.
     """
     nr_tablets = 8
-    servers = await manager.servers_add(3, property_file=[{"dc": "dc1", "rack": f"r{i}"} for i in range(3)])
+    cmdline = ["--repair-hints-batchlog-flush-cache-time-in-ms", str(LONG_CACHE_TIME_MS)]
+    servers = await manager.servers_add(3, cmdline=cmdline, property_file=[{"dc": "dc1", "rack": f"r{i}"} for i in range(3)])
     cql = manager.get_cql()
-    await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
     logs = await open_logs(manager, servers)
 
     async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 3}} AND tablets = {{'initial': {nr_tablets}}}") as ks:
@@ -135,40 +137,45 @@ async def test_no_flush_for_table_without_repair_tombstone_gc(manager: ScyllaClu
             self_flushes = sum(await count_in_logs(logs, REPAIR_FLUSH_SERVED))
             logger.info(f"{finished=} {rounds=} {served=} {self_flushes=}")
             assert finished == nr_tablets
-            assert rounds == 0
-            assert served == 0
+            assert rounds == 1
+            assert served == len(servers)
             assert self_flushes == 0
 
+            table_id = await manager.get_table_id(ks, table.split(".")[1])
+            times = await load_tablet_repair_time(cql, hosts[0:1], table_id)
+            assert all(v is not None and v.year > 2000 for v in times.values()), f"{times=}"
 
-@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_repair_without_peers_needs_no_flush(manager: ScyllaClusterManager):
+
+async def test_single_replica_repair_is_flushed_for(manager: ScyllaClusterManager):
     """
-    A tablet with a single replica has no peer to repair with, so the
-    coordinator does not flush for it, and its repair completes even while a
-    node cannot flush.
+    A tablet with a single replica has no peer to repair with, but hints and
+    batchlog may still hold writes for it, so the coordinator flushes for it
+    as for any other tablet, and the repair records the flush time.
     """
-    injection = "repair_flush_hints_batchlog_handler_bm_uninitialized"
     nr_tablets = 8
-    servers = await manager.servers_add(3, property_file=[{"dc": "dc1", "rack": f"r{i}"} for i in range(3)])
+    cmdline = ["--repair-hints-batchlog-flush-cache-time-in-ms", str(LONG_CACHE_TIME_MS)]
+    servers = await manager.servers_add(3, cmdline=cmdline, property_file=[{"dc": "dc1", "rack": f"r{i}"} for i in range(3)])
     cql = manager.get_cql()
-    await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
     logs = await open_logs(manager, servers)
 
     async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'initial': {nr_tablets}}}") as ks:
         async with new_test_table(manager, ks, "pk int PRIMARY KEY, c int", " WITH tombstone_gc = {'mode': 'repair'}") as table:
             await asyncio.gather(*[cql.run_async(f"INSERT INTO {table} (pk, c) VALUES ({k}, {k});") for k in range(256)])
 
-            await manager.api.enable_injection(servers[2].ip_addr, injection, one_shot=False)
-            try:
-                await manager.api.tablet_repair(servers[0].ip_addr, ks, table.split(".")[1], "all")
-            finally:
-                await manager.api.disable_injection(servers[2].ip_addr, injection)
+            await manager.api.tablet_repair(servers[0].ip_addr, ks, table.split(".")[1], "all")
 
             finished = sum(await count_in_logs(logs, FINISHED_REPAIR))
             rounds = sum(await count_in_logs(logs, COORDINATOR_ROUND))
-            logger.info(f"{finished=} {rounds=}")
+            self_flushes = sum(await count_in_logs(logs, REPAIR_FLUSH_SERVED))
+            logger.info(f"{finished=} {rounds=} {self_flushes=}")
             assert finished == nr_tablets
-            assert rounds == 0
+            assert rounds == 1
+            assert self_flushes == 0
+
+            table_id = await manager.get_table_id(ks, table.split(".")[1])
+            times = await load_tablet_repair_time(cql, hosts[0:1], table_id)
+            assert all(v is not None and v.year > 2000 for v in times.values()), f"{times=}"
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
