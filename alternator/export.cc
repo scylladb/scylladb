@@ -98,8 +98,9 @@ namespace alternator {
 // convert the rows.
 
 // Identifies one incarnation of a node: host_id and gossip generation. The value changes
-// after a restart (the gossip generation increases). The export and the garbage collector
-// use this.
+// after a restart (the gossip generation increases), and also when an operator stops and starts
+// gossip. We accept that the garbage collector then fails the running exports of the node (see
+// docs/alternator/compatibility.md). The export and the garbage collector use this.
 // The `node_id` columns store it as "{host_id}:{gossip_generation}".
 // A default value (a null host_id) means "no node".
 struct live_node_identifier {

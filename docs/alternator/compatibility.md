@@ -386,10 +386,7 @@ November 2020.
 S3Prefix is also more restricted than in DynamoDB, which takes any S3 key as
 a prefix: Alternator accepts only the characters which S3 documents as safe
 in a key name - letters, digits and `/!-_.*'()` - and rejects a prefix with
-any other character, or longer than 1024 characters, with a
-ValidationException. S3Bucket is validated as DynamoDB validates it: 3 to
-255 characters, each of them a letter, a digit, `.`, `-` or `_`, and the
-first and the last character a letter or a digit.
+any other character with a ValidationException.
 
 Alternator also accepts an export request without a ClientToken, which
 DynamoDB refuses with a ValidationException. The AWS SDKs always send a
@@ -399,6 +396,12 @@ request Alternator generates a token, and reports it in the
 ExportDescription. A retry with that token gets the same export. Alternator
 rejects a token longer than 1024 characters with a ValidationException,
 because the token is also a key of a system table.
+
+If Alternator accepts an export request but cannot start the export (for
+example, because the cluster is overloaded), ExportTableToPointInTime returns
+the ExportDescription with the status FAILED, not an error. If Alternator
+recorded the ClientToken, a retry with the same ClientToken returns the same
+failed export, so a new export needs a new ClientToken.
 
 An export is also not a snapshot. In DynamoDB, an export contains the table
 exactly as it was at a single instant, ExportTime; in Alternator the export
@@ -426,6 +429,11 @@ bucket - a failed export never deletes what it wrote - so the user has to
 remove that partial output themselves, and start a new export if they still
 want one.
 
+A stop and a start of gossip on a node (`nodetool disablegossip` and
+`nodetool enablegossip`) count as a restart of that node: a later garbage
+collection round fails the exports of the node with NodeFailure, although the
+node continues to write their objects to the bucket.
+
 A failed export can also leave behind something a listing of the bucket does
 not show. The export writes its data file as a multipart upload, and only the
 export itself ever completes or aborts that upload. An export which fails
@@ -434,13 +442,17 @@ completes it, so the data file is left in the bucket as an ordinary object,
 holding however much of the table the export got through. A clean shutdown is
 the exception: it aborts the export, which makes that close fail, and the
 multipart upload is aborted with it, leaving no data file behind. But an
-export whose node died gets to do neither, and what it had uploaded so far
-stays in the bucket as an incomplete multipart upload, which a listing of the
-bucket's objects does not show, even though its parts are stored and paid
-for. So cleaning up after a node which died means listing the bucket's
-multipart uploads as well (ListMultipartUploads) and aborting those of the
-export (AbortMultipartUpload) - or having a bucket lifecycle rule which
-expires incomplete multipart uploads do it.
+export whose node died gets to do neither. The export uploads the data file
+in pieces of about 2.5 GiB, whose keys are the key of the data file followed
+by `_` and a number, and copies each piece into the data file. What the
+export had uploaded so far stays in the bucket as incomplete multipart
+uploads of the pieces and, for a large export, of the data file, which a
+listing of the bucket's objects does not show, even though their parts are
+stored and paid for. A large export can also leave pieces as ordinary
+objects. So cleaning up after a node which died means listing the multipart
+uploads under the directory of the export as well (ListMultipartUploads) and
+aborting them (AbortMultipartUpload) - or having a bucket lifecycle rule
+which expires incomplete multipart uploads do it.
 
 How soon the export turns FAILED depends on how the node went away. A node
 shutting down cleanly fails its own running exports on the way out, and a
@@ -448,8 +460,9 @@ node which restarts fails the exports of its previous incarnation when it
 comes back up, so in both cases the export stops being IN_PROGRESS within
 seconds. But if the node stays down, another node has to fail the export for
 it, and that happens in a garbage collection round: a round only touches the
-exports of a node which has been unreachable for an hour. Each node runs a
-round every four hours, and also an hour after it sees a node go down. So
+exports of a node which has been unreachable for an hour. Each node that runs
+Alternator runs a round every four hours, and also an hour after it sees a
+node go down. So
 after a node dies, DescribeExport and ListExports go on reporting its exports
 as IN_PROGRESS for about an hour, even though nothing is running them anymore
 and no more objects will be written to the bucket.
@@ -460,15 +473,11 @@ export's manifest-summary.json - is the number of bytes of table data the
 completed export is billed for. ScyllaDB does not bill for exports, so
 Alternator has nothing to put there and reports 0, not the size of what the
 export wrote; an application which needs that size has to get it from S3.
-The ItemCount reported next to it, and the itemCount of the manifest, are
-real counts of the exported items.
 
 DynamoDB limits the number of ExportTableToPointInTime exports running at the
 same time in an account. Alternator limits them per shard instead: the limit
 defaults to 10 and can be changed with the
-`alternator_max_concurrent_exports_per_shard` configuration parameter. Like
-DynamoDB, Alternator rejects a request which would exceed the limit with a
-LimitExceededException, and the request can be retried later.
+`alternator_max_concurrent_exports_per_shard` configuration parameter.
 
 Alternator counts the exports that each node runs in the metrics
 `scylla_alternator_s3_exports_started`,
