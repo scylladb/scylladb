@@ -151,6 +151,8 @@ static const s3::group_connections default_group_connections = {
     {"streaming", 64},
     {"backup", 32},
     {"maintenance", 16},
+    // Alternator's export to S3 uploads its data file and manifests from this group.
+    {"export_import", 16},
     // Shared by every group with no entry of its own; utils/s3/client.cc falls back to it.
     // main is one of them: it reaches object storage only while loading sstables at startup,
     // so it gets the shared pool rather than one that sits idle for the node's whole life.
@@ -314,7 +316,7 @@ bool storage_manager::is_known_endpoint(sstring endpoint, sstring type) const {
     return it != _object_storage_endpoints.end() && (type == "" || it->second.cfg.is_storage_of_type(type));
 }
 
-std::vector<sstring> storage_manager::endpoints(sstring type) const noexcept {
+std::vector<sstring> storage_manager::endpoints(sstring type) const {
     return _object_storage_endpoints | std::views::filter([&type] (auto& ep) {
         return type == "" || ep.second.cfg.is_storage_of_type(type);
     }) | std::views::keys | std::ranges::to<std::vector>();

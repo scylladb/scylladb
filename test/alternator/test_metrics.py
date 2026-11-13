@@ -358,12 +358,12 @@ def test_export_table_operations(test_table_s, metrics):
 
 # DescribeExport counts against the table named by the export ARN, whether the export exists or
 # not - the counter tracks the request, not its outcome. A table outside Alternator gets no per-table
-# counter. Nothing writes export rows until export orchestration lands, so the existing export's row
-# is put there over CQL, as test_export.py does.
+# counter. A real export needs an S3 server, so the existing export's row is put there over CQL
+# instead, as test_export.py does.
 def test_describe_export_operations(test_table_s, cql, metrics):
     client = test_table_s.meta.client
     table_arn = client.describe_table(TableName=test_table_s.name)['Table']['TableArn']
-    export_arn = unstarted_export_arn(client, table_arn)
+    export_arn = unstarted_export_arn(table_arn)
     with export_metadata(cql, export_arn, accepted_export_row(table_arn)):
         with check_increases_operation(metrics, ['DescribeExport']):
             with check_table_increases_operation(metrics, ['DescribeExport'], test_table_s.name):

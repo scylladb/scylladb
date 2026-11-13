@@ -200,7 +200,9 @@ the MODIFY permission, not the SELECT permission.
 
 ExportTableToPointInTime needs both SELECT on the table and MODIFY on ALL
 OBJECT STORAGE. DescribeExport and ListExports, with or without a TableArn,
-need only SELECT on ALL OBJECT STORAGE, and no permission on the table.
+need only SELECT on ALL OBJECT STORAGE, and no permission on the table. Thus
+the deletion of a table, or a new table with the same name, does not change
+who can see the exports of the table.
 
 Permissions are separate for a base table and each of its GSI/LSI and CDC
 log, so it's possible to give a role permissions to read one index and
@@ -370,6 +372,124 @@ is different, or can be configured in Alternator:
   The `alternator_describe_table_info_cache_validity_in_seconds` parameter allows
   users to change this timeout - the default value in seconds is set to 21600 (6 hours).
 
+## Export to S3
+
+Alternator supports the DynamoDB feature "export to S3" and its operations
+ExportTableToPointInTime, DescribeExport and ListExports, but only for a
+full export of the table as it is now. Exporting an earlier point in time
+is not supported - an ExportTime given in the request has to be in the last
+5 minutes - and neither are incremental exports
+(ExportType has to be FULL_EXPORT, and IncrementalExportSpecification is
+rejected). The only supported ExportFormat is DYNAMODB_JSON, and the
+parameters FilterSpecification, S3BucketOwner, S3SseAlgorithm and
+S3SseKmsKeyId are rejected as well. This feature was added to DynamoDB in
+November 2020.
+
+S3Prefix is also more restricted than in DynamoDB, which takes any S3 key as
+a prefix: Alternator accepts only the characters which S3 documents as safe
+in a key name - letters, digits and `/!-_.*'()` - and rejects a prefix with
+any other character with a ValidationException.
+
+Alternator also accepts an export request without a ClientToken, which
+DynamoDB refuses with a ValidationException. The AWS SDKs always send a
+token, because the DynamoDB service model marks ClientToken as an
+idempotency token. Thus only a hand-written request has no token. For such a
+request Alternator generates a token, and reports it in the
+ExportDescription. A retry with that token gets the same export. Alternator
+rejects a token longer than 1024 characters with a ValidationException,
+because the token is also a key of a system table.
+
+If Alternator accepts an export request but cannot start the export (for
+example, because the cluster is overloaded), ExportTableToPointInTime returns
+the ExportDescription with the status FAILED, not an error. A retry with the
+same ClientToken returns the same failed export, so a new export needs a new
+ClientToken.
+
+An export is also not a snapshot. In DynamoDB, an export contains the table
+exactly as it was at a single instant, ExportTime; in Alternator the export
+is a scan of the live table, done page by page over however long the export
+takes, and each page is read as of the moment it is read. So an item written
+or deleted while the export runs may or may not appear in it, depending on
+whether the write reached the item's partition before or after the scan did,
+and an item modified during the scan is exported in whichever state the page
+that read it saw. Two items written together by the application can therefore
+end up in the export in states which never existed together in the table. The
+ExportTime which DescribeExport reports, and the exportTime in the export's
+manifest-summary.json, are the time the request asked for - not an instant
+the exported data is consistent as of. Thus an export is not a backup of the
+table. For a backup, use ScyllaDB's backup solutions, such as snapshots or
+ScyllaDB Manager.
+<https://scylladb.atlassian.net/browse/SCYLLADB-2835>
+
+An export is also not resumed if the node running it goes away. In DynamoDB
+an export is a managed operation which eventually finishes on its own; in
+Alternator one node runs the whole export, and if that node dies or is shut
+down while the export is still running, no other node picks the export up.
+It ends as FAILED instead - with the failure code NodeFailure if the node
+died and the export had to be failed on its behalf, by another node or by
+that node's own next incarnation after a restart, or NodeShutdown if the
+node shut down cleanly and the export failed itself on the way out. As
+with any failed export, the objects it had already uploaded are left in the
+bucket - a failed export never deletes what it wrote - so the user has to
+remove that partial output themselves, and start a new export if they still
+want one.
+<https://scylladb.atlassian.net/browse/SCYLLADB-2839>
+
+An export whose node died can also leave incomplete multipart uploads under
+the directory of the export. A listing of the objects of the bucket does not
+show them, but S3 stores them and bills for them. To remove them, list them
+with ListMultipartUploads and abort them with AbortMultipartUpload, or use a
+bucket lifecycle rule that expires incomplete multipart uploads.
+
+A node that shuts down marks its running exports FAILED, and a node that
+restarts marks the exports of its previous run FAILED when it starts. But if
+a node stays down, another node marks its exports FAILED only after the node
+was unreachable for an hour. Until then, DescribeExport and ListExports
+report these exports as IN_PROGRESS.
+
+Alternator also always reports a BilledSizeBytes of 0, in DescribeExport and
+in the `billedSizeBytes` of manifest-summary.json, because ScyllaDB does not
+bill for exports. In DynamoDB, it is the size of the table data that the
+export is billed for. An application that needs the size of an export can
+get it from S3.
+
+DynamoDB limits the number of ExportTableToPointInTime exports running at the
+same time in an account. Alternator limits them per shard instead: the limit
+defaults to 10 and can be changed with the
+`alternator_max_concurrent_exports_per_shard` configuration parameter.
+
+In DynamoDB, an export uses no read capacity and has no effect on the
+performance of the table. In Alternator, an export reads the table as a Scan
+does, so it adds load to the nodes of the table. One shard of the node that
+accepted the request reads the whole table, compresses it and uploads it.
+Thus more nodes do not make an export faster, and a large table or a loaded
+cluster makes an export long. The export runs with a lower priority than
+requests, and its reads bypass the cache.
+<https://scylladb.atlassian.net/browse/SCYLLADB-2838>
+
+The metrics `scylla_alternator_s3_exports_*` and
+`scylla_alternator_s3_exported_items` count the exports of each node and the
+items that they wrote. If a node runs exports and its count of exported items
+does not increase for a long time, an export can be stuck, for example while
+it waits for S3.
+
+DynamoDB's ExportTableToPointInTime writes to any S3 bucket the caller is
+allowed to write to. Alternator reaches the bucket named in the request
+through an object storage endpoint taken from the cluster's
+`object_storage_endpoints` configuration, which the request cannot choose,
+so exactly one S3 endpoint has to be configured there - that one endpoint is
+used for every bucket. On a cluster which has no S3 endpoint configured, or
+more than one, every export request is rejected with a ValidationException.
+See {ref}`Configuring Object Storage <object-storage-configuration>` for how
+to configure the endpoint.
+
+DynamoDB exports only a table which has point-in-time recovery enabled, and
+rejects a request for a table which has it disabled with a
+PointInTimeRecoveryUnavailableException. Alternator has no point-in-time
+recovery: DescribeContinuousBackups always reports it as DISABLED, and
+UpdateContinuousBackups is not supported. Alternator therefore exports any
+table, and never returns that error.
+
 ## Alternator Streams
 
 The DynamoDB Streams API for change data capture is supported by Alternator, however
@@ -504,11 +624,6 @@ they should be easy to detect. Here is a list of these unimplemented features:
   Insights" are not yet supported. ScyllaDB has different ways to retrieve the
   same information, such as which items were accessed most often.
   <https://github.com/scylladb/scylla/issues/8788>
-
-* Alternator does not support the DynamoDB feature "export to S3",
-  and its operations DescribeExport, ExportTableToPointInTime, ListExports.
-  This feature was added to DynamoDB in November 2020.
-  <https://github.com/scylladb/scylla/issues/8789>
 
 * Alternator does not support the DynamoDB feature "import from S3",
   and its operations ImportTable, DescribeImport, ListImports.
