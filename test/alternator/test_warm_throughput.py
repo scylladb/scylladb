@@ -12,7 +12,7 @@
 import pytest
 import time
 from botocore.exceptions import ClientError
-from test.alternator.util import is_aws, new_test_table, unique_table_name
+from test.alternator.util import is_aws, new_test_table, unique_table_name, wait_for_gsi
 
 # The warm throughput every table starts with in DynamoDB, which is also the
 # least it can be configured with - see
@@ -29,7 +29,7 @@ def warm_throughput(read_multiple, write_multiple):
     return {'ReadUnitsPerSecond': int(MIN_READ_UNITS * read_multiple),
             'WriteUnitsPerSecond': int(MIN_WRITE_UNITS * write_multiple)}
 
-def wait_for_warm_throughput(table, warm):
+def wait_for_warm_throughput(table, warm, index_name=None):
     # DynamoDB applies the change asynchronously - WarmThroughput.Status is
     # UPDATING until it settles - whereas in Alternator it is immediate.
     if is_aws(table):
@@ -38,10 +38,16 @@ def wait_for_warm_throughput(table, warm):
     else:
         timeout = 60
         delay = 0.1
+    if index_name:
+        # A GSI reports no WarmThroughput until the GSI is ACTIVE.
+        wait_for_gsi(table, index_name)
     got = None
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        got = table.meta.client.describe_table(TableName=table.name)['Table']['WarmThroughput']
+        desc = table.meta.client.describe_table(TableName=table.name)['Table']
+        if index_name:
+            desc = next(gsi for gsi in desc['GlobalSecondaryIndexes'] if gsi['IndexName'] == index_name)
+        got = desc['WarmThroughput']
         if got['Status'] == 'ACTIVE':
             for unit, value in warm.items():
                 assert got[unit] == value
@@ -113,6 +119,171 @@ def test_create_table_warm_throughput_response(dynamodb):
         waiter.config.max_attempts = 200
         waiter.wait(TableName=name)
         dynamodb.meta.client.delete_table(TableName=name)
+
+# A WarmThroughput which is missing both ReadUnitsPerSecond and
+# WriteUnitsPerSecond configures nothing: DynamoDB's CreateTable accepts one,
+# for the table or for a GSI, and leaves it out of its response.
+def test_create_table_warm_throughput_empty(dynamodb):
+    with new_test_table(dynamodb,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[
+                {'AttributeName': 'p', 'AttributeType': 'S'},
+                {'AttributeName': 'x', 'AttributeType': 'S'}],
+            GlobalSecondaryIndexes=[{
+                'IndexName': 'gsi',
+                'KeySchema': [{'AttributeName': 'x', 'KeyType': 'HASH'}],
+                'Projection': {'ProjectionType': 'ALL'},
+                'WarmThroughput': {}}],
+            WarmThroughput={}) as table:
+        # boto3 fills table.meta.data with the TableDescription which
+        # CreateTable returned.
+        assert not 'WarmThroughput' in table.meta.data
+        assert not 'WarmThroughput' in table.meta.data['GlobalSecondaryIndexes'][0]
+
+# An update to a WarmThroughput which is missing both ReadUnitsPerSecond and
+# WriteUnitsPerSecond is refused, for the table and for a GSI alike, and so is a
+# GSI which UpdateTable creates with one. DynamoDB refuses the GSI's with the
+# message matched here, but fails the table's with an InternalFailure, where
+# Alternator gives a ValidationException.
+def test_update_table_warm_throughput_empty(dynamodb):
+    with new_test_table(dynamodb,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[
+                {'AttributeName': 'p', 'AttributeType': 'S'},
+                {'AttributeName': 'x', 'AttributeType': 'S'}],
+            GlobalSecondaryIndexes=[{
+                'IndexName': 'gsi',
+                'KeySchema': [{'AttributeName': 'x', 'KeyType': 'HASH'}],
+                'Projection': {'ProjectionType': 'ALL'}}]) as table:
+        with pytest.raises(ClientError, match='InternalFailure' if is_aws(dynamodb) else 'ValidationException'):
+            table.meta.client.update_table(TableName=table.name, WarmThroughput={})
+        with pytest.raises(ClientError, match='ValidationException.*WarmThroughput.*ReadUnitsPerSecond or WriteUnitsPerSecond'):
+            table.meta.client.update_table(TableName=table.name,
+                GlobalSecondaryIndexUpdates=[{'Update': {'IndexName': 'gsi', 'WarmThroughput': {}}}])
+        with pytest.raises(ClientError, match='ValidationException.*WarmThroughput.*ReadUnitsPerSecond or WriteUnitsPerSecond'):
+            table.meta.client.update_table(TableName=table.name,
+                AttributeDefinitions=[{'AttributeName': 'y', 'AttributeType': 'S'}],
+                GlobalSecondaryIndexUpdates=[{'Create': {
+                    'IndexName': 'gsi2',
+                    'KeySchema': [{'AttributeName': 'y', 'KeyType': 'HASH'}],
+                    'Projection': {'ProjectionType': 'ALL'},
+                    'WarmThroughput': {}}}])
+
+# A GSI has a WarmThroughput of its own, and a WarmThroughput given to a GSI by
+# CreateTable is reported back for that GSI by DescribeTable, and by
+# CreateTable's response with a Status - UPDATING in DynamoDB, ACTIVE in
+# Alternator, whose CreateTable is synchronous.
+def test_gsi_create_table_warm_throughput(dynamodb):
+    warm = warm_throughput(1.02, 1.02)
+    with new_test_table(dynamodb,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[
+                {'AttributeName': 'p', 'AttributeType': 'S'},
+                {'AttributeName': 'x', 'AttributeType': 'S'}],
+            GlobalSecondaryIndexes=[{
+                'IndexName': 'gsi',
+                'KeySchema': [{'AttributeName': 'x', 'KeyType': 'HASH'}],
+                'Projection': {'ProjectionType': 'ALL'},
+                'WarmThroughput': warm}]) as table:
+        # boto3 fills table.meta.data with the TableDescription which
+        # CreateTable returned.
+        got = table.meta.data['GlobalSecondaryIndexes'][0]['WarmThroughput']
+        assert got['ReadUnitsPerSecond'] == warm['ReadUnitsPerSecond']
+        assert got['WriteUnitsPerSecond'] == warm['WriteUnitsPerSecond']
+        assert got['Status'] in ['ACTIVE', 'UPDATING']
+        wait_for_warm_throughput(table, warm, 'gsi')
+
+# A GSI added to an existing table by UpdateTable keeps the WarmThroughput it
+# was created with.
+def test_gsi_created_by_update_table_warm_throughput(dynamodb):
+    warm = warm_throughput(1.02, 1.02)
+    with new_test_table(dynamodb,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
+        table.meta.client.update_table(TableName=table.name,
+            AttributeDefinitions=[{'AttributeName': 'x', 'AttributeType': 'S'}],
+            GlobalSecondaryIndexUpdates=[{'Create': {
+                'IndexName': 'gsi',
+                'KeySchema': [{'AttributeName': 'x', 'KeyType': 'HASH'}],
+                'Projection': {'ProjectionType': 'ALL'},
+                'WarmThroughput': warm}}])
+        wait_for_warm_throughput(table, warm, 'gsi')
+
+# A GlobalSecondaryIndexUpdates Update carrying nothing but a WarmThroughput
+# takes effect, also together with a WarmThroughput of the table, which
+# DynamoDB accepts in the same request. This is the request the Terraform AWS
+# Provider sends, in an UpdateTable of its own, for a warm_throughput block in a
+# global_secondary_index, which Alternator used to reject.
+@pytest.mark.parametrize('table_warm', [None, warm_throughput(1.03, 1.03)],
+    ids=['alone', 'with_table_warm_throughput'])
+def test_gsi_update_table_warm_throughput(dynamodb, table_warm):
+    warm = warm_throughput(1.02, 1.02)
+    with new_test_table(dynamodb,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[
+                {'AttributeName': 'p', 'AttributeType': 'S'},
+                {'AttributeName': 'x', 'AttributeType': 'S'}],
+            GlobalSecondaryIndexes=[{
+                'IndexName': 'gsi',
+                'KeySchema': [{'AttributeName': 'x', 'KeyType': 'HASH'}],
+                'Projection': {'ProjectionType': 'ALL'}}]) as table:
+        table.meta.client.update_table(TableName=table.name,
+            GlobalSecondaryIndexUpdates=[{'Update': {'IndexName': 'gsi', 'WarmThroughput': warm}}],
+            **({'WarmThroughput': table_warm} if table_warm else {}))
+        wait_for_warm_throughput(table, warm, 'gsi')
+        if table_warm:
+            wait_for_warm_throughput(table, table_warm)
+
+# DynamoDB refuses a GlobalSecondaryIndexUpdates Update of a GSI's
+# WarmThroughput together with a BillingMode - a switch to PAY_PER_REQUEST, or
+# even the billing mode which the table already has - or with another member of
+# the Update, such as a ProvisionedThroughput, with the message matched here.
+@pytest.mark.parametrize('billing_mode,table_change,gsi_change', [
+        ('PROVISIONED', {'BillingMode': 'PAY_PER_REQUEST'}, {}),
+        ('PAY_PER_REQUEST', {'BillingMode': 'PAY_PER_REQUEST'}, {}),
+        ('PROVISIONED', {}, {'ProvisionedThroughput': {'ReadCapacityUnits': 6, 'WriteCapacityUnits': 7}})],
+    ids=['switch_to_pay_per_request', 'same_billing_mode', 'gsi_provisioned_throughput'])
+def test_gsi_update_table_warm_throughput_not_alone(dynamodb, billing_mode, table_change, gsi_change):
+    warm = warm_throughput(1.02, 1.02)
+    provisioned = billing_mode == 'PROVISIONED'
+    gsi_throughput = {'ProvisionedThroughput': {'ReadCapacityUnits': 4, 'WriteCapacityUnits': 5}} if provisioned else {}
+    table_throughput = {'ProvisionedThroughput': {'ReadCapacityUnits': 2, 'WriteCapacityUnits': 3}} if provisioned else {}
+    with new_test_table(dynamodb,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[
+                {'AttributeName': 'p', 'AttributeType': 'S'},
+                {'AttributeName': 'x', 'AttributeType': 'S'}],
+            BillingMode=billing_mode, **table_throughput,
+            GlobalSecondaryIndexes=[{
+                'IndexName': 'gsi',
+                'KeySchema': [{'AttributeName': 'x', 'KeyType': 'HASH'}],
+                'Projection': {'ProjectionType': 'ALL'},
+                **gsi_throughput}]) as table:
+        with pytest.raises(ClientError, match='ValidationException.*WarmThroughput must be the only operation in the request for index'):
+            table.meta.client.update_table(TableName=table.name,
+                GlobalSecondaryIndexUpdates=[{'Update': {'IndexName': 'gsi', 'WarmThroughput': warm, **gsi_change}}],
+                **table_change)
+
+# An Update must carry a WarmThroughput: changing a GSI's ProvisionedThroughput
+# is not supported yet (#19718), and an Update with only IndexName changes
+# nothing. On a PAY_PER_REQUEST table, DynamoDB refuses both as well: there it
+# allows an Update only of OnDemandThroughput or WarmThroughput.
+@pytest.mark.parametrize('update', [
+        {}, {'ProvisionedThroughput': {'ReadCapacityUnits': 6, 'WriteCapacityUnits': 7}}],
+    ids=['nothing', 'provisioned_throughput'])
+def test_gsi_update_table_without_warm_throughput(dynamodb, update):
+    with new_test_table(dynamodb,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[
+                {'AttributeName': 'p', 'AttributeType': 'S'},
+                {'AttributeName': 'x', 'AttributeType': 'S'}],
+            GlobalSecondaryIndexes=[{
+                'IndexName': 'gsi',
+                'KeySchema': [{'AttributeName': 'x', 'KeyType': 'HASH'}],
+                'Projection': {'ProjectionType': 'ALL'}}]) as table:
+        with pytest.raises(ClientError, match='ValidationException'):
+            table.meta.client.update_table(TableName=table.name,
+                GlobalSecondaryIndexUpdates=[{'Update': {'IndexName': 'gsi', **update}}])
 
 # Once raised, a warm throughput cannot be lowered again - the documentation
 # says "After warm throughput is increased, the values can't be decreased", and

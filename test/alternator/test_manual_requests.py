@@ -19,7 +19,7 @@ from packaging.version import Version
 
 from test.pylib.skip_types import skip_env
 
-from test.alternator.util import random_bytes, random_string, get_signed_request, client_ssl_context, manual_request, ManualRequestError
+from test.alternator.util import random_bytes, random_string, get_signed_request, client_ssl_context, manual_request, ManualRequestError, new_test_table
 from test.cqlpy.util import config_value_context
 
 
@@ -714,3 +714,20 @@ def test_request_limit_exceeded_connection_reuse(dynamodb, cql):
         assert 'ResourceNotFoundException' in body, body
     finally:
         conn.close()
+
+# UpdateTable has no GlobalSecondaryIndexes parameter, and DynamoDB ignores a
+# stray one whatever it holds: the update succeeds, and the response does not
+# echo the member back. Alternator echoes the rest of its request back as the
+# response (#17141), so it must leave this member out.
+def test_update_table_stray_global_secondary_indexes(dynamodb):
+    with new_test_table(dynamodb,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}]) as table:
+        got = manual_request(dynamodb, 'UpdateTable', json.dumps({
+            'TableName': table.name,
+            'BillingMode': 'PAY_PER_REQUEST',
+            'GlobalSecondaryIndexes': [1, {'ProvisionedThroughput': 1}]}))
+        # DynamoDB applies the update asynchronously, and cannot delete the
+        # table before it is done.
+        table.wait_until_exists()
+        assert 'GlobalSecondaryIndexes' not in got['TableDescription']
