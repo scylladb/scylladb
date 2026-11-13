@@ -1907,9 +1907,12 @@ def test_export_table_filter_specification(dynamodb, test_table_s_for_export_onl
 
 
 # Test that ExportTime close to now is accepted, and reported rounded to the nearest millisecond, as
-# DynamoDB does. boto3 sends an ExportTime in whole seconds, so the request is written out here. The
-# bucket does not exist, so on DynamoDB the export fails by itself without writing anything.
-def test_export_table_export_time_now(dynamodb, test_table_s_for_export_only, s3):
+# DynamoDB does. Scylla truncates its current time to the millisecond, so the rounded ExportTime of
+# "now" can be 1 ms after it. botocore before 1.43.93 sends an ExportTime in whole seconds, so the
+# request is written out here. The bucket does not exist, so on DynamoDB the export fails by itself
+# without writing anything.
+@pytest.mark.parametrize('now', [False, True], ids=['before_now', 'now'])
+def test_export_table_export_time_now(dynamodb, test_table_s_for_export_only, s3, now):
     client = test_table_s_for_export_only.meta.client
     table_arn = get_table_arn(test_table_s_for_export_only)
     # DynamoDB exports only from its point-in-time recovery window, which can start after the
@@ -1918,10 +1921,15 @@ def test_export_table_export_time_now(dynamodb, test_table_s_for_export_only, s3
     earliest = pitr['PointInTimeRecoveryDescription'].get('EarliestRestorableDateTime')
     second = max(int(time.time()) - 1, int(earliest.timestamp()) + 1 if earliest else 0)
     time.sleep(max(0, second + 1 - time.time()))
-    payload = json.dumps({'TableArn': table_arn, 'S3Bucket': unique_bucket_name(), 'ExportTime': second + 0.1236,
+    export_time = time.time() if now else second + 0.1236
+    payload = json.dumps({'TableArn': table_arn, 'S3Bucket': unique_bucket_name(), 'ExportTime': export_time,
                           'ClientToken': str(uuid.uuid4())})
-    response = manual_request(dynamodb, 'ExportTableToPointInTime', payload)
-    assert response['ExportDescription']['ExportTime'] == pytest.approx(second + 0.124, abs=1e-5)
+    desc = manual_request(dynamodb, 'ExportTableToPointInTime', payload)['ExportDescription']
+    assert desc['ExportTime'] == pytest.approx(round(export_time, 3), abs=1e-5)
+    # On Scylla, the export fails at once. Wait for its end, so that it does not hold an export slot
+    # in the next test.
+    if not is_aws(dynamodb):
+        wait_for_export(client, desc['ExportArn'])
 
 
 # Test that ExportTime in the past (more than 5 minutes) is rejected.

@@ -1846,14 +1846,11 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
         }
         export_time = export_time_v->GetDouble();
         // ExportTime becomes int64 milliseconds (db_clock). The cap, 9999-12-31T23:59:59Z, is far
-        // below the limit of that type, so the conversions below cannot overflow.
+        // below the limit of that type, so export_time_of_request() cannot overflow.
         constexpr double max_export_time = 253402300799; // 9999-12-31T23:59:59Z
         if (std::isnan(export_time) || export_time < 0 || export_time > max_export_time) {
             co_return api_error::invalid_export_time("ExportTime number is out of range of valid values for this field");
         }
-        // DynamoDB rounds a requested ExportTime to the nearest millisecond.
-        export_time = std::chrono::duration<double>(std::chrono::round<std::chrono::milliseconds>(
-                std::chrono::duration<double>(export_time))).count();
     }
 
     auto node_id_opt = get_self_node_id(_gossiper);
@@ -1958,11 +1955,12 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
 
     // From here, the request starts a new export. Check the two conditions that can change after
     // we accept a request. A retry skips them, so that it always finds its export.
-    // ExportTime must be in the last 5 minutes. DynamoDB refuses a time in the future.
+    // ExportTime must be in the last 5 minutes. DynamoDB refuses a time in the future. db_clock
+    // truncates `now` to the millisecond, so the current time is before `now` + 1 ms.
     if (export_time_v) {
-        if (export_time > now || now - export_time > 300) {
+        if (export_time >= now + 0.001 || now - export_time > 300) {
             co_return api_error::invalid_export_time(fmt::format("ExportTime must be in the last 5 minutes. "
-                                "ExportTime: {} s , current time: {} s", export_time, now));
+                                "ExportTime: {} s, current time: {} s", export_time, now));
         }
     }
 
