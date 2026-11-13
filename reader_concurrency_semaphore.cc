@@ -952,6 +952,10 @@ void reader_concurrency_semaphore::inactive_read_handle::abandon() noexcept {
         auto& sem = permit.semaphore();
         sem.close_reader(std::move(permit.aux_data_ref().ir->reader));
         sem.dequeue_permit(permit);
+        // The queued reader keeps the permit alive until the eviction loop
+        // closes it. Cancel the TTL, so the permit's timer doesn't try to
+        // evict the already abandoned inactive read in the meanwhile.
+        permit.set_timeout(db::no_timeout);
         // Break the handle <-> inactive read connection, to prevent the inactive
         // read attempting to detach(). Not only is that unnecessary (the handle
         // is abandoning the inactive read), but detach() will reset _permit,
@@ -1321,6 +1325,13 @@ mutation_reader_opt reader_concurrency_semaphore::unregister_inactive_read(inact
         // and close the reader, in case on_internal_error
         // doesn't abort.
         auto& sem = permit.semaphore();
+        // The handle is detached when irp is destroyed, so nobody will
+        // dequeue the permit later. The permit might outlive this call,
+        // as the reader is closed in the background, so dequeue it now.
+        // Also cancel the TTL, so the permit's timer doesn't try to evict
+        // the inactive read, which is gone.
+        sem.dequeue_permit(permit);
+        permit.set_timeout(db::no_timeout);
         sem.close_reader(std::move(irp->reader));
         on_internal_error(rcslog, fmt::format(
                     "reader_concurrency_semaphore::unregister_inactive_read(): "
@@ -1440,15 +1451,7 @@ mutation_reader reader_concurrency_semaphore::detach_inactive_reader(reader_perm
 }
 
 void reader_concurrency_semaphore::detach_and_evict_in_background(reader_permit::impl& permit, evict_reason reason) noexcept {
-    auto reader = detach_inactive_reader(permit, reason);
-    try {
-        _readers_to_close.push_back(std::move(reader));
-    } catch (...) {
-        // Failed to allocate room in the queue, close in the foreground.
-        close_reader(std::move(reader));
-        return;
-    }
-    _eviction_cv.signal();
+    close_reader(detach_inactive_reader(permit, reason));
 }
 
 void reader_concurrency_semaphore::maybe_start_eviction_loop() {
@@ -1490,11 +1493,19 @@ future<> reader_concurrency_semaphore::eviction_loop() noexcept {
 }
 
 void reader_concurrency_semaphore::close_reader(mutation_reader reader) {
-    // It is safe to discard the future since it is waited on indirectly
-    // by closing the _close_readers_gate in stop().
-    (void)with_gate(_close_readers_gate, [reader = std::move(reader)] () mutable {
-        return reader.close();
-    });
+    try {
+        _readers_to_close.push_back(std::move(reader));
+    } catch (...) {
+        // Failed to allocate room in the queue (push_back() doesn't consume
+        // the reader if it throws). Close the reader in a fiber of its own.
+        // It is safe to discard the future since it is waited on indirectly
+        // by closing the _close_readers_gate in stop().
+        (void)with_gate(_close_readers_gate, [reader = std::move(reader)] () mutable {
+            return reader.close();
+        });
+        return;
+    }
+    _eviction_cv.signal();
 }
 
 reader_concurrency_semaphore::reason reader_concurrency_semaphore::has_available_units(const resources& r) const {

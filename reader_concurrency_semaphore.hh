@@ -384,7 +384,7 @@ private:
 
     std::runtime_error stopped_exception();
 
-    // closes reader in the background.
+    // Queue the reader to be closed by the eviction loop.
     void close_reader(mutation_reader reader);
 
     future<> execution_loop() noexcept;
