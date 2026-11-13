@@ -4522,3 +4522,80 @@ async def test_shutdown_does_not_abort_late_shard_bounced_write(manager: ScyllaC
         cql, _ = await manager.get_ready_cql([server])
         rows = await cql.run_async(f"SELECT v FROM {ks}.test WHERE pk = {pk}")
         assert [row.v for row in rows] == [1]
+
+
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+async def test_shutdown_aborts_stuck_shard_bounced_write(manager: ScyllaClusterManager):
+    """
+    A write is bounced to another shard of the stopping node and can never
+    finish there. The node aborts its requests only after all shards are done
+    with their connections, so the abort must still come once the shard of the
+    write's connection gives up waiting for it (request_timeout_on_shutdown_in_seconds),
+    and the stop must not wait for the write's own, much longer, timeout.
+
+    It passes without the SCYLLADB-5405 fix too; it guards that ordering
+    against a hang.
+    """
+    smp = 2
+    config = DEFAULT_CONFIG | {"request_timeout_on_shutdown_in_seconds": 2}
+    cmdline = DEFAULT_CMDLINE + [f"--smp={smp}"]
+    leader = await manager.server_add(config=config, cmdline=cmdline, property_file={"dc": "dc1", "rack": "r1"})
+    follower_config = config | {"error_injections_at_startup": ["avoid_being_raft_leader"]}
+    followers = await manager.servers_add(2, config=follower_config, cmdline=cmdline, property_file=[
+        {"dc": "dc1", "rack": "r2"},
+        {"dc": "dc1", "rack": "r3"},
+    ])
+    cql, hosts = await manager.get_ready_cql([leader, *followers])
+    leader_host = next(h for h in hosts if h.address == leader.rpc_address)
+    leader_host_id = await manager.get_host_id(leader.server_id)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v int)")
+        group_id = await get_table_raft_group_id(manager, ks, "test")
+        [tablet_shard] = [shard for host_id, shard in await get_tablet_replicas(manager, leader, ks, "test", 0)
+                          if host_id == leader_host_id]
+
+        # The write's own timeout is far beyond what the stop may take.
+        insert = cql.prepare(f"INSERT INTO {ks}.test (pk, v) VALUES (?, ?) USING TIMEOUT 300s")
+        insert.retry_policy = FallthroughRetryPolicy()
+
+        # See test_shutdown_does_not_abort_shard_bounced_write for why the driver
+        # sends the first write to a tablet to the shard picked by the token.
+        def driver_shard(pk: int) -> int:
+            routing_key = insert.bind((pk, 0)).routing_key
+            return leader_host.sharding_info.shard_id_from_token(Murmur3Token.from_key(routing_key).value)
+        pk = next(pk for pk in range(100) if driver_shard(pk) != tablet_shard)
+
+        pool = next(p for p in cql.get_pools() if p.host == leader_host)
+        async def driver_connected_to_all_shards():
+            return True if pool.num_missing_or_needing_replacement == 0 else None
+        await wait_for(driver_connected_to_all_shards, time.time() + 60)
+
+        injections = ("raft_drop_incoming_append_entries_for_specified_group", "avoid_being_raft_leader")
+        try:
+            # The followers never accept the entry, so the leader's add_entry
+            # waits until it is aborted.
+            for follower in followers:
+                await manager.api.enable_injection(follower.ip_addr, injections[0], one_shot=False,
+                                                   parameters={"value": group_id})
+
+            bounces_metric = "scylla_strong_consistency_coordinator_write_shard_bounces"
+            async def bounces():
+                return (await manager.metrics.query(leader.ip_addr)).get(bounces_metric) or 0
+            bounces_before = await bounces()
+            write_fut = asyncio.ensure_future(cql.run_async(insert.bind((pk, 1)), host=leader_host))
+            async def write_bounced():
+                return True if await bounces() > bounces_before else None
+            await wait_for(write_bounced, time.time() + 60)
+            assert not write_fut.done()
+
+            start = time.monotonic()
+            await manager.server_stop_gracefully(leader.server_id)
+            elapsed = time.monotonic() - start
+            logger.info(f"The stop took {elapsed:.1f}s")
+            with pytest.raises(Exception):
+                await asyncio.wait_for(write_fut, timeout=60)
+            assert elapsed < 120, f"The stop took {elapsed:.1f}s, waiting for a stuck shard-bounced write"
+        finally:
+            await gather_safely(*[manager.api.disable_injection(follower.ip_addr, injection)
+                                  for follower in followers for injection in injections])
