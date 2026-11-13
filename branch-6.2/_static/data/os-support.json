@@ -1,0 +1,65 @@
+{
+    "Linux Distributions": {
+      "Ubuntu": ["22.04", "24.04"],
+      "Debian": ["11", "12"],
+      "Rocky / CentOS / RHEL": ["8", "9", "10"],
+      "Amazon Linux": ["2023"]
+    },
+    "ScyllaDB Versions": [
+      {
+        "version": "ScyllaDB 2025.4",
+        "supported_OS": {
+          "Ubuntu": ["22.04", "24.04"],
+          "Debian": ["11", "12"],
+          "Rocky / CentOS / RHEL": ["8", "9", "10"],
+          "Amazon Linux": ["2023"]
+        }
+      },
+      {
+        "version": "ScyllaDB 2025.3",
+        "supported_OS": {
+          "Ubuntu": ["22.04", "24.04"],
+          "Debian": ["11", "12"],
+          "Rocky / CentOS / RHEL": ["8", "9", "10"],
+          "Amazon Linux": ["2023"]
+        }
+      },
+      {
+        "version": "ScyllaDB 2025.2",
+        "supported_OS": {
+          "Ubuntu": ["22.04", "24.04"],
+          "Debian": ["11", "12"],
+          "Rocky / CentOS / RHEL": ["8", "9"],
+          "Amazon Linux": ["2023"]
+        }
+      },
+      {
+        "version": "ScyllaDB 2025.1",
+        "supported_OS": {
+          "Ubuntu": ["22.04", "24.04"],
+          "Debian": ["11", "12"],
+          "Rocky / CentOS / RHEL": ["8", "9"],
+          "Amazon Linux": ["2023"]
+        }
+      },
+      {
+        "version": "Enterprise 2024.2",
+        "supported_OS": {
+          "Ubuntu": ["22.04", "24.04"],
+          "Debian": ["11"],
+          "Rocky / CentOS / RHEL": ["8", "9"],
+          "Amazon Linux": ["2023"]
+        }
+      },
+      {
+        "version": "Enterprise 2024.1",
+        "supported_OS": {
+          "Ubuntu": ["22.04", "24.04*"],
+          "Debian": ["11"],
+          "Rocky / CentOS / RHEL": ["8", "9"],
+          "Amazon Linux": []
+        }
+      }
+    ]
+  }
+  
