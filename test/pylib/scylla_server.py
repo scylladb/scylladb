@@ -9,6 +9,7 @@
 import asyncio
 import copy
 import errno
+import functools
 import glob
 import itertools
 import json
@@ -20,6 +21,7 @@ import re
 import shutil
 import signal
 import socket
+import subprocess
 import tempfile
 import threading
 import time
@@ -185,22 +187,6 @@ class ScyllaVersionDescription(NamedTuple):
     config: dict # a dictionary of added scylla.yaml options
     argv: list[str] # a list of added CLI args
 
-# Returns the description of the current version.
-# (I.e. the one we just built and are now testing).
-#
-# (The path has to be passed by an argument because the current executable
-# has no fixed location -- the build directory depends on the build mode,
-# and in the case of cmake can be moved to something different than `build`.)
-def get_current_version_description(path: str) -> ScyllaVersionDescription:
-    return ScyllaVersionDescription(
-        path=path,
-        config={},
-        argv=[
-            '--logger-log-level', 'group0_voter_handler=debug',
-        ]
-    )
-
-
 # The experimental features which every version taking part in the tests can
 # run with. A version older than the current one sets this list instead of the
 # default one, so only features which all such versions have, and which don't
@@ -208,6 +194,42 @@ def get_current_version_description(path: str) -> ScyllaVersionDescription:
 # (2025.1 lacks it, and before 2026.4 it turns tablet balancing off in the
 # whole cluster) and logstor (appeared in 2026.2).
 EXPERIMENTAL_FEATURES_IN_ALL_VERSIONS = ('udf', 'views-with-tablets')
+
+
+# The (year, minor) version of a Scylla executable which test.py did not build,
+# or None for a built one and for an executable which doesn't tell.
+@functools.cache
+def _prebuilt_scylla_version(path: str) -> tuple[int, int] | None:
+    if pathlib.Path(path).resolve().is_relative_to(pathlib.Path(TOP_SRC_DIR).resolve()):
+        return None
+    try:
+        out = subprocess.run([path, '--version'], capture_output=True, text=True, timeout=60, check=True).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    m = re.match(r'\s*(\d+)\.(\d+)', out)
+    return (int(m[1]), int(m[2])) if m else None
+
+
+# Returns the description of the current version.
+# (I.e. the one we just built and are now testing).
+#
+# (The path has to be passed by an argument because the current executable
+# has no fixed location -- the build directory depends on the build mode,
+# and in the case of cmake can be moved to something different than `build`.)
+def get_current_version_description(path: str) -> ScyllaVersionDescription:
+    config = {}
+    # --exe-url and --exe-path can run a release which lacks a feature of the
+    # default list, and an unknown feature makes Scylla drop the whole list.
+    version = _prebuilt_scylla_version(path)
+    if version is not None and version < (2026, 4):
+        config['experimental_features'] = list(EXPERIMENTAL_FEATURES_IN_ALL_VERSIONS)
+    return ScyllaVersionDescription(
+        path=path,
+        config=config,
+        argv=[
+            '--logger-log-level', 'group0_voter_handler=debug',
+        ]
+    )
 
 
 async def get_scylla_2025_1_executable(build_mode: str) -> str:
