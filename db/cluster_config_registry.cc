@@ -79,6 +79,7 @@ constexpr std::array registry_options = {
         .description = "Time in seconds since the start of the last successful repair of a tablet after which it is eligible for automatic repair. A repair restricted to some hosts or datacenters does not count, and a tablet that was never repaired is eligible immediately. 0 disables time-based automatic repair",
         .scopes = table_oriented_scopes,
         .default_value = auto_repair_threshold_default_seconds,
+        .valid_range = integer_range{.min = 0, .max = std::numeric_limits<int64_t>::max()},
     },
     option{
         .name = option_name::repair_hints_batchlog_flush_discard_unreplayed_hints,

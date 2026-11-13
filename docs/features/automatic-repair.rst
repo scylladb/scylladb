@@ -16,8 +16,8 @@ Automatic repair is controlled by two :doc:`cluster configuration options </cql/
 * ``auto_repair_enabled`` (boolean): whether tablets of a table are scheduled for automatic repair.
 * ``auto_repair_threshold_in_seconds`` (integer, seconds): a tablet becomes eligible for automatic repair when this
   much time has passed since the start of its last successful repair. A repair restricted to some hosts or
-  datacenters does not count, and a tablet that was never repaired is eligible immediately. ``0`` disables
-  time-based automatic repair at that scope.
+  datacenters does not count, and a tablet that was never repaired is eligible immediately. Must be ``0`` or
+  greater; ``0`` disables time-based automatic repair at that scope.
 
 Both can be set for the whole cluster, for a keyspace, or for a single table. A value set for a table
 overrides the keyspace value, which overrides the cluster value:
