@@ -14,8 +14,16 @@ class TabletReplicas(NamedTuple):
     last_token: int
     replicas: list[tuple[HostID, int]]
 
-async def get_base_table(manager: ScyllaClusterManager, table_id):
-    rows = await manager.get_cql().run_async(f"SELECT base_table FROM system.tablets where table_id = {table_id}")
+async def get_base_table(manager: ScyllaClusterManager, table_id, host=None):
+    """
+    Returns the table whose tablet map the given table uses: its base table if it is
+    co-located with one, otherwise the table itself.
+
+    :param host: the node to query. By default, the driver picks one, which may not
+                 have applied the latest group0 changes yet.
+    """
+    rows = await manager.get_cql().run_async(f"SELECT base_table FROM system.tablets where table_id = {table_id}",
+                                             host=host)
     if len(rows) > 0 and rows[0].base_table:
         return rows[0].base_table
     return table_id
@@ -35,7 +43,7 @@ async def get_all_tablet_replicas(manager: ScyllaClusterManager, server: ServerI
     await read_barrier(manager.api, server.ip_addr)
 
     table_id = await manager.get_table_or_view_id(keyspace_name, table_name)
-    table_id = await get_base_table(manager, table_id)
+    table_id = await get_base_table(manager, table_id, host)
     rows = await manager.get_cql().run_async(f"SELECT last_token, replicas FROM system.tablets where "
                                        f"table_id = {table_id}", host=host)
     return [TabletReplicas(
@@ -94,7 +102,7 @@ async def get_tablet_info(manager: ScyllaClusterManager, server: ServerInfo, key
     await read_barrier(manager.api, server.ip_addr)
 
     table_id = await manager.get_table_or_view_id(keyspace_name, table_name)
-    table_id = await get_base_table(manager, table_id)
+    table_id = await get_base_table(manager, table_id, host)
 
     rows = await manager.get_cql().run_async(f"SELECT * FROM system.tablets where table_id = {table_id}", host=host)
     for row in rows:
@@ -110,7 +118,7 @@ async def get_tablet_count(manager: ScyllaClusterManager, server: ServerInfo, ke
     await read_barrier(manager.api, server.ip_addr)
 
     table_id = await manager.get_table_or_view_id(keyspace_name, table_name)
-    table_id = await get_base_table(manager, table_id)
+    table_id = await get_base_table(manager, table_id, host)
     rows = await manager.cql.run_async(f"SELECT tablet_count FROM system.tablets where "
                                        f"table_id = {table_id}", host=host)
     return rows[0].tablet_count if len(rows) > 0 else 0

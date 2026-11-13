@@ -2532,7 +2532,9 @@ async def test_migration_in_mixed_cluster(manager: ScyllaClusterManager):
 
         logger.info("Finalizing, which must not be blocked by the absent modes")
         await manager.api.finalize_vnode_tablet_migration(new_node.ip_addr, ks)
-        await read_barrier(manager.api, new_node.ip_addr)
+        # The query below may go to either node, so wait for both of them to
+        # apply the finalization.
+        await asyncio.gather(*(read_barrier(manager.api, s.ip_addr) for s in servers))
 
         res = await cql.run_async(f"SELECT * FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{ks}'")
         assert len(res) == 1 and res[0].initial_tablets is not None, \
@@ -2632,6 +2634,9 @@ async def test_replace_during_migration(manager: ScyllaClusterManager, rbno_enab
         cql, _ = await manager.get_ready_cql(surviving_servers)
 
         logger.info("Verifying node statuses after replacement")
+        # The replace ends when the new node applied its end, and the other
+        # nodes apply it later. The query below may go to any of them.
+        await asyncio.gather(*(read_barrier(manager.api, s.ip_addr) for s in surviving_servers))
         rs = await cql.run_async("SELECT host_id, node_state, current_storage_mode FROM system.topology WHERE key = 'topology'")
         for row in rs:
             if row.host_id == UUID(replaced_host_id):
@@ -2802,6 +2807,9 @@ async def test_replace_during_migration_tablet_followers(manager: ScyllaClusterM
             f"Replacement node tokens {new_tokens} do not match replaced node tokens {replaced_tokens}"
 
         logger.info("Verifying node statuses after replacement")
+        # The replace ends when the new node applied its end, and the other
+        # nodes apply it later. The query below may go to any of them.
+        await asyncio.gather(*(read_barrier(manager.api, s.ip_addr) for s in surviving_servers))
         rows = await cql.run_async("SELECT host_id, node_state FROM system.topology WHERE key = 'topology'")
         for row in rows:
             if row.host_id == UUID(replaced_host_id):
@@ -3815,6 +3823,10 @@ async def test_migration_with_views(manager: ScyllaClusterManager, rf: int, num_
 
         logger.info("Starting vnodes-to-tablets migration (creating tablet maps)")
         await manager.api.create_vnode_tablet_migration(server.ip_addr, ks)
+        # The request returns once `server` applied the new tablet maps, but
+        # get_base_table() below may query another node, which may apply them
+        # later (SCYLLADB-6204). A read barrier on every node waits for that.
+        await asyncio.gather(*(read_barrier(manager.api, s.ip_addr) for s in servers))
 
         logger.info("Verifying the tablet maps of the base table and the views")
         await verify_tablet_map_boundaries(manager, server, ks, 'test', vnode_boundaries)
