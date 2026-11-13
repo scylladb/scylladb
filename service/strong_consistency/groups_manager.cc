@@ -544,7 +544,7 @@ std::optional<locator::tablet_routing_info_v2> groups_manager::local_tablet_rout
         return std::nullopt;
     }
     const auto leader = server->server().current_leader();
-    if (!leader || !serving.find_replica(locator::host_id(leader.uuid()))) {
+    if (!leader || !serving.find_replica(locator::host_id(leader.uuid())) || !_gossiper.is_alive(locator::host_id(leader.uuid()))) {
         return std::nullopt;
     }
     bool unavailable = false;
@@ -586,7 +586,7 @@ future<std::optional<locator::tablet_routing_info_v2>> groups_manager::collect_t
             return make_ready_future<std::optional<locator::tablet_routing_info_v2>>();
         }
         const auto leader = _leader_cache.get(map.get_tablet_raft_info(tid).group_id);
-        if (!leader || !serving.find_replica(*leader)) {
+        if (!leader || !serving.find_replica(*leader) || !_gossiper.is_alive(*leader)) {
             return make_ready_future<std::optional<locator::tablet_routing_info_v2>>();
         }
         return make_ready_future<std::optional<locator::tablet_routing_info_v2>>(
