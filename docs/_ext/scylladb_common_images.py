@@ -1,6 +1,8 @@
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import os
 import re
+import shutil
+import tempfile
 import requests
 
 from docutils.parsers.rst import Directive, directives
@@ -31,13 +33,27 @@ class FileDownloader:
 
 
     def download_files(self, bucket_directory, download_directory, extension="csv"):
-        os.makedirs(download_directory, exist_ok=True)
-
-        links = self.get_links(bucket_directory, extension)
-        with ThreadPoolExecutor(max_workers=10) as executor:
-            futures = [executor.submit(self.download_file, link, download_directory) for link in links]
-            for future in as_completed(futures):
-                future.result()  # Handling exceptions can be added here
+        # The llms.txt markdown build runs a second sphinx process at the same time as the
+        # main build. Download into a temporary directory and move it into place once complete,
+        # so neither process sees a half-filled directory and skips the download.
+        parent_directory = os.path.dirname(download_directory)
+        os.makedirs(parent_directory, exist_ok=True)
+        tmp_directory = tempfile.mkdtemp(dir=parent_directory)
+        try:
+            links = self.get_links(bucket_directory, extension)
+            with ThreadPoolExecutor(max_workers=10) as executor:
+                futures = [executor.submit(self.download_file, link, tmp_directory) for link in links]
+                for future in as_completed(futures):
+                    future.result()  # Handling exceptions can be added here
+            try:
+                os.rename(tmp_directory, download_directory)
+            except OSError:
+                # Expected only when another process got there first; anything else is a real failure.
+                if not (os.path.isdir(download_directory) and os.listdir(download_directory)):
+                    raise
+                LOGGER.info(f"{download_directory} was downloaded by another process.")
+        finally:
+            shutil.rmtree(tmp_directory, ignore_errors=True)
 
         LOGGER.info(f"Download complete. The {extension.upper()} files are in {download_directory}")
 
