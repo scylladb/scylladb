@@ -17,6 +17,7 @@
 #include <seastar/core/future-util.hh>
 #include <seastar/core/queue.hh>
 #include <seastar/core/smp.hh>
+#include <seastar/coroutine/exception.hh>
 #include "tracing/trace_state.hh"
 
 namespace mutation_writer {
@@ -121,9 +122,21 @@ future<> multishard_writer::make_shard_writer(unsigned shard) {
         auto s = co_await gs.get(db::no_timeout);
         auto semaphore = std::make_unique<reader_concurrency_semaphore>(reader_concurrency_semaphore::no_limits{}, "shard_writer",
                 reader_concurrency_semaphore::register_metrics::no);
-        auto permit = semaphore->make_tracking_only_permit(s, "multishard-writer", db::no_timeout, {});
-        auto this_shard_reader = make_foreign_reader(s, std::move(permit), std::move(reader));
-        co_return make_foreign(std::make_unique<shard_writer>(s, std::move(semaphore), std::move(this_shard_reader), consumer));
+        mutation_reader_opt this_shard_reader;
+        std::exception_ptr ex;
+        try {
+            auto permit = semaphore->make_tracking_only_permit(s, "multishard-writer", db::no_timeout, {});
+            this_shard_reader = make_foreign_reader(s, std::move(permit), std::move(reader));
+            co_return make_foreign(std::make_unique<shard_writer>(s, std::move(semaphore), std::move(*this_shard_reader), std::move(consumer)));
+        } catch (...) {
+            ex = std::current_exception();
+        }
+        // Failed to create the shard writer, it is not there to stop the semaphore.
+        if (this_shard_reader) {
+            co_await this_shard_reader->close();
+        }
+        co_await semaphore->stop();
+        co_return coroutine::exception(std::move(ex));
     }).then([this, shard] (foreign_ptr<std::unique_ptr<shard_writer>> writer) {
         _shard_writers[shard] = std::move(writer);
         _pending_consumers.push_back(consume(shard));
