@@ -2885,17 +2885,23 @@ SEASTAR_THREAD_TEST_CASE(test_collection_compaction) {
     auto row_tomb = row_tombstone(tombstone { 1, gc_clock::time_point() });
     auto [out1, res1] = compact_and_expire(cmut, 0, *bytes_type, row_tomb, gc_clock::time_point(), always_gc, gc_clock::time_point(), nullptr);
     BOOST_CHECK(!res1.is_live());
-    BOOST_CHECK(collection_mutation_view(out1).empty());
+    BOOST_REQUIRE(out1);
+    BOOST_CHECK(collection_mutation_view(*out1).empty());
 
     // No collection tombstone, row tombstone doesn't cover anything
     cmut = make_collection_mutation({}, key, make_collection_member(bytes_type, value));
     row_tomb = row_tombstone(tombstone { -1, gc_clock::time_point() });
     auto [out2, res2] = compact_and_expire(cmut, 0, *bytes_type, row_tomb, gc_clock::time_point(), always_gc, gc_clock::time_point(), nullptr);
     BOOST_CHECK(res2.is_live());
+    // Nothing to compact, so the input is kept as is; a rewrite yields the same bytes.
+    BOOST_CHECK(!out2);
     {
-        collection_mutation_view v = out2;
-        BOOST_CHECK(!v.tomb());
-        BOOST_CHECK_EQUAL(v.size(), 1);
+        collection_mutation_writer w(tombstone{});
+        for (auto& e : collection_mutation_view(cmut)) {
+            w.push_back(e);
+        }
+        auto rewritten = std::move(w).finish();
+        BOOST_CHECK(collection_mutation_view(rewritten).data == collection_mutation_view(cmut).data);
     }
 
     // Collection tombstone covers everything
@@ -2904,7 +2910,8 @@ SEASTAR_THREAD_TEST_CASE(test_collection_compaction) {
     auto [out3, res3] = compact_and_expire(cmut, 0, *bytes_type, row_tomb, gc_clock::time_point(), always_gc, gc_clock::time_point(), nullptr);
     BOOST_CHECK(!res3.is_live());
     {
-        collection_mutation_view v = out3;
+        BOOST_REQUIRE(out3);
+        collection_mutation_view v = *out3;
         BOOST_CHECK(v.tomb());
         BOOST_CHECK_EQUAL(v.tomb().timestamp, 2);
         BOOST_CHECK_EQUAL(v.size(), 0);
@@ -2915,7 +2922,26 @@ SEASTAR_THREAD_TEST_CASE(test_collection_compaction) {
     row_tomb = row_tombstone(tombstone { 3, gc_clock::time_point() });
     auto [out4, res4] = compact_and_expire(cmut, 0, *bytes_type, row_tomb, gc_clock::time_point(), always_gc, gc_clock::time_point(), nullptr);
     BOOST_CHECK(!res4.is_live());
-    BOOST_CHECK(collection_mutation_view(out4).empty());
+    BOOST_REQUIRE(out4);
+    BOOST_CHECK(collection_mutation_view(*out4).empty());
+
+    // Only the last cell is covered: the kept prefix is replayed into the rewrite.
+    cmut = make_collection_mutation({},
+            to_bytes("a"), atomic_cell::make_live(*bytes_type, 5, value.serialize_nonnull(), atomic_cell::collection_member::yes),
+            to_bytes("b"), make_collection_member(bytes_type, value));
+    row_tomb = row_tombstone(tombstone { 3, gc_clock::time_point() });
+    auto [out5, res5] = compact_and_expire(cmut, 0, *bytes_type, row_tomb, gc_clock::time_point(), always_gc, gc_clock::time_point(), nullptr);
+    BOOST_CHECK(res5.is_live());
+    BOOST_REQUIRE(out5);
+    {
+        collection_mutation_view v = *out5;
+        BOOST_CHECK(!v.tomb());
+        BOOST_REQUIRE_EQUAL(v.size(), 1);
+        for (auto& [k, c] : v) {
+            BOOST_CHECK_EQUAL(to_bytes(k), to_bytes("a"));
+            BOOST_CHECK_EQUAL(c.timestamp(), 5);
+        }
+    }
 }
 
 namespace {

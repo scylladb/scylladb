@@ -2909,6 +2909,69 @@ SEASTAR_THREAD_TEST_CASE(test_compacting_reader_is_consistent_with_compaction) {
             .produces_partition_end();
 }
 
+namespace {
+// Opts out of discards_garbage, so the compactor runs its garbage collector.
+struct discarding_gc_consumer : noop_compacted_fragments_consumer {
+    static constexpr bool discards_garbage = false;
+};
+}
+
+// The compacting reader compacts in place, without the garbage collector.
+// Its output must match a compactor that collects the purged data.
+SEASTAR_THREAD_TEST_CASE(test_compacting_reader_matches_garbage_collecting_compactor) {
+    struct rebuilding_consumer {
+        schema_ptr _s;
+        std::optional<mutation_rebuilder_v2> _mr;
+        utils::chunked_vector<mutation> _muts;
+
+        void consume_new_partition(const dht::decorated_key& dk) {
+            _mr.emplace(_s);
+            _mr->consume_new_partition(dk);
+        }
+        void consume(tombstone t) { _mr->consume(t); }
+        stop_iteration consume(static_row&& sr, tombstone, bool) { return _mr->consume(std::move(sr)); }
+        stop_iteration consume(clustering_row&& cr, row_tombstone, bool) { return _mr->consume(std::move(cr)); }
+        stop_iteration consume(range_tombstone_change&& rtc) { return _mr->consume(std::move(rtc)); }
+        stop_iteration consume_end_of_partition() {
+            _mr->consume_end_of_partition();
+            _muts.push_back(*_mr->consume_end_of_stream());
+            _mr.reset();
+            return stop_iteration::no;
+        }
+        utils::chunked_vector<mutation> consume_end_of_stream() { return std::move(_muts); }
+    };
+
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    for (auto seed : {1u, 2u, 3u, 4u, 5u}) {
+        random_mutation_generator gen(random_mutation_generator::generate_counters::no, seed);
+        auto s = gen.schema();
+        const auto mutations = gen(20);
+        // Cell expiry and deletion times are a few seconds after the epoch.
+        for (auto compaction_time : {gc_clock::time_point() + std::chrono::seconds(1), gc_clock::time_point() + std::chrono::seconds(2), gc_clock::now()}) {
+            for (auto get_max_purgeable : {can_never_purge, can_always_purge}) {
+                for (auto buffer_size : {size_t(1), size_t(128 * 1024)}) {
+                    auto expected = [&] {
+                        auto rd = make_mutation_reader_from_mutations(s, semaphore.make_permit(), mutations);
+                        auto close_rd = deferred_close(rd);
+                        return rd.consume(compact_for_compaction<rebuilding_consumer, discarding_gc_consumer>(*s, compaction_time,
+                                get_max_purgeable, tombstone_gc_state::for_tests(), rebuilding_consumer{s})).get();
+                    }();
+                    auto rd = make_compacting_reader(make_mutation_reader_from_mutations(s, semaphore.make_permit(), mutations),
+                            compaction_time, get_max_purgeable, tombstone_gc_state::for_tests());
+                    rd.set_max_buffer_size(buffer_size);
+                    auto close_rd = deferred_close(rd);
+                    for (const auto& m : expected) {
+                        auto actual = read_mutation_from_mutation_reader(rd).get();
+                        BOOST_REQUIRE(actual);
+                        assert_that(*actual).is_equal_to(m);
+                    }
+                    BOOST_REQUIRE(!read_mutation_from_mutation_reader(rd).get());
+                }
+            }
+        }
+    }
+}
+
 SEASTAR_THREAD_TEST_CASE(test_auto_paused_evictable_reader_is_mutation_source) {
     auto make_populate = [] (schema_ptr s, const utils::chunked_vector<mutation>& mutations, gc_clock::time_point query_time) {
         auto mt = make_memtable(s, mutations).get();

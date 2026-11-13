@@ -1668,10 +1668,13 @@ compact_and_expire_result row::compact_and_expire(
         } else {
             auto compact_res = ::compact_and_expire(c.as_collection_mutation(), id, *def.type, tomb, query_time, can_gc, gc_before, collector);
             res += compact_res.result;
-            if (collection_mutation_view(compact_res.collection).empty()) {
-                 erase = true;
-            } else {
-                c = std::move(compact_res.collection);
+            // A disengaged collection means unchanged: keep c as is.
+            if (compact_res.collection) {
+                if (collection_mutation_view(*compact_res.collection).empty()) {
+                    erase = true;
+                } else {
+                    c = std::move(*compact_res.collection);
+                }
             }
         }
         return erase;
