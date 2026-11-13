@@ -4659,3 +4659,104 @@ async def test_shutdown_does_not_abort_shard_bounced_write(manager: ScyllaCluste
         cql, _ = await manager.get_ready_cql([server])
         rows = await cql.run_async(f"SELECT v FROM {ks}.test WHERE pk = {pk}")
         assert [row.v for row in rows] == [1]
+
+
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+async def test_shutdown_does_not_abort_late_shard_bounced_write(manager: ScyllaClusterManager):
+    """
+    Reproducer for SCYLLADB-5405.
+
+    A write is read by the shard that owns its connection before the node is
+    stopped, and is bounced to the tablet's shard only after that shard has
+    closed its own connections. The connection that owns the write is still
+    being drained, so the write has to succeed.
+
+    Holding the target shard's gate for the bounced request doesn't cover this:
+    the gate is already closed when the request is bounced.
+    """
+    cmdline = DEFAULT_CMDLINE + ["--smp=2", "--logger-log-level", "cql_server=debug"]
+    server = await manager.server_add(cmdline=cmdline)
+    cql, [host] = await manager.get_ready_cql([server])
+    # The pause below holds any CQL request, once per shard. On a schema change event the
+    # driver's control connection schedules a schema refresh at a random moment within its
+    # event refresh window, and nothing tells when that refresh is done. Held on the tablet's
+    # shard, it would take that shard's pause. Turn these refreshes off for this session: a
+    # DDL statement refreshes the driver's schema itself before it returns.
+    cql.cluster.control_connection._schema_event_refresh_window = -1
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v int)")
+        [(_, tablet_shard)] = await get_tablet_replicas(manager, server, ks, "test", 0)
+
+        insert = cql.prepare(f"INSERT INTO {ks}.test (pk, v) VALUES (?, ?)")
+        insert.retry_policy = FallthroughRetryPolicy()
+
+        # See test_shutdown_does_not_abort_shard_bounced_write for why the driver
+        # sends the first write to a tablet to the shard picked by the token.
+        def driver_shard(pk: int) -> int:
+            routing_key = insert.bind((pk, 0)).routing_key
+            return host.sharding_info.shard_id_from_token(Murmur3Token.from_key(routing_key).value)
+        pk = next(pk for pk in range(100) if driver_shard(pk) != tablet_shard)
+        conn_shard = driver_shard(pk)
+
+        pool = next(p for p in cql.get_pools() if p.host == host)
+        await wait_for_pool_on_all_shards(pool)
+
+        logger.info(f"Pausing a write on shard {conn_shard} before it is bounced to shard {tablet_shard}")
+        log = await manager.server_open_log(server.server_id)
+        mark = await log.mark()
+        await manager.api.enable_injection(server.ip_addr, "transport_cql_request_pause", one_shot=True)
+        write_fut = asyncio.ensure_future(cql.run_async(insert.bind((pk, 1))))
+        await manager.api.wait_for_injection_enter(server.ip_addr, "transport_cql_request_pause")
+        assert not write_fut.done()
+
+        # The write is bounced only if it came to a shard without the tablet. The bounce happens
+        # after the release, when the node is already stopping, so the bounce metric can't show
+        # it. Check where the write is paused instead: it is not done, so it is held by the
+        # pause of the shard it came to, and only the connection's shard may be paused.
+        paused = rf"\[shard (\d+):[^\]]*\] .*transport_cql_request_pause: waiting"
+        await log.wait_for(paused, from_mark=mark, timeout=30)
+        paused_shards = {int(m.group(1)) for _, m in await log.grep(paused, from_mark=mark)}
+        assert paused_shards == {conn_shard}, \
+            f"Requests are paused on shards {sorted(paused_shards)}, expected only shard {conn_shard}: " \
+            f"either the driver sent the write to the tablet's shard {tablet_shard} and it won't be " \
+            f"bounced, or another query took a pause"
+
+        logger.info(f"Stopping the node and waiting for shard {tablet_shard} to be done with its connections")
+        mark = await log.mark()
+        stop_task = asyncio.create_task(manager.server_stop_gracefully(server.server_id))
+        # Release the write only once the tablet's shard is done with its connections: without
+        # the fix it aborts its requests right there ("shutdown completed" is printed after that
+        # abort), with the fix no shard aborts before the shard of the write's connection is done
+        # too. See test_shutdown_does_not_abort_shard_bounced_write for why the first match is the
+        # CQL server of the clients.
+        # A query of the driver's control connection on the tablet's shard can still take that
+        # shard's pause while the node stops. Its connection then can't be done until the pause
+        # is released, which releases the write together with it, so the run can't show the bug.
+        shard_done = rf"\[shard {tablet_shard}:[^\]]*\] cql_server - generic_server::shutdown(_connections)? completed"
+        shard_paused = rf"\[shard {tablet_shard}:[^\]]*\] .*transport_cql_request_pause: waiting"
+        async def tablet_shard_done_with_connections():
+            assert not await log.grep(shard_paused, from_mark=mark), \
+                f"A request was paused on the tablet's shard {tablet_shard} while the node was stopping, " \
+                f"so the write can't be released after that shard is done with its connections"
+            return True if await log.grep(shard_done, from_mark=mark) else None
+        await wait_for(tablet_shard_done_with_connections, time.time() + 60, period=0.1)
+        # The one-shot pause could have been taken by another query, such as one of the
+        # driver's control connection. Then the write wasn't paused and is done by now.
+        assert not write_fut.done(), "The write was not paused before the bounce"
+        await manager.api.message_injection(server.ip_addr, "transport_cql_request_pause")
+
+        # Report the write's error even if the stop fails too.
+        write_result, stop_result = await asyncio.gather(write_fut, stop_task, return_exceptions=True)
+        if isinstance(write_result, WriteTimeout):
+            pytest.fail(f"SCYLLADB-5405: the write bounced late to shard {tablet_shard} was aborted "
+                        f"while the connection on shard {conn_shard} was still draining: {write_result}")
+        for result in (write_result, stop_result):
+            if isinstance(result, BaseException):
+                raise result
+
+        logger.info("Restarting the node and reading the write back")
+        await manager.server_start(server.server_id)
+        cql, _ = await manager.get_ready_cql([server])
+        rows = await cql.run_async(f"SELECT v FROM {ks}.test WHERE pk = {pk}")
+        assert [row.v for row in rows] == [1]
