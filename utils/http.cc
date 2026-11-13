@@ -11,6 +11,7 @@
 
 #include <boost/regex.hpp>
 #include <seastar/coroutine/all.hh>
+#include <seastar/coroutine/exception.hh>
 
 future<shared_ptr<tls::certificate_credentials>> utils::http::system_trust_credentials() {
     static thread_local shared_ptr<tls::certificate_credentials> system_trust_credentials;
@@ -103,17 +104,33 @@ utils::http::dns_connection_factory::dns_connection_factory(std::string uri, log
     }())
 {}
 
-future<connected_socket> utils::http::dns_connection_factory::make(abort_source*) {
+future<connected_socket> utils::http::dns_connection_factory::make(abort_source* as) {
+    std::optional<connected_socket> socket;
     try {
         auto address = co_await get_address();
-        co_return co_await connect(address);
+        socket = co_await connect(address);
     } catch (...) {
         // On failure, forcefully renew address resolution and try again
         _logger.debug("Connection failed, resetting address provider and retrying: {:t}", std::current_exception());
     }
-    _addr_list.reset();
-    auto address = co_await get_address();
-    co_return co_await connect(address);
+    if (!socket) {
+        // Reset even if the abort below stops the retry, so that the next connection
+        // does not try the same address again.
+        _addr_list.reset();
+        if (as && as->abort_requested()) {
+            co_await coroutine::return_exception_ptr(as->abort_requested_exception_ptr());
+        }
+        auto address = co_await get_address();
+        socket = co_await connect(address);
+    }
+    // The connect does not watch the abort source, so it may have fired meanwhile. Do
+    // not hand out the connection then. seastar's http client would send the request
+    // on it, and the request could not be cancelled any more, because subscribing to a
+    // source that already fired does nothing (SCYLLADB-6270).
+    if (as && as->abort_requested()) {
+        co_await coroutine::return_exception_ptr(as->abort_requested_exception_ptr());
+    }
+    co_return std::move(*socket);
 }
 
 future<> utils::http::dns_connection_factory::close() {
