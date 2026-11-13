@@ -517,13 +517,11 @@ future<> distributed_loader::populate_keyspace(sharded<replica::database>& db,
                 format("Exception while populating keyspace '{}' with column family '{}' from '{}': {:t}",
                         ks_name, cfname, cf.get_storage_options(), eptr);
             dblog.error("{}", msg);
-            try {
-                std::rethrow_exception(eptr);
-            } catch (compaction::compaction_stopped_exception& e) {
-                // swallow compaction stopped exception, to allow clean shutdown.
-            } catch (...) {
-                ex = std::make_exception_ptr(std::runtime_error(msg.c_str()));
-            }
+            // Fail the boot on any error, including a stopped resharding: the
+            // table must not become writable with only part of its sstables
+            // loaded. A shutdown signal cannot cause such a stop, because main
+            // handles it only at the next checkpoint, after loading returns.
+            ex = std::make_exception_ptr(std::runtime_error(msg.c_str()));
         }
 
         co_await metadata.stop();
