@@ -72,46 +72,101 @@ auto write_dead_cell(Writer&& writer, atomic_cell_view c)
 }
 
 template<typename Writer>
+void write_collection_element(Writer& cells_writer, managed_bytes_view key, atomic_cell_view cell)
+{
+    auto cell_writer = cells_writer.add().write_fragmented_key(fragment_range(key));
+    if (!cell.is_live()) {
+        write_dead_cell(std::move(cell_writer).start_value_dead_cell(), cell).end_collection_element();
+    } else if (cell.is_live_and_has_ttl()) {
+        write_expiring_cell(std::move(cell_writer).start_value_expiring_cell(), cell).end_collection_element();
+    } else {
+        write_live_cell(std::move(cell_writer).start_value_live_cell(), cell).end_collection_element();
+    }
+}
+
+template<typename Writer>
 auto write_collection_cell(Writer&& collection_writer, collection_mutation_view cmv, const column_definition& def)
 {
   auto cells_writer = std::move(collection_writer).write_tomb(cmv.tomb()).start_elements();
     for (auto&& [key, cell] : cmv) {
-        auto cell_writer = cells_writer.add().write_fragmented_key(fragment_range(key));
-        if (!cell.is_live()) {
-            write_dead_cell(std::move(cell_writer).start_value_dead_cell(), cell).end_collection_element();
-        } else if (cell.is_live_and_has_ttl()) {
-            write_expiring_cell(std::move(cell_writer).start_value_expiring_cell(), cell).end_collection_element();
-        } else {
-            write_live_cell(std::move(cell_writer).start_value_live_cell(), cell).end_collection_element();
-        }
+        write_collection_element(cells_writer, key, cell);
     }
     return std::move(cells_writer).end_elements().end_collection_cell();
+}
+
+template<typename Writer>
+void write_cell(Writer&& cell_or_collection_writer, const column_definition& def, const atomic_cell_or_collection& cell)
+{
+    if (def.is_atomic()) {
+        auto&& c = cell.as_atomic_cell(def);
+        auto cell_writer = std::move(cell_or_collection_writer).start_c_variant();
+        if (!c.is_live()) {
+            write_dead_cell(std::move(cell_writer).start_variant_dead_cell(), c).end_variant().end_column();
+        } else if (def.is_counter()) {
+            write_counter_cell(std::move(cell_writer).start_variant_counter_cell(), c).end_variant().end_column();
+        } else if (c.is_live_and_has_ttl()) {
+            write_expiring_cell(std::move(cell_writer).start_variant_expiring_cell(), c).end_variant().end_column();
+        } else {
+            write_live_cell(std::move(cell_writer).start_variant_live_cell(), c).end_variant().end_column();
+        }
+    } else {
+        write_collection_cell(std::move(cell_or_collection_writer).start_c_collection_cell(), cell.as_collection_mutation(), def).end_column();
+    }
+}
+
+template<typename Writer>
+void write_cells(Writer& column_writer, const row& r, const schema& s, column_kind kind)
+{
+    r.for_each_cell([&] (column_id id, const atomic_cell_or_collection& cell) {
+        write_cell(column_writer.add().write_id(id), s.column_at(kind, id), cell);
+    });
 }
 
 template<typename Writer>
 auto write_row_cells(Writer&& writer, const row& r, const schema& s, column_kind kind)
 {
     auto column_writer = std::move(writer).start_columns();
-    r.for_each_cell([&] (column_id id, const atomic_cell_or_collection& cell) {
-        auto& def = s.column_at(kind, id);
-        auto cell_or_collection_writer = column_writer.add().write_id(id);
-        if (def.is_atomic()) {
-            auto&& c = cell.as_atomic_cell(def);
-            auto cell_writer = std::move(cell_or_collection_writer).start_c_variant();
-            if (!c.is_live()) {
-                write_dead_cell(std::move(cell_writer).start_variant_dead_cell(), c).end_variant().end_column();
-            } else if (def.is_counter()) {
-                write_counter_cell(std::move(cell_writer).start_variant_counter_cell(), c).end_variant().end_column();
-            } else if (c.is_live_and_has_ttl()) {
-                write_expiring_cell(std::move(cell_writer).start_variant_expiring_cell(), c).end_variant().end_column();
-            } else {
-                write_live_cell(std::move(cell_writer).start_variant_live_cell(), c).end_variant().end_column();
-            }
-        } else {
-            write_collection_cell(std::move(cell_or_collection_writer).start_c_collection_cell(), cell.as_collection_mutation(), def).end_column();
-        }
-    });
+    write_cells(column_writer, r, s, kind);
     return std::move(column_writer).end_columns();
+}
+
+static bool has_large_collection(const row& r, const schema& s, column_kind kind) {
+    bool found = false;
+    r.for_each_cell([&] (column_id id, const atomic_cell_or_collection& cell) {
+        found = found || (!s.column_at(kind, id).is_atomic() && cell.as_collection_mutation().data.size_bytes() >= gentle_collection_min_size);
+    });
+    return found;
+}
+
+// write_collection_cell() that yields between elements, so that a large
+// collection does not stall; finishes the column.
+template<typename Writer>
+future<> write_collection_cell_gently(Writer cell_or_collection_writer, collection_mutation_view cmv)
+{
+    auto cells_writer = std::move(cell_or_collection_writer).start_c_collection_cell().write_tomb(cmv.tomb()).start_elements();
+    for (auto&& [key, cell] : cmv) {
+        co_await coroutine::maybe_yield();
+        write_collection_element(cells_writer, key, cell);
+    }
+    std::move(cells_writer).end_elements().end_collection_cell().end_column();
+}
+
+// write_row_cells() that yields inside large collection cells; callers check has_large_collection() first.
+template<typename Writer>
+future<> write_row_cells_gently(Writer& column_writer, const row& r, const schema& s, column_kind kind)
+{
+    std::vector<std::pair<column_id, const atomic_cell_or_collection*>> cells;
+    r.for_each_cell([&] (column_id id, const atomic_cell_or_collection& cell) {
+        cells.emplace_back(id, &cell);
+    });
+    for (auto [id, cell] : cells) {
+        auto& def = s.column_at(kind, id);
+        if (!def.is_atomic() && cell->as_collection_mutation().data.size_bytes() >= gentle_collection_min_size) {
+            co_await write_collection_cell_gently(column_writer.add().write_id(id), cell->as_collection_mutation());
+        } else {
+            write_cell(column_writer.add().write_id(id), def, *cell);
+        }
+    }
 }
 
 template<typename Writer>
@@ -158,13 +213,33 @@ static auto write_tombstone(Writer&& writer, const tombstone& t) {
     return std::move(writer).write_timestamp(t.timestamp).write_deletion_time(t.deletion_time);
 }
 
+// The row up to its cells, shared by write_row() and write_row_gently().
 template<typename Writer>
-static auto write_row(Writer&& writer, const schema& s, const clustering_key_prefix& key, const row& cells, const row_marker& m, const row_tombstone& t) {
+static auto start_row_columns(Writer&& writer, const clustering_key_prefix& key, const row_marker& m, const row_tombstone& t) {
     auto marker_writer = std::move(writer).write_key(key);
     auto deleted_at_writer = write_row_marker(std::move(marker_writer), m).start_deleted_at();
-    auto row_writer = write_tombstone(std::move(deleted_at_writer), t.regular()).end_deleted_at().start_cells();
-    auto shadowable_deleted_at_writer = write_row_cells(std::move(row_writer), cells, s, column_kind::regular_column).end_cells().start_shadowable_deleted_at();
+    return write_tombstone(std::move(deleted_at_writer), t.regular()).end_deleted_at().start_cells().start_columns();
+}
+
+template<typename Writer>
+static auto end_row_columns(Writer&& column_writer, const row_tombstone& t) {
+    auto shadowable_deleted_at_writer = std::move(column_writer).end_columns().end_cells().start_shadowable_deleted_at();
     return write_tombstone(std::move(shadowable_deleted_at_writer), t.shadowable().tomb()).end_shadowable_deleted_at();
+}
+
+template<typename Writer>
+static auto write_row(Writer&& writer, const schema& s, const clustering_key_prefix& key, const row& cells, const row_marker& m, const row_tombstone& t) {
+    auto column_writer = start_row_columns(std::forward<Writer>(writer), key, m, t);
+    write_cells(column_writer, cells, s, column_kind::regular_column);
+    return end_row_columns(std::move(column_writer), t);
+}
+
+// write_row() that yields inside large collection cells; finishes the row.
+template<typename Writer>
+static future<> write_row_gently(Writer writer, const schema& s, const clustering_key_prefix& key, const row& cells, const row_marker& m, const row_tombstone& t) {
+    auto column_writer = start_row_columns(std::move(writer), key, m, t);
+    co_await write_row_cells_gently(column_writer, cells, s, column_kind::regular_column);
+    end_row_columns(std::move(column_writer), t).end_deletable_row();
 }
 
 template<typename Writer>
@@ -183,8 +258,13 @@ void mutation_partition_serializer::write_serialized(Writer&& writer, const sche
 template<typename Writer>
 future<> mutation_partition_serializer::write_serialized_gently(Writer&& writer, const schema& s, const mutation_partition& mp)
 {
-    auto srow_writer = std::move(writer).write_tomb(mp.partition_tombstone()).start_static_row();
-    auto row_tombstones = write_row_cells(std::move(srow_writer), mp.static_row().get(), s, column_kind::static_column).end_static_row().start_range_tombstones();
+    auto static_columns = std::move(writer).write_tomb(mp.partition_tombstone()).start_static_row().start_columns();
+    if (has_large_collection(mp.static_row().get(), s, column_kind::static_column)) {
+        co_await write_row_cells_gently(static_columns, mp.static_row().get(), s, column_kind::static_column);
+    } else {
+        write_cells(static_columns, mp.static_row().get(), s, column_kind::static_column);
+    }
+    auto row_tombstones = std::move(static_columns).end_columns().end_static_row().start_range_tombstones();
     for (auto&& rte : mp.row_tombstones()) {
         co_await coroutine::maybe_yield();
         auto& rt = rte.tombstone();
@@ -194,6 +274,10 @@ future<> mutation_partition_serializer::write_serialized_gently(Writer&& writer,
     auto clustering_rows = std::move(row_tombstones).end_range_tombstones().start_rows();
     for (auto&& cr : mp.non_dummy_rows()) {
         co_await coroutine::maybe_yield();
+        if (has_large_collection(cr.row().cells(), s, column_kind::regular_column)) {
+            co_await write_row_gently(clustering_rows.add(), s, cr.key(), cr.row().cells(), cr.row().marker(), cr.row().deleted_at());
+            continue;
+        }
         write_row(clustering_rows.add(), s, cr.key(), cr.row().cells(), cr.row().marker(), cr.row().deleted_at()).end_deletable_row();
     }
     std::move(clustering_rows).end_rows().end_mutation_partition();
