@@ -200,7 +200,9 @@ the MODIFY permission, not the SELECT permission.
 
 ExportTableToPointInTime needs both SELECT on the table and MODIFY on ALL
 OBJECT STORAGE. DescribeExport and ListExports, with or without a TableArn,
-need only SELECT on ALL OBJECT STORAGE, and no permission on the table.
+need only SELECT on ALL OBJECT STORAGE, and no permission on the table. Thus
+the deletion of a table, or a new table with the same name, does not change
+who can see the exports of the table.
 
 Permissions are separate for a base table and each of its GSI/LSI and CDC
 log, so it's possible to give a role permissions to read one index and
@@ -414,7 +416,10 @@ that read it saw. Two items written together by the application can therefore
 end up in the export in states which never existed together in the table. The
 ExportTime which DescribeExport reports, and the exportTime in the export's
 manifest-summary.json, are the time the request asked for - not an instant
-the exported data is consistent as of.
+the exported data is consistent as of. Thus an export is not a backup of the
+table. For a backup, use ScyllaDB's backup solutions, such as snapshots or
+ScyllaDB Manager.
+<https://scylladb.atlassian.net/browse/SCYLLADB-2835>
 
 An export is also not resumed if the node running it goes away. In DynamoDB
 an export is a managed operation which eventually finishes on its own; in
@@ -428,69 +433,45 @@ with any failed export, the objects it had already uploaded are left in the
 bucket - a failed export never deletes what it wrote - so the user has to
 remove that partial output themselves, and start a new export if they still
 want one.
+<https://scylladb.atlassian.net/browse/SCYLLADB-2839>
 
-A stop and a start of gossip on a node (`nodetool disablegossip` and
-`nodetool enablegossip`) count as a restart of that node: a later garbage
-collection round fails the exports of the node with NodeFailure, although the
-node continues to write their objects to the bucket.
+An export whose node died can also leave incomplete multipart uploads under
+the directory of the export. A listing of the objects of the bucket does not
+show them, but S3 stores them and bills for them. To remove them, list them
+with ListMultipartUploads and abort them with AbortMultipartUpload, or use a
+bucket lifecycle rule that expires incomplete multipart uploads.
 
-A failed export can also leave behind something a listing of the bucket does
-not show. The export writes its data file as a multipart upload, and only the
-export itself ever completes or aborts that upload. An export which fails
-while its node is running closes the upload on the way out, and closing it
-completes it, so the data file is left in the bucket as an ordinary object,
-holding however much of the table the export got through. A clean shutdown is
-the exception: it aborts the export, which makes that close fail, and the
-multipart upload is aborted with it, leaving no data file behind. But an
-export whose node died gets to do neither. The export uploads the data file
-in pieces of about 2.5 GiB, whose keys are the key of the data file followed
-by `_` and a number, and copies each piece into the data file. What the
-export had uploaded so far stays in the bucket as incomplete multipart
-uploads of the pieces and, for a large export, of the data file, which a
-listing of the bucket's objects does not show, even though their parts are
-stored and paid for. A large export can also leave pieces as ordinary
-objects. So cleaning up after a node which died means listing the multipart
-uploads under the directory of the export as well (ListMultipartUploads) and
-aborting them (AbortMultipartUpload) - or having a bucket lifecycle rule
-which expires incomplete multipart uploads do it.
+A node that shuts down marks its running exports FAILED, and a node that
+restarts marks the exports of its previous run FAILED when it starts. But if
+a node stays down, another node marks its exports FAILED only after the node
+was unreachable for an hour. Until then, DescribeExport and ListExports
+report these exports as IN_PROGRESS.
 
-How soon the export turns FAILED depends on how the node went away. A node
-shutting down cleanly fails its own running exports on the way out, and a
-node which restarts fails the exports of its previous incarnation when it
-comes back up, so in both cases the export stops being IN_PROGRESS within
-seconds. But if the node stays down, another node has to fail the export for
-it, and that happens in a garbage collection round: a round only touches the
-exports of a node which has been unreachable for an hour. Each node that runs
-Alternator runs a round every four hours, and also an hour after it sees a
-node go down. So
-after a node dies, DescribeExport and ListExports go on reporting its exports
-as IN_PROGRESS for about an hour, even though nothing is running them anymore
-and no more objects will be written to the bucket.
-
-Alternator also always reports a BilledSizeBytes of 0. In DynamoDB that
-field - of the DescribeExport response, and `billedSizeBytes` of the
-export's manifest-summary.json - is the number of bytes of table data the
-completed export is billed for. ScyllaDB does not bill for exports, so
-Alternator has nothing to put there and reports 0, not the size of what the
-export wrote; an application which needs that size has to get it from S3.
+Alternator also always reports a BilledSizeBytes of 0, in DescribeExport and
+in the `billedSizeBytes` of manifest-summary.json, because ScyllaDB does not
+bill for exports. In DynamoDB, it is the size of the table data that the
+export is billed for. An application that needs the size of an export can
+get it from S3.
 
 DynamoDB limits the number of ExportTableToPointInTime exports running at the
 same time in an account. Alternator limits them per shard instead: the limit
 defaults to 10 and can be changed with the
 `alternator_max_concurrent_exports_per_shard` configuration parameter.
 
-Alternator counts the exports that each node runs in the metrics
-`scylla_alternator_s3_exports_started`,
-`scylla_alternator_s3_exports_completed` and
-`scylla_alternator_s3_exports_failed`, and the items that they wrote in
-`scylla_alternator_s3_exported_items`. An export that failed before it
-started, or that the garbage collection failed, is not counted. The gauge
-`scylla_alternator_s3_exports_running` gives the number of exports that run
-on each shard, together with the exports that still retry the write of their
-final state. If exports run on a node and its count of exported items does
-not increase for a long time, an export can be stuck, for example while it
-waits for S3. The log of the node shows the start, the completion and the
-failure of each export.
+In DynamoDB, an export uses no read capacity and has no effect on the
+performance of the table. In Alternator, an export reads the table as a Scan
+does, so it adds load to the nodes of the table. One shard of the node that
+accepted the request reads the whole table, compresses it and uploads it.
+Thus more nodes do not make an export faster, and a large table or a loaded
+cluster makes an export long. The export runs with a lower priority than
+requests, and its reads bypass the cache.
+<https://scylladb.atlassian.net/browse/SCYLLADB-2838>
+
+The metrics `scylla_alternator_s3_exports_*` and
+`scylla_alternator_s3_exported_items` count the exports of each node and the
+items that they wrote. If a node runs exports and its count of exported items
+does not increase for a long time, an export can be stuck, for example while
+it waits for S3.
 
 DynamoDB's ExportTableToPointInTime writes to any S3 bucket the caller is
 allowed to write to. Alternator reaches the bucket named in the request
@@ -499,6 +480,8 @@ through an object storage endpoint taken from the cluster's
 so exactly one S3 endpoint has to be configured there - that one endpoint is
 used for every bucket. On a cluster which has no S3 endpoint configured, or
 more than one, every export request is rejected with a ValidationException.
+See {ref}`Configuring Object Storage <object-storage-configuration>` for how
+to configure the endpoint.
 
 DynamoDB exports only a table which has point-in-time recovery enabled, and
 rejects a request for a table which has it disabled with a
