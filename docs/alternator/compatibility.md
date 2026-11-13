@@ -470,6 +470,19 @@ defaults to 10 and can be changed with the
 DynamoDB, Alternator rejects a request which would exceed the limit with a
 LimitExceededException, and the request can be retried later.
 
+Alternator counts the exports that each node runs in the metrics
+`scylla_alternator_s3_exports_started`,
+`scylla_alternator_s3_exports_completed` and
+`scylla_alternator_s3_exports_failed`, and the items that they wrote in
+`scylla_alternator_s3_exported_items`. An export that failed before it
+started, or that the garbage collection failed, is not counted. The gauge
+`scylla_alternator_s3_exports_running` gives the number of exports that run
+on each shard, together with the exports that still retry the write of their
+final state. If exports run on a node and its count of exported items does
+not increase for a long time, an export can be stuck, for example while it
+waits for S3. The log of the node shows the start, the completion and the
+failure of each export.
+
 DynamoDB's ExportTableToPointInTime writes to any S3 bucket the caller is
 allowed to write to. Alternator reaches the bucket named in the request
 through an object storage endpoint taken from the cluster's

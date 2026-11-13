@@ -239,6 +239,8 @@ public:
     explicit s3_exports(executor& e) : _e(e) {}
     // True after stop() aborted the exports, i.e. during a clean shutdown.
     bool abort_requested() const noexcept { return _as.abort_requested(); }
+    // The number of reserved export slots, see try_reserve_export_slot().
+    size_t running_exports() const noexcept { return _running_exports; }
     // A reserved slot of the counter above. The fiber holds it while it
     // runs. The destructor releases the slot.
     class slot {

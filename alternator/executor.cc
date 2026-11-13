@@ -58,6 +58,7 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/loop.hh>
+#include <seastar/core/metrics.hh>
 #include <seastar/core/when_all.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <boost/range/algorithm/find_end.hpp>
@@ -334,6 +335,10 @@ executor::executor(gms::gossiper& gossiper,
     _describe_table_info_manager = std::make_unique<describe_table_info_manager>(*this);
     _s3_exports = std::make_unique<s3_exports>(*this);
     register_metrics(_metrics, _stats);
+    _metrics.add_group("alternator", {
+            seastar::metrics::make_gauge("s3_exports_running", [this] { return _s3_exports->running_exports(); },
+                    seastar::metrics::description("number of exports to S3 that run on this shard, with those which still write their final state")),
+    });
 }
 
 executor::~executor() = default;

@@ -28,7 +28,7 @@ from cassandra import ConsistencyLevel
 from cassandra.query import SimpleStatement
 from contextlib import contextmanager, ExitStack
 
-from test.alternator.util import get_table_arn, is_aws, manual_request, ManualRequestError, new_test_table, create_test_table, random_string, scylla_config_read, scylla_config_temporary, scylla_inject_error, scylla_injection_enter_count, scylla_injection_message, scylla_wait_for_injection_enters, metrics, get_metric
+from test.alternator.util import get_table_arn, is_aws, manual_request, ManualRequestError, new_test_table, create_test_table, random_string, scylla_config_read, scylla_config_temporary, scylla_inject_error, scylla_injection_enter_count, scylla_injection_message, scylla_wait_for_injection_enters, metrics, get_metric, check_increases_metric
 from test.pylib.s3mock_server import S3MockServer
 from test.pylib.skip_types import skip_env
 
@@ -1177,6 +1177,32 @@ def test_export_paused_export_holds_its_slot(dynamodb, scylla_only, rest_api, s3
                     assert time.time() < deadline, 'The slots of the completed exports were not given back within 30s'
                     time.sleep(0.05)
             assert wait_for_export(client, export_arn)['ExportStatus'] == 'COMPLETED'
+
+
+# Test that the metrics of the export life cycle count an export, its items and its end. A paused
+# export shows in the gauge of the running exports. Operators use these metrics to find running,
+# failed and stuck exports.
+def test_export_metrics(dynamodb, scylla_only, rest_api, metrics, s3):
+    with new_table_s(dynamodb) as table, new_s3_bucket(s3) as bucket:
+        # One item, so that the export stops once (see paused_exports()).
+        table.put_item(Item={'p': 'item'})
+        client = table.meta.client
+        table_arn = get_table_arn(table)
+        with check_increases_metric(metrics, ['scylla_alternator_s3_exports_started',
+                                              'scylla_alternator_s3_exports_completed',
+                                              'scylla_alternator_s3_exported_items']):
+            with paused_exports(rest_api) as (wait_until_paused, release_paused):
+                export_arn = client.export_table_to_point_in_time(
+                    TableArn=table_arn, S3Bucket=bucket)['ExportDescription']['ExportArn']
+                wait_until_paused(1)
+                assert get_metric(metrics, 'scylla_alternator_s3_exports_running') >= 1
+                release_paused()
+            assert wait_for_export(client, export_arn)['ExportStatus'] == 'COMPLETED'
+        # The bucket does not exist, so the export fails.
+        with check_increases_metric(metrics, ['scylla_alternator_s3_exports_failed']):
+            export_arn = client.export_table_to_point_in_time(
+                TableArn=table_arn, S3Bucket=unique_bucket_name())['ExportDescription']['ExportArn']
+            assert wait_for_export(client, export_arn)['ExportStatus'] == 'FAILED'
 
 
 # Test that trying to export from two tables using the same client token fails.

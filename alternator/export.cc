@@ -1449,6 +1449,8 @@ static future<> collect_export_row(db::system_distributed_keyspace& sdks, const 
     if (!co_await update_export(sdks, failed_export_row, exp.export_status, exp.node_id, export_row_ttl)) {
         // A different node took the row first. Skip it.
         xlogger.debug("Failed to update export row {} to FAILED, it may have been updated by another node", exp.export_arn);
+    } else {
+        xlogger.warn("Export {} failed with NodeFailure: its node {} cannot run it", exp.export_arn, exp_node_id);
     }
 }
 
@@ -1507,7 +1509,10 @@ static future<> garbage_collect_s3_exports(service::storage_proxy& proxy, db::sy
                     ct.client_token, ct.node_id, ct.export_arn);
             try {
                 auto existing = co_await insert_export(sdks, failed_row_for_orphaned_client_token(proxy, ct, self_node_id));
-                if (existing) {
+                if (!existing) {
+                    xlogger.warn("Export {} failed with NodeFailure: its node {} stopped before it wrote the export row",
+                            ct.export_arn, ct.node_id);
+                } else {
                     // The scan did not see the row, but the insert did. A Paxos round of the dead
                     // node had accepted the row without a commit, and our insert completed that
                     // round. The loop below uses the scan, thus it does not collect the row.
@@ -2123,7 +2128,8 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
     erow.completed_at = db_clock::now();
     try {
         if (co_await try_write_final_export_row(_sdks, erow)) {
-            xlogger.debug("Export {} failed during starting up phase", erow.export_arn);
+            xlogger.warn("Export {} failed before it started, with {}: {}", erow.export_arn, *erow.failure_code,
+                    *erow.failure_message);
         }
         else {
             // The write did not apply. The garbage collector took the export and marked it FAILED.
@@ -2630,6 +2636,7 @@ static sstring format_manifest_time(db_clock::time_point tp) {
 static future<std::optional<export_row>> run_export(
         service::storage_proxy& proxy,
         db::system_distributed_keyspace& sdks,
+        stats& stats,
         abort_source& as,
         schema_ptr schema,
         export_row row,
@@ -2647,6 +2654,7 @@ static future<std::optional<export_row>> run_export(
         : fmt::format("{}/AWSDynamoDB/{}/", s3_prefix, row.export_id_token);
 
     int64_t item_count = 0;
+    xlogger.info("Export {} of table {} to s3://{}/{} started", row.export_arn, table_arn, s3_bucket, s3_key_prefix);
 
     // The block below throws to report a failure. The message comes from the exception. A step
     // that has a different failure code sets it before it throws.
@@ -2702,7 +2710,7 @@ static future<std::optional<export_row>> run_export(
         auto pipeline = co_await create_sink_pipeline(s3_target_config{ client, s3_object_name(data_object_key), &as }, gzip_compression{});
 
         // Scan the table and feed items through the pipeline
-        auto scan = co_await coroutine::as_future(export_scan_table(proxy, schema, as, empty_service_permit(), [&pipeline, &item_count, &as](rjson::value item) -> future<> {
+        auto scan = co_await coroutine::as_future(export_scan_table(proxy, schema, as, empty_service_permit(), [&pipeline, &item_count, &stats, &as](rjson::value item) -> future<> {
             utils::get_local_injector().inject("alternator_export_to_s3_in_item_handler",
                     [] { throw std::runtime_error("injected failure alternator_export_to_s3_in_item_handler"); });
             // Stops the export fiber during the scan, so that a test can interrupt a running
@@ -2724,6 +2732,7 @@ static future<std::optional<export_row>> run_export(
             rjson::add(wrapper, "Item", std::move(item));
             co_await pipeline->process(wrapper);
             ++item_count;
+            ++stats.s3_exports.items;
         }));
 
         auto flushed = co_await coroutine::as_future(pipeline->flush_and_close());
@@ -2776,6 +2785,9 @@ static future<std::optional<export_row>> run_export(
 
         row.export_status = "COMPLETED";
         row.export_manifest = manifest_summary_key;
+        // Count the export before the row reports it, so that a reader of the row sees the count.
+        ++stats.s3_exports.completed;
+        xlogger.info("Export {} completed with {} items", row.export_arn, item_count);
         // The data and the manifests are in S3, so a failure of this write should not make a
         // completed export FAILED. The write must not be given up either, and this fiber must not
         // wait for the retries: hand them to the caller, which retries them in another fiber.
@@ -2792,7 +2804,6 @@ static future<std::optional<export_row>> run_export(
             xlogger.warn("Export {} completed, but the garbage collector took its row before", row.export_arn);
             co_return std::nullopt;
         }
-        xlogger.debug("Export {} completed successfully with {} items", row.export_arn, item_count);
         co_return std::nullopt;
     } catch (const std::exception& e) {
         if (as.abort_requested()) {
@@ -2807,7 +2818,8 @@ static future<std::optional<export_row>> run_export(
 
     // The export failed. Report it.
     row.completed_at = db_clock::now();
-    xlogger.debug("Export {} failed with exception: {}", row.export_arn, failure_message);
+    ++stats.s3_exports.failed;
+    xlogger.warn("Export {} failed with {}: {}", row.export_arn, failure_code, failure_message);
     row.export_status = "FAILED";
     row.failure_code = std::move(failure_code);
     row.failure_message = std::move(failure_message);
@@ -2850,7 +2862,8 @@ void executor::s3_exports::start_export(slot export_slot, schema_ptr schema, exp
     // `slot` type.
     auto export_arn = row.export_arn;
     (void)with_gate(_gate, [&] {
-        return run_export(_e._proxy, _e._sdks, _as, std::move(schema), std::move(row), std::move(table_arn),
+        ++_e._stats.s3_exports.started;
+        return run_export(_e._proxy, _e._sdks, _e._stats, _as, std::move(schema), std::move(row), std::move(table_arn),
                 std::move(s3_bucket), std::move(s3_prefix))
                 .then([this, export_slot = std::move(export_slot)] (std::optional<export_row> unwritten) mutable {
             // The write of the terminal state failed. Retry it in a fiber that takes the export
