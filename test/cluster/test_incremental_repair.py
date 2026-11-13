@@ -14,10 +14,13 @@ from test.pylib.util import wait_for_cql_and_get_hosts
 from test.pylib.rest_client import read_barrier
 
 from cassandra.query import ConsistencyLevel, SimpleStatement
+from cassandra.murmur3 import murmur3
 
 import pytest
 import asyncio
+import itertools
 import logging
+import struct
 import time
 import glob
 import os
@@ -1436,6 +1439,19 @@ async def _setup_tombstone_gc_cluster(manager, *, tablets=2, extra_cmdline=None)
     return servers, cql, hosts, ks, table_id, logs
 
 
+def _keys_around(key):
+    """Return two keys other than key: one before it and one after it in token order.
+
+    An sstable holding both overlaps any sstable which holds key. ICS splices runs which don't
+    overlap instead of compacting them, so a test which needs a compaction needs the overlap.
+    """
+    def token_of(pk):
+        return murmur3(struct.pack('>i', pk))
+    key_below = next(k for k in itertools.count(key + 1) if token_of(k) < token_of(key))
+    key_above = next(k for k in itertools.count(key + 1) if token_of(k) > token_of(key))
+    return key_below, key_above
+
+
 async def _trigger_repaired_compaction(manager, server, ks):
     """Force a compaction that operates on the repaired sstable set."""
     await manager.api.keyspace_compaction(server.ip_addr, ks, "test")
@@ -1521,8 +1537,8 @@ async def test_tombstone_gc_no_resurrection_repair_completing_mid_compaction(man
     from its start.
 
     Scenario:
-      - A tombstone for another key is written and flushed, so that a minor compaction on the
-        repaired set has two sstables to work with, then T (row deletion, ts=2).
+      - Tombstones for other keys are written and flushed, so that a minor compaction on the
+        repaired set has two overlapping sstables to work with, then T (row deletion, ts=2).
       - Repair #1 promotes both to repaired. propagation_delay is then set to
         repair_time - T.deletion_time: gc_before = T.deletion_time, so T is not GC-eligible yet,
         but becomes GC-eligible under any later repair_time.
@@ -1553,9 +1569,15 @@ async def test_tombstone_gc_no_resurrection_repair_completing_mid_compaction(man
     # The other sstable has the same shape as T's, so that the two have the same size and the
     # strategy puts them in one bucket: a tiny sstable written recently is bucketed by size alone,
     # and a row and a tombstone are too far apart for that.
-    await write(f"DELETE FROM {ks}.test USING TIMESTAMP 3 WHERE pk = {key + 1}")
+    # The two sstables also have to overlap, or the strategy splices them instead of compacting
+    # them. So the other sstable holds a key on each side of T's key in token order, and T's
+    # sstable holds a second tombstone to keep the shapes equal.
+    key_below, key_above = _keys_around(key)
+    await write(f"DELETE FROM {ks}.test USING TIMESTAMP 3 WHERE pk = {key_below}")
+    await write(f"DELETE FROM {ks}.test USING TIMESTAMP 3 WHERE pk = {key_above}")
     for s in servers:
         await manager.api.flush_keyspace(s.ip_addr, ks)
+    await write(f"DELETE FROM {ks}.test USING TIMESTAMP 3 WHERE pk = {key_above}")
     # T.deletion_time is the coordinator's gc_clock::now() while it executes the DELETE, in whole
     # seconds. Repeat the DELETE if it straddled a second boundary, so that the second is known;
     # a repeated DELETE with the same timestamp only refreshes the deletion_time.
@@ -1782,8 +1804,8 @@ async def test_tombstone_gc_no_resurrection_full_repair_demotes_repaired(manager
 
     Scenario:
       - D (ts=1) is flushed with filler rows into a large sstable B, repaired.
-      - T (ts=2) deleting D is flushed into a small sstable A, and an unrelated
-        row into a small sstable C; both repaired.  T is GC-eligible now.
+      - T (ts=2) deleting D is flushed into a small sstable A, and unrelated
+        tombstones into a small sstable C which overlaps A; both repaired.  T is GC-eligible now.
       - Full repair starts; it's paused after the snapshot, and repaired
         compaction merges A and C into O (B is in a different STCS bucket).
         T is kept since B is in the repaired set.
@@ -1814,10 +1836,16 @@ async def test_tombstone_gc_no_resurrection_full_repair_demotes_repaired(manager
         await manager.api.flush_keyspace(s.ip_addr, ks)
     await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", "all", incremental_mode='incremental')
 
+    # A and C have to overlap, or the strategy splices them instead of compacting them. So C
+    # holds a key on each side of T's key in token order. Both hold two tombstones, so that
+    # they have the same size and land in one bucket.
+    key_below, key_above = _keys_around(key)
     await cql.run_async(f"DELETE FROM {ks}.test USING TIMESTAMP 2 WHERE pk = {key}")
+    await cql.run_async(f"DELETE FROM {ks}.test USING TIMESTAMP 2 WHERE pk = {key_above}")
     for s in servers:
         await manager.api.flush_keyspace(s.ip_addr, ks)
-    await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({key + 1}, 1)")
+    await cql.run_async(f"DELETE FROM {ks}.test USING TIMESTAMP 2 WHERE pk = {key_below}")
+    await cql.run_async(f"DELETE FROM {ks}.test USING TIMESTAMP 2 WHERE pk = {key_above}")
     for s in servers:
         await manager.api.flush_keyspace(s.ip_addr, ks)
     # Make T GC-eligible (T.deletion_time < repair_time).

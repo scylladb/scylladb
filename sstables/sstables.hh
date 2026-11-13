@@ -1102,6 +1102,14 @@ public:
         _run_identifier = run_id::create_random_id();
     }
 
+    // Changes the run identifier in memory only. The Scylla metadata keeps the one stored on
+    // disk, so the sstable is known by that one again once it's loaded again.
+    // Sstable sets index their sstables by run identifier. So once this is called, the sstable
+    // must not be inserted into or erased from a set which already holds it.
+    void set_run_identifier(run_id identifier) noexcept {
+        _run_identifier = identifier;
+    }
+
     double get_compression_ratio() const;
 
     const sstables::compression& get_compression() const {

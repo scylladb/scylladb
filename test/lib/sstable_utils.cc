@@ -293,10 +293,15 @@ std::vector<shared_sstable> add_same_size_sstables(test_env& env, table_for_test
         uint32_t count) {
     auto s = cf.schema();
     std::vector<shared_sstable> ssts;
+    // Every sstable also holds the same shared partition, so that the sstables overlap.
+    // Otherwise, ICS would splice their runs instead of compacting them.
+    auto shared_pkey = ss.make_pkey(count);
     for (uint32_t i = 0; i < count; ++i) {
         mutation m(s, ss.make_pkey(i));
         ss.add_row(m, ss.make_ckey(0), "v");
-        auto sst = make_sstable_containing(env.make_sstable(s, version), {std::move(m)}).get();
+        mutation shared(s, shared_pkey);
+        ss.add_row(shared, ss.make_ckey(0), "v");
+        auto sst = make_sstable_containing(env.make_sstable(s, version), {std::move(m), std::move(shared)}).get();
         column_family_test(cf).add_sstable(sst).get();
         ssts.push_back(std::move(sst));
     }

@@ -244,6 +244,12 @@ public:
     // invalidated and statistics are updated.
     future<> update_sstable_sets_on_compaction_completion(compaction::compaction_completion_desc desc);
 
+    // Gives the sstables, which have to be in the main set, the run identifier, in memory only.
+    // The main set is replaced by one which indexes them by it. The run identifier has to be a
+    // new one, which no sstable of the main set has, and the sstables must not overlap one
+    // another. If this fails, nothing is changed.
+    future<> set_run_identifier(std::vector<sstables::shared_sstable> sstables, sstables::run_id run_identifier);
+
     // Merges all sstables from another group into this one.
     future<> merge_sstables_from(compaction_group& group);
 

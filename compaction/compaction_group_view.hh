@@ -63,6 +63,11 @@ public:
     virtual api::timestamp_type min_memtable_live_row_marker_timestamp() const = 0;
     virtual bool memtable_has_key(const dht::decorated_key& key) const = 0;
     virtual future<> on_compaction_completion(compaction_completion_desc desc, sstables::offstrategy offstrategy) = 0;
+    // Gives the sstables, which have to be in the main set, the run identifier, in memory only.
+    // The main set is replaced by one which indexes them by it. The run identifier has to be a
+    // new one, which no sstable of the main set has, and the sstables must not overlap one
+    // another. If this fails, nothing is changed.
+    virtual future<> set_run_identifier(std::vector<sstables::shared_sstable> sstables, sstables::run_id run_identifier) = 0;
     virtual bool is_auto_compaction_disabled_by_user() const noexcept = 0;
     virtual bool tombstone_gc_enabled() const noexcept = 0;
     virtual tombstone_gc_state get_tombstone_gc_state() const noexcept = 0;

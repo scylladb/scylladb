@@ -269,6 +269,60 @@ incremental_compaction_strategy::most_interesting_bucket(std::vector<std::vector
     return std::move(max.first);
 }
 
+// Returns the largest subset of the runs in which no run overlaps another, i.e. each run ends
+// before the next one starts. The fragments of a run don't overlap and are kept in key order,
+// so a run spans from the start of its first fragment to the end of its last one.
+static std::vector<sstables::frozen_sstable_run> largest_disjoint_subset(std::vector<sstables::frozen_sstable_run> runs) {
+    auto first_fragment = [] (const sstables::frozen_sstable_run& run) -> const sstables::shared_sstable& {
+        return *run->all().begin();
+    };
+    auto last_fragment = [] (const sstables::frozen_sstable_run& run) -> const sstables::shared_sstable& {
+        return *run->all().rbegin();
+    };
+    std::erase_if(runs, [] (const sstables::frozen_sstable_run& run) { return run->all().empty(); });
+    if (runs.empty()) {
+        return runs;
+    }
+    std::ranges::sort(runs, sstables::sstable_first_key_less_comparator{}, first_fragment);
+    auto disjoint = [&] (const sstables::frozen_sstable_run& before, const sstables::frozen_sstable_run& after) {
+        return sstables::completely_ordered_before(last_fragment(before), first_fragment(after));
+    };
+    auto ends_before = [&] (const sstables::frozen_sstable_run& a, const sstables::frozen_sstable_run& b) {
+        auto& sst = last_fragment(a);
+        return sst->get_last_decorated_key().tri_compare(*sst->get_schema(), last_fragment(b)->get_last_decorated_key()) < 0;
+    };
+    // The runs are taken in the order in which they start. A run which starts after the last
+    // one taken ends is taken too. Otherwise the two overlap, and the one which ends first is
+    // kept, as it leaves the most room for the runs to come. That gives the largest subset.
+    std::vector<sstables::frozen_sstable_run> ret;
+    for (auto& run : runs) {
+        if (ret.empty() || disjoint(ret.back(), run)) {
+            ret.push_back(std::move(run));
+        } else if (ends_before(run, ret.back())) {
+            // The run starts no earlier than the one it replaces, so it's disjoint with the
+            // ones taken before that, too.
+            ret.back() = std::move(run);
+        }
+    }
+    return ret;
+}
+
+compaction_descriptor
+incremental_compaction_strategy::make_same_tier_job(std::vector<sstables::frozen_sstable_run> runs) const {
+    auto disjoint = largest_disjoint_subset(runs);
+    if (disjoint.size() < 2) {
+        return compaction_descriptor(runs_to_sstables(std::move(runs)), 0, _fragment_size);
+    }
+    // The spliced run gets a new identifier, like the output of a compaction does. The identifier
+    // of an input run wouldn't do: the run may have sstables outside of this view, e.g. repaired
+    // ones, which the sstables of the other input runs may overlap.
+    auto run_identifier = sstables::run_id::create_random_id();
+    clogger.debug("ICS: splicing {} disjoint runs, out of {} picked, into run {}", disjoint.size(), runs.size(), run_identifier);
+    auto descriptor = compaction_descriptor(runs_to_sstables(std::move(disjoint)), 0, _fragment_size, run_identifier);
+    descriptor.splice = true;
+    return descriptor;
+}
+
 compaction_descriptor
 incremental_compaction_strategy::find_garbage_collection_job(const compaction::compaction_group_view& t, std::vector<size_bucket_t>& buckets) {
     // min_memtable_timestamp() scans all memtables; hoist it out of the per-run loop below.
@@ -357,12 +411,12 @@ incremental_compaction_strategy::get_sstables_for_compaction(compaction_group_vi
 
     if (is_any_bucket_interesting(buckets, min_threshold)) {
         std::vector<sstables::frozen_sstable_run> most_interesting = most_interesting_bucket(std::move(buckets), min_threshold, max_threshold);
-        co_return compaction_descriptor(runs_to_sstables(std::move(most_interesting)), 0, _fragment_size);
+        co_return make_same_tier_job(std::move(most_interesting));
     }
     // If we are not enforcing min_threshold explicitly, try any pair of sstable runs in the same tier.
     if (!t.compaction_enforce_min_threshold() && is_any_bucket_interesting(buckets, 2)) {
         std::vector<sstables::frozen_sstable_run> most_interesting = most_interesting_bucket(std::move(buckets), 2, max_threshold);
-        co_return compaction_descriptor(runs_to_sstables(std::move(most_interesting)), 0, _fragment_size);
+        co_return make_same_tier_job(std::move(most_interesting));
     }
 
     // The cross-tier behavior is only triggered once we're done with all the pending same-tier compaction to
