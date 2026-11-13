@@ -15,6 +15,7 @@ from test.pylib.internal_types import HostID, ServerInfo
 from cassandra import InvalidRequest, ReadTimeout, Unavailable, WriteTimeout, WriteFailure
 from cassandra.cluster import ConsistencyLevel
 from cassandra.connection import UnixSocketEndPoint
+from cassandra.metadata import Murmur3Token
 from cassandra.policies import FallthroughRetryPolicy, WhiteListRoundRobinPolicy
 from cassandra.query import SimpleStatement, BoundStatement
 from test.pylib.tablets import get_all_tablet_replicas, get_tablet_info, get_tablet_replicas
@@ -4349,3 +4350,252 @@ async def test_truncate_coordinator_crash_dedup(manager: ScyllaClusterManager):
         rows = await select_rows(cql, f"SELECT c FROM {ks}.test WHERE pk = 9999")
         assert [r.c for r in rows] == [9999]
 
+
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+async def test_shutdown_does_not_abort_shard_bounced_write(manager: ScyllaClusterManager):
+    """
+    Reproducer for SCYLLADB-5405.
+
+    A write arrives on a connection of one shard while the tablet lives on the
+    other shard, so the CQL server bounces it there. The bounced request runs
+    with the abort source of the target shard's CQL server. On a graceful stop
+    each shard's CQL server waits only for its own connections and then aborts
+    its abort source. The target shard has nothing to wait for, so it aborts
+    the write while the shard that owns the connection is still waiting for
+    that very write to finish.
+
+    The write is paused on the target shard until the target shard's CQL
+    server waits for its requests to finish. Once released, it should complete
+    and be applied: the connection that owns it is still draining.
+
+    The test relies on the driver to send the write to the wrong shard. The
+    driver has no routing information for the tablet before the first request
+    to it (see below), so it picks the shard by the token. If a driver learns
+    the routing before the first write to a tablet, the test has to send the
+    write on a connection of the other shard by other means. The shard bounce
+    metric check catches that.
+    """
+    cmdline = DEFAULT_CMDLINE + ["--smp=2", "--logger-log-level", "cql_server=debug"]
+    server = await manager.server_add(config=DEFAULT_CONFIG, cmdline=cmdline)
+    cql, [host] = await manager.get_ready_cql([server])
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v int)")
+        [(_, tablet_shard)] = await get_tablet_replicas(manager, server, ks, "test", 0)
+
+        insert = cql.prepare(f"INSERT INTO {ks}.test (pk, v) VALUES (?, ?)")
+        insert.retry_policy = FallthroughRetryPolicy()
+
+        # The driver learns a tablet's routing only from the response to the
+        # first request to that tablet, and the write below is the first one to
+        # the table, so the driver picks the shard from the token alone, as for
+        # vnodes. Pick a key that the driver sends to the shard without the tablet.
+        def driver_shard(pk: int) -> int:
+            routing_key = insert.bind((pk, 0)).routing_key
+            return host.sharding_info.shard_id_from_token(Murmur3Token.from_key(routing_key).value)
+        pk = next(pk for pk in range(100) if driver_shard(pk) != tablet_shard)
+        conn_shard = driver_shard(pk)
+        logger.info(f"Tablet is on shard {tablet_shard}, the driver sends pk={pk} to shard {conn_shard}")
+
+        # Without a connection to that shard the driver would use any connection.
+        pool = next(p for p in cql.get_pools() if p.host == host)
+        async def driver_connected_to_all_shards():
+            return True if pool.num_missing_or_needing_replacement == 0 else None
+        await wait_for(driver_connected_to_all_shards, time.time() + 60)
+
+        bounces_metric = "scylla_strong_consistency_coordinator_write_shard_bounces"
+        bounces_before = (await manager.metrics.query(server.ip_addr)).get(bounces_metric) or 0
+
+        log = await manager.server_open_log(server.server_id)
+        mark = await log.mark()
+        await manager.api.enable_injection(server.ip_addr, "sc_coordinator_wait_before_begin_mutate", one_shot=True)
+        write_fut = asyncio.ensure_future(cql.run_async(insert.bind((pk, 1))))
+        await log.wait_for(rf"\[shard {tablet_shard}:.*sc_coordinator_wait_before_begin_mutate: waiting",
+                           from_mark=mark, timeout=30)
+
+        bounces_after = (await manager.metrics.query(server.ip_addr)).get(bounces_metric) or 0
+        assert bounces_after > bounces_before, "The write was not bounced to another shard"
+
+        logger.info("Stopping the node while the bounced write is in flight")
+        mark = await log.mark()
+        stop_task = asyncio.create_task(manager.server_stop_gracefully(server.server_id))
+        # The CQL server of the maintenance socket stops later, so the first match is
+        # the CQL server of the clients. The tablet's shard has no request of its own, so
+        # it is done with its connections at once. Without the fix it aborts its requests
+        # right there ("shutdown completed" is printed after that abort); with the fix no
+        # shard aborts before the shard of the write's connection is done too.
+        await log.wait_for(rf"\[shard {tablet_shard}:[^\]]*\] cql_server - generic_server::shutdown(_connections)? completed",
+                           from_mark=mark, timeout=30)
+        await manager.api.message_injection(server.ip_addr, "sc_coordinator_wait_before_begin_mutate")
+
+        # Report the write's error even if the stop fails too.
+        write_result, stop_result = await asyncio.gather(write_fut, stop_task, return_exceptions=True)
+        if isinstance(write_result, WriteTimeout):
+            pytest.fail(f"SCYLLADB-5405: the bounced write was aborted by the CQL server of shard {tablet_shard} "
+                        f"while the connection on shard {conn_shard} was still draining: {write_result}")
+        for result in (write_result, stop_result):
+            if isinstance(result, BaseException):
+                raise result
+
+        logger.info("Restarting the node to check that the write was applied")
+        await manager.server_start(server.server_id)
+        cql, _ = await manager.get_ready_cql([server])
+        rows = await cql.run_async(f"SELECT v FROM {ks}.test WHERE pk = {pk}")
+        assert [row.v for row in rows] == [1]
+
+
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+async def test_shutdown_does_not_abort_late_shard_bounced_write(manager: ScyllaClusterManager):
+    """
+    Reproducer for SCYLLADB-5405.
+
+    A write is read by the shard that owns its connection before the node is
+    stopped, and is bounced to the tablet's shard only after that shard has
+    closed its own connections. The connection that owns the write is still
+    being drained, so the write has to succeed.
+
+    Holding the target shard's gate for the bounced request doesn't cover this:
+    the gate is already closed when the request is bounced.
+    """
+    cmdline = DEFAULT_CMDLINE + ["--smp=2"]
+    server = await manager.server_add(config=DEFAULT_CONFIG, cmdline=cmdline)
+    cql, [host] = await manager.get_ready_cql([server])
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v int)")
+        [(_, tablet_shard)] = await get_tablet_replicas(manager, server, ks, "test", 0)
+
+        insert = cql.prepare(f"INSERT INTO {ks}.test (pk, v) VALUES (?, ?)")
+        insert.retry_policy = FallthroughRetryPolicy()
+
+        # See test_shutdown_does_not_abort_shard_bounced_write for why the driver
+        # sends the first write to a tablet to the shard picked by the token.
+        def driver_shard(pk: int) -> int:
+            routing_key = insert.bind((pk, 0)).routing_key
+            return host.sharding_info.shard_id_from_token(Murmur3Token.from_key(routing_key).value)
+        pk = next(pk for pk in range(100) if driver_shard(pk) != tablet_shard)
+        conn_shard = driver_shard(pk)
+
+        pool = next(p for p in cql.get_pools() if p.host == host)
+        async def driver_connected_to_all_shards():
+            return True if pool.num_missing_or_needing_replacement == 0 else None
+        await wait_for(driver_connected_to_all_shards, time.time() + 60)
+
+        # The pause holds any CQL request, once per shard. The CREATE TABLE above makes the
+        # driver refresh its schema metadata at a random moment within its event refresh
+        # window. Let that refresh pass first: paused on the tablet's shard, it would keep
+        # that shard from being done with its connections.
+        await asyncio.sleep(cql.cluster.schema_event_refresh_window + 1)
+
+        logger.info(f"Pausing a write on shard {conn_shard} before it is bounced to shard {tablet_shard}")
+        await manager.api.enable_injection(server.ip_addr, "transport_cql_request_pause", one_shot=True)
+        write_fut = asyncio.ensure_future(cql.run_async(insert.bind((pk, 1))))
+        await manager.api.wait_for_injection_enter(server.ip_addr, "transport_cql_request_pause")
+        assert not write_fut.done()
+
+        logger.info(f"Stopping the node and waiting for shard {tablet_shard} to close its idle connections")
+        stop_task = asyncio.create_task(manager.server_stop_gracefully(server.server_id))
+        # The driver's control connection may be on the tablet's shard. A query it sends while the node
+        # stops may be paused too, and then keeps that connection open until the pause is released.
+        async def tablet_shard_closed_idle_connections():
+            metrics = await manager.metrics.query(server.ip_addr)
+            shard = {"shard": str(tablet_shard)}
+            connections = metrics.get("scylla_transport_current_connections", shard)
+            return True if connections == metrics.get("scylla_transport_requests_serving", shard) else None
+        await wait_for(tablet_shard_closed_idle_connections, time.time() + 60)
+        # The one-shot pause could have been taken by another query, such as one of the
+        # driver's control connection. Then the write wasn't paused and is done by now.
+        assert not write_fut.done(), "The write was not paused before the bounce"
+        await manager.api.message_injection(server.ip_addr, "transport_cql_request_pause")
+
+        # Report the write's error even if the stop fails too.
+        write_result, stop_result = await asyncio.gather(write_fut, stop_task, return_exceptions=True)
+        if isinstance(write_result, WriteTimeout):
+            pytest.fail(f"SCYLLADB-5405: the write bounced late to shard {tablet_shard} was aborted "
+                        f"while the connection on shard {conn_shard} was still draining: {write_result}")
+        for result in (write_result, stop_result):
+            if isinstance(result, BaseException):
+                raise result
+
+        logger.info("Restarting the node and reading the write back")
+        await manager.server_start(server.server_id)
+        cql, _ = await manager.get_ready_cql([server])
+        rows = await cql.run_async(f"SELECT v FROM {ks}.test WHERE pk = {pk}")
+        assert [row.v for row in rows] == [1]
+
+
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+async def test_shutdown_aborts_stuck_shard_bounced_write(manager: ScyllaClusterManager):
+    """
+    A write is bounced to another shard of the stopping node and can never
+    finish there. The node aborts its requests only after all shards are done
+    with their connections, so the abort must still come once the shard of the
+    write's connection gives up waiting for it (request_timeout_on_shutdown_in_seconds),
+    and the stop must not wait for the write's own, much longer, timeout.
+
+    It passes without the SCYLLADB-5405 fix too; it guards that ordering
+    against a hang.
+    """
+    smp = 2
+    config = DEFAULT_CONFIG | {"request_timeout_on_shutdown_in_seconds": 2}
+    cmdline = DEFAULT_CMDLINE + [f"--smp={smp}"]
+    leader = await manager.server_add(config=config, cmdline=cmdline, property_file={"dc": "dc1", "rack": "r1"})
+    follower_config = config | {"error_injections_at_startup": ["avoid_being_raft_leader"]}
+    followers = await manager.servers_add(2, config=follower_config, cmdline=cmdline, property_file=[
+        {"dc": "dc1", "rack": "r2"},
+        {"dc": "dc1", "rack": "r3"},
+    ])
+    cql, hosts = await manager.get_ready_cql([leader, *followers])
+    leader_host = next(h for h in hosts if h.address == leader.rpc_address)
+    leader_host_id = await manager.get_host_id(leader.server_id)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v int)")
+        group_id = await get_table_raft_group_id(manager, ks, "test")
+        [tablet_shard] = [shard for host_id, shard in await get_tablet_replicas(manager, leader, ks, "test", 0)
+                          if host_id == leader_host_id]
+
+        # The write's own timeout is far beyond what the stop may take.
+        insert = cql.prepare(f"INSERT INTO {ks}.test (pk, v) VALUES (?, ?) USING TIMEOUT 300s")
+        insert.retry_policy = FallthroughRetryPolicy()
+
+        # See test_shutdown_does_not_abort_shard_bounced_write for why the driver
+        # sends the first write to a tablet to the shard picked by the token.
+        def driver_shard(pk: int) -> int:
+            routing_key = insert.bind((pk, 0)).routing_key
+            return leader_host.sharding_info.shard_id_from_token(Murmur3Token.from_key(routing_key).value)
+        pk = next(pk for pk in range(100) if driver_shard(pk) != tablet_shard)
+
+        pool = next(p for p in cql.get_pools() if p.host == leader_host)
+        async def driver_connected_to_all_shards():
+            return True if pool.num_missing_or_needing_replacement == 0 else None
+        await wait_for(driver_connected_to_all_shards, time.time() + 60)
+
+        injections = ("raft_drop_incoming_append_entries_for_specified_group", "avoid_being_raft_leader")
+        try:
+            # The followers never accept the entry, so the leader's add_entry
+            # waits until it is aborted.
+            for follower in followers:
+                await manager.api.enable_injection(follower.ip_addr, injections[0], one_shot=False,
+                                                   parameters={"value": group_id})
+
+            bounces_metric = "scylla_strong_consistency_coordinator_write_shard_bounces"
+            async def bounces():
+                return (await manager.metrics.query(leader.ip_addr)).get(bounces_metric) or 0
+            bounces_before = await bounces()
+            write_fut = asyncio.ensure_future(cql.run_async(insert.bind((pk, 1)), host=leader_host))
+            async def write_bounced():
+                return True if await bounces() > bounces_before else None
+            await wait_for(write_bounced, time.time() + 60)
+            assert not write_fut.done()
+
+            start = time.monotonic()
+            await manager.server_stop_gracefully(leader.server_id)
+            elapsed = time.monotonic() - start
+            logger.info(f"The stop took {elapsed:.1f}s")
+            with pytest.raises(Exception):
+                await asyncio.wait_for(write_fut, timeout=60)
+            assert elapsed < 120, f"The stop took {elapsed:.1f}s, waiting for a stuck shard-bounced write"
+        finally:
+            await gather_safely(*[manager.api.disable_injection(follower.ip_addr, injection)
+                                  for follower in followers for injection in injections])

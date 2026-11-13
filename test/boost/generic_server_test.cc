@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
+#include <boost/test/unit_test.hpp>
 #include <chrono>
 #include <seastar/core/lowres_clock.hh>
 #include <seastar/core/with_timeout.hh>
@@ -30,6 +31,8 @@ protected:
         SCYLLA_ASSERT(false);
     }
     scheduling_group get_scheduling_group_for_new_connection() const override { return current_scheduling_group(); }
+public:
+    bool abort_requested() const noexcept { return _abort_source.abort_requested(); }
 };
 
 SEASTAR_TEST_CASE(stop_without_listening) {
@@ -37,4 +40,26 @@ SEASTAR_TEST_CASE(stop_without_listening) {
     test_server srv(concurrency);
     co_await with_timeout(lowres_clock::now() + 5min, srv.stop());
     co_return;
+}
+
+// shutdown_connections() leaves requests running; a sharded server aborts them only
+// after every shard has shut its connections down (requests may be bounced between shards).
+SEASTAR_TEST_CASE(shutdown_connections_does_not_abort_requests) {
+    utils::updateable_value_source<uint32_t> concurrency(1);
+    test_server srv(concurrency);
+    co_await with_timeout(lowres_clock::now() + 5min, srv.shutdown_connections());
+    BOOST_REQUIRE(!srv.abort_requested());
+    srv.abort_requests();
+    BOOST_REQUIRE(srv.abort_requested());
+    co_await with_timeout(lowres_clock::now() + 5min, srv.stop());
+}
+
+// If whoever called shutdown_connections() failed before abort_requests(),
+// stop() must still abort the requests, or it could wait for them forever.
+SEASTAR_TEST_CASE(stop_after_shutdown_connections_aborts_requests) {
+    utils::updateable_value_source<uint32_t> concurrency(1);
+    test_server srv(concurrency);
+    co_await with_timeout(lowres_clock::now() + 5min, srv.shutdown_connections());
+    co_await with_timeout(lowres_clock::now() + 5min, srv.stop());
+    BOOST_REQUIRE(srv.abort_requested());
 }
