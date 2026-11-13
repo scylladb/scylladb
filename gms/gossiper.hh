@@ -105,6 +105,7 @@ private:
     future<> handle_ack_msg(locator::host_id from, gossip_digest_ack ack_msg);
     future<> handle_ack2_msg(locator::host_id from, gossip_digest_ack2 msg);
     future<> handle_echo_msg(locator::host_id id, seastar::rpc::opt_time_point, std::optional<int64_t> generation_number_opt, bool notify_up);
+    future<> handle_prepare_shutdown_msg(locator::host_id from, endpoint_state remote_state, rpc::opt_time_point deadline);
     future<> handle_shutdown_msg(locator::host_id from, std::optional<int64_t> generation_number_opt);
     future<> do_send_ack_msg(locator::host_id from, gossip_digest_syn syn_msg);
     future<> do_send_ack2_msg(locator::host_id from, utils::chunked_vector<gossip_digest> ack_msg_digest);
@@ -203,7 +204,8 @@ public:
         const permit_id& id() const noexcept { return _permit_id; }
     };
     // Must be called on shard 0
-    future<endpoint_permit> lock_endpoint(locator::host_id, permit_id pid, std::source_location l = std::source_location::current());
+    future<endpoint_permit> lock_endpoint(locator::host_id, permit_id pid, std::source_location l = std::source_location::current(),
+            abort_source* as_override = nullptr);
 
 private:
     void permit_internal_error(const locator::host_id& addr, permit_id pid);
@@ -239,6 +241,13 @@ private:
     /* live member set */
     std::unordered_set<locator::host_id> _live_endpoints;
     uint64_t _live_endpoints_version = 0;
+
+    // Read routing excludes peers until their startup drain-state exchange succeeds.
+    std::unordered_set<locator::host_id> _read_shutdown_sync_pending;
+    // Local routing must stop selecting us before publishing DRAINING can wait
+    // for the endpoint lock. This flag lasts for the rest of this process.
+    bool _local_query_shutdown = false;
+    future<> notify_node_on_up(locator::host_id, bool synchronize_read_shutdown, bool& peer_responded);
 
     /* nodes are being marked as alive */
     std::unordered_set<locator::host_id> _pending_mark_alive_endpoints;
@@ -476,7 +485,7 @@ private:
     // applier fibers. Does not wait for them to be applied.
     void queue_state_applies(std::map<inet_address, endpoint_state> map);
     void queue_state_apply(inet_address ep, endpoint_state state);
-    future<> do_apply_state_locally(locator::host_id node, endpoint_state remote_state, bool shadow_round);
+    future<> do_apply_state_locally(locator::host_id node, endpoint_state remote_state, bool shadow_round, abort_source* as = nullptr);
     future<> apply_state_locally_in_shadow_round(std::unordered_map<inet_address, endpoint_state> map);
     // Spawns a background fiber applying pending states of the given endpoint
     // until none remain. At most one such fiber runs per endpoint. On failure
@@ -584,6 +593,18 @@ public:
     future<> add_local_application_state(std::convertible_to<std::pair<const application_state, versioned_value>> auto&&... states);
 
     future<> start();
+    // Stop new query selection and wait for live coordinators to receive existing replies.
+    // Must be called on shard 0 before shutdown(), with GRACEFUL_READ_SHUTDOWN enabled.
+    future<> prepare_shutdown(std::chrono::seconds timeout);
+    // True until the endpoint restarts with a new gossip generation.
+    bool is_draining(locator::host_id endpoint) const noexcept;
+    // Stop selecting this process locally before closing admission. Call on
+    // every shard; this does not publish gossip or acquire an endpoint lock.
+    void mark_local_query_shutdown() noexcept { _local_query_shutdown = true; }
+    // False while draining or while the startup drain-state exchange is incomplete.
+    bool is_query_ready(locator::host_id endpoint) const noexcept;
+    // Used to cancel coordinator read waits when gossip shuts down, including isolation.
+    abort_source& shutdown_abort_source() noexcept { return _msg_abort_source; }
     future<> shutdown();
     // Needed by seastar::sharded
     future<> stop();
@@ -627,7 +648,9 @@ public:
     int get_down_endpoint_count() const noexcept;
     int get_up_endpoint_count() const noexcept;
     // Send UP notification to all nodes in the set
-    future<> notify_nodes_on_up(std::unordered_set<locator::host_id>);
+    // Before client admission, make peers see this coordinator as UP and then
+    // learn their current drain state. A concurrent drain must cover either step.
+    future<> notify_nodes_on_up(std::unordered_set<locator::host_id>, bool synchronize_read_shutdown = false);
     const gossip_address_map& get_address_map() const  {
         return _address_map;
     }
@@ -642,8 +665,10 @@ private:
 
 
 struct gossip_get_endpoint_states_request {
-    // Application states the sender requested
+    // Application states requested for a cluster snapshot.
     std::unordered_set<gms::application_state> application_states;
+    // When set, fetch this node's complete state; a new generation must not be installed from a partial snapshot.
+    std::optional<locator::host_id> endpoint;
 };
 
 struct gossip_get_endpoint_states_response {

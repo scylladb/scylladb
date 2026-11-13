@@ -71,6 +71,7 @@ class server : public peering_sharded_service<server> {
     utils::updateable_value<uint64_t> _max_users_query_size_in_trace_output;
     utils::small_vector<std::reference_wrapper<seastar::httpd::http_server>, 2> _enabled_servers;
     named_gate _pending_requests;
+    bool _accepting_requests = true;
     // In some places we will need a CQL updateable_timeout_config object even
     // though it isn't really relevant for Alternator which defines its own
     // timeouts separately.
@@ -130,6 +131,8 @@ public:
             utils::updateable_value<bool> enforce_authorization, utils::updateable_value<bool> warn_authorization, utils::updateable_value<uint64_t> max_users_query_size_in_trace_output,
             semaphore* memory_limiter, utils::updateable_value<uint32_t> max_concurrent_requests);
     future<> stop();
+    /// Reject new API requests while admitted requests retain access to the executor.
+    void stop_accepting_requests() noexcept { _accepting_requests = false; }
     // get_client_data() is called (on each shard separately) when the virtual
     // table "system.clients" is read. It is expected to generate a list of
     // clients connected to this server (on this shard). This function is

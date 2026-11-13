@@ -282,6 +282,15 @@ void cql_server::event_notifier::on_up(const gms::inet_address& endpoint, locato
     }
 }
 
+void cql_server::event_notifier::on_cql_change(const gms::inet_address& endpoint, locator::host_id hid, bool ready)
+{
+    if (ready) {
+        on_up(endpoint, hid);
+    } else {
+        on_down(endpoint, hid);
+    }
+}
+
 void cql_server::event_notifier::on_down(const gms::inet_address& endpoint, locator::host_id hid)
 {
     bool was_down = _last_status_change.contains(endpoint) && _last_status_change.at(endpoint) == event::status_change::status_type::DOWN;

@@ -211,11 +211,18 @@ public:
 };
 
 class health_handler : public gated_handler {
+    const bool& _accepting_requests;
 public:
-    health_handler(seastar::gate& pending_requests) : gated_handler(pending_requests) {}
+    health_handler(seastar::gate& pending_requests, const bool& accepting_requests)
+        : gated_handler(pending_requests), _accepting_requests(accepting_requests) {}
 protected:
     virtual future<std::unique_ptr<reply>> do_handle(const sstring& path, std::unique_ptr<request> req, std::unique_ptr<reply> rep) override {
         handle_CORS(*req, *rep, false);
+        if (!_accepting_requests) {
+            rep->set_status(reply::status_type::service_unavailable);
+            rep->write_body("txt", "draining");
+            return make_ready_future<std::unique_ptr<reply>>(std::move(rep));
+        }
         rep->set_status(reply::status_type::ok);
         rep->write_body("txt", format("healthy: {}", req->get_header("Host")));
         return make_ready_future<std::unique_ptr<reply>>(std::move(rep));
@@ -262,7 +269,7 @@ protected:
             // Note that it's not enough for the node to be is_alive() - a
             // node joining the cluster is also "alive" but not responsive to
             // requests. We alive *and* normal. See #19694, #21538.
-            if (_gossiper.is_alive(id) && _gossiper.is_normal(id)) {
+            if (_gossiper.is_alive(id) && _gossiper.is_normal(id) && !_gossiper.is_draining(id)) {
                 // Use the gossiped broadcast_rpc_address if available instead
                 // of the internal IP address "ip". See discussion in #18711.
                 rjson::push_back(results, rjson::from_string(_gossiper.get_rpc_address(id)));
@@ -665,12 +672,6 @@ static future<> drain_request_body(input_stream<char>& inp, size_t request_size_
         }
         drained += buf.size();
     }
-    // Exceeding the limit while draining is possible only for a chunked
-    // request - a non-chunked one is bounded by its Content-Length, which
-    // was checked against the limit before the drain. Seastar's httpd will
-    // close the connection after sending the reply, as it does for any
-    // reply sent before reading the entire body (the client may rarely
-    // miss the reply - see #12166).
     throw api_error::payload_too_large(fmt::format("Request body exceeds the request size limit of {} bytes", request_size_limit));
 }
 
@@ -777,6 +778,12 @@ ungzip(chunked_content&& compressed_body, size_t length_limit, bool gzip = true)
 }
 
 future<executor::request_return_type> server::handle_api_request(std::unique_ptr<request> req) {
+    if (!_accepting_requests) {
+        // Consume the body before replying so that an old client can safely
+        // retry without leaving this HTTP connection out of sync.
+        co_await coroutine::try_future(drain_request_body(*req->content_stream, request_content_length_limit));
+        co_return api_error::internal("This node is draining and no longer accepts new requests");
+    }
     _executor._stats.total_operations++;
     sstring target = req->get_header("X-Amz-Target");
     // target is DynamoDB API version followed by a dot '.' and operation type (e.g. CreateTable)
@@ -911,7 +918,7 @@ void server::set_routes(routes& r) {
     }, _proxy.data_dictionary().get_config(), _executor._stats);
 
     r.put(operation_type::POST, "/", req_handler);
-    r.put(operation_type::GET, "/", new health_handler(_pending_requests));
+    r.put(operation_type::GET, "/", new health_handler(_pending_requests, _accepting_requests));
     // The "/localnodes" request is a new Alternator feature, not supported by
     // DynamoDB and not required for DynamoDB compatibility. It allows a
     // client to enquire - using a trivial HTTP request without requiring

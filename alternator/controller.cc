@@ -184,6 +184,12 @@ future<> controller::start_server() {
     });
 }
 
+future<> controller::stop_accepting_requests() {
+    if (_ssg && _server.local_is_initialized()) {
+        co_await _server.invoke_on_all([] (server& server) { server.stop_accepting_requests(); });
+    }
+}
+
 future<> controller::stop_server() {
     return seastar::async([this] {
         if (!_ssg) {

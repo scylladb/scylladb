@@ -47,6 +47,7 @@
 #include "utils/assert.hh"
 #include "utils/exceptions.hh"
 #include "utils/error_injection.hh"
+#include "utils/chain_abort_source.hh"
 #include "idl/gossip.dist.hh"
 #include <csignal>
 #include "build_mode.hh"
@@ -441,24 +442,66 @@ future<> gossiper::handle_echo_msg(locator::host_id from_hid, seastar::rpc::opt_
         throw std::runtime_error("Not ready to respond gossip echo message");
     }
     if (notify_up) {
+        utils::get_local_injector().inject("gossip_fail_up_notification", [] {
+            throw std::runtime_error("Injected UP notification failure");
+        });
         if (!timeout) {
             on_internal_error(logger, "UP notification should have a timeout");
         }
-        auto normal = [] (gossiper& g, locator::host_id hid) {
+        auto normal = [generation_number_opt] (gossiper& g, locator::host_id hid) {
             const auto& topo = g.get_token_metadata_ptr()->get_topology();
-            return topo.has_node(hid) && topo.find_node(hid)->is_normal();
+            const auto state = g.get_endpoint_state_ptr(hid);
+            return topo.has_node(hid) && topo.find_node(hid)->is_normal() && state
+                    && (!generation_number_opt || state->get_heart_beat_state().get_generation().value() == *generation_number_opt);
         };
         co_await container().invoke_on(0, [from_hid, timeout, &normal] (gossiper& g) -> future<> {
             try {
-                // Wait to see the node as normal. It may node be the case if the node bootstraps
+                // Confirm this process generation: an earlier process can still
+                // be marked UP after a fast restart, before its new state arrives.
                 while (rpc::rpc_clock_type::now() < *timeout && !(normal(g, from_hid) && g.is_alive(from_hid))) {
                     co_await sleep_abortable(std::chrono::milliseconds(100), g._abort_source);
                 }
+                if (!(normal(g, from_hid) && g.is_alive(from_hid))) {
+                    throw std::runtime_error("UP notification expired before the coordinator became live");
+                }
             } catch(...) {
                 logger.warn("handle_echo_msg: UP notification from {} failed with {:t}", from_hid, std::current_exception());
+                throw;
             }
         });
+    } else {
+        co_await utils::get_local_injector().inject("gossip_pause_echo_reply", utils::wait_for_message(60s));
     }
+}
+
+future<> gossiper::handle_prepare_shutdown_msg(locator::host_id from, endpoint_state remote_state, rpc::opt_time_point deadline) {
+    if (!is_enabled() || !deadline) {
+        throw std::runtime_error("Cannot prepare shutdown without active gossip and a deadline");
+    }
+    const auto* draining = remote_state.get_application_state_ptr(application_state::DRAINING);
+    if (remote_state.get_host_id() != from || !draining) {
+        throw std::runtime_error("Invalid read-shutdown endpoint state");
+    }
+    abort_on_expiry<rpc::rpc_clock_type> expiry(*deadline);
+    auto sub = _msg_abort_source.subscribe([&expiry] () noexcept { expiry.abort_source().request_abort(); });
+    _msg_abort_source.check();
+    {
+        auto permit = co_await lock_endpoint(from, null_permit_id, std::source_location::current(), &expiry.abort_source());
+        auto es = get_endpoint_state_ptr(from);
+        if (!es || es->get_heart_beat_state().get_generation() != remote_state.get_heart_beat_state().get_generation()) {
+            throw std::runtime_error("Cannot prepare shutdown for an unknown gossip generation");
+        }
+        auto state = *es;
+        // The marker raises our advertised max version. Keep every earlier
+        // application update, even if a newer heartbeat has already arrived.
+        merge_endpoint_state(state, remote_state);
+        co_await apply_new_states(*es, state, permit.id(), false);
+    }
+    // Do not hold the endpoint lock while waiting for requests: they may need gossip callbacks.
+    auto remaining = std::max(0ms, std::chrono::duration_cast<std::chrono::milliseconds>(*deadline - rpc::rpc_clock_type::now()));
+    co_await _subscribers.for_each([from, remaining] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
+        return subscriber->on_draining(from, remaining);
+    });
 }
 
 future<> gossiper::handle_shutdown_msg(locator::host_id from, std::optional<int64_t> generation_number_opt) {
@@ -494,6 +537,9 @@ gossiper::handle_get_endpoint_states_msg(gossip_get_endpoint_states_request requ
     std::unordered_map<gms::inet_address, gms::endpoint_state> map;
     const auto& application_states_wanted = request.application_states;
     for (const auto& [node, state] : _endpoint_state_map) {
+        if (request.endpoint && node != *request.endpoint) {
+            continue;
+        }
         const heart_beat_state& hbs = state->get_heart_beat_state();
         auto it = map.find(state->get_ip());
         if (it != map.end()) {
@@ -504,7 +550,7 @@ gossiper::handle_get_endpoint_states_msg(gossip_get_endpoint_states_request requ
         auto state_wanted = endpoint_state(hbs, state->get_ip());
         auto& apps = state->get_application_state_map();
         for (const auto& app : apps) {
-            if (application_states_wanted.count(app.first) > 0) {
+            if (request.endpoint || application_states_wanted.count(app.first) > 0) {
                 state_wanted.get_application_state_map().emplace(app);
             }
         }
@@ -551,6 +597,15 @@ void gossiper::init_messaging_service_handler() {
         auto from_hid = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
         return handle_echo_msg(from_hid, timeout, generation_number_opt, notify_up_opt.value_or(false));
     });
+    ser::gossip_rpc_verbs::register_gossip_prepare_shutdown(&_messaging,
+            [this] (const rpc::client_info& cinfo, rpc::opt_time_point deadline, endpoint_state state) {
+        auto from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+        return with_gate(_background_msg, [this, from, deadline, state = std::move(state)] () mutable {
+            return container().invoke_on(0, [from, deadline, state = std::move(state)] (gossiper& g) mutable {
+                return g.handle_prepare_shutdown_msg(from, std::move(state), deadline);
+            });
+        });
+    });
     ser::gossip_rpc_verbs::register_gossip_shutdown(&_messaging, [this] (const rpc::client_info& cinfo, inet_address from, rpc::optional<int64_t> generation_number_opt) {
         auto from_hid = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
         return background_msg("GOSSIP_SHUTDOWN", [from_hid, generation_number_opt] (gms::gossiper& gossiper) {
@@ -590,7 +645,7 @@ future<> gossiper::send_gossip(gossip_digest_syn message, std::set<T> epset) {
 }
 
 
-future<> gossiper::do_apply_state_locally(locator::host_id node, endpoint_state remote_state, bool shadow_round) {
+future<> gossiper::do_apply_state_locally(locator::host_id node, endpoint_state remote_state, bool shadow_round, abort_source* as) {
 
     // share_messages: a single message_injection() releases every stalled
     // applier, so the test can unstick them all when it is done.
@@ -609,7 +664,7 @@ future<> gossiper::do_apply_state_locally(locator::host_id node, endpoint_state 
 
     // If state does not exist just add it. If it does then add it if the remote generation is greater.
     // If there is a generation tie, attempt to break it by heartbeat version.
-    auto permit = co_await lock_endpoint(node, null_permit_id);
+    auto permit = co_await lock_endpoint(node, null_permit_id, std::source_location::current(), as);
 
     // Re-check under the endpoint lock: the node may have left between the
     // time the state was queued and now. force_remove_endpoint() runs under
@@ -980,7 +1035,8 @@ gossiper::endpoint_lock_entry::endpoint_lock_entry() noexcept
     , pid(permit_id::create_null_id())
 {}
 
-future<gossiper::endpoint_permit> gossiper::lock_endpoint(locator::host_id ep, permit_id pid, std::source_location l) {
+future<gossiper::endpoint_permit> gossiper::lock_endpoint(locator::host_id ep, permit_id pid, std::source_location l, abort_source* as_override) {
+    auto& as = as_override ? *as_override : _abort_source;
     if (current_scheduling_group() != _gcfg.gossip_scheduling_group) {
         logger.warn("Incorrect scheduling group used for gossiper::lock_endpoint: {}, should be {}, backtrace {}", current_scheduling_group().name(), _gcfg.gossip_scheduling_group.name(), current_backtrace());
     }
@@ -1002,10 +1058,10 @@ future<gossiper::endpoint_permit> gossiper::lock_endpoint(locator::host_id ep, p
     pid = permit_id::create_random_id();
     logger.debug("{}: lock_endpoint {}: waiting: permit_id={}", l.function_name(), ep, pid);
     while (true) {
-        _abort_source.check();
+        as.check();
         static constexpr auto duration = std::chrono::minutes{1};
         abort_on_expiry aoe(lowres_clock::now() + duration);
-        auto sub = _abort_source.subscribe([&aoe] () noexcept {
+        auto sub = as.subscribe([&aoe] () noexcept {
             aoe.abort_source().request_abort();
         });
         SCYLLA_ASSERT(sub); // due to check() above
@@ -1013,7 +1069,7 @@ future<gossiper::endpoint_permit> gossiper::lock_endpoint(locator::host_id ep, p
             eptr->units = co_await get_units(eptr->sem, 1, aoe.abort_source());
             break;
         } catch (const abort_requested_exception&) {
-            if (_abort_source.abort_requested()) {
+            if (as.abort_requested()) {
                 throw;
             }
 
@@ -1038,8 +1094,9 @@ future<gossiper::endpoint_permit> gossiper::lock_endpoint(locator::host_id ep, p
     if (eptr->holders) {
         on_internal_error_noexcept(logger, fmt::format("{}: lock_endpoint {}: newly held endpoint_lock_entry has {} holders", l.function_name(), ep, eptr->holders));
     }
-    _abort_source.check();
-    co_return endpoint_permit(std::move(eptr), std::move(ep), std::move(l));
+    auto permit = endpoint_permit(std::move(eptr), std::move(ep), std::move(l));
+    as.check();
+    co_return permit;
 }
 
 void gossiper::permit_internal_error(const locator::host_id& addr, permit_id pid) {
@@ -1237,6 +1294,7 @@ void gossiper::run() {
 
             {
                 auto permit = lock_endpoint(my_host_id(), null_permit_id).get();
+                utils::get_local_injector().inject("gossiper_hold_local_endpoint", utils::wait_for_message(60s)).get();
                 /* Update the local heartbeat counter. */
                 heart_beat_state& hbs = my_endpoint_state().get_heart_beat_state();
                 hbs.update_heart_beat();
@@ -1692,14 +1750,143 @@ void gossiper::update_timestamp_for_nodes(const std::map<inet_address, endpoint_
     }
 }
 
-future<> gossiper::notify_nodes_on_up(std::unordered_set<locator::host_id> dsts) {
-    co_await coroutine::parallel_for_each(dsts, [this] (locator::host_id dst) -> future<>  {
-        if (dst != _gcfg.host_id) {
+future<> gossiper::notify_node_on_up(locator::host_id dst, bool synchronize_read_shutdown, bool& peer_responded) {
+    const auto deadline = rpc::rpc_clock_type::now() + std::chrono::seconds(10);
+    abort_on_expiry<rpc::rpc_clock_type> expiry(deadline);
+    auto stop_sub = utils::chain_abort_source(expiry.abort_source(), _abort_source);
+    auto messaging_sub = utils::chain_abort_source(expiry.abort_source(), _msg_abort_source);
+    while (true) {
+        try {
+            auto generation = my_endpoint_state().get_heart_beat_state().get_generation();
+            std::exception_ptr up_error;
             try {
-                auto generation = my_endpoint_state().get_heart_beat_state().get_generation();
-                co_await send_echo(dst, std::chrono::seconds(10), generation.value(), true);
+                co_await ser::gossip_rpc_verbs::send_gossip_echo(
+                        &_messaging, dst, deadline, expiry.abort_source(), generation.value(), true);
+                peer_responded = true;
             } catch (...) {
-                logger.warn("Failed to notify node {} that I am UP: {:t}", dst, std::current_exception());
+                if (!synchronize_read_shutdown) {
+                    throw;
+                }
+                up_error = std::current_exception();
+            }
+            if (synchronize_read_shutdown) {
+                // If the peer starts draining after its UP reply, its live
+                // snapshot includes us. If it started earlier, fetch its marker
+                // before CQL starts. Shadow-round state alone is too old.
+                gossip_get_endpoint_states_request request;
+                request.endpoint = dst;
+                auto& injector = utils::get_local_injector();
+                auto target = injector.inject_parameter("gossip_get_states_connection_closed");
+                if (!target || *target == fmt::to_string(dst)) {
+                    injector.inject("gossip_get_states_connection_closed", [] {
+                        throw rpc::closed_error();
+                    });
+                }
+                auto response = co_await ser::gossip_rpc_verbs::send_gossip_get_endpoint_states(
+                        &_messaging, dst, deadline, std::move(request));
+                peer_responded = true;
+                bool found = false;
+                for (auto& [ip, state] : response.endpoint_state_map) {
+                    if (state.get_host_id() == dst) {
+                        state.set_ip(ip);
+                        const auto peer_generation = state.get_heart_beat_state().get_generation();
+                        const auto* marker = state.get_application_state_ptr(application_state::DRAINING);
+                        auto draining = marker ? std::optional(*marker) : std::nullopt;
+                        co_await do_apply_state_locally(dst, std::move(state), false, &expiry.abort_source());
+                        // A newer heartbeat can arrive while the snapshot RPC
+                        // is in flight. Its version must not hide a drain marker
+                        // from the same generation that we have not learned yet.
+                        if (draining) {
+                            auto permit = co_await lock_endpoint(dst, null_permit_id, std::source_location::current(), &expiry.abort_source());
+                            auto current = get_endpoint_state_ptr(dst);
+                            if (current && current->get_heart_beat_state().get_generation() == peer_generation && !is_draining(dst)) {
+                                auto updated = *current;
+                                updated.add_application_state(application_state::DRAINING, std::move(*draining));
+                                co_await replicate(std::move(updated), permit.id());
+                            }
+                        }
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    throw std::runtime_error("Peer did not return its own gossip state");
+                }
+                if (up_error && !is_draining(dst)) {
+                    // A peer already handling SIGTERM may no longer mark new
+                    // nodes UP. Its authoritative drain marker is sufficient:
+                    // this coordinator will not send new reads to that peer.
+                    std::rethrow_exception(up_error);
+                }
+            }
+            break;
+        } catch (const rpc::closed_error&) {
+            if (!synchronize_read_shutdown || rpc::rpc_clock_type::now() >= deadline) {
+                throw;
+            }
+            // Gossip readiness changes can close a connection while
+            // the restarted node becomes UP. Retry the complete exchange
+            // before admitting queries, under the original deadline.
+            logger.debug("Retrying UP and drain-state exchange with {} after a closed connection", dst);
+        }
+        co_await sleep_abortable(100ms, expiry.abort_source());
+    }
+    if (synchronize_read_shutdown) {
+        co_await container().invoke_on_all([dst] (gossiper& g) {
+            g._read_shutdown_sync_pending.erase(dst);
+        });
+    }
+}
+
+future<> gossiper::notify_nodes_on_up(std::unordered_set<locator::host_id> dsts, bool synchronize_read_shutdown) {
+    co_await coroutine::switch_to(_gcfg.gossip_scheduling_group);
+    if (synchronize_read_shutdown) {
+        // An offline peer can recover through ordinary echo before its drain
+        // state arrives. Keep it out of read routing until the exchange succeeds.
+        co_await container().invoke_on_all([dsts] (gossiper& g) {
+            g._read_shutdown_sync_pending = dsts;
+            g._read_shutdown_sync_pending.erase(g.my_host_id());
+        });
+    }
+    co_await coroutine::parallel_for_each(dsts, [this, synchronize_read_shutdown] (locator::host_id dst) -> future<> {
+        if (dst == my_host_id()) {
+            co_return;
+        }
+        bool peer_responded = false;
+        try {
+            co_await notify_node_on_up(dst, synchronize_read_shutdown, peer_responded);
+        } catch (...) {
+            logger.warn("Failed to notify node {} that I am UP: {:t}", dst, std::current_exception());
+            if (synchronize_read_shutdown && (peer_responded || is_alive(dst))) {
+                throw;
+            }
+            if (synchronize_read_shutdown) {
+                // Allow startup with offline members. One retry fiber per peer
+                // restores read eligibility without blocking gossip UP propagation.
+                auto retry = [] (gossiper& g, locator::host_id dst, gate::holder holder) -> future<> {
+                    const auto node = raft::server_id(dst.uuid());
+                    while (g.is_enabled() && !g._msg_abort_source.abort_requested()
+                            && (g._topo_sm._topology.normal_nodes.contains(node)
+                                || g._topo_sm._topology.transition_nodes.contains(node))) {
+                        // Rebuilding nodes still serve reads and must finish the exchange.
+                        co_await sleep_abortable(1s, g._msg_abort_source);
+                        try {
+                            bool peer_responded = false;
+                            co_await g.notify_node_on_up(dst, true, peer_responded);
+                            co_return;
+                        } catch (...) {
+                            logger.debug("Read-shutdown synchronization with {} failed: {:t}", dst, std::current_exception());
+                        }
+                    }
+                    if (g._topo_sm._topology.left_nodes.contains(node)) {
+                        co_await g.container().invoke_on_all([dst] (gossiper& g) {
+                            g._read_shutdown_sync_pending.erase(dst);
+                        });
+                    }
+                };
+                (void)retry(*this, dst, _background_msg.hold()).handle_exception([dst] (std::exception_ptr ex) {
+                    logger.debug("Stopped read-shutdown synchronization with {}: {:t}", dst, ex);
+                });
             }
         }
     });
@@ -1771,6 +1958,8 @@ future<> gossiper::real_mark_alive(locator::host_id host_id) {
     if (was_live) {
         co_return;
     }
+
+    co_await utils::get_local_injector().inject("gossiper_hold_mark_alive_endpoint", utils::wait_for_message(60s));
 
     if (_endpoints_to_talk_with.empty()) {
         _endpoints_to_talk_with.push_back({host_id});
@@ -2149,7 +2338,8 @@ future<> gossiper::do_shadow_round(std::unordered_set<gms::inet_address> nodes, 
         gms::application_state::DC,
         gms::application_state::RACK,
         gms::application_state::SUPPORTED_FEATURES,
-        gms::application_state::SNITCH_NAME}};
+        gms::application_state::SNITCH_NAME,
+        gms::application_state::DRAINING}};
     logger.info("Gossip shadow round started with nodes={}", nodes);
     std::unordered_set<gms::inet_address> nodes_talked;
     auto start_time = clk::now();
@@ -2325,6 +2515,60 @@ future<> gossiper::add_local_application_state(application_state_map states) {
     } catch (...) {
         logger.warn("Fail to apply application_state: {:t}", std::current_exception());
     }
+}
+
+bool gossiper::is_query_ready(locator::host_id endpoint) const noexcept {
+    return !_read_shutdown_sync_pending.contains(endpoint) && !is_draining(endpoint);
+}
+
+bool gossiper::is_draining(locator::host_id endpoint) const noexcept {
+    return (_local_query_shutdown && endpoint == my_host_id())
+            || get_application_state_ptr(endpoint, application_state::DRAINING) != nullptr;
+}
+
+future<> gossiper::prepare_shutdown(std::chrono::seconds timeout) {
+    SCYLLA_ASSERT(this_shard_id() == 0);
+    // The process stop signal has already aborted _abort_source on SIGTERM.
+    // Messaging remains available until shutdown() aborts _msg_abort_source.
+    const auto* self = _topo_sm._topology.find(raft::server_id(my_host_id().uuid()));
+    if (!_enabled || _msg_abort_source.abort_requested() || !self
+            || (self->second.state != service::node_state::normal && self->second.state != service::node_state::rebuilding)) {
+        co_return;
+    }
+    const auto deadline = rpc::rpc_clock_type::now() + timeout;
+    abort_on_expiry<rpc::rpc_clock_type> expiry(deadline);
+    auto sub = _msg_abort_source.subscribe([&expiry] () noexcept { expiry.abort_source().request_abort(); });
+    versioned_value draining("true");
+    endpoint_state_ptr shutdown_state;
+    {
+        co_await coroutine::switch_to(_gcfg.gossip_scheduling_group);
+        auto permit = co_await lock_endpoint(my_host_id(), null_permit_id, std::source_location::current(), &expiry.abort_source());
+        auto state = *get_this_endpoint_state_ptr();
+        state.add_application_state(application_state::DRAINING, draining);
+        // Ordinary gossip notifications have already stopped on SIGTERM.
+        // Peers learn client availability from the complete shutdown state.
+        state.add_application_state(application_state::RPC_READY, versioned_value::cql_ready(false));
+        co_await replicate(std::move(state), permit.id());
+        shutdown_state = get_this_endpoint_state_ptr();
+    }
+    auto live = get_live_members();
+    logger.info("Preparing shutdown: waiting for coordinators to finish requests");
+    co_await coroutine::parallel_for_each(live, [this, deadline, shutdown_state, &expiry] (locator::host_id id) -> future<> {
+        try {
+            if (id == my_host_id()) {
+                auto remaining = std::max(0ms, std::chrono::duration_cast<std::chrono::milliseconds>(deadline - rpc::rpc_clock_type::now()));
+                co_await _subscribers.for_each([id, remaining] (shared_ptr<i_endpoint_state_change_subscriber> subscriber) {
+                    return subscriber->on_draining(id, remaining);
+                });
+            } else {
+                co_await ser::gossip_rpc_verbs::send_gossip_prepare_shutdown(&_messaging, id, deadline, expiry.abort_source(), *shutdown_state);
+            }
+        } catch (...) {
+            // A failed coordinator must not prevent shutdown indefinitely.
+            logger.warn("Failed to prepare shutdown on {}: {:t}", id, std::current_exception());
+        }
+    });
+    logger.info("Preparing shutdown: coordinator request wait finished");
 }
 
 future<> gossiper::do_stop_gossiping() {

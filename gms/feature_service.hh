@@ -205,6 +205,7 @@ public:
     gms::feature object_storage_permissions { *this, "OBJECT_STORAGE_PERMISSIONS"sv };
     gms::feature alternator_composite_gsi_keys { *this, "ALTERNATOR_COMPOSITE_GSI_KEYS"sv };
     gms::feature cluster_config { *this, "CLUSTER_CONFIG"sv };
+    gms::feature graceful_read_shutdown { *this, "GRACEFUL_READ_SHUTDOWN"sv };
     // Restore persists tablet transitions and a topology request that older nodes fail to parse.
     gms::feature tablet_aware_restore { *this, "TABLET_AWARE_RESTORE"sv };
 

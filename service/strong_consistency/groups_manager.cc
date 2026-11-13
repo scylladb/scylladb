@@ -1388,6 +1388,9 @@ future<> groups_manager::stepdown_leaders() {
         }
 
         try {
+            utils::get_local_injector().inject("strong_consistency_fail_leadership_transfer", [] {
+                throw std::runtime_error("Injected leadership transfer failure");
+            });
             co_await srv->server().stepdown(raft::logical_clock::duration(stepdown_timeout_ticks));
             ++transferred;
             logger.debug("stepdown_leaders(): group id {}: leadership transferred", gid);

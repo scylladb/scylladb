@@ -11,6 +11,7 @@
 
 #include "cql3/statements/batch_statement.hh"
 #include "cql3/statements/modification_statement.hh"
+#include "cql3/statements/select_statement.hh"
 #include "cql3/statements/strong_consistency/statement_helpers.hh"
 #include <seastar/core/scheduling.hh>
 #include <seastar/core/semaphore.hh>
@@ -430,7 +431,25 @@ void cql_server::init_messaging_service() {
 
             co_await utils::get_local_injector().inject("wait_before_handling_forwarded_request", utils::wait_for_message(60s));
 
-            co_return co_await container().invoke_on(shard, [src_host, req = std::move(req)] (cql_server& shard_svc) mutable -> future<forward_cql_execute_response> {
+            if (_gate.is_closed() && src_host != _gossiper.my_host_id()) {
+                if (_gossiper.is_draining(_gossiper.my_host_id())) {
+                    // Local shutdown is visible before the gossip marker. Let
+                    // statement routing select another replica here: returning
+                    // to an origin with a stale leader cache can repeat this hop.
+                    clogger.debug("Rerouting a late forwarded query after admission stopped");
+                } else {
+                    // Admission can also stop without a node drain. Only local
+                    // routing for an already admitted request may continue then.
+                    clogger.debug("Returning a late forwarded query to {} after admission stopped", src_host);
+                    co_return forward_cql_execute_response{
+                        .status = forward_cql_status::redirect,
+                        .target_host = src_host,
+                        .target_shard = 0,
+                    };
+                }
+            }
+
+            auto response = co_await container().invoke_on(shard, [src_host, req = std::move(req)] (cql_server& shard_svc) mutable -> future<forward_cql_execute_response> {
                 service::client_state cs(shard_svc._auth_service,
                     &shard_svc._sl_controller,
                     std::move(req.client_state),
@@ -469,6 +488,8 @@ void cql_server::init_messaging_service() {
                 }
                 co_return f.get();
             });
+            co_await utils::get_local_injector().inject("forward_cql_pause_before_reply", utils::wait_for_message(60s));
+            co_return response;
         });
 
     ser::forward_cql_rpc_verbs::register_forward_cql_prepare(&_ms,
@@ -586,8 +607,23 @@ cql_server::forward_cql(
 
     locator::host_id current_host = target_host;
     unsigned current_shard = target_shard;
+    std::vector<locator::host_id> reselected_targets;
 
     while (true) {
+        if (current_host != _gossiper.my_host_id() && !_gossiper.is_query_ready(current_host)) {
+            if (std::ranges::contains(reselected_targets, current_host)) {
+                // A follower can still redirect to the leader this coordinator
+                // excludes. Repeating local routing would only repeat that hop.
+                co_return coroutine::exception(std::make_exception_ptr(exceptions::unavailable_exception(
+                        format("No query-ready route to leader {}", current_host), db::consistency_level::ONE, 1, 0)));
+            }
+            reselected_targets.push_back(current_host);
+            // Re-enter local routing with the drain state this coordinator has
+            // already learned. Both the original hop and a delayed redirect's
+            // target may now be draining. Keep the original RPC deadline.
+            current_host = _gossiper.my_host_id();
+            current_shard = this_shard_id();
+        }
         auto response_fut = co_await coroutine::as_future(ser::forward_cql_rpc_verbs::send_forward_cql_execute(&_ms, current_host, timeout, current_shard, req));
 
         if (response_fut.failed()) {
@@ -1700,7 +1736,7 @@ process_query_internal(service::client_state& client_state, sharded<cql3::query_
         cql3::dialect dialect, cql_sg_stats& sg_stats, api::timestamp_type request_start_timestamp,
         // Only EXECUTE takes memory here; a QUERY is already charged for parsing
         // up front. Taken to share one signature across the process_fn's.
-        semaphore&) {
+        semaphore&, utils::phased_barrier::operation& read_request) {
     utils::result_with_exception_ptr<utils::chunked_string> query = in.read_long_chunked_string();
     if (!query) {
         return make_exception_future<cql_server::process_fn_return_type>(std::move(query).assume_error());
@@ -1733,6 +1769,9 @@ process_query_internal(service::client_state& client_state, sharded<cql3::query_
             cql3::query_processor::prepared_for_driver::no,
             cql3::query_processor::pinned_plan_from_paging_state(options.get_paging_state()));
     auto& statement = *prepared->statement;
+    if (dynamic_cast<const cql3::statements::select_statement*>(&statement)) {
+        read_request = qp.local().proxy().start_read_request();
+    }
     auto execute_fut = reclassifying_control_connection_needs_user_service_level(statement, query_state)
             ? query_state.get_service_level_controller().with_user_service_level(query_state.get_client_state().user(),
                     [&qp, &query_state, &options, prepared = std::move(prepared)] () mutable {
@@ -1892,7 +1931,7 @@ process_execute_internal(service::client_state& client_state, sharded<cql3::quer
         uint16_t stream, cql_protocol_version_type version,
         service_permit permit, tracing::trace_state_ptr trace_state, bool init_trace, cql3::computed_function_values cached_pk_fn_calls,
         cql3::dialect dialect, cql_sg_stats& sg_stats, api::timestamp_type request_start_timestamp,
-        semaphore& memory_available) {
+        semaphore& memory_available, utils::phased_barrier::operation& read_request) {
     utils::result_with_exception_ptr<bytes> cache_key_bytes = in.read_short_bytes();
     if (!cache_key_bytes) {
         return make_exception_future<cql_server::process_fn_return_type>(std::move(cache_key_bytes).assume_error());
@@ -1911,6 +1950,9 @@ process_execute_internal(service::client_state& client_state, sharded<cql3::quer
 
     if (!prepared) {
         throw exceptions::prepared_query_not_found_exception(id);
+    }
+    if (dynamic_cast<const cql3::statements::select_statement*>(prepared->statement.get())) {
+        read_request = qp.local().proxy().start_read_request();
     }
 
     cql_metadata_id_wrapper metadata_id = cql_metadata_id_wrapper();
@@ -2006,7 +2048,7 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
         uint16_t stream, cql_protocol_version_type version,
         service_permit permit, tracing::trace_state_ptr trace_state, bool init_trace, cql3::computed_function_values cached_pk_fn_calls, cql3::dialect dialect, cql_sg_stats& sg_stats, api::timestamp_type request_start_timestamp,
         // Never paged, so nothing here re-derives a statement. See above.
-        semaphore&) {
+        semaphore&, utils::phased_barrier::operation&) {
     const utils::result_with_exception_ptr<int8_t> type = in.read_byte();
     if (!type) {
         return make_exception_future<cql_server::process_fn_return_type>(std::move(type).assume_error());
@@ -2181,6 +2223,11 @@ cql_server::process(uint16_t stream, request_reader in, service::client_state& c
         tracing::trace_state_ptr trace_state, cql_binary_opcode opcode, cql_protocol_version_type version, cql3::dialect dialect,
         api::timestamp_type request_start_timestamp, cql3::computed_function_values cached_fn_calls, handling_node_bounce bounced)
 {
+    // Keep all admitted queries, including writes and batches, in the peer
+    // shutdown barrier through the final forwarded reply. Replica reads also
+    // retain their background work after the foreground query completes.
+    auto query_request = _query_processor.local().proxy().start_query_request();
+    utils::phased_barrier::operation read_request;
     fragmented_temporary_buffer::istream is = in.get_stream();
 
     auto process_fn = [] (cql_binary_opcode op) {
@@ -2201,7 +2248,7 @@ cql_server::process(uint16_t stream, request_reader in, service::client_state& c
     bool init_trace = (bool)!bounced; // If the request was bounced, we already started the trace in the handler
     auto& sg_stats = get_cql_sg_stats();
     auto msg = co_await coroutine::try_future(process_fn(client_state, _query_processor, in, stream,
-        version, permit, trace_state, init_trace, std::move(cached_fn_calls), dialect, sg_stats, request_start_timestamp, _memory_available));
+        version, permit, trace_state, init_trace, std::move(cached_fn_calls), dialect, sg_stats, request_start_timestamp, _memory_available, read_request));
     while (auto* bounce_msg = std::get_if<cql_server::result_with_bounce>(&msg)) {
         auto shard = (*bounce_msg)->target_shard();
         auto&& cached_vals = (*bounce_msg)->take_cached_pk_function_calls();
@@ -2219,9 +2266,10 @@ cql_server::process(uint16_t stream, request_reader in, service::client_state& c
                 auto local_client_state = gcs.get(&server._abort_source);
                 auto local_trace_state = gt.get();
                 auto& local_sg_stats = server.get_cql_sg_stats();
+                utils::phased_barrier::operation local_read_request;
                 co_return co_await process_fn(local_client_state, server._query_processor, in, stream, version,
                         /* FIXME */empty_service_permit(), std::move(local_trace_state), false, cached_vals, dialect, local_sg_stats, request_start_timestamp,
-                        server._memory_available);
+                        server._memory_available, local_read_request);
             });
         } else {
             // Node bounce

@@ -15,6 +15,7 @@
 #include "utils/scoped_item_list.hh"
 
 #include <cstdint>
+#include <optional>
 
 #include <seastar/core/file-types.hh>
 #include <seastar/core/future.hh>
@@ -24,6 +25,7 @@
 #include <seastar/net/tls.hh>
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/scheduling.hh>
+#include <seastar/core/shared_future.hh>
 
 namespace generic_server {
 
@@ -113,7 +115,9 @@ protected:
     sstring _server_name;
     logging::logger& _logger;
     seastar::named_gate _gate;
-    future<> _all_connections_stopped = make_ready_future<>();
+    shared_future<> _all_connections_stopped{make_ready_future<>()};
+    std::optional<shared_future<>> _request_admission_stopped;
+    std::optional<shared_future<>> _shutdown_finished;
     uint64_t _total_connections = 0;
     uint64_t _shed_connections = 0;
     uint64_t _blocked_connections = 0;
@@ -128,17 +132,18 @@ private:
     uint32_t _prev_conns_cpu_concurrency;
     named_semaphore _conns_cpu_concurrency_semaphore;
     std::chrono::seconds _shutdown_timeout;
+    future<> do_stop_accepting_requests();
+    future<> do_shutdown();
 public:
     server(const sstring& server_name, logging::logger& logger, config cfg);
 
     virtual ~server() = default;
 
-    // Makes sure listening sockets no longer generate new connections and aborts the
-    // connected sockets, so that new requests are not served and existing requests don't
-    // send responses back.
-    //
-    // It does _not_ wait for any internal activity started by the established connections
-    // to finish. It's the .stop() method that does it
+    /// Stop listeners and request input without waiting for admitted requests or closing response output.
+    future<> stop_accepting_requests();
+
+    // Stop admission, wait for admitted requests up to the shutdown timeout,
+    // then close the connections. stop() also joins any remaining activity.
     future<> shutdown();
     future<> stop();
 

@@ -66,6 +66,8 @@ public:
      * @param endpoint the endpoint marked DOWN.
      */
     virtual void on_down(const gms::inet_address& endpoint, locator::host_id host_id) {}
+    /// Client admission changed without changing replica or internode liveness.
+    virtual void on_cql_change(const gms::inet_address& endpoint, locator::host_id host_id, bool ready) {}
     virtual void on_client_routes_change(const client_routes_service::client_route_keys& client_route_keys) {}
 };
 
@@ -77,6 +79,7 @@ public:
     future<> unregister_subscriber(endpoint_lifecycle_subscriber* subscriber) noexcept;
 
     future<> notify_down(gms::inet_address endpoint, locator::host_id host_id);
+    future<> notify_cql_change(gms::inet_address endpoint, locator::host_id host_id, bool ready);
     future<> notify_left(gms::inet_address endpoint, locator::host_id host_id);
     future<> notify_released(locator::host_id host_id);
     future<> notify_up(gms::inet_address endpoint, locator::host_id host_id);

@@ -71,6 +71,7 @@ class gossip_digest_ack2 {
 
 struct gossip_get_endpoint_states_request {
     std::unordered_set<gms::application_state> application_states;
+    std::optional<locator::host_id> endpoint [[version 2027.1]];
 };
 
 struct gossip_get_endpoint_states_response {

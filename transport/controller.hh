@@ -80,6 +80,7 @@ public:
     virtual sstring protocol_version() const override;
     virtual std::vector<socket_address> listen_addresses() const override;
     virtual future<> start_server() override;
+    virtual future<> stop_accepting_requests() override;
     virtual future<> stop_server() override;
     virtual future<> request_stop_server() override;
     virtual future<utils::chunked_vector<foreign_ptr<std::unique_ptr<client_data>>>> get_client_data() override;

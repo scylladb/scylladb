@@ -300,6 +300,19 @@ future<> controller::do_start_server() {
     });
 }
 
+future<> controller::stop_accepting_requests() {
+    if (_stopped) {
+        co_return;
+    }
+    auto units = co_await get_units(_ops_sem, 1);
+    if (_server) {
+        // Keep the server and forwarding RPC handlers alive until peer
+        // coordinators have received replies to their admitted queries.
+        co_await _server->invoke_on_all([] (auto& server) { return server.stop_accepting_requests(); });
+        _listen_addresses.clear();
+    }
+}
+
 future<> controller::stop_server() {
     SCYLLA_ASSERT(this_shard_id() == 0);
 

@@ -347,6 +347,8 @@ private:
     std::unique_ptr<cancellable_write_handlers_list> _cancellable_write_handlers_list;
 
     gate _write_handlers_gate;
+    utils::phased_barrier _pending_reads{"storage_proxy::pending_reads"};
+    utils::phased_barrier _pending_queries{"storage_proxy::pending_queries"};
 
     /* This is a pointer to the shard-local part of the sharded cdc_service:
      * storage_proxy needs access to cdc_service to augment mutations.
@@ -438,6 +440,7 @@ private:
             tracing::trace_state_ptr trace_state,
             const host_id_vector_replica_set& preferred_endpoints,
             bool& is_bounced_read,
+            utils::phased_barrier::operation read_operation,
             service_permit permit,
             node_local_only node_local_only);
     future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>> query_result_local(
@@ -873,6 +876,13 @@ public:
     future<> start_hints_manager();
     void allow_replaying_hints() noexcept;
     future<> drain_hints_for_left_nodes();
+    // Track a request before it selects replicas, through its final forwarded reply.
+    // The holder must stay on the shard where it was created.
+    utils::phased_barrier::operation start_read_request() { return _pending_reads.start(); }
+    /// Track an admitted CQL query through shard forwarding and receipt of its final reply.
+    utils::phased_barrier::operation start_query_request() { return _pending_queries.start(); }
+    // Wait for earlier coordinator queries and background replica reads after a peer announced DRAINING.
+    future<> drain_requests(std::chrono::milliseconds timeout, abort_source& as);
     future<> drain_all_hints();
     future<> abort_view_writes();
     future<> abort_batch_writes();
