@@ -39,7 +39,6 @@
 #include "locator/host_id.hh"
 #include "dht/token_range_endpoints.hh"
 #include "service/cas_shard.hh"
-#include "service/maintenance_mode.hh"
 #include "timeout_config.hh"
 #include "service/storage_proxy_fwd.hh"
 #include "service/fencing_token.hh"
@@ -217,7 +216,6 @@ public:
         // with writes.
         smp_service_group write_ack_smp_service_group = default_smp_service_group();
         scheduling_group hints_sched_group;
-        maintenance_mode_enabled maintenance_mode = maintenance_mode_enabled::no;
     };
 private:
 
@@ -316,7 +314,6 @@ private:
     scheduling_group_key _stats_key;
     storage_proxy_stats::global_stats _global_stats;
     gms::feature_service& _features;
-    maintenance_mode_enabled _maintenance_mode;
 
     class remote;
     std::unique_ptr<remote> _remote;
