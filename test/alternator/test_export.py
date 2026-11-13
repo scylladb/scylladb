@@ -28,7 +28,7 @@ from cassandra import ConsistencyLevel
 from cassandra.query import SimpleStatement
 from contextlib import contextmanager, ExitStack
 
-from test.alternator.util import get_table_arn, is_aws, manual_request, ManualRequestError, new_test_table, create_test_table, random_string, scylla_config_read, scylla_config_temporary, scylla_inject_error, scylla_injection_enter_count, scylla_injection_message, scylla_wait_for_injection_enters
+from test.alternator.util import get_table_arn, is_aws, manual_request, ManualRequestError, new_test_table, create_test_table, random_string, scylla_config_read, scylla_config_temporary, scylla_inject_error, scylla_injection_enter_count, scylla_injection_message, scylla_wait_for_injection_enters, metrics, get_metric
 from test.pylib.s3mock_server import S3MockServer
 from test.pylib.skip_types import skip_env
 

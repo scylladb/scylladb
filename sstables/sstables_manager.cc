@@ -151,6 +151,8 @@ static const s3::group_connections default_group_connections = {
     {"streaming", 64},
     {"backup", 32},
     {"maintenance", 16},
+    // Alternator's export to S3 uploads its data file and manifests from this group.
+    {"export_import", 16},
     // Shared by every group with no entry of its own; utils/s3/client.cc falls back to it.
     // main is one of them: it reaches object storage only while loading sstables at startup,
     // so it gets the shared pool rather than one that sits idle for the node's whole life.
