@@ -151,7 +151,7 @@ inline void atomic_cell_or_collection_block_tree_node_ptr::set_owner(atomic_cell
 //
 //   header                              (sizeof(atomic_cell_or_collection_block))
 //   managed_bytes  external[popcount(_external)]
-//   cell_hash_opt  hashes[popcount(_present)]
+//   cell_hash_opt  hashes[popcount(_hashed)]
 //   offset_type    offsets[popcount(_present & ~_external) + 1]   offsets[0] == 0; internal cell i
 //                                                                  occupies [offsets[i], offsets[i + 1])
 //   int8_t         data[_inline_size]
@@ -159,6 +159,9 @@ inline void atomic_cell_or_collection_block_tree_node_ptr::set_owner(atomic_cell
 // The shape of a block (which cells it holds and where) never changes after it is built;
 // changes are made by building a new block with atomic_cell_or_collection_block_builder.
 // The cell contents (and hashes) can be modified in place, as long as sizes don't change.
+//
+// Only cells of at least hashed_cell_min_size bytes have a hash slot (_hashed): a small
+// cell is cheap to rehash, while its 8-byte slot stays in memory for the cell's lifetime.
 class atomic_cell_or_collection_block : public atomic_cell_or_collection_block_tree_node_header {
 public:
     using mask_type = atomic_cell_or_collection_block_mask;
@@ -167,16 +170,21 @@ public:
     static constexpr unsigned nr_cells = atomic_cell_or_collection_block_nr_cells;
     // managed_bytes is byte-aligned, but its pointers are better accessed aligned.
     static constexpr size_t external_cells_alignment = alignof(void*);
+    static constexpr size_t hashed_cell_min_size = 128;
 private:
     mask_type _present = 0;
     mask_type _external = 0;
     offset_type _inline_size = 0;
+    // Subset of _present.
+    mask_type _hashed = 0;
 
     friend class atomic_cell_or_collection_block_builder;
 
-    atomic_cell_or_collection_block(mask_type present, mask_type external, offset_type inline_size) noexcept
-        : _present(present), _external(external), _inline_size(inline_size) {
+    atomic_cell_or_collection_block(mask_type present, mask_type external, mask_type hashed, offset_type inline_size) noexcept
+        : _present(present), _external(external), _inline_size(inline_size), _hashed(hashed) {
     }
+
+    unsigned nr_hashed() const noexcept { return std::popcount(_hashed); }
 
     unsigned nr_internal() const noexcept { return std::popcount(mask_type(_present & ~_external)); }
 
@@ -188,7 +196,7 @@ private:
         return std::assume_aligned<alignof(cell_hash_opt)>(reinterpret_cast<cell_hash_opt*>(external_cells() + nr_external()));
     }
     offset_type* offsets() const noexcept {
-        return std::assume_aligned<alignof(offset_type)>(reinterpret_cast<offset_type*>(hashes() + nr_present()));
+        return std::assume_aligned<alignof(offset_type)>(reinterpret_cast<offset_type*>(hashes() + nr_hashed()));
     }
     bytes::value_type* data() const noexcept {
         return reinterpret_cast<bytes::value_type*>(offsets() + nr_internal() + 1);
@@ -199,10 +207,10 @@ private:
         return managed_bytes_view(bytes_view(data() + offs[internal_rank], offs[internal_rank + 1] - offs[internal_rank]));
     }
 public:
-    static size_t storage_size_for(unsigned nr_present, unsigned nr_external, size_t inline_size) noexcept {
+    static size_t storage_size_for(unsigned nr_present, unsigned nr_external, unsigned nr_hashed, size_t inline_size) noexcept {
         return sizeof(atomic_cell_or_collection_block)
                 + nr_external * sizeof(managed_bytes)
-                + nr_present * sizeof(cell_hash_opt)
+                + nr_hashed * sizeof(cell_hash_opt)
                 + (nr_present - nr_external + 1) * sizeof(offset_type)
                 + inline_size;
     }
@@ -215,7 +223,7 @@ public:
     ptr clone() const;
 
     size_t storage_size() const noexcept {
-        return storage_size_for(nr_present(), nr_external(), _inline_size);
+        return storage_size_for(nr_present(), nr_external(), nr_hashed(), _inline_size);
     }
 
     // Memory used by this block and the external cells it owns.
@@ -226,6 +234,7 @@ public:
 
     mask_type present() const noexcept { return _present; }
     mask_type external() const noexcept { return _external; }
+    mask_type hashed() const noexcept { return _hashed; }
     unsigned nr_present() const noexcept { return std::popcount(_present); }
     unsigned nr_external() const noexcept { return std::popcount(_external); }
     bool contains(unsigned slot) const noexcept { return _present & bitmask::bit<mask_type>(slot); }
@@ -245,10 +254,14 @@ public:
     // which don't change the size. The slot must be present.
     managed_bytes_mutable_view mutable_cell(unsigned slot) noexcept;
 
-    // The hash of the cell at `slot`. Hashes are a cache which may be updated in
-    // place even through a const block. The slot must be present.
-    cell_hash_opt& hash(unsigned slot) const noexcept {
-        return hashes()[bitmask::rank(_present, slot)];
+    // The hash slot of the cell at `slot`, or nullptr if the cell has none. Hashes are
+    // a cache which may be updated in place even through a const block.
+    cell_hash_opt* hash(unsigned slot) const noexcept {
+        return _hashed & bitmask::bit<mask_type>(slot) ? &hashes()[bitmask::rank(_hashed, slot)] : nullptr;
+    }
+    cell_hash_opt hash_value(unsigned slot) const noexcept {
+        auto h = hash(slot);
+        return h ? *h : cell_hash_opt();
     }
 
     // The managed_bytes holding the cell at `slot` if it is external, nullptr otherwise.
@@ -259,20 +272,27 @@ public:
     struct cell_entry {
         unsigned slot;
         managed_bytes_view cell;
-        cell_hash_opt& hash;
+        // Null iff the cell has no hash slot.
+        cell_hash_opt* hash;
         // Non-null iff the cell is external.
         managed_bytes* external_storage;
+
+        cell_hash_opt hash_value() const noexcept { return hash ? *hash : cell_hash_opt(); }
     };
 
     // Calls func(const cell_entry&) for each cell, in slot order. If func returns
     // stop_iteration, iteration stops early when it returns stop_iteration::yes.
     // Returns stop_iteration::yes if iteration was stopped.
     stop_iteration for_each_cell(std::invocable<const cell_entry&> auto&& func) const {
+        unsigned hashed_rank = 0;
         unsigned external_rank = 0;
         return bitmask::for_each_set_with_rank(_present, [&] (unsigned slot, unsigned rank) {
             const bool is_ext = is_external(slot);
+            const bool is_hashed = _hashed & bitmask::bit<mask_type>(slot);
             managed_bytes* ext = is_ext ? &external_cells()[external_rank] : nullptr;
-            cell_entry e{slot, is_ext ? managed_bytes_view(*ext) : internal_cell(rank - external_rank), hashes()[rank], ext};
+            cell_entry e{slot, is_ext ? managed_bytes_view(*ext) : internal_cell(rank - external_rank),
+                    is_hashed ? &hashes()[hashed_rank] : nullptr, ext};
+            hashed_rank += is_hashed;
             external_rank += is_ext;
             return func(e);
         });

@@ -60,10 +60,12 @@ struct cell_and_hash {
 };
 
 // A cell stored in a row, together with its cached hash, which may be
-// updated in place.
+// updated in place. hash is null if the cell is too small to cache its hash.
 struct cell_and_hash_view {
     atomic_cell_or_collection_view cell;
-    cell_hash_opt& hash;
+    cell_hash_opt* hash;
+
+    cell_hash_opt cached_hash() const noexcept { return hash ? *hash : cell_hash_opt(); }
 };
 
 class compaction_garbage_collector;
@@ -196,7 +198,7 @@ private:
             return func(id, cell);
         } else if constexpr (std::is_invocable_v<Func&, column_id&, const cell_and_hash&>) {
             // Compatibility path, materializes a copy of the cell.
-            auto cah = cell_and_hash(atomic_cell_or_collection::from_serialized(managed_bytes(e.cell)), e.hash);
+            auto cah = cell_and_hash(atomic_cell_or_collection::from_serialized(managed_bytes(e.cell)), e.hash_value());
             return func(id, std::as_const(cah));
         } else {
             // Compatibility path, materializes a copy of the cell.
@@ -299,7 +301,9 @@ public:
             bitmask::for_each_set(block.present(), [&] (unsigned slot) {
                 func(column_of(block_index, slot), block.mutable_cell(slot));
                 // The cached hash may no longer match the cell.
-                block.hash(slot) = cell_hash_opt();
+                if (auto* h = block.hash(slot)) {
+                    *h = cell_hash_opt();
+                }
             });
         });
     }

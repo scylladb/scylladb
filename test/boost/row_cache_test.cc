@@ -65,10 +65,11 @@ static schema_ptr make_schema_with_extra_column() {
 static thread_local api::timestamp_type next_timestamp = 1;
 
 static
-mutation make_new_mutation(schema_ptr s, partition_key key) {
+mutation make_new_mutation(schema_ptr s, partition_key key, size_t padding = 0) {
     mutation m(s, key);
     static thread_local int next_value = 1;
-    m.set_clustered_cell(clustering_key::make_empty(), "v", data_value(to_bytes(format("v{:d}", next_value++))), next_timestamp++);
+    auto v = to_bytes(format("v{:d}", next_value++)) + bytes(padding, int8_t(0));
+    m.set_clustered_cell(clustering_key::make_empty(), "v", data_value(std::move(v)), next_timestamp++);
     return m;
 }
 
@@ -3743,6 +3744,11 @@ SEASTAR_TEST_CASE(test_cache_update_and_eviction_preserves_monotonicity_of_memta
     });
 }
 
+// Large enough for the cell to get a hash slot.
+static mutation make_new_hashed_mutation(schema_ptr s, partition_key key) {
+    return make_new_mutation(s, std::move(key), atomic_cell_or_collection_block::hashed_cell_min_size);
+}
+
 SEASTAR_TEST_CASE(test_hash_is_cached) {
     return seastar::async([] {
         cache_tracker tracker;
@@ -3751,7 +3757,7 @@ SEASTAR_TEST_CASE(test_hash_is_cached) {
         auto s = make_schema();
         tests::reader_concurrency_semaphore_wrapper semaphore;
 
-        auto mut = make_new_mutation(s);
+        auto mut = make_new_hashed_mutation(s, new_key(s));
         memtable_snapshot_source underlying(s);
         underlying.apply(mut);
 
@@ -3784,7 +3790,7 @@ SEASTAR_TEST_CASE(test_hash_is_cached) {
         }
 
         auto mt = make_lw_shared<replica::memtable>(s);
-        mt->apply(make_new_mutation(s, mut.key()));
+        mt->apply(make_new_hashed_mutation(s, mut.key()));
         cache.update(row_cache::external_updater([&] { }), *mt).get();
 
         {

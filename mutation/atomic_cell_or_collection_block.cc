@@ -36,10 +36,11 @@ atomic_cell_or_collection_block::atomic_cell_or_collection_block(atomic_cell_or_
     , _present(o._present)
     , _external(o._external)
     , _inline_size(o._inline_size)
+    , _hashed(o._hashed)
 {
     std::uninitialized_move_n(o.external_cells(), nr_external(), external_cells());
     // hashes, offsets and data are contiguous and trivially copyable
-    std::memcpy(hashes(), o.hashes(), nr_present() * sizeof(cell_hash_opt) + (nr_internal() + 1) * sizeof(offset_type) + _inline_size);
+    std::memcpy(hashes(), o.hashes(), nr_hashed() * sizeof(cell_hash_opt) + (nr_internal() + 1) * sizeof(offset_type) + _inline_size);
     relocated_to(this);
 }
 
@@ -58,9 +59,9 @@ atomic_cell_or_collection_block::ptr atomic_cell_or_collection_block::clone() co
     auto size = storage_size();
     void* storage = current_allocator().alloc<atomic_cell_or_collection_block>(size);
     // Nothrow from here on.
-    auto* block = new (storage) atomic_cell_or_collection_block(_present, _external, _inline_size);
+    auto* block = new (storage) atomic_cell_or_collection_block(_present, _external, _hashed, _inline_size);
     std::uninitialized_move_n(external_copies.begin(), nr_external(), block->external_cells());
-    std::memcpy(block->hashes(), hashes(), nr_present() * sizeof(cell_hash_opt) + (nr_internal() + 1) * sizeof(offset_type) + _inline_size);
+    std::memcpy(block->hashes(), hashes(), nr_hashed() * sizeof(cell_hash_opt) + (nr_internal() + 1) * sizeof(offset_type) + _inline_size);
     return ptr(block);
 }
 
@@ -184,8 +185,13 @@ atomic_cell_or_collection_block_builder::block_ptr atomic_cell_or_collection_blo
     // Decide which cells are external. Depends only on the cell sizes. Cells are
     // visited in slot order, so ties are broken by the lowest slot.
     size_t inline_size = 0;
+    mask_type hashed = 0;
     bitmask::for_each_set(_slots, [&] (unsigned slot) {
-        inline_size += entry_of(slot).size;
+        auto size = entry_of(slot).size;
+        inline_size += size;
+        if (size >= atomic_cell_or_collection_block::hashed_cell_min_size) {
+            hashed |= bitmask::bit<mask_type>(slot);
+        }
     });
     mask_type external = 0;
     while (inline_size > inline_budget) {
@@ -212,21 +218,24 @@ atomic_cell_or_collection_block_builder::block_ptr atomic_cell_or_collection_blo
         }
     });
 
-    auto size = atomic_cell_or_collection_block::storage_size_for(std::popcount(_slots), std::popcount(external), inline_size);
+    auto size = atomic_cell_or_collection_block::storage_size_for(std::popcount(_slots), std::popcount(external), std::popcount(hashed), inline_size);
     void* storage = current_allocator().alloc<atomic_cell_or_collection_block>(size);
 
     // Nothrow from here on.
-    auto* block = new (storage) atomic_cell_or_collection_block(_slots, external, inline_size);
+    auto* block = new (storage) atomic_cell_or_collection_block(_slots, external, hashed, inline_size);
     auto ext = block->external_cells();
     auto hashes = block->hashes();
     auto offsets = block->offsets();
     auto data = block->data();
+    unsigned hashed_rank = 0;
     unsigned external_rank = 0;
     unsigned internal_rank = 0;
     offsets[0] = 0;
-    bitmask::for_each_set_with_rank(_slots, [&] (unsigned slot, unsigned rank) {
+    bitmask::for_each_set(_slots, [&] (unsigned slot) {
         auto& e = entry_of(slot);
-        new (&hashes[rank]) cell_hash_opt(e.hash);
+        if (hashed & bitmask::bit<mask_type>(slot)) {
+            new (&hashes[hashed_rank++]) cell_hash_opt(e.hash);
+        }
         if (external & bitmask::bit<mask_type>(slot)) {
             if (e.kind == source_kind::owned) {
                 new (&ext[external_rank]) managed_bytes(std::move(e.owned));

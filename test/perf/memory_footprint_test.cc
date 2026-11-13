@@ -60,10 +60,11 @@ public:
         std::cout << prefix() << "sizeof(evictable) = " << sizeof(evictable) << "\n";
         std::cout << prefix() << "sizeof(deletable_row) = " << sizeof(deletable_row) << "\n";
         std::cout << prefix() << "sizeof(row) = " << sizeof(row) << "\n";
-        std::cout << prefix() << "atomic_cell_or_collection_block::storage_size(header, per cell, per external cell) = "
-                << atomic_cell_or_collection_block::storage_size_for(0, 0, 0) << " "
-                << atomic_cell_or_collection_block::storage_size_for(1, 0, 0) - atomic_cell_or_collection_block::storage_size_for(0, 0, 0) << " "
-                << atomic_cell_or_collection_block::storage_size_for(1, 1, 0) - atomic_cell_or_collection_block::storage_size_for(1, 0, 0) << "\n";
+        std::cout << prefix() << "atomic_cell_or_collection_block::storage_size(header, per cell, per hashed cell, per external cell) = "
+                << atomic_cell_or_collection_block::storage_size_for(0, 0, 0, 0) << " "
+                << atomic_cell_or_collection_block::storage_size_for(1, 0, 0, 0) - atomic_cell_or_collection_block::storage_size_for(0, 0, 0, 0) << " "
+                << atomic_cell_or_collection_block::storage_size_for(1, 0, 1, 0) - atomic_cell_or_collection_block::storage_size_for(1, 0, 0, 0) << " "
+                << atomic_cell_or_collection_block::storage_size_for(1, 1, 0, 0) - atomic_cell_or_collection_block::storage_size_for(1, 0, 0, 0) << "\n";
         std::cout << prefix() << "atomic_cell_or_collection_block_vector::storage_size(header, per child) = "
                 << atomic_cell_or_collection_block_vector::storage_size_for(0) << " "
                 << atomic_cell_or_collection_block_vector::storage_size_for(1) - atomic_cell_or_collection_block_vector::storage_size_for(0) << "\n";

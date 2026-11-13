@@ -3414,6 +3414,51 @@ SEASTAR_THREAD_TEST_CASE(test_appending_hash_row_4567) {
     BOOST_CHECK_NE(compute_hash(r2, { 0, 1, 2 }), compute_hash(r3, { 0, 1, 2 }));
 }
 
+// Only large cells cache their hash; the digest must not depend on what is cached.
+SEASTAR_THREAD_TEST_CASE(test_row_digest_independent_of_cached_hashes) {
+    auto map_type = map_type_impl::get_instance(int32_type, utf8_type, true);
+    auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
+        .with_column("pk", bytes_type, column_kind::partition_key)
+        // Regular column ids follow name order.
+        .with_column("c0_small", bytes_type)
+        .with_column("c1_large", bytes_type)
+        .with_column("c2_external", bytes_type)
+        .with_column("c3_map", map_type)
+        .build();
+    const auto min = atomic_cell_or_collection_block::hashed_cell_min_size;
+
+    auto r = row();
+    r.append_cell(0, atomic_cell::make_live(*bytes_type, 1, bytes(8, 'a')));
+    r.append_cell(1, atomic_cell::make_live(*bytes_type, 1, bytes(min, 'b')));
+    r.append_cell(2, atomic_cell::make_live(*bytes_type, 1, bytes(5000, 'c')));
+    r.append_cell(3, make_collection_mutation({}, int32_type->decompose(1), make_collection_member(utf8_type, sstring("x"))));
+
+    const query::column_id_vector columns{0, 1, 2, 3};
+    auto compute_hash = [&] (const row& r) {
+        auto hasher = xx_hasher{};
+        max_timestamp ts;
+        appending_hash<row>{}(hasher, r, *s, column_kind::regular_column, columns, ts);
+        return hasher.finalize_uint64();
+    };
+
+    const auto uncached = compute_hash(r);
+    r.prepare_hash(*s, column_kind::regular_column);
+    BOOST_REQUIRE(!r.cell_hash_for(0));
+    BOOST_REQUIRE(r.cell_hash_for(1));
+    BOOST_REQUIRE(r.cell_hash_for(2));
+    BOOST_REQUIRE(!r.cell_hash_for(3));
+    BOOST_REQUIRE_EQUAL(compute_hash(r), uncached);
+
+    auto copy = row(*s, column_kind::regular_column, r);
+    BOOST_REQUIRE_EQUAL(copy.cell_hash_for(1)->hash, r.cell_hash_for(1)->hash);
+    BOOST_REQUIRE_EQUAL(copy.cell_hash_for(2)->hash, r.cell_hash_for(2)->hash);
+    BOOST_REQUIRE_EQUAL(compute_hash(copy), uncached);
+
+    r.clear_hash();
+    BOOST_REQUIRE(!r.cell_hash_for(1));
+    BOOST_REQUIRE_EQUAL(compute_hash(r), uncached);
+}
+
 SEASTAR_THREAD_TEST_CASE(test_mutation_consume) {
     std::mt19937 engine(tests::random::get_int<uint32_t>());
 
