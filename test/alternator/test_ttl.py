@@ -15,6 +15,7 @@ from botocore.exceptions import ClientError
 
 from test.pylib.skip_types import skip_bug, skip_env
 from .util import new_test_table, random_string, full_query, unique_table_name, is_aws, client_no_transform, multiset, scylla_config_read
+from .test_encoding import cql_put, past_timestamp, _serialize_number
 
 # The following fixture is to ensure that Alternator TTL is being tested with both vnodes and tablets.
 # This fixture will run automatically for every test in the module.
@@ -403,6 +404,43 @@ def test_ttl_expiration_with_rangekey(dynamodb, waits_for_expiration):
             time.sleep(sleep)
         assert 'Item' in table.get_item(Key={'p': p1, 'c': c1})
         assert not 'Item' in table.get_item(Key={'p': p2, 'c': c2})
+
+# Test that the expiration scanner deletes an expired item which was written
+# directly through CQL, not through PutItem. Hermes copies items into
+# Alternator tables in this way (see the header of test_encoding.py), and
+# assumes in A20: "Alternator's expiration reads the TTL attribute (an N in
+# `:attrs`, seconds since the epoch) of an item Hermes wrote and deletes it
+# when due." The expiration time of the item is one minute in the past. The
+# test enables TTL only after it reads the item, so that it sees the item
+# before the expiration scanner deletes it.
+# Like test_ttl_expiration_with_rangekey, the test ends as soon as the item
+# expires.
+def test_ttl_expiration_cql_write(dynamodb, cql, waits_for_expiration):
+    max_duration = 240
+    sleep = 0.1
+    with new_test_table(dynamodb,
+        Tags=TAGS,
+        KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                    { 'AttributeName': 'c', 'KeyType': 'RANGE' } ],
+        AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' },
+                               { 'AttributeName': 'c', 'AttributeType': 'S' }]) as table:
+        # This item never expires: it has no "expiration" attribute.
+        key1 = {'p': random_string(), 'c': random_string()}
+        cql_put(cql, table, key1, {'a': b'\x00x'}, past_timestamp())
+        # This item expired one minute ago.
+        key2 = {'p': random_string(), 'c': random_string()}
+        expiration = int(time.time()) - 60
+        cql_put(cql, table, key2, {'expiration': b'\x03' + _serialize_number(str(expiration))}, past_timestamp())
+        assert table.get_item(Key=key2, ConsistentRead=True)['Item'] == {**key2, 'expiration': expiration}
+        table.meta.client.update_time_to_live(TableName=table.name,
+            TimeToLiveSpecification={'AttributeName': 'expiration', 'Enabled': True})
+        start_time = time.time()
+        while time.time() < start_time + max_duration:
+            if ('Item' in table.get_item(Key=key1)) and not ('Item' in table.get_item(Key=key2)):
+                break
+            time.sleep(sleep)
+        assert 'Item' in table.get_item(Key=key1)
+        assert not 'Item' in table.get_item(Key=key2)
 
 # While it probably makes little sense to do this, the designated
 # expiration-time attribute *may* be the hash or range key attributes.

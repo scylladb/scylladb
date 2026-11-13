@@ -22,6 +22,8 @@ from functools import cache
 import re
 
 from test.pylib.skip_types import skip_env
+from test.cqlpy.util import new_session
+from test.cqlpy.test_permissions import eventually_authorized, eventually_unauthorized
 from .util import new_role, new_dynamodb, unique_table_name, random_string, new_test_table, get_cert, get_table_arn
 from .test_gsi_updatetable import wait_for_gsi, wait_for_gsi_gone
 from .test_gsi import assert_index_query
@@ -292,6 +294,67 @@ def test_rbac_deleteitem_read(dynamodb, cql, test_table_s):
                 ret = authorized(lambda: tab.delete_item(Key={'p': p}, ReturnValues='ALL_OLD'))
                 assert ret['Attributes'] == {'p': p, 'v': v}
     assert not 'Item' in test_table_s.get_item(Key={'p': p}, ConsistentRead=True)
+
+# Hermes writes and deletes items in Alternator tables through CQL (see the
+# header of test_encoding.py). Test that such a CQL write needs the permission
+# that PutItem and DeleteItem need, MODIFY on the base table. It needs no
+# permission on the GSI, the LSI or the CDC log of the table, although the
+# write changes them too. The test also checks the reads that Hermes makes:
+# the schema and the topology need no grant, and system.config and
+# system.tablets need SELECT. Hermes assumes, in section 1 of its contract:
+# "The role it needs: `MODIFY` and
+# `SELECT` on `alternator_<table>.<table>`, and `SELECT` on `system_schema`
+# and `system.config`; nothing more is recommended."
+def test_rbac_cql_write(dynamodb, cql):
+    schema = {
+        'KeySchema': [{'AttributeName': 'p', 'KeyType': 'HASH'},
+                      {'AttributeName': 'c', 'KeyType': 'RANGE'}],
+        'AttributeDefinitions': [{'AttributeName': a, 'AttributeType': 'S'} for a in 'pcxy'],
+        'GlobalSecondaryIndexes': [
+            {'IndexName': 'gsi',
+             'KeySchema': [{'AttributeName': 'x', 'KeyType': 'HASH'}],
+             'Projection': {'ProjectionType': 'ALL'}}],
+        'LocalSecondaryIndexes': [
+            {'IndexName': 'lsi',
+             'KeySchema': [{'AttributeName': 'p', 'KeyType': 'HASH'},
+                           {'AttributeName': 'y', 'KeyType': 'RANGE'}],
+             'Projection': {'ProjectionType': 'ALL'}}],
+        'StreamSpecification': {'StreamEnabled': True, 'StreamViewType': 'NEW_AND_OLD_IMAGES'},
+    }
+    with new_test_table(dynamodb, **schema) as table:
+        p, c, x, y = (random_string() for _ in range(4))
+        name = cql_table_name(table)
+        insert = f'INSERT INTO {name} (p, c, ":attrs") VALUES (%s, %s, %s)'
+        delete = f'DELETE FROM {name} WHERE p = %s AND c = %s'
+        select = f'SELECT ":attrs" FROM {name} WHERE p = %s AND c = %s'
+        config = ("SELECT value FROM system.config "
+                  "WHERE name IN ('alternator_write_isolation', 'batch_size_warn_threshold_in_kb')")
+        tablets = "SELECT * FROM system.tablets LIMIT 1"
+        values = [p, c, {'x': b'\x00' + x.encode(), 'y': b'\x00' + y.encode()}]
+        with new_role(cql) as (role, _):
+            # new_role() sets the password of the role to its name.
+            with new_session(cql, role) as session:
+                eventually_unauthorized(lambda: session.execute(insert, values))
+                with temporary_grant(cql, 'MODIFY', name, role):
+                    eventually_authorized(lambda: session.execute(insert, values))
+                    assert table.get_item(Key={'p': p, 'c': c}, ConsistentRead=True)['Item'] == {'p': p, 'c': c, 'x': x, 'y': y}
+                    # Hermes reads its own test row back through CQL.
+                    eventually_unauthorized(lambda: session.execute(select, [p, c]))
+                    with temporary_grant(cql, 'SELECT', name, role):
+                        assert eventually_authorized(lambda: session.execute(select, [p, c]).one()) is not None
+                    eventually_authorized(lambda: session.execute(delete, [p, c]))
+                    assert not 'Item' in table.get_item(Key={'p': p, 'c': c}, ConsistentRead=True)
+                # At start, Hermes reads the schema and the topology, which
+                # need no grant. It also reads two values of system.config, and
+                # the tablets, to route a write to the replicas of its tablet.
+                session.execute("SELECT column_name FROM system_schema.columns WHERE keyspace_name = %s",
+                                ['alternator_' + table.name])
+                session.execute("SELECT * FROM system.local")
+                session.execute("SELECT * FROM system.peers")
+                for read, resource in ((config, 'system.config'), (tablets, 'system.tablets')):
+                    eventually_unauthorized(lambda: session.execute(read))
+                    with temporary_grant(cql, 'SELECT', resource, role):
+                        eventually_authorized(lambda: session.execute(read))
 
 # Test UpdateItem's support of permissions.
 # As PutItem above, UpdateItem requires the "MODIFY" permission, both for

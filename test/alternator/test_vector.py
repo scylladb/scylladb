@@ -7618,6 +7618,20 @@ def test_float32vector_precision(test_table_s, dynamodb_with_float32vector):
     assert v[1] != x
     assert to_float32(v[1]) == to_float32(x)
 
+# Test that a vector index has an entry in system_schema.indexes. Hermes,
+# which writes items into Alternator tables through CQL, refuses a table with
+# such an entry (see the header of test_encoding.py). It assumes, in A4: "A
+# table with an entry in `system_schema.indexes` (a vector index, a search
+# schema) is refused, since Hermes cannot know what the CQL write would miss
+# there."
+# test_encoding.py::test_index_naming checks that a GSI and an LSI have no
+# such entry.
+def test_vector_index_in_schema_indexes(table_vs, cql):
+    rows = list(cql.execute("SELECT index_name FROM system_schema.indexes "
+                            "WHERE keyspace_name = %s AND table_name = %s",
+                            ['alternator_' + table_vs.name, table_vs.name]))
+    assert len(rows) == 1
+
 # Test more directly (using CQL) that the vector is stored in the underlying
 # table in an optimized way - and also exactly how it is encoded. It's
 # important that we don't unintentionally change this encoding, because the
