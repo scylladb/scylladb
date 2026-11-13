@@ -1,6 +1,10 @@
 ### a dictionary of redirections
 #old path: new path
 
+# Remove a duplicate KB about partial cqlsh results
+
+/stable/kb/cqlsh-results.html: /stable/kb/cqlsh-more.html
+
 # Remove the KB about upgrading from experimental CDC (ScyllaDB 4.3)
 
 /stable/kb/cdc-experimental-upgrade.html: /stable/kb/index.html

@@ -35,7 +35,6 @@ Knowledge Base
   * :doc:`Snapshots and Disk Utilization </kb/disk-utilization>` - How snapshots affect disk utilization
   * :doc:`ScyllaDB Snapshots </kb/snapshots>` - What ScyllaDB snapshots are, what they are used for, and how they get created and removed.
   * :doc:`How does ScyllaDB LWT Differ from Apache Cassandra ? </kb/lwt-differences>` - How does ScyllaDB's implementation of lightweight transactions differ from Apache Cassandra?
-  * :doc:`If a query does not reveal enough results </kb/cqlsh-results>`
   * :doc:`How to Change gc_grace_seconds for a Table </kb/gc-grace-seconds>` - How to change the ``gc_grace_seconds`` parameter and prevent data resurrection.
   * :doc:`How to flush old tombstones from a table </kb/tombstones-flush>` - How to remove old tombstones from SSTables.
   * :doc:`How to Safely Increase the Replication Factor </kb/rf-increase>`
