@@ -338,6 +338,18 @@ consistency is guaranteed for operations going to all DCs. Note that
 `local` or `global` consistencies are guaranteed only for requests that
 are going to the same partition.
 
+Each tablet of a strongly consistent table has a Raft leader, which a
+quorum of the tablet's replicas elects. Writes and reads at ``QUORUM``
+or ``LOCAL_QUORUM`` go through the leader. While a tablet has no leader,
+for example with two of its three replicas down, they wait for one until
+they time out. Once the tablet has had no leader for longer than
+``strongly_consistent_tables_leaderless_timeout_in_seconds`` (60 by
+default) and fewer than a quorum of its replicas are up, they fail at
+once with an ``Unavailable`` error instead. A write refused this way is
+not applied, so it is safe to retry. Reads at ``ONE`` or ``LOCAL_ONE``
+need no leader: a live replica answers them from its local data, which
+may be stale.
+
 .. _use-statement:        
         
 USE
