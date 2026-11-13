@@ -49,7 +49,6 @@ Knowledge Base
   :class: my-panel
 
   * :doc:`NTP configuration for ScyllaDB </kb/ntp>` - ScyllaDB depends on an accurate system clock. Learn to configure NTP for your data store and applications.
-  * :doc:`ScyllaDB and Spark integration </kb/scylla-and-spark-integration>` - How to run an example Spark application that uses ScyllaDB to store data?
   * :doc:`Map CPUs to ScyllaDB Shards </kb/map-cpu>` - Mapping between CPUs and ScyllaDB shards
   * :doc:`Customizing CPUSET </kb/customizing-cpuset>`
   * :doc:`Recreate RAID devices </kb/raid-device>` - How to recreate your RAID devices without running scylla-setup

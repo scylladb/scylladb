@@ -1,6 +1,10 @@
 ### a dictionary of redirections
 #old path: new path
 
+# Remove the outdated KB about Spark integration
+
+/stable/kb/scylla-and-spark-integration.html: /stable/using-scylla/integrations/integration-spark.html
+
 # Remove the outdated System Limits KB
 
 /stable/kb/system-limits.html: /stable/kb/scylla-limits-systemd.html
