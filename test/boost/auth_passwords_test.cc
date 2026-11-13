@@ -13,6 +13,9 @@
 #include <unordered_set>
 
 #include "auth/passwords.hh"
+#include "auth/verified_password_cache.hh"
+
+#include <seastar/core/manual_clock.hh>
 
 #include <boost/test/unit_test.hpp>
 #include <seastar/core/sstring.hh>
@@ -74,7 +77,8 @@ SEASTAR_TEST_CASE(same_hashes_as_crypt_h) {
     std::string long_pwd_255 = long_password(255);
     std::string long_pwd_511 = long_password(511);
 
-    std::array<const char*, 8> passwords{
+    std::array<const char*, 9> passwords{
+        "",
         "12345",
         "1_am_the_greatest!",
         "password1",
@@ -89,11 +93,50 @@ SEASTAR_TEST_CASE(same_hashes_as_crypt_h) {
         long_pwd_511.c_str(),
     };
 
-    auto salt = "$6$aaaabbbbccccdddd";
+    for (const char* salt : {"$6$aaaabbbbccccdddd", "$6$rounds=1000$aaaabbbbccccdddd"}) {
+        for (const char* p : passwords) {
+            auto res = co_await auth::passwords::detail::hash_with_salt_async(p, salt);
+            BOOST_REQUIRE(res == auth::passwords::detail::hash_with_salt(p, salt));
+        }
+    }
+}
 
-    for (const char* p : passwords) {
-        auto res = co_await auth::passwords::detail::hash_with_salt_async(p, salt);
-        BOOST_REQUIRE(res == auth::passwords::detail::hash_with_salt(p, salt));
+struct sha512_crypt_vector {
+    const char* key;
+    const char* setting;
+    const char* hash;
+};
+
+// Test vectors from the SHA-crypt specification
+// (http://people.redhat.com/drepper/SHA-crypt.txt), followed by the musl
+// libc self-test vector.
+static const std::array<sha512_crypt_vector, 8> sha512_crypt_vectors{{
+    {"Hello world!", "$6$saltstring",
+        "$6$saltstring$svn8UoSVapNtMuq1ukKS4tPQd8iKwSMHWjl/O817G3uBnIFNjnQJuesI68u4OTLiBFdcbYEdFCoEOfaS35inz1"},
+    {"Hello world!", "$6$rounds=10000$saltstringsaltstring",
+        "$6$rounds=10000$saltstringsaltst$OW1/O6BYHV6BcXZu8QVeXbDWra3Oeqh0sbHbbMCVNSnCM/UrjmM0Dp8vOuZeHBy/YTBmSK6H9qs/y3RnOaw5v."},
+    {"This is just a test", "$6$rounds=5000$toolongsaltstring",
+        "$6$rounds=5000$toolongsaltstrin$lQ8jolhgVRVhY4b5pZKaysCLi0QBxGoNeKQzQ3glMhwllF7oGDZxUhx1yxdYcz/e1JSbq3y6JMxxl8audkUEm0"},
+    {"a very much longer text to encrypt.  This one even stretches over morethan one line.", "$6$rounds=1400$anotherlongsaltstring",
+        "$6$rounds=1400$anotherlongsalts$POfYwTEok97VWcjxIiSOjiykti.o/pQs.wPvMxQ6Fm7I6IoYN3CmLs66x9t0oSwbtEW7o7UmJEiDwGqd8p4ur1"},
+    {"we have a short salt string but not a short password", "$6$rounds=77777$short",
+        "$6$rounds=77777$short$WuQyW2YR.hBNpjjRhpYD/ifIw05xdfeEyQoMxIXbkvr0gge1a1x3yRULJ5CCaUeOxFmtlcGZelFl5CxtgfiAc0"},
+    {"a short string", "$6$rounds=123456$asaltof16chars..",
+        "$6$rounds=123456$asaltof16chars..$BtCwjqMJGx5hrJhZywWvt0RLE8uZ4oPwcelCjmw2kSYu.Ec6ycULevoBK25fs2xXgMNrCzIMVcgEJAstJeonj1"},
+    // libxcrypt rejects rounds below the minimum, so only __crypt_sha512 clamps them as the specification says.
+    {"the minimum number is still observed", "$6$rounds=10$roundstoolow",
+        "$6$rounds=1000$roundstoolow$kUMsbe306n21p9R.FRkW3IGn.S9NPN0x50YhH1xhLsPuWGsUSklZt58jaTfF4ZEQpyUNGc0dqbpBYYBaHHrsX."},
+    {"Xy01@#\x01\x02\x80\x7f\xff\r\n\x81\t !", "$6$rounds=1234$abc0123456789$",
+        "$6$rounds=1234$abc0123456789$BCpt8zLrc/RcyuXmCDOE1ALqMXB2MH6n1g891HhFj8.w7LxGv.FTkqq6Vxc/km3Y0jE0j24jY5PIv/oOu6reg1"},
+}};
+
+SEASTAR_TEST_CASE(sha512_crypt_known_answers) {
+    for (const auto& v : sha512_crypt_vectors) {
+        BOOST_REQUIRE_EQUAL(co_await auth::passwords::detail::hash_with_salt_async(v.key, v.setting), v.hash);
+        // Verifying against the full hash is how a login checks a password.
+        BOOST_REQUIRE_EQUAL(co_await auth::passwords::detail::hash_with_salt_async(v.key, v.hash), v.hash);
+        BOOST_REQUIRE(co_await auth::passwords::check(v.key, v.hash));
+        BOOST_REQUIRE(!co_await auth::passwords::check(sstring(v.key) + "x", v.hash));
     }
 }
 
@@ -135,4 +178,167 @@ SEASTAR_TEST_CASE(too_long_password) {
 SEASTAR_TEST_CASE(incorrect_passwords_do_not_authenticate) {
     const sstring hashed_password = auth::passwords::hash("actual_password", rng_for_salt,auth::passwords::scheme::sha_512);
     BOOST_REQUIRE(!co_await auth::passwords::check("password_guess", hashed_password));
+}
+
+// A cheap salt keeps the cache tests fast; the number of rounds does not matter to the cache.
+static sstring cheap_hash(const char* password, const char* salt = "$6$rounds=1000$aaaabbbbccccdddd") {
+    return auth::passwords::detail::hash_with_salt(password, salt);
+}
+
+using test_password_cache = auth::basic_verified_password_cache<manual_clock>;
+
+static constexpr uint32_t test_validity_ms = 20000;
+
+static std::unique_ptr<test_password_cache> make_test_cache(uint32_t max_entries) {
+    return std::make_unique<test_password_cache>(utils::updateable_value<uint32_t>(max_entries),
+            utils::updateable_value<uint32_t>(test_validity_ms));
+}
+
+SEASTAR_TEST_CASE(verified_password_cache_hits_on_repeated_login) {
+    auto cache = make_test_cache(10);
+    const auto hash = cheap_hash("secret");
+
+    BOOST_REQUIRE(co_await cache->check("alice", "secret", hash));
+    BOOST_REQUIRE_EQUAL(cache->get_stats().misses, 1);
+    BOOST_REQUIRE_EQUAL(cache->get_stats().hits, 0);
+    BOOST_REQUIRE_EQUAL(cache->size(), 1);
+
+    BOOST_REQUIRE(co_await cache->check("alice", "secret", hash));
+    BOOST_REQUIRE_EQUAL(cache->get_stats().misses, 1);
+    BOOST_REQUIRE_EQUAL(cache->get_stats().hits, 1);
+}
+
+SEASTAR_TEST_CASE(verified_password_cache_does_not_cache_wrong_password) {
+    auto cache = make_test_cache(10);
+    const auto hash = cheap_hash("secret");
+
+    BOOST_REQUIRE(!co_await cache->check("alice", "guess", hash));
+    BOOST_REQUIRE_EQUAL(cache->size(), 0);
+    BOOST_REQUIRE(!co_await cache->check("alice", "guess", hash));
+    BOOST_REQUIRE_EQUAL(cache->get_stats().misses, 2);
+
+    // A cached correct password does not let a wrong one skip the full check.
+    BOOST_REQUIRE(co_await cache->check("alice", "secret", hash));
+    BOOST_REQUIRE(!co_await cache->check("alice", "guess", hash));
+    BOOST_REQUIRE_EQUAL(cache->get_stats().hits, 0);
+    BOOST_REQUIRE_EQUAL(cache->get_stats().misses, 4);
+    BOOST_REQUIRE(co_await cache->check("alice", "secret", hash));
+    BOOST_REQUIRE_EQUAL(cache->get_stats().hits, 1);
+}
+
+SEASTAR_TEST_CASE(verified_password_cache_password_change_invalidates) {
+    auto cache = make_test_cache(10);
+    const auto old_hash = cheap_hash("old");
+    // Changing the password generates a new salt.
+    const auto new_hash = cheap_hash("new", "$6$rounds=1000$eeeeffffgggghhhh");
+
+    BOOST_REQUIRE(co_await cache->check("alice", "old", old_hash));
+    BOOST_REQUIRE(!co_await cache->check("alice", "old", new_hash));
+    BOOST_REQUIRE(co_await cache->check("alice", "new", new_hash));
+    BOOST_REQUIRE_EQUAL(cache->get_stats().hits, 0);
+    BOOST_REQUIRE_EQUAL(cache->size(), 1);
+    BOOST_REQUIRE(co_await cache->check("alice", "new", new_hash));
+    BOOST_REQUIRE_EQUAL(cache->get_stats().hits, 1);
+}
+
+SEASTAR_TEST_CASE(verified_password_cache_is_per_role) {
+    auto cache = make_test_cache(10);
+    const auto hash = cheap_hash("secret");
+
+    BOOST_REQUIRE(co_await cache->check("alice", "secret", hash));
+    // Same salted hash, different role: the entry of another role does not count.
+    BOOST_REQUIRE(co_await cache->check("bob", "secret", hash));
+    BOOST_REQUIRE_EQUAL(cache->get_stats().hits, 0);
+    BOOST_REQUIRE_EQUAL(cache->size(), 2);
+}
+
+SEASTAR_TEST_CASE(verified_password_cache_expires_entries) {
+    auto cache = make_test_cache(10);
+    const auto hash = cheap_hash("secret");
+
+    BOOST_REQUIRE(co_await cache->check("alice", "secret", hash));
+    manual_clock::advance(std::chrono::milliseconds(test_validity_ms / 2));
+    BOOST_REQUIRE(co_await cache->check("bob", "secret", hash));
+    BOOST_REQUIRE(co_await cache->check("alice", "secret", hash));
+    BOOST_REQUIRE_EQUAL(cache->get_stats().hits, 1);
+
+    // Hits do not extend the validity, and expired entries go away without a login.
+    manual_clock::advance(std::chrono::milliseconds(test_validity_ms / 2));
+    BOOST_REQUIRE_EQUAL(cache->size(), 1);
+    BOOST_REQUIRE(co_await cache->check("alice", "secret", hash));
+    BOOST_REQUIRE_EQUAL(cache->get_stats().hits, 1);
+    BOOST_REQUIRE_EQUAL(cache->get_stats().misses, 3);
+
+    manual_clock::advance(std::chrono::milliseconds(test_validity_ms / 2));
+    BOOST_REQUIRE_EQUAL(cache->size(), 1);
+    manual_clock::advance(std::chrono::milliseconds(test_validity_ms / 2));
+    BOOST_REQUIRE_EQUAL(cache->size(), 0);
+    // Expiry is not an eviction.
+    BOOST_REQUIRE_EQUAL(cache->get_stats().evictions, 0);
+}
+
+SEASTAR_TEST_CASE(verified_password_cache_evicts_oldest) {
+    utils::updateable_value_source<uint32_t> max_entries(2);
+    utils::updateable_value_source<uint32_t> validity(test_validity_ms);
+    test_password_cache cache{utils::updateable_value<uint32_t>(max_entries), utils::updateable_value<uint32_t>(validity)};
+    const auto hash = cheap_hash("secret");
+
+    BOOST_REQUIRE(co_await cache.check("a", "secret", hash));
+    BOOST_REQUIRE(co_await cache.check("b", "secret", hash));
+    BOOST_REQUIRE(co_await cache.check("a", "secret", hash));
+    BOOST_REQUIRE_EQUAL(cache.get_stats().hits, 1);
+    BOOST_REQUIRE(co_await cache.check("c", "secret", hash));
+    BOOST_REQUIRE_EQUAL(cache.size(), 2);
+    BOOST_REQUIRE_EQUAL(cache.get_stats().evictions, 1);
+
+    // "a" was the oldest entry, hits do not make it younger.
+    BOOST_REQUIRE(co_await cache.check("b", "secret", hash));
+    BOOST_REQUIRE(co_await cache.check("c", "secret", hash));
+    BOOST_REQUIRE_EQUAL(cache.get_stats().hits, 3);
+    BOOST_REQUIRE(co_await cache.check("a", "secret", hash));
+    BOOST_REQUIRE_EQUAL(cache.get_stats().hits, 3);
+    BOOST_REQUIRE_EQUAL(cache.get_stats().evictions, 2);
+
+    // Changing the configuration evicts every entry.
+    max_entries.set(1);
+    BOOST_REQUIRE_EQUAL(cache.get_stats().evictions, 4);
+    BOOST_REQUIRE(co_await cache.check("a", "secret", hash));
+    BOOST_REQUIRE_EQUAL(cache.size(), 1);
+    BOOST_REQUIRE_EQUAL(cache.get_stats().hits, 3);
+
+    max_entries.set(0);
+    BOOST_REQUIRE_EQUAL(cache.get_stats().evictions, 5);
+    BOOST_REQUIRE(co_await cache.check("a", "secret", hash));
+    BOOST_REQUIRE(!co_await cache.check("a", "guess", hash));
+    BOOST_REQUIRE_EQUAL(cache.size(), 0);
+    BOOST_REQUIRE_EQUAL(cache.get_stats().hits, 3);
+
+    max_entries.set(2);
+    validity.set(0);
+    BOOST_REQUIRE(co_await cache.check("a", "secret", hash));
+    BOOST_REQUIRE_EQUAL(cache.size(), 0);
+}
+
+SEASTAR_TEST_CASE(verified_password_cache_clears_on_config_change) {
+    utils::updateable_value_source<uint32_t> max_entries(10);
+    utils::updateable_value_source<uint32_t> validity(test_validity_ms);
+    test_password_cache cache{utils::updateable_value<uint32_t>(max_entries), utils::updateable_value<uint32_t>(validity)};
+    const auto hash = cheap_hash("secret");
+
+    // Disabling the cache drops its entries without waiting for a login, so they cannot
+    // come back when it is enabled again.
+    BOOST_REQUIRE(co_await cache.check("alice", "secret", hash));
+    max_entries.set(0);
+    BOOST_REQUIRE_EQUAL(cache.size(), 0);
+    max_entries.set(10);
+    BOOST_REQUIRE(co_await cache.check("alice", "secret", hash));
+    BOOST_REQUIRE_EQUAL(cache.get_stats().hits, 0);
+
+    // Lowering the validity applies to existing entries too.
+    validity.set(test_validity_ms / 2);
+    BOOST_REQUIRE_EQUAL(cache.size(), 0);
+    BOOST_REQUIRE(co_await cache.check("alice", "secret", hash));
+    manual_clock::advance(std::chrono::milliseconds(test_validity_ms / 2));
+    BOOST_REQUIRE_EQUAL(cache.size(), 0);
+    BOOST_REQUIRE_EQUAL(cache.get_stats().hits, 0);
 }

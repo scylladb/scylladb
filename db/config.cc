@@ -1419,6 +1419,14 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Refresh interval for authorized statements cache. After this interval, cache entries become eligible for refresh. An async reload is scheduled every permissions_update_interval_in_ms time period and the old value is returned until it completes. If permissions_validity_in_ms has a non-zero value, then this property must also have a non-zero value. It's recommended to set this value to be at least 3 times smaller than the permissions_validity_in_ms. This option additionally controls the permissions refresh interval for LDAP.")
     , permissions_cache_max_entries(this, "permissions_cache_max_entries", liveness::LiveUpdate, value_status::Unused, 1000,
         "Maximum cached permission entries. Must have a non-zero value if permissions caching is enabled (see a permissions_validity_in_ms description).")
+    , verified_password_cache_max_entries(this, "verified_password_cache_max_entries", liveness::LiveUpdate, value_status::Used, 1000,
+        "Maximum number of roles per shard whose recently verified password PasswordAuthenticator remembers, so that a client reconnecting with the same credentials skips the deliberately slow password hashing. "
+        "The cache keeps the digest SHA-256(salted hash || password), never the password itself.A wrong password is never cached and always pays for the full hash, and changing a role's password invalidates its entry. "
+        "Set to 0 to disable the cache.")
+    , verified_password_cache_validity_in_ms(this, "verified_password_cache_validity_in_ms", liveness::LiveUpdate, value_status::Used, 20000,
+        "How long PasswordAuthenticator remembers a verified password (see verified_password_cache_max_entries), counted from the full verification. "
+        "Logins within this period do not extend it, so a role is fully verified at least once per period on each shard it logs in on. "
+        "Set to 0 to disable the cache.")
     , server_encryption_options(this, "server_encryption_options", value_status::Used, {/*none*/},
         "Enable or disable inter-node encryption. You must also generate keys and provide the appropriate key and trust store locations and passwords. The available options are:\n"
         "* internode_encryption: (Default: none) Enable or disable encryption of inter-node communication using TLS. The available inter-node options are:\n"
