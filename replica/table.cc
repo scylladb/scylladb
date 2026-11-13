@@ -3714,7 +3714,7 @@ table::table(schema_ptr schema, config config, lw_shared_ptr<const storage_optio
     , _compaction_manager(compaction_manager)
     , _compaction_strategy(make_compaction_strategy(_schema->compaction_strategy(), _schema->compaction_strategy_options()))
     , _logstor(logstor)
-    , _logstor_index(_schema->logstor_enabled() ? _logstor->make_primary_index(cache_enabled()) : nullptr)
+    , _logstor_index(_schema->logstor_enabled() ? _logstor->make_primary_index(_config.enable_cache, _schema->caching_options().enabled()) : nullptr)
     , _sg_manager(make_storage_group_manager())
     , _sstables(make_compound_sstable_set())
     , _sstable_deletion_gate(format("[table {}.{}] sstable_deletion_gate", _schema->ks_name(), _schema->cf_name()))
@@ -5069,6 +5069,9 @@ void table::set_schema(schema_ptr s) {
     }
     const bool large_data_guardrail_toggled = large_data_guardrail_enabled(*s) != large_data_guardrail_enabled(*_schema);
     _schema = std::move(s);
+    if (_logstor_index) {
+        _logstor_index->set_cache_enabled(_schema->caching_options().enabled());
+    }
     if (large_data_guardrail_toggled) {
         _large_data_guardrail->rebuild({});
         _large_data_guardrail = make_large_data_guardrail();
