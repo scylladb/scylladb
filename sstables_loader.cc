@@ -235,71 +235,26 @@ private:
         return result;
     }
 
-    using sst_classification_info = std::vector<std::vector<minimal_sst_info>>;
-
-    future<> attach_sstable(shard_id from_shard, const sstring& ks, const sstring& cf, const minimal_sst_info& min_info) const {
-        llog.debug("Adding downloaded SSTable gen={} to the table {}.{} on shard {}, submitted from shard {}", min_info.generation, _table.schema()->ks_name(), _table.schema()->cf_name(), this_shard_id(), from_shard);
-        auto& db = _db.local();
-        auto& table = db.find_column_family(ks, cf);
-        // DROP waits for streams before truncating, so this guard is what makes it wait
-        // for the attach rather than remove the directory under sst->load(). Must be
-        // taken in the same continuation as the lookup: `table` is unpinned, and a
-        // suspension between the two reopens the race.
-        auto stream_guard = table.stream_in_progress();
-        auto& sst_manager = table.get_sstables_manager();
-        auto sst = sst_manager.make_sstable(
-            table.schema(), table.get_storage_options(), min_info.generation, sstables::sstable_state::normal, min_info.version, min_info.format);
-        sst->set_sstable_level(0);
-        auto units = co_await sst_manager.dir_semaphore().get_units(1);
-        // The sstable was downloaded for this shard, which is why it was submitted
-        // here, so there is nothing to work out: declare this shard its owner. Letting
-        // load() recompute it would also drag in an ERM, and _erm belongs to the shard
-        // which created the streamer, not to this one.
-        sstables::sstable_open_config cfg {
-            .current_shard_as_sstable_owner = true,
-            .unsealed_sstable = true,
-        };
-        // Unused given current_shard_as_sstable_owner, but load() wants a sharder.
-        dht::auto_refreshing_sharder sharder(table.shared_from_this());
-        co_await sst->load(sharder, cfg);
-        co_await table.add_new_sstable_and_update_cache(sst, [&sst_manager, sst] (sstables::shared_sstable loading_sst) -> future<> {
-            if (loading_sst == sst) {
-                auto writer_cfg = sst_manager.configure_writer(loading_sst->get_origin());
-                co_await loading_sst->seal_sstable(writer_cfg.backup);
-            }
-        });
-    }
-
     future<>
     stream_fully_contained_sstables(const dht::partition_range& pr, std::vector<sstables::shared_sstable> sstables, shared_ptr<stream_progress> progress) {
         if (_stream_scope != stream_scope::node) {
             co_return co_await stream_sstables(pr, std::move(sstables), std::move(progress), defer_unlinking::no);
         }
         llog.debug("Directly downloading {} fully contained SSTables to local node from object storage.", sstables.size());
-        auto downloaded_ssts = co_await download_fully_contained_sstables(std::move(sstables));
+        auto downloaded_ssts = co_await download_sstables(_table, sstables, {}, llog);
 
         co_await smp::invoke_on_all(
-            [this, &downloaded_ssts, from = this_shard_id(), ks = _table.schema()->ks_name(), cf = _table.schema()->cf_name()] -> future<> {
+            [this, &downloaded_ssts, ks = _table.schema()->ks_name(), cf = _table.schema()->cf_name()] -> future<> {
                 auto shard_ssts = std::move(downloaded_ssts[this_shard_id()]);
+                auto& table = _db.local().find_column_family(ks, cf);
+                auto stream_guard = table.stream_in_progress();
                 for (const auto& min_info : shard_ssts) {
-                    co_await attach_sstable(from, ks, cf, min_info);
+                    co_await attach_downloaded_sstable(table, min_info, llog);
                 }
             });
         if (progress) {
             progress->advance(std::accumulate(downloaded_ssts.cbegin(), downloaded_ssts.cend(), 0., [](float acc, const auto& v) { return acc + v.size(); }));
         }
-    }
-
-    future<sst_classification_info> download_fully_contained_sstables(std::vector<sstables::shared_sstable> sstables) const {
-        sst_classification_info downloaded_sstables(this_smp_shard_count());
-        for (const auto& sstable : sstables) {
-            // For now, tablet-aware restore doesn't need to mutate sstable level to 0
-            // since we support only restoring to empty tables and so we can keep the sstable levels on backup.
-            // Once we support restoring onto live tables we may want to mutate the ingested sstables' level to 0.
-            auto min_info = co_await download_sstable(_table, sstable, llog);
-            downloaded_sstables[min_info.shard].emplace_back(min_info);
-        }
-        co_return downloaded_sstables;
     }
 
     future<> unlink_marked_sstables() {
@@ -949,44 +904,6 @@ future<tasks::task_id> sstables_loader::download_new_sstables(sstring ks_name, s
     co_return task->id();
 }
 
-future<sstables::shared_sstable> sstables_loader::attach_sstable(table_id tid, const minimal_sst_info& min_info) const {
-    auto& db = _db.local();
-    auto& table = db.find_column_family(tid);
-    // DROP waits for streams before truncating, so this guard is what makes it wait
-    // for the attach rather than remove the directory under sst->load(). Must be
-    // taken in the same continuation as the lookup: `table` is unpinned, and a
-    // suspension between the two reopens the race.
-    auto stream_guard = table.stream_in_progress();
-    // After the guard on purpose: the test needs the DROP to meet a guarded attach.
-    co_await utils::get_local_injector().inject("pause_attach_sstable", utils::wait_for_message(60s));
-    llog.debug("Adding downloaded SSTable gen={} to the table {}.{} on shard {}", min_info.generation, table.schema()->ks_name(), table.schema()->cf_name(), this_shard_id());
-    auto& sst_manager = table.get_sstables_manager();
-    auto sst = sst_manager.make_sstable(
-        table.schema(), table.get_storage_options(), min_info.generation, min_info.sid, sstables::sstable_state::normal, min_info.version, min_info.format);
-    sst->set_sstable_level(0);
-    // The sstable was downloaded for this shard, which is why it was submitted here,
-    // so there is nothing to work out: declare this shard its owner. The tablet is
-    // mid-restore, with its tablet count pinned, so the mapping which chose the shard
-    // cannot have moved since.
-    sstables::sstable_open_config cfg {
-        .current_shard_as_sstable_owner = true,
-        .unsealed_sstable = true,
-    };
-    // Unused given current_shard_as_sstable_owner, but load() wants a sharder.
-    dht::auto_refreshing_sharder sharder(table.shared_from_this());
-    co_await sst->load(sharder, cfg);
-    if (!sst->sstable_identifier()) {
-        on_internal_error(llog, "sstable identifier is required for tablet restore");
-    }
-    co_await table.add_new_sstable_and_update_cache(sst, [&sst_manager, sst] (sstables::shared_sstable loading_sst) -> future<> {
-        if (loading_sst == sst) {
-            auto writer_cfg = sst_manager.configure_writer(loading_sst->get_origin());
-            co_await loading_sst->seal_sstable(writer_cfg.backup);
-        }
-    });
-    co_return sst;
-}
-
 // Joins a backup location's prefix with a path that is relative to it, the same
 // way cluster-wide backup composes its object keys (db/snapshot/cluster_backup.cc).
 static sstring join_path(std::string_view prefix, std::string_view relative_path) {
@@ -1143,16 +1060,9 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
                         sst_chunk.push_back(std::move(sst));
                     }
                 }
-                std::vector<std::vector<minimal_sst_info>> local_min_infos(this_smp_shard_count());
-                co_await max_concurrent_for_each(sst_chunk, 16, [&loader, tid, &local_min_infos, &snapshot_name](const auto& sst) -> future<> {
-                    auto& table = loader._db.local().find_column_family(tid.table);
-                    auto stream_guard = table.stream_in_progress();
-                    auto min_info = table.get_storage_options().is_object_storage_type()
-                            ? co_await clone_backup_sstable(table, sst, snapshot_name, llog)
-                            : co_await download_sstable(table, sst, llog);
-                    local_min_infos[min_info.shard].emplace_back(std::move(min_info));
-                });
-                co_return local_min_infos;
+                auto& table = loader._db.local().find_column_family(tid.table);
+                auto stream_guard = table.stream_in_progress();
+                co_return co_await download_sstables(table, sst_chunk, snapshot_name, llog);
             },
             std::vector<std::vector<minimal_sst_info>>(this_smp_shard_count()),
             [](auto init, auto&& item) -> std::vector<std::vector<minimal_sst_info>> {
@@ -1165,8 +1075,12 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
         co_await container().invoke_on_all([tid, &downloaded_ssts, snap_name = snapshot_name, keyspace_name, table_name, datacenter, rack] (auto& loader) -> future<> {
             auto shard_ssts = std::move(downloaded_ssts[this_shard_id()]);
             db::snapshot_table_helper sth(loader._sys_dist_ks.qp());
-            co_await max_concurrent_for_each(shard_ssts, 16, [&sth, &loader, tid, snap_name, keyspace_name, table_name, datacenter, rack](const auto& min_info) -> future<> {
-                sstables::shared_sstable attached_sst = co_await loader.attach_sstable(tid.table, min_info);
+            auto& table = loader._db.local().find_column_family(tid.table);
+            auto stream_guard = table.stream_in_progress();
+            // After the guard on purpose: the test needs the DROP to meet a guarded attach.
+            co_await utils::get_local_injector().inject("pause_attach_sstable", utils::wait_for_message(60s));
+            co_await max_concurrent_for_each(shard_ssts, 16, [&sth, &table, snap_name, keyspace_name, table_name, datacenter, rack](const auto& min_info) -> future<> {
+                sstables::shared_sstable attached_sst = co_await attach_downloaded_sstable(table, min_info, llog);
                 // Use the sstable_id of the backup sstable, not of the clone. A retried
                 // restore looks for this sstable_id to skip the sstables which are
                 // already restored.
