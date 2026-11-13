@@ -17,6 +17,9 @@
 #include <seastar/core/units.hh>
 #include <seastar/http/client.hh>
 #include <filesystem>
+#include <initializer_list>
+#include <stdexcept>
+#include <utility>
 #include <unordered_map>
 #include "utils/lister.hh"
 #include "utils/s3/creds.hh"
@@ -113,6 +116,58 @@ struct stats {
 future<> ignore_reply(const http::reply& rep, input_stream<char>&& in_);
 [[noreturn]] void map_s3_client_exception(std::exception_ptr ex);
 
+// The reply statuses a request accepts; the rest go to the error-and-retry path. A
+// request that accepts an error status -- the 404 of object_exists(), say -- gets the
+// reply handed to its handler instead of an exception, which keeps the http connection
+// alive. Asking for a status with no bit here is a compile error rather than a request
+// that quietly accepts nothing.
+class expected_status {
+    enum class bits : uint8_t {
+        none            = 0,
+        ok              = 1 << 0, // 200
+        no_content      = 1 << 1, // 204
+        partial_content = 1 << 2, // 206
+        not_found       = 1 << 3, // 404
+    };
+    bits _accepted = bits::none;
+
+    // Tolerant on purpose: every reply ever received passes through here, so an unknown
+    // status is an ordinary answer that matches nothing. Only construction rejects one.
+    static constexpr bits as_bit(http::reply::status_type status) noexcept {
+        switch (status) {
+        case http::reply::status_type::ok:              return bits::ok;
+        case http::reply::status_type::no_content:      return bits::no_content;
+        case http::reply::status_type::partial_content: return bits::partial_content;
+        case http::reply::status_type::not_found:       return bits::not_found;
+        default:                                        return bits::none;
+        }
+    }
+
+    consteval void accept(http::reply::status_type status) {
+        auto bit = as_bit(status);
+        if (bit == bits::none) {
+            // Throwing from an immediate function is a compile error at the call site.
+            throw std::invalid_argument("no bit for this reply status, add one");
+        }
+        _accepted = bits(std::to_underlying(_accepted) | std::to_underlying(bit));
+    }
+
+public:
+    consteval expected_status(http::reply::status_type status) {
+        accept(status);
+    }
+    consteval expected_status(std::initializer_list<http::reply::status_type> statuses) {
+        for (auto status : statuses) {
+            accept(status);
+        }
+    }
+
+    constexpr bool accepts(http::reply::status_type status) const noexcept {
+        auto bit = as_bit(status);
+        return bit != bits::none && (std::to_underlying(_accepted) & std::to_underlying(bit));
+    }
+};
+
 class client : public enable_shared_from_this<client> {
     class multipart_upload;
     class copy_s3_object;
@@ -168,28 +223,28 @@ class client : public enable_shared_from_this<client> {
 
     http::client::reply_handler wrap_handler(http::request& request,
                                                            http::client::reply_handler handler,
-                                                           std::optional<http::reply::status_type> expected);
+                                                           expected_status expected);
 
     future<> make_request(http::request req,
-                          http::client::reply_handler handle = ignore_reply,
-                          std::optional<http::reply::status_type> expected = std::nullopt,
+                          http::client::reply_handler handle,
+                          expected_status expected,
                           seastar::abort_source* = nullptr);
     future<> make_request(http::request req,
                           http::client::reply_handler handle,
                           const http::retry_strategy& rs,
                           error_handler err_handler,
-                          std::optional<http::reply::status_type> expected,
+                          expected_status expected,
                           seastar::abort_source* as);
 
     future<> make_request(http::request req,
                           reply_handler_ext handle,
-                          std::optional<http::reply::status_type> expected = std::nullopt,
+                          expected_status expected,
                           seastar::abort_source* = nullptr);
     future<> make_request(http::request req,
                           reply_handler_ext handle,
                           const seastar::http::retry_strategy& rs,
                           error_handler err_handler,
-                          std::optional<http::reply::status_type> expected = std::nullopt,
+                          expected_status expected,
                           seastar::abort_source* = nullptr);
     future<> get_object_header(sstring object_name, http::client::reply_handler handler, seastar::abort_source* = nullptr);
 public:
