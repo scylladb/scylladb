@@ -33,6 +33,7 @@ class audit_cf_storage_helper : public storage_helper {
     cql3::query_processor& _qp;
     service::migration_manager& _mm;
     table_helper _table;
+    service::client_state _client_state;
     service::query_state _dummy_query_state;
     static cql3::query_options make_data(const audit_info* audit_info,
                                          socket_address node_ip,
