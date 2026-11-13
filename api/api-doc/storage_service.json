@@ -3227,6 +3227,14 @@
                      "allowMultiple":false,
                      "type":"string",
                      "paramType":"query"
+                  },
+                  {
+                     "name":"tables",
+                     "description":"JSON object with a 'tables' array that lists the tables to snapshot, of any keyspaces. Cannot be combined with the 'keyspace' and 'table' parameters.",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"cluster_snapshot_tables",
+                     "paramType":"body"
                   }
                ]
             }
@@ -3364,13 +3372,10 @@
                       },
                       {
                          "name":"backup_location",
-                         "description":"JSON array of backup location objects. Each object must contain: 'datacenter' (string), 'endpoint' (string), 'bucket' (string), and 'prefix' (string). 'manifests' must not be set.",
+                         "description":"JSON array of backup location objects. Each object must contain: 'datacenter' (string), 'endpoint' (string), 'bucket' (string), and 'prefix' (string). 'manifests' must not be set. Alternatively, a JSON object that holds this array as 'locations' and, optionally, a 'tables' array that lists the tables to backup, of any keyspaces. 'tables' cannot be combined with the 'keyspace' and 'table' parameters.",
                          "required":true,
                          "allowMultiple":false,
-                         "type":"array",
-                         "items":{
-                            "$ref":"backup_location"
-                         },
+                         "type":"cluster_backup_request",
                          "paramType":"body"
                       }
                   ]
@@ -4125,6 +4130,53 @@
                   "type":"string"
                },
                "description":"List of manifest file paths, relative to 'prefix'. Only used by tablet-aware restore; must not be set for backup."
+            }
+         }
+      },
+      "cluster_snapshot_table":{
+         "id":"cluster_snapshot_table",
+         "description":"A table, or a whole keyspace, of a cluster snapshot or backup",
+         "properties":{
+            "keyspace":{
+               "type":"string",
+               "description":"The keyspace name"
+            },
+            "table":{
+               "type":"string",
+               "description":"The table name. If omitted, all tables of the keyspace."
+            }
+         }
+      },
+      "cluster_snapshot_tables":{
+         "id":"cluster_snapshot_tables",
+         "description":"The tables of a cluster snapshot",
+         "properties":{
+            "tables":{
+               "type":"array",
+               "items":{
+                  "$ref":"cluster_snapshot_table"
+               },
+               "description":"The tables to snapshot. Must not be empty."
+            }
+         }
+      },
+      "cluster_backup_request":{
+         "id":"cluster_backup_request",
+         "description":"The locations and, optionally, the tables of a cluster backup",
+         "properties":{
+            "locations":{
+               "type":"array",
+               "items":{
+                  "$ref":"backup_location"
+               },
+               "description":"The backup location of each datacenter"
+            },
+            "tables":{
+               "type":"array",
+               "items":{
+                  "$ref":"cluster_snapshot_table"
+               },
+               "description":"The tables to backup. Must not be empty."
             }
          }
       }
