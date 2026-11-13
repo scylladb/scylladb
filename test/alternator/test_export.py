@@ -363,9 +363,12 @@ def fetch_all_exported_items(s3, bucket):
 #   directory content will still be verified and as will be manifest files.
 # Test is parameterized to run with both supported export formats and with/without S3 prefix.
 # A prefix that ends with '/' must not add an empty directory before "AWSDynamoDB".
+# A prefix with the characters "!*'()" checks that the export signs its S3 requests correctly: S3
+# percent-encodes these characters in the path that it signs.
 # The empty table is tested only once, as DYNAMODB_JSON without a prefix.
 @pytest.mark.parametrize('num_items,export_format_value,s3_prefix_value',
     [(10, f, p) for f in ['DYNAMODB_JSON', 'ION'] for p in [None, 'dira/dirb/dirc', 'dira/dirb/']] +
+    [(10, 'DYNAMODB_JSON', "dir!a/(dir*b)'")] +
     [(0, 'DYNAMODB_JSON', None)])
 def test_export_with_data_full(dynamodb, s3_prefix_value, export_format_value, num_items, request, s3):
     if export_format_value == 'ION' and not is_aws(dynamodb):

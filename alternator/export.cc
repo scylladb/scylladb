@@ -60,6 +60,7 @@
 #include <seastar/coroutine/exception.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/switch_to.hh>
+#include <seastar/http/url.hh>
 #include <seastar/util/defer.hh>
 #include <seastar/util/log.hh>
 
@@ -1729,8 +1730,8 @@ static bool is_ascii_alnum(char c) {
 }
 
 // The bucket and the prefix of a request become part of the path of the S3 requests of the export
-// (see `s3_object_name()`), and the HTTP client sends that path as it is, without any encoding.
-// Thus a character with a meaning in a request line - a space, a CR or a LF - would let a request
+// (see `s3_object_name()`), and the HTTP client sends that path as it is. Only the key in the path
+// is percent-encoded (see `s3_path_of_key()`). Thus a character with a meaning in a request line - a space, a CR or a LF - would let a request
 // change the requests which the export sends to S3, so we accept only characters which cannot.
 // For the bucket, these are the characters and the length which DynamoDB accepts. DynamoDB also
 // requires a letter or a digit as the first and the last character, so we require it too.
@@ -1740,6 +1741,21 @@ static bool is_valid_s3_bucket_name(std::string_view bucket) {
             && std::ranges::all_of(bucket, [] (char c) {
         return is_ascii_alnum(c) || c == '.' || c == '-' || c == '_';
     });
+}
+
+// Returns the path of the S3 key `key` in an S3 request. s3::client signs the path as it is, but
+// S3 signs it with each character percent-encoded, except '/' and the characters which RFC 3986
+// calls unreserved (AWS Signature Version 4). So we encode them, or a key with a character such
+// as '(' fails with a signature mismatch. S3 decodes the path, so the name of the object is `key`.
+static sstring s3_path_of_key(std::string_view key) {
+    sstring path;
+    for (auto segment : key | std::views::split('/')) {
+        if (segment.begin() != key.begin()) {
+            path += "/";
+        }
+        path += seastar::http::internal::url_encode(std::string_view(segment.begin(), segment.end()));
+    }
+    return path;
 }
 
 // DynamoDB accepts any S3 key as a prefix, but for the reason above we accept only the characters
@@ -2678,9 +2694,10 @@ static future<> run_export(
     std::string failure_message;
     try {
         auto client = get_s3_client(proxy, s3_bucket);
-        // s3::client addresses objects as "/bucket/key".
+        // s3::client addresses objects as "/bucket/key". The bucket has only unreserved
+        // characters (see is_valid_s3_bucket_name()), so only the key needs encoding.
         auto s3_object_name = [&s3_bucket](std::string_view key) {
-            return fmt::format("/{}/{}", s3_bucket, key);
+            return fmt::format("/{}/{}", s3_bucket, s3_path_of_key(key));
         };
         // Writes the manifest file "<name>.json" and the object "<name>.md5" with the base64 md5
         // of its content. Returns the key of the .json object.
