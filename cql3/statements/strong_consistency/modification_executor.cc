@@ -44,7 +44,7 @@ modification_executor::commit(const modification_statement& stmt, query_processo
     validate_write_consistency_level(options.get_consistency());
     stmt.validate_primary_key(options);
 
-    auto timeout = db::timeout_clock::now() + stmt.get_timeout(qs.get_client_state(), options);
+    auto timeout = request_deadline(options, stmt.get_timeout(qs.get_client_state(), options));
     const modification_spec spec(stmt, options);
     if (spec.keys.size() != 1 || !query::is_single_partition(spec.keys[0])) {
         throw exceptions::invalid_request_exception("Strongly consistent queries can only target a single partition");

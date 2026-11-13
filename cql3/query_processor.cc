@@ -1386,12 +1386,13 @@ future<> query_processor::query_internal(
     return query_internal(query_string, db::consistency_level::ONE, {}, default_internal_page_size, std::move(f));
 }
 
-shared_ptr<cql_transport::messages::result_message> query_processor::bounce_to_shard(unsigned shard, cql3::computed_function_values cached_fn_calls, bool track) {
+shared_ptr<cql_transport::messages::result_message> query_processor::bounce_to_shard(unsigned shard, cql3::computed_function_values cached_fn_calls, bool track,
+        std::optional<seastar::lowres_clock::time_point> timeout) {
     if (track) {
         _proxy.get_stats().replica_cross_shard_ops++;
     }
     const auto my_host_id = _proxy.get_token_metadata_ptr()->get_topology().my_host_id();
-    return ::make_shared<cql_transport::messages::result_message::bounce>(my_host_id, shard, std::move(cached_fn_calls));
+    return ::make_shared<cql_transport::messages::result_message::bounce>(my_host_id, shard, std::move(cached_fn_calls), timeout);
 }
 
 shared_ptr<cql_transport::messages::result_message> query_processor::bounce_to_node(

@@ -16,6 +16,7 @@
 #include "service/query_state.hh"
 #include "locator/tablet_replication_strategy.hh"
 #include "service/strong_consistency/coordinator.hh"
+#include "utils/error_injection.hh"
 
 namespace cql3::statements::strong_consistency {
 future<::shared_ptr<cql_transport::messages::result_message>> redirect_statement(query_processor& qp,
@@ -33,7 +34,13 @@ future<::shared_ptr<cql_transport::messages::result_message>> redirect_statement
         co_return qp.bounce_to_node(target, std::move(func_values_cache), timeout, is_write, std::move(on_forwarding_finished));
     }
     ++(is_write ? stats.write_shard_bounces : stats.read_shard_bounces);
-    co_return qp.bounce_to_shard(target.shard, std::move(func_values_cache));
+    co_await utils::get_local_injector().inject("sc_wait_before_bounce_to_shard", utils::wait_for_message(std::chrono::seconds(60)));
+    co_return qp.bounce_to_shard(target.shard, std::move(func_values_cache), true, timeout);
+}
+
+db::timeout_clock::time_point request_deadline(const query_options& options, db::timeout_clock::duration timeout) {
+    const auto deadline = db::timeout_clock::now() + timeout;
+    return std::min(deadline, options.get_deadline().value_or(deadline));
 }
 
 bool is_strongly_consistent(data_dictionary::database db, std::string_view ks_name) {

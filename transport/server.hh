@@ -388,14 +388,16 @@ private:
     future<process_fn_return_type>
     process(uint16_t stream, request_reader in, service::client_state& client_state, service_permit permit, tracing::trace_state_ptr trace_state,
             cql_binary_opcode opcode, cql_protocol_version_type version, cql3::dialect dialect, api::timestamp_type request_start_timestamp,
-            cql3::computed_function_values cached_fn_calls = {}, handling_node_bounce bounced = handling_node_bounce::no);
+            cql3::computed_function_values cached_fn_calls = {}, std::optional<db::timeout_clock::time_point> deadline = std::nullopt,
+            handling_node_bounce bounced = handling_node_bounce::no);
 
     friend class type_codec;
 
 private:
     void init_messaging_service();
     future<> uninit_messaging_service();
-    future<forward_cql_execute_response> handle_forward_execute(service::query_state& qs, forward_cql_execute_request& req);
+    future<forward_cql_execute_response> handle_forward_execute(service::query_state& qs, forward_cql_execute_request& req,
+            std::optional<db::timeout_clock::time_point> deadline);
 
     future<foreign_ptr<std::unique_ptr<cql_transport::response>>> forward_cql(locator::host_id target_host, unsigned target_shard, seastar::lowres_clock::time_point timeout,
             bool is_write, uint16_t stream, tracing::trace_state_ptr trace_state, forward_cql_execute_request req,

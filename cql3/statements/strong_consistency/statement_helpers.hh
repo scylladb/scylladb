@@ -25,6 +25,10 @@ future<::shared_ptr<cql_transport::messages::result_message>> redirect_statement
     service::strong_consistency::stats& stats,
     locator::host_id_or_exception_callback on_forwarding_finished = {});
 
+// Now plus `timeout`, or the deadline the request carries from another shard
+// or node if that is earlier.
+db::timeout_clock::time_point request_deadline(const query_options& options, db::timeout_clock::duration timeout);
+
 bool is_strongly_consistent(data_dictionary::database db, std::string_view ks_name);
 
 void validate_write_consistency_level(const db::consistency_level& cl);
