@@ -3,15 +3,19 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
+import re
+from contextlib import ExitStack
 from typing import Tuple
 
 import pytest
 from cassandra import WriteFailure
 from . import nodetool
+from . import rest_api
 from . import util
 import json
 import glob
 import os
+import subprocess
 import time
 
 from collections import defaultdict
@@ -128,6 +132,11 @@ def test_clients(scylla_only, cql):
         client_options = cl[13]
         assert(client_options.get('DRIVER_NAME') == cl[4])
         assert(client_options.get('DRIVER_VERSION') == cl[5])
+        # The port, connection_stage, protocol_version, shard_id and
+        # username columns all have values (this check was translated from
+        # scylla-dtest's cql_system_clients_test.py::TestSystemClients::test_system_client_not_none_non_ssl).
+        for i in [1, 3, 7, 8, 12]:
+            assert cl[i] is not None, cl
 
 # We only want to check that the table exists with the listed columns, to assert
 # backwards compatibility.
@@ -264,3 +273,260 @@ def test_one_row(scylla_only, cql):
     assert cql.execute("SELECT count(*) FROM system.one_row").one()[0] == 1
     with pytest.raises(WriteFailure, match="virtual table"):
         cql.execute("INSERT INTO system.one_row (\"system$dummy\") VALUES ('Y')")
+
+#############################################################################
+# The following tests were translated from scylla-dtest's
+# system_tables_test.py.
+#############################################################################
+
+# Test that system.token_ring lists a keyspace (with a table, as needed with
+# tablets) while it exists, and stops listing it when it is dropped.
+# Translated from scylla-dtest's system_tables_test.py::TestTokenRingTable::test_content_one_node_create_and_drop_keyspace.
+def test_token_ring_drop_keyspace(scylla_only, cql):
+    select = 'SELECT DISTINCT keyspace_name FROM system.token_ring'
+    with util.new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
+        with util.new_test_table(cql, ks, 'p int PRIMARY KEY'):
+            assert ks in [r.keyspace_name for r in cql.execute(select)]
+    assert ks not in [r.keyspace_name for r in cql.execute(select)]
+
+# Test the content of system.versions: its version is the one the REST API
+# reports, and its build id and build mode have the right format.
+# test_versions_executable below also compares them with the executable's.
+# Translated from scylla-dtest's system_tables_test.py::TestVersionsTable::test_content.
+def test_versions_content(scylla_only, cql):
+    rows = list(cql.execute("SELECT * FROM system.versions WHERE key = 'local'"))
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.version == rest_api.get_request(cql, 'storage_service/scylla_release_version')
+    assert re.fullmatch(r'[0-9a-f]{40}', row.build_id)
+    assert row.build_mode in ['release', 'dev', 'debug', 'sanitize', 'coverage']
+
+# Test that system.versions describes the running Scylla executable: its
+# version, build id and build mode are the ones which the executable prints
+# with --version, --build-id and --build-mode. The scylla_path fixture skips
+# this test if Scylla isn't running locally.
+# Translated from scylla-dtest's system_tables_test.py::TestVersionsTable::test_content.
+def test_versions_executable(scylla_only, cql, scylla_path):
+    row = cql.execute("SELECT * FROM system.versions WHERE key = 'local'").one()
+    def executable_output(option):
+        return subprocess.check_output([scylla_path, option], text=True).strip()
+    # Check that each of the three values is the executable's.
+    assert row.version == executable_output('--version')
+    assert row.build_id == executable_output('--build-id')
+    assert row.build_mode == executable_output('--build-mode')
+
+# Test that the REST API's release version, which "nodetool version" prints,
+# is the Cassandra-compatible version which system.local reports, 3.x.y.
+# Translated from scylla-dtest's nodetool_additional_test.py::TestNodetool::test_version.
+def test_rest_release_version(scylla_only, cql):
+    version = rest_api.get_request(cql, 'storage_service/release_version')
+    assert re.fullmatch(r'3\.\d+\.\d+', version)
+    assert version == cql.execute('SELECT release_version FROM system.local').one().release_version
+
+# Test the content of system.protocol_servers: the CQL server's row lists
+# its two ports - the regular and the shard-aware one - and the CQL version.
+# Other protocol servers, which may or may not be enabled, are not checked.
+# Translated from scylla-dtest's system_tables_test.py::TestProtocolServersTable::test_content[default].
+# The dtest's variants with Alternator and Redis enabled need a node
+# started with them, so they remain in the dtest.
+def test_protocol_servers_content(scylla_only, cql):
+    def config(name):
+        return cql.execute(f"SELECT value FROM system.config WHERE name = '{name}'").one().value.strip('"')
+    address = cql.hosts[0].endpoint.address
+    cql_version = cql.execute('SELECT cql_version FROM system.local').one().cql_version
+    rows = {r.name: r for r in cql.execute('SELECT * FROM system.protocol_servers')}
+    assert rows['native transport'].listen_addresses == [f'{address}:{config("native_transport_port")}', f'{address}:{config("native_shard_aware_transport_port")}']
+    assert rows['native transport'].protocol == 'cql'
+    assert rows['native transport'].protocol_version == cql_version
+
+# Test that a snapshot of a table, or of a whole keyspace, is listed in
+# system.snapshots - one row for each of the tables, with numeric sizes -
+# and is no longer listed after it is removed.
+# Translated from scylla-dtest's system_tables_test.py::TestSnapshotsTable::test_content_create_and_remove_snapshot.
+@pytest.mark.parametrize('whole_keyspace', [False, True], ids=['one_table', 'keyspace'])
+def test_snapshots_table_create_and_remove(scylla_only, cql, whole_keyspace):
+    tag = util.unique_name()
+    with util.new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks, ExitStack() as stack:
+        tables = [stack.enter_context(util.new_test_table(cql, ks, 'k int PRIMARY KEY, c1 text, c2 text')) for _ in range(5 if whole_keyspace else 1)]
+        for table in tables:
+            for i in range(10):
+                cql.execute(f"INSERT INTO {table} (k, c1, c2) VALUES ({i}, 'value1', 'value2')")
+        if whole_keyspace:
+            rest_api.post_request(cql, f'storage_service/snapshots?tag={tag}&kn={ks}')
+        else:
+            nodetool.take_snapshot(cql, tables[0], tag)
+        try:
+            rows = [r for r in cql.execute('SELECT * FROM system.snapshots') if r.snapshot_name == tag]
+            assert sorted(f'{r.keyspace_name}.{r.table_name}' for r in rows) == sorted(tables)
+            for r in rows:
+                assert isinstance(r.live, int)
+                assert isinstance(r.total, int)
+        finally:
+            nodetool.del_snapshot(cql, tag)
+        assert [r for r in cql.execute('SELECT * FROM system.snapshots') if r.snapshot_name == tag] == []
+
+def is_number(value):
+    try:
+        float(value)
+        return True
+    except ValueError:
+        return False
+
+# Test the content of system.runtime_info: the exact set of items in each
+# group, the default values of gossip_active and incremental_backup_enabled,
+# an uptime of a positive number of seconds, and numbers for all the other
+# items. The dtest also compares the memory total with the memory the node
+# was started with, which depends on how the node is started, so the dtest
+# remains in scylla-dtest, and this test only checks it is a positive number.
+# Translated from scylla-dtest's system_tables_test.py::TestRuntimeInfoTable::test_default_content.
+def test_runtime_info_default_content(scylla_only, cql):
+    expected_items = {
+        'cache': {'entries', 'hit_rate_recent', 'hit_rate_total', 'hits', 'memory_free', 'memory_total', 'memory_used', 'misses', 'requests_recent', 'requests_total'},
+        'memory': {'free', 'total', 'used'},
+        'generic': {'gossip_active', 'incremental_backup_enabled', 'load', 'trace_probability', 'uptime'},
+        'memtable': {'entries', 'memory_free', 'memory_total', 'memory_used'},
+    }
+    info = _runtime_info(cql)
+    assert {group: set(items) for group, items in info.items()} == expected_items
+    assert info['generic']['gossip_active'] == 'true'
+    assert info['generic']['incremental_backup_enabled'] == 'false'
+    assert re.fullmatch(r'\d+ seconds', info['generic']['uptime'])
+    assert int(info['generic']['uptime'].split()[0]) > 0
+    assert int(info['memory']['total']) > 0
+    for group, items in info.items():
+        for item, value in items.items():
+            if (group, item) not in [('generic', 'gossip_active'), ('generic', 'incremental_backup_enabled'), ('generic', 'uptime')]:
+                assert is_number(value), f'{group}.{item} = {value}'
+
+# Test that system.runtime_info shows the state of gossip and of
+# incremental backups after they are toggled, and after they are restored.
+# The dtest toggled them with nodetool; the test uses the same REST API.
+# Translated from scylla-dtest's system_tables_test.py::TestRuntimeInfoTable::test_content_toggle_item.
+@pytest.mark.parametrize('item,default,changed,change,revert', [
+    ('gossip_active', 'true', 'false', ('DELETE', 'storage_service/gossiping'), ('POST', 'storage_service/gossiping')),
+    ('incremental_backup_enabled', 'false', 'true', ('POST', 'storage_service/incremental_backups?value=true'), ('POST', 'storage_service/incremental_backups?value=false'))],
+    ids=['gossip_active', 'incremental_backup_enabled'])
+def test_runtime_info_toggle_item(scylla_only, cql, item, default, changed, change, revert):
+    def rest(method, path):
+        (rest_api.delete_request if method == 'DELETE' else rest_api.post_request)(cql, path)
+    def value():
+        return cql.execute(f"SELECT value FROM system.runtime_info WHERE group = 'generic' AND item = '{item}'").one().value
+    assert value() == default
+    rest(*change)
+    try:
+        assert value() == changed
+    finally:
+        rest(*revert)
+    assert value() == default
+
+# Test the cache items of system.runtime_info: flushing a table adds its
+# rows to the cache, so the number of entries and the memory used grow;
+# then reading the table counts hits, but no misses. The cache items are
+# summed over all the tables, and background reads of other tables (e.g.,
+# of the auth tables) may add misses at any time, so the test checks that
+# there were no misses in the table's own cache metric.
+# Translated from scylla-dtest's system_tables_test.py::TestRuntimeInfoTable::test_cache_metrics.
+def test_runtime_info_cache_metrics(scylla_only, cql, test_keyspace):
+    rows = 100
+    def cache_metrics():
+        return {item: int(value) for item, value in _runtime_info(cql)['cache'].items() if item not in ['hit_rate_recent', 'hit_rate_total']}
+    def table_cache_misses():
+        return rest_api.get_column_family_metric(cql, 'row_cache_miss', table)['count']
+    with util.new_test_table(cql, test_keyspace, 'k int PRIMARY KEY, c1 text, c2 text') as table:
+        insert = cql.prepare(f"INSERT INTO {table} (k, c1, c2) VALUES (?, 'value1', 'value2')")
+        for i in range(rows):
+            cql.execute(insert, [i])
+        before_flush = cache_metrics()
+        nodetool.flush(cql, table)
+        after_flush = cache_metrics()
+        table_misses = table_cache_misses()
+        assert after_flush['entries'] - before_flush['entries'] >= rows
+        assert after_flush['memory_used'] > before_flush['memory_used']
+        cql.execute(f'SELECT * FROM {table}')
+        after_read = cache_metrics()
+        assert after_read['requests_total'] > after_flush['requests_total']
+        assert after_read['hits'] > after_flush['hits']
+        assert table_cache_misses() == table_misses
+        assert after_read['requests_total'] == after_read['hits'] + after_read['misses']
+
+# Test that writing data to a new table increases the memtable entries and
+# memory used in system.runtime_info. These are summed over all the tables,
+# so to not be confused by memtables of other tests' tables shrinking, the
+# test first flushes all memtables. The dtest, which ran on a new node, was
+# an xfail test for issue #10340 (the memtable items were always zero); it
+# was fixed by commit c2e954adea.
+# Translated from scylla-dtest's system_tables_test.py::TestRuntimeInfoTable::test_memtable_metrics.
+def test_runtime_info_memtable_metrics(scylla_only, cql, test_keyspace):
+    def memtable_metrics():
+        return {item: int(value) for item, value in _runtime_info(cql)['memtable'].items()}
+    nodetool.flush_all(cql)
+    before = memtable_metrics()
+    with util.new_test_table(cql, test_keyspace, 'k int PRIMARY KEY, c1 text, c2 text') as table:
+        insert = cql.prepare(f"INSERT INTO {table} (k, c1, c2) VALUES (?, 'value1', 'value2')")
+        for i in range(100):
+            cql.execute(insert, [i])
+        after = memtable_metrics()
+        assert after['entries'] > before['entries']
+        assert after['memory_used'] > before['memory_used']
+
+# Test that the value of each option in system.config matches its type.
+# Translated from scylla-dtest's system_tables_test.py::TestConfigTable::test_content_values_types.
+def test_system_config_values_types(scylla_only, cql):
+    for row in cql.execute('SELECT * FROM system.config'):
+        if row.type in ['integer', 'double', 'float']:
+            assert is_number(row.value), row
+        elif row.type == 'bool':
+            assert row.value.lower() in ['true', 'false'], row
+        elif row.type == 'string list':
+            assert re.match(r'\[.*]', row.value), row
+        elif row.type == 'string map':
+            assert re.match(r'\{.*}', row.value), row
+        elif row.type == 'string':
+            assert row.value.isprintable(), row
+        else:
+            assert row.value, row
+
+# Test the errors of invalid updates of system.config: without a value,
+# of the source or the type, of an option that isn't live-updatable or
+# doesn't exist, and with a value of the wrong type (which used to cause an
+# error in the log - issue #10394; since its fix, the error is "cannot parse
+# option value").
+# Translated from scylla-dtest's system_tables_test.py::TestConfigTable::test_invalid_update.
+@pytest.mark.parametrize('statement,error', [
+    ("SET source = 'default' WHERE name = 'api_port'", 'option value is required'),
+    ("SET source = 'default', value = '15000' WHERE name = 'api_port'", 'option source is not updateable'),
+    ("SET type = 'bool', value = '15000' WHERE name = 'api_port'", 'option type is immutable'),
+    ("SET value = '15000' WHERE name = 'api_port'", 'option is not live-updateable'),
+    ("SET value = '15000' WHERE name = 'some_generic_name'", 'no such option'),
+    ("SET value = 'true' WHERE name = 'failure_detector_timeout_in_ms'", 'cannot parse option value')],
+    ids=['no_value_provided', 'source_not_updatable', 'type_not_updatable', 'parameter_not_live_updatable', 'wrong_parameter_name', 'wrong_value_type'])
+def test_system_config_invalid_update(scylla_only, cql, statement, error):
+    with pytest.raises(WriteFailure, match=re.escape(error)):
+        cql.execute(f'UPDATE system.config {statement}')
+
+# Test updating live-updatable options in system.config: after the update,
+# the option has the new value, and its source is "cql". Unlike the dtest,
+# the test restores each option's value after checking it, because the
+# Scylla it runs on is shared with other tests.
+# Translated from scylla-dtest's system_tables_test.py::TestConfigTable::test_content_update_value.
+def test_system_config_update_value(scylla_only, cql):
+    options = {
+        'compaction_enforce_min_threshold': 'true',
+        'failure_detector_timeout_in_ms': '30000',
+        'max_hinted_handoff_concurrency': '10',
+        'enable_repair_based_node_ops': 'false',
+        'allowed_repair_based_node_ops': 'some_value',
+        'force_gossip_generation': '5',
+        'abort_on_internal_error': 'true',
+        'max_partition_key_restrictions_per_query': '150',
+        'max_clustering_key_restrictions_per_query': '150',
+        'max_memory_for_unlimited_query_soft_limit': '1572864',
+        'max_memory_for_unlimited_query_hard_limit': '157286400',
+        'max_concurrent_requests_per_shard': '430000000',
+        'flush_schema_tables_after_modification': 'false',
+    }
+    for name, value in options.items():
+        with util.config_value_context(cql, name, '0' if value == 'false' else '1' if value == 'true' else value):
+            row = cql.execute(f"SELECT * FROM system.config WHERE name = '{name}'").one()
+            assert row.value.strip('"') == value
+            assert row.source == 'cql'

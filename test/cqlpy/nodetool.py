@@ -225,6 +225,15 @@ def disablebinary(cql):
     else:
         run_nodetool(cql, "disablebinary")
 
+# Returns whether the CQL server is running, like "nodetool statusbinary"
+def statusbinary(cql):
+    if has_rest_api(cql):
+        resp = requests.get(f'{rest_api_url(cql)}/storage_service/native_transport')
+        resp.raise_for_status()
+        return resp.json()
+    result = run_nodetool(cql, "statusbinary", capture_output=True, text=True, check=True)
+    return result.stdout.strip() == 'running'
+
 def getlogginglevel(cql, logger):
     if has_rest_api(cql):
         resp = requests.get(f'{rest_api_url(cql)}/system/logger/{logger}')

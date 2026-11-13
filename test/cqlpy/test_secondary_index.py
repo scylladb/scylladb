@@ -11,7 +11,7 @@ import time
 import tempfile
 import pytest
 import os
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from . import rest_api
 from . import nodetool
 from test.pylib.skip_types import skip_env
@@ -3057,3 +3057,232 @@ def test_index_query_with_stale_index_entry(cql, test_keyspace, scylla_only):
                     inj_disable(err)
                 except Exception:
                     pass
+
+#############################################################################
+# The following tests were translated from scylla-dtest's
+# secondary_indexes_test.py.
+#############################################################################
+
+# Test that a query using an index on a table with many partitions finds
+# all the matching rows, both in a regular table and in a COMPACT STORAGE
+# table (CASSANDRA-11104 was about such queries missing rows when the
+# partitions are spread over many token ranges).
+# Translated from scylla-dtest's secondary_indexes_test.py::TestSecondaryIndexes::test_query_indexes_with_vnodes.
+@pytest.mark.parametrize('extra', ['', 'WITH COMPACT STORAGE'])
+def test_index_query_many_partitions(cql, test_keyspace, compact_storage, extra):
+    with new_test_table(cql, test_keyspace, 'key int PRIMARY KEY, b int', extra) as table:
+        index = unique_name()
+        cql.execute(f'CREATE INDEX {index} ON {table}(b)')
+        wait_for_index(cql, test_keyspace, index)
+        insert = cql.prepare(f'INSERT INTO {table} (key, b) VALUES (?, ?)')
+        for i in range(100):
+            cql.execute(insert, [i, i % 2])
+        assert sorted(cql.execute(f'SELECT * FROM {table} WHERE b = 0')) == [(i, 0) for i in range(0, 100, 2)]
+
+# Test that an index on two or more columns can't be created, unless it is
+# a CUSTOM index.
+# Translated from scylla-dtest's secondary_indexes_test.py::TestSecondaryIndexes::test_multi_column_index.
+def test_index_multiple_columns(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'key int PRIMARY KEY, b int, c int, d int, e int, f int, g int') as table:
+        for columns in ['b, c', 'b, c, d, e, f, g']:
+            with pytest.raises(InvalidRequest, match='Only CUSTOM indexes support multiple columns'):
+                cql.execute(f'CREATE INDEX ON {table}({columns})')
+
+# Like test_index_multiple_columns, for a local index: a local index can
+# only index one column in addition to the partition key. Local indexes are
+# a Scylla-only feature.
+# Translated from scylla-dtest's secondary_indexes_test.py::TestLocalIndexes::test_multi_column_local_index.
+def test_local_index_multiple_columns(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, 'key int PRIMARY KEY, b int, c int, d int, e int, f int, g int') as table:
+        for columns in ['b, c', 'b, c, d, e, f, g']:
+            with pytest.raises(InvalidRequest, match='Only CUSTOM indexes support multiple columns'):
+                cql.execute(f'CREATE INDEX ON {table}((key), {columns})')
+
+# The following tests check that when the indexed column's value expires
+# (its TTL passes), the row is no longer found through the index, and that
+# a TTL on a non-indexed column doesn't affect the index. They create a
+# table with an index on column b, and a row with b=1, c=2.
+@contextmanager
+def table_with_index_for_ttl(cql, test_keyspace, local=False):
+    with new_test_table(cql, test_keyspace, 'key int PRIMARY KEY, b int, c int') as table:
+        cql.execute(f'INSERT INTO {table} (key, b, c) VALUES (0, 1, 2)')
+        index = unique_name()
+        cql.execute(f'CREATE INDEX {index} ON {table}({"(key), " if local else ""}b)')
+        wait_for_index(cql, test_keyspace, index)
+        yield table, f'{test_keyspace}.{index}_index'
+
+# Test that when the indexed column expires, the row is no longer found
+# through the index.
+# Translated (except the checks of the index's view, which are in
+# test_index_ttl_indexed_column_view below) from
+# scylla-dtest's secondary_indexes_test.py::TestSecondaryIndexes::test_ttl_index_column.
+def test_index_ttl_indexed_column(cql, test_keyspace, clock):
+    with table_with_index_for_ttl(cql, test_keyspace) as (table, _):
+        assert list(cql.execute(f'SELECT * FROM {table} WHERE b = 1')) == [(0, 1, 2)]
+        cql.execute(f'UPDATE {table} USING TTL {clock.ttl} SET b = 3 WHERE key = 0')
+        assert list(cql.execute(f'SELECT * FROM {table} WHERE key = 0')) == [(0, 3, 2)]
+        assert list(cql.execute(f'SELECT * FROM {table} WHERE b = 3')) == [(0, 3, 2)]
+        assert list(cql.execute(f'SELECT * FROM {table} WHERE b = 1')) == []
+        clock.jump(clock.ttl + 1)
+        assert list(cql.execute(f'SELECT * FROM {table} WHERE key = 0')) == [(0, None, 2)]
+        assert list(cql.execute(f'SELECT * FROM {table} WHERE b = 3')) == []
+        assert list(cql.execute(f'SELECT * FROM {table} WHERE b = 1')) == []
+
+# Test that when the indexed column expires, its row in the materialized
+# view which Scylla uses to implement the index expires too. This is
+# scylla_only because it reads that view directly.
+# Translated from the view checks of
+# scylla-dtest's secondary_indexes_test.py::TestSecondaryIndexes::test_ttl_index_column.
+def test_index_ttl_indexed_column_view(cql, test_keyspace, clock, scylla_only):
+    with table_with_index_for_ttl(cql, test_keyspace) as (table, view):
+        cql.execute(f'UPDATE {table} USING TTL {clock.ttl} SET b = 3 WHERE key = 0')
+        assert list(cql.execute(f'SELECT key, b FROM {view}')) == [(0, 3)]
+        clock.jump(clock.ttl + 1)
+        assert list(cql.execute(f'SELECT key, b FROM {view}')) == []
+
+# Test that the expiration of a non-indexed column doesn't affect the index.
+# Translated (except the checks of the index's view, which are in
+# test_index_ttl_non_indexed_column_view below) from
+# scylla-dtest's secondary_indexes_test.py::TestSecondaryIndexes::test_ttl_non_index_column.
+def test_index_ttl_non_indexed_column(cql, test_keyspace, clock):
+    with table_with_index_for_ttl(cql, test_keyspace) as (table, _):
+        cql.execute(f'UPDATE {table} USING TTL {clock.ttl} SET c = 3 WHERE key = 0')
+        assert list(cql.execute(f'SELECT * FROM {table} WHERE key = 0')) == [(0, 1, 3)]
+        assert list(cql.execute(f'SELECT * FROM {table} WHERE b = 1')) == [(0, 1, 3)]
+        clock.jump(clock.ttl + 1)
+        assert list(cql.execute(f'SELECT * FROM {table} WHERE key = 0')) == [(0, 1, None)]
+        assert list(cql.execute(f'SELECT * FROM {table} WHERE b = 1')) == [(0, 1, None)]
+
+# Test that the expiration of a non-indexed column doesn't affect the
+# materialized view which Scylla uses to implement the index. This is
+# scylla_only because it reads that view directly.
+# Translated from the view checks of
+# scylla-dtest's secondary_indexes_test.py::TestSecondaryIndexes::test_ttl_non_index_column.
+def test_index_ttl_non_indexed_column_view(cql, test_keyspace, clock, scylla_only):
+    with table_with_index_for_ttl(cql, test_keyspace) as (table, view):
+        cql.execute(f'UPDATE {table} USING TTL {clock.ttl} SET c = 3 WHERE key = 0')
+        assert list(cql.execute(f'SELECT key, b FROM {view}')) == [(0, 1)]
+        clock.jump(clock.ttl + 1)
+        assert list(cql.execute(f'SELECT key, b FROM {view}')) == [(0, 1)]
+
+# Like test_index_ttl_indexed_column and test_index_ttl_indexed_column_view,
+# for a local index. Local indexes are a Scylla-only feature.
+# Translated from scylla-dtest's secondary_indexes_test.py::TestLocalIndexes::test_ttl_local_index_column.
+def test_local_index_ttl_indexed_column(cql, test_keyspace, clock, scylla_only):
+    with table_with_index_for_ttl(cql, test_keyspace, local=True) as (table, view):
+        assert list(cql.execute(f'SELECT * FROM {table} WHERE b = 1 AND key = 0')) == [(0, 1, 2)]
+        cql.execute(f'UPDATE {table} USING TTL {clock.ttl} SET b = 3 WHERE key = 0')
+        assert list(cql.execute(f'SELECT * FROM {table} WHERE b = 3 AND key = 0')) == [(0, 3, 2)]
+        assert list(cql.execute(f'SELECT * FROM {table} WHERE b = 1 AND key = 0')) == []
+        assert list(cql.execute(f'SELECT key, b FROM {view}')) == [(0, 3)]
+        clock.jump(clock.ttl + 1)
+        assert list(cql.execute(f'SELECT * FROM {table} WHERE key = 0')) == [(0, None, 2)]
+        assert list(cql.execute(f'SELECT * FROM {table} WHERE b = 3 AND key = 0')) == []
+        assert list(cql.execute(f'SELECT * FROM {table} WHERE b = 1 AND key = 0')) == []
+        assert list(cql.execute(f'SELECT key, b FROM {view}')) == []
+
+# Test indexes on tuple columns - tuples of one, two and three elements,
+# and a nested tuple: a query on a tuple column requires ALLOW FILTERING
+# before it is indexed, and after it is indexed, the index finds the rows
+# written before the index was created, rows written after it, and rows
+# whose tuple was modified.
+# Translated from scylla-dtest's secondary_indexes_test.py::TestSecondaryIndexesOnCollections::test_tuple_indexes.
+# The dtest used 50 values, written 5 times before creating the indexes and
+# 3 times after, and modified the rows of 5 values; this test uses 10
+# values, written twice before and once after, and modifies the rows of 3.
+def test_index_tuple(cql, test_keyspace):
+    templates = {'single_tuple': '({0})', 'double_tuple': '({0},{0})', 'triple_tuple': '({0},{0},{0})', 'nested_one': '({0},({0},{0}))'}
+    schema = 'key uuid PRIMARY KEY, normal_col int, single_tuple tuple<int>, double_tuple tuple<int, int>, triple_tuple tuple<int, int, int>, nested_one tuple<int, tuple<int, int>>'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        def insert_all():
+            for n in range(10):
+                cql.execute(f'INSERT INTO {table} (key, normal_col, single_tuple, double_tuple, triple_tuple, nested_one) '
+                            f'VALUES (uuid(), {n}, ({n}), ({n},{n}), ({n},{n},{n}), ({n},({n},{n})))')
+        def count(column, value):
+            return len(list(cql.execute(f'SELECT * FROM {table} WHERE {column} = {templates[column].format(value)}')))
+        insert_all()
+        insert_all()
+        with pytest.raises(InvalidRequest, match='ALLOW FILTERING'):
+            cql.execute(f'SELECT * FROM {table} WHERE single_tuple = (1)')
+        indexes = [unique_name() for column in templates]
+        for index, column in zip(indexes, templates):
+            cql.execute(f'CREATE INDEX {index} ON {table}({column})')
+        for index in indexes:
+            wait_for_index(cql, test_keyspace, index)
+        # Check that the indexes find the rows written before they were created
+        for n in range(10):
+            for column in templates:
+                assert count(column, n) == 2
+                assert count(column, -1) == 0
+        # Check that the indexes find rows written after they were created
+        insert_all()
+        for n in range(10):
+            for column in templates:
+                assert count(column, n) == 3
+        # Check that the indexes find rows after their tuple is modified
+        for n in range(3):
+            for column, template in templates.items():
+                for row in cql.execute(f'SELECT key FROM {table} WHERE {column} = {template.format(n)}'):
+                    cql.execute(f'UPDATE {table} SET {column} = {template.format(-999)} WHERE key = {row.key}')
+        for n in range(3):
+            for column in templates:
+                assert count(column, n) == 0
+        for column in templates:
+            assert count(column, -999) == 9
+
+# Test that a plain index (not full()) can't be created on a frozen
+# collection column.
+# Translated (except the local index, which is in
+# test_local_index_frozen_collection below) from
+# scylla-dtest's secondary_indexes_test.py::TestSecondaryIndexesOnCollections tests
+# test_frozen_list_indexes, test_frozen_set_indexes and test_frozen_map_indexes.
+@pytest.mark.parametrize('typ', ['frozen<list<uuid>>', 'frozen<set<uuid>>', 'frozen<map<uuid, uuid>>'])
+def test_index_frozen_collection(cql, test_keyspace, typ):
+    with new_test_table(cql, test_keyspace, f'key uuid PRIMARY KEY, email text, uuids {typ}') as table:
+        with pytest.raises(InvalidRequest, match='Cannot create .*index on .*frozen'):
+            cql.execute(f'CREATE INDEX ON {table}(uuids)')
+
+# Like test_index_frozen_collection, for a local index. Local indexes are a
+# Scylla-only feature.
+# Translated from the local index part of
+# scylla-dtest's secondary_indexes_test.py::TestSecondaryIndexesOnCollections tests
+# test_frozen_list_indexes, test_frozen_set_indexes and test_frozen_map_indexes.
+@pytest.mark.parametrize('typ', ['frozen<list<uuid>>', 'frozen<set<uuid>>', 'frozen<map<uuid, uuid>>'])
+def test_local_index_frozen_collection(cql, test_keyspace, typ, scylla_only):
+    with new_test_table(cql, test_keyspace, f'key uuid PRIMARY KEY, email text, uuids {typ}') as table:
+        with pytest.raises(InvalidRequest, match='Cannot create index on (index_values|value) of frozen'):
+            cql.execute(f'CREATE INDEX ON {table}((key), uuids)')
+
+# Test an index on one of the columns of a composite partition key, and
+# queries which restrict this column (and the other one) with ALLOW FILTERING.
+# Translated from scylla-dtest's cql_additional_tests.py::TestCQL::test_partition_key_as_secondary_index.
+def test_index_on_partition_key_column_with_filtering(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'a bigint, b bigint, c bigint, PRIMARY KEY ((a, b))') as table:
+        cql.execute(f'CREATE INDEX ON {table}(a)')
+        for a, b, c in [(0, 2, 1), (1, 2, 3), (2, 2, 4)]:
+            cql.execute(f'INSERT INTO {table} (a, b, c) VALUES ({a}, {b}, {c})')
+        assert set(cql.execute(f'SELECT * FROM {table} WHERE a > 0 AND b = 2 ALLOW FILTERING')) == {(1, 2, 3), (2, 2, 4)}
+        assert set(cql.execute(f'SELECT b, c FROM {table} WHERE a >= 2 ALLOW FILTERING')) == {(2, 4)}
+
+# Test selecting columns other than the indexed column which the query
+# restricts.
+# Translated from scylla-dtest's cql_additional_tests.py::TestCQL::test_restricted_column_not_in_select_clause.
+def test_index_restricted_column_not_selected(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'a bigint, b bigint, c bigint, d int, e int, PRIMARY KEY ((a, b), c)') as table:
+        cql.execute(f'CREATE INDEX ON {table}(d)')
+        cql.execute(f'INSERT INTO {table} (a, b, c, d, e) VALUES (1, 2, 3, 4, 5)')
+        cql.execute(f'INSERT INTO {table} (a, b, c, d, e) VALUES (11, 22, 33, 44, 55)')
+        assert list(cql.execute(f'SELECT c, e FROM {table} WHERE d = 44')) == [(33, 55)]
+        assert list(cql.execute(f'SELECT a FROM {table} WHERE d > 43 ALLOW FILTERING')) == [(11,)]
+
+# Test a query which restricts an indexed column twice, to two different
+# values ("c0 = 'a' AND c0 = 'b'"), so no row matches. Reproduces #7772,
+# where such a query crashed Scylla. Cassandra rejects restricting a column
+# with an equality more than once, so this test is scylla_only.
+# Translated from scylla-dtest's secondary_indexes_test.py::TestSecondaryIndexes::test_index_same_key_twice.
+def test_index_restricted_twice(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, 'key uuid PRIMARY KEY, c0 text, c1 text') as table:
+        cql.execute(f'CREATE INDEX ON {table}(c0)')
+        for c0, c1 in [('a', 'b'), ('a', 'b'), ('q', 'b'), ('a', 'e')]:
+            cql.execute(f"INSERT INTO {table} (key, c0, c1) VALUES (uuid(), '{c0}', '{c1}')")
+        assert list(cql.execute(f"SELECT count(*) FROM {table} WHERE c0 = 'a' AND c0 = 'b'")) == [(0,)]

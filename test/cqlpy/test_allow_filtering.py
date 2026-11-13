@@ -31,7 +31,7 @@ import time
 from cassandra.protocol import InvalidRequest, ConfigurationException
 
 from test.pylib.skip_types import skip_env
-from .util import unique_name, new_test_table
+from .util import unique_name, new_test_table, config_value_context
 
 # check_af_optional() and check_af_mandatory() are utility functions for
 # checking that ALLOW FILTERING is optional or mandatory on a SELECT on a
@@ -122,10 +122,11 @@ def test_allow_filtering_single_row(cql, table1, cassandra_bug):
     check_af_optional(cql, table1, 'k=1 AND c=2 AND v=2', lambda row: row.k==1 and row.c==2 and row.v==2)
 
 # A scan of the whole table or of a whole partition looking for one particular
-# regular column value requires filtering.
+# regular column value, or a range of values, requires filtering.
 def test_allow_filtering_regular_column(cql, table1):
     check_af_mandatory(cql, table1, 'v=2', lambda row: row.v==2)
     check_af_mandatory(cql, table1, 'k=1 AND v=2', lambda row: row.k==1 and row.v==2)
+    check_af_mandatory(cql, table1, 'v>1 AND v<=4', lambda row: row.v>1 and row.v<=4)
 
 # A scan of the whole table looking for one particular *clustering* column
 # value requires filtering: Such a query may return just a few or even no
@@ -533,3 +534,19 @@ def test_allow_filtering_index_intersection_sai(cql, test_keyspace, cassandra_bu
         check_af_mandatory(cql, (table, everything),
             "x = 1 AND y = 1",
             lambda r : r.x == 1 and r.y == 1)
+
+# Test that when the strict_allow_filtering option is "warn" (its default),
+# a query which filters by a clustering key without restricting the
+# partition key - and should therefore require ALLOW FILTERING, as
+# test_allow_filtering_clustering_key above checks - is accepted, with a
+# warning that it will be rejected in the future.
+# Translated from scylla-dtest's cql_additional_tests.py::TestCQL::test_cql_warning_when_filtering_potentially_infinite_partitions.
+def test_allow_filtering_clustering_key_warning(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, 'pk int, ck int, v int, PRIMARY KEY (pk, ck)') as table:
+        for pk in range(3):
+            cql.execute(f'INSERT INTO {table} (pk, ck, v) VALUES ({pk}, 2, 100)')
+        with config_value_context(cql, 'strict_allow_filtering', 'warn'):
+            result = cql.execute(f'SELECT pk, ck FROM {table} WHERE ck = 2')
+            assert sorted(result) == [(pk, 2) for pk in range(3)]
+            assert any('This query should use ALLOW FILTERING and will be rejected in future versions' in w
+                       for w in result.response_future.warnings)
