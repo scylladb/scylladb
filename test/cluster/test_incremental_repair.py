@@ -2282,3 +2282,48 @@ async def test_full_incremental_repair_with_repaired_view_compaction_leaves_no_t
         raise repair_error
 
     assert deleted_while_held, "no captured sstable was deleted: the repaired-view compaction did not run"
+
+
+@pytest.mark.skip_mode(mode='release', reason='test_clocks_offset_seconds exists only with error injections')
+async def test_incremental_repair_uses_master_compaction_time(manager: ScyllaClusterManager):
+    """
+    In-sync replicas must exchange no rows in incremental repair even if their clocks
+    disagree on whether TTL'd cells expired: all of them must compact with the repair
+    master's compaction_time, not with their own clock. Regression test for SCYLLADB-6205.
+    """
+    servers = await manager.servers_add(2, auto_rack_dc="dc1")
+    cql, hosts = await manager.get_ready_cql(servers)
+    ttl = 3600
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} "
+                                          "AND tablets = {'initial': 1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int, ck int, v int, PRIMARY KEY (pk, ck))")
+        # Keeps the cells unexpired on disk; only the repair reader may expire them.
+        for s in servers:
+            await manager.api.disable_autocompaction(s.ip_addr, ks, 'test')
+        insert = cql.prepare(f"INSERT INTO {ks}.test (pk, ck, v) VALUES (?, ?, ?) USING TTL {ttl}")
+        insert.consistency_level = ConsistencyLevel.ALL
+        await asyncio.gather(*[cql.run_async(insert, (k, k, k)) for k in range(100)])
+        await flush_all(manager, servers, ks)
+
+        tablets = await get_all_tablet_replicas(manager, servers[0], ks, 'test')
+        host_ids = {str(await manager.get_host_id(s.server_id)) for s in servers}
+        assert len(tablets) == 1 and {str(h) for h, _ in tablets[0].replicas} == host_ids
+
+        def repaired_rows():
+            return sum(get_metrics(s, "scylla_repair_tx_row_nr") + get_metrics(s, "scylla_repair_rx_row_nr") for s in servers)
+        rows_before = repaired_rows()
+        disk_rows_before = sum(get_metrics(s, "scylla_repair_row_from_disk_nr") for s in servers)
+
+        # The cells are expired by servers[1]'s clock and live by servers[0]'s.
+        offset = "UPDATE system.config SET value = '{}' WHERE name = 'test_clocks_offset_seconds'"
+        await cql.run_async(offset.format(2 * ttl), host=hosts[1])
+        try:
+            applied = await cql.run_async("SELECT value FROM system.config WHERE name = 'test_clocks_offset_seconds'", host=hosts[1])
+            assert int(applied[0].value) == 2 * ttl
+            await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", 'all', incremental_mode='incremental')
+        finally:
+            await cql.run_async(offset.format(0), host=hosts[1])
+
+        disk_rows_after = sum(get_metrics(s, "scylla_repair_row_from_disk_nr") for s in servers)
+        assert disk_rows_after > disk_rows_before, "incremental repair read no rows from disk"
+        assert repaired_rows() == rows_before, "incremental repair exchanged rows of in-sync replicas"

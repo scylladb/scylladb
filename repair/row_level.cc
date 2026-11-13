@@ -368,7 +368,7 @@ mutation_reader repair_reader::make_reader(
                 });
         }
         case read_strategy::incremental_repair: {
-            return cf.make_streaming_reader(_schema, _permit, _range, inc.sst_set, gc_clock::now());
+            return cf.make_streaming_reader(_schema, _permit, _range, inc.sst_set, compaction_time);
         }
         default:
             on_internal_error(rlogger,
