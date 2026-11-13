@@ -1311,7 +1311,7 @@ private:
         co_return combined;
     }
 
-    void handle_mutation_fragment(mutation_fragment& mf, size_t& cur_size, size_t& new_rows_size, std::list<repair_row>& cur_rows) {
+    void handle_mutation_fragment(mutation_fragment&& mf, size_t& cur_size, size_t& new_rows_size, std::list<repair_row>& cur_rows) {
         if (mf.is_partition_start()) {
             auto& start = mf.as_partition_start();
             _repair_reader->set_current_dk(start.key());
@@ -1324,7 +1324,8 @@ private:
             return;
         }
         auto hash = _repair_hasher.do_hash_for_mf(*_repair_reader->get_current_dk(), mf);
-        repair_row r(freeze(*_schema, mf), position_in_partition(mf.position()), _repair_reader->get_current_dk(), hash, is_dirty_on_master::no);
+        repair_row r(_repair_reader->get_current_dk(), hash, is_dirty_on_master::no,
+                make_lw_shared<mutation_fragment>(std::move(mf)));
         rlogger.trace("Reading: r.boundary={{ {}, {} }}, r.hash={}", r.get_dk_with_hash()->dk, r.position(), r.hash());
         auto sz = r.size();
         _metrics.row_from_disk_nr++;
@@ -1508,7 +1509,7 @@ private:
                     co_await _repair_reader->on_end_of_stream();
                     break;
                 }
-                handle_mutation_fragment(*mfopt, cur_size, new_rows_size, cur_rows);
+                handle_mutation_fragment(std::move(*mfopt), cur_size, new_rows_size, cur_rows);
             }
         } catch (...) {
             ex = std::current_exception();
@@ -1553,7 +1554,7 @@ private:
         std::optional<repair_sync_boundary> sb_max;
         if (!_row_buf.empty()) {
             const auto& last = _row_buf.back();
-            sb_max = repair_sync_boundary{last.get_dk_with_hash()->dk, last.position()};
+            sb_max = repair_sync_boundary{last.get_dk_with_hash()->dk, position_in_partition(last.position())};
         }
         rlogger.debug("get_sync_boundary: Got nr={} rows, sb_max={}, row_buf_size={}, repair_hash={}, skipped_sync_boundary={}",
                       new_rows_nr, sb_max, row_buf_bytes, row_buf_combined_hash, skipped_sync_boundary);
@@ -1618,7 +1619,9 @@ private:
     future<std::list<repair_row>>
     copy_rows_from_working_row_buf() {
         std::list<repair_row> rows;
-        for (const repair_row& r : _working_row_buf) {
+        for (repair_row& r : _working_row_buf) {
+            // Freeze once, not once per peer.
+            r.freeze_for_send(*_schema);
             rows.push_back(r);
             co_await coroutine::maybe_yield();
         }
@@ -1628,8 +1631,9 @@ private:
     future<std::list<repair_row>>
     copy_rows_from_working_row_buf_within_set_diff(repair_hash_set set_diff) {
         std::list<repair_row> rows;
-        for (const repair_row& r : _working_row_buf) {
+        for (repair_row& r : _working_row_buf) {
             if (set_diff.contains(r.hash())) {
+                r.freeze_for_send(*_schema);
                 rows.push_back(r);
             }
             co_await coroutine::maybe_yield();
@@ -1810,33 +1814,55 @@ private:
         }
     };
 
-    future<repair_rows_on_wire> to_repair_rows_on_wire(std::list<repair_row> row_list) {
-        lw_shared_ptr<const decorated_key_with_hash> last_dk_with_hash;
+    // Packs frozen fragments into repair_row_on_wire messages, split by fragments_limiter.
+    class rows_on_wire_builder {
+        const schema& _s;
+        fragments_limiter _limiter;
+        bool _msg_split;
+        lw_shared_ptr<const decorated_key_with_hash> _last_dk_with_hash;
+        std::optional<repair_row_on_wire> _cur;
+    public:
+        rows_on_wire_builder(const schema& s, bool msg_split)
+            : _s(s), _limiter(s.ks_name(), s.cf_name()), _msg_split(msg_split) {}
+        // Returns the previous message once mf starts a new one.
+        std::optional<repair_row_on_wire> add(const lw_shared_ptr<const decorated_key_with_hash>& dk_with_hash, frozen_mutation_fragment mf) {
+            const auto size = mf.representation().size();
+            bool same_pk = _cur && _last_dk_with_hash && dk_with_hash->dk.tri_compare(_s, _last_dk_with_hash->dk) == 0;
+            if (same_pk && (!_msg_split || _limiter.no_split(size))) {
+                _limiter.add(size);
+                _cur->push_mutation_fragment(std::move(mf));
+                return std::nullopt;
+            }
+            _last_dk_with_hash = dk_with_hash;
+            _limiter.reset(size);
+            // initializer_list would deep-copy the fragment; push_back moves it.
+            utils::chunked_vector<frozen_mutation_fragment> mfs;
+            mfs.push_back(std::move(mf));
+            return std::exchange(_cur, same_pk && _msg_split ? repair_row_on_wire(std::move(mfs)) : repair_row_on_wire(dk_with_hash->dk.key(), std::move(mfs)));
+        }
+        std::optional<repair_row_on_wire> finish() {
+            return std::exchange(_cur, std::nullopt);
+        }
+    };
+
+    future<repair_rows_on_wire> to_repair_rows_on_wire(std::list<repair_row> row_list, size_t& row_bytes) {
         repair_rows_on_wire rows;
-        size_t row_bytes = co_await get_repair_rows_size(row_list);
         _metrics.tx_row_nr += row_list.size();
-        _metrics.tx_row_bytes += row_bytes;
-        fragments_limiter limiter(_schema->ks_name(), _schema->cf_name());
-        auto msg_split_feature = bool(_db.local().features().repair_msg_split);
+        rows_on_wire_builder builder(*_schema, bool(_db.local().features().repair_msg_split));
         while (!row_list.empty()) {
             repair_row r = std::move(row_list.front());
             row_list.pop_front();
-            const auto& dk_with_hash = r.get_dk_with_hash();
-            auto mf = std::move(r.get_frozen_mutation());
-            const auto size = mf.representation().size();
-            bool same_pk = !rows.empty() && last_dk_with_hash && dk_with_hash->dk.tri_compare(*_schema, last_dk_with_hash->dk) == 0;
-
-            if (same_pk && (!msg_split_feature || limiter.no_split(size))) {
-                limiter.add(size);
-                rows.back().push_mutation_fragment(std::move(mf));
-            } else {
-                last_dk_with_hash = dk_with_hash;
-                limiter.reset(size);
-                auto r = same_pk && msg_split_feature ? repair_row_on_wire({std::move(mf)}) : repair_row_on_wire(dk_with_hash->dk.key(), {std::move(mf)});
-                rows.push_back(std::move(r));
+            r.freeze_for_send(*_schema);
+            row_bytes += r.size();
+            if (auto done = builder.add(r.get_dk_with_hash(), std::move(r.get_frozen_mutation()))) {
+                rows.push_back(std::move(*done));
             }
             co_await coroutine::maybe_yield();
         }
+        if (auto done = builder.finish()) {
+            rows.push_back(std::move(*done));
+        }
+        _metrics.tx_row_bytes += row_bytes;
         co_return rows;
     };
 
@@ -2216,7 +2242,8 @@ public:
     future<repair_rows_on_wire> get_row_diff_handler(repair_hash_set set_diff, needs_all_rows_t needs_all_rows) {
         auto gate_held = _gate.hold();
         std::list<repair_row> row_diff = co_await get_row_diff(std::move(set_diff), needs_all_rows);
-        co_return co_await to_repair_rows_on_wire(std::move(row_diff));
+        size_t row_bytes = 0;
+        co_return co_await to_repair_rows_on_wire(std::move(row_diff), row_bytes);
     }
 
     // RPC API
@@ -2232,12 +2259,12 @@ public:
                 rlogger.warn("Hash conflict detected, keyspace={}, table={}, range={}, row_diff.size={}, set_diff.size={}. It is recommended to compact the table and rerun repair for the range.",
                         _schema->ks_name(), _schema->cf_name(), _range, row_diff.size(), sz);
             }
-            size_t row_bytes = co_await get_repair_rows_size(row_diff);
             stats().tx_row_nr += row_diff.size();
             stats().tx_row_nr_peer[remote_node] += row_diff.size();
-            stats().tx_row_bytes += row_bytes;
             stats().rpc_call_nr++;
-            repair_rows_on_wire rows = co_await to_repair_rows_on_wire(std::move(row_diff));
+            size_t row_bytes = 0;
+            repair_rows_on_wire rows = co_await to_repair_rows_on_wire(std::move(row_diff), row_bytes);
+            stats().tx_row_bytes += row_bytes;
             co_await ser::repair_rpc_verbs::send_repair_put_row_diff(&_messaging, remote_node, _repair_meta_id, std::move(rows), dst_cpu_id);
         }
     }
@@ -2262,15 +2289,70 @@ private:
         throw std::runtime_error("put_row_diff: Got unexpected end of stream");
     }
 
-    future<> put_row_diff_sink_op(
-            repair_rows_on_wire rows,
+    // Streams the diff straight from _working_row_buf: each peer holds one message
+    // of frozen copies at a time, not a copy of the whole diff.
+    future<> put_working_row_buf_sink_op(
+            const repair_hash_set& set_diff,
+            needs_all_rows_t needs_all_rows,
+            const std::optional<small_table_optimization_params>& small_table_optimization,
             rpc::sink<repair_row_on_wire_with_cmd>& sink,
             locator::host_id remote_node) {
         std::exception_ptr ep;
+        size_t matched = 0;
         try {
-            for (repair_row_on_wire& row : rows) {
+            stats().rpc_call_nr++;
+            const locator::token_metadata* tm = nullptr;
+            if (small_table_optimization) {
+                tm = &small_table_optimization->erm->get_token_metadata();
+                if (const auto* tmptr = co_await get_tm_for_small_table_optimization_check(tm)) {
+                    tm = tmptr;
+                }
+            }
+            rows_on_wire_builder builder(*_schema, bool(_db.local().features().repair_msg_split));
+            size_t nr = 0, bytes = 0;
+            // Rows are sorted by partition, so cache the last token's verdict.
+            std::optional<dht::token> last_token;
+            bool last_contains = false;
+            // One peer: nothing else reads the frozen row, so move it.
+            const bool sole_peer = _nr_peer_nodes == 1;
+            for (repair_row& r : _working_row_buf) {
+                co_await coroutine::maybe_yield();
+                if (!needs_all_rows && !set_diff.contains(r.hash())) {
+                    continue;
+                }
+                ++matched;
+                if (small_table_optimization) {
+                    const auto& dk = r.get_dk_with_hash()->dk;
+                    if (!last_token || *last_token != dk.token()) {
+                        auto eps = co_await small_table_optimization->erm->get_replication_strategy().calculate_natural_endpoints(dk.token(), *tm);
+                        last_contains = eps.contains(remote_node);
+                        last_token = dk.token();
+                    }
+                    if (!last_contains) {
+                        rlogger.trace("master: put : ignore row, token={}", dk.token());
+                        continue;
+                    }
+                }
+                r.freeze_for_send(*_schema);
+                ++nr;
+                bytes += r.size();
+                if (auto m = builder.add(r.get_dk_with_hash(), sole_peer ? r.take_frozen_mutation() : frozen_mutation_fragment(r.get_frozen_mutation()))) {
+                    rlogger.trace("put_row_diff: send row");
+                    co_await sink(repair_row_on_wire_with_cmd{repair_stream_cmd::row_data, std::move(*m)});
+                }
+            }
+            _metrics.tx_row_nr += nr;
+            _metrics.tx_row_bytes += bytes;
+            stats().tx_row_nr += nr;
+            stats().tx_row_nr_peer[remote_node] += nr;
+            stats().tx_row_bytes += bytes;
+            if (matched != set_diff.size()) {
+                rlogger.warn("Hash conflict detected, keyspace={}, table={}, range={}, row_diff.size={}, set_diff.size={}. It is recommended to compact the table and rerun repair for the range.",
+                        _schema->ks_name(), _schema->cf_name(), _range, matched, set_diff.size());
+            }
+            if (auto m = builder.finish()) {
                 rlogger.trace("put_row_diff: send row");
-                co_await sink(repair_row_on_wire_with_cmd{repair_stream_cmd::row_data, std::move(row)});
+                co_await sink(repair_row_on_wire_with_cmd{repair_stream_cmd::row_data, std::move(*m)});
             }
             rlogger.trace("put_row_diff: send empty row");
             co_await sink(repair_row_on_wire_with_cmd{repair_stream_cmd::end_of_current_rows, repair_row_on_wire()});
@@ -2298,49 +2380,12 @@ public:
         if (remote_node == myhostid()) {
             co_return;
         }
-        size_t sz = set_diff.size();
-
-        std::list<repair_row> row_diff = co_await get_row_diff(std::move(set_diff), needs_all_rows);
-        if (row_diff.size() != sz) {
-            rlogger.warn("Hash conflict detected, keyspace={}, table={}, range={}, row_diff.size={}, set_diff.size={}. It is recommended to compact the table and rerun repair for the range.",
-                    _schema->ks_name(), _schema->cf_name(), _range, row_diff.size(), sz);
-        }
-        if (small_table_optimization) {
-            auto& strat = small_table_optimization->erm->get_replication_strategy();
-            const auto* tm = &small_table_optimization->erm->get_token_metadata();
-            const auto* tmptr = co_await get_tm_for_small_table_optimization_check(tm);
-            if (tmptr) {
-                tm = tmptr;
-            }
-            std::list<repair_row> tmp;
-            for (auto& row : row_diff) {
-                repair_row r = std::move(row);
-                const auto& dk = r.get_dk_with_hash()->dk;
-                auto eps = co_await strat.calculate_natural_endpoints(dk.token(), *tm);
-                if (eps.contains(remote_node)) {
-                    tmp.push_back(std::move(r));
-                } else {
-                    rlogger.trace("master: put : ignore row, token={}", dk.token());
-                }
-            }
-            row_diff = std::move(tmp);
-        }
-
-        size_t row_bytes = co_await get_repair_rows_size(row_diff);
-
-        stats().tx_row_nr += row_diff.size();
-        stats().tx_row_nr_peer[remote_node] += row_diff.size();
-        stats().tx_row_bytes += row_bytes;
-        stats().rpc_call_nr++;
-
-        repair_rows_on_wire rows = co_await to_repair_rows_on_wire(std::move(row_diff));
-
         auto [sink, source] = co_await _sink_source_for_put_row_diff.get_sink_source(remote_node, node_idx, dst_cpu_id);
         auto source_op = [&] () mutable -> future<> {
             co_await put_row_diff_source_op(remote_node, node_idx, source);
         };
         auto sink_op = [&] () mutable -> future<> {
-            co_await put_row_diff_sink_op(std::move(rows), sink, remote_node);
+            co_await put_working_row_buf_sink_op(set_diff, needs_all_rows, small_table_optimization, sink, remote_node);
         };
         co_await coroutine::all(source_op, sink_op);
     }
