@@ -33,6 +33,7 @@
 #include "utils/exceptions.hh"
 #include "utils/on_internal_error.hh"
 #include <seastar/core/lowres_clock.hh>
+#include <seastar/core/sleep.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/as_future.hh>
@@ -53,6 +54,26 @@ static logging::logger logger("sc_groups_manager");
 // membership was published, which the cleanup has already synchronized with, and no
 // request holds the server by then, so all that's left is stopping it.
 static constexpr auto group_teardown_timeout = std::chrono::seconds(60);
+
+// How long the leader waits for a replica to report its applied timestamps.
+static constexpr auto applied_timestamps_rpc_timeout = std::chrono::seconds(5);
+
+// A group's data is sealed once this much was written since its last seal, or the oldest
+// unsealed write is this old, and at most this many seals wait for promotion at a time.
+static constexpr uint64_t seal_bytes = 32 << 20;
+static constexpr auto seal_interval = std::chrono::minutes(1);
+static constexpr size_t max_pending_seals = 4;
+static constexpr auto seal_proposer_tick = std::chrono::minutes(1);
+// How long the leader waits for a seal or a promotion to commit, so that a group
+// without a quorum does not hold the others back.
+static constexpr auto seal_append_timeout = std::chrono::seconds(10);
+
+// Tests shorten the intervals, or lengthen the seal one to hold seals back.
+static std::chrono::milliseconds injectable_interval(const char* name, std::chrono::milliseconds dflt) {
+    return utils::get_local_injector().inject_parameter<int64_t>(name)
+            .transform([] (int64_t ms) { return std::chrono::milliseconds(ms); })
+            .value_or(dflt);
+}
 
 static raft::server_id to_server_id(host_id host_id) {
     return raft::server_id{host_id.uuid()};
@@ -208,6 +229,7 @@ groups_manager::groups_manager(netw::messaging_service& ms,
 }
 
 future<> groups_manager::start_raft_group(global_tablet_id tablet,
+        dht::token_range range,
         raft::group_id group_id,
         token_metadata_ptr tm,
         lw_shared_ptr<raft::server_stats> server_stats,
@@ -263,7 +285,7 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
         *commitlog, tablet.table, std::move(replayed_data),
         [this](db::cf_id_type id, db::replay_position pos) { request_flush(id, pos); });
 
-    auto state_machine = make_state_machine(tablet, group_id, _db, _mm, _sys_ks, *storage, _resize_tracker, std::move(apply_stats));
+    auto state_machine = make_state_machine(tablet, range, group_id, _db, _mm, _sys_ks, *storage, _resize_tracker, std::move(apply_stats));
 
     auto& state_machine_ref = *state_machine;
     auto rpc = std::make_unique<rpc_impl>(state_machine_ref, _ms, _raft_gr.failure_detector(), group_id, my_id,
@@ -274,6 +296,22 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
     // Store the initial configuration if this is the first time we create this group
     // on this node
     const auto snapshot = co_await storage->load_snapshot_descriptor();
+    // The table may be gone: a DROP TABLE removes it before the deletion of the group is
+    // scheduled, and that waits for this start to finish.
+    if (const auto table = _db.get_tables_metadata().get_table_if_exists(tablet.table)) {
+        // The repair history is not persisted.
+        if (const auto& promoted = storage->promoted_seal()) {
+            record_promoted_seal(*table, range, promoted->ts);
+        }
+        // Replay skips the state machine, so count the writes it put back as unsealed when
+        // the table holds a change newer than the newest seal. Their size is unknown.
+        const auto newest_seal = storage->seals().empty()
+                ? (storage->promoted_seal() ? storage->promoted_seal()->ts : api::min_timestamp)
+                : storage->seals().back().ts;
+        if (table->get_max_timestamp_for_token_range(range) > newest_seal) {
+            storage->note_write(0);
+        }
+    }
     if (!snapshot.id) {
         const auto& tablet_map = tm->tablets().get_tablet_map(tablet.table);
         const auto& tablet_info = tablet_map.get_tablet_info(tablet.tablet);
@@ -479,6 +517,26 @@ table_metrics& groups_manager::get_table_metrics(const schema& s) {
         table_metrics_reporting(_db.get_config())).first->second;
 }
 
+void groups_manager::register_seal_boundaries_provider(replica::table& t) {
+    if (!_seal_provider_tables.insert(t.schema()->id()).second) {
+        return;
+    }
+    t.set_seal_boundaries_provider([this] (raft::group_id id) {
+        return seal_boundaries_for(id);
+    });
+}
+
+std::optional<replica::seal_boundaries> groups_manager::seal_boundaries_for(raft::group_id id) const {
+    const auto it = _raft_groups.find(id);
+    if (it == _raft_groups.end() || !it->second.storage) {
+        return std::nullopt;
+    }
+    const auto& storage = *it->second.storage;
+    const auto promoted = storage.promoted_seal() ? storage.promoted_seal()->ts : api::min_timestamp;
+    const auto newest = storage.seals().empty() ? promoted : storage.seals().back().ts;
+    return replica::seal_boundaries{promoted, newest};
+}
+
 void groups_manager::drop_dropped_tables_metrics() {
     std::erase_if(_table_metrics, [this] (const auto& entry) {
         return !_db.has_schema(entry.first.first, entry.first.second);
@@ -528,6 +586,107 @@ future<> groups_manager::cleanup_group(global_tablet_id tablet, raft::group_id g
     co_await raft_groups_storage::erase_persisted_state(_qp, group_id, this_shard_id());
 }
 
+future<groups_manager::applied_timestamp_per_group> groups_manager::get_applied_timestamps(const tablet_per_group& groups) const {
+    const auto tm = _db.get_token_metadata_ptr();
+    applied_timestamp_per_group res;
+    res.reserve(groups.size());
+    for (const auto& [gid, tablet] : groups) {
+        co_await coroutine::maybe_yield();
+        // This shard's map may be a version past the one the caller checked the group against.
+        const auto table = _db.get_tables_metadata().get_table_if_exists(tablet.table);
+        if (!table || !tm->tablets().has_tablet_map(tablet.table)) {
+            continue;
+        }
+        const auto& tmap = tm->tablets().get_tablet_map(tablet.table);
+        if (!tmap.has_raft_info() || tablet.tablet.value() >= tmap.tablet_count() || tmap.get_tablet_raft_info(tablet.tablet).group_id != gid) {
+            continue;
+        }
+        auto ts = table->get_max_timestamp_for_token_range(tmap.get_token_range(tablet.tablet)).value_or(api::min_timestamp);
+        // A seal is applied like a write, and may be the newest change.
+        if (const auto boundaries = seal_boundaries_for(gid)) {
+            ts = std::max(ts, boundaries->newest);
+        }
+        res[gid] = ts;
+    }
+    co_return res;
+}
+
+future<std::unordered_map<raft::group_id, api::timestamp_type>> groups_manager::min_applied_timestamps() {
+    const auto tm = _db.get_token_metadata_ptr();
+    const auto my_host = tm->get_my_id();
+    const auto fence = service::fencing_token{tm->get_version()};
+
+    std::unordered_map<raft::group_id, std::vector<host_id>> replicas_of;
+    std::unordered_map<host_id, tablet_per_group> host_groups;
+    for (const auto& [table, _] : tm->tablets().all_table_groups()) {
+        const auto& tmap = tm->tablets().get_tablet_map(table);
+        if (!tmap.has_raft_info()) {
+            continue;
+        }
+        // Only the groups the tablet map names: the children of a resize are promoted once the
+        // finalization makes them tablets, which table::seal_boundaries_for() relies on.
+        for (const auto tid : tmap.tablet_ids()) {
+            const auto gid = tmap.get_tablet_raft_info(tid).group_id;
+            const auto it = _raft_groups.find(gid);
+            // A migrating tablet is skipped: its new replica is not in the replica set yet.
+            if (it == _raft_groups.end() || !it->second.leader_info || !it->second.storage
+                    || it->second.storage->seals().empty() || tmap.get_tablet_transition_info(tid)) {
+                continue;
+            }
+            const global_tablet_id tablet{table, tid};
+            auto& hosts = replicas_of[gid];
+            for (const auto& replica : tmap.get_tablet_info(tid).replicas) {
+                hosts.push_back(replica.host);
+                host_groups[replica.host].emplace(gid, tablet);
+            }
+            co_await coroutine::maybe_yield();
+        }
+    }
+
+    std::unordered_map<host_id, applied_timestamp_per_group> host_timestamps;
+    co_await coroutine::parallel_for_each(host_groups, [&] (auto& entry) -> future<> {
+        auto& [host, groups] = entry;
+        try {
+            if (host == my_host) {
+                host_timestamps[host] = co_await get_applied_timestamps(groups);
+                co_return;
+            }
+            abort_on_expiry aoe(lowres_clock::now() + applied_timestamps_rpc_timeout);
+            const auto stop_sub = utils::chain_abort_source(aoe.abort_source(), _as);
+            host_timestamps[host] = co_await ser::groups_manager_rpc_verbs::send_get_local_applied_timestamps(&_ms, host,
+                    aoe.abort_source(), to_server_id(host), fence, groups);
+        } catch (...) {
+            logger.debug("min_applied_timestamps(): no answer from {}: {}", host, std::current_exception());
+        }
+    });
+
+    const auto applied = [&] (host_id host, raft::group_id gid) -> std::optional<api::timestamp_type> {
+        const auto answer = host_timestamps.find(host);
+        if (answer == host_timestamps.end()) {
+            return std::nullopt;
+        }
+        const auto ts = answer->second.find(gid);
+        return ts == answer->second.end() ? std::nullopt : std::optional(ts->second);
+    };
+    std::unordered_map<raft::group_id, api::timestamp_type> res;
+    for (const auto& [gid, hosts] : replicas_of) {
+        std::optional<api::timestamp_type> min_ts = api::max_timestamp;
+        for (const auto host : hosts) {
+            const auto ts = applied(host, gid);
+            if (!ts) {
+                min_ts.reset();
+                break;
+            }
+            min_ts = std::min(*min_ts, *ts);
+        }
+        if (min_ts) {
+            res[gid] = *min_ts;
+        }
+        co_await coroutine::maybe_yield();
+    }
+    co_return res;
+}
+
 void groups_manager::init_messaging_service() {
     ser::groups_manager_rpc_verbs::register_wait_for_raft_groups_to_start(&_ms,
         [this] (rpc::opt_time_point timeout, raft::server_id dst_id, table_id table) -> future<> {
@@ -570,6 +729,49 @@ void groups_manager::init_messaging_service() {
             co_return co_await container().invoke_on(*shard, [group_id, request_id, frozen_guard] (groups_manager& gm) {
                 return gm.truncate_tablet_group(group_id, request_id, frozen_guard);
             });
+        }
+    );
+    ser::groups_manager_rpc_verbs::register_get_local_applied_timestamps(&_ms,
+        [this] (raft::server_id dst_id, service::fencing_token fence, const tablet_per_group& groups) -> future<applied_timestamp_per_group> {
+            if (_raft_gr.get_my_raft_id() != dst_id) {
+                throw raft_destination_id_not_correct{_raft_gr.get_my_raft_id(), dst_id};
+            }
+            const auto tm = _db.get_token_metadata_ptr();
+            const auto my_host = tm->get_my_id();
+            if (auto stale = _qp.proxy().check_fence(fence, my_host); stale) {
+                throw std::move(*stale);
+            }
+
+            // The fence keeps the caller's view of the tablets at most one version behind ours.
+            // A group is left out of the answer when its table was dropped meanwhile, when its
+            // tablet was renumbered by a resize, or when its replica has just left this host.
+            applied_timestamp_per_group result;
+            std::unordered_map<shard_id, tablet_per_group> by_shard;
+            for (const auto& [gid, tablet] : groups) {
+                co_await coroutine::maybe_yield();
+                if (!tm->tablets().has_tablet_map(tablet.table)) {
+                    continue;
+                }
+                const auto& tmap = tm->tablets().get_tablet_map(tablet.table);
+                if (!tmap.has_raft_info() || tablet.tablet.value() >= tmap.tablet_count() || tmap.get_tablet_raft_info(tablet.tablet).group_id != gid) {
+                    continue;
+                }
+                if (const auto shard = locator::get_shard_for_reads(tmap, tablet.tablet, my_host)) {
+                    by_shard[*shard].emplace(gid, tablet);
+                }
+            }
+
+            co_await coroutine::parallel_for_each(by_shard, [&] (this auto, const auto& entry) -> future<> {
+                const auto& [shard, local_groups] = entry;
+                auto timestamps = co_await container().invoke_on(shard, [&local_groups] (groups_manager& gm) -> future<foreign_ptr<std::unique_ptr<applied_timestamp_per_group>>> {
+                    co_return make_foreign(std::make_unique<applied_timestamp_per_group>(co_await gm.get_applied_timestamps(local_groups)));
+                });
+                for (const auto& [gid, ts] : *timestamps) {
+                    result[gid] = ts;
+                    co_await coroutine::maybe_yield();
+                }
+            });
+            co_return result;
         }
     );
 }
@@ -616,12 +818,25 @@ future<bool> groups_manager::truncate_tablet_group(raft::group_id gid, utils::UU
     }
 
     auto& as = guard.abort_source();
+    const auto res = co_await append_command(*srv, gid, as, [&] (api::timestamp_type ts, raft::term_t term) {
+        logger.info("truncate_strongly_consistent_tablet: group {}: adding a truncate at {} by request {}, term {}",
+                gid, ts, request_id, term);
+        return raft_command{.change = truncate_command{.truncated_at = ts, .request_id = request_id}};
+    });
+    if (res == append_result::commit_status_unknown) {
+        // Maybe committed. The retry carries the same request id, so a second entry is a no-op.
+        logger.debug("truncate_strongly_consistent_tablet: group {}: the commit status of the truncate is unknown, asking for a retry", gid);
+    }
+    co_return res == append_result::committed;
+}
 
+future<groups_manager::append_result> groups_manager::append_command(raft_server& srv, raft::group_id gid, abort_source& as,
+        noncopyable_function<raft_command(api::timestamp_type, raft::term_t)> make_command) {
     while (true) {
-        auto disposition = srv->begin_mutate(as);
+        auto disposition = srv.begin_mutate(as);
         if (std::holds_alternative<raft::not_a_leader>(disposition)) {
-            logger.debug("truncate_strongly_consistent_tablet: group {} is not led by this replica", gid);
-            co_return false;
+            logger.debug("append_command: group {} is not led by this replica", gid);
+            co_return append_result::not_leader;
         }
         if (auto* wait_for_leader = std::get_if<raft_server::need_wait_for_leader>(&disposition)) {
             co_await std::move(wait_for_leader->future);
@@ -631,27 +846,20 @@ future<bool> groups_manager::truncate_tablet_group(raft::group_id gid, utils::UU
 
         // No suspension between begin_mutate() and add_entry(), see coordinator::mutate().
         raft::command raft_cmd;
-        ser::serialize(raft_cmd, raft_command{.change = truncate_command{
-            .truncated_at = ts_with_term.timestamp,
-            .request_id = request_id,
-        }});
-        logger.info("truncate_strongly_consistent_tablet: group {}: adding a truncate at {} by request {}, term {}",
-                gid, ts_with_term.timestamp, request_id, ts_with_term.term);
+        ser::serialize(raft_cmd, make_command(ts_with_term.timestamp, ts_with_term.term));
         auto res = co_await coroutine::as_future(
-                srv->server().add_entry(std::move(raft_cmd), raft::wait_type::committed, &as));
+                srv.server().add_entry(std::move(raft_cmd), raft::wait_type::committed, &as));
         if (!res.failed()) {
-            co_return true;
+            co_return append_result::committed;
         }
 
         auto ex = res.get_exception();
         if (try_catch<raft::not_a_leader>(ex) || try_catch<raft::dropped_entry>(ex)) {
-            logger.debug("truncate_strongly_consistent_tablet: group {}: add_entry failed with {}, retrying", gid, ex);
+            logger.debug("append_command: group {}: add_entry failed with {}, retrying", gid, ex);
             continue;
         }
         if (try_catch<raft::commit_status_unknown>(ex)) {
-            // Maybe committed. The retry carries the same request id, so a second entry is a no-op.
-            logger.debug("truncate_strongly_consistent_tablet: group {}: the commit status of the truncate is unknown, asking for a retry", gid);
-            co_return false;
+            co_return append_result::commit_status_unknown;
         }
         std::rethrow_exception(std::move(ex));
     }
@@ -734,9 +942,11 @@ future<> groups_manager::leader_info_updater(raft_group_state& state, table_id t
                     co_return;
                 }
                 const auto truncate = co_await raft_groups_storage::load_truncate_record(_qp, gid, this_shard_id());
+                // A seal writes nothing to the table, so its timestamp is seeded from the row.
+                const auto newest_seal = seal_boundaries_for(gid).transform([] (const auto& b) { return b.newest; }).value_or(api::min_timestamp);
                 state.leader_info = leader_info {
                     .term = current_term,
-                    .last_timestamp = std::max(*last_timestamp, truncate.truncated_at)
+                    .last_timestamp = std::max({*last_timestamp, truncate.truncated_at, newest_seal})
                 };
                 logger.debug("leader_info_updater({}, group_id={}): read_barrier() completed, "
                     "new leader term {}, last_timestamp {}",
@@ -772,6 +982,111 @@ future<> groups_manager::leader_info_updater(raft_group_state& state, table_id t
         on_internal_error(logger, ::format("leader_info_updater({}, group_id={}): unexpected exception: {}",
             tablet, gid, std::current_exception()));
     }
+}
+
+void groups_manager::seal_proposer::start() {
+    _fiber = run();
+}
+
+future<> groups_manager::seal_proposer::stop() {
+    co_await std::move(_fiber);
+}
+
+future<> groups_manager::seal_proposer::run() {
+    while (true) {
+        try {
+            co_await sleep_abortable(injectable_interval("sc_seal_proposer_tick_in_ms", seal_proposer_tick), _gm._as);
+        } catch (const sleep_aborted&) {
+            co_return;
+        }
+        try {
+            co_await round();
+        } catch (...) {
+            if (_gm._as.abort_requested()) {
+                co_return;
+            }
+            logger.warn("seal_proposer: a round failed: {}", std::current_exception());
+        }
+    }
+}
+
+future<> groups_manager::seal_proposer::round() {
+    const auto min_applied = co_await _gm.min_applied_timestamps();
+    for (const auto& [gid, ts] : min_applied) {
+        if (const auto it = _gm._raft_groups.find(gid); it != _gm._raft_groups.end()) {
+            co_await maybe_promote(gid, it->second, ts);
+        }
+    }
+
+    std::vector<raft::group_id> led;
+    for (const auto& [gid, state] : _gm._raft_groups) {
+        if (state.leader_info) {
+            led.push_back(gid);
+        }
+    }
+    for (const auto gid : led) {
+        if (const auto it = _gm._raft_groups.find(gid); it != _gm._raft_groups.end()) {
+            co_await maybe_seal(gid, it->second);
+        }
+    }
+}
+
+future<> groups_manager::seal_proposer::maybe_seal(raft::group_id gid, raft_group_state& state) {
+    auto srv = try_acquire_server(state);
+    if (!srv || !state.storage) {
+        co_return;
+    }
+    // The parent of a resize hands its writes off to its children once it applies start_resize.
+    // A seal appended after that would be stamped above the children's writes, and promoting it
+    // would vouch for data its log does not carry. The children's seals cover the parent's
+    // unsealed tail once the resize is finalized.
+    if (_gm._resize_tracker.is_resizing(gid)) {
+        co_return;
+    }
+    const auto& storage = *state.storage;
+    const auto& unsealed = storage.unsealed();
+    if (storage.seals().size() >= max_pending_seals || !unsealed.first_applied_at) {
+        co_return;
+    }
+    if (unsealed.bytes < seal_bytes
+            && lowres_clock::now() - *unsealed.first_applied_at < injectable_interval("sc_seal_interval_in_ms", seal_interval)) {
+        co_return;
+    }
+    // Whatever the outcome, the next round sees it: a second seal would only cut an empty memtable.
+    co_await append(*srv, gid, [gid] (api::timestamp_type ts, raft::term_t term) {
+        logger.debug("seal_proposer: group {}: adding a seal at {}, term {}", gid, ts, term);
+        return raft_command{.change = seal_command{.timestamp = ts}};
+    });
+}
+
+future<> groups_manager::seal_proposer::append(raft_server& srv, raft::group_id gid,
+        noncopyable_function<raft_command(api::timestamp_type, raft::term_t)> make_command) {
+    abort_on_expiry aoe(lowres_clock::now() + seal_append_timeout);
+    const auto stop_sub = utils::chain_abort_source(aoe.abort_source(), _gm._as);
+    try {
+        co_await _gm.append_command(srv, gid, aoe.abort_source(), std::move(make_command));
+    } catch (...) {
+        if (_gm._as.abort_requested()) {
+            throw;
+        }
+        logger.debug("seal_proposer: group {}: the command was not committed: {}", gid, std::current_exception());
+    }
+}
+
+future<> groups_manager::seal_proposer::maybe_promote(raft::group_id gid, raft_group_state& state, api::timestamp_type min_applied) {
+    auto srv = try_acquire_server(state);
+    if (!srv || !state.storage) {
+        co_return;
+    }
+    const auto& seals = state.storage->seals();
+    const auto seal = std::ranges::find_if(seals | std::views::reverse, [&] (const raft_seal& s) { return s.ts <= min_applied; });
+    if (seal == seals.rend()) {
+        co_return;
+    }
+    co_await append(*srv, gid, [gid, idx = seal->idx] (api::timestamp_type, raft::term_t term) {
+        logger.debug("seal_proposer: group {}: promoting the seal at {}, term {}", gid, idx, term);
+        return raft_command{.change = promote_command{.seal_idx = idx}};
+    });
 }
 
 // The raft group configuration implied by a tablet's replica set and the stage its
@@ -1116,10 +1431,11 @@ void groups_manager::schedule_raft_group_start(global_tablet_id tablet, raft::gr
         _starting_groups.push_back(state);
     }
     const auto range = token_range_of_group(tm->tablets().get_tablet_map(tablet.table), tablet.tablet, id);
+    register_seal_boundaries_provider(_db.find_column_family(tablet.table));
     chain_control_op(state, id, [this, &state, tablet, id, tm = std::move(tm), range, g = state.gate,
             m = metrics.weak_from_this(), server_stats = metrics.server_stats(),
             rpc_stats = metrics.rpc_stats(), apply_stats = metrics.apply_stats()] () mutable -> future<> {
-        co_await start_raft_group(tablet, id, std::move(tm), std::move(server_stats), std::move(rpc_stats),
+        co_await start_raft_group(tablet, range, id, std::move(tm), std::move(server_stats), std::move(rpc_stats),
             std::move(apply_stats));
         state.server = &_raft_gr.get_server(id);
         state.metrics = std::move(m);
@@ -1361,6 +1677,8 @@ void groups_manager::start() {
     if (_pending_tm) {
         update(std::move(_pending_tm));
     }
+
+    _seal_proposer.start();
 }
 
 future<> groups_manager::stepdown_leaders() {
@@ -1433,6 +1751,8 @@ future<> groups_manager::stop_shard() {
     }
     logger.info("stop_shard() enter");
 
+    co_await _seal_proposer.stop();
+
     // The segments must survive so replay can recover the log.
     schedule_raft_groups_deletion(true, log_disposition::keep);
 
@@ -1440,6 +1760,13 @@ future<> groups_manager::stop_shard() {
         co_await _raft_groups.begin()->second.server_control_op.get_future();
     }
     _started = false;
+
+    // The database outlives this object, and flushes at shutdown classify sstables.
+    for (const auto id : _seal_provider_tables) {
+        if (auto t = _db.get_tables_metadata().get_table_if_exists(id)) {
+            t->set_seal_boundaries_provider({});
+        }
+    }
 
     logger.info("stop_shard() completed");
 }

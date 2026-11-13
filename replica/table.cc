@@ -954,8 +954,28 @@ private:
         };
     }
 
+    // No sstable spans a seal, so the max timestamp says which seal interval it is in.
+    repair_classifier_func make_seal_sstable_classifier_func() const {
+        return [this] (const sstables::shared_sstable& sst, int64_t) {
+            const auto boundaries = _t.seal_boundaries_for(compaction_group_for_sstable(sst).token_range());
+            // Seals unknown, e.g. right after a restart: nothing may be compacted meanwhile.
+            if (!boundaries) {
+                return repair_sstable_classification::repairing;
+            }
+            const auto max_timestamp = sst->get_stats_metadata().max_timestamp;
+            if (max_timestamp <= boundaries->promoted) {
+                return repair_sstable_classification::repaired;
+            }
+            if (max_timestamp <= boundaries->newest) {
+                return repair_sstable_classification::repairing;
+            }
+            return repair_sstable_classification::unrepaired;
+        };
+    }
+
     storage_group_ptr allocate_storage_group(const locator::tablet_map& tmap, locator::tablet_id tid, dht::token_range range) const {
-        auto cg = make_lw_shared<compaction_group>(_t, tid.value(), std::move(range), make_repair_sstable_classifier_func());
+        auto classifier = tmap.has_raft_info() ? make_seal_sstable_classifier_func() : make_repair_sstable_classifier_func();
+        auto cg = make_lw_shared<compaction_group>(_t, tid.value(), std::move(range), std::move(classifier));
         auto sg = make_lw_shared<storage_group>(std::move(cg));
         if (tmap.needs_split()) {
             sg->set_split_mode();
@@ -2127,6 +2147,81 @@ public:
     }
 };
 
+future<> table::with_flush_retry(future<>& previous_flush, std::function<future<>()> func) {
+    auto r = exponential_backoff_retry(100ms, 10s);
+    // Try flushing for around half an hour (30 minutes every 10 seconds)
+    int default_retries = 30 * 60 / 10;
+    int allowed_retries = default_retries;
+
+    for (;;) {
+        std::exception_ptr ex;
+        try {
+            co_return co_await func();
+        } catch (...) {
+            ex = std::current_exception();
+            _config.cf_stats->failed_memtables_flushes_count++;
+
+            auto should_retry = [](auto* ep) {
+                int ec = ep->code().value();
+                return ec == ENOSPC || ec == EDQUOT || ec == EPERM || ec == EACCES;
+            };
+            if (try_catch<std::bad_alloc>(ex)) {
+                // There is a chance something else will free the memory, so we can try again
+                allowed_retries--;
+            } else if (auto ep = try_catch<std::system_error>(ex)) {
+                allowed_retries = should_retry(ep) ? default_retries : 0;
+            } else if (auto ep = try_catch<storage_io_error>(ex)) {
+                allowed_retries = should_retry(ep) ? default_retries : 0;
+            } else if (try_catch<db::extension_storage_exception>(ex)) {
+                allowed_retries = default_retries;
+            } else {
+                allowed_retries = 0;
+            }
+
+            if (allowed_retries <= 0) {
+                // At this point we don't know what has happened and it's better to potentially
+                // take the node down and rely on commitlog to replay.
+                //
+                // FIXME: enter maintenance mode when available.
+                // since replaying the commitlog with a corrupt mutation
+                // may end up in an infinite crash loop.
+                tlogger.error("Memtable flush failed due to: {}. Aborting, at {}", ex, current_backtrace());
+                std::abort();
+            }
+        }
+        if (_async_gate.is_closed()) {
+            tlogger.warn("Memtable flush failed due to: {}. Dropped due to shutdown", ex);
+            co_await std::move(previous_flush);
+            co_await coroutine::return_exception_ptr(std::move(ex));
+        }
+        tlogger.warn("Memtable flush failed due to: {}. Will retry in {}ms", ex, r.sleep_time().count());
+        co_await r.retry();
+    }
+}
+
+size_t table::account_memtable_switch(memtable& old) noexcept {
+    _highest_flushed_rp = std::max(_highest_flushed_rp, old.replay_position());
+    _stats.memtable_switch_count++;
+    // This will set evictable occupancy of the old memtable region to zero, so that
+    // this region is considered last for flushing by dirty_memory_manager::flush_when_needed().
+    // If we don't do that, the flusher may keep picking up this memtable list for flushing after
+    // the permit is released even though there is not much to flush in the active memtable of this list.
+    old.region().ground_evictable_occupancy();
+    return old.occupancy().total_space();
+}
+
+void table::add_pending_flush(size_t memtable_size) noexcept {
+    _stats.pending_flushes++;
+    _config.cf_stats->pending_memtables_flushes_count++;
+    _config.cf_stats->pending_memtables_flushes_bytes += memtable_size;
+}
+
+void table::remove_pending_flush(size_t memtable_size) noexcept {
+    _stats.pending_flushes--;
+    _config.cf_stats->pending_memtables_flushes_count--;
+    _config.cf_stats->pending_memtables_flushes_bytes -= memtable_size;
+}
+
 // The function never fails.
 // It either succeeds eventually after retrying or aborts.
 future<>
@@ -2147,59 +2242,13 @@ table::seal_active_memtable(compaction_group& cg, flush_permit&& flush_permit) n
     }
 
     auto permit = std::move(flush_permit);
-    auto r = exponential_backoff_retry(100ms, 10s);
-    // Try flushing for around half an hour (30 minutes every 10 seconds)
-    int default_retries = 30 * 60 / 10;
-    int allowed_retries = default_retries;
     std::optional<utils::phased_barrier::operation> op;
     size_t memtable_size;
     future<> previous_flush = make_ready_future<>();
+    bool rotated = false;
 
-    auto with_retry = [&] (std::function<future<>()> func) -> future<> {
-        for (;;) {
-            std::exception_ptr ex;
-            try {
-                co_return co_await func();
-            } catch (...) {
-                ex = std::current_exception();
-                _config.cf_stats->failed_memtables_flushes_count++;
-
-                auto should_retry = [](auto* ep) {
-                    int ec = ep->code().value();
-                    return ec == ENOSPC || ec == EDQUOT || ec == EPERM || ec == EACCES;
-                };
-                if (try_catch<std::bad_alloc>(ex)) {
-                    // There is a chance something else will free the memory, so we can try again
-                    allowed_retries--;
-                } else if (auto ep = try_catch<std::system_error>(ex)) {
-                    allowed_retries = should_retry(ep) ? default_retries : 0;
-                } else if (auto ep = try_catch<storage_io_error>(ex)) {
-                    allowed_retries = should_retry(ep) ? default_retries : 0;
-                } else if (try_catch<db::extension_storage_exception>(ex)) {
-                    allowed_retries = default_retries;
-                } else {
-                    allowed_retries = 0;
-                }
-
-                if (allowed_retries <= 0) {
-                    // At this point we don't know what has happened and it's better to potentially
-                    // take the node down and rely on commitlog to replay.
-                    //
-                    // FIXME: enter maintenance mode when available.
-                    // since replaying the commitlog with a corrupt mutation
-                    // may end up in an infinite crash loop.
-                    tlogger.error("Memtable flush failed due to: {}. Aborting, at {}", ex, current_backtrace());
-                    std::abort();
-                }
-            }
-            if (_async_gate.is_closed()) {
-                tlogger.warn("Memtable flush failed due to: {}. Dropped due to shutdown", ex);
-                co_await std::move(previous_flush);
-                co_await coroutine::return_exception_ptr(std::move(ex));
-            }
-            tlogger.warn("Memtable flush failed due to: {}. Will retry in {}ms", ex, r.sleep_time().count());
-            co_await r.retry();
-        }
+    auto with_retry = [&] (std::function<future<>()> func) {
+        return with_flush_retry(previous_flush, std::move(func));
     };
 
     co_await with_retry([&] {
@@ -2208,21 +2257,22 @@ table::seal_active_memtable(compaction_group& cg, flush_permit&& flush_permit) n
             throw std::bad_alloc();
         });
 
+        // While a failed attempt waits to be retried, rotate_memtables() may switch
+        // the memtable, and then it flushes the memtable itself.
+        if (cg.memtables()->back() != old) {
+            rotated = true;
+            return make_ready_future<>();
+        }
         cg.memtables()->add_memtable();
-        _highest_flushed_rp = std::max(_highest_flushed_rp, old->replay_position());
 
         // no exceptions allowed (nor expected) from this point on
-        _stats.memtable_switch_count++;
-        [&] () noexcept {
-            // This will set evictable occupancy of the old memtable region to zero, so that
-            // this region is considered last for flushing by dirty_memory_manager::flush_when_needed().
-            // If we don't do that, the flusher may keep picking up this memtable list for flushing after
-            // the permit is released even though there is not much to flush in the active memtable of this list.
-            old->region().ground_evictable_occupancy();
-            memtable_size = old->occupancy().total_space();
-        }();
+        memtable_size = account_memtable_switch(*old);
         return make_ready_future<>();
     });
+    if (rotated) {
+        // rotate_memtables() flushes it, and compaction_group::flush() waits for that.
+        co_return;
+    }
 
     co_await with_retry([&] {
         previous_flush = _flush_barrier.advance_and_await();
@@ -2232,16 +2282,12 @@ table::seal_active_memtable(compaction_group& cg, flush_permit&& flush_permit) n
         op = _flush_barrier.start();
 
         // no exceptions allowed (nor expected) from this point on
-        _stats.pending_flushes++;
-        _config.cf_stats->pending_memtables_flushes_count++;
-        _config.cf_stats->pending_memtables_flushes_bytes += memtable_size;
+        add_pending_flush(memtable_size);
         return make_ready_future<>();
     });
 
     auto undo_stats = std::make_optional(deferred_action([this, memtable_size] () noexcept {
-        _stats.pending_flushes--;
-        _config.cf_stats->pending_memtables_flushes_count--;
-        _config.cf_stats->pending_memtables_flushes_bytes -= memtable_size;
+        remove_pending_flush(memtable_size);
     }));
 
     co_await with_retry([&] () -> future<> {
@@ -2278,6 +2324,117 @@ table::seal_active_memtable(compaction_group& cg, flush_permit&& flush_permit) n
 
     // FIXME: release commit log
     // FIXME: provide back-pressure to upper layers
+}
+
+std::optional<seal_boundaries> table::seal_boundaries_for(const dht::token_range& range) const {
+    if (!_seal_boundaries_provider) {
+        return std::nullopt;
+    }
+    const auto& tmap = _erm->get_token_metadata().tablets().get_tablet_map(_schema->id());
+    // The range is a tablet's, or a part of one during a split; the map names the parent
+    // until the split is finalized.
+    const auto tid = tmap.get_tablet_id(range.end() ? range.end()->value() : dht::maximum_token());
+    const auto boundaries = _seal_boundaries_provider(tmap.get_tablet_raft_info(tid).group_id);
+    if (!boundaries || !tmap.has_raft_resize_info(tid)) {
+        return boundaries;
+    }
+    // During a resize the children's writes land in the parent's storage, and the children
+    // seal them. The promoted seal stays the parent's: a child is promoted only once the map
+    // names it, and the children's writes are all above the parent's seals. The newest seal
+    // is the newest of the three groups, so nothing is ever merged across a child's seal.
+    auto combined = *boundaries;
+    for (const auto child : tmap.get_raft_resize_info(tid).new_gids) {
+        const auto child_boundaries = _seal_boundaries_provider(child);
+        if (!child_boundaries) {
+            return std::nullopt;
+        }
+        combined.newest = std::max(combined.newest, child_boundaries->newest);
+    }
+    return combined;
+}
+
+void table::rotate_memtables(dht::token_range range) {
+    struct rotation {
+        compaction_group_ptr cg;
+        gate::holder flush_gate_holder;
+        shared_memtable new_memtable;
+    };
+    utils::small_vector<rotation, 3> rotations;
+    for (const auto& sg : storage_groups_for_token_range(std::move(range))) {
+        for (auto& cg : sg->compaction_groups_immediate()) {
+            if (cg->memtables()->back()->empty()) {
+                continue;
+            }
+            // A group whose flush gate is closed is being stopped, and its stop() has
+            // already flushed it.
+            auto flush_gate_holder = cg->flush_gate().try_hold();
+            if (!flush_gate_holder) {
+                continue;
+            }
+            cg->_pending_rotations.reserve(cg->_pending_rotations.size() + 1);
+            rotations.push_back(rotation{cg, std::move(*flush_gate_holder), cg->memtables()->prepare_memtable()});
+        }
+    }
+
+    // no exceptions allowed (nor expected) from this point on
+    [&] () noexcept {
+        for (auto& [cg, flush_gate_holder, new_memtable] : rotations) {
+            auto old = cg->memtables()->back();
+            cg->_lowest_rp = db::replay_position::max;
+            cg->_pending_rotations.emplace_back(old.get(), cg->_highest_flushed_rp);
+            cg->memtables()->add_memtable(std::move(new_memtable));
+            (void)flush_rotated_memtable(*cg, std::move(flush_gate_holder), std::move(old));
+        }
+    }();
+}
+
+future<> table::flush_rotated_memtable(compaction_group& cg, gate::holder flush_gate_holder, lw_shared_ptr<memtable> old) noexcept {
+    // Runs before the caller resumes, so that a flush of the table started after the
+    // rotation waits for this one; see _rotated_flush_barrier.
+    auto rotated_op = _rotated_flush_barrier.start();
+    auto memtable_size = account_memtable_switch(*old);
+    add_pending_flush(memtable_size);
+    auto undo_stats = deferred_action([this, memtable_size] () noexcept {
+        remove_pending_flush(memtable_size);
+    });
+    auto previous_flush = make_ready_future<>();
+    std::optional<utils::phased_barrier::operation> op;
+    std::exception_ptr ex;
+    try {
+        co_await utils::get_local_injector().inject("rotated_memtable_flush_wait", utils::wait_for_message(std::chrono::minutes(5)));
+        auto permit = co_await _config.dirty_memory_manager->get_flush_permit();
+        // Joins the flush order only now, holding a permit, like every other flush.
+        previous_flush = _flush_barrier.advance_and_await();
+        op = _flush_barrier.start();
+        // Truncate and clear() drop memtables without flushing them, while holding all flush
+        // permits. Writing out a memtable which was dropped while its flush waited for a permit
+        // would bring its data back.
+        if (cg.memtables()->contains(old)) {
+            // previous_flush is awaited below, also when the flush fails.
+            auto no_previous_flush = make_ready_future<>();
+            co_await with_flush_retry(no_previous_flush, [&] () -> future<> {
+                if (!permit.has_sstable_write_permit()) {
+                    permit = co_await std::move(permit).reacquire_sstable_write_permit();
+                }
+                co_await try_flush_memtable_to_sstable(cg, old, permit.release_sstable_write_permit());
+            });
+            if (_commitlog) {
+                _commitlog->discard_completed_segments(_schema->id(), old->get_and_discard_rp_set());
+            }
+        }
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    if (ex) {
+        tlogger.log(try_catch<gate_closed_exception>(ex) ? log_level::warn : log_level::error,
+                "Failed to flush rotated memtable of {}.{}: {}", _schema->ks_name(), _schema->cf_name(), ex);
+    }
+    co_await std::move(previous_flush);
+    if (!ex) {
+        // As in seal_active_memtable(): every memtable sealed before this one is in sstables too.
+        cg._highest_flushed_rp = std::max(cg._highest_flushed_rp, old->replay_position());
+        std::erase_if(cg._pending_rotations, [&] (const auto& r) { return r.first == old.get(); });
+    }
 }
 
 future<>
@@ -3006,6 +3163,14 @@ void table::trigger_compaction() {
     });
 }
 
+void table::trigger_compaction(dht::token_range range) {
+    for (const auto& sg : storage_groups_for_token_range(std::move(range))) {
+        for (auto& cg : sg->compaction_groups_immediate()) {
+            try_trigger_compaction(*cg);
+        }
+    }
+}
+
 void table::trigger_logstor_compaction() {
     for_each_compaction_group([] (compaction_group& cg) {
         cg.trigger_logstor_compaction();
@@ -3725,6 +3890,7 @@ table::table(schema_ptr schema, config config, lw_shared_ptr<const storage_optio
     , _sstables_manager(sst_manager)
     , _index_manager(this->as_data_dictionary())
     , _flush_barrier(format("[table {}.{}] flush_barrier", _schema->ks_name(), _schema->cf_name()))
+    , _rotated_flush_barrier(format("[table {}.{}] rotated_flush_barrier", _schema->ks_name(), _schema->cf_name()))
     , _counter_cell_locks(_schema->is_counter() ? std::make_unique<cell_locker>(_schema, cl_stats) : nullptr)
     , _large_data_guardrail(make_large_data_guardrail())
     , _async_gate(format("[table {}.{}] async_gate", _schema->ks_name(), _schema->cf_name()))
@@ -4779,7 +4945,9 @@ future<> compaction_group::flush(std::optional<db::replay_position> pos) noexcep
     // set the flush function, I guess it is ok. Retaining low until then
     // for logging purposes as well.
     try {
-        return _memtables->flush();
+        return _memtables->flush().then([this] {
+            return _t._rotated_flush_barrier.advance_and_await();
+        });
     } catch (...) {
         return current_exception_as_future<>();
     }
@@ -5923,7 +6091,7 @@ lw_shared_ptr<sstables::sstable_set> compaction_group::make_repaired_sstable_set
     auto set = make_lw_shared<sstables::sstable_set>(make_main_sstable_set());
     auto sstables_repaired_at = get_sstables_repaired_at();
     for (auto& sst : *_main_sstables->all()) {
-        if (repair::is_repaired(sstables_repaired_at, sst)) {
+        if (_repair_sstable_classifier(sst, sstables_repaired_at) == repair_sstable_classification::repaired) {
             set->insert(sst);
         }
     }
@@ -6374,6 +6542,7 @@ future<> table::truncate_tablet_locally(database& db, locator::tablet_id tid) {
         rebuild_statistics();
     }
 
+    co_await utils::get_local_injector().inject("truncate_tablet_locally_before_clear", utils::wait_for_message(std::chrono::minutes(5)));
     // Safe under a read still using one of these: iterator_reader re-derives its iterators,
     // and invalidate() left the cache with nothing pre-truncate to pair them with. A read
     // bypassing the cache can still see a shadowed value, as on the regular truncate path.

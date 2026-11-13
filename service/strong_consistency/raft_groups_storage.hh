@@ -12,11 +12,13 @@
 #include "utils/UUID.hh"
 
 #include <optional>
+#include <span>
 #include <vector>
 #include <deque>
 #include <functional>
 
 #include <seastar/core/future.hh>
+#include <seastar/core/lowres_clock.hh>
 
 #include "seastarx.hh"
 #include "raft_commitlog.hh"
@@ -37,6 +39,8 @@ namespace replica {
 class database;
 }
 
+class mutation;
+
 namespace service::strong_consistency {
 
 // The last truncate a group's state machine applied, as recorded in system.raft_groups.
@@ -55,6 +59,37 @@ struct truncate_record {
     // cell of the row; the next record is stamped above it.
     api::timestamp_type written_at = api::min_timestamp;
 };
+
+// A point in the raft log of a strongly consistent tablet at which its data is cut.
+struct raft_seal {
+    raft::index_t idx;
+    api::timestamp_type ts;
+
+    bool operator==(const raft_seal&) const = default;
+};
+
+// What the group has applied since its last seal. In memory only: after a restart, the
+// writes replay put back count as present, from the start of the group, with no size.
+struct unsealed_writes {
+    uint64_t bytes = 0;
+    // When the first of them was applied, nothing while there is none.
+    std::optional<lowres_clock::time_point> first_applied_at;
+};
+
+// Builds the mutation which records `seal` in the system.raft_groups row of the
+// group `gid` hosted on `shard`. `ts` is the write timestamp: this node's clock,
+// like the rest of the row, so that erase_persisted_state() beats it. The seal's
+// own timestamp is only a value.
+mutation make_seal_mutation(raft::group_id gid, shard_id shard, const raft_seal& seal, api::timestamp_type ts);
+
+// Builds the mutation which removes `seals` from the system.raft_groups row of the
+// group `gid` hosted on `shard`, written at `ts`.
+mutation make_remove_seals_mutation(raft::group_id gid, shard_id shard, std::span<const raft_seal> seals, api::timestamp_type ts);
+
+// Builds the mutation which makes `seal` the promoted seal of the group `gid` hosted
+// on `shard`, and removes it and every older one of `seals`, written at `ts`.
+mutation make_promote_seal_mutation(raft::group_id gid, shard_id shard, const raft_seal& seal,
+        std::span<const raft_seal> seals, api::timestamp_type ts);
 
 // Ask table `id` to flush, in the background. `pos` only decides whether the
 // table skips the request.
@@ -96,6 +131,10 @@ class raft_groups_storage : public raft::persistence {
     // The truncation history as the row currently holds it, so a release can leave
     // that cell alone when nothing changed.
     std::vector<truncation_record> _persisted_truncations;
+    // Oldest first.
+    std::vector<raft_seal> _seals;
+    std::optional<raft_seal> _promoted_seal;
+    unsealed_writes _unsealed;
 
     // The future of the currently executing (or already finished) write operation.
     //
@@ -147,6 +186,34 @@ public:
     // Release every record that is now committed, applied and closed.
     void maybe_release();
 
+    // The timestamp of the next write to the group's row; see _last_row_timestamp.
+    api::timestamp_type next_row_timestamp();
+
+    // Adds the seal if it is newer than the last one and than the promoted one, so that
+    // adding the same seal twice keeps one copy and a promoted seal stays out. Only in
+    // memory: make_seal_mutation() writes the row.
+    void add_seal(raft_seal seal);
+    void note_write(uint64_t bytes);
+    const unsealed_writes& unsealed() const noexcept {
+        return _unsealed;
+    }
+    // Makes room for one more seal, so that the next add_seal() does not allocate.
+    void reserve_seal() {
+        _seals.reserve(_seals.size() + 1);
+    }
+    // Removes the seal and every older one. Only in memory:
+    // make_remove_seals_mutation() writes the row.
+    void remove_seals(const raft_seal& seal);
+    const std::vector<raft_seal>& seals() const noexcept {
+        return _seals;
+    }
+    // Makes the seal the promoted one if it is newer than the current one, and removes
+    // it and every older seal. Only in memory: make_promote_seal_mutation() writes the row.
+    void promote_seal(const raft_seal& seal);
+    const std::optional<raft_seal>& promoted_seal() const noexcept {
+        return _promoted_seal;
+    }
+
     // Everything one group's row holds, as commitlog replay needs to read it.
     struct persisted_descriptor {
         bool exists = false;
@@ -155,6 +222,9 @@ public:
         raft::configuration config;
         std::vector<truncation_record> truncations;
         truncate_record truncate;
+        // Oldest first.
+        std::vector<raft_seal> seals;
+        std::optional<raft_seal> promoted_seal;
     };
 
     // The statics below read and write a group's row without a raft_groups_storage,
@@ -170,7 +240,7 @@ public:
         raft::group_id gid, shard_id shard);
 
     // Deletes the group's row, which is everything this shard persists about it: term and
-    // vote, the snapshot descriptor and the truncation history.
+    // vote, the snapshot descriptor, the truncation history, the seals and the promoted seal.
     //
     // Called when a replica leaves the group, so that a tablet migrated back to this shard
     // later rejoins with no history of its previous membership. Without it the replica

@@ -22,6 +22,7 @@
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/testing/on_internal_error.hh>
 #include "test/lib/cql_test_env.hh"
+#include "test/lib/cql_assertions.hh"
 #include "test/lib/log.hh"
 #include "test/lib/simple_schema.hh"
 #include "test/lib/key_utils.hh"
@@ -7844,6 +7845,280 @@ SEASTAR_TEST_CASE(test_truncate_tablet_locally_under_parked_paged_read) {
             BOOST_REQUIRE(paged_partition_read(e, 0, page_size).rest().empty());
         }
     }, tablet_cql_test_config());
+}
+
+// Rotates the memtables of one tablet of ks.cf on the shard holding it.
+static void rotate_memtables(cql_test_env& e, locator::tablet_id tid) {
+    e.db().invoke_on(shard_of(e, tid), [tid] (replica::database& db) {
+        auto& t = db.find_column_family("ks", "cf");
+        t.rotate_memtables(db.get_token_metadata().tablets().get_tablet_map(t.schema()->id()).get_token_range(tid));
+    }).get();
+}
+
+// Writes from before and after rotate_memtables() never end up in one sstable.
+SEASTAR_TEST_CASE(test_rotate_memtables_cuts_tablet) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("create table ks.cf (pk int, ck int, v int, primary key (pk, ck)) with compaction = {'class': 'NullCompactionStrategy'}").get();
+        const auto tid = tablet_of(e, 0);
+        const auto owner = shard_of(e, tid);
+
+        for (int ck = 0; ck < 10; ck++) {
+            e.execute_cql(format("insert into ks.cf (pk, ck, v) values (0, {}, 1) using timestamp 1", ck)).get();
+        }
+        rotate_memtables(e, tid);
+        for (int ck = 10; ck < 20; ck++) {
+            e.execute_cql(format("insert into ks.cf (pk, ck, v) values (0, {}, 2) using timestamp 3", ck)).get();
+        }
+        // Waits for the flush of the rotated memtable too.
+        replica::database::flush_table_on_all_shards(e.db(), "ks", "cf").get();
+
+        auto sstable_count = e.db().invoke_on(owner, [] (replica::database& db) {
+            auto ssts = db.find_column_family("ks", "cf").get_sstables();
+            for (auto& sst : *ssts) {
+                const auto& stats = sst->get_stats_metadata();
+                BOOST_REQUIRE(stats.max_timestamp < 2 || stats.min_timestamp > 2);
+            }
+            return ssts->size();
+        }).get();
+        BOOST_REQUIRE_EQUAL(sstable_count, 2);
+        assert_that(e.execute_cql("select * from ks.cf where pk = 0").get()).is_rows().with_size(20);
+    }, tablet_cql_test_config());
+}
+
+// A rotated memtable dropped by a truncate while its flush waits must not be written out,
+// even when the flush gets a permit before the truncate clears the memtable.
+SEASTAR_TEST_CASE(test_rotate_memtables_then_truncate) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+        fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+        return;
+#endif
+        e.execute_cql("create table ks.cf (pk int, ck int, v int, primary key (pk, ck))").get();
+        const auto tid = tablet_of(e, 0);
+        const auto owner = shard_of(e, tid);
+        constexpr auto pause = "rotated_memtable_flush_wait";
+
+        write_partition(e, 0, 10, 1);
+        smp::submit_to(owner, [] { utils::get_local_injector().enable(pause); }).get();
+        rotate_memtables(e, tid);
+        BOOST_REQUIRE(eventually_true([&] {
+            return smp::submit_to(owner, [] { return utils::get_local_injector().waiters(pause) > 0; }).get();
+        }));
+
+        constexpr auto truncate_pause = "truncate_tablet_locally_before_clear";
+        smp::submit_to(owner, [] { utils::get_local_injector().enable(truncate_pause); }).get();
+        auto truncate = truncate_tablet_locally(e, tid);
+        BOOST_REQUIRE(eventually_true([&] {
+            return smp::submit_to(owner, [] { return utils::get_local_injector().waiters(truncate_pause) > 0; }).get();
+        }));
+        smp::submit_to(owner, [] {
+            utils::get_local_injector().receive_message(pause);
+            utils::get_local_injector().disable(pause);
+        }).get();
+        // Waits for the flush of the rotated memtable, which runs while the dropped memtable
+        // still holds its data.
+        replica::database::flush_table_on_all_shards(e.db(), "ks", "cf").get();
+        smp::submit_to(owner, [] {
+            utils::get_local_injector().receive_message(truncate_pause);
+            utils::get_local_injector().disable(truncate_pause);
+        }).get();
+        truncate.get();
+
+        e.execute_cql("insert into ks.cf (pk, ck, v) values (0, 100, 2)").get();
+        // Waits for the flush of the rotated memtable too.
+        replica::database::flush_table_on_all_shards(e.db(), "ks", "cf").get();
+        assert_that(e.execute_cql("select ck, v from ks.cf where pk = 0").get()).is_rows().with_rows({
+            {int32_type->decompose(100), int32_type->decompose(2)},
+        });
+    }, tablet_cql_test_config());
+}
+
+// The flushed position of a tablet does not pass a rotated memtable while its flush
+// waits, even if newer memtables are flushed meanwhile, and covers it once it is flushed.
+SEASTAR_TEST_CASE(test_rotate_memtables_keeps_flushed_position_behind) {
+    return do_with_cql_env_thread([](cql_test_env& e) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+        fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+        return;
+#endif
+        e.execute_cql("create table ks.cf (pk int, ck int, v int, primary key (pk, ck)) with compaction = {'class': 'NullCompactionStrategy'}").get();
+        const auto tid = tablet_of(e, 0);
+        const auto owner = shard_of(e, tid);
+        constexpr auto pause = "rotated_memtable_flush_wait";
+        const auto flushed_position = [&] {
+            return e.db().invoke_on(owner, [tid] (replica::database& db) {
+                auto& t = db.find_column_family("ks", "cf");
+                return t.highest_flushed_replay_position(db.get_token_metadata().tablets().get_tablet_map(t.schema()->id()).get_token_range(tid));
+            }).get();
+        };
+        const auto sstable_count = [&] {
+            return e.db().invoke_on(owner, [] (replica::database& db) {
+                return db.find_column_family("ks", "cf").get_sstables()->size();
+            }).get();
+        };
+
+        write_partition(e, 0, 10, 1);
+        smp::submit_to(owner, [] { utils::get_local_injector().enable(pause); }).get();
+        rotate_memtables(e, tid);
+        BOOST_REQUIRE(eventually_true([&] {
+            return smp::submit_to(owner, [] { return utils::get_local_injector().waiters(pause) > 0; }).get();
+        }));
+
+        write_partition(e, 1, 10, 1);
+        // Flushes the newer memtable, then waits for the rotated one.
+        auto flush = replica::database::flush_table_on_all_shards(e.db(), "ks", "cf");
+        BOOST_REQUIRE(eventually_true([&] { return sstable_count() == 1; }));
+        BOOST_REQUIRE(flushed_position() == db::replay_position());
+
+        smp::submit_to(owner, [] {
+            utils::get_local_injector().receive_message(pause);
+            utils::get_local_injector().disable(pause);
+        }).get();
+        flush.get();
+        BOOST_REQUIRE_EQUAL(sstable_count(), 2);
+        BOOST_REQUIRE(flushed_position() != db::replay_position());
+    }, tablet_cql_test_config());
+}
+
+// The sstables of a strongly consistent tablet are classified by its seals: compaction
+// never merges sstables from both sides of a seal, and merges them once the seal is promoted.
+//
+// Nothing seals the group yet, so the test stands in a provider which pretends the seals
+// are at the max timestamps of chosen sstables.
+SEASTAR_TEST_CASE(test_seal_sstable_classifier) {
+    cql_test_config cfg = tablet_cql_test_config();
+    cfg.db_config->experimental_features(
+        {db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES},
+        db::config::config_source::CommandLine
+    );
+
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("create keyspace sc_ks with replication = {'class': 'NetworkTopologyStrategy',"
+                      " 'replication_factor': 1} and tablets = {'initial': 1} and consistency = 'global'").get();
+        e.execute_cql("create table sc_ks.cf (pk int, ck int, v int, primary key (pk, ck))"
+                      " with compaction = {'class': 'NullCompactionStrategy'}").get();
+
+        const auto table = e.local_db().find_schema("sc_ks", "cf")->id();
+        const auto& tmap = e.local_db().get_token_metadata().tablets().get_tablet_map(table);
+        const auto tablet = tmap.first_tablet();
+        const auto shard = tmap.get_tablet_info(tablet).replicas[0].shard;
+        const auto range = tmap.get_token_range(tablet);
+
+        const auto write_rows = [&] (int from, int to) {
+            for (int ck = from; ck < to; ck++) {
+                e.execute_cql(format("insert into sc_ks.cf (pk, ck, v) values (0, {}, 1)", ck),
+                        std::make_unique<cql3::query_options>(db::consistency_level::QUORUM,
+                                std::vector<cql3::raw_value>{})).get();
+            }
+        };
+        const auto rotate = [&] {
+            e.db().invoke_on(shard, [&] (replica::database& db) {
+                db.find_column_family(table).rotate_memtables(range);
+            }).get();
+        };
+        const auto compact = [&] {
+            e.db().invoke_on(shard, [&] (replica::database& db) {
+                return db.find_column_family(table).compact_all_sstables(tasks::make_empty_task_info());
+            }).get();
+        };
+        // The max timestamps of the tablet's sstables, oldest first.
+        const auto max_timestamps = [&] {
+            return e.db().invoke_on(shard, [&] (replica::database& db) {
+                std::vector<api::timestamp_type> ts;
+                for (const auto& sst : *db.find_column_family(table).get_sstables()) {
+                    ts.push_back(sst->get_stats_metadata().max_timestamp);
+                }
+                std::ranges::sort(ts);
+                return ts;
+            }).get();
+        };
+        const auto pretend_seals = [&] (api::timestamp_type promoted, api::timestamp_type newest) {
+            e.db().invoke_on(shard, [&, promoted, newest] (replica::database& db) {
+                db.find_column_family(table).set_seal_boundaries_provider([promoted, newest] (raft::group_id) {
+                    return replica::seal_boundaries{.promoted = promoted, .newest = newest};
+                });
+            }).get();
+        };
+        // How many sstables tombstone GC consults when compacting the oldest one.
+        const auto gc_set_size_of_oldest = [&] {
+            return e.db().invoke_on(shard, [&] (replica::database& db) {
+                auto& t = db.find_column_family(table);
+                const auto oldest = std::ranges::min(*t.get_sstables(), {}, [] (const sstables::shared_sstable& sst) {
+                    return sst->get_stats_metadata().max_timestamp;
+                });
+                return t.compaction_group_view_for_sstable(oldest).sstable_set_for_tombstone_gc(*t.schema())->size();
+            }).get();
+        };
+
+        write_rows(0, 10);
+        rotate();
+        write_rows(10, 20);
+        replica::database::flush_table_on_all_shards(e.db(), "sc_ks", "cf").get();
+        BOOST_REQUIRE_EQUAL(max_timestamps().size(), 2);
+
+        // The group has no seals: everything is unrepaired and merges.
+        compact();
+        BOOST_REQUIRE_EQUAL(max_timestamps().size(), 1);
+
+        // Five more sstables, six with the merged one.
+        for (int i = 2; i < 7; i++) {
+            write_rows(i * 10, (i + 1) * 10);
+            if (i < 6) {
+                rotate();
+            }
+        }
+        replica::database::flush_table_on_all_shards(e.db(), "sc_ks", "cf").get();
+        const auto cuts = max_timestamps();
+        BOOST_REQUIRE_EQUAL(cuts.size(), 6);
+
+        // A promoted seal after the second sstable and a pending one after the fourth: two
+        // sstables in each tier. The repaired ones merge, the repairing ones are left alone,
+        // the unrepaired ones merge.
+        pretend_seals(cuts[1], cuts[3]);
+        // Tombstone GC of a repaired sstable consults the repaired sstables only, and the
+        // seals say which those are.
+        BOOST_REQUIRE_EQUAL(gc_set_size_of_oldest(), 2);
+        compact();
+        BOOST_REQUIRE(max_timestamps() == (std::vector{cuts[1], cuts[2], cuts[3], cuts[5]}));
+
+        // The pending seal is promoted: its sstables merge with the repaired ones.
+        pretend_seals(cuts[3], cuts[3]);
+        compact();
+        BOOST_REQUIRE(max_timestamps() == (std::vector{cuts[3], cuts[5]}));
+
+        // A promoted seal after the last sstable: all of it merges.
+        pretend_seals(cuts[5], cuts[5]);
+        compact();
+        BOOST_REQUIRE(max_timestamps() == (std::vector{cuts[5]}));
+    }, cfg);
+}
+
+// Tombstone GC of a strongly consistent table runs in repair mode, where the promoted seal
+// fences it, or not at all; the modes purging on time alone are refused.
+SEASTAR_TEST_CASE(test_strongly_consistent_table_tombstone_gc_mode) {
+    cql_test_config cfg = tablet_cql_test_config();
+    cfg.db_config->experimental_features(
+        {db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES},
+        db::config::config_source::CommandLine
+    );
+
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("create keyspace sc_ks with replication = {'class': 'NetworkTopologyStrategy',"
+                      " 'replication_factor': 1} and tablets = {'initial': 1} and consistency = 'global'").get();
+        for (const auto mode : {"timeout", "immediate"}) {
+            BOOST_REQUIRE_THROW(e.execute_cql(format("create table sc_ks.cf (pk int primary key)"
+                    " with tombstone_gc = {{'mode': '{}'}}", mode)).get(), exceptions::configuration_exception);
+        }
+        e.execute_cql("create table sc_ks.cf (pk int primary key) with tombstone_gc = {'mode': 'repair'}").get();
+        for (const auto mode : {"timeout", "immediate"}) {
+            BOOST_REQUIRE_THROW(e.execute_cql(format("alter table sc_ks.cf with tombstone_gc = {{'mode': '{}'}}", mode)).get(),
+                    exceptions::configuration_exception);
+        }
+        e.execute_cql("alter table sc_ks.cf with tombstone_gc = {'mode': 'disabled'}").get();
+        BOOST_REQUIRE(e.local_db().find_schema("sc_ks", "cf")->tombstone_gc_options().mode() == tombstone_gc_mode::disabled);
+        e.execute_cql("create table sc_ks.cf2 (pk int primary key)").get();
+        BOOST_REQUIRE(e.local_db().find_schema("sc_ks", "cf2")->tombstone_gc_options().mode() == tombstone_gc_mode::repair);
+    }, cfg);
 }
 
 namespace {

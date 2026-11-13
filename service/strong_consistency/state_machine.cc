@@ -17,6 +17,8 @@
 #include "idl/strong_consistency/state_machine.dist.hh"
 #include "idl/strong_consistency/state_machine.dist.impl.hh"
 #include "replica/database.hh"
+#include "compaction/compaction_manager.hh"
+#include "tombstone_gc.hh"
 #include "service/migration_manager.hh"
 #include "db/system_keyspace.hh"
 #include "utils/error_injection.hh"
@@ -45,6 +47,7 @@ mutation make_resize_marker_mutation(raft::group_id gid, shard_id shard, const r
 
 class state_machine : public raft_state_machine {
     locator::global_tablet_id _tablet;
+    dht::token_range _range;
     raft::group_id _group_id;
     replica::database& _db;
     service::migration_manager& _mm;
@@ -57,6 +60,7 @@ class state_machine : public raft_state_machine {
 
 public:
     state_machine(locator::global_tablet_id tablet,
+        dht::token_range range,
         raft::group_id gid,
         replica::database& db,
         service::migration_manager& mm,
@@ -65,6 +69,7 @@ public:
         raft_resize_tracker& resize_tracker,
         lw_shared_ptr<state_machine_stats> stats)
         : _tablet(tablet)
+        , _range(std::move(range))
         , _group_id(gid)
         , _db(db)
         , _mm(mm)
@@ -84,6 +89,39 @@ public:
         if (!command.empty()) {
             _persistence.note_applied(command.back()->idx);
         }
+    }
+
+    future<> apply_seal(raft_seal s) {
+        // Applied again after a restart. The row is written at this node's clock, so
+        // the seal must be skipped, not written over its promotion.
+        if (const auto& promoted = _persistence.promoted_seal(); promoted && s.idx <= promoted->idx) {
+            co_return;
+        }
+        // Once the row is written, add_seal() must not fail, or the row would
+        // hold a seal that memory misses.
+        _persistence.reserve_seal();
+        _db.find_column_family(_tablet.table).rotate_memtables(_range);
+        auto m = make_seal_mutation(_group_id, this_shard_id(), s, _persistence.next_row_timestamp());
+        co_await _db.apply_in_memory(m, m.schema()->table(),
+                _persistence.pin_raft_groups_for_apply(s.idx), db::no_timeout);
+        _persistence.add_seal(s);
+    }
+
+    future<> apply_promote(raft::index_t idx, raft::index_t seal_idx) {
+        const auto& seals = _persistence.seals();
+        auto it = std::ranges::find(seals, seal_idx, &raft_seal::idx);
+        // Already promoted, or older than the promoted seal.
+        if (it == seals.end()) {
+            co_return;
+        }
+        const auto s = *it;
+        auto m = make_promote_seal_mutation(_group_id, this_shard_id(), s, seals, _persistence.next_row_timestamp());
+        co_await _db.apply_in_memory(m, m.schema()->table(),
+                _persistence.pin_raft_groups_for_apply(idx), db::no_timeout);
+        _persistence.promote_seal(s);
+        record_promoted_seal(_db.find_column_family(_tablet.table), _range, s.ts);
+        // The sstables up to the seal may be merged now, and their tombstones purged.
+        _db.find_column_family(_tablet.table).trigger_compaction(_range);
     }
 
     future<> apply(raft::log_entry_ptr_list command) override {
@@ -130,6 +168,20 @@ public:
                     _persistence.note_applied(command[i]->idx);
                     continue;
                 }
+                if (const auto* s = std::get_if<seal_command>(&cmd.change)) {
+                    logger.log(log_level::trace, rate_limit, "apply(): applying the seal of group {} at {}",
+                        _group_id, command[i]->idx);
+                    co_await apply_seal(raft_seal{.idx = command[i]->idx, .ts = s->timestamp});
+                    _persistence.note_applied(command[i]->idx);
+                    continue;
+                }
+                if (const auto* p = std::get_if<promote_command>(&cmd.change)) {
+                    logger.log(log_level::trace, rate_limit, "apply(): promoting the seal of group {} at {}",
+                        _group_id, p->seal_idx);
+                    co_await apply_promote(command[i]->idx, p->seal_idx);
+                    _persistence.note_applied(command[i]->idx);
+                    continue;
+                }
                 auto& mut = std::get<write_mutation>(cmd.change).mutation;
                 auto schema = co_await schemas.resolve_and_upgrade(mut);
                 // Taken after the schema resolution, which may yield on the
@@ -150,6 +202,7 @@ public:
                 }
                 ++_db.get_stats().total_writes;
                 _stats->apply_latency.add(lc.stop().latency());
+                _persistence.note_write(mut.representation().size());
                 _persistence.note_applied(command[i]->idx);
             }
         } catch (replica::no_such_column_family&) {
@@ -321,6 +374,7 @@ future<schema_ptr> schema_store::resolve_and_upgrade(frozen_mutation& m) {
 }
 
 std::unique_ptr<raft_state_machine> make_state_machine(locator::global_tablet_id tablet,
+    dht::token_range range,
     raft::group_id gid,
     replica::database& db,
     service::migration_manager& mm,
@@ -329,7 +383,14 @@ std::unique_ptr<raft_state_machine> make_state_machine(locator::global_tablet_id
     raft_resize_tracker& resize_tracker,
     lw_shared_ptr<state_machine_stats> stats)
 {
-    return std::make_unique<state_machine>(tablet, gid, db, mm, sys_ks, persistence, resize_tracker, std::move(stats));
+    return std::make_unique<state_machine>(tablet, std::move(range), gid, db, mm, sys_ks, persistence, resize_tracker, std::move(stats));
+}
+
+void record_promoted_seal(replica::table& table, const dht::token_range& range, api::timestamp_type ts) {
+    const auto time = gc_clock::time_point(std::chrono::duration_cast<gc_clock::duration>(std::chrono::microseconds(ts)));
+    // Like a repair: the commitlog segments flushed for the range do not hold gc_before down.
+    table.get_compaction_manager().get_shared_tombstone_gc_state().update_repair_time(table.schema()->id(), range, time,
+            table.highest_flushed_replay_position(range));
 }
 
 future<> apply_truncate_command(replica::database& db, locator::global_tablet_id tablet, raft::group_id gid,

@@ -10,6 +10,7 @@
 
 #include "locator/abstract_replication_strategy_fwd.hh"
 #include "locator/token_metadata.hh"
+#include "raft/raft_fwd.hh"
 #include "index/secondary_index_manager.hh"
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/sstring.hh>
@@ -351,6 +352,21 @@ public:
         _memtables.emplace_back(new_memtable());
     }
 
+    // Builds a memtable for add_memtable(shared_memtable) and makes room for it in the list,
+    // so that adding it allocates nothing and cannot fail.
+    shared_memtable prepare_memtable() {
+        _memtables.reserve(_memtables.size() + 1);
+        return new_memtable();
+    }
+
+    void add_memtable(shared_memtable mt) noexcept {
+        _memtables.push_back(std::move(mt));
+    }
+
+    bool contains(const shared_memtable& mt) const noexcept {
+        return std::ranges::find(_memtables, mt) != _memtables.end();
+    }
+
     dirty_memory_manager_logalloc::region_group& region_group() noexcept {
         return _dirty_memory_manager->region_group();
     }
@@ -475,6 +491,15 @@ public:
     }
 };
 
+// Seals of a strongly consistent tablet's Raft group. No sstable spans a seal.
+struct seal_boundaries {
+    api::timestamp_type promoted; // api::min_timestamp while no seal is promoted
+    api::timestamp_type newest;   // pending or promoted
+};
+
+// Returns nothing when the group does not run on this shard.
+using seal_boundaries_provider = std::function<std::optional<seal_boundaries>(raft::group_id)>;
+
 class table : public enable_lw_shared_from_this<table>
             , public weakly_referencable<table> {
 public:
@@ -539,6 +564,7 @@ private:
     // The storage_group_manager manages either a single storage_group for vnodes or per-tablet storage_group for tablets.
     // It contains and manages both the compaction_groups list and the storage_groups vector.
     std::unique_ptr<storage_group_manager> _sg_manager;
+    seal_boundaries_provider _seal_boundaries_provider;
     // Storage groups whose truncate_tablet_locally() is between swapping the sstables and
     // retiring the memtables, see wait_for_tablet_truncate().
     std::vector<const storage_group*> _truncating_storage_groups;
@@ -579,6 +605,18 @@ private:
     std::optional<std::chrono::seconds> _scrub_period;
     bool _tombstone_gc_enabled = true;
     utils::phased_barrier _flush_barrier;
+    // One operation per memtable rotate_memtables() set aside, held until that memtable
+    // is written. Any other memtable switch joins _flush_barrier at once, already holding
+    // a flush permit, so flushes are ordered like the switches, and waiting for the earlier
+    // flushes covers all older data. A rotated memtable is switched at once too, but its
+    // flush joins _flush_barrier only after it gets a permit. Meanwhile a later flush with
+    // newer data can join ahead of it and finish first, while the older data is not written
+    // yet. So compaction_group::flush() also waits here.
+    //
+    // The rotated flush can't join _flush_barrier before it has a permit instead: flushes
+    // wait in that barrier holding their permits, so it could wait for a permit that is
+    // only given back once it is done.
+    utils::phased_barrier _rotated_flush_barrier;
     std::vector<view_ptr> _views;
 
     std::unique_ptr<cell_locker> _counter_cell_locks; // Memory-intensive; allocate only when needed.
@@ -1140,6 +1178,17 @@ public:
     // Hence no truncation or commitlog cleanup record is written:
     // the commitlog is filtered by Raft index during replay, not by replay position
     future<> truncate_tablet_locally(database& db, locator::tablet_id tid);
+    // Switches every compaction group of the storage groups overlapping the range to a
+    // new memtable without yielding, and flushes the old ones in the background. A flush
+    // of the table started after the call waits for them.
+    void rotate_memtables(dht::token_range range);
+    void set_seal_boundaries_provider(seal_boundaries_provider provider) {
+        _seal_boundaries_provider = std::move(provider);
+    }
+    // The seals of the range's tablet, read from its Raft group: nothing while they are
+    // not known, i.e. before the strong consistency layer registers its provider, or while
+    // the group does not run on this shard.
+    std::optional<seal_boundaries> seal_boundaries_for(const dht::token_range& range) const;
     future<const_mutation_partition_ptr> find_partition(schema_ptr, reader_permit permit, const dht::decorated_key& key) const;
     future<const_row_ptr> find_row(schema_ptr, reader_permit permit, const dht::decorated_key& partition_key, clustering_key clustering_key) const;
     shard_id shard_for_reads(dht::token t) const;
@@ -1266,6 +1315,8 @@ public:
 
     void start_compaction();
     void trigger_compaction();
+    // Of the compaction groups of the storage groups overlapping the range.
+    void trigger_compaction(dht::token_range range);
     void try_trigger_compaction(compaction_group& cg) noexcept;
     void trigger_logstor_compaction();
     // Triggers offstrategy compaction, if needed, in the background.
@@ -1517,6 +1568,15 @@ private:
     // The function never fails.
     // It either succeeds eventually after retrying or aborts.
     future<> seal_active_memtable(compaction_group& cg, flush_permit&&) noexcept;
+    // Runs a step of a memtable flush. Errors which may go away are retried, the others abort,
+    // unless the table is being stopped.
+    future<> with_flush_retry(future<>& previous_flush, std::function<future<>()> func);
+    // Accounts for `old` being switched out of its memtable list to be flushed.
+    // Returns the size of the flush.
+    size_t account_memtable_switch(memtable& old) noexcept;
+    void add_pending_flush(size_t memtable_size) noexcept;
+    void remove_pending_flush(size_t memtable_size) noexcept;
+    future<> flush_rotated_memtable(compaction_group& cg, gate::holder flush_gate_holder, lw_shared_ptr<memtable> old) noexcept;
 
     void check_valid_rp(const db::replay_position&) const;
 

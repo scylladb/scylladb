@@ -224,8 +224,9 @@ enum class messaging_verb : int32_t {
     WAIT_FOR_SNAPSHOT_TRANSFER = 94,
     SYNC_RAFT_GROUP_CONFIG = 95,
     TRUNCATE_STRONGLY_CONSISTENT_TABLET = 96,
+    GET_LOCAL_APPLIED_TIMESTAMPS = 97,
 
-    LAST = 97,
+    LAST = 98,
 };
 
 } // namespace netw
