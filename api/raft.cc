@@ -7,12 +7,14 @@
  */
 
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/shard_id.hh>
 
 #include "api/api-doc/raft.json.hh"
 #include "api/utils.hh"
 
 #include "service/raft/raft_group_registry.hh"
 #include "utils/log.hh"
+#include "utils/on_internal_error.hh"
 
 using namespace seastar::httpd;
 
@@ -36,6 +38,23 @@ namespace {
         throw bad_param_exception{"Timeout must be a positive number."};
     }
     return ::service::raft_timeout{.value = lowres_clock::now() + *timeout};
+}
+
+// Must be called on shard 0.
+//
+// The Raft API is registered before group 0 is set up. Group 0 is set up later
+// during startup, or never in maintenance mode, so a missing group 0 is
+// a regular state and not an internal error.
+raft::group_id get_group0_id(const service::raft_group_registry& raft_gr) {
+    const auto shard_id = this_shard_id();
+    if (shard_id != 0) {
+        utils::on_internal_error(seastar::format("Called get_group0_id on shard {}", shard_id));
+    }
+    const auto gid = raft_gr.maybe_group0_id();
+    if (!gid) {
+        throw httpd::base_exception("Group 0 is not set up yet", http::reply::status_type::service_unavailable);
+    }
+    return *gid;
 }
 
 }  // namespace
@@ -73,7 +92,7 @@ void set_raft(http_context&, httpd::routes& r, sharded<service::raft_group_regis
         const auto gid_param = try_get_query_param<raft::group_id>(*req, "group_id");
         if (!gid_param) {
             const auto leader_id = co_await raft_gr.invoke_on(0, [] (service::raft_group_registry& raft_gr) {
-                auto& srv = raft_gr.group0();
+                auto& srv = raft_gr.get_server(get_group0_id(raft_gr));
                 return srv.current_leader();
             });
             co_return json_return_type{leader_id.to_sstring()};
@@ -104,7 +123,7 @@ void set_raft(http_context&, httpd::routes& r, sharded<service::raft_group_regis
         if (!gid_param) {
             // Read barrier on group 0 by default
             co_await raft_gr.invoke_on(0, [timeout] (service::raft_group_registry& raft_gr) -> future<> {
-                co_await raft_gr.group0_with_timeouts().read_barrier(nullptr, timeout);
+                co_await raft_gr.get_server_with_timeouts(get_group0_id(raft_gr)).read_barrier(nullptr, timeout);
             });
             co_return json_void{};
         }
@@ -172,7 +191,7 @@ void set_raft(http_context&, httpd::routes& r, sharded<service::raft_group_regis
             // Stepdown on group 0 by default
             co_await raft_gr.invoke_on(0, [timeout_dur, target] (service::raft_group_registry& raft_gr) {
                 apilog.info("Triggering stepdown for group0, target {}", target);
-                return raft_gr.group0().stepdown(timeout_dur, target);
+                return raft_gr.get_server(get_group0_id(raft_gr)).stepdown(timeout_dur, target);
             });
             co_return json_void{};
         }

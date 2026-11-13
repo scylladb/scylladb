@@ -2238,6 +2238,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 api::unset_server_raft(ctx).get();
             });
 
+            utils::get_local_injector().inject("pause_after_registering_raft_api",
+                    utils::wait_for_message(std::chrono::minutes{5})).get();
+
             checkpoint(stop_signal, "initializing system schema");
             db::schema_tables::save_system_schema(qp.local()).get();
 

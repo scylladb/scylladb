@@ -192,6 +192,12 @@ public:
     raft::server& group0();
     raft::group_id group0_id() const;
 
+    // Return the ID of group 0, or nullopt if group 0 has not been set up
+    // on this node (yet). Valid only on shard 0.
+    std::optional<raft::group_id> maybe_group0_id() const noexcept {
+        return _group0_id;
+    }
+
     // Return an instance of group 0 server with timeouts support. Valid only on shard 0,
     // after boot/upgrade is complete
     raft_server_with_timeouts group0_with_timeouts();
