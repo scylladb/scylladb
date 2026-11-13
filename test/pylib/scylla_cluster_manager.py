@@ -49,6 +49,7 @@ from cassandra.policies import (
 from test.pylib.driver_utils import control_connection_query_fallback_options, safe_driver_shutdown
 from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo, ServerUpState, SeastarIOMetricName
 from test.pylib.log_browsing import ScyllaLogFile
+from test.pylib.network_proxy import ProxyServer
 from test.pylib.rest_client import HTTPError, ScyllaMetricsClient, ScyllaRESTAPIClient
 from test.pylib.scylla_cluster import ReplaceConfig, ScyllaCluster
 from test.pylib.scylla_server import ScyllaServer, ScyllaVersionDescription
@@ -473,6 +474,15 @@ class ScyllaClusterManager:
             return True if status != psutil.STATUS_STOPPED else None
 
         await wait_for(process_is_not_stopped, time() + 30)
+
+    @manager_op
+    async def network_proxy_enable(self) -> ProxyServer:
+        """Put every server added from now on behind a TCP proxy on its internode and CQL ports.
+
+        Returns the cluster's network proxy process; wrap it in a NetworkProxy to act on the
+        nodes (the `network_proxy` fixture does). See test/pylib/network_proxy.py.
+        """
+        return await self.cluster.enable_network_proxy()
 
     @manager_op(timeout=None)
     async def _server_add(self,

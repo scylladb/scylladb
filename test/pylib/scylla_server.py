@@ -434,7 +434,10 @@ class ScyllaServer:
 
     @property
     def rpc_address(self) -> IPAddress:
-        return self.config["rpc_address"]
+        """The address clients know the server's CQL port by, which the driver reports for it:
+        broadcast_rpc_address when set (a proxied server, see test/pylib/network_proxy.py), the
+        listening address otherwise. The harness's own checks use the listening address."""
+        return self.config.get("broadcast_rpc_address", self.config["rpc_address"])
 
     @property
     def datacenter(self) -> str:
@@ -721,9 +724,12 @@ class ScyllaServer:
                                        request_timeout=self.TOPOLOGY_TIMEOUT)
             contact_points = [UnixSocketEndPoint(maintenance_socket)]
         else:
-            profile = ExecutionProfile(load_balancing_policy=WhiteListRoundRobinPolicy([self.rpc_address]),
+            # The address the node listens on, not the one it advertises: behind a network
+            # proxy, the start-up check must not depend on the rules a test has set.
+            listen_rpc_address = self.config["rpc_address"]
+            profile = ExecutionProfile(load_balancing_policy=WhiteListRoundRobinPolicy([listen_rpc_address]),
                                        request_timeout=self.TOPOLOGY_TIMEOUT)
-            contact_points=[self.rpc_address]
+            contact_points=[listen_rpc_address]
         connected = False
         cql_queried = False
         cluster_kwargs = dict(

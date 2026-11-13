@@ -20,6 +20,7 @@ import psutil
 
 from test.pylib.host_registry import Host, HostRegistry
 from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo, ServerUpState
+from test.pylib.network_proxy import ProxyServer
 from test.pylib.rest_client import ScyllaRESTAPIClient
 from test.pylib.scylla_server import (
     SCYLLA_CMDLINE_OPTIONS,
@@ -87,6 +88,9 @@ class ScyllaCluster:
         self.starting: Dict[ServerNum, ScyllaServer] = {}       # servers starting right now, not yet running (and not included in "servers").
         # The first IP assigned to a server added to the cluster.
         self.initial_seed: Optional[IPAddress] = None
+        # Set by enable_network_proxy(): every server added afterwards
+        # advertises the address of a proxy in front of its internode and CQL ports.
+        self.network_proxy: Optional[ProxyServer] = None
         # cluster is started (but it might not have running servers);
         # cleared by stop(), which is a no-op when it is False
         self.is_running: bool = True
@@ -108,6 +112,9 @@ class ScyllaCluster:
         if self.api is not None:
             self.api.close()
             self.api = None
+        if self.network_proxy is not None:
+            self.network_proxy.stop()
+            self.network_proxy = None
         await gather_safely(*(self.host_registry.release_host(Host(ip)) for ip in self.leased_ips))
         self.leased_ips.clear()
 
@@ -132,11 +139,52 @@ class ScyllaCluster:
             self.stopped.update(self.running)
             self.running.clear()
 
+    def _advertised_address(self, server: ScyllaServer) -> IPAddress:
+        """The address the server's peers reach it at: its proxy's, when proxied."""
+        if self.network_proxy is not None:
+            return IPAddress(server.config.get("broadcast_address", server.ip_addr))
+        return server.ip_addr
+
     def _seeds(self) -> List[IPAddress]:
         # If the cluster is empty, all servers must use self.initial_seed to not start separate clusters.
         if not self.running:
             return [self.initial_seed] if self.initial_seed else []
-        return [server.ip_addr for server in self.running.values()]
+        return [self._advertised_address(server) for server in self.running.values()]
+
+    async def _advertise_through_proxy(self, ip_addr: IPAddress, extra_config: dict,
+                                       advertised_addr: Optional[IPAddress] = None) -> IPAddress:
+        """The address a new server at ``ip_addr`` advertises: its own, or its proxy's when the cluster is proxied.
+
+        A proxied server advertises the address of its proxy, so that its peers
+        reach its internode ports and its clients its CQL ports through the
+        proxy. The shard-aware port is not advertised: the proxy's source ports
+        would land the driver's connections on the wrong shards. The proxy's
+        address is leased, unless ``advertised_addr`` names one to reuse (a
+        replacement on the same address), and released with the others, in recycle().
+        """
+        if self.network_proxy is None:
+            return ip_addr
+        if advertised_addr is None:
+            advertised_addr = IPAddress(await self.host_registry.lease_host())
+            self.leased_ips.add(advertised_addr)
+        extra_config['broadcast_address'] = advertised_addr
+        extra_config['broadcast_rpc_address'] = advertised_addr
+        extra_config['enable_shard_aware_drivers'] = False
+        await self.network_proxy.add_node(ip_addr, advertised_addr)
+        return advertised_addr
+
+    async def enable_network_proxy(self) -> ProxyServer:
+        """Put every server added from now on behind a TCP proxy on its internode and CQL ports.
+
+        Starts one network proxy process for the cluster, on a leased address, and
+        returns it; the cluster adds a proxy to it for each new server and
+        stops it in recycle(). See test/pylib/network_proxy.py.
+        """
+        if self.network_proxy is None:
+            host = IPAddress(await self.host_registry.lease_host())
+            self.leased_ips.add(host)
+            self.network_proxy = await ProxyServer.start(host, self.vardir, name=self.name)
+        return self.network_proxy
 
     async def add_server(self, replace_cfg: Optional[ReplaceConfig] = None,
                          cmdline: Optional[List[str]] = None,
@@ -166,7 +214,8 @@ class ScyllaCluster:
             if replace_cfg.use_host_id:
                 extra_config['replace_node_first_boot'] = await replaced_srv.get_host_id(self.api)
             else:
-                extra_config['replace_address_first_boot'] = replaced_srv.ip_addr
+                # The peers know a proxied node only by its proxy's address.
+                extra_config['replace_address_first_boot'] = self._advertised_address(replaced_srv)
 
             if replace_cfg.ignore_dead_nodes:
                 extra_config['ignore_dead_nodes_for_replace'] = ','.join(replace_cfg.ignore_dead_nodes)
@@ -184,13 +233,20 @@ class ScyllaCluster:
             self.logger.info("Cluster %s obtained new IP: %s", self.name, ip_addr)
             self.leased_ips.add(ip_addr)
 
+        # Reusing the replaced node's address behind a proxy means reusing the address its
+        # peers knew it by, its proxy's, too.
+        reused_advertised_addr = (self._advertised_address(replaced_srv)
+                                  if replace_cfg and replace_cfg.reuse_ip_addr and self.network_proxy is not None
+                                  else None)
+        advertised_addr = await self._advertise_through_proxy(ip_addr, extra_config, reused_advertised_addr)
+
         if not self.initial_seed and not expected_error and start:
-            self.initial_seed = ip_addr
+            self.initial_seed = advertised_addr
 
         if not seeds:
             seeds = self._seeds()
             if not seeds:
-                seeds = [ip_addr]
+                seeds = [advertised_addr]
 
         server = None
 
@@ -521,12 +577,20 @@ class ScyllaCluster:
         assert server_id in self.servers, f"Server {server_id} unknown"
         server = self.servers[server_id]
         assert not server.is_running, f"Server {server_id} is running: stop it first and then change its ip"
+        self._refuse_address_change_behind_proxy(server, "IP")
         ip_addr = IPAddress(await self.host_registry.lease_host())
         self.leased_ips.add(ip_addr)
         logging.info("Cluster %s changed server %s IP from %s to %s", self.name,
                      server_id, server.ip_addr, ip_addr)
         server.change_ip(ip_addr)
         return ip_addr
+
+    def _refuse_address_change_behind_proxy(self, server: ScyllaServer, what: str) -> None:
+        """A proxied server's peers and clients know it by its proxy's address, and the proxy
+        forwards to the address it was created with: a new address would leave both stale."""
+        if "broadcast_address" in server.config and self.network_proxy is not None:
+            raise NotImplementedError(f"cannot change the {what} of server {server.server_id}: it is behind the "
+                                      "network proxy, which knows it by its old address (see test/pylib/network_proxy.py)")
 
     async def change_rpc_address(self, server_id: ServerNum) -> IPAddress:
         """Lease a new IP address and update conf/scylla.yaml with it. The
@@ -536,6 +600,7 @@ class ScyllaCluster:
         assert server_id in self.servers, f"Server {server_id} unknown"
         server = self.servers[server_id]
         assert not server.is_running, f"Server {server_id} is running: stop it first and then change its ip"
+        self._refuse_address_change_behind_proxy(server, "RPC address")
         rpc_address = IPAddress(await self.host_registry.lease_host())
         self.leased_ips.add(rpc_address)
         logging.info("Cluster %s changed server %s RPC IP from %s to %s", self.name,
