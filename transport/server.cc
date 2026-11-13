@@ -2129,6 +2129,34 @@ process_batch_internal(service::client_state& client_state, sharded<cql3::query_
         options.set_cached_pk_function_calls(std::move(cached_pk_fn_calls));
     }
 
+    if (client_state.is_protocol_extension_set(cql_protocol_extension::TABLETS_ROUTING_V2_EXPERIMENTAL)) {
+        const utils::result_with_exception_ptr<uint16_t> routing_statement_index = in.read_short();
+        if (!routing_statement_index) [[unlikely]] {
+            return make_exception_future<cql_server::process_fn_return_type>(
+                    std::move(routing_statement_index).assume_error());
+        }
+        const utils::result_with_exception_ptr<int8_t> tablet_version_byte = in.read_byte();
+        if (!tablet_version_byte) [[unlikely]] {
+            return make_exception_future<cql_server::process_fn_return_type>(
+                    std::move(tablet_version_byte).assume_error());
+        }
+        // The index of a batch the driver didn't route by any statement.
+        constexpr uint16_t no_routing_statement = 0xFFFF;
+        const uint16_t index = routing_statement_index.assume_value();
+        if (index != no_routing_statement) {
+            if (index >= modifications.size()) [[unlikely]] {
+                return make_exception_future<cql_server::process_fn_return_type>(exceptions::protocol_exception(format(
+                        "Invalid routing statement index in BATCH message: {} for a batch of {} statements",
+                        index, modifications.size())));
+            }
+            // Whether the driver could compute the token from the routing statement
+            // is only decided when the batch is executed: it depends on the prepared
+            // statement the ID names now, not on the request.
+            const locator::tablet_version_block block{uint8_t(tablet_version_byte.assume_value())};
+            options.set_routing_hint(index, block);
+        }
+    }
+
     if (init_trace && trace_state) {
         tracing::add_prepared_query_options(trace_state, options);
         tracing::set_common_query_parameters(trace_state, options.get_consistency(),

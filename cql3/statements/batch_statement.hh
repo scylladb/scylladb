@@ -116,6 +116,12 @@ public:
 
     const std::vector<single_statement>& get_statements() const;
 
+    // The index of the statement the driver routed a BATCH request by, if it
+    // could compute the token from it. The driver may name a statement it can't
+    // compute the token from, e.g. if its metadata of the prepared statement is
+    // stale, and then the routing hint is ignored.
+    std::optional<size_t> routing_statement_index(const query_options& options) const;
+
     // What a batch_executor needs to commit this batch. Everything else about
     // the batch stays private.
     type batch_type() const { return _type; }
