@@ -9,69 +9,57 @@ Deterministic reproducer for the SCYLLADB-2531 unlinked-sstable abort
 originally observed in test_tablet_repair_wait
 (test/cluster/tasks/test_tablet_tasks.py).
 
-This isolates the split-bypass-vs-repair race exposed by that test.
-The abort fires inside the split bypass path after the captured
-SSTable was unlinked by repair's mark_sstable_as_repaired:
+Split's bypass path hands an sstable to on_compaction_completion() after
+repair's mark_sstable_as_repaired() already replaced and unlinked it:
 
     on_compaction_completion -> sstable_list_updater::prepare ->
         on_internal_error("was already unlinked before being added to table")
 
-Why this test (vs. relying on the original test_tablet_repair_wait):
+Constraints that shape the sequence:
 
-  * test_tablet_repair_wait hits the race only statistically — it
-    relies on natural timing between split and repair, so reproducing
-    requires --repeat N and is not reliable in CI.
-  * Here we use error injections to park both split and repair at the
-    exact points needed to expose the race and explicitly order the
-    unlink.  The test fails deterministically on a pre-fix build and
-    passes after the fix.
+  * Split never processes the repairing view (its compaction is always
+    disabled), and holds the unrepaired view's incremental-repair read lock,
+    which repair needs before marking. So the shared sstable must be in the
+    repaired view, and only a 'full' incremental repair rewrites those.
+  * Split's executor holds the maintenance semaphore that repair's component
+    rewrite also needs, so split must be parked after capturing its inputs
+    but before taking that semaphore (split_before_maintenance_permit).
 
-Sequence used here:
+Sequence:
 
-  1. 3-node cluster, RF=3, tablets=4, tombstone_gc='repair'.
-  2. Insert 256 rows + flush + run one incremental repair so the
-     baseline sstables have repaired_at>0.
-  3. Insert 128 more rows + flush on all nodes -> fresh sstables with
-     repaired_at=0 (the actual race target).
-  4. Enable `split_bypass_before_completion` and
-     `repair_before_component_rewrite` injections on all nodes.
-  5. Trigger a tablet merge (force decrease) and wait for it to finalize.
-  6. Start a background incremental repair -> it will park at
-     repair_before_component_rewrite once it gets to
-     mark_sstable_as_repaired for the freshly-flushed sstable.
-  7. Trigger the split by raising min_tablet_count -> split's bypass
-     captures the fresh sstable and parks at
-     split_bypass_before_completion.
-  8. Release the repair injection -> mark_sstable_as_repaired calls
-     perform_component_rewrite, which creates a hard-linked replacement
-     sstable and unlinks the original file.
-  9. Release the split bypass -> on_compaction_completion is called with
-     desc.new_sstables = [original_sst], whose unlinked_at() is now
-     set -> sstable_list_updater::prepare() trips the diagnostic guard.
+  1. 3 nodes, RF=3, 4 tablets, autocompaction off (so repaired sstables
+     stay within one child tablet and split bypasses them).
+  2. Insert + flush + incremental repair -> repaired sstables.
+  3. Merge 4 -> 2 tablets.
+  4. Enable split_before_maintenance_permit and trigger split 2 -> 4.
+     Split captures the repaired sstables and parks on every node.
+  5. Run a 'full' incremental repair to completion.
+     - Pre-fix: repair rewrites the captured sstables, unlinking them.
+     - Fixed: repair's capture stops the parked split first, so split
+       never sees the unlinked sstables.
+  6. Release split: pre-fix trips the marker; fixed code finishes the split.
 
-abort_on_internal_error is set to false so the abort is logged but
-the node does not actually crash; we then grep for the marker.
+abort_on_internal_error is set to false so the error is logged rather than
+crashing the node; we then grep for the marker.
 """
 
 import asyncio
 import logging
+import re
+import time
 
 import pytest
 
 from test.cluster.util import new_test_keyspace
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
-from test.pylib.skip_types import skip_env
 from test.pylib.tablets import get_tablet_count
 
 logger = logging.getLogger(__name__)
 
-# Specific diagnostic marker emitted by sstable_list_updater::prepare()
-# when split's on_compaction_completion observes an sstable already
-# unlinked by repair's concurrent component rewrite (SCYLLADB-2531).
-# We intentionally do NOT match the generic "on_internal_error" string
-# here, as that would risk false positives from unrelated internal
-# errors hitting during the race window.
+# Specific diagnostic emitted by sstable_list_updater::prepare(); the generic
+# on_internal_error string could match unrelated errors.
 ABORT_MARKER = "was already unlinked before being added to table"
+INJECTION = "split_before_maintenance_permit"
 
 
 async def _enable(manager, servers, name, one_shot=False):
@@ -86,45 +74,63 @@ async def _disable(manager, servers, name):
         try:
             await manager.api.disable_injection(s.ip_addr, name)
         except Exception as e:
-            logger.debug("disable_injection(%s) on %s ignored: %s",
-                         name, s.server_id, e)
+            logger.warning("disable_injection(%s) on %s ignored: %s",
+                           name, s.server_id, e)
 
 
 async def _message(manager, servers, name):
-    for s in servers:
+    # Pre-fix, one node may abort on release; don't let that mask the marker check.
+    results = await asyncio.gather(
+        *(manager.api.message_injection(s.ip_addr, name) for s in servers),
+        return_exceptions=True)
+    failed = []
+    for s, r in zip(servers, results):
+        if isinstance(r, BaseException):
+            logger.warning("message_injection(%s) on %s failed: %s", name, s.server_id, r)
+            failed.append(s.server_id)
+    return failed
+
+
+async def _wait_for_tablet_count(manager, server, ks, expected, timeout):
+    deadline = time.monotonic() + timeout
+    n = last_err = None
+    while True:
         try:
-            await manager.api.message_injection(s.ip_addr, name)
+            n = await get_tablet_count(manager, server, ks, 'test')
+            if n == expected:
+                return
         except Exception as e:
-            logger.debug("message_injection(%s) on %s ignored: %s",
-                         name, s.server_id, e)
+            last_err = e
+            logger.warning("get_tablet_count failed: %s", e)
+        if time.monotonic() > deadline:
+            pytest.fail(f"Tablet count did not reach {expected} within {timeout}s "
+                        f"(current={n}, last error={last_err})")
+        await asyncio.sleep(1)
 
 
-async def _wait_for_pattern_any(logs, marks, pattern, timeout):
-    """Wait for *pattern* in any log; return the matching server or raise."""
-    tasks = {s: asyncio.create_task(log.wait_for(pattern, from_mark=marks[s]))
-             for s, log in logs.items()}
-    done, pending = await asyncio.wait(
-        tasks.values(), timeout=timeout,
-        return_when=asyncio.FIRST_COMPLETED)
-    for t in pending:
-        t.cancel()
-    if not done:
-        raise asyncio.TimeoutError(
-            f"pattern {pattern!r} not seen on any node within {timeout}s")
-    for s, t in tasks.items():
-        if t in done:
-            return s
-    raise asyncio.TimeoutError(f"pattern {pattern!r}: lost matching server")
+async def _grep_marker(logs, marks):
+    for s, log in logs.items():
+        matches = await log.grep(ABORT_MARKER, from_mark=marks[s])
+        if matches:
+            return s.server_id, matches[0][0]
+    return None
+
+
+async def _wait_for_parked(logs, marks, servers, expected, timeout):
+    pattern = f"{INJECTION}: waiting for message"
+    deadline = time.monotonic() + timeout
+    while True:
+        counts = {s.server_id: len(await logs[s].grep(pattern, from_mark=marks[s])) for s in servers}
+        if all(c >= expected for c in counts.values()):
+            return
+        if time.monotonic() > deadline:
+            pytest.fail(f"Split did not park {expected}x on every node within {timeout}s: {counts}")
+        await asyncio.sleep(1)
 
 
 @pytest.mark.asyncio
 @pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_split_bypass_race_with_repair_after_merge(manager: ScyllaClusterManager):
-    """
-    Deterministic reproducer of the unlinked-sstable abort in the split
-    bypass path, racing against repair's component rewrite, set up to
-    match the merge→split→repair timeline observed in CI.
-    """
     cfg = {
         'enable_tablets': True,
         'tablet_load_stats_refresh_interval_in_seconds': 1,
@@ -141,172 +147,75 @@ async def test_split_bypass_race_with_repair_after_merge(manager: ScyllaClusterM
         property_file=[{"dc": "dc1", "rack": f"r{i % 3}"} for i in range(3)])
     cql = manager.get_cql()
 
-    initial_tablets = 4
     async with new_test_keyspace(
             manager,
             "WITH replication = {'class': 'NetworkTopologyStrategy', "
             "'replication_factor': 3}") as ks:
         await cql.run_async(
             f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) "
-            f"WITH tablets = {{'min_tablet_count': {initial_tablets}}} "
+            f"WITH tablets = {{'min_tablet_count': 4}} "
             f"AND tombstone_gc = {{'mode':'repair'}};")
+        # Post-merge compaction would join repaired sstables across child
+        # boundaries, forcing a real split rewrite instead of the bypass.
+        for s in servers:
+            await manager.api.disable_autocompaction(s.ip_addr, ks, 'test')
 
-        # ---- Step 2: baseline data + first repair so sstables_repaired_at > 0.
-        logger.info("Inserting baseline data and flushing")
+        logger.info("Inserting data, flushing and repairing")
         await asyncio.gather(*[
             cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});")
             for k in range(256)])
         for s in servers:
             await manager.api.flush_keyspace(s.ip_addr, ks)
-        logger.info("Running baseline incremental repair")
         await manager.api.tablet_repair(
             servers[0].ip_addr, ks, "test", "all",
             incremental_mode='incremental')
 
-        # ---- Step 3: fresh data → memtable-origin sstables with
-        # repaired_at=0.  These are the race target.
-        logger.info("Inserting fresh data and flushing")
-        await asyncio.gather(*[
-            cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});")
-            for k in range(256, 384)])
-        for s in servers:
-            await manager.api.flush_keyspace(s.ip_addr, ks)
+        logger.info("Merging 4 -> 2 tablets")
+        await cql.run_async(
+            f"ALTER TABLE {ks}.test WITH tablets = "
+            f"{{'min_tablet_count': 2, 'max_tablet_count': 2}}")
+        await _wait_for_tablet_count(manager, servers[0], ks, 2, timeout=120)
 
-        # Mark logs AFTER all setup so we only consider events from the
-        # actual race window onward.
         logs = {s: await manager.server_open_log(s.server_id) for s in servers}
         marks = {s: await logs[s].mark() for s in servers}
 
-        # ---- Step 4: enable injections.
-        logger.info("Enabling split_bypass_before_completion and "
-                    "repair_before_component_rewrite")
-        await _enable(manager, servers, "split_bypass_before_completion")
-        await _enable(manager, servers, "repair_before_component_rewrite")
-
-        repair_task = None
+        # Precondition: baseline repair repaired all data and nothing was written since;
+        # unrepaired data would make split park holding the lock repair needs.
+        await _enable(manager, servers, INJECTION)
         try:
-            # ---- Step 5: trigger merge (4 -> 2 tablets) and wait for
-            # it to finalize so the post-merge load-balancer emits the
-            # split decision naturally.
-            logger.info("Triggering tablet merge (force decrease)")
-            await _enable(manager, servers, "tablet_force_tablet_count_decrease")
-            try:
-                await _wait_for_pattern_any(
-                    logs, marks, "Detected tablet merge for table", timeout=120)
-                logger.info("Merge detected")
-            except asyncio.TimeoutError:
-                skip_env("Could not trigger merge in this run")
-            finally:
-                await _disable(manager, servers,
-                               "tablet_force_tablet_count_decrease")
-
-            # Wait for merge to actually halve the tablets so the
-            # subsequent split has well-defined post-state.  If it
-            # never drops, the rest of the orchestration no longer
-            # matches the merge -> split -> repair timeline, so we
-            # skip rather than risk a false-green pass.
-            merged = False
-            for _ in range(60):
-                n = await get_tablet_count(manager, servers[0], ks, 'test')
-                if n <= initial_tablets // 2:
-                    merged = True
-                    break
-                await asyncio.sleep(1)
-            if not merged:
-                current = await get_tablet_count(
-                    manager, servers[0], ks, 'test')
-                skip_env(
-                    f"Merge did not reduce tablet count within 60s "
-                    f"(current={current}); race window not exercised.")
-
-            # ---- Step 6: start the long-running repair in the background.
-            logger.info("Starting background incremental repair")
-            repair_task = asyncio.create_task(
-                manager.api.tablet_repair(
-                    servers[0].ip_addr, ks, "test", "all",
-                    incremental_mode='incremental'))
-
-            # ---- Step 7: trigger the split by raising min_tablet_count
-            # back up past the post-merge count.  This naturally emits a
-            # split decision (the same way the CI failure did via
-            # reason=initial after merge).
-            logger.info("Triggering tablet split (raise min_tablet_count)")
-            split_target = initial_tablets * 2
+            logger.info("Triggering split 2 -> 4 tablets")
             await cql.run_async(
-                f"ALTER TABLE {ks}.test WITH tablets = "
-                f"{{'min_tablet_count': {split_target}}}")
+                f"ALTER TABLE {ks}.test WITH tablets = {{'min_tablet_count': 4}}")
+            # RF=3 on 3 nodes with 2 tablets: 2 replicas per node, each parks once.
+            await _wait_for_parked(logs, marks, servers, expected=2, timeout=180)
+            logger.info("Split parked on all nodes")
 
-            # Wait for split to park at the bypass injection.  We give
-            # it a wide window because the load-balancer must first
-            # emit the decision, then the split task must reach the
-            # bypass path.  If it never parks, the bypass-vs-rewrite
-            # race is not exercised at all, so skip rather than
-            # report a false green.
-            logger.info("Waiting for split bypass to park")
-            try:
-                await _wait_for_pattern_any(
-                    logs, marks,
-                    "split_bypass_before_completion: parked",
-                    timeout=180)
-                logger.info("Split bypass parked")
-            except asyncio.TimeoutError:
-                skip_env("Split bypass never parked within 180s; "
-                         "race window not exercised.")
+            logger.info("Running full incremental repair")
+            await asyncio.wait_for(
+                manager.api.tablet_repair(servers[0].ip_addr, ks, "test", "all",
+                                          incremental_mode='full'),
+                timeout=180)
 
-            # Wait for repair to park at the component rewrite.  If
-            # this point is never reached the unlink ordering required
-            # to expose the race does not happen, so skip.
-            logger.info("Waiting for repair to park at component rewrite")
-            try:
-                await _wait_for_pattern_any(
-                    logs, marks,
-                    "repair_before_component_rewrite: waiting for message",
-                    timeout=120)
-                logger.info("Repair parked at component rewrite")
-            except asyncio.TimeoutError:
-                skip_env("Repair never parked at component rewrite "
-                         "within 120s; race window not exercised.")
+            logger.info("Releasing split")
+            failed_releases = await _message(manager, servers, INJECTION)
 
-            # ---- Step 8: release repair -> it does the component
-            # rewrite and unlinks the original sstable file.
-            logger.info("Releasing repair from component rewrite")
-            await _message(manager, servers,
-                           "repair_before_component_rewrite")
-            # Give the rewrite/unlink a moment to take effect on disk.
-            await asyncio.sleep(2)
-
-            # ---- Step 9: release split bypass -> on_compaction_completion
-            # observes the unlinked sstable and trips the diagnostic guard.
-            logger.info("Releasing split bypass")
-            await _message(manager, servers,
-                           "split_bypass_before_completion")
-            # Give the abort marker a moment to be logged.
-            await asyncio.sleep(3)
-        finally:
-            # Defensive cleanup.  Disable everything so the test framework
-            # tears down cleanly even if the orchestration above raised.
-            for name in ("split_bypass_before_completion",
-                         "repair_before_component_rewrite",
-                         "tablet_force_tablet_count_decrease"):
-                await _disable(manager, servers, name)
-            if repair_task is not None:
+            # Pre-fix trips the marker; fixed code completes the split.
+            deadline = time.monotonic() + 180
+            split_done = False
+            hit = None
+            while time.monotonic() < deadline:
+                hit = await _grep_marker(logs, marks)
+                if hit:
+                    break
                 try:
-                    await asyncio.wait_for(repair_task, timeout=120)
-                    logger.info("Repair task completed")
-                except asyncio.TimeoutError:
-                    logger.warning("Repair task did not complete within 120s")
-                    repair_task.cancel()
+                    if await get_tablet_count(manager, servers[0], ks, 'test') == 4:
+                        split_done = True
+                        break
                 except Exception as e:
-                    logger.warning("Repair task raised: %s", e)
-
-        # ---- Check for the race signal.
-        logger.info("Checking for abort marker")
-        hit = None
-        for s in servers:
-            matches = await logs[s].grep(ABORT_MARKER, from_mark=marks[s])
-            if matches:
-                hit = (s.server_id, matches[0][0])
-                break
+                    logger.warning("get_tablet_count failed: %s", e)
+                await asyncio.sleep(1)
+        finally:
+            await _disable(manager, servers, INJECTION)
 
         if hit:
             where, line = hit
@@ -315,5 +224,11 @@ async def test_split_bypass_race_with_repair_after_merge(manager: ScyllaClusterM
                 "Split's on_compaction_completion observed an SSTable already "
                 "unlinked by repair's concurrent component rewrite. "
                 "See SCYLLADB-2531.")
-        else:
-            logger.info("No abort marker observed - fix appears effective")
+        assert split_done, \
+            f"Split did not complete within 180s (failed releases: {failed_releases})"
+
+        # A real split of a pre-merge repaired sstable means the bypass was not exercised.
+        split_rewrite = re.compile(rf"\[Split {re.escape(ks)}\.test .*Splitting .*repaired_at=[1-9]\d*\b")
+        for s in servers:
+            assert not await logs[s].grep(split_rewrite, from_mark=marks[s]), \
+                f"Repaired sstable needed a real split on server {s.server_id}"

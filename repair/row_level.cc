@@ -2419,9 +2419,6 @@ public:
             return repair_set.contains(sst);
         };
 
-        co_await utils::get_local_injector().inject("repair_before_component_rewrite",
-                utils::wait_for_message(5min));
-
         // Rewrite the matching sstables across every compaction group of every
         // storage group covering the repair range, using the filter-based
         // perform_component_rewrite which captures sstables while compaction
