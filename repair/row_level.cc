@@ -1381,7 +1381,8 @@ private:
                 _rs._repair_compaction_locks[gid].push_back(std::move(lock_holder));
             }
         }
-        auto sstables = co_await table.take_storage_snapshot(_range);
+        // Repair reads through the sstable objects' own fds; no per-component handles needed.
+        auto sstables = co_await table.take_storage_snapshot(_range, replica::table::open_component_files::no);
         _incremental_repair_meta.sst_set = make_lw_shared<sstables::sstable_set>(sstables::make_partitioned_sstable_set(_schema));
         _incremental_repair_meta.sstables_repaired_at = sstables_repaired_at;
         for (auto& snap : sstables) {
@@ -3413,9 +3414,25 @@ private:
         return sorted_nodes;
     }
 
+    static constexpr size_t max_tablet_repair_row_buf_size = 4 * 1024 * 1024;
+
+    bool all_peers_in_local_dc() {
+        auto& topology = get_erm()->get_topology();
+        auto& dc = topology.get_location().dc;
+        return std::ranges::all_of(_all_live_peer_nodes, [&] (const locator::host_id& n) {
+            auto* node = topology.find_node(n);
+            return node && node->dc() == dc;
+        });
+    }
+
     size_t get_max_row_buf_size(row_level_diff_detect_algorithm algo) {
         // Max buffer size per repair round
         size_t size = is_rpc_stream_supported(algo) ? repair::task_manager_module::max_repair_memory_per_range : 256 * 1024;
+        if (_is_tablet && !_rstate.sched_info.for_tablet_rebuild && all_peers_in_local_dc()) {
+            // Tablet repairs run back to back on every replica; cap the per-round row memory they hold.
+            // Not across DCs (extra inter-DC round trips); not for rebuild, which ships whole tablets.
+            size = std::min(size, max_tablet_repair_row_buf_size);
+        }
         if (_small_table_optimization) {
             // For small table optimization, we reduce the buffer size to reduce memory consumption.
             size /= _all_live_peer_nodes.size();

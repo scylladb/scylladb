@@ -718,6 +718,33 @@ SEASTAR_THREAD_TEST_CASE(test_stream_sink_stamps_scrub_time_on_completion) {
     }).get();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_storage_snapshot_without_component_files) {
+    do_with_cql_env_thread([] (cql_test_env& env) {
+        auto& db = env.local_db();
+        env.execute_cql("CREATE KEYSPACE ks_snap WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};").get();
+        env.execute_cql("CREATE TABLE ks_snap.cf (pk text PRIMARY KEY, v int);").get();
+        for (int i = 0; i < 10; i++) {
+            env.execute_cql(format("INSERT INTO ks_snap.cf (pk, v) VALUES ('key_{}', {});", i, i * 10)).get();
+        }
+
+        auto& table = db.find_column_family("ks_snap", "cf");
+        table.flush().get();
+
+        auto with_files = table.take_storage_snapshot(dht::token_range::make_open_ended_both_sides(), replica::table::open_component_files::yes).get();
+        BOOST_REQUIRE_GT(with_files.size(), 0);
+        for (auto& snap : with_files) {
+            BOOST_REQUIRE(!snap.files.empty());
+        }
+
+        auto no_files = table.take_storage_snapshot(dht::token_range::make_open_ended_both_sides(), replica::table::open_component_files::no).get();
+        BOOST_REQUIRE_EQUAL(no_files.size(), with_files.size());
+        for (auto& snap : no_files) {
+            BOOST_REQUIRE(snap.sst);
+            BOOST_REQUIRE(snap.files.empty());
+        }
+    }).get();
+}
+
 // S3 variants: exercise reading SSTables from object storage.  Corruption
 // tests are omitted because the corruption helpers use local-filesystem I/O.
 SEASTAR_THREAD_TEST_CASE(test_sstable_stream_compressed_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)

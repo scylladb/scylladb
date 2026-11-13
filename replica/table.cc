@@ -1783,7 +1783,7 @@ const storage_group_map& table::storage_groups() const {
     return _sg_manager->storage_groups();
 }
 
-future<utils::chunked_vector<sstables::sstable_files_snapshot>> table::take_storage_snapshot(dht::token_range tr) {
+future<utils::chunked_vector<sstables::sstable_files_snapshot>> table::take_storage_snapshot(dht::token_range tr, open_component_files open_files) {
     utils::chunked_vector<sstables::sstable_files_snapshot> ret;
 
     for (auto& sg : storage_groups_for_token_range(tr)) {
@@ -1806,7 +1806,7 @@ future<utils::chunked_vector<sstables::sstable_files_snapshot>> table::take_stor
         co_await sg->make_sstable_set()->for_each_sstable_gently([&] (const sstables::shared_sstable& sst) -> future<> {
            ret.push_back({
                .sst = sst,
-               .files = co_await sst->readable_file_for_all_components(),
+               .files = open_files ? co_await sst->readable_file_for_all_components() : std::unordered_map<sstables::component_type, file>{},
            });
         });
     }
