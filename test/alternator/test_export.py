@@ -7,6 +7,7 @@
 
 import base64
 import collections
+from concurrent.futures import ThreadPoolExecutor
 import logging
 from urllib import response
 
@@ -668,6 +669,76 @@ def test_export_with_data_full(dynamodb, s3_prefix_value, export_format_value, n
             assert 'outputFormat' in manifest_summary
             assert manifest_summary['outputFormat'] == export_format_value
 
+# Test that an export of a table with a sort key writes each item once, with both key attributes.
+# Several items share a partition, so the scan of a partition with several rows is covered too.
+def test_export_table_with_sort_key(dynamodb, s3):
+    with new_test_table(dynamodb,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}, {'AttributeName': 'c', 'KeyType': 'RANGE'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'},
+                                  {'AttributeName': 'c', 'AttributeType': 'N'}]) as table:
+        items = [{'p': f'p{i % 2}', 'c': i, 'v': f'v{i}'} for i in range(6)]
+        with table.batch_writer() as batch:
+            for item in items:
+                batch.put_item(Item=item)
+        client = enable_pitr(table)
+        with new_s3_bucket(s3) as bucket:
+            export_arn = client.export_table_to_point_in_time(
+                TableArn=get_table_arn(table), S3Bucket=bucket)['ExportDescription']['ExportArn']
+            final = wait_for_export(client, export_arn)
+            assert final['ExportStatus'] == 'COMPLETED', final
+            summary = json.loads(s3.get_object(Bucket=bucket, Key=final['ExportManifest'])['Body'].read())
+            manifest_files = s3.get_object(Bucket=bucket, Key=summary['manifestFilesS3Key'])['Body'].read()
+            exported = []
+            for line in manifest_files.decode().splitlines():
+                data_file = s3.get_object(Bucket=bucket, Key=json.loads(line)['dataFileS3Key'])['Body'].read()
+                exported += [json.loads(item)['Item'] for item in gzip.decompress(data_file).decode().splitlines()]
+        expected = [{'p': {'S': item['p']}, 'c': {'N': str(item['c'])}, 'v': {'S': item['v']}} for item in items]
+        key = lambda item: (item['p']['S'], int(item['c']['N']))
+        assert sorted(exported, key=key) == sorted(expected, key=key)
+
+
+# Test that an export writes a data file of several pieces correctly. The export uploads its data
+# file in pieces, and copies each piece into the data file. A piece has at most 512 parts (about
+# 2.5 GiB), so a data file of two pieces is larger than 2.5 GiB. That is too large for a test. Thus
+# the test uses an injection that limits a piece to one part (a little more than 5 MiB).
+def test_export_data_file_of_several_pieces(dynamodb, scylla_only, rest_api, s3):
+    item_count = 16
+    with new_table_s(dynamodb) as table, new_s3_bucket(s3) as bucket:
+        # Each item holds 350 KiB of random bytes, below the item size limit of 400 KB. The data file
+        # holds them in base64, and gzip compresses that back to about the size of the random bytes.
+        # So the data file is about 5.5 MiB long. The first piece is one part, and the second piece
+        # holds the rest.
+        with table.batch_writer() as batch:
+            for i in range(item_count):
+                batch.put_item(Item={'p': f'item{i}', 'v': os.urandom(350 * 1024)})
+        client = table.meta.client
+        # Limit each piece to one part.
+        with scylla_inject_error(rest_api, 'alternator_export_to_s3_max_parts_per_piece', parameters={'value': '1'}):
+            export_arn = client.export_table_to_point_in_time(
+                TableArn=get_table_arn(table), S3Bucket=bucket)['ExportDescription']['ExportArn']
+            desc = wait_for_export(client, export_arn)
+        assert desc['ExportStatus'] == 'COMPLETED', desc
+        assert desc['ItemCount'] == item_count
+        # The export deleted the pieces after it copied them, and no upload stays open.
+        keys = [obj['Key'] for obj in s3.list_objects_v2(Bucket=bucket)['Contents']]
+        data_keys = [key for key in keys if '/data/' in key]
+        assert len(data_keys) == 1, keys
+        assert not s3.list_multipart_uploads(Bucket=bucket).get('Uploads', [])
+        # The manifest describes the data file, and the data file holds all the items.
+        export_dir = data_keys[0].split('data/')[0]
+        manifest = json.loads(s3.get_object(Bucket=bucket, Key=export_dir + 'manifest-files.json')['Body'].read())
+        data = s3.get_object(Bucket=bucket, Key=data_keys[0])
+        content = data['Body'].read()
+        assert manifest['dataFileS3Key'] == data_keys[0]
+        assert manifest['etag'] == data['ETag'].strip('"')
+        # The ETag of an object which a multipart upload made ends with "-<number of parts>". Each
+        # piece is one part of the data file.
+        assert int(data['ETag'].strip('"').rsplit('-', 1)[1]) > 1, data['ETag']
+        assert manifest['md5Checksum'] == base64.b64encode(hashlib.md5(content).digest()).decode()
+        assert manifest['itemCount'] == item_count
+        assert len(gzip.decompress(content).decode().splitlines()) == item_count
+
+
 # Test that sending the same ClientToken twice returns the same export.
 def test_export_client_token_idempotent(test_table_s, s3):
     table = test_table_s
@@ -898,6 +969,7 @@ def test_export_client_token_some_value_changed(dynamodb, test_table_s, param_va
     ('ValidationException', 'TableArn', '[tT]ableArn', ''),
     ('ValidationException', 'TableArn', '[tT]ableArn', '\t'),
     ('ValidationException', 'TableArn', '[tT]ableArn', 'QWERTY'),
+    ('ValidationException', 'TableArn', '[tT]ableArn', 'a' * 1025),
     ('ValidationException', 'S3BucketOwner', '[sS]3BucketOwner', ''),
     ('ValidationException', 'S3SseAlgorithm', '[sS]3SseAlgorithm', ''),
     ('ValidationException', 'S3SseAlgorithm', '[sS]3SseAlgorithm', 'QWERTY'),
@@ -913,6 +985,25 @@ def test_export_setting_fields_to_weird_values_or_skipping_fail(dynamodb, test_t
         }
         kw[field] = value
         client.export_table_to_point_in_time(**{ k:v for k, v in kw.items() if v is not None })
+
+
+# Test that an export stores only the parameters of the operation, without ClientToken. An unknown
+# member of the request is not stored: else a client could make the rows of the export tables as
+# large as the request, and ListExports and the garbage collector read these rows.
+def test_export_stores_only_the_parameters(dynamodb, cql, test_table_s, scylla_only, s3):
+    table_arn = get_table_arn(test_table_s)
+    token = str(uuid.uuid4())
+    with new_s3_bucket(s3) as bucket:
+        payload = json.dumps({'TableArn': table_arn, 'S3Bucket': bucket, 'ClientToken': token,
+                              'UnknownMember': 'x' * 100000})
+        export_arn = manual_request(dynamodb, 'ExportTableToPointInTime', payload)['ExportDescription']['ExportArn']
+        assert wait_for_export(test_table_s.meta.client, export_arn)['ExportStatus'] == 'COMPLETED'
+        for table, key, value in [('alternator_export_to_s3_client_tokens', 'client_token', token),
+                                  ('alternator_export_to_s3_exports', 'export_arn', export_arn)]:
+            row = cql.execute(SimpleStatement(
+                f"SELECT request FROM system_distributed.{table} WHERE {key} = %s",
+                consistency_level=ConsistencyLevel.ONE), [value]).one()
+            assert json.loads(row.request) == {'TableArn': table_arn, 'S3Bucket': bucket}, table
 
 
 # S3Bucket and S3Prefix end up in the path of the requests which the export sends to S3, so a
@@ -1258,6 +1349,28 @@ def test_export_metrics(dynamodb, scylla_only, rest_api, metrics, s3):
             assert wait_for_export(client, export_arn)['ExportStatus'] == 'FAILED'
 
 
+# Test that an export fails if its table is deleted during the scan. The export must not stay
+# IN_PROGRESS, because it holds a slot of its shard while it runs, and it must not report a part of
+# the table as COMPLETED. The table has more items than the first page of the scan, so the scan
+# reads the table again after the delete.
+def test_export_table_deleted_during_scan(dynamodb, scylla_only, rest_api, s3):
+    with new_s3_bucket(s3) as bucket:
+        with paused_exports(rest_api) as (wait_until_paused, _):
+            with new_table_s(dynamodb) as table:
+                with table.batch_writer() as batch:
+                    for i in range(300):
+                        batch.put_item(Item={'p': f'item{i}'})
+                client = table.meta.client
+                export_arn = client.export_table_to_point_in_time(
+                    TableArn=get_table_arn(table), S3Bucket=bucket)['ExportDescription']['ExportArn']
+                wait_until_paused(1)
+            wait_for_table_deleted(client, table.name)
+        # The end of paused_exports() disables the injection, and the export continues.
+        desc = wait_for_export(client, export_arn)
+        assert desc['ExportStatus'] == 'FAILED', desc
+        assert 'ExportManifest' not in desc
+
+
 # Test that trying to export from two tables using the same client token fails.
 def test_export_client_token_doesnt_work_on_two_tables(test_table_s, test_table_s_2, s3):
     client1 = enable_pitr(test_table_s)
@@ -1280,6 +1393,23 @@ def test_export_client_token_doesnt_work_on_two_tables(test_table_s, test_table_
             )
 
         wait_for_exports(client1, desc['ExportArn'])
+
+
+# Test that requests with the same ClientToken which arrive at the same time start one export. This
+# is the case of an SDK retry that overlaps the first request, and the reason why the writes of the
+# token row and of the export row are conditional.
+def test_export_client_token_concurrent_requests(test_table_s, s3):
+    client = enable_pitr(test_table_s)
+    with new_s3_bucket(s3) as bucket:
+        request = {'TableArn': get_table_arn(test_table_s), 'S3Bucket': bucket, 'ClientToken': str(uuid.uuid4())}
+        # Two requests: more of them can exceed the contention timeout of LWT in a slow build mode.
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            descs = list(pool.map(lambda _: client.export_table_to_point_in_time(**request)['ExportDescription'], range(2)))
+        assert len({desc['ExportArn'] for desc in descs}) == 1, descs
+        assert wait_for_export(client, descs[0]['ExportArn'])['ExportStatus'] == 'COMPLETED'
+        # One export wrote to the bucket: all keys are in one directory AWSDynamoDB/<export id>/.
+        keys = [obj['Key'] for obj in s3.list_objects_v2(Bucket=bucket)['Contents']]
+        assert len({key.split('/')[1] for key in keys}) == 1, keys
 
 # Test that exporting a nonexistent table returns TableNotFoundException.
 def test_export_nonexistent_table(dynamodb, test_table_s):
@@ -1351,6 +1481,16 @@ def test_export_failed_does_not_reserve_client_token(test_table_s, invalid, s3):
         wait_for_exports(client, desc['ExportArn'])
 
 
+# Asserts that five columns which each export row has expire in about 90 days. A write of the row
+# without the TTL makes a row which never expires.
+def assert_export_row_expires(cql, export_arn):
+    ttls = cql.execute(SimpleStatement(
+        "SELECT TTL(export_status), TTL(client_token), TTL(request), TTL(node_id), TTL(accepted_at)"
+        " FROM system_distributed.alternator_export_to_s3_exports WHERE export_arn = %s",
+        consistency_level=ConsistencyLevel.ONE), [export_arn]).one()
+    assert all(ttl is not None and 89 * 86400 < ttl <= 90 * 86400 for ttl in ttls), ttls
+
+
 # Test that a retry gets IN_PROGRESS with the reserved ARN, if the ClientToken row exists but the
 # export row does not (a different node inserted the ClientToken row but not yet the export row).
 # To make this state, we delete the export row of a finished export.
@@ -1366,10 +1506,7 @@ def test_export_client_token_without_export_row(cql, test_table_s, s3):
         export_arn = started['ExportArn']
         wait_for_export(client, export_arn)
         # The finished row must keep its TTL.
-        ttl = cql.execute(SimpleStatement(
-            "SELECT TTL(export_status), TTL(client_token) FROM system_distributed.alternator_export_to_s3_exports WHERE export_arn = %s",
-            consistency_level=ConsistencyLevel.ONE), [export_arn]).one()
-        assert 89 * 86400 < ttl[0] <= 90 * 86400 and 89 * 86400 < ttl[1] <= 90 * 86400, ttl
+        assert_export_row_expires(cql, export_arn)
         cql.execute(SimpleStatement(
             "DELETE FROM system_distributed.alternator_export_to_s3_exports WHERE export_arn = %s",
             consistency_level=ConsistencyLevel.ONE), [export_arn])
@@ -2009,9 +2146,12 @@ def test_export_table_filter_specification(dynamodb, test_table_s_for_export_onl
 
 
 # Test that ExportTime close to now is accepted, and reported rounded to the nearest millisecond, as
-# DynamoDB does. boto3 sends an ExportTime in whole seconds, so the request is written out here. The
-# bucket does not exist, so on DynamoDB the export fails by itself without writing anything.
-def test_export_table_export_time_now(dynamodb, test_table_s_for_export_only, s3):
+# DynamoDB does. Scylla truncates its current time to the millisecond, so the rounded ExportTime of
+# "now" can be 1 ms after it. botocore before 1.43.93 sends an ExportTime in whole seconds, so the
+# request is written out here. The bucket does not exist, so on DynamoDB the export fails by itself
+# without writing anything.
+@pytest.mark.parametrize('now', [False, True], ids=['before_now', 'now'])
+def test_export_table_export_time_now(dynamodb, test_table_s_for_export_only, s3, now):
     client = test_table_s_for_export_only.meta.client
     table_arn = get_table_arn(test_table_s_for_export_only)
     # DynamoDB exports only from its point-in-time recovery window, which can start after the
@@ -2020,10 +2160,15 @@ def test_export_table_export_time_now(dynamodb, test_table_s_for_export_only, s3
     earliest = pitr['PointInTimeRecoveryDescription'].get('EarliestRestorableDateTime')
     second = max(int(time.time()) - 1, int(earliest.timestamp()) + 1 if earliest else 0)
     time.sleep(max(0, second + 1 - time.time()))
-    payload = json.dumps({'TableArn': table_arn, 'S3Bucket': unique_bucket_name(), 'ExportTime': second + 0.1236,
+    export_time = time.time() if now else second + 0.1236
+    payload = json.dumps({'TableArn': table_arn, 'S3Bucket': unique_bucket_name(), 'ExportTime': export_time,
                           'ClientToken': str(uuid.uuid4())})
     response = manual_request(dynamodb, 'ExportTableToPointInTime', payload)
-    assert response['ExportDescription']['ExportTime'] == pytest.approx(second + 0.124, abs=1e-5)
+    # The reported time is a whole millisecond, at most half a millisecond from export_time. At a
+    # tie, the server and round() can choose different neighbours, so do not compare with round().
+    reported = response['ExportDescription']['ExportTime']
+    assert reported * 1000 == pytest.approx(round(reported * 1000), abs=1e-3)
+    assert abs(reported - export_time) <= 0.0005 + 1e-6
     # A running export holds a slot of its shard, which a later test can need.
     if not is_aws(client):
         wait_for_export(client, response['ExportDescription']['ExportArn'])
@@ -2672,6 +2817,8 @@ def test_export_error_injection_after_client_token_insertion(cql, scylla_only, r
         assert desc['FailureCode'] == 'Exception'
         assert 'injected failure alternator_export_to_s3_after_client_token_insertion' in desc['FailureMessage']
         assert 'EndTime' in desc
+        # The request inserted the FAILED row, because there was no row to update.
+        assert_export_row_expires(cql, desc['ExportArn'])
 
         # The failed export has the ARN of the ClientToken row. Each retry must report the same
         # failed export.
@@ -2827,6 +2974,39 @@ def test_export_error_injection_final_write_retried_in_background(dynamodb, scyl
                 assert wait_for_export(client, arn)['ExportStatus'] == 'COMPLETED'
 
 
+# Test that the export fiber does not overwrite its row after a garbage collector took it. The
+# garbage collector of another node takes the export of a node which it cannot reach, and that node
+# can still run the export. The final write of the fiber is conditional, so it does not apply.
+def test_export_fiber_keeps_a_collected_row(dynamodb, cql, scylla_only, rest_api, metrics, s3):
+    with new_table_s(dynamodb) as table, new_s3_bucket(s3) as bucket:
+        # One item, so that the export stops once (see paused_exports()).
+        table.put_item(Item={'p': 'item'})
+        client = table.meta.client
+        with paused_exports(rest_api) as (wait_until_paused, release_paused):
+            export_arn = client.export_table_to_point_in_time(
+                TableArn=get_table_arn(table), S3Bucket=bucket)['ExportDescription']['ExportArn']
+            wait_until_paused(1)
+            # Take the row with a conditional write, as the garbage collector of another node does.
+            # One node, so CL=ONE.
+            applied = cql.execute(SimpleStatement(
+                "UPDATE system_distributed.alternator_export_to_s3_exports USING TTL 7776000"
+                " SET export_status = 'FAILED', failure_code = 'NodeFailure', failure_message = 'taken by the test',"
+                " node_id = %s WHERE export_arn = %s IF export_status = 'IN_PROGRESS'",
+                consistency_level=ConsistencyLevel.ONE), [f'{uuid.uuid4()}:1', export_arn]).one()
+            assert applied[0], applied
+            release_paused()
+        # The fiber holds its export slot until its final write ends, so the gauge of the running
+        # exports goes to 0 after that write.
+        deadline = time.monotonic() + 60
+        while get_metric(metrics, 'scylla_alternator_s3_exports_running') > 0:
+            assert time.monotonic() < deadline, 'The export did not end within 60s'
+            time.sleep(0.1)
+        desc = client.describe_export(ExportArn=export_arn)['ExportDescription']
+        assert desc['ExportStatus'] == 'FAILED', desc
+        assert desc['FailureCode'] == 'NodeFailure', desc
+        assert 'ExportManifest' not in desc
+
+
 # ---------------------------------------------------------------------------
 # Garbage collection tests
 # ---------------------------------------------------------------------------
@@ -2916,6 +3096,7 @@ def test_export_garbage_collection_fails_export_of_dead_node(cql, scylla_only, r
             assert desc['FailureCode'] == 'NodeFailure'
             assert desc['FailureMessage']
             assert desc['EndTime']
+            assert_export_row_expires(cql, dead_export_arn)
 
 # Test that the garbage collector marks as FAILED an IN_PROGRESS export of a node
 # which is not in the cluster any more (it was removed or replaced), and of which
