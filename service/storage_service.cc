@@ -6843,20 +6843,20 @@ future<join_node_request_result> storage_service::join_node_request_handler(join
     while (true) {
         auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
 
-        if (const auto *p = _topology_state_machine._topology.find(params.host_id)) {
-            const auto& rs = p->second;
-            if (rs.state == node_state::left) {
-                rtlogger.warn("the node {} attempted to join but it was removed from the cluster. Rejecting the node", params.host_id);
-                result.result = join_node_request_result::rejected{
-                    .reason = "The node has already been removed from the cluster",
-                };
-            } else {
-                rtlogger.warn("the node {} attempted to join again after an unfinished attempt but it is no longer allowed to do so. Rejecting the node", params.host_id);
-                result.result = join_node_request_result::rejected{
-                    .reason = "The node requested to join before but didn't finish the procedure. "
-                              "Please clear the data directory and restart.",
-                };
-            }
+        // topology::find() does not return left nodes, they are only in left_nodes.
+        if (_topology_state_machine._topology.left_nodes.contains(params.host_id)) {
+            rtlogger.warn("the node {} attempted to join but it was removed from the cluster. Rejecting the node", params.host_id);
+            result.result = join_node_request_result::rejected{
+                .reason = "The node has already been removed from the cluster",
+            };
+            co_return result;
+        }
+        if (_topology_state_machine._topology.find(params.host_id)) {
+            rtlogger.warn("the node {} attempted to join again after an unfinished attempt but it is no longer allowed to do so. Rejecting the node", params.host_id);
+            result.result = join_node_request_result::rejected{
+                .reason = "The node requested to join before but didn't finish the procedure. "
+                          "Please clear the data directory and restart.",
+            };
             co_return result;
         }
 
