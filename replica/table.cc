@@ -828,6 +828,7 @@ public:
 
     bool all_storage_groups_split() override { return true; }
     future<> split_all_storage_groups(tasks::task_info tablet_split_task_info) override { return make_ready_future(); }
+    future<> finish_started_splits(tasks::task_info info) override { return make_ready_future(); }
     future<> maybe_split_compaction_group_of(size_t idx) override { return make_ready_future(); }
     future<std::vector<sstables::shared_sstable>> maybe_split_new_sstable(const sstables::shared_sstable& sst) override {
         return make_ready_future<std::vector<sstables::shared_sstable>>(std::vector<sstables::shared_sstable>{sst});
@@ -1015,6 +1016,7 @@ public:
     locator::combined_load_stats table_load_stats() const override;
     bool all_storage_groups_split() override;
     future<> split_all_storage_groups(tasks::task_info tablet_split_task_info) override;
+    future<> finish_started_splits(tasks::task_info info) override;
     future<> maybe_split_compaction_group_of(size_t idx) override;
     future<std::vector<sstables::shared_sstable>> maybe_split_new_sstable(const sstables::shared_sstable& sst) override;
     dht::token_range get_token_range_after_split(const dht::token& token) const noexcept override {
@@ -1470,6 +1472,16 @@ future<> tablet_storage_group_manager::split_all_storage_groups(tasks::task_info
 
     co_await for_each_storage_group_gently([opt, tablet_split_task_info] (storage_group& storage_group) {
         return storage_group.split(opt, tablet_split_task_info);
+    });
+}
+
+future<> tablet_storage_group_manager::finish_started_splits(tasks::task_info info) {
+    compaction::compaction_type_options::split opt = co_await split_compaction_options();
+
+    co_await for_each_storage_group_gently([opt, info] (storage_group& sg) -> future<> {
+        if (!sg.split_ready_compaction_groups().empty()) {
+            co_await sg.split(opt, info);
+        }
     });
 }
 
@@ -2990,6 +3002,10 @@ table::compact_all_sstables(tasks::task_info info, do_flush do_flush, bool consi
     // Forces off-strategy before major, so sstables previously sitting on maintenance set will be included
     // in the compaction's input set, to provide same semantics as before maintenance set came into existence.
     co_await perform_offstrategy_compaction(info);
+    // A storage group in split mode takes new writes in its split-ready groups while older
+    // data waits in the main group. Compaction works on one group at a time, so until the
+    // split moves that data over, it cannot drop what a newer tombstone shadows.
+    co_await _sg_manager->finish_started_splits(info);
     co_await parallel_foreach_compaction_group_view([this, info, consider_only_existing_data, &pre_flush_gc_state] (compaction::compaction_group_view& view) -> future<> {
         auto lock_holder = co_await _compaction_manager.get_incremental_repair_read_lock(view, "compact_all_sstables");
         co_await _compaction_manager.perform_major_compaction(view, info, consider_only_existing_data, pre_flush_gc_state);

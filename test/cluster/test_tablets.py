@@ -2280,6 +2280,51 @@ async def test_drop_keyspace_while_split(manager: ScyllaClusterManager):
     await drop_ks_task
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_major_compaction_during_tablet_split(manager: ScyllaClusterManager):
+
+    # Reproducer for https://scylladb.atlassian.net/browse/SCYLLADB-6203
+    # A major compaction of a tablet which is being split has to drop the data
+    # shadowed by tombstones written after the split was requested.
+
+    cmdline = ['--target-tablet-size-in-bytes', '30000', '--smp', '1']
+    config = {'tablet_load_stats_refresh_interval_in_seconds': 1}
+    server = await manager.server_add(config=config, cmdline=cmdline)
+    s0_log = await manager.server_open_log(server.server_id)
+    cql = manager.get_cql()
+
+    await manager.disable_tablet_balancing()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
+        # Without compression the size on disk follows the amount of live data.
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c blob) WITH compression = {{}};")
+
+        async def table_size():
+            return await manager.api.client.get_json(f"/column_family/metrics/live_disk_space_used/{ks}:test", host=server.ip_addr)
+
+        keys = range(200)
+        insert = cql.prepare(f"INSERT INTO {ks}.test (pk, c) VALUES (?, ?)")
+        await asyncio.gather(*[cql.run_async(insert, [k, b'x' * 2000]) for k in keys])
+        await manager.api.flush_keyspace(server.ip_addr, ks)
+        size_before = await table_size()
+
+        # Hold the split after the storage group entered split mode and before
+        # its sstables are split.
+        await manager.api.enable_injection(server.ip_addr, 'split_storage_groups_wait', one_shot=False)
+        await manager.enable_tablet_balancing()
+        await s0_log.wait_for('split_storage_groups_wait: wait')
+
+        await asyncio.gather(*[cql.run_async(f"DELETE FROM {ks}.test WHERE pk = {k};") for k in keys[1:]])
+        await manager.api.flush_keyspace(server.ip_addr, ks)
+        await manager.api.keyspace_compaction(server.ip_addr, ks)
+        size_after = await table_size()
+
+        await manager.api.disable_injection(server.ip_addr, 'split_storage_groups_wait')
+        await manager.api.message_injection(server.ip_addr, 'split_storage_groups_wait')
+
+        # One row of 200 is left.
+        assert size_after < size_before // 4
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_drop_with_tablet_migration_cleanup(manager: ScyllaClusterManager):
 
     # Reproducer for https://github.com/scylladb/scylladb/issues/25706
