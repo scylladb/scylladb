@@ -2477,10 +2477,9 @@ def test_export_error_injection_after_export_row_insertion(scylla_only, rest_api
         assert_listed_with_status(client, table_arn, export_arn, 'FAILED')
 
 
-# Test that an overloaded coordinator on the export row insert gives the FAILED export, not
-# RequestLimitExceeded. The ClientToken row is already there, so no retry can start this export.
-# An SDK retries RequestLimitExceeded with the same ClientToken, and that retry must get the same
-# answer as the first call.
+# Test that an overloaded coordinator on the export row insert gives the FAILED export, not an
+# error. The ClientToken row is already there, so no retry can start this export. A retry with the
+# same ClientToken gets this FAILED export, so the first call gets it too.
 def test_export_error_injection_export_row_insert_overloaded(cql, scylla_only, rest_api, test_table_s, s3):
     injection = 'alternator_export_to_s3_export_row_insert_overloaded'
     client = test_table_s.meta.client
@@ -2504,6 +2503,23 @@ def test_export_error_injection_export_row_insert_overloaded(cql, scylla_only, r
         assert_failed_export_of_token(client, cql, table_arn, bucket, token, desc)
 
         assert_listed_with_status(client, table_arn, desc['ExportArn'], 'FAILED')
+
+
+# Test that if the ClientToken row insert fails, as on an overloaded coordinator, the client gets
+# InternalServerError, not a FAILED export. Maybe no ClientToken row has the ARN of that export,
+# so a retry with the same ClientToken can start a new export.
+def test_export_error_injection_client_token_insert_overloaded(scylla_only, rest_api, test_table_s, s3):
+    client = test_table_s.meta.client
+    table_arn = get_table_arn(test_table_s)
+    token = str(uuid.uuid4())
+
+    with new_s3_bucket(s3) as bucket:
+        with scylla_inject_error(rest_api, 'alternator_export_to_s3_client_token_insert_overloaded'):
+            with pytest.raises(ClientError, match='InternalServerError'):
+                client.export_table_to_point_in_time(TableArn=table_arn, S3Bucket=bucket, ClientToken=token)
+        desc = client.export_table_to_point_in_time(
+            TableArn=table_arn, S3Bucket=bucket, ClientToken=token)['ExportDescription']
+        assert wait_for_export(client, desc['ExportArn'])['ExportStatus'] == 'COMPLETED'
 
 
 # Test that the export starts if the export row insert returns "not applied" but applied (this

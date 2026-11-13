@@ -57,6 +57,7 @@
 #include <seastar/core/sleep.hh>
 #include <seastar/core/temporary_buffer.hh>
 #include <seastar/coroutine/as_future.hh>
+#include <seastar/coroutine/exception.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/switch_to.hh>
 #include <seastar/util/defer.hh>
@@ -235,10 +236,11 @@ static future<bool> write_final_export_row(db::system_distributed_keyspace& sdks
 
 // `query_processor` throws the coordinator errors. Convert overload and rate limit errors to
 // RequestLimitExceeded, so that the client retries (the same as
-// create_api_error_from_coordinators_exception() does for data tables).
+// create_api_error_from_coordinators_exception() does for reads of data tables).
 // The reads below convert errors for all callers. Only the garbage collector reads the client
-// tokens, and it calls the helper directly, thus that read does not convert the errors. For
-// writes, the request path converts the errors. Background fibers retry all errors.
+// tokens, and it calls the helper directly, thus that read does not convert the errors. Writes
+// do not convert the errors, the same as a write with LWT to a data table: a client gets
+// InternalServerError. Background fibers retry all errors.
 template <typename T>
 static future<T> translate_coordinator_errors(future<T> f) {
     try {
@@ -2023,22 +2025,26 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
     // can apply even if it throws), a failure must write the FAILED export row, because the
     // garbage collector does that only for dead nodes.
     // `own_export_arn` is true if the ARN of `erow` belongs to this request.
-    // Both writes convert overload errors to RequestLimitExceeded (see
-    // translate_coordinator_errors()). We still write the FAILED export row, because a refused
-    // CAS can still apply. The client then gets that FAILED export, not RequestLimitExceeded,
-    // because a retry with the same ClientToken must get the same answer.
+    // `token_row_known` is true if the insert of the token row answered, so we know its ARN.
     bool own_export_arn = true;
+    bool token_row_known = false;
     std::exception_ptr failure;
+    const client_row crow{
+        .client_token = client_token,
+        .export_arn = export_arn,
+        .request = stored_request,
+        .node_id = node_id.to_string(),
+    };
 
     try {
         db::alternator_export_table_helper helper(_sdks.qp());
-        // The insert returns the existing token row if it did not apply.
-        auto existing_client_row = co_await translate_coordinator_errors(helper.insert_client_token(client_row{
-            .client_token = client_token,
-            .export_arn = export_arn,
-            .request = stored_request,
-            .node_id = node_id.to_string(),
-        }));
+        // The insert returns the existing token row if it did not apply. Tests use the injection
+        // to fail the insert as an overloaded coordinator does.
+        utils::get_local_injector().inject("alternator_export_to_s3_client_token_insert_overloaded",
+                [] { throw exceptions::overloaded_exception(sstring(
+                        "injected failure alternator_export_to_s3_client_token_insert_overloaded")); });
+        auto existing_client_row = co_await helper.insert_client_token(crow);
+        token_row_known = true;
 
         utils::get_local_injector().inject("alternator_export_to_s3_after_client_token_insertion",
                 [] { throw std::runtime_error("injected failure alternator_export_to_s3_after_client_token_insertion"); });
@@ -2046,12 +2052,7 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
         // A CAS that applied can return "not applied" with our own row (see below). Tests use
         // this injection to cause it.
         if (utils::get_local_injector().enter("alternator_export_to_s3_client_token_insert_not_applied")) {
-            existing_client_row = client_row{
-                .client_token = client_token,
-                .export_arn = export_arn,
-                .request = stored_request,
-                .node_id = node_id.to_string(),
-            };
+            existing_client_row = crow;
         }
 
         if (existing_client_row) {
@@ -2080,12 +2081,10 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
         // failed insert, because a write that timed out can still apply.
         // The insert returns the existing export row if it did not apply. Tests use the injection
         // to fail the insert as an overloaded coordinator does.
-        auto existing_export_row = co_await translate_coordinator_errors(seastar::futurize_invoke([&] {
-            utils::get_local_injector().inject("alternator_export_to_s3_export_row_insert_overloaded",
-                    [] { throw exceptions::overloaded_exception(sstring(
-                            "injected failure alternator_export_to_s3_export_row_insert_overloaded")); });
-            return insert_export(_sdks, erow);
-        }));
+        utils::get_local_injector().inject("alternator_export_to_s3_export_row_insert_overloaded",
+                [] { throw exceptions::overloaded_exception(sstring(
+                        "injected failure alternator_export_to_s3_export_row_insert_overloaded")); });
+        auto existing_export_row = co_await insert_export(_sdks, erow);
 
         utils::get_local_injector().inject("alternator_export_to_s3_after_export_row_insertion",
                 [] { throw std::runtime_error("injected failure alternator_export_to_s3_after_export_row_insertion"); });
@@ -2155,8 +2154,15 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
                 erow.export_arn, std::current_exception());
         _s3_exports->finish_export_in_background(std::move(*export_slot), erow);
     }
-    // Answer with the FAILED export, also for an api_error such as RequestLimitExceeded. An SDK
-    // retries such an error with the same ClientToken, and the retry finds this FAILED export.
+    // If the insert of the token row threw, maybe no token row has our ARN. Then a retry with the
+    // same ClientToken starts a new export, so do not answer with this FAILED export. Answer with
+    // the error (InternalServerError, as for a failed write with LWT to a data table). An SDK
+    // retries it with the same ClientToken. If the insert applied, the retry finds the FAILED
+    // export.
+    if (!token_row_known) {
+        co_return coroutine::exception(std::move(failure));
+    }
+    // A retry with the same ClientToken finds this FAILED export, so answer with it now.
     co_return rjson::print(build_export_description_response(erow));
 }
 

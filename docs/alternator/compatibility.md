@@ -399,9 +399,9 @@ because the token is also a key of a system table.
 
 If Alternator accepts an export request but cannot start the export (for
 example, because the cluster is overloaded), ExportTableToPointInTime returns
-the ExportDescription with the status FAILED, not an error. If Alternator
-recorded the ClientToken, a retry with the same ClientToken returns the same
-failed export, so a new export needs a new ClientToken.
+the ExportDescription with the status FAILED, not an error. A retry with the
+same ClientToken returns the same failed export, so a new export needs a new
+ClientToken.
 
 An export is also not a snapshot. In DynamoDB, an export contains the table
 exactly as it was at a single instant, ExportTime; in Alternator the export
