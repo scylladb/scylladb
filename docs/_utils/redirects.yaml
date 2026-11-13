@@ -1,6 +1,10 @@
 ### a dictionary of redirections
 #old path: new path
 
+# Remove the outdated System Limits KB
+
+/stable/kb/system-limits.html: /stable/kb/scylla-limits-systemd.html
+
 # Remove a duplicate KB about partial cqlsh results
 
 /stable/kb/cqlsh-results.html: /stable/kb/cqlsh-more.html

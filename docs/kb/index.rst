@@ -17,7 +17,6 @@ Knowledge Base
   * :doc:`Compaction </kb/compaction>` - To free up disk space and speed up reads, ScyllaDB must do compaction operations.
   * :doc:`DPDK mode </kb/dpdk-hardware>` - Learn to select and configure networking for DPDK mode
   * :doc:`POSIX networking for ScyllaDB </kb/posix>` - ScyllaDB's POSIX mode works on all physical and virtual network devices and is useful for development work.
-  * :doc:`System Limits </kb/system-limits>` - Outlines the system limits which should be set or removed
   * :doc:`Run ScyllaDB as a custom user:group </kb/custom-user>` - Configure the ScyllaDB and supporting services to run as a custom user:group.
   * :doc:`How to Set up a Swap Space Using a File </kb/set-up-swap>` - Outlines the steps you need to take to set up a swap space.
 

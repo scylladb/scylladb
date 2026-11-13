@@ -181,6 +181,6 @@ Huge page configuration is written to :code:`/etc/sysconfig/scylla-server` by th
 Related Topics
 --------------
 
-:doc:`System Limits </kb/system-limits>` - outlines the system limits which should be set or removed.
+:doc:`Increase ScyllaDB resource limits over systemd </kb/scylla-limits-systemd>` - describes the resource limits ScyllaDB runs with and how to override them.
 
 .. include:: /rst_include/advance-index.rst
