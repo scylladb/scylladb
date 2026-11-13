@@ -1253,9 +1253,11 @@ public:
                                        query::row_limit(query::max_rows),
                                        query::partition_limit(query::max_partitions));
         reader_permit::awaits_guard ag(permit);
+        abort_source as;
         auto&& [result, hit_rate, opt_exception] = co_await ser::storage_proxy_rpc_verbs::send_read_mutation_data(&_ms.local(),
               locator::host_id(leader.uuid()),
               permit.timeout(),
+              as,
               cmd,
               query::full_partition_range,
               {});

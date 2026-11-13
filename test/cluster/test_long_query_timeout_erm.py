@@ -1,7 +1,9 @@
 # Copyright (C) 2025-present ScyllaDB
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
+from cassandra import ConsistencyLevel
 from cassandra.policies import WhiteListRoundRobinPolicy
+from cassandra.query import SimpleStatement
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.random_tables import RandomTables, Column, IntType
 from test.pylib.rest_client import inject_error_one_shot
@@ -184,3 +186,92 @@ async def test_long_query_timeout_without_failure_erm(request, manager: ScyllaCl
 
     res = await query_future
     assert res[0][0] == num_rows
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_read_with_failed_extra_target_releases_erm(manager: ScyllaClusterManager):
+    """
+    Test verifies that a read which reached its consistency level although one
+    of its targets failed doesn't block ERM until its timeout.
+
+    With speculative_retry = 'ALWAYS', a QUORUM read with RF=3 sends requests
+    to all three replicas, so it succeeds when one of them fails. The read
+    executor used to wait until the read's timeout for a response from the
+    failed replica, holding its ERM and so blocking topology changes, which
+    wait for all older token metadata versions to be released.
+    Reproduces SCYLLADB-6015.
+    """
+    servers = await manager.servers_add(3, config={"rf_rack_valid_keyspaces": False})
+    cql = await manager.get_cql_exclusive(servers[0])
+    await cql.run_async("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}")
+    await cql.run_async("CREATE TABLE ks.t (pk int PRIMARY KEY, v int) WITH speculative_retry = 'ALWAYS'")
+    await cql.run_async(SimpleStatement("INSERT INTO ks.t (pk, v) VALUES (0, 0)", consistency_level=ConsistencyLevel.ALL))
+
+    logger.info("Make one replica fail the read")
+    # Not one-shot: a one-shot injection is removed when it fires, together with
+    # its enter count.
+    await manager.api.enable_injection(servers[1].ip_addr, 'storage_proxy::handle_read', one_shot=False,
+                                       parameters={'cf_name': 't', 'what': 'throw'})
+    try:
+        query_timeout = 600
+        rows = await cql.run_async(SimpleStatement(f"SELECT * FROM ks.t WHERE pk = 0 USING TIMEOUT {query_timeout}s",
+                                                   consistency_level=ConsistencyLevel.QUORUM), timeout=2*query_timeout)
+        assert [(r.pk, r.v) for r in rows] == [(0, 0)]
+        await manager.api.wait_for_injection_enter(servers[1].ip_addr, 'storage_proxy::handle_read')
+
+        logger.info("Add a new node - ERM should not be blocked")
+        await asyncio.wait_for(manager.server_add(config={"rf_rack_valid_keyspaces": False}), timeout=query_timeout/4)
+    finally:
+        await manager.api.disable_injection(servers[1].ip_addr, 'storage_proxy::handle_read')
+
+async def get_read_failures(manager: ScyllaClusterManager, server):
+    """Returns the coordinator's count of failed replica reads, of cancelled replica reads
+    and of dropped read messages."""
+    metrics = await manager.metrics.query(server.ip_addr)
+    read_errors = metrics.get('scylla_storage_proxy_coordinator_read_errors') or 0
+    cancelled_reads = metrics.get('scylla_storage_proxy_coordinator_cancelled_reads') or 0
+    dropped = await manager.api.client.get_json('/messaging_service/messages/dropped_by_ver', host=server.ip_addr)
+    dropped_reads = sum(d['count'] for d in dropped if d['verb'] in ('READ_DATA', 'READ_DIGEST'))
+    return read_errors, cancelled_reads, dropped_reads
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='debug', reason='adding a node must finish before the paused replica read times out')
+async def test_read_with_stuck_extra_target_releases_erm(manager: ScyllaClusterManager):
+    """
+    Test verifies that a read which reached its consistency level while one of
+    its targets is still processing the request doesn't block ERM until that
+    target replies.
+
+    With speculative_retry = 'ALWAYS', a QUORUM read with RF=3 sends requests
+    to all three replicas, so it succeeds while one of them is paused. The read
+    executor used to stay alive, holding its ERM and so blocking topology
+    changes, until the paused replica replied.
+    The paused replica read gives up after a minute, so adding the node must
+    finish before that.
+    The request to the paused replica is cancelled, so it must count as a
+    cancelled read, not as a failed read or a dropped message.
+    """
+    servers = await manager.servers_add(3, config={"rf_rack_valid_keyspaces": False})
+    cql = await manager.get_cql_exclusive(servers[0])
+    await cql.run_async("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}")
+    await cql.run_async("CREATE TABLE ks.t (pk int PRIMARY KEY, v int) WITH speculative_retry = 'ALWAYS'")
+    await cql.run_async(SimpleStatement("INSERT INTO ks.t (pk, v) VALUES (0, 0)", consistency_level=ConsistencyLevel.ALL))
+
+    read_failures = await get_read_failures(manager, servers[0])
+
+    logger.info("Make one replica pause the read")
+    handler = await inject_error_one_shot(manager.api, servers[1].ip_addr, 'storage_proxy::handle_read',
+                                          parameters={'cf_name': 't'})
+    try:
+        query_timeout = 600
+        rows = await cql.run_async(SimpleStatement(f"SELECT * FROM ks.t WHERE pk = 0 USING TIMEOUT {query_timeout}s",
+                                                   consistency_level=ConsistencyLevel.QUORUM), timeout=2*query_timeout)
+        assert [(r.pk, r.v) for r in rows] == [(0, 0)]
+        await manager.api.wait_for_injection_enter(servers[1].ip_addr, 'storage_proxy::handle_read')
+
+        logger.info("Add a new node while the replica is paused - ERM should not be blocked")
+        await asyncio.wait_for(manager.server_add(config={"rf_rack_valid_keyspaces": False}), timeout=40)
+        read_errors, cancelled_reads, dropped_reads = read_failures
+        assert await get_read_failures(manager, servers[0]) == (read_errors, cancelled_reads + 1, dropped_reads)
+    finally:
+        await handler.message()

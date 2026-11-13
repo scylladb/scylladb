@@ -218,8 +218,8 @@ auto send_message_cancellable(messaging_service* ms, messaging_verb verb, std::o
     }
 
     return rpc_handler(rpc_client, c_ref, std::forward<MsgOut>(msg)...).handle_exception([ms = ms->shared_from_this(), id, host_id, verb, rpc_client_ptr = std::move(rpc_client_ptr), sub = std::move(sub)] (std::exception_ptr&& eptr) {
-        ms->increment_dropped_messages(verb);
         if (const auto* exp = try_catch<rpc::closed_error>(eptr)) {
+            ms->increment_dropped_messages(verb);
             // This is a transport error
             if (host_id) {
                 ms->remove_error_rpc_client(verb, *host_id);
@@ -229,9 +229,11 @@ auto send_message_cancellable(messaging_service* ms, messaging_verb verb, std::o
             return futurator::make_exception_future(rpc::closed_error(fmt::format("got error from node {}/{}: {}",
                     host_id.value_or(locator::host_id{}), id.addr, exp->what())));
         } else if (try_catch<rpc::canceled_error>(eptr)) {
+            // The sender cancelled the message, so it wasn't dropped.
             // Translate low-level canceled_error into high-level abort_requested_exception.
             return futurator::make_exception_future(abort_requested_exception{});
         } else {
+            ms->increment_dropped_messages(verb);
             // This is expected to be a rpc server error, e.g., the rpc handler throws a std::runtime_error.
             return futurator::make_exception_future(std::move(eptr));
         }
@@ -269,16 +271,18 @@ auto send_message_timeout_cancellable(messaging_service* ms, messaging_verb verb
     }
 
     return rpc_handler(rpc_client, timeout, c_ref, std::forward<MsgOut>(msg)...).handle_exception([ms = ms->shared_from_this(), host_id, address, verb, rpc_client_ptr = std::move(rpc_client_ptr), sub = std::move(sub)] (std::exception_ptr&& eptr) {
-        ms->increment_dropped_messages(verb);
         if (const auto* exp = try_catch<rpc::closed_error>(eptr)) {
+            ms->increment_dropped_messages(verb);
             // This is a transport error
             ms->remove_error_rpc_client(verb, host_id);
             return futurator::make_exception_future(rpc::closed_error(fmt::format("got error from node {}/{}: {}",
                     host_id, address.addr, exp->what())));
         } else if (try_catch<rpc::canceled_error>(eptr)) {
+            // The sender cancelled the message, so it wasn't dropped.
             // Translate low-level canceled_error into high-level abort_requested_exception.
             return futurator::make_exception_future(abort_requested_exception{});
         } else {
+            ms->increment_dropped_messages(verb);
             // This is expected to be a rpc server error, e.g., the rpc handler throws a std::runtime_error.
             return futurator::make_exception_future(std::move(eptr));
         }

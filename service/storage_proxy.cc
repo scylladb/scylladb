@@ -434,10 +434,10 @@ public:
 
     future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>>
     send_read_mutation_data(
-            locator::host_id addr, storage_proxy::clock_type::time_point timeout, tracing::trace_state_ptr tr_state,
+            locator::host_id addr, storage_proxy::clock_type::time_point timeout, abort_source& as, tracing::trace_state_ptr tr_state,
             const query::read_command& cmd, const dht::partition_range& pr,
             fencing_token fence) {
-        auto&& [result, hit_rate, opt_exception] = co_await ser::storage_proxy_rpc_verbs::send_read_mutation_data(&_ms, addr, timeout, cmd, pr, fence);
+        auto&& [result, hit_rate, opt_exception] = co_await ser::storage_proxy_rpc_verbs::send_read_mutation_data(&_ms, addr, timeout, as, cmd, pr, fence);
         if (opt_exception.has_value() && *opt_exception) {
             co_await coroutine::return_exception_ptr((*opt_exception).into_exception_ptr());
         }
@@ -447,12 +447,12 @@ public:
 
     future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>>
     send_read_data(
-            locator::host_id addr, storage_proxy::clock_type::time_point timeout, tracing::trace_state_ptr tr_state,
+            locator::host_id addr, storage_proxy::clock_type::time_point timeout, abort_source& as, tracing::trace_state_ptr tr_state,
             const query::read_command& cmd, const dht::partition_range& pr,
             query::digest_algorithm digest_algo, db::per_partition_rate_limit::info rate_limit_info,
             fencing_token fence) {
         auto&& [result, hit_rate, opt_exception] =
-            co_await ser::storage_proxy_rpc_verbs::send_read_data(&_ms, addr, timeout, cmd, pr, digest_algo, rate_limit_info, fence);
+            co_await ser::storage_proxy_rpc_verbs::send_read_data(&_ms, addr, timeout, as, cmd, pr, digest_algo, rate_limit_info, fence);
         if (opt_exception.has_value() && *opt_exception) {
             co_await coroutine::return_exception_ptr((*opt_exception).into_exception_ptr());
         }
@@ -462,12 +462,12 @@ public:
 
     future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature, std::optional<full_position>>>
     send_read_digest(
-            locator::host_id addr, storage_proxy::clock_type::time_point timeout, tracing::trace_state_ptr tr_state,
+            locator::host_id addr, storage_proxy::clock_type::time_point timeout, abort_source& as, tracing::trace_state_ptr tr_state,
             const query::read_command& cmd, const dht::partition_range& pr,
             query::digest_algorithm digest_algo, db::per_partition_rate_limit::info rate_limit_info,
             fencing_token fence) {
         auto&& [d, t, hit_rate, opt_exception, opt_last_pos] =
-            co_await ser::storage_proxy_rpc_verbs::send_read_digest(&_ms, addr, timeout, cmd, pr, digest_algo, rate_limit_info, fence);
+            co_await ser::storage_proxy_rpc_verbs::send_read_digest(&_ms, addr, timeout, as, cmd, pr, digest_algo, rate_limit_info, fence);
         if (opt_exception.has_value() && *opt_exception) {
             co_await coroutine::return_exception_ptr((*opt_exception).into_exception_ptr());
         }
@@ -3117,9 +3117,11 @@ storage_proxy_stats::stats::stats()
         , data_read_attempts(COORDINATOR_STATS_CATEGORY, "reads", "number of data read requests", "data")
         , data_read_completed(COORDINATOR_STATS_CATEGORY, "completed_reads", "number of data read requests that completed", "data")
         , data_read_errors(COORDINATOR_STATS_CATEGORY, "read_errors", "number of data read requests that failed", "data")
+        , data_read_cancelled(COORDINATOR_STATS_CATEGORY, "cancelled_reads", "number of data read requests cancelled after the read reached its consistency level", "data")
         , digest_read_attempts(COORDINATOR_STATS_CATEGORY, "reads", "number of digest read requests", "digest")
         , digest_read_completed(COORDINATOR_STATS_CATEGORY, "completed_reads", "number of digest read requests that completed", "digest")
         , digest_read_errors(COORDINATOR_STATS_CATEGORY, "read_errors", "number of digest read requests that failed", "digest")
+        , digest_read_cancelled(COORDINATOR_STATS_CATEGORY, "cancelled_reads", "number of digest read requests cancelled after the read reached its consistency level", "digest")
         , mutation_data_read_attempts(COORDINATOR_STATS_CATEGORY, "reads", "number of mutation data read requests", "mutation_data")
         , mutation_data_read_completed(COORDINATOR_STATS_CATEGORY, "completed_reads", "number of mutation data read requests that completed", "mutation_data")
         , mutation_data_read_errors(COORDINATOR_STATS_CATEGORY, "read_errors", "number of mutation data read requests that failed", "mutation_data") { }
@@ -3130,8 +3132,10 @@ void storage_proxy_stats::stats::register_split_metrics_local() {
     data_read_attempts.register_metrics_local();
     data_read_completed.register_metrics_local();
     data_read_errors.register_metrics_local();
+    data_read_cancelled.register_metrics_local();
     digest_read_attempts.register_metrics_local();
     digest_read_completed.register_metrics_local();
+    digest_read_cancelled.register_metrics_local();
     mutation_data_read_attempts.register_metrics_local();
     mutation_data_read_completed.register_metrics_local();
     mutation_data_read_errors.register_metrics_local();
@@ -5002,6 +5006,10 @@ protected:
     timer<storage_proxy::clock_type> _timeout;
     schema_ptr _schema;
     size_t _failed = 0;
+    // Cancels the requests to the targets which haven't replied when the request
+    // fails or times out. Their callbacks keep the read executor, and with it its
+    // effective replication map, alive.
+    abort_source _abort_source;
 
     virtual void on_failure(exceptions::coordinator_exception_container&& ex) = 0;
     virtual void on_timeout() = 0;
@@ -5013,6 +5021,7 @@ protected:
         _done_promise.set_value(ex.clone());
         _timeout.cancel();
         on_failure(std::move(ex));
+        _abort_source.request_abort();
     }
 public:
     abstract_read_resolver(schema_ptr schema, db::consistency_level cl, size_t target_count, storage_proxy::clock_type::time_point timeout)
@@ -5029,6 +5038,9 @@ public:
     virtual void on_error(locator::host_id ep, error_kind kind, exceptions::request_failure_reason reason) = 0;
     future<result<>> done() {
         return _done_promise.get_future();
+    }
+    abort_source& get_abort_source() noexcept {
+        return _abort_source;
     }
     void error(locator::host_id ep, std::exception_ptr eptr) {
         sstring why;
@@ -5073,6 +5085,7 @@ struct digest_read_result {
 };
 
 class digest_read_resolver : public abstract_read_resolver {
+    static constexpr auto background_digest_check_timeout = std::chrono::seconds(1);
     struct digest_and_last_pos {
         query::result_digest digest;
         std::optional<full_position> last_pos;
@@ -5172,6 +5185,9 @@ private:
             if (_cl_responses >= _block_for && _data_result) {
                 _cl_reported = true;
                 _cl_promise.set_value(digest_read_result{std::move(_data_result), digests_match()});
+                // The remaining responses are only used for the background digest check,
+                // so don't wait for them for long.
+                _timeout.rearm(std::min(_timeout.get_timeout(), storage_proxy::clock_type::now() + background_digest_check_timeout));
             }
         }
         if (is_completed()) {
@@ -5212,6 +5228,9 @@ private:
     }
 
 public:
+    bool cl_reported() const noexcept {
+        return _cl_reported;
+    }
     future<result<digest_read_result>> has_cl() {
         return _cl_promise.get_future();
     }
@@ -5793,7 +5812,7 @@ public:
     }
 
 protected:
-    future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>> make_mutation_data_request(lw_shared_ptr<query::read_command> cmd, locator::host_id ep, clock_type::time_point timeout) {
+    future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>> make_mutation_data_request(lw_shared_ptr<query::read_command> cmd, locator::host_id ep, clock_type::time_point timeout, abort_source& as) {
         ++_proxy->get_stats().mutation_data_read_attempts.get_ep_stat(get_topology(), ep);
         auto fence = storage_proxy::get_fence(*_effective_replication_map_ptr);
         if (_proxy->is_me(*_effective_replication_map_ptr, ep)) {
@@ -5804,7 +5823,7 @@ protected:
             const bool format_reverse_required = cmd->slice.is_reversed() && !_native_reversed_queries_enabled;
             cmd = format_reverse_required ? reversed(::make_lw_shared(*cmd)) : cmd;
 
-            auto f = _proxy->remote().send_read_mutation_data(ep, timeout, _trace_state, *cmd, _partition_range, fence);
+            auto f = _proxy->remote().send_read_mutation_data(ep, timeout, as, _trace_state, *cmd, _partition_range, fence);
             if (format_reverse_required) {
                 f = f.then([](auto r) {
                     auto&& [result, hit_rate] = r;
@@ -5816,7 +5835,7 @@ protected:
             return f;
         }
     }
-    future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>> make_data_request(locator::host_id ep, clock_type::time_point timeout, bool want_digest) {
+    future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>> make_data_request(locator::host_id ep, clock_type::time_point timeout, abort_source& as, bool want_digest) {
         ++_proxy->get_stats().data_read_attempts.get_ep_stat(get_topology(), ep);
         auto opts = want_digest
                   ? query::result_options{query::result_request::result_and_digest, digest_algorithm(*_proxy)}
@@ -5829,10 +5848,10 @@ protected:
             tracing::trace(_trace_state, "read_data: sending a message to /{}", ep);
             const bool format_reverse_required = _cmd->slice.is_reversed() && !_native_reversed_queries_enabled;
             auto cmd = format_reverse_required ? reversed(::make_lw_shared(*_cmd)) : _cmd;
-            return _proxy->remote().send_read_data(ep, timeout, _trace_state, *cmd, _partition_range, opts.digest_algo, _rate_limit_info, fence);
+            return _proxy->remote().send_read_data(ep, timeout, as, _trace_state, *cmd, _partition_range, opts.digest_algo, _rate_limit_info, fence);
         }
     }
-    future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature, std::optional<full_position>>> make_digest_request(locator::host_id ep, clock_type::time_point timeout) {
+    future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature, std::optional<full_position>>> make_digest_request(locator::host_id ep, clock_type::time_point timeout, abort_source& as) {
         ++_proxy->get_stats().digest_read_attempts.get_ep_stat(get_topology(), ep);
         auto fence = storage_proxy::get_fence(*_effective_replication_map_ptr);
         if (_proxy->is_me(*_effective_replication_map_ptr, ep)) {
@@ -5843,14 +5862,14 @@ protected:
             tracing::trace(_trace_state, "read_digest: sending a message to /{}", ep);
             const bool format_reverse_required = _cmd->slice.is_reversed() && !_native_reversed_queries_enabled;
             auto cmd = format_reverse_required ? reversed(::make_lw_shared(*_cmd)) : _cmd;
-            return _proxy->remote().send_read_digest(ep, timeout, _trace_state, *cmd, _partition_range, digest_algorithm(*_proxy), _rate_limit_info, fence);
+            return _proxy->remote().send_read_digest(ep, timeout, as, _trace_state, *cmd, _partition_range, digest_algorithm(*_proxy), _rate_limit_info, fence);
         }
     }
     void make_mutation_data_requests(lw_shared_ptr<query::read_command> cmd, data_resolver_ptr resolver, targets_iterator begin, targets_iterator end, clock_type::time_point timeout) {
         auto start = latency_clock::now();
         for (const locator::host_id& ep : std::ranges::subrange(begin, end)) {
             // Waited on indirectly, shared_from_this keeps `this` alive
-            (void)make_mutation_data_request(cmd, ep, timeout).then_wrapped([this, resolver, ep, start, exec = shared_from_this()] (future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>> f) {
+            (void)make_mutation_data_request(cmd, ep, timeout, resolver->get_abort_source()).then_wrapped([this, resolver, ep, start, exec = shared_from_this()] (future<rpc::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>> f) {
                 std::exception_ptr ex;
                 try {
                   if (!f.failed()) {
@@ -5877,7 +5896,7 @@ protected:
         auto start = latency_clock::now();
         for (const locator::host_id& ep : std::ranges::subrange(begin, end)) {
             // Waited on indirectly, shared_from_this keeps `this` alive
-            (void)make_data_request(ep, timeout, want_digest).then_wrapped([this, resolver, ep, start, exec = shared_from_this()] (future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>> f) {
+            (void)make_data_request(ep, timeout, resolver->get_abort_source(), want_digest).then_wrapped([this, resolver, ep, start, exec = shared_from_this()] (future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>> f) {
                 std::exception_ptr ex;
                 try {
                   if (!f.failed()) {
@@ -5896,7 +5915,13 @@ protected:
                   ex = std::current_exception();
                 }
 
-                ++_proxy->get_stats().data_read_errors.get_ep_stat(get_topology(), ep);
+                // The requests which haven't replied shortly after the read reached CL
+                // are cancelled. They didn't fail.
+                if (resolver->cl_reported() && try_catch<abort_requested_exception>(ex)) {
+                    ++_proxy->get_stats().data_read_cancelled.get_ep_stat(get_topology(), ep);
+                } else {
+                    ++_proxy->get_stats().data_read_errors.get_ep_stat(get_topology(), ep);
+                }
                 resolver->error(ep, std::move(ex));
             });
         }
@@ -5905,7 +5930,7 @@ protected:
         auto start = latency_clock::now();
         for (const locator::host_id& ep : std::ranges::subrange(begin, end)) {
             // Waited on indirectly, shared_from_this keeps `this` alive
-            (void)make_digest_request(ep, timeout).then_wrapped([this, resolver, ep, start, exec = shared_from_this()] (future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature, std::optional<full_position>>> f) {
+            (void)make_digest_request(ep, timeout, resolver->get_abort_source()).then_wrapped([this, resolver, ep, start, exec = shared_from_this()] (future<rpc::tuple<query::result_digest, api::timestamp_type, cache_temperature, std::optional<full_position>>> f) {
                 std::exception_ptr ex;
                 try {
                   if (!f.failed()) {
@@ -5924,7 +5949,13 @@ protected:
                   ex = std::current_exception();
                 }
 
-                ++_proxy->get_stats().digest_read_errors.get_ep_stat(get_topology(), ep);
+                // The requests which haven't replied shortly after the read reached CL
+                // are cancelled. They didn't fail.
+                if (resolver->cl_reported() && try_catch<abort_requested_exception>(ex)) {
+                    ++_proxy->get_stats().digest_read_cancelled.get_ep_stat(get_topology(), ep);
+                } else {
+                    ++_proxy->get_stats().digest_read_errors.get_ep_stat(get_topology(), ep);
+                }
                 resolver->error(ep, std::move(ex));
             });
         }
@@ -6158,7 +6189,10 @@ public:
                 if (background_repair_check && !digest_resolver->digests_match()) {
                     exec->_proxy->get_stats().read_repair_repaired_background++;
                     exec->_result_promise = promise<result<foreign_ptr<lw_shared_ptr<query::result>>>>();
-                    exec->reconcile(exec->_cl, timeout);
+                    // Nobody waits for the repair, so bound its reads even if the read has no
+                    // timeout. Its writes use the write timeout.
+                    auto repair_timeout = std::min(timeout, storage_proxy::clock_type::now() + std::chrono::milliseconds(exec->_proxy->_timeout_config.read_timeout_in_ms()));
+                    exec->reconcile(exec->_cl, repair_timeout);
                     return exec->_result_promise.get_future().then(utils::result_discard_value<result<foreign_ptr<lw_shared_ptr<query::result>>>>);
                 } else {
                     return make_ready_future<result<>>(bo::success());
