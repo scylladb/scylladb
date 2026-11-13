@@ -603,6 +603,69 @@ SEASTAR_THREAD_TEST_CASE(test_client_upload_jumbo_sink_etag_empty_object_s3) {
     do_test_client_upload_jumbo_sink_etag(make_s3_client, 0);
 }
 
+// The jumbo sink copies each piece into the target object with a single
+// UploadPartCopy, which S3 refuses for a source larger than maximum_part_size, so
+// the sink has to start a new piece before the current one grows past that - even
+// when the number of parts in a piece is not limited, as for sstable components,
+// which would otherwise let a piece grow to 10,000 parts (SCYLLADB-6250).
+// Uploading 5 GiB is out of the question here, so the limit is lowered with an
+// error injection. The pieces the object was made of are counted from its ETag,
+// which for a multipart upload ends with the number of parts, one per piece.
+void do_test_client_upload_jumbo_sink_piece_size_limit(const client_maker_function& client_maker) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    testlog.info("Skipping, the test needs SCYLLA_ENABLE_ERROR_INJECTION to lower the piece size limit");
+#else
+    static constexpr size_t piece_size_limit = 3 * s3::minimum_part_size;
+    // Pieces are cut at put() boundaries, so they come out smaller than the limit,
+    // by less than a chunk. Three and a half limits' worth of data then takes
+    // exactly four pieces.
+    static constexpr size_t chunk_size = 512_KiB;
+    static constexpr size_t object_size = 3 * piece_size_limit + piece_size_limit / 2;
+    static_assert(object_size % chunk_size == 0);
+    static constexpr unsigned expected_pieces = 4;
+
+    utils::get_local_injector().enable("s3_jumbo_sink_maximum_piece_size", false, {{"value", fmt::to_string(piece_size_limit)}});
+    auto disable_injection = defer([] () noexcept { utils::get_local_injector().disable("s3_jumbo_sink_maximum_piece_size"); });
+
+    s3_test_fixture guard(client_maker);
+    auto cln = guard.client();
+    const auto name = guard.object_path("testjumbopiecesizeobject");
+
+    // Every chunk gets its own content, so that a piece copied out of place or
+    // twice would not go unnoticed.
+    auto chunk = [] (size_t index) {
+        return sstring(chunk_size, char('a' + index % 26));
+    };
+
+    testlog.info("Upload object of {} bytes, with pieces of at most {} bytes\n", object_size, piece_size_limit);
+    auto [sink, etag_f] = cln->make_upload_jumbo_sink_and_get_etag(name, s3::object_metadata{}, std::nullopt);
+    auto out = output_stream<char>(std::move(sink));
+    auto close = seastar::deferred_close(out);
+    for (size_t i = 0; i < object_size / chunk_size; ++i) {
+        const auto content = chunk(i);
+        out.write(content.data(), content.size()).get();
+    }
+    out.flush().get();
+    close.close_now();
+
+    const auto etag = etag_f.get();
+    testlog.info("Reported etag {}\n", etag);
+    BOOST_REQUIRE(etag.ends_with(format("-{}\"", expected_pieces)));
+
+    BOOST_REQUIRE_EQUAL(cln->get_object_size(name).get(), object_size);
+    auto in = input_stream<char>(cln->make_download_source(name));
+    auto close_in = seastar::deferred_close(in);
+    for (size_t i = 0; i < object_size / chunk_size; ++i) {
+        auto buf = in.read_exactly(chunk_size).get();
+        BOOST_REQUIRE_EQUAL(to_sstring(std::move(buf)), chunk(i));
+    }
+#endif
+}
+
+SEASTAR_THREAD_TEST_CASE(test_client_upload_jumbo_sink_piece_size_limit_s3) {
+    do_test_client_upload_jumbo_sink_piece_size_limit(make_s3_client);
+}
+
 // Uploads object_size bytes through a plain sink and requires the entity tag the
 // sink reports to be non-empty and equal to the one get_object_info() returns.
 void do_test_client_upload_sink_etag(const client_maker_function& client_maker, size_t object_size) {
