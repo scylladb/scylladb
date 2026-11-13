@@ -1743,6 +1743,12 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
 
     // Required parameter
     auto table_arn = get_non_empty_string_attribute(request, "TableArn");
+    // The limit of DynamoDB. The request is stored in the export tables, so it must have a bound.
+    constexpr size_t max_table_arn_length = 1024;
+    if (table_arn.size() > max_table_arn_length) {
+        co_return api_error::validation(fmt::format(
+                "TableArn attribute: must have at most {} characters", max_table_arn_length));
+    }
 
     // Validate that the table exists
     arn_parts parts;
@@ -1860,10 +1866,17 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
     }
     auto node_id = std::move(*node_id_opt);
 
-    // The request that we store and compare on a retry. We remove ClientToken: a retry with the
-    // generated token must be equal to the original request without a token.
-    auto request_to_compare = rjson::copy(request);
-    rjson::remove_member(request_to_compare, "ClientToken");
+    // The request that we store and compare on a retry: the parameters of the operation without
+    // ClientToken, because a retry with the generated token must be equal to the original request
+    // without a token. The other parameters of the operation are refused above. An unknown member
+    // is not stored: ListExports and the garbage collector read the request of each export, so the
+    // size of a row must have a bound.
+    auto request_to_compare = rjson::empty_object();
+    for (auto name : {"TableArn", "S3Bucket", "S3Prefix", "ExportFormat", "ExportType", "ExportTime"}) {
+        if (const rjson::value* v = rjson::find(request, name)) {
+            rjson::add_with_string_name(request_to_compare, name, rjson::copy(*v));
+        }
+    }
     sstring stored_request(rjson::print(request_to_compare));
 
     // If there is no ClientToken, generate a random one. We store and return it the same as a

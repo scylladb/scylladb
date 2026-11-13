@@ -876,6 +876,7 @@ def test_export_client_token_some_value_changed(dynamodb, test_table_s, param_va
     ('ValidationException', 'TableArn', '[tT]ableArn', ''),
     ('ValidationException', 'TableArn', '[tT]ableArn', '\t'),
     ('ValidationException', 'TableArn', '[tT]ableArn', 'QWERTY'),
+    ('ValidationException', 'TableArn', '[tT]ableArn', 'a' * 1025),
     ('ValidationException', 'S3BucketOwner', '[sS]3BucketOwner', ''),
     ('ValidationException', 'S3SseAlgorithm', '[sS]3SseAlgorithm', ''),
     ('ValidationException', 'S3SseAlgorithm', '[sS]3SseAlgorithm', 'QWERTY'),
@@ -1301,6 +1302,24 @@ def test_export_client_token_without_export_row(cql, test_table_s, s3):
         # The times are those of the original export, not of this retry.
         assert desc['StartTime'] == started['StartTime']
         assert desc['ExportTime'] == started['ExportTime']
+
+# Test that an export stores only the parameters of the operation, without ClientToken. An unknown
+# member of the request is not stored: else a client could make the rows of the export tables as
+# large as the request, and ListExports and the garbage collector read these rows.
+def test_export_stores_only_the_parameters(dynamodb, cql, test_table_s, scylla_only, s3):
+    table_arn = get_table_arn(test_table_s)
+    token = str(uuid.uuid4())
+    with new_s3_bucket(s3) as bucket:
+        payload = json.dumps({'TableArn': table_arn, 'S3Bucket': bucket, 'ClientToken': token,
+                              'UnknownMember': 'x' * 100000})
+        export_arn = manual_request(dynamodb, 'ExportTableToPointInTime', payload)['ExportDescription']['ExportArn']
+        assert wait_for_export(test_table_s.meta.client, export_arn)['ExportStatus'] == 'COMPLETED'
+        for table, key, value in [('alternator_export_to_s3_client_tokens', 'client_token', token),
+                                  ('alternator_export_to_s3_exports', 'export_arn', export_arn)]:
+            row = cql.execute(SimpleStatement(
+                f"SELECT request FROM system_distributed.{table} WHERE {key} = %s",
+                consistency_level=ConsistencyLevel.ONE), [value]).one()
+            assert json.loads(row.request) == {'TableArn': table_arn, 'S3Bucket': bucket}, table
 
 # ---------------------------------------------------------------------------
 # DescribeExport tests
