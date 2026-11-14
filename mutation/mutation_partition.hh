@@ -70,6 +70,9 @@ struct cell_and_hash_view {
 
 class compaction_garbage_collector;
 
+// True if columns is every column of kind in id order.
+bool is_all_columns(const schema& s, column_kind kind, const query::column_id_vector& columns) noexcept;
+
 //
 // Container for cells of a row. Cells are identified by column_id.
 //
@@ -89,6 +92,8 @@ class row {
     using block_type = atomic_cell_or_collection_block;
     using block_ptr = block_type::ptr;
     cells_type _cells;
+    // Hash of the hashes of all columns of the row's kind (see row_hash()); cleared on change.
+    mutable cell_hash_opt _row_hash;
 
     static block_index_type block_index_of(column_id id) noexcept {
         return id >> atomic_cell_or_collection_block_slot_bits;
@@ -98,6 +103,20 @@ class row {
     }
     static column_id column_of(block_index_type block_index, unsigned slot) noexcept {
         return (column_id(block_index) << atomic_cell_or_collection_block_slot_bits) | slot;
+    }
+    // All block replacement goes through these two, which drop the stale row hash.
+    void set_block(block_index_type block_index, block_ptr&& block) {
+        _row_hash = {};
+        _cells.set_block(block_index, std::move(block));
+    }
+    void rebuild_blocks(auto&& func) {
+        _cells.rebuild_blocks([&] (block_index_type block_index, block_ptr& block) {
+            auto* before = block.get();
+            func(block_index, block);
+            if (block.get() != before) {
+                _row_hash = {};
+            }
+        });
     }
 public:
     row();
@@ -218,6 +237,7 @@ public:
     // Visiting a cell clears its cached hash.
     template<typename Func>
     void for_each_cell_in_place(Func&& func) {
+        _row_hash = {};
         _cells.for_each_block([&func] (block_index_type block_index, const block_type& block) {
             auto& mutable_block = const_cast<block_type&>(block);
             for (auto m = block.present(); m; m &= m - 1) {
@@ -292,6 +312,9 @@ public:
 
     void prepare_hash(const schema& s, column_kind kind) const;
     void clear_hash() const;
+    // The digest of all columns of the row's kind, in id order, as fed by
+    // digest_algorithm::xxHash_row. Set by prepare_hash().
+    cell_hash_opt row_hash() const noexcept { return _row_hash; }
 
     bool is_live(const schema&, column_kind kind, tombstone tomb = tombstone(), gc_clock::time_point now = gc_clock::time_point::min()) const;
 

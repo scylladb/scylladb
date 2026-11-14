@@ -204,6 +204,8 @@ class mutation_querier {
     query::result_memory_accounter& _memory_accounter;
     ser::qr_partition__static_row__cells<bytes_ostream> _static_cells_wr;
     query::result::partition_writer _pw;
+    const bool _static_all_columns;
+    const bool _regular_all_columns;
     bool _live_data_in_static_row{};
     uint64_t _live_clustering_rows = 0;
     std::optional<ser::qr_partition__rows<bytes_ostream>> _rows_wr;
