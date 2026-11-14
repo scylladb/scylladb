@@ -396,6 +396,22 @@ future<> storage_service::raft_topology_update_ip(locator::host_id id, gms::inet
 
     const auto& rs = node->second;
 
+    // If system.peers already maps `id` to a different IP, the node has changed
+    // its address (e.g. it was restarted on another host). The old row must go,
+    // otherwise system.peers ends up with two rows for the same host_id, which
+    // get_or_load_peers_cache() treats as an internal error and aborts the node.
+    auto remove_stale_ip = [&] {
+        if (const auto it = host_id_to_ip_map.find(id); it != host_id_to_ip_map.end() && it->second != ip) {
+            utils::get_local_injector().inject("crash-before-prev-ip-removed", [] {
+                slogger.info("crash-before-prev-ip-removed hit, killing the node");
+                _exit(1);
+            });
+
+            auto old_ip = it->second;
+            sys_ks_futures.push_back(_sys_ks.local().remove_endpoint(old_ip));
+        }
+    };
+
     switch (rs.state) {
         case node_state::normal: {
             if (is_me(id)) {
@@ -423,15 +439,7 @@ future<> storage_service::raft_topology_update_ip(locator::host_id id, gms::inet
                 nodes_to_notify->joined.emplace_back(ip, id);
             }
 
-            if (const auto it = host_id_to_ip_map.find(id); it != host_id_to_ip_map.end() && it->second != ip) {
-                utils::get_local_injector().inject("crash-before-prev-ip-removed", [] {
-                    slogger.info("crash-before-prev-ip-removed hit, killing the node");
-                    _exit(1);
-                });
-
-                auto old_ip = it->second;
-                sys_ks_futures.push_back(_sys_ks.local().remove_endpoint(old_ip));
-            }
+            remove_stale_ip();
         }
         break;
         case node_state::bootstrapping:
@@ -443,6 +451,9 @@ future<> storage_service::raft_topology_update_ip(locator::host_id id, gms::inet
 
                 // Save ip -> id mapping in peers table because we need it on restart, but do not save tokens until owned
                 sys_ks_futures.push_back(_sys_ks.local().update_peer_info(ip, id, {}));
+                // A bootstrapping node may crash and come back with a different IP
+                // before the topology coordinator notices and rolls the bootstrap back.
+                remove_stale_ip();
             }
         break;
         case node_state::replacing:
@@ -454,6 +465,8 @@ future<> storage_service::raft_topology_update_ip(locator::host_id id, gms::inet
                 if (const auto it = host_id_to_ip_map.find(locator::host_id(replaced_id.uuid())); it == host_id_to_ip_map.end() || it->second != ip) {
                     sys_ks_futures.push_back(_sys_ks.local().update_peer_info(ip, id, {}));
                 }
+                // Same as for bootstrapping above.
+                remove_stale_ip();
             }
         break;
         default:
