@@ -5963,8 +5963,9 @@ class scylla_sstable_summary(gdb.Command):
             sst = shared_sstable_get(arg).dereference()
         else:
             sst = arg
-        ms_version = int(gdb.parse_and_eval('sstables::sstable_version_types::ms'))
-        if int(sst['_version']) >= ms_version:
+        # Versions are not ordered: list the ones with the trie index.
+        trie_index_versions = [int(gdb.parse_and_eval(f'sstables::sstable_version_types::{v}')) for v in ('ms', 'mt')]
+        if int(sst['_version']) in trie_index_versions:
             footer_opt = std_optional(sst['_partitions_db_footer'])
             if not footer_opt:
                 gdb.write("sstable uses ms format but partitions db footer is not loaded.\n")

@@ -816,7 +816,7 @@ public:
         file_input_stream_options options,
         use_caching caching)
     {
-        if (sst->get_version() >= sstable_version_types::mc) [[likely]] {
+        if (has_mx_promoted_index(sst->get_version())) [[likely]] {
             seastar::shared_ptr<cached_file> cached_file_ptr = caching
                     ? sst->_cached_index_file
                     : seastar::make_shared<cached_file>(make_tracked_index_file(*sst, permit, trace_state, caching),
