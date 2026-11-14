@@ -3471,6 +3471,63 @@ static schema_ptr make_row_hash_test_schema() {
             .build();
 }
 
+// prepare_hash() caches large cells' max timestamps next to their hashes; the digest's max_ts uses them.
+SEASTAR_THREAD_TEST_CASE(test_cell_hash_caches_max_timestamp) {
+    auto s = make_row_hash_test_schema();
+    const auto kind = column_kind::regular_column;
+    auto& r3_def = *s->get_column_definition(to_bytes("r3"));
+    auto& m_def = *s->get_column_definition(to_bytes("m"));
+    collection_mutation_writer w(tombstone(3, gc_clock::now()));
+    for (int32_t i = 0; i < 8; ++i) {
+        // Timestamps 10..20, the newest neither first nor last.
+        w.push_back(managed_bytes_view(int32_type->decompose(i)),
+                atomic_cell::make_live(*bytes_type, (i * 7) % 11 + 10, bytes(32, 'y'), atomic_cell::collection_member::yes));
+    }
+    row r;
+    r.apply(r3_def, atomic_cell_or_collection(atomic_cell::make_live(*bytes_type, 5, bytes(200, 'x'))));
+    r.apply(m_def, atomic_cell_or_collection(std::move(w).finish()));
+    const api::timestamp_type r3_ts = r.find_cell(r3_def.id)->as_atomic_cell(r3_def).timestamp();
+    const api::timestamp_type m_ts = r.find_cell(m_def.id)->as_collection_mutation().last_update(*m_def.type);
+    BOOST_REQUIRE_EQUAL(r3_ts, 5);
+    BOOST_REQUIRE_EQUAL(m_ts, 20);
+
+    const std::vector<query::column_id_vector> column_sets{{r3_def.id}, {m_def.id}, {r3_def.id, m_def.id}};
+    auto digests = [&] {
+        std::vector<std::pair<uint64_t, api::timestamp_type>> ret;
+        for (auto& columns : column_sets) {
+            xx_hasher h;
+            max_timestamp ts;
+            appending_hash<row>{}(h, r, *s, kind, columns, ts);
+            ret.emplace_back(h.finalize_uint64(), ts.max);
+        }
+        return ret;
+    };
+    const auto uncached = digests();
+    BOOST_REQUIRE_EQUAL(uncached[0].second, r3_ts);
+    BOOST_REQUIRE_EQUAL(uncached[1].second, m_ts);
+
+    r.prepare_hash(*s, kind, digest_request::cells);
+    for (auto [id, ts] : {std::pair(r3_def.id, r3_ts), std::pair(m_def.id, m_ts)}) {
+        auto ch = r.cell_hash_for(id);
+        BOOST_REQUIRE(ch);
+        BOOST_REQUIRE_EQUAL(ch->max_ts, ts);
+    }
+    BOOST_REQUIRE(digests() == uncached);
+
+    // The cached value is what the digest reads.
+    r.for_each_cell([&] (column_id id, const cell_and_hash_view& c) {
+        if (id == m_def.id) {
+            (*c.hash)->max_ts = 1000;
+        }
+    });
+    BOOST_REQUIRE_EQUAL(digests()[1].second, 1000);
+
+    // Without cached hashes, the max timestamp is walked again.
+    r.clear_hash();
+    BOOST_REQUIRE(!r.cell_hash_for(m_def.id));
+    BOOST_REQUIRE(digests() == uncached);
+}
+
 // r2 is never set; r3 is large enough to get a cached cell hash.
 static mutation make_row_hash_test_mutation(schema_ptr s, int32_t r1_value) {
     mutation m(s, partition_key::from_single_value(*s, int32_type->decompose(0)));
