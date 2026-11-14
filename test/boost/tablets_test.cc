@@ -2241,7 +2241,7 @@ future<> apply_plan(token_metadata& tm, const migration_plan& plan, service::top
             if (load_stats && mig.src && mig.dst) {
                 global_tablet_id gid {mig.tablet.table, mig.tablet.tablet};
                 dht::token_range trange {tmap.get_token_range(mig.tablet.tablet)};
-                auto new_stats = load_stats->stats.migrate_tablet_size(mig.src->host, mig.dst->host, gid, trange);
+                auto new_stats = load_stats->stats.migrate_tablet_size(mig.src->host, mig.dst->host, gid, trange, tm.tablets().get_table_group(gid.table));
                 if (new_stats) {
                     load_stats->stats = std::move(*new_stats);
                 }
@@ -5530,6 +5530,168 @@ SEASTAR_THREAD_TEST_CASE(test_split_and_merge_of_colocated_tables) {
     }).get();
 }
 
+// Returns true when load_stats holds a size for every tablet replica of the
+// given tables, so that load_sketch has complete data for every host that
+// holds their replicas. Logs what is missing.
+static bool load_stats_complete(token_metadata_ptr tmptr, const shared_load_stats& load_stats, const std::vector<table_id>& tables) {
+    bool complete = true;
+    std::unordered_set<host_id> hosts;
+    for (auto table : tables) {
+        auto& tmap = tmptr->tablets().get_tablet_map(table);
+        tmap.for_each_tablet([&] (tablet_id tid, const tablet_info& tinfo) -> future<> {
+            range_based_tablet_id rb_tid {table, tmap.get_token_range(tid)};
+            for (auto& replica : tinfo.replicas) {
+                hosts.insert(replica.host);
+                if (!load_stats.stats.get_tablet_size(replica.host, rb_tid)) {
+                    testlog.info("load_stats has no size for tablet {} on host {}", rb_tid, replica.host);
+                    complete = false;
+                }
+            }
+            return make_ready_future<>();
+        }).get();
+    }
+    load_sketch load(tmptr, load_stats.get());
+    load.populate().get();
+    for (auto host : hosts) {
+        if (!load.has_complete_data(host)) {
+            testlog.info("load_sketch has incomplete data for host {}", host);
+            complete = false;
+        }
+    }
+    return complete;
+}
+
+// Regression test for SCYLLADB-5244.
+//
+// A co-located table shares the tablet map of its base table, so a resize
+// driven by the balancer must leave its tablet sizes complete too.
+SEASTAR_THREAD_TEST_CASE(test_load_stats_complete_for_colocated_tables_after_resize) {
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+
+        auto host1 = topo.add_node(node_state::normal, 2);
+
+        auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, 1);
+        auto table1 = add_table(e, ks_name).get();
+        auto table2 = add_table(e, ks_name).get();
+
+        mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+            tablet_map tmap(1);
+            auto tid = tmap.first_tablet();
+            tmap.set_tablet(tid, tablet_info {
+                    tablet_replica_set {
+                            tablet_replica {host1, 0},
+                    }
+            });
+
+            tablet_map tmap1 = co_await tmap.clone_gently();
+            tmeta.set_tablet_map(table1, std::move(tmap1));
+            co_await tmeta.set_colocated_table(table2, table1);
+        });
+
+        auto& stm = e.shared_token_metadata().local();
+        auto tablet_count_of = [&] (table_id table) {
+            return stm.get()->tablets().get_tablet_map(table).tablet_count();
+        };
+        BOOST_REQUIRE_EQUAL(1, tablet_count_of(table1));
+        BOOST_REQUIRE_EQUAL(1, tablet_count_of(table2));
+
+        // The sizing follows test_split_and_merge_of_colocated_tables.
+        const uint64_t target_tablet_size = service::default_target_tablet_size / 2;
+
+        shared_load_stats& load_stats = topo.get_shared_load_stats();
+
+        // Replaces the sizes of a table with the given size for every tablet
+        // of its current tablet map, like a load stats refresh from the
+        // replicas would.
+        auto refresh_tablet_sizes = [&] (table_id table, uint64_t tablet_size) {
+            for (auto& tls : load_stats.stats.tablet_stats | std::views::values) {
+                tls.tablet_sizes.erase(table);
+            }
+            load_stats.set_tablet_sizes(stm.get(), table, tablet_size);
+        };
+
+        // avg tablet size = 3.5 * target > 2 * target
+        refresh_tablet_sizes(table1, 3 * target_tablet_size);
+        refresh_tablet_sizes(table2, 4 * target_tablet_size);
+
+        rebalance_tablets(e, &load_stats);
+
+        BOOST_REQUIRE_EQUAL(2, tablet_count_of(table1));
+        BOOST_REQUIRE_EQUAL(2, tablet_count_of(table2));
+        bool complete_after_split = load_stats_complete(stm.get(), load_stats, {table1, table2});
+
+        // avg tablet size = (0.6 / 2) * target = 0.3 * target < 0.5 * target
+        refresh_tablet_sizes(table1, target_tablet_size * 55 / 100);
+        refresh_tablet_sizes(table2, target_tablet_size * 5 / 100);
+
+        rebalance_tablets(e, &load_stats);
+
+        BOOST_REQUIRE_EQUAL(1, tablet_count_of(table1));
+        BOOST_REQUIRE_EQUAL(1, tablet_count_of(table2));
+        bool complete_after_merge = load_stats_complete(stm.get(), load_stats, {table1, table2});
+
+        BOOST_CHECK_MESSAGE(complete_after_split && complete_after_merge,
+                fmt::format("load stats complete after split: {}, after merge: {}", complete_after_split, complete_after_merge));
+    }).get();
+}
+
+// Regression test for SCYLLADB-5244.
+//
+// A migration of a co-located group driven by the balancer must leave the
+// tablet sizes of every table complete on the new host.
+SEASTAR_THREAD_TEST_CASE(test_load_stats_complete_for_colocated_tables_after_migration) {
+    do_with_cql_env_thread([] (auto& e) {
+        // The setup follows test_load_balancing_with_colocated_tablets:
+        // two co-located groups start on host1, and the balancer is expected
+        // to move one of them to host2.
+        unsigned shard_count = 2;
+
+        topology_builder topo(e);
+        auto host1 = topo.add_node(node_state::normal, shard_count);
+        auto host2 = topo.add_node(node_state::normal, shard_count);
+
+        auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, 1);
+        auto table1 = add_table(e, ks_name).get();
+        auto table2 = add_table(e, ks_name).get();
+        auto table3 = add_table(e, ks_name).get();
+        auto table4 = add_table(e, ks_name).get();
+
+        mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+            tablet_map tmap(1);
+            auto tid = tmap.first_tablet();
+            tmap.set_tablet(tid, tablet_info {
+                    tablet_replica_set {
+                            tablet_replica {host1, 0},
+                    }
+            });
+
+            tablet_map tmap1 = co_await tmap.clone_gently();
+            tmeta.set_tablet_map(table1, std::move(tmap1));
+            co_await tmeta.set_colocated_table(table2, table1);
+
+            tablet_map tmap3 = co_await tmap.clone_gently();
+            tmeta.set_tablet_map(table3, std::move(tmap3));
+            co_await tmeta.set_colocated_table(table4, table3);
+        });
+
+        auto& stm = e.shared_token_metadata().local();
+        shared_load_stats& load_stats = topo.get_shared_load_stats();
+        load_stats.set_default_tablet_sizes(stm.get());
+
+        rebalance_tablets(e, &load_stats);
+
+        {
+            load_sketch load(stm.get());
+            load.populate().get();
+            BOOST_REQUIRE_EQUAL(load.get_load(host1), 2);
+            BOOST_REQUIRE_EQUAL(load.get_load(host2), 2);
+        }
+
+        BOOST_CHECK(load_stats_complete(stm.get(), load_stats, {table1, table2, table3, table4}));
+    }).get();
+}
+
 SEASTAR_THREAD_TEST_CASE(test_per_shard_goal_uses_correct_desired_count_for_colocated_tables) {
     cql_test_config cfg{};
     cfg.db_config->tablets_per_shard_goal.set(4);
@@ -5884,6 +6046,112 @@ SEASTAR_THREAD_TEST_CASE(test_load_stats_tablet_reconcile_tablet_not_found) {
     }, cfg).get();
 }
 
+// Regression test for SCYLLADB-5244.
+//
+// The coordinator passes only base tables to the reconciliation, so it must
+// rewrite the sizes of their co-located tables too.
+SEASTAR_THREAD_TEST_CASE(test_load_stats_tablet_reconcile_colocated) {
+    auto cfg = tablet_cql_test_config();
+
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+        auto dc = topo.dc();
+        const size_t tablet_count = 16;
+
+        auto host = topo.add_node(node_state::normal, 4);
+        auto ks_name = add_keyspace(e, {{dc, 1}}, tablet_count);
+        auto base = add_table(e, ks_name).get();
+        auto colocated = add_table(e, ks_name).get();
+
+        mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+            co_await tmeta.set_colocated_table(colocated, base);
+        });
+
+        auto& stm = e.shared_token_metadata().local();
+        token_metadata_ptr old_tmptr = stm.get();
+        auto& tmap = old_tmptr->tablets().get_tablet_map(base);
+        BOOST_REQUIRE_EQUAL(tmap.tablet_count(), tablet_count);
+
+        auto set_tablet_count = [&] (size_t new_tablet_count) {
+            mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+                tablet_map new_tmap(new_tablet_count);
+                tmeta.set_tablet_map(base, std::move(new_tmap));
+                return make_ready_future<>();
+            });
+        };
+
+        // The sizes of the co-located table are offset from those of the
+        // base table, so that mixing up the two tables is detected.
+        const uint64_t colocated_offset = 100;
+        auto make_stats = [&] (uint64_t multiplier) {
+            locator::load_stats stats;
+            locator::tablet_load_stats& tls = stats.tablet_stats[host];
+            for (size_t i = 0; i < tablet_count; ++i) {
+                const dht::token_range range {tmap.get_token_range(tablet_id(i))};
+                tls.tablet_sizes[base][range] = i * multiplier;
+                tls.tablet_sizes[colocated][range] = colocated_offset + i * multiplier;
+            }
+            return stats;
+        };
+
+        using tablet_sizes_map = std::unordered_map<dht::token_range, uint64_t>;
+        auto sizes_of = [] (const locator::load_stats& stats, host_id h, table_id table) -> tablet_sizes_map {
+            auto& tablet_sizes = stats.tablet_stats.at(h).tablet_sizes;
+            if (auto it = tablet_sizes.find(table); it != tablet_sizes.end()) {
+                return it->second;
+            }
+            return {};
+        };
+
+        // Merge: old tablets 2i and 2i+1 form new tablet i.
+        bool merge_reconciled;
+        {
+            size_t tablet_count_after_merge = tablet_count / 2;
+            set_tablet_count(tablet_count_after_merge);
+
+            auto stats = make_stats(1);
+            auto reconciled = stats.reconcile_tablets_resize({ base }, *old_tmptr, *stm.get());
+            BOOST_REQUIRE(reconciled);
+
+            tablet_sizes_map expected_base;
+            tablet_sizes_map expected_colocated;
+            locator::tablet_map tmap_after_merge(tablet_count_after_merge);
+            for (size_t i = 0; i < tablet_count_after_merge; ++i) {
+                dht::token_range trange {tmap_after_merge.get_token_range(locator::tablet_id{i})};
+                expected_base[trange] = (2 * i) + (2 * i + 1);
+                expected_colocated[trange] = (colocated_offset + 2 * i) + (colocated_offset + 2 * i + 1);
+            }
+            BOOST_REQUIRE(sizes_of(*reconciled, host, base) == expected_base);
+            merge_reconciled = sizes_of(*reconciled, host, colocated) == expected_colocated;
+        }
+
+        // Split: old tablet i forms new tablets 2i and 2i+1, each with half the size.
+        bool split_reconciled;
+        {
+            size_t tablet_count_after_split = tablet_count * 2;
+            set_tablet_count(tablet_count_after_split);
+
+            auto stats = make_stats(2);
+            auto reconciled = stats.reconcile_tablets_resize({ base }, *old_tmptr, *stm.get());
+            BOOST_REQUIRE(reconciled);
+
+            tablet_sizes_map expected_base;
+            tablet_sizes_map expected_colocated;
+            locator::tablet_map tmap_after_split(tablet_count_after_split);
+            for (size_t i = 0; i < tablet_count_after_split; ++i) {
+                dht::token_range trange {tmap_after_split.get_token_range(locator::tablet_id{i})};
+                expected_base[trange] = i / 2;
+                expected_colocated[trange] = (colocated_offset + 2 * (i / 2)) / 2;
+            }
+            BOOST_REQUIRE(sizes_of(*reconciled, host, base) == expected_base);
+            split_reconciled = sizes_of(*reconciled, host, colocated) == expected_colocated;
+        }
+
+        BOOST_CHECK_MESSAGE(merge_reconciled && split_reconciled,
+                fmt::format("co-located table reconciled after merge: {}, after split: {}", merge_reconciled, split_reconciled));
+    }, cfg).get();
+}
+
 SEASTAR_TEST_CASE(test_load_stats_migrate_tablet_size) {
 
     auto table = table_id(utils::UUID_gen::get_time_UUID());
@@ -5893,6 +6161,7 @@ SEASTAR_TEST_CASE(test_load_stats_migrate_tablet_size) {
     tablet_map tmap(8);
     tablet_id tid(1);
     const uint64_t tablet_size = 42;
+    const table_group_set tables {table};
     range_based_tablet_id rb_tid{table, tmap.get_token_range(tid)};
     global_tablet_id gid{table, tid};
 
@@ -5902,7 +6171,7 @@ SEASTAR_TEST_CASE(test_load_stats_migrate_tablet_size) {
         stats.tablet_stats[host1].tablet_sizes[table][rb_tid.range] = tablet_size;
         stats.tablet_stats[host2] = {};
 
-        auto new_load_stats = stats.migrate_tablet_size(host1, host2, gid, rb_tid.range);
+        auto new_load_stats = stats.migrate_tablet_size(host1, host2, gid, rb_tid.range, tables);
         BOOST_REQUIRE(new_load_stats);
 
         // Check tablet size is on host2
@@ -5924,7 +6193,7 @@ SEASTAR_TEST_CASE(test_load_stats_migrate_tablet_size) {
         stats.tablet_stats[host1] = {};
         stats.tablet_stats[host2] = {};
 
-        auto new_load_stats = stats.migrate_tablet_size(host1, host2, gid, rb_tid.range);
+        auto new_load_stats = stats.migrate_tablet_size(host1, host2, gid, rb_tid.range, tables);
         BOOST_REQUIRE(!new_load_stats);
     }
 
@@ -5934,7 +6203,7 @@ SEASTAR_TEST_CASE(test_load_stats_migrate_tablet_size) {
         stats.tablet_stats[host1].tablet_sizes[table][rb_tid.range] = tablet_size;
         stats.tablet_stats[host2].tablet_sizes[table][rb_tid.range] = tablet_size;
 
-        auto new_load_stats = stats.migrate_tablet_size(host1, host2, gid, rb_tid.range);
+        auto new_load_stats = stats.migrate_tablet_size(host1, host2, gid, rb_tid.range, tables);
         BOOST_REQUIRE(!new_load_stats);
     }
 
@@ -5944,7 +6213,7 @@ SEASTAR_TEST_CASE(test_load_stats_migrate_tablet_size) {
         stats.tablet_stats[host1].tablet_sizes[table][rb_tid.range] = tablet_size;
         stats.tablet_stats[host2] = {};
 
-        auto new_load_stats = stats.migrate_tablet_size(host1, host1, gid, rb_tid.range);
+        auto new_load_stats = stats.migrate_tablet_size(host1, host1, gid, rb_tid.range, tables);
         BOOST_REQUIRE(!new_load_stats);
     }
 
@@ -5953,9 +6222,137 @@ SEASTAR_TEST_CASE(test_load_stats_migrate_tablet_size) {
         load_stats stats;
         stats.tablet_stats[host1].tablet_sizes[table][rb_tid.range] = tablet_size;
 
-        auto new_load_stats = stats.migrate_tablet_size(host1, host2, gid, rb_tid.range);
+        auto new_load_stats = stats.migrate_tablet_size(host1, host2, gid, rb_tid.range, tables);
         BOOST_REQUIRE(!new_load_stats);
     }
+
+    return make_ready_future<>();
+}
+
+SEASTAR_TEST_CASE(test_load_stats_rebuild_tablet_size) {
+    auto table = table_id(utils::UUID_gen::get_time_UUID());
+    auto host1 = host_id(utils::UUID_gen::get_time_UUID());
+    auto host2 = host_id(utils::UUID_gen::get_time_UUID());
+    auto host3 = host_id(utils::UUID_gen::get_time_UUID());
+
+    tablet_map tmap(8);
+    tablet_id tid(1);
+    range_based_tablet_id rb_tid{table, tmap.get_token_range(tid)};
+    global_tablet_id gid{table, tid};
+    const std::unordered_set<tablet_replica> read_from {tablet_replica{host1, 0}, tablet_replica{host2, 0}};
+    const table_group_set tables {table};
+
+    // Check the rebuilt tablet gets the average size of the replicas it was rebuilt from
+    {
+        load_stats stats;
+        stats.tablet_stats[host1].tablet_sizes[table][rb_tid.range] = 40;
+        stats.tablet_stats[host2].tablet_sizes[table][rb_tid.range] = 60;
+        stats.tablet_stats[host3] = {};
+
+        auto new_load_stats = stats.rebuild_tablet_size(host3, read_from, gid, rb_tid.range, tables);
+        BOOST_REQUIRE(new_load_stats);
+        BOOST_REQUIRE(new_load_stats->get_tablet_size(host3, rb_tid) == 50);
+        BOOST_REQUIRE(new_load_stats->get_tablet_size(host1, rb_tid) == 40);
+        BOOST_REQUIRE(new_load_stats->get_tablet_size(host2, rb_tid) == 60);
+    }
+
+    // Check rebuild_tablet_size() returns nullptr when a source replica lacks the tablet size
+    {
+        load_stats stats;
+        stats.tablet_stats[host1].tablet_sizes[table][rb_tid.range] = 40;
+        stats.tablet_stats[host2] = {};
+        stats.tablet_stats[host3] = {};
+
+        auto new_load_stats = stats.rebuild_tablet_size(host3, read_from, gid, rb_tid.range, tables);
+        BOOST_REQUIRE(!new_load_stats);
+    }
+
+    // Check rebuild_tablet_size() returns nullptr when pending host is not found in load_stats
+    {
+        load_stats stats;
+        stats.tablet_stats[host1].tablet_sizes[table][rb_tid.range] = 40;
+        stats.tablet_stats[host2].tablet_sizes[table][rb_tid.range] = 60;
+
+        auto new_load_stats = stats.rebuild_tablet_size(host3, read_from, gid, rb_tid.range, tables);
+        BOOST_REQUIRE(!new_load_stats);
+    }
+
+    return make_ready_future<>();
+}
+
+// Regression test for SCYLLADB-5244.
+//
+// The sizes of the co-located tables must move along with the base table's.
+SEASTAR_TEST_CASE(test_load_stats_migrate_tablet_size_colocated) {
+    auto base = table_id(utils::UUID_gen::get_time_UUID());
+    auto colocated = table_id(utils::UUID_gen::get_time_UUID());
+    auto host1 = host_id(utils::UUID_gen::get_time_UUID());
+    auto host2 = host_id(utils::UUID_gen::get_time_UUID());
+
+    tablet_map tmap(8);
+    tablet_id tid(1);
+    const dht::token_range trange = tmap.get_token_range(tid);
+    range_based_tablet_id base_rb_tid{base, trange};
+    range_based_tablet_id colocated_rb_tid{colocated, trange};
+    global_tablet_id gid{base, tid};
+    const table_group_set tables {base, colocated};
+
+    load_stats stats;
+    stats.tablet_stats[host1].tablet_sizes[base][trange] = 42;
+    stats.tablet_stats[host1].tablet_sizes[colocated][trange] = 43;
+    stats.tablet_stats[host2] = {};
+
+    auto new_load_stats = stats.migrate_tablet_size(host1, host2, gid, trange, tables);
+    BOOST_REQUIRE(new_load_stats);
+
+    // The base table's size moves in any case.
+    BOOST_REQUIRE(new_load_stats->get_tablet_size(host2, base_rb_tid) == 42);
+    BOOST_REQUIRE(!new_load_stats->get_tablet_size(host1, base_rb_tid));
+
+    auto colocated_on_host2 = new_load_stats->get_tablet_size(host2, colocated_rb_tid);
+    auto colocated_on_host1 = new_load_stats->get_tablet_size(host1, colocated_rb_tid);
+    BOOST_CHECK_MESSAGE(colocated_on_host2 == 43 && !colocated_on_host1,
+            fmt::format("co-located table size found on pending host: {}, on leaving host: {}",
+                        colocated_on_host2.has_value(), colocated_on_host1.has_value()));
+
+    return make_ready_future<>();
+}
+
+// Regression test for SCYLLADB-5244.
+//
+// The co-located tables need a size estimate along with the base table's.
+SEASTAR_TEST_CASE(test_load_stats_rebuild_tablet_size_colocated) {
+    auto base = table_id(utils::UUID_gen::get_time_UUID());
+    auto colocated = table_id(utils::UUID_gen::get_time_UUID());
+    auto host1 = host_id(utils::UUID_gen::get_time_UUID());
+    auto host2 = host_id(utils::UUID_gen::get_time_UUID());
+    auto host3 = host_id(utils::UUID_gen::get_time_UUID());
+
+    tablet_map tmap(8);
+    tablet_id tid(1);
+    const dht::token_range trange = tmap.get_token_range(tid);
+    range_based_tablet_id base_rb_tid{base, trange};
+    range_based_tablet_id colocated_rb_tid{colocated, trange};
+    global_tablet_id gid{base, tid};
+    const std::unordered_set<tablet_replica> read_from {tablet_replica{host1, 0}, tablet_replica{host2, 0}};
+    const table_group_set tables {base, colocated};
+
+    load_stats stats;
+    stats.tablet_stats[host1].tablet_sizes[base][trange] = 40;
+    stats.tablet_stats[host1].tablet_sizes[colocated][trange] = 10;
+    stats.tablet_stats[host2].tablet_sizes[base][trange] = 60;
+    stats.tablet_stats[host2].tablet_sizes[colocated][trange] = 30;
+    stats.tablet_stats[host3] = {};
+
+    auto new_load_stats = stats.rebuild_tablet_size(host3, read_from, gid, trange, tables);
+    BOOST_REQUIRE(new_load_stats);
+
+    // The base table's size gets an estimate in any case.
+    BOOST_REQUIRE(new_load_stats->get_tablet_size(host3, base_rb_tid) == 50);
+
+    auto colocated_on_host3 = new_load_stats->get_tablet_size(host3, colocated_rb_tid);
+    BOOST_CHECK_MESSAGE(colocated_on_host3 == 20,
+            fmt::format("co-located table size found on rebuilt host: {}", colocated_on_host3.has_value()));
 
     return make_ready_future<>();
 }
