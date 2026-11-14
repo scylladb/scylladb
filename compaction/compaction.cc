@@ -2073,6 +2073,9 @@ public:
         if (_reshard_vnodes && !_owned_ranges) {
             on_internal_error(clogger, "Resharding vnodes requires owned_ranges");
         }
+        if (!_sharder) {
+            on_internal_error(clogger, "Resharding requires a sharder");
+        }
         for (auto& sst : _sstables) {
             const auto& shards = sst->get_shards_for_this_sstable();
             auto size = sst->bytes_on_disk();
@@ -2111,7 +2114,7 @@ public:
 
     mutation_reader_consumer make_interposer_consumer(mutation_reader_consumer end_consumer) override {
         auto owned_ranges = _reshard_vnodes ? _owned_ranges : nullptr;
-        return [end_consumer = std::move(end_consumer), owned_ranges = std::move(owned_ranges)] (mutation_reader reader) mutable -> future<> {
+        return [this, end_consumer = std::move(end_consumer), owned_ranges = std::move(owned_ranges)] (mutation_reader reader) mutable -> future<> {
             if (owned_ranges) {
                 auto classify = [owned_ranges, it = owned_ranges->begin(), idx = mutation_writer::token_group_id(0)] (dht::token t) mutable -> mutation_writer::token_group_id {
                     dht::token_comparator cmp;
@@ -2127,7 +2130,7 @@ public:
                 };
                 return mutation_writer::segregate_by_token_group(std::move(reader), std::move(classify), std::move(end_consumer));
             } else {
-                return mutation_writer::segregate_by_shard(std::move(reader), std::move(end_consumer));
+                return mutation_writer::segregate_by_shard(std::move(reader), *_sharder, std::move(end_consumer));
             }
         };
     }
@@ -2145,12 +2148,8 @@ public:
     }
 
     compaction_writer create_compaction_writer(const dht::decorated_key& dk) override {
-        auto shards = _sharder->shard_for_writes(dk.token());
-        if (shards.size() != 1) {
-            // Resharding is not supposed to run on tablets, so this case does not have to be supported.
-            on_internal_error(clogger, fmt::format("Got {} shards for token {} in table {}.{}", shards.size(), dk.token(), _schema->ks_name(), _schema->cf_name()));
-        }
-        auto shard = shards[0];
+        // Match segregate_by_shard(); shard_for_writes() can return 0 or 2 shards for tablets.
+        auto shard = _sharder->shard_for_reads(dk.token());
         auto sst = _sstable_creator(shard);
         setup_new_sstable(sst);
 
