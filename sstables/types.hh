@@ -566,6 +566,7 @@ enum class scylla_metadata_type : uint32_t {
     ComponentsDigests = 12,
     LargeDataRecords = 13,
     ScrubTime = 14,
+    ParquetDataFile = 15,
 };
 
 // UUID is used for uniqueness across nodes, such that an imported sstable
@@ -691,6 +692,30 @@ struct scrub_time_type {
     auto describe_type(sstable_version_types v, Describer f) { return f(timestamp); }
 };
 
+// Facts about the Data file of a `pq` sstable (a Parquet file) that the
+// reader needs before it parses the Parquet footer, or to verify the footer.
+struct parquet_data_file_metadata {
+    // The number of Parquet rows in the file. The trie index stores row
+    // ordinals in place of Data file positions, and this count is the
+    // position of the end of the file.
+    uint64_t rows;
+    // The total raw size of the rows: the sum, over the non-null values of
+    // all rows, of each value's plain size. It is the logical size of the
+    // data, close to the uncompressed size of an `mx` Data file.
+    uint64_t raw_size;
+    // The size of the Data file. For an encrypted sstable, it is the size of
+    // the plaintext.
+    uint64_t file_size;
+    // The size and the CRC-32 (crc32_utils) of the serialized Parquet
+    // FileMetaData. They do not cover the footer length and the magic bytes
+    // that follow the FileMetaData at the end of the file.
+    uint64_t footer_size;
+    uint32_t footer_crc32;
+
+    template <typename Describer>
+    auto describe_type(sstable_version_types v, Describer f) { return f(rows, raw_size, file_size, footer_size, footer_crc32); }
+};
+
 struct scylla_metadata {
     using extension_attributes = disk_hash<uint32_t, disk_string<uint32_t>, disk_string<uint32_t>>;
     using large_data_stats = disk_hash<uint32_t, large_data_type, large_data_stats_entry>;
@@ -702,6 +727,7 @@ struct scylla_metadata {
     using sstable_identifier = sstable_identifier_type;
     using sstable_schema = sstable_schema_type;
     using components_digests = disk_hash<uint32_t, component_type, uint32_t>;
+    using parquet_data_file = parquet_data_file_metadata;
 
     disk_set_of_tagged_union<scylla_metadata_type,
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::Sharding, sharding_metadata>,
@@ -717,7 +743,8 @@ struct scylla_metadata {
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::Schema, sstable_schema>,
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::ComponentsDigests, components_digests>,
             disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::LargeDataRecords, large_data_records>,
-            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::ScrubTime, scrub_time_type>
+            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::ScrubTime, scrub_time_type>,
+            disk_tagged_union_member<scylla_metadata_type, scylla_metadata_type::ParquetDataFile, parquet_data_file>
             > data;
     std::optional<uint32_t> digest;
 
@@ -773,6 +800,10 @@ struct scylla_metadata {
             return std::nullopt;
         }
         return db_clock::time_point(std::chrono::milliseconds(ts->timestamp));
+    }
+    // Present exactly in sstables with a Parquet Data file.
+    const parquet_data_file* get_parquet_data_file() const {
+        return data.get<scylla_metadata_type::ParquetDataFile, parquet_data_file>();
     }
     void set_scrub_time(db_clock::time_point timestamp) {
         std::chrono::milliseconds since_epoch = std::chrono::duration_cast<std::chrono::milliseconds>(timestamp.time_since_epoch());

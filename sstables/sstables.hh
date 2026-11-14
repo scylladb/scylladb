@@ -752,7 +752,8 @@ private:
                                run_identifier identifier,
                                std::optional<scylla_metadata::large_data_stats> ld_stats,
                                std::optional<scylla_metadata::ext_timestamp_stats> ts_stats,
-                               std::optional<scylla_metadata::large_data_records> ld_records = std::nullopt);
+                               std::optional<scylla_metadata::large_data_records> ld_records = std::nullopt,
+                               std::optional<scylla_metadata::parquet_data_file> parquet_data_file = std::nullopt);
     sstable_id ensure_sstable_identifier();
     // Verifies that the sstable identifier persisted in the Scylla metadata
     // agrees with the one this sstable is known by, when both are known.

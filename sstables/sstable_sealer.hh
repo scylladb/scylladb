@@ -72,7 +72,9 @@ public:
     // Writes Scylla.db, with the large data statistics and records of
     // `large_data`, and the extended timestamp statistics of `collector`.
     // `large_data` must not be used after this call.
-    void write_scylla_metadata(shard_id shard, run_id run, large_data_tracker& large_data, metadata_collector& collector);
+    // `parquet_data_file` is set exactly for a Parquet Data file.
+    void write_scylla_metadata(shard_id shard, run_id run, large_data_tracker& large_data, metadata_collector& collector,
+            std::optional<scylla_metadata::parquet_data_file> parquet_data_file = std::nullopt);
 
     // Writes the TOC and seals the sstable, unless the configuration asks
     // to leave it unsealed.

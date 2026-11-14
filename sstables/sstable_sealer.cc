@@ -47,14 +47,16 @@ void sstable_sealer::write_statistics() {
     _sst.write_statistics();
 }
 
-void sstable_sealer::write_scylla_metadata(shard_id shard, run_id run, large_data_tracker& large_data, metadata_collector& collector) {
+void sstable_sealer::write_scylla_metadata(shard_id shard, run_id run, large_data_tracker& large_data, metadata_collector& collector,
+        std::optional<scylla_metadata::parquet_data_file> parquet_data_file) {
     run_identifier identifier{run};
     std::optional<scylla_metadata::large_data_stats> ld_stats(large_data.take_stats());
     std::optional<scylla_metadata::ext_timestamp_stats> ts_stats(scylla_metadata::ext_timestamp_stats{
         .map = collector.get_ext_timestamp_stats()
     });
     std::optional<scylla_metadata::large_data_records> ld_records = large_data.take_records();
-    _sst.write_scylla_metadata(shard, std::move(identifier), std::move(ld_stats), std::move(ts_stats), std::move(ld_records));
+    _sst.write_scylla_metadata(shard, std::move(identifier), std::move(ld_stats), std::move(ts_stats), std::move(ld_records),
+            std::move(parquet_data_file));
 }
 
 void sstable_sealer::seal(const sstable_writer_config& cfg) {

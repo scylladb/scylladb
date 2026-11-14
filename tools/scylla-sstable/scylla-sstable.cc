@@ -1676,6 +1676,7 @@ const char* to_string(sstables::scylla_metadata_type t) {
         case sstables::scylla_metadata_type::ComponentsDigests: return "components_digests";
         case sstables::scylla_metadata_type::LargeDataRecords: return "large_data_records";
         case sstables::scylla_metadata_type::ScrubTime: return "scrub_time";
+        case sstables::scylla_metadata_type::ParquetDataFile: return "parquet_data_file";
     }
     std::abort();
 }
@@ -1876,6 +1877,21 @@ public:
 
     void operator()(const sstables::scrub_time_type& as) const {
         _writer.Int64(as.timestamp);
+    }
+
+    void operator()(const sstables::scylla_metadata::parquet_data_file& p) const {
+        _writer.StartObject();
+        _writer.Key("rows");
+        _writer.Uint64(p.rows);
+        _writer.Key("raw_size");
+        _writer.Uint64(p.raw_size);
+        _writer.Key("file_size");
+        _writer.Uint64(p.file_size);
+        _writer.Key("footer_size");
+        _writer.Uint64(p.footer_size);
+        _writer.Key("footer_crc32");
+        _writer.Uint(p.footer_crc32);
+        _writer.EndObject();
     }
 };
 

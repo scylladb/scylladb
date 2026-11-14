@@ -35,6 +35,7 @@ in individual sections
         | components_digests
         | large_data_records
         | scrub_time
+        | parquet_data_file
 
 `sharding_metadata` (tag 1): describes what token sub-ranges are included in this
 sstable. This is used, when loading the sstable, to determine which shard(s)
@@ -90,6 +91,11 @@ tablet/shard migration.
 `scrub_time` (tag 14): an `int64_t` with the timestamp of when the sstable was
 last written or validated as milliseconds since the epoch of `db_clock`. Used
 to decide automatic scrub eligibility.
+
+`parquet_data_file` (tag 15): facts about the Data file of an sstable whose Data file
+is a Parquet file (format `pq`). It is present exactly in such sstables. The reader
+needs these values before it parses the Parquet footer, or to verify the footer.
+See the `parquet_data_file` section below.
 
 The [scylla sstable dump-scylla-metadata](https://github.com/scylladb/scylladb/blob/master/docs/operating-scylla/admin-tools/scylla-sstable.rst#dump-scylla-metadata) tool
 can be used to dump the scylla metadata in JSON format.
@@ -246,3 +252,31 @@ The elements_count field carries a type-dependent element count:
 
 The range_tombstones and dead_rows fields are meaningful only for
 partition_size records and are zero for all other record types.
+
+## parquet_data_file subcomponent
+
+    parquet_data_file = rows raw_size file_size footer_size footer_crc32
+        rows = be64          // the number of Parquet rows in the Data file
+        raw_size = be64      // the total raw size of the rows, in bytes
+        file_size = be64     // the size of the Data file
+        footer_size = be64   // the size of the serialized Parquet FileMetaData
+        footer_crc32 = be32  // the CRC-32 of the serialized Parquet FileMetaData
+
+The trie index of a Parquet sstable stores row ordinals in place of Data file
+positions. `rows` is the position of the end of the file: the index reader
+receives it in place of the Data file size.
+
+The raw size of a row is the sum, over its non-null values, of each value's
+plain size: the width of a fixed-width value, or the length of a byte array.
+It covers value columns and metadata columns, and it does not depend on the
+encoding or the compression. `raw_size` is the logical size of the data, close
+to the uncompressed size of the Data file of an `mx` sstable, so the reader
+gets it without parsing the footer.
+
+`file_size` is the size of the Data file as the writer wrote it. For an
+encrypted sstable, it is the size of the plaintext.
+
+`footer_size` and `footer_crc32` describe the serialized FileMetaData, which
+ends 8 bytes before the end of the file. They do not cover the 4-byte footer
+length and the 4 magic bytes that follow it. The CRC-32 is the one of
+`Digest.crc32`. The reader verifies it while it parses the footer.
