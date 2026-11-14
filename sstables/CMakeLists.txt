@@ -15,6 +15,7 @@ target_sources(sstables
     mx/writer.cc
     object_storage_client.cc
     parquet/bit_util.cc
+    parquet/compression.cc
     parquet/encoding.cc
     parquet/metadata.cc
     parquet/rle.cc
