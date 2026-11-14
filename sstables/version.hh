@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <array>
+#include <compare>
 #include <cstdint>
 #include <initializer_list>
 #include <type_traits>
@@ -19,8 +20,20 @@
 
 namespace sstables {
 
+// The numeric values of the enumerators are sent over the network
+// (`stream_sstable_meta`), so a new version is always added at the end.
 enum class sstable_version_types { ka, la, mc, md, me, ms, mt };
 enum class sstable_format_types { big };
+
+// Versions are not ordered. Code that depends on a property of a version
+// asks the predicate that names the property (see below), so that a new
+// version can have any combination of properties. The ordered comparison
+// operators are deleted to keep it that way.
+bool operator<(sstable_version_types, sstable_version_types) = delete;
+bool operator<=(sstable_version_types, sstable_version_types) = delete;
+bool operator>(sstable_version_types, sstable_version_types) = delete;
+bool operator>=(sstable_version_types, sstable_version_types) = delete;
+std::strong_ordering operator<=>(sstable_version_types, sstable_version_types) = delete;
 
 constexpr bool version_is_one_of(sstable_version_types v, std::initializer_list<sstable_version_types> versions) {
     return std::ranges::find(versions, v) != versions.end();

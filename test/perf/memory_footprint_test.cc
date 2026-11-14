@@ -173,7 +173,8 @@ static mutation make_mutation(schema_ptr s, mutation_settings settings) {
 struct sizes {
     size_t memtable;
     size_t cache;
-    std::map<sstables::sstable::version_types, size_t> sstable;
+    // In the order of writable_sstable_versions.
+    std::vector<std::pair<sstables::sstable::version_types, size_t>> sstable;
     size_t frozen;
     size_t canonical;
     size_t query_result;
@@ -211,7 +212,7 @@ static sizes calculate_sizes(cache_tracker& tracker, const mutation_settings& se
             mt2->apply(*mt, env.make_reader_permit()).get();
             write_memtable_to_sstable(*mt2, sst).get();
             sst->open_data().get();
-            result.sstable[v] = sst->data_size();
+            result.sstable.emplace_back(v, sst->data_size());
         }
     }).get();
 
