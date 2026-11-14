@@ -5,6 +5,8 @@
 #
 import uuid
 
+from cassandra import Unavailable
+from cassandra.cluster import NoHostAvailable
 from cassandra.protocol import ConfigurationException, InvalidRequest, SyntaxException
 from cassandra.query import SimpleStatement, ConsistencyLevel
 from test.cluster.tasks.task_manager_client import TaskManagerClient
@@ -108,6 +110,80 @@ async def test_tablet_cannot_decommision_below_replication_factor(manager: Scyll
         assert len(rows) == len(keys)
         for r in rows:
             assert r.c == r.pk
+
+async def test_tablet_degraded_scan_query(manager: ScyllaClusterManager):
+    """Scan queries must fail cleanly when too many nodes are down.
+
+    With RF=3 over three racks, every tablet has exactly one replica in
+    rack r1, on one of the two nodes there. Keeping alive only the r1 node
+    which does not hold the first tablet leaves that tablet with no live
+    replica at all, so a full scan cannot be served at any consistency
+    level and must report unavailability rather than hang or return
+    partial results.
+    """
+    logger.info("Bootstrapping cluster")
+    cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled'}
+    servers = await manager.servers_add(4, config=cfg, property_file=[
+        {"dc": "dc1", "rack": "r1"},
+        {"dc": "dc1", "rack": "r1"},
+        {"dc": "dc1", "rack": "r2"},
+        {"dc": "dc1", "rack": "r3"}
+    ])
+
+    cql = manager.get_cql()
+    await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    await manager.disable_tablet_balancing()
+
+    logger.info("Creating table")
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+
+        # Pick the survivor: the r1 node which is not a replica of the first
+        # tablet, so that tablet is guaranteed to have no live replica.
+        tablet = (await get_all_tablet_replicas(manager, servers[0], ks, 'test'))[0]
+        tablet_hosts = {host_id for host_id, _ in tablet.replicas}
+        host_ids = {srv.server_id: await manager.get_host_id(srv.server_id) for srv in servers}
+        survivors = [srv for srv in servers if srv.rack == 'r1' and host_ids[srv.server_id] not in tablet_hosts]
+        assert len(survivors) == 1, f"Expected exactly one r1 node outside tablet {tablet}, got {survivors}"
+        survivor = survivors[0]
+        others = [srv for srv in servers if srv.server_id != survivor.server_id]
+
+        stmt = f"SELECT * FROM {ks}.test"
+        consistency_levels = [ConsistencyLevel.ONE, ConsistencyLevel.LOCAL_ONE,
+                              ConsistencyLevel.TWO, ConsistencyLevel.THREE,
+                              ConsistencyLevel.QUORUM, ConsistencyLevel.LOCAL_QUORUM,
+                              ConsistencyLevel.ALL]
+
+        # Control: with the whole cluster up, every one of these scans succeeds,
+        # so the failures below are caused by the nodes going down and not by
+        # the query, the keyspace or the driver.
+        for cl in consistency_levels:
+            logger.info(f"Scanning at consistency level {cl} with all nodes up")
+            assert await cql.run_async(SimpleStatement(stmt, consistency_level=cl)) == []
+
+        # The stops must be graceful: a stopping node announces its shutdown
+        # over gossip, so the survivor marks it down at once and reports
+        # unavailability. After a kill, the survivor would keep the node alive
+        # for a while and the scan would time out instead.
+        logger.info(f"Stopping all nodes but {survivor}")
+        for srv in others:
+            await manager.server_stop_gracefully(srv.server_id)
+
+        for cl in consistency_levels:
+            logger.info(f"Scanning at consistency level {cl} with 3 of 4 nodes down")
+            query = SimpleStatement(stmt, consistency_level=cl)
+            with pytest.raises((NoHostAvailable, Unavailable),
+                               match=r"Cannot achieve consistency level for cl \w+\. Requires [1-3], alive [0-1]") as excinfo:
+                await cql.run_async(query)
+            logger.info(f"Got the expected error: {excinfo.value}")
+
+        # Bring the cluster back so the keyspace can be dropped on exit: with
+        # three of four nodes down there is no group0 majority, so the nodes
+        # are started together rather than one after the other, as none can
+        # make progress on its own.
+        logger.info("Restarting the stopped nodes")
+        await asyncio.gather(*[manager.server_start(srv.server_id) for srv in others])
+        await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
 
 async def test_reshape_with_tablets(manager: ScyllaClusterManager):
     logger.info("Bootstrapping cluster")
