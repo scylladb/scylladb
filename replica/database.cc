@@ -3076,7 +3076,7 @@ future<> database::flush(const sstring& ksname, const sstring& cfname) {
 future<> database::flush_table_on_all_shards(sharded<database>& sharded_db, table_id id) {
     return sharded_db.invoke_on_all([id] (replica::database& db) {
         if (db.column_family_exists(id)) {
-            return db.find_column_family(id).flush();
+            return db.find_column_family(id).flush_storage();
         }
         return make_ready_future();
     });
@@ -3137,7 +3137,7 @@ future<> database::flush_all_tables() {
     dblog.info("Forcing new commitlog segment and flushing all tables");
     co_await _commitlog->force_new_active_segment();
     co_await get_tables_metadata().parallel_for_each_table([] (table_id, lw_shared_ptr<table> t) {
-        return t->flush();
+        return t->flush_storage();
     });
     _all_tables_flushed_at = db_clock::now();
     co_await _commitlog->wait_for_pending_deletes();
@@ -3170,18 +3170,6 @@ void database::trigger_logstor_compaction(bool major) {
         if (tp->uses_logstor()) {
             tp->trigger_logstor_compaction();
         }
-    });
-}
-
-future<> database::flush_logstor_separator_on_all_shards(sharded<database>& sharded_db) {
-    return sharded_db.invoke_on_all([] (replica::database& db) {
-        return db.flush_logstor_separator();
-    });
-}
-
-future<> database::flush_logstor_separator(std::optional<logstor::segment_sequence> seq_num) {
-    return _tables_metadata.parallel_for_each_table([seq_num] (table_id, lw_shared_ptr<table> table) {
-        return table->flush_separator(seq_num);
     });
 }
 
