@@ -45,6 +45,7 @@ target_sources(sstables
     trie/bti_partition_index_writer.cc
     trie/bti_row_index_writer.cc
     trie/trie_writer.cc
+    trie_index_writer.cc
     writer.cc)
 target_include_directories(sstables
   PUBLIC
