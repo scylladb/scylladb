@@ -24,6 +24,7 @@ from test import DEBUG_AND_SANITIZE_MODES, TEST_DIR, TOP_SRC_DIR, asan_options, 
 from test.pylib.coverage_utils import coverage_dir
 from test.pylib.runner import BUILD_MODE, CPP_TEST_LOG, CPP_TEST_LOG_KEPT, RUN_ID, TEST_SUITE
 from test.pylib.scylla_server import merge_cmdline_options
+from test.pylib.skip_types import skip_env
 from test.pylib.util import get_configured_tests, ninja_build, ninja_cwd
 
 if TYPE_CHECKING:
@@ -192,6 +193,13 @@ class CppFile(pytest.File, ABC):
         return args
 
     def collect(self) -> Iterator[CppTestCase]:
+        # An optional test is built into its own executable, never into a
+        # shared one such as combined_tests, which is always configured.
+        if self.test_name in self.suite_config.get("optional_tests", []):
+            suite_name = self.stash[TEST_SUITE].name
+            if f"test/{suite_name}/{self.test_name}" not in get_configured_tests():
+                skip_env(f"{self.test_name} needs an optional dependency which the build system did not find")
+
         if self.config.getoption("--build"):
             self.build()
 
