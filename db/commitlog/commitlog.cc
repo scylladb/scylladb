@@ -351,6 +351,9 @@ public:
     template<typename T, typename R = typename T::result_type>
     requires std::derived_from<T, db::commitlog::entry_writer> && std::same_as<R, decltype(std::declval<T>().result())>
     future<R> allocate_when_possible(T writer, db::timeout_clock::time_point timeout);
+    template<typename T, typename R = typename T::result_type>
+    requires std::derived_from<T, db::commitlog::entry_writer> && std::same_as<R, decltype(std::declval<T>().result())>
+    future<R> allocate_slow(T writer, db::timeout_clock::time_point timeout);
 
     future<> oversized_allocation(entry_writer&, db::timeout_clock::time_point timeout);
 
@@ -405,6 +408,7 @@ public:
         uint64_t requests_blocked_memory = 0;
         uint64_t blocked_on_new_segment = 0;
         uint64_t active_allocations = 0;
+        uint64_t fast_path_allocations = 0;
     };
 
     class scope_increment_counter {
@@ -1598,6 +1602,27 @@ size_t db::commitlog::segment_manager::sector_overhead(segment_id_type id, size_
 template<typename T, typename R>
 requires std::derived_from<T, db::commitlog::entry_writer> && std::same_as<R, decltype(std::declval<T>().result())>
 future<R> db::commitlog::segment_manager::allocate_when_possible(T writer, db::timeout_clock::time_point timeout) {
+    // Common case without a coroutine frame. Entries that must wait for a sync are left out, so a
+    // failed attempt wrote nothing. need_preempt() keeps the coroutine's yield point; waiters fail try_get_units() (FIFO).
+    try {
+        auto size = writer.size();
+        if (size < max_mutation_size && cfg.mode != sync_mode::BATCH && !writer.sync && !need_preempt()
+                && !_segments.empty() && _segments.back()->is_still_allocating()) {
+            if (auto permit = try_get_units(_request_controller, size);
+                    permit && _segments.back()->allocate(writer, *permit, timeout) == segment::write_result::ok) {
+                ++totals.fast_path_allocations;
+                return make_ready_future<R>(writer.result());
+            }
+        }
+    } catch (...) {
+        return current_exception_as_future<R>();
+    }
+    return allocate_slow<T, R>(std::move(writer), timeout);
+}
+
+template<typename T, typename R>
+requires std::derived_from<T, db::commitlog::entry_writer> && std::same_as<R, decltype(std::declval<T>().result())>
+future<R> db::commitlog::segment_manager::allocate_slow(T writer, db::timeout_clock::time_point timeout) {
     auto size = writer.size();
     // If this is already too big now, we should fall back early. This measurement does not count
     // overhead into the estimate, i.e. it might be worse.
@@ -4084,6 +4109,18 @@ db::replay_position db::commitlog::min_position() const {
 
 db::replay_position db::commitlog::current_position() const {
     return _segment_manager->current_position();
+}
+
+ssize_t db::commitlog::get_available_memory_units() const {
+    return _segment_manager->_request_controller.available_units();
+}
+
+uint64_t db::commitlog::get_fast_path_allocations() const {
+    return _segment_manager->totals.fast_path_allocations;
+}
+
+uint64_t db::commitlog::get_requests_blocked_memory() const {
+    return _segment_manager->totals.requests_blocked_memory;
 }
 
 db::replay_position db::commitlog::flush_position() const {
