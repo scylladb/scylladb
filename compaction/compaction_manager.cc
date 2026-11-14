@@ -3047,13 +3047,17 @@ future<> compaction_manager::perform_sstable_upgrade(owned_ranges_ptr sorted_own
     auto get_sstables = [this, &t, exclude_current_version] () -> future<std::vector<sstables::shared_sstable>> {
         std::vector<sstables::shared_sstable> tables;
 
-        auto last_version = t.get_sstables_manager().get_preferred_sstable_version();
+        auto chosen_version = t.get_sstables_manager().choose_sstable_version(*t.schema());
 
         for (auto& sst : co_await get_candidates(t)) {
-            // if we are a "normal" upgrade, we only care about
-            // tables with other versions, but potentially
+            // if we are a "normal" upgrade, we only rewrite sstables whose
+            // format differs from the table's choice, or whose version is
+            // older within the same format, but potentially
             // we are to actually rewrite everything. (-a)
-            if (!exclude_current_version || sstables::is_older_within_format(sst->get_version(), last_version)) {
+            auto version = sst->get_version();
+            if (!exclude_current_version
+                    || sstables::format_of(version) != sstables::format_of(chosen_version)
+                    || sstables::is_older_within_format(version, chosen_version)) {
                 tables.emplace_back(sst);
             }
         }

@@ -1086,7 +1086,7 @@ private:
 
 private:
     sstables::shared_sstable do_make_sstable() const {
-        const auto version = _sst_man.get_preferred_sstable_version();
+        const auto version = _sst_man.choose_sstable_version(*_schema);
         auto generation = _generation_generator();
         auto sst_name = sstables::sstable::filename(_output_dir, _schema->ks_name(), _schema->cf_name(), version, generation, component_type::Data);
         if (file_exists(sst_name).get()) {
@@ -2299,7 +2299,7 @@ void write_operation(schema_ptr schema, reader_permit permit, const std::vector<
     auto output_dir = vm["output-dir"].as<std::string>();
     auto version = vm.contains("sstable-version")
         ? version_from_string(vm["sstable-version"].as<std::string>())
-        : manager.get_preferred_sstable_version();
+        : manager.choose_sstable_version(*schema);
 
     auto consume_reader = [&] (mutation_reader reader, size_t partition_count_estimate) -> future<> {
         auto generation = sstables::generation_type(utils::UUID_gen::get_time_UUID());
@@ -2627,7 +2627,7 @@ void upgrade_operation(schema_ptr schema, reader_permit permit, const std::vecto
 
     const auto new_version = vm.contains("sstable-version")
         ? sstables::version_from_string(vm["sstable-version"].as<std::string>())
-        : sst_man.get_preferred_sstable_version();
+        : sst_man.choose_sstable_version(*schema);
 
     for (const auto& sst : sstables) {
         if (sst->get_version() == new_version && !all) {
@@ -2702,7 +2702,7 @@ void filter_operation(schema_ptr schema, reader_permit permit, const std::vector
 
     const auto new_version = vm.contains("sstable-version")
         ? sstables::version_from_string(vm["sstable-version"].as<std::string>())
-        : sst_man.get_preferred_sstable_version();
+        : sst_man.choose_sstable_version(*schema);
 
     auto sources = create_mutation_sources(sstables, vm.count("merge"));
 
@@ -2762,7 +2762,7 @@ void split_operation(schema_ptr schema, reader_permit permit, const std::vector<
 
     const auto new_version = vm.contains("sstable-version")
         ? sstables::version_from_string(vm["sstable-version"].as<std::string>())
-        : sst_man.get_preferred_sstable_version();
+        : sst_man.choose_sstable_version(*schema);
 
     // Parse split tokens
     auto split_token_strings = vm["split-token"].as<std::vector<sstring>>();
