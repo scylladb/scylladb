@@ -30,6 +30,7 @@ target_sources(sstables
     parquet/writer.cc
     prepended_input_stream.cc
     random_access_reader.cc
+    serialization_header_builder.cc
     sstable_directory.cc
     sstable_mutation_reader.cc
     sstables.cc

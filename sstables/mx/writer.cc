@@ -9,6 +9,7 @@
 #include "sstables/mx/writer.hh"
 #include "sstables/writer.hh"
 #include "sstables/large_data_tracker.hh"
+#include "sstables/serialization_header_builder.hh"
 #include "sstables/trie/bti_index.hh"
 #include "encoding_stats.hh"
 #include "schema/schema.hh"
@@ -347,30 +348,6 @@ void write_delta_local_deletion_time(W& out, gc_clock::time_point ldt, const enc
     write_unsigned_delta_vint(out, ldt.time_since_epoch().count(), enc_stats.min_local_deletion_time.time_since_epoch().count());
 }
 
-static bytes_array_vint_size to_bytes_array_vint_size(bytes b) {
-    bytes_array_vint_size result;
-    result.value = std::move(b);
-    return result;
-}
-
-static bytes_array_vint_size to_bytes_array_vint_size(const sstring& s) {
-    bytes_array_vint_size result;
-    result.value = to_bytes(s);
-    return result;
-}
-
-static sstring pk_type_to_string(const schema& s) {
-    if (s.partition_key_size() == 1) {
-        return s.partition_key_columns().begin()->type->name();
-    } else {
-        return seastar::format("org.apache.cassandra.db.marshal.CompositeType({})",
-                               fmt::join(s.partition_key_columns()
-                                          | std::views::transform(std::mem_fn(&column_definition::type))
-                                          | std::views::transform(std::mem_fn(&abstract_type::name)),
-                                        ","));
-    }
-}
-
 struct sstable_schema {
     serialization_header header;
     indexed_columns regular_columns;
@@ -378,41 +355,17 @@ struct sstable_schema {
 };
 
 static
-sstable_schema make_sstable_schema(const schema& s, const encoding_stats& enc_stats, const sstable_writer_config& cfg) {
+sstable_schema make_sstable_schema(const schema& s, const encoding_stats& enc_stats) {
     sstable_schema sst_sch;
-    serialization_header& header = sst_sch.header;
-    // mc serialization header minimum values are delta-encoded based on the default timestamp epoch times
-    // Note: We rely on implicit conversion to uint64_t when subtracting the signed epoch values below
-    // for preventing signed integer overflow.
-    header.min_timestamp_base.value = static_cast<uint64_t>(enc_stats.min_timestamp) - encoding_stats::timestamp_epoch;
-    header.min_local_deletion_time_base.value = static_cast<uint64_t>(enc_stats.min_local_deletion_time.time_since_epoch().count()) - encoding_stats::deletion_time_epoch;
-    header.min_ttl_base.value = static_cast<uint64_t>(enc_stats.min_ttl.count()) - encoding_stats::ttl_epoch;
-
-    header.pk_type_name = to_bytes_array_vint_size(pk_type_to_string(s));
-
-    header.clustering_key_types_names.elements.reserve(s.clustering_key_size());
-    for (const auto& ck_column : s.clustering_key_columns()) {
-        auto ck_type_name = to_bytes_array_vint_size(ck_column.type->name());
-        header.clustering_key_types_names.elements.push_back(std::move(ck_type_name));
-    }
-
-    auto add_column = [&] (const column_definition& column) {
-        serialization_header::column_desc cd;
-        cd.name = to_bytes_array_vint_size(column.name());
-        cd.type_name = to_bytes_array_vint_size(column.type->name());
-        if (column.is_static()) {
-            header.static_columns.elements.push_back(std::move(cd));
-            sst_sch.static_columns.push_back(column);
-        } else if (column.is_regular()) {
-            header.regular_columns.elements.push_back(std::move(cd));
-            sst_sch.regular_columns.push_back(column);
-        }
-    };
+    sst_sch.header = make_serialization_header(s, enc_stats);
 
     for (const auto& column : s.v3().all_columns()) {
-        add_column(column);
+        if (column.is_static()) {
+            sst_sch.static_columns.push_back(column);
+        } else if (column.is_regular()) {
+            sst_sch.regular_columns.push_back(column);
+        }
     }
-
 
     // For static and regular columns, we write all simple columns first followed by collections
     // These containers have columns partitioned by atomicity
@@ -808,7 +761,7 @@ public:
         , _enc_stats(enc_stats)
         , _shard(shard)
         , _tmp_bufs(_sst.sstable_buffer_size)
-        , _sst_schema(make_sstable_schema(s, _enc_stats, _cfg))
+        , _sst_schema(make_sstable_schema(s, _enc_stats))
         , _run_identifier(cfg.run_identifier)
         , _write_regular_as_static(s.is_static_compact_table())
         , _size_threshold([this] {
