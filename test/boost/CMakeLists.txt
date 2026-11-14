@@ -227,6 +227,10 @@ add_scylla_test(parquet_reader_test
   KIND SEASTAR
   LIBRARIES
     Parquet::parquet_shared)
+add_scylla_test(parquet_sstable_writer_test
+  KIND SEASTAR
+  LIBRARIES
+    Parquet::parquet_shared)
 add_scylla_test(parquet_writer_test
   KIND SEASTAR
   LIBRARIES

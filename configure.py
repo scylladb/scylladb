@@ -635,6 +635,7 @@ scylla_tests = set([
     'test/boost/parquet_encoding_test',
     'test/boost/parquet_mapping_test',
     'test/boost/parquet_reader_test',
+    'test/boost/parquet_sstable_writer_test',
     'test/boost/parquet_writer_test',
     'test/boost/partitioner_test',
     'test/boost/pretty_printers_test',
@@ -1745,6 +1746,7 @@ arrow_tests = set([
     'test/boost/parquet_encoding_test',
     'test/boost/parquet_mapping_test',
     'test/boost/parquet_reader_test',
+    'test/boost/parquet_sstable_writer_test',
     'test/boost/parquet_writer_test',
 ])
 arrow_test_sources = set(t + '.cc' for t in arrow_tests)
