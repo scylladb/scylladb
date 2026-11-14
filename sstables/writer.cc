@@ -10,6 +10,7 @@
 #include "sstable_writer.hh"
 #include "writer.hh"
 #include "mx/writer.hh"
+#include "parquet/sstable_writer.hh"
 #include "db/corrupt_data_handler.hh"
 
 namespace sstables {
@@ -75,15 +76,14 @@ void sstable_writer::writer_impl::record_corrupt_row(clustering_row&& clustered_
 
 sstable_writer::sstable_writer(sstable& sst, const schema& s, uint64_t estimated_partitions,
         const sstable_writer_config& cfg, encoding_stats enc_stats, shard_id shard) {
-    // FIXME: choose the Parquet writer_impl here once it exists.
-    if (has_parquet_data_file(sst.get_version())) {
-        throw std::runtime_error(seastar::format("Cannot write sstable {}: sstables of format {} (version {}) are not supported yet",
-                sst.toc_filename(), sst.get_format(), sst.get_version()));
-    }
     if (!is_writable(sst.get_version())) {
         on_internal_error(sstlog, format("writing sstables with too old format: {}", static_cast<int>(sst.get_version())));
     }
-    _impl = mc::make_writer(sst, s, estimated_partitions, cfg, enc_stats, shard);
+    if (has_parquet_data_file(sst.get_version())) {
+        _impl = parquet::make_sstable_writer(sst, s, estimated_partitions, cfg, enc_stats, shard);
+    } else {
+        _impl = mc::make_writer(sst, s, estimated_partitions, cfg, enc_stats, shard);
+    }
     if (cfg.replay_position) {
         _impl->_collector.set_replay_position(cfg.replay_position.value());
     }

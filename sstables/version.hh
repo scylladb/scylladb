@@ -88,10 +88,9 @@ constexpr bool has_compression_info_or_crc(sstable_version_types v) {
 }
 
 // The current sstable writer can write this version.
-// FIXME: add `aa` once the Parquet writer exists.
 constexpr bool is_writable(sstable_version_types v) {
     using enum sstable_version_types;
-    return version_is_one_of(v, {mc, md, me, ms, mt});
+    return version_is_one_of(v, {mc, md, me, ms, mt, aa});
 }
 
 // The sstable has Index.db and Summary.db. Otherwise it has the trie index
@@ -228,7 +227,9 @@ constexpr auto all_sstable_versions = std::to_array<sstable_version_types>({
 });
 
 // The versions in all_sstable_versions for which is_writable() is true.
-// FIXME: add `aa` once the Parquet writer exists.
+// FIXME: add `aa` once the Parquet reader exists, together with
+// all_sstable_versions. `aa` is writable, but the tests that loop over
+// this list read back what they write.
 constexpr auto writable_sstable_versions = std::to_array<sstable_version_types>({
     sstable_version_types::mc,
     sstable_version_types::md,

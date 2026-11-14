@@ -11,6 +11,7 @@
 #include <seastar/core/iostream.hh>
 #include <seastar/core/sstring.hh>
 #include "sstables/types.hh"
+#include "sstables/writer.hh"
 #include "utils/UUID.hh"
 
 struct encoding_stats;
@@ -28,7 +29,7 @@ struct sstable_writer_config;
 //
 // All methods must be called in a seastar thread, in this order:
 //  1. open(), first.
-//  2. make_data_sink(), to write the Data file.
+//  2. make_data_sink() or make_digest_data_writer(), to write the Data file.
 //  3. set_owner_shard().
 //  ... the writer writes the partitions and finishes its index:
 //      trie_index_writer::finish(), or the Summary of the legacy index ...
@@ -52,6 +53,12 @@ public:
     // Creates the sink of the Data file, below compression and checksums.
     // Encryption, if any, is applied by the sink.
     data_sink make_data_sink();
+
+    // Creates the writer of a Data file that has no checksums or compression
+    // of its own below the writer, on top of make_data_sink(). After the
+    // writer is closed, its full_checksum() is the CRC-32 of the whole Data
+    // file, for write_data_digest().
+    std::unique_ptr<crc32_digest_file_writer> make_digest_data_writer();
 
     // Records the shard that owns the sstable.
     void set_owner_shard(shard_id shard);

@@ -1024,7 +1024,7 @@ BOOST_AUTO_TEST_CASE(test_aa_predicates) {
     BOOST_CHECK(has_compression_info_or_crc(mt));
     BOOST_CHECK(!has_m_format_checksums(aa));
     BOOST_CHECK(!supports_compact_storage(aa));
-    BOOST_CHECK(!is_writable(aa));
+    BOOST_CHECK(is_writable(aa));
     for (auto pred : {has_summary_and_index, has_mx_promoted_index, has_serialization_header, has_compaction_ancestors,
             has_correct_max_deletion_time, has_correct_min_max_column_names, has_originating_host_id, has_m_format_filter,
             uses_legacy_dk_order}) {
@@ -1057,9 +1057,9 @@ BOOST_AUTO_TEST_CASE(test_aa_file_names) {
     BOOST_CHECK_EQUAL(aa_components.size() + 2, sstable_version_constants::get_component_map(mt).size());
 }
 
-// The Parquet writer and reader do not exist yet. Writing or loading an
-// `aa` sstable must fail with an exception, not crash.
-SEASTAR_TEST_CASE(test_aa_is_not_supported_yet) {
+// The Parquet reader does not exist yet. Writing an `aa` sstable works,
+// and loading it must fail with an exception, not crash.
+SEASTAR_TEST_CASE(test_aa_load_is_not_supported_yet) {
     return test_env::do_with_async([] (test_env& env) {
         simple_schema ss;
         auto s = ss.schema();
@@ -1069,10 +1069,9 @@ SEASTAR_TEST_CASE(test_aa_is_not_supported_yet) {
         auto sst = env.make_sstable(s, sstable_version_types::aa);
         BOOST_CHECK_EQUAL(sst->get_format(), sstable_format_types::pq);
         auto rd = make_mutation_reader_from_mutations(s, env.make_reader_permit(), mut);
-        BOOST_REQUIRE_THROW(sst->write_components(std::move(rd), 1, s, env.manager().configure_writer("test"), encoding_stats{}).get(),
-                std::runtime_error);
+        sst->write_components(std::move(rd), 1, s, env.manager().configure_writer("test"), encoding_stats{}).get();
 
-        auto sst2 = env.make_sstable(s, sstable_version_types::aa);
+        auto sst2 = env.make_sstable(s, sst->generation(), sstable_version_types::aa);
         BOOST_REQUIRE_THROW(sst2->load(s->get_sharder()).get(), std::runtime_error);
     });
 }
