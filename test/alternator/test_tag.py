@@ -48,16 +48,29 @@ def wait_for_tags_dict(table, arn, expected, timeout=30):
         time.sleep(0.1)
     assert expected == tags_array_to_dict(table.meta.client.list_tags_of_resource(ResourceArn=arn)['Tags'])
 
+# Even after ListTagsOfResource shows the previous tag change, DynamoDB may
+# still refuse a new one for a short while, with LimitExceededException
+# ("Table tags are being updated"), so we retry it.
+def retry_while_tags_updated(f, timeout=30, **kwargs):
+    deadline = time.time() + timeout
+    while True:
+        try:
+            return f(**kwargs)
+        except ClientError as e:
+            if e.response['Error']['Code'] != 'LimitExceededException' or time.time() > deadline:
+                raise
+            time.sleep(1)
+
 def tag_resource(table, arn, tags):
     expected = tags_array_to_dict(table.meta.client.list_tags_of_resource(ResourceArn=arn)['Tags'])
     expected.update(tags_array_to_dict(tags))
-    table.meta.client.tag_resource(ResourceArn=arn, Tags=tags)
+    retry_while_tags_updated(table.meta.client.tag_resource, ResourceArn=arn, Tags=tags)
     wait_for_tags_dict(table, arn, expected)
 
 def untag_resource(table, arn, tagkeys):
     expected = tags_array_to_dict(table.meta.client.list_tags_of_resource(ResourceArn=arn)['Tags'])
     expected = {k: v for k, v in expected.items() if k not in tagkeys}
-    table.meta.client.untag_resource(ResourceArn=arn, TagKeys=tagkeys)
+    retry_while_tags_updated(table.meta.client.untag_resource, ResourceArn=arn, TagKeys=tagkeys)
     wait_for_tags_dict(table, arn, expected)
 
 def delete_tags(table, arn):
@@ -257,7 +270,7 @@ def test_forbidden_tags_from_creation(scylla_only, dynamodb):
         dynamodb.meta.client.describe_table(TableName=name)
 
 # Test checking that unicode tags are allowed
-@pytest.mark.xfail(reason="unicode tags not yet supported")
+# Reproduces #16908
 def test_tag_resource_unicode(test_table):
     arn = get_table_arn(test_table)
     tags = [
@@ -445,7 +458,7 @@ def test_missing_tag_value(dynamodb, test_table):
 # Reproduces #16908
 @pytest.mark.parametrize("is_ascii", [
         True,
-        pytest.param(False, marks=pytest.mark.xfail(reason="#16908"))])
+        False])
 def test_tag_key_length_128_allowed(dynamodb, test_table, is_ascii):
     client = dynamodb.meta.client
     arn = get_table_arn(test_table)
@@ -468,7 +481,7 @@ def test_tag_key_length_129_forbidden(dynamodb, test_table):
 # Reproduces #16908
 @pytest.mark.parametrize("is_ascii", [
         True,
-        pytest.param(False, marks=pytest.mark.xfail(reason="#16908"))])
+        False])
 def test_tag_value_length_256_allowed(dynamodb, test_table, is_ascii):
     client = dynamodb.meta.client
     arn = get_table_arn(test_table)
@@ -498,6 +511,55 @@ def test_tag_forbidden_chars(dynamodb, test_table):
             client.tag_resource(ResourceArn=arn, Tags=[{'Key': x, 'Value': 'dog'}])
         with pytest.raises(ClientError, match='ValidationException'):
             client.tag_resource(ResourceArn=arn, Tags=[{'Key': 'dog', 'Value': x}])
+
+# The documentation's "letters, whitespace, and numbers" are actually any
+# Unicode letters, numbers and separators (the Unicode general categories L, N
+# and Z), not just ASCII ones. DynamoDB also allows "@": DynamoDB's
+# documentation doesn't list it, but AWS's general documentation on tags does.
+# Reproduces #16908.
+def test_tag_allowed_unicode_chars(test_table):
+    arn = get_table_arn(test_table)
+    for c in [
+            # Letters: uppercase, lowercase, titlecase, modifier, other, and a
+            # letter outside Unicode's Basic Multilingual Plane
+            'Ж', '\u00e9', 'ǅ', 'ʰ', 'א', '中', '\U0001d400',
+            # Numbers: a non-ASCII digit, a Roman numeral, a fraction
+            '٣', 'Ⅻ', '½',
+            # Separators: space, no-break space, em space, line separator,
+            # paragraph separator
+            ' ', '\u00a0', '\u2003', '\u2028', '\u2029',
+            '@']:
+        key = 'k' + c + random_string()
+        tag_resource(test_table, arn, [{'Key': key, 'Value': 'v' + c + 'v'}])
+        untag_resource(test_table, arn, [key])
+
+# Other Unicode characters are not allowed in tag keys or values: combining
+# marks, punctuation and symbols (other than the ASCII characters +-=._:/@),
+# control characters - including tab and newline, although they are white
+# space - format characters and private-use characters. Reproduces #16908.
+def test_tag_forbidden_unicode_chars(test_table):
+    client = test_table.meta.client
+    arn = get_table_arn(test_table)
+    for c in ['e\u0301', '¡', '\u2014', '€', '©', '\U0001f600',
+              '\t', '\n', '\u200b', '\ue000']:
+        with pytest.raises(ClientError, match='ValidationException'):
+            client.tag_resource(ResourceArn=arn, Tags=[{'Key': 'k' + c, 'Value': 'v'}])
+        with pytest.raises(ClientError, match='ValidationException'):
+            client.tag_resource(ResourceArn=arn, Tags=[{'Key': 'k', 'Value': 'v' + c}])
+
+# The length limits of 128 characters for a tag key and 256 for a tag value
+# are counted in UTF-16 code units, so a character outside Unicode's Basic
+# Multilingual Plane counts as two. Reproduces #16908.
+def test_tag_length_non_bmp(test_table):
+    client = test_table.meta.client
+    arn = get_table_arn(test_table)
+    c = '\U0001d400'
+    with pytest.raises(ClientError, match='ValidationException'):
+        client.tag_resource(ResourceArn=arn, Tags=[{'Key': c * 65, 'Value': 'v'}])
+    with pytest.raises(ClientError, match='ValidationException'):
+        client.tag_resource(ResourceArn=arn, Tags=[{'Key': 'k', 'Value': c * 129}])
+    tag_resource(test_table, arn, [{'Key': c * 64, 'Value': c * 128}])
+    untag_resource(test_table, arn, [c * 64])
 
 # Check that's it's allowed to reassign a new value to an existing tag.
 def test_tag_reassign(dynamodb, test_table):
