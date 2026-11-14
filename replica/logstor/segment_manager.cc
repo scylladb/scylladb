@@ -544,6 +544,15 @@ struct separator_task {
 // (segment_descriptor_hist_options), so a scan reads a segment in one buffer.
 static constexpr size_t max_scan_buffer_size = 128 * 1024;
 
+float separator_shares_for(bool active, size_t queued_tasks, size_t queue_depth, float floor_shares, float max_shares) noexcept {
+    if (!active) {
+        return 0;
+    }
+    floor_shares = std::min(floor_shares, max_shares);
+    const float fill = queue_depth ? std::min(1.0f, float(queued_tasks) / queue_depth) : 1.0f;
+    return floor_shares + (max_shares - floor_shares) * fill;
+}
+
 class segment_manager_impl {
 
     class recovery;
@@ -564,6 +573,8 @@ class segment_manager_impl {
         uint64_t live_record_count{0};
         uint64_t separator_task_failures{0};
         uint64_t segment_free_failures{0};
+        uint64_t separator_enqueue_waits{0};
+        std::chrono::steady_clock::duration separator_enqueue_wait_time{0};
     };
 
     file_manager _file_mgr;
@@ -629,6 +640,13 @@ class segment_manager_impl {
     abort_source _separator_buffer_abort;
 
     static constexpr size_t separator_queue_depth = 16;
+    // How long the separator counts as active after it last had work. The memtable flush
+    // controller samples separator_wanted_shares() every 50ms, and a separator that is busy only
+    // part of the time is often idle at the sample, so without a hold its shares would drop to
+    // nothing between bursts and come back only once the queue had filled.
+    static constexpr auto separator_active_hold = std::chrono::seconds(1);
+    lowres_clock::time_point _separator_last_active = lowres_clock::now() - separator_active_hold;
+    bool _separator_task_running{false};
 
     seastar::queue<separator_task> _separator_task_queue;
     seastar::semaphore _separator_enqueue_sem{1};
@@ -756,6 +774,16 @@ public:
 
     uint64_t get_segment_size() const noexcept {
         return _cfg.segment_size;
+    }
+
+    void note_separator_active() noexcept {
+        _separator_last_active = lowres_clock::now();
+    }
+
+    float separator_wanted_shares() const noexcept {
+        const bool active = _separator_task_running || !_separator_task_queue.empty()
+                || lowres_clock::now() - _separator_last_active < separator_active_hold;
+        return separator_shares_for(active, _separator_task_queue.size(), separator_queue_depth, separator_floor_shares, separator_max_shares);
     }
 
     sstring get_segment_file_path(log_segment_id segment_id) const {
@@ -1146,6 +1174,12 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
                        sm::description("Counts number of logstor segment references that failed to free the segment.")),
         sm::make_gauge("separator_task_queue_size", [this]() { return _separator_task_queue.size(); },
                        sm::description("Current number of pending tasks in the separator task queue.")),
+        sm::make_counter("separator_enqueue_waits", _stats.separator_enqueue_waits,
+                       sm::description("Counts number of times a write had to wait for room in the separator task queue, which blocks the writes behind it.")),
+        sm::make_counter("separator_enqueue_wait_time_ms", [this] { return std::chrono::duration<double, std::milli>(_stats.separator_enqueue_wait_time).count(); },
+                       sm::description("Total time in milliseconds writes spent waiting for room in the separator task queue.")),
+        sm::make_gauge("separator_wanted_shares", [this] { return separator_wanted_shares(); },
+                       sm::description("CPU shares the separator currently asks of its scheduling group: none while idle, a floor while active, rising as its task queue fills.")),
     });
 }
 
@@ -1246,6 +1280,12 @@ future<> segment_manager_impl::run_separator_fiber() {
             seg_ref.set_flush_failure();
         });
 
+        _separator_task_running = true;
+        auto task_done = defer([this] noexcept {
+            _separator_task_running = false;
+            note_separator_active();
+        });
+
         try {
             co_await write_to_separator(task.records, task.chunk_position, std::move(task.seg_ref), task.seq_num);
             write_to_separator_failed.cancel();
@@ -1314,7 +1354,7 @@ future<> segment_manager_impl::write(write_buffer& wb) {
 
         auto records = wb.take_separator_records();
         if (!records.empty()) {
-            co_await with_semaphore(_separator_enqueue_sem, 1, [&] {
+            auto enqueued = with_semaphore(_separator_enqueue_sem, 1, [&] {
                 return _separator_task_queue.push_eventually(separator_task{
                     .records = std::move(records),
                     .chunk_position = pos,
@@ -1323,6 +1363,16 @@ future<> segment_manager_impl::write(write_buffer& wb) {
                     .write_op = std::move(write_op),
                 });
             });
+            // The separator is behind and this write - and every write queued after it - waits
+            // for it. Only the waiting case is timed, so the common one costs a branch.
+            if (!enqueued.available()) {
+                ++_stats.separator_enqueue_waits;
+                const auto wait_start = std::chrono::steady_clock::now();
+                co_await std::move(enqueued);
+                _stats.separator_enqueue_wait_time += std::chrono::steady_clock::now() - wait_start;
+            } else {
+                co_await std::move(enqueued);
+            }
         }
         write_to_separator_failed.cancel();
         break;
@@ -2131,6 +2181,9 @@ future<> compaction_manager_impl::flush_separator_buffer(separator_buffer& buf, 
         });
 
         if (!buf.empty()) {
+            // Flushes also run outside the separator fiber, when a segment switch or a flush
+            // request forces out a buffer that is not full yet.
+            _sm.note_separator_active();
             co_await with_scheduling_group(_cfg.separator_sg, [&] {
                 return _sm.write_full_segment(*buf.buf, cg, write_source::separator);
             });
@@ -2573,6 +2626,10 @@ segment_stats& segment_manager::shard_segment_stats() noexcept {
 
 const segment_stats& segment_manager::shard_segment_stats() const noexcept {
     return _impl->shard_segment_stats();
+}
+
+float segment_manager::separator_wanted_shares() const noexcept {
+    return _impl->separator_wanted_shares();
 }
 
 sstring segment_manager::get_segment_file_path(log_segment_id segment_id) const {
