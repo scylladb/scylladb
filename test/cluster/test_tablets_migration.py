@@ -1333,8 +1333,8 @@ async def test_disable_balancing_cancels_a_repair(manager: ScyllaClusterManager,
     before = []
     async def repair_requests_cleared():
         nonlocal before
-        rows = await cql.run_async(f"SELECT last_token, repair_task_info FROM system.tablets "
-                                   f"WHERE table_id = {table_id}", host=hosts[0])
+        rows = await cql.run_async(f"SELECT last_token, repair_task_info, pending_repair_request "
+                                   f"FROM system.tablets WHERE table_id = {table_id}", host=hosts[0])
         cancelled = {r.last_token for r in rows if r.repair_task_info is None}
         before = rows
         return True if set(repairing) <= cancelled else None
@@ -1347,8 +1347,10 @@ async def test_disable_balancing_cancels_a_repair(manager: ScyllaClusterManager,
         await manager.api.disable_injection(s.ip_addr, injection)
 
     # The rest of the request was left alone. Uses the snapshot taken before the release, so
-    # tablets repaired since can't make this pass.
-    assert any(r.repair_task_info is not None for r in before if r.last_token not in set(repairing)), \
+    # tablets repaired since can't make this pass. A tablet whose repair has not started holds
+    # the request in pending_repair_request.
+    assert any(r.repair_task_info is not None or r.pending_repair_request is not None
+               for r in before if r.last_token not in set(repairing)), \
         "the whole repair request was cancelled, not just the transitioning tablets"
     await disable
     await wait_for_no_pending_topology_transition(manager, time.time() + scale_timeout(180))
