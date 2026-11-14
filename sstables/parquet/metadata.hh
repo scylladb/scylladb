@@ -71,8 +71,19 @@ enum class converted_type : int32_t {
     map = 1,
     map_key_value = 2,
     list = 3,
+    date = 6,
+    timestamp_millis = 9,
     int_8 = 15,
     int_16 = 16,
+    int_32 = 17,
+    int_64 = 18,
+};
+
+/// The TimeUnit union of TIME and TIMESTAMP, by the field id of its member.
+enum class time_unit : int8_t {
+    millis = 1,
+    micros = 2,
+    nanos = 3,
 };
 
 enum class encoding : int32_t {
@@ -114,6 +125,9 @@ struct logical_type {
         string = 1,
         map = 2,
         list = 3,
+        date = 6,
+        time = 7,
+        timestamp = 8,
         integer = 10,
         uuid = 14,
     };
@@ -121,6 +135,9 @@ struct logical_type {
     /// Parameters of `integer`.
     int8_t bit_width = 0;
     bool is_signed = false;
+    /// Parameters of `time` and `timestamp`.
+    bool is_adjusted_to_utc = false;
+    time_unit unit{};
 
     bool operator==(const logical_type&) const = default;
 };
