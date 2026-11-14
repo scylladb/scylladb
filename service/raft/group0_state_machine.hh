@@ -238,6 +238,8 @@ class group0_state_machine : public raft_state_machine {
     // Whether non-system keyspaces are loaded, so the in-memory state built
     // from their schemas (see do_reload_schema_dependent_state()) can be loaded.
     bool _schema_dependent_state_enabled;
+    // The last snapshot whose state transfer_snapshot() persisted and loaded into memory.
+    raft::snapshot_id _transferred_snapshot_id;
 
     // Stops the group 0 raft server on this node, the same way an error from apply() does.
     noncopyable_function<void(std::exception_ptr)> _on_fatal_error;
@@ -248,6 +250,10 @@ class group0_state_machine : public raft_state_machine {
     future<> reload_modules(modules_to_reload modules);
     future<> merge_and_apply(group0_state_machine_merger& merger);
     future<> reload_state();
+    // Reloads the in-memory state that is not loaded together with the topology.
+    future<> reload_non_topology_state();
+    // Persists the topology and raft parts of a transferred snapshot.
+    future<> persist_snapshot_state(std::optional<service::raft_snapshot> topology_snp, std::optional<service::raft_snapshot> raft_snp);
     future<> sync_audit_known_entities();
     future<> do_reload_schema_dependent_state();
 public:
@@ -274,5 +280,9 @@ bool should_flush_system_topology_after_applying(const mutation& mut, const data
 // and also for schema tables during early raft log replay (before
 // non-system keyspaces are loaded).
 future<> write_mutations_to_database(storage_service& storage_service, storage_proxy& proxy, gms::inet_address from, utils::chunked_vector<canonical_mutation> cms);
+future<> write_mutations_to_database(storage_service& storage_service, storage_proxy& proxy, utils::chunked_vector<mutation> mutations);
+
+// Converts group 0 command mutations, which target tables known to the local database.
+future<utils::chunked_vector<mutation>> to_mutations(storage_proxy& proxy, gms::inet_address from, utils::chunked_vector<canonical_mutation> cms);
 
 } // end of namespace service
