@@ -569,6 +569,7 @@ The content is dumped in JSON, using the following schema:
         "sstable_identifier": String, // UUID
         "large_data_records": [$LARGE_DATA_RECORD, ...]
         "scrub_time": int64
+        "parquet_data_file": $PARQUET_DATA_FILE // sstables with a Parquet Data file only
     }
 
     $SHARDING_METADATA := {
@@ -602,6 +603,14 @@ The content is dumped in JSON, using the following schema:
         "elements_count": Uint64,    // rows (partition_size, rows_in_partition) or collection elements (cell_size, elements_in_collection), 0 for row_size
         "range_tombstones": Uint64,  // range tombstones (partition_size records only, 0 otherwise)
         "dead_rows": Uint64          // dead rows (partition_size records only, 0 otherwise)
+    }
+
+    $PARQUET_DATA_FILE := {
+        "rows": Uint64,              // Parquet rows in the Data file
+        "raw_size": Uint64,          // total raw size of the rows, in bytes
+        "file_size": Uint64,         // size of the Data file (of its plaintext, if encrypted)
+        "footer_size": Uint64,       // size of the serialized Parquet FileMetaData
+        "footer_crc32": Uint         // CRC-32 of the serialized Parquet FileMetaData
     }
 
 .. _scylla-sstable-dump-operation:
