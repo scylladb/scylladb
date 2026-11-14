@@ -21,10 +21,14 @@
 
 #include "enum_set.hh"
 
+#include <algorithm>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <set>
+#include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 namespace db {
@@ -60,6 +64,19 @@ namespace audit {
 extern logging::logger logger;
 
 using audit_table_set = std::set<std::pair<sstring, sstring>>;
+using audit_table_refs = std::vector<std::reference_wrapper<const audit_table_set::value_type>>;
+
+void add_alternator_batch_sink_tables(std::vector<std::pair<audit_sink, audit_table_refs>>& sink_tables,
+        audit_sink sink, const audit_table_set::value_type& table, size_t table_count);
+
+struct alternator_request_memory_copy_counts {
+    // Serialized-request-sized units reserved alongside the measured parsed
+    // request memory. For batches this also covers the later filtering pass.
+    size_t request_processing = 0;
+    // Serialized-request-sized units reserved later, while the audit record
+    // is being written after the parsed request is gone.
+    size_t audit_write = 0;
+};
 
 class audit_exception : public std::exception {
     sstring _what;
@@ -100,6 +117,17 @@ public:
         }
         return *this;
     }
+    audit_info& set_query_string(std::string&& query_string, std::string_view operation) {
+        if (operation.empty()) {
+            _query = sstring(query_string);
+        } else {
+            _query = sstring(sstring::initialized_later{}, operation.size() + 1 + query_string.size());
+            std::ranges::copy(operation, _query.begin());
+            _query[operation.size()] = '|';
+            std::ranges::copy(query_string, _query.begin() + operation.size() + 1);
+        }
+        return *this;
+    }
     const sstring& keyspace() const { return _keyspace; }
     const sstring& table() const { return _table; }
     const sstring& query() const { return _query; }
@@ -126,13 +154,84 @@ using audit_info_ptr = std::unique_ptr<audit_info>;
 // PutItem, Query, Scan, etc.) have a meaningful CL. Schema operations and
 // metadata queries pass std::nullopt.
 class audit_info_alternator final : public audit_info {
+    enum class state {
+        disabled,
+        pending,
+        active,
+        skipped,
+    };
+
     std::optional<db::consistency_level> _cl;
+    state _state = state::active;
+    size_t _serialized_size = 0;
+    bool _serialized_size_known = false;
+    shard_id _request_shard = 0;
+    size_t _audit_only_units = 0;
+    size_t _request_memory = 0;
+    alternator_request_memory_copy_counts _memory_copy_counts;
+    size_t _request_processing_extra = 0;
+    // RapidJSON parsing bound for the filtered batch request. The retained
+    // canonical query and batch metadata are accounted separately.
+    size_t _batch_reparse_memory = 0;
+    size_t _audit_write_extra = 0;
 public:
+    struct disabled_tag {};
+    struct pending_tag {};
+
+    explicit audit_info_alternator(disabled_tag)
+        : audit_info(statement_category::QUERY, "", "", false), _state(state::disabled)
+    {}
+    audit_info_alternator(pending_tag, statement_category cat, shard_id request_shard, size_t audit_only_units,
+            size_t request_memory, alternator_request_memory_copy_counts memory_copy_counts,
+            size_t request_processing_extra, size_t batch_reparse_memory, size_t audit_write_extra)
+        : audit_info(cat, "", "", false)
+        , _state(state::pending)
+        , _request_shard(request_shard)
+        , _audit_only_units(audit_only_units)
+        , _request_memory(request_memory)
+        , _memory_copy_counts(memory_copy_counts)
+        , _request_processing_extra(request_processing_extra)
+        , _batch_reparse_memory(batch_reparse_memory)
+        , _audit_write_extra(audit_write_extra)
+    {}
     audit_info_alternator(statement_category cat, sstring keyspace, sstring table, std::optional<db::consistency_level> cl = std::nullopt)
         : audit_info(cat, std::move(keyspace), std::move(table), false), _cl(cl)
     {}
 
     std::optional<db::consistency_level> get_cl() const { return _cl; }
+    bool is_disabled() const { return _state == state::disabled; }
+    bool is_pending() const { return _state == state::pending; }
+    bool is_active() const { return _state == state::active; }
+    bool serialized_size_known() const { return _serialized_size_known; }
+    size_t serialized_size() const { return _serialized_size; }
+    shard_id request_shard() const { return _request_shard; }
+    size_t request_memory() const { return _request_memory; }
+    alternator_request_memory_copy_counts memory_copy_counts() const { return _memory_copy_counts; }
+    size_t request_processing_extra() const { return _request_processing_extra; }
+    size_t batch_reparse_memory() const { return _batch_reparse_memory; }
+    size_t audit_write_extra() const { return _audit_write_extra; }
+
+    void set_serialized_size(size_t serialized_size, size_t audit_only_units) {
+        _serialized_size = serialized_size;
+        _serialized_size_known = true;
+        _audit_only_units = audit_only_units;
+    }
+
+    size_t mark_skipped() {
+        if (_state != state::pending) {
+            return 0;
+        }
+        _state = state::skipped;
+        return std::exchange(_audit_only_units, 0);
+    }
+    void activate(statement_category cat, sstring keyspace, sstring table, std::optional<db::consistency_level> cl) {
+        _category = cat;
+        _keyspace = std::move(keyspace);
+        _table = std::move(table);
+        _cl = cl;
+        _state = state::active;
+        _audit_only_units = 0;
+    }
 };
 
 class storage_helper;
@@ -223,6 +322,11 @@ public:
     ~audit();
     future<> shutdown();
     bool will_log(statement_category cat, std::string_view keyspace = {}, std::string_view table = {}) const;
+    /// Resolve the effective sinks after the target table and client role are known.
+    bool should_log(statement_category cat, std::string_view keyspace, std::string_view table, const service::client_state& client_state) const;
+    /// Returns the serialized request-sized copy counts for the request
+    /// processing and audit-write phases of an Alternator operation.
+    alternator_request_memory_copy_counts alternator_request_memory_copy_counts_for(bool is_batch) const;
     bool should_log_login(const sstring& username) const;
     future<> log(const audit_info& audit_info, const service::client_state& client_state, std::optional<db::consistency_level> cl, bool error);
     future<> log_login(const sstring& username, socket_address client_ip, bool error) noexcept;

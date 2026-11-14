@@ -926,7 +926,8 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
     catch (api_error& e) {
         co_return std::move(e);
     }
-    maybe_audit(audit_info, audit::statement_category::QUERY, parts.keyspace_name, parts.table_name, "ExportTableToPointInTime", request);
+    maybe_audit(audit_info, client_state, permit,
+            parts.keyspace_name, parts.table_name, "ExportTableToPointInTime", request);
 
     if (!parts.keyspace_name.starts_with(executor::KEYSPACE_NAME_PREFIX)) {
         co_return api_error::table_not_found(
@@ -1135,7 +1136,7 @@ future<executor::request_return_type> executor::describe_export(client_state& cl
     auto export_arn = get_non_empty_string_attribute(request, "ExportArn");
     auto parts = parse_export_arn(export_arn, "ExportArn");
 
-    maybe_audit(audit_info, audit::statement_category::QUERY, parts.keyspace_name, parts.table_name, "DescribeExport", request);
+    maybe_audit(audit_info, client_state, permit, parts.keyspace_name, parts.table_name, "DescribeExport", request);
 
     // The exported table may have been dropped after the export was accepted, and DynamoDB keeps
     // describing such exports. Per-table metrics live on the table object, so they only exist for
@@ -1593,7 +1594,7 @@ future<executor::request_return_type> executor::list_exports(client_state& clien
         }
     }
 
-    maybe_audit(audit_info, audit::statement_category::QUERY,
+    maybe_audit(audit_info, client_state, permit,
                 table_parts ? table_parts->keyspace_name : "", table_parts ? table_parts->table_name : "",
                 "ListExports", request);
 
