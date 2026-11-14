@@ -21,6 +21,7 @@ target_sources(sstables
     parquet/encoding.cc
     parquet/fetcher.cc
     parquet/file_summary.cc
+    parquet/mapping.cc
     parquet/metadata.cc
     parquet/page_decoder.cc
     parquet/reader.cc
