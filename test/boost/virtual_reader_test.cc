@@ -164,6 +164,17 @@ SEASTAR_TEST_CASE(test_query_size_estimates_virtual_table) {
         rs = e.execute_cql(fmt::format("select * from system.size_estimates where keyspace_name = 'ks' "
                                       "and (table_name, range_start) < ('cf2', '{}');", start_token1)).get();
         assert_that(rs).is_rows().with_size(259);
+
+        // Regression check: a scan spanning multiple keyspaces must reuse the cached
+        // local ranges correctly for each keyspace, not just the first one visited.
+        e.execute_cql("create keyspace ks2 with replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 };").discard_result().get();
+        e.execute_cql("create table ks2.cf3(pk text PRIMARY KEY, v int);").discard_result().get();
+
+        rs = e.execute_cql("select * from system.size_estimates where keyspace_name in ('ks', 'ks2');").get();
+        assert_that(rs).is_rows().with_size(512 + 256);
+
+        rs = e.execute_cql("select * from system.size_estimates where keyspace_name = 'ks2';").get();
+        assert_that(rs).is_rows().with_size(256);
     });
 }
 
