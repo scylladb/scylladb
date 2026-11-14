@@ -128,6 +128,7 @@ void write_chunk_header(seastar::simple_memory_output_stream& out, const chunk_h
                 .table = full.table,
                 .first_token = full.first_token,
                 .last_token = full.last_token,
+                .reserved = {},
             });
             return std::span<const char>(rest_buf);
         },

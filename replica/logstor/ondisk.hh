@@ -163,10 +163,17 @@ struct chunk_header_common : fixed_layout {
 //       +---------------------------------------+---------------------------------------+
 //   80  |              first_token              |              last_token               |
 //       +---------------------------------------+---------------------------------------+
+//   96  |                                   reserved                                    |
+//       +-------------------------------------------------------------------------------+
+//  112  |                                   reserved                                    |
+//       +-------------------------------------------------------------------------------+
 struct chunk_header_full_part : fixed_layout {
     table_id table;
     dht::token first_token;
     dht::token last_token;
+    // The writer sets these bytes to zero. A new field of a full segment uses part of these bytes,
+    // so that the header keeps its size.
+    std::array<char, 32> reserved;
 
     bool operator==(const chunk_header_full_part& other) const noexcept = default;
 };
