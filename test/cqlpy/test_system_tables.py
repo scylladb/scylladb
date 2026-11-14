@@ -16,6 +16,7 @@ from .util import new_test_table
 import pytest
 from . import nodetool
 from cassandra.protocol import Unauthorized
+from cassandra.query import SimpleStatement
 
 #############################################################################
 # system.size_estimates.partitions_count
@@ -137,6 +138,30 @@ def test_size_estimates_tablets_clustering_restrictions(cql, test_keyspace):
         assert ranges(f"AND table_name = '{n1}' AND range_start > '{x}'") == r1[11:]
         assert ranges(f"AND table_name = '{n1}' AND range_start >= '{x}' AND range_start < '{y}'") == r1[10:20]
         assert ranges(f"AND table_name = '{n2}' AND range_start <= '{x}'") == [r for r in rows if r[0] == n2 and r[1] <= x]
+
+# Reversed reads return the same rows as a forward read, in reverse order.
+@pytest.mark.parametrize("test_keyspace", ["tablets", "vnodes"], indirect=True)
+def test_size_estimates_reversed(scylla_only, request, cql, test_keyspace):
+    def ranges(where='', order='', limit=''):
+        return [(r.table_name, r.range_start, r.range_end) for r in cql.execute(
+            f"SELECT table_name, range_start, range_end FROM system.size_estimates WHERE keyspace_name = '{test_keyspace}' {where} {order} {limit}")]
+    tablets = " WITH tablets = {'min_tablet_count': 16}" if request.node.callspec.params['test_keyspace'] == 'tablets' else ''
+    desc = 'ORDER BY table_name DESC'
+    with new_test_table(cql, test_keyspace, 'k int PRIMARY KEY', tablets) as t1, \
+         new_test_table(cql, test_keyspace, 'k int PRIMARY KEY', tablets) as t2:
+        n1, n2 = sorted([t1.split('.')[1], t2.split('.')[1]])
+        rows = ranges()
+        r1 = [r for r in rows if r[0] == n1]
+        assert len(r1) > 12 and len(rows) >= 2 * len(r1)
+        assert ranges(order=desc) == rows[::-1]
+        assert ranges(f"AND table_name = '{n1}'", desc) == r1[::-1]
+        assert ranges(order=desc, limit='LIMIT 5') == rows[-5:][::-1]
+        assert ranges(order=desc, limit='PER PARTITION LIMIT 3') == rows[-3:][::-1]
+        assert ranges(f"AND table_name = '{n1}'", desc, 'PER PARTITION LIMIT 3') == r1[-3:][::-1]
+        stmt = SimpleStatement(f"SELECT table_name, range_start, range_end FROM system.size_estimates WHERE keyspace_name = '{test_keyspace}' {desc}", fetch_size=7)
+        assert [(r.table_name, r.range_start, r.range_end) for r in cql.execute(stmt)] == rows[::-1]
+        x = r1[5][1]
+        assert ranges(f"AND table_name = '{n1}' AND range_start > '{x}'", desc) == [r for r in r1 if r[1] > x][::-1]
 
 # Test that deleted partitions should not be counted by the estimated
 # partitions count. Unfortunately, the current state of both Cassandra

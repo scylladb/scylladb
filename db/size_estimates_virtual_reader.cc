@@ -203,9 +203,8 @@ future<> size_estimates_mutation_reader::get_next_partition() {
     auto estimates = co_await this->estimates_for_current_keyspace();
     auto mutations = db::system_keyspace::make_size_estimates_mutation(*_current_partition, std::move(estimates));
     ++_current_partition;
-    utils::chunked_vector<mutation> ms;
-    ms.emplace_back(std::move(mutations));
-    auto reader = make_mutation_reader_from_mutations(_schema, _permit, std::move(ms), _fwd);
+    // Rows already match the slice; the reader only emits them in reverse for reversed reads.
+    auto reader = make_mutation_reader_from_mutations(_schema, _permit, std::move(mutations), _fwd, _slice.is_reversed());
     if (_partition_reader) {
         co_await close_partition_reader();
     }
@@ -264,8 +263,17 @@ future<> size_estimates_mutation_reader::close() noexcept {
 
 future<std::vector<db::system_keyspace::range_estimates>>
 size_estimates_mutation_reader::estimates_for_current_keyspace() const {
+    // Rows are produced in query order; the partition reader emits them reversed for reversed reads.
+    const bool reversed = _slice.is_reversed();
+    // For reversed reads _schema is the reversed query schema; table_schema is always forward.
+    auto table_schema = reversed ? _schema->get_reversed() : _schema;
+    std::optional<query::partition_slice> fwd_slice;
+    if (reversed) {
+        fwd_slice.emplace(query::reverse_slice(*_schema, _slice));
+    }
+    const auto& slice = fwd_slice ? *fwd_slice : _slice;
     // For each specified range, estimate (crudely) mean partition size and partitions count.
-    auto pkey = partition_key::from_single_value(*_schema, utf8_type->decompose(*_current_partition));
+    auto pkey = partition_key::from_single_value(*table_schema, utf8_type->decompose(*_current_partition));
     auto cfs = _db.find_keyspace(*_current_partition).metadata()->cf_meta_data();
     auto cf_names = cfs | std::views::transform([] (auto&& cf) {
         return utf8_type->decompose(cf.first);
@@ -276,11 +284,15 @@ size_estimates_mutation_reader::estimates_for_current_keyspace() const {
     std::vector<db::system_keyspace::range_estimates> estimates;
     // Vnode ranges are only needed once a vnode table is reached.
     std::optional<utils::chunked_vector<token_range>> local_ranges;
-    const auto& row_ranges = _slice.row_ranges(*_schema, pkey);
+    const auto& row_ranges = slice.row_ranges(*table_schema, pkey);
     auto pranges = row_ranges | std::views::transform([] (const auto& r) { return position_range(r); })
             | std::ranges::to<std::vector<position_range>>();
-    position_in_partition::less_compare less(*_schema);
-    // Tables outermost: row ranges are sorted and disjoint, so rows stay in clustering order.
+    position_in_partition::less_compare less(*table_schema);
+    // Rows are produced in query order so the row limit can stop early.
+    if (reversed) {
+        std::ranges::reverse(cf_names);
+        std::ranges::reverse(pranges);
+    }
     for (const auto& cf_name : cf_names) {
         auto cf_key = clustering_key_prefix::from_exploded(std::vector<bytes_view>{cf_name});
         auto cf_name_str = utf8_type->to_string(cf_name);
@@ -339,10 +351,11 @@ size_estimates_mutation_reader::estimates_for_current_keyspace() const {
             };
             auto first = std::ranges::partition_point(*table_ranges, [&] (const token_range& r) { return row_pos_less(r, pr.start()); });
             auto last = std::partition_point(first, table_ranges->end(), [&] (const token_range& r) { return row_pos_less(r, pr.end()); });
-            for (const auto& r : std::ranges::subrange(first, last)) {
+            for (ssize_t i = 0, n = last - first; i < n; ++i) {
+                const auto& r = reversed ? *(last - 1 - i) : *(first + i);
                 co_await coroutine::maybe_yield();
                 estimates.push_back(co_await estimate(_db, s->id(), s, r));
-                if (estimates.size() >= _slice.partition_row_limit()) {
+                if (estimates.size() >= slice.partition_row_limit()) {
                     co_return estimates;
                 }
             }
