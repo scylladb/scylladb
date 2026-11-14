@@ -176,6 +176,8 @@ future<> raft_commitlog_replay_buffer::resolve_group(replica::database& db, cql3
     // pass has to establish starts there.
     group.contiguous_to = persisted.idx;
     group.commit_term = persisted.term;
+    group.applied_to = persisted.idx;
+    group.applied_term = persisted.term;
     group.config = std::move(persisted.config);
     // The persisted configuration sits at the floor, so only a configuration entry
     // above the floor supersedes it.
@@ -185,6 +187,8 @@ future<> raft_commitlog_replay_buffer::resolve_group(replica::database& db, cql3
     // entry's apply returns, so if it is here, the drop it is the receipt for happened,
     // and if it is not, no entry after the truncate was applied.
     group.truncate = persisted.truncate;
+    group.announced = co_await service::strong_consistency::raft_groups_storage::load_schema_changed(
+            qp, group_id, this_shard_id());
     for (const auto& truncation : group.truncations) {
         group.cursors[truncation.segment].push_back(raft_buffer_detail::truncation_cursor{
                 .from = truncation.from, .to = truncation.to, .next = truncation.from});
@@ -193,9 +197,14 @@ future<> raft_commitlog_replay_buffer::resolve_group(replica::database& db, cql3
             group_id, group.commit_idx, group.commit_term, group.truncations.size(), group.truncate.truncate_index);
 }
 
-void raft_commitlog_replay_buffer::note_committed(group_state& group, const raft::log_entry_ptr& entry) {
+void raft_commitlog_replay_buffer::note_applied(group_state& group, const raft::log_entry_ptr& entry) {
     if (entry->idx > group.commit_idx) {
         return;
+    }
+    // A later copy of an applied index changes nothing; see superseded_by().
+    if (entry->idx == group.applied_to + raft::index_t{1}) {
+        group.applied_to = entry->idx;
+        group.applied_term = entry->term;
     }
     // Only the entry at the floor: raft reads snapshot_term as the term at
     // snapshot_idx, for the election check and for log matching at the snapshot
@@ -210,10 +219,10 @@ void raft_commitlog_replay_buffer::note_committed(group_state& group, const raft
     }
 }
 
-future<> raft_commitlog_replay_buffer::apply_committed(replica::database& db, db::system_keyspace& sys_ks,
-        raft::group_id group_id, group_state& group, const raft::log_entry_ptr& entry) {
+future<bool> raft_commitlog_replay_buffer::apply_committed(replica::database& db, raft::group_id group_id,
+        group_state& group, const raft::log_entry_ptr& entry) {
     if (!std::holds_alternative<raft::command>(entry->data)) {
-        co_return;
+        co_return true;
     }
     auto cmd = sc::detail::deserialize_raft_command(entry);
     if (auto* marker = std::get_if<sc::resize_marker>(&cmd.change)) {
@@ -221,18 +230,60 @@ future<> raft_commitlog_replay_buffer::apply_committed(replica::database& db, db
         logger.debug("group {}: replaying the {} marker", group_id, marker->kind);
         auto m = sc::make_resize_marker_mutation(group_id, this_shard_id(), *marker);
         co_await db.apply_in_memory(m, m.schema()->table(), db::rp_handle(), db::no_timeout);
-        co_return;
+        co_return true;
+    }
+    if (auto* changed = std::get_if<sc::schema_changed>(&cmd.change)) {
+        // Not data, so the recorded truncate drops nothing of it: the writes above the
+        // truncate may be announced by a schema_changed below it.
+        if (group.announced && (entry->idx <= group.announced->first
+                || group.announced->second.version == changed->version)) {
+            // Below the row's announcement, from a segment that outlived the one holding
+            // the newer one, or the version in effect announced again by a new term: the
+            // index stays, as the state machine keeps it, so no unflushed write falls below it.
+            co_return true;
+        }
+        logger.debug("group {}: replaying the switch to schema version {}", group_id, changed->version);
+        // The writes replayed under the announcement being replaced sit in a memtable;
+        // finish_replay() flushes them before the row names this index.
+        group.announcement_replaced = group.announced.has_value();
+        group.announced.emplace(entry->idx, std::move(*changed));
+        co_return true;
     }
     if (entry->idx <= group.truncate.truncate_index) {
         // Dropped by the recorded truncate. Applying it would bring the data back.
         ++group.dropped_by_truncate;
-        co_return;
+        co_return true;
     }
     if (auto* write = std::get_if<sc::write_mutation>(&cmd.change)) {
-        if (!_schemas) {
-            _schemas.emplace(db, sys_ks);
+        if (!group.announced) {
+            on_internal_error(logger, fmt::format("group {}: the write at index {} is not preceded by a "
+                    "schema_changed, and the group's row holds none", group_id, entry->idx));
         }
-        auto schema = co_await _schemas->resolve_and_upgrade(write->mutation);
+        const auto& [announced_idx, announced] = *group.announced;
+        if (entry->idx < announced_idx) {
+            // Flushed before the row named the announcement at announced_idx, and possibly
+            // announced under a version whose schema_changed went away with its segment.
+            logger.debug("group {}: the write at index {} is below the announcement at {}, already flushed",
+                    group_id, entry->idx, announced_idx);
+            co_return true;
+        }
+        if (!_schemas) {
+            _schemas.emplace(db);
+        }
+        auto schema = co_await _schemas->resolve_and_upgrade(group.tablet.table, announced, write->mutation);
+        if (!schema) {
+            // Every index below was applied in order, so the floor can stop at the one
+            // before, with its term; the announcement at or below it goes to the row. Over
+            // a gap applied_to is lower, and finish_replay() refuses the boot for the gap.
+            logger.info("group {}: the table has no schema version {} and the mapping of the announcement at {} "
+                    "names a column it does not have as such, which only a group0 barrier can resolve. Leaving "
+                    "the write at index {} and the entries above it to the state machine",
+                    group_id, announced.version, announced_idx, entry->idx);
+            group.unresolved = entry->idx;
+            group.commit_idx = group.applied_to;
+            group.commit_term = group.applied_term;
+            co_return false;
+        }
         co_await db.apply_in_memory(write->mutation, std::move(schema), db::rp_handle(), db::no_timeout,
                 db::noop_large_data_guardrail::instance());
     } else {
@@ -242,15 +293,19 @@ future<> raft_commitlog_replay_buffer::apply_committed(replica::database& db, db
         co_await sc::apply_truncate_command(db, group.tablet, group_id, entry->idx,
                 std::get<sc::truncate_command>(cmd.change), group.truncate);
     }
+    co_return true;
 }
 
 future<> raft_commitlog_replay_buffer::drain_committed(replica::database& db, db::system_keyspace& sys_ks,
         raft::group_id group_id, group_state& group) {
     while (!group.buf.empty() && group.buf.front().entry->idx <= group.commit_idx) {
-        auto entry = std::move(group.buf.front().entry);
+        auto entry = group.buf.front().entry;
+        if (!co_await apply_committed(db, group_id, group, entry)) {
+            // Left buffered, as the head of the tail.
+            co_return;
+        }
+        note_applied(group, entry);
         group.buf.pop_front();
-        note_committed(group, entry);
-        co_await apply_committed(db, sys_ks, group_id, group, entry);
         ++group.applied;
         co_await seastar::coroutine::maybe_yield();
     }
@@ -268,6 +323,9 @@ future<> raft_commitlog_replay_buffer::add_batch(replica::database& db, cql3::qu
     }
     _total_entries += entries.size();
     group.commit_idx = std::max(group.commit_idx, commit_idx);
+    if (group.unresolved) {
+        group.commit_idx = std::min(group.commit_idx, *group.unresolved - raft::index_t{1});
+    }
     // Raft never replaces a committed entry, so every index at or below this
     // header's commit_idx had its current copy written before the batch and
     // already read by replay. The entries the buffer holds there are final.
@@ -353,10 +411,9 @@ future<> raft_commitlog_replay_buffer::add_batch(replica::database& db, cql3::qu
     }
 
     for (auto& entry : remaining_entries) {
-        if (entry->idx <= group.commit_idx) {
-            // A copy of a committed entry is identical, so re-applying it is a no-op by timestamp.
-            note_committed(group, entry);
-            co_await apply_committed(db, sys_ks, group_id, group, entry);
+        // A copy of a committed entry is identical, so re-applying it is a no-op by timestamp.
+        if (entry->idx <= group.commit_idx && co_await apply_committed(db, group_id, group, entry)) {
+            note_applied(group, entry);
             ++group.applied;
         } else {
             group.buf.push_back(raft_buffer_detail::buffered_entry{.entry = entry, .segment = segment});
@@ -470,10 +527,17 @@ future<> raft_commitlog_replay_buffer::finish_replay(replica::database& db, cql3
         if (!group.known) {
             continue;
         }
+        if (group.announcement_replaced) {
+            // Replay skips the writes below the row's announcement as flushed, so they
+            // must be, before the row names it: the memtables are flushed only after
+            // this returns, and a crash in between would lose them on the next replay.
+            co_await db.find_column_family(group.tablet.table).flush_tablet(group.tablet.tablet);
+        }
         // The recovered floor is a real descriptor: every index at or below
         // commit_idx is committed, and commit_term is the term of the entry there.
         co_await service::strong_consistency::raft_groups_storage::store_descriptor(
-                qp, group_id, this_shard_id(), group.commit_idx, group.commit_term, group.config, group.truncations);
+                qp, group_id, this_shard_id(), group.commit_idx, group.commit_term, group.config, group.truncations,
+                group.announced);
 
         auto& group_data = _per_group_data[group_id];
         if (!group.buf.empty()) {

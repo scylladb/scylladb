@@ -729,6 +729,41 @@ auto coordinator::mutate(schema_ptr schema,
 
         ts_with_term = &get<raft_server::timestamp_with_term>(disposition);
 
+        if (op->raft_server.needs_schema_announcement(schema->version())) {
+            // The first write of this schema version in the leader's term: announce the
+            // version, with its column mapping, right ahead of it. Not waited for on its
+            // own: raft appends the two in call order, so the write's commit below implies
+            // this one's. No abort source either: once the term is marked as announced
+            // below, only a term change may keep the entry out of the log, or the writes
+            // queued behind it would land under no announcement.
+            logger.debug("mutate(): announcing schema version {} of table {}.{}, {}",
+                schema->version(), schema->ks_name(), schema->cf_name(), state_fmt);
+            raft::command announce_cmd;
+            ser::serialize(announce_cmd, raft_command{.change = schema_changed{
+                .version = schema->version(),
+                .mapping = schema->get_column_mapping(),
+            }});
+            // Checked here, not left to add_entry(): the announcement's failure would not
+            // stop the write below, which would then commit under no announcement.
+            if (const auto limit = op->raft_server.server().max_command_size(); announce_cmd.size() > limit) {
+                logger.debug("mutate(): the column mapping of table {}.{} is {} bytes, over the limit of {}",
+                    schema->ks_name(), schema->cf_name(), announce_cmd.size(), limit);
+                count_error([] (auto& s) { ++s.write_errors_other; });
+                co_await coroutine::return_exception_ptr(std::make_exception_ptr(exceptions::invalid_request_exception(fmt::format(
+                    "The schema of table {}.{} has too many columns for a strongly consistent write: its column "
+                    "mapping is {} bytes, over the raft command limit of {} bytes", schema->ks_name(), schema->cf_name(),
+                    announce_cmd.size(), limit))));
+            }
+            // No suspension since begin_mutate(): the entry lands in this term.
+            auto announced = op->raft_server.server().add_entry(std::move(announce_cmd),
+                raft::wait_type::committed, nullptr);
+            op->raft_server.note_schema_announced(schema->version());
+            // A failure here (the term changed, the server stopped) fails the write too.
+            (void)std::move(announced).handle_exception([ks = schema->ks_name(), cf = schema->cf_name()] (std::exception_ptr ex) {
+                logger.debug("mutate(): announcing the schema version of table {}.{} failed: {}", ks, cf, ex);
+            });
+        }
+
         // Nothing between begin_mutate() above and add_entry() below may
         // suspend this coroutine, not even a co_await on a ready future
         // (Seastar suspends on those too when the task quota is exhausted).

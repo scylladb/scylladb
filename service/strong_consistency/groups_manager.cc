@@ -404,6 +404,9 @@ void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_
         logger.debug("schedule_raft_group_deletion(): group id {}: gate closed", id);
 
         co_await std::move(state.leader_info_updater);
+        // A restarted group may elect the same term, which would pass off the old
+        // server's leader_info, and the schema it announced, as the new one's.
+        state.leader_info = std::nullopt;
 
         if (state.metrics) {
             state.metrics->remove_server(*state.server);

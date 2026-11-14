@@ -22,6 +22,7 @@ from test.pylib.driver_utils import safe_shutting_down
 from test.pylib.rest_client import read_barrier, ScyllaMetrics, ScyllaMetricsLine
 
 import asyncio
+import json
 import pytest
 import logging
 import time
@@ -717,6 +718,116 @@ async def test_old_schema_when_apply_write(manager: ScyllaClusterManager):
         assert row.pk == 10
         assert row.c == 20
         assert row.new_col is None
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_write_applied_with_the_announced_column_mapping(manager: ScyllaClusterManager):
+    """
+    A replica upgrades a write of an older schema version with the column mapping the
+    leader announced in the group's log, not with system.scylla_table_schema_history,
+    whose rows expire (SCYLLADB-6021). Before the follower applies the write, the
+    history row of the old version is deleted on it, as if it had expired, and the
+    version is hidden from its schema registry.
+    """
+    servers = await manager.servers_add(2, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
+    # The follower must not lead either group0 or the tablet's group: it has to receive the
+    # write from the leader, and apply it after the schema change.
+    config = DEFAULT_CONFIG | {'error_injections_at_startup': ['avoid_being_raft_leader']}
+    servers += [await manager.server_add(config=config, cmdline=DEFAULT_CMDLINE, property_file={'dc':'my_dc', 'rack': 'rack3'})]
+    (cql, hosts) = await manager.get_ready_cql(servers)
+    host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
+    follower, follower_host = servers[2], hosts[2]
+
+    def host_by_host_id(host_id):
+        for hid, host in zip(host_ids, hosts):
+            if hid == host_id:
+                return host
+        raise RuntimeError(f"Can't find host for host_id {host_id}")
+
+    wait_before_apply = "strong_consistency_state_machine_wait_before_apply"
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+
+        group_id = await get_table_raft_group_id(manager, ks, 'test')
+        leader_host_id = await wait_for_leader(manager, servers[0], group_id)
+        assert leader_host_id != host_ids[2]
+        leader_host = host_by_host_id(leader_host_id)
+
+        table_id = await manager.get_table_id(ks, 'test')
+        old_version = (await cql.run_async(f"SELECT version FROM system_schema.scylla_tables WHERE keyspace_name = '{ks}' AND table_name = 'test'"))[0].version
+
+        # The first write announces the version. Park the follower's apply only once it
+        # has applied the announcement, so that the parked apply is a write's.
+        log = await manager.server_open_log(follower.server_id)
+        mark = await log.mark()
+        await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES (1, 2)", host=leader_host)
+        await log.wait_for(rf"apply\(\): group {group_id} switches to schema version {old_version}", from_mark=mark)
+
+        await manager.api.enable_injection(follower.ip_addr, wait_before_apply, one_shot=False)
+        try:
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES (10, 20)", host=leader_host)
+            await manager.api.wait_for_injection_enter(follower.ip_addr, wait_before_apply)
+
+            await cql.run_async(f"ALTER TABLE {ks}.test ADD new_col int;", host=leader_host)
+            await cql.run_async(f"DELETE FROM system.scylla_table_schema_history WHERE cf_id = {table_id} AND schema_version = {old_version}", host=follower_host)
+            await manager.api.enable_injection(follower.ip_addr, "schema_registry_ignore_version", one_shot=False, parameters={'value': str(old_version)})
+        finally:
+            # Released on failure too, or the parked apply holds the follower until the
+            # injection's wait times out.
+            await manager.api.message_injection(follower.ip_addr, wait_before_apply)
+            await manager.api.disable_injection(follower.ip_addr, wait_before_apply)
+
+        # The follower's own copy of the row: MUTATION_FRAGMENTS() dumps the coordinator's
+        # replica, and a linearizable read, which would wait for the apply, goes to the leader.
+        dump = SimpleStatement(f"SELECT mutation_fragment_kind, value FROM MUTATION_FRAGMENTS({ks}.test) WHERE pk = 10",
+                               consistency_level=ConsistencyLevel.ONE)
+        async def follower_row():
+            rows = [r for r in await cql.run_async(dump, host=follower_host) if r.mutation_fragment_kind == 'clustering row']
+            return rows[0] if rows else None
+        row = await wait_for(follower_row, time.time() + 60)
+        columns = json.loads(row.value)
+        assert columns['c'] == '20'
+        assert 'new_col' not in columns
+
+async def test_new_replica_applies_writes_of_a_schema_it_never_had(manager: ScyllaClusterManager):
+    """
+    A node that joins the cluster after an ALTER TABLE has never seen the schema version the
+    table's writes were built with, so nothing local can map their columns. The schema_changed
+    in the group's log is what lets it apply them when the tablet's replica moves there
+    (SCYLLADB-6021).
+    """
+    servers = await manager.servers_add(3, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE, property_file=[
+        {'dc': 'dc1', 'rack': 'rack1'},
+        {'dc': 'dc1', 'rack': 'rack2'},
+        {'dc': 'dc1', 'rack': 'rack3'},
+    ])
+    cql, hosts = await manager.get_ready_cql(servers)
+    await manager.disable_tablet_balancing()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        group_id = await get_table_raft_group_id(manager, ks, 'test')
+        await wait_for_leader(manager, servers[0], group_id)
+        pks = list(range(10))
+        for pk in pks:
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({pk}, {pk + 1})")
+        await cql.run_async(f"ALTER TABLE {ks}.test WITH comment = 'x'")
+
+        new_server = await manager.server_add(config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE,
+                                              property_file={'dc': 'dc1', 'rack': 'rack1'})
+        new_host_id = await manager.get_host_id(new_server.server_id)
+        src_host_id = await manager.get_host_id(servers[0].server_id)
+        [tablet] = await get_all_tablet_replicas(manager, servers[0], ks, 'test')
+        [src_shard] = [shard for host_id, shard in tablet.replicas if host_id == src_host_id]
+        await manager.api.move_tablet(servers[0].ip_addr, ks, 'test', src_host_id, src_shard, new_host_id, 0, tablet.last_token)
+        await manager.api.quiesce_topology(servers[0].ip_addr)
+
+        # The new replica's own copy: it has applied the whole log before the migration
+        # finished, and a linearizable read would go to the leader instead.
+        [new_host] = (await manager.get_ready_cql([new_server]))[1]
+        dump = SimpleStatement(f"SELECT pk, value FROM MUTATION_FRAGMENTS({ks}.test)", consistency_level=ConsistencyLevel.ONE)
+        rows = {r.pk: json.loads(r.value) for r in await cql.run_async(dump, host=new_host) if r.value}
+        assert {pk: {'c': str(pk + 1)} for pk in pks} == rows
 
 async def test_forward_cql_prepared_with_bound_values(manager: ScyllaClusterManager):
     """
@@ -1531,6 +1642,60 @@ async def test_abort_state_machine_apply_after_dropping_table(manager: ScyllaClu
             # A shutdown waits for the group0 barrier.
             await manager.api.message_injection(target_server.ip_addr, block_barrier_injection)
             await manager.api.disable_injection(target_server.ip_addr, block_barrier_injection)
+
+
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+async def test_state_machine_apply_retries_the_group0_barrier_on_timeout(manager: ScyllaClusterManager):
+    """
+    The group0 barrier apply() runs for a schema version it does not have carries the
+    group0 operation timeout. A timeout must not fail the apply, which would end the
+    Raft group: the barrier is retried until it goes through.
+
+    Same setup as test_abort_state_machine_apply_during_group_removal, with the
+    target's group0 timeout shortened below a one-shot delay in the read barrier.
+    """
+    cmdline = DEFAULT_CMDLINE + ["--logger-log-level", "sc_state_machine=debug"]
+    leader_server = await manager.server_add(config=DEFAULT_CONFIG, cmdline=cmdline,
+                                             property_file={"dc": "dc1", "rack": "rack1"})
+    config = DEFAULT_CONFIG | {"error_injections_at_startup": ["avoid_being_raft_leader"]}
+    target_server = await manager.server_add(config=config, cmdline=cmdline, property_file={"dc": "dc1", "rack": "rack2"})
+    cql, [leader_host, _] = await manager.get_ready_cql([leader_server, target_server])
+    target_host_id = await manager.get_host_id(target_server.server_id)
+
+    # After the join, which runs group0 operations of its own. A SIGHUP only asks for the
+    # re-read, so wait for it.
+    log = await manager.server_open_log(target_server.server_id)
+    mark = await log.mark()
+    await manager.server_update_config(target_server.server_id, "group0_raft_op_timeout_in_ms", 500)
+    await log.wait_for("completed re-reading configuration file", from_mark=mark, timeout=60)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        table_name = "my_table"
+        table = f"{ks}.{table_name}"
+        await cql.run_async(f"CREATE TABLE {table} (pk int PRIMARY KEY, v int)")
+
+        group_id = await get_table_raft_group_id(manager, ks, table_name)
+        leader_host_id = await wait_for_leader(manager, leader_server, group_id)
+        assert leader_host_id != target_host_id
+
+        # The first barrier sleeps for a second inside the timed region and times out;
+        # the retry is not delayed and goes through.
+        await gather_safely(
+            manager.api.enable_injection(target_server.ip_addr, "sc_state_machine_return_empty_schema", one_shot=True),
+            manager.api.enable_injection(target_server.ip_addr, "sleep_in_read_barrier", one_shot=True))
+        try:
+            mark = await log.mark()
+            await cql.run_async(f"INSERT INTO {table} (pk, v) VALUES (0, 13)", host=leader_host)
+            await log.wait_for(rf"apply\(\): the group0 barrier for tablet \S+, group_id={group_id} timed out, retrying",
+                               from_mark=mark, timeout=60)
+            await log.wait_for(r"has schema version \S+ after the group0 read barrier", from_mark=mark, timeout=60)
+        finally:
+            await gather_safely(
+                manager.api.disable_injection(target_server.ip_addr, "sc_state_machine_return_empty_schema"),
+                manager.api.disable_injection(target_server.ip_addr, "sleep_in_read_barrier"))
+
+        metrics = await manager.metrics.query(target_server.ip_addr)
+        assert metrics.get(f"{SC_APPLY_METRICS_PREFIX}schema_barrier_waits", {"ks": ks, "cf": table_name}) == 1
 
 
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
@@ -4524,3 +4689,27 @@ async def test_truncate_coordinator_crash_dedup(manager: ScyllaClusterManager):
         rows = await select_rows(cql, f"SELECT c FROM {ks}.test WHERE pk = 9999")
         assert [r.c for r in rows] == [9999]
 
+
+@pytest.mark.asyncio
+async def test_schema_too_large_to_announce_fails_the_write(manager: ScyllaClusterManager):
+    """
+    The leader announces a schema version by appending its column mapping to the group's
+    log, and raft refuses a command over its size limit. The announcement is checked before
+    the write is appended, so the write fails with the reason instead of committing under no
+    announcement, which would abort every replica applying it (SCYLLADB-6021).
+    """
+    [server] = await manager.servers_add(1, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE)
+    cql, _ = await manager.get_ready_cql([server])
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        # Each column adds its name and the name of its type to the mapping; 3000 of them
+        # serialize well over the 100 KiB raft_max_command_size.
+        columns = ", ".join(f"c{i} int" for i in range(3000))
+        async with new_test_table(manager, ks, f"pk int PRIMARY KEY, {columns}") as table:
+            with pytest.raises(InvalidRequest, match="too many columns for a strongly consistent write"):
+                await cql.run_async(f"INSERT INTO {table} (pk, c0) VALUES (0, 0)")
+
+        # The node is still serving: nothing was appended, so no replica aborted on it.
+        async with new_test_table(manager, ks, "pk int PRIMARY KEY, v int") as table:
+            await cql.run_async(f"INSERT INTO {table} (pk, v) VALUES (0, 0)")
+            assert [r.v for r in await cql.run_async(f"SELECT v FROM {table} WHERE pk = 0")] == [0]

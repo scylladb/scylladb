@@ -7,6 +7,7 @@
  */
 
 #include "idl/frozen_mutation.idl.hh"
+#include "idl/mutation.idl.hh"
 #include "idl/uuid.idl.hh"
 #include "mutation/timestamp.hh"
 
@@ -32,8 +33,14 @@ struct truncate_command {
     utils::UUID request_id;
 };
 
+struct schema_changed {
+    table_schema_version version;
+    column_mapping mapping;
+};
+
 struct raft_command {
-    std::variant<service::strong_consistency::resize_marker, service::strong_consistency::write_mutation, service::strong_consistency::truncate_command> change;
+    std::variant<service::strong_consistency::resize_marker, service::strong_consistency::write_mutation,
+            service::strong_consistency::truncate_command, service::strong_consistency::schema_changed> change;
 };
 
 } // namespace strong_consistency
