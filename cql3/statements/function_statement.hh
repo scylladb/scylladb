@@ -53,6 +53,9 @@ protected:
     // "what" is "Function" or "Aggregate", for the error message.
     void validate_name(std::string_view what) const;
 
+    // Throws if the keyspace of the function being created doesn't exist.
+    void validate_keyspace_exists(query_processor& qp) const;
+
 public:
     virtual future<> check_access(query_processor& qp, const service::client_state& state) const override;
 };
