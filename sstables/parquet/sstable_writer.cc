@@ -207,7 +207,8 @@ public:
         _sealer.set_owner_shard(shard);
         _cfg.monitor->on_write_started(_progress);
         _mapping.emplace(s, _header, *_data_writer, make_writer_config(_cfg, s.get_compressor_params()),
-                _sst.manager().register_parquet_writer(_cfg.parquet_page_set_size, _cfg.parquet_row_group_size));
+                _sst.manager().register_parquet_writer(_cfg.parquet_page_set_size, _cfg.parquet_row_group_size),
+                _cfg.parquet_random_row_defaults_seed ? make_random_row_defaults_policy(*_cfg.parquet_random_row_defaults_seed) : nullptr);
     }
 
     ~sstable_writer_impl() {
