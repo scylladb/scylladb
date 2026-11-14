@@ -17,4 +17,5 @@ struct cached_file_stats {
     uint64_t page_populations = 0;
     uint64_t cached_bytes = 0;
     uint64_t bytes_in_std = 0; // memory used by active temporary_buffer:s
+    uint64_t disk_read_bytes = 0; // bytes read from disk on page misses (incl. read-ahead)
 };

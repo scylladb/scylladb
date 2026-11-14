@@ -103,7 +103,9 @@ public:
             : _ref(std::move(ref))
         {
             if (_ref->is_linked()) {
-                _ref->_parent->_lru.remove(*_ref);
+                // Accessed while resident: counts as a touch, the release
+                // path re-adds into the protected segment.
+                _ref->_parent->_lru.unlink_touched(*_ref);
             }
         }
         ~entry_ptr() { *this = nullptr; }
@@ -112,7 +114,7 @@ public:
         entry_ptr& operator=(std::nullptr_t) noexcept {
             if (_ref) {
                 if (_ref.unique() && _ref->ready()) {
-                    _ref->_parent->_lru.add(*_ref);
+                    _ref->_parent->_lru.add_index(*_ref);
                 }
                 _ref = nullptr;
             }

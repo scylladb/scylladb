@@ -62,7 +62,7 @@ private:
                 if (--cp->_use_count == 0) {
                     cp->parent->_metrics.bytes_in_std -= cp->_buf.size();
                     cp->_buf = {};
-                    cp->parent->_lru.add(*cp);
+                    cp->parent->_lru.add_index(*cp);
                 }
             }
         };
@@ -74,7 +74,9 @@ private:
         ptr_type share() noexcept {
             if (_use_count++ == 0) {
                 if (is_linked()) {
-                    parent->_lru.remove(*this);
+                    // Accessed while resident: counts as a touch, the release
+                    // path re-adds into the protected segment.
+                    parent->_lru.unlink_touched(*this);
                 }
             }
             return std::unique_ptr<cached_page, cached_page_del>(this);
@@ -206,6 +208,10 @@ private:
 
         return _file.dma_read_exactly<char>(idx * page_size, size)
             .then([this, ag = std::move(await_guard), units = std::move(units), idx] (temporary_buffer<char>&& buf) mutable {
+                // Count bytes actually read once the read has completed, using the
+                // returned buffer size -- a canceled or short read must not be
+                // reported as a full disk read.
+                _metrics.disk_read_bytes += buf.size();
                 cached_page::ptr_type first_page;
                 while (buf.size()) {
                     auto this_size = std::min(page_size, buf.size());
