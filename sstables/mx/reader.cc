@@ -395,9 +395,9 @@ public:
         }
         check_schema_mismatch(column_info, column_def);
         if (column_def.is_multi_cell()) {
-            auto& value_type = visit(*column_def.type, make_visitor(
-                [] (const collection_type_impl& ctype) -> const abstract_type& { return *ctype.value_comparator(); },
-                [&] (const user_type_impl& utype) -> const abstract_type& {
+            visit(*column_def.type, make_visitor(
+                [] (const collection_type_impl&) { },
+                [&] (const user_type_impl& utype) {
                     if (cell_path.size() != sizeof(int16_t)) {
                         throw_malformed_sstable_exception(format("wrong size of field index while reading UDT column: expected {}, got {}",
                                     sizeof(int16_t), cell_path.size()));
@@ -408,15 +408,13 @@ public:
                         throw_malformed_sstable_exception(format("field index too big while reading UDT column: type has {} fields, got {}",
                                     utype.size(), field_idx));
                     }
-
-                    return *utype.type(field_idx);
                 },
-                [] (const abstract_type& o) -> const abstract_type& {
+                [] (const abstract_type& o) {
                     throw_malformed_sstable_exception(format("attempted to read multi-cell column, but expected type was {}", o.name()));
                 }
             ));
             auto ac = is_deleted ? atomic_cell::make_dead(timestamp, local_deletion_time)
-                                 : make_atomic_cell(value_type,
+                                 : make_atomic_cell(*column_def.type,
                                                     timestamp,
                                                     value,
                                                     ttl,
