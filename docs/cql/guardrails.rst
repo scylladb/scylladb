@@ -257,6 +257,10 @@ protection from large data shapes is worth the additional write-path overhead.
 Hard-limit violations reject the write. Hard-limit failures are
 returned to the client as an ``InvalidRequestException``.
 
+A hint for a write that a replica rejects is discarded instead of being
+retried. If other replicas accepted the write, repair copies it to the
+replica that rejected it.
+
 Soft-limit violations are logged by the ``large_data`` logger. If
 ``large_data_cql_warnings`` is enabled, ScyllaDB also returns a CQL protocol
 warning to the client. The warning identifies the violated category, for
