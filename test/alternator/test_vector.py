@@ -2960,7 +2960,6 @@ def test_vector_attribute_name_looks_like_cql_target(dynamodb):
 # This test (the "before") doesn't need vector search and can also run on
 # DynamoDB. It reproduces issue #8070 - where Alternator validates number
 # values, but forget to validate numbers when they are inside a list.
-@pytest.mark.xfail(reason='issue #8070 - Alternator did not validate "N" values inside lists')
 def test_putitem_vector_bad_number_string_before(test_table_s):
     p = random_string()
     # boto3 normally validates number strings before sending them to the

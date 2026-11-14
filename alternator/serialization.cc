@@ -140,6 +140,22 @@ internal::magnitude_and_precision internal::get_magnitude_and_precision(std::str
     return magnitude_and_precision {magnitude, precision};
 }
 
+// Check that a number's magnitude and precision are in the allowed ranges
+// (see issue #6794). Assumes that the number has a valid numeric format.
+// Throws an api_error::validation if the validation failed.
+static void validate_magnitude_and_precision(std::string_view s) {
+    auto [magnitude, precision] = internal::get_magnitude_and_precision(s);
+    if (magnitude > 125) {
+        throw api_error::validation(fmt::format("Number overflow: {}. Attempting to store a number with magnitude larger than supported range.", s));
+    }
+    if (magnitude < -130) {
+        throw api_error::validation(fmt::format("Number underflow: {}. Attempting to store a number with magnitude lower than supported range.", s));
+    }
+    if (precision > 38) {
+        throw api_error::validation(fmt::format("Number too precise: {}. Attempting to store a number with more significant digits than supported.", s));
+    }
+}
+
 // Parse a number read from user input, validating that it has a valid
 // numeric format and also in the allowed magnitude and precision ranges
 // (see issue #6794). Throws an api_error::validation if the validation
@@ -147,21 +163,68 @@ internal::magnitude_and_precision internal::get_magnitude_and_precision(std::str
 static big_decimal parse_and_validate_number(std::string_view s) {
     try {
         big_decimal ret(s);
-        auto [magnitude, precision] = internal::get_magnitude_and_precision(s);
-        if (magnitude > 125) {
-            throw api_error::validation(fmt::format("Number overflow: {}. Attempting to store a number with magnitude larger than supported range.", s));
-        }
-        if (magnitude < -130) {
-            throw api_error::validation(fmt::format("Number underflow: {}. Attempting to store a number with magnitude lower than supported range.", s));
-        }
-        if (precision > 38) {
-            throw api_error::validation(fmt::format("Number too precise: {}. Attempting to store a number with more significant digits than supported.", s));
-        }
+        validate_magnitude_and_precision(s);
         return ret;
     } catch (const marshal_exception& e) {
         throw api_error::validation(fmt::format("The parameter cannot be converted to a numeric value: {}", s));
     }
 
+}
+
+// Check if the string is a number in a simple and common format - an
+// optional sign, digits, optionally a dot followed by digits, and optionally
+// an exponent of up to 4 digits (e.g., -12.345e-6). A number in this format
+// is always accepted by big_decimal's parser.
+static bool is_simple_number(std::string_view s) {
+    auto is_digit = [] (char c) { return c >= '0' && c <= '9'; };
+    size_t i = 0;
+    auto skip_digits = [&] {
+        size_t start = i;
+        while (i < s.size() && is_digit(s[i])) {
+            i++;
+        }
+        return i - start;
+    };
+    if (i < s.size() && (s[i] == '-' || s[i] == '+')) {
+        i++;
+    }
+    if (skip_digits() == 0) {
+        return false;
+    }
+    if (i < s.size() && s[i] == '.') {
+        i++;
+        if (skip_digits() == 0) {
+            return false;
+        }
+    }
+    if (i < s.size() && (s[i] == 'e' || s[i] == 'E')) {
+        i++;
+        if (i < s.size() && (s[i] == '-' || s[i] == '+')) {
+            i++;
+        }
+        size_t exponent_digits = skip_digits();
+        if (exponent_digits == 0 || exponent_digits > 4) {
+            return false;
+        }
+    }
+    return i == s.size();
+}
+
+// validate_number() accepts and rejects exactly the same numbers as
+// parse_and_validate_number(), but is much faster, because it usually
+// avoids the cost of parsing the number into a big_decimal. This matters
+// because validate_value() needs to validate every number nested in a
+// list or map, and a vector is often written as a list of a thousand or
+// more numbers. For a number in a simple and common format, we know that
+// big_decimal's parser would accept its syntax, so we only need to check
+// its magnitude and precision. Any other number - which may be invalid, or
+// valid in some unusual format - falls back to the full parsing.
+void validate_number(std::string_view s) {
+    if (is_simple_number(s)) {
+        validate_magnitude_and_precision(s);
+    } else {
+        parse_and_validate_number(s);
+    }
 }
 
 struct from_json_visitor {
