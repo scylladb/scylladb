@@ -2417,12 +2417,6 @@ void sstable::write_component(component_type type) {
 }
 
 
-// Reading and writing sstables with a Parquet Data file is not implemented yet.
-[[noreturn]] static void throw_parquet_not_supported(const sstable& sst, std::string_view operation) {
-    throw std::runtime_error(seastar::format("Cannot {} sstable {}: sstables of format {} (version {}) are not supported yet",
-            operation, sst.toc_filename(), sst.get_format(), sst.get_version()));
-}
-
 future<> sstable::load_metadata(sstable_open_config cfg) noexcept {
     co_await read_toc(cfg);
     // read scylla-meta after toc. Might need it to parse
@@ -2944,9 +2938,10 @@ future<uint64_t> sstable::validate(reader_permit permit, abort_source& abort,
     }
     co_await utils::get_local_injector().inject("sstable_validate/pause", utils::wait_for_message(std::chrono::seconds(5)));
 
-    if (has_parquet_data_file(_version)) {
-        throw_parquet_not_supported(*this, "validate");
-    }
+    // A Parquet Data file goes through the full scan below, which validates
+    // the order of the fragments. The cross-check with the trie index and
+    // the structural checks (PLAN.md, "Scrub and validation") are left
+    // for the operations phase.
     if (has_mx_data_file(_version)) {
         co_return co_await mx::validate(shared_from_this(), std::move(permit), abort, std::move(error_handler), monitor);
     }
@@ -3338,7 +3333,8 @@ sstable::make_reader(
     auto index_reader = make_index_reader(permit, trace_state, index_caching, range.is_singular());
 
     if (has_parquet_data_file(_version)) {
-        throw_parquet_not_supported(*this, "read");
+        return parquet::make_reader(shared_from_this(), std::move(query_schema), std::move(permit), range, slice,
+                std::move(trace_state), fwd, fwd_mr, mon, integrity, std::move(index_reader), single_partition_read_murmur_hash);
     }
     if (has_mx_data_file(_version) && (!reversed || range.is_singular())) {
         return mx::make_reader(
@@ -3396,7 +3392,7 @@ sstable::make_full_scan_reader(
         read_monitor& monitor,
         integrity_check integrity) {
     if (has_parquet_data_file(_version)) {
-        throw_parquet_not_supported(*this, "read");
+        return parquet::make_full_scan_reader(shared_from_this(), std::move(schema), std::move(permit), std::move(trace_state), monitor, integrity);
     }
     if (has_mx_data_file(_version)) {
         return mx::make_full_scan_reader(shared_from_this(), std::move(schema), std::move(permit), std::move(trace_state), monitor, integrity);

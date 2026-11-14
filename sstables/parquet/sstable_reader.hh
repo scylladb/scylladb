@@ -41,6 +41,7 @@
 #include "sstables/parquet/reader_cache.hh"
 #include "sstables/progress_monitor.hh"
 #include "sstables/shared_sstable.hh"
+#include "sstables/types_fwd.hh"
 #include "tracing/trace_state.hh"
 
 namespace utils {
@@ -75,7 +76,9 @@ public:
 };
 
 /// A reader of a range of partitions, as mx::make_reader(). The index
-/// reader `ir` must be the sstable's.
+/// reader `ir` must be the sstable's. Page checksums are verified on every
+/// read, so `integrity` adds nothing yet. The check of the file digest is
+/// left for the operations phase of PLAN.md.
 ///
 /// FIXME: a reversed slice reads forward and reverses the result in
 /// memory. The next step replaces this with native reverse reads.
@@ -89,17 +92,19 @@ mutation_reader make_reader(
         streamed_mutation::forwarding fwd,
         mutation_reader::forwarding fwd_mr,
         read_monitor& monitor,
+        integrity_check integrity,
         std::unique_ptr<abstract_index_reader> ir,
         const utils::hashed_key* single_partition_read_murmur_hash);
 
 /// A reader of the whole sstable that does not use the index, as
 /// mx::make_full_scan_reader(). It does not support fast-forwarding or
-/// next_partition(). Page checksums are always verified.
+/// next_partition(). `integrity` is as for make_reader().
 mutation_reader make_full_scan_reader(
         shared_sstable sstable,
         schema_ptr schema,
         reader_permit permit,
         tracing::trace_state_ptr trace_state,
-        read_monitor& monitor);
+        read_monitor& monitor,
+        integrity_check integrity);
 
 } // namespace sstables::parquet
