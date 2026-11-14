@@ -11,6 +11,8 @@
 #include "utils/UUID.hh"
 #include <boost/test/tools/old/interface.hpp>
 #include <seastar/core/shard_id.hh>
+#include <seastar/core/memory.hh>
+#include <seastar/util/alloc_failure_injector.hh>
 #include <seastar/coroutine/as_future.hh>
 #include <source_location>
 #undef SEASTAR_TESTING_MAIN
@@ -55,6 +57,7 @@
 #include "service/migration_manager.hh"
 #include "service/strong_consistency/coordinator.hh"
 #include "service/strong_consistency/groups_manager.hh"
+#include "service/strong_consistency/serving_set.hh"
 #include "gms/gossiper.hh"
 
 #include <boost/regex.hpp>
@@ -9011,6 +9014,251 @@ SEASTAR_THREAD_TEST_CASE(test_tablet_version_block_matches) {
     BOOST_REQUIRE(!compare_tablet_version_block(version, wrong_block_0));
 }
 
+// Forced and conditional refresh use the same range, replica ordering and hash,
+// including on ordinary tables without the strong-consistency experiment.
+SEASTAR_THREAD_TEST_CASE(test_tablet_routing_v2_forced_refresh) {
+    do_with_cql_env_thread([] (cql_test_env& e) {
+        topology_builder topo(e);
+        topo.add_node(node_state::normal, 2, topo.rack());
+        const auto ks = add_keyspace(e, {{topo.dc(), 1}}, 2);
+        const auto id = add_table(e, ks).get();
+        const auto schema = e.local_db().as_data_dictionary().find_schema(id);
+        const auto& table = schema->table();
+        const auto erm = table.get_effective_replication_map();
+        for (const auto token : {dht::token{-1000}, dht::token{1000}}) {
+            const auto forced = table.tablet_routing_info_v2_for(token, std::nullopt);
+            BOOST_REQUIRE(forced);
+            const auto direct = erm->check_tablet_version(token, std::nullopt);
+            BOOST_REQUIRE(direct);
+            BOOST_REQUIRE(forced->tablet_replicas == direct->tablet_replicas);
+            BOOST_REQUIRE(forced->token_range == direct->token_range);
+            BOOST_REQUIRE(forced->hash == direct->hash);
+            for (unsigned i = 0; i < 16; ++i) {
+                const auto matching = extract_tablet_version_block(forced->hash, i);
+                BOOST_REQUIRE(!table.tablet_routing_info_v2_for(token, matching));
+                const auto mismatching = tablet_version_block{matching.value() ^ 0x0f};
+                const auto changed = table.tablet_routing_info_v2_for(token, mismatching);
+                BOOST_REQUIRE(changed);
+                BOOST_REQUIRE(changed->tablet_replicas == forced->tablet_replicas);
+                BOOST_REQUIRE(changed->token_range == forced->token_range);
+                BOOST_REQUIRE(changed->hash == forced->hash);
+            }
+        }
+        e.execute_cql("CREATE KEYSPACE vnode_routing WITH replication = "
+                "{'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}").get();
+        e.execute_cql("CREATE TABLE vnode_routing.tbl (pk int PRIMARY KEY)").get();
+        for (auto names : {std::pair{"vnode_routing", "tbl"}, std::pair{"system", "local"}}) {
+            const auto& non_tablet = e.local_db().find_column_family(names.first, names.second);
+            BOOST_REQUIRE(!non_tablet.tablet_routing_info_v2_for(dht::token{0}, std::nullopt));
+            BOOST_REQUIRE(!non_tablet.tablet_routing_info_v2_for(dht::token{0}, tablet_version_block{0}));
+            const auto& non_tablet_erm = non_tablet.get_effective_replication_map();
+            BOOST_REQUIRE(!non_tablet_erm->check_tablet_version(dht::token{0}, std::nullopt));
+            BOOST_REQUIRE(!non_tablet_erm->check_tablet_version(dht::token{0}, tablet_version_block{0}));
+        }
+    }, tablet_cql_test_config()).get();
+}
+
+// A matching version check must not allocate another replica list after its
+// snapshot has been warmed. RF=4 exceeds tablet_replica_set's inline capacity.
+SEASTAR_THREAD_TEST_CASE(test_tablet_routing_v2_prepared_match_does_not_allocate) {
+    do_with_cql_env_thread([] (cql_test_env& e) {
+        topology_builder topo(e);
+        for (unsigned i = 0; i < 4; ++i) {
+            if (i) {
+                topo.start_new_rack();
+            }
+            topo.add_node(node_state::normal, 1, topo.rack());
+        }
+        const auto ks = add_keyspace(e, {{topo.dc(), 4}}, 1);
+        const auto id = add_table(e, ks).get();
+        const auto schema = e.local_db().as_data_dictionary().find_schema(id);
+        const auto erm = schema->table().get_effective_replication_map();
+        const auto token = dht::token{0};
+        const auto forced = erm->check_tablet_version(token, std::nullopt);
+        BOOST_REQUIRE(forced);
+        BOOST_REQUIRE_EQUAL(forced->tablet_replicas.size(), 4u);
+        BOOST_REQUIRE(std::ranges::is_sorted(forced->tablet_replicas));
+        for (unsigned i = 0; i < 16; ++i) {
+            const auto block = extract_tablet_version_block(forced->hash, i);
+            const auto before = seastar::memory::stats().mallocs();
+            const auto result = erm->check_tablet_version(token, block);
+            const auto allocations = seastar::memory::stats().mallocs() - before;
+            BOOST_REQUIRE(!result);
+            BOOST_REQUIRE_EQUAL(allocations, 0u);
+        }
+        const auto changed = erm->check_tablet_version(token,
+                tablet_version_block{extract_tablet_version_block(forced->hash, 0).value() ^ 0x0f});
+        BOOST_REQUIRE(changed);
+        BOOST_REQUIRE(changed->tablet_replicas == forced->tablet_replicas);
+        BOOST_REQUIRE(changed->token_range == forced->token_range);
+        BOOST_REQUIRE(changed->hash == forced->hash);
+    }, tablet_cql_test_config()).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_sc_tablet_routing_preparation_reuses_storage) {
+    using namespace service::strong_consistency;
+    do_with_cql_env_thread([] (cql_test_env& e) {
+        topology_builder topo(e);
+        for (unsigned i = 0; i < 4; ++i) {
+            topo.start_new_rack();
+            topo.add_node(node_state::normal, 1, topo.rack());
+        }
+        const auto ks = add_keyspace(e, {{topo.dc(), 4}}, 1);
+        const auto id = add_table(e, ks).get();
+        const auto erm = e.local_db().find_schema(id)->table().get_effective_replication_map();
+        const auto& map = erm->get_token_metadata().tablets().get_tablet_map(id);
+        const auto tid = map.first_tablet();
+        const auto serving = replica_set_view(map.get_tablet_info(tid).replicas);
+        const auto leader = map.get_tablet_info(tid).replicas.front().host;
+        const auto forced = make_tablet_routing_info_v2(map, tid, serving, leader, std::nullopt);
+        BOOST_REQUIRE(forced);
+        // A forced response owns its replica buffer. Warm matching preparation
+        // separately before checking that subsequent calls reuse their storage.
+        BOOST_REQUIRE(!make_tablet_routing_info_v2(map, tid, serving, leader, extract_tablet_version_block(forced->hash, 0)));
+        for (unsigned i = 0; i < 16; ++i) {
+            const auto block = extract_tablet_version_block(forced->hash, i);
+            const auto before = memory::stats().mallocs();
+            const auto result = make_tablet_routing_info_v2(map, tid, serving, leader, block);
+            const auto allocations = memory::stats().mallocs() - before;
+            BOOST_REQUIRE(!result);
+            BOOST_REQUIRE_EQUAL(allocations, 0u);
+        }
+    }, tablet_cql_test_config()).get();
+}
+
+// Matching checks must not allocate, including the first request to each
+// tablet in a large working set: no bounded per-tablet cache is involved.
+SEASTAR_THREAD_TEST_CASE(test_tablet_routing_v2_large_working_set_does_not_allocate) {
+    do_with_cql_env_thread([] (cql_test_env& e) {
+        topology_builder topo(e);
+        for (unsigned i = 0; i < 4; ++i) {
+            topo.start_new_rack();
+            topo.add_node(node_state::normal, 1, topo.rack());
+        }
+        const auto ks = add_keyspace(e, {{topo.dc(), 4}}, 1);
+        const auto id = add_table(e, ks).get();
+        const auto schema = e.local_db().as_data_dictionary().find_schema(id);
+        const auto initial_erm = schema->table().get_effective_replication_map();
+        const auto& initial = initial_erm->get_token_metadata_ptr()->tablets().get_tablet_map(id);
+        const auto replicas = initial.get_tablet_info(initial.first_tablet()).replicas;
+        // Publish an exact-sized map rather than depending on initial allocation
+        // policy, which can scale the requested count by replication factor.
+        mutate_tablets(e, [&] (tablet_metadata& metadata) -> future<> {
+            tablet_map map(dht::get_uniform_tokens(512));
+            for (const auto tid : map.tablet_ids()) {
+                map.set_tablet(tid, tablet_info{replicas});
+            }
+            metadata.set_tablet_map(id, std::move(map));
+            co_return;
+        });
+        auto aoe = abort_on_expiry(lowres_clock::now() + std::chrono::seconds(60));
+        auto guard = e.get_raft_group0_client().start_operation(aoe.abort_source()).get();
+        save_token_metadata(e, std::move(guard)).get();
+        const auto erm = schema->table().get_effective_replication_map();
+        const auto& map = erm->get_token_metadata_ptr()->tablets().get_tablet_map(id);
+        BOOST_REQUIRE_EQUAL(map.tablet_count(), 512);
+        const auto forced = erm->check_tablet_version(map.get_last_token(tablet_id{0}), std::nullopt);
+        BOOST_REQUIRE(forced);
+        const auto block = extract_tablet_version_block(forced->hash, 0);
+        const auto cold_allocations_before = memory::stats().mallocs();
+        bool cold_matched = true;
+        for (auto tid : map.tablet_ids()) {
+            cold_matched &= !erm->check_tablet_version(map.get_last_token(tid), block);
+        }
+        const auto cold_allocations = memory::stats().mallocs() - cold_allocations_before;
+        BOOST_REQUIRE(cold_matched);
+        BOOST_REQUIRE_EQUAL(cold_allocations, 0u);
+    }, tablet_cql_test_config()).get();
+}
+
+// Hashes must follow placement installation, including edits to a copied
+// tablet_info and maps populated incrementally during a split or merge.
+SEASTAR_THREAD_TEST_CASE(test_tablet_routing_v2_prepared_version_updates) {
+    const auto host1 = locator::host_id(utils::UUID(0, 1));
+    const auto host2 = locator::host_id(utils::UUID(0, 2));
+    const auto tid = tablet_id{0};
+    tablet_map original(1);
+    BOOST_REQUIRE(original.get_tablet_routing_version(tid) == locator::internal::hash_replica_list({}));
+    original.set_tablet(tid, tablet_info{tablet_replica_set{{host2, 2}, {host1, 1}}});
+    const auto hash = locator::internal::hash_replica_list(tablet_replica_set{{host1, 1}, {host2, 2}});
+    BOOST_REQUIRE(original.get_tablet_routing_version(tid) == hash);
+    auto cloned = original.clone();
+    auto gentle = original.clone_gently().get();
+    BOOST_REQUIRE(cloned.get_tablet_routing_version(tid) == hash);
+    BOOST_REQUIRE(gentle.get_tablet_routing_version(tid) == hash);
+    auto edited = cloned.get_tablet_info(tid);
+    edited.replicas.front().shard = 3;
+    cloned.set_tablet(tid, std::move(edited));
+    BOOST_REQUIRE(cloned.get_tablet_routing_version(tid) != hash);
+    BOOST_REQUIRE(original.get_tablet_routing_version(tid) == hash);
+    tablet_map incremental(1, false, tablet_map::initialized_later{});
+    incremental.emplace_tablet(tid, original.get_last_token(tid), original.get_tablet_info(tid));
+    BOOST_REQUIRE(incremental.get_tablet_routing_version(tid) == hash);
+    incremental.clear_gently().get();
+    gentle.clear_gently().get();
+    cloned.clear_gently().get();
+    original.clear_gently().get();
+}
+
+// Prepared placement hashes belong to a token-metadata snapshot. A replacement map may
+// keep the hash while changing the bounds, or change a replica without changing
+// the tablet id; retaining the old ERM must preserve its own view in both cases.
+SEASTAR_THREAD_TEST_CASE(test_tablet_routing_v2_prepared_version_snapshot_lifetime) {
+    do_with_cql_env_thread([] (cql_test_env& e) {
+        topology_builder topo(e);
+        const auto host1 = topo.add_node(node_state::normal, 2, topo.rack());
+        const auto host2 = topo.add_node(node_state::normal, 2, topo.rack());
+        const auto ks = add_keyspace(e, {{topo.dc(), 1}}, 1);
+        const auto id = add_table(e, ks).get();
+        const auto publish = [&] (size_t count, locator::host_id host, unsigned shard) {
+            mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+                tablet_map tmap(dht::get_uniform_tokens(count));
+                for (auto tid : tmap.tablet_ids()) {
+                    tmap.set_tablet(tid, tablet_info{tablet_replica_set{{host, shard}}});
+                }
+                tmeta.set_tablet_map(id, std::move(tmap));
+                co_return;
+            });
+            auto aoe = abort_on_expiry(lowres_clock::now() + std::chrono::seconds(60));
+            auto guard = e.get_raft_group0_client().start_operation(aoe.abort_source()).get();
+            save_token_metadata(e, std::move(guard)).get();
+        };
+        const auto current_erm = [&] {
+            return e.local_db().as_data_dictionary().find_schema(id)->table().get_effective_replication_map();
+        };
+        const auto token = dht::token{-1000};
+        publish(1, host1, 0);
+        const auto original_erm = current_erm();
+        const auto original = original_erm->check_tablet_version(token, std::nullopt);
+        BOOST_REQUIRE(original);
+
+        publish(2, host1, 0);
+        const auto split_erm = current_erm();
+        const auto split = split_erm->check_tablet_version(token, std::nullopt);
+        BOOST_REQUIRE(split);
+        BOOST_REQUIRE(split->hash == original->hash);
+        BOOST_REQUIRE(split->token_range != original->token_range);
+        BOOST_REQUIRE(original_erm->check_tablet_version(token, std::nullopt)->token_range == original->token_range);
+
+        publish(1, host1, 0);
+        const auto merged = current_erm()->check_tablet_version(token, std::nullopt);
+        BOOST_REQUIRE(merged);
+        BOOST_REQUIRE(merged->hash == original->hash);
+        BOOST_REQUIRE(merged->token_range == original->token_range);
+        BOOST_REQUIRE(split_erm->check_tablet_version(token, std::nullopt)->token_range == split->token_range);
+
+        publish(1, host2, 1);
+        const auto moved = current_erm()->check_tablet_version(token, std::nullopt);
+        BOOST_REQUIRE(moved);
+        BOOST_REQUIRE(moved->tablet_replicas == tablet_replica_set({{host2, 1}}));
+        BOOST_REQUIRE(moved->hash != original->hash);
+        const auto retained = original_erm->check_tablet_version(token, std::nullopt);
+        BOOST_REQUIRE(retained);
+        BOOST_REQUIRE(retained->tablet_replicas == original->tablet_replicas);
+        BOOST_REQUIRE(retained->hash == original->hash);
+    }, tablet_cql_test_config()).get();
+}
+
 // Verifies that resize metadata (the replacement Raft group ids in tablet_raft_resize_info)
 // round-trips through system.tablets serialization for strongly consistent
 // tables, and that the in-memory tablet_map API for resizing tablets works.
@@ -9419,6 +9667,89 @@ SEASTAR_TEST_CASE(test_load_stats_split_ready_invalidation) {
     }
 
     return make_ready_future<>();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_sc_routing_metadata_forced_and_version_blocks) {
+    using namespace locator;
+    using service::strong_consistency::make_tablet_routing_info_v2;
+    using service::strong_consistency::replica_set_view;
+    const auto a = host_id(utils::UUID("11111111-1111-4111-8111-111111111111"));
+    const auto b = host_id(utils::UUID("22222222-2222-4222-8222-222222222222"));
+    const auto c = host_id(utils::UUID("33333333-3333-4333-8333-333333333333"));
+    const tablet_replica_set replicas{{c, 3}, {a, 1}, {b, 2}};
+    tablet_map map(dht::get_uniform_tokens(2));
+    const auto tid = map.first_tablet();
+    map.set_tablet(tid, tablet_info(replicas));
+    const auto forced = make_tablet_routing_info_v2(map, tid, replica_set_view(replicas), b, std::nullopt);
+    BOOST_REQUIRE(forced);
+    const tablet_replica_set expected{{b, 2}, {c, 3}, {a, 1}};
+    BOOST_REQUIRE(forced->tablet_replicas == expected);
+    BOOST_REQUIRE(forced->hash == locator::internal::hash_replica_list(expected));
+    BOOST_REQUIRE(forced->token_range.first == dht::minimum_token());
+    BOOST_REQUIRE(forced->token_range.second == map.get_last_token(tid));
+    for (uint8_t i = 0; i < 16; ++i) {
+        const auto matching = extract_tablet_version_block(forced->hash, i);
+        BOOST_REQUIRE(!make_tablet_routing_info_v2(map, tid, replica_set_view(replicas), b, matching));
+        const auto mismatch = tablet_version_block{matching.value() ^ 0x0f};
+        const auto refreshed = make_tablet_routing_info_v2(map, tid, replica_set_view(replicas), b, mismatch);
+        BOOST_REQUIRE(refreshed);
+        BOOST_REQUIRE(refreshed->tablet_replicas == forced->tablet_replicas);
+        BOOST_REQUIRE(refreshed->hash == forced->hash);
+        BOOST_REQUIRE(refreshed->token_range == forced->token_range);
+    }
+    const auto new_leader = make_tablet_routing_info_v2(map, tid, replica_set_view(replicas), a, std::nullopt);
+    BOOST_REQUIRE(new_leader);
+    BOOST_REQUIRE(new_leader->tablet_replicas.front().host == a);
+    BOOST_REQUIRE(new_leader->hash != forced->hash);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_sc_routing_metadata_uses_serving_replicas) {
+    using namespace locator;
+    using service::strong_consistency::make_tablet_routing_info_v2;
+    using service::strong_consistency::serving_replicas;
+    const auto a = host_id(utils::UUID("11111111-1111-4111-8111-111111111111"));
+    const auto b = host_id(utils::UUID("22222222-2222-4222-8222-222222222222"));
+    const auto pending = tablet_replica{b, 1};
+    const tablet_info current(tablet_replica_set{{a, 0}});
+    tablet_map map(dht::get_uniform_tokens(1));
+    const auto tid = map.first_tablet();
+    map.set_tablet(tid, current);
+    tablet_transition_info transition(tablet_transition_stage::sc_snapshot_transfer,
+            tablet_transition_kind::migration, tablet_replica_set{pending}, pending);
+    auto before_promotion = make_tablet_routing_info_v2(map, tid, serving_replicas(current, &transition), a, std::nullopt);
+    BOOST_REQUIRE(before_promotion);
+    BOOST_REQUIRE(before_promotion->tablet_replicas == tablet_replica_set({{a, 0}}));
+    transition.stage = tablet_transition_stage::sc_become_voter;
+    auto promoted = make_tablet_routing_info_v2(map, tid, serving_replicas(current, &transition), b, std::nullopt);
+    BOOST_REQUIRE(promoted);
+    BOOST_REQUIRE(promoted->tablet_replicas == tablet_replica_set({pending, {a, 0}}));
+    transition.stage = tablet_transition_stage::use_new;
+    auto next = make_tablet_routing_info_v2(map, tid, serving_replicas(current, &transition), b, std::nullopt);
+    BOOST_REQUIRE(next);
+    BOOST_REQUIRE(next->tablet_replicas == tablet_replica_set({pending}));
+}
+
+SEASTAR_THREAD_TEST_CASE(test_sc_routing_metadata_unavailable_and_expired) {
+    using namespace locator;
+    auto cfg = strongly_consistent_tablet_cql_test_config();
+    do_with_cql_env_thread([] (cql_test_env& e) {
+        const auto [coordinator, holder] = e.local_qp().acquire_strongly_consistent_coordinator();
+        auto& manager = coordinator.get().get_groups_manager();
+        const auto missing = table_id(utils::UUID("11111111-1111-4111-8111-111111111111"));
+        BOOST_REQUIRE(!manager.get_tablet_routing_info(missing, dht::token{0}, std::nullopt,
+                db::timeout_clock::now() + std::chrono::seconds(1)).get());
+        e.execute_cql("CREATE TABLE ks.non_sc_routing (pk int PRIMARY KEY)").get();
+        const auto ordinary = e.local_db().find_schema("ks", "non_sc_routing")->id();
+        BOOST_REQUIRE(!manager.get_tablet_routing_info(ordinary, dht::token{0}, std::nullopt,
+                db::timeout_clock::now() + std::chrono::seconds(1)).get());
+        e.execute_cql("CREATE KEYSPACE sc_routing_meta WITH replication = "
+                "{'class': 'NetworkTopologyStrategy', 'replication_factor': 1} "
+                "AND tablets = {'initial': 1} AND consistency = 'global'").get();
+        e.execute_cql("CREATE TABLE sc_routing_meta.tbl (pk int PRIMARY KEY)").get();
+        const auto sc = e.local_db().find_schema("sc_routing_meta", "tbl")->id();
+        BOOST_REQUIRE(!manager.get_tablet_routing_info(sc, dht::token{0}, std::nullopt,
+                db::timeout_clock::now() - std::chrono::milliseconds(1)).get());
+    }, cfg).get();
 }
 
 BOOST_AUTO_TEST_SUITE_END()

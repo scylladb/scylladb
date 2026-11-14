@@ -637,7 +637,8 @@ static future<executor::request_return_type> do_query(service::storage_proxy& pr
         tracing::trace_state_ptr trace_state,
         service_permit permit,
         bool enforce_authorization,
-        bool warn_authorization) {
+        bool warn_authorization,
+        noncopyable_function<void()> before_read = {}) {
     lw_shared_ptr<const service::pager::paging_state> old_paging_state = nullptr;
 
     tracing::trace(trace_state, "Performing a database query");
@@ -689,7 +690,12 @@ static future<executor::request_return_type> do_query(service::storage_proxy& pr
     query_options = std::make_unique<cql3::query_options>(std::move(query_options), std::move(old_paging_state));
     auto p = service::pager::query_pagers::pager(proxy, query_schema, selection, *query_state_ptr, *query_options, command, std::move(partition_ranges), nullptr);
 
+    if (before_read) {
+        before_read();
+    }
+    co_await utils::get_local_injector().inject("alternator_query_before_read", utils::wait_for_message(60s));
     std::unique_ptr<cql3::result_set> rs = co_await p->fetch_page(limit, gc_clock::now(), executor::default_timeout());
+    co_await utils::get_local_injector().inject("alternator_query_after_read", utils::wait_for_message(60s));
     if (!p->is_exhausted()) {
         // No plan to record: this pager was pointed at the table or index to scan
         // here, rather than by a CQL plan a resumed page could pick differently.
@@ -1862,7 +1868,7 @@ static score_from_similarity_fn pick_score_from_similarity(std::string_view dist
     }
 }
 
-future<executor::request_return_type> executor::query(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+future<executor::request_return_type> executor::query(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info, optional_tablet_routing_request routing_request) {
     _stats.api_operations.query++;
     elogger.trace("Querying {}", request);
 
@@ -1974,13 +1980,39 @@ future<executor::request_return_type> executor::query(client_state& client_state
     verify_all_are_used(expression_attribute_values, used_attribute_values, "ExpressionAttributeValues", "Query");
     query::partition_slice::option_set opts;
     opts.set_if<query::partition_slice::option::reversed>(!forward);
-    return do_query(_proxy, schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl,
-            std::move(filter), opts, client_state, _stats, std::move(trace_state), std::move(permit), _enforce_authorization, _warn_authorization).then(
-            [this, per_table_stats, start_time] (request_return_type result) {
-        auto duration = std::chrono::steady_clock::now() - start_time;
-        _stats.api_operations.query_latency.mark(duration);
-        per_table_stats->api_operations.query_latency.mark(duration);
-        return result;
+    const auto routing_token = routing_request && table_type == table_or_view_type::base
+            ? std::make_optional(partition_ranges.front().start()->value().token()) : std::nullopt;
+    const bool prefetch = routing_token && needs_sc_tablet_routing_info(schema, routing_request);
+    auto execute = [this, schema, exclusive_start_key, partition_ranges = std::move(partition_ranges),
+            ck_bounds = std::move(ck_bounds), attrs_to_get = std::move(attrs_to_get), limit, cl, filter = std::move(filter),
+            opts, &client_state, trace_state = std::move(trace_state), permit = std::move(permit), per_table_stats, start_time,
+            routing_token, routing_request]
+            (noncopyable_function<void()> before_read, tablet_routing_future* sc_info = nullptr) mutable {
+        return do_query(_proxy, schema, exclusive_start_key, std::move(partition_ranges), std::move(ck_bounds), std::move(attrs_to_get), limit, cl,
+                std::move(filter), opts, client_state, _stats, std::move(trace_state), std::move(permit),
+                _enforce_authorization, _warn_authorization, std::move(before_read)).then(
+                [this, per_table_stats, start_time, schema, routing_token, routing_request, sc_info] (request_return_type result) {
+            const auto duration = std::chrono::steady_clock::now() - start_time;
+            _stats.api_operations.query_latency.mark(duration);
+            per_table_stats->api_operations.query_latency.mark(duration);
+            if (routing_token) {
+                return add_tablet_routing_info(std::move(result), schema, *routing_token, routing_request,
+                        sc_info ? std::move(*sc_info) : make_ready_future<std::unique_ptr<tablet_routing_response>>());
+            }
+            return make_ready_future<request_return_type>(std::move(result));
+        });
+    };
+    if (!prefetch) {
+        return execute({});
+    }
+    // Only SC queries need stable state shared with the authorized read's
+    // callback. Ordinary queries keep their synchronous hint path.
+    return do_with(make_ready_future<std::unique_ptr<tablet_routing_response>>(),
+            [this, schema, token = *routing_token, routing_request, execute = std::move(execute)]
+            (tablet_routing_future& sc_info) mutable {
+        return execute([this, schema, token, routing_request, &sc_info] {
+            sc_info = start_sc_tablet_routing_info(schema, token, *routing_request);
+        }, &sc_info);
     });
 }
 
@@ -2733,69 +2765,88 @@ static rjson::value describe_item(schema_ptr schema,
     return item_descr;
 }
 
-future<executor::request_return_type> executor::get_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+future<executor::request_return_type> executor::get_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info, optional_tablet_routing_request routing_request) {
     _stats.api_operations.get_item++;
     auto start_time = std::chrono::steady_clock::now();
     elogger.trace("Getting item {}", request);
 
     schema_ptr schema = get_table(_proxy, request);
-    lw_shared_ptr<stats> per_table_stats = get_stats_from_schema(_proxy, *schema);
-    per_table_stats->api_operations.get_item++;
-    tracing::add_alternator_table_name(trace_state, schema->cf_name());
+    request_return_type result;
+    std::optional<dht::token> routing_token;
+    auto sc_info = make_ready_future<std::unique_ptr<tablet_routing_response>>();
+    {
+        lw_shared_ptr<stats> per_table_stats = get_stats_from_schema(_proxy, *schema);
+        per_table_stats->api_operations.get_item++;
+        tracing::add_alternator_table_name(trace_state, schema->cf_name());
 
-    rjson::value& query_key = request["Key"];
-    db::consistency_level cl = get_read_consistency(request);
+        rjson::value& query_key = request["Key"];
+        db::consistency_level cl = get_read_consistency(request);
 
-    maybe_audit(audit_info, audit::statement_category::QUERY, schema->ks_name(), schema->cf_name(), "GetItem", request, cl);
+        maybe_audit(audit_info, audit::statement_category::QUERY, schema->ks_name(), schema->cf_name(), "GetItem", request, cl);
 
-    partition_key pk = pk_from_json(query_key, schema);
-    dht::partition_range_vector partition_ranges{dht::partition_range(dht::decorate_key(*schema, pk))};
+        partition_key pk = pk_from_json(query_key, schema);
+        dht::partition_range_vector partition_ranges{dht::partition_range(dht::decorate_key(*schema, pk))};
 
-    std::vector<query::clustering_range> bounds;
-    if (schema->clustering_key_size() == 0) {
-        bounds.push_back(query::clustering_range::make_open_ended_both_sides());
-    } else {
-        clustering_key ck = ck_from_json(query_key, schema);
-        bounds.push_back(query::clustering_range::make_singular(std::move(ck)));
+        routing_token = routing_request
+                ? std::make_optional(partition_ranges.front().start()->value().token()) : std::nullopt;
+
+        std::vector<query::clustering_range> bounds;
+        if (schema->clustering_key_size() == 0) {
+            bounds.push_back(query::clustering_range::make_open_ended_both_sides());
+        } else {
+            clustering_key ck = ck_from_json(query_key, schema);
+            bounds.push_back(query::clustering_range::make_singular(std::move(ck)));
+        }
+        check_key(query_key, schema);
+
+        //TODO(sarna): It would be better to fetch only some attributes of the map, not all
+        auto regular_columns =
+                schema->regular_columns() | std::views::transform(&column_definition::id)
+                | std::ranges::to<query::column_id_vector>();
+
+        auto selection = cql3::selection::selection::wildcard(schema);
+
+        auto partition_slice = query::partition_slice(std::move(bounds), {}, std::move(regular_columns), selection->get_query_options());
+        auto command = ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, _proxy.get_max_result_size(partition_slice),
+                query::tombstone_limit(_proxy.get_tombstone_limit()));
+
+        std::unordered_set<std::string> used_attribute_names;
+        auto attrs_to_get = calculate_attrs_to_get(request, *_parsed_expression_cache, used_attribute_names);
+        const rjson::value* expression_attribute_names = rjson::find(request, "ExpressionAttributeNames");
+        verify_all_are_used(expression_attribute_names, used_attribute_names, "ExpressionAttributeNames", "GetItem");
+        rcu_consumed_capacity_counter add_capacity(request, cl == db::consistency_level::LOCAL_QUORUM);
+        co_await verify_permission(_enforce_authorization, _warn_authorization, client_state, schema, auth::permission::SELECT, _stats);
+        if (routing_token && needs_sc_tablet_routing_info(schema, routing_request)) {
+            sc_info = start_sc_tablet_routing_info(schema, *routing_token, *routing_request);
+            co_await utils::get_local_injector().inject("alternator_get_item_before_read", utils::wait_for_message(60s));
+        }
+        service::storage_proxy::result<service::storage_proxy::coordinator_query_result> rqr =
+                co_await _proxy.query_result(
+                    schema, std::move(command), std::move(partition_ranges), cl,
+                    service::storage_proxy::coordinator_query_options(executor::default_timeout(), std::move(permit), client_state, trace_state));
+        if (!rqr) {
+            co_return create_api_error_from_coordinators_exception(std::move(rqr).assume_error());
+        }
+        auto qr = std::move(rqr).assume_value();
+        per_table_stats->api_operations.get_item_latency.mark(std::chrono::steady_clock::now() - start_time);
+        _stats.api_operations.get_item_latency.mark(std::chrono::steady_clock::now() - start_time);
+        uint64_t rcu_half_units = 0;
+        rjson::value res = describe_item(schema, partition_slice, *selection, *qr.query_result, std::move(attrs_to_get), add_capacity, rcu_half_units);
+        per_table_stats->rcu_half_units_total += rcu_half_units;
+        _stats.rcu_half_units_total += rcu_half_units;
+        // Update item size metrics only if we found an item.
+        if (qr.query_result->row_count().value_or(0) > 0) {
+            per_table_stats->operation_sizes.get_item_op_size_kb.add(bytes_to_kb_ceil(add_capacity._total_bytes));
+        }
+        result = rjson::print(res);
     }
-    check_key(query_key, schema);
-
-    //TODO(sarna): It would be better to fetch only some attributes of the map, not all
-    auto regular_columns =
-            schema->regular_columns() | std::views::transform(&column_definition::id)
-            | std::ranges::to<query::column_id_vector>();
-
-    auto selection = cql3::selection::selection::wildcard(schema);
-
-    auto partition_slice = query::partition_slice(std::move(bounds), {}, std::move(regular_columns), selection->get_query_options());
-    auto command = ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, _proxy.get_max_result_size(partition_slice),
-            query::tombstone_limit(_proxy.get_tombstone_limit()));
-
-    std::unordered_set<std::string> used_attribute_names;
-    auto attrs_to_get = calculate_attrs_to_get(request, *_parsed_expression_cache, used_attribute_names);
-    const rjson::value* expression_attribute_names = rjson::find(request, "ExpressionAttributeNames");
-    verify_all_are_used(expression_attribute_names, used_attribute_names, "ExpressionAttributeNames", "GetItem");
-    rcu_consumed_capacity_counter add_capacity(request, cl == db::consistency_level::LOCAL_QUORUM);
-    co_await verify_permission(_enforce_authorization, _warn_authorization, client_state, schema, auth::permission::SELECT, _stats);
-    service::storage_proxy::result<service::storage_proxy::coordinator_query_result> rqr =
-            co_await _proxy.query_result(
-                schema, std::move(command), std::move(partition_ranges), cl,
-                service::storage_proxy::coordinator_query_options(executor::default_timeout(), std::move(permit), client_state, trace_state));
-    if (!rqr) {
-        co_return create_api_error_from_coordinators_exception(std::move(rqr).assume_error());
+    if (routing_token) {
+        // The read state and materialized JSON are gone. Retain only the
+        // serialized response while the SC lookup can suspend this request.
+        request = rjson::null_value();
+        co_return co_await add_tablet_routing_info(std::move(result), schema, *routing_token, routing_request, std::move(sc_info));
     }
-    auto qr = std::move(rqr).assume_value();
-    per_table_stats->api_operations.get_item_latency.mark(std::chrono::steady_clock::now() - start_time);
-    _stats.api_operations.get_item_latency.mark(std::chrono::steady_clock::now() - start_time);
-    uint64_t rcu_half_units = 0;
-    rjson::value res = describe_item(schema, partition_slice, *selection, *qr.query_result, std::move(attrs_to_get), add_capacity, rcu_half_units);
-    per_table_stats->rcu_half_units_total += rcu_half_units;
-    _stats.rcu_half_units_total += rcu_half_units;
-    // Update item size metrics only if we found an item.
-    if (qr.query_result->row_count().value_or(0) > 0) {
-        per_table_stats->operation_sizes.get_item_op_size_kb.add(bytes_to_kb_ceil(add_capacity._total_bytes));
-    }
-    co_return rjson::print(std::move(res));
+    co_return result;
 }
 
 future<executor::request_return_type> executor::batch_get_item(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
