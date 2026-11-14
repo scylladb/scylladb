@@ -15,7 +15,7 @@ import distro
 import re
 import traceback
 
-from scylla_util import sysconfig_parser, out, get_set_nic_and_disks_config_value, check_sysfs_numa_topology_is_valid, sysconfdir_p, scylla_excepthook, perftune_base_command
+from scylla_util import sysconfig_parser, out, get_set_nic_and_disks_config_value, check_sysfs_numa_topology_is_valid, sysconfdir_p, scylla_excepthook, perftune_base_command, cpuset_conf_cpus, setup_helper_slice_cpuset
 from subprocess import run
 
 def get_cur_cpuset():
@@ -149,6 +149,14 @@ if __name__ == '__main__':
     if os.getuid() > 0:
         print('Requires root permission.')
         sys.exit(1)
+
+    # Keep scylla-helper.slice off Scylla's CPUs after a cpuset.conf edit or
+    # a CPU count change. A failure here must not stop Scylla from starting.
+    try:
+        setup_helper_slice_cpuset(cpuset_conf_cpus(), always_reload=False)
+    except Exception as e:
+        print(f'Warning: could not pin scylla-helper.slice: {e}', file=sys.stderr)
+
     cfg = sysconfig_parser(sysconfdir_p() / 'scylla-server')
     mode = cfg.get('NETWORK_MODE')
 

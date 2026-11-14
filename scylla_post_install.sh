@@ -65,4 +65,11 @@ EOS
     fi
 fi
 
+# On upgrade, pin scylla-helper.slice to the CPUs outside the existing cpuset.
+# The same values do not change cpuset.conf.
+CPUSET=$(sed -n 's/^[[:space:]]*CPUSET="\(.*\)"$/\1/p' /etc/scylla.d/cpuset.conf 2>/dev/null | tail -n 1)
+if [ -n "$CPUSET" ]; then
+    "$(dirname "$(readlink -f "$0")")"/scylla_cpuset_setup $CPUSET >/dev/null || true
+fi
+
 systemctl --system daemon-reload >/dev/null || true

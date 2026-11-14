@@ -10,7 +10,7 @@
 import os
 import sys
 import argparse
-from scylla_util import is_container, sysconfig_parser
+from scylla_util import is_container, sysconfig_parser, setup_helper_slice_cpuset
 
 if __name__ == '__main__':
     if not is_container() and os.getuid() > 0:
@@ -44,3 +44,9 @@ if __name__ == '__main__':
                 smp='--smp {} '.format(args.smp) if args.smp else '' \
                 ))
         cfg.commit()
+
+    # On cloud images this runs at first boot, after the package install.
+    try:
+        setup_helper_slice_cpuset(args.cpuset)
+    except Exception as e:
+        print(f'Warning: could not pin scylla-helper.slice: {e}', file=sys.stderr)
