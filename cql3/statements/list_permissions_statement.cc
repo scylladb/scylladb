@@ -50,37 +50,66 @@ void cql3::statements::list_permissions_statement::validate(
     state.ensure_not_anonymous();
 }
 
+future<std::optional<std::string>> cql3::statements::list_permissions_statement::check_role_access(const service::client_state& state) const {
+    if (co_await state.has_superuser()) {
+        co_return std::nullopt;
+    }
+
+    // DESCRIBE permission on a role allows listing its permissions, and
+    // DESCRIBE on all roles allows listing everyone's permissions. The creator
+    // of a role gets DESCRIBE on it automatically.
+    if (!_role_name) {
+        if (co_await state.check_has_permission({auth::permission::DESCRIBE, auth::root_role_resource()})) {
+            co_return std::nullopt;
+        }
+        co_return "You are not authorized to view everyone's permissions";
+    }
+
+    bool has_role;
+    try {
+        has_role = co_await auth::has_role(*state.get_auth_service(), *state.user(), *_role_name);
+    } catch (const auth::nonexistant_role&) {
+        // Treat a role which doesn't exist like a role which the user may not
+        // view, so the error doesn't tell the user whether the role exists. A
+        // user who may view it gets the "doesn't exist" error from execute().
+        has_role = false;
+    }
+    if (has_role || co_await state.check_has_permission({auth::permission::DESCRIBE, auth::make_role_resource(*_role_name)})) {
+        co_return std::nullopt;
+    }
+    co_return fmt::format("You are not authorized to view {}'s permissions", *_role_name);
+}
+
 future<> cql3::statements::list_permissions_statement::check_access(query_processor& qp, const service::client_state& state) const {
     if (_resource) {
         maybe_correct_resource(*_resource, state, qp);
-        return state.ensure_exists(*_resource);
     }
 
-    const auto& as = *state.get_auth_service();
-    const auto user = state.user();
-
-    return state.has_superuser().then([this, &as, user](bool has_super) {
-        if (has_super) {
-            return make_ready_future<>();
+    if (auto denied = co_await check_role_access(state)) {
+        // A user with AUTHORIZE permission on the resource - who may grant and
+        // revoke any role's permissions on it - may list everyone's
+        // permissions on it anyway, but sees only the permissions it could
+        // revoke (see execute()). It may not list them OF a specific role,
+        // because that listing also includes the permissions of the roles
+        // granted to that role, so it would reveal which roles these are.
+        if (!_resource || _role_name || !co_await state.check_has_permission({auth::permission::AUTHORIZE, *_resource})) {
+            throw exceptions::unauthorized_exception(*denied);
         }
+    }
 
-        if (!_role_name) {
-            return make_exception_future<>(
-                    exceptions::unauthorized_exception("You are not authorized to view everyone's permissions"));
+    // Check that the resource exists only after checking access, so the error
+    // doesn't tell an unauthorized user whether it exists. Moreover, a role is
+    // checked only if the user may view it: Listing its own permissions ON
+    // ROLE r is allowed to any user, who would otherwise learn whether r
+    // exists. For a role which doesn't exist, the listing is simply empty.
+    if (_resource) {
+        if (_resource->kind() != auth::resource_kind::role
+                || co_await state.has_superuser()
+                || co_await state.check_has_permission({auth::permission::DESCRIBE, *_resource})
+                || co_await state.check_has_permission({auth::permission::AUTHORIZE, *_resource})) {
+            co_await state.ensure_exists(*_resource);
         }
-
-        return auth::has_role(as, *user, *_role_name).then([this](bool has_role) {
-            if (!has_role) {
-                return make_exception_future<>(
-                        exceptions::unauthorized_exception(
-                                format("You are not authorized to view {}'s permissions", *_role_name)));
-            }
-
-            return make_ready_future<>();
-        }).handle_exception_type([](const auth::nonexistant_role& e) {
-            return make_exception_future<>(exceptions::invalid_request_exception(e.what()));
-        });
-    });
+    }
 }
 
 
@@ -90,65 +119,84 @@ cql3::statements::list_permissions_statement::execute(
         service::query_state& state,
         const query_options& options,
         std::optional<service::group0_guard> guard) const {
-    const auto make_resource_filter = [this]()
-            -> std::optional<std::pair<auth::resource, auth::recursive_permissions>> {
-        if (!_resource) {
-            return {};
+    std::optional<std::pair<auth::resource, auth::recursive_permissions>> resource_filter;
+    if (_resource) {
+        resource_filter.emplace(*_resource, _recursive ? auth::recursive_permissions::yes : auth::recursive_permissions::no);
+    }
+
+    const auto& client_state = state.get_client_state();
+    std::vector<auth::permission_details> all_details;
+    try {
+        // check_access() deliberately doesn't check that the role exists, so
+        // its error doesn't tell an unauthorized user whether it does. Check it
+        // here, after access was checked: Listing the permissions of a role
+        // which doesn't exist doesn't fail with every role manager (e.g., LDAP).
+        if (_role_name && !co_await client_state.get_auth_service()->underlying_role_manager().exists(*_role_name)) {
+            throw auth::nonexistant_role(*_role_name);
         }
+        all_details = co_await auth::list_filtered_permissions(*client_state.get_auth_service(), _permissions, _role_name, resource_filter);
+    } catch (const auth::nonexistant_role& e) {
+        throw exceptions::invalid_request_exception(e.what());
+    } catch (const auth::unsupported_authorization_operation& e) {
+        throw exceptions::invalid_request_exception(e.what());
+    }
 
-        return std::make_pair(
-                *_resource,
-                _recursive ? auth::recursive_permissions::yes : auth::recursive_permissions::no);
-    };
-
-    const auto& as = *state.get_client_state().get_auth_service();
-    auto metadata = ::make_shared<cql3::metadata>(*get_result_metadata());
-
-    return do_with(make_resource_filter(), [this, &as, metadata = std::move(metadata)](const auto& resource_filter) mutable {
-        return auth::list_filtered_permissions(
-                as,
-                _permissions,
-                _role_name,
-                resource_filter).then([metadata = std::move(metadata)](std::vector<auth::permission_details> all_details) mutable {
-            std::sort(all_details.begin(), all_details.end());
-
-            auto rs = std::make_unique<result_set>(std::move(metadata));
-
-            for (const auto& pd : all_details) {
-                const std::vector<sstring> sorted_permission_names = [&pd] {
-                    std::vector<sstring> names;
-
-                    std::transform(
-                            pd.permissions.begin(),
-                            pd.permissions.end(),
-                            std::back_inserter(names),
-                            &auth::permissions::to_string);
-
-                    std::sort(names.begin(), names.end());
-                    return names;
-                }();
-
-                const auto decomposed_role_name = utf8_type->decompose(pd.role_name);
-                const auto decomposed_resource = utf8_type->decompose(sstring(format("{}", pd.resource)));
-
-                for (const auto& ps : sorted_permission_names) {
-                    rs->add_row(
-                            std::vector<bytes_opt>{
-                                    decomposed_role_name,
-                                    decomposed_role_name,
-                                    decomposed_resource,
-                                    utf8_type->decompose(ps)});
+    // A user allowed to list these permissions only because it has AUTHORIZE
+    // permission on the resource (see check_access()) sees only the
+    // permissions it could revoke: Revoking a permission on a resource
+    // requires AUTHORIZE on that resource and also that permission itself.
+    // A recursive listing also includes permissions on the resources above
+    // the requested one, on which the user may not have AUTHORIZE.
+    if (_resource && co_await check_role_access(client_state)) {
+        std::vector<auth::permission_details> authorized_details;
+        for (auto& pd : all_details) {
+            if (!co_await client_state.check_has_permission({auth::permission::AUTHORIZE, pd.resource})) {
+                continue;
+            }
+            auth::permission_set revocable;
+            for (auth::permission p : pd.permissions) {
+                if (co_await client_state.check_has_permission({p, pd.resource})) {
+                    revocable.set(p);
                 }
             }
+            if (revocable.mask()) {
+                pd.permissions = revocable;
+                authorized_details.push_back(std::move(pd));
+            }
+        }
+        all_details = std::move(authorized_details);
+    }
 
-            auto rows = ::make_shared<cql_transport::messages::result_message::rows>(result(std::move(std::move(rs))));
-            return ::shared_ptr<cql_transport::messages::result_message>(rows);
-        }).handle_exception_type([](const auth::nonexistant_role& e) {
-            return make_exception_future<::shared_ptr<cql_transport::messages::result_message>>(
-                    exceptions::invalid_request_exception(e.what()));
-        }).handle_exception_type([](const auth::unsupported_authorization_operation& e) {
-            return make_exception_future<::shared_ptr<cql_transport::messages::result_message>>(
-                    exceptions::invalid_request_exception(e.what()));
-        });
-    });
+    std::sort(all_details.begin(), all_details.end());
+
+    auto rs = std::make_unique<result_set>(::make_shared<cql3::metadata>(*get_result_metadata()));
+
+    for (const auto& pd : all_details) {
+        const std::vector<sstring> sorted_permission_names = [&pd] {
+            std::vector<sstring> names;
+
+            std::transform(
+                    pd.permissions.begin(),
+                    pd.permissions.end(),
+                    std::back_inserter(names),
+                    &auth::permissions::to_string);
+
+            std::sort(names.begin(), names.end());
+            return names;
+        }();
+
+        const auto decomposed_role_name = utf8_type->decompose(pd.role_name);
+        const auto decomposed_resource = utf8_type->decompose(sstring(format("{}", pd.resource)));
+
+        for (const auto& ps : sorted_permission_names) {
+            rs->add_row(
+                    std::vector<bytes_opt>{
+                            decomposed_role_name,
+                            decomposed_role_name,
+                            decomposed_resource,
+                            utf8_type->decompose(ps)});
+        }
+    }
+
+    co_return ::make_shared<cql_transport::messages::result_message::rows>(result(std::move(rs)));
 }

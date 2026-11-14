@@ -29,6 +29,11 @@ private:
     std::optional<sstring> _role_name;
     bool _recursive;
 
+    // Checks whether the user may list the permissions of the requested role
+    // (or of all roles), regardless of the resource. Returns the error to
+    // report if it may not.
+    future<std::optional<std::string>> check_role_access(const service::client_state&) const;
+
 public:
     list_permissions_statement(auth::permission_set, std::optional<auth::resource>, std::optional<sstring>, bool);
 

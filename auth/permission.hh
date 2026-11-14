@@ -39,7 +39,7 @@ enum class permission {
 
     // permission management
     AUTHORIZE, // required for GRANT and REVOKE.
-    DESCRIBE, // required on the root-level role resource to list all roles.
+    DESCRIBE, // required on the root-level role resource to list all roles, or on a role to list its permissions.
 
     // function/aggregate/procedure calls
     EXECUTE,
