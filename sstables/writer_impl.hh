@@ -14,8 +14,12 @@
 #include "mutation/mutation_fragment.hh"
 #include "metadata_collector.hh"
 #include "mutation/mutation_fragment_stream_validator.hh"
+#include "utils/log.hh"
 
 namespace sstables {
+
+// The logger of the sstable writers and their helpers.
+extern logging::logger sstable_writer_log;
 
 struct sstable_writer::writer_impl {
     sstable& _sst;

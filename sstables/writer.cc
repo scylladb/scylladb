@@ -13,6 +13,9 @@
 
 namespace sstables {
 
+// The name predates the writers of other formats, and users may refer to it.
+logging::logger sstable_writer_log("mc_writer");
+
 sstable_writer::sstable_writer(sstable& sst, const schema& s, uint64_t estimated_partitions,
         const sstable_writer_config& cfg, encoding_stats enc_stats, shard_id shard) {
     // FIXME: choose the Parquet writer_impl here once it exists.

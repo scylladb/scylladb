@@ -8,6 +8,7 @@ target_sources(sstables
     digest_checked_data_source.cc
     integrity_checked_file_impl.cc
     kl/reader.cc
+    large_data_tracker.cc
     metadata_collector.cc
     m_format_read_helpers.cc
     mx/partition_reversing_data_source.cc
