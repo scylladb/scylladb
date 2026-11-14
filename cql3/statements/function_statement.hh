@@ -30,7 +30,7 @@ protected:
     std::vector<shared_ptr<cql3_type::raw>> _raw_arg_types;
     mutable std::vector<data_type> _arg_types;
     static shared_ptr<cql_transport::event::schema_change> create_schema_change(
-            const db::functions::function& func, bool created);
+            const db::functions::function& func, cql_transport::event::schema_change::change_type change);
     function_statement(functions::function_name name, std::vector<shared_ptr<cql3_type::raw>> raw_arg_types);
     void create_arg_types(query_processor& qp) const;
     data_type prepare_type(query_processor& qp, cql3_type::raw &t) const;
@@ -52,6 +52,11 @@ protected:
     // Throws if the name of the function being created is invalid.
     // "what" is "Function" or "Aggregate", for the error message.
     void validate_name(std::string_view what) const;
+
+    // The type of the schema change of creating the function: UPDATED if it
+    // replaces an existing function (CREATE OR REPLACE), otherwise CREATED.
+    // Must be called after validate_while_executing().
+    cql_transport::event::schema_change::change_type change_type() const;
 
 public:
     virtual future<> check_access(query_processor& qp, const service::client_state& state) const override;
