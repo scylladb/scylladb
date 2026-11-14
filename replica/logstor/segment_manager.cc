@@ -656,6 +656,7 @@ public:
 
     void on_add_record(record_location) noexcept;
     void on_free_record(record_location) noexcept;
+    void on_move_record(record_location from, record_location to) noexcept;
 
     // Calls `fn` for each chunk of the segment, in order.
     template <typename Func>
@@ -1398,6 +1399,21 @@ void segment_manager_impl::on_free_record(record_location location) noexcept {
     _stats.bytes_freed += location.size;
 }
 
+void segment_manager_impl::on_move_record(record_location from, record_location to) noexcept {
+    auto& from_desc = get_segment_descriptor(from);
+    auto& to_desc = get_segment_descriptor(to);
+    if (to_desc.owner) {
+        on_fatal_internal_error(logstor_logger, format("moving a record to segment {}, which a compaction group already owns", to.segment));
+    }
+    from_desc.on_free(from);
+    if (from_desc.owner) {
+        from_desc.owner->update_segment(from_desc, from.size);
+    }
+    to_desc.on_write(to);
+    _stats.live_record_bytes += to.size;
+    _stats.live_record_bytes -= from.size;
+}
+
 future<log_record> segment_manager_impl::read(record_location location) {
     auto holder = _async_gate.hold();
 
@@ -1529,7 +1545,7 @@ future<seg_ptr> segment_manager_impl::allocate_segment() {
 
 void segment_manager_impl::free_segment(log_segment_id segment_id) noexcept {
     // Before freeing a segment, ensure there are no ongoing operations that use
-    // locations in this segment. See for example `await_pending_reads`.
+    // locations in this segment. See for example `await_read_guards`.
     logstor_logger.trace("Free segment {}", segment_id);
 
     // This runs on the release path of segment_ref (including from its destructor), so it must
@@ -1932,7 +1948,7 @@ future<> compaction_manager_impl::do_compaction(logstor_group& cg, compaction_ba
                 compaction_buffer(_sm, co_await _sm._compaction_buffer_pool.allocate(as), cg),
                 [this, &index, &nonempty_segments] (compaction_buffer& cb) -> future<compaction_buffer_stats> {
             co_await _sm.for_each_record(nonempty_segments, [&index, &cb] (const chunk_record& record) {
-                if (!index.is_record_alive(record.header.index_key(), record.location)) {
+                if (!index.is_record_live(record.header.index_key(), record.location)) {
                     cb.stats.records_skipped++;
                     return make_ready_future<>();
                 }
@@ -1949,7 +1965,7 @@ future<> compaction_manager_impl::do_compaction(logstor_group& cg, compaction_ba
     logstor_logger.debug("Compaction complete: in {} out {}", compaction_segments_in, compaction_segments_out);
 
     // wait for read operations that use the old locations
-    co_await index.await_pending_reads();
+    co_await index.await_read_guards();
     co_await utils::get_local_injector().inject("logstor_compaction_wait_before_remove_segments", utils::wait_for_message(std::chrono::seconds{60}));
 
     // Free the compacted segments
@@ -2042,7 +2058,7 @@ future<> compaction_manager_impl::do_split_compaction(logstor_group& src, mutati
                 },
                 [this, &index, &classifier, &nonempty_segments] (split_buffer_pair& bufs) -> future<compaction_buffer_stats> {
             co_await _sm.for_each_record(nonempty_segments, [&index, &bufs, &classifier] (const chunk_record& record) {
-                if (!index.is_record_alive(record.header.index_key(), record.location)) {
+                if (!index.is_record_live(record.header.index_key(), record.location)) {
                     return make_ready_future<>();
                 }
                 auto& cb = bufs.bufs[classifier(record.header.key.token())];
@@ -2058,8 +2074,8 @@ future<> compaction_manager_impl::do_split_compaction(logstor_group& src, mutati
         _stats.bytes_read += nonempty_segments.size() * _sm.get_segment_size();
 
         // All records are safely written to new segments in src.
-        // Await pending reads before freeing the source segments.
-        co_await index.await_pending_reads();
+        // Wait for the read guards of the old locations before freeing the source segments.
+        co_await index.await_read_guards();
 
         // Remove and free the source segments of this batch.
         for (auto seg_id : batch) {
@@ -2143,7 +2159,7 @@ future<> compaction_manager_impl::flush_separator_buffer(separator_buffer& buf, 
         co_await buf.close();
 
         // wait for read operations that use the old locations before freeing the old segments
-        co_await cg.logstor_index().await_pending_reads();
+        co_await cg.logstor_index().await_read_guards();
     }());
 
     if (flush_result.failed()) {
@@ -2399,6 +2415,10 @@ void segment_manager::on_free_record(record_location location) noexcept {
     get_impl().on_free_record(location);
 }
 
+void segment_manager::on_move_record(record_location from, record_location to) noexcept {
+    get_impl().on_move_record(from, to);
+}
+
 segment_manager_impl::needs_separation segment_manager_impl::place_recovered_segment(recovery_catalog& catalog, log_segment_id seg_id, const segment_info& info, recovery_stats& stats) {
     switch (info.kind) {
     case segment_kind::mixed:
@@ -2464,7 +2484,7 @@ future<> segment_manager_impl::separate_segment_records(recovery_catalog& catalo
         const auto& header = record.header;
         auto key = header.index_key();
         auto* index = catalog.index(header.table);
-        if (!index || !index->is_record_alive(key, record.location)) {
+        if (!index || !index->is_record_live(key, record.location)) {
             return make_ready_future<>();
         }
         auto* cg = catalog.find(header.table, key.token()).group;

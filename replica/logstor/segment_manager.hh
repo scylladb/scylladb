@@ -168,6 +168,7 @@ public:
 
     void on_add_record(record_location location) noexcept override;
     void on_free_record(record_location location) noexcept override;
+    void on_move_record(record_location from, record_location to) noexcept override;
 
     compaction_manager& get_compaction_manager() noexcept;
     const compaction_manager& get_compaction_manager() const noexcept;

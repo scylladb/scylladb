@@ -103,7 +103,8 @@
 //
 // What one operation of each test does:
 //
-//   index-lookup     look one key up in the primary index, which hashes the key first
+//   index-lookup     look one key up in the primary index the way a read that bypasses the cache
+//                    does, which hashes the key first and returns the location with a guard
 //   index-insert     point the index of one key at a record, which is what a write does once its
 //                    record is in a segment. Includes the lookup. Skips the per-segment accounting
 //                    of the segment manager that a real write pays
@@ -726,10 +727,20 @@ public:
 
     void do_index_lookup(unsigned count) {
         for (unsigned i = 0; i < count; ++i) {
-            if (!index().get(primary_index_key{random_key()})) [[unlikely]] {
+            if (!index().lookup_for_read(primary_index_key{random_key()}, *_schema, use_cache::no)) [[unlikely]] {
                 on_internal_error(logstor_logger, "key of the dataset is missing from the index");
             }
         }
+    }
+
+    // Returns the location of the record of a key in the private index with its read guard, which
+    // the index finds the way a read that bypasses the cache does.
+    primary_index::guarded_location private_location(const primary_index_key& key) const {
+        auto where = tests::logstor::lookup_guarded_location(*_private_index, key, *_schema);
+        if (!where) [[unlikely]] {
+            on_internal_error(logstor_logger, "key of the dataset is missing from the index");
+        }
+        return std::move(*where);
     }
 
     // Copies the index entries of the keys into _private_index, in the order populate() issues the
@@ -741,11 +752,11 @@ public:
         auto copy = std::make_unique<primary_index>(tests::logstor::noop_space_accounting, &_cache.logstor_tracker, true);
         for (const auto& key : _keys) {
             primary_index_key pk{key};
-            auto entry = index().get(pk);
-            if (!entry) [[unlikely]] {
+            auto lookup = index().lookup_for_dump(pk, _schema);
+            if (!lookup) [[unlikely]] {
                 on_internal_error(logstor_logger, "key of the dataset is missing from the index");
             }
-            copy->insert(pk, *entry);
+            copy->insert(pk, lookup->entry);
             co_await coroutine::maybe_yield();
         }
         _private_index = std::move(copy);
@@ -765,12 +776,8 @@ public:
     void do_index_insert(unsigned count) {
         for (unsigned i = 0; i < count; ++i) {
             primary_index_key key{random_key()};
-            auto entry = _private_index->get(key);
-            if (!entry) [[unlikely]] {
-                on_internal_error(logstor_logger, "key of the dataset is missing from the index");
-            }
             _private_index->insert(key, index_entry{
-                .location = entry->location,
+                .location = private_location(key).location,
                 .timestamp = api::new_timestamp(),
             });
         }
@@ -852,15 +859,12 @@ public:
     void do_cache_populate(unsigned count) {
         const primary_index_key key{_mutation->decorated_key()};
         for (unsigned i = 0; i < count; ++i) {
-            auto entry = _private_index->get(key);
-            if (!entry) [[unlikely]] {
-                on_internal_error(logstor_logger, "key of the dataset is missing from the index");
-            }
+            const auto where = private_location(key);
             _private_index->insert(key, index_entry{
-                .location = entry->location,
+                .location = where.location,
                 .timestamp = api::new_timestamp(),
             });
-            if (!_private_index->populate_cache(key, entry->location, _mutation->schema(), _mutation->key(), *_partition)) [[unlikely]] {
+            if (!_private_index->populate_cache(where.guard, key, where.location, _mutation->schema(), _mutation->key(), *_partition)) [[unlikely]] {
                 on_internal_error(logstor_logger, "the entry of the prepared partition was not populated");
             }
         }

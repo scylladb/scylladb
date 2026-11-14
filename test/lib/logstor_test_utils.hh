@@ -45,9 +45,27 @@ namespace tests::logstor {
 struct noop_space_accounting_subscriber final : replica::logstor::space_accounting_subscriber {
     void on_add_record(replica::logstor::record_location) noexcept override {}
     void on_free_record(replica::logstor::record_location) noexcept override {}
+    void on_move_record(replica::logstor::record_location, replica::logstor::record_location) noexcept override {}
 };
 
 inline noop_space_accounting_subscriber noop_space_accounting{};
+
+// Returns the location of the record of a key with its read guard, or nullopt when the index does
+// not have the key. It looks the key up the way a read that bypasses the cache does.
+inline std::optional<replica::logstor::primary_index::guarded_location> lookup_guarded_location(
+        const replica::logstor::primary_index& index, const replica::logstor::primary_index_key& key, const schema& s) {
+    auto result = index.lookup_for_read(key, s, replica::logstor::use_cache::no);
+    if (!result) {
+        return std::nullopt;
+    }
+    return std::get<replica::logstor::primary_index::guarded_location>(std::move(*result));
+}
+
+// Returns the location of the record of a key, or nullopt when the index does not have the key.
+inline std::optional<replica::logstor::record_location> lookup_location(const replica::logstor::primary_index& index,
+        const replica::logstor::primary_index_key& key, const schema& s) {
+    return lookup_guarded_location(index, key, s).transform([] (const auto& where) { return where.location; });
+}
 
 struct shared_logstor_cache {
     ::cache_tracker shared_tracker;
@@ -231,18 +249,18 @@ public:
 struct null_space_accounting final : replica::logstor::space_accounting_subscriber {
     void on_add_record(replica::logstor::record_location) noexcept override {}
     void on_free_record(replica::logstor::record_location) noexcept override {}
+    void on_move_record(replica::logstor::record_location, replica::logstor::record_location) noexcept override {}
 };
 
 using index_entries = std::vector<std::pair<replica::logstor::primary_index_key, replica::logstor::index_entry>>;
 
 inline index_entries entries_of(const replica::logstor::primary_index& index) {
     index_entries out;
-    out.reserve(index.get_key_count());
+    out.reserve(index.get_usage().key_count);
     auto scan = index.scan();
-    while (auto batch = scan.next_batch(1024)) {
-        for (const auto& e : batch->entries) {
-            out.emplace_back(e.get().key(), e.get().entry());
-        }
+    while (scan.next_batch(replica::logstor::primary_index::default_scan_batch_size, [&] (const replica::logstor::primary_index::scanned_entry& e) {
+        out.emplace_back(e.key(), e.entry());
+    })) {
     }
     return out;
 }

@@ -119,7 +119,7 @@ class cache_tracker {
 public:
     explicit cache_tracker(::cache_tracker& shared_tracker);
 
-    void evict(const primary_index_entry&);
+    void evict(const primary_index_entry&) noexcept;
 
     // Admits a copy of `partition`, of the key `key` under `schema`, unless the entry holds a
     // partition already.

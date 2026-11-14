@@ -180,8 +180,6 @@ add_scylla_test(logalloc_test
   KIND SEASTAR)
 add_scylla_test(logstor_test
   KIND SEASTAR)
-add_scylla_test(logstor_cache_test
-  KIND SEASTAR)
 add_scylla_test(logstor_file_test
   KIND SEASTAR)
 add_scylla_test(logstor_recovery_test
@@ -398,6 +396,7 @@ add_scylla_test(combined_tests
     loading_cache_test.cc
     logstor_compaction_driver_test.cc
     logstor_compaction_policy_test.cc
+    logstor_index_test.cc
     memtable_test.cc
     multishard_combining_reader_as_mutation_source_test.cc
     multishard_query_test.cc
