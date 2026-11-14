@@ -26,7 +26,6 @@ def table1(cql, test_keyspace):
 # optional and if provided, can be less than the nanosecond). The following
 # tests verify that these different initialization options actually work.
 # Reproduces issue #7987
-@pytest.mark.xfail(reason="issue #7987")
 def test_type_time_from_int_unprepared(cql, table1):
     p = unique_key_int()
     cql.execute(f"INSERT INTO {table1} (p, t) VALUES ({p}, 123)")
@@ -37,6 +36,38 @@ def test_type_time_from_int_prepared(cql, table1):
     stmt = cql.prepare(f"INSERT INTO {table1} (p, t) VALUES (?, ?)")
     cql.execute(stmt, [p, 123])
     assert list(cql.execute(f"SELECT t from {table1} where p = {p}")) == [(Time(123),)]
+
+# A time given as an integer is the number of nanoseconds since midnight,
+# so it must be at least 0 and less than the number of nanoseconds in a day.
+# Such an integer can also be given in a string - in a CQL string literal or
+# in JSON.
+# Reproduces issue #7987
+def test_type_time_from_int_more(cql, table1):
+    p = unique_key_int()
+    nanoseconds_per_day = 24 * 60 * 60 * 1000000000
+    for n in [0, nanoseconds_per_day - 1]:
+        cql.execute(f"INSERT INTO {table1} (p, t) VALUES ({p}, {n})")
+        assert list(cql.execute(f"SELECT t from {table1} where p = {p}")) == [(Time(n),)]
+    for n in [-1, nanoseconds_per_day]:
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"INSERT INTO {table1} (p, t) VALUES ({p}, {n})")
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"INSERT INTO {table1} (p, t) VALUES ({p}, '{n}')")
+    # Check that the integer really means nanoseconds since midnight: it is
+    # the same time as the equivalent hh:mm:ss.fffffffff string, and toJson()
+    # converts it to that string.
+    p2 = unique_key_int()
+    cql.execute(f"INSERT INTO {table1} (p, t) VALUES ({p2}, '08:12:54.123456789')")
+    for n in ["29574123456789", "'29574123456789'"]:
+        cql.execute(f"INSERT INTO {table1} (p, t) VALUES ({p}, {n})")
+        assert list(cql.execute(f"SELECT t from {table1} where p = {p}")) == list(cql.execute(f"SELECT t from {table1} where p = {p2}"))
+        assert list(cql.execute(f"SELECT toJson(t) from {table1} where p = {p}")) == [('"08:12:54.123456789"',)]
+    cql.execute(f"INSERT INTO {table1} (p, t) VALUES ({p}, '456')")
+    assert list(cql.execute(f"SELECT t from {table1} where p = {p}")) == [(Time(456),)]
+    cql.execute(f"""INSERT INTO {table1} JSON '{{"p": {p}, "t": "789"}}'""")
+    assert list(cql.execute(f"SELECT t from {table1} where p = {p}")) == [(Time(789),)]
+    cql.execute(f"""INSERT INTO {table1} (p, t) VALUES ({p}, fromJson('"321"'))""")
+    assert list(cql.execute(f"SELECT t from {table1} where p = {p}")) == [(Time(321),)]
 
 def test_type_time_from_string_unprepared(cql, table1):
     p = unique_key_int()

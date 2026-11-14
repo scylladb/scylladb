@@ -89,7 +89,8 @@ arguments) as well as the format ScyllaDB will use when returning data for ``SEL
  ``smallint``    integer, string          integer         String must be valid 16 bit integer
  ``set``         list, string             list            Uses JSON's native list representation
  ``text``        string                   string          Uses JSON's ``\u`` character escape
- ``time``        string                   string          Time of day in format ``HH-MM-SS[.fffffffff]``
+ ``time``        string                   string          Time of day in format ``HH:MM:SS[.fffffffff]``, or a string
+                                                          of digits: the number of nanoseconds since midnight
  ``timestamp``   integer, string          string          A timestamp. Strings constant allows to input :ref:`timestamps
                                                           as dates <timestamps>`. Datestamps with format ``YYYY-MM-DD
                                                           HH:MM:SS.SSS`` are returned.
