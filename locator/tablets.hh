@@ -661,6 +661,11 @@ private:
     raft_info_container _raft_info;
     raft_resize_map _raft_resizes;
     size_t _target_pow2_tablet_count = 0; // 0 means no convergence in progress
+    // Set when the table's vnodes-to-tablets migration has been finalized, which
+    // can happen before its keyspace is flipped when tables are migrated one at a
+    // time. The table then behaves like any other tablet table: it is balanced,
+    // it converges to its pow2 layout, and it cannot be rolled back.
+    bool _migration_finalized = false;
 
     // Internal constructor, used by clone() and clone_gently().
     tablet_map(tablet_id_map ids,
@@ -670,7 +675,8 @@ private:
                tablet_task_info resize_task_info,
                raft_info_container raft_info,
                raft_resize_map raft_resizes,
-               size_t target_pow2_tablet_count)
+               size_t target_pow2_tablet_count,
+               bool migration_finalized)
         : _tablet_ids(std::move(ids))
         , _tablets(std::move(tablets))
         , _transitions(std::move(transitions))
@@ -679,6 +685,7 @@ private:
         , _raft_info(std::move(raft_info))
         , _raft_resizes(std::move(raft_resizes))
         , _target_pow2_tablet_count(target_pow2_tablet_count)
+        , _migration_finalized(migration_finalized)
     {}
 public:
     /// Constructs a tablet map.
@@ -877,6 +884,9 @@ public:
     size_t target_pow2_tablet_count() const { return _target_pow2_tablet_count; }
     void set_target_pow2_tablet_count(size_t count) { _target_pow2_tablet_count = count; }
     bool is_converging_to_pow2() const { return _target_pow2_tablet_count != 0; }
+
+    bool migration_finalized() const { return _migration_finalized; }
+    void set_migration_finalized(bool finalized) { _migration_finalized = finalized; }
 public:
     /// Use only on tablet_map constructed with initialized_later tag to populate its contents.
     /// Must be called for consecutive tablet ids and with increasing last_token.
