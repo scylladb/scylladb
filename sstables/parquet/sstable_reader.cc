@@ -13,8 +13,6 @@
 #include <seastar/coroutine/maybe_yield.hh>
 
 #include "query/query-request.hh"
-#include "readers/forwardable.hh"
-#include "readers/reversing.hh"
 #include "schema/schema.hh"
 #include "sstables/abstract_index_reader.hh"
 #include "sstables/mutation_fragment_filter.hh"
@@ -28,10 +26,14 @@
 namespace sstables::parquet {
 
 lw_shared_ptr<const read_plan> sstable_read_state::plan_for(const ::schema& s, const column_translation& ct, const file_summary& summary) {
-    if (!_plan || _plan->version() != s.version()) [[unlikely]] {
-        _plan = make_lw_shared<const read_plan>(_mapping, summary, s, ct);
+    if (_plans[0] && _plans[0]->version() == s.version()) [[likely]] {
+        return _plans[0];
     }
-    return _plan;
+    if (!_plans[1] || _plans[1]->version() != s.version()) {
+        _plans[1] = make_lw_shared<const read_plan>(_mapping, summary, s, ct);
+    }
+    std::swap(_plans[0], _plans[1]);
+    return _plans[0];
 }
 
 namespace {
@@ -64,7 +66,7 @@ bool is_end_bound(fragment_kind k) noexcept {
     return k == fragment_kind::incl_end || k == fragment_kind::excl_end;
 }
 
-// Reads partitions of an sstable with a Parquet Data file in the forward
+// Reads partitions of an sstable with a Parquet Data file, in either
 // direction.
 //
 // The reader follows the state machine of the mx reader
@@ -80,6 +82,45 @@ bool is_end_bound(fragment_kind k) noexcept {
 //
 // With no index reader, the reader reads the whole file and supports
 // neither fast-forwarding nor next_partition(), like the mx full scan reader.
+//
+// Reverse reads
+// -------------
+//
+// Navigation between partitions is the same in both directions: the reader
+// moves forward from head to head. Within a partition, a reverse read has
+// two phases.
+//
+// 1. The head phase reads forward, as a forward read does, until the first
+//    clustering row or range tombstone bound row. It consumes the head and
+//    the static row, or the row of kind "none". A partition without
+//    clustering rows or bounds ends there, as in a forward read.
+// 2. The backward walk reads the rows from the end of the partition down
+//    to that first row. The end of the partition comes from the index. The
+//    walk then consumes rows from the top, and every fragment is turned
+//    into the reverse order: a range tombstone start bound becomes an end
+//    bound and the other way round. A boundary, stored as an end bound row
+//    followed by a start bound row, is met as the start bound row first,
+//    and the reader merges the pair into one change as it does forward.
+//    The head row is the last row of the walk if it holds a clustering row
+//    or a bound. Its partition key and partition tombstone are ignored then.
+//
+// Every row is consumed by the same code in both directions. The direction
+// decides only which row comes next, and how a bound kind reads.
+//
+// The index is used as in a forward read: at the ends of the read and after
+// a skip between clustering ranges. A skip to a position in a backward walk
+// moves the top of the walk down to the start of the first index block after
+// that position (abstract_index_reader::advance_reverse()). The walk never
+// starts inside a block. The rows between the position and the block start
+// are read and filtered, as a forward read filters the rows between a block
+// start and the position. The range tombstone open at the new top of the
+// walk is the one that the index records for that block: the tombstone open
+// before the block's first row (reverse_end_open_marker()). That is the
+// tombstone that a backward walk has open when it reaches the row below. At
+// the end of the partition no tombstone is open. Below that point the walk
+// tracks the open tombstone from the bound rows, as a forward read does.
+// This is what the mx reader does, and it needs nothing more in the index or
+// in the Data file.
 class sstable_mutation_reader final : public mutation_reader::impl {
     shared_sstable _sst;
     value_or_reference<query::partition_slice> _slice_holder;
@@ -100,7 +141,8 @@ class sstable_mutation_reader final : public mutation_reader::impl {
     bool _initialized = false;
     bool _read_enabled = true;
     // The rows to read are [_next_row, _end_row). The rows before
-    // _next_row are consumed.
+    // _next_row are consumed. During a backward walk, _next_row stays at
+    // the bottom of the walk, and _walk tracks the rows of the partition.
     uint64_t _next_row = 0;
     uint64_t _end_row = 0;
     // The sstable's data_size(), which read progress is measured in.
@@ -122,8 +164,76 @@ class sstable_mutation_reader final : public mutation_reader::impl {
     std::optional<dht::decorated_key> _current_partition_key;
     std::optional<mutation_fragment_filter> _mf_filter;
 
+    // The backward walk of a reverse read (see above). The rows that the
+    // walk has not consumed are [begin, end), and it consumes end - 1 next.
+    // `begin` is the partition's first clustering row or bound row, and
+    // `partition_end` is one past the partition's last row.
+    struct backward_walk {
+        uint64_t begin;
+        uint64_t end;
+        uint64_t partition_end;
+    };
+    // Engaged while a reverse read is in the walk of a partition.
+    std::optional<backward_walk> _walk;
+
     bool full_scan() const noexcept {
         return !_index_reader;
+    }
+
+    bool reversed() const noexcept {
+        return _slice.is_reversed();
+    }
+
+    // The row that the reader consumes next.
+    uint64_t current_row() const noexcept {
+        return _walk ? _walk->end - 1 : _next_row;
+    }
+
+    // Whether the reader consumed all rows of the walk, or all rows to read.
+    bool at_end() const noexcept {
+        return _walk ? _walk->end == _walk->begin : _next_row >= _end_row;
+    }
+
+    // The row after the current one in the read direction, if it is one of
+    // the rows to read.
+    std::optional<uint64_t> following_row() const noexcept {
+        if (_walk) {
+            return _walk->end - 1 > _walk->begin ? std::optional<uint64_t>(_walk->end - 2) : std::nullopt;
+        }
+        return _next_row + 1 < _end_row ? std::optional<uint64_t>(_next_row + 1) : std::nullopt;
+    }
+
+    // Consumes `n` rows from the current one, in the read direction.
+    void consume(uint64_t n) {
+        if (_walk) {
+            set_walk_end(_walk->end - n);
+        } else {
+            set_next_row(_next_row + n);
+        }
+    }
+
+    // A reverse read sees the start bound of a range tombstone as its end,
+    // and the end bound as its start. Other kinds stay.
+    fragment_kind in_read_order(fragment_kind k) const noexcept {
+        if (!reversed()) {
+            return k;
+        }
+        switch (k) {
+        case fragment_kind::incl_start: return fragment_kind::incl_end;
+        case fragment_kind::excl_start: return fragment_kind::excl_end;
+        case fragment_kind::incl_end: return fragment_kind::incl_start;
+        case fragment_kind::excl_end: return fragment_kind::excl_start;
+        default: return k;
+        }
+    }
+
+    // The bound row at the decoder's row, with its kind in the read order.
+    decoded_bound decode_bound() {
+        auto b = _rows->decode_bound();
+        if (reversed()) {
+            b.kind = reverse_kind(b.kind);
+        }
+        return b;
     }
 
     bool proceed() const {
@@ -151,6 +261,13 @@ class sstable_mutation_reader final : public mutation_reader::impl {
         _progress.position = progress_of(row);
     }
 
+    // Moves the top of the walk down to `end`. Read progress counts the
+    // rows that the walk consumed or skipped, so it grows in both directions.
+    void set_walk_end(uint64_t end) {
+        _walk->end = end;
+        _progress.position = progress_of(_walk->begin + (_walk->partition_end - end));
+    }
+
     // Moves the rows to read to [begin, end), for example after the index
     // was advanced. Read-ahead restarts there.
     void set_range(uint64_t begin, uint64_t end) {
@@ -160,12 +277,13 @@ class sstable_mutation_reader final : public mutation_reader::impl {
     }
 
     [[noreturn]] void malformed(std::string_view what) const {
-        throw_malformed_sstable_exception(seastar::format("{} (row {})", what, _next_row), _sst->get_filename());
+        throw_malformed_sstable_exception(seastar::format("{} (row {})", what, current_row()), _sst->get_filename());
     }
 
     void reset_partition() {
         _in_partition = false;
         _mf_filter.reset();
+        _walk.reset();
     }
 
     // Skips to the head of a partition.
@@ -195,8 +313,13 @@ class sstable_mutation_reader final : public mutation_reader::impl {
                     _sst->get_filter_tracker().add_false_positive();
                     co_return false;
                 }
-                const position_in_partition_view pos = get_slice_upper_bound(*_schema, _slice, key);
-                co_await _index_reader->advance_upper_past(pos);
+                if (reversed()) {
+                    // A backward walk starts at the end of the partition.
+                    co_await _index_reader->advance_reverse_to_next_partition();
+                } else {
+                    const position_in_partition_view pos = get_slice_upper_bound(*_schema, _slice, key);
+                    co_await _index_reader->advance_upper_past(pos);
+                }
                 _sst->get_filter_tracker().add_true_positive();
             } else {
                 _sst->get_stats().on_range_partition_read();
@@ -221,11 +344,11 @@ class sstable_mutation_reader final : public mutation_reader::impl {
         _codec.emplace(_sst->make_untracked_data_file_for_read(_trace_state), summary, state.cache(), projection, reader_options{
             .begin = begin,
             .end = end,
-            .direction = read_direction::forward,
+            .direction = reversed() ? read_direction::backward : read_direction::forward,
             .hint = _single_partition_read ? read_hint::single_partition : read_hint::scan,
             .permit = _permit,
         }, std::move(fixed_memory));
-        _rows.emplace(*_schema, *_plan, *_codec, read_direction::forward);
+        _rows.emplace(*_schema, *_plan, *_codec, reversed() ? read_direction::backward : read_direction::forward);
         _data_size = _sst->data_size();
         _end_row = end;
         set_next_row(begin);
@@ -338,13 +461,13 @@ class sstable_mutation_reader final : public mutation_reader::impl {
 
     // Fragments
 
-    // Consumes the static row at _next_row.
+    // Consumes the static row at the current row.
     bool consume_static_row() {
-        if (_next_row != _head_row) {
+        if (current_row() != _head_row) {
             malformed("a static row is not the first row of its partition");
         }
         static_row sr = _rows->decode_static_row();
-        set_next_row(_next_row + 1);
+        consume(1);
         if (!sr.empty()) {
             switch (_mf_filter->apply(sr)) {
             case mutation_fragment_filter::result::emit:
@@ -359,7 +482,7 @@ class sstable_mutation_reader final : public mutation_reader::impl {
         return proceed();
     }
 
-    // Consumes the clustering row at _next_row, unless the filter stops at it.
+    // Consumes the clustering row at the current row, unless the filter stops at it.
     bool consume_clustering_row() {
         clustering_key ck = _rows->decode_clustering_key();
         _sst->get_stats().on_row_read();
@@ -374,7 +497,7 @@ class sstable_mutation_reader final : public mutation_reader::impl {
             if (cr.tomb()) {
                 _sst->get_stats().on_row_tombstone_read();
             }
-            set_next_row(_next_row + 1);
+            consume(1);
             push_mutation_fragment(mutation_fragment_v2(*_schema, _permit, std::move(cr)));
             return proceed();
         }
@@ -390,7 +513,7 @@ class sstable_mutation_reader final : public mutation_reader::impl {
                 // again otherwise.
                 return false;
             }
-            set_next_row(_next_row + 1);
+            consume(1);
             // A long run of rows that the filter ignores must not stall.
             return proceed();
         case mutation_fragment_filter::result::store_and_finish:
@@ -400,8 +523,8 @@ class sstable_mutation_reader final : public mutation_reader::impl {
         std::abort();
     }
 
-    // Applies a range tombstone change that `rows` bound rows at _next_row
-    // make, and consumes them unless the filter stores the change.
+    // Applies a range tombstone change that `rows` bound rows from the
+    // current row make, and consumes them unless the filter stores the change.
     bool on_range_tombstone_change(position_in_partition pos, tombstone t, uint64_t rows) {
         auto result = _mf_filter->apply(pos, t);
         for (auto&& rt : result.rts) {
@@ -411,7 +534,7 @@ class sstable_mutation_reader final : public mutation_reader::impl {
         case mutation_fragment_filter::result::emit:
             break;
         case mutation_fragment_filter::result::ignore:
-            set_next_row(_next_row + rows);
+            consume(rows);
             if (_mf_filter->out_of_range()) {
                 on_out_of_clustering_range();
                 return false;
@@ -426,9 +549,12 @@ class sstable_mutation_reader final : public mutation_reader::impl {
             on_out_of_clustering_range();
             return false;
         }
-        set_next_row(_next_row + rows);
+        consume(rows);
         return proceed();
     }
+
+    // The bounds below are in the read order: a start bound opens a range
+    // tombstone in the order of the read, and an end bound closes it.
 
     bool consume_start_bound(decoded_bound b) {
         if (const auto open = _mf_filter->current_tombstone()) {
@@ -437,8 +563,9 @@ class sstable_mutation_reader final : public mutation_reader::impl {
         return on_range_tombstone_change(position_in_partition(position_in_partition::range_tag_t(), b.kind, std::move(b.prefix)), b.tomb, 1);
     }
 
-    // An end bound, and the start bound that follows it at the same
-    // position, if any. The two rows of a boundary make one change.
+    // An end bound, and the start bound that follows it in the read
+    // direction at the same position, if any. The two rows of a boundary
+    // make one change.
     bool consume_end_bound(decoded_bound end, std::optional<decoded_bound> start) {
         const auto open = _mf_filter->current_tombstone();
         if (!open) {
@@ -451,46 +578,108 @@ class sstable_mutation_reader final : public mutation_reader::impl {
         return on_range_tombstone_change(position_in_partition(position_in_partition::range_tag_t(), end.kind, std::move(end.prefix)), next, start ? 2 : 1);
     }
 
-    // Consumes rows from _next_row until a step asks to stop, the buffer
-    // is full, or the task should yield.
+    // Starts the backward walk of the current partition, whose head phase
+    // is over. `first` is its first clustering row or range tombstone bound
+    // row. Returns whether to go on reading rows.
+    future<bool> begin_walk(uint64_t first) {
+        // The end of the partition is the start of the next one in the index.
+        if (!_index_in_current_partition) {
+            co_await _index_reader->advance_to_definitely_present_partition(*_current_partition_key);
+            _index_in_current_partition = true;
+        }
+        co_await _index_reader->advance_reverse_to_next_partition();
+        const auto positions = _index_reader->data_file_positions();
+        if (positions.start != _head_row || !positions.end || *positions.end <= first || *positions.end > _end_row) {
+            malformed(seastar::format("the index puts the partition at rows [{}, {}), the Data file at row {} with a clustering row at {}",
+                    positions.start, positions.end, _head_row, first));
+        }
+        const uint64_t end = *positions.end;
+        _walk = backward_walk{.begin = first, .end = end, .partition_end = end};
+        set_walk_end(end);
+        _codec->fast_forward_to(first, end);
+
+        // The filter has not seen a clustering position yet. A forward read
+        // moves it to its first clustering range at the first clustering
+        // row. A backward walk must know that range before it reads a row,
+        // so that it can skip there with the index.
+        auto result = _mf_filter->apply(position_in_partition_view::before_all_clustered_rows());
+        if (result.action == mutation_fragment_filter::result::store_and_finish || _mf_filter->out_of_range()) {
+            on_out_of_clustering_range();
+            co_return false;
+        }
+        // The lower bound may have been consumed by fast_forward_to() during
+        // the head phase, so it is taken from the filter.
+        _mf_filter->maybe_skip();
+        position_in_partition start(_mf_filter->lower_bound());
+        if (!start.is_before_all_clustered_rows(*_schema)) {
+            co_await advance_context(std::move(start));
+        }
+        co_return true;
+    }
+
+    // The backward walk reached the first clustering row of the partition.
+    bool end_walk() {
+        const uint64_t end = _walk->partition_end;
+        _walk.reset();
+        // The next partition starts there. Read-ahead restarts at its head.
+        set_range(end, _end_row);
+        return consume_partition_end();
+    }
+
+    // Consumes rows until a step asks to stop, the buffer is full, or the
+    // task should yield.
     future<> consume_rows() {
         while (true) {
-            if (_next_row >= _end_row) {
+            if (at_end()) {
+                if (_walk) {
+                    if (!end_walk()) {
+                        co_return;
+                    }
+                    continue;
+                }
                 on_end_of_range();
                 co_return;
             }
-            if (!_rows->try_position(_next_row)) {
+            const uint64_t row = current_row();
+            if (!_rows->try_position(row)) {
                 co_await _rows->finish_position();
             }
             bool go;
-            if (_rows->starts_partition() && !(_in_partition && _next_row == _head_row)) {
+            if (_rows->starts_partition() && !(_in_partition && row == _head_row)) {
+                if (_walk) {
+                    malformed("a partition starts inside another one");
+                }
                 go = _in_partition ? consume_partition_end() : consume_partition_start();
             } else {
                 if (!_in_partition) {
                     malformed("a row is not in a partition");
                 }
-                const fragment_kind kind = _rows->kind();
+                const fragment_kind kind = in_read_order(_rows->kind());
                 if (kind == fragment_kind::none) {
-                    if (_next_row != _head_row) {
+                    if (row != _head_row) {
                         malformed("a row of kind none is not the first row of its partition");
                     }
                     _rows->check_none_row();
-                    set_next_row(_next_row + 1);
+                    consume(1);
                     go = true;
                 } else if (kind == fragment_kind::static_row) {
                     go = consume_static_row();
+                } else if (reversed() && !_walk) {
+                    go = co_await begin_walk(row);
                 } else if (is_start_bound(kind)) {
-                    go = consume_start_bound(_rows->decode_bound());
+                    go = consume_start_bound(decode_bound());
                 } else if (is_end_bound(kind)) {
-                    auto end = _rows->decode_bound();
+                    auto end = decode_bound();
                     std::optional<decoded_bound> start;
-                    const uint64_t next = _next_row + 1;
-                    if (next < _end_row) {
-                        if (!_rows->try_position(next)) {
+                    if (const auto next = following_row()) {
+                        if (!_rows->try_position(*next)) {
                             co_await _rows->finish_position();
                         }
-                        if (!_rows->starts_partition() && is_start_bound(_rows->kind())) {
-                            auto b = _rows->decode_bound();
+                        // In a walk, every row is in the partition. The
+                        // last one is the head, which starts it.
+                        const bool same_partition = _walk || !_rows->starts_partition();
+                        if (same_partition && is_start_bound(in_read_order(_rows->kind()))) {
+                            auto b = decode_bound();
                             const position_in_partition::equal_compare eq(*_schema);
                             if (eq(position_in_partition_view(position_in_partition_view::range_tag_t(), bound_view(end.prefix, end.kind)),
                                     position_in_partition_view(position_in_partition_view::range_tag_t(), bound_view(b.prefix, b.kind)))) {
@@ -516,10 +705,10 @@ class sstable_mutation_reader final : public mutation_reader::impl {
     // reader keeps the sstable readers of a single-partition read until the
     // read ends. So the reader releases its pages as soon as it can.
     void maybe_end_early() {
-        if (_end_of_stream) {
+        if (_end_of_stream || _walk) {
             return;
         }
-        if (!_partition_finished && _next_row >= _end_row) {
+        if (!_partition_finished && at_end()) {
             // What the next consume_rows() would do first.
             on_end_of_range();
         } else if (_partition_finished && _single_partition_read) {
@@ -545,8 +734,10 @@ class sstable_mutation_reader final : public mutation_reader::impl {
             co_await _index_reader->advance_past_definitely_present_partition(*_current_partition_key);
         }
         _index_in_current_partition = true;
-        const auto [start, end] = _index_reader->data_file_positions();
-        if (end && start > *end) {
+        // The end of the rows to read, and not the upper bound of the
+        // index, which a reverse read moves within the partition.
+        const uint64_t start = _index_reader->data_file_positions().start;
+        if (start > _end_row) {
             _read_enabled = false;
             co_return;
         }
@@ -576,15 +767,24 @@ class sstable_mutation_reader final : public mutation_reader::impl {
         co_await read_partition();
     }
 
-    // Skips forward with the index to `pos` in the current partition.
+    // Skips with the index to `pos` in the current partition, in the read
+    // direction. `pos` is in the order of the read.
     future<> advance_context(std::optional<position_in_partition> pos) {
         if (!pos || position_in_partition_view(*pos).is_before_all_fragments(*_schema) || full_scan()) {
+            co_return;
+        }
+        if (reversed() && !_walk) {
+            // begin_walk() skips to the filter's lower bound.
             co_return;
         }
         parse_assert(bool(_current_partition_key), _sst->get_filename());
         if (!_index_in_current_partition) {
             _index_in_current_partition = true;
             co_await _index_reader->advance_to_definitely_present_partition(*_current_partition_key);
+        }
+        if (reversed()) {
+            co_await skip_backward(*pos);
+            co_return;
         }
         co_await _index_reader->advance_to(*pos);
         const uint64_t start = _index_reader->data_file_positions().start;
@@ -601,6 +801,32 @@ class sstable_mutation_reader final : public mutation_reader::impl {
             co_return;
         }
         set_range(start, _end_row);
+        _sst->get_stats().on_partition_seek();
+        _mf_filter->set_tombstone(open);
+    }
+
+    // Moves the top of the walk down to the first index block after `pos`,
+    // if that is below the rows that the walk consumed. See the top of the
+    // class.
+    future<> skip_backward(position_in_partition_view pos) {
+        // The index takes positions in the order of the table.
+        co_await _index_reader->advance_reverse(pos.reversed());
+        const auto end = _index_reader->data_file_positions().end;
+        parse_assert(bool(end), _sst->get_filename());
+        if (*end >= _walk->end) {
+            co_return;
+        }
+        const auto open_marker = _index_reader->reverse_end_open_marker();
+        const tombstone open = open_marker ? open_marker->tomb : tombstone();
+        if (may_be_capped(open)) {
+            // The walk reads on from where it is, and takes the open
+            // tombstone from the bound row in the Data file.
+            co_return;
+        }
+        // The first block of a partition starts at its first clustering row
+        // or bound row, which is the bottom of the walk.
+        set_walk_end(std::max(*end, _walk->begin));
+        _codec->fast_forward_to(_walk->begin, _walk->end);
         _sst->get_stats().on_partition_seek();
         _mf_filter->set_tombstone(open);
     }
@@ -710,8 +936,8 @@ public:
                 ? std::optional<utils::hashed_key>(*single_partition_read_murmur_hash) : std::nullopt)
     {
         _permit.on_start_sstable_read();
-        if (_slice.is_reversed()) {
-            on_internal_error(sstlog, "Parquet sstable reader: reversed reads are not supported natively yet");
+        if (reversed() && !_index_reader) {
+            on_internal_error(sstlog, "Parquet full scan reader: reversed reads are not supported");
         }
     }
     sstable_mutation_reader(const sstable_mutation_reader&) = delete;
@@ -752,8 +978,12 @@ public:
                         co_await read_next_partition();
                     }
                 } else {
-                    if (auto pos = maybe_skip()) {
-                        co_await advance_context(std::move(pos));
+                    // In the head phase of a reverse read, the filter's lower
+                    // bound is left for begin_walk().
+                    if (!reversed() || _walk) {
+                        if (auto pos = maybe_skip()) {
+                            co_await advance_context(std::move(pos));
+                        }
                     }
                     if (!is_buffer_full() && !_partition_finished && !_end_of_stream) {
                         co_await consume_rows();
@@ -839,7 +1069,7 @@ public:
     }
 };
 
-mutation_reader make_forward_reader(
+mutation_reader make_sstable_mutation_reader(
         shared_sstable sstable,
         schema_ptr schema,
         reader_permit permit,
@@ -853,32 +1083,6 @@ mutation_reader make_forward_reader(
         const utils::hashed_key* single_partition_read_murmur_hash) {
     return make_mutation_reader<sstable_mutation_reader>(std::move(sstable), std::move(schema), std::move(permit), range,
             std::move(slice), std::move(trace_state), fwd, fwd_mr, monitor, std::move(ir), single_partition_read_murmur_hash);
-}
-
-// FIXME: a temporary scaffold, so that the tests of reverse reads run
-// before the reader reads backward. It reads forward and reverses the
-// result in memory, which the next step replaces with native reverse reads
-// (PLAN.md, "Reverse reads"). Then this function goes away.
-mutation_reader make_reversed_reader_scaffold(
-        shared_sstable sstable,
-        schema_ptr schema,
-        reader_permit permit,
-        const dht::partition_range& range,
-        const query::partition_slice& slice,
-        tracing::trace_state_ptr trace_state,
-        streamed_mutation::forwarding fwd,
-        mutation_reader::forwarding fwd_mr,
-        read_monitor& monitor,
-        std::unique_ptr<abstract_index_reader> ir,
-        const utils::hashed_key* single_partition_read_murmur_hash) {
-    const auto max_result_size = permit.max_result_size();
-    auto rd = make_reversing_reader(make_forward_reader(std::move(sstable), schema->make_reversed(), std::move(permit), range,
-            value_or_reference(query::reverse_slice(*schema, slice)), std::move(trace_state), streamed_mutation::forwarding::no, fwd_mr,
-            monitor, std::move(ir), single_partition_read_murmur_hash), max_result_size);
-    if (fwd) {
-        rd = make_forwardable(std::move(rd));
-    }
-    return rd;
 }
 
 } // anonymous namespace
@@ -896,11 +1100,7 @@ mutation_reader make_reader(
         integrity_check,
         std::unique_ptr<abstract_index_reader> ir,
         const utils::hashed_key* single_partition_read_murmur_hash) {
-    if (slice.is_reversed()) {
-        return make_reversed_reader_scaffold(std::move(sstable), std::move(schema), std::move(permit), range, slice,
-                std::move(trace_state), fwd, fwd_mr, monitor, std::move(ir), single_partition_read_murmur_hash);
-    }
-    return make_forward_reader(std::move(sstable), std::move(schema), std::move(permit), range, value_or_reference(slice),
+    return make_sstable_mutation_reader(std::move(sstable), std::move(schema), std::move(permit), range, value_or_reference(slice),
             std::move(trace_state), fwd, fwd_mr, monitor, std::move(ir), single_partition_read_murmur_hash);
 }
 
@@ -912,7 +1112,7 @@ mutation_reader make_full_scan_reader(
         read_monitor& monitor,
         integrity_check) {
     const auto& slice = schema->full_slice();
-    return make_forward_reader(std::move(sstable), std::move(schema), std::move(permit), query::full_partition_range,
+    return make_sstable_mutation_reader(std::move(sstable), std::move(schema), std::move(permit), query::full_partition_range,
             value_or_reference(slice), std::move(trace_state), streamed_mutation::forwarding::no, mutation_reader::forwarding::no,
             monitor, nullptr, nullptr);
 }

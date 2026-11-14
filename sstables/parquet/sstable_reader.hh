@@ -30,7 +30,25 @@
 // the read's permit, and a row decoder (mapping_reader.hh) on top of it.
 // The mutation reader walks rows by ordinal and turns each row into
 // mutation fragments, in the order of the `mx` reader.
+//
+// Reverse reads
+// =============
+//
+// A reversed slice is read natively (PLAN.md, "Reverse reads"). As for
+// `mx`, the slice is in the native reversed format, and the schema passed
+// to the reader is the reversed schema. Partitions come in forward order,
+// and the fragments of each partition in reverse clustering order, after
+// its partition start and static row. Unlike `mx`, a reverse read may span
+// several partitions, and supports fast_forward_to() of both kinds.
+//
+// For each partition, the reader first reads the head forward: the first
+// row, which holds the key and the partition tombstone, and the static row
+// if there is one. It then walks backward by ordinal, from the end of the
+// partition down to its first clustering row or range tombstone bound
+// row. The codec reads the pages backward, and read-ahead runs backward.
+// See sstable_reader.cc for the details.
 
+#include <array>
 #include <memory>
 
 #include <seastar/core/shared_ptr.hh>
@@ -59,8 +77,10 @@ namespace sstables::parquet {
 class sstable_read_state {
     opened_mapping _mapping;
     metadata_cache _cache;
-    // The plan of the latest table schema that a read used.
-    lw_shared_ptr<const read_plan> _plan;
+    // The plans of the two latest schemas that reads used, the latest
+    // first. A table has a forward and a reversed schema, and reads in
+    // both directions should not evict each other's plan.
+    std::array<lw_shared_ptr<const read_plan>, 2> _plans;
 public:
     /// The cache's entries live in `region` and are linked in `lru`, which
     /// belong to the sstables' cache_tracker, with `stats`.
@@ -79,9 +99,6 @@ public:
 /// reader `ir` must be the sstable's. Page checksums are verified on every
 /// read, so `integrity` adds nothing yet. The check of the file digest is
 /// left for the operations phase of PLAN.md.
-///
-/// FIXME: a reversed slice reads forward and reverses the result in
-/// memory. The next step replaces this with native reverse reads.
 mutation_reader make_reader(
         shared_sstable sstable,
         schema_ptr schema,
