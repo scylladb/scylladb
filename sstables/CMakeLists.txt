@@ -21,6 +21,7 @@ target_sources(sstables
     parquet/rle.cc
     parquet/schema.cc
     parquet/thrift.cc
+    parquet/writer.cc
     prepended_input_stream.cc
     random_access_reader.cc
     sstable_directory.cc
