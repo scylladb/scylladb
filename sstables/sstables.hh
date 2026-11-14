@@ -992,7 +992,7 @@ public:
     }
 
     bool has_correct_max_deletion_time() const {
-        return (_version >= sstable_version_types::mc) || has_scylla_component();
+        return sstables::has_correct_max_deletion_time(_version) || has_scylla_component();
     }
 
     bool filter_has_key(const key& key) const {
@@ -1071,7 +1071,7 @@ public:
         return _column_translation.get_for_schema(s, h, f);
     }
     column_translation get_column_translation(const schema& s) {
-        if (get_version() >= sstable_version_types::mc) [[likely]] {
+        if (has_serialization_header(get_version())) [[likely]] {
             return _column_translation.get_for_schema(s, get_serialization_header(), features());
         } else {
             return _column_translation.get_for_schema(s);
@@ -1148,7 +1148,7 @@ public:
     }
 
     bool has_correct_min_max_column_names() const noexcept {
-        return _version >= sstable_version_types::md;
+        return sstables::has_correct_min_max_column_names(_version);
     }
 
     // Return true if this sstable possibly stores clustering row(s) specified by ranges.

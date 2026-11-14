@@ -774,7 +774,7 @@ future<> parse(const schema& schema, sstable_version_types v, random_access_read
             co_await parse<stats_metadata>(schema, v, in, s.contents[type]);
             break;
         case metadata_type::Serialization:
-            if (v < sstable_version_types::mc) {
+            if (!has_serialization_header(v)) {
                 throw_malformed_sstable_exception(
                     "Statistics is malformed: SSTable is in 2.x format but contains serialization header.");
             } else {
@@ -792,7 +792,7 @@ future<> parse(const schema& schema, sstable_version_types v, random_access_read
             throw_malformed_sstable_exception(fmt::format("Statistics is malformed: missing metadata type {}", int(type)));
         }
     }
-    if (v >= sstable_version_types::mc && !s.contents.contains(metadata_type::Serialization)) {
+    if (has_serialization_header(v) && !s.contents.contains(metadata_type::Serialization)) {
         throw_malformed_sstable_exception("Statistics is malformed: missing Serialization header");
     }
 }
@@ -2105,7 +2105,7 @@ future<> sstable::drop_caches() {
 
 // Return the filter format for the given sstable version
 static inline utils::filter_format get_filter_format(sstable_version_types version) {
-    return (version >= sstable_version_types::mc)
+    return has_m_format_filter(version)
                ? utils::filter_format::m_format
                : utils::filter_format::k_l_format;
 }
@@ -2576,7 +2576,7 @@ void seal_statistics(sstable_version_types v, statistics& s, metadata_collector&
     s.contents[metadata_type::Validation] = std::make_unique<validation_metadata>(std::move(validation));
 
     collector.construct_compaction(compaction);
-    if (v < sstable_version_types::mc && !compaction_ancestors.empty()) {
+    if (has_compaction_ancestors(v) && !compaction_ancestors.empty()) {
         compaction.ancestors.elements = utils::chunked_vector<uint32_t>(compaction_ancestors.begin(), compaction_ancestors.end());
     }
     s.contents[metadata_type::Compaction] = std::make_unique<compaction_metadata>(std::move(compaction));
@@ -2788,7 +2788,7 @@ void sstable::validate_sstable_identifier() const {
 }
 
 bool sstable::may_contain_rows(const query::clustering_row_ranges& ranges) const {
-    if (_version < sstables::sstable_version_types::md) {
+    if (!has_correct_min_max_column_names()) {
         return true;
     }
 
@@ -2860,7 +2860,7 @@ future<uint64_t> sstable::validate(reader_permit permit, abort_source& abort,
     }
     co_await utils::get_local_injector().inject("sstable_validate/pause", utils::wait_for_message(std::chrono::seconds(5)));
 
-    if (_version >= sstable_version_types::mc) {
+    if (has_mx_data_file(_version)) {
         co_return co_await mx::validate(shared_from_this(), std::move(permit), abort, std::move(error_handler), monitor);
     }
 
@@ -3090,7 +3090,7 @@ bool sstable::has_component(component_type f) const {
 }
 
 std::optional<bool> sstable::originated_on_this_node() const {
-    if (_version < version_types::me) {
+    if (!has_originating_host_id(_version)) {
         // earlier formats do not store originating host id
         return std::nullopt;
     }
@@ -3116,7 +3116,7 @@ std::optional<bool> sstable::originated_on_this_node() const {
 }
 
 void sstable::validate_originating_host_id() const {
-    if (_version < version_types::me) {
+    if (!has_originating_host_id(_version)) {
         // earlier formats do not store originating host id
         return;
     }
@@ -3237,7 +3237,7 @@ sstable::make_reader(
     auto index_caching = use_caching(global_cache_index_pages && !slice.options.contains(query::partition_slice::option::bypass_cache));
     auto index_reader = make_index_reader(permit, trace_state, index_caching, range.is_singular());
 
-    if (_version >= version_types::mc && (!reversed || range.is_singular())) {
+    if (has_mx_data_file(_version) && (!reversed || range.is_singular())) {
         return mx::make_reader(
             shared_from_this(),
             std::move(query_schema),
@@ -3258,7 +3258,7 @@ sstable::make_reader(
     // FIXME: remove this workaround eventually.
     auto max_result_size = permit.max_result_size();
 
-    if (_version >= version_types::mc) {
+    if (has_mx_data_file(_version)) {
         // The only mx case falling through here is reversed multi-partition reader
         auto rd = make_reversing_reader(mx::make_reader(shared_from_this(), query_schema->make_reversed(), std::move(permit),
                 range, reverse_slice(*query_schema, slice), std::move(trace_state), streamed_mutation::forwarding::no, fwd_mr, mon,
@@ -3292,7 +3292,7 @@ sstable::make_full_scan_reader(
         tracing::trace_state_ptr trace_state,
         read_monitor& monitor,
         integrity_check integrity) {
-    if (_version >= version_types::mc) {
+    if (has_mx_data_file(_version)) {
         return mx::make_full_scan_reader(shared_from_this(), std::move(schema), std::move(permit), std::move(trace_state), monitor, integrity);
     }
     return kl::make_full_scan_reader(shared_from_this(), std::move(schema), std::move(permit), std::move(trace_state), monitor, integrity);
@@ -3435,7 +3435,7 @@ future<input_stream<char>> sstable::data_stream(uint64_t pos, size_t len,
         co_return input_stream<char>(co_await _storage->make_data_or_index_source(*this, component_type::Data, std::move(f), pos, len, std::move(options)));
     };
     if (_components->compression && raw == raw_stream::no) {
-        if (_version >= sstable_version_types::mc) {
+        if (has_m_format_checksums(_version)) {
             co_return make_compressed_file_m_format_input_stream(stream_creator, &_components->compression,
                pos, len, std::move(options), permit, digest);
         } else {
@@ -3444,14 +3444,14 @@ future<input_stream<char>> sstable::data_stream(uint64_t pos, size_t len,
         }
     }
 
-    if (_components->compression && raw == raw_stream::compressed_chunks && _version >= sstable_version_types::mc) {
+    if (_components->compression && raw == raw_stream::compressed_chunks && has_m_format_checksums(_version)) {
         co_return make_compressed_raw_file_input_stream(stream_creator, &_components->compression, std::move(options), permit, digest);
     }
 
     if (_components->checksum && integrity == integrity_check::yes) {
         auto checksum = get_checksum();
         auto file_len = data_size();
-        if (_version >= sstable_version_types::mc) {
+        if (has_m_format_checksums(_version)) {
              co_return make_checksummed_file_m_format_input_stream(stream_creator, file_len,
                 *checksum, pos, len, std::move(options), digest, error_handler);
         } else {
@@ -3755,7 +3755,7 @@ future<validate_checksums_result> validate_checksums_and_digests(shared_sstable 
 
     try {
         if (sst->get_compression()) {
-            if (sst->get_version() >= sstable_version_types::mc) {
+            if (has_m_format_checksums(sst->get_version())) {
                 valid = co_await do_validate_compressed<crc32_utils>(data_stream, sst->get_compression(), true, digest);
             } else {
                 valid = co_await do_validate_compressed<adler32_utils>(data_stream, sst->get_compression(), false, digest);

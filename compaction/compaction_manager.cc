@@ -3053,7 +3053,7 @@ future<> compaction_manager::perform_sstable_upgrade(owned_ranges_ptr sorted_own
             // if we are a "normal" upgrade, we only care about
             // tables with other versions, but potentially
             // we are to actually rewrite everything. (-a)
-            if (!exclude_current_version || sst->get_version() < last_version) {
+            if (!exclude_current_version || sstables::is_older_within_format(sst->get_version(), last_version)) {
                 tables.emplace_back(sst);
             }
         }

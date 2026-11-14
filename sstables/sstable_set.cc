@@ -988,7 +988,7 @@ time_series_sstable_set::create_single_key_sstable_reader(
             || schema->has_static_columns()
             || std::any_of(_sstables->begin(), _sstables->end(),
                 [] (const sst_entry& e) {
-                    return e.second->get_version() < sstable_version_types::md
+                    return !e.second->has_correct_min_max_column_names()
                         || e.second->may_have_partition_tombstones();
     })) {
         // Some of the conditions were not satisfied so we use the standard query path.
