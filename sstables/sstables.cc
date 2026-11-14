@@ -300,10 +300,12 @@ const std::unordered_map<sstable_version_types, sstring, enum_hash<sstable_versi
     { sstable_version_types::me , "me" },
     { sstable_version_types::ms , "ms" },
     { sstable_version_types::mt , "mt" },
+    { sstable_version_types::aa , "aa" },
 };
 
 const std::unordered_map<sstable_format_types, sstring, enum_hash<sstable_format_types>> format_string = {
-    { sstable_format_types::big , "big" }
+    { sstable_format_types::big , "big" },
+    { sstable_format_types::pq , "pq" },
 };
 
 // This assumes that the mappings are small enough, and called unfrequent
@@ -1059,10 +1061,12 @@ void sstable::generate_toc() {
     if (_schema->bloom_filter_fp_chance() != 1.0) {
         _recognized_components.insert(component_type::Filter);
     }
-    if (!_schema->get_compressor_params().compression_enabled()) {
-        _recognized_components.insert(component_type::CRC);
-    } else {
-        _recognized_components.insert(component_type::CompressionInfo);
+    if (has_compression_info_or_crc(_version)) {
+        if (!_schema->get_compressor_params().compression_enabled()) {
+            _recognized_components.insert(component_type::CRC);
+        } else {
+            _recognized_components.insert(component_type::CompressionInfo);
+        }
     }
     _recognized_components.insert(component_type::Scylla);
 }
@@ -2342,7 +2346,17 @@ void sstable::write_component(component_type type) {
 }
 
 
+// Reading and writing sstables with a Parquet Data file is not implemented yet.
+[[noreturn]] static void throw_parquet_not_supported(const sstable& sst, std::string_view operation) {
+    throw std::runtime_error(seastar::format("Cannot {} sstable {}: sstables of format {} (version {}) are not supported yet",
+            operation, sst.toc_filename(), sst.get_format(), sst.get_version()));
+}
+
 future<> sstable::load_metadata(sstable_open_config cfg) noexcept {
+    // FIXME: read the Parquet footer here once the Parquet reader exists.
+    if (has_parquet_data_file(_version)) {
+        throw_parquet_not_supported(*this, "load");
+    }
     co_await read_toc(cfg);
     // read scylla-meta after toc. Might need it to parse
     // rest (hint extensions)
@@ -2407,7 +2421,6 @@ future<foreign_sstable_open_info> sstable::get_open_info() & {
             .rows = _rows_file ? std::optional<seastar::file_handle>(_rows_file.dup()) : std::nullopt,
             .generation = _generation,
             .version = _version,
-            .format = _format,
             .uncompressed_data_size = data_size(),
             .metadata_size_on_disk = _metadata_size_on_disk
         };
@@ -2415,7 +2428,7 @@ future<foreign_sstable_open_info> sstable::get_open_info() & {
 }
 
 entry_descriptor sstable::get_descriptor(component_type c) const {
-    return entry_descriptor(_generation, _sstable_identifier, _version, _format, c);
+    return entry_descriptor(_generation, _sstable_identifier, _version, c);
 }
 
 future<>
@@ -2860,6 +2873,9 @@ future<uint64_t> sstable::validate(reader_permit permit, abort_source& abort,
     }
     co_await utils::get_local_injector().inject("sstable_validate/pause", utils::wait_for_message(std::chrono::seconds(5)));
 
+    if (has_parquet_data_file(_version)) {
+        throw_parquet_not_supported(*this, "validate");
+    }
     if (has_mx_data_file(_version)) {
         co_return co_await mx::validate(shared_from_this(), std::move(permit), abort, std::move(error_handler), monitor);
     }
@@ -3146,10 +3162,10 @@ void sstable::validate_originating_host_id() const {
 }
 
 sstring sstable::component_basename(const sstring& ks, const sstring& cf, version_types version, generation_type generation,
-                                    format_types format, sstring component) {
+                                    sstring component) {
     sstring v = fmt::to_string(version);
     sstring g = to_sstring(generation);
-    sstring f = fmt::to_string(format);
+    sstring f = fmt::to_string(format_of(version));
     switch (version) {
     case sstable::version_types::ka:
         return ks + "-" + cf + "-" + v + "-" + g + "-" + component;
@@ -3160,6 +3176,7 @@ sstring sstable::component_basename(const sstring& ks, const sstring& cf, versio
     case sstable::version_types::me:
     case sstable::version_types::ms:
     case sstable::version_types::mt:
+    case sstable::version_types::aa:
         return v + "-" + g + "-" + f + "-" + component;
     }
     on_internal_error(sstlog, seastar::format("invalid version {} for sstable: table={}.{}, generation={}, format={}, component={}",
@@ -3167,19 +3184,19 @@ sstring sstable::component_basename(const sstring& ks, const sstring& cf, versio
 }
 
 sstring sstable::component_basename(const sstring& ks, const sstring& cf, version_types version, generation_type generation,
-                          format_types format, component_type component) {
-    return component_basename(ks, cf, version, generation, format,
+                          component_type component) {
+    return component_basename(ks, cf, version, generation,
             sstable_version_constants::get_component_map(version).at(component));
 }
 
 sstring sstable::filename(const sstring& dir, const sstring& ks, const sstring& cf, version_types version, generation_type generation,
-                          format_types format, component_type component) {
-    return dir + "/" + component_basename(ks, cf, version, generation, format, component);
+                          component_type component) {
+    return dir + "/" + component_basename(ks, cf, version, generation, component);
 }
 
 sstring sstable::filename(const sstring& dir, const sstring& ks, const sstring& cf, version_types version, generation_type generation,
-                          format_types format, sstring component) {
-    return dir + "/" + component_basename(ks, cf, version, generation, format, component);
+                          sstring component) {
+    return dir + "/" + component_basename(ks, cf, version, generation, component);
 }
 
 std::vector<std::pair<component_type, sstring>> sstable::all_components() const {
@@ -3237,6 +3254,9 @@ sstable::make_reader(
     auto index_caching = use_caching(global_cache_index_pages && !slice.options.contains(query::partition_slice::option::bypass_cache));
     auto index_reader = make_index_reader(permit, trace_state, index_caching, range.is_singular());
 
+    if (has_parquet_data_file(_version)) {
+        throw_parquet_not_supported(*this, "read");
+    }
     if (has_mx_data_file(_version) && (!reversed || range.is_singular())) {
         return mx::make_reader(
             shared_from_this(),
@@ -3292,6 +3312,9 @@ sstable::make_full_scan_reader(
         tracing::trace_state_ptr trace_state,
         read_monitor& monitor,
         integrity_check integrity) {
+    if (has_parquet_data_file(_version)) {
+        throw_parquet_not_supported(*this, "read");
+    }
     if (has_mx_data_file(_version)) {
         return mx::make_full_scan_reader(shared_from_this(), std::move(schema), std::move(permit), std::move(trace_state), monitor, integrity);
     }
@@ -3303,7 +3326,8 @@ static std::expected<std::tuple<entry_descriptor, sstring, sstring>, sstring> ma
     //   la-42-big-Data.db
     //   ka-42-big-Data.db
     //   me-3g8w_00qf_4pbog2i7h2c7am0uoe-big-Data.db
-    static boost::regex la_mx("(la|m[cdest])-([^-]+)-(\\w+)-(.*)");
+    //   aa-3g8w_00qf_4pbog2i7h2c7am0uoe-pq-Data.db
+    static boost::regex la_mx("(la|m[cdest]|aa)-([^-]+)-(\\w+)-(.*)");
     static boost::regex ka("(\\w+)-(\\w+)-ka-(\\d+)-(.*)");
 
     // Use non-greedy match so that a snapshot tag that ressembles a name-<uuid> wouldn't match
@@ -3364,7 +3388,8 @@ static std::expected<std::tuple<entry_descriptor, sstring, sstring>, sstring> ma
         return std::unexpected{seastar::format("invalid version for file {}. Name doesn't match any known version.", fname)};
     }
     try {
-        return std::make_tuple(entry_descriptor(generation_type::from_string(generation), std::nullopt, version, format_from_string(format), sstable::component_from_sstring(version, component)), ks, cf);
+        check_format_of_version(version, format_from_string(format));
+        return std::make_tuple(entry_descriptor(generation_type::from_string(generation), std::nullopt, version, sstable::component_from_sstring(version, component)), ks, cf);
     } catch (const std::exception& e) {
         return std::unexpected{seastar::format("failed to parse sstable filename {}: {}", fname, e.what())};
     }
@@ -3396,6 +3421,18 @@ sstable_format_types format_from_string(std::string_view s) {
     } catch (std::out_of_range&) {
         throw std::out_of_range(seastar::format("Unknown sstable format: {}", s));
     }
+}
+
+void check_format_of_version(sstable_version_types v, sstable_format_types f) {
+    if (f != format_of(v)) {
+        throw std::invalid_argument(seastar::format("sstable version {} belongs to format {}, not to format {}", v, format_of(v), f));
+    }
+}
+
+sstable_version_types version_and_format_from_strings(std::string_view version, std::string_view format) {
+    auto v = version_from_string(version);
+    check_format_of_version(v, format_from_string(format));
+    return v;
 }
 
 component_type sstable::component_from_sstring(version_types v, const sstring &s) {
@@ -4361,7 +4398,6 @@ sstable::sstable(schema_ptr schema,
         optimized_optional<sstable_id> sstable_identifier,
         sstable_state state,
         version_types v,
-        format_types f,
         db::large_data_handler& large_data_handler,
         db::corrupt_data_handler& corrupt_data_handler,
         sstables_manager& manager,
@@ -4374,7 +4410,6 @@ sstable::sstable(schema_ptr schema,
     , _state(state)
     , _storage(make_storage(manager, _schema, storage, _state))
     , _version(v)
-    , _format(f)
     , _index_cache(std::make_unique<partition_index_cache>(
             manager.get_cache_tracker().get_lru(), manager.get_cache_tracker().region(), manager.get_cache_tracker().get_partition_index_cache_stats()))
     , _now(now)
@@ -4859,7 +4894,7 @@ public:
 };
 
 std::unique_ptr<sstable_stream_sink> create_stream_sink(schema_ptr schema, sstables_manager& sstm, const data_dictionary::storage_options& s_opts, sstable_state state, const entry_descriptor& desc, sstable_stream_sink_cfg cfg) {
-    auto sst = sstm.make_sstable(schema, s_opts, desc.generation, desc.sid, state, desc.version, desc.format);
+    auto sst = sstm.make_sstable(schema, s_opts, desc.generation, desc.sid, state, desc.version);
 
     auto type = desc.component;
     // Don't write actual TOC. Write temp, if successful, storage::seal will rename this to actual

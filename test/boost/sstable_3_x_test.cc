@@ -56,7 +56,6 @@ class sstable_assertions final : public sstables::test {
                             path,
                             generation,
                             version,
-                            sstable_format_types::big,
                             1))
         , _env(env)
     { }
@@ -3184,9 +3183,9 @@ static void compare_sstables(const std::filesystem::path& result_path, sstring t
     for (auto file_type : file_types) {
         auto orig_filename =
                 sstable::filename(get_write_test_path(table_name),
-                                  "ks", table_name, sstables::sstable_version_types::mc, generation_from_value(1), big, file_type);
+                                  "ks", table_name, sstables::sstable_version_types::mc, generation_from_value(1), file_type);
         auto result_filename =
-                sstable::filename(result_path.string(), "ks", table_name, sst->get_version(), sst->generation(), big, file_type);
+                sstable::filename(result_path.string(), "ks", table_name, sst->get_version(), sst->generation(), file_type);
         auto eq = tests::compare_files(orig_filename, result_filename).get();
         if (!eq) {
             BOOST_FAIL(format("Files {} and {} are different", orig_filename, result_filename));

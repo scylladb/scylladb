@@ -645,10 +645,9 @@ const std::vector<sstables::shared_sstable> load_sstables(schema_ptr schema, sst
                         sstables::object_storage_sstable_version_attribute,
                         sstables::object_storage_sstable_format_attribute));
                 }
-                auto version = sstables::version_from_string(version_it->second);
-                auto format = sstables::format_from_string(format_it->second);
+                auto version = sstables::version_and_format_from_strings(version_it->second, format_it->second);
                 ed = sstables::entry_descriptor(sstables::generation_type(sid_uuid), sstables::sstable_id(sid_uuid),
-                        version, format, sstables::sstable::component_from_sstring(version, component));
+                        version, sstables::sstable::component_from_sstring(version, component));
             }
         } else {
             auto ed_result = sstables::parse_path(sst_path, schema->ks_name(), schema->cf_name());
@@ -669,7 +668,7 @@ const std::vector<sstables::shared_sstable> load_sstables(schema_ptr schema, sst
             const auto dir_path = sst_path.parent_path();
             options = data_dictionary::make_local_options(dir_path);
         }
-        auto sst = sst_man.make_sstable(schema, options, ed->generation, ed->sid, sstables::sstable_state::normal, ed->version, ed->format);
+        auto sst = sst_man.make_sstable(schema, options, ed->generation, ed->sid, sstables::sstable_state::normal, ed->version);
 
         try {
             auto open_cfg = sstables::sstable_open_config{
@@ -1087,15 +1086,14 @@ private:
 
 private:
     sstables::shared_sstable do_make_sstable() const {
-        const auto format = sstables::sstable_format_types::big;
         const auto version = _sst_man.get_preferred_sstable_version();
         auto generation = _generation_generator();
-        auto sst_name = sstables::sstable::filename(_output_dir, _schema->ks_name(), _schema->cf_name(), version, generation, format, component_type::Data);
+        auto sst_name = sstables::sstable::filename(_output_dir, _schema->ks_name(), _schema->cf_name(), version, generation, component_type::Data);
         if (file_exists(sst_name).get()) {
             throw std::runtime_error(fmt::format("cannot create output sstable {}, file already exists", sst_name));
         }
         auto local = data_dictionary::make_local_options(_output_dir);
-        return _sst_man.make_sstable(_schema, local, generation, sstables::sstable_state::normal, version, format);
+        return _sst_man.make_sstable(_schema, local, generation, sstables::sstable_state::normal, version);
     }
     sstables::sstable_writer_config do_configure_writer(sstring origin) const {
         return _sst_man.configure_writer(std::move(origin));
@@ -2299,7 +2297,6 @@ void write_operation(schema_ptr schema, reader_permit permit, const std::vector<
     auto input_format = get_input_format_from_options(vm, input_format::cql);
     auto memory_limit = vm["memory-limit"].as<size_t>();
     auto output_dir = vm["output-dir"].as<std::string>();
-    auto format = sstables::sstable_format_types::big;
     auto version = vm.contains("sstable-version")
         ? version_from_string(vm["sstable-version"].as<std::string>())
         : manager.get_preferred_sstable_version();
@@ -2308,7 +2305,7 @@ void write_operation(schema_ptr schema, reader_permit permit, const std::vector<
         auto generation = sstables::generation_type(utils::UUID_gen::get_time_UUID());
 
         {
-            auto sst_name = sstables::sstable::filename(output_dir, schema->ks_name(), schema->cf_name(), version, generation, format, component_type::Data);
+            auto sst_name = sstables::sstable::filename(output_dir, schema->ks_name(), schema->cf_name(), version, generation, component_type::Data);
             if (co_await file_exists(sst_name)) {
                 throw std::invalid_argument(fmt::format("cannot create output sstable {}, file already exists", sst_name));
             }
@@ -2317,7 +2314,7 @@ void write_operation(schema_ptr schema, reader_permit permit, const std::vector<
         auto writer_cfg = manager.configure_writer("scylla-sstable");
         writer_cfg.validation_level = validation_level;
         auto local = data_dictionary::make_local_options(output_dir);
-        auto sst = manager.make_sstable(schema, local, generation, sstables::sstable_state::normal, version, format);
+        auto sst = manager.make_sstable(schema, local, generation, sstables::sstable_state::normal, version);
 
         co_await sst->write_components(std::move(reader), partition_count_estimate, schema, writer_cfg, encoding_stats{});
 
@@ -2628,7 +2625,6 @@ void upgrade_operation(schema_ptr schema, reader_permit permit, const std::vecto
 
     const auto local = data_dictionary::make_local_options(output_dir);
 
-    const auto new_format = sstables::sstable_format_types::big;
     const auto new_version = vm.contains("sstable-version")
         ? sstables::version_from_string(vm["sstable-version"].as<std::string>())
         : sst_man.get_preferred_sstable_version();
@@ -2642,7 +2638,7 @@ void upgrade_operation(schema_ptr schema, reader_permit permit, const std::vecto
         const auto new_generation = sstables::generation_type(utils::UUID_gen::get_time_UUID());
 
         auto writer_cfg = sst_man.configure_writer("scylla-sstable");
-        auto new_sst = sst_man.make_sstable(schema, local, new_generation, sstables::sstable_state::normal, new_version, new_format);
+        auto new_sst = sst_man.make_sstable(schema, local, new_generation, sstables::sstable_state::normal, new_version);
 
         new_sst->write_components(
                 sst->make_full_scan_reader(schema, permit),
@@ -2704,7 +2700,6 @@ void filter_operation(schema_ptr schema, reader_permit permit, const std::vector
 
     const auto local = data_dictionary::make_local_options(output_dir);
 
-    const auto new_format = sstables::sstable_format_types::big;
     const auto new_version = vm.contains("sstable-version")
         ? sstables::version_from_string(vm["sstable-version"].as<std::string>())
         : sst_man.get_preferred_sstable_version();
@@ -2735,7 +2730,7 @@ void filter_operation(schema_ptr schema, reader_permit permit, const std::vector
         const auto new_generation = sstables::generation_type(utils::UUID_gen::get_time_UUID());
 
         auto writer_cfg = sst_man.configure_writer("scylla-sstable");
-        auto new_sst = sst_man.make_sstable(schema, local, new_generation, sstables::sstable_state::normal, new_version, new_format);
+        auto new_sst = sst_man.make_sstable(schema, local, new_generation, sstables::sstable_state::normal, new_version);
 
         new_sst->write_components(
                 std::move(reader),
@@ -2765,7 +2760,6 @@ void split_operation(schema_ptr schema, reader_permit permit, const std::vector<
 
     const auto local = data_dictionary::make_local_options(output_dir);
 
-    const auto new_format = sstables::sstable_format_types::big;
     const auto new_version = vm.contains("sstable-version")
         ? sstables::version_from_string(vm["sstable-version"].as<std::string>())
         : sst_man.get_preferred_sstable_version();
@@ -2804,7 +2798,7 @@ void split_operation(schema_ptr schema, reader_permit permit, const std::vector<
 
         auto consumer = [&] (mutation_reader reader) -> future<> {
             const auto new_generation = sstables::generation_type(utils::UUID_gen::get_time_UUID());
-            auto new_sst = sst_man.make_sstable(schema, local, new_generation, sstables::sstable_state::normal, new_version, new_format);
+            auto new_sst = sst_man.make_sstable(schema, local, new_generation, sstables::sstable_state::normal, new_version);
 
             auto writer_cfg = sst_man.configure_writer("scylla-sstable");
 

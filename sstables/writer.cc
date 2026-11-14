@@ -15,6 +15,11 @@ namespace sstables {
 
 sstable_writer::sstable_writer(sstable& sst, const schema& s, uint64_t estimated_partitions,
         const sstable_writer_config& cfg, encoding_stats enc_stats, shard_id shard) {
+    // FIXME: choose the Parquet writer_impl here once it exists.
+    if (has_parquet_data_file(sst.get_version())) {
+        throw std::runtime_error(seastar::format("Cannot write sstable {}: sstables of format {} (version {}) are not supported yet",
+                sst.toc_filename(), sst.get_format(), sst.get_version()));
+    }
     if (!is_writable(sst.get_version())) {
         on_internal_error(sstlog, format("writing sstables with too old format: {}", static_cast<int>(sst.get_version())));
     }

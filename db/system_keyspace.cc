@@ -3574,7 +3574,7 @@ future<> system_keyspace::sstables_registry_create_entry(table_id tid, locator::
     } else {
         on_internal_error(slogger, fmt::format("sstables_registry_create_entry: sstable with generation={} has no sstable_id", desc.generation));
     }
-    co_await execute_cql(req, tid.id, node_owner.uuid(), desc.generation, status, sid, sstables::state_to_dir(state), fmt::to_string(desc.version), fmt::to_string(desc.format)).discard_result();
+    co_await execute_cql(req, tid.id, node_owner.uuid(), desc.generation, status, sid, sstables::state_to_dir(state), fmt::to_string(desc.version), fmt::to_string(desc.format())).discard_result();
 }
 
 future<> system_keyspace::sstables_registry_update_entry_status(table_id tid, locator::host_id node_owner, sstables::generation_type gen, sstring status) {
@@ -3629,9 +3629,8 @@ future<> system_keyspace::sstables_registry_list(table_id tid, locator::host_id 
         } else {
             on_internal_error(slogger, fmt::format("sstables_registry_list: sstable with generation={} has no sstable_id", gen));
         }
-        auto ver = sstables::version_from_string(row.get_as<sstring>("version"));
-        auto fmt = sstables::format_from_string(row.get_as<sstring>("format"));
-        sstables::entry_descriptor desc(gen, sid, ver, fmt, sstables::component_type::TOC);
+        auto ver = sstables::version_and_format_from_strings(row.get_as<sstring>("version"), row.get_as<sstring>("format"));
+        sstables::entry_descriptor desc(gen, sid, ver, sstables::component_type::TOC);
         co_await consumer(std::move(status), std::move(state), std::move(desc));
         co_return stop_iteration::no;
     });

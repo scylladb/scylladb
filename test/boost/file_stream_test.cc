@@ -612,7 +612,7 @@ static future<> test_stream_sink_write(sstables::test_env_config cfg) {
         auto& mgr = env.manager();
         auto s_opts = env.get_storage_options();
         auto desc = sstables::entry_descriptor(generation, sstable_id(generation.as_uuid()),
-                get_highest_sstable_version(), sstable::format_types::big, component_type::TOC);
+                get_highest_sstable_version(), component_type::TOC);
 
         std::visit(overloaded_functor {
             [&env] (data_dictionary::storage_options::local& o) { o.dir = env.tempdir().path().native(); },
@@ -709,7 +709,7 @@ SEASTAR_THREAD_TEST_CASE(test_stream_sink_stamps_scrub_time_on_completion) {
         // Check what was persisted rather than what the sink left in memory.
         auto reopened = table.get_sstables_manager().make_sstable(schema, table.get_storage_options(),
                 received->generation(), *received->sstable_identifier(), sstable_state::normal,
-                received->get_version(), received->get_format());
+                received->get_version());
         reopened->load_metadata().get();
 
         auto scrub_time = reopened->get_scrub_time();

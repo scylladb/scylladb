@@ -29,7 +29,6 @@ struct minimal_sst_info {
     shard_id shard;
     sstables::generation_type generation;
     sstables::sstable_version_types version;
-    sstables::sstable_format_types format;
     // The sstable_id of the restored sstable. Set only for a table on object storage.
     // There the sstable_id is the prefix of the object names, so attach_sstable()
     // needs it to open the sstable. For a table on filesystem, the sstable_id comes

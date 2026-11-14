@@ -177,8 +177,7 @@ future<std::vector<sstables_registry_entry>> load_system_sstables_registry(const
                 entries.emplace_back(std::move(*status), sstables::state_from_dir(*state),
                         sstables::entry_descriptor(sstables::generation_type(*generation),
                                 sstables::sstable_id(*sstable_id),
-                                sstables::version_from_string(*version),
-                                sstables::format_from_string(*format),
+                                sstables::version_and_format_from_strings(*version, *format),
                                 sstables::component_type::TOC));
             });
     co_return entries;

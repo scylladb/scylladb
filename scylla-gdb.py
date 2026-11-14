@@ -4840,8 +4840,9 @@ class scylla_sstables(gdb.Command):
             'me': new_format,
             'ms': new_format,
             'mt': new_format,
+            'aa': new_format,
         }
-        format_to_str = ['big']
+        format_to_str = ['big', 'pq']
         schema = schema_ptr(sst['_schema'])
         int_type = gdb.lookup_type('int')
         version_number = int(sst['_version'])
@@ -5954,7 +5955,7 @@ class scylla_sstable_summary(gdb.Command):
         else:
             sst = arg
         # Versions are not ordered: list the ones with the trie index.
-        trie_index_versions = [int(gdb.parse_and_eval(f'sstables::sstable_version_types::{v}')) for v in ('ms', 'mt')]
+        trie_index_versions = [int(gdb.parse_and_eval(f'sstables::sstable_version_types::{v}')) for v in ('ms', 'mt', 'aa')]
         if int(sst['_version']) in trie_index_versions:
             footer_opt = std_optional(sst['_partitions_db_footer'])
             if not footer_opt:

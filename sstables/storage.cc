@@ -63,7 +63,7 @@ private:
     template <typename Comp>
     requires std::is_same_v<Comp, component_type> || std::is_same_v<Comp, sstring>
     static auto filename(const sstable& sst, sstring dir, generation_type gen, Comp comp) {
-        return sstable::filename(dir, sst._schema->ks_name(), sst._schema->cf_name(), sst._version, gen, sst._format, comp);
+        return sstable::filename(dir, sst._schema->ks_name(), sst._schema->cf_name(), sst._version, gen, comp);
     }
 
     future<> check_create_links_replay(const sstable& sst, const sstring& dst_dir, generation_type dst_gen, const std::vector<std::pair<sstables::component_type, sstring>>& comps) const;
@@ -851,7 +851,7 @@ object_name object_storage_base::make_object_name(const sstable& sst, sstring co
     }
 
     auto ret = uses_foreign_layout()
-            ? object_name(_bucket, prefix(), sstable::component_basename(sst.get_schema()->ks_name(), sst.get_schema()->cf_name(), sst.get_version(), gen, sst.get_format(), comp))
+            ? object_name(_bucket, prefix(), sstable::component_basename(sst.get_schema()->ks_name(), sst.get_schema()->cf_name(), sst.get_version(), gen, comp))
             : object_name(_bucket, prefix(), get_sstable_identifier(sst), comp);
     sstlog.trace("make_object_name: sstable_id={} generation={} comp={}: {}", sst.sstable_identifier(), gen, comp, ret.str());
     return ret;
@@ -923,7 +923,7 @@ static std::vector<sstring> all_possible_components(sstable_version_types versio
 
 void object_storage_base::open(sstable& sst) {
     auto sid = get_sstable_identifier(sst);
-    entry_descriptor desc(sst._generation, sid, sst._version, sst._format, component_type::TOC);
+    entry_descriptor desc(sst._generation, sid, sst._version, component_type::TOC);
     auto host_id = sst.manager().get_local_host_id();
     sst.manager().sstables_registry().create_entry(owner(), host_id, status_creating, sst._state, std::move(desc)).get();
 
@@ -1224,7 +1224,7 @@ future<> object_storage_base::link_with_excluded_components(const sstable& sst, 
     if (!sid) {
         on_internal_error(sstlog, "Object-storage link_with_excluded_components requires an sstable id");
     }
-    entry_descriptor desc(new_gen, sid, sst.get_version(), sst.get_format(), component_type::TOC);
+    entry_descriptor desc(new_gen, sid, sst.get_version(), component_type::TOC);
     desc.state = sst.state();
     auto node_owner = sst.manager().get_local_host_id();
     co_await sst.manager().sstables_registry().create_entry(owner(), node_owner, status_creating, sst.state(), desc);
@@ -1240,7 +1240,7 @@ future<entry_descriptor> object_storage_base::clone(sstable& sst, generation_typ
             gen, leave_unsealed, may_use_reference_sharing);
 
     auto sid = may_use_reference_sharing ? get_sstable_identifier(sst) : sstable_id(gen.as_uuid());
-    entry_descriptor desc(gen, sid, sst.get_version(), sst.get_format(), component_type::TOC);
+    entry_descriptor desc(gen, sid, sst.get_version(), component_type::TOC);
     desc.state = sst.state();
     auto node_owner = sst.manager().get_local_host_id();
     co_await sst.manager().sstables_registry().create_entry(owner(), node_owner, status_creating, sst.state(), desc);
@@ -1300,7 +1300,7 @@ future<entry_descriptor> object_storage_base::clone_from(sstable& src, generatio
     sstlog.debug("Cloning {} sstable_id={} generation={} into {}/{}: new_generation={} new_sstable_id={} share_components={}",
             src.get_filename(), src_sid, src.generation(), _bucket, prefix(), gen, sid, share_components);
 
-    entry_descriptor desc(gen, sid, src.get_version(), src.get_format(), component_type::TOC);
+    entry_descriptor desc(gen, sid, src.get_version(), component_type::TOC);
     // `src` is opened in the upload state. The clone belongs to the restored table,
     // so the clone must be in the normal state, or the next boot does not find it.
     desc.state = sstable_state::normal;

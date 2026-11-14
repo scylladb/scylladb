@@ -26,7 +26,6 @@
 #include <array>
 
 constexpr auto la = sstables::sstable::version_types::la;
-constexpr auto big = sstables::sstable::format_types::big;
 
 class column_family_test {
     lw_shared_ptr<replica::column_family> _cf;

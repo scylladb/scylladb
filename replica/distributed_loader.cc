@@ -202,7 +202,7 @@ distributed_loader::process_upload_dir(sharded<replica::database>& db, sharded<d
             auto generation = gen();
             return sstm.make_sstable(global_table->schema(), global_table->get_storage_options(),
                                      generation, sstables::sstable_state::upload, sstm.get_preferred_sstable_version(),
-                                     sstables::sstable_format_types::big, db_clock::now(), &error_handler_gen_for_upload_dir);
+                                     db_clock::now(), &error_handler_gen_for_upload_dir);
         };
         // Pass owned_ranges_ptr to reshard to piggy-back cleanup on the resharding compaction.
         // Note that needs_cleanup() is inaccurate and may return false positives,
@@ -413,7 +413,7 @@ future<> table_populator::process_subdir(sharded<sstables::sstable_directory>& d
 }
 
 sstables::shared_sstable make_sstable(replica::table& table, sstables::sstable_state state, sstables::generation_type generation, sstables::sstable_version_types v) {
-    return table.get_sstables_manager().make_sstable(table.schema(), table.get_storage_options(), generation, state, v, sstables::sstable_format_types::big);
+    return table.get_sstables_manager().make_sstable(table.schema(), table.get_storage_options(), generation, state, v);
 }
 
 future<> table_populator::populate_subdir(sharded<sstables::sstable_directory>& directory) {
