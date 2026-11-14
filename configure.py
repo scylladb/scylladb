@@ -632,6 +632,7 @@ scylla_tests = set([
     'test/boost/object_storage_upload_test',
     'test/boost/observable_test',
     'test/boost/parquet_codec_test',
+    'test/boost/parquet_encoding_test',
     'test/boost/partitioner_test',
     'test/boost/pretty_printers_test',
     'test/boost/radix_tree_test',
@@ -1723,6 +1724,7 @@ tests_not_using_seastar_test_framework = set([
 # Arrow is linked into these test binaries only, never into scylla.
 arrow_tests = set([
     'test/boost/parquet_codec_test',
+    'test/boost/parquet_encoding_test',
 ])
 arrow_test_sources = set(t + '.cc' for t in arrow_tests)
 
