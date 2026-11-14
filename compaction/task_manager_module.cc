@@ -23,18 +23,8 @@ using namespace std::chrono_literals;
 
 namespace replica {
 
-// Helper structures for resharding.
+// Helper structure for resharding.
 //
-// Describes a resharding job: the shared sstables (represented by their foreign_sstable_open_info)
-// that are resharded together, in a single compaction round.
-struct reshard_job {
-    std::vector<sstables::foreign_sstable_open_info> info_vec;
-    // Shards owning all of the job's sstables, one of which will run the job.
-    std::vector<shard_id> owners;
-    uint64_t bytes_on_disk = 0;
-    uint64_t uncompressed_data_size = 0;
-};
-
 // Describes the resharding jobs assigned to a shard. Each shard will keep one such descriptor, that
 // contains the jobs assigned to it, and their total size. The total size is used to make sure we are
 // fairly balancing jobs among shards.
@@ -117,14 +107,6 @@ collect_all_shared_sstables(sharded<sstables::sstable_directory>& dir, sharded<r
 // regular compaction.
 static constexpr float reshard_target_space_overhead = 0.4f;
 
-// Packs the shared sstables to be resharded into jobs. A job is limited to max_job_size bytes on disk, and to
-// max_sstables_per_job sstables, but an sstable bigger than max_job_size is resharded alone. The sstables of a job
-// must have a common owner shard, which will run the job.
-//
-// Every job writes an output run to every shard owning its data, so resharding should produce as few jobs as
-// possible, but enough for all shards to reshard in parallel. So the sstables are split into as many jobs as the
-// shards their size is a fair share of the work for, and more only if the limits above require. The sstables are
-// sorted on descending size, and each is added to the smallest job it fits in, which balances the jobs.
 future<std::vector<replica::reshard_job>>
 make_reshard_jobs(sstables::sstable_directory::sstable_open_info_vector source, uint64_t max_job_size, size_t max_sstables_per_job, uint64_t fair_share) {
     std::vector<replica::reshard_job> jobs;
