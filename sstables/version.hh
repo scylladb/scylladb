@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdint>
 #include <initializer_list>
 #include <type_traits>
 #include <utility>
@@ -131,6 +132,36 @@ constexpr bool uses_legacy_dk_order(sstable_version_types v) {
 constexpr bool is_older_within_format(sstable_version_types a, sstable_version_types b) {
     return std::to_underlying(a) < std::to_underlying(b);
 }
+
+// A set of sstable versions.
+class sstable_version_set {
+    uint32_t _mask = 0;
+
+    static constexpr uint32_t bit(sstable_version_types v) {
+        return uint32_t(1) << std::to_underlying(v);
+    }
+public:
+    constexpr sstable_version_set() = default;
+    constexpr sstable_version_set(std::initializer_list<sstable_version_types> versions) {
+        for (auto v : versions) {
+            insert(v);
+        }
+    }
+    constexpr void insert(sstable_version_types v) {
+        _mask |= bit(v);
+    }
+    constexpr bool contains(sstable_version_types v) const {
+        return _mask & bit(v);
+    }
+    constexpr sstable_version_set& operator|=(const sstable_version_set& o) {
+        _mask |= o._mask;
+        return *this;
+    }
+    friend constexpr sstable_version_set operator|(sstable_version_set a, const sstable_version_set& b) {
+        return a |= b;
+    }
+    constexpr bool operator==(const sstable_version_set&) const = default;
+};
 
 constexpr std::array<sstable_version_types, 7> all_sstable_versions = {
     sstable_version_types::ka,

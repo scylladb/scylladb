@@ -262,9 +262,7 @@ future<>
 sstable_directory::do_process_descriptor(sstables::entry_descriptor desc,
         process_flags flags,
         noncopyable_function<data_dictionary::storage_options()>&& get_storage_options) {
-    if (desc.version > _max_version_seen) {
-        _max_version_seen = desc.version;
-    }
+    _versions_seen.insert(desc.version);
 
     if (!flags.allow_numerical_generations && !desc.generation.is_uuid_based()) {
         throw_malformed_sstable_exception(format("{}: numerical SSTable generations are not supported",
@@ -314,9 +312,9 @@ sstable_directory::do_process_descriptor(sstables::entry_descriptor desc,
     }
 }
 
-sstables::sstable_version_types
-sstable_directory::highest_version_seen() const {
-    return _max_version_seen;
+sstables::sstable_version_set
+sstable_directory::versions_seen() const {
+    return _versions_seen;
 }
 
 future<> sstable_directory::prepare(process_flags flags) {

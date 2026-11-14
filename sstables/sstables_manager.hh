@@ -271,13 +271,13 @@ public:
     //    The user might wish to use an older format, and we should respect that if possible.
     sstables::sstable::version_types get_preferred_sstable_version() const;
     // Like get_sstable_version_for_write(), but additionally assume that
-    // all features implied by `existing_version` are enabled. 
+    // all features implied by `existing_versions` are enabled.
     //
     // This is used when rewriting (reshaping or resharding) system sstables
     // during startup. At this point cluster features aren't known to `feature_service` yet.
     // But we must still pick some format compatible with the existing data.
     // So use existing sstables to infer the set of enabled features.
-    sstables::sstable::version_types get_safe_sstable_version_for_rewrites(sstable_version_types existing_version) const;
+    sstables::sstable::version_types get_safe_sstable_version_for_rewrites(sstable_version_set existing_versions) const;
 
     locator::host_id get_local_host_id() const;
 
