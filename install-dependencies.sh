@@ -63,6 +63,10 @@ debian_base_packages=(
     e2fsprogs
     fuse3
     libev-dev # for python driver
+    # Arrow C++ is the reference Parquet implementation in tests.
+    # Debian ships it from forky on.
+    libarrow-dev
+    libparquet-dev
 )
 
 fedora_packages=(
@@ -147,6 +151,10 @@ fedora_packages=(
 
     libev-devel # for python driver
 
+    # Arrow C++ is the reference Parquet implementation in tests.
+    libarrow-devel
+    parquet-libs-devel
+
     # test.py re-execs itself under `uv run --locked` against
     # test/pyproject.toml (see _ensure_running_under_uv() in test.py)
     uv
@@ -229,6 +237,7 @@ arch_packages=(
     rapidjson
     snappy
     uv
+    arrow # Arrow C++ and Parquet, the reference Parquet implementation in tests
 )
 
 go_arch() {

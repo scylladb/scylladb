@@ -1714,6 +1714,12 @@ tests_not_using_seastar_test_framework = set([
     'test/unit/cross_shard_barrier_test',
 ]) | pure_boost_tests
 
+# Tests that use Arrow C++ as the reference Parquet implementation.
+# Arrow is linked into these test binaries only, never into scylla.
+arrow_tests = set([
+])
+arrow_test_sources = set(t + '.cc' for t in arrow_tests)
+
 
 COVERAGE_INST_FLAGS = ['-fprofile-instr-generate', '-fcoverage-mapping', f'-fprofile-list=./{PROFILES_LIST_FILE_NAME}']
 if args.coverage:
@@ -2728,6 +2734,10 @@ if not args.staticboost:
 for pkg in pkgs:
     user_cflags += ' ' + pkg_config(pkg, '--cflags')
     libs += ' ' + pkg_config(pkg, '--libs')
+# The parquet package pulls in arrow. See arrow_tests.
+arrow_cflags = pkg_config('parquet', '--cflags')
+arrow_libs = pkg_config('parquet', '--libs')
+
 user_cflags += ' -fvisibility-inlines-hidden'
 user_ldflags += ' -fvisibility-inlines-hidden'
 if args.staticcxx:
@@ -3137,6 +3147,8 @@ def write_build_file(f,
                     local_libs += f' {seastar_testing_libs}'
                 else:
                     local_libs += ' ' + '-lgnutls' + ' ' + '-lboost_unit_test_framework'
+                if binary in arrow_tests:
+                    local_libs += ' ' + arrow_libs
                 # Our code's debugging information is huge, and multiplied
                 # by many tests yields ridiculous amounts of disk space.
                 # So we strip the tests by default; The user can very
@@ -3243,6 +3255,8 @@ def write_build_file(f,
             f.write(f'build {obj}: {cxx_cmd}.{mode} {src} | {profile_dep} {seastar_dep} {abseil_dep} {gen_headers_dep} {pch_dep}\n')
             if src in modeval['per_src_extra_cxxflags']:
                 f.write('    cxxflags = {seastar_cflags} $cxxflags $cxxflags_{mode} {extra_cxxflags}\n'.format(mode=mode, extra_cxxflags=modeval["per_src_extra_cxxflags"][src], **modeval))
+            if arrow_cflags and src in arrow_test_sources:
+                f.write(f'    obj_cxxflags = {arrow_cflags}\n')
         for swagger in swaggers:
             hh = swagger.headers(gen_dir)[0]
             cc = swagger.sources(gen_dir)[0]

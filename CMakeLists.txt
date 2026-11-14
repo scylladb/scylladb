@@ -265,6 +265,9 @@ find_package(xxHash REQUIRED)
 find_package(yaml-cpp REQUIRED)
 find_package(zstd REQUIRED)
 find_package(lz4 REQUIRED)
+# Arrow C++ is the reference Parquet implementation in tests.
+# It is linked into test binaries only, never into scylla.
+find_package(Parquet CONFIG REQUIRED)
 
 set(scylla_gen_build_dir "${CMAKE_BINARY_DIR}/gen")
 file(MAKE_DIRECTORY "${scylla_gen_build_dir}")
