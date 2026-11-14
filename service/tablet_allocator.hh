@@ -14,9 +14,11 @@
 #include "locator/abstract_replication_strategy.hh"
 #include "tablet_allocator_fwd.hh"
 #include "locator/token_metadata_fwd.hh"
+#include "locator/group0_leader_shard_skew.hh"
 #include <seastar/core/metrics.hh>
 #include <seastar/core/sharded.hh>
 #include <seastar/util/bool_class.hh>
+#include <seastar/util/noncopyable_function.hh>
 
 namespace db {
 class system_keyspace;
@@ -425,6 +427,14 @@ public:
 
     /// Should be called when the node is no longer a leader.
     void on_leadership_lost();
+
+    /// Finds the group0 leader whose shard 0 gets deweighted; none or nullopt means no skew.
+    /// Clear it before whatever it captures is destroyed.
+    void set_group0_leader_provider(seastar::noncopyable_function<std::optional<locator::host_id>()>);
+
+    /// The shard skew to use when placing tablets on this node's behalf: the group0 leader and the
+    /// ratio currently configured for it.
+    locator::group0_leader_shard_skew group0_leader_shard_skew();
 };
 
 /// Checks that the keyspace can be migrated from vnodes to tablets and returns its

@@ -1503,6 +1503,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                                 locator::replication_strategy_params params{ks_md->strategy_options(), tablet_count, ks.metadata()->consistency_option()};
                                 auto new_strategy = locator::abstract_replication_strategy::create_replication_strategy("NetworkTopologyStrategy", params, tmptr->get_topology());
 
+                                const auto skew = _tablet_allocator.group0_leader_shard_skew();
                                 for (const auto& table_or_mv : tables_with_mvs) {
                                     if (!tmptr->tablets().is_base_table(table_or_mv->id())) {
                                         // Apply the transition only on base tables.
@@ -1511,7 +1512,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                                         continue;
                                     }
                                     auto old_tablets = co_await tmptr->tablets().get_tablet_map(table_or_mv->id()).clone_gently();
-                                    new_tablet_map = co_await new_strategy->maybe_as_tablet_aware()->reallocate_tablets(table_or_mv, tmptr, co_await old_tablets.clone_gently());
+                                    new_tablet_map = co_await new_strategy->maybe_as_tablet_aware()->reallocate_tablets(table_or_mv, tmptr, co_await old_tablets.clone_gently(), skew);
 
                                     replica::tablet_mutation_builder tablet_mutation_builder(guard.write_timestamp(), table_or_mv->id());
                                     co_await new_tablet_map.for_each_tablet([&](locator::tablet_id tablet_id, const locator::tablet_info& tablet_info) -> future<> {
@@ -5978,6 +5979,7 @@ future<bool> topology_coordinator::maybe_retry_failed_rf_change_tablet_rebuilds(
     }
 
     group0_update_collector updates;
+    const auto skew = _tablet_allocator.group0_leader_shard_skew();
     for (auto& ks_name : _db.get_tablets_keyspaces()) {
         auto& ks = _db.find_keyspace(ks_name);
         auto& strategy = ks.get_replication_strategy();
@@ -5990,7 +5992,7 @@ future<bool> topology_coordinator::maybe_retry_failed_rf_change_tablet_rebuilds(
             }
 
             auto& tablet_map = tmptr->tablets().get_tablet_map(table_or_mv->id());
-            auto new_tablet_map = co_await strategy.maybe_as_tablet_aware()->reallocate_tablets(table_or_mv, tmptr, co_await tablet_map.clone_gently());
+            auto new_tablet_map = co_await strategy.maybe_as_tablet_aware()->reallocate_tablets(table_or_mv, tmptr, co_await tablet_map.clone_gently(), skew);
 
             replica::tablet_mutation_builder tablet_mutation_builder(guard.write_timestamp(), table_or_mv->id());
             co_await new_tablet_map.for_each_tablet([&](locator::tablet_id tablet_id, const locator::tablet_info& tablet_info) -> future<> {
