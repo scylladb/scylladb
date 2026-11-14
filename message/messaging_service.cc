@@ -1187,24 +1187,12 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
             return true;
         }
 
-        // #9653 - if our idea of dc for bind address differs from our official endpoint address,
-        // we cannot trust downgrading. We need to ensure either (local) bind address is same as
-        // broadcast or that the dc info we get for it is the same.
-        if (broadcast_address != laddr && !is_same_dc(laddr)) {
-            return true;
-        }
         // if cross-rack tls, check rack.
         if (opt == type::dc) {
             return false;
         }
 
-        if (!is_same_rack(id.addr)) {
-            return true;
-        }
-
-        // See above: We need to ensure either (local) bind address is same as
-        // broadcast or that the rack info we get for it is the same.
-        return broadcast_address != laddr && !is_same_rack(laddr);
+        return !is_same_rack(id.addr);
     };
     auto must_encrypt = [&] {
         if (_cfg.encrypt == encrypt_what::none) {
@@ -1216,7 +1204,10 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
             return true;
         }
 
-        return must_helper(_cfg.encrypt);
+        // #9653 - the peer's plaintext filter places a connection by its source address, normally laddr.
+        // The peer maps a laddr other than the broadcast address only through its prefer_local cache,
+        // which this node cannot see, so a laddr other than the broadcast address means TLS.
+        return broadcast_address != laddr || must_helper(_cfg.encrypt);
     }();
 
     auto must_compress = [&] {
