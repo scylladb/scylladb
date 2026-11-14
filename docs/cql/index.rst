@@ -16,6 +16,7 @@ CQL Reference
    definitions
    secondary-indexes
    time-to-live
+   synthetic-timestamps
    functions
    guardrails
    wasm
@@ -50,6 +51,7 @@ It allows you to create keyspaces and tables, insert and query tables, and more.
   * :doc:`Global Secondary Indexes </cql/secondary-indexes>`
   * :doc:`CQL Guardrails </cql/guardrails>`
   * :doc:`Expiring Data with Time to Live (TTL) </cql/time-to-live>`
+  * :doc:`Synthetic Write Timestamps </cql/synthetic-timestamps>`
   * :doc:`Functions </cql/functions>`
   * :doc:`JSON Support </cql/json>`
   * :doc:`Materialized Views </cql/mv>`
