@@ -85,6 +85,7 @@
 #include "reader_concurrency_semaphore.hh"
 #include "readers/mutation_source.hh"
 #include "readers/reversing.hh"
+#include "sstables/parquet/sstable_reader.hh"
 #include "readers/forwardable.hh"
 #include "sstables/trie/bti_index.hh"
 #include "partition_slice_builder.hh"
@@ -2032,6 +2033,9 @@ future<> sstable::update_info_for_opened_data(sstable_open_config cfg) {
     }
     _data_file_size = st.st_size;
     _data_file_write_time = db_clock::from_time_t(st.st_mtime);
+    if (has_parquet_data_file(_version)) {
+        co_await open_parquet_data_file();
+    }
 
   if (_index_file) {
     auto size = co_await _index_file.size();
@@ -2083,6 +2087,70 @@ future<> sstable::update_info_for_opened_data(sstable_open_config cfg) {
     }
 }
 
+future<> sstable::open_parquet_data_file() {
+    // The reader takes the column names from the serialization header,
+    // which does not hold for a dense table.
+    if (_schema->is_compact_table()) {
+        throw std::runtime_error(seastar::format("Cannot open sstable {} of format {}: compact storage table {}.{} is not supported",
+                get_filename(), get_format(), _schema->ks_name(), _schema->cf_name()));
+    }
+    const auto* entry = _components->scylla_metadata ? _components->scylla_metadata->get_parquet_data_file() : nullptr;
+    if (!entry) {
+        throw_malformed_sstable_exception("Scylla.db has no entry for the Parquet Data file", filename(component_type::Scylla));
+    }
+    if (entry->file_size != _data_file_size) {
+        throw_malformed_sstable_exception(seastar::format("the Data file has {} bytes, Scylla.db says {}", _data_file_size, entry->file_size),
+                filename(component_type::Data));
+    }
+    // Another shard may have read the footer already. Then the components
+    // are that shard's, and they are only read here.
+    if (!_components->parquet_summary) {
+        auto summary = co_await parquet::read_file_summary(_data_file, _data_file_size, entry->footer_crc32);
+        if (summary.rows() != entry->rows) {
+            throw_malformed_sstable_exception(seastar::format("the Data file has {} rows, Scylla.db says {}", summary.rows(), entry->rows),
+                    filename(component_type::Data));
+        }
+        _components->parquet_summary.emplace(std::move(summary));
+    }
+    try {
+        auto& tracker = _manager.get_cache_tracker();
+        _parquet = seastar::make_shared<parquet::sstable_read_state>(
+                parquet::open_mapping(get_serialization_header(), *_components->parquet_summary),
+                tracker.region(), tracker.get_lru(), tracker.get_parquet_metadata_cache_stats());
+    } catch (const malformed_sstable_exception& e) {
+        throw_malformed_sstable_exception(e.what(), filename(component_type::Data));
+    }
+}
+
+parquet::sstable_read_state& sstable::get_parquet_read_state() const {
+    if (!_parquet) [[unlikely]] {
+        on_internal_error(sstlog, fmt::format("sstable {} has no open Parquet Data file", get_filename()));
+    }
+    return *_parquet;
+}
+
+const parquet::file_summary& sstable::get_parquet_file_summary() const {
+    if (!_components->parquet_summary) [[unlikely]] {
+        on_internal_error(sstlog, fmt::format("sstable {} has no Parquet file summary", get_filename()));
+    }
+    return *_components->parquet_summary;
+}
+
+file sstable::make_data_file_for_read(reader_permit permit, tracing::trace_state_ptr trace_state) const {
+    file f = make_tracked_file(_data_file, std::move(permit));
+    if (trace_state) {
+        f = tracing::make_traced_file(std::move(f), std::move(trace_state), format("{}:", get_filename()));
+    }
+    return f;
+}
+
+file sstable::make_untracked_data_file_for_read(tracing::trace_state_ptr trace_state) const {
+    if (trace_state) {
+        return tracing::make_traced_file(_data_file, std::move(trace_state), format("{}:", get_filename()));
+    }
+    return _data_file;
+}
+
 future<> sstable::create_data() noexcept {
     auto oflags = sstable_write_open_flags;
     file_open_options opt;
@@ -2104,6 +2172,9 @@ future<> sstable::drop_caches() {
         co_await _cached_rows_file->evict_gently();
     }
     co_await _index_cache->evict_gently();
+    if (_parquet) {
+        co_await _parquet->cache().evict_gently();
+    }
 }
 
 // Return the filter format for the given sstable version
@@ -2352,10 +2423,6 @@ void sstable::write_component(component_type type) {
 }
 
 future<> sstable::load_metadata(sstable_open_config cfg) noexcept {
-    // FIXME: read the Parquet footer here once the Parquet reader exists.
-    if (has_parquet_data_file(_version)) {
-        throw_parquet_not_supported(*this, "load");
-    }
     co_await read_toc(cfg);
     // read scylla-meta after toc. Might need it to parse
     // rest (hint extensions)
@@ -3068,6 +3135,11 @@ bool sstable::is_shared() const {
 }
 
 uint64_t sstable::data_size() const {
+    if (has_parquet_data_file(_version)) {
+        // FIXME: audit the users of the Data file size.
+        const auto* p = _components->scylla_metadata ? _components->scylla_metadata->get_parquet_data_file() : nullptr;
+        return p ? p->raw_size : _data_file_size;
+    }
     if (has_component(component_type::CompressionInfo)) {
         return _components->compression.uncompressed_file_length();
     }
@@ -3076,6 +3148,13 @@ uint64_t sstable::data_size() const {
 
 uint64_t sstable::ondisk_data_size() const {
     return _data_file_size;
+}
+
+uint64_t sstable::data_end_position() const {
+    if (has_parquet_data_file(_version)) {
+        return get_parquet_file_summary().rows();
+    }
+    return data_size();
 }
 
 utils::file_size_stats sstable::get_file_size_stats() const {
@@ -4145,7 +4224,7 @@ future<uint64_t> sstable::estimated_keys_for_range(const dht::token_range& range
     try {
         co_await ir->advance_to(dht::to_partition_range(range));
         auto data_file_range = ir->data_file_positions();
-        auto uncompressed_data_size = data_size();
+        auto uncompressed_data_size = data_end_position();
         auto start = data_file_range.start;
         auto end = data_file_range.end.value_or(uncompressed_data_size);
         auto total_count = get_estimated_key_count();
@@ -4474,6 +4553,9 @@ future<> sstable::destroy() {
     if (_cached_index_file) {
         co_await _cached_index_file->evict_gently();
     }
+    if (_parquet) {
+        co_await _parquet->cache().evict_gently();
+    }
     co_await _storage->destroy(*this);
 
     if (ex) {
@@ -4570,7 +4652,7 @@ std::unique_ptr<abstract_index_reader> sstable::make_index_reader(
             cached_partitions_file,
             cached_rows_file,
             _partitions_db_footer.value().trie_root_position,
-            data_size(),
+            data_end_position(),
             _version,
             _schema,
             std::move(permit),

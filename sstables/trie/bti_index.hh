@@ -142,11 +142,13 @@ public:
 // Creates a BTI index reader over the Partitions.db file and the matching Rows.db file.
 // `partitions_db_root_pos` should have been read from the Partitions.db footer beforehand.
 // (As we don't want to repeat that for every query).
+// `data_end_position` is the position that the reader returns for the end of the
+// Data file: the Data file size, or the row count of a Parquet Data file.
 std::unique_ptr<sstables::abstract_index_reader> make_bti_index_reader(
     seastar::shared_ptr<cached_file> partitions_db,
     seastar::shared_ptr<cached_file> rows_db,
     uint64_t partitions_db_root_pos,
-    uint64_t total_data_db_file_size,
+    uint64_t data_end_position,
     sstable_version_types,
     schema_ptr,
     reader_permit,

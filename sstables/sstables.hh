@@ -82,6 +82,10 @@ namespace mc {
 class writer;
 }
 
+namespace parquet {
+class sstable_read_state;
+}
+
 namespace fs = std::filesystem;
 
 extern logging::logger sstlog;
@@ -403,9 +407,24 @@ public:
     bool is_shared() const;
 
     // Returns uncompressed size of data component.
+    // For a Parquet Data file, the raw size.
     uint64_t data_size() const;
     // Returns on-disk size of data component.
     uint64_t ondisk_data_size() const;
+    // The position of the end of the Data file, in the units of the index:
+    // the uncompressed size, or the row count of a Parquet Data file.
+    uint64_t data_end_position() const;
+
+    // The read state and the footer summary of a Parquet Data file
+    // (has_parquet_data_file()). The Data file must be open.
+    parquet::sstable_read_state& get_parquet_read_state() const;
+    const parquet::file_summary& get_parquet_file_summary() const;
+    // The Data file, for a read that tracks its buffers with `permit`, and
+    // traces its reads with `trace_state`.
+    file make_data_file_for_read(reader_permit permit, tracing::trace_state_ptr trace_state) const;
+    // The Data file, for a read that charges its buffers to its permit
+    // itself, and traces its reads with `trace_state`.
+    file make_untracked_data_file_for_read(tracing::trace_state_ptr trace_state) const;
 
     uint64_t index_size() const {
         return _index_file_size;
@@ -591,6 +610,8 @@ private:
     file _partitions_file;
     seastar::shared_ptr<cached_file> _cached_partitions_file;
     std::optional<trie::bti_partitions_db_footer> _partitions_db_footer;
+    // Set for a Parquet Data file once it is open. See open_parquet_data_file().
+    seastar::shared_ptr<parquet::sstable_read_state> _parquet;
     file _rows_file;
     seastar::shared_ptr<cached_file> _cached_rows_file;
     uint64_t _data_file_size;
@@ -788,6 +809,9 @@ private:
     void build_delayed_filter(uint64_t num_partitions);
 
     future<> update_info_for_opened_data(sstable_open_config cfg = {});
+    // Reads the footer of a Parquet Data file, unless another shard did,
+    // and builds this shard's read state.
+    future<> open_parquet_data_file();
 
     future<> read_toc(sstable_open_config cfg = {}) noexcept;
     future<> read_summary() noexcept;
