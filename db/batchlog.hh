@@ -15,6 +15,10 @@ namespace db {
 
 mutation get_batchlog_mutation_for(schema_ptr schema, const utils::chunked_vector<mutation>& mutations, int32_t version, db_clock::time_point now, const utils::UUID& id);
 
+// Like get_batchlog_mutation_for(), but yields between mutations, for batches with many partitions.
+// `mutations` must stay alive until the returned future resolves.
+future<mutation> get_batchlog_mutation_for_gently(schema_ptr schema, const utils::chunked_vector<mutation>& mutations, int32_t version, db_clock::time_point now, const utils::UUID& id);
+
 mutation get_batchlog_delete_mutation(schema_ptr schema, int32_t version, db_clock::time_point now, const utils::UUID& id);
 
 }
