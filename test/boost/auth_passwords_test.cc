@@ -136,3 +136,48 @@ SEASTAR_TEST_CASE(incorrect_passwords_do_not_authenticate) {
     const sstring hashed_password = auth::passwords::hash("actual_password", rng_for_salt,auth::passwords::scheme::sha_512);
     BOOST_REQUIRE(!co_await auth::passwords::check("password_guess", hashed_password));
 }
+
+//
+// A hash computed with any of the supported schemes is a valid salted hash, but a string which crypt(3) can't
+// check a password against - even one which differs from a valid hash by just one character - is not.
+//
+SEASTAR_TEST_CASE(valid_and_invalid_salted_hashes) {
+    const char* const settings[] = {
+        "$2a$05$mAyzaIeJu41dWUkxEbn8hO",
+        "$2y$05$mAyzaIeJu41dWUkxEbn8hO",
+        "$6$aaaabbbbccccdddd",
+        "$6$rounds=5000$aaaabbbbccccdddd",
+        "$5$aaaabbbbccccdddd",
+        "$1$aaaabbbb",
+        "ab", // the traditional DES-based scheme
+        "_J9..aaaa", // the BSDi extended DES-based scheme
+    };
+    for (const char* setting : settings) {
+        const sstring h = co_await auth::passwords::detail::hash_with_salt_async("my_password", setting);
+        BOOST_REQUIRE(co_await auth::passwords::is_valid_salted_hash(h));
+        BOOST_REQUIRE(!co_await auth::passwords::is_valid_salted_hash(h.substr(0, h.size() - 1)));
+        BOOST_REQUIRE(!co_await auth::passwords::is_valid_salted_hash(h + "a"));
+        // A character which the encoding of the hash never uses.
+        BOOST_REQUIRE(!co_await auth::passwords::is_valid_salted_hash(h.substr(0, h.size() - 1) + "_"));
+        BOOST_REQUIRE(!co_await auth::passwords::is_valid_salted_hash(setting));
+        // The '$' which ends the setting (in most schemes, the salt) replaced
+        // by a character of the encoding: crypt(3) reads only as much of the
+        // salt as the scheme allows, so the hash it computes for this setting
+        // still has that '$', and can never be equal to this string.
+        if (auto pos = h.find_last_of('$'); pos != sstring::npos) {
+            sstring broken = h;
+            broken[pos] = 'a';
+            BOOST_REQUIRE(!co_await auth::passwords::is_valid_salted_hash(broken));
+        }
+    }
+    // In the "bigcrypt" extension of the DES-based scheme, which crypt(3)
+    // uses for a setting longer than 13 characters, the hash grows by 11
+    // characters for every 8 characters of the password beyond 8.
+    const sstring bigcrypt_hash = co_await auth::passwords::detail::hash_with_salt_async("my_password_is_long", "ab......................");
+    BOOST_REQUIRE_EQUAL(bigcrypt_hash.size(), 35);
+    BOOST_REQUIRE(co_await auth::passwords::is_valid_salted_hash(bigcrypt_hash));
+    BOOST_REQUIRE(!co_await auth::passwords::is_valid_salted_hash(bigcrypt_hash.substr(0, bigcrypt_hash.size() - 1)));
+    for (const char* h : {"", ";", "*0", "hashed_password", "not_a_hash_ok", "$6$", "$9$aaaabbbb$cccc"}) {
+        BOOST_REQUIRE(!co_await auth::passwords::is_valid_salted_hash(h));
+    }
+}
