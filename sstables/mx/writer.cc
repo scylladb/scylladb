@@ -12,7 +12,7 @@
 #include "sstables/serialization_header_builder.hh"
 #include "sstables/writer_stats.hh"
 #include "sstables/row_index_block_tracker.hh"
-#include "sstables/trie/bti_index.hh"
+#include "sstables/trie_index_writer.hh"
 #include "encoding_stats.hh"
 #include "schema/schema.hh"
 #include "mutation/mutation_fragment.hh"
@@ -495,18 +495,8 @@ private:
     bool _compression_enabled = false;
     std::unique_ptr<file_writer> _data_writer;
     std::unique_ptr<file_writer> _index_writer;
-    std::unique_ptr<file_writer> _rows_writer;
-    std::unique_ptr<file_writer> _partitions_writer;
-    optimized_optional<trie::bti_row_index_writer> _bti_row_index_writer;
-    optimized_optional<trie::bti_partition_index_writer> _bti_partition_index_writer;
-    // The key of the last `consume_new_partition` call.
-    // A partition key can only be inserted into Partitions.db
-    // after its intra-partition index is written to Rows.db.
-    // So we need to hold onto the key until `consume_end_of_partition`.
-    std::optional<dht::decorated_key> _current_dk_for_bti;
-    // Position of the Data writer at the moment of the last
-    // `consume_new_partition` call.
-    uint64_t _current_partition_position = 0;
+    // Engaged if the sstable has the trie index.
+    std::optional<trie_index_writer> _trie_index;
     // If true, we don't build the bloom filter during the main pass
     // (when Data.db is written), but we instead write the murmur hashes
     // of keys to a temporary file, and later (after Data.db is written,
@@ -582,8 +572,6 @@ private:
 
     void close_data_writer();
     void close_index_writer();
-    void close_rows_writer();
-    void close_partitions_writer();
 
     void ensure_tombstone_is_written() {
         if (!_tombstone_written) {
@@ -776,8 +764,7 @@ writer::~writer() {
     };
     close_writer(_index_writer);
     close_writer(_data_writer);
-    close_writer(_partitions_writer);
-    close_writer(_rows_writer);
+    _trie_index.reset();
     close_writer(_hashes_writer);
 }
 
@@ -825,12 +812,7 @@ void writer::init_file_writers() {
         _index_writer = std::make_unique<crc32_digest_file_writer>(std::move(out), _sst.sstable_buffer_size, _sst.index_filename());
     }
     if (_sst.has_component(component_type::Partitions) && _sst.has_component(component_type::Rows)) {
-        out = _sst._storage->make_data_or_index_sink(_sst, component_type::Rows).get();
-        _rows_writer = std::make_unique<crc32_digest_file_writer>(std::move(out), _sst.sstable_buffer_size, component_name(_sst, component_type::Rows));
-        _bti_row_index_writer = trie::bti_row_index_writer(*_rows_writer);
-        out = _sst._storage->make_data_or_index_sink(_sst, component_type::Partitions).get();
-        _partitions_writer = std::make_unique<crc32_digest_file_writer>(std::move(out), _sst.sstable_buffer_size, component_name(_sst, component_type::Partitions));
-        _bti_partition_index_writer = trie::bti_partition_index_writer(_sst.get_version(), *_partitions_writer);
+        _trie_index.emplace(_sst);
     }
     if (_delayed_filter) {
         file_output_stream_options options;
@@ -869,21 +851,6 @@ void writer::close_index_writer() {
     }
 }
 
-void writer::close_partitions_writer() {
-    if (_partitions_writer) {
-        _sst._partitions_db_footer = std::move(*_bti_partition_index_writer).finish(
-            _first_key.value(),
-            _last_key.value());
-        _sst.get_components_digests().map[component_type::Partitions] = close_digest_writer(_partitions_writer);
-    }
-}
-
-void writer::close_rows_writer() {
-    if (_rows_writer) {
-        _sst.get_components_digests().map[component_type::Rows] = close_digest_writer(_rows_writer);
-    }
-}
-
 void writer::consume_new_partition(const dht::decorated_key& dk) {
     _c_stats.start_offset = _data_writer->offset();
     _prev_row_start = _data_writer->offset();
@@ -915,8 +882,9 @@ void writer::consume_new_partition(const dht::decorated_key& dk) {
     write(_sst.get_version(), *_index_writer, p_key);
     write_vint(*_index_writer, _data_writer->offset());
   }
-    _current_dk_for_bti = dk;
-    _current_partition_position = _data_writer->offset();
+    if (_trie_index) {
+        _trie_index->start_partition(dk, _data_writer->offset());
+    }
 
     _row_index.start_partition(_c_stats.start_offset);
     _pi_write_m.blocks.clear();
@@ -1285,8 +1253,8 @@ void writer::write_pi_block(const row_index_block& block) {
         write(_sst.get_version(), blocks, to_deletion_time(*block.open_marker));
     }
   }
-    if (_bti_row_index_writer) {
-        _bti_row_index_writer->add(
+    if (_trie_index) {
+        _trie_index->add_row_index_block(
             _schema,
             block.first,
             block.last,
@@ -1376,20 +1344,13 @@ stop_iteration writer::consume_end_of_partition() {
 
     write_promoted_index();
 
-    if (_bti_partition_index_writer) {
-        auto partitions_db_payload = _bti_row_index_writer->finish(
-            _sst.get_version(),
+    if (_trie_index) {
+        _trie_index->end_partition(
             _schema,
-            _current_partition_position,
+            _current_murmur_hash,
             end_of_partition_position,
             *_partition_key,
             _pi_write_m.partition_tombstone
-        );
-        _bti_partition_index_writer->add(
-            _schema,
-            *std::exchange(_current_dk_for_bti, std::nullopt),
-            _current_murmur_hash,
-            partitions_db_payload
         );
     }
 
@@ -1428,8 +1389,9 @@ void writer::consume_end_of_stream() {
 
     close_index_writer();
 
-    close_partitions_writer();
-    close_rows_writer();
+    if (_trie_index) {
+        _trie_index->finish(_first_key.value(), _last_key.value());
+    }
 
     if (_hashes_writer) {
         close_writer(_hashes_writer);

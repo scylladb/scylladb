@@ -1240,6 +1240,7 @@ public:
     friend class test;
 
     friend class mc::writer;
+    friend class trie_index_writer;
     friend class index_reader;
     friend class sstables_manager;
     template <typename DataConsumeRowsContext>
