@@ -34,6 +34,7 @@ target_sources(sstables
     serialization_header_builder.cc
     sstable_directory.cc
     sstable_mutation_reader.cc
+    sstable_sealer.cc
     sstables.cc
     sstable_set.cc
     sstables_manager.cc

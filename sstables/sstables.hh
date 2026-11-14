@@ -1253,6 +1253,7 @@ public:
     friend class mc::writer;
     friend class trie_index_writer;
     friend class filter_writer;
+    friend class sstable_sealer;
     friend class index_reader;
     friend class sstables_manager;
     template <typename DataConsumeRowsContext>
