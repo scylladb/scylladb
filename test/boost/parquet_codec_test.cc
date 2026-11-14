@@ -475,7 +475,7 @@ namespace {
 pq::file_metadata make_file_metadata(int n_row_groups) {
     pq::file_metadata md;
     using pq::schema_element;
-    md.schema.push_back(schema_element{.name = "schema", .num_children = 3});
+    md.schema.push_back(schema_element{.name = "schema", .num_children = 7});
     md.schema.push_back(schema_element{.type = pq::physical_type::int64, .repetition = pq::repetition_type::required, .name = "pk"});
     md.schema.push_back(schema_element{.repetition = pq::repetition_type::required, .name = "_scylla", .num_children = 2});
     md.schema.push_back(schema_element{.type = pq::physical_type::int32, .repetition = pq::repetition_type::required, .name = "kind",
@@ -487,6 +487,16 @@ pq::file_metadata make_file_metadata(int n_row_groups) {
             .logical = pq::logical_type{.k = pq::logical_type::kind::string}});
     md.schema.push_back(schema_element{.type = pq::physical_type::fixed_len_byte_array, .type_length = 16,
             .repetition = pq::repetition_type::optional, .name = "id", .logical = pq::logical_type{.k = pq::logical_type::kind::uuid}});
+    md.schema.push_back(schema_element{.type = pq::physical_type::int32, .repetition = pq::repetition_type::optional, .name = "d",
+            .converted = pq::converted_type::date, .logical = pq::logical_type{.k = pq::logical_type::kind::date}});
+    md.schema.push_back(schema_element{.type = pq::physical_type::int64, .repetition = pq::repetition_type::optional, .name = "t",
+            .logical = pq::logical_type{.k = pq::logical_type::kind::time, .is_adjusted_to_utc = false, .unit = pq::time_unit::nanos}});
+    md.schema.push_back(schema_element{.type = pq::physical_type::int64, .repetition = pq::repetition_type::optional, .name = "ts",
+            .converted = pq::converted_type::timestamp_millis,
+            .logical = pq::logical_type{.k = pq::logical_type::kind::timestamp, .is_adjusted_to_utc = true, .unit = pq::time_unit::millis}});
+    md.schema.push_back(schema_element{.type = pq::physical_type::int64, .repetition = pq::repetition_type::optional, .name = "big",
+            .converted = pq::converted_type::int_64,
+            .logical = pq::logical_type{.k = pq::logical_type::kind::integer, .bit_width = 64, .is_signed = true}});
     int64_t offset = 4;
     for (int rg = 0; rg < n_row_groups; ++rg) {
         pq::row_group g{.total_byte_size = 1000 + rg, .num_rows = 100 + rg};
@@ -495,7 +505,7 @@ pq::file_metadata make_file_metadata(int n_row_groups) {
             g.total_compressed_size = 500;
             g.ordinal = rg;
         }
-        for (int c = 0; c < 4; ++c) {
+        for (int c = 0; c < 8; ++c) {
             pq::column_chunk chunk{
                 .meta_data = pq::column_metadata{
                     .type = pq::physical_type::int32,
@@ -532,7 +542,7 @@ pq::file_metadata make_file_metadata(int n_row_groups) {
 }
 
 const std::vector<std::vector<sstring>> expected_paths = {
-    {"pk"}, {"_scylla", "kind"}, {"_scylla", "values", "list", "element"}, {"id"},
+    {"pk"}, {"_scylla", "kind"}, {"_scylla", "values", "list", "element"}, {"id"}, {"d"}, {"t"}, {"ts"}, {"big"},
 };
 
 // Collects the whole footer, and checks the paths of the column chunks.
@@ -566,7 +576,7 @@ SEASTAR_THREAD_TEST_CASE(test_file_metadata_round_trip) {
         chunked_source src(input, chunk);
         checking_builder b;
         pq::parse_file_metadata(src, input.size(), b);
-        BOOST_REQUIRE_EQUAL(b.chunks, 50 * 4);
+        BOOST_REQUIRE_EQUAL(b.chunks, 50 * 8);
         BOOST_REQUIRE(std::move(b).get() == md);
     }
 

@@ -59,8 +59,19 @@ void write_logical_type(encoder& e, const logical_type& lt) {
     case logical_type::kind::string:
     case logical_type::kind::map:
     case logical_type::kind::list:
+    case logical_type::kind::date:
     case logical_type::kind::uuid:
         e.begin_struct_field(static_cast<int16_t>(lt.k));
+        e.end_struct();
+        break;
+    case logical_type::kind::time:
+    case logical_type::kind::timestamp:
+        e.begin_struct_field(static_cast<int16_t>(lt.k));
+        e.write_bool_field(1, lt.is_adjusted_to_utc);
+        e.begin_struct_field(2);
+        e.begin_struct_field(static_cast<int16_t>(lt.unit));
+        e.end_struct();
+        e.end_struct();
         e.end_struct();
         break;
     case logical_type::kind::integer:
@@ -376,6 +387,33 @@ logical_type parse_logical_type(decoder& d, const field_header& f) {
                 }
             });
             seen.require(d, {1, 2}, "IntType");
+        } else if (member.id == static_cast<int16_t>(logical_type::kind::time)
+                || member.id == static_cast<int16_t>(logical_type::kind::timestamp)) {
+            field_set seen;
+            d.read_struct(member, [&] (const field_header& g) {
+                switch (g.id) {
+                case 1: seen.add(d, g); lt->is_adjusted_to_utc = d.read_bool(g); break;
+                case 2: {
+                    seen.add(d, g);
+                    std::optional<time_unit> unit;
+                    d.read_struct(g, [&] (const field_header& u) {
+                        if (unit) {
+                            d.fail("TimeUnit has more than one member");
+                        }
+                        unit = static_cast<time_unit>(u.id);
+                        // Each member is an empty struct.
+                        d.read_struct(u, [&] (const field_header& x) { d.skip(x); });
+                    });
+                    if (!unit) {
+                        d.fail("TimeUnit has no member");
+                    }
+                    lt->unit = *unit;
+                    break;
+                }
+                default: d.skip(g);
+                }
+            });
+            seen.require(d, {1, 2}, member.id == static_cast<int16_t>(logical_type::kind::time) ? "TimeType" : "TimestampType");
         } else {
             d.skip(member);
         }
