@@ -755,7 +755,7 @@ public:
     }
 
     void create_table(rjson::value request) {
-        service::client_state cs(service::client_state::internal_tag{});
+        alternator::client_state cs(service::client_state::internal_tag{});
         tracing::trace_state_ptr ts;
         std::unique_ptr<audit::audit_info_alternator> ai;
         auto result = _exec.local().create_table(cs, ts, empty_service_permit(),
@@ -771,7 +771,7 @@ public:
 
     // Non-blocking variants, for use in export_scan_table() callbacks (not a seastar thread).
     future<> put_item_async(rjson::value request) {
-        service::client_state cs(service::client_state::internal_tag{});
+        alternator::client_state cs(service::client_state::internal_tag{});
         tracing::trace_state_ptr ts;
         std::unique_ptr<audit::audit_info_alternator> ai;
         auto result = co_await _exec.local().put_item(cs, ts, empty_service_permit(),
@@ -782,7 +782,7 @@ public:
     }
 
     future<> delete_item_async(rjson::value request) {
-        service::client_state cs(service::client_state::internal_tag{});
+        alternator::client_state cs(service::client_state::internal_tag{});
         tracing::trace_state_ptr ts;
         std::unique_ptr<audit::audit_info_alternator> ai;
         auto result = co_await _exec.local().delete_item(cs, ts, empty_service_permit(),

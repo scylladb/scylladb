@@ -9,6 +9,103 @@ Alternator's compatibility with DynamoDB is described in the
 But Alternator also adds several features and APIs that are not available in
 DynamoDB. These Alternator-specific APIs are documented here.
 
+## Request timeout
+
+Alternator uses `alternator_timeout_in_ms` as the default timeout for backend
+operations. A client can override this timeout for an individual request with
+the `X-Scylla-Timeout` HTTP header on either HTTP or HTTPS requests.
+
+The override applies to `GetItem`, `BatchGetItem`, `Query`, `Scan`, `PutItem`,
+`UpdateItem`, `DeleteItem`, `BatchWriteItem`, `GetRecords`, and `SearchVectors`.
+Other APIs, including table/schema changes, tags, TTL settings, stream
+configuration and export jobs, validate the header but ignore a valid value.
+
+For example:
+
+```text
+X-Scylla-Timeout: 30s
+```
+
+If the header is absent, `alternator_timeout_in_ms` retains its existing
+behavior. The header can increase or decrease the configured timeout. Its name
+is case-insensitive. Values use CQL duration syntax, such as `500ms`, `5s`, or
+`1m30s`, and must be non-negative with millisecond granularity, at most
+`4294967295ms` (the largest unsigned 32-bit millisecond value). Days and months
+are not accepted, matching CQL's `USING TIMEOUT`. Invalid values return
+`ValidationException`. A zero timeout expires immediately.
+
+With a header, backend work shares one deadline measured from the start of HTTP
+request handling. Query and Scan, batch operations, read-before-write
+operations, and LWTs reuse this deadline instead of starting a fresh timeout at
+each step. The deadline also follows requests between shards. A completed
+operation keeps its successful response even if response processing crosses the
+deadline. A preimage read for a stream with old or new images still has CDC's
+10-second limit, so a longer header does not extend that read.
+
+Expired operations return HTTP 500 `InternalServerError`, the same error class
+as existing Alternator backend timeouts. A write timeout does not prove that the
+write failed: it may already have reached replicas or committed through LWT.
+The header does not roll back writes. Retrying an increment or another
+non-idempotent operation after an uncertain result can apply it more than once.
+`BatchGetItem` can return successful reads together with `UnprocessedKeys` for
+timed-out reads; retry the unprocessed keys.
+
+The interval starts when the API handler receives the request headers, before
+waiting for request memory, reading and parsing the body, and authentication.
+It excludes connection establishment and TLS negotiation. The header is parsed
+after authentication, but its deadline uses that original handler start time.
+
+This is a backend budget, not a bound on HTTP response latency. Memory
+admission, body reception and parsing, signature verification (including
+fetching the signing key), and permission checks retain their existing wait
+policies. These waits are not interrupted by the header. Their elapsed time
+reduces the budget available to backend work. If the deadline has already
+expired when dispatching the operation, the server returns a timeout without
+dispatching it. Backend work receives the same deadline after later permission
+checks.
+
+The header does not persist on the HTTP connection. To configure a Boto3 client
+default once in application code, register a hook that adds the header to each
+request before signing:
+
+```python
+def set_timeout(request, **kwargs):
+    if 'X-Scylla-Timeout' not in request.headers:
+        request.headers['X-Scylla-Timeout'] = '5s'
+
+service = client.meta.service_model.service_id.hyphenize()
+client.meta.events.register(f'before-sign.{service}', set_timeout)
+```
+
+Register this hook on each client that needs the default. The signing event
+uses `dynamodb` for DynamoDB clients and `dynamodb-streams` for DynamoDB Streams
+clients.
+
+This server timeout is separate from the SDK's socket timeout and retry budget;
+an SDK retry is another HTTP request with its own deadline. SDKs can retry HTTP
+500 errors automatically, so the total call can take much longer than the header
+interval. To observe one attempt in Boto3, use
+`Config(retries={'total_max_attempts': 1})`. Choose a socket read timeout longer
+than the server budget; a shorter socket timeout can leave the outcome unknown.
+
+Client-side header optimization can remove `X-Scylla-Timeout` before it reaches
+the server. Configure it to preserve the header, or disable it for affected
+clients. Removing a header after signing can also invalidate the signature.
+The following settings disable filtering or extend its allowlist:
+
+| Client | Setting |
+| --- | --- |
+| Rust | `AlternatorConfig::builder().optimize_headers(false)` |
+| Go | `shared.WithOptimizeHeaders(false)`, or a `shared.WithCustomOptimizeHeaders` callback that retains `X-Scylla-Timeout` along with the required headers |
+| JavaScript | `headerOptimization: false`, or `headerOptimization: { additionalAllowedHeaders: ['X-Scylla-Timeout'] }` |
+
+Check the options supported by the client version in use. In particular, Rust's
+optimizer is enabled by default; versions that retain signed headers can still
+strip a custom header from unsigned requests. Any other client or proxy using a
+header allowlist must preserve this header too.
+During a rolling upgrade, older nodes can ignore the extension, so use endpoints
+on upgraded nodes when relying on the deadline.
+
 ## Vector search extensions
 Alternator implements Amazon DynamoDB's own Vector Search API
 (`VectorIndexes`, `VectorIndexUpdates`, `SearchVectors`), so this core
