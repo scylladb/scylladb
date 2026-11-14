@@ -17,6 +17,11 @@
 // - Random schemas and mutations, written with row defaults picked at
 //   random, read back and compared with the input and with an `mt` sstable
 //   written from the same mutations.
+// - Reverse reads with random clustering slices, of random mutations and of
+//   wide partitions with many range tombstones, compared with the in-memory
+//   reversing reader over a forward read and with an `mt` sstable.
+// - The I/O of a reverse read of a few rows of a wide partition, which is
+//   bounded by those rows and not by the partition.
 // - Damage to the Data file, which the reader reports as a malformed sstable.
 // - Rows that break the decoding rules of mapping.hh, written leaf by leaf
 //   with the codec writer, which the row decoder reports as corruption.
@@ -26,7 +31,9 @@
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/util/closeable.hh>
 
+#include "partition_slice_builder.hh"
 #include "readers/from_mutations.hh"
+#include "readers/reversing.hh"
 #include "schema/schema_builder.hh"
 #include "sstables/file_writer.hh"
 #include "sstables/parquet/file_summary.hh"
@@ -87,6 +94,226 @@ shared_sstable write(test_env& env, schema_ptr s, const utils::chunked_vector<mu
     return sst;
 }
 
+// Ranges of positions in the order of `s`, with bounds at random prefixes
+// of `keys`, as the mutation source suite makes them.
+std::vector<position_range> random_position_ranges(const schema& s, const std::vector<clustering_key_prefix>& keys, std::mt19937& engine) {
+    std::vector<position_in_partition> positions;
+    if (tests::random::get_bool(engine)) {
+        positions.push_back(position_in_partition::before_all_clustered_rows());
+    }
+    for (const auto& k : keys) {
+        const auto exploded = k.explode(s);
+        if (exploded.empty()) {
+            continue;
+        }
+        const auto tag = tests::random::get_int<int>(1, 3, engine);
+        const auto prefix_size = tag == 2 ? exploded.size() : tests::random::get_int<size_t>(1, exploded.size(), engine);
+        auto prefix = clustering_key_prefix::from_exploded(s, std::vector<bytes>(exploded.begin(), exploded.begin() + prefix_size));
+        switch (tag) {
+        case 1:
+            positions.emplace_back(position_in_partition::before_clustering_row_tag_t{}, std::move(prefix));
+            break;
+        case 2:
+            positions.emplace_back(position_in_partition::clustering_row_tag_t{}, std::move(prefix));
+            break;
+        default:
+            positions.emplace_back(position_in_partition_view::after_all_prefixed(prefix));
+            break;
+        }
+    }
+    const auto subset_size = tests::random::get_int<size_t>(0, positions.size(), engine);
+    positions = tests::random::random_subset<position_in_partition>(std::move(positions), subset_size, engine);
+    std::ranges::sort(positions, position_in_partition::less_compare(s));
+    positions.erase(std::unique(positions.begin(), positions.end(), position_in_partition::equal_compare(s)), positions.end());
+    if (tests::random::get_bool(engine)) {
+        positions.push_back(position_in_partition::after_all_clustered_rows());
+    }
+    std::vector<position_range> ranges;
+    for (size_t i = 0; i + 1 < positions.size(); i += 2) {
+        ranges.emplace_back(std::move(positions[i]), std::move(positions[i + 1]));
+    }
+    if (ranges.empty()) {
+        ranges.emplace_back(position_in_partition::before_all_clustered_rows(), position_in_partition::after_all_clustered_rows());
+    }
+    return ranges;
+}
+
+// Clustering ranges in the order of the table, of a shape picked at random:
+// the full partition, several ranges with bounds at prefixes, single rows,
+// or ranges that start and end inside range tombstones.
+query::clustering_row_ranges random_clustering_ranges(const schema& s, const utils::chunked_vector<mutation>& muts, std::mt19937& engine) {
+    std::vector<clustering_key_prefix> row_keys;
+    std::vector<range_tombstone> rts;
+    for (const auto& m : muts) {
+        for (const auto& r : m.partition().clustered_rows()) {
+            row_keys.push_back(r.key());
+        }
+        for (const auto& rt : m.partition().row_tombstones()) {
+            rts.push_back(rt.tombstone());
+        }
+    }
+    const position_in_partition::less_compare less(s);
+    std::vector<position_range> ranges;
+    switch (tests::random::get_int<int>(0, 3, engine)) {
+    case 0:
+        break;
+    case 1: {
+        auto keys = row_keys;
+        for (const auto& rt : rts) {
+            keys.push_back(rt.start);
+            keys.push_back(rt.end);
+        }
+        ranges = random_position_ranges(s, keys, engine);
+        break;
+    }
+    case 2: {
+        auto keys = tests::random::random_subset<clustering_key_prefix>(row_keys, std::min<size_t>(row_keys.size(), 4), engine);
+        for (const auto& k : keys) {
+            ranges.emplace_back(position_in_partition::before_key(k), position_in_partition(position_in_partition_view::after_all_prefixed(k)));
+        }
+        break;
+    }
+    default: {
+        auto picked = tests::random::random_subset<range_tombstone>(rts, std::min<size_t>(rts.size(), 3), engine);
+        for (const auto& rt : picked) {
+            // Strictly inside the tombstone if possible.
+            position_in_partition start(position_in_partition_view::after_all_prefixed(rt.start));
+            position_in_partition end(rt.end_position());
+            if (!less(start, end)) {
+                start = position_in_partition(rt.position());
+            }
+            if (less(start, end)) {
+                ranges.emplace_back(std::move(start), std::move(end));
+            }
+        }
+        break;
+    }
+    }
+    std::ranges::sort(ranges, less, [] (const position_range& r) -> position_in_partition_view { return r.start(); });
+    query::clustering_row_ranges result;
+    std::optional<position_in_partition> last_end;
+    for (const auto& r : ranges) {
+        if (last_end && less(r.start(), *last_end)) {
+            continue;
+        }
+        if (auto cr = position_range_to_clustering_range(r, s)) {
+            result.push_back(std::move(*cr));
+            last_end = position_in_partition(r.end());
+        }
+    }
+    if (result.empty()) {
+        result.push_back(query::clustering_range::make_open_ended_both_sides());
+    }
+    return result;
+}
+
+std::vector<mutation> read_partitions(mutation_reader& rd) {
+    std::vector<mutation> r;
+    while (auto m = read_mutation_from_mutation_reader(rd).get()) {
+        r.push_back(std::move(*m));
+    }
+    return r;
+}
+
+std::vector<mutation> read_all(mutation_reader rd) {
+    auto close = deferred_close(rd);
+    return read_partitions(rd);
+}
+
+void check_equal(const std::vector<mutation>& actual, const std::vector<mutation>& expected) {
+    BOOST_REQUIRE_EQUAL(actual.size(), expected.size());
+    for (size_t i = 0; i < actual.size(); ++i) {
+        assert_that(actual[i]).is_equal_to(expected[i]);
+    }
+}
+
+// Reads `sst` in reverse with random clustering slices, and compares the
+// result with the in-memory reversing reader over a forward read of `sst`,
+// and with a reverse read of `ref`, an `mt` sstable of the same mutations.
+// Covers single-partition reads, multi-partition reads, and both kinds of
+// fast-forwarding.
+void check_reverse_reads(test_env& env, schema_ptr s, const utils::chunked_vector<mutation>& muts, shared_sstable ref, shared_sstable sst,
+        std::mt19937& engine) {
+    const auto rs = s->make_reversed();
+    for (int i = 0; i < 4; ++i) {
+        const auto fwd_slice = partition_slice_builder(*s).with_ranges(random_clustering_ranges(*s, muts, engine)).build();
+        const auto rev_slice = query::reverse_slice(*s, fwd_slice);
+        testlog.debug("reversed slice: {}", rev_slice);
+        // The reversing reader may emit redundant range tombstone changes,
+        // so it is compared by the mutations that it produces. So is a
+        // multi-partition reverse read of `mt`, which goes through it too.
+        // A single-partition reverse read of `mt` is native, and the
+        // fragments must match exactly.
+        auto check = [&] (const dht::partition_range& pr) {
+            testlog.debug("partition range: {}", pr);
+            auto permit = env.make_reader_permit();
+            const auto actual = read_all(sst->make_reader(rs, permit, pr, rev_slice));
+            check_equal(actual, read_all(make_reversing_reader(sst->make_reader(s, permit, pr, fwd_slice), permit.max_result_size())));
+            if (pr.is_singular()) {
+                compare_readers(*rs, ref->make_reader(rs, permit, pr, rev_slice), sst->make_reader(rs, permit, pr, rev_slice), true);
+            } else {
+                check_equal(actual, read_all(ref->make_reader(rs, permit, pr, rev_slice)));
+            }
+        };
+        check(query::full_partition_range);
+        for (const auto& m : muts) {
+            check(dht::partition_range::make_singular(m.decorated_key()));
+        }
+
+        // fast_forward_to(partition_range): every other partition, one at a
+        // time. The `mx` reader does not support it in reverse, so the
+        // reference is the reversing reader over a forward read of `mt`.
+        {
+            // The ranges are not singular, because the `mx` reader of a
+            // singular range does not support fast_forward_to() either.
+            std::vector<dht::partition_range> ranges;
+            for (size_t k = 0; k < muts.size(); k += 2) {
+                std::optional<dht::partition_range::bound> end;
+                if (k + 1 < muts.size()) {
+                    end = dht::partition_range::bound(muts[k + 1].decorated_key(), false);
+                }
+                ranges.push_back(dht::partition_range(dht::partition_range::bound(muts[k].decorated_key(), true), std::move(end)));
+            }
+            auto permit = env.make_reader_permit();
+            auto expected = make_reversing_reader(ref->make_reader(s, permit, ranges.front(), fwd_slice, nullptr,
+                    streamed_mutation::forwarding::no, mutation_reader::forwarding::yes), permit.max_result_size());
+            auto close_expected = deferred_close(expected);
+            auto actual = sst->make_reader(rs, permit, ranges.front(), rev_slice, nullptr, streamed_mutation::forwarding::no, mutation_reader::forwarding::yes);
+            auto close_actual = deferred_close(actual);
+            for (size_t k = 0; k < ranges.size(); ++k) {
+                if (k) {
+                    expected.fast_forward_to(ranges[k]).get();
+                    actual.fast_forward_to(ranges[k]).get();
+                }
+                check_equal(read_partitions(actual), read_partitions(expected));
+            }
+        }
+    }
+
+    // fast_forward_to(position_range), with ranges in the reversed order.
+    std::vector<clustering_key_prefix> keys;
+    for (const auto& m : muts) {
+        for (const auto& r : m.partition().clustered_rows()) {
+            keys.push_back(r.key());
+        }
+    }
+    const auto rev_full_slice = query::reverse_slice(*s, s->full_slice());
+    for (const auto& m : muts) {
+        const auto fwd_ranges = random_position_ranges(*rs, keys, engine);
+        const auto pr = dht::partition_range::make_singular(m.decorated_key());
+        auto permit = env.make_reader_permit();
+        // Forwarding may split range tombstones differently in equivalent
+        // streams (see #9472), so the results are compared as mutations.
+        const auto expected = forwardable_reader_to_mutation(
+                ref->make_reader(rs, permit, pr, rev_full_slice, nullptr, streamed_mutation::forwarding::yes, mutation_reader::forwarding::no),
+                fwd_ranges);
+        const auto actual = forwardable_reader_to_mutation(
+                sst->make_reader(rs, permit, pr, rev_full_slice, nullptr, streamed_mutation::forwarding::yes, mutation_reader::forwarding::no),
+                fwd_ranges);
+        assert_that(actual).is_equal_to(expected);
+    }
+}
+
 // Writes `muts` as `aa` with the row defaults picked at random, and checks
 // what the readers produce against the input and against `mt`.
 void check_round_trip(test_env& env, schema_ptr s, const utils::chunked_vector<mutation>& muts, uint64_t seed) {
@@ -126,6 +353,9 @@ void check_round_trip(test_env& env, schema_ptr s, const utils::chunked_vector<m
                     sst->make_reader(s, env.make_reader_permit(), pr, s->full_slice()),
                     true);
         }
+
+        std::mt19937 engine(seed);
+        check_reverse_reads(env, s, muts, ref, sst, engine);
     }
 }
 
@@ -583,4 +813,264 @@ SEASTAR_THREAD_TEST_CASE(test_corrupt_rows) {
         r.clustering_key();
         r.set(*r.cell("st").tomb_ts, int64_t(1));
     });
+}
+
+namespace {
+
+// Wide partitions with many overlapping range deletions, which the writer
+// turns into many range tombstone boundaries, and with a static row in some.
+utils::chunked_vector<mutation> wide_partitions(simple_schema& ss, std::mt19937& engine) {
+    auto s = ss.schema();
+    utils::chunked_vector<mutation> muts;
+    auto pkeys = ss.make_pkeys(3);
+    for (size_t p = 0; p < pkeys.size(); ++p) {
+        mutation m(s, pkeys[p]);
+        if (p != 1) {
+            ss.add_static_row(m, "static");
+        }
+        for (uint32_t i = 0; i < 600; ++i) {
+            if (tests::random::get_int<int>(0, 4, engine)) {
+                ss.add_row(m, ss.make_ckey(i), fmt::format("value {}", i));
+            }
+        }
+        for (int i = 0; i < 80; ++i) {
+            const auto a = tests::random::get_int<uint32_t>(0, 620, engine);
+            const auto b = tests::random::get_int<uint32_t>(a, std::min<uint32_t>(a + 40, 620), engine);
+            const bool a_incl = tests::random::get_bool(engine);
+            const bool b_incl = tests::random::get_bool(engine) || a == b;
+            ss.delete_range(m, query::clustering_range(
+                    query::clustering_range::bound(ss.make_ckey(a), a_incl || a == b),
+                    query::clustering_range::bound(ss.make_ckey(b), b_incl)));
+        }
+        muts.push_back(std::move(m));
+    }
+    std::ranges::sort(muts, mutation_decorated_key_less_comparator());
+    return muts;
+}
+
+} // anonymous namespace
+
+SEASTAR_THREAD_TEST_CASE(test_reverse_reads_of_wide_partitions) {
+    test_env::do_with_async([] (test_env& env) {
+        const auto seed = tests::random::get_int<uint32_t>();
+        testlog.info("seed: {}", seed);
+        std::mt19937 engine(seed);
+        simple_schema ss;
+        const auto muts = wide_partitions(ss, engine);
+        auto s = ss.schema();
+        auto ref = write(env, s, muts, mt);
+        for (const auto& [name, tweak] : configs) {
+            testlog.info("config: {}", name);
+            auto sst = write(env, s, muts, aa, tweak);
+            check_reverse_reads(env, s, muts, ref, sst, engine);
+        }
+    }).get();
+}
+
+namespace {
+
+// Counts the reads from a file and their bytes.
+class counting_file_impl : public file_impl {
+    file _file;
+public:
+    uint64_t reads = 0;
+    uint64_t bytes = 0;
+    explicit counting_file_impl(file f) : _file(std::move(f)) {}
+    future<size_t> write_dma(uint64_t pos, const void* buffer, size_t len, io_intent* intent) override {
+        return get_file_impl(_file)->write_dma(pos, buffer, len, intent);
+    }
+    future<size_t> write_dma(uint64_t pos, std::vector<iovec> iov, io_intent* intent) override {
+        return get_file_impl(_file)->write_dma(pos, std::move(iov), intent);
+    }
+    future<size_t> read_dma(uint64_t pos, void* buffer, size_t len, io_intent* intent) override {
+        ++reads;
+        bytes += len;
+        return get_file_impl(_file)->read_dma(pos, buffer, len, intent);
+    }
+    future<size_t> read_dma(uint64_t pos, std::vector<iovec> iov, io_intent* intent) override {
+        ++reads;
+        for (const auto& v : iov) {
+            bytes += v.iov_len;
+        }
+        return get_file_impl(_file)->read_dma(pos, std::move(iov), intent);
+    }
+    future<temporary_buffer<uint8_t>> dma_read_bulk(uint64_t offset, size_t range_size, io_intent* intent) override {
+        ++reads;
+        bytes += range_size;
+        return get_file_impl(_file)->dma_read_bulk(offset, range_size, intent);
+    }
+    future<> flush() override { return get_file_impl(_file)->flush(); }
+    future<struct stat> stat() override { return get_file_impl(_file)->stat(); }
+    future<> truncate(uint64_t length) override { return get_file_impl(_file)->truncate(length); }
+    future<> discard(uint64_t offset, uint64_t length) override { return get_file_impl(_file)->discard(offset, length); }
+    future<> allocate(uint64_t position, uint64_t length) override { return get_file_impl(_file)->allocate(position, length); }
+    future<uint64_t> size() override { return get_file_impl(_file)->size(); }
+    future<> close() override { return get_file_impl(_file)->close(); }
+    std::unique_ptr<seastar::file_handle_impl> dup() override { return get_file_impl(_file)->dup(); }
+    subscription<directory_entry> list_directory(std::function<future<> (directory_entry de)> next) override {
+        return get_file_impl(_file)->list_directory(std::move(next));
+    }
+};
+
+// Checks that read progress never goes back, and records where it ended.
+class progress_checker : public read_monitor {
+    const reader_position_tracker* _tracker = nullptr;
+    uint64_t _last = 0;
+public:
+    std::optional<uint64_t> final_position;
+    uint64_t total = 0;
+    void on_read_started(const reader_position_tracker& t) override {
+        _tracker = &t;
+        _last = t.position;
+        total = t.total_read_size;
+    }
+    void on_read_completed() override {
+        check();
+        final_position = _tracker->position;
+        _tracker = nullptr;
+    }
+    void check() {
+        if (_tracker) {
+            BOOST_REQUIRE_GE(_tracker->position, _last);
+            _last = _tracker->position;
+        }
+    }
+};
+
+} // anonymous namespace
+
+// The trie index stores a deletion time in 32 bits, capped at
+// max_deletion_time, while the Data file stores it uncapped. For tombstones
+// past 2038, reads that skip with the index see the same tombstones as a
+// sequential read of the Data file, in both directions.
+SEASTAR_THREAD_TEST_CASE(test_deletion_times_beyond_the_index_cap) {
+    test_env::do_with_async([] (test_env& env) {
+        simple_schema ss;
+        auto s = ss.schema();
+        const auto rs = s->make_reversed();
+        const auto far = gc_clock::time_point(gc_clock::duration(int64_t(1) << 33));
+        BOOST_REQUIRE_GT(far.time_since_epoch().count(), sstables::max_deletion_time);
+        auto pk = ss.make_pkey();
+        mutation m(s, pk);
+        m.partition().apply(tombstone(api::new_timestamp(), far));
+        const uint32_t rows = 3000;
+        for (uint32_t i = 0; i < rows; ++i) {
+            ss.add_row(m, ss.make_ckey(i), fmt::format("value {}", i));
+        }
+        // Range tombstones that span many index blocks, newer than the rows.
+        std::vector<uint32_t> starts;
+        for (uint32_t a = 100; a + 500 < rows; a += 700) {
+            starts.push_back(a);
+            ss.delete_range(m, query::clustering_range::make({ss.make_ckey(a), true}, {ss.make_ckey(a + 500), false}),
+                    tombstone(api::new_timestamp(), far + std::chrono::seconds(a)));
+        }
+        auto sst = write(env, s, {m}, aa, [] (sstable_writer_config& cfg) {
+            cfg.parquet_page_set_size = 1024;
+            cfg.parquet_min_page_size = 256;
+            cfg.parquet_row_group_size = 16 * 1024;
+        });
+        auto permit = env.make_reader_permit();
+        // A full scan reads the Data file in order, without the index.
+        check_equal(read_all(sst->make_full_scan_reader(s, permit)), {m});
+
+        const auto pr = dht::partition_range::make_singular(pk);
+        auto check = [&] (std::vector<query::clustering_range> ranges) {
+            const auto fwd_slice = partition_slice_builder(*s).with_ranges(std::move(ranges)).build();
+            const auto rev_slice = query::reverse_slice(*s, fwd_slice);
+            testlog.debug("slice: {}", fwd_slice);
+            check_equal(read_all(sst->make_reader(s, permit, pr, fwd_slice)),
+                    read_all(make_mutation_reader_from_mutations(s, permit, m, fwd_slice)));
+            check_equal(read_all(sst->make_reader(rs, permit, pr, rev_slice)),
+                    read_all(make_reversing_reader(make_mutation_reader_from_mutations(s, permit, m, fwd_slice), permit.max_result_size())));
+        };
+        for (const auto a : starts) {
+            // Ranges that start and end inside a range tombstone, far from
+            // its bounds, so that the reader skips into it with the index.
+            check({ss.make_ckey_range(a + 200, a + 300)});
+            check({ss.make_ckey_range(a + 50, a + 60), ss.make_ckey_range(a + 400, a + 450)});
+        }
+        check({query::clustering_range::make_starting_with({ss.make_ckey(starts.back() + 250), true})});
+        check({query::clustering_range::make_ending_with({ss.make_ckey(starts.front() + 250), true})});
+    }).get();
+}
+
+// A reverse read of a few rows of a wide partition reads the pages of those
+// rows, of the partition's head, and some read-ahead, but not the whole
+// partition. Checked by counting the bytes read from the Data file, at the
+// end of the partition (where the walk starts), at its start (reached with
+// an index skip before the walk reads anything), and in its middle.
+// A reverse read of the whole partition reads ahead backward: it makes about
+// as many requests as a forward read. Read progress grows in both directions.
+SEASTAR_THREAD_TEST_CASE(test_reverse_read_io_is_bounded) {
+    test_env::do_with_async([] (test_env& env) {
+        simple_schema ss;
+        auto s = ss.schema();
+        const auto rs = s->make_reversed();
+        const uint32_t rows = 4000;
+        auto pk = ss.make_pkey();
+        mutation m(s, pk);
+        ss.add_static_row(m, "static");
+        for (uint32_t i = 0; i < rows; ++i) {
+            ss.add_row(m, ss.make_ckey(i), fmt::format("value {} {}", i, tests::random::get_sstring(64)));
+        }
+        auto sst = write(env, s, {m}, aa, [] (sstable_writer_config& cfg) {
+            cfg.parquet_page_set_size = 4096;
+            cfg.parquet_min_page_size = 1024;
+            cfg.parquet_row_group_size = 64 * 1024;
+        });
+        BOOST_REQUIRE_GT(sst->get_parquet_file_summary().row_groups(), 4);
+        const auto pr = dht::partition_range::make_singular(pk);
+
+        struct result {
+            uint64_t reads;
+            uint64_t bytes;
+            uint64_t rows;
+        };
+        // Reads `range` in the given direction. A fresh sstable object has
+        // empty caches of OffsetIndexes and dictionaries.
+        auto read = [&] (query::clustering_range range, bool reverse) {
+            auto fresh = env.reusable_sst(s, sst).get();
+            auto counting = make_shared<counting_file_impl>(sstables::test(fresh).data_file());
+            sstables::test(fresh).data_file() = file(counting);
+            auto slice = partition_slice_builder(*s).with_range(std::move(range)).build();
+            if (reverse) {
+                slice = query::reverse_slice(*s, std::move(slice));
+            }
+            const auto& qs = reverse ? rs : s;
+            progress_checker progress;
+            auto rd = fresh->make_reader(qs, env.make_reader_permit(), pr, slice, nullptr,
+                    streamed_mutation::forwarding::no, mutation_reader::forwarding::no, progress);
+            uint64_t produced = 0;
+            std::optional<clustering_key> last;
+            while (auto mf = rd().get()) {
+                progress.check();
+                if (mf->is_clustering_row()) {
+                    if (last) {
+                        BOOST_REQUIRE(clustering_key::less_compare(*qs)(*last, mf->as_clustering_row().key()));
+                    }
+                    last = mf->as_clustering_row().key();
+                    ++produced;
+                }
+            }
+            rd.close().get();
+            BOOST_REQUIRE(progress.final_position);
+            BOOST_REQUIRE_LE(*progress.final_position, sst->data_size());
+            return result{counting->reads, counting->bytes, produced};
+        };
+
+        const auto all = query::clustering_range::make_open_ended_both_sides();
+        const auto forward = read(all, false);
+        const auto full = read(all, true);
+        testlog.info("the full partition: {} reads and {} bytes forward, {} reads and {} bytes in reverse",
+                forward.reads, forward.bytes, full.reads, full.bytes);
+        BOOST_REQUIRE_EQUAL(forward.rows, rows);
+        BOOST_REQUIRE_EQUAL(full.rows, rows);
+        BOOST_REQUIRE_LE(full.reads, 2 * forward.reads);
+        for (const uint32_t first : {rows - 5, 0u, rows / 2}) {
+            const auto r = read(ss.make_ckey_range(first, first + 4), true);
+            testlog.info("rows [{}, {}]: {} reads and {} bytes", first, first + 4, r.reads, r.bytes);
+            BOOST_REQUIRE_EQUAL(r.rows, 5);
+            BOOST_REQUIRE_LT(r.bytes * 10, full.bytes);
+        }
+    }).get();
 }

@@ -57,6 +57,12 @@ public:
         return metadata ? &*metadata : nullptr;
     }
 
+    // The open Data file, which readers read through. A test can wrap it,
+    // for example to count the reads.
+    file& data_file() {
+        return _sst->_data_file;
+    }
+
     std::unique_ptr<index_reader> make_index_reader(reader_permit permit) {
         return std::make_unique<index_reader>(_sst, std::move(permit));
     }
