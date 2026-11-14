@@ -16,6 +16,7 @@ target_sources(mutation
     mutation_partition_v2.cc
     mutation_partition_view.cc
     partition_version.cc
+    position_range_utils.cc
     range_tombstone.cc
     range_tombstone_list.cc)
 target_include_directories(mutation

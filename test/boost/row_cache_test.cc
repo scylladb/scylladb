@@ -28,6 +28,7 @@
 #include "replica/memtable.hh"
 #include "partition_slice_builder.hh"
 #include "mutation/mutation_rebuilder.hh"
+#include "mutation/position_range_utils.hh"
 #include "service/migration_manager.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/eventually.hh"

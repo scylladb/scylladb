@@ -1499,6 +1499,14 @@ private:
                     if (index_position.start <= _context->position()) {
                         return make_ready_future<>();
                     }
+                    if (index_position.start > _context->end_position()) {
+                        // The data file range read was determined from the slice upper bound (or the
+                        // partition end), so this can only happen if the clustering ranges of the
+                        // slice are not in order.
+                        on_internal_error(sstlog, format("mx_sstable_mutation_reader::advance_context(): invalid skip to position {} detected"
+                                " in partition {} of sstable {}, the position is after the end of the read range ({})",
+                                index_position.start, *_current_partition_key, _sst->get_filename(), _context->end_position()));
+                    }
                     return skip_to(idx.element_kind(), index_position.start).then([this, &idx] {
                         _sst->get_stats().on_partition_seek();
                         auto open_end_marker = idx.end_open_marker();
