@@ -146,20 +146,31 @@ void flip_byte(temporary_buffer<char>& buf, size_t offset) {
     buf.get_write()[offset] ^= char(0x1);
 }
 
-// Rewrites the chunk header at the start of `buf` with `change` applied and a matching CRC, so that
-// the chunk has the header that a release which sets those fields writes.
-void rewrite_chunk_header(temporary_buffer<char>& buf, std::function<void(ondisk::chunk_header&)> change) {
-    auto in = seastar::simple_memory_input_stream(buf.get(), ondisk::chunk_header_size);
-    auto ch = ser::deserialize(in, std::type_identity<ondisk::chunk_header>{});
-    std::optional<ondisk::segment_header> sh;
-    if (ch.kind == segment_kind::full) {
-        auto sh_in = seastar::simple_memory_input_stream(buf.get() + ondisk::chunk_header_size, ondisk::segment_header_size);
-        sh = ser::deserialize(sh_in, std::type_identity<ondisk::segment_header>{});
-    }
-    change(ch);
-    ch.crc = ch.calculate_crc(sh);
-    auto out = seastar::simple_memory_output_stream(buf.get_write(), ondisk::chunk_header_size);
-    ser::serialize(out, ch);
+ondisk::chunk_header_common read_chunk_header_common(const temporary_buffer<char>& buf) {
+    auto in = seastar::simple_memory_input_stream(buf.get(), ondisk::chunk_header_common_size);
+    return ser::deserialize(in, std::type_identity<ondisk::chunk_header_common>{});
+}
+
+// Returns the bytes of the chunk header at the start of `buf` that follow its common part.
+std::span<const char> chunk_header_rest(const temporary_buffer<char>& buf, segment_kind kind) {
+    return std::span(buf.get() + ondisk::chunk_header_common_size, ondisk::chunk_header_size(kind) - ondisk::chunk_header_common_size);
+}
+
+// Returns the chunk header at the start of `buf`, or nullopt if it is not valid.
+std::optional<ondisk::chunk_header> read_chunk_header(const temporary_buffer<char>& buf) {
+    const auto common = read_chunk_header_common(buf);
+    return ondisk::parse_chunk_header(common, chunk_header_rest(buf, common.kind));
+}
+
+// Rewrites the common part of the chunk header at the start of `buf` with `change` applied and a
+// matching CRC, so that the chunk has the header that a release which sets those fields writes.
+void rewrite_chunk_header(temporary_buffer<char>& buf, std::function<void(ondisk::chunk_header_common&)> change) {
+    auto common = read_chunk_header_common(buf);
+    const auto rest = chunk_header_rest(buf, common.kind);
+    change(common);
+    common.crc = ondisk::calculate_chunk_header_crc(common, rest);
+    auto out = seastar::simple_memory_output_stream(buf.get_write(), ondisk::chunk_header_common_size);
+    ser::serialize(out, common);
 }
 
 std::optional<segment_info> read_chunk_info_from_bytes(const temporary_buffer<char>& buf) {
@@ -177,29 +188,12 @@ temporary_buffer<char> slice_buffer(const temporary_buffer<char>& buf, size_t of
     return out;
 }
 
-ondisk::chunk_header read_chunk_header(const temporary_buffer<char>& buf) {
-    seastar::simple_memory_input_stream in(buf.get(), buf.size());
-    return ser::deserialize(in, std::type_identity<ondisk::chunk_header>{});
-}
-
-// The segment header that follows the chunk header in a full segment.
-ondisk::segment_header read_segment_header(const temporary_buffer<char>& buf) {
-    seastar::simple_memory_input_stream in(buf.get() + ondisk::chunk_header_size, buf.size() - ondisk::chunk_header_size);
-    return ser::deserialize(in, std::type_identity<ondisk::segment_header>{});
-}
-
 // Recomputes the chunk header's CRCs over the bytes as they are now, for a test that corrupts the
 // records on purpose and wants the scan to get past the body CRC to what it is testing.
 void reseal_chunk_crcs(temporary_buffer<char>& buf) {
-    auto ch = read_chunk_header(buf);
-    std::optional<ondisk::segment_header> sh;
-    if (ch.kind == segment_kind::full) {
-        sh = read_segment_header(buf);
-    }
-    ch.body_crc = ondisk::calculate_body_crc(std::span(buf.get() + raw_write_buffer::chunk_headers_size(ch.kind), ch.records_size));
-    ch.crc = ch.calculate_crc(sh);
-    seastar::simple_memory_output_stream out(buf.get_write(), ondisk::chunk_header_size);
-    ser::serialize<ondisk::chunk_header>(out, ch);
+    rewrite_chunk_header(buf, [&] (ondisk::chunk_header_common& common) {
+        common.body_crc = ondisk::calculate_body_crc(std::span(buf.get() + ondisk::chunk_header_size(common.kind), common.records_size));
+    });
 }
 
 struct rewritten_stream_result {
@@ -502,7 +496,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_ondisk_layout) {
     std::array<char, 36> reserved;
     std::iota(reserved.begin(), reserved.end(), char(0x40));
 
-    check_ondisk_layout("chunk_header", ondisk::chunk_header {
+    check_ondisk_layout("chunk_header_common", ondisk::chunk_header_common {
         .magic = ondisk::chunk_header_magic,
         .version = ondisk::current_version,
         .kind = segment_kind::full,
@@ -515,11 +509,13 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_ondisk_layout) {
     }, "4253474c" "01" "02" "3412" "0807060504030201" "efbeadde" "0df0ad0b"
        "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f60616263" "cefaedfe");
 
-    check_ondisk_layout("segment_header", ondisk::segment_header {
+    const auto full_part = ondisk::chunk_header_full_part {
         .table = table,
         .first_token = dht::token::from_int64(-0x0123456789abcdef),
         .last_token = dht::token::from_int64(0x7fffffffffffffff),
-    }, "8877665544332211" "00ffeeddccbbaa99" "1132547698badcfe" "ffffffffffffff7f");
+    };
+    check_ondisk_layout("chunk_header_full_part", full_part,
+        "8877665544332211" "00ffeeddccbbaa99" "1132547698badcfe" "ffffffffffffff7f");
 
     check_ondisk_layout("record_frame_header", ondisk::record_frame_header {
         .key_size = 0x0a0b,
@@ -541,8 +537,9 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_ondisk_layout) {
                 "1132547698badcfe" "08090a0b0c0d0e0f" "8877665544332211" "00ffeeddccbbaa99" "706b");
     }
 
-    // The CRC covers the chunk header fields before `crc`, and the segment header in a full segment.
-    auto ch = ondisk::chunk_header {
+    // The CRC covers the fields of chunk_header_common before `crc`, and chunk_header_full_part in a
+    // full segment.
+    auto common = ondisk::chunk_header_common {
         .magic = ondisk::chunk_header_magic,
         .version = ondisk::current_version,
         .kind = segment_kind::mixed,
@@ -553,13 +550,37 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_ondisk_layout) {
         .reserved = reserved,
         .crc = 0xfeedface,
     };
-    BOOST_REQUIRE_EQUAL(ch.calculate_crc(std::nullopt), 0xfea1ab1fu);
-    ch.kind = segment_kind::full;
-    BOOST_REQUIRE_EQUAL(ch.calculate_crc(ondisk::segment_header {
+    BOOST_REQUIRE_EQUAL(ondisk::calculate_chunk_header_crc(common, {}), 0xfea1ab1fu);
+    common.kind = segment_kind::full;
+    std::array<char, ondisk::chunk_header_full_part_size> full_part_bytes;
+    seastar::simple_memory_output_stream full_part_out(full_part_bytes.data(), full_part_bytes.size());
+    ser::serialize(full_part_out, full_part);
+    BOOST_REQUIRE_EQUAL(ondisk::calculate_chunk_header_crc(common, full_part_bytes), 0x410e62ddu);
+
+    // write_chunk_header() writes the fields of chunk_header, and parse_chunk_header() reads them back.
+    auto mixed_ch = ondisk::chunk_header {
+        .segment = { .segment_seq = segment_sequence{0x0102030405060708} },
+        .flags = 0x1234,
+        .records_size = 0xdeadbeef,
+        .body_crc = 0x0badf00d,
+    };
+    auto full_ch = mixed_ch;
+    full_ch.segment.v = segment_info::full {
         .table = table,
-        .first_token = dht::token::from_int64(-0x0123456789abcdef),
-        .last_token = dht::token::from_int64(0x7fffffffffffffff),
-    }), 0x410e62ddu);
+        .first_token = full_part.first_token,
+        .last_token = full_part.last_token,
+    };
+    for (const auto& ch : {mixed_ch, full_ch}) {
+        std::vector<char> buf(ondisk::chunk_header_size(ch.kind()));
+        seastar::simple_memory_output_stream out(buf.data(), buf.size());
+        ondisk::write_chunk_header(out, ch);
+        BOOST_REQUIRE_EQUAL(out.size(), 0);
+
+        seastar::simple_memory_input_stream in(buf.data(), buf.size());
+        const auto read_common = ser::deserialize(in, std::type_identity<ondisk::chunk_header_common>{});
+        BOOST_REQUIRE(read_common.reserved == decltype(read_common.reserved){});
+        BOOST_REQUIRE(ondisk::parse_chunk_header(read_common, std::span(buf).subspan(ondisk::chunk_header_common_size)) == ch);
+    }
 }
 
 // Serializes a record frame and returns its bytes, checking that the frame took exactly the size
@@ -781,16 +802,18 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_write_buffer_record_and_header_serializati
     BOOST_REQUIRE_EQUAL(chunk.size() % ondisk::block_alignment, 0u);
 
     seastar::simple_memory_input_stream in(reinterpret_cast<const char*>(chunk.data()), chunk.size());
-    auto ch = ser::deserialize(in, std::type_identity<ondisk::chunk_header>{});
-    auto sh = ser::deserialize(in, std::type_identity<ondisk::segment_header>{});
-    BOOST_REQUIRE(ondisk::validate_chunk_headers(ch, sh));
-    BOOST_REQUIRE(ch.kind == segment_kind::full);
-    BOOST_REQUIRE_EQUAL(ch.segment_seq.value, 17u);
-    BOOST_REQUIRE_EQUAL(ch.records_size, expected_records_size);
+    auto common = ser::deserialize(in, std::type_identity<ondisk::chunk_header_common>{});
+    auto ch = ondisk::parse_chunk_header(common, std::span(reinterpret_cast<const char*>(chunk.data()) + ondisk::chunk_header_common_size,
+            ondisk::chunk_header_full_part_size));
+    BOOST_REQUIRE(ch);
+    BOOST_REQUIRE(ch->kind() == segment_kind::full);
+    BOOST_REQUIRE_EQUAL(ch->segment.segment_seq.value, 17u);
+    BOOST_REQUIRE_EQUAL(ch->records_size, expected_records_size);
 
-    BOOST_REQUIRE_EQUAL(sh.table, schema->id());
-    BOOST_REQUIRE_EQUAL(sh.first_token, expected.header.key.token());
-    BOOST_REQUIRE_EQUAL(sh.last_token, expected.header.key.token());
+    const auto& full = std::get<segment_info::full>(ch->segment.v);
+    BOOST_REQUIRE_EQUAL(full.table, schema->id());
+    BOOST_REQUIRE_EQUAL(full.first_token, expected.header.key.token());
+    BOOST_REQUIRE_EQUAL(full.last_token, expected.header.key.token());
 }
 
 namespace {
@@ -1714,7 +1737,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_mixed_chunks_report_readable_
 
     BOOST_REQUIRE_EQUAL(seen_segment_infos.size(), 2u);
     for (const auto& sh : seen_segment_infos) {
-        BOOST_REQUIRE(sh.kind == segment_kind::mixed);
+        BOOST_REQUIRE(sh.kind() == segment_kind::mixed);
         BOOST_REQUIRE_EQUAL(sh.segment_seq.value, 23u);
     }
 
@@ -1738,7 +1761,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_mixed_chunks_report_readable_
 
     auto maybe_header = read_chunk_info_from_bytes(segment_copy);
     BOOST_REQUIRE(maybe_header);
-    BOOST_REQUIRE(maybe_header->kind == segment_kind::mixed);
+    BOOST_REQUIRE(maybe_header->kind() == segment_kind::mixed);
     BOOST_REQUIRE_EQUAL(maybe_header->segment_seq.value, 23u);
     BOOST_REQUIRE(std::holds_alternative<segment_info::mixed>(maybe_header->v));
 }
@@ -1760,7 +1783,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_rejects_corrupt_key_size) {
         auto serialized0 = copy_chunk(wb0.chunk());
         auto serialized1 = copy_chunk(wb1.chunk());
         // The first record_frame_header of the first chunk follows the chunk header; key_size is its first field.
-        seastar::simple_memory_output_stream out(serialized0.get_write() + ondisk::chunk_header_size, sizeof(uint16_t));
+        seastar::simple_memory_output_stream out(serialized0.get_write() + ondisk::chunk_header_size(segment_kind::mixed), sizeof(uint16_t));
         ser::serialize(out, key_size);
         // The corruption is in the records, which is what the body CRC would catch first.
         reseal_chunk_crcs(serialized0);
@@ -1799,12 +1822,12 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_fails_on_a_record_with_an_unk
 
     auto serialized = copy_chunk(wb.chunk());
     // The first record_frame_header follows the chunk header; flags is its second field.
-    seastar::simple_memory_output_stream out(serialized.get_write() + ondisk::chunk_header_size + sizeof(uint16_t), sizeof(uint16_t));
+    seastar::simple_memory_output_stream out(serialized.get_write() + ondisk::chunk_header_size(segment_kind::mixed) + sizeof(uint16_t), sizeof(uint16_t));
     ser::serialize(out, uint16_t(~ondisk::known_record_flags));
     reseal_chunk_crcs(serialized);
 
     const auto names_the_record_and_the_flags = [] (const std::runtime_error& e) {
-        const auto expected = fmt::format("Cannot read the record at offset {} of segment(5)", ondisk::chunk_header_size);
+        const auto expected = fmt::format("Cannot read the record at offset {} of segment(5)", ondisk::chunk_header_size(segment_kind::mixed));
         BOOST_REQUIRE_EQUAL(std::string_view(e.what()), expected);
         try {
             std::rethrow_if_nested(e);
@@ -1846,7 +1869,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_reads_full_chunk_records_with
     in.close().get();
 
     BOOST_REQUIRE_EQUAL(seen_segment_infos.size(), 1u);
-    BOOST_REQUIRE(seen_segment_infos.front().kind == segment_kind::full);
+    BOOST_REQUIRE(seen_segment_infos.front().kind() == segment_kind::full);
     BOOST_REQUIRE_EQUAL(seen_segment_infos.front().segment_seq.value, 41u);
     BOOST_REQUIRE(std::holds_alternative<segment_info::full>(seen_segment_infos.front().v));
     BOOST_REQUIRE_EQUAL(seen_records.size(), 3u);
@@ -1861,7 +1884,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_reads_full_chunk_records_with
     assert_that(to_mutation(seen_records[2], schema)).is_equal_to(expected2);
 
     BOOST_REQUIRE(maybe_header);
-    BOOST_REQUIRE(maybe_header->kind == segment_kind::full);
+    BOOST_REQUIRE(maybe_header->kind() == segment_kind::full);
     BOOST_REQUIRE_EQUAL(maybe_header->segment_seq.value, 41u);
     BOOST_REQUIRE(std::holds_alternative<segment_info::full>(maybe_header->v));
     auto& full = std::get<segment_info::full>(maybe_header->v);
@@ -1918,7 +1941,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_stops_on_mixed_chunk_lower_se
     in.close().get();
 
     BOOST_REQUIRE_EQUAL(seen_segment_infos.size(), 1u);
-    BOOST_REQUIRE(seen_segment_infos.front().kind == segment_kind::mixed);
+    BOOST_REQUIRE(seen_segment_infos.front().kind() == segment_kind::mixed);
     BOOST_REQUIRE_EQUAL(seen_segment_infos.front().segment_seq.value, 61u);
 
     BOOST_REQUIRE_EQUAL(seen_headers.size(), 2u);
@@ -1950,7 +1973,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_stops_on_corrupted_later_mixe
 
     auto serialized0 = copy_chunk(wb0.chunk());
     auto serialized1 = copy_chunk(wb1.chunk());
-    flip_byte(serialized1, ondisk::chunk_header_size - sizeof(uint32_t));
+    // Flip a byte of crc, which is the last field of the header of a mixed segment.
+    flip_byte(serialized1, ondisk::chunk_header_size(segment_kind::mixed) - sizeof(uint32_t));
 
     auto segment = concat_chunks({&serialized0, &serialized1});
     const auto segment_size = segment.size();
@@ -1982,7 +2006,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_stops_on_corrupted_later_mixe
 // Requires that read_chunk_info(), the segment scan and the streamed rewriter all fail with an error
 // that contains `expected` on a segment whose chunk header has `change` applied, because the chunk
 // is from another release and recovery must not free the segment as empty.
-void require_segment_read_fails(std::function<void(ondisk::chunk_header&)> change, const sstring& expected) {
+void require_segment_read_fails(std::function<void(ondisk::chunk_header_common&)> change, const sstring& expected) {
     auto schema = make_kv_schema();
 
     raw_write_buffer wb(64 * 1024, segment_kind::mixed);
@@ -2000,12 +2024,12 @@ void require_segment_read_fails(std::function<void(ondisk::chunk_header&)> chang
 }
 
 SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_fails_on_a_chunk_of_another_format_version) {
-    require_segment_read_fails([] (ondisk::chunk_header& ch) { ch.version = ondisk::min_read_version - 1; }, "has format version");
-    require_segment_read_fails([] (ondisk::chunk_header& ch) { ch.version = ondisk::current_version + 1; }, "has format version");
+    require_segment_read_fails([] (ondisk::chunk_header_common& ch) { ch.version = ondisk::min_read_version - 1; }, "has format version");
+    require_segment_read_fails([] (ondisk::chunk_header_common& ch) { ch.version = ondisk::current_version + 1; }, "has format version");
 }
 
 SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_fails_on_a_chunk_with_an_unknown_flag) {
-    require_segment_read_fails([] (ondisk::chunk_header& ch) { ch.flags = ~ondisk::known_chunk_flags; }, "has flags");
+    require_segment_read_fails([] (ondisk::chunk_header_common& ch) { ch.flags = ~ondisk::known_chunk_flags; }, "has flags");
 }
 
 // A flag that a bit flip set fails the CRC check, so the scan ends as it does for other corruption,
@@ -2043,7 +2067,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_stops_on_a_stale_chunk_of_ano
 
     auto serialized0 = copy_chunk(wb0.chunk());
     auto serialized1 = copy_chunk(wb1.chunk());
-    rewrite_chunk_header(serialized1, [] (ondisk::chunk_header& ch) {
+    rewrite_chunk_header(serialized1, [] (ondisk::chunk_header_common& ch) {
         ch.version = ondisk::current_version + 1;
         ch.flags = ~ondisk::known_chunk_flags;
     });
@@ -2070,9 +2094,10 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_stops_on_a_stale_chunk_of_ano
     assert_that(to_mutation(seen_records[0], schema)).is_equal_to(expected0);
 }
 
-// Checks that the chunk header's CRC covers the segment header: a full segment whose segment header
-// is corrupt has no segment info, gives no records, and is not taken in by the streamed rewriter.
-SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_rejects_corrupt_segment_header) {
+// Checks that the chunk header's CRC covers the full part of the header: a full segment whose
+// header is corrupt there has no segment info, gives no records, and is not taken in by the streamed
+// rewriter.
+SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_rejects_corrupt_full_chunk_header) {
     auto schema = make_kv_schema();
 
     raw_write_buffer wb(64 * 1024, segment_kind::full);
@@ -2081,8 +2106,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_rejects_corrupt_segment_heade
 
     auto serialized = copy_chunk(wb.chunk());
     BOOST_REQUIRE(read_chunk_info_from_bytes(serialized));
-    // A byte of last_token, the last field of the segment header.
-    flip_byte(serialized, ondisk::chunk_header_size + ondisk::segment_header_size - 1);
+    // Flip a byte of last_token, which is the last field of the header of a full segment.
+    flip_byte(serialized, ondisk::chunk_header_size(segment_kind::full) - 1);
 
     BOOST_REQUIRE(!read_chunk_info_from_bytes(serialized));
     BOOST_REQUIRE_THROW(rewrite_streamed_segment(log_segment_id{13}, segment_sequence{131}, std::span(&serialized, 1)), std::runtime_error);
@@ -2103,7 +2128,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_rejects_corrupt_segment_heade
     BOOST_REQUIRE_EQUAL(seen_headers, 0u);
 }
 
-// A crash while a chunk is being written over a reused segment can leave the headers on disk and
+// A crash while a chunk is being written over a reused segment can leave the header on disk and
 // only part of the body, with the previous incarnation's bytes in the rest. Where the old and the
 // new records' boundaries line up - here, as they do under a uniform record size - the old records
 // parse cleanly under the new header, so the scan has to check the chunk's body CRC before it
@@ -2136,7 +2161,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_rejects_torn_chunk) {
 
     // The header and the first two record frames of the new incarnation made it to disk, the rest
     // is still the old one's.
-    const size_t torn_at = ondisk::chunk_header_size + 2 * align_up(ondisk::record_frame_header_size + record_size, ondisk::record_alignment);
+    const size_t torn_at = ondisk::chunk_header_size(segment_kind::mixed) + 2 * align_up(ondisk::record_frame_header_size + record_size, ondisk::record_alignment);
     auto torn = slice_buffer(new_incarnation, 0, new_incarnation.size());
     std::copy_n(old_incarnation.get() + torn_at, old_incarnation.size() - torn_at, torn.get_write() + torn_at);
 
@@ -2189,8 +2214,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_skips_chunk_with_failed_body)
     };
     auto make_failed_chunk = [&] (api::timestamp_type ts, segment_sequence seq) {
         auto chunk = make_chunk(ts, seq);
-        // The first byte of the body. The headers stay valid.
-        flip_byte(chunk, ondisk::chunk_header_size);
+        // The first byte of the body. The header stays valid.
+        flip_byte(chunk, ondisk::chunk_header_size(segment_kind::mixed));
         return chunk;
     };
 
@@ -2239,7 +2264,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_skips_chunk_with_failed_body)
     BOOST_REQUIRE(result.timestamps == std::vector<api::timestamp_type>{api::timestamp_type(1)});
 }
 
-// A chunk whose headers are on disk and whose body is cut short still gives its segment info, and
+// A chunk whose header is on disk and whose body is cut short still gives its segment info, and
 // the scan ends after it.
 SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_gives_info_of_chunk_with_cut_short_body) {
     auto schema = make_kv_schema();
@@ -2252,7 +2277,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_scan_gives_info_of_chunk_with_cut_
     };
     const auto chunk0 = make_chunk(api::timestamp_type(1));
     const auto chunk1 = make_chunk(api::timestamp_type(2));
-    const auto cut_chunk1 = slice_buffer(chunk1, 0, ondisk::chunk_header_size + ondisk::record_frame_header_size);
+    const auto cut_chunk1 = slice_buffer(chunk1, 0, ondisk::chunk_header_size(segment_kind::mixed) + ondisk::record_frame_header_size);
 
     // The segment is `extra_segment_size` bytes longer than the stream.
     auto check = [&] (size_t extra_segment_size) {
@@ -2301,6 +2326,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_streamed_segment_rewriter_rewrites_initial
     auto serialized = copy_chunk(wb.chunk());
     auto rewritten = rewrite_streamed_segment(log_segment_id{33}, segment_sequence{221}, std::span(&serialized, 1));
     auto ch = read_chunk_header(rewritten.data);
+    BOOST_REQUIRE(ch);
 
     auto rewritten_size = rewritten.data.size();
     auto in = seastar::util::as_input_stream(rewritten.data.share());
@@ -2317,10 +2343,9 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_streamed_segment_rewriter_rewrites_initial
     in.close().get();
 
     BOOST_REQUIRE_EQUAL(rewritten.write_count, 1u);
-    BOOST_REQUIRE(ondisk::validate_chunk_headers(ch, read_segment_header(rewritten.data)));
-    BOOST_REQUIRE_EQUAL(ch.segment_seq.value, 221u);
+    BOOST_REQUIRE_EQUAL(ch->segment.segment_seq.value, 221u);
     BOOST_REQUIRE_EQUAL(seen_segment_infos.size(), 1u);
-    BOOST_REQUIRE(seen_segment_infos.front().kind == segment_kind::full);
+    BOOST_REQUIRE(seen_segment_infos.front().kind() == segment_kind::full);
     BOOST_REQUIRE_EQUAL(seen_segment_infos.front().segment_seq.value, 221u);
     BOOST_REQUIRE(std::holds_alternative<segment_info::full>(seen_segment_infos.front().v));
     BOOST_REQUIRE_EQUAL(seen_records.size(), 3u);
@@ -2335,6 +2360,32 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_streamed_segment_rewriter_rewrites_initial
     assert_that(to_mutation(seen_records[2], schema)).is_equal_to(expected2);
 }
 
+// A later release can use the reserved bytes of the chunk header for a field that this code does
+// not read. Checks that this code reads such a chunk, and that the streamed rewriter keeps those
+// bytes.
+SEASTAR_THREAD_TEST_CASE(test_logstor_chunk_with_reserved_bytes_set) {
+    auto schema = make_kv_schema();
+
+    raw_write_buffer wb(64 * 1024, segment_kind::full);
+    wb.append(log_record_writer(make_log_record(schema, "pk0", "value0", api::timestamp_type(141))));
+    wb.seal(segment_sequence{151}, schema->id(), ondisk::block_alignment);
+
+    auto serialized = copy_chunk(wb.chunk());
+    rewrite_chunk_header(serialized, [] (ondisk::chunk_header_common& common) {
+        std::iota(common.reserved.begin(), common.reserved.end(), char(0x40));
+    });
+    const auto reserved = read_chunk_header_common(serialized).reserved;
+
+    BOOST_REQUIRE(read_chunk_info_from_bytes(serialized));
+    BOOST_REQUIRE_EQUAL(scan_buffer_records(serialized, log_segment_id{15}).size(), 1u);
+
+    auto rewritten = rewrite_streamed_segment(log_segment_id{15}, segment_sequence{161}, std::span(&serialized, 1));
+    auto ch = read_chunk_header(rewritten.data);
+    BOOST_REQUIRE(ch);
+    BOOST_REQUIRE_EQUAL(ch->segment.segment_seq.value, 161u);
+    BOOST_REQUIRE(read_chunk_header_common(rewritten.data).reserved == reserved);
+}
+
 // Checks that the rewriter can wait for a fragmented initial header before rewriting it.
 SEASTAR_THREAD_TEST_CASE(test_logstor_streamed_segment_rewriter_handles_fragmented_initial_header) {
     auto schema = make_kv_schema();
@@ -2344,7 +2395,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_streamed_segment_rewriter_handles_fragment
     wb.seal(segment_sequence{241}, std::nullopt, ondisk::block_alignment);
 
     auto serialized = copy_chunk(wb.chunk());
-    auto split = ondisk::chunk_header_size - 1;
+    auto split = ondisk::chunk_header_common_size - 1;
     std::vector<temporary_buffer<char>> pieces;
     pieces.push_back(slice_buffer(serialized, 0, split));
     pieces.push_back(slice_buffer(serialized, split, serialized.size() - split));
@@ -2353,7 +2404,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_streamed_segment_rewriter_handles_fragment
     auto ch = read_chunk_header(rewritten.data);
 
     BOOST_REQUIRE_EQUAL(rewritten.write_count, 1u);
-    BOOST_REQUIRE_EQUAL(ch.segment_seq.value, 251u);
+    BOOST_REQUIRE(ch);
+    BOOST_REQUIRE_EQUAL(ch->segment.segment_seq.value, 251u);
 }
 
 // Checks that the rewriter rejects a stream whose initial chunk header is corrupted.
@@ -2379,7 +2431,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_streamed_segment_rewriter_rejects_truncate
     wb.seal(segment_sequence{331}, std::nullopt, ondisk::block_alignment);
 
     auto serialized = copy_chunk(wb.chunk());
-    auto truncated = slice_buffer(serialized, 0, ondisk::chunk_header_size - 1);
+    auto truncated = slice_buffer(serialized, 0, ondisk::chunk_header_common_size - 1);
 
     BOOST_REQUIRE_THROW(rewrite_streamed_segment(log_segment_id{41}, segment_sequence{341}, std::span(&truncated, 1)), std::runtime_error);
 }

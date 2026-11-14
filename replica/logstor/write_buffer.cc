@@ -43,11 +43,7 @@ raw_write_buffer::raw_write_buffer(size_t buffer_size, segment_kind kind)
 
 void raw_write_buffer::reset() {
     _stream = seastar::simple_memory_output_stream(_buffer.get(), _buffer_size);
-    _header_stream = _stream.write_substream(ondisk::chunk_header_size);
-    if (with_segment_header()) {
-        _segment_header_stream = _stream.write_substream(ondisk::segment_header_size);
-    }
-    _chunk_header = {};
+    _header_stream = _stream.write_substream(chunk_header_size());
     _record_bytes = 0;
     _record_count = 0;
     _min_token = std::nullopt;
@@ -62,7 +58,7 @@ bool raw_write_buffer::can_fit(size_t record_size) const noexcept {
 }
 
 bool raw_write_buffer::has_data() const noexcept {
-    return serialized_size() > chunk_headers_size();
+    return serialized_size() > chunk_header_size();
 }
 
 template <log_record_writer_concept Writer>
@@ -122,9 +118,9 @@ void raw_write_buffer::seal(segment_sequence segment_seq, std::optional<table_id
     if (_sealed) {
         throw std::runtime_error("Cannot seal write buffer more than once");
     }
-    _chunk_header.records_size = static_cast<uint32_t>(serialized_size() - chunk_headers_size());
+    const auto records_size = static_cast<uint32_t>(serialized_size() - chunk_header_size());
     pad_to_alignment(alignment);
-    write_header(segment_seq, table);
+    write_header(segment_seq, table, records_size);
     _sealed = true;
 }
 
@@ -135,30 +131,25 @@ bytes_view raw_write_buffer::chunk() const {
     return bytes_view(reinterpret_cast<const int8_t*>(_buffer.get()), serialized_size());
 }
 
-void raw_write_buffer::write_header(segment_sequence segment_seq, std::optional<table_id> table) {
-    // The segment header first: the chunk header's CRC covers it.
-    std::optional<ondisk::segment_header> seg_hdr;
-    if (_segment_kind == segment_kind::full) {
-        seg_hdr = ondisk::segment_header {
+void raw_write_buffer::write_header(segment_sequence segment_seq, std::optional<table_id> table, uint32_t records_size) {
+    ondisk::chunk_header ch {
+        .segment = { .segment_seq = segment_seq },
+        .flags = 0,
+        .records_size = records_size,
+        .body_crc = ondisk::calculate_body_crc(std::span(_buffer.get() + chunk_header_size(), records_size)),
+    };
+    switch (_segment_kind) {
+    case segment_kind::mixed:
+        break;
+    case segment_kind::full:
+        ch.segment.v = segment_info::full {
             .table = table.value(),
             .first_token = _min_token.value_or(dht::minimum_token()),
             .last_token = _max_token.value_or(dht::minimum_token()),
         };
-
-        ser::serialize<ondisk::segment_header>(_segment_header_stream, *seg_hdr);
+        break;
     }
-
-    _chunk_header.magic = ondisk::chunk_header_magic;
-    _chunk_header.version = ondisk::current_version;
-    _chunk_header.kind = _segment_kind;
-    _chunk_header.flags = 0;
-    _chunk_header.segment_seq = segment_seq;
-    // seal() set records_size, which is what the body spans after the headers.
-    _chunk_header.body_crc = ondisk::calculate_body_crc(std::span(_buffer.get() + chunk_headers_size(), _chunk_header.records_size));
-    _chunk_header.reserved = {};
-    _chunk_header.crc = _chunk_header.calculate_crc(seg_hdr);
-
-    ser::serialize<ondisk::chunk_header>(_header_stream, _chunk_header);
+    ondisk::write_chunk_header(_header_stream, ch);
 }
 
 size_t raw_write_buffer::estimate_required_segments(size_t record_bytes, size_t record_count, size_t segment_size, segment_kind kind) {
@@ -166,7 +157,7 @@ size_t raw_write_buffer::estimate_required_segments(size_t record_bytes, size_t 
         return 0;
     }
 
-    const size_t fixed_overhead = chunk_headers_size(kind);
+    const size_t fixed_overhead = ondisk::chunk_header_size(kind);
 
     if (segment_size <= fixed_overhead) {
         return 1;

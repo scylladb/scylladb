@@ -223,11 +223,11 @@ these parts, in this order:
 
 - the **chunk header**, which identifies a valid chunk of a given format version, gives the segment
   kind and the sequence number of the segment, and holds the sizes and the CRCs of the parts that
-  follow. Recovery uses the sequence number to order segments. After its first chunk, a segment can
-  still hold the chunks of an earlier use of the segment, and recovery identifies such a chunk by
-  its sequence number before recovery checks the version and the flags.
-- the **segment header**, in a full segment only, which gives the table and the token range of the
-  records.
+  follow. In a full segment, the chunk header also gives the table and the token range of the
+  records, so the size of the header depends on the kind. Recovery uses the sequence number to order
+  segments. After its first chunk, a segment can still hold the chunks of an earlier use of the
+  segment, and recovery identifies such a chunk by its sequence number before recovery checks the
+  version and the flags.
 - the **record frames**, one after the other.
 - zero padding to the block boundary.
 

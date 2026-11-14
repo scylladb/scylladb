@@ -2166,39 +2166,38 @@ void segment_manager::on_free_record(record_location location) noexcept {
 }
 
 segment_manager_impl::needs_separation segment_manager_impl::place_recovered_segment(recovery_catalog& catalog, log_segment_id seg_id, const segment_info& info, recovery_stats& stats) {
-    switch (info.kind) {
-    case segment_kind::mixed:
-        logstor_logger.debug("Recovering mixed segment {} using separator", seg_id);
-        return needs_separation::yes;
-    case segment_kind::full: {
-        const auto& full = std::get<segment_info::full>(info.v);
-        auto [index, cg] = catalog.find(full.table, full.first_token, full.last_token);
-        if (!index) {
-            // The table is gone, and its records with it.
-            return needs_separation::no;
-        }
-        if (cg) {
-            cg->add_logstor_segment(get_segment_descriptor(seg_id));
-            logstor_logger.debug("Added segment {} with tokens [{},{}] to compaction group of table {}", seg_id, full.first_token, full.last_token,
-                    seastar::value_of([&] { return catalog.table_name(full.table); }));
-            return needs_separation::no;
-        }
-        // The range of the segment is in two tablets of this shard, or part of the range
-        // is in a tablet that is not on this shard, so no compaction group of this shard
-        // owns the whole segment. A split cannot make such a segment, because a split moves
-        // a segment whole only when the segment fits one of the new tablets, and rewrites
-        // the segment otherwise. So this is a segment that an erase freed and that a stale
-        // copy brought back.
-        //
-        // The records of the segment that belong to this shard are separated one by one,
-        // like the records of a mixed segment.
-        ++stats.separated_segments;
-        logstor_logger.warn("Segment {} with tokens [{},{}] of table {} fits no compaction group of this shard, separating its records",
-                seg_id, full.first_token, full.last_token, catalog.table_name(full.table));
-        return needs_separation::yes;
-    }
-    }
-    return needs_separation::no;
+    return std::visit(overloaded_functor{
+        [&] (const segment_info::mixed&) {
+            logstor_logger.debug("Recovering mixed segment {} using separator", seg_id);
+            return needs_separation::yes;
+        },
+        [&] (const segment_info::full& full) {
+            auto [index, cg] = catalog.find(full.table, full.first_token, full.last_token);
+            if (!index) {
+                // The table is gone, and its records with it.
+                return needs_separation::no;
+            }
+            if (cg) {
+                cg->add_logstor_segment(get_segment_descriptor(seg_id));
+                logstor_logger.debug("Added segment {} with tokens [{},{}] to compaction group of table {}", seg_id, full.first_token, full.last_token,
+                        seastar::value_of([&] { return catalog.table_name(full.table); }));
+                return needs_separation::no;
+            }
+            // The range of the segment is in two tablets of this shard, or part of the range
+            // is in a tablet that is not on this shard, so no compaction group of this shard
+            // owns the whole segment. A split cannot make such a segment, because a split moves
+            // a segment whole only when the segment fits one of the new tablets, and rewrites
+            // the segment otherwise. So this is a segment that an erase freed and that a stale
+            // copy brought back.
+            //
+            // The records of the segment that belong to this shard are separated one by one,
+            // like the records of a mixed segment.
+            ++stats.separated_segments;
+            logstor_logger.warn("Segment {} with tokens [{},{}] of table {} fits no compaction group of this shard, separating its records",
+                    seg_id, full.first_token, full.last_token, catalog.table_name(full.table));
+            return needs_separation::yes;
+        },
+    }, info.v);
 }
 
 future<> segment_manager_impl::separate_recovered_segments() {

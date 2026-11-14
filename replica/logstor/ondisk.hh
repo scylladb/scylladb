@@ -12,6 +12,7 @@
 #include <limits>
 #include <optional>
 #include <span>
+#include <variant>
 
 #include <seastar/core/simple-stream.hh>
 
@@ -22,6 +23,7 @@
 #include "replica/logstor/types.hh"
 #include "serializer.hh"
 #include "utils/managed_bytes.hh"
+#include "utils/overloaded_functor.hh"
 
 namespace replica::logstor::ondisk {
 
@@ -51,7 +53,10 @@ static constexpr uint32_t chunk_header_magic = 0x4c475342;
 // key size in 16 bits.
 static constexpr size_t max_key_size = std::numeric_limits<uint16_t>::max();
 
-// segment_kind is the kind of the segment that holds a chunk, as the chunk header records it.
+// segment_kind is the kind of the segment that holds a chunk, as the chunk header records it. The
+// kind sets the layout of the chunk header, so the set of kinds is part of the format version, and
+// a new kind needs a new format version. Then this code never reads a chunk of a kind that it does
+// not define.
 enum class segment_kind : uint8_t {
     mixed = 1,
     full = 2,
@@ -95,15 +100,18 @@ struct field<table_id> : projected_field<utils::UUID, &table_id::uuid> {};
 // it as int64_t.
 static_assert(std::is_same_v<api::timestamp_type, int64_t>, "The timestamp must be of the on-disk type");
 
-struct segment_header;
-
 // A segment holds one or more chunks, each starting at a block_alignment boundary and padded to
-// a multiple of it. A chunk is this header, the segment_header in a full segment, and the record
-// frames, which are the chunk's body. Chunks are appended to a mixed segment one at a time; a full
-// segment is a single chunk. A write buffer builds a chunk in memory and seals it - pads it and
-// fills in its header - before it is written.
+// a multiple of it. A chunk is the chunk header and the record frames, which are the chunk's body.
+// Chunks are appended to a mixed segment one at a time; a full segment is a single chunk. A write
+// buffer builds a chunk in memory and seals it - pads it and fills in its header - before it is
+// written.
 //
-// The chunk header, 16 bytes a row, little-endian:
+// The chunk header has a layout that depends on the kind of the segment. chunk_header_common is the
+// start of the header in every kind, and chunk_header_full_part follows it in a full segment. The
+// chunk_header type holds the header in memory, and write_chunk_header() and parse_chunk_header()
+// convert between the two forms.
+//
+// chunk_header_common, 16 bytes a row, little-endian:
 //
 //       0                   4    5    6         8                                       16
 //       +-------------------+----+----+---------+---------------------------------------+
@@ -118,37 +126,49 @@ struct segment_header;
 //
 // The first row holds magic, version, kind, flags and segment_seq. The first row keeps its position
 // in every format version, so that a reader can find the version and the end of a segment in any
-// layout of the other bytes. `crc` covers bytes 0 to 59, and the segment header in a full segment.
-struct chunk_header : fixed_layout {
+// layout of the other bytes. `crc` covers bytes 0 to 59, and chunk_header_full_part in a full
+// segment.
+struct chunk_header_common : fixed_layout {
     uint32_t magic;
     uint8_t version;
     segment_kind kind;
     // The flags give properties that a chunk can have in a format version. No flag is defined yet.
     uint16_t flags;
     segment_sequence segment_seq;
-    uint32_t records_size; // size of the record frames following the header(s), padding included
-    // CRC32 of the chunk's body: the record frames, records_size bytes after the headers. It is what
+    uint32_t records_size; // size of the record frames following the header, padding included
+    // CRC32 of the chunk's body: the record frames, records_size bytes after the header. It is what
     // tells a chunk whose header is durable but whose body was only partly written - a crash mid-write
     // over a reused segment - from a whole one.
     uint32_t body_crc;
     // The writer sets these bytes to zero. A new field uses part of these bytes, so that the header
     // keeps its size.
     std::array<char, 36> reserved;
-    // crc is the CRC32 of the fields above it and, in a full segment, of the segment header. crc
-    // must stay the last field, because calculate_crc() covers the serialized bytes before crc.
+    // crc is the CRC32 of the fields above it and, in a full segment, of chunk_header_full_part.
+    // crc must stay the last field, because calculate_chunk_header_crc() covers the serialized
+    // bytes before crc.
     uint32_t crc;
 
-    uint32_t calculate_crc(const std::optional<segment_header>& sh) const;
-
-    bool operator==(const chunk_header& other) const noexcept = default;
+    bool operator==(const chunk_header_common& other) const noexcept = default;
 };
 
-struct segment_header : fixed_layout {
+// chunk_header_full_part is the part of the chunk header that follows chunk_header_common in a full
+// segment. It gives the table and the token range of the records, which belong to one compaction
+// group.
+//
+// chunk_header_full_part, 16 bytes a row, little-endian, at offset 64 of the header:
+//
+//       0                                       8                                       16
+//       +-------------------------------------------------------------------------------+
+//   64  |                                   table id                                    |
+//       +---------------------------------------+---------------------------------------+
+//   80  |              first_token              |              last_token               |
+//       +---------------------------------------+---------------------------------------+
+struct chunk_header_full_part : fixed_layout {
     table_id table;
     dht::token first_token;
     dht::token last_token;
 
-    bool operator==(const segment_header& other) const noexcept = default;
+    bool operator==(const chunk_header_full_part& other) const noexcept = default;
 };
 
 // A record is stored on disk as a record frame: this header, the record header it sizes,
@@ -194,30 +214,101 @@ struct record_header_fixed : fixed_layout {
 };
 
 // These constants are the on-disk sizes, which fixed_size calculates from the fields of each type.
-static constexpr size_t chunk_header_size = fixed_size<chunk_header>;
-static constexpr size_t segment_header_size = fixed_size<segment_header>;
+static constexpr size_t chunk_header_common_size = fixed_size<chunk_header_common>;
+static constexpr size_t chunk_header_full_part_size = fixed_size<chunk_header_full_part>;
 static constexpr size_t record_frame_header_size = fixed_size<record_frame_header>;
 static constexpr size_t record_header_fixed_size = fixed_size<record_header_fixed>;
 // min_record_frame_size is the size of the smallest record frame, which holds a
 // record_frame_header and a record header with an empty key.
 static constexpr size_t min_record_frame_size = record_frame_header_size + record_header_fixed_size;
 
-static_assert(chunk_header_size % record_alignment == 0, "Chunk header size must be aligned by record_alignment");
-static_assert(segment_header_size % record_alignment == 0, "Segment header size must be aligned by record_alignment");
+// Reports an internal error for a `kind` that segment_kind does not define. This function is out
+// of line, so that the formatting is not in the inlined code.
+[[noreturn]] void on_unknown_segment_kind(segment_kind kind);
+
+// Returns the size of the header of a chunk in a segment of `kind`. The caller must check a kind
+// from disk with validate_chunk_header_fields() first, because for a kind that segment_kind does
+// not define, this function reports an internal error.
+constexpr size_t chunk_header_size(segment_kind kind) {
+    switch (kind) {
+    case segment_kind::mixed:
+        return chunk_header_common_size;
+    case segment_kind::full:
+        return chunk_header_common_size + chunk_header_full_part_size;
+    }
+    on_unknown_segment_kind(kind);
+}
+
+static_assert(chunk_header_size(segment_kind::mixed) % record_alignment == 0, "Chunk header size must be aligned by record_alignment");
+static_assert(chunk_header_size(segment_kind::full) % record_alignment == 0, "Chunk header size must be aligned by record_alignment");
+
+// segment_info describes a segment, and the header of each chunk in the segment holds it. Every
+// chunk of one use of a segment has the same segment_info.
+struct segment_info {
+    segment_sequence segment_seq;
+
+    struct mixed {
+        bool operator==(const mixed& other) const noexcept = default;
+    };
+    struct full {
+        table_id table;
+        dht::token first_token;
+        dht::token last_token;
+
+        bool operator==(const full& other) const noexcept = default;
+    };
+
+    std::variant<mixed, full> v;
+
+    segment_kind kind() const noexcept {
+        return std::visit(overloaded_functor{
+            [] (const mixed&) { return segment_kind::mixed; },
+            [] (const full&) { return segment_kind::full; },
+        }, v);
+    }
+
+    bool operator==(const segment_info& other) const noexcept = default;
+};
+
+// chunk_header holds a chunk header in memory. It does not hold the magic, the format version, the
+// reserved bytes and the CRC, because write_chunk_header() writes them, and parse_chunk_header()
+// checks the magic, the version and the CRC and ignores the reserved bytes.
+struct chunk_header {
+    segment_info segment;
+    uint16_t flags;
+    uint32_t records_size;
+    uint32_t body_crc;
+
+    segment_kind kind() const noexcept {
+        return segment.kind();
+    }
+
+    bool operator==(const chunk_header& other) const noexcept = default;
+};
 
 // Returns true if this code reads chunks of format version `v`.
 constexpr bool can_read_version(uint8_t v) noexcept {
     return v >= min_read_version && v <= current_version;
 }
 
-// Returns true if the header has the magic, a valid kind and a version that this code reads. The
-// kind shows if a segment header follows. This function does not check the CRC, because the CRC
-// also covers the segment header, and validate_chunk_headers() checks the CRC.
-bool validate_chunk_header_fields(const chunk_header& ch);
+// Returns true if `common` has the magic, a valid kind and a version that this code reads. The kind
+// gives the size of the header. This function does not check the CRC, because the CRC also covers
+// the bytes of the header after `common`.
+bool validate_chunk_header_fields(const chunk_header_common& common);
 
-// Whether the headers at the start of a chunk are the ones this code wrote: the chunk header fields
-// are valid, a segment header is there exactly in a full segment, and the CRC matches.
-bool validate_chunk_headers(const chunk_header& ch, const std::optional<segment_header>& sh);
+// Returns the CRC that `common.crc` must hold, which covers the fields of `common` before `crc` and
+// the bytes in `rest`, which are the bytes of the header after `common`. The CRC covers the reserved
+// bytes as they are, so that a chunk keeps a valid CRC when a later release uses a reserved byte.
+uint32_t calculate_chunk_header_crc(const chunk_header_common& common, std::span<const char> rest);
+
+// Returns the chunk header that `common` and `rest` hold, where `rest` is the bytes of the header
+// after `common`. Returns nullopt if the fields of `common` are not valid, if `rest` does not have
+// the size that the kind gives, or if the CRC does not match.
+std::optional<chunk_header> parse_chunk_header(const chunk_header_common& common, std::span<const char> rest);
+
+// Writes `ch` in chunk_header_size(ch.kind()) bytes, with the magic, the current format version,
+// zero reserved bytes and the CRC.
+void write_chunk_header(seastar::simple_memory_output_stream& out, const chunk_header& ch);
 
 // Returns the flags of `ch` that are not in known_chunk_flags. A chunk with such a flag is from a
 // release that this code cannot read, and it does not mark the end of the segment, so recovery must
@@ -412,5 +503,7 @@ namespace replica::logstor {
 
 // The code that picks a chunk layout uses the on-disk kind directly.
 using ondisk::segment_kind;
+// Recovery keeps the segment_info of each segment that the chunk headers give.
+using ondisk::segment_info;
 
 }

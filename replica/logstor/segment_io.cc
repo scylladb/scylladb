@@ -23,15 +23,9 @@ extern seastar::logger logstor_logger;
 
 namespace {
 
-// The headers at the start of a chunk: the chunk header, and the segment header in a full segment.
-struct chunk_headers {
-    ondisk::chunk_header chunk;
-    std::optional<ondisk::segment_header> segment;
-};
-
-// Returns nullopt if the stream ends before the headers, if no chunk starts at the position, if
-// the chunk is from an earlier use of the segment (its segment_seq is not `expected_seq`), or if
-// the headers are invalid.
+// Returns nullopt if the stream ends before the header, if no chunk starts at the position, if the
+// chunk is from an earlier use of the segment (its segment_seq is not `expected_seq`), or if the
+// header is invalid.
 //
 // Throws std::runtime_error at a chunk with a format version that this code does not read or with
 // an unknown flag. Such a chunk is from another release and does not mark the end of the segment,
@@ -47,64 +41,35 @@ struct chunk_headers {
 //
 // The function checks the flags after the CRC, which covers them, so that a flag that a bit flip
 // set ends the scan as other corruption does.
-future<std::optional<chunk_headers>> read_chunk_headers(segment_reader& reader, log_segment_id segment_id,
+future<std::optional<ondisk::chunk_header>> read_chunk_header(segment_reader& reader, log_segment_id segment_id,
         std::optional<segment_sequence> expected_seq) {
     const auto position = reader.position();
-    auto ch = co_await reader.read<ondisk::chunk_header>();
-    if (!ch || ch->magic != ondisk::chunk_header_magic) {
+    auto common = co_await reader.read<ondisk::chunk_header_common>();
+    if (!common || common->magic != ondisk::chunk_header_magic) {
         co_return std::nullopt;
     }
-    if (expected_seq && ch->segment_seq != *expected_seq) {
+    if (expected_seq && common->segment_seq != *expected_seq) {
         co_return std::nullopt;
     }
-    if (!ondisk::can_read_version(ch->version)) {
+    if (!ondisk::can_read_version(common->version)) {
         throw std::runtime_error(fmt::format("Chunk at offset {} of {} has format version {}, and this release reads versions {} to {}",
-                position, segment_id, ch->version, ondisk::min_read_version, ondisk::current_version));
+                position, segment_id, common->version, ondisk::min_read_version, ondisk::current_version));
+    }
+    // The kind gives the size of the rest of the header, so it must be valid before the read.
+    if (!ondisk::validate_chunk_header_fields(*common)) {
+        co_return std::nullopt;
     }
 
-    std::optional<ondisk::segment_header> sh;
-    if (ch->kind == segment_kind::full) {
-        sh = co_await reader.read<ondisk::segment_header>();
-        if (!sh) {
-            co_return std::nullopt;
-        }
-    }
-
-    if (!ondisk::validate_chunk_headers(*ch, sh)) {
+    auto rest = co_await reader.read_exactly(ondisk::chunk_header_size(common->kind) - ondisk::chunk_header_common_size);
+    auto ch = ondisk::parse_chunk_header(*common, std::span(rest.get(), rest.size()));
+    if (!ch) {
         co_return std::nullopt;
     }
     if (const auto unknown = ondisk::unknown_chunk_flags(*ch)) {
         throw std::runtime_error(fmt::format("Chunk at offset {} of {} has flags {:#x} that this release does not define",
                 position, segment_id, unknown));
     }
-    co_return chunk_headers{*ch, sh};
-}
-
-segment_info make_segment_info(const chunk_headers& headers) {
-    const auto& ch = headers.chunk;
-    const auto& sh = headers.segment;
-    segment_info seg_info {
-        .kind = ch.kind,
-        .segment_seq = ch.segment_seq,
-    };
-
-    switch (ch.kind) {
-    case segment_kind::full:
-        // read_chunk_headers() reads the segment header of every full segment.
-        if (!sh) {
-            on_internal_error(logstor_logger, "Full segment chunk header without segment header");
-        }
-        seg_info.v = segment_info::full {
-            .table = sh->table,
-            .first_token = sh->first_token,
-            .last_token = sh->last_token,
-        };
-        break;
-    case segment_kind::mixed:
-        seg_info.v = segment_info::mixed{};
-        break;
-    }
-    return seg_info;
+    co_return ch;
 }
 
 // The body of a chunk, and whether it matches the body CRC of the chunk header.
@@ -113,7 +78,7 @@ struct chunk_body {
     bool valid;
 };
 
-// Reads the body of the chunk whose headers the reader read last, and checks it against the body
+// Reads the body of the chunk whose header the reader read last, and checks it against the body
 // CRC of the header. Returns nullopt if the stream ends first.
 future<std::optional<chunk_body>> read_chunk_body(segment_reader& reader, const ondisk::chunk_header& ch) {
     auto body = co_await reader.read_exactly(ch.records_size);
@@ -199,22 +164,26 @@ future<std::optional<scanned_chunk>> segment_scanner::read_chunk() {
         co_return std::nullopt;
     }
 
-    // A chunk with invalid headers, or a chunk of an earlier use of the segment, ends the scan.
+    // A chunk with an invalid header, or a chunk of an earlier use of the segment, ends the scan.
     // Chunks are written in sequence, so no chunk of this use of the segment follows it.
-    auto headers = co_await read_chunk_headers(_reader, _segment_id, _segment_seq);
-    if (!headers) {
+    auto header = co_await read_chunk_header(_reader, _segment_id, _segment_seq);
+    if (!header) {
         co_return std::nullopt;
     }
-    const auto& ch = headers->chunk;
-    _segment_seq = ch.segment_seq;
+    const auto& ch = *header;
+    _segment_seq = ch.segment.segment_seq;
 
     // A chunk whose body is cut short still gives its segment info. Recovery takes the highest
     // segment_seq from it, and a segment_seq that is on disk must not go to a new segment again,
     // even when the body of its chunk is torn.
-    auto seg_info = make_segment_info(*headers);
-    // A full segment has only one chunk.
-    if (seg_info.kind == segment_kind::full) {
+    auto seg_info = ch.segment;
+    switch (seg_info.kind()) {
+    case segment_kind::mixed:
+        break;
+    case segment_kind::full:
+        // A full segment has only one chunk.
         _state = scan_state::last;
+        break;
     }
 
     const size_t body_position = _reader.position();
@@ -261,8 +230,8 @@ void segment_scanner::report_failed_chunks() const {
 
 future<std::optional<segment_info>> read_chunk_info(seastar::input_stream<char>& in, log_segment_id segment_id) {
     segment_reader reader(in);
-    auto headers = co_await read_chunk_headers(reader, segment_id, std::nullopt);
-    co_return headers.transform(make_segment_info);
+    auto header = co_await read_chunk_header(reader, segment_id, std::nullopt);
+    co_return header.transform(&ondisk::chunk_header::segment);
 }
 
 streamed_segment_rewriter::streamed_segment_rewriter(log_segment_id target_segment, segment_sequence target_seq, streamed_buffer_consumer on_buffer)
@@ -271,53 +240,47 @@ streamed_segment_rewriter::streamed_segment_rewriter(log_segment_id target_segme
     , _on_buffer(std::move(on_buffer)) {
 }
 
-ondisk::chunk_header streamed_segment_rewriter::read_chunk_header() const {
-    simple_memory_input_stream ch_stream(_pending_data.data(), ondisk::chunk_header_size);
-    return ser::deserialize(ch_stream, std::type_identity<ondisk::chunk_header>{});
+ondisk::chunk_header_common streamed_segment_rewriter::read_chunk_header_common() const {
+    simple_memory_input_stream in(_pending_data.data(), ondisk::chunk_header_common_size);
+    return ser::deserialize(in, std::type_identity<ondisk::chunk_header_common>{});
 }
 
 void streamed_segment_rewriter::maybe_parse_initial_header() {
-    if (_initial_header_size || _pending_data.size() < ondisk::chunk_header_size) {
+    if (_initial_header_size || _pending_data.size() < ondisk::chunk_header_common_size) {
         return;
     }
 
-    auto ch = read_chunk_header();
-    if (ch.magic == ondisk::chunk_header_magic && !ondisk::can_read_version(ch.version)) {
+    auto common = read_chunk_header_common();
+    if (common.magic == ondisk::chunk_header_magic && !ondisk::can_read_version(common.version)) {
         throw std::runtime_error(fmt::format("Streamed logstor chunk has format version {}, and this release reads versions {} to {}",
-                ch.version, ondisk::min_read_version, ondisk::current_version));
+                common.version, ondisk::min_read_version, ondisk::current_version));
     }
-    if (!ondisk::validate_chunk_header_fields(ch)) {
+    if (!ondisk::validate_chunk_header_fields(common)) {
         throw std::runtime_error("Invalid streamed logstor chunk header");
     }
-
-    size_t header_size = ondisk::chunk_header_size;
-    if (ch.kind == segment_kind::full) {
-        header_size += ondisk::segment_header_size;
-    }
-    _initial_header_size = header_size;
+    _initial_header_size = ondisk::chunk_header_size(common.kind);
 }
 
 void streamed_segment_rewriter::rewrite_chunk_header() {
-    simple_memory_input_stream in(_pending_data.data(), *_initial_header_size);
-    auto ch = ser::deserialize(in, std::type_identity<ondisk::chunk_header>{});
-    std::optional<ondisk::segment_header> sh;
-    if (ch.kind == segment_kind::full) {
-        sh = ser::deserialize(in, std::type_identity<ondisk::segment_header>{});
+    auto common = read_chunk_header_common();
+    const auto rest = std::span<const char>(_pending_data.data() + ondisk::chunk_header_common_size, *_initial_header_size - ondisk::chunk_header_common_size);
+    auto ch = ondisk::parse_chunk_header(common, rest);
+    if (!ch) {
+        throw std::runtime_error("Invalid streamed logstor chunk header");
     }
-    if (!ondisk::validate_chunk_headers(ch, sh)) {
-        throw std::runtime_error("Invalid streamed logstor chunk headers");
-    }
-    if (const auto unknown = ondisk::unknown_chunk_flags(ch)) {
+    if (const auto unknown = ondisk::unknown_chunk_flags(*ch)) {
         throw std::runtime_error(fmt::format("Streamed logstor chunk has flags {:#x} that this release does not define", unknown));
     }
 
-    logstor_logger.trace("Rewriting chunk header for segment {} seq {} with seq {}", _target_segment, ch.segment_seq, _target_seq);
+    logstor_logger.trace("Rewriting chunk header for segment {} seq {} with seq {}", _target_segment, common.segment_seq, _target_seq);
 
-    ch.segment_seq = _target_seq;
-    ch.crc = ch.calculate_crc(sh);
+    // The rewriter changes only segment_seq and the CRC, so that the other bytes of the header keep
+    // the values that the sender wrote, also the reserved bytes.
+    common.segment_seq = _target_seq;
+    common.crc = ondisk::calculate_chunk_header_crc(common, rest);
 
-    simple_memory_output_stream ch_stream(_pending_data.data(), ondisk::chunk_header_size);
-    ser::serialize<ondisk::chunk_header>(ch_stream, ch);
+    simple_memory_output_stream out(_pending_data.data(), ondisk::chunk_header_common_size);
+    ser::serialize<ondisk::chunk_header_common>(out, common);
 }
 
 future<> streamed_segment_rewriter::flush_pending_data() {
