@@ -280,6 +280,12 @@ public:
     dht::partition_range_vector get_partition_key_ranges(const query_options& options) const;
     std::vector<query::clustering_range> get_clustering_bounds(const query_options& options) const;
     void validate_primary_key(const query_options& options) const;
+    /// Returns the index of a bind variable in the WHERE clause which is
+    /// bound to an unset value, if any. A restriction applied as a filter
+    /// only evaluates its bind variables when a row reaches the filter, so
+    /// without checking this an unset value would go unnoticed when no row
+    /// does.
+    std::optional<size_t> find_unset_bind_variable(const query_options& options) const;
     bool is_empty() const;
 
     /// The restrictions on columns of the given kind.
