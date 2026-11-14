@@ -91,7 +91,7 @@ add_custom_target(package
 
 set(dist_pkgs
   "${stripped_dist_pkg}")
-dist_submodule(cqlsh cqlsh dist_pkgs)
+dist_submodule(cqlsh cqlsh-rs-pkg dist_pkgs)
 dist_submodule(python3 python3 dist_pkgs)
 set(unified_dist_pkg
   "${CMAKE_BINARY_DIR}/$<CONFIG>/dist/tar/${Scylla_PRODUCT}-unified-${Scylla_VERSION}-${Scylla_RELEASE}.${CMAKE_SYSTEM_PROCESSOR}.tar.gz")
@@ -141,7 +141,7 @@ set(server_rpms
   "${server_rpms_dir}/${Scylla_PRODUCT}-kernel-conf-${rpm_ver}.${rpm_arch}.rpm"
   "${server_rpms_dir}/${Scylla_PRODUCT}-node-exporter-${rpm_ver}.${rpm_arch}.rpm")
 set(cqlsh_rpms
-  "${CMAKE_SOURCE_DIR}/tools/cqlsh/build/redhat/RPMS/${rpm_arch}/${Scylla_PRODUCT}-cqlsh-${rpm_ver}.${rpm_arch}.rpm")
+  "${CMAKE_SOURCE_DIR}/tools/cqlsh-rs-pkg/build/redhat/RPMS/${rpm_arch}/${Scylla_PRODUCT}-cqlsh-${rpm_ver}.${rpm_arch}.rpm")
 set(python3_rpms
   "${CMAKE_SOURCE_DIR}/tools/python3/build/redhat/RPMS/${rpm_arch}/${Scylla_PRODUCT}-python3-${rpm_ver}.${rpm_arch}.rpm")
 
@@ -159,8 +159,8 @@ set(server_debs
   "${server_debs_dir}/scylla-enterprise-kernel-conf_${deb_ver}_all.deb"
   "${server_debs_dir}/scylla-enterprise-node-exporter_${deb_ver}_all.deb")
 set(cqlsh_debs
-  "${CMAKE_SOURCE_DIR}/tools/cqlsh/build/debian/${Scylla_PRODUCT}-cqlsh_${deb_ver}_${deb_arch}.deb"
-  "${CMAKE_SOURCE_DIR}/tools/cqlsh/build/debian/scylla-enterprise-cqlsh_${deb_ver}_all.deb")
+  "${CMAKE_SOURCE_DIR}/tools/cqlsh-rs-pkg/build/debian/${Scylla_PRODUCT}-cqlsh_${deb_ver}_${deb_arch}.deb"
+  "${CMAKE_SOURCE_DIR}/tools/cqlsh-rs-pkg/build/debian/scylla-enterprise-cqlsh_${deb_ver}_all.deb")
 set(python3_debs
   "${CMAKE_SOURCE_DIR}/tools/python3/build/debian/${Scylla_PRODUCT}-python3_${deb_ver}_${deb_arch}.deb"
   "${CMAKE_SOURCE_DIR}/tools/python3/build/debian/scylla-enterprise-python3_${deb_ver}_all.deb")
