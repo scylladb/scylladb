@@ -3,12 +3,10 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
 # Tests for the operations allowed under the four different write isolation
-# modes describe in docs/alternator/new-apis.md. We only test here which
-# operations are allowed or not allowed in each write isolation mode -
-# we do NOT test here the actual isolation provided in these modes between
-# different concurrent writes! We will need to check that in a different
-# test framework that is allows testing Alternator concurrency and
-# consistency (see suggestion in #6350).
+# modes described in docs/alternator/new-apis.md. Most tests below check which
+# operations each mode permits. test_isolation_concurrent_updateexpression_rmw
+# also checks that LWT isolates two concurrent updates to the same item. Broader
+# multi-node consistency scenarios remain tracked in #6350.
 #
 # We also don't check here the various corner cases of the operation to *set*
 # the write isolation - this is done using tags and tested in test_tag.py.
@@ -49,9 +47,12 @@
 # need to test them here.
 #############################################################################
 
+import concurrent.futures
+import time
+
 import pytest
 from botocore.exceptions import ClientError
-from .util import create_test_table, random_string, new_test_table
+from .util import create_test_table, random_string, new_test_table, scylla_inject_error
 
 @pytest.fixture(scope="function", autouse=True)
 def all_tests_are_scylla_only(scylla_only):
@@ -311,6 +312,33 @@ def test_isolation_updateexpression_rmw(table_forbid_rmw, tables_permit_rmw):
         table.update_item(Key={'p': p},
             UpdateExpression='DELETE a :val',
             ExpressionAttributeValues={':val': set([2])})
+
+# Verify the isolation guarantee for concurrent read-modify-write operations.
+# Pause two updates immediately before LWT so they both read and modify the
+# same item concurrently. See #6350.
+def test_isolation_concurrent_updateexpression_rmw(table_only_rmw_uses_lwt, rest_api):
+    table = table_only_rmw_uses_lwt
+    client = table.meta.client
+    p = random_string()
+    table.put_item(Item={'p': p, 'a': 0})
+
+    def increment():
+        client.update_item(TableName=table.name, Key={'p': p},
+            UpdateExpression='SET a = a + :increment',
+            ExpressionAttributeValues={':increment': 1})
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        with scylla_inject_error(rest_api, 'alternator_update_item_before_lwt',
+                parameters={'table': table.name}) as injection:
+            requests = [executor.submit(increment) for _ in range(2)]
+            try:
+                injection.wait_for_enter(time.monotonic() + 60, threshold=2)
+            finally:
+                injection.message()
+        for request in requests:
+            request.result(timeout=60)
+
+    assert table.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'a': 2}
 
 #############################################################################
 # "AttributeUpdates" tests. These are the old version of UpdateExpression,
