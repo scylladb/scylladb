@@ -11,6 +11,7 @@
 #include "sstables/large_data_tracker.hh"
 #include "sstables/serialization_header_builder.hh"
 #include "sstables/writer_stats.hh"
+#include "sstables/row_index_block_tracker.hh"
 #include "sstables/trie/bti_index.hh"
 #include "encoding_stats.hh"
 #include "schema/schema.hh"
@@ -544,33 +545,18 @@ private:
 
     tombstone _current_tombstone;
 
-    struct pi_block {
-        clustering_info first;
-        clustering_info last;
-        uint64_t offset;
-        uint64_t width;
-        std::optional<tombstone> open_marker;
-        // The range tombstone active between this block
-        // and its predecessor.
-        // (If there's no predecessor, this is a "live" tombstone).
-        tombstone preceding_range_tombstone;
-    };
+    // The blocks of the row index of the current partition, with Data file
+    // offsets as positions.
+    row_index_block_tracker _row_index;
     // _pi_write_m is used temporarily for building the promoted
     // index (column sample) of one partition when writing a new sstable.
     struct {
         // Unfortunately we cannot output the promoted index directly to the
         // index file because it needs to be prepended by its size.
-        // first_entry is used for deferring serialization into blocks for small partitions.
-        std::optional<pi_block> first_entry;
         bytes_ostream blocks; // Serialized pi_blocks.
         bytes_ostream offsets; // Serialized block offsets (uint32_t) relative to the start of "blocks".
-        uint64_t promoted_index_size = 0; // Number of pi_blocks inside blocks and first_entry;
         sstables::deletion_time partition_tombstone;
-        tombstone range_tombstone_preceding_current_block;
-        uint64_t block_start_offset;
         uint64_t block_next_start_offset;
-        std::optional<clustering_info> first_clustering;
-        std::optional<clustering_info> last_clustering;
 
         // for this partition
         size_t desired_block_size;
@@ -621,10 +607,9 @@ private:
       }
     }
 
-    void maybe_set_pi_first_clustering(const clustering_info& info, tombstone range_tombstone);
     void maybe_add_pi_block();
     void add_pi_block();
-    void write_pi_block(const pi_block&);
+    void write_pi_block(const row_index_block&);
 
     uint64_t get_data_offset() const {
         if (_sst.has_component(component_type::CompressionInfo)) {
@@ -704,10 +689,12 @@ private:
     requires Clustered<T>
     void write_clustered(const T& clustered, tombstone preceding_range_tombstone) {
         clustering_info info {clustered.key(), get_kind(clustered)};
-        maybe_set_pi_first_clustering(info, preceding_range_tombstone);
         uint64_t pos = _data_writer->offset();
+        if (_row_index.on_entry_start(info, preceding_range_tombstone, pos)) {
+            _pi_write_m.block_next_start_offset = pos + _pi_write_m.desired_block_size;
+        }
         write_clustered(clustered, pos - _prev_row_start);
-        _pi_write_m.last_clustering = std::move(info);
+        _row_index.on_entry_end(std::move(info));
         _prev_row_start = pos;
         maybe_add_pi_block();
     }
@@ -794,44 +781,13 @@ writer::~writer() {
     close_writer(_hashes_writer);
 }
 
-void writer::maybe_set_pi_first_clustering(const clustering_info& info, tombstone preceding_range_tombstone) {
-    uint64_t pos = _data_writer->offset();
-    if (!_pi_write_m.first_clustering) {
-        _pi_write_m.first_clustering = info;
-        _pi_write_m.range_tombstone_preceding_current_block = preceding_range_tombstone;
-        _pi_write_m.block_start_offset = pos;
-        _pi_write_m.block_next_start_offset = pos + _pi_write_m.desired_block_size;
-    }
-}
-
 void writer::add_pi_block() {
-    auto block = pi_block{
-        *_pi_write_m.first_clustering,
-        *_pi_write_m.last_clustering,
-        _pi_write_m.block_start_offset - _c_stats.start_offset,
-        _data_writer->offset() - _pi_write_m.block_start_offset,
-        (_current_tombstone ? std::make_optional(_current_tombstone) : std::optional<tombstone>{}),
-        _pi_write_m.range_tombstone_preceding_current_block,
-    };
-
-    // An index with only one block (that spans the entire partition)
-    // would be relatively useless, and wouldn't carry its weight.
-    // So if we are adding the first block, we don't write it out yet --
-    // we only remember it in `first_entry`, and we wait until another
-    // entry appears. (If it doesn't, then there will be no row index
-    // for this partition).
-    // If this is a second block, we write out the deferred `first_entry`
-    // first, and then we proceed normally.
-    if (_pi_write_m.promoted_index_size == 0) {
-        _pi_write_m.first_entry.emplace(std::move(block));
-        ++_pi_write_m.promoted_index_size;
+    bool written = _row_index.end_block(_data_writer->offset(), _current_tombstone, [this] (const row_index_block& block) {
+        write_pi_block(block);
+    });
+    if (!written) {
         return;
-    } else if (_pi_write_m.promoted_index_size == 1) {
-        write_pi_block(*_pi_write_m.first_entry);
     }
-
-    write_pi_block(block);
-    ++_pi_write_m.promoted_index_size;
 
     // auto-scale?
     if (_pi_write_m.blocks.size() >= _pi_write_m.auto_scale_threshold) {
@@ -845,8 +801,6 @@ void writer::maybe_add_pi_block() {
     uint64_t pos = _data_writer->offset();
     if (pos >= _pi_write_m.block_next_start_offset) {
         add_pi_block();
-        _pi_write_m.first_clustering.reset();
-        _pi_write_m.range_tombstone_preceding_current_block = tombstone();
         _pi_write_m.block_next_start_offset = pos + _pi_write_m.desired_block_size;
     }
 }
@@ -964,13 +918,10 @@ void writer::consume_new_partition(const dht::decorated_key& dk) {
     _current_dk_for_bti = dk;
     _current_partition_position = _data_writer->offset();
 
-    _pi_write_m.first_entry.reset();
+    _row_index.start_partition(_c_stats.start_offset);
     _pi_write_m.blocks.clear();
     _pi_write_m.offsets.clear();
-    _pi_write_m.promoted_index_size = 0;
     _pi_write_m.partition_tombstone = {};
-    _pi_write_m.first_clustering.reset();
-    _pi_write_m.last_clustering.reset();
     _pi_write_m.desired_block_size = _pi_write_m.promoted_index_block_size;
     _pi_write_m.auto_scale_threshold = _pi_write_m.promoted_index_auto_scale_threshold;
 
@@ -1278,7 +1229,7 @@ stop_iteration writer::consume(clustering_row&& cr) {
     auto can_split_partition_at_clustering_boundary = [this] {
         // Check there are enough promoted index entries, meaning that current fragment won't
         // unnecessarily cut the current partition in the middle.
-        bool has_enough_promoted_index_entries = _pi_write_m.promoted_index_size >= 2;
+        bool has_enough_promoted_index_entries = _row_index.block_count() >= 2;
 
         return get_data_offset() > _size_threshold && has_enough_promoted_index_entries;
     };
@@ -1304,13 +1255,13 @@ static void write_clustering_prefix(sstable_version_types v, W& writer, bound_ki
 
 void writer::write_promoted_index() {
   if (_index_writer) {
-    if (_pi_write_m.promoted_index_size < 2) {
+    if (_row_index.block_count() < 2) {
         write_vint(*_index_writer, uint64_t(0));
         return;
     }
     write_vint(_tmp_bufs, _partition_header_length);
     write(_sst.get_version(), _tmp_bufs, _pi_write_m.partition_tombstone);
-    write_vint(_tmp_bufs, _pi_write_m.promoted_index_size);
+    write_vint(_tmp_bufs, _row_index.block_count());
     uint64_t pi_size = _tmp_bufs.size() + _pi_write_m.blocks.size() + _pi_write_m.offsets.size();
     write_vint(*_index_writer, pi_size);
     flush_tmp_bufs(*_index_writer);
@@ -1319,7 +1270,7 @@ void writer::write_promoted_index() {
   }
 }
 
-void writer::write_pi_block(const pi_block& block) {
+void writer::write_pi_block(const row_index_block& block) {
   if (_index_writer) {
     static constexpr size_t width_base = 65536;
     bytes_ostream& blocks = _pi_write_m.blocks;
@@ -1410,7 +1361,7 @@ stop_iteration writer::consume_end_of_partition() {
     };
 
     auto maybe_add_pi_block = [&] {
-        if (_pi_write_m.promoted_index_size && _pi_write_m.first_clustering) {
+        if (_row_index.block_count() && _row_index.has_open_block()) {
             add_pi_block();
         }
     };
@@ -1447,8 +1398,8 @@ stop_iteration writer::consume_end_of_partition() {
 
     _large_data.maybe_record_large_partition(*_partition_key, _c_stats.partition_size, _c_stats.rows_count, _c_stats.range_tombstones_count, _c_stats.dead_rows_count);
 
-    // The promoted index already holds an owning copy of the last clustering position.
-    if (const auto& last = _pi_write_m.last_clustering) {
+    // The row index tracker already holds an owning copy of the last clustering position.
+    if (const auto& last = _row_index.last_clustering()) {
         _clustering_bounds.end_partition(_collector, position_of(last->clustering, last->kind));
     }
 
