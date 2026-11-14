@@ -1,19 +1,30 @@
 # Single-node functional tests for ScyllaDB's Alternator features
 
-These tests use AWS's Python library ("boto3") and the pytest framework
-to test Alternator's user-visible functionality ("black-box testing").
-By using an actual AWS library for the tests, the same tests can be run
-against *any* implementation of the DynamoDB API - both ScyllaDB Alternator
-and original DynamoDB. Most tests - except in rare cases - should pass on
-both, to ensure that Alternator is compatible with DynamoDB in most features.
+These tests use the pytest framework and clients based on AWS's Python library
+("boto3") to test Alternator's user-visible functionality ("black-box
+testing"). Tests use boto3 by default. Three tests also run with
+`alternator-client` to cover its User-Agent and request compression against
+local ScyllaDB; those variants are skipped with `--aws`. The same tests can
+therefore run against both ScyllaDB Alternator and original
+DynamoDB. Most tests - except in rare cases - should pass on both, to ensure
+that Alternator is compatible with DynamoDB in most features.
 
-Both pytest and boto3 are easily available on Linux distributions, or via
-"pip install".
+Pytest, boto3, and alternator-client are all available from PyPI. The pinned
+test dependencies are managed in `test/pyproject.toml`. A custom environment
+without alternator-client can collect the suite and run the boto3 cases; the
+alternator-client variants are skipped when the package is not installed.
 
 To run all tests against an already-running installation of Alternator
 listening on http://localhost:8000, just run `pytest` in this directory.
 The `--url` option can be used to specify a different address where Alternator
 is listening. Use the `--aws` option to run tests against AWS DynamoDB.
+
+The `alternator-client` variants use this URL as a discovery seed and send
+requests to the node addresses returned by `/localnodes`. Those addresses
+must be reachable from the test process. When using a proxy or port forward
+that cannot reach the advertised addresses, exclude these variants with
+`pytest --url URL -k 'not alternator-client'` to keep using boto3 through the
+supplied endpoint.
 
 More conveniently, instead of starting ScyllaDB on your own, we have a
 script `test/alternator/run` which does all the work necessary to start
