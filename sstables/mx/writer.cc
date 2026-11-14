@@ -14,6 +14,7 @@
 #include "sstables/row_index_block_tracker.hh"
 #include "sstables/trie_index_writer.hh"
 #include "sstables/filter_writer.hh"
+#include "sstables/sstable_sealer.hh"
 #include "encoding_stats.hh"
 #include "schema/schema.hh"
 #include "mutation/mutation_fragment.hh"
@@ -553,6 +554,7 @@ private:
     // Derived once from _cfg.max_sstable_size, which never changes for the lifetime of the writer.
     const uint64_t _size_threshold;
     large_data_tracker _large_data;
+    sstable_sealer _sealer;
 
     void init_file_writers();
 
@@ -705,18 +707,18 @@ public:
         , _write_regular_as_static(s.is_static_compact_table())
         , _size_threshold(partition_split_size_threshold(_cfg.max_sstable_size))
         , _large_data(sst, s, cfg.large_data_records_per_sstable)
+        , _sealer(sst)
     {
         // This can be 0 in some cases, which is albeit benign, can wreak havoc
         // in lower-level writer code, so clamp it to [1, +inf) here, which is
         // exactly what callers used to do anyway.
         estimated_partitions = std::max(uint64_t(1), estimated_partitions);
 
-        _sst.open_sstable(cfg.origin);
-        _sst.create_data().get();
+        _sealer.open(cfg.origin);
         _compression_enabled = !_sst.has_component(component_type::CRC);
         init_file_writers();
         _filter.emplace(_sst, estimated_partitions);
-        _sst._shards = { shard };
+        _sealer.set_owner_shard(shard);
 
         _cfg.monitor->on_write_started(_data_writer->offset_tracker());
         _pi_write_m.promoted_index_block_size = cfg.promoted_index_block_size;
@@ -780,7 +782,7 @@ void writer::maybe_add_pi_block() {
 }
 
 void writer::init_file_writers() {
-    auto out = _sst._storage->make_data_or_index_sink(_sst, component_type::Data).get();
+    auto out = _sealer.make_data_sink();
 
     if (!_compression_enabled) {
         _data_writer = std::make_unique<crc32_checksummed_file_writer>(std::move(out), _sst.sstable_buffer_size, _sst.get_filename());
@@ -819,10 +821,10 @@ void writer::close_data_writer() {
     auto writer = close_writer(_data_writer);
     if (!_compression_enabled) {
         auto chksum_wr = static_cast<crc32_checksummed_file_writer*>(writer.get());
-        _sst.write_digest(chksum_wr->full_checksum());
+        _sealer.write_data_digest(chksum_wr->full_checksum());
         _sst.write_crc(chksum_wr->finalize_checksum());
     } else {
-        _sst.write_digest(_sst._components->compression.get_full_checksum());
+        _sealer.write_data_digest(_sst._components->compression.get_full_checksum());
     }
 }
 
@@ -1364,12 +1366,7 @@ void writer::consume_end_of_stream() {
         _trie_index->finish(_first_key.value(), _last_key.value());
     }
 
-    _sst.set_first_and_last_keys();
-
-    _sst._components->statistics.contents[metadata_type::Serialization] = std::make_unique<serialization_header>(std::move(_sst_schema.header));
-    seal_statistics(_sst.get_version(), _sst._components->statistics, _collector,
-        _sst._schema->get_partitioner().name(), _sst._schema->bloom_filter_fp_chance(),
-        _sst._schema, _sst.get_first_decorated_key(), _sst.get_last_decorated_key(), _enc_stats);
+    _sealer.seal_statistics(_sst_schema.header, _collector, _enc_stats);
     close_data_writer();
 
   if (_sst._components->summary) {
@@ -1377,7 +1374,7 @@ void writer::consume_end_of_stream() {
   }
 
     _filter->finish();
-    _sst.write_statistics();
+    _sealer.write_statistics();
     _sst.write_compression();
     // Note: during the SSTable write, the `compressor` object in `_sst._components->compression`
     // can only compress, not decompress. We have to create a decompressing `compressor` here.
@@ -1386,16 +1383,8 @@ void writer::consume_end_of_stream() {
     auto decompressor = _sst.manager().get_compressor_factory().make_compressor_for_reading(_sst._components->compression).get();
     _sst._components->compression.set_compressor(std::move(decompressor));
     _sst._components->compression.discard_hidden_options();
-    run_identifier identifier{_run_identifier};
-    std::optional<scylla_metadata::large_data_stats> ld_stats(_large_data.take_stats());
-    std::optional<scylla_metadata::ext_timestamp_stats> ts_stats(scylla_metadata::ext_timestamp_stats{
-        .map = _collector.get_ext_timestamp_stats()
-    });
-    std::optional<scylla_metadata::large_data_records> ld_records = _large_data.take_records();
-    _sst.write_scylla_metadata(_shard, std::move(identifier), std::move(ld_stats), std::move(ts_stats), std::move(ld_records));
-    if (!_cfg.leave_unsealed) {
-        _sst.seal_sstable(_cfg.backup).get();
-    }
+    _sealer.write_scylla_metadata(_shard, _run_identifier, _large_data, _collector);
+    _sealer.seal(_cfg);
 }
 
 uint64_t writer::data_file_position_for_tests() const {
