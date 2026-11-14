@@ -128,7 +128,7 @@ inline void atomic_cell_or_collection_block_tree_node_ptr::set_owner(atomic_cell
 // The cell contents (and hashes) can be modified in place, as long as sizes don't change.
 //
 // Only cells of at least hashed_cell_min_size bytes have a hash slot (_hashed): a smaller
-// cell costs less to rehash than its 8-byte slot is worth.
+// cell costs less to rehash than its 16-byte slot (hash and newest timestamp) is worth.
 class atomic_cell_or_collection_block : public atomic_cell_or_collection_block_tree_node_header {
 public:
     using mask_type = atomic_cell_or_collection_block_mask;

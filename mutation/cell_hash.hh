@@ -13,12 +13,16 @@
 #include <seastar/util/optimized_optional.hh>
 
 #include "utils/hashing.hh"
+#include "mutation/timestamp.hh"
 
 struct cell_hash {
     using size_type = uint64_t;
     static constexpr size_type no_hash = 0;
 
     size_type hash = no_hash;
+    // The cell's newest timestamp (last_update() for collections); missing if unknown.
+    // Not part of the digest; empty-ness is defined by hash alone.
+    api::timestamp_type max_ts = api::missing_timestamp;
 
     explicit operator bool() const noexcept {
         return hash != no_hash;
