@@ -118,12 +118,9 @@ distributed_loader::reshard(sharded<sstables::sstable_directory>& dir, sharded<r
     co_await task->done();
 }
 
-future<sstables::sstable::version_types>
-highest_version_seen(sharded<sstables::sstable_directory>& dir, sstables::sstable_version_types system_version) {
-    using version = sstables::sstable_version_types;
-    return dir.map_reduce0(std::mem_fn(&sstables::sstable_directory::highest_version_seen), system_version, [] (version a, version b) {
-        return std::max(a, b);
-    });
+future<sstables::sstable_version_set>
+versions_seen(sharded<sstables::sstable_directory>& dir) {
+    return dir.map_reduce0(std::mem_fn(&sstables::sstable_directory::versions_seen), sstables::sstable_version_set(), std::bit_or<>());
 }
 
 future<>
@@ -411,8 +408,8 @@ future<> table_populator::process_subdir(sharded<sstables::sstable_directory>& d
     // in the system tables. In that case we'll rely on what we find on disk: we'll
     // at least not downgrade any files. If we already know that we support a higher
     // format than the one we see then we use that.
-    auto sst_version = co_await highest_version_seen(directory, sstables::oldest_writable_sstable_format);
-    _version_for_reshaping = _global_table->get_sstables_manager().get_safe_sstable_version_for_rewrites(sst_version);
+    auto sst_versions = co_await versions_seen(directory);
+    _version_for_reshaping = _global_table->get_sstables_manager().get_safe_sstable_version_for_rewrites(sst_versions);
 }
 
 sstables::shared_sstable make_sstable(replica::table& table, sstables::sstable_state state, sstables::generation_type generation, sstables::sstable_version_types v) {
