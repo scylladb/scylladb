@@ -641,6 +641,7 @@ scylla_tests = set([
     'test/boost/parquet_encoding_test',
     'test/boost/parquet_mapping_test',
     'test/boost/parquet_reader_test',
+    'test/boost/parquet_sstable_reader_test',
     'test/boost/parquet_sstable_writer_test',
     'test/boost/parquet_writer_test',
     'test/boost/partitioner_test',

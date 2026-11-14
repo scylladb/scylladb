@@ -209,6 +209,8 @@ add_scylla_test(nonwrapping_interval_test
   KIND BOOST)
 add_scylla_test(observable_test
   KIND BOOST)
+add_scylla_test(parquet_sstable_reader_test
+  KIND SEASTAR)
 # These tests use Arrow C++, which is optional. See optional_tests in
 # test/boost/test_config.yaml.
 if(Parquet_FOUND)
