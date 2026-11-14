@@ -268,10 +268,14 @@ def test_counter_syntax_non_counter_prepare(cql, table1):
         cql.prepare(f'UPDATE {table1} SET r = r - 1 WHERE p = ? AND c = ?')
 
 # Test that the counter syntax SET r = r + 1 IS allowed in an LWT update
-# on non-counter integer columns (issue #10568). This is a Scylla extension
-# (Cassandra rejects it). The underlying CAS mechanism reads the old value
-# and writes the incremented result atomically.
-def test_lwt_counter_syntax(cql, table1, scylla_only):
+# on non-counter integer columns (issue #10568). The underlying CAS mechanism
+# reads the old value and writes the incremented result atomically.
+# Cassandra also supports this syntax, but only for addition since Cassandra
+# 4.1 (commit 951d72cd92, "[CEP-10] Phase 4: Support CAS Add Operations"),
+# and for subtraction only since Cassandra 6.0 (CASSANDRA-20477). This test,
+# and the following ones using subtraction, are therefore skipped on older
+# versions of Cassandra.
+def test_lwt_counter_syntax(cql, table1, new_to_cassandra_6):
     p = unique_key_int()
     # Insert a row with r explicitly set to 0. Arithmetic on a null column
     # is an error, so the column must have a value before using arithmetic SET.
@@ -305,7 +309,7 @@ def test_lwt_counter_syntax(cql, table1, scylla_only):
 # expressions work in SQL, but can be considered a footgun; In contrast,
 # DynamoDB does throw an error when an expression uses an uninitialized
 # attribute.
-def test_lwt_counter_syntax_null_column(cql, table1, scylla_only):
+def test_lwt_counter_syntax_null_column(cql, table1, new_to_cassandra_6):
     p = unique_key_int()
     cql.execute(f'INSERT INTO {table1} (p, c) VALUES ({p}, 1) IF NOT EXISTS')
     # At this point, the row (p, 1) exists but has r is null.
@@ -335,8 +339,8 @@ def test_lwt_counter_syntax_null_column(cql, table1, scylla_only):
     assert cql.execute(f'SELECT r FROM {table1} WHERE p={p} AND c=1').one().r == 1
 
 # Test that the LWT counter syntax is allowed for all numeric types, not just
-# integers. This is a Scylla extension (issue #10568).
-def test_lwt_counter_syntax_numeric_types(cql, test_keyspace, scylla_only):
+# integers.
+def test_lwt_counter_syntax_numeric_types(cql, test_keyspace, new_to_cassandra_6):
     # All CQL numeric types that should support arithmetic SET in LWT updates.
     numeric_types = ['tinyint', 'smallint', 'int', 'bigint', 'varint', 'float', 'double', 'decimal']
     # Build a table with one column per numeric type, all named col_<type>.
@@ -392,9 +396,125 @@ def test_lwt_counter_forbidden_key_columns(cql, table1):
     with pytest.raises(InvalidRequest, match='PRIMARY KEY'):
         cql.execute(f'UPDATE {table1} SET c = c + 1 WHERE p={p} AND c=1 IF EXISTS')
 
+@pytest.fixture(scope="module")
+def table_strings(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY, t text, a ascii, i int, b blob') as table:
+        yield table
+
+# Like "SET r = r + 1" on numeric columns, "SET t = t + 'abc'" is allowed in
+# an LWT update on string columns (text and ascii), where it means string
+# concatenation. Cassandra supports this since Cassandra 4.1 (in the same
+# commit that added numeric addition). Reproduces SCYLLADB-5384.
+def test_lwt_string_concatenation(cql, table_strings):
+    p = unique_key_int()
+    cql.execute(f"INSERT INTO {table_strings} (p, t, a, i) VALUES ({p}, 'x', 'y', 1)")
+    # Concatenation on a text column:
+    rs = list(cql.execute(f"UPDATE {table_strings} SET t = t + 'ab' WHERE p = {p} IF EXISTS"))
+    assert len(rs) == 1 and rs[0].applied
+    assert list(cql.execute(f'SELECT t, a FROM {table_strings} WHERE p = {p}')) == [('xab', 'y')]
+    # Concatenation on an ascii column:
+    rs = list(cql.execute(f"UPDATE {table_strings} SET a = a + 'cd' WHERE p = {p} IF EXISTS"))
+    assert len(rs) == 1 and rs[0].applied
+    assert list(cql.execute(f'SELECT t, a FROM {table_strings} WHERE p = {p}')) == [('xab', 'ycd')]
+    # The "+=" syntax on both columns, and a condition on a different column:
+    rs = list(cql.execute(f"UPDATE {table_strings} SET t += 'e', a += 'f' WHERE p = {p} IF i = 1"))
+    assert len(rs) == 1 and rs[0].applied
+    assert list(cql.execute(f'SELECT t, a FROM {table_strings} WHERE p = {p}')) == [('xabe', 'ycdf')]
+    # The ascii string to add can come from a bind variable:
+    stmt = cql.prepare(f'UPDATE {table_strings} SET a = a + ? WHERE p = ? IF EXISTS')
+    rs = list(cql.execute(stmt, ['gh', p]))
+    assert len(rs) == 1 and rs[0].applied
+    assert list(cql.execute(f'SELECT a FROM {table_strings} WHERE p = {p}')) == [('ycdfgh',)]
+    # A failed condition leaves t unchanged:
+    rs = list(cql.execute(f"UPDATE {table_strings} SET t = t + 'f' WHERE p = {p} IF i = 2"))
+    assert len(rs) == 1 and not rs[0].applied
+    assert list(cql.execute(f'SELECT t FROM {table_strings} WHERE p = {p}')) == [('xabe',)]
+    # String and numeric additions in the same update:
+    rs = list(cql.execute(f"UPDATE {table_strings} SET t = t + 'g', i = i + 1 WHERE p = {p} IF EXISTS"))
+    assert len(rs) == 1 and rs[0].applied
+    assert list(cql.execute(f'SELECT t, i FROM {table_strings} WHERE p = {p}')) == [('xabeg', 2)]
+
+# Test string concatenation with non-ASCII (multi-byte UTF-8) characters,
+# with an empty string, and with the added string coming from a bind
+# variable of a prepared statement.
+def test_lwt_string_concatenation_corner_cases(cql, table_strings):
+    p = unique_key_int()
+    cql.execute(f"INSERT INTO {table_strings} (p, t) VALUES ({p}, '')")
+    stmt = cql.prepare(f'UPDATE {table_strings} SET t = t + ? WHERE p = ? IF EXISTS')
+    rs = list(cql.execute(stmt, ['שלום', p]))
+    assert len(rs) == 1 and rs[0].applied
+    rs = list(cql.execute(stmt, ['', p]))
+    assert len(rs) == 1 and rs[0].applied
+    rs = list(cql.execute(stmt, ['ü', p]))
+    assert len(rs) == 1 and rs[0].applied
+    assert list(cql.execute(f'SELECT t FROM {table_strings} WHERE p = {p}')) == [('שלוםü',)]
+
+# Concatenating a non-ASCII string to an ascii column must be rejected,
+# otherwise the column would be left with an invalid ascii value.
+def test_lwt_string_concatenation_non_ascii_to_ascii(cql, table_strings):
+    p = unique_key_int()
+    cql.execute(f"INSERT INTO {table_strings} (p, a) VALUES ({p}, 'y')")
+    with pytest.raises(InvalidRequest, match='Invalid ASCII character'):
+        cql.execute(f"UPDATE {table_strings} SET a = a + 'ü' WHERE p = {p} IF EXISTS")
+    with pytest.raises(InvalidRequest, match='Invalid ASCII character'):
+        cql.execute(f"UPDATE {table_strings} SET a += 'ü' WHERE p = {p} IF EXISTS")
+    assert list(cql.execute(f'SELECT a FROM {table_strings} WHERE p = {p}')) == [('y',)]
+
+# As with numbers, concatenating to a null (unset) string column results
+# in null, so the column remains unset.
+def test_lwt_string_concatenation_null_column(cql, table_strings):
+    p = unique_key_int()
+    cql.execute(f'INSERT INTO {table_strings} (p, i) VALUES ({p}, 1)')
+    rs = list(cql.execute(f"UPDATE {table_strings} SET t = t + 'a' WHERE p = {p} IF EXISTS"))
+    assert len(rs) == 1 and rs[0].applied
+    assert list(cql.execute(f'SELECT t FROM {table_strings} WHERE p = {p}')) == [(None,)]
+
+# String concatenation is rejected without an LWT condition, as numeric
+# addition is. The error messages differ between Scylla and Cassandra, so we
+# don't check them.
+def test_lwt_string_concatenation_without_lwt(cql, table_strings):
+    p = unique_key_int()
+    with pytest.raises(InvalidRequest):
+        cql.execute(f"UPDATE {table_strings} SET t = t + 'a' WHERE p = {p}")
+
+# Adding a number to a string column, or a string to a numeric column, is a
+# type error - even in an LWT update, where "+" is allowed on both kinds of
+# columns: the added value must have the column's type.
+def test_lwt_addition_type_mismatch(cql, table_strings):
+    p = unique_key_int()
+    cql.execute(f"INSERT INTO {table_strings} (p, t, i) VALUES ({p}, 'x', 1)")
+    with pytest.raises(InvalidRequest, match='Invalid INTEGER constant'):
+        cql.execute(f'UPDATE {table_strings} SET t = t + 3 WHERE p = {p} IF EXISTS')
+    with pytest.raises(InvalidRequest, match='Invalid STRING constant'):
+        cql.execute(f"UPDATE {table_strings} SET i = i + 'dog' WHERE p = {p} IF EXISTS")
+    assert list(cql.execute(f'SELECT t, i FROM {table_strings} WHERE p = {p}')) == [('x', 1)]
+
+# Unlike strings, blobs can't be concatenated with "+", even in an LWT
+# update: Cassandra only allows "+" on numbers and strings, and so does
+# Scylla. The error messages differ between Scylla and Cassandra, but both
+# begin with "Invalid operation".
+def test_lwt_blob_concatenation_not_supported(cql, table_strings):
+    p = unique_key_int()
+    cql.execute(f'INSERT INTO {table_strings} (p, b) VALUES ({p}, 0x01)')
+    with pytest.raises(InvalidRequest, match='Invalid operation'):
+        cql.execute(f'UPDATE {table_strings} SET b = b + 0x02 WHERE p = {p} IF EXISTS')
+    with pytest.raises(InvalidRequest, match='Invalid operation'):
+        cql.execute(f'UPDATE {table_strings} SET b += 0x02 WHERE p = {p} IF EXISTS')
+    assert list(cql.execute(f'SELECT b FROM {table_strings} WHERE p = {p}')) == [(b'\x01',)]
+
+# Subtracting strings has no meaning, so unlike addition (concatenation), it
+# is rejected even in an LWT update. The error messages differ between Scylla
+# and Cassandra (and between Cassandra versions), so we don't check them.
+def test_lwt_string_subtraction(cql, table_strings):
+    p = unique_key_int()
+    with pytest.raises(InvalidRequest):
+        cql.execute(f"UPDATE {table_strings} SET t = t - 'a' WHERE p = {p} IF EXISTS")
+    with pytest.raises(InvalidRequest):
+        cql.execute(f"UPDATE {table_strings} SET t -= 'a' WHERE p = {p} IF EXISTS")
+
 # Test that the LWT counter syntax works in prepared statements, including
 # the operand coming from a bind variable.
-def test_lwt_counter_syntax_prepared(cql, table1, scylla_only):
+def test_lwt_counter_syntax_prepared(cql, table1, new_to_cassandra_6):
     p = unique_key_int()
     cql.execute(f'INSERT INTO {table1} (p, c, r) VALUES ({p}, 1, 10)')
     # Prepare a statement with a bind variable for the increment delta.
@@ -420,6 +540,10 @@ def test_lwt_counter_syntax_prepared(cql, table1, scylla_only):
 # Test that the LWT counter syntax (add and subtract) catches overflows and
 # underflows for fixed-width integer types (tinyint, smallint, int, bigint)
 # and doesn't allow them to wrap around.
+# This test is scylla_only because Cassandra deliberately lets the result
+# wrap around, as Java's integer arithmetic does - here, and also in its
+# arithmetic operators in SELECT (see testOverflow in
+# cassandra_tests/functions/operation_fcts_test.py).
 def test_lwt_counter_syntax_overflow(cql, test_keyspace, scylla_only):
     # (type name, bits) for each fixed-width signed integer type.
     integer_types = [
@@ -455,7 +579,7 @@ def test_lwt_counter_syntax_overflow(cql, test_keyspace, scylla_only):
 
 # Test that adding a float literal (3.5) to an int column is rejected at
 # because 3.5 is not a valid integer value.
-def test_lwt_counter_syntax_float_on_integer(cql, table1, scylla_only):
+def test_lwt_counter_syntax_float_on_integer(cql, table1, new_to_cassandra_6):
     p = unique_key_int()
     cql.execute(f'INSERT INTO {table1} (p, c, r) VALUES ({p}, 1, 0)')
     with pytest.raises(InvalidRequest, match='of type int'):
