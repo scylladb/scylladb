@@ -44,6 +44,9 @@ sstring validate_keyspace(const http_context& ctx, sstring ks_name);
 // containing the description of the respective keyspace error.
 sstring validate_keyspace(const http_context& ctx, const std::unique_ptr<http::request>& req);
 
+// throws a bad_param_exception if the keyspace uses tablets, as api_endpoint_path then needs a table.
+void ensure_tablets_disabled(const http_context& ctx, const sstring& ks_name, const sstring& api_endpoint_path);
+
 // verify that the keyspace:table is found, otherwise a bad_param_exception exception is thrown
 // returns the table_id of the table if found
 table_id validate_table(const replica::database& db, sstring ks_name, sstring table_name);
