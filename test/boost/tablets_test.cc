@@ -34,6 +34,7 @@
 #include "cql3/util.hh"
 #include "db/schema_tables.hh"
 #include "schema/schema_builder.hh"
+#include "tombstone_gc.hh"
 
 #include "replica/compaction_group.hh"
 #include "test/boost/sstable_test.hh"
@@ -9419,6 +9420,72 @@ SEASTAR_TEST_CASE(test_load_stats_split_ready_invalidation) {
     }
 
     return make_ready_future<>();
+}
+
+// A merged tablet's repair_time is loaded by every replica into its
+// tombstone-GC repair history, over the whole merged range. If it is the later
+// of the two siblings' times, the sibling that was repaired less recently, or
+// never, gets the other sibling's GC horizon, and its tombstones that no repair
+// has synchronized yet become purgeable.
+// Reproduces SCYLLADB-6091.
+SEASTAR_THREAD_TEST_CASE(test_merge_tablet_info_does_not_advance_tombstone_gc) {
+    const auto replicas = tablet_replica_set{tablet_replica{host_id(utils::UUID_gen::get_time_UUID()), 0}};
+    const auto never = db_clock::time_point{};
+    const auto t_old = db_clock::now() - std::chrono::hours(2);
+    const auto t_new = db_clock::now() - std::chrono::hours(1);
+
+    auto merged_repair_time = [&] (db_clock::time_point left, db_clock::time_point right) {
+        auto merged = merge_tablet_info(tablet_info(replicas, left, nullptr, nullptr, 0),
+                                        tablet_info(replicas, right, nullptr, nullptr, 0));
+        BOOST_REQUIRE(merged);
+        return merged->repair_time;
+    };
+
+    BOOST_CHECK(merged_repair_time(t_new, t_old) == t_old);
+    BOOST_CHECK(merged_repair_time(t_old, t_new) == t_old);
+    BOOST_CHECK(merged_repair_time(t_new, never) == never);
+    BOOST_CHECK(merged_repair_time(never, t_new) == never);
+    BOOST_CHECK(merged_repair_time(t_new, t_new) == t_new);
+
+    // Replay what the tombstone-GC state of a replica goes through: it holds
+    // the repair time of each sibling, then loads the merged tablet's.
+    auto s = schema_builder(this_smp_shard_count(), "ks", "tbl")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_tombstone_gc_options(tombstone_gc_options(tombstone_gc_mode::repair, std::chrono::seconds(0)))
+            .build();
+    const tablet_map before(2);
+    const tablet_map after(1);
+    const auto left = tablet_id(0);
+    const auto right = tablet_id(1);
+    const auto boundary = dht::token::to_int64(before.get_last_token(left));
+    auto key_in = [&] (tablet_id tid) {
+        auto t = dht::token::from_int64(tid == left ? boundary - 1000 : boundary + 1000);
+        BOOST_REQUIRE_EQUAL(before.get_tablet_id(t), tid);
+        return dht::decorated_key(t, partition_key::from_singular(*s, int32_t(0)));
+    };
+    auto expected_gc_before = [&] (db_clock::time_point t) {
+        return t == never ? gc_clock::time_point::min() : to_gc_clock(t);
+    };
+
+    for (auto [left_time, right_time] : {std::pair{t_new, t_old}, std::pair{t_new, never}}) {
+        shared_tombstone_gc_state gc_state;
+        // process_one_row() loads only a repair_time that system.tablets has,
+        // and tablet_map_to_mutations() does not write the zero time point.
+        auto load = [&] (const tablet_map& tmap, tablet_id tid, db_clock::time_point t) {
+            if (t != never) {
+                gc_state.update_repair_time(s->id(), tmap.get_token_range(tid), to_gc_clock(t));
+            }
+        };
+        load(before, left, left_time);
+        load(before, right, right_time);
+        load(after, after.first_tablet(), merged_repair_time(left_time, right_time));
+
+        for (auto [tid, t] : {std::pair{left, left_time}, std::pair{right, right_time}}) {
+            auto gc_before = tombstone_gc_state(gc_state, false).get_gc_before_for_key(s, key_in(tid), gc_clock::now());
+            BOOST_CHECK_MESSAGE(gc_before == expected_gc_before(t),
+                    fmt::format("tablet {}: gc_before={} expected={}", tid, gc_before, expected_gc_before(t)));
+        }
+    }
 }
 
 BOOST_AUTO_TEST_SUITE_END()
