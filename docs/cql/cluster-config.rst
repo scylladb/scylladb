@@ -197,8 +197,8 @@ Available options
      - ``CLUSTER``, ``KEYSPACE``, ``TABLE``
      - Time in seconds since the start of the last successful repair of a tablet after which it is
        eligible for automatic repair. A repair restricted to some hosts or datacenters does not count,
-       and a tablet that was never repaired is eligible immediately. ``0`` disables time-based
-       automatic repair. Default: ``86400``. Until the deprecated
+       and a tablet that was never repaired is eligible immediately. Must be ``0`` or greater;
+       ``0`` disables time-based automatic repair. Default: ``86400``. Until the deprecated
        ``auto_repair_threshold_default_in_seconds`` option is removed, a node that sets it in
        ``scylla.yaml`` uses that value when no scope sets this option.
    * - ``repair_hints_batchlog_flush_discard_unreplayed_hints``
