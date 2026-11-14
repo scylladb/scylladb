@@ -157,6 +157,9 @@ lw_shared_ptr<sstables::sstable_set> compaction_group::make_maintenance_sstable_
 
 void table::refresh_compound_sstable_set() {
     _sstables = make_compound_sstable_set();
+    // Most sstable set changes (truncate, split, streaming, ...) end up here;
+    // merge_sstables_from() refreshes the gauge directly.
+    refresh_pending_compactions_stat();
 }
 
 // Exposed for testing, not performance critical.
@@ -2771,6 +2774,7 @@ compaction_group::merge_sstables_from(compaction_group& group) {
     std::invoke([&] noexcept {
         set_main_sstables(std::move(res.new_sstable_set));
         group.clear_sstables();
+        _t.refresh_pending_compactions_stat();
         // FIXME: backlog adjustment is not exception safe.
         backlog_tracker_adjust_charges({}, sstables_to_merge);
     });
@@ -3096,8 +3100,10 @@ future<> table::perform_cleanup_compaction(compaction::owned_ranges_ptr sorted_o
 
 future<unsigned> compaction_group::estimate_pending_compactions() const {
     unsigned ret = 0;
+    // The copy keeps the strategy impl alive across an ALTER.
+    auto cs = _t.get_compaction_strategy();
     for (auto& view : all_views()) {
-        ret += co_await _t.get_compaction_strategy().estimated_pending_compactions(*view);
+        ret += co_await cs.estimated_pending_compactions(*view);
     }
     co_return ret;
 }
@@ -3108,6 +3114,26 @@ future<unsigned> table::estimate_pending_compactions() const {
         ret += co_await cg.estimate_pending_compactions();
     });
     co_return ret;
+}
+
+future<> table::do_refresh_pending_compactions_stat() {
+    _stats.pending_compactions = co_await estimate_pending_compactions();
+}
+
+void table::refresh_pending_compactions_stat() noexcept {
+    if (!_config.enable_metrics_reporting || _async_gate.is_closed()) {
+        return;
+    }
+    // The estimate yields, so it runs detached; serialized_action coalesces the triggers.
+    try {
+        (void)with_gate(_async_gate, [this] {
+            return _pending_compactions_refresh.trigger();
+        }).handle_exception([this] (std::exception_ptr ep) {
+            tlogger.debug("Failed to refresh pending_compactions stat of {}.{}: {}", _schema->ks_name(), _schema->cf_name(), ep);
+        });
+    } catch (...) {
+        tlogger.debug("Failed to launch pending_compactions stat refresh of {}.{}: {}", _schema->ks_name(), _schema->cf_name(), std::current_exception());
+    }
 }
 
 void compaction_group::set_compaction_strategy_state(compaction::compaction_strategy_state compaction_strategy_state) noexcept {
@@ -5087,6 +5113,8 @@ void table::set_schema(schema_ptr s) {
 
     set_compaction_strategy(_schema->compaction_strategy());
     trigger_compaction();
+    // New strategy/thresholds change the estimate even when no compaction follows.
+    refresh_pending_compactions_stat();
 
     if (_schema->memtable_flush_period() > 0) {
         _flush_timer.rearm(timer<lowres_clock>::clock::now() + std::chrono::milliseconds(_schema->memtable_flush_period()));
