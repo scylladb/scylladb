@@ -697,10 +697,11 @@ future<std::variant<rjson::value, api_error>> executor::fill_table_description(s
                 const std::map<sstring, sstring>* view_tags_ptr = db::get_tags_of_table(vptr);
                 // Add index's KeySchema and collect types for AttributeDefinitions:
                 describe_key_schema(view_entry, *vptr, &key_attribute_types, view_tags_ptr);
-                // Add projection type
+                // Add projection type: KEYS_ONLY if the view has no ":attrs" column,
+                // ALL otherwise.
                 rjson::value projection = rjson::empty_object();
-                rjson::add(projection, "ProjectionType", "ALL");
-                // FIXME: we have to get ProjectionType from the schema when it is added
+                rjson::add(projection, "ProjectionType",
+                    rjson::string_ref_type(projection_is_keys_only(*vptr) ? "KEYS_ONLY" : "ALL"));
                 rjson::add(view_entry, "Projection", std::move(projection));
                 // Local secondary indexes are marked by an extra '!' sign occurring before the ':' delimiter
                 bool is_lsi = (delim_it > 1 && cf_name[delim_it-1] == '!');
@@ -1836,55 +1837,89 @@ static std::map<sstring, sstring> make_gsi_tags(
     return tags;
 }
 
-// Validates the mandatory "Projection" field from a VectorIndexes or
-// VectorIndexUpdates entry. ProjectionType must be one of KEYS_ONLY, ALL or
-// INCLUDE (case-sensitive). NonKeyAttributes is only allowed - and
-// mandatory - when ProjectionType is INCLUDE: it lists additional
-// attributes to project, must be a non-empty array of legal attribute
-// names, and (excluding the base table's key columns, which are always
-// projected regardless of whether they are listed).
+// This function is called to complete a view_builder for a GSI's or LSI,
+// once view_builder already has its key columns and the base table's final
+// schema is known. Unless keys_only, it copies to the view the base's regular
+// columns (notably the ":attrs" column), which it doesn't have yet,
+// and calls with_view_info() to declare that this build is building a view
+// for base_schema.
+static void add_projected_columns_and_view_info(schema_builder& view_builder, const schema_ptr& base_schema, bool keys_only) {
+    // Note: when keys_only is true, we don't copy some base-table columns to
+    // the view (notably ":attrs"). Normally in CQL materialized views, in
+    // this case we add "virtual columns" to the view to remember the missing
+    // columns' liveness. But we do not need to do this here: in Alternator
+    // every live item has a live CQL row marker (every write that creates an
+    // item writes one), and you can't delete an item by deleting its last
+    // attribute (see test_item.py::test_empty_update_delete).
+    if (!keys_only) {
+        for (const column_definition& regular_cdef : base_schema->regular_columns()) {
+            if (!view_builder.has_column(*cql3::to_identifier(regular_cdef))) {
+                view_builder.with_column(regular_cdef.name(), regular_cdef.type, column_kind::regular_column);
+            }
+        }
+    }
+    // The "include_all_columns" flag has no practical effect in
+    // Alternator and we could have really set it to anything. But it
+    // affects CQL's DESCRIBE MATERIALIZED VIEW (true produces "SELECT *",
+    // false produces a SELECT listing the view's explicit columns),
+    // as well as ALTER TABLE ... ADD COLUMN.
+    const bool include_all_columns = !keys_only;
+    view_builder.with_view_info(base_schema, include_all_columns, ""/*where clause*/);
+}
+
+// Validates the "Projection" field of a vector index, GSI or LSI definition,
+// from VectorIndexes, GlobalSecondaryIndexes or LocalSecondaryIndexes
+// (CreateTable) or VectorIndexUpdates or GlobalSecondaryIndexUpdates
+// (UpdateTable). The Projection field is mandatory, and ProjectionType must
+// be one of KEYS_ONLY, ALL or INCLUDE (case-sensitive).
+// NonKeyAttributes is only allowed - and mandatory - when ProjectionType is
+// INCLUDE: it lists additional attributes to project, must be a non-empty
+// array of legal attribute names, and (excluding the base table's key
+// columns, which are always projected regardless of whether they are listed).
 // Despite the name "NonKeyAttributes", key columns are not forbidden in
 // this list (but will be projected in any case). Similarly, attributes
-// already in SearchSchema may or may not be listed in NonKeyAttributes,
-// they will be projected in any case. However, duplicate attribute names in
-// NonKeyAttributes itself are forbidden.
+// already in a vector index's SearchSchema may or may not be listed in
+// NonKeyAttributes, they will be projected in any case. However, duplicate
+// attribute names in NonKeyAttributes itself are forbidden.
 //
-// Alternator does *not* enforce DynamoDB's limit on the number of these
-// attributes: DynamoDB's limit is 20 total projected attributes, but the
-// vector attribute itself (despite not really being projected) is counted
-// so the actual limit is 19. The number 19 does not include key columns.
+// Alternator does *not* enforce DynamoDB's limits on the number of these
+// attributes. For a vector index, DynamoDB's limit is 20 total projected
+// attributes, but the vector attribute itself (despite not really being
+// projected) is counted so the actual limit is 19. The number 19 does not
+// include key columns. For GSIs and LSIs, DynamoDB limits the total number
+// of NonKeyAttributes in all of a table's indexes to 100.
 //
 // The return value encodes the validated ProjectionType together with
-// NonKeyAttributes (if any), in the same nullopt/empty/non-empty
-// convention used by build_vector_index_non_key_attributes() and
-// get_vector_index_non_key_attributes(): nullopt means KEYS_ONLY, an empty
-// vector means ALL, and a non-empty vector means INCLUDE with these
-// NonKeyAttributes.
+// NonKeyAttributes (if any): nullopt means KEYS_ONLY, an empty vector means
+// ALL, and a non-empty vector means INCLUDE with these NonKeyAttributes.
+// For vector indexes, this is the same convention used by
+// build_vector_index_non_key_attributes() and
+// get_vector_index_non_key_attributes().
 static std::optional<std::vector<std::string>> validate_projection(const rjson::value& json, std::string_view index_name) {
     const rjson::value* projection_v = rjson::find(json, "Projection");
     if (!projection_v) {
-        throw api_error::validation(fmt::format("Missing Projection for vector index {}", index_name));
+        throw api_error::validation(fmt::format("Missing Projection for index {}", index_name));
     }
     if (!projection_v->IsObject()) {
-        throw api_error::validation(fmt::format("Projection for vector index {} must be an object.", index_name));
+        throw api_error::validation(fmt::format("Projection for index {} must be an object.", index_name));
     }
     const rjson::value* projection_type_v = rjson::find(*projection_v, "ProjectionType");
     if (!projection_type_v || !projection_type_v->IsString()) {
-        throw api_error::validation(fmt::format("Missing ProjectionType for vector index {}", index_name));
+        throw api_error::validation(fmt::format("Missing ProjectionType for index {}", index_name));
     }
     std::string_view projection_type = rjson::to_string_view(*projection_type_v);
     const rjson::value* non_key_attributes_v = rjson::find(*projection_v, "NonKeyAttributes");
     if (projection_type != "INCLUDE") {
         if (non_key_attributes_v) {
             throw api_error::validation(fmt::format(
-                "NonKeyAttributes for vector index {} is only allowed when ProjectionType is INCLUDE.", index_name));
+                "NonKeyAttributes for index {} is only allowed when ProjectionType is INCLUDE.", index_name));
         }
         if (projection_type == "ALL") {
             return std::vector<std::string>(); // ALL, nothing more to validate
         }
         if (projection_type != "KEYS_ONLY") {
             throw api_error::validation(fmt::format(
-                "ProjectionType '{}' is not valid for vector index {}. Valid values are: KEYS_ONLY, ALL, INCLUDE.",
+                "ProjectionType '{}' is not valid for index {}. Valid values are: KEYS_ONLY, ALL, INCLUDE.",
                 projection_type, index_name));
         }
         return std::nullopt; // KEYS_ONLY, nothing more to validate
@@ -1892,23 +1927,23 @@ static std::optional<std::vector<std::string>> validate_projection(const rjson::
     // Continue validation for INCLUDE
     if (!non_key_attributes_v) {
         throw api_error::validation(fmt::format(
-            "Missing NonKeyAttributes for vector index {} with ProjectionType=INCLUDE.", index_name));
+            "Missing NonKeyAttributes for index {} with ProjectionType=INCLUDE.", index_name));
     }
     if (!non_key_attributes_v->IsArray() || non_key_attributes_v->Empty()) {
         throw api_error::validation(fmt::format(
-            "NonKeyAttributes for vector index {} must be a non-empty array.", index_name));
+            "NonKeyAttributes for index {} must be a non-empty array.", index_name));
     }
     std::vector<std::string> non_key_attributes;
     for (const rjson::value& attr : non_key_attributes_v->GetArray()) {
         if (!attr.IsString()) {
             throw api_error::validation(fmt::format(
-                "NonKeyAttributes for vector index {} must have string elements.", index_name));
+                "NonKeyAttributes for index {} must have string elements.", index_name));
         }
         std::string_view attr_name = rjson::to_string_view(attr);
         validate_attr_name_length("NonKeyAttributes", attr_name.size(), /*is_key=*/false);
         if (std::ranges::contains(non_key_attributes, attr_name)) {
             throw api_error::validation(fmt::format(
-                "Duplicate NonKeyAttributes attribute '{}' for vector index {}.", attr_name, index_name));
+                "Duplicate NonKeyAttributes attribute '{}' for index {}.", attr_name, index_name));
         }
         non_key_attributes.emplace_back(attr_name);
     }
@@ -2276,8 +2311,18 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
             if (range_key.empty()) {
                 co_return api_error::validation("LocalSecondaryIndex requires that the base table have a range key");
             }
-            // FIXME: read and handle "Projection" parameter. This will
-            // require the MV code to copy just parts of the attrs map.
+            // validate_projection() returns nullopt for ProjectionType=KEYS_ONLY.
+            // FIXME: ProjectionType=INCLUDE is not yet supported (it needs the view to
+            // copy only some elements of the ":attrs" map), so we create the index as
+            // ProjectionType=ALL, which projects a superset of the requested attributes.
+            // We don't reject INCLUDE, because that would break applications and
+            // migration tools which create such indexes.
+            // Until the whole cluster supports the ALTERNATOR_KEYS_ONLY_INDEXES
+            // feature, we also create a KEYS_ONLY index as ALL, because a node without
+            // it would read the view of a KEYS_ONLY index as an ALL index whose items
+            // have no non-key attributes.
+            bool keys_only = !validate_projection(l, index_name).has_value()
+                    && _proxy.features().alternator_keys_only_indexes;
             schema_builder view_builder(this_smp_shard_count(), keyspace_name, vname);
             auto [view_hash_key, view_range_key] = parse_key_schema(l, "Local Secondary Index");
             if (view_hash_key != hash_key) {
@@ -2299,10 +2344,17 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
             if (!range_key.empty() && view_range_key != range_key) {
                 add_column(view_builder, range_key, *attribute_definitions, column_kind::clustering_key);
             }
-            view_builder.with_column(bytes(executor::ATTRS_COLUMN_NAME), attrs_type(), column_kind::regular_column);
-            // Note above we don't need to add virtual columns, as all
-            // base columns were copied to view. TODO: reconsider the need
-            // for virtual columns when we support Projection.
+            // NOTE: If keys_only, the ":attrs" column from the base is not
+            // copied into the view. In CQL, this would mean that we may need
+            // to add a "virtual column" in this case. But in Alternator, we
+            // don't - in Alternator every live item has a live CQL row
+            // marker (every write that creates an item writes one), and you
+            // can't delete an item by deleting its last attribute (see
+            // test_item.py::test_empty_update_delete), so virtual columns
+            // are not needed.
+            if (!keys_only) {
+                view_builder.with_column(bytes(executor::ATTRS_COLUMN_NAME), attrs_type(), column_kind::regular_column);
+            }
             // LSIs have no tags, but Scylla's "synchronous_updates" feature
             // (which an LSIs need), is actually implemented as a tag so we
             // need to add it here:
@@ -2330,8 +2382,18 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
             }
             std::string vname(view_name(table_name, index_name));
             elogger.trace("Adding GSI {}", index_name);
-            // FIXME: read and handle "Projection" parameter. This will
-            // require the MV code to copy just parts of the attrs map.
+            // validate_projection() returns nullopt for ProjectionType=KEYS_ONLY.
+            // FIXME: ProjectionType=INCLUDE is not yet supported (it needs the view to
+            // copy only some elements of the ":attrs" map), so we create the index as
+            // ProjectionType=ALL, which projects a superset of the requested attributes.
+            // We don't reject INCLUDE, because that would break applications and
+            // migration tools which create such indexes.
+            // Until the whole cluster supports the ALTERNATOR_KEYS_ONLY_INDEXES
+            // feature, we also create a KEYS_ONLY index as ALL, because a node without
+            // it would read the view of a KEYS_ONLY index as an ALL index whose items
+            // have no non-key attributes.
+            bool keys_only = !validate_projection(g, index_name).has_value()
+                    && _proxy.features().alternator_keys_only_indexes;
             schema_builder view_builder(this_smp_shard_count(), keyspace_name, vname);
             const auto [view_hash_keys, view_range_keys] = parse_gsi_composite_key_schema(g, "GlobalSecondaryIndexes",
                     composite_gsi_keys_supported);
@@ -2366,6 +2428,10 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
                 spurious_base_key_added_as_range_key = true;
             }
 
+            // Unless KEYS_ONLY, the view needs to have the ":attrs" column.
+            if (!keys_only) {
+                view_builder.with_column(bytes(executor::ATTRS_COLUMN_NAME), attrs_type(), column_kind::regular_column);
+            }
             auto tags = make_gsi_tags(composite_gsi_keys_supported, spurious_base_key_added_as_range_key, view_hash_keys, view_range_keys);
             validate_and_store_gsi_provisioned_throughput(tags, g, index_name, bm.provisioned, gsi_creator::create_table);
             add_warm_throughput_tags(tags, g);
@@ -2526,16 +2592,9 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
 
     schema_ptr schema = builder.build();
     for (auto& view_builder : view_builders) {
-        // Note below we don't need to add virtual columns, as all
-        // base columns were copied to view. TODO: reconsider the need
-        // for virtual columns when we support Projection.
-        for (const column_definition& regular_cdef : schema->regular_columns()) {
-            if (!view_builder.has_column(*cql3::to_identifier(regular_cdef))) {
-                view_builder.with_column(regular_cdef.name(), regular_cdef.type, column_kind::regular_column);
-            }
-        }
-        const bool include_all_columns = true;
-        view_builder.with_view_info(schema, include_all_columns, ""/*where clause*/);
+        const bool keys_only = !view_builder.has_column(
+                cql3::column_identifier(sstring(executor::ATTRS_COLUMN_NAME), true));
+        add_projected_columns_and_view_info(view_builder, schema, keys_only);
     }
 
     size_t retries = _mm.get_concurrent_ddl_retries();
@@ -3248,8 +3307,18 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                         }
 
                         elogger.trace("Adding GSI {}", index_name);
-                        // FIXME: read and handle "Projection" parameter. This will
-                        // require the MV code to copy just parts of the attrs map.
+                        // validate_projection() returns nullopt for ProjectionType=KEYS_ONLY.
+                        // FIXME: ProjectionType=INCLUDE is not yet supported (it needs the view to
+                        // copy only some elements of the ":attrs" map), so we create the index as
+                        // ProjectionType=ALL, which projects a superset of the requested attributes.
+                        // We don't reject INCLUDE, because that would break applications and
+                        // migration tools which create such indexes.
+                        // Until the whole cluster supports the ALTERNATOR_KEYS_ONLY_INDEXES
+                        // feature, we also create a KEYS_ONLY index as ALL, because a node without
+                        // it would read the view of a KEYS_ONLY index as an ALL index whose items
+                        // have no non-key attributes.
+                        bool keys_only = !validate_projection(it->value, index_name).has_value()
+                                && p.local().features().alternator_keys_only_indexes;
                         schema_builder view_builder(this_smp_shard_count(), keyspace_name, vname);
                         const bool composite_gsi_keys_supported = p.local().features().alternator_composite_gsi_keys;
                         const auto [view_hash_keys, view_range_keys] = parse_gsi_composite_key_schema(it->value, "GlobalSecondaryIndexUpdates",
@@ -3301,16 +3370,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                         check_gsi_warm_throughput_units(it->value, index_name);
                         add_warm_throughput_tags(tags, it->value);
                         view_builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(std::move(tags)));
-                        // Note below we don't need to add virtual columns, as all
-                        // base columns were copied to view. TODO: reconsider the need
-                        // for virtual columns when we support Projection.
-                        for (const column_definition& regular_cdef : schema->regular_columns()) {
-                            if (!view_builder.has_column(*cql3::to_identifier(regular_cdef))) {
-                                view_builder.with_column(regular_cdef.name(), regular_cdef.type, column_kind::regular_column);
-                            }
-                        }
-                        const bool include_all_columns = true;
-                        view_builder.with_view_info(schema, include_all_columns, ""/*where clause*/);
+                        add_projected_columns_and_view_info(view_builder, schema, keys_only);
                         new_views.emplace_back(view_builder.build());
                     } else if (op == "Delete") {
                         elogger.trace("Deleting GSI {}", index_name);
