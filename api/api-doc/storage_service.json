@@ -3779,6 +3779,14 @@
             "live":{
                "type":"long",
                "description":"The live snapshot size"
+            },
+            "created_at":{
+               "type":"long",
+               "description":"The time the snapshot was created at, in seconds since the epoch. Omitted if unknown, e.g. for snapshots taken by an older version"
+            },
+            "expires_at":{
+               "type":"long",
+               "description":"The time the snapshot expires at, in seconds since the epoch. Omitted if the snapshot was taken with no ttl"
             }
          }
       },

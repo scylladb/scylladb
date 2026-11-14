@@ -9,8 +9,13 @@
 
 #pragma once
 
+#include <filesystem>
+#include <optional>
 #include <string>
+#include <seastar/core/future.hh>
 #include <seastar/json/json_elements.hh>
+
+#include "gc_clock.hh"
 
 namespace sstables {
     struct sstable_snapshot_metadata;
@@ -30,6 +35,9 @@ namespace db::snapshot {
 
 namespace json = seastar::json;
 using sstring = seastar::sstring;
+
+// Name of the manifest file, written in the snapshot directory.
+constexpr const char* manifest_filename = "manifest.json";
 
 struct manifest_json : public json::json_base {
     struct info : public json::json_base {
@@ -134,5 +142,20 @@ struct manifest_json : public json::json_base {
 private:
     void register_params();
 };
+
+// The times recorded in the manifest's "snapshot" section.
+struct snapshot_times {
+    gc_clock::time_point created_at;
+    // Engaged only for snapshots that were taken with a ttl.
+    std::optional<gc_clock::time_point> expires_at;
+};
+
+// Read the creation and expiration times of the snapshot stored in snapshot_dir.
+//
+// Returns std::nullopt if the times cannot be determined: the manifest may be
+// missing or unreadable, or it may have been written by a version that did not
+// record them yet. Listing snapshots must work in those cases, so this is not
+// considered an error.
+seastar::future<std::optional<snapshot_times>> read_snapshot_times(std::filesystem::path snapshot_dir);
 
 }

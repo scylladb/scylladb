@@ -7,11 +7,19 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
+#include <seastar/core/thread.hh>
+#include <seastar/util/file.hh>
+
 #include "manifest.hh"
 #include "db/snapshot_types.hh"
 #include "dht/token.hh"
 #include "sstables/sstables_manager.hh"
 #include "locator/tablets.hh"
+#include "utils/log.hh"
+#include "utils/rjson.hh"
+
+// Defined in db/snapshot-ctl.cc
+extern logging::logger snap_log;
 
 namespace db::snapshot {
 
@@ -291,6 +299,61 @@ void manifest_json::register_params() {
     add(&sstables, "sstables");
     add(&tablets, "tablets");
     add(&nodes, "nodes");
+}
+
+static std::optional<gc_clock::time_point> get_time(const rjson::value& snapshot, const char* name) {
+    const auto* v = rjson::find(snapshot, name);
+    if (!v || !v->IsInt64()) {
+        return std::nullopt;
+    }
+    return gc_clock::time_point(gc_clock::duration(v->GetInt64()));
+}
+
+seastar::future<std::optional<snapshot_times>> read_snapshot_times(std::filesystem::path snapshot_dir) {
+    auto manifest_path = snapshot_dir / manifest_filename;
+    rjson::chunked_content content;
+    try {
+        content = co_await seastar::util::read_entire_file(manifest_path);
+    } catch (const std::system_error& e) {
+        // The manifest is optional: snapshots taken by older versions,
+        // or by an external tool, may not have one at all.
+        if (e.code().value() != ENOENT) {
+            snap_log.warn("Could not read {}: {}", manifest_path.native(), e);
+        }
+        co_return std::nullopt;
+    } catch (...) {
+        snap_log.warn("Could not read {}: {}", manifest_path.native(), std::current_exception());
+        co_return std::nullopt;
+    }
+
+    // Parsing the manifest may take a while since it lists all the sstables
+    // in the snapshot, so do it in a thread, where it can yield.
+    co_return co_await seastar::async([manifest_path = std::move(manifest_path), content = std::move(content)] () mutable -> std::optional<snapshot_times> {
+        rjson::value manifest;
+        try {
+            manifest = rjson::parse_yieldable(std::move(content));
+        } catch (...) {
+            snap_log.warn("Could not parse {}: {}", manifest_path.native(), std::current_exception());
+            return std::nullopt;
+        }
+        if (!manifest.IsObject()) {
+            snap_log.warn("Unexpected content in {}: not a JSON object", manifest_path.native());
+            return std::nullopt;
+        }
+        const auto* snapshot = rjson::find(manifest, "snapshot");
+        if (!snapshot || !snapshot->IsObject()) {
+            // Manifests written before the snapshot section was introduced.
+            return std::nullopt;
+        }
+        auto created_at = get_time(*snapshot, "created_at");
+        if (!created_at) {
+            return std::nullopt;
+        }
+        return snapshot_times{
+            .created_at = *created_at,
+            .expires_at = get_time(*snapshot, "expires_at"),
+        };
+    });
 }
 
 }

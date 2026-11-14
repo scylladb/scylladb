@@ -263,7 +263,7 @@ snapshot_ctl::get_snapshot_details() {
     using snapshot_map = std::unordered_map<sstring, db_snapshot_details>;
 
     co_return co_await run_snapshot_list_operation(coroutine::lambda([this] () -> future<snapshot_map> {
-        auto details = co_await _db.local().get_snapshot_details();
+        auto details = co_await _db.local().get_snapshot_details(with_snapshot_times::yes);
 
         for (auto& [snapshot_name, snapshot_details] : details) {
             for (auto& table : snapshot_details) {
