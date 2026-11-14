@@ -1227,6 +1227,30 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_evict_inactive_reads_
     fut2.get();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_has_admission_waiters) {
+    simple_schema ss;
+    const auto& s = ss.schema();
+    reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::for_tests{}, get_name(), 1, 32 * 1024);
+    auto stop_sem = deferred_stop(semaphore);
+
+    std::optional<reader_permit> p1 = semaphore.obtain_permit(s, get_name(), 1024, db::no_timeout, {}).get();
+    promise<> done;
+    auto fut1 = semaphore.with_ready_permit(*p1, [&] (reader_permit) { return done.get_future(); });
+
+    // p1 is on the ready list (counted in waiters), but nothing waits for admission.
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().waiters, 1);
+    BOOST_REQUIRE(!semaphore.has_admission_waiters());
+
+    auto p2_fut = semaphore.obtain_permit(s, get_name(), 1024, db::no_timeout, {});
+    BOOST_REQUIRE(semaphore.has_admission_waiters());
+
+    done.set_value();
+    fut1.get();
+    p1.reset();
+    p2_fut.get();
+    BOOST_REQUIRE(!semaphore.has_admission_waiters());
+}
+
 SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_set_resources) {
     const auto initial_resources = reader_concurrency_semaphore::resources{4, 4 * 1024};
     reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::for_tests{}, get_name(), initial_resources.count, initial_resources.memory);
