@@ -35,6 +35,7 @@ target_sources(test-perf
     perf_sstable.cc
     perf_tablets.cc
     tablet_load_balancing.cc
+    perf_tablet_hint_propagation.cc
     perf.cc)
 target_include_directories(test-perf
   PUBLIC
