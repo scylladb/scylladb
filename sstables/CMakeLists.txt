@@ -19,6 +19,8 @@ target_sources(sstables
     parquet/encoding.cc
     parquet/file_summary.cc
     parquet/metadata.cc
+    parquet/page_decoder.cc
+    parquet/reader_cache.cc
     parquet/rle.cc
     parquet/schema.cc
     parquet/thrift.cc
