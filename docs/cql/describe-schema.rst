@@ -160,8 +160,15 @@ The rows are emitted in an order in which the statements can be executed one aft
 Required permissions
 --------------------
 
-No permissions are necessary to execute the first two tiers. However, executing the last tier requires that the user
-performing the query be a superuser.
+No permissions are necessary to execute the first tier.
+
+The second tier, ``WITH INTERNALS``, also describes all the roles, permission grants and service levels, so it requires
+the permissions needed to list them with ``LIST ROLES``, ``LIST ALL PERMISSIONS``, ``LIST ALL SERVICE LEVELS`` and
+``LIST ALL ATTACHED SERVICE LEVELS``: ``DESCRIBE`` permission on ``ALL ROLES``, and ``DESCRIBE`` permission on all
+service levels. Note that permissions on service levels currently can't be granted, so in practice only a superuser
+can execute this tier.
+
+Executing the last tier, ``WITH INTERNALS AND PASSWORDS``, requires that the user performing the query be a superuser.
 
 Restoring the schema by executing the consecutive statements returned by ``DESCRIBE SCHEMA`` should be conducted by
 a superuser—some of the statements may require that status. It's advised to use the default superuser and not modify
