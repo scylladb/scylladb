@@ -31,6 +31,7 @@
 #include "sstables/object_storage_client.hh"
 #include "service/storage_proxy.hh"
 #include "idl/snapshot_backup.dist.hh"
+#include "utils/error_injection.hh"
 
 using namespace std::chrono_literals;
 
@@ -455,6 +456,14 @@ void snapshot_ctl::schedule_expiration(gc_clock::time_point when, sstring ks_nam
         on_internal_error(snap_log, "schedule_expiration must be called on shard 0");
     }
     if (!_ops.is_closed()) {
+        // Lets tests exercise snapshot expiration without waiting for the
+        // ttl to elapse: a snapshot whose tag matches the "tag" parameter
+        // of the injection is scheduled to expire immediately. The
+        // expiration time recorded in the snapshot manifest is unaffected.
+        if (auto expire_tag = utils::get_local_injector().inject_parameter("snapshot_expire_now", "tag"); expire_tag && *expire_tag == tag) {
+            snap_log.info("snapshot_expire_now: expiring snapshot {} of table {}.{} now instead of at {}", tag, ks_name, table_name, when);
+            when = gc_clock::now();
+        }
         snap_log.info("Scheduling expiration of snapshot {} of table {}.{} at {}", tag, ks_name, table_name, when);
         _expiration_queue.emplace_back(expiration_info{
             .expires_at = when,
