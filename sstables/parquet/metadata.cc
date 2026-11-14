@@ -13,6 +13,7 @@
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/core/thread.hh>
 
+#include "sstables/checksum_utils.hh"
 #include "sstables/file_writer.hh"
 #include "utils/log.hh"
 
@@ -223,10 +224,12 @@ void write_row_group(encoder& e, const row_group& rg, const utils::chunked_vecto
     e.end_struct();
 }
 
-// Serializes the footer into `buf`. Calls `flush(buf)` at points where the
-// caller may move the buffered bytes elsewhere and clear `buf`.
-template <typename Flush>
-void serialize_file_metadata(const file_metadata& md, bytes_ostream& buf, Flush&& flush) {
+// Serializes the footer into `buf`, with the row groups that
+// `row_group_at(i)` returns for i from 0 to `row_group_count` - 1. It ignores
+// `md.row_groups`. Calls `flush(buf)` at points where the caller may move the
+// buffered bytes elsewhere and clear `buf`.
+template <typename RowGroupAt, typename Flush>
+void serialize_file_metadata(const file_metadata& md, size_t row_group_count, RowGroupAt&& row_group_at, bytes_ostream& buf, Flush&& flush) {
     const auto paths = leaf_paths(md.schema);
     encoder e(buf);
     e.begin_struct();
@@ -237,8 +240,9 @@ void serialize_file_metadata(const file_metadata& md, bytes_ostream& buf, Flush&
         maybe_yield();
     }
     e.write_i64_field(3, md.num_rows);
-    e.write_list_field(4, type::struct_, list_size(md.row_groups.size()));
-    for (const auto& rg : md.row_groups) {
+    e.write_list_field(4, type::struct_, list_size(row_group_count));
+    for (size_t i = 0; i < row_group_count; ++i) {
+        const row_group& rg = row_group_at(i);
         write_row_group(e, rg, paths);
         flush(buf);
         maybe_yield();
@@ -307,27 +311,41 @@ void write_offset_index(const offset_index& idx, bytes_ostream& out) {
 
 bytes_ostream serialize_file_metadata(const file_metadata& md) {
     bytes_ostream out;
-    serialize_file_metadata(md, out, [] (bytes_ostream&) {});
+    serialize_file_metadata(md, md.row_groups.size(), [&] (size_t i) -> const row_group& { return md.row_groups[i]; },
+            out, [] (bytes_ostream&) {});
     return out;
 }
 
-uint64_t write_file_metadata(const file_metadata& md, sstables::file_writer& out) {
-    uint64_t written = 0;
+template <typename RowGroupAt>
+static footer_info write_file_metadata(const file_metadata& md, size_t row_group_count, RowGroupAt&& row_group_at, sstables::file_writer& out) {
+    footer_info info{.size = 0, .crc32 = crc32_utils::init_checksum()};
     auto write_out = [&] (bytes_ostream& buf) {
         for (bytes_view frag : buf.fragments()) {
+            info.crc32 = crc32_utils::checksum(info.crc32, reinterpret_cast<const char*>(frag.data()), frag.size());
             out.write(frag);
         }
-        written += buf.size();
+        info.size += buf.size();
         buf.clear();
     };
     bytes_ostream buf;
-    serialize_file_metadata(md, buf, [&] (bytes_ostream& pending) {
+    serialize_file_metadata(md, row_group_count, row_group_at, buf, [&] (bytes_ostream& pending) {
         if (pending.size() >= footer_flush_threshold) {
             write_out(pending);
         }
     });
     write_out(buf);
-    return written;
+    return info;
+}
+
+footer_info write_file_metadata(const file_metadata& md, sstables::file_writer& out) {
+    return write_file_metadata(md, md.row_groups.size(), [&] (size_t i) -> const row_group& { return md.row_groups[i]; }, out);
+}
+
+footer_info write_file_metadata(const file_metadata& md, size_t row_group_count, row_group_source source, sstables::file_writer& out) {
+    if (!md.row_groups.empty()) {
+        on_internal_error(parquet_metadata_logger, "Parquet metadata: row groups both in the footer and in a source");
+    }
+    return write_file_metadata(md, row_group_count, [&] (size_t i) { return source(i); }, out);
 }
 
 // Parsing

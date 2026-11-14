@@ -27,6 +27,7 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/iostream.hh>
 #include <seastar/core/sstring.hh>
+#include <seastar/util/noncopyable_function.hh>
 
 #include "bytes_ostream.hh"
 #include "sstables/parquet/thrift.hh"
@@ -280,10 +281,29 @@ void write_offset_index(const offset_index& idx, bytes_ostream& out);
 /// Yields between row groups when it runs in a seastar thread.
 bytes_ostream serialize_file_metadata(const file_metadata& md);
 
+/// The size and the checksum of a footer that write_file_metadata() wrote.
+struct footer_info {
+    uint64_t size;
+    /// The standard CRC-32 (crc32_utils in sstables/checksum_utils.hh, the
+    /// function of Digest.crc32) of the serialized FileMetaData. It covers
+    /// neither the footer length nor the magic bytes that follow the footer.
+    uint32_t crc32;
+};
+
 /// Serializes the footer and appends it to `out`, a piece at a time, so the
 /// serialized footer is never held in memory as a whole.
-/// Returns the number of bytes written. Must run in a seastar thread.
-uint64_t write_file_metadata(const file_metadata& md, sstables::file_writer& out);
+/// Must run in a seastar thread.
+footer_info write_file_metadata(const file_metadata& md, sstables::file_writer& out);
+
+/// Returns row group `index` of a footer. write_file_metadata() calls it
+/// once for each index, in increasing order.
+using row_group_source = noncopyable_function<row_group(size_t index)>;
+
+/// Like the overload above, but takes the row groups from `source` instead of
+/// `md.row_groups`, which must be empty. Only one row group is materialized at
+/// a time, so a writer can keep its own compact record of the column chunks
+/// until the end of the file.
+footer_info write_file_metadata(const file_metadata& md, size_t row_group_count, row_group_source source, sstables::file_writer& out);
 
 // Parsing. The parsers treat their input as untrusted. Each raises the
 // malformed sstable error when the input does not decode.
