@@ -93,10 +93,14 @@ void test_cache_population_with_range_tombstone_adjacent_to_population_range(pop
             .produces_end_of_stream();
 }
 
-static future<> test_sstable_conforms_to_mutation_source(sstable_version_types version, int index_block_size) {
-    return sstables::test_env::do_with_async([version, index_block_size] (sstables::test_env& env) {
+static future<> test_sstable_conforms_to_mutation_source(sstable_version_types version, int index_block_size,
+        std::function<void(sstable_writer_config&)> tweak = {}) {
+    return sstables::test_env::do_with_async([version, index_block_size, tweak = std::move(tweak)] (sstables::test_env& env) {
         sstable_writer_config cfg = env.manager().configure_writer();
         cfg.promoted_index_block_size = index_block_size;
+        if (tweak) {
+            tweak(cfg);
+        }
 
         std::vector<tmpdir> dirs;
         auto populate = [&env, &dirs, &cfg, version] (schema_ptr s, const utils::chunked_vector<mutation>& partitions,
@@ -166,8 +170,33 @@ SEASTAR_TEST_CASE(test_sstable_conforms_to_mutation_source_mt_large) {
     return test_sstable_conforms_to_mutation_source(sstable_version_types::mt, block_sizes[2]);
 }
 
+// `aa` ends index blocks at page set boundaries, so the promoted index
+// block size has no effect on it. Its tests vary the page set and row
+// group sizes instead. Tiny ones give partitions with many index blocks,
+// files with many row groups, and columns that start late in the file.
+
+SEASTAR_TEST_CASE(test_sstable_conforms_to_mutation_source_aa) {
+    return test_sstable_conforms_to_mutation_source(sstable_version_types::aa, block_sizes[2]);
+}
+
+SEASTAR_TEST_CASE(test_sstable_conforms_to_mutation_source_aa_tiny) {
+    return test_sstable_conforms_to_mutation_source(sstable_version_types::aa, block_sizes[0], [] (sstable_writer_config& cfg) {
+        cfg.parquet_page_set_size = 1;
+        cfg.parquet_min_page_size = 1;
+        cfg.parquet_row_group_size = 1;
+    });
+}
+
+SEASTAR_TEST_CASE(test_sstable_conforms_to_mutation_source_aa_small) {
+    return test_sstable_conforms_to_mutation_source(sstable_version_types::aa, block_sizes[1], [] (sstable_writer_config& cfg) {
+        cfg.parquet_page_set_size = 256;
+        cfg.parquet_min_page_size = 64;
+        cfg.parquet_row_group_size = 2048;
+    });
+}
+
 // This SCYLLA_ASSERT makes sure we don't miss writable vertions
-static_assert(writable_sstable_versions.size() == 5);
+static_assert(writable_sstable_versions.size() == 6);
 
 // `keys` may contain repetitions.
 // The generated position ranges are non-empty. The start of each range in the vector is greater than the end of the previous range.

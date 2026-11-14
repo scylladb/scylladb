@@ -25,6 +25,7 @@
 #include "sstables/sstable_version.hh"
 #include "test/lib/exception_utils.hh"
 #include "test/lib/log.hh"
+#include "test/lib/mutation_reader_assertions.hh"
 #include "test/lib/random_schema.hh"
 #include "test/lib/sstable_utils.hh"
 #include "test/lib/random_utils.hh"
@@ -995,7 +996,7 @@ BOOST_AUTO_TEST_CASE(test_parse_path_bad) {
 
 BOOST_AUTO_TEST_CASE(test_format_of_version) {
     for (auto v : all_sstable_versions) {
-        BOOST_CHECK_EQUAL(format_of(v), sstable_format_types::big);
+        BOOST_CHECK_EQUAL(format_of(v), has_parquet_data_file(v) ? sstable_format_types::pq : sstable_format_types::big);
     }
     BOOST_CHECK_EQUAL(format_of(sstable_version_types::aa), sstable_format_types::pq);
     BOOST_CHECK_EQUAL(version_and_format_from_strings("aa", "pq"), sstable_version_types::aa);
@@ -1057,14 +1058,18 @@ BOOST_AUTO_TEST_CASE(test_aa_file_names) {
     BOOST_CHECK_EQUAL(aa_components.size() + 2, sstable_version_constants::get_component_map(mt).size());
 }
 
-// The Parquet reader does not exist yet. Writing an `aa` sstable works,
-// and loading it must fail with an exception, not crash.
-SEASTAR_TEST_CASE(test_aa_load_is_not_supported_yet) {
+// An `aa` sstable loads and reads back what was written. A compact storage
+// table cannot load it, because the reader takes the column names from the
+// serialization header, which a dense table does not follow.
+SEASTAR_TEST_CASE(test_aa_load) {
     return test_env::do_with_async([] (test_env& env) {
-        simple_schema ss;
-        auto s = ss.schema();
-        auto mut = mutation(s, ss.make_pkey());
-        ss.add_row(mut, ss.make_ckey(0), "val");
+        auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
+                .with_column("pk", int32_type, column_kind::partition_key)
+                .with_column("ck", int32_type, column_kind::clustering_key)
+                .with_column("v", int32_type)
+                .build();
+        auto mut = mutation(s, partition_key::from_single_value(*s, int32_type->decompose(1)));
+        mut.set_clustered_cell(clustering_key::from_single_value(*s, int32_type->decompose(2)), "v", data_value(3), api::new_timestamp());
 
         auto sst = env.make_sstable(s, sstable_version_types::aa);
         BOOST_CHECK_EQUAL(sst->get_format(), sstable_format_types::pq);
@@ -1072,7 +1077,15 @@ SEASTAR_TEST_CASE(test_aa_load_is_not_supported_yet) {
         sst->write_components(std::move(rd), 1, s, env.manager().configure_writer("test"), encoding_stats{}).get();
 
         auto sst2 = env.make_sstable(s, sst->generation(), sstable_version_types::aa);
-        BOOST_REQUIRE_THROW(sst2->load(s->get_sharder()).get(), std::runtime_error);
+        sst2->load(s->get_sharder()).get();
+        assert_that(sst2->make_reader(s, env.make_reader_permit(), query::full_partition_range, s->full_slice()))
+                .produces(mut)
+                .produces_end_of_stream();
+
+        auto compact = schema_builder(s).with(schema_builder::compact_storage::yes).build();
+        auto sst3 = env.make_sstable(compact, sst->generation(), sstable_version_types::aa);
+        BOOST_REQUIRE_EXCEPTION(sst3->load(compact->get_sharder()).get(), std::runtime_error,
+                exception_predicate::message_contains("compact storage table"));
     });
 }
 
