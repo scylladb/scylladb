@@ -32,7 +32,7 @@ namespace alternator {
 
 extern logging::logger elogger; // from executor.cc
 
-std::expected<optional_tablet_routing_request, api_error> parse_tablet_routing_request(const seastar::http::request& request) {
+std::expected<optional_tablet_routing_request, api_error> parse_tablet_routing_request(const http::request& request) {
     // The pinned Seastar header map hashes a copy of an owning sstring. Scanning
     // views avoids both that allocation and the temporary long header name.
     // HTTP limits the combined header size, and most names differ in length.
@@ -128,7 +128,7 @@ sstring format_tablet_routing_info(const tablet_routing_response& response) {
     return sstring(header.data(), header.size());
 }
 
-void add_tablet_routing_header(seastar::http::reply& reply, const tablet_routing_response& response) {
+void add_tablet_routing_header(http::reply& reply, const tablet_routing_response& response) {
     try {
         reply._headers.insert_or_assign(sstring(tablet_info_header), format_tablet_routing_info(response));
     } catch (...) {
