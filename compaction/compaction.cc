@@ -1278,11 +1278,12 @@ stop_iteration compacted_fragments_writer::consume(range_tombstone_change&& rtc)
 }
 
 stop_iteration compacted_fragments_writer::consume_end_of_partition() {
-    auto ret = do_consume_end_of_partition();
-    if (ret == stop_iteration::yes) {
+    if (do_consume_end_of_partition() == stop_iteration::yes) {
+        // The sstable reached its size limit, so the next partition goes to a new one.
         stop_current_writer();
     }
-    return ret;
+    // Consumption mustn't stop, as nothing resumes it when a reader is consumed directly by this writer.
+    return stop_iteration::no;
 }
 
 void compacted_fragments_writer::consume_end_of_stream() {
