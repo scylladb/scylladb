@@ -187,10 +187,60 @@ def test_function_arg_type_hint(cql, table2):
 # which Cassandra 5 gave this function (CASSANDRA-18037, which gave native
 # functions snake_case names), or "castAsInt"(v), its old name, which has
 # to be quoted because it isn't lowercase (Cassandra 4.1 and 5 support it).
-# Scylla doesn't support calling these functions by name.
 # Reproduces SCYLLADB-5347.
-@pytest.mark.xfail(reason='SCYLLADB-5347')
 def test_cast_function_by_name(cql, table1):
     p = unique_key_int()
     cql.execute(f'INSERT INTO {table1} (pk, bigint_col) VALUES ({p}, 7)')
     assert list(cql.execute(f'SELECT cast_as_int(bigint_col), "castAsInt"(bigint_col), CAST(bigint_col AS int) FROM {table1} WHERE pk = {p}')) == [(7, 7, 7)]
+
+# Test the cast functions to every type which CAST supports converting to,
+# called by both names: cast_as_<type> and the quoted old name
+# "castAs<Type>" (see test_cast_function_by_name above). Each must return the
+# same result as CAST.
+def test_cast_function_by_name_all_types(cql, table1, table2):
+    p = unique_key_int()
+    cql.execute(f'INSERT INTO {table1} (pk, bigint_col) VALUES ({p}, 7)')
+    for t in ['tinyint', 'smallint', 'int', 'bigint', 'float', 'double', 'decimal', 'varint', 'ascii', 'text']:
+        # Check that cast_as_<t> and "castAs<T>" convert a bigint like
+        # CAST(... AS <t>)
+        [row] = cql.execute(f'SELECT cast_as_{t}(bigint_col), "castAs{t.capitalize()}"(bigint_col), CAST(bigint_col AS {t}) FROM {table1} WHERE pk = {p}')
+        assert row[0] == row[1] == row[2]
+    cql.execute(f"INSERT INTO {table2} (pk, d) VALUES ({p}, '2024-01-02')")
+    # Check that cast_as_timestamp and "castAsTimestamp" convert a date like
+    # CAST(... AS timestamp), and cast_as_date and "castAsDate" convert a
+    # timestamp like CAST(... AS date)
+    [row] = cql.execute(f'SELECT cast_as_timestamp(d), "castAsTimestamp"(d), CAST(d AS timestamp), cast_as_date(cast_as_timestamp(d)), "castAsDate"(cast_as_timestamp(d)), CAST(CAST(d AS timestamp) AS date) FROM {table2} WHERE pk = {p}')
+    assert row[0] == row[1] == row[2]
+    assert row[3] == row[4] == row[5]
+
+# Test that the result column of a cast function called by name is named
+# like the result of CAST, "cast(x as type)" - whether the function is called
+# by its new name or its old name, with or without the "system." keyspace.
+def test_cast_function_by_name_column_name(cql, table1):
+    p = unique_key_int()
+    cql.execute(f'INSERT INTO {table1} (pk, bigint_col) VALUES ({p}, 7)')
+    rs = cql.execute(f'SELECT cast_as_int(bigint_col), "castAsInt"(bigint_col), system.cast_as_int(bigint_col), system."castAsInt"(bigint_col), CAST(bigint_col AS int) FROM {table1} WHERE pk = {p}')
+    assert rs.column_names == ['cast(bigint_col as int)'] * 5
+
+# Test that only the names cast_as_<type> and "castAs<Type>" are the names of
+# cast functions, and that a call to them which CAST can't do fails.
+def test_cast_function_by_name_errors(cql, table1):
+    p = unique_key_int()
+    cql.execute(f'INSERT INTO {table1} (pk, bigint_col) VALUES ({p}, 7)')
+    # Check that other names - the old name unquoted, which is lowercased to
+    # castasint, or a name with the type alias varchar instead of text -
+    # aren't names of cast functions
+    for name in ['castasint', '"castasint"', 'cast_as_varchar']:
+        with pytest.raises(InvalidRequest, match='Unknown function'):
+            cql.execute(f'SELECT {name}(bigint_col) FROM {table1} WHERE pk = {p}')
+    # Check that a call which CAST can't do - converting a blob to an int -
+    # fails
+    with pytest.raises(InvalidRequest):
+        cql.execute(f'SELECT cast_as_int(blob_col) FROM {table1} WHERE pk = {p}')
+    # Check that a call with a wrong number of arguments fails
+    with pytest.raises(InvalidRequest):
+        cql.execute(f'SELECT cast_as_int(bigint_col, bigint_col) FROM {table1} WHERE pk = {p}')
+    # Check that a call with an argument whose type is unknown - a bind
+    # marker - fails
+    with pytest.raises(InvalidRequest):
+        cql.prepare(f'SELECT cast_as_int(?) FROM {table1} WHERE pk = {p}')
