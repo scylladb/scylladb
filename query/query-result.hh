@@ -324,6 +324,8 @@ public:
     friend class result_merger;
 
     result();
+    // The result buffer is deliberately left as-is, not linearized: it is parsed at most
+    // once, sequentially, and is serialized to the wire fragment by fragment.
     result(bytes_ostream&& w, short_read sr, std::optional<uint32_t> c_low_bits, std::optional<uint32_t> pc,
            std::optional<uint32_t> c_high_bits, std::optional<full_position> last_position, result_memory_tracker memory_tracker = { })
         : _w(std::move(w))
