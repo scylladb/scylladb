@@ -139,6 +139,9 @@ struct sstable_writer_config {
     uint64_t parquet_page_set_size = 128 << 10;
     uint64_t parquet_min_page_size = 8 << 10;
     uint64_t parquet_dictionary_page_limit = 4 << 10;
+    // For tests: the Parquet writer picks the defaults of each row at random,
+    // with this seed. See make_random_row_defaults_policy().
+    std::optional<uint64_t> parquet_random_row_defaults_seed;
 
 private:
     explicit sstable_writer_config() {}
