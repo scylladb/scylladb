@@ -26,6 +26,10 @@ data_sink sstable_sealer::make_data_sink() {
     return _sst._storage->make_data_or_index_sink(_sst, component_type::Data).get();
 }
 
+std::unique_ptr<crc32_digest_file_writer> sstable_sealer::make_digest_data_writer() {
+    return std::make_unique<crc32_digest_file_writer>(make_data_sink(), _sst.sstable_buffer_size, _sst.get_filename());
+}
+
 void sstable_sealer::set_owner_shard(shard_id shard) {
     _sst._shards = { shard };
 }

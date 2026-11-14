@@ -29,6 +29,7 @@ target_sources(sstables
     parquet/reader_cache.cc
     parquet/rle.cc
     parquet/schema.cc
+    parquet/sstable_writer.cc
     parquet/thrift.cc
     parquet/writer.cc
     prepended_input_stream.cc
