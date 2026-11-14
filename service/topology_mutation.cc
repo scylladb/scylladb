@@ -374,9 +374,13 @@ topology_node_mutation_builder& topology_mutation_builder::with_node(raft::serve
 }
 
 topology_request_tracking_mutation_builder::topology_request_tracking_mutation_builder(utils::UUID id, bool set_type) :
+        topology_request_tracking_mutation_builder(id, utils::UUID_gen::micros_timestamp(id), set_type) {
+}
+
+topology_request_tracking_mutation_builder::topology_request_tracking_mutation_builder(utils::UUID id, api::timestamp_type ts, bool set_type) :
         _s(db::system_keyspace::topology_requests()),
         _m(_s, partition_key::from_singular(*_s, id)),
-        _ts(utils::UUID_gen::micros_timestamp(id)),
+        _ts(ts),
         _r(_m.partition().clustered_row(*_s, clustering_key::make_empty())),
         _set_type(set_type) {
     _r.apply(row_marker(_ts, *ttl(), gc_clock::now() + *ttl()));
@@ -432,6 +436,11 @@ topology_request_tracking_mutation_builder& topology_request_tracking_mutation_b
                                 set_type_impl::native_type(uuids.begin(), uuids.end())));
     apply_atomic("snapshot_tag", tag);
     apply_atomic("snapshot_skip_flush", skip_flush);
+    return *this;
+}
+
+topology_request_tracking_mutation_builder& topology_request_tracking_mutation_builder::set_snapshot_attempt(utils::UUID attempt) {
+    apply_atomic("snapshot_attempt", attempt);
     return *this;
 }
 

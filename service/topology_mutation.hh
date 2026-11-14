@@ -178,6 +178,9 @@ public:
     ttl_opt ttl() const;
 
     topology_request_tracking_mutation_builder(utils::UUID id, bool set_type = false);
+    // Writes at `ts` instead of the request id's timestamp, for a cell a request
+    // writes more than once.
+    topology_request_tracking_mutation_builder(utils::UUID id, api::timestamp_type ts, bool set_type = false);
     using builder_base::set;
     using builder_base::del;
     topology_request_tracking_mutation_builder& set(const char* cell, topology_request value);
@@ -190,6 +193,7 @@ public:
     topology_request_tracking_mutation_builder& set_truncate_table_data(const table_id& table_id);
     topology_request_tracking_mutation_builder& set_new_keyspace_rf_change_data(const sstring& ks_name, const std::map<sstring, sstring>& rf_per_dc);
     topology_request_tracking_mutation_builder& set_snapshot_tables_data(const std::unordered_set<table_id>&, const sstring& tag, bool);
+    topology_request_tracking_mutation_builder& set_snapshot_attempt(utils::UUID attempt);
     topology_request_tracking_mutation_builder& set_finalize_migration_data(const sstring& ks_name);
     // `tables` maps each table which has no tablet map yet to its tablet count target, 0 for none.
     topology_request_tracking_mutation_builder& set_prepare_migration_data(const sstring& ks_name,
