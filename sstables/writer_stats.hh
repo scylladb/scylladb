@@ -18,6 +18,7 @@
 #include "sstables/metadata_collector.hh"
 #include "sstables/stats.hh"
 #include "sstables/types.hh"
+#include "sstables/mx/types.hh"
 #include "mutation/atomic_cell.hh"
 #include "mutation/mutation_partition.hh"
 
@@ -76,6 +77,25 @@ inline void collect_row_marker_stats(column_stats& stats, const row_marker& mark
         stats.update_ttl(0);
         stats.update_local_deletion_time(std::numeric_limits<int32_t>::max());
     }
+}
+
+// The position of a clustering row (bound_kind_m::clustering) or of a range
+// tombstone marker of kind `kind` at `ck`, as clustering_bounds_tracker
+// receives it.
+//
+// An exclusive end bound gets the position after all keys with the prefix
+// `ck`, although the range ends before them. The maximum clustering
+// position in Statistics.db is then larger than necessary, but still covers
+// the data. Every writer uses this function, so that sstables of all formats
+// record the same bounds for the same data.
+inline position_in_partition_view position_of(const clustering_key_prefix& ck, bound_kind_m kind) {
+    if (kind == bound_kind_m::clustering) {
+        return position_in_partition_view(position_in_partition_view::clustering_row_tag_t(), ck);
+    }
+    if (kind == bound_kind_m::incl_start || kind == bound_kind_m::excl_end_incl_start) {
+        return position_in_partition_view::before_key(ck);
+    }
+    return position_in_partition_view::after_all_prefixed(ck);
 }
 
 // Tracks the smallest and the largest clustering position of an sstable in

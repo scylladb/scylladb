@@ -441,17 +441,6 @@ enum class row_extended_flags : uint8_t {
         has_shadowable_deletion_scylla = 0x80,
 };
 
-// Position of a row (bound_kind_m::clustering) or an RT marker.
-static position_in_partition_view position_of(const clustering_key_prefix& ck, bound_kind_m kind) {
-    if (kind == bound_kind_m::clustering) {
-        return position_in_partition_view(position_in_partition_view::clustering_row_tag_t(), ck);
-    }
-    if (kind == bound_kind_m::incl_start || kind == bound_kind_m::excl_end_incl_start) {
-        return position_in_partition_view::before_key(ck);
-    }
-    return position_in_partition_view::after_all_prefixed(ck);
-}
-
 // A range tombstone marker (RT marker) represents a bound of a range tombstone
 // in a SSTables 3.x ('m') data file.
 // RT markers can be of two types called "bounds" and "boundaries" in Origin nomenclature.
