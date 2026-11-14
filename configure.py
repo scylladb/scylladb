@@ -1369,6 +1369,7 @@ scylla_core = (['message/messaging_service.cc',
                 'audit/audit_rule.cc',
                 'audit/preprocessed_audit_rules.cc',
                 'audit/audit_syslog_storage_helper.cc',
+                'audit/audit_stdout_storage_helper.cc',
                 'tombstone_gc_options.cc',
                 'tombstone_gc.cc',
                 'utils/disk-error-handler.cc',
@@ -1753,6 +1754,7 @@ for t in sorted(perf_tests):
 
 deps['test/boost/combined_tests'] += [
     'test/boost/aggregate_fcts_test.cc',
+    'test/boost/audit_stdout_test.cc',
     'test/boost/audit_test.cc',
     'test/boost/auth_cache_test.cc',
     'test/boost/auth_test.cc',
