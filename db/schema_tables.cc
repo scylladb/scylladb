@@ -268,6 +268,7 @@ schema_ptr scylla_keyspaces() {
             {"initial_tablets", int32_type},
             {"consistency", utf8_type},
             {"configs", configs_map_type()},
+            {"preferred_rack", map_type_impl::get_instance(utf8_type, utf8_type, false)},
         },
         // static columns
         {},
@@ -1322,6 +1323,8 @@ utils::chunked_vector<mutation> make_create_keyspace_mutations(schema_features f
         auto consistency = keyspace->consistency_option();
         if (consistency) {
             scylla_m.set_cell(ckey, "consistency", data_dictionary::consistency_config_option_to_string(*consistency), timestamp);
+            // Written even when empty, so that an ALTER which unsets it overwrites the old value.
+            store_map(scylla_m, ckey, "preferred_rack", timestamp, keyspace->preferred_rack());
         }
         // The out-of-band configs column is only meaningful once the cluster-config feature
         // is enabled. Gating the write (rather than always emitting an empty collection
@@ -1420,6 +1423,7 @@ future<lw_shared_ptr<keyspace_metadata>> create_keyspace_metadata(
     std::optional<unsigned> initial_tablets;
     std::optional<data_dictionary::consistency_config_option> consistency;
     std::map<sstring, sstring> config_options;
+    std::map<sstring, sstring> preferred_rack;
     // Scylla-specific row will only be present if SCYLLA_KEYSPACES schema feature is available in the cluster
     if (scylla_specific_rs) {
         if (!scylla_specific_rs->empty()) {
@@ -1438,6 +1442,11 @@ future<lw_shared_ptr<keyspace_metadata>> create_keyspace_metadata(
             if (copt) {
                 consistency = data_dictionary::consistency_config_option_from_string(*copt);
             }
+            if (auto pr = row.get<map_type_impl::native_type>("preferred_rack")) {
+                for (const auto& entry : *pr) {
+                    preferred_rack.emplace(value_cast<sstring>(entry.first), value_cast<sstring>(entry.second));
+                }
+            }
             if (auto configs = row.get<map_type_impl::native_type>("configs")) {
                 for (const auto& entry : *configs) {
                     config_options.emplace(value_cast<sstring>(entry.first), value_cast<sstring>(entry.second));
@@ -1445,7 +1454,7 @@ future<lw_shared_ptr<keyspace_metadata>> create_keyspace_metadata(
             }
         }
     }
-    co_return keyspace_metadata::new_keyspace(keyspace_name, strategy_name, strategy_options, initial_tablets, consistency, durable_writes, storage_opts, {}, next_strategy_options, std::move(config_options));
+    co_return keyspace_metadata::new_keyspace(keyspace_name, strategy_name, strategy_options, initial_tablets, consistency, durable_writes, storage_opts, {}, next_strategy_options, std::move(config_options), std::move(preferred_rack));
 }
 
 template<typename V>

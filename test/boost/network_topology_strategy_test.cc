@@ -1104,6 +1104,166 @@ SEASTAR_TEST_CASE(test_rack_list_rejected_when_using_vnodes) {
     }, cfg);
 }
 
+SEASTAR_TEST_CASE(test_consistency_preserved_on_alter_keyspace) {
+    auto cfg = cql_test_config();
+    cfg.db_config->tablets_mode_for_new_keyspaces(db::tablets_mode_t::mode::enabled);
+    cfg.db_config->experimental_features({db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES});
+    return do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+
+        unsigned shard_count = 2;
+        topo.start_new_dc({"dc1", "rack1"});
+        topo.add_node(service::node_state::normal, shard_count);
+
+        e.execute_cql("CREATE KEYSPACE ks_cons WITH REPLICATION = {'class': 'NetworkTopologyStrategy', "
+                      "'dc1': ['rack1']} AND consistency = 'global'").get();
+
+        auto check_consistency = [&] {
+            auto ksm = e.local_db().find_keyspace("ks_cons").metadata();
+            BOOST_REQUIRE(ksm->consistency_option() == data_dictionary::consistency_config_option::global);
+        };
+        check_consistency();
+
+        // ALTER KEYSPACE without re-specifying consistency must preserve it
+        e.execute_cql("ALTER KEYSPACE ks_cons WITH DURABLE_WRITES = false").get();
+        check_consistency();
+
+        // Restating the current value is allowed
+        e.execute_cql("ALTER KEYSPACE ks_cons WITH consistency = 'global'").get();
+        check_consistency();
+
+        // Altering consistency is forbidden
+        try {
+            e.execute_cql("ALTER KEYSPACE ks_cons WITH consistency = 'eventual'").get();
+            BOOST_FAIL("Expected ALTER KEYSPACE consistency update to fail");
+        } catch (const exceptions::invalid_request_exception& ex) {
+            BOOST_REQUIRE(std::string_view(ex.what()).contains("Cannot alter consistency option"));
+        }
+
+        // Consistency still intact after failed alter
+        check_consistency();
+    }, cfg);
+}
+
+SEASTAR_TEST_CASE(test_create_keyspace_with_preferred_rack) {
+    auto cfg = cql_test_config();
+    cfg.db_config->tablets_mode_for_new_keyspaces(db::tablets_mode_t::mode::enabled);
+    cfg.db_config->experimental_features({db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES});
+    return do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+
+        unsigned shard_count = 2;
+        topo.start_new_dc({"dc1", "rack1"});
+        topo.add_node(service::node_state::normal, shard_count);
+        topo.start_new_rack("rack2");
+        topo.add_node(service::node_state::normal, shard_count);
+
+        e.execute_cql("CREATE KEYSPACE ks1 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', "
+                      "'dc1': ['rack1', 'rack2']} AND consistency = 'global' "
+                      "AND preferred_rack = {'dc1': 'rack1'}").get();
+
+        auto ksm = e.local_db().find_keyspace("ks1").metadata();
+        BOOST_REQUIRE(ksm->consistency_option() == data_dictionary::consistency_config_option::global);
+        BOOST_REQUIRE(ksm->preferred_rack() == (std::map<sstring, sstring>{{"dc1", "rack1"}}));
+        BOOST_REQUIRE(describe(e, "ks1").contains("AND preferred_rack = {'dc1': 'rack1'}"));
+
+        auto rejected = [&] (const sstring& query, std::string_view message) {
+            BOOST_REQUIRE_EXCEPTION(e.execute_cql(query).get(), exceptions::request_validation_exception,
+                [&] (const auto& ex) { return std::string_view(ex.what()).contains(message); });
+        };
+
+        rejected("CREATE KEYSPACE fail1 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', "
+                 "'dc1': ['rack1', 'rack2']} AND consistency = 'global' AND preferred_rack = {'dc99': 'rack1'}",
+                 "datacenter 'dc99' which is not in the replication options");
+
+        // A numeric RF is rejected as such, even though rack auto-expansion (on by
+        // default here) would have turned it into a rack list containing rack1.
+        rejected("CREATE KEYSPACE fail2 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', "
+                 "'dc1': 2} AND consistency = 'global' AND preferred_rack = {'dc1': 'rack1'}",
+                 "replication factor is numeric");
+        rejected("CREATE KEYSPACE fail2b WITH REPLICATION = {'class': 'NetworkTopologyStrategy', "
+                 "'replication_factor': 2} AND consistency = 'global' AND preferred_rack = {'dc1': 'rack1'}",
+                 "replication factor is numeric");
+
+        rejected("CREATE KEYSPACE fail3 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', "
+                 "'dc1': ['rack1', 'rack2']} AND consistency = 'global' AND preferred_rack = {'dc1': 'rack99'}",
+                 "preferred_rack 'rack99' is not in the replication rack list");
+
+        rejected("CREATE KEYSPACE fail4 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', "
+                 "'dc1': ['rack1', 'rack2']} AND consistency = 'eventual' AND preferred_rack = {'dc1': 'rack1'}",
+                 "preferred_rack requires global consistency");
+        rejected("CREATE KEYSPACE fail5 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', "
+                 "'dc1': ['rack1', 'rack2']} AND preferred_rack = {'dc1': 'rack1'}",
+                 "preferred_rack requires global consistency");
+
+        rejected("CREATE KEYSPACE fail6 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', "
+                 "'dc1': ['rack1', 'rack2']} AND consistency = 'global' AND preferred_rack = 'rack1'",
+                 "It should be a map");
+
+        rejected("CREATE KEYSPACE fail7 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', "
+                 "'dc1': ['rack1', 'rack2']} AND consistency = 'global' "
+                 "AND preferred_rack = {'dc1': 'rack1', 'dc2': 'rack1'}",
+                 "Only a single preferred_rack entry");
+    }, cfg);
+}
+
+SEASTAR_TEST_CASE(test_alter_keyspace_preferred_rack) {
+    auto cfg = cql_test_config();
+    cfg.db_config->tablets_mode_for_new_keyspaces(db::tablets_mode_t::mode::enabled);
+    cfg.db_config->experimental_features({db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES});
+    return do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+
+        unsigned shard_count = 2;
+        topo.start_new_dc({"dc1", "rack1"});
+        topo.add_node(service::node_state::normal, shard_count);
+        topo.start_new_rack("rack2");
+        topo.add_node(service::node_state::normal, shard_count);
+
+        e.execute_cql("CREATE KEYSPACE ks_pr WITH REPLICATION = {'class': 'NetworkTopologyStrategy', "
+                      "'dc1': ['rack1', 'rack2']} AND consistency = 'global' "
+                      "AND preferred_rack = {'dc1': 'rack1'}").get();
+
+        auto preferred_rack = [&] {
+            return e.local_db().find_keyspace("ks_pr").metadata()->preferred_rack();
+        };
+        using rack_map = std::map<sstring, sstring>;
+        auto rejected = [&] (const sstring& query, std::string_view message) {
+            BOOST_REQUIRE_EXCEPTION(e.execute_cql(query).get(), exceptions::request_validation_exception,
+                [&] (const auto& ex) { return std::string_view(ex.what()).contains(message); });
+        };
+
+        // An ALTER which does not mention preferred_rack keeps it.
+        e.execute_cql("ALTER KEYSPACE ks_pr WITH durable_writes = false").get();
+        BOOST_REQUIRE(preferred_rack() == (rack_map{{"dc1", "rack1"}}));
+
+        BOOST_REQUIRE(!e.local_db().find_keyspace("ks_pr").metadata()->durable_writes());
+
+        // An ALTER of preferred_rack alone resets durable_writes, like any ALTER which doesn't restate it.
+        e.execute_cql("ALTER KEYSPACE ks_pr WITH preferred_rack = {'dc1': 'rack2'}").get();
+        BOOST_REQUIRE(preferred_rack() == (rack_map{{"dc1", "rack2"}}));
+        BOOST_REQUIRE(e.local_db().find_keyspace("ks_pr").metadata()->durable_writes());
+        BOOST_REQUIRE(describe(e, "ks_pr").contains("AND preferred_rack = {'dc1': 'rack2'}"));
+
+        rejected("ALTER KEYSPACE ks_pr WITH preferred_rack = {'dc1': 'rack99'}",
+                 "preferred_rack 'rack99' is not in the replication rack list");
+
+        // The RF change would drop the preferred rack from the rack list.
+        rejected("ALTER KEYSPACE ks_pr WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1']}",
+                 "preferred_rack 'rack2' is not in the replication rack list");
+
+        // Combined with an RF change, preferred_rack is checked against the new rack list.
+        rejected("ALTER KEYSPACE ks_pr WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1']} "
+                 "AND preferred_rack = {'dc1': 'rack2'}",
+                 "preferred_rack 'rack2' is not in the replication rack list");
+        BOOST_REQUIRE(preferred_rack() == (rack_map{{"dc1", "rack2"}}));
+
+        e.execute_cql("ALTER KEYSPACE ks_pr WITH preferred_rack = {}").get();
+        BOOST_REQUIRE(preferred_rack().empty());
+        BOOST_REQUIRE(!describe(e, "ks_pr").contains("preferred_rack"));
+    }, cfg);
+}
+
 } // namespace network_topology_strategy_test
 
 namespace locator {

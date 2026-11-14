@@ -289,7 +289,8 @@ static locator::replication_strategy_config_options prepare_options(
 }
 
 ks_prop_defs::ks_prop_defs(property_definitions::map_type options) {
-    map_type replication_opts, storage_opts, tablets_opts, durable_writes_opts, consistency_opts;
+    map_type replication_opts, storage_opts, tablets_opts, durable_writes_opts, consistency_opts, preferred_rack_opts;
+    bool has_preferred_rack = false;
 
     auto read_property_into = [] (auto& map, const sstring& name, const sstring& value, const sstring& tag) {
         auto prefix = sstring(tag) + ":";
@@ -310,6 +311,10 @@ ks_prop_defs::ks_prop_defs(property_definitions::map_type options) {
             read_property_into(storage_opts, name, value, KW_STORAGE);
         } else if (name.starts_with(KW_CONSISTENCY)) {
             read_property_into(consistency_opts, name, value, KW_CONSISTENCY);
+        } else if (name == KW_PREFERRED_RACK) {
+            has_preferred_rack = true;
+        } else if (name.starts_with(KW_PREFERRED_RACK)) {
+            read_property_into(preferred_rack_opts, name, value, KW_PREFERRED_RACK);
         }
     }
 
@@ -323,6 +328,9 @@ ks_prop_defs::ks_prop_defs(property_definitions::map_type options) {
         add_property(KW_DURABLE_WRITES, durable_writes_opts.begin()->second);
     if (!consistency_opts.empty()) {
         add_property(KW_CONSISTENCY, consistency_opts.begin()->second);
+    }
+    if (has_preferred_rack) {
+        add_property(KW_PREFERRED_RACK, preferred_rack_opts);
     }
 }
 
@@ -423,6 +431,10 @@ std::optional<data_dictionary::consistency_config_option> ks_prop_defs::get_cons
     }
 }
 
+std::optional<property_definitions::map_type> ks_prop_defs::get_preferred_rack() const {
+    return get_map(KW_PREFERRED_RACK);
+}
+
 std::optional<sstring> ks_prop_defs::get_replication_strategy_class() const {
     return _strategy_class;
 }
@@ -465,13 +477,36 @@ lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata(s
     auto initial_tablets = get_initial_tablets(default_initial_tablets, cfg.enforce_tablets());
     bool uses_tablets = initial_tablets.has_value();
     bool rack_list_enabled = utils::get_local_injector().enter("create_with_numeric") ? false : feat.rack_list_rf;
-    auto options = prepare_options(sc, tm, cfg.rf_rack_valid_keyspaces(), cfg.enforce_rack_list(), get_replication_options(), {}, rack_list_enabled, uses_tablets);
+    auto preferred_rack = get_preferred_rack().value_or(map_type{});
+    // Checked before prepare_options(), which may expand a numeric RF into a rack list.
+    const auto raw_options = get_replication_options();
+    for (const auto& [dc, rack] : preferred_rack) {
+        auto it = raw_options.find(dc);
+        if (it == raw_options.end()) {
+            it = raw_options.find(REPLICATION_FACTOR_KEY);
+        }
+        if (it != raw_options.end()
+                && !locator::abstract_replication_strategy::parse_replication_factor(it->second).is_rack_based()) {
+            throw exceptions::configuration_exception(
+                fmt::format("preferred_rack requires rack-based replication for datacenter '{}', but replication factor is numeric", dc));
+        }
+    }
+    auto options = prepare_options(sc, tm, cfg.rf_rack_valid_keyspaces(), cfg.enforce_rack_list(), raw_options, {}, rack_list_enabled, uses_tablets);
     auto config_options = apply_config_updates({}, *this, feat);
     return data_dictionary::keyspace_metadata::new_keyspace(ks_name, sc,
-            std::move(options), initial_tablets, get_consistency_option(), get_boolean(KW_DURABLE_WRITES, true), get_storage_options(), {}, std::nullopt, std::move(config_options));
+            std::move(options), initial_tablets, get_consistency_option(), get_boolean(KW_DURABLE_WRITES, true), get_storage_options(), {}, std::nullopt, std::move(config_options), std::move(preferred_rack));
 }
 
 lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata_update(lw_shared_ptr<data_dictionary::keyspace_metadata> old, const locator::token_metadata& tm, const gms::feature_service& feat, const db::config& cfg) {
+    // Switching a keyspace to or from strong consistency would have to move the data it
+    // already holds between two write paths, so the consistency option cannot be altered.
+    // Restating the value the keyspace already has is allowed, so that a keyspace can be
+    // described and altered back.
+    if (const auto consistency = get_consistency_option();
+            consistency && *consistency != old->consistency_option().value_or(data_dictionary::consistency_config_option::eventual)) {
+        throw exceptions::invalid_request_exception("Cannot alter consistency option of a keyspace");
+    }
+
     locator::replication_strategy_config_options options;
     const auto& old_options = old->strategy_options();
     // if tablets options have not been specified, inherit them if it's tablets-enabled KS
@@ -489,7 +524,7 @@ lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata_u
         options = old_options;
     }
     auto config_options = apply_config_updates(old->config_options(), *this, feat);
-    return data_dictionary::keyspace_metadata::new_keyspace(old->name(), *sc, options, initial_tablets, get_consistency_option(), get_boolean(KW_DURABLE_WRITES, true), get_storage_options(), {}, old->next_strategy_options_opt(), std::move(config_options));
+    return data_dictionary::keyspace_metadata::new_keyspace(old->name(), *sc, options, initial_tablets, old->consistency_option(), get_boolean(KW_DURABLE_WRITES, true), get_storage_options(), {}, old->next_strategy_options_opt(), std::move(config_options), get_preferred_rack().value_or(old->preferred_rack()));
 }
 
 namespace {
@@ -523,6 +558,12 @@ property_definitions::map_type ks_prop_defs::flattened() const {
             // Use nested map for backwards compatibility, ks_prop_defs() constructor expects this.
             add_prefixed_key(kw, std::map<sstring, sstring>({{sstring(kw), to_sstring(*val_opt)}}), result);
         }
+    }
+
+    // The bare key marks the option as set, so that an empty map, which unsets it, survives.
+    if (auto preferred_rack = get_preferred_rack()) {
+        result[KW_PREFERRED_RACK] = "";
+        add_prefixed_key(KW_PREFERRED_RACK, *preferred_rack, result);
     }
 
     return {result};

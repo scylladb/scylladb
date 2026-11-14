@@ -133,9 +133,6 @@ void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, c
             if (new_rs->is_per_table() != ks.get_replication_strategy().is_per_table()) {
                 throw exceptions::invalid_request_exception(format("Cannot alter replication strategy vnode/tablets flavor"));
             }
-            if (new_ks->consistency_option() && new_ks->consistency_option() != ks.metadata()->consistency_option()) {
-                throw exceptions::invalid_request_exception(format("Cannot alter consistency option"));
-            }
         } catch (const std::runtime_error& e) {
             throw exceptions::invalid_request_exception(e.what());
         }
@@ -223,6 +220,14 @@ cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_proce
 
         auto ts = mc.write_timestamp();
         auto global_request_id = mc.new_group0_state_id();
+
+        // preferred_rack is validated against the current replication, which a running
+        // RF change is about to replace.
+        if (_attrs->get_preferred_rack() && qp.proxy().features().rack_list_rf
+                && co_await qp.ongoing_rf_change(mc.guard(), _name)) {
+            co_await coroutine::return_exception(exceptions::invalid_request_exception(
+                    format("An RF change for keyspace {} is ongoing, retry altering preferred_rack later.", _name)));
+        }
 
         // we only want to run the tablets path if there are actually any tablets changes, not only schema changes
         // TODO: the current `if (changes_tablets(qp))` is insufficient: someone may set the same RFs as before,
