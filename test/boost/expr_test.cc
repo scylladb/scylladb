@@ -583,6 +583,57 @@ BOOST_AUTO_TEST_CASE(evaluate_bind_variable_performs_validation) {
     BOOST_REQUIRE_THROW(evaluate(bind_var, inputs), exceptions::invalid_request_exception);
 }
 
+// A query can evaluate the same bind variable for every result row, e.g.
+// `select similarity_cosine(v, ?) ...`. Validating a large bound value (a
+// vector, element by element) on every evaluation stalled the reactor
+// (SCYLLADB-5936), so a value is validated once per query and type.
+// The row loop itself still doesn't yield, so other per-row work can still
+// stall on large pages; fully solving that path needs SCYLLADB-2150.
+BOOST_AUTO_TEST_CASE(evaluate_bind_variable_validates_once) {
+    auto qo = query_options(cql3::raw_value_vector_with_unset({make_int_raw(123)}));
+    auto inputs = evaluation_inputs{.options = &qo};
+    BOOST_REQUIRE(!qo.is_validated_as(0, *int32_type));
+    BOOST_REQUIRE_EQUAL(evaluate(new_bind_variable(0), inputs), make_int_raw(123));
+    BOOST_REQUIRE(qo.is_validated_as(0, *int32_type));
+    BOOST_REQUIRE_EQUAL(evaluate(new_bind_variable(0), inputs), make_int_raw(123));
+
+    // The same value bound to a receiver of another type is validated again.
+    BOOST_REQUIRE_THROW(evaluate(new_bind_variable(0, boolean_type), inputs), exceptions::invalid_request_exception);
+    BOOST_REQUIRE(!qo.is_validated_as(0, *boolean_type));
+}
+
+// A value already validated as the receiver's type isn't validated again:
+// recorded as a valid int, an invalid one is returned as is.
+BOOST_AUTO_TEST_CASE(evaluate_bind_variable_skips_cached_validation) {
+    auto qo = query_options(cql3::raw_value_vector_with_unset({make_bool_raw(true)}));
+    qo.set_validated_as(0, *int32_type);
+    auto inputs = evaluation_inputs{.options = &qo};
+    BOOST_REQUIRE_EQUAL(evaluate(new_bind_variable(0), inputs), make_bool_raw(true));
+}
+
+BOOST_AUTO_TEST_CASE(evaluate_bind_variable_invalid_value_fails_every_time) {
+    auto qo = query_options(cql3::raw_value_vector_with_unset({make_bool_raw(true)}));
+    auto inputs = evaluation_inputs{.options = &qo};
+    BOOST_REQUIRE_THROW(evaluate(new_bind_variable(0), inputs), exceptions::invalid_request_exception);
+    BOOST_REQUIRE(!qo.is_validated_as(0, *int32_type));
+    BOOST_REQUIRE_THROW(evaluate(new_bind_variable(0), inputs), exceptions::invalid_request_exception);
+}
+
+// prepare() reorders named values, so what was validated at an index before
+// doesn't apply to the value now there.
+BOOST_AUTO_TEST_CASE(evaluate_bind_variable_revalidates_after_prepare) {
+    auto qo = query_options(default_cql_config, db::consistency_level::ONE,
+            std::vector<std::string_view>{"b", "a"},
+            cql3::raw_value_vector_with_unset({make_int_raw(123), make_bool_raw(true)}),
+            true, query_options::specific_options::DEFAULT);
+    auto inputs = evaluation_inputs{.options = &qo};
+    BOOST_REQUIRE_EQUAL(evaluate(new_bind_variable(0), inputs), make_int_raw(123));
+
+    // Now index 0 is "a", the boolean, which isn't a valid int.
+    qo.prepare({make_receiver(boolean_type, "a"), make_receiver(int32_type, "b")});
+    BOOST_REQUIRE_THROW(evaluate(new_bind_variable(0), inputs), exceptions::invalid_request_exception);
+}
+
 BOOST_AUTO_TEST_CASE(evaluate_bind_variable_vs_unset) {
     auto qo = query_options(cql3::raw_value_vector_with_unset({raw_value::make_null()}, {true}));
     BOOST_REQUIRE_THROW(evaluate(new_bind_variable(0), evaluation_inputs{.options = &qo}), exceptions::invalid_request_exception);
