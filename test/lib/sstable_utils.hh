@@ -98,6 +98,10 @@ public:
         return _sst->read_statistics();
     }
 
+    future<> read_scylla_metadata() {
+        return _sst->read_scylla_metadata();
+    }
+
     future<> read_summary() noexcept {
         return _sst->read_summary();
     }

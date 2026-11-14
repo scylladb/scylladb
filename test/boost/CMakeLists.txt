@@ -217,6 +217,7 @@ if(Parquet_FOUND)
       parquet_encoding_test
       parquet_mapping_test
       parquet_reader_test
+      parquet_sstable_writer_test
       parquet_writer_test)
     add_scylla_test(${name}
       KIND SEASTAR

@@ -23,6 +23,7 @@ optional_tests:
     - parquet_encoding_test
     - parquet_mapping_test
     - parquet_reader_test
+    - parquet_sstable_writer_test
     - parquet_writer_test
 # Enable compaction groups on tests except on a few, listed below
 all_can_run_compaction_groups_except:
