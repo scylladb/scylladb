@@ -14,7 +14,9 @@ target_sources(sstables
     mx/reader.cc
     mx/writer.cc
     object_storage_client.cc
+    parquet/bit_util.cc
     parquet/metadata.cc
+    parquet/rle.cc
     parquet/thrift.cc
     prepended_input_stream.cc
     random_access_reader.cc
