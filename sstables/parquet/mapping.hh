@@ -326,6 +326,13 @@ std::vector<key_value> file_key_value_metadata();
 /// The Parquet name of a CQL column or UDT field name. See the top of this file.
 sstring parquet_name(bytes_view cql_name);
 
+/// A TTL with its expiry time, as stored: seconds, and seconds since the epoch.
+struct expiration {
+    int32_t ttl;
+    int64_t expiry;
+    bool operator==(const expiration&) const = default;
+};
+
 /// The value of the row-level `kind` column.
 enum class fragment_kind : int32_t {
     none = 0,

@@ -62,13 +62,6 @@ struct row_info {
     bool page_set_ended;
 };
 
-/// A TTL with its expiry time, as stored: seconds, and seconds since the epoch.
-struct expiration {
-    int32_t ttl;
-    int64_t expiry;
-    bool operator==(const expiration&) const = default;
-};
-
 /// Picks the defaults of a row that has no live row marker to supply them.
 ///
 /// The writer calls it once per static row and per clustering row without
