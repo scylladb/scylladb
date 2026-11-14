@@ -129,6 +129,12 @@ struct sstable_writer_config {
     sstring origin;
     bool correct_pi_block_width = true;
     uint32_t large_data_records_per_sstable = 10;
+    // The tunables of the writer of a Parquet Data file (`has_parquet_data_file()`),
+    // in bytes. See writer_config in sstables/parquet/writer.hh.
+    uint64_t parquet_row_group_size = 8 << 20;
+    uint64_t parquet_page_set_size = 128 << 10;
+    uint64_t parquet_min_page_size = 8 << 10;
+    uint64_t parquet_dictionary_page_limit = 4 << 10;
 
 private:
     explicit sstable_writer_config() {}
