@@ -735,7 +735,7 @@ SEASTAR_TEST_CASE(buffer_overflow) {
 
 SEASTAR_TEST_CASE(test_non_compound_table_row_is_not_marked_as_static) {
    return test_env::do_with_async([] (test_env& env) {
-      for (const auto version : writable_sstable_versions) {
+      for (const auto version : writable_sstable_versions_with_compact_storage) {
         schema_builder builder(this_smp_shard_count(), "ks", "cf");
         builder.with_column("p", utf8_type, column_kind::partition_key);
         builder.with_column("c", int32_type, column_kind::clustering_key);
@@ -760,7 +760,7 @@ SEASTAR_TEST_CASE(test_non_compound_table_row_is_not_marked_as_static) {
 
 SEASTAR_TEST_CASE(test_has_partition_key) {
     return test_env::do_with_async([] (test_env& env) {
-        for (const auto version : writable_sstable_versions) {
+        for (const auto version : writable_sstable_versions_with_compact_storage) {
             schema_builder builder(this_smp_shard_count(), "ks", "cf");
             builder.with_column("p", utf8_type, column_kind::partition_key);
             builder.with_column("c", int32_type, column_kind::clustering_key);
@@ -872,7 +872,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_with_auto_scaling) {
 
 SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_compound_dense) {
    return test_env::do_with_async([] (test_env& env) {
-      for (const auto version : writable_sstable_versions) {
+      for (const auto version : writable_sstable_versions_with_compact_storage) {
         schema_builder builder(this_smp_shard_count(), "ks", "cf");
         builder.with_column("p", utf8_type, column_kind::partition_key);
         builder.with_column("c1", int32_type, column_kind::clustering_key);
@@ -925,7 +925,7 @@ SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_compound_dense) {
 
 SEASTAR_TEST_CASE(test_promoted_index_blocks_are_monotonic_non_compound_dense) {
    return test_env::do_with_async([] (test_env& env) {
-      for (const auto version : writable_sstable_versions) {
+      for (const auto version : writable_sstable_versions_with_compact_storage) {
         schema_builder builder(this_smp_shard_count(), "ks", "cf");
         builder.with_column("p", utf8_type, column_kind::partition_key);
         builder.with_column("c1", int32_type, column_kind::clustering_key);
@@ -978,6 +978,10 @@ SEASTAR_TEST_CASE(test_promoted_index_repeats_open_tombstones) {
         int id = 0;
         for (auto& compact : { schema_builder::compact_storage::no, schema_builder::compact_storage::yes }) {
             const auto generation = id++;
+            // `aa` cannot store a compact storage table.
+            if (compact == schema_builder::compact_storage::yes && !supports_compact_storage(version)) {
+                continue;
+            }
             schema_builder builder(this_smp_shard_count(), "ks", format("cf{:d}", generation));
             builder.with_column("p", utf8_type, column_kind::partition_key);
             builder.with_column("c1", bytes_type, column_kind::clustering_key);
@@ -1017,7 +1021,7 @@ SEASTAR_TEST_CASE(test_promoted_index_repeats_open_tombstones) {
 
 SEASTAR_TEST_CASE(test_range_tombstones_are_correctly_seralized_for_non_compound_dense_schemas) {
    return test_env::do_with_async([] (test_env& env) {
-      for (const auto version : writable_sstable_versions) {
+      for (const auto version : writable_sstable_versions_with_compact_storage) {
         schema_builder builder(this_smp_shard_count(), "ks", "cf");
         builder.with_column("p", utf8_type, column_kind::partition_key);
         builder.with_column("c", int32_type, column_kind::clustering_key);
@@ -1051,7 +1055,7 @@ SEASTAR_TEST_CASE(test_range_tombstones_are_correctly_seralized_for_non_compound
 
 SEASTAR_TEST_CASE(test_promoted_index_is_absent_for_schemas_without_clustering_key) {
    return test_env::do_with_async([] (test_env& env) {
-      for (const auto version : writable_sstable_versions) {
+      for (const auto version : writable_sstable_versions_with_compact_storage) {
         schema_builder builder(this_smp_shard_count(), "ks", "cf");
         builder.with_column("p", utf8_type, column_kind::partition_key);
         builder.with_column("v", int32_type);
@@ -1434,7 +1438,7 @@ SEASTAR_TEST_CASE(test_counter_header_size) {
 
 SEASTAR_TEST_CASE(test_static_compact_tables_are_read) {
     return test_env::do_with_async([] (test_env& env) {
-        for (const auto version : writable_sstable_versions) {
+        for (const auto version : writable_sstable_versions_with_compact_storage) {
             auto s = schema_builder(this_smp_shard_count(), "ks", "test")
                 .with_column("pk", int32_type, column_kind::partition_key)
                 .with_column("v1", int32_type)
@@ -1536,7 +1540,7 @@ SEASTAR_TEST_CASE(writer_handles_subsequent_range_tombstone_changes_without_tomb
 // the third buffer, and finds the corrupt chunk while that read is in flight.
 SEASTAR_TEST_CASE(test_data_read_corrupt_chunk) {
     return test_env::do_with_async([] (test_env& env) {
-        for (const auto version : writable_sstable_versions) {
+        for (const auto version : writable_sstable_versions_with_mx_data_file) {
             simple_schema ss;
             auto s = ss.schema();
             mutation m(s, ss.make_pkey());

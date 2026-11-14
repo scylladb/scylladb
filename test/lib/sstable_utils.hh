@@ -8,6 +8,8 @@
 
 #pragma once
 
+#include <algorithm>
+#include <array>
 #include <optional>
 
 #include "sstables/sstables.hh"
@@ -275,11 +277,38 @@ inline auto replacer_fn_no_op() {
     return [](compaction::compaction_completion_desc desc) -> void {};
 }
 
+// The versions of `Versions` for which `Pred` is true.
+template <const auto& Versions, auto Pred>
+consteval auto filter_sstable_versions() {
+    constexpr size_t n = std::ranges::count_if(Versions, Pred);
+    std::array<sstable_version_types, n> r{};
+    std::ranges::copy_if(Versions, r.begin(), Pred);
+    return r;
+}
+
+// Whether test/resource/sstables has sstables of version `v`. A Parquet
+// Data file gets them once its format is frozen.
+constexpr bool has_test_resource_sstables(sstable_version_types v) {
+    return !has_parquet_data_file(v);
+}
+
+// The versions of the sstables in test/resource/sstables, for the tests
+// that read them.
+inline constexpr auto resource_sstable_versions = filter_sstable_versions<all_sstable_versions, has_test_resource_sstables>();
+
+// The writable versions that can store a compact storage table.
+inline constexpr auto writable_sstable_versions_with_compact_storage = filter_sstable_versions<writable_sstable_versions, supports_compact_storage>();
+
+// The writable versions whose Data file has the mx layout, for the tests
+// of that layout and of its CompressionInfo.db and CRC.db.
+inline constexpr auto writable_sstable_versions_with_mx_data_file = filter_sstable_versions<writable_sstable_versions, has_mx_data_file>();
+
+// Runs `action` for the versions of the sstables in test/resource/sstables.
 template<typename AsyncAction>
 requires requires (AsyncAction aa, sstables::sstable::version_types& c) { { aa(c) } -> std::same_as<future<>>; }
 inline
 future<> for_each_sstable_version(AsyncAction action) {
-    return seastar::do_for_each(all_sstable_versions, std::move(action));
+    return seastar::do_for_each(resource_sstable_versions, std::move(action));
 }
 
 } // namespace sstables

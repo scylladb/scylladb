@@ -215,7 +215,6 @@ public:
 };
 
 // The versions that tests loop over.
-// FIXME: add `aa` once the Parquet reader exists.
 constexpr auto all_sstable_versions = std::to_array<sstable_version_types>({
     sstable_version_types::ka,
     sstable_version_types::la,
@@ -224,18 +223,17 @@ constexpr auto all_sstable_versions = std::to_array<sstable_version_types>({
     sstable_version_types::me,
     sstable_version_types::ms,
     sstable_version_types::mt,
+    sstable_version_types::aa,
 });
 
 // The versions in all_sstable_versions for which is_writable() is true.
-// FIXME: add `aa` once the Parquet reader exists, together with
-// all_sstable_versions. `aa` is writable, but the tests that loop over
-// this list read back what they write.
 constexpr auto writable_sstable_versions = std::to_array<sstable_version_types>({
     sstable_version_types::mc,
     sstable_version_types::md,
     sstable_version_types::me,
     sstable_version_types::ms,
     sstable_version_types::mt,
+    sstable_version_types::aa,
 });
 
 constexpr sstable_version_types oldest_writable_sstable_format = sstable_version_types::mc;

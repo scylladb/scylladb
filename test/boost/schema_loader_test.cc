@@ -582,6 +582,12 @@ future<> do_test_load_schema_from_sstable(schema_ptr schema, const utils::chunke
             // re-use the original schema.
             check_sstable_schema(env, sst_path, mutations, true);
 
+            // A Parquet Data file cannot be opened without Scylla.db, which
+            // holds the checksum of its footer.
+            if (has_parquet_data_file(version)) {
+                continue;
+            }
+
             // Drop the scylla-metadata to also test the fall-back schema loader from Statistics
             {
                 // rm Scylla.db
