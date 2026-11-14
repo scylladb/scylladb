@@ -6,8 +6,9 @@ a version-controlled toolchain is provided as a docker image.
 
 ## Quick start
 
-If your workstation supports docker (without requiring sudo), you can build and
-run Scylla easily without setting up the build dependencies beforehand:
+If your workstation has rootless podman or
+[rootless docker](https://docs.docker.com/engine/security/rootless/), you can
+build and run Scylla easily without setting up the build dependencies beforehand:
 
     ./tools/toolchain/dbuild ./configure.py
     ./tools/toolchain/dbuild ninja build/release/scylla
