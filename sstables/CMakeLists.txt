@@ -19,6 +19,7 @@ target_sources(sstables
     parquet/encoding.cc
     parquet/metadata.cc
     parquet/rle.cc
+    parquet/schema.cc
     parquet/thrift.cc
     prepended_input_stream.cc
     random_access_reader.cc
