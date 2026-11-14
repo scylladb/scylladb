@@ -12,24 +12,6 @@ from cassandra.protocol import InvalidRequest
 
 from .util import new_test_keyspace, new_test_table, new_type, unique_name, new_function
 
-# Unfortunately, while ScyllaDB and Cassandra support the same UDF
-# feature, each supports a different choice of languages. In particular,
-# Cassandra supports Java and ScyllaDB doesn't - but ScyllaDB supports
-# Lua. The following fixture can be used to check if the server supports
-# Java UDFs - and if it doesn't, the test should use Lua.
-@pytest.fixture(scope="module")
-def has_java_udf(cql, test_keyspace):
-    try:
-        with new_function(cql, test_keyspace, "(i int) CALLED ON NULL INPUT RETURNS int LANGUAGE java AS 'return 42;'"):
-            return True
-    except InvalidRequest as e:
-        # When the language "java" is not supported, Scylla prints the
-        # error message "Language 'java' is not supported". Cassandra
-        # isn't expected to fail here because it does support Java.
-        # Any other error here indicates an unexpected bug.
-        assert "Language 'java' is not supported" in str(e)
-        return False
-
 # Test that if we have an overloaded function (i.e., two functions with the
 # same name, just with different parameters), DROP FUNCTION requires
 # disambiguating which function you want to drop. Without parameters, the
