@@ -639,6 +639,7 @@ scylla_tests = set([
     'test/boost/observable_test',
     'test/boost/parquet_codec_test',
     'test/boost/parquet_encoding_test',
+    'test/boost/parquet_mapping_test',
     'test/boost/parquet_reader_test',
     'test/boost/parquet_writer_test',
     'test/boost/partitioner_test',
@@ -1758,6 +1759,7 @@ tests_not_using_seastar_test_framework = set([
 arrow_tests = set([
     'test/boost/parquet_codec_test',
     'test/boost/parquet_encoding_test',
+    'test/boost/parquet_mapping_test',
     'test/boost/parquet_reader_test',
     'test/boost/parquet_writer_test',
 ])
