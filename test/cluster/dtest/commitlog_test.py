@@ -1281,6 +1281,8 @@ class TestCommitLog(Tester):
             # Recover from ENOSPC
             node1.stop(gently=False)
 
+            # The node has not used its own commitlog directory, so it may not exist.
+            os.makedirs(commitlog_dir, exist_ok=True)
             copytree(volume.mount, commitlog_dir)
 
             node1.set_configuration_options(values={"commitlog_directory": commitlog_dir})

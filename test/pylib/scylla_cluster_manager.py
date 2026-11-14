@@ -485,7 +485,8 @@ class ScyllaClusterManager:
                          seeds: list[IPAddress] | None = None,
                          server_encryption: str = "none",
                          expected_error: str | None = None,
-                         expected_server_up_state: ServerUpState = ServerUpState.SERVING) -> ServerInfo:
+                         expected_server_up_state: ServerUpState = ServerUpState.SERVING,
+                         launcher: list[str] | None = None) -> ServerInfo:
         """Add a new server."""
 
         return await self.cluster.add_server(
@@ -499,6 +500,7 @@ class ScyllaClusterManager:
             server_encryption=server_encryption,
             expected_error=expected_error,
             expected_server_up_state=expected_server_up_state,
+            launcher=launcher,
         )
 
     @manager_op(timeout=None)
@@ -1202,7 +1204,8 @@ class ScyllaClusterManager:
                          timeout: float | None = ScyllaServer.TOPOLOGY_TIMEOUT,
                          server_encryption: str = "none",
                          expected_server_up_state: ServerUpState = ServerUpState.SERVING,
-                         connect_driver: bool = True) -> ServerInfo:
+                         connect_driver: bool = True,
+                         launcher: list[str] | None = None) -> ServerInfo:
         """Add a new server.
 
         When start=True and expected_error is None, waits until Scylla reports
@@ -1211,6 +1214,11 @@ class ScyllaClusterManager:
         earlier. When start=False or expected_error is set, no readiness wait is
         performed. When connect_driver=False, the effective wait state is capped
         at HOST_ID_QUERIED regardless of expected_server_up_state.
+
+        launcher is a command prefix the server's executable is started through
+        on every start, e.g. to run it in another namespace. It must exec the
+        executable rather than fork it. By default the executable is started
+        directly.
         """
         if expected_error is not None:
             self.ignore_log_patterns.append(re.escape(expected_error))
@@ -1241,6 +1249,7 @@ class ScyllaClusterManager:
                     server_encryption=server_encryption,
                     expected_error=expected_error,
                     expected_server_up_state=expected_server_up_state,
+                    launcher=launcher,
                 )
         except Exception as exc:
             raise RuntimeError("Failed to add server") from exc

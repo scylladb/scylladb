@@ -32,7 +32,7 @@ def write_generator(table, size_in_kb: int):
 
 
 # Number of INSERTs write_rows() keeps in flight. These tests run against nodes
-# whose data directory is a small fuse2fs volume, and in debug mode the nodes
+# whose data directory is a small volume, and in debug mode the nodes
 # are slow to begin with. Submitting a whole bulk load at once leaves thousands
 # of statements queued behind a single busy shard; once one of them stays
 # unanswered for longer than write_request_timeout_in_ms, the load fails with a

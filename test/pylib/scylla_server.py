@@ -337,7 +337,8 @@ class ScyllaServer:
                  cmdline_options: List[str],
                  config_options: Dict[str, Any],
                  property_file: Dict[str, Any],
-                 append_env: Dict[str, str]) -> None:
+                 append_env: Dict[str, str],
+                 launcher: Optional[List[str]] = None) -> None:
         self.server_id = ServerNum(ScyllaServer.newid())
         xdist_worker_id = get_xdist_worker_id()
         # this variable needed to make a cleanup after server is not needed anymore
@@ -351,6 +352,12 @@ class ScyllaServer:
         self.notify_socket: Optional[socket.socket] = None
         self._received_serving = False
         self.exe = pathlib.Path(version.path).resolve()
+        # A command the executable is started through, e.g. to run it in another
+        # namespace. It must exec the executable (not fork it), so the process the
+        # server tracks and signals is Scylla itself, and it is responsible for the
+        # working directory if it changes it (as entering a mount namespace does).
+        # Kept across switch_executable(), as it is independent of the version.
+        self.launcher: List[str] = list(launcher or [])
         self.logger = logger
         self.log_file = None
         self.cmdline_options = cmdline_options
@@ -904,6 +911,7 @@ class ScyllaServer:
             self.log_file = self.log_filename.open("ab")  # append mode to preserve previous logs
 
         self.cmd = await asyncio.create_subprocess_exec(
+            *self.launcher,
             self.exe,
             *(self.cmdline_options if cmdline_options_override is None else cmdline_options_override),
             cwd=self.workdir,
