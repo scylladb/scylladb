@@ -3039,6 +3039,334 @@ SEASTAR_THREAD_TEST_CASE(test_rack_list_conversion_shard_distribution) {
     }).get();
 }
 
+using racks_per_dc = std::map<sstring, std::vector<sstring>>;
+
+// Starts an RF change of ks_name from old_racks to old_racks + new_racks and
+// returns the plan of one load balancer round made while it is in progress.
+static migration_plan balance_during_rf_change(cql_test_env& e, topology_builder& topo, const sstring& ks_name,
+        racks_per_dc old_racks, const racks_per_dc& new_racks) {
+    auto id = utils::UUID_gen::get_time_UUID();
+    sstring rf_change_data_cql = "{'replication:class': 'NetworkTopologyStrategy'";
+    for (auto& [dc, racks] : old_racks) {
+        for (size_t i = 0; i < racks.size(); i++) {
+            rf_change_data_cql += format(", 'replication:{}:{}': '{}'", dc, i, racks[i]);
+        }
+    }
+    rf_change_data_cql += "}";
+    e.execute_cql(format("INSERT INTO system.topology_requests (id, request_type, done, new_keyspace_rf_change_ks_name, new_keyspace_rf_change_data) VALUES ({}, 'keyspace_rf_change', False, '{}', {})",
+        id, ks_name, rf_change_data_cql)).get();
+    auto all_racks = std::move(old_racks);
+    for (auto& [dc, racks] : new_racks) {
+        all_racks[dc].insert(all_racks[dc].end(), racks.begin(), racks.end());
+    }
+    locator::replication_strategy_config_options next_options;
+    for (auto& [dc, racks] : all_racks) {
+        next_options.emplace(dc, std::move(racks));
+    }
+    e.local_db().find_keyspace(ks_name).metadata()->set_next_strategy_options(std::move(next_options));
+
+    auto& stm = e.shared_token_metadata().local();
+    topo.get_shared_load_stats().set_default_tablet_sizes(stm.get());
+    auto& talloc = e.get_tablet_allocator().local();
+    talloc.set_load_stats(topo.get_load_stats());
+    auto& sys_ks = e.get_system_keyspace().local();
+    auto& topology = e.get_topology_state_machine().local()._topology;
+    topology.ongoing_rf_changes.insert(id);
+    return talloc.balance_tablets(stm.get(), &topology, &sys_ks).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_rf_change_respects_source_streaming_concurrency) {
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+
+        auto dc = topo.dc();
+        auto rack_s1 = topo.rack();
+        auto host_s1 = topo.add_node(node_state::normal, 1);
+        auto rack_s2 = topo.start_new_rack();
+        auto host_s2 = topo.add_node(node_state::normal, 1);
+        auto rack_t1 = topo.start_new_rack();
+        topo.add_node(node_state::normal, 4);
+        auto rack_t2 = topo.start_new_rack();
+        topo.add_node(node_state::normal, 4);
+
+        auto ks_name = add_keyspace_racks(e, {{dc, {rack_s1.rack, rack_s2.rack}}}, 4);
+        auto table1 = add_table(e, ks_name).get();
+
+        // All 4 tablets have their replicas on the only shard of host_s1 and host_s2.
+        mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+            tablet_map tmap(4);
+            for (auto tid : tmap.tablet_ids()) {
+                tmap.set_tablet(tid, tablet_info {
+                    tablet_replica_set {
+                        tablet_replica{host_s1, 0},
+                        tablet_replica{host_s2, 0},
+                    }
+                });
+            }
+            tmeta.set_tablet_map(table1, std::move(tmap));
+            co_return;
+        });
+
+        // Ongoing RF change extending the keyspace into rack_t1 and rack_t2.
+        migration_plan plan = balance_during_rf_change(e, topo, ks_name, {{dc, {rack_s1.rack, rack_s2.rack}}}, {{dc, {rack_t1.rack, rack_t2.rack}}});
+
+        // Every rebuild_v2 streams from the single shard of host_s1 and host_s2 with
+        // tablet_migration_stream_weight_repair (2), and the per-shard cap
+        // (tablet_streaming_read_concurrency_per_shard) defaults to 2, so only one rebuild
+        // may be admitted per round, across both extended racks. The write cap binds on the
+        // same shards, since a rebuild also writes to the surviving replicas; the target
+        // nodes never bind, each has 4 idle shards.
+        unsigned rebuilds = 0;
+        for (auto& mig : plan.migrations()) {
+            testlog.info("Migration: {}", mig);
+            if (mig.kind == locator::tablet_transition_kind::rebuild_v2) {
+                rebuilds++;
+            }
+        }
+        BOOST_REQUIRE_EQUAL(rebuilds, 1);
+    }).get();
+}
+
+// Rebuilds of two racks extended at once compete for the streaming caps of the same sources.
+SEASTAR_THREAD_TEST_CASE(test_concurrent_rack_rebuilds_share_streaming_caps) {
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+
+        auto dc = topo.dc();
+        auto rack_s1 = topo.rack();
+        auto host_s1 = topo.add_node(node_state::normal, 2);
+        auto rack_s2 = topo.start_new_rack();
+        auto host_s2 = topo.add_node(node_state::normal, 2);
+        auto rack_t1 = topo.start_new_rack();
+        topo.add_node(node_state::normal, 4);
+        auto rack_t2 = topo.start_new_rack();
+        topo.add_node(node_state::normal, 4);
+
+        auto ks_name = add_keyspace_racks(e, {{dc, {rack_s1.rack, rack_s2.rack}}}, 4);
+        auto table1 = add_table(e, ks_name).get();
+
+        // Tablets alternate between the two shards of host_s1 and host_s2.
+        mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+            tablet_map tmap(4);
+            shard_id shard = 0;
+            for (auto tid : tmap.tablet_ids()) {
+                tmap.set_tablet(tid, tablet_info {
+                    tablet_replica_set {
+                        tablet_replica{host_s1, shard},
+                        tablet_replica{host_s2, shard},
+                    }
+                });
+                shard = (shard + 1) % 2;
+            }
+            tmeta.set_tablet_map(table1, std::move(tmap));
+            co_return;
+        });
+
+        // Ongoing RF change extending the keyspace into rack_t1 and rack_t2.
+        migration_plan plan = balance_during_rf_change(e, topo, ks_name, {{dc, {rack_s1.rack, rack_s2.rack}}}, {{dc, {rack_t1.rack, rack_t2.rack}}});
+
+        // Each source shard admits one rebuild per round, and each rack wants one per shard,
+        // so the two admitted rebuilds must be shared between the racks.
+        BOOST_REQUIRE_EQUAL(plan.tablet_migration_count(), 2);
+        std::unordered_map<sstring, unsigned> rebuilds_per_rack;
+        for (auto& mig : plan.migrations()) {
+            testlog.info("Migration: {}", mig);
+            BOOST_REQUIRE(mig.kind == locator::tablet_transition_kind::rebuild_v2);
+            BOOST_REQUIRE(mig.dst);
+            rebuilds_per_rack[e.shared_token_metadata().local().get()->get_topology().get_rack(mig.dst->host)]++;
+        }
+        BOOST_REQUIRE_EQUAL(rebuilds_per_rack[rack_t1.rack], 1);
+        BOOST_REQUIRE_EQUAL(rebuilds_per_rack[rack_t2.rack], 1);
+    }).get();
+}
+
+// Rebuilds of two DCs added at once compete for the streaming caps of the same sources.
+SEASTAR_THREAD_TEST_CASE(test_concurrent_dc_rebuilds_share_streaming_caps) {
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+
+        auto dc_s = topo.dc();
+        auto rack_s1 = topo.rack();
+        auto host_s1 = topo.add_node(node_state::normal, 2);
+        auto rack_s2 = topo.start_new_rack();
+        auto host_s2 = topo.add_node(node_state::normal, 2);
+        auto rack_t1 = topo.start_new_dc();
+        topo.add_node(node_state::normal, 4);
+        auto rack_t2 = topo.start_new_dc();
+        topo.add_node(node_state::normal, 4);
+
+        auto ks_name = add_keyspace_racks(e, {{dc_s, {rack_s1.rack, rack_s2.rack}}}, 4);
+        auto table1 = add_table(e, ks_name).get();
+
+        // Tablets alternate between the two shards of host_s1 and host_s2.
+        mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+            tablet_map tmap(4);
+            shard_id shard = 0;
+            for (auto tid : tmap.tablet_ids()) {
+                tmap.set_tablet(tid, tablet_info {
+                    tablet_replica_set {
+                        tablet_replica{host_s1, shard},
+                        tablet_replica{host_s2, shard},
+                    }
+                });
+                shard = (shard + 1) % 2;
+            }
+            tmeta.set_tablet_map(table1, std::move(tmap));
+            co_return;
+        });
+
+        // Ongoing RF change extending the keyspace into the DCs of rack_t1 and rack_t2.
+        migration_plan plan = balance_during_rf_change(e, topo, ks_name, {{dc_s, {rack_s1.rack, rack_s2.rack}}},
+                {{rack_t1.dc, {rack_t1.rack}}, {rack_t2.dc, {rack_t2.rack}}});
+
+        // Each source shard admits one rebuild per round, and each DC wants one per shard,
+        // so the two admitted rebuilds must be shared between the DCs.
+        BOOST_REQUIRE_EQUAL(plan.tablet_migration_count(), 2);
+        std::unordered_map<sstring, unsigned> rebuilds_per_dc;
+        for (auto& mig : plan.migrations()) {
+            testlog.info("Migration: {}", mig);
+            BOOST_REQUIRE(mig.kind == locator::tablet_transition_kind::rebuild_v2);
+            BOOST_REQUIRE(mig.dst);
+            rebuilds_per_dc[e.shared_token_metadata().local().get()->get_topology().get_datacenter(mig.dst->host)]++;
+        }
+        BOOST_REQUIRE_EQUAL(rebuilds_per_dc[rack_t1.dc], 1);
+        BOOST_REQUIRE_EQUAL(rebuilds_per_dc[rack_t2.dc], 1);
+    }).get();
+}
+
+// Rebuilds of two racks, each losing a node to removenode, compete for the streaming caps of the same source node.
+SEASTAR_THREAD_TEST_CASE(test_concurrent_removenodes_share_streaming_caps) {
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+
+        auto dc = topo.dc();
+        auto rack1 = topo.rack();
+        auto host1 = topo.add_node(node_state::normal, 1);
+        topo.add_node(node_state::normal, 4);
+        auto rack2 = topo.start_new_rack();
+        auto host2 = topo.add_node(node_state::normal, 1);
+        topo.add_node(node_state::normal, 4);
+        auto rack3 = topo.start_new_rack();
+        auto host3 = topo.add_node(node_state::normal, 2);
+        // Only one node can be in a transition state, so concurrent removenodes are
+        // represented by remove requests of excluded nodes.
+        e.get_storage_service().local().mark_excluded({host1, host2}).get();
+        topo.add_draining_request(host1);
+        topo.add_draining_request(host2);
+
+        auto ks_name = add_keyspace_racks(e, {{dc, {rack1.rack, rack2.rack, rack3.rack}}}, 8);
+        auto table1 = add_table(e, ks_name).get();
+
+        // Every tablet loses its rack1 and rack2 replicas, so all rebuilds stream from host3.
+        mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+            tablet_map tmap(8);
+            shard_id shard = 0;
+            for (auto tid : tmap.tablet_ids()) {
+                tmap.set_tablet(tid, tablet_info {
+                    tablet_replica_set {
+                        tablet_replica{host1, 0},
+                        tablet_replica{host2, 0},
+                        tablet_replica{host3, shard},
+                    }
+                });
+                shard = (shard + 1) % 2;
+            }
+            tmeta.set_tablet_map(table1, std::move(tmap));
+            co_return;
+        });
+
+        auto& stm = e.shared_token_metadata().local();
+        topo.get_shared_load_stats().set_default_tablet_sizes(stm.get());
+        auto& talloc = e.get_tablet_allocator().local();
+        talloc.set_load_stats(topo.get_load_stats());
+        auto& sys_ks = e.get_system_keyspace().local();
+        auto& topology = e.get_topology_state_machine().local()._topology;
+        auto stats_before = *talloc.stats().for_dc(dc);
+        migration_plan plan = talloc.balance_tablets(stm.get(), &topology, &sys_ks).get();
+        auto stats = *talloc.stats().for_dc(dc) - stats_before;
+
+        // Each shard of host3 admits one rebuild per round, so the two admitted rebuilds
+        // must be shared between the racks.
+        BOOST_REQUIRE_EQUAL(plan.tablet_migration_count(), 2);
+        std::unordered_map<sstring, unsigned> rebuilds_per_rack;
+        for (auto& mig : plan.migrations()) {
+            testlog.info("Migration: {}", mig);
+            BOOST_REQUIRE(mig.kind == locator::tablet_transition_kind::rebuild_v2);
+            BOOST_REQUIRE(mig.dst);
+            rebuilds_per_rack[stm.get()->get_topology().get_rack(mig.dst->host)]++;
+        }
+        BOOST_REQUIRE_EQUAL(rebuilds_per_rack[rack1.rack], 1);
+        BOOST_REQUIRE_EQUAL(rebuilds_per_rack[rack2.rack], 1);
+        BOOST_REQUIRE_EQUAL(stats.migrations_produced, 2);
+        BOOST_REQUIRE_EQUAL(stats.rebuilds_produced, 2);
+    }).get();
+}
+
+// A tablet with replicas in two racks is a candidate of both rack scopes, but is scheduled once.
+SEASTAR_THREAD_TEST_CASE(test_tablet_drained_in_two_racks_is_scheduled_once) {
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+
+        auto dc = topo.dc();
+        auto rack1 = topo.rack();
+        auto host1 = topo.add_node(node_state::normal, 1);
+        topo.add_node(node_state::normal, 2);
+        auto rack2 = topo.start_new_rack();
+        auto host2 = topo.add_node(node_state::normal, 1);
+        topo.add_node(node_state::normal, 2);
+        auto rack3 = topo.start_new_rack();
+        auto host3 = topo.add_node(node_state::normal, 1);
+        // The drained nodes are not excluded, so that the migrations stream from them,
+        // and not all from host3, whose streaming cap would limit the plan.
+        topo.add_draining_request(host1);
+        topo.add_draining_request(host2);
+
+        auto ks_name = add_keyspace_racks(e, {{dc, {rack1.rack, rack2.rack, rack3.rack}}}, 2);
+        auto table1 = add_table(e, ks_name).get();
+
+        mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+            tablet_map tmap(2);
+            for (auto tid : tmap.tablet_ids()) {
+                tmap.set_tablet(tid, tablet_info {
+                    tablet_replica_set {
+                        tablet_replica{host1, 0},
+                        tablet_replica{host2, 0},
+                        tablet_replica{host3, 0},
+                    }
+                });
+            }
+            tmeta.set_tablet_map(table1, std::move(tmap));
+            co_return;
+        });
+
+        auto& stm = e.shared_token_metadata().local();
+        topo.get_shared_load_stats().set_default_tablet_sizes(stm.get());
+        auto& talloc = e.get_tablet_allocator().local();
+        talloc.set_load_stats(topo.get_load_stats());
+        auto& sys_ks = e.get_system_keyspace().local();
+        auto& topology = e.get_topology_state_machine().local()._topology;
+        migration_plan plan = talloc.balance_tablets(stm.get(), &topology, &sys_ks).get();
+
+        // The rack scope which schedules first takes one tablet. The other scope collects
+        // its candidates after that, so it takes the other tablet. The first scope collected
+        // both tablets as its candidates, and its target has a free slot for the second one.
+        BOOST_REQUIRE_EQUAL(plan.tablet_migration_count(), 2);
+        std::unordered_set<global_tablet_id> tablets;
+        std::unordered_map<sstring, unsigned> migrations_per_rack;
+        for (auto& mig : plan.migrations()) {
+            testlog.info("Migration: {}", mig);
+            BOOST_REQUIRE(tablets.insert(mig.tablet).second);
+            BOOST_REQUIRE(mig.src && mig.dst);
+            BOOST_REQUIRE(mig.src->host == host1 || mig.src->host == host2);
+            auto& rack = stm.get()->get_topology().get_rack(mig.dst->host);
+            BOOST_REQUIRE_EQUAL(stm.get()->get_topology().get_rack(mig.src->host), rack);
+            migrations_per_rack[rack]++;
+        }
+        BOOST_REQUIRE_EQUAL(migrations_per_rack[rack1.rack], 1);
+        BOOST_REQUIRE_EQUAL(migrations_per_rack[rack2.rack], 1);
+    }).get();
+}
+
 SEASTAR_THREAD_TEST_CASE(test_colocation_skipped_on_excluded_nodes) {
     do_with_cql_env_thread([] (auto& e) {
         topology_builder topo(e);
@@ -3987,6 +4315,75 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_colocated_tablets) {
         BOOST_REQUIRE_EQUAL(tmap3.get_tablet_info(tmap3.first_tablet()).replicas, tmap4.get_tablet_info(tmap4.first_tablet()).replicas);
     }
   }).get();
+}
+
+// A tablet with replicas on two drained nodes is migrated once, even though both
+// replicas are parked in the skip lists before either of them is migrated.
+SEASTAR_THREAD_TEST_CASE(test_tablet_skipped_on_two_drained_nodes_is_scheduled_once) {
+    cql_test_config cfg{};
+    // Keeps all nodes in one rack, so that both drained nodes are in the same plan.
+    cfg.db_config->rf_rack_valid_keyspaces.set(false);
+
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+
+        auto host1 = topo.add_node(node_state::normal, 1);
+        auto host2 = topo.add_node(node_state::normal, 1);
+        // host3 is the least loaded target, but it already holds a replica, so both drained
+        // replicas are parked in the skip lists with host4 as the only viable target.
+        auto host3 = topo.add_node(node_state::normal, 4);
+        auto host4 = topo.add_node(node_state::normal, 2);
+
+        auto ks1 = add_keyspace(e, {{topo.dc(), 3}}, 1);
+        auto table1 = add_table(e, ks1).get();
+        auto ks2 = add_keyspace(e, {{topo.dc(), 1}}, 1);
+        auto table2 = add_table(e, ks2).get();
+
+        mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+            tablet_map tmap1(1);
+            tmap1.set_tablet(tmap1.first_tablet(), tablet_info {
+                tablet_replica_set {
+                    tablet_replica{host1, 0},
+                    tablet_replica{host2, 0},
+                    tablet_replica{host3, 0},
+                }
+            });
+            tmeta.set_tablet_map(table1, std::move(tmap1));
+            // Loads host4 more than host3.
+            tablet_map tmap2(1);
+            tmap2.set_tablet(tmap2.first_tablet(), tablet_info {
+                tablet_replica_set {
+                    tablet_replica{host4, 0},
+                }
+            });
+            tmeta.set_tablet_map(table2, std::move(tmap2));
+            co_return;
+        });
+
+        // Draining nodes get no replicas of new tables, so drain after the tables are created.
+        topo.add_draining_request(host1);
+        topo.add_draining_request(host2);
+
+        auto& stm = e.shared_token_metadata().local();
+        topo.get_shared_load_stats().set_default_tablet_sizes(stm.get());
+        auto& talloc = e.get_tablet_allocator().local();
+        talloc.set_load_stats(topo.get_load_stats());
+        // Otherwise the replicas would go straight to host4, as it holds no replica of table1.
+        talloc.set_use_table_aware_balancing(false);
+        auto& sys_ks = e.get_system_keyspace().local();
+        auto& topology = e.get_topology_state_machine().local()._topology;
+        auto plan = talloc.balance_tablets(stm.get(), &topology, &sys_ks).get();
+
+        size_t migrations = 0;
+        for (auto& mig : plan.migrations()) {
+            testlog.info("Migration: {}", mig);
+            if (mig.tablet.table == table1) {
+                migrations++;
+                BOOST_REQUIRE(mig.dst && mig.dst->host == host4);
+            }
+        }
+        BOOST_REQUIRE_EQUAL(migrations, 1);
+    }, std::move(cfg)).get();
 }
 
 SEASTAR_THREAD_TEST_CASE(test_decommission_rf_met) {
