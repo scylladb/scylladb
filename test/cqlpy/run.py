@@ -343,6 +343,14 @@ def run_scylla_cmd(pid, dir):
         '--tablets-initial-scale-factor=1',
         # Avoid unhelpful "guardrails" warnings
         '--minimum-replication-factor-warn-threshold=-1',
+        # Many tests write tombstones and expect them to live on for the
+        # duration of the test, not to be garbage-collected in the middle of
+        # it at some random point that depends on timing. The "timeout" mode
+        # with the default gc_grace_seconds of 10 days guarantees that,
+        # unlike the default "repair" mode which with RF=1 can purge a
+        # tombstone as soon as the clock crosses a whole-second boundary and
+        # a compaction happens to run.
+        '--default-tombstone-gc-mode=timeout',
         # The expiration scanner's period (started for Alternator but
         # now also CQL)
         '--alternator-ttl-period-in-seconds=0.5',
@@ -423,6 +431,8 @@ def run_precompiled_scylla_cmd(exe, pid, dir):
         cmd.remove('--logstor-file-size-in-mb=4')
     if major < [2026,4]:
         cmd.remove('--logstor-sparse-files=true')
+    if major < [2026,4]:
+        cmd.remove('--default-tombstone-gc-mode=timeout')
     return (cmd, env)
 
 # Get a Cluster object to connect to CQL at the given IP address (and with
