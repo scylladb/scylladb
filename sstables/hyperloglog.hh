@@ -45,7 +45,9 @@
  */
 
 #include <vector>
+#include <bit>
 #include <cmath>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <algorithm>
@@ -61,10 +63,6 @@
 #define HLL_HASH_SEED 313
 
 namespace hll {
-
-static constexpr double pow_2_32 = 4294967296.0; ///< 2^32
-static constexpr double neg_pow_2_32 = -4294967296.0; ///< -(2^32)
-
 
 inline size_t size_unsigned_var_int(unsigned int value) {
     size_t size = 0;
@@ -128,11 +126,44 @@ public:
         alphaMM_ = alpha * m_ * m_;
     }
 
-    static HyperLogLog from_bytes(temporary_buffer<uint8_t> bytes) {
-        // FIXME: implement class that creates a HyperLogLog from an array of bytes.
-        // This will useful if we need to work with the cardinality data from the
-        // compaction metadata.
-        abort();
+    /** Parses get_bytes() output; std::nullopt for anything else, including Cassandra's HLL++ encoding. */
+    template <typename Bytes>
+    static std::optional<HyperLogLog> from_bytes(const Bytes& bytes) {
+        size_t offset = 0;
+        auto read_unsigned_var_int = [&] () -> std::optional<uint32_t> {
+            uint32_t value = 0;
+            for (unsigned shift = 0; shift < 32 && offset < bytes.size(); shift += 7) {
+                uint8_t byte = bytes[offset++];
+                value |= uint32_t(byte & 0x7F) << shift;
+                if (!(byte & 0x80)) {
+                    return value;
+                }
+            }
+            return std::nullopt;
+        };
+        if (bytes.size() < sizeof(int32_t)) {
+            return std::nullopt;
+        }
+        uint32_t v = 0;
+        for (; offset < sizeof(int32_t); offset++) {
+            v = (v << 8) | bytes[offset];
+        }
+        auto p = read_unsigned_var_int();
+        auto sp = read_unsigned_var_int();
+        auto type = read_unsigned_var_int();
+        auto size = read_unsigned_var_int();
+        if (int32_t(v) != -version || !p || *p < 4 || *p > 16 || sp != 0 || type != 0
+                || size != (1u << *p) || bytes.size() - offset != *size) {
+            return std::nullopt;
+        }
+        HyperLogLog hll(*p);
+        for (auto& r : hll.M_) {
+            r = bytes[offset++];
+            if (r > 64 - *p + 1) {
+                return std::nullopt;
+            }
+        }
+        return hll;
     }
 
     /**
@@ -177,8 +208,6 @@ public:
 
     temporary_buffer<uint8_t> get_bytes() {
         // FIXME: add support to SPARSE format.
-        static constexpr int version = 2;
-
         size_t s = get_bytes_size();
         temporary_buffer<uint8_t> bytes(s);
         size_t offset = 0;
@@ -227,9 +256,8 @@ public:
             if (zeros != 0) {
                 estimate = m_ * log(static_cast<double>(m_)/ zeros);
             }
-        } else if (estimate > (1.0 / 30.0) * pow_2_32) {
-            estimate = neg_pow_2_32 * log(1.0 - (estimate / pow_2_32));
         }
+        // No large-range correction: 64-bit hashes don't saturate at 2^32 like the original 32-bit HLL.
         return estimate;
     }
 
@@ -316,18 +344,15 @@ public:
     }
 
 private:
+    static constexpr int32_t version = 2;
+
     uint8_t b_; ///< register bit width
     uint32_t m_; ///< register size
     double alphaMM_; ///< alpha * m^2
     std::vector<uint8_t> M_; ///< registers
 
-    uint8_t rho(uint32_t x, uint8_t b) {
-        uint8_t v = 1;
-        while (v <= b && !(x & 0x80000000)) {
-            v++;
-            x <<= 1;
-        }
-        return v;
+    uint8_t rho(uint64_t x, uint8_t b) {
+        return std::min(std::countl_zero(x) + 1, b + 1);
     }
 
 };
