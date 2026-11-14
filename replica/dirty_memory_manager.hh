@@ -397,8 +397,8 @@ class dirty_memory_manager {
     // memory usage minus bytes that were already written to disk.
     dirty_memory_manager_logalloc::region_group _region_group;
 
-    size_t _threshold;
-    double _soft_limit;
+    size_t _threshold = 0;
+    double _soft_limit = 0;
 
     // We would like to serialize the flushing of memtables. While flushing many memtables
     // simultaneously can sustain high levels of throughput, the memory is not freed until the
@@ -524,6 +524,13 @@ public:
 
     size_t throttle_threshold() const {
         return _region_group.unspooled_throttle_threshold();
+    }
+
+    // The amount of dirty memory, in bytes, that the memtables in this group are
+    // expected to use before flushing kicks in, i.e. the soft limit in real,
+    // rather than unspooled, terms. Zero if no threshold was configured.
+    size_t flush_threshold() const noexcept {
+        return _threshold * _soft_limit;
     }
 
     future<> flush_one(replica::memtable_list& cf, flush_permit&& permit) noexcept;
