@@ -3093,7 +3093,7 @@ mutation_reader create_evictable_reader_and_evict_after_first_buffer(
         rd.detach_buffer();
     }
 
-    while(permit.semaphore().try_evict_one_inactive_read());
+    permit.semaphore().clear_inactive_reads();
 
     return rd;
 }
@@ -3485,7 +3485,7 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_recreate_before_fast_forward_to) 
     reader_assert.produces(pkeys[2]);
 
     handle.pause();
-    BOOST_REQUIRE(semaphore.try_evict_one_inactive_read());
+    BOOST_REQUIRE(semaphore.try_evict_one_inactive_read().get());
 
     reader_assert.produces_end_of_stream();
 

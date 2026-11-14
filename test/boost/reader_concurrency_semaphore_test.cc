@@ -25,6 +25,7 @@
 
 #include <fmt/ranges.h>
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/sleep.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/testing/on_internal_error.hh>
 #undef SEASTAR_TESTING_MAIN
@@ -107,7 +108,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_destroyed_permit_rele
         auto units2 = permit.consume_memory(1024);
 
         auto handle = semaphore.register_inactive_read(make_empty_mutation_reader(s.schema(), permit));
-        BOOST_REQUIRE(semaphore.try_evict_one_inactive_read());
+        BOOST_REQUIRE(semaphore.try_evict_one_inactive_read().get());
     }
     BOOST_REQUIRE_EQUAL(semaphore.available_resources(), initial_resources);
 
@@ -124,7 +125,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_destroyed_permit_rele
         auto units1 = permit.consume_memory(1024);
 
         auto handle = semaphore.register_inactive_read(make_empty_mutation_reader(s.schema(), permit));
-        BOOST_REQUIRE(semaphore.try_evict_one_inactive_read());
+        BOOST_REQUIRE(semaphore.try_evict_one_inactive_read().get());
     }
     BOOST_REQUIRE_EQUAL(semaphore.available_resources(), initial_resources);
 }
@@ -141,6 +142,109 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_abandoned_handle_clos
         // If the test fails an SCYLLA_ASSERT() is triggered due to the reader being
         // destroyed without having been closed before.
     }
+}
+
+// An inactive read evicted on TTL must not be closed in the timer callback:
+// timer callbacks run in the reactor's poller context, outside of any task
+// quota, so the (potentially expensive) close would stall the reactor.
+SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_ttl_eviction_does_not_close_reader_in_timer_callback) {
+    class close_tracking_reader : public mutation_reader::impl {
+        std::optional<bool>& _closed_in_task;
+    public:
+        close_tracking_reader(schema_ptr s, reader_permit permit, std::optional<bool>& closed_in_task)
+            : impl(std::move(s), std::move(permit))
+            , _closed_in_task(closed_in_task)
+        { }
+        virtual future<> fill_buffer() override { return make_ready_future<>(); }
+        virtual future<> next_partition() override { return make_ready_future<>(); }
+        virtual future<> fast_forward_to(const dht::partition_range&) override { return make_ready_future<>(); }
+        virtual future<> fast_forward_to(position_range) override { return make_ready_future<>(); }
+        virtual future<> close() noexcept override {
+            _closed_in_task = engine().current_task() != nullptr;
+            return make_ready_future<>();
+        }
+    };
+
+    simple_schema s;
+    reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::no_limits{}, get_name(), reader_concurrency_semaphore::register_metrics::no);
+    auto stop_sem = deferred_stop(semaphore);
+
+    auto permit = semaphore.make_tracking_only_permit(s.schema(), get_name(), db::no_timeout, {});
+
+    std::optional<bool> evicted_in_task;
+    std::optional<bool> closed_in_task;
+    std::optional<reader_concurrency_semaphore::evict_reason> evict_reason;
+
+    auto handle = semaphore.register_inactive_read(make_mutation_reader<close_tracking_reader>(s.schema(), permit, closed_in_task));
+    BOOST_REQUIRE(handle);
+
+    // Timer callbacks run outside of any task, engine().current_task() is null there.
+    semaphore.set_notify_handler(handle, [&] (reader_concurrency_semaphore::evict_reason reason) {
+        evict_reason = reason;
+        evicted_in_task = engine().current_task() != nullptr;
+    }, std::nullopt);
+    permit.set_timeout(db::timeout_clock::now() + std::chrono::milliseconds(10));
+
+    BOOST_REQUIRE(eventually_true([&] { return closed_in_task.has_value(); }));
+
+    BOOST_REQUIRE(evict_reason == reader_concurrency_semaphore::evict_reason::time);
+    // Sanity check: the eviction itself did happen in the timer callback.
+    BOOST_REQUIRE(evicted_in_task == false);
+    BOOST_REQUIRE(*closed_in_task);
+    BOOST_REQUIRE(!handle);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().time_based_evictions, 1);
+}
+
+// The reader of an abandoned inactive read is queued for the eviction loop to
+// close it, keeping its permit alive until then. The permit's TTL must not
+// fire in the meanwhile: the inactive read is already gone.
+SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_abandoned_handle_ttl) {
+    class blocking_close_reader : public mutation_reader::impl {
+        future<> _close_fut;
+    public:
+        blocking_close_reader(schema_ptr s, reader_permit permit, future<> close_fut)
+            : impl(std::move(s), std::move(permit))
+            , _close_fut(std::move(close_fut))
+        { }
+        virtual future<> fill_buffer() override { return make_ready_future<>(); }
+        virtual future<> next_partition() override { return make_ready_future<>(); }
+        virtual future<> fast_forward_to(const dht::partition_range&) override { return make_ready_future<>(); }
+        virtual future<> fast_forward_to(position_range) override { return make_ready_future<>(); }
+        virtual future<> close() noexcept override {
+            return std::move(_close_fut);
+        }
+    };
+
+    simple_schema s;
+    reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::no_limits{}, get_name(), reader_concurrency_semaphore::register_metrics::no);
+    auto stop_sem = deferred_stop(semaphore);
+
+    // Block the eviction loop by abandoning an inactive read whose reader
+    // can only be closed when we allow it.
+    promise<> unblock_close;
+    {
+        auto permit = semaphore.make_tracking_only_permit(s.schema(), get_name(), db::no_timeout, {});
+        auto handle = semaphore.register_inactive_read(make_mutation_reader<blocking_close_reader>(s.schema(), permit, unblock_close.get_future()));
+        BOOST_REQUIRE(handle);
+    }
+    auto unblock = defer([&] () noexcept { unblock_close.set_value(); });
+
+    bool notified = false;
+    auto permit = semaphore.make_tracking_only_permit(s.schema(), get_name(), db::no_timeout, {});
+    {
+        auto handle = semaphore.register_inactive_read(make_empty_mutation_reader(s.schema(), permit));
+        BOOST_REQUIRE(handle);
+        semaphore.set_notify_handler(handle, [&] (reader_concurrency_semaphore::evict_reason) { notified = true; }, std::nullopt);
+        permit.set_timeout(db::timeout_clock::now() + std::chrono::milliseconds(10));
+    }
+
+    // The reader is stuck in the queue, behind the blocked one.
+    BOOST_REQUIRE_EQUAL(permit.get_state(), reader_permit::state::inactive);
+    // Give the TTL plenty of time to expire.
+    seastar::sleep(std::chrono::milliseconds(100)).get();
+
+    BOOST_REQUIRE(!notified);
+    BOOST_REQUIRE_EQUAL(semaphore.get_stats().time_based_evictions, 0);
 }
 
 // This unit test passes a read through admission again-and-again, just
@@ -165,7 +269,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_readmission_preserves
         BOOST_REQUIRE_EQUAL(semaphore.available_resources(), initial_resources - permit->consumed_resources());
 
         auto handle = semaphore.register_inactive_read(make_empty_mutation_reader(s.schema(), *permit));
-        BOOST_REQUIRE(semaphore.try_evict_one_inactive_read());
+        BOOST_REQUIRE(semaphore.try_evict_one_inactive_read().get());
         BOOST_REQUIRE_EQUAL(permit->consumed_resources(), residue_units->resources());
 
         BOOST_REQUIRE_EQUAL(semaphore.available_resources(), initial_resources - permit->consumed_resources());
@@ -841,7 +945,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_admission) {
         auto permit = semaphore.obtain_permit(schema, get_name(), 1024, db::no_timeout, {}).get();
 
         auto irh = semaphore.register_inactive_read(make_empty_mutation_reader(s.schema(), permit));
-        BOOST_REQUIRE(semaphore.try_evict_one_inactive_read());
+        BOOST_REQUIRE(semaphore.try_evict_one_inactive_read().get());
         BOOST_REQUIRE(!irh);
 
         reader_permit::need_cpu_guard _{permit};
@@ -887,7 +991,9 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_admission) {
         }
         require_can_admit(true, "!need_cpu");
     }
-    BOOST_REQUIRE_EQUAL(semaphore.available_resources(), initial_resources);
+    // The abandoned inactive read's reader is closed in the background,
+    // the permit is released after that.
+    BOOST_REQUIRE(eventually_true([&] { return semaphore.available_resources() == initial_resources; }));
     require_can_admit(true, "semaphore in initial state");
 
     // evicting inactive readers for admission
@@ -3047,7 +3153,7 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_release_base_resource
         auto irh = semaphore.register_inactive_read(make_empty_mutation_reader(s.schema(), permit));
         BOOST_REQUIRE(irh);
 
-        BOOST_REQUIRE(semaphore.try_evict_one_inactive_read());
+        BOOST_REQUIRE(semaphore.try_evict_one_inactive_read().get());
         BOOST_REQUIRE(!irh);
 
         BOOST_REQUIRE_EQUAL(permit.consumed_resources(), reader_resources{});

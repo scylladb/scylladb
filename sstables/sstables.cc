@@ -4179,18 +4179,22 @@ future<bool> sstable::has_partition_key(const utils::hashed_key& hk, const dht::
 
     auto slice = partition_slice_builder(*_schema).with_no_regular_columns().with_no_static_columns().build();
     auto pr = dht::partition_range::make_singular(dk);
-    auto reader = make_reader(
-        _schema,
-        sem.make_tracking_only_permit(_schema, fmt::to_string(s->get_filename()), db::no_timeout, {}),
-        pr,
-        slice);
+    mutation_reader_opt reader;
     try {
-        reader.set_max_buffer_size(1);
-        present = bool(co_await reader.peek());
+        reader = make_reader(
+            _schema,
+            sem.make_tracking_only_permit(_schema, fmt::to_string(s->get_filename()), db::no_timeout, {}),
+            pr,
+            slice);
+        reader->set_max_buffer_size(1);
+        present = bool(co_await reader->peek());
     } catch (...) {
         ex = std::current_exception();
     }
-    co_await reader.close();
+    if (reader) {
+        co_await reader->close();
+    }
+    // The semaphore has to be stopped, even if creating the reader failed.
     co_await sem.stop();
     if (ex) {
         co_return coroutine::exception(std::move(ex));
