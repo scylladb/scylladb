@@ -183,7 +183,7 @@ void set_system(http_context& ctx, routes& r) {
 
     hs::get_chosen_sstable_version.set(r, [&ctx] (std::unique_ptr<request> req) {
         return smp::submit_to(0, [&ctx] {
-            auto format = ctx.db.local().get_user_sstables_manager().get_preferred_sstable_version();
+            auto format = ctx.db.local().get_user_sstables_manager().choose_default_sstable_version();
             return make_ready_future<json::json_return_type>(seastar::to_sstring(format));
         });
     });

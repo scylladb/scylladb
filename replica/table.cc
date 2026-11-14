@@ -541,7 +541,7 @@ static bool belongs_to_other_shard(const std::vector<shard_id>& shards) {
 
 sstables::shared_sstable table::make_sstable(sstables::sstable_state state) {
     auto& sstm = get_sstables_manager();
-    return make_sstable(state, sstm.get_preferred_sstable_version());
+    return make_sstable(state, sstm.choose_sstable_version(*_schema));
 }
 
 sstables::shared_sstable table::make_sstable(sstables::sstable_state state, sstables::sstable_version_types version) {

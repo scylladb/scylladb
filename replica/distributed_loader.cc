@@ -201,7 +201,7 @@ distributed_loader::process_upload_dir(sharded<replica::database>& db, sharded<d
             auto& gen = global_table->get_sstable_generation_generator();
             auto generation = gen();
             return sstm.make_sstable(global_table->schema(), global_table->get_storage_options(),
-                                     generation, sstables::sstable_state::upload, sstm.get_preferred_sstable_version(),
+                                     generation, sstables::sstable_state::upload, sstm.choose_sstable_version(*global_table->schema()),
                                      db_clock::now(), &error_handler_gen_for_upload_dir);
         };
         // Pass owned_ranges_ptr to reshard to piggy-back cleanup on the resharding compaction.
@@ -409,7 +409,7 @@ future<> table_populator::process_subdir(sharded<sstables::sstable_directory>& d
     // at least not downgrade any files. If we already know that we support a higher
     // format than the one we see then we use that.
     auto sst_versions = co_await versions_seen(directory);
-    _version_for_reshaping = _global_table->get_sstables_manager().get_safe_sstable_version_for_rewrites(sst_versions);
+    _version_for_reshaping = _global_table->get_sstables_manager().choose_sstable_version(*_global_table->schema(), sst_versions);
 }
 
 sstables::shared_sstable make_sstable(replica::table& table, sstables::sstable_state state, sstables::generation_type generation, sstables::sstable_version_types v) {

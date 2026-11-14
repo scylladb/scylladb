@@ -257,8 +257,15 @@ public:
 
     // Get the highest supported sstable version, according to cluster features.
     sstables::sstable::version_types get_highest_supported_format() const noexcept;
-    // Get the preferred sstable version for writing new sstables,
-    // according to cluster features and database config.
+    // Decides the version, and so the format (see format_of()), of a new
+    // sstable of the table with schema `s`. Every path that creates an
+    // sstable for a table calls it: flush, compaction, streaming, repair,
+    // upload, reshape, `upgradesstables`, and the tools. It is the only code
+    // that reads the `sstable_format` option. The sstable and its writer
+    // receive the version and never read configuration.
+    //
+    // The schema lets the choice depend on the table. For now, every table
+    // gets the version of the `big` format that the following rules give.
     //
     // 1. The choice must be new enough to support existing data.
     //    (For example, range tombstones with infinite endpoints were added in version "mc",
@@ -267,15 +274,17 @@ public:
     // 2. The choice must be old enough to be supported by cluster features.
     // 3. The choice should respect the config, as long as it doesn't contradict (1) and (2).
     //    The user might wish to use an older format, and we should respect that if possible.
-    sstables::sstable::version_types get_preferred_sstable_version() const;
-    // Like get_sstable_version_for_write(), but additionally assume that
-    // all features implied by `existing_versions` are enabled.
     //
-    // This is used when rewriting (reshaping or resharding) system sstables
-    // during startup. At this point cluster features aren't known to `feature_service` yet.
+    // `existing_versions` are the versions of sstables found on disk. The
+    // choice assumes that the features they imply are enabled. This is used
+    // when rewriting (reshaping or resharding) system sstables during startup.
+    // At this point cluster features aren't known to `feature_service` yet.
     // But we must still pick some format compatible with the existing data.
     // So use existing sstables to infer the set of enabled features.
-    sstables::sstable::version_types get_safe_sstable_version_for_rewrites(sstable_version_set existing_versions) const;
+    sstables::sstable::version_types choose_sstable_version(const schema& s, sstable_version_set existing_versions = {}) const;
+    // The version that choose_sstable_version() picks for a table that makes
+    // no choice of its own. The REST API reports it.
+    sstables::sstable::version_types choose_default_sstable_version() const;
 
     locator::host_id get_local_host_id() const;
 
@@ -332,6 +341,10 @@ public:
     void subscribe(sstables_manager_event_handler& handler);
 
 private:
+    // The part of choose_sstable_version() that picks a version of the
+    // `big` format.
+    sstables::sstable::version_types choose_big_sstable_version(sstable_version_set existing_versions) const;
+
     void add(sstable* sst);
     // Transition the sstable to the "inactive" state. It has no
     // visible references at this point, and only waits for its
