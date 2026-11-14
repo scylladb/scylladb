@@ -35,10 +35,16 @@ def test_create_pattern_index_on_supported_text_column(cql, test_keyspace):
 
 
 def test_create_pattern_index_uppercase_class(cql, test_keyspace):
-    """Custom index class name lookup is case-insensitive."""
+    """Custom index class name lookup is case-insensitive, and the name is stored in lowercase."""
     schema = 'p int primary key, title text'
     with new_test_table(cql, test_keyspace, schema) as table:
-        cql.execute(f"CREATE CUSTOM INDEX ON {table}(title) USING 'PATTERN_INDEX'")
+        index_name = unique_name()
+        cql.execute(f"CREATE CUSTOM INDEX {index_name} ON {table}(title) USING 'PATTERN_INDEX'")
+        table_name = table.split('.')[1]
+        row = cql.execute(
+            f"SELECT options FROM system_schema.indexes WHERE keyspace_name = '{test_keyspace}' "
+            f"AND table_name = '{table_name}' AND index_name = '{index_name}'").one()
+        assert row.options['class_name'] == 'pattern_index'
 
 
 def test_create_pattern_index_on_unsupported_column_fails(cql, test_keyspace):
