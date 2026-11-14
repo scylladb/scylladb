@@ -211,6 +211,10 @@ add_scylla_test(nonwrapping_interval_test
   KIND BOOST)
 add_scylla_test(observable_test
   KIND BOOST)
+add_scylla_test(parquet_codec_test
+  KIND SEASTAR
+  LIBRARIES
+    Parquet::parquet_shared)
 add_scylla_test(partitioner_test
   KIND SEASTAR)
 add_scylla_test(pretty_printers_test
