@@ -71,6 +71,14 @@ const aws_errors& aws_error::get_errors() {
         {"RequestTimeTooSkewed", aws_error(aws_error_type::REQUEST_TIME_TOO_SKEWED, retryable::yes)},
         {"RequestTimeoutException", aws_error(aws_error_type::REQUEST_TIMEOUT, retryable::yes)},
         {"RequestTimeout", aws_error(aws_error_type::REQUEST_TIMEOUT, retryable::yes)},
+        // S3 returns IncompleteBody when it received fewer body bytes than the
+        // request's Content-Length. MinIO also returns it for any request whose
+        // processing on the server fails with io.ErrUnexpectedEOF or
+        // io.ErrShortWrite, or is cancelled or times out (context.Canceled,
+        // context.DeadlineExceeded), e.g., when a drive operation exceeds MinIO's
+        // drive timeout. Like RequestTimeout, this is a transient failure, and
+        // the request can be sent again.
+        {"IncompleteBody", aws_error(aws_error_type::REQUEST_TIMEOUT, retryable::yes)},
         {"HTTP_NOT_IMPLEMENTED", aws_error(aws_error_type::HTTP_NOT_IMPLEMENTED, retryable::no)},
         {"HTTP_UNAUTHORIZED", aws_error(aws_error_type::HTTP_UNAUTHORIZED, retryable::no)},
         {"HTTP_FORBIDDEN", aws_error(aws_error_type::HTTP_FORBIDDEN, retryable::no)},
