@@ -1155,6 +1155,7 @@ void database::init_schema_commitlog() {
     c.extensions = &_cfg.extensions();
     c.use_o_dsync = _cfg.commitlog_use_o_dsync();
     c.allow_going_over_size_limit = true; // for lower latency
+    c.wait_for_replay_cleanup = true;
     if (features().fragmented_commitlog_entries) {
         c.allow_fragmented_entries = true;
     }

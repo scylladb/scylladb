@@ -2400,14 +2400,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                     db.invoke_on_all(&replica::database::flush_all_memtables).get();
                     supervisor::notify("replaying commit log - removing old commitlog segments");
 
-                    auto chunks = paths | std::views::chunk(size_t(std::ceil(double(paths.size())/this_smp_shard_count())));
-                    db.invoke_on_all([&chunks](auto& db) {
-                        if (this_shard_id() < chunks.size()) {
-                            auto chunk = chunks[this_shard_id()];
-                            std::vector copy(chunk.begin(), chunk.end());
-                            return db.commitlog()->delete_segments(std::move(copy));
-                        }
-                        return make_ready_future<>();
+                    auto groups = db::commitlog::split_segments_for_delete(std::move(paths), smp::count);
+                    db.invoke_on_all([&groups](auto& db) {
+                        return db.commitlog()->delete_segments(groups[this_shard_id()]);
                     }).get();
                 }
             }
