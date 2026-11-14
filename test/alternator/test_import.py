@@ -11,23 +11,31 @@
 
 import base64
 import gzip
+import hashlib
+import itertools
 import json
 import time
 import uuid
 import warnings
+import zlib
 from compression import zstd
 from contextlib import contextmanager
 from decimal import Decimal
 
-import boto3
 import pytest
 from boto3.dynamodb.types import Binary, TypeSerializer
 from botocore.exceptions import ClientError
 
+from test.alternator.test_export import (arn_with_part, enable_pitr,
+                                        make_s3_client,
+                                        new_s3_bucket as new_export_bucket,
+                                        wait_for_export)
+from test.alternator.test_gsi import assert_index_scan
 from test.alternator.util import (ManualRequestError, client_no_transform,
                                   full_scan, get_table_arn, is_aws,
-                                  manual_request, multiset, random_string,
-                                  unique_table_name)
+                                  manual_request, multiset, new_test_table,
+                                  random_string, unique_table_name)
+from test.pylib.skip_types import skip_env
 
 
 COMPRESSORS = {
@@ -47,15 +55,6 @@ GROUND_TRUTH_SCHEMA = {
 # unique_table_name() cannot be used.
 def unique_bucket_name():
     return f"alternator-import-test-{uuid.uuid4().hex[:12]}"
-
-# An S3 client in the "dynamodb" fixture's region. DynamoDB allows a bucket
-# in another region, but keeping it in the table's region saves cost and
-# latency. Local testing does not run an S3 server (such as MinIO) yet.
-def make_s3_client(dynamodb):
-    if is_aws(dynamodb):
-        return boto3.client('s3', region_name=dynamodb.meta.client.meta.region_name)
-    raise NotImplementedError(
-        'local testing does not run an S3 server (such as MinIO) yet')
 
 # Create an S3 bucket and delete it, with its contents, on exit. An import
 # only reads the bucket, so nothing writes to it behind the cleanup.
@@ -256,10 +255,31 @@ def delete_table_afterwards(client, table_name):
                 if code == 'ResourceInUseException' and time.time() < deadline:
                     time.sleep(_poll_interval(client))
                     continue
-                # Every test here is xfail, so pytest.fail alone shows as
-                # XFAIL. The warning shows in pytest's summary regardless.
+                # In an xfail test, pytest.fail alone shows as XFAIL. The
+                # warning shows in pytest's summary regardless.
                 warnings.warn(f'Leaked table {table_name}: {e}')
                 pytest.fail(f'Leaked table {table_name}: {e}')
+
+# Import `prefix` into a new table and wait for the import to end. Yield the
+# table and the final description; delete the table on exit.
+@contextmanager
+def finished_import(dynamodb, bucket, prefix, **overrides):
+    client = dynamodb.meta.client
+    table_name = unique_table_name()
+    initial = client.import_table(
+        **import_kwargs(bucket, prefix, table_name, **overrides))['ImportTableDescription']
+    with delete_table_afterwards(client, table_name):
+        yield dynamodb.Table(table_name), wait_for_import(client, initial['ImportArn'])
+
+# Check that the import ended with exactly `items` in `table`, and with
+# `errors` lines or objects which failed. The table is ACTIVE either way.
+def assert_import_result(table, final, items, errors=0):
+    assert final['ImportStatus'] == ('FAILED' if errors else 'COMPLETED')
+    assert final.get('FailureCode') == ('ItemValidationError' if errors else None)
+    assert [final[c] for c in ('ProcessedItemCount', 'ImportedItemCount', 'ErrorCount')] == \
+        [len(items) + errors, len(items), errors]
+    assert multiset(items) == multiset(full_scan(table))
+    assert table.meta.client.describe_table(TableName=table.name)['Table']['TableStatus'] == 'ACTIVE'
 
 # All ListImports summaries, following NextToken.
 def list_all_imports(client, **kwargs):
@@ -526,6 +546,8 @@ def test_import_into_existing_table(dynamodb, scylla_only):
             assert multiset(first_half) == multiset(full_scan(dynamodb.Table(table_name)))
             second = client.import_table(
                 **import_kwargs(bucket, second_prefix, table_name))['ImportTableDescription']
+            # The import reports the id of the table it found, not a new one.
+            assert second['TableId'] == client.describe_table(TableName=table_name)['Table']['TableId']
             final = wait_for_import(client, second['ImportArn'])
             assert final['ImportStatus'] == 'COMPLETED'
             assert final['ErrorCount'] == 0
@@ -534,7 +556,6 @@ def test_import_into_existing_table(dynamodb, scylla_only):
 
 # ClientToken is documented as optional but is required. botocore generates
 # one when it is missing, so the request is sent without botocore's handlers.
-@pytest.mark.xfail(reason="SCYLLADB-1369")
 def test_client_token_required(dynamodb):
     kwargs = import_kwargs(unique_bucket_name(), unique_prefix('unused'))
     assert 'ClientToken' not in kwargs
@@ -544,7 +565,6 @@ def test_client_token_required(dynamodb):
 
 # ClientToken must match ^[^\$]+$. botocore checks neither the pattern nor a
 # minimum length, so these reach the server.
-@pytest.mark.xfail(reason="SCYLLADB-1369")
 def test_client_token_invalid(dynamodb):
     for token in ['$', 'has$dollar', '$leading', 'trailing$', '']:
         kwargs = import_kwargs(unique_bucket_name(), unique_prefix('unused'),
@@ -556,19 +576,70 @@ def test_client_token_invalid(dynamodb):
 def unknown_import_arn(table):
     return f'{get_table_arn(table)}/import/{int(time.time() * 1000):014}-0badf00d'
 
-# An unknown import is ImportNotFoundException, not ValidationException.
-@pytest.mark.xfail(reason="SCYLLADB-1369")
+# An unknown import is ImportNotFoundException, not ValidationException, also
+# when its table does not exist.
 def test_describe_import_not_found(dynamodb, test_table_s):
     arn = unknown_import_arn(test_table_s)
-    with pytest.raises(ClientError, match='ImportNotFoundException'):
+    for import_arn in [arn, arn.replace(test_table_s.name, unique_table_name())]:
+        with pytest.raises(ClientError, match='ImportNotFoundException'):
+            dynamodb.meta.client.describe_import(ImportArn=import_arn)
+
+# The ARN `table_arn` with an empty keyspace before the `@`. An Alternator ARN
+# names its keyspace before `table/`, so it is rewritten into the AWS form, as
+# in unknown_export_arn().
+def arn_with_empty_keyspace(table_arn):
+    prefix, _, name = table_arn.rpartition('/')
+    if prefix.startswith('arn:scylla:'):
+        prefix = 'arn:aws:dynamodb:us-east-1:000000000000:table'
+    return f'{prefix}/@{name}'
+
+# A missing, null or empty ImportArn is a ValidationException, and one of the
+# wrong JSON type a SerializationException. botocore resolves the endpoint
+# from the ImportArn, so these go by manual_request().
+@pytest.mark.parametrize('body, error', [
+    pytest.param({}, 'ValidationException', id='missing'),
+    pytest.param({'ImportArn': None}, 'ValidationException', id='null'),
+    pytest.param({'ImportArn': ''}, 'ValidationException', id='empty'),
+    pytest.param({'ImportArn': 5}, 'SerializationException', id='number'),
+])
+def test_describe_import_missing_or_wrong_type(dynamodb, body, error):
+    with pytest.raises(ManualRequestError, match=error):
+        manual_request(dynamodb, 'DescribeImport', json.dumps(body))
+
+# An import ARN must be a table ARN followed by `/import/<id>`, of a table
+# name that a table can have.
+@pytest.mark.parametrize('make_arn', [
+    pytest.param(lambda table_arn: table_arn.rpartition('/')[0] + '/x/import/01658528578619-c4d4e311',
+                 id='name_too_short'),
+    pytest.param(lambda table_arn: table_arn, id='table_arn'),
+    pytest.param(lambda table_arn: f'{table_arn}/export/01658528578619-c4d4e311', id='export_arn'),
+    pytest.param(lambda table_arn: arn_with_part(table_arn, 0, 'qwerty') + '/import/01658528578619-c4d4e311',
+                 id='no_arn_prefix'),
+    pytest.param(lambda table_arn: arn_with_part(table_arn, 4, None) + '/import/01658528578619-c4d4e311',
+                 id='no_account'),
+    pytest.param(lambda table_arn: arn_with_empty_keyspace(table_arn) + '/import/01658528578619-c4d4e311',
+                 id='empty_keyspace'),
+])
+def test_describe_import_malformed_arn(dynamodb, test_table_s, make_arn):
+    arn = make_arn(get_table_arn(test_table_s))
+    with pytest.raises(ClientError, match='ValidationException.*Invalid Import ARN'):
         dynamodb.meta.client.describe_import(ImportArn=arn)
 
-# An import ARN whose table name is below the 3-character minimum.
-@pytest.mark.xfail(reason="SCYLLADB-1369")
-def test_describe_import_malformed_arn(dynamodb, test_table_s):
-    arn_up_to_table, _, _ = get_table_arn(test_table_s).rpartition('/')
-    arn = f'{arn_up_to_table}/x/import/01658528578619-c4d4e311'
-    with pytest.raises(ClientError, match='ValidationException.*Invalid Import ARN'):
+# The import id must have the shape of the ids DynamoDB hands out: 14 digits,
+# a dash and 8 hex digits, which may be upper case.
+@pytest.mark.parametrize('import_id, error', [
+    pytest.param('01658528578619-C4D4E311', 'ImportNotFoundException', id='upper_case'),
+    pytest.param('', 'ValidationException', id='empty'),
+    pytest.param('1658528578619-c4d4e311', 'ValidationException', id='13_digits'),
+    pytest.param('01658528578619-c4d4e3110', 'ValidationException', id='9_hex_digits'),
+    pytest.param('01658528578619_c4d4e311', 'ValidationException', id='no_dash'),
+    pytest.param('01658528578619-c4d4e311/x', 'ValidationException', id='suffix'),
+    pytest.param('0165852857861x-c4d4e311', 'ValidationException', id='non_digit'),
+    pytest.param('01658528578619-c4d4e31g', 'ValidationException', id='non_hex_digit'),
+])
+def test_describe_import_import_id(dynamodb, test_table_s, import_id, error):
+    arn = f'{get_table_arn(test_table_s)}/import/{import_id}'
+    with pytest.raises(ClientError, match=error):
         dynamodb.meta.client.describe_import(ImportArn=arn)
 
 # ImportSummary members, except CloudWatchLogGroupArn.
@@ -772,7 +843,8 @@ def test_import_without_s3_key_prefix(dynamodb):
 
 # BillingMode defaults to PROVISIONED, as in CreateTable, so a request without
 # ProvisionedThroughput is refused.
-@pytest.mark.xfail(reason="SCYLLADB-1369")
+@pytest.mark.xfail(reason="Alternator refuses it with CreateTable's message: "
+                          "When BillingMode=PROVISIONED, ProvisionedThroughput must be specified.")
 def test_import_default_billing_mode_is_provisioned(dynamodb):
     kwargs = import_kwargs(unique_bucket_name(), unique_prefix('unused'),
                            TableCreationParameters={'BillingMode': None})
@@ -890,7 +962,6 @@ def test_list_imports_paging(dynamodb):
 # PageSize must be 1 to 25. botocore checks only the minimum, so -1 and 0
 # reach the server only because the "dynamodb" fixture sets
 # parameter_validation=False; 26 and 1000 reach it regardless.
-@pytest.mark.xfail(reason="SCYLLADB-1369")
 @pytest.mark.parametrize('page_size', [-1, 0, 26, 1000])
 def test_list_imports_page_size_out_of_range(dynamodb, page_size):
     with pytest.raises(ClientError, match='ValidationException.*[Pp]age[Ss]ize'):
@@ -899,7 +970,6 @@ def test_list_imports_page_size_out_of_range(dynamodb, page_size):
 # NextToken must be 112 to 1024 characters matching ([0-9a-f]{16})+. The
 # 111-character token reaches the server only because the "dynamodb" fixture
 # sets parameter_validation=False: botocore checks the minimum length.
-@pytest.mark.xfail(reason="SCYLLADB-1369")
 @pytest.mark.parametrize('token', [
     pytest.param('0' * 111, id='one_short_of_the_minimum'),
     pytest.param('0' * 112, id='minimum_length_but_not_a_token'),
@@ -908,6 +978,58 @@ def test_list_imports_page_size_out_of_range(dynamodb, page_size):
 def test_list_imports_bad_next_token(dynamodb, token):
     with pytest.raises(ClientError, match='ValidationException.*[Nn]ext[Tt]oken'):
         dynamodb.meta.client.list_imports(NextToken=token)
+
+# A NextToken of 112 to 1024 characters which does not match ([0-9a-f]{16})+.
+@pytest.mark.parametrize('token', [
+    pytest.param('0' * 113, id='113_characters'),
+    pytest.param('A' * 112, id='upper_case'),
+    pytest.param('g' * 112, id='not_hex'),
+])
+def test_list_imports_next_token_pattern(dynamodb, token):
+    with pytest.raises(ClientError, match='ValidationException.*[Nn]ext[Tt]oken.*pattern'):
+        dynamodb.meta.client.list_imports(NextToken=token)
+
+# A table without imports has an empty ImportSummaryList, also when the table
+# does not exist.
+def test_list_imports_table_without_imports(dynamodb, test_table_s):
+    table_arn = get_table_arn(test_table_s)
+    for arn in [table_arn, table_arn.replace(test_table_s.name, unique_table_name())]:
+        response = dynamodb.meta.client.list_imports(TableArn=arn)
+        assert response['ImportSummaryList'] == []
+        assert 'NextToken' not in response
+
+# TableArn must be a table ARN, of a table name that a table can have.
+@pytest.mark.parametrize('make_arn', [
+    pytest.param(lambda table_arn, name: '', id='empty'),
+    pytest.param(lambda table_arn, name: arn_with_part(table_arn, 0, 'qwerty'), id='no_arn_prefix'),
+    pytest.param(lambda table_arn, name: f'{table_arn}/import/01658528578619-c4d4e311', id='import_arn'),
+    pytest.param(lambda table_arn, name: table_arn.replace(name, 'ab'), id='name_too_short'),
+    pytest.param(lambda table_arn, name: table_arn.replace(name, 'a b'), id='name_with_space'),
+    pytest.param(lambda table_arn, name: arn_with_empty_keyspace(table_arn), id='empty_keyspace'),
+])
+def test_list_imports_invalid_table_arn(dynamodb, test_table_s, make_arn):
+    arn = make_arn(get_table_arn(test_table_s), test_table_s.name)
+    with pytest.raises(ClientError, match='ValidationException.*[Tt]able ?[Aa][Rr][Nn]'):
+        dynamodb.meta.client.list_imports(TableArn=arn)
+
+# A parameter of the wrong JSON type is a SerializationException. botocore
+# resolves the endpoint from an ARN, so a wrong ARN goes by manual_request().
+def test_list_imports_wrong_type(dynamodb):
+    for kwargs in [{'PageSize': '3'}, {'PageSize': True}, {'NextToken': 5}]:
+        with pytest.raises(ClientError, match='SerializationException'):
+            dynamodb.meta.client.list_imports(**kwargs)
+    with pytest.raises(ManualRequestError, match='SerializationException'):
+        manual_request(dynamodb, 'ListImports', json.dumps({'TableArn': 5}))
+
+# A null parameter is ignored. A fractional PageSize is truncated, so 25.9 is
+# accepted as 25, 1.5 lists at most one import and 0.5 is out of range.
+def test_list_imports_fraction_and_null(dynamodb):
+    client = dynamodb.meta.client
+    client.list_imports(PageSize=None, TableArn=None, NextToken=None)
+    assert len(client.list_imports(PageSize=25.9)['ImportSummaryList']) <= 25
+    assert len(client.list_imports(PageSize=1.5)['ImportSummaryList']) <= 1
+    with pytest.raises(ClientError, match='ValidationException.*[Pp]age[Ss]ize'):
+        client.list_imports(PageSize=0.5)
 
 DUPLICATE_ITEMS = [
     {'p': 'dup', 'c': Decimal(1), 'which': 'first'},
@@ -953,43 +1075,34 @@ INVALID_LINES = {
     'empty attribute name': '{"Item": {"p": {"S": "x"}, "c": {"N": "1"}, "": {"S": "v"}}}',
 }
 
+# The INVALID_LINES which are not an item at all. After such a line DynamoDB
+# skips the rest of its object, and the skipped lines are not processed.
+# After an item which fails validation it goes on with the next line.
+NOT_AN_ITEM = {'no Item member', 'not JSON at all'}
+
 # DynamoDB skips blank lines, counting them neither as items nor as errors.
 IGNORED_LINES = ['', '   ']
-
-EXPECTED_BAD_COUNTERS = {
-    'ProcessedItemCount': len(VALID_ITEMS) + len(INVALID_LINES),
-    'ImportedItemCount': len(VALID_ITEMS),
-    'ErrorCount': len(INVALID_LINES),
-}
 
 # An import with an invalid item fails, but keeps the table with the valid
 # items.
 @pytest.mark.xfail(reason="SCYLLADB-1369")
 def test_invalid_items(dynamodb):
-    client = dynamodb.meta.client
     s3 = make_s3_client(dynamodb)
     with new_s3_bucket(s3) as bucket:
         prefix = upload_lines(s3, bucket,
                               dynamodb_json_lines(VALID_ITEMS) + IGNORED_LINES,
                               context='bad', name='00000-good')
-        # DynamoDB skips the rest of an object after its first invalid line,
-        # both invalid JSON and valid JSON without the top-level "Item"
-        # member. So each invalid line gets its own object.
-        for i, line in enumerate(INVALID_LINES.values(), start=1):
-            upload_lines(s3, bucket, [line], prefix=prefix,
-                         name=f'{i:05}-bad')
-        table_name = unique_table_name()
-        initial = client.import_table(
-            **import_kwargs(bucket, prefix, table_name))['ImportTableDescription']
-        with delete_table_afterwards(client, table_name):
-            final = wait_for_import(client, initial['ImportArn'])
-            assert final['ImportStatus'] == 'FAILED'
-            assert final['FailureCode'] == 'ItemValidationError'
+        imported = list(VALID_ITEMS)
+        # Each invalid line is put between two valid items, in an object of
+        # its own, so that each one shows what happens to the rest.
+        for i, (label, line) in enumerate(INVALID_LINES.items(), start=1):
+            before, after = [{'p': label, 'c': Decimal(c)} for c in (1, 3)]
+            upload_lines(s3, bucket, dynamodb_json_lines([before]) + [line] + dynamodb_json_lines([after]),
+                         prefix=prefix, name=f'{i:05}-bad')
+            imported += [before] if label in NOT_AN_ITEM else [before, after]
+        with finished_import(dynamodb, bucket, prefix) as (table, final):
             assert final['FailureMessage']
-            assert {c: final.get(c) for c in EXPECTED_BAD_COUNTERS} == \
-                EXPECTED_BAD_COUNTERS
-            assert final['ProcessedItemCount'] == final['ImportedItemCount'] + final['ErrorCount']
-            assert multiset(VALID_ITEMS) == multiset(full_scan(dynamodb.Table(table_name)))
+            assert_import_result(table, final, imported, errors=len(INVALID_LINES))
 
 # ProcessedSizeBytes counts uncompressed bytes, for every codec.
 @pytest.mark.xfail(reason="SCYLLADB-1369")
@@ -1032,21 +1145,25 @@ def test_processed_size_bytes_is_uncompressed(dynamodb, compression):
 
 # DynamoDB refuses CsvOptions with DYNAMODB_JSON. The documentation does not
 # say so.
-@pytest.mark.xfail(reason="SCYLLADB-1369")
 def test_csv_options_with_dynamodb_json_rejected(dynamodb):
     kwargs = import_kwargs(unique_bucket_name(), unique_prefix('unused'),
                            InputFormatOptions={'Csv': {'Delimiter': ','}})
     with pytest.raises(ClientError, match='ValidationException.*[Ii]nputFormatOptions'):
         dynamodb.meta.client.import_table(**kwargs)
 
-# Invalid parameters. The error must name the parameter.
-@pytest.mark.xfail(reason="SCYLLADB-1369")
+# Invalid or missing parameters. The error must name the parameter.
 @pytest.mark.parametrize('overrides,parameter', [
     pytest.param({'InputFormat': 'NOT_A_FORMAT'}, '[Ii]nputFormat', id='bad_format'),
+    pytest.param({'InputFormat': None}, '[Ii]nputFormat', id='missing_format'),
     pytest.param({'InputCompressionType': 'BZIP2'}, '[Ii]nputCompressionType', id='bad_compression'),
-    pytest.param({'S3BucketSource': {'S3Bucket': 'x' * 256}}, '[Ss]3Bucket', id='bucket_too_long'),
-    pytest.param({'S3BucketSource': {'S3Bucket': '-nope!'}}, '[Ss]3Bucket', id='bucket_bad_chars'),
-    pytest.param({'S3BucketSource': {'S3KeyPrefix': 'p' * 1025}}, '[Ss]3KeyPrefix', id='prefix_too_long'),
+    pytest.param({'S3BucketSource': None}, '[Ss]3BucketSource', id='missing_bucket_source'),
+    pytest.param({'S3BucketSource': {'S3Bucket': None}}, '[Ss]3Bucket', id='missing_bucket'),
+    pytest.param({'S3BucketSource': {'S3Bucket': 'x' * 256}}, '[Ss]3Bucket', id='bucket_too_long',
+                 marks=pytest.mark.xfail(reason="Alternator leaves validating the S3 bucket name and key prefix to S3")),
+    pytest.param({'S3BucketSource': {'S3Bucket': '-nope!'}}, '[Ss]3Bucket', id='bucket_bad_chars',
+                 marks=pytest.mark.xfail(reason="Alternator leaves validating the S3 bucket name and key prefix to S3")),
+    pytest.param({'S3BucketSource': {'S3KeyPrefix': 'p' * 1025}}, '[Ss]3KeyPrefix', id='prefix_too_long',
+                 marks=pytest.mark.xfail(reason="Alternator leaves validating the S3 bucket name and key prefix to S3")),
     pytest.param({'TableCreationParameters': {'TableName': 'n' * 256}}, '[Tt]ableName', id='name_too_long'),
     pytest.param({'TableCreationParameters': {'TableName': 'not a table name!'}},
                  '[Tt]ableName', id='name_bad_chars'),
@@ -1059,9 +1176,23 @@ def test_import_table_validation(dynamodb, overrides, parameter):
     with pytest.raises(ClientError, match=f'ValidationException.*({parameter})'):
         dynamodb.meta.client.import_table(**kwargs)
 
+# A missing TableCreationParameters makes DynamoDB fail with InternalFailure
+# (HTTP 500) instead of a ValidationException, although the member is
+# required. Alternator refuses it with a ValidationException naming it.
+def test_import_table_missing_table_creation_parameters(dynamodb):
+    kwargs = import_kwargs(unique_bucket_name(), unique_prefix('unused'),
+                           ClientToken=random_string(20),
+                           TableCreationParameters=None)
+    with client_no_transform(dynamodb.meta.client) as client:
+        if is_aws(client):
+            with pytest.raises(ClientError, match='InternalFailure'):
+                client.import_table(**kwargs)
+        else:
+            with pytest.raises(ClientError, match='ValidationException.*TableCreationParameters'):
+                client.import_table(**kwargs)
+
 # DynamoDB refuses WarmThroughput on a GSI, though ImportTable's documented
 # request syntax lists it.
-@pytest.mark.xfail(reason="SCYLLADB-1369")
 def test_gsi_warm_throughput_rejected(dynamodb):
     gsi = [{**A_GSI[0], 'WarmThroughput': {'ReadUnitsPerSecond': 12000,
                                            'WriteUnitsPerSecond': 4000}}]
@@ -1127,9 +1258,12 @@ def test_unsupported_creation_parameters_dropped(dynamodb, extra, absent):
 
 # Because the LSI is dropped before validation, a valid LSI makes the request
 # invalid: its key attribute is left defined but unused by KeySchema.
-@pytest.mark.xfail(reason="SCYLLADB-1369")
+@pytest.mark.xfail(reason="Alternator refuses it with CreateTable's message: "
+                          "AttributeDefinitions defines spurious attributes not used by any KeySchema")
 def test_valid_lsi_leaves_unused_attribute(dynamodb):
+    # manual_request(), unlike botocore, does not generate a ClientToken.
     request = import_kwargs(unique_bucket_name(), unique_prefix('unused'),
+                            ClientToken=random_string(20),
                             TableCreationParameters={
                                 'AttributeDefinitions': GROUND_TRUTH_SCHEMA['AttributeDefinitions'] + [
                                     {'AttributeName': 'lsi_key', 'AttributeType': 'S'}],
@@ -1138,6 +1272,27 @@ def test_valid_lsi_leaves_unused_attribute(dynamodb):
                        'in KeySchema does not exactly match number of attributes defined '
                        'in AttributeDefinitions'):
         manual_request(dynamodb, 'ImportTable', json.dumps(request))
+
+# ImportTable's response to an accepted request, as far as it is fixed at
+# acceptance. The bucket does not exist, so on DynamoDB the import fails
+# later; ImportStatus is not checked.
+def test_import_table_description(dynamodb):
+    client = dynamodb.meta.client
+    table_name = unique_table_name()
+    initial = client.import_table(**import_kwargs(
+        unique_bucket_name(), unique_prefix('nowhere'), table_name))['ImportTableDescription']
+    with delete_table_afterwards(client, table_name):
+        for member in INITIAL_MEMBERS:
+            assert member in initial, member
+        for member in ABSENT_UNTIL_THE_END:
+            assert member not in initial, member
+        # An import ARN is its table's ARN with an import id appended.
+        table_arn, separator, import_id = initial['ImportArn'].rpartition('/import/')
+        assert separator and import_id
+        assert table_arn == initial['TableArn']
+        assert initial['TableArn'].endswith(f':table/{table_name}')
+        if is_aws(client):
+            wait_for_import(client, initial['ImportArn'])
 
 # A missing bucket fails the import with S3NoSuchBucket, and no table is left.
 @pytest.mark.xfail(reason="SCYLLADB-1369")
@@ -1183,3 +1338,216 @@ def test_empty_prefix_is_an_empty_success(dynamodb):
             assert table['TableStatus'] == 'ACTIVE'
             assert table['TableId'] == final['TableId']
             assert full_scan(dynamodb.Table(table_name)) == []
+
+# S3KeyPrefix is a prefix of the object keys, not a directory: "a" selects
+# every object whose key starts with "a", at any depth. A zero-length object,
+# such as the folder marker which the S3 console creates, adds nothing.
+@pytest.mark.xfail(reason="SCYLLADB-1369")
+def test_import_key_prefix_is_not_a_directory(dynamodb):
+    s3 = make_s3_client(dynamodb)
+    selected = [{'p': name, 'c': Decimal(1)} for name in ['a', 'abc', 'ab/x', 'a/deep/deeper']]
+    with new_s3_bucket(s3) as bucket:
+        base = unique_prefix('key-prefix')
+        for item in selected + [{'p': 'b', 'c': Decimal(1)}]:
+            upload_lines(s3, bucket, dynamodb_json_lines([item]), prefix=base, name=item['p'])
+        s3.put_object(Bucket=bucket, Key=f'{base}a/', Body=b'')
+        with finished_import(dynamodb, bucket, f'{base}a') as (table, final):
+            assert_import_result(table, final, selected)
+
+# An import of many items from several objects writes every item, and reports
+# COMPLETED only once they are all in the table.
+@pytest.mark.xfail(reason="SCYLLADB-1369")
+def test_import_many_items(dynamodb):
+    s3 = make_s3_client(dynamodb)
+    items = [{'p': f'object{o}', 'c': Decimal(c)} for o in range(4) for c in range(500)]
+    with new_s3_bucket(s3) as bucket:
+        prefix = unique_prefix('many-items')
+        for o, object_items in enumerate(itertools.batched(items, 500)):
+            upload_lines(s3, bucket, dynamodb_json_lines(object_items), prefix=prefix, name=f'{o:05}')
+        with finished_import(dynamodb, bucket, prefix) as (table, final):
+            assert_import_result(table, final, items)
+
+# How each object joins its lines.
+LINE_ENDINGS = {
+    'crlf': lambda lines: '\r\n'.join(lines) + '\r\n',
+    'no_final_newline': lambda lines: '\n'.join(lines),
+    'padded_with_whitespace': lambda lines: ''.join(f' \t{line}  \n' for line in lines),
+}
+
+# A line may end with "\r\n", the last line may have no newline, and
+# whitespace around an item is ignored.
+@pytest.mark.xfail(reason="SCYLLADB-1369")
+def test_import_line_endings(dynamodb):
+    s3 = make_s3_client(dynamodb)
+    with new_s3_bucket(s3) as bucket:
+        prefix = unique_prefix('line-endings')
+        items = []
+        for name, join in LINE_ENDINGS.items():
+            object_items = [{'p': name, 'c': Decimal(c)} for c in (1, 2)]
+            s3.put_object(Bucket=bucket, Key=f'{prefix}{name}.json',
+                          Body=join(dynamodb_json_lines(object_items)).encode())
+            items += object_items
+        with finished_import(dynamodb, bucket, prefix) as (table, final):
+            assert_import_result(table, final, items)
+
+# A table with a GSI keyed by the string attribute "g".
+GSI_SCHEMA = {
+    'AttributeDefinitions': GROUND_TRUTH_SCHEMA['AttributeDefinitions'] + [
+        {'AttributeName': 'g', 'AttributeType': 'S'}],
+    'GlobalSecondaryIndexes': [{'IndexName': 'by_g',
+                                'KeySchema': [{'AttributeName': 'g', 'KeyType': 'HASH'}],
+                                'Projection': {'ProjectionType': 'ALL'}}],
+}
+
+# The import fills the GSIs of the table. An item without the GSI key is
+# imported but not indexed. An item whose GSI key has the wrong type fails
+# validation, as in PutItem.
+@pytest.mark.xfail(reason="SCYLLADB-1369")
+def test_import_with_gsi(dynamodb):
+    s3 = make_s3_client(dynamodb)
+    indexed = [{'p': 'gsi', 'c': Decimal(1), 'g': 'one'}, {'p': 'gsi', 'c': Decimal(2), 'g': 'two'}]
+    not_indexed = [{'p': 'gsi', 'c': Decimal(3)}]
+    wrong_type = [{'p': 'gsi', 'c': Decimal(4), 'g': Decimal(5)}]
+    with new_s3_bucket(s3) as bucket:
+        prefix = upload_lines(s3, bucket, dynamodb_json_lines(indexed + not_indexed + wrong_type),
+                              context='gsi')
+        with finished_import(dynamodb, bucket, prefix, TableCreationParameters=GSI_SCHEMA) as (table, final):
+            assert_import_result(table, final, indexed + not_indexed, errors=1)
+            assert_index_scan(table, 'by_g', indexed)
+
+# PutItem refuses an empty string as a GSI key, but the import imports such
+# an item and leaves it out of the GSI.
+@pytest.mark.xfail(reason="SCYLLADB-1369")
+def test_import_empty_string_gsi_key(dynamodb):
+    s3 = make_s3_client(dynamodb)
+    indexed = [{'p': 'gsi', 'c': Decimal(1), 'g': 'one'}]
+    empty_key = [{'p': 'gsi', 'c': Decimal(2), 'g': ''}]
+    with new_s3_bucket(s3) as bucket:
+        prefix = upload_lines(s3, bucket, dynamodb_json_lines(indexed + empty_key),
+                              context='gsi-empty-key')
+        with finished_import(dynamodb, bucket, prefix, TableCreationParameters=GSI_SCHEMA) as (table, final):
+            assert_import_result(table, final, indexed + empty_key)
+            assert_index_scan(table, 'by_g', indexed)
+
+# `count` items whose hex padding compresses poorly, so that a gzip stream of
+# them is long enough to be cut in the middle of an item.
+def padded_items(name, count):
+    return [{'p': name, 'c': Decimal(c), 'pad': hashlib.sha256(f'{name}{c}'.encode()).hexdigest()}
+            for c in range(count)]
+
+def lines_body(items):
+    return ('\n'.join(dynamodb_json_lines(items)) + '\n').encode()
+
+# A GZIP import of objects which are not one plain gzip stream. An empty
+# object, also an empty gzip stream, adds nothing; a multi-member stream is
+# read whole. An object which cannot be decompressed is one error. The items
+# before the end of a truncated stream, or before a wrong CRC in the gzip
+# trailer, are imported, and the failure is one error.
+@pytest.mark.xfail(reason="SCYLLADB-1369")
+def test_import_gzip_edge_cases(dynamodb):
+    s3 = make_s3_client(dynamodb)
+    multi_member = padded_items('multi-member', 3)
+    truncated_items = padded_items('truncated', 400)
+    packed = gzip.compress(lines_body(truncated_items), mtime=0)
+    truncated = packed[:len(packed) // 2]
+    unpacked = zlib.decompressobj(wbits=31).decompress(truncated)
+    assert not unpacked.endswith(b'\n'), 'the cut must fall inside an item'
+    bad_crc_items = padded_items('bad-crc', 3)
+    bad_crc = bytearray(gzip.compress(lines_body(bad_crc_items), mtime=0))
+    bad_crc[-8] ^= 0xff  # the first byte of the CRC32 in the gzip trailer
+    # Each object's content, the items imported from it, and whether it fails.
+    objects = {
+        'empty': (b'', [], False),
+        'empty-stream': (gzip.compress(b'', mtime=0), [], False),
+        'multi-member': (gzip.compress(lines_body(multi_member[:1]), mtime=0) +
+                         gzip.compress(lines_body(multi_member[1:]), mtime=0), multi_member, False),
+        'not-gzip': (lines_body(padded_items('not-gzip', 3)), [], True),
+        'truncated': (truncated, truncated_items[:unpacked.count(b'\n')], True),
+        'bad-crc': (bytes(bad_crc), bad_crc_items, True),
+    }
+    imported = [item for _, items, _ in objects.values() for item in items]
+    errors = sum(fails for _, _, fails in objects.values())
+    with new_s3_bucket(s3) as bucket:
+        prefix = unique_prefix('gzip-edge-cases')
+        for name, (body, _, _) in objects.items():
+            s3.put_object(Bucket=bucket, Key=f'{prefix}{name}.json.gz', Body=body)
+        with finished_import(dynamodb, bucket, prefix, InputCompressionType='GZIP') as (table, final):
+            assert_import_result(table, final, imported, errors)
+
+# A bucket policy which denies the caller ListBucket or GetObject fails the
+# import with S3AccessDenied, before the table is created. The S3 server of
+# local runs does not apply bucket policies to its root account, which Scylla
+# uses, so this test needs AWS.
+@pytest.mark.parametrize('action, resource', [
+    pytest.param('s3:ListBucket', '', id='list_bucket'),
+    pytest.param('s3:GetObject', '/*', id='get_object'),
+])
+def test_import_access_denied(dynamodb, action, resource):
+    if not is_aws(dynamodb):
+        skip_env('The local S3 server lets Scylla bypass bucket policies')
+    client = dynamodb.meta.client
+    s3 = make_s3_client(dynamodb)
+    with new_s3_bucket(s3) as bucket:
+        prefix = upload_lines(s3, bucket, dynamodb_json_lines(VALID_ITEMS), context='denied')
+        s3.put_bucket_policy(Bucket=bucket, Policy=json.dumps({
+            'Version': '2012-10-17',
+            'Statement': [{'Effect': 'Deny', 'Principal': '*', 'Action': action,
+                           'Resource': f'arn:aws:s3:::{bucket}{resource}'}]}))
+        try:
+            with finished_import(dynamodb, bucket, prefix) as (table, final):
+                assert final['ImportStatus'] == 'FAILED'
+                assert final['FailureCode'] == 'S3AccessDenied'
+                assert final['FailureMessage']
+                assert final['ProcessedItemCount'] == final['ImportedItemCount'] == 0
+                assert final['ErrorCount'] == 0
+                with pytest.raises(ClientError, match='ResourceNotFoundException'):
+                    client.describe_table(TableName=table.name)
+        finally:
+            # new_s3_bucket() lists the bucket to empty it.
+            s3.delete_bucket_policy(Bucket=bucket)
+
+# An export of a table holding GROUND_TRUTH_ITEMS: the bucket, the key prefix
+# of the export's folder, "<S3Prefix>/AWSDynamoDB/<export id>/", and the
+# uncompressed size of its data/ folder. The tests of one pytest worker share
+# one export, as an export takes over ten minutes on DynamoDB.
+@pytest.fixture(scope='module')
+def ground_truth_export(dynamodb):
+    s3 = make_s3_client(dynamodb)
+    # test_export's bucket cleanup also stops an export which still writes.
+    with new_export_bucket(s3) as bucket:
+        with new_test_table(dynamodb, **GROUND_TRUTH_SCHEMA) as table:
+            with table.batch_writer() as batch:
+                for item in GROUND_TRUTH_ITEMS:
+                    batch.put_item(Item=item)
+            client = enable_pitr(table)
+            export_arn = client.export_table_to_point_in_time(
+                TableArn=get_table_arn(table), S3Bucket=bucket, S3Prefix='export',
+                ExportFormat='DYNAMODB_JSON')['ExportDescription']['ExportArn']
+            assert wait_for_export(client, export_arn)['ExportStatus'] == 'COMPLETED'
+        folder = f"export/AWSDynamoDB/{export_arn.rpartition('/')[2]}/"
+        data = s3.list_objects_v2(Bucket=bucket, Prefix=f'{folder}data/')['Contents']
+        data_bytes = sum(len(gzip.decompress(s3.get_object(Bucket=bucket, Key=o['Key'])['Body'].read()))
+                         for o in data)
+        yield bucket, folder, data_bytes
+
+# The data/ folder of an export imports into a copy of the exported table.
+@pytest.mark.xfail(reason="SCYLLADB-1369")
+def test_import_export_data_folder(dynamodb, ground_truth_export):
+    bucket, folder, data_bytes = ground_truth_export
+    with finished_import(dynamodb, bucket, f'{folder}data/', InputCompressionType='GZIP') as (table, final):
+        assert_import_result(table, final, GROUND_TRUTH_ITEMS)
+        assert final['ProcessedSizeBytes'] == data_bytes
+
+# The export's own folder imports the items of its data/ folder too, but the
+# manifest and checksum objects there are not gzip streams: each of them is
+# one error, and its bytes are not counted. The zero-length _started object
+# adds nothing.
+@pytest.mark.xfail(reason="SCYLLADB-1369")
+def test_import_export_folder(dynamodb, ground_truth_export):
+    bucket, folder, data_bytes = ground_truth_export
+    listing = make_s3_client(dynamodb).list_objects_v2(Bucket=bucket, Prefix=folder)['Contents']
+    errors = sum(1 for o in listing if o['Size'] and not o['Key'].startswith(f'{folder}data/'))
+    assert errors, 'the export has no manifest'
+    with finished_import(dynamodb, bucket, folder, InputCompressionType='GZIP') as (table, final):
+        assert_import_result(table, final, GROUND_TRUTH_ITEMS, errors)
+        assert final['ProcessedSizeBytes'] == data_bytes
