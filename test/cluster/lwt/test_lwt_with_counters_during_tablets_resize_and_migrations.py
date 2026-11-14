@@ -90,7 +90,7 @@ async def tablet_migration_ops(
     tester: BaseLWTTester,
     table: str,
     num_ops: int,
-    pause_range=(0.5, 2.0),
+    pause_range=(0.05, 0.2),
     *,
     server_properties,
 ) -> None:
@@ -196,7 +196,7 @@ async def run_random_resizes(
     table: str,
     counter_table: str,
     target_steps: int = TARGET_RESIZE_COUNT,
-    pause_range=(0.5, 2.0),
+    pause_range=(0.05, 0.2),
     max_tablets: int = MAX_TABLETS,
 ):
     """
@@ -223,12 +223,13 @@ async def run_random_resizes(
             counter_table, target_cnt
         )
         tables = [table, counter_table]
-        # Apply ALTER TABLE to both tables.
-        for tbl in tables:
-            await tester.cql.run_async(
+        # Alter both tables concurrently: each ALTER waits for schema agreement.
+        await asyncio.gather(*(
+            tester.cql.run_async(
                 f"ALTER TABLE {ks}.{tbl} "
                 f"WITH tablets = {{'min_tablet_count': {target_cnt}}}"
-            )
+            ) for tbl in tables
+        ))
 
         if direction == "split":
             predicate = lambda c, tgt=target_cnt: c >= tgt
@@ -246,6 +247,7 @@ async def run_random_resizes(
                 target=target_cnt,
                 scale_timeout=tester.scale_timeout,
                 timeout_s=RESIZE_TIMEOUT,
+                poll_s=0.2,
             ),
             wait_for_tablet_count(
                 manager,
@@ -256,6 +258,7 @@ async def run_random_resizes(
                 target=target_cnt,
                 scale_timeout=tester.scale_timeout,
                 timeout_s=RESIZE_TIMEOUT,
+                poll_s=0.2,
             ),
         )
 
@@ -378,7 +381,7 @@ async def test_multi_column_lwt_migrate_and_random_resizes(manager: ScyllaCluste
                     stop_event_,
                     manager, servers, tester,
                     num_ops=NUM_MIGRATIONS,
-                    pause_range=(0.3, 1.0),
+                    pause_range=(0.03, 0.1),
                     server_properties=properties,
                     table=table,
                 )
@@ -388,7 +391,7 @@ async def test_multi_column_lwt_migrate_and_random_resizes(manager: ScyllaCluste
                     stop_event_,
                     manager, servers, tester,
                     num_ops=NUM_MIGRATIONS,
-                    pause_range=(0.3, 1.0),
+                    pause_range=(0.03, 0.1),
                     server_properties=properties,
                     table=cnt_table
                 )

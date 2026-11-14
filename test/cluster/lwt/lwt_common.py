@@ -203,7 +203,7 @@ class Worker:
                     self.counter_deltas[pk] += delta
                     await self._inc_counter(pk, delta)
 
-                await asyncio.sleep(self.scale_timeout(0.5))
+                await asyncio.sleep(self.scale_timeout(0.1))
 
             except Exception:
                 self.stop()
