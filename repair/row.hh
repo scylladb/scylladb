@@ -8,11 +8,13 @@
 
 #pragma once
 #include <optional>
+#include <variant>
 #include "mutation/frozen_mutation.hh"
 #include <seastar/core/shared_ptr.hh>
 #include "repair/decorated_key_with_hash.hh"
 #include "repair/hash.hh"
 #include "repair/sync_boundary.hh"
+#include "utils/on_internal_error.hh"
 
 using namespace seastar;
 
@@ -20,10 +22,44 @@ using is_dirty_on_master = bool_class<class is_dirty_on_master_tag>;
 class decorated_key_with_hash;
 class repair_hash;
 
+// A row read from disk, moved out of its fragment so it is not charged to the reader's permit.
+class repair_disk_row {
+    size_t _memory_usage; // before _row: taken before the content is moved out
+    std::variant<partition_start, static_row, clustering_row, range_tombstone> _row;
+
+    static decltype(_row) take_row(mutation_fragment&& mf) {
+        switch (mf.mutation_fragment_kind()) {
+        case mutation_fragment::kind::partition_start: return std::move(mf).as_partition_start();
+        case mutation_fragment::kind::static_row: return std::move(mf).as_static_row();
+        case mutation_fragment::kind::clustering_row: return std::move(mf).as_clustering_row();
+        case mutation_fragment::kind::range_tombstone: return std::move(mf).as_range_tombstone();
+        case mutation_fragment::kind::partition_end: break;
+        }
+        utils::on_internal_error("repair_disk_row: unexpected partition_end");
+    }
+public:
+    explicit repair_disk_row(mutation_fragment mf)
+        : _memory_usage(mf.memory_usage())
+        , _row(take_row(std::move(mf)))
+    { }
+    position_in_partition_view position() const {
+        return std::visit([] (const auto& r) -> position_in_partition_view { return r.position(); }, _row);
+    }
+    size_t memory_usage() const {
+        return _memory_usage;
+    }
+    frozen_mutation_fragment freeze(const schema& s) const {
+        return std::visit([&] (const auto& r) { return ::freeze(s, r); }, _row);
+    }
+};
+
 class repair_row {
     std::optional<frozen_mutation_fragment> _fm;
     lw_shared_ptr<const decorated_key_with_hash> _dk_with_hash;
+    // Rows received from peers.
     lw_shared_ptr<mutation_fragment> _mf;
+    // Rows read from disk, until frozen. Shared so repair_row stays copyable.
+    lw_shared_ptr<repair_disk_row> _disk;
     repair_hash _hash;
     // The boundary's partition key is _dk_with_hash->dk; not copied per row.
     std::optional<position_in_partition> _position;
@@ -45,6 +81,14 @@ public:
             , _has_hash(hash.has_value())
             , _dirty_on_master(dirty_on_master)
     { }
+    // Row read from disk: no frozen form and no position until freeze_for_send().
+    repair_row(lw_shared_ptr<const decorated_key_with_hash> dk_with_hash, repair_hash hash, lw_shared_ptr<repair_disk_row> disk)
+            : _dk_with_hash(std::move(dk_with_hash))
+            , _disk(std::move(disk))
+            , _hash(hash)
+            , _has_hash(true)
+            , _dirty_on_master(is_dirty_on_master::no)
+    { }
     lw_shared_ptr<mutation_fragment>& get_mutation_fragment_ptr() { return _mf; }
     mutation_fragment& get_mutation_fragment() {
         if (!_mf) {
@@ -54,6 +98,16 @@ public:
     }
     void reset_mutation_fragment() {
         _mf = nullptr;
+    }
+    // Freezes a row read from disk and drops its unfrozen form. Rows from peers are already frozen.
+    void freeze_for_send(const schema& s) {
+        if (_disk) {
+            auto fm = _disk->freeze(s);
+            position_in_partition pos(_disk->position());
+            _fm = std::move(fm);
+            _position = std::move(pos);
+            _disk = nullptr;
+        }
     }
     frozen_mutation_fragment& get_frozen_mutation() {
         if (!_fm) {
@@ -71,24 +125,34 @@ public:
         return _dk_with_hash;
     }
     size_t size() const {
-        if (!_fm) {
-            throw std::runtime_error("empty size due to empty frozen_mutation_fragment");
-        }
-        auto size = sizeof(repair_row) + _fm->representation().size();
-        if (_position) {
+        auto size = sizeof(repair_row) + (_fm ? _fm->representation().size() : 0);
+        if (_dk_with_hash && (_position || _mf || _disk)) {
             // Shared key counted per row: conservative, as before the key copy was dropped.
-            size += _dk_with_hash->dk.external_memory_usage() + _position->external_memory_usage();
+            size += _dk_with_hash->dk.external_memory_usage();
+        }
+        if (_position) {
+            size += _position->external_memory_usage();
         }
         if (_mf) {
             size += _mf->memory_usage();
         }
+        if (_disk) {
+            size += _disk->memory_usage();
+        }
         return size;
     }
-    const position_in_partition& position() const {
-        if (!_position) {
-            throw std::runtime_error("empty repair_sync_boundary");
+    // Valid until this row's _position, _disk or _mf changes.
+    position_in_partition_view position() const {
+        if (_position) {
+            return *_position;
         }
-        return *_position;
+        if (_disk) {
+            return _disk->position();
+        }
+        if (_mf) {
+            return _mf->position();
+        }
+        throw std::runtime_error("empty repair_sync_boundary");
     }
     const repair_hash& hash() const {
         if (!_has_hash) {
@@ -108,6 +172,7 @@ public:
         _position.reset();
         _has_hash = false;
         _mf = {};
+        _disk = {};
     }
 };
 
