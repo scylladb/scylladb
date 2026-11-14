@@ -1045,6 +1045,13 @@ public:
 // }}} ip_address_updater
 
 future<> storage_service::sstable_vnodes_cleanup_fiber(raft::server& server, gate::holder group0_holder, sharded<service::storage_proxy>& proxy) noexcept {
+    // Back off exponentially between failed attempts, up to max_retry_delay.
+    // A cleanup can fail for as long as an operator needs to act, e.g. on
+    // quarantined sstables requiring cleanup, and each attempt flushes all
+    // tables and logs errors, so retrying every second would be too costly.
+    constexpr auto min_retry_delay = std::chrono::seconds(1);
+    constexpr auto max_retry_delay = std::chrono::seconds(300);
+    auto retry_delay = min_retry_delay;
     while (!_group0_as.abort_requested()) {
         bool err = false;
         try {
@@ -1134,6 +1141,7 @@ future<> storage_service::sstable_vnodes_cleanup_fiber(raft::server& server, gat
                 break;
             }
             rtlogger.debug("vnodes_cleanup: cleanup flag cleared");
+            retry_delay = min_retry_delay;
         } catch (const seastar::abort_requested_exception&) {
              rtlogger.info("vnodes_cleanup fiber aborted");
              break;
@@ -1148,7 +1156,9 @@ future<> storage_service::sstable_vnodes_cleanup_fiber(raft::server& server, gat
              err = true;
         }
         if (err) {
-            co_await sleep_abortable(std::chrono::seconds(1), _group0_as);
+            rtlogger.info("vnodes_cleanup: retrying in {} seconds", retry_delay.count());
+            co_await sleep_abortable(retry_delay, _group0_as);
+            retry_delay = std::min(retry_delay * 2, max_retry_delay);
         }
     }
 }
