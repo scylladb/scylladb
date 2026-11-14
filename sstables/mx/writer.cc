@@ -10,6 +10,7 @@
 #include "sstables/writer.hh"
 #include "sstables/large_data_tracker.hh"
 #include "sstables/serialization_header_builder.hh"
+#include "sstables/writer_stats.hh"
 #include "sstables/trie/bti_index.hh"
 #include "encoding_stats.hh"
 #include "schema/schema.hh"
@@ -518,9 +519,7 @@ private:
     std::unique_ptr<file_writer> _hashes_writer;
     bool _tombstone_written = false;
     bool _static_row_written = false;
-    // Positions within a partition are weakly monotonic, so only its first
-    // clustering position can lower the min. Reset in consume_new_partition().
-    bool _partition_min_checked = false;
+    clustering_bounds_tracker _clustering_bounds;
     // The length of partition header (partition key, partition deletion and static row, if present)
     // as written to the data file
     // Used for writing promoted index
@@ -711,13 +710,6 @@ private:
     void collect_range_tombstone_stats() {
         ++_c_stats.rows_count;
         ++_c_stats.range_tombstones_count;
-    }
-
-    void maybe_update_partition_min(position_in_partition_view pos) {
-        if (!_partition_min_checked) {
-            _collector.update_min(pos);
-            _partition_min_checked = true;
-        }
     }
 
     // Clustered is a term used to denote an entity that has a clustering key prefix
@@ -1016,7 +1008,7 @@ void writer::consume_new_partition(const dht::decorated_key& dk) {
     _tombstone_written = false;
     _static_row_written = false;
 
-    _partition_min_checked = false;
+    _clustering_bounds.start_partition();
 }
 
 void writer::consume(tombstone t) {
@@ -1030,13 +1022,7 @@ void writer::consume(tombstone t) {
 
     _tombstone_written = true;
 
-    if (t) {
-        // The tombstone covers the whole clustered region; feed the sentinels to the
-        // collector directly - nothing in this partition can improve on them.
-        _collector.update_min(position_in_partition_view::before_all_clustered_rows());
-        _collector.update_max(position_in_partition_view::after_all_clustered_rows());
-        _partition_min_checked = true;
-    }
+    _clustering_bounds.on_partition_tombstone(_collector, t);
 }
 
 void writer::write_cell(bytes_ostream& writer, const clustering_key_prefix* clustering_key, atomic_cell_view cell,
@@ -1108,26 +1094,7 @@ void writer::write_cell(bytes_ostream& writer, const clustering_key_prefix* clus
         _large_data.maybe_record_large_cell(*_partition_key, clustering_key, cdef, size, 0);
     }
 
-    auto timestamp = cell.timestamp();
-    if (is_deleted) {
-        _c_stats.update_timestamp(timestamp, is_live::no);
-        _c_stats.update_local_deletion_time_and_tombstone_histogram(cell.deletion_time());
-        _sst.get_stats().on_cell_tombstone_write();
-        return;
-    }
-
-    _c_stats.update_timestamp(timestamp, is_live::yes);
-
-    if (is_cell_expiring) {
-        _c_stats.update_ttl(cell.ttl());
-        // tombstone histogram is updated with expiration time because if ttl is longer
-        // than gc_grace_seconds for all data, sstable will be considered fully expired
-        // when actually nothing is expired.
-        _c_stats.update_local_deletion_time_and_tombstone_histogram(cell.expiry());
-    } else { // regular live cell
-        _c_stats.update_local_deletion_time(std::numeric_limits<int>::max());
-    }
-    _sst.get_stats().on_cell_write();
+    collect_cell_stats(_c_stats, _sst.get_stats(), cell);
 }
 
 void writer::write_liveness_info(bytes_ostream& writer, const row_marker& marker) {
@@ -1135,18 +1102,10 @@ void writer::write_liveness_info(bytes_ostream& writer, const row_marker& marker
         return;
     }
 
-    api::timestamp_type timestamp = marker.timestamp();
-    if (marker.is_live()) {
-        _c_stats.update_timestamp(timestamp, is_live::yes);
-        _c_stats.update_live_row_marker_timestamp(timestamp);
-    } else {
-        _c_stats.update_timestamp(timestamp, is_live::no);
-    }
-    write_delta_timestamp(writer, timestamp);
+    collect_row_marker_stats(_c_stats, marker);
+    write_delta_timestamp(writer, marker.timestamp());
 
     auto write_expiring_liveness_info = [this, &writer] (gc_clock::duration ttl, gc_clock::time_point ldt) {
-        _c_stats.update_ttl(ttl);
-        _c_stats.update_local_deletion_time_and_tombstone_histogram(ldt);
         write_delta_ttl(writer, ttl);
         write_delta_local_deletion_time(writer, ldt);
     };
@@ -1154,9 +1113,6 @@ void writer::write_liveness_info(bytes_ostream& writer, const row_marker& marker
         write_expiring_liveness_info(gc_clock::duration(expired_liveness_ttl), marker.deletion_time());
     } else if (marker.is_expiring()) {
         write_expiring_liveness_info(marker.ttl(), marker.expiry());
-    } else {
-        _c_stats.update_ttl(0);
-        _c_stats.update_local_deletion_time(std::numeric_limits<int32_t>::max());
     }
 }
 
@@ -1328,7 +1284,7 @@ void writer::write_clustered(const clustering_row& clustered_row, uint64_t prev_
     flush_tmp_bufs();
 
     // Collect statistics
-    maybe_update_partition_min(clustered_row.position());
+    _clustering_bounds.on_clustered(_collector, clustered_row.position());
     collect_row_stats(_data_writer->offset() - current_pos, &clustered_row.key(), is_dead);
 }
 
@@ -1457,7 +1413,7 @@ void writer::write_clustered(const rt_marker& marker, uint64_t prev_row_size) {
     write_marker_body(_tmp_bufs);
     write_vint(*_data_writer, _tmp_bufs.size());
     flush_tmp_bufs();
-    maybe_update_partition_min(marker.position());
+    _clustering_bounds.on_clustered(_collector, marker.position());
 
     collect_range_tombstone_stats();
 }
@@ -1543,10 +1499,9 @@ stop_iteration writer::consume_end_of_partition() {
 
     _large_data.maybe_record_large_partition(*_partition_key, _c_stats.partition_size, _c_stats.rows_count, _c_stats.range_tombstones_count, _c_stats.dead_rows_count);
 
-    // Only the partition's last clustering position can raise the max; the promoted
-    // index already holds an owning copy of it.
+    // The promoted index already holds an owning copy of the last clustering position.
     if (const auto& last = _pi_write_m.last_clustering) {
-        _collector.update_max(position_of(last->clustering, last->kind));
+        _clustering_bounds.end_partition(_collector, position_of(last->clustering, last->kind));
     }
 
     // update is about merging column_stats with the data being stored by collector.
