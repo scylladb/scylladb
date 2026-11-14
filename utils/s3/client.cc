@@ -19,6 +19,7 @@
 #else
 #include <rapidxml/rapidxml.hpp>
 #endif
+#include <seastar/core/abort_on_expiry.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/fstream.hh>
 #include <seastar/core/future.hh>
@@ -48,6 +49,7 @@
 #include "utils/s3/credentials_providers/instance_profile_credentials_provider.hh"
 #include "utils/s3/credentials_providers/sts_assume_role_credentials_provider.hh"
 #include "utils/div_ceil.hh"
+#include "utils/error_injection.hh"
 #include "utils/http.hh"
 #include "utils/memory_data_sink.hh"
 #include "utils/chunked_vector.hh"
@@ -311,6 +313,41 @@ future<> client::authorize(http::request& req) {
 static future<semaphore_units<>> claim_unit(semaphore& sem, seastar::abort_source* as) {
     return as ? get_units(sem, 1, *as) : get_units(sem, 1);
 }
+
+namespace {
+
+// Stops retrying a request once its abort source has fired.
+//
+// seastar's http client looks at the abort source before the first attempt and when
+// that attempt fails, but not when a retry fails. The abort shuts the connection down,
+// which reads as a dropped connection, so the strategy would retry. The next attempt
+// then cannot be cancelled: subscribing to a source that already fired does nothing,
+// and the request could wait for a reply forever.
+//
+// So refuse the retry and fail with the abort's exception, as the first attempt does.
+// The source is checked again after the wrapped strategy answers, because its backoff
+// does not watch the source. When the source has fired, the wrapped strategy is not
+// asked at all, so the throttling controller does not count a failure we caused.
+//
+// Redundant once seastar checks the abort source itself (SCYLLADB-6270).
+class abortable_retry_strategy final : public http::retry_strategy {
+    const http::retry_strategy& _rs;
+    const seastar::abort_source& _as;
+public:
+    abortable_retry_strategy(const http::retry_strategy& rs, const seastar::abort_source& as) noexcept : _rs(rs), _as(as) {}
+
+    future<bool> should_retry(std::exception_ptr ex, unsigned attempted_retries) const override {
+        if (!_as.abort_requested()) {
+            bool retry = co_await _rs.should_retry(std::move(ex), attempted_retries);
+            if (!_as.abort_requested()) {
+                co_return retry;
+            }
+        }
+        co_return coroutine::exception(std::exception_ptr(_as.abort_requested_exception_ptr()));
+    }
+};
+
+} // anonymous namespace
 
 client::group_client::group_client(std::unique_ptr<http::connection_factory> f, unsigned max_conn) : http(std::move(f), max_conn), max_connections(max_conn) {
 }
@@ -628,7 +665,14 @@ future<> client::make_request(http::request req,
     // dispatch fresh; a stale one there is caught by the REQUEST_TIME_TOO_SKEWED path.
     co_await authorize(request);
 
-    co_await gc.http.make_request(request, handler, rs, std::nullopt, as).handle_exception([err_handler = std::move(err_handler)](auto ex) {
+    // http::client refers to the strategy for the whole request, retries included,
+    // and this frame outlives the request.
+    std::optional<abortable_retry_strategy> abortable_rs;
+    if (as) {
+        abortable_rs.emplace(rs, *as);
+    }
+    const http::retry_strategy& strategy = abortable_rs ? *abortable_rs : rs;
+    co_await gc.http.make_request(request, handler, strategy, std::nullopt, as).handle_exception([err_handler = std::move(err_handler)](auto ex) {
         err_handler(std::move(ex));
     });
 }
@@ -1429,11 +1473,34 @@ future<> client::multipart_upload::upload_part(memory_data_sink_buffers bufs) {
     }).finally([gh = std::move(gh), mpu = std::move(mpu)] {});
 }
 
+// How long the DELETE that aborts a multipart upload may take, retries included.
+// Neither this client nor seastar's http client times requests out, so without a
+// limit an endpoint that accepts the connection and then never answers would hold
+// the DELETE forever - and with it whoever closes the sink, and client::close(),
+// which waits for every request in flight.
+//
+// The bound is not exact. It can be exceeded by:
+// - a backoff of the retry strategy that is already running when the time is up,
+//   since the backoff cannot be cut short;
+// - a connect in progress, which is bounded only by the kernel;
+// - the closing handshake of a TLS connection.
+static constexpr std::chrono::milliseconds abort_upload_timeout = 60s;
+
 future<> client::multipart_upload::abort_upload() {
     s3l.trace("DELETE upload {}", _upload_id);
     auto req = http::request::make("DELETE", _client->_host, _object_name);
     req.set_query_param("uploadId", std::exchange(_upload_id, "")); // now upload_started() returns false
-    co_await _client->make_request(std::move(req), ignore_reply, http::reply::status_type::no_content)
+    // The DELETE does not go with _as: an upload is often aborted precisely because
+    // _as fired, and an aborted source would stop the DELETE before it is even sent,
+    // leaving all the parts behind. A private abort source, armed by a timer, bounds
+    // it instead. It cancels the request itself rather than just stopping the wait for
+    // it, so the request - and the continuation below, which refers to this - is over
+    // by the time this returns.
+    auto timeout = utils::get_local_injector().inject_parameter<uint32_t>("s3_abort_upload_timeout_ms")
+            .transform([] (uint32_t ms) { return std::chrono::milliseconds(ms); })
+            .value_or(abort_upload_timeout);
+    abort_on_expiry<lowres_clock> deadline(lowres_clock::now() + timeout);
+    co_await _client->make_request(std::move(req), ignore_reply, http::reply::status_type::no_content, &deadline.abort_source())
         .handle_exception([this](const std::exception_ptr& ex) -> future<> {
             // Here we discard whatever exception is thrown when aborting multipart upload since we don't care about cleanly aborting it since there are other
             // means to clean up dangling parts, for example `rclone cleanup` or S3 bucket's Lifecycle Management Policy
