@@ -1551,6 +1551,10 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "A column chunk whose dictionary would grow beyond it uses another encoding. Set to 0 to disable dictionaries. "
         "Values above 1024 (1 MiB) are treated as 1024. "
         "It affects only sstables written after the change.")
+    , parquet_writer_memory_fraction(this, "parquet_writer_memory_fraction", liveness::LiveUpdate, value_status::Used, 0.05,
+        "The fraction of the shard's memory that the writers of sstables whose Data file is a Parquet file share for their row group buffers. "
+        "Each writer's row group target is this budget divided by the number of such writers on the shard, "
+        "capped above by parquet_row_group_size_in_kb and below by parquet_page_set_size_in_kb. Nothing waits for the budget.")
     , components_memory_reclaim_threshold(this, "components_memory_reclaim_threshold", liveness::LiveUpdate, value_status::Used, .2, "Ratio of available memory for all in-memory components of SSTables in a shard beyond which the memory will be reclaimed from components until it falls back under the threshold. Currently, this limit is only enforced for bloom filters.")
     , large_memory_allocation_warning_threshold(this, "large_memory_allocation_warning_threshold", value_status::Used, (size_t(128) << 10) + 1, "Warn about memory allocations above this size; set to zero to disable.")
     , enable_deprecated_partitioners(this, "enable_deprecated_partitioners", value_status::Used, false, "Enable the byteordered and random partitioners. These partitioners are deprecated and will be removed in a future version.")

@@ -24,6 +24,7 @@
 #include "sstables/sstables_registry.hh"
 #include "sstables/partition_index_cache.hh"
 #include "sstables/sstables.hh"
+#include "sstables/parquet/writer.hh"
 #include "object_storage_client.hh"
 #include "db/config.hh"
 #include "db/object_storage_endpoint_param.hh"
@@ -115,6 +116,23 @@ sstables_manager::sstables_manager(
     , _signal_gate("sstables_manager::signal")
 {
     _components_reloader_status = components_reclaim_reload_fiber();
+
+    if (_config.register_metrics) {
+        namespace sm = seastar::metrics;
+        const auto manager_label = sm::label("manager")(name);
+        _metrics.add_group("sstables_manager", {
+            sm::make_gauge("parquet_active_writers", [this] { return _active_parquet_writers; },
+                    sm::description("The number of writers of Parquet Data files that share the writer memory budget"), {manager_label}),
+            sm::make_gauge("parquet_writer_memory_budget", [this] { return parquet_writer_memory_budget(); },
+                    sm::description("The memory, in bytes, that the writers of Parquet Data files share for their row group buffers"), {manager_label}),
+            sm::make_gauge("parquet_writer_memory_used", [this] { return _parquet_writer_memory_used; },
+                    sm::description("The memory, in bytes, that the writers of Parquet Data files reported to hold"), {manager_label}),
+            sm::make_gauge("parquet_row_group_target", [this] {
+                        return parquet_row_group_target(uint64_t(_config.parquet_page_set_size_in_kb()) << 10, uint64_t(_config.parquet_row_group_size_in_kb()) << 10);
+                    },
+                    sm::description("The row group target, in bytes, of a writer of Parquet Data files with the configured sizes"), {manager_label}),
+        });
+    }
 }
 
 sstables_manager::~sstables_manager() {
@@ -457,6 +475,48 @@ sstable_writer_config sstables_manager::configure_writer(sstring origin) const {
     cfg.parquet_dictionary_page_limit = uint64_t(_config.parquet_dictionary_page_size_limit_in_kb()) << 10;
 
     return cfg;
+}
+
+// Counts the writer as active, and its last memory report as used, for its lifetime.
+class sstables_manager::parquet_writer_memory_handle final : public parquet::writer_memory_handle {
+    sstables_manager& _manager;
+    const uint64_t _page_set_size;
+    const uint64_t _row_group_size;
+    uint64_t _reported = 0;
+public:
+    parquet_writer_memory_handle(sstables_manager& manager, uint64_t page_set_size, uint64_t row_group_size) noexcept
+        : _manager(manager)
+        , _page_set_size(page_set_size)
+        , _row_group_size(row_group_size)
+    {
+        ++_manager._active_parquet_writers;
+    }
+    ~parquet_writer_memory_handle() {
+        --_manager._active_parquet_writers;
+        _manager._parquet_writer_memory_used -= _reported;
+    }
+    uint64_t row_group_target() override {
+        return _manager.parquet_row_group_target(_page_set_size, _row_group_size);
+    }
+    void report_memory_usage(uint64_t bytes) noexcept override {
+        _manager._parquet_writer_memory_used = _manager._parquet_writer_memory_used - _reported + bytes;
+        _reported = bytes;
+    }
+};
+
+uint64_t sstables_manager::parquet_writer_memory_budget() const noexcept {
+    const double fraction = std::clamp(_config.parquet_writer_memory_fraction(), 0.0, 1.0);
+    return uint64_t(double(_config.available_memory) * fraction);
+}
+
+uint64_t sstables_manager::parquet_row_group_target(uint64_t page_set_size, uint64_t row_group_size) const noexcept {
+    const uint64_t share = parquet_writer_memory_budget() / std::max<uint64_t>(_active_parquet_writers, 1);
+    // The lower cap wins if the configuration puts it above the upper one.
+    return std::max(std::min(share, row_group_size), page_set_size);
+}
+
+std::unique_ptr<parquet::writer_memory_handle> sstables_manager::register_parquet_writer(uint64_t page_set_size, uint64_t row_group_size) {
+    return std::make_unique<parquet_writer_memory_handle>(*this, page_set_size, row_group_size);
 }
 
 void sstables_manager::increment_total_reclaimable_memory(sstable* sst) {
