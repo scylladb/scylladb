@@ -403,6 +403,8 @@ static auto configure_sstables_manager(const db::config& cfg, const database_con
         .parquet_page_set_size_in_kb = cfg.parquet_page_set_size_in_kb,
         .parquet_min_page_size_in_kb = cfg.parquet_min_page_size_in_kb,
         .parquet_dictionary_page_size_limit_in_kb = cfg.parquet_dictionary_page_size_limit_in_kb,
+        .parquet_writer_memory_fraction = cfg.parquet_writer_memory_fraction,
+        .register_metrics = true,
     };
 }
 

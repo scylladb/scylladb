@@ -43,6 +43,8 @@ namespace s3 { class client; }
 
 namespace gms { class feature_service; }
 
+namespace sstables::parquet { class writer_memory_handle; }
+
 namespace sstables {
 
 class object_storage_client;
@@ -158,6 +160,11 @@ public:
         utils::updateable_value<uint32_t> parquet_page_set_size_in_kb = utils::updateable_value<uint32_t>(128);
         utils::updateable_value<uint32_t> parquet_min_page_size_in_kb = utils::updateable_value<uint32_t>(8);
         utils::updateable_value<uint32_t> parquet_dictionary_page_size_limit_in_kb = utils::updateable_value<uint32_t>(4);
+        // The fraction of available_memory that the Parquet writers share
+        // for their row group buffers. See register_parquet_writer().
+        utils::updateable_value<double> parquet_writer_memory_fraction = utils::updateable_value<double>(0.05);
+        // Registers the metrics of the manager, labeled with its name.
+        bool register_metrics = false;
     };
 
 private:
@@ -206,6 +213,14 @@ private:
 
     named_gate _signal_gate;
     signal_type _signal_source;
+
+    // The Parquet writers that hold a handle from register_parquet_writer().
+    uint64_t _active_parquet_writers = 0;
+    // The sum of their last memory reports.
+    uint64_t _parquet_writer_memory_used = 0;
+    seastar::metrics::metric_groups _metrics;
+
+    class parquet_writer_memory_handle;
 
 public:
     explicit sstables_manager(
@@ -256,6 +271,40 @@ public:
 
     virtual sstable_writer_config configure_writer(sstring origin) const;
     const config& get_config() const noexcept { return _config; }
+
+    // The writer memory budget of the Parquet writers.
+    //
+    // A writer of a Parquet Data file buffers a whole row group. The writers
+    // that use this manager share a budget of parquet_writer_memory_fraction
+    // of available_memory for these buffers. In production, every Parquet
+    // writer of the shard uses the manager of user tables, because system
+    // tables never use Parquet, so the budget is per shard.
+    //
+    // Nothing waits for the budget. A writer asks for its row group target
+    // at each page set boundary, and ends its row group early when it is
+    // above the target. The target is the budget divided by the number of
+    // active writers, capped above by the writer's row group size and below
+    // by its page set size. A new writer therefore shrinks the target of the
+    // others, but no writer stops.
+    //
+    // Each writer also reports the memory that it holds, which includes
+    // what the target does not limit, such as its footer records. The
+    // manager sums the reports, for the metrics. See
+    // parquet::writer::memory_usage().
+
+    // The budget, in bytes.
+    uint64_t parquet_writer_memory_budget() const noexcept;
+    // The number of writers that hold a handle.
+    uint64_t active_parquet_writers() const noexcept { return _active_parquet_writers; }
+    // The sum of the last memory reports of the writers that hold a handle.
+    uint64_t parquet_writer_memory_used() const noexcept { return _parquet_writer_memory_used; }
+    // The row group target of a writer with the given page set size and row
+    // group size, for the current number of active writers.
+    uint64_t parquet_row_group_target(uint64_t page_set_size, uint64_t row_group_size) const noexcept;
+    // Registers a Parquet writer. The writer holds the handle for its
+    // lifetime, and the handle unregisters it when it is destroyed. The
+    // handle must not outlive the manager.
+    std::unique_ptr<parquet::writer_memory_handle> register_parquet_writer(uint64_t page_set_size, uint64_t row_group_size);
 
     cache_tracker& get_cache_tracker() { return _cache_tracker; }
     const gms::feature_service& get_features() const noexcept { return _features; }

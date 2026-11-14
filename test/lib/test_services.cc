@@ -289,6 +289,7 @@ test_env::impl::impl(test_env_config cfg, sstable_compressor_factory& scfarg, ss
                 .parquet_page_set_size_in_kb = db_config->parquet_page_set_size_in_kb,
                 .parquet_min_page_size_in_kb = db_config->parquet_min_page_size_in_kb,
                 .parquet_dictionary_page_size_limit_in_kb = db_config->parquet_dictionary_page_size_limit_in_kb,
+                .parquet_writer_memory_fraction = db_config->parquet_writer_memory_fraction,
             },
             feature_service,
             cache_tracker,
