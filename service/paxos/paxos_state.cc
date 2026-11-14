@@ -22,6 +22,7 @@
 #include "gms/gossiper.hh"
 #include "replica/database.hh"
 #include "schema/schema_builder.hh"
+#include "mutation/mutation.hh"
 
 #include "utils/error_injection.hh"
 
@@ -118,9 +119,40 @@ future<token_guard> paxos_state::get_cas_lock(const dht::token& key, clock_type:
     co_return std::move(m);
 }
 
-future<prepare_response> paxos_state::prepare(storage_proxy& sp, paxos_store& paxos_store, tracing::trace_state_ptr tr_state, schema_ptr schema,
+paxos_state::round_schemas paxos_state::get_round_schemas(schema_ptr s, const query::read_command& cmd) {
+    if (!cmd.slice.is_reversed()) {
+        return {s, s};
+    }
+    // A reversed read reaches paxos in the native reversed format: cmd carries the
+    // version of the reversed table schema (see docs/dev/reverse-reads.md).
+    if (s->version() == cmd.schema_version) {
+        auto table_schema = s->get_reversed();
+        return {std::move(table_schema), std::move(s)};
+    }
+    auto query_schema = s->get_reversed();
+    if (query_schema->version() != cmd.schema_version) {
+        on_internal_error(logger, format("paxos round on {}.{}: reversed read command has schema version {}, expected {} or {}",
+                s->ks_name(), s->cf_name(), cmd.schema_version, s->version(), query_schema->version()));
+    }
+    return {std::move(s), std::move(query_schema)};
+}
+
+std::optional<proposal> paxos_state::unreverse_if_needed(std::optional<proposal> p, const schema_ptr& s) {
+    if (!p || p->update.schema_version() != ::reversed(s->version())) {
+        return p;
+    }
+    // The same data in the reverse clustering order: reverse it back.
+    auto m = ::reverse(p->update.unfreeze(s->get_reversed()));
+    return proposal(p->ballot, freeze(m));
+}
+
+future<prepare_response> paxos_state::prepare(storage_proxy& sp, paxos_store& paxos_store, tracing::trace_state_ptr tr_state, schema_ptr s,
         const query::read_command& cmd, const partition_key& key, utils::UUID ballot,
         bool only_digest, query::digest_algorithm da, clock_type::time_point timeout) {
+    // The paxos state uses the table schema, the data read uses the schema of cmd.
+    auto schemas = get_round_schemas(std::move(s), cmd);
+    schema_ptr schema = std::move(schemas.table);
+    schema_ptr query_schema = std::move(schemas.query);
     dht::token token = dht::get_token(*schema, key);
     utils::latency_counter lc;
     lc.start();
@@ -160,7 +192,7 @@ future<prepare_response> paxos_state::prepare(storage_proxy& sp, paxos_store& pa
             },
             [&] () -> future<std::optional<std::variant<foreign_ptr<lw_shared_ptr<query::result>>, query::result_digest>>> {
                 try {
-                    auto&& [result, hit_rate] = co_await sp.get_db().local().query(schema, cmd,
+                    auto&& [result, hit_rate] = co_await sp.get_db().local().query(query_schema, cmd,
                             {only_digest ? query::result_request::only_digest : query::result_request::result_and_digest, da},
                             dht::partition_range_vector({dht::partition_range::make_singular({token, key})}), tr_state, timeout);
                     if (only_digest) {
@@ -180,6 +212,7 @@ future<prepare_response> paxos_state::prepare(storage_proxy& sp, paxos_store& pa
         }
 
         auto upgrade_if_needed = [schema = std::move(schema), token, &paxos_store, timeout] (std::optional<proposal> p) -> future<std::optional<proposal>> {
+            p = unreverse_if_needed(std::move(p), schema);
             if (!p || p->update.schema_version() == schema->version()) {
                 co_return std::move(p);
             }
