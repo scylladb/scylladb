@@ -79,8 +79,9 @@ private:
 
 class azure_host::impl {
 public:
-    static inline constexpr std::chrono::milliseconds default_expiry = 600s;
-    static inline constexpr std::chrono::milliseconds default_refresh = 1200s;
+    static inline constexpr std::chrono::milliseconds default_expiry = 1200s;
+    static inline constexpr std::chrono::milliseconds default_refresh = 300s;
+    static_assert(2 * default_refresh < default_expiry);
 
     impl(encryption_context*, const std::string& name, const host_options& options);
     future<> init();
