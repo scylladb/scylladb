@@ -338,6 +338,16 @@ Tests run in parallel via `pytest-xdist` workers (`gw0`, `gw1`, ...).
 Each worker writes its log to `testlog/pytest_log/pytest_gw{N}_{HOST_ID}.log`.
 This log contains cluster lifecycle messages and test pass/fail status.
 
+If a worker dies unexpectedly (no traceback, no core), the controller logs
+the cgroup v2 `memory.events` and `memory.current` of the dead worker and of
+the controller, and `/proc/meminfo`, to
+`testlog/pytest_log/pytest_main_{HOST_ID}.log`, next to the "worker crashed"
+failure. The worker cgroup exists only with `--gather-metrics`.
+The `oom_kill` delta counts kills in the worker cgroup since the worker
+started. It also counts kills of the Scylla processes of that worker, so a
+nonzero delta is a hint of an OOM kill or a cgroup memory limit, not proof
+that the worker itself was killed.
+
 For example, imagine `cqlpy/test_null.py` fails. The relevant lines
 in the worker log will be:
 

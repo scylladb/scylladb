@@ -268,6 +268,59 @@ class ResourceGatherOn(ResourceGatherRecord):
         return result
 
 
+def _read_file_or_reason(path: Path) -> str:
+    """Read *path* as text, or describe why it could not be read."""
+    try:
+        return path.read_text().strip()
+    except OSError as exc:
+        return f"<unavailable: {exc}>"
+
+
+def read_oom_kill(cgroup_dir: Path) -> int | None:
+    """Return the oom_kill counter of the memory.events in *cgroup_dir*, or None if it cannot be read."""
+    try:
+        for line in (cgroup_dir / "memory.events").read_text().splitlines():
+            name, _, value = line.partition(" ")
+            if name == "oom_kill":
+                return int(value)
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def gather_oom_kill_evidence(worker_id: str, oom_kill_baseline: int | None) -> str:
+    """Collect circumstantial evidence that an external kill stopped a dead xdist worker.
+
+    Reads cgroup v2 memory.events and memory.current of the worker and of the
+    controller, and /proc/meminfo. The worker cgroup exists only with --gather-metrics.
+    The counters of a cgroup also include its child cgroups, for example the Scylla
+    processes of a worker. So they are a hint, not proof.
+    """
+    worker_cgroup = CGROUP_TESTS / worker_id
+    oom_kill = read_oom_kill(worker_cgroup)
+    oom_kill_delta = oom_kill - oom_kill_baseline if oom_kill is not None and oom_kill_baseline is not None else "unknown"
+    sections = [
+        f"--- {worker_id} worker cgroup (includes its Scylla processes) ---",
+        f"oom_kill delta since the worker started: {oom_kill_delta}",
+        f"memory.events:\n{_read_file_or_reason(worker_cgroup / 'memory.events')}",
+        f"memory.current: {_read_file_or_reason(worker_cgroup / 'memory.current')}",
+        "--- controller cgroup (cumulative) ---",
+    ]
+    try:
+        controller_cgroup = get_current_cgroup()
+        sections += [
+            f"memory.events:\n{_read_file_or_reason(controller_cgroup / 'memory.events')}",
+            f"memory.current: {_read_file_or_reason(controller_cgroup / 'memory.current')}",
+        ]
+    except (OSError, IndexError) as exc:
+        sections.append(f"<unavailable: {exc}>")
+    sections += [
+        "--- /proc/meminfo ---",
+        _read_file_or_reason(Path("/proc/meminfo")),
+    ]
+    return "\n".join(sections)
+
+
 def _get_cpu_model() -> str:
     try:
         with open("/proc/cpuinfo") as f:
