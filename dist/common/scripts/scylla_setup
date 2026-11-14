@@ -258,6 +258,8 @@ if __name__ == '__main__':
                         help='skip cpu scaling setup')
     parser.add_argument('--no-fstrim-setup', action='store_true', default=False,
                         help='skip fstrim setup')
+    parser.add_argument('--no-gnutls-setup', action='store_true', default=False,
+                        help='skip benchmarking GnuTLS crypto implementations for TLS')
     parser.add_argument('--no-memory-setup', action='store_true', default=False,
                         help='skip memory setup')
     parser.add_argument('--no-swap-setup', action='store_true', default=False,
@@ -307,6 +309,7 @@ if __name__ == '__main__':
     io_setup = args.io_setup
     cpuscaling_setup = not args.no_cpuscaling_setup
     fstrim_setup = not args.no_fstrim_setup
+    gnutls_setup = not args.no_gnutls_setup
     memory_setup = not args.no_memory_setup
     swap_setup = not args.no_swap_setup
     rsyslog_setup = not args.no_rsyslog_setup
@@ -456,6 +459,11 @@ if __name__ == '__main__':
         args.no_cpuscaling_setup = not cpuscaling_setup
         if cpuscaling_setup:
             run_setup_script('CPU scaling', 'scylla_cpuscaling_setup')
+
+        gnutls_setup = interactive_ask_service('Do you want to benchmark TLS encryption and configure GnuTLS to use the faster crypto implementation for this CPU?', 'Yes - runs a short benchmark of TLS record encryption and sets GNUTLS_CPUID_OVERRIDE in /etc/scylla.d/gnutls.conf if that is clearly faster. No - skip this step.', gnutls_setup)
+        args.no_gnutls_setup = not gnutls_setup
+        if gnutls_setup:
+            run_setup_script('GnuTLS', 'scylla_gnutls_setup')
 
         # no need for fstrim if online discard is enabled
         fstrim_setup = fstrim_setup and not online_discard
