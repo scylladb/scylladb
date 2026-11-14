@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <functional>
 #include <memory>
 #include <seastar/core/shared_ptr.hh>
 #include "sstables/abstract_index_reader.hh"
@@ -78,8 +79,13 @@ public:
     bti_partition_index_writer& operator=(bti_partition_index_writer&&) noexcept;
     ~bti_partition_index_writer() noexcept;
     explicit operator bool() const noexcept { return bool(_impl); }
-    // Add a new partition key to the index.
-    void add(const schema&, dht::decorated_key, const utils::hashed_key&, int64_t data_or_rowsdb_file_pos);
+    // Add a new partition key to the index. The mark (see trie_writer::add())
+    // is given to the key - and to the next key, because a lookup of a key
+    // also reads the next key, to know where the partition ends.
+    void add(const schema&, dht::decorated_key, const utils::hashed_key&, int64_t data_or_rowsdb_file_pos, uint32_t mark = 0);
+    // Calls the observer before writing each node whose subtree has a
+    // marked key, with the node's position and the largest mark.
+    void set_mark_observer(std::function<void(uint64_t pos, uint32_t mark)> observer);
     // Flushes all remaining contents, and returns the position of the root node in the output stream.
     // If add() was never called, returns -1.
     // The writer mustn't be used again after this.
@@ -115,7 +121,13 @@ public:
         const sstables::clustering_info& first_ck,
         const sstables::clustering_info& last_ck,
         uint64_t offset_from_partition_start,
-        const sstables::deletion_time& range_tombstone_before_first_ck);
+        const sstables::deletion_time& range_tombstone_before_first_ck,
+        uint32_t mark = 0);
+    // Like bti_partition_index_writer::set_mark_observer(). A block's mark
+    // is given to its separator, and to the next block's separator, because
+    // a lookup also reads the next separator; and the largest mark of the
+    // partition's blocks is given to the final separator.
+    void set_mark_observer(std::function<void(uint64_t pos, uint32_t mark)> observer);
     // Flushes all remaining contents, and returns the position of the root node in the output stream.
     // If add() was never called, returns -1.
     //

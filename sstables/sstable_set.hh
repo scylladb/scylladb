@@ -126,7 +126,8 @@ public:
         streamed_mutation::forwarding,
         mutation_reader::forwarding,
         const sstable_predicate&,
-        sstables::integrity_check integrity = sstables::integrity_check::no) const;
+        sstables::integrity_check integrity = sstables::integrity_check::no,
+        sstables::populate_disk_cache populate = sstables::populate_disk_cache::no) const;
 };
 
 class sstable_set : public enable_lw_shared_from_this<sstable_set> {
@@ -225,7 +226,8 @@ public:
         streamed_mutation::forwarding,
         mutation_reader::forwarding,
         const sstable_predicate& p = default_sstable_predicate(),
-        sstables::integrity_check integrity = sstables::integrity_check::no) const;
+        sstables::integrity_check integrity = sstables::integrity_check::no,
+        sstables::populate_disk_cache populate = sstables::populate_disk_cache::no) const;
 
     /// Read a range from the sstable set.
     ///
@@ -254,7 +256,8 @@ public:
         read_monitor_generator& rmg = default_read_monitor_generator(),
         const sstable_predicate& p = default_sstable_predicate(),
         combined_reader_statistics* statistics = nullptr,
-        integrity_check integrity = integrity_check::no) const;
+        integrity_check integrity = integrity_check::no,
+        populate_disk_cache populate = populate_disk_cache::no) const;
 
     mutation_reader make_full_scan_reader(
             schema_ptr,

@@ -31,6 +31,7 @@ mutation_reader make_reader(
         mutation_reader::forwarding fwd_mr,
         read_monitor& monitor,
         integrity_check integrity,
+        populate_disk_cache populate,
         std::unique_ptr<abstract_index_reader>,
         const utils::hashed_key* single_partition_read_murmur_hash
 );
@@ -47,6 +48,7 @@ mutation_reader make_reader(
         mutation_reader::forwarding fwd_mr,
         read_monitor& monitor,
         integrity_check integrity,
+        populate_disk_cache populate,
         std::unique_ptr<abstract_index_reader>,
         const utils::hashed_key* single_partition_read_murmur_hash
 );
