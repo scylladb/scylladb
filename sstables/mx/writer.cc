@@ -13,6 +13,7 @@
 #include "sstables/writer_stats.hh"
 #include "sstables/row_index_block_tracker.hh"
 #include "sstables/trie_index_writer.hh"
+#include "sstables/filter_writer.hh"
 #include "encoding_stats.hh"
 #include "schema/schema.hh"
 #include "mutation/mutation_fragment.hh"
@@ -497,17 +498,8 @@ private:
     std::unique_ptr<file_writer> _index_writer;
     // Engaged if the sstable has the trie index.
     std::optional<trie_index_writer> _trie_index;
-    // If true, we don't build the bloom filter during the main pass
-    // (when Data.db is written), but we instead write the murmur hashes
-    // of keys to a temporary file, and later (after Data.db is written,
-    // but before the sstable is sealed) we build the bloom filter from that.
-    //
-    // (Ideally this mechanism should only be used if the optimal size of the
-    // filter can't be well estimated in advance. As of this writing we use
-    // this mechanism every time the Index component isn't being written).
-    bool _delayed_filter = true;
-    // The writer of the temporary file used when `_delayed_filter` is true.
-    std::unique_ptr<file_writer> _hashes_writer;
+    // Engaged by the constructor.
+    std::optional<filter_writer> _filter;
     bool _tombstone_written = false;
     bool _static_row_written = false;
     clustering_bounds_tracker _clustering_bounds;
@@ -517,11 +509,9 @@ private:
     uint64_t _partition_header_length = 0;
     uint64_t _prev_row_start = 0;
     std::optional<key> _partition_key;
-    utils::hashed_key _current_murmur_hash{{0, 0}};
     std::optional<key> _first_key, _last_key;
     index_sampling_state _index_sampling_state;
     bytes_ostream _tmp_bufs;
-    uint64_t _num_partitions_consumed = 0;
 
     const sstable_schema _sst_schema;
 
@@ -750,14 +740,11 @@ public:
         _sst.open_sstable(cfg.origin);
         _sst.create_data().get();
         _compression_enabled = !_sst.has_component(component_type::CRC);
-        _delayed_filter = _sst.has_component(component_type::Filter) && !_sst.has_component(component_type::Index);
         init_file_writers();
+        _filter.emplace(_sst, estimated_partitions);
         _sst._shards = { shard };
 
         _cfg.monitor->on_write_started(_data_writer->offset_tracker());
-        if (!_delayed_filter) {
-            _sst._components->filter = utils::i_filter::get_filter(estimated_partitions, _sst._schema->bloom_filter_fp_chance(), utils::filter_format::m_format);
-        }
         _pi_write_m.promoted_index_block_size = cfg.promoted_index_block_size;
         _pi_write_m.promoted_index_auto_scale_threshold = cfg.promoted_index_auto_scale_threshold;
         _index_sampling_state.summary_byte_cost = _cfg.summary_byte_cost;
@@ -791,7 +778,7 @@ writer::~writer() {
     close_writer(_index_writer);
     close_writer(_data_writer);
     _trie_index.reset();
-    close_writer(_hashes_writer);
+    _filter.reset();
 }
 
 void writer::add_pi_block() {
@@ -840,12 +827,6 @@ void writer::init_file_writers() {
     if (_sst.has_component(component_type::Partitions) && _sst.has_component(component_type::Rows)) {
         _trie_index.emplace(_sst);
     }
-    if (_delayed_filter) {
-        file_output_stream_options options;
-        options.buffer_size = 32 * 1024;
-        _hashes_writer = std::make_unique<file_writer>(_sst.make_component_file_writer(component_type::TemporaryHashes, std::move(options),
-            sstable_write_open_flags).get());
-    }
 }
 
 std::unique_ptr<file_writer> writer::close_writer(std::unique_ptr<file_writer>& w) {
@@ -884,18 +865,8 @@ void writer::consume_new_partition(const dht::decorated_key& dk) {
     _partition_key = key::from_partition_key(_schema, dk.key());
     maybe_add_summary_entry(dk.token(), bytes_view(*_partition_key));
 
-    _current_murmur_hash = utils::make_hashed_key(bytes_view(*_partition_key));
-    if (_hashes_writer) {
-        std::array<uint64_t, 2> hash = {
-            seastar::cpu_to_le(_current_murmur_hash.hash()[0]),
-            seastar::cpu_to_le(_current_murmur_hash.hash()[1])
-        };
-        _hashes_writer->write(reinterpret_cast<const char*>(hash.data()), sizeof(hash));
-    } else {
-        _sst._components->filter->add(_current_murmur_hash);
-    }
+    _filter->add(bytes_view(*_partition_key));
     _collector.add_key(bytes_view(*_partition_key));
-    _num_partitions_consumed++;
 
     auto p_key = disk_string_view<uint16_t>();
     p_key.value = bytes_view(*_partition_key);
@@ -1381,7 +1352,7 @@ stop_iteration writer::consume_end_of_partition() {
     if (_trie_index) {
         _trie_index->end_partition(
             _schema,
-            _current_murmur_hash,
+            _filter->current_hash(),
             end_of_partition_position,
             *_partition_key,
             _pi_write_m.partition_tombstone
@@ -1427,10 +1398,6 @@ void writer::consume_end_of_stream() {
         _trie_index->finish(_first_key.value(), _last_key.value());
     }
 
-    if (_hashes_writer) {
-        close_writer(_hashes_writer);
-    }
-
     _sst.set_first_and_last_keys();
 
     _sst._components->statistics.contents[metadata_type::Serialization] = std::make_unique<serialization_header>(std::move(_sst_schema.header));
@@ -1443,12 +1410,7 @@ void writer::consume_end_of_stream() {
     _sst.write_summary();
   }
 
-    if (_delayed_filter) {
-        _sst.build_delayed_filter(_num_partitions_consumed);
-    } else {
-        _sst.maybe_rebuild_filter_from_index(_num_partitions_consumed);
-    }
-    _sst.write_filter();
+    _filter->finish();
     _sst.write_statistics();
     _sst.write_compression();
     // Note: during the SSTable write, the `compressor` object in `_sst._components->compression`

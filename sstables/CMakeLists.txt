@@ -5,6 +5,7 @@ target_sources(sstables
     compressor.cc
     checksummed_data_source.cc
     dictionary_service.cc
+    filter_writer.cc
     digest_checked_data_source.cc
     integrity_checked_file_impl.cc
     kl/reader.cc
