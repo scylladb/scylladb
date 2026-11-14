@@ -209,6 +209,17 @@ add_scylla_test(nonwrapping_interval_test
   KIND BOOST)
 add_scylla_test(observable_test
   KIND BOOST)
+# These tests use Arrow C++, which is optional. See optional_tests in
+# test/boost/test_config.yaml.
+if(Parquet_FOUND)
+  foreach(name
+      parquet_codec_test)
+    add_scylla_test(${name}
+      KIND SEASTAR
+      LIBRARIES
+        Parquet::parquet_shared)
+  endforeach()
+endif()
 add_scylla_test(partitioner_test
   KIND SEASTAR)
 add_scylla_test(pretty_printers_test
