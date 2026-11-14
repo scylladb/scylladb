@@ -261,18 +261,17 @@ void slightly_corrupt_sstable(sstables::shared_sstable sst, component_type compo
     auto close_f = deferred_close(f);
     const auto mem_align = f.memory_dma_alignment();
     const auto dma_align = f.disk_write_dma_alignment();
-    auto block_offset = align_down(size - 1, dma_align);
+    const bool scylla_with_digest = component == component_type::Scylla && sst->get_component_digest(component_type::Scylla);
+    // Modify the last byte of the data itself, not the digest that follows it.
+    // That byte may be in an earlier block than the last byte of the file, so
+    // the block to rewrite is found from it.
+    auto corrupt_offset = size - 1 - (scylla_with_digest ? sizeof(uint32_t) : 0);
+    auto block_offset = align_down(corrupt_offset, dma_align);
     auto buf = seastar::temporary_buffer<char>::aligned(mem_align, dma_align);
     f.dma_read(block_offset, buf.get_write(), dma_align).get();
-    if (component == component_type::Scylla && sst->get_component_digest(component_type::Scylla)) {
-        // Modify the last bit of the data itself, not the digest.
-        buf.get_write()[size - 1 - sizeof(uint32_t) - block_offset] ^= 1u;
-    } else {
-        // Flip one bit in the last byte of the file to corrupt it minimally.
-        // Using a single-bit flip avoids creating values that overflow
-        // during parsing.
-        buf.get_write()[size - 1 - block_offset] += 1;
-    }
+    // Flip one bit of that byte to corrupt the file minimally. Using a
+    // single-bit flip avoids creating values that overflow during parsing.
+    buf.get_write()[corrupt_offset - block_offset] ^= 1u;
     f.dma_write(block_offset, buf.get(), dma_align).get();
     f.truncate(size).get();
 }
