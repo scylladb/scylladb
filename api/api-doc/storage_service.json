@@ -1011,8 +1011,24 @@
                      "paramType":"query"
                   },
                   {
+                     "name":"source_keyspace",
+                     "description":"Name of the keyspace the snapshot was taken from, if it differs from the keyspace to copy SSTables to. Used only to find the manifests of the backup locations that do not list them.",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"source_table",
+                     "description":"Name of the table the snapshot was taken from, if it differs from the table to copy SSTables to. Used only to find the manifests of the backup locations that do not list them.",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
                      "name":"backup_source_location",
-                     "description":"Array of backup location objects, exactly one entry per datacenter the keyspace replicates to.",
+                     "description":"Array of backup location objects, exactly one entry per datacenter the keyspace replicates to. An entry without 'manifests' restores a backup made with /storage_service/tablets/backup: the manifest is found by the snapshot name.",
                      "required":true,
                      "allowMultiple":false,
                      "type":"array",
@@ -4124,7 +4140,7 @@
                "items":{
                   "type":"string"
                },
-               "description":"List of manifest file paths, relative to 'prefix'. Only used by tablet-aware restore; must not be set for backup."
+               "description":"List of manifest file paths, relative to 'prefix'. Only used by tablet-aware restore, where it is optional; must not be set for backup."
             }
          }
       }

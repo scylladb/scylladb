@@ -1390,6 +1390,10 @@ future<manifest_summary> populate_snapshot_sstables_from_manifests(sstables::sto
                 }
                 nr_sstables += ms.nr_sstables;
             });
+        }).handle_exception([&] (std::exception_ptr ex) {
+            // An object storage reports a missing object without naming it.
+            return make_exception_future<>(std::runtime_error(fmt::format("Failed to load manifest {} from bucket {} on {}: {}",
+                join_path(prefix, manifest_prefix), bucket, endpoint, ex)));
         });
     });
 

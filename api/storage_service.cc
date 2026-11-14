@@ -56,6 +56,7 @@
 #include "replica/database.hh"
 #include "db/extensions.hh"
 #include "db/snapshot-ctl.hh"
+#include "db/snapshot/cluster_backup.hh"
 #include "transport/controller.hh"
 #include "locator/token_metadata.hh"
 #include "cdc/generation_service.hh"
@@ -452,6 +453,14 @@ void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>&
         std::string keyspace = req->get_query_param("keyspace");
         std::string table = req->get_query_param("table");
         std::string snapshot = req->get_query_param("snapshot");
+        std::string source_keyspace = req->get_query_param("source_keyspace");
+        std::string source_table = req->get_query_param("source_table");
+        if (source_keyspace.empty()) {
+            source_keyspace = keyspace;
+        }
+        if (source_table.empty()) {
+            source_table = table;
+        }
 
         rjson::chunked_content content = co_await util::read_entire_stream(*req->content_stream);
         rjson::value parsed = rjson::parse(std::move(content));
@@ -481,16 +490,23 @@ void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>&
             auto dc = get_member(location, "datacenter");
             auto prefix = location.HasMember("prefix") ? rjson::to_string_view(location["prefix"]) : std::string_view{};
 
-            if (!location.HasMember("manifests") || !location["manifests"].IsArray()) {
-                throw httpd::bad_param_exception("backup location entry must have 'manifests' array");
-            }
+            utils::chunked_vector<sstring> manifests;
+            if (location.HasMember("manifests")) {
+                if (!location["manifests"].IsArray()) {
+                    throw httpd::bad_param_exception("backup location 'manifests' must be an array");
+                }
 
-            auto manifests = location["manifests"].GetArray() |
-                std::views::transform([] (const auto& m) { return sstring(rjson::to_string_view(m)); }) |
-                std::ranges::to<utils::chunked_vector<sstring>>();
+                manifests = location["manifests"].GetArray() |
+                    std::views::transform([] (const auto& m) { return sstring(rjson::to_string_view(m)); }) |
+                    std::ranges::to<utils::chunked_vector<sstring>>();
 
-            if (manifests.empty()) {
-                throw httpd::bad_param_exception("backup location 'manifests' array must not be empty");
+                if (manifests.empty()) {
+                    throw httpd::bad_param_exception("backup location 'manifests' array must not be empty");
+                }
+            } else {
+                // Without manifests the location holds a backup made by /storage_service/tablets/backup,
+                // which writes one manifest per table at a path derived from the snapshot name.
+                manifests.push_back(format("{}/manifest.json", db::snapshot::snapshot_meta_location("", source_keyspace, source_table, snapshot)));
             }
 
             apilog.info("Tablet restore for {}:{} called. Parameters: snapshot={} datacenter={} endpoint={} bucket={} prefix={} manifests_count={}",
