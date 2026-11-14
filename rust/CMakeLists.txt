@@ -61,6 +61,54 @@ endfunction(generate_cxxbridge)
 
 add_rust_library(rust_combined)
 
+# The AWS ClockBound bounded-clock backend links against libclockbound.a, built
+# from the clock-bound git submodule (the clock-bound-ffi workspace member). The
+# submodule is its own cargo workspace with its own Cargo.toml/Cargo.lock, and is
+# always built with the release profile, independent of the Scylla build mode,
+# since it only exposes a plain C ABI.
+set(clockbound_src_dir ${CMAKE_CURRENT_SOURCE_DIR}/../clock-bound)
+set(clockbound_target_dir ${CMAKE_CURRENT_BINARY_DIR}/clock-bound)
+# Use the archive where cargo writes it: cargo emits its dep-info file alongside,
+# naming that exact path as the target, which is what lets DEPFILE line up.
+# CARGO_BUILD_DEP_INFO_BASEDIR is unset so cargo writes absolute paths, which
+# DEPFILE accepts; WORKING_DIRECTORY below is the submodule, and a relative
+# basedir would resolve against it.
+set(clockbound_library ${clockbound_target_dir}/release/libclockbound.a)
+set(clockbound_depfile ${clockbound_target_dir}/release/libclockbound.d)
+# The submodule's release profile is tuned for its standalone daemon: fat LTO,
+# one codegen unit, panic=abort, stripped. The library is linked into scylla
+# next to librust_combined.a, and with fat LTO it is one object that carries
+# the Rust runtime, which librust_combined.a carries too, so the link fails on
+# duplicate symbols. The library is built with the profile defaults for those
+# settings instead, which keeps the runtime in archive members of its own that
+# the linker never takes from it. The binaries keep their symbols too: the
+# dist step strips them and keeps the debuginfo.
+set(clockbound_cargo_config --config profile.release.strip=false)
+set(clockbound_lib_cargo_config ${clockbound_cargo_config}
+  --config profile.release.lto=false
+  --config profile.release.codegen-units=16
+  --config profile.release.panic=\"unwind\")
+add_custom_command(
+  OUTPUT ${clockbound_library}
+  COMMAND ${CMAKE_COMMAND} -E env --unset=CARGO_BUILD_DEP_INFO_BASEDIR ${RUSTC_WRAPPER_ENV} ${CARGO} build --locked --release ${clockbound_lib_cargo_config} --manifest-path=${clockbound_src_dir}/Cargo.toml -p clock-bound-ffi --target-dir=${clockbound_target_dir}
+  # The dep-info covers the workspace's Rust sources, so a submodule bump
+  # rebuilds the archive. The manifests are named here so they do too.
+  DEPENDS
+    ${clockbound_src_dir}/Cargo.lock
+    ${clockbound_src_dir}/Cargo.toml
+    ${clockbound_src_dir}/clock-bound-ffi/Cargo.toml
+  DEPFILE ${clockbound_depfile}
+  WORKING_DIRECTORY ${clockbound_src_dir}
+  COMMENT "Building Rust library: ${clockbound_library}"
+  VERBATIM)
+add_custom_target(rust-clockbound
+  DEPENDS ${clockbound_library})
+add_library(Rust::clockbound STATIC IMPORTED GLOBAL)
+add_dependencies(Rust::clockbound rust-clockbound)
+set_target_properties(Rust::clockbound PROPERTIES
+  IMPORTED_LOCATION "${clockbound_library}"
+  INTERFACE_INCLUDE_DIRECTORIES "${clockbound_src_dir}/clock-bound-ffi/include")
+
 set(binding_gen_build_dir "${scylla_gen_build_dir}/rust")
 
 set(cxx_header "${binding_gen_build_dir}/cxx.h")

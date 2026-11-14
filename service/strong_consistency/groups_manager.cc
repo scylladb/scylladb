@@ -20,6 +20,8 @@
 #include "service/raft/raft_rpc.hh"
 #include "service/raft/raft_group0.hh"
 #include "service/raft/raft_timeout.hh"
+#include "service/raft/bounded_clock_adjtimex.hh"
+#include "service/raft/bounded_clock_clockbound.hh"
 #include "service/storage_proxy.hh"
 #include "replica/database.hh"
 #include "db/config.hh"
@@ -189,6 +191,30 @@ auto raft_server::begin_read(abort_source& as) -> begin_read_result {
     return ok{};
 }
 
+// Renewal and the deferred commit are checked once per tick, so a lease under
+// this many ticks would be renewed on every tick.
+static constexpr int64_t min_lease_ticks = 3;
+
+// Above this a leader change stalls a group's writes for long enough to warn
+// about: the new leader commits nothing until the deposed lease has expired.
+static constexpr auto lease_duration_warn_threshold = std::chrono::seconds(8);
+
+// The lease duration (Delta): the configured value, or, when it is 0, the Raft
+// election timeout, the longest lease a crashed leader's successor never has
+// to wait out, since it is elected only after that long.
+static std::chrono::milliseconds lease_duration(const db::config& db_config) {
+    const auto tick = std::chrono::duration_cast<std::chrono::milliseconds>(get_tick_interval());
+    const auto configured = std::chrono::milliseconds(db_config.strong_consistency_lease_duration_in_ms());
+    const auto delta = configured.count() ? configured : tick * raft::ELECTION_TIMEOUT.count();
+    if (delta < tick * min_lease_ticks) {
+        throw std::invalid_argument(fmt::format(
+                "strong_consistency_lease_duration_in_ms must be at least {} raft ticks ({}ms) "
+                "when strong_consistency_enable_leases is set, got {}ms",
+                min_lease_ticks, (tick * min_lease_ticks).count(), delta.count()));
+    }
+    return delta;
+}
+
 groups_manager::groups_manager(netw::messaging_service& ms, 
         raft_group_registry& raft_gr, cql3::query_processor& qp,
         replica::database& db, service::migration_manager& mm, db::system_keyspace& sys_ks, gms::feature_service& features,
@@ -204,6 +230,44 @@ groups_manager::groups_manager(netw::messaging_service& ms,
     , _raft_replay_buffer(raft_replay_buffer)
     , _resize_tracker(resize_tracker.local())
 {
+    // Construct the LeaseGuard clock backend eagerly, but only when leader
+    // leases are enabled: the clockbound backend's constructor throws (failing
+    // node start) if the ClockBound shared-memory segment is missing or
+    // unreadable, which must not happen when leases are off. The selected
+    // source is fixed for the process lifetime (MustRestart config option).
+    const auto& db_config = _db.get_config();
+    if (db_config.strong_consistency_enable_leases()) {
+        _lease_duration = lease_duration(db_config);
+        using source = db::lease_clock_source_t::source;
+        const char* backend_name = nullptr;
+        switch (db_config.strong_consistency_lease_clock_source()) {
+        case source::adjtimex:
+            _bounded_clock = std::make_unique<service::bounded_clock_adjtimex>();
+            backend_name = "adjtimex";
+            break;
+        case source::clockbound:
+            _bounded_clock = std::make_unique<service::bounded_clock_clockbound>();
+            backend_name = "clockbound";
+            break;
+        }
+        // Log once per node (not once per shard) now that the backend has been
+        // successfully constructed, so the line records a backend that is in use.
+        // A clockbound constructor that throws (no readable segment) propagates
+        // and fails node start.
+        if (this_shard_id() == 0) {
+            logger.info("LeaseGuard leader leases enabled; using '{}' bounded-clock backend "
+                        "(lease duration {}ms)", backend_name, _lease_duration.count());
+            if (_lease_duration > lease_duration_warn_threshold) {
+                logger.warn("LeaseGuard lease duration {}ms is above {}ms: after every leader change "
+                            "a group's writes stall for up to the lease duration",
+                            _lease_duration.count(),
+                            std::chrono::duration_cast<std::chrono::milliseconds>(lease_duration_warn_threshold).count());
+            }
+        }
+    } else if (this_shard_id() == 0) {
+        logger.info("LeaseGuard leader leases disabled");
+    }
+
     init_messaging_service();
 }
 
@@ -321,6 +385,23 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
         // table starts with many tablets).
         .fast_bootstrap_seed = std::hash<raft::group_id>()(group_id)
     };
+
+    // LeaseGuard leader leases. Off by default: leases require synchronized
+    // clocks on all nodes; when enabled, the leader serves local linearizable
+    // reads while its lease is valid and defers committing after a leadership
+    // change until the previous lease has expired. The clock is owned by this
+    // manager (per shard) and outlives the server.
+    const auto& db_config = _db.get_config();
+    if (db_config.strong_consistency_enable_leases()) {
+        // The clock backend is constructed in the groups_manager constructor
+        // whenever leases are enabled, so it must be present here.
+        SCYLLA_ASSERT(_bounded_clock);
+        config.leaseguard = raft::server::configuration::leaseguard_configuration {
+            .delta = _lease_duration,
+            .clock = *_bounded_clock,
+        };
+    }
+
     auto server = raft::create_server(my_id, std::move(rpc), std::move(state_machine),
             std::move(storage), _raft_gr.failure_detector(), config, std::move(server_stats));
 

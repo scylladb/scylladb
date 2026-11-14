@@ -334,6 +334,13 @@ const config_type& config_type_for<enum_option<db::tablets_mode_t>>() {
 }
 
 template <>
+const config_type& config_type_for<enum_option<db::lease_clock_source_t>>() {
+    static config_type ct(
+        "lease clock source", printable_to_json<enum_option<db::lease_clock_source_t>>);
+    return ct;
+}
+
+template <>
 const config_type& config_type_for<db::config::hinted_handoff_enabled_type>() {
     static config_type ct("hinted handoff enabled", hinted_handoff_enabled_to_json);
     return ct;
@@ -527,6 +534,23 @@ template <>
 class convert<enum_option<db::tablets_mode_t>> {
 public:
     static bool decode(const Node& node, enum_option<db::tablets_mode_t>& rhs) {
+        std::string name;
+        if (!convert<std::string>::decode(node, name)) {
+            return false;
+        }
+        try {
+            std::istringstream(name) >> rhs;
+        } catch (boost::program_options::invalid_option_value&) {
+            return false;
+        }
+        return true;
+    }
+};
+
+template <>
+class convert<enum_option<db::lease_clock_source_t>> {
+public:
+    static bool decode(const Node& node, enum_option<db::lease_clock_source_t>& rhs) {
         std::string name;
         if (!convert<std::string>::decode(node, name)) {
             return false;
@@ -1198,6 +1222,42 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Timeout for CQL server requests on shutdown. After this timeout the server will shutdown all connections.")
     , group0_raft_op_timeout_in_ms(this, "group0_raft_op_timeout_in_ms", liveness::LiveUpdate, value_status::Used, 60000,
             "The time in milliseconds that group0 allows a Raft operation to complete.")
+    , strong_consistency_enable_leases(this, "strong_consistency_enable_leases", liveness::MustRestart, value_status::Used, false,
+            "Enable Raft leader leases (LeaseGuard) for strongly-consistent tables. When enabled, "
+            "a leader serves linearizable reads locally without a quorum round-trip while its lease "
+            "is valid, and defers committing writes until a deposed leader's lease has expired. "
+            "This REQUIRES synchronized clocks on all nodes (e.g. NTP or PTP): a node whose clock is "
+            "unsynchronized falls back to the safe path (deferring commits and possibly stepping "
+            "down), which can reduce availability. Read once when a raft group starts.")
+    , strong_consistency_lease_duration_in_ms(this, "strong_consistency_lease_duration_in_ms", liveness::MustRestart, value_status::Used, 0,
+            "Duration (Delta) in milliseconds of a Raft leader lease for strongly-consistent tables, "
+            "used when strong_consistency_enable_leases is true. 0, the default, derives it "
+            "from the Raft election timeout (10 ticks of 100ms, i.e. 1s), the longest lease a crashed "
+            "leader's successor never has to wait out. Values below three ticks (300ms) are rejected at "
+            "startup; above 8s a warning is logged, since every leader change stalls a group's writes for "
+            "up to the lease duration. All nodes must use the same value: a deposed leader with a longer "
+            "lease than the new leader's would serve reads past the point where the new leader commits, "
+            "so change it only while leases are disabled on all nodes. A leader serves reads locally only "
+            "while its lease is younger than this duration minus twice the clock's error bound. With "
+            "the adjtimex clock that bound is the kernel's maximum error, which grows by 0.5ms per "
+            "second between NTP daemon updates (to ~0.5s at chrony's default maxpoll of 1024s), so "
+            "configure the daemon to update the kernel often: several sources, or a low maxpoll "
+            "(maxpoll 6 keeps it under ~40ms).")
+    , strong_consistency_lease_clock_source(this, "strong_consistency_lease_clock_source", liveness::MustRestart, value_status::Used, lease_clock_source_t::source::adjtimex,
+            "Bounded-clock backend used by Raft leader leases (LeaseGuard) to obtain a trusted bound "
+            "on wall-clock time. Used when strong_consistency_enable_leases is true. "
+            "Can be set to the following values:\n"
+            "\n"
+            "\tadjtimex: derive the clock bound from the kernel clock synchronization state and maximum "
+            "error reported by adjtimex(2). Always available; the default. Requires the NTP daemon to apply "
+            "leap seconds through the kernel or by a step (chrony's leapsecmode system, the default, or step; "
+            "not slew or ignore), and all nodes to use the same kind of time sources, all leap-smearing or none.\n"
+            "\tclockbound: derive the clock bound from the AWS ClockBound daemon (via shared memory). "
+            "The node fails to start if the ClockBound shared-memory segment is missing or unreadable, "
+            "i.e. the clockbound daemon has never run on this host. If the daemon stops, leases fall back "
+            "to quorum reads once its clock status is no longer synchronized or free-running.\n"
+            "\n"
+            "Read once when a raft group starts.")
     /**
     * @Group Inter-node settings
     */
@@ -2228,6 +2288,12 @@ std::unordered_map<sstring, db::tablets_mode_t::mode> db::tablets_mode_t::map() 
             };
 }
 
+std::unordered_map<sstring, db::lease_clock_source_t::source> db::lease_clock_source_t::map() {
+    return {{"adjtimex", db::lease_clock_source_t::source::adjtimex},
+            {"clockbound", db::lease_clock_source_t::source::clockbound}
+            };
+}
+
 template struct utils::config_file::named_value<seastar::log_level>;
 
 // Explicit instantiation definitions for all named_value<T> specializations
@@ -2261,6 +2327,7 @@ template struct utils::config_file::named_value<enum_option<db::experimental_fea
 template struct utils::config_file::named_value<enum_option<db::replication_strategy_restriction_t>>;
 template struct utils::config_file::named_value<enum_option<db::consistency_level_restriction_t>>;
 template struct utils::config_file::named_value<enum_option<db::tablets_mode_t>>;
+template struct utils::config_file::named_value<enum_option<db::lease_clock_source_t>>;
 template struct utils::config_file::named_value<enum_option<netw::dict_training_loop::when>>;
 template struct utils::config_file::named_value<netw::advanced_rpc_compressor::tracker::algo_config>;
 template struct utils::config_file::named_value<std::vector<enum_option<db::experimental_features_t>>>;
