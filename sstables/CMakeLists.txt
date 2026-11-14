@@ -17,9 +17,11 @@ target_sources(sstables
     parquet/bit_util.cc
     parquet/compression.cc
     parquet/encoding.cc
+    parquet/fetcher.cc
     parquet/file_summary.cc
     parquet/metadata.cc
     parquet/page_decoder.cc
+    parquet/reader.cc
     parquet/reader_cache.cc
     parquet/rle.cc
     parquet/schema.cc
