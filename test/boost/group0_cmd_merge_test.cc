@@ -79,6 +79,41 @@ SEASTAR_TEST_CASE(test_group0_state_machine_merger_timeuuid_order) {
     BOOST_REQUIRE_EQUAL(merger.last_id(), t1);
 }
 
+// can_merge() after a flush must measure only the new batch, not already-flushed ones.
+SEASTAR_TEST_CASE(test_group0_state_machine_merger_size_reset_after_flush) {
+    auto [db, db_impl] = cql3::expr::test_utils::make_data_dictionary_database(db::system_keyspace::group0_history());
+
+    semaphore s{1};
+    auto mutex_holder = co_await get_units(s, 1);
+
+    constexpr size_t max_command_size = 100;
+    service::group0_state_machine_merger merger{OLD_TIMEUUID, std::move(mutex_holder), max_command_size, db};
+
+    auto cmd_a = create_command(utils::UUID_gen::get_time_UUID());
+    merger.add(std::move(cmd_a), 60);
+
+    // 60 + 60 > 100: flush, as apply()'s merge loop does.
+    auto cmd_b = create_command(utils::UUID_gen::get_time_UUID());
+    BOOST_REQUIRE(!merger.can_merge(cmd_b, 60));
+    merger.merge();
+    BOOST_REQUIRE(merger.empty());
+
+    merger.add(std::move(cmd_b), 60);
+
+    auto cmd_c = create_command(utils::UUID_gen::get_time_UUID());
+
+    // The fresh batch's own 60 still counts (60 + 41 > 100).
+    BOOST_REQUIRE(!merger.can_merge(cmd_c, 41));
+
+    // 61 <= 100 must merge; a stale _size from the flushed batch would say 121.
+    BOOST_REQUIRE(merger.can_merge(cmd_c, 1));
+
+    // In-batch accumulation still works (61 + 40 > 100).
+    merger.add(std::move(cmd_c), 1);
+    auto cmd_d = create_command(utils::UUID_gen::get_time_UUID());
+    BOOST_REQUIRE(!merger.can_merge(cmd_d, 40));
+}
+
 SEASTAR_TEST_CASE(test_group0_cmd_merge) {
 #ifndef SCYLLA_ENABLE_ERROR_INJECTION
     fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
