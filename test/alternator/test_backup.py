@@ -38,3 +38,15 @@ def test_describe_continuous_backups_nonexistent(test_table):
 def test_describe_continuous_backups_missing(test_table):
     with pytest.raises(ClientError, match='ValidationException'):
         test_table.meta.client.describe_continuous_backups()
+
+# DynamoDB's "TableName" documentation specifies that besides the obvious
+# possibility of giving the table's name, "You can also provide the Amazon
+# Resource Name (ARN) of the table in this parameter.". Here we check this for
+# DescribeContinuousBackups.
+# Reproduces SCYLLADB-4683.
+def test_describe_continuous_backups_table_name_arn(test_table):
+    client = test_table.meta.client
+    arn = client.describe_table(TableName=test_table.name)['Table']['TableArn']
+    response = client.describe_continuous_backups(TableName=arn)
+    assert response['ContinuousBackupsDescription'] == client.describe_continuous_backups(
+        TableName=test_table.name)['ContinuousBackupsDescription']

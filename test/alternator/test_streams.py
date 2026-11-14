@@ -157,6 +157,18 @@ def test_list_streams_alter(dynamodb, dynamodbstreams):
             table.update(StreamSpecification={'StreamEnabled': True, 'StreamViewType': type});
             wait_for_active_stream(dynamodbstreams, table)
 
+# The TableName parameters of DynamoDB's API also accept a table's ARN in
+# place of its name (see the test_table_name_arn_* tests in test_table.py).
+# But ListStreams belongs to the separate DynamoDB Streams API, whose TableName
+# is documented as just a table name, and DynamoDB indeed rejects an ARN there
+# with a ValidationException. This test checks that Alternator doesn't accept
+# it either. The table doesn't need a stream, since the ARN is rejected before
+# any streams are listed.
+def test_list_streams_table_name_arn(test_table_s, dynamodbstreams):
+    arn = test_table_s.meta.client.describe_table(TableName=test_table_s.name)['Table']['TableArn']
+    with pytest.raises(ClientError, match='ValidationException'):
+        dynamodbstreams.list_streams(TableName=arn)
+
 def test_list_streams_paged(dynamodb, dynamodbstreams):
     # There is no reason to run this test for all stream types - we have
     # other tests for creating tables with all stream types, and for using
