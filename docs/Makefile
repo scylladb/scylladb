@@ -100,6 +100,7 @@ multiversionpreview: multiversion
 # Test commands
 .PHONY: test
 test: setup
+	$(UV) run python -m unittest discover -s _ext/tests
 	FLAG=$(FLAG) $(SPHINXBUILD) -b dirhtml $(TESTSPHINXOPTS) $(BUILDDIR)/dirhtml
 	@echo
 	@echo "Build finished. The HTML pages are in $(BUILDDIR)/dirhtml."
