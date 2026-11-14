@@ -8,28 +8,54 @@
 
 #include "replica/logstor/ondisk.hh"
 
+#include <algorithm>
+#include <cstddef>
+#include <limits>
 #include <stdexcept>
 #include <fmt/format.h>
+#include <seastar/core/byteorder.hh>
 
 #include "utils/crc.hh"
 
 namespace replica::logstor::ondisk {
 
+namespace {
+
+// crc_output gives the bytes that a serializer writes to a CRC, and if a limit is set, it gives
+// only the first `limit` bytes. A serializer writes a field in one write() call, so a field of 1, 2,
+// 4 or 8 bytes becomes one CRC instruction.
+class crc_output {
+    utils::crc32& _crc;
+    size_t _left;
+public:
+    explicit crc_output(utils::crc32& crc, size_t limit = std::numeric_limits<size_t>::max()) noexcept
+        : _crc(crc), _left(limit) {}
+
+    void write(const char* p, size_t n) noexcept {
+        n = std::min(n, _left);
+        _left -= n;
+        switch (n) {
+        case 0: break;
+        case 1: _crc.process_le(seastar::read_le<uint8_t>(p)); break;
+        case 2: _crc.process_le(seastar::read_le<uint16_t>(p)); break;
+        case 4: _crc.process_le(seastar::read_le<uint32_t>(p)); break;
+        case 8: _crc.process_le(seastar::read_le<uint64_t>(p)); break;
+        default: _crc.process(reinterpret_cast<const uint8_t*>(p), n);
+        }
+    }
+};
+
+} // anonymous namespace
+
 uint32_t chunk_header::calculate_crc(const std::optional<segment_header>& sh) const {
     utils::crc32 c;
-    c.process_le(magic);
-    c.process_le(static_cast<uint8_t>(kind));
-    c.process_le(version);
-    c.process_le(reserved);
-    c.process_le(segment_seq.value);
-    c.process_le(records_size);
-    c.process_le(body_crc);
-    c.process_le(reserved2);
+    static_assert(offsetof(chunk_header, crc) + sizeof(crc) == sizeof(chunk_header),
+            "crc must be the last field of chunk_header, because the CRC covers the bytes before it");
+    crc_output ch_out(c, chunk_header_size - sizeof(crc));
+    ser::serializer<chunk_header>::write(ch_out, *this);
     if (sh) {
-        c.process_le(sh->table.uuid().get_most_significant_bits());
-        c.process_le(sh->table.uuid().get_least_significant_bits());
-        c.process_le(sh->first_token.raw());
-        c.process_le(sh->last_token.raw());
+        crc_output sh_out(c);
+        ser::serializer<segment_header>::write(sh_out, *sh);
     }
     return c.get();
 }
@@ -47,7 +73,7 @@ bool validate_chunk_header_fields(const chunk_header& ch) {
         return false;
     }
 
-    return ch.version == current_version;
+    return can_read_version(ch.version);
 }
 
 bool validate_chunk_headers(const chunk_header& ch, const std::optional<segment_header>& sh) {
@@ -63,9 +89,18 @@ uint32_t calculate_body_crc(std::span<const char> body) {
     return c.get();
 }
 
-void throw_invalid_record_frame(const record_frame_header& frame_header, size_t frame_size) {
+void throw_invalid_record_frame(std::span<const char> frame) {
+    if (frame.size() < record_frame_header_size) {
+        throw std::runtime_error(fmt::format("Invalid record frame: {} bytes, shorter than its header", frame.size()));
+    }
+    seastar::simple_memory_input_stream in(frame.data(), frame.size());
+    auto frame_header = ser::serializer<record_frame_header>::read(in);
     throw std::runtime_error(fmt::format("Invalid record frame: key_size {} and value_size {} in a frame of {} bytes",
-            frame_header.key_size, frame_header.value_size, frame_size));
+            frame_header.key_size, frame_header.value_size, frame.size()));
+}
+
+void throw_unknown_record_flags(uint16_t unknown) {
+    throw std::runtime_error(fmt::format("Record frame has unknown flags {:#x}", unknown));
 }
 
 } // namespace replica::logstor::ondisk

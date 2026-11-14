@@ -1607,8 +1607,8 @@ future<> segment_manager_impl::discard_segments(logstor_group& cg) {
 }
 
 future<std::optional<segment_info>> segment_manager_impl::read_segment_info(log_segment_id segment_id) {
-    return with_segment_input_stream(segment_id, block_alignment, [] (seastar::input_stream<char>& in) {
-        return read_chunk_info(in);
+    return with_segment_input_stream(segment_id, block_alignment, [segment_id] (seastar::input_stream<char>& in) {
+        return read_chunk_info(in, segment_id);
     });
 }
 
@@ -2400,7 +2400,7 @@ void segment_manager::on_free_record(record_location location) noexcept {
 }
 
 segment_manager_impl::needs_separation segment_manager_impl::place_recovered_segment(recovery_catalog& catalog, log_segment_id seg_id, const segment_info& info, recovery_stats& stats) {
-    switch (info.kind) {
+    switch (info.kind()) {
     case segment_kind::mixed:
         logstor_logger.debug("Recovering mixed segment {} using separator", seg_id);
         return needs_separation::yes;

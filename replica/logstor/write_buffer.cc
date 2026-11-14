@@ -74,6 +74,9 @@ raw_write_buffer::append_result raw_write_buffer::append(const Writer& writer) {
     if (header_size < ondisk::record_header_fixed_size) {
         on_internal_error(logstor_logger, fmt::format("Record header size {} is below its fixed size {}", header_size, ondisk::record_header_fixed_size));
     }
+    if (const size_t key_size = header_size - ondisk::record_header_fixed_size; key_size > ondisk::max_key_size) {
+        on_internal_error(logstor_logger, fmt::format("Partition key size {} exceeds the maximum {}", key_size, ondisk::max_key_size));
+    }
 
     const auto record_size = header_size + value_size;
     if (!can_fit(record_size)) {
@@ -146,13 +149,13 @@ void raw_write_buffer::write_header(segment_sequence segment_seq, std::optional<
     }
 
     _chunk_header.magic = ondisk::chunk_header_magic;
-    _chunk_header.kind = _segment_kind;
     _chunk_header.version = ondisk::current_version;
-    _chunk_header.reserved = 0;
+    _chunk_header.kind = _segment_kind;
+    _chunk_header.flags = 0;
     _chunk_header.segment_seq = segment_seq;
     // seal() set records_size, which is what the body spans after the headers.
     _chunk_header.body_crc = ondisk::calculate_body_crc(std::span(_buffer.get() + chunk_headers_size(), _chunk_header.records_size));
-    _chunk_header.reserved2 = 0;
+    _chunk_header.reserved = {};
     _chunk_header.crc = _chunk_header.calculate_crc(seg_hdr);
 
     ser::serialize<ondisk::chunk_header>(_header_stream, _chunk_header);
@@ -687,6 +690,11 @@ future<buffered_write_result> buffered_writer::write_to_buffer(log_record_writer
     if (writer.record_size() > max_size) [[unlikely]] {
         return make_exception_future<buffered_write_result>(std::runtime_error(
                 fmt::format("Write size {} exceeds the maximum record size {}", writer.record_size(), max_size)));
+    }
+    const size_t key_size = writer.header_size() - ondisk::record_header_fixed_size;
+    if (key_size > ondisk::max_key_size) [[unlikely]] {
+        return make_exception_future<buffered_write_result>(std::runtime_error(
+                fmt::format("Partition key size {} exceeds the maximum {}", key_size, ondisk::max_key_size)));
     }
 
     // fast path - if there are no queued writes and there is space in the current head buffer or the next, advance the

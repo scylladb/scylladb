@@ -138,6 +138,20 @@ future<file_id_t> file_manager::recovery::open_found_files() {
     files._open_files.resize(static_cast<size_t>(std::max(files._cfg.file_count, found_file_count)));
     files._allocated_file_count = found_file_count;
     co_await files.open_allocated_files();
+
+    // Check that each found file has the configured size, because the segment manager calculates
+    // the number of segments in a file from the configured size. With a file of another size,
+    // recovery would not scan the end of the file, or would read past the end of the file.
+    co_await max_concurrent_for_each(std::views::iota(file_id_t(0), found_file_count), 32, [&files] (file_id_t file_id) -> future<> {
+        const auto size = co_await files._open_files[file_id].size();
+        if (size != files._cfg.file_size) {
+            throw std::runtime_error(fmt::format("Logstor file {} is {} bytes, but the configured file size is {} bytes. "
+                    "The size of a logstor file cannot change after the file is created, so set logstor_file_size_in_mb "
+                    "back to the value that created the files.",
+                    files.file_path(file_id).string(), size, files._cfg.file_size));
+        }
+    });
+
     files._recovery_step = recovery_step::opened;
     co_return found_file_count;
 }
