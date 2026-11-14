@@ -66,6 +66,7 @@ struct foreign_sstable_open_info {
     sstable_format_types format;
     uint64_t uncompressed_data_size;
     uint64_t metadata_size_on_disk;
+    uint64_t bytes_on_disk;
 };
 
 struct sstable_open_config {
