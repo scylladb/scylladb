@@ -167,7 +167,8 @@ private:
 ///
 /// The semaphore also acts as an execution stage for reads. This
 /// functionality is exposed via \ref with_permit() and \ref
-/// with_ready_permit().
+/// with_ready_permit(). Reads admitted immediately by with_permit() usually run
+/// inline instead (see with_permit()).
 class reader_concurrency_semaphore {
 public:
     using resources = reader_resources;
@@ -570,7 +571,10 @@ public:
     /// Run the function through the semaphore's execution stage with an admitted permit
     ///
     /// First a permit is obtained via the normal admission route, as if
-    /// it was created  with \ref obtain_permit(), then func is enqueued to be
+    /// it was created  with \ref obtain_permit(). If the permit is admitted
+    /// immediately, func is run inline, unless called from a seastar::thread or
+    /// a preemption is pending, in which case it goes through the execution
+    /// loop like a queued read. Otherwise func is enqueued to be
     /// run by the semaphore's execution loop. This emulates an execution stage,
     /// as it allows batching multiple funcs to be run together. Unlike an
     /// execution stage, with_permit() accepts a type-erased function, which
