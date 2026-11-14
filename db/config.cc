@@ -1525,6 +1525,27 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Hard limit on the number of partition keys covered by a single sstable summary entry. "
         "A summary entry is forced (breaking the index page) once this many partitions accumulate, which prevents "
         "pathologically large index pages.")
+    , parquet_row_group_size_in_kb(this, "parquet_row_group_size_in_kb", liveness::LiveUpdate, value_status::Used, 8192,
+        "The largest row group of a new sstable whose Data file is a Parquet file, in KiB of buffered data. "
+        "The writer buffers a whole row group in memory, so the memory budget of the writers may make row groups smaller. "
+        "Values above 1048576 (1 GiB) are treated as 1048576. "
+        "It affects only sstables written after the change.")
+    , parquet_page_set_size_in_kb(this, "parquet_page_set_size_in_kb", liveness::LiveUpdate, value_status::Used, 128,
+        "The size of a page set of a new sstable whose Data file is a Parquet file, in KiB of raw data. "
+        "A page set is the group of pages of all columns that cover the same rows. "
+        "It bounds the work of a point read, and the row index has an entry at each page set boundary inside a partition. "
+        "Values above 1024 (1 MiB) are treated as 1024. "
+        "It affects only sstables written after the change.")
+    , parquet_min_page_size_in_kb(this, "parquet_min_page_size_in_kb", liveness::LiveUpdate, value_status::Used, 8,
+        "The smallest page of a column of a new sstable whose Data file is a Parquet file, in KiB. "
+        "A column skips a page set boundary while its pending page is smaller than this. "
+        "Values above 1024 (1 MiB) are treated as 1024. "
+        "It affects only sstables written after the change.")
+    , parquet_dictionary_page_size_limit_in_kb(this, "parquet_dictionary_page_size_limit_in_kb", liveness::LiveUpdate, value_status::Used, 4,
+        "The size limit of a dictionary page of a new sstable whose Data file is a Parquet file, in KiB. "
+        "A column chunk whose dictionary would grow beyond it uses another encoding. Set to 0 to disable dictionaries. "
+        "Values above 1024 (1 MiB) are treated as 1024. "
+        "It affects only sstables written after the change.")
     , components_memory_reclaim_threshold(this, "components_memory_reclaim_threshold", liveness::LiveUpdate, value_status::Used, .2, "Ratio of available memory for all in-memory components of SSTables in a shard beyond which the memory will be reclaimed from components until it falls back under the threshold. Currently, this limit is only enforced for bloom filters.")
     , large_memory_allocation_warning_threshold(this, "large_memory_allocation_warning_threshold", value_status::Used, (size_t(128) << 10) + 1, "Warn about memory allocations above this size; set to zero to disable.")
     , enable_deprecated_partitioners(this, "enable_deprecated_partitioners", value_status::Used, false, "Enable the byteordered and random partitioners. These partitioners are deprecated and will be removed in a future version.")

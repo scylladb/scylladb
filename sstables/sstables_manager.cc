@@ -451,6 +451,11 @@ sstable_writer_config sstables_manager::configure_writer(sstring origin) const {
     cfg.origin = std::move(origin);
     cfg.large_data_records_per_sstable = _config.large_data_records_per_sstable();
 
+    cfg.parquet_row_group_size = uint64_t(_config.parquet_row_group_size_in_kb()) << 10;
+    cfg.parquet_page_set_size = uint64_t(_config.parquet_page_set_size_in_kb()) << 10;
+    cfg.parquet_min_page_size = uint64_t(_config.parquet_min_page_size_in_kb()) << 10;
+    cfg.parquet_dictionary_page_limit = uint64_t(_config.parquet_dictionary_page_size_limit_in_kb()) << 10;
+
     return cfg;
 }
 

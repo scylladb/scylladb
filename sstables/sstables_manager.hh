@@ -153,6 +153,11 @@ public:
         utils::updateable_value<uint32_t> large_data_records_per_sstable = utils::updateable_value<uint32_t>(10);
         bool ignore_component_digest_mismatch = false;
         bool enable_dangerous_direct_import_of_cassandra_counters = false;
+        // The tunables of the Parquet writer (see sstable_writer_config).
+        utils::updateable_value<uint32_t> parquet_row_group_size_in_kb = utils::updateable_value<uint32_t>(8192);
+        utils::updateable_value<uint32_t> parquet_page_set_size_in_kb = utils::updateable_value<uint32_t>(128);
+        utils::updateable_value<uint32_t> parquet_min_page_size_in_kb = utils::updateable_value<uint32_t>(8);
+        utils::updateable_value<uint32_t> parquet_dictionary_page_size_limit_in_kb = utils::updateable_value<uint32_t>(4);
     };
 
 private:
@@ -251,6 +256,7 @@ public:
 
     virtual sstable_writer_config configure_writer(sstring origin) const;
     const config& get_config() const noexcept { return _config; }
+
     cache_tracker& get_cache_tracker() { return _cache_tracker; }
     const gms::feature_service& get_features() const noexcept { return _features; }
     const std::vector<sstables::file_io_extension*>& file_io_extensions() const { return _file_io_extensions; }

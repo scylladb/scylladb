@@ -399,6 +399,10 @@ static auto configure_sstables_manager(const db::config& cfg, const database_con
         .large_data_records_per_sstable = cfg.compaction_large_data_records_per_sstable,
         .ignore_component_digest_mismatch = cfg.ignore_component_digest_mismatch(),
         .enable_dangerous_direct_import_of_cassandra_counters = cfg.enable_dangerous_direct_import_of_cassandra_counters(),
+        .parquet_row_group_size_in_kb = cfg.parquet_row_group_size_in_kb,
+        .parquet_page_set_size_in_kb = cfg.parquet_page_set_size_in_kb,
+        .parquet_min_page_size_in_kb = cfg.parquet_min_page_size_in_kb,
+        .parquet_dictionary_page_size_limit_in_kb = cfg.parquet_dictionary_page_size_limit_in_kb,
     };
 }
 
