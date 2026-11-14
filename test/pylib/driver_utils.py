@@ -7,6 +7,7 @@
 """Utilities for working with the scylla-driver (cassandra-driver)."""
 
 import logging
+import math
 import re
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -94,3 +95,19 @@ def normalize_cipher(cipher_name: str) -> str:
     # Remove hyphen between letters and digits: e.g. convert "AES-256" to "AES256"
     cipher_name = re.sub(r'([A-Z]+)-(\d+)', r'\1\2', cipher_name)
     return cipher_name
+
+
+def cql_literal(value: object) -> str:
+    """Render a scalar as a CQL literal: None as NULL, a bool as true/false,
+       a finite number as is, a str quoted. Anything else raises TypeError."""
+    if value is None:
+        return "NULL"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        if not math.isfinite(value):
+            raise TypeError(f"not a CQL literal: {value!r}")
+        return str(value)
+    if isinstance(value, str):
+        return "'" + value.replace("'", "''") + "'"
+    raise TypeError(f"not a CQL literal: {value!r}")
