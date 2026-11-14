@@ -25,9 +25,13 @@ struct single_row_partition;
 // from it. The layout of the value is described in replica/logstor/record_value.cc, next to
 // the encoder.
 
-// Returns the timestamp of the record that stores m: the timestamp of the row marker, or of the
-// partition tombstone if there is no marker. Throws if m has neither. The two overloads must give
-// the same result.
+// Returns the timestamp of the record that stores m: the maximum of the row marker timestamps and
+// the partition tombstone timestamp. Throws if m has neither. The two overloads must give the same
+// result.
+//
+// A converged partition produced by repair may carry both a live row marker and a newer partition
+// tombstone. The maximum makes the record win against, and not be later resurrected by, the
+// versions it supersedes.
 api::timestamp_type record_timestamp(const mutation& m);
 api::timestamp_type record_timestamp(const frozen_mutation& m);
 

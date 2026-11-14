@@ -10,6 +10,7 @@
 #include <seastar/util/closeable.hh>
 #include <seastar/testing/test_case.hh>
 
+#include <algorithm>
 #include <map>
 #include <set>
 
@@ -25,6 +26,7 @@
 #include "sstables/exceptions.hh"
 #include "test/lib/sstable_utils.hh"
 #include "db/commitlog/commitlog.hh"
+#include "db/config.hh"
 
 BOOST_AUTO_TEST_SUITE(table_streaming_reader_test)
 
@@ -154,6 +156,77 @@ SEASTAR_TEST_CASE(test_streaming_reader_checks_integrity_of_single_partition) {
                     return sstring(e.what()).find("failed checksum") != sstring::npos;
                 });
     });
+}
+
+// Verifies that the streaming reader of a logstor table can move from one
+// singular range to the next one. The multi-range reader asks its source for a
+// reader that it can fast-forward, and a logstor reader of a singular range
+// supports that only when it gets the forwarding flags.
+SEASTAR_TEST_CASE(test_logstor_streaming_reader_forwards_across_singular_ranges) {
+    if (this_smp_shard_count() > 1) {
+        std::cerr << "Cannot run test " << get_name() << " with this_smp_shard_count() > 1" << std::endl;
+        return make_ready_future<>();
+    }
+    auto db_cfg = make_shared<db::config>();
+    db_cfg->experimental_features({db::experimental_features_t::feature::LOGSTOR});
+    db_cfg->logstor_disk_size_in_mb(20);
+    db_cfg->logstor_file_size_in_mb(1);
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE KEYSPACE test_ks "
+                "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} "
+                "AND tablets = {'enabled': true}").get();
+        e.execute_cql("CREATE TABLE test_ks.t (pk int PRIMARY KEY, v int) WITH storage_engine = 'logstor'").get();
+        for (int pk = 0; pk < 3; ++pk) {
+            e.execute_cql(format("INSERT INTO test_ks.t (pk, v) VALUES ({}, {})", pk, pk)).get();
+        }
+
+        auto& db = e.local_db();
+        auto s = db.find_schema("test_ks", "t");
+        auto& table = db.find_column_family(s->id());
+
+        std::vector<dht::decorated_key> keys;
+        for (int pk = 0; pk < 3; ++pk) {
+            keys.push_back(dht::decorate_key(*s, partition_key::from_single_value(*s, int32_type->decompose(pk))));
+        }
+        std::ranges::sort(keys, dht::decorated_key::less_comparator(s));
+
+        auto read_keys = [&] (mutation_reader& reader) {
+            std::vector<dht::decorated_key> read;
+            while (auto m = read_mutation_from_mutation_reader(reader).get()) {
+                read.push_back(m->decorated_key());
+            }
+            return read;
+        };
+        auto require_keys = [&] (const std::vector<dht::decorated_key>& actual, const std::vector<dht::decorated_key>& expected) {
+            BOOST_REQUIRE_EQUAL(actual.size(), expected.size());
+            for (size_t i = 0; i < actual.size(); ++i) {
+                BOOST_REQUIRE(actual[i].equal(*s, expected[i]));
+            }
+        };
+
+        tests::reader_concurrency_semaphore_wrapper semaphore;
+
+        // The multi-range overload, with the middle key left out.
+        {
+            dht::partition_range_vector ranges{
+                    dht::partition_range::make_singular(keys[0]),
+                    dht::partition_range::make_singular(keys[2])};
+            auto reader = table.make_streaming_reader(s, semaphore.make_permit(), ranges, gc_clock::now());
+            auto close_reader = deferred_close(reader);
+            require_keys(read_keys(reader), {keys[0], keys[2]});
+        }
+
+        // The single-range overload, which the caller fast-forwards.
+        {
+            auto reader = table.make_streaming_reader(s, semaphore.make_permit(), dht::partition_range::make_singular(keys[0]),
+                    s->full_slice(), mutation_reader::forwarding::yes, gc_clock::now());
+            auto close_reader = deferred_close(reader);
+            require_keys(read_keys(reader), {keys[0]});
+            auto next_range = dht::partition_range::make_singular(keys[2]);
+            reader.fast_forward_to(next_range).get();
+            require_keys(read_keys(reader), {keys[2]});
+        }
+    }, std::move(db_cfg));
 }
 
 BOOST_AUTO_TEST_SUITE_END()
