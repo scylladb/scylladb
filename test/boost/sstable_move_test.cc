@@ -89,20 +89,20 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_move_idempotent) {
 // Must be called from a seastar thread
 static bool partial_create_links(sstable_ptr sst, fs::path dst_path, sstables::generation_type gen, int count) {
     auto schema = sst->get_schema();
-    auto tmp_toc = sstable::filename(dst_path.native(), schema->ks_name(), schema->cf_name(), sst->get_version(), gen, sstable_format_types::big, component_type::TemporaryTOC);
+    auto tmp_toc = sstable::filename(dst_path.native(), schema->ks_name(), schema->cf_name(), sst->get_version(), gen, component_type::TemporaryTOC);
     link_file(test(sst).filename(component_type::TOC).native(), tmp_toc).get();
     for (auto& [c, s] : sst->all_components()) {
         if (count-- <= 0) {
             return false;
         }
         auto src = test(sst).filename(c);
-        auto dst = sstable::filename(dst_path.native(), schema->ks_name(), schema->cf_name(), sst->get_version(), gen, sstable_format_types::big, c);
+        auto dst = sstable::filename(dst_path.native(), schema->ks_name(), schema->cf_name(), sst->get_version(), gen, c);
         link_file(src.native(), dst).get();
     }
     if (count-- <= 0) {
         return false;
     }
-    auto dst = sstable::filename(dst_path.native(), schema->ks_name(), schema->cf_name(), sst->get_version(), gen, sstable_format_types::big, component_type::TOC);
+    auto dst = sstable::filename(dst_path.native(), schema->ks_name(), schema->cf_name(), sst->get_version(), gen, component_type::TOC);
     remove_file(tmp_toc).get();
     return true;
 }

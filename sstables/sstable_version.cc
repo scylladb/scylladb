@@ -62,6 +62,8 @@ sstable_version_constants::get_component_map(sstable_version_types version) {
         case sstable_version_types::ms:
         case sstable_version_types::mt:
             return sstable_version_constants_m_bti::_component_map;
+        case sstable_version_types::aa:
+            return sstable_version_constants_pq::_component_map;
     }
     // Should never reach this.
     // Compiler should complain if the switch above does no cover all sstable_version_types values.
@@ -102,5 +104,15 @@ const sstable_version_constants::component_map_t sstable_version_constants_m_bti
 
 const sstable_version_constants::component_map_t sstable_version_constants_m_bti::_component_map =
         sstable_version_constants_m_bti::create_component_map();
+
+const sstable_version_constants::component_map_t sstable_version_constants_pq::create_component_map() {
+    auto result = sstable_version_constants_m_bti::create_component_map();
+    result.erase(component_type::CompressionInfo);
+    result.erase(component_type::CRC);
+    return result;
+}
+
+const sstable_version_constants::component_map_t sstable_version_constants_pq::_component_map =
+        sstable_version_constants_pq::create_component_map();
 
 }

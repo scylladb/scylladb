@@ -6984,7 +6984,7 @@ void sstable_clone_leaving_unsealed_dest_sstable_fn(test_env& env) {
     auto d = sst->clone(gen_generator(), leave_unsealed).get();
     BOOST_REQUIRE(d.state == sst->state());
 
-    auto sst2 = table->get_sstables_manager().make_sstable(s, table->get_storage_options(), d.generation, d.state.value(), d.version, d.format);
+    auto sst2 = table->get_sstables_manager().make_sstable(s, table->get_storage_options(), d.generation, d.state.value(), d.version);
     sst2->load(s->get_sharder(), sstable_open_config{ .unsealed_sstable = leave_unsealed }).get();
     BOOST_REQUIRE(!sst2->get_storage().exists(*sst2, sstables::component_type::TOC).get());
     BOOST_REQUIRE(sst2->get_storage().exists(*sst2, sstables::component_type::TemporaryTOC).get());
@@ -6993,7 +6993,7 @@ void sstable_clone_leaving_unsealed_dest_sstable_fn(test_env& env) {
     d = sst->clone(gen_generator(), leave_unsealed).get();
     BOOST_REQUIRE(d.state == sst->state());
 
-    auto sst3 = table->get_sstables_manager().make_sstable(s, table->get_storage_options(), d.generation, d.state.value(), d.version, d.format);
+    auto sst3 = table->get_sstables_manager().make_sstable(s, table->get_storage_options(), d.generation, d.state.value(), d.version);
     sst3->load(s->get_sharder(), sstable_open_config{ .unsealed_sstable = leave_unsealed }).get();
     BOOST_REQUIRE(sst3->get_storage().exists(*sst3, sstables::component_type::TOC).get());
     BOOST_REQUIRE(!sst3->get_storage().exists(*sst3, sstables::component_type::TemporaryTOC).get());
@@ -7020,7 +7020,7 @@ void object_storage_sstable_clone_leaving_unsealed_dest_sstable(test_env& env) {
     bool leave_unsealed = true;
     auto d = sst->clone(gen_generator(), leave_unsealed).get();
 
-    auto sst2 = env.make_sstable(s, d.generation, d.version, d.format);
+    auto sst2 = env.make_sstable(s, d.generation, d.version);
     {
         bool checked = false;
         env.manager()
@@ -7042,7 +7042,7 @@ void object_storage_sstable_clone_leaving_unsealed_dest_sstable(test_env& env) {
     leave_unsealed = false;
     d = sst->clone(gen_generator(), leave_unsealed).get();
 
-    auto sst3 = env.make_sstable(s, d.generation, d.version, d.format);
+    auto sst3 = env.make_sstable(s, d.generation, d.version);
     {
         bool checked = false;
         env.manager()
@@ -7814,7 +7814,7 @@ SEASTAR_TEST_CASE(test_size_tiering_for_tiny_sstables) {
                 .build();
 
         auto make_sstable = [&] (uint64_t data_size) {
-            auto sst = env.make_sstable(s, "/nowhere/in/particular", env.new_generation(), sstable_version_types::md, big);
+            auto sst = env.make_sstable(s, "/nowhere/in/particular", env.new_generation(), sstable_version_types::md);
             auto keys = tests::generate_partition_keys(2, s, local_shard_only::yes);
             sstables::test(sst).set_values(keys[0].key(), keys[1].key(), stats_metadata{}, data_size);
             return sst;

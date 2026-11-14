@@ -255,7 +255,7 @@ private:
         auto stream_guard = table.stream_in_progress();
         auto& sst_manager = table.get_sstables_manager();
         auto sst = sst_manager.make_sstable(
-            table.schema(), table.get_storage_options(), min_info.generation, sstables::sstable_state::normal, min_info.version, min_info.format);
+            table.schema(), table.get_storage_options(), min_info.generation, sstables::sstable_state::normal, min_info.version);
         sst->set_sstable_level(0);
         auto units = co_await sst_manager.dir_semaphore().get_units(1);
         // The sstable was downloaded for this shard, which is why it was submitted
@@ -969,7 +969,7 @@ future<sstables::shared_sstable> sstables_loader::attach_sstable(table_id tid, c
     llog.debug("Adding downloaded SSTable gen={} to the table {}.{} on shard {}", min_info.generation, table.schema()->ks_name(), table.schema()->cf_name(), this_shard_id());
     auto& sst_manager = table.get_sstables_manager();
     auto sst = sst_manager.make_sstable(
-        table.schema(), table.get_storage_options(), min_info.generation, min_info.sid, sstables::sstable_state::normal, min_info.version, min_info.format);
+        table.schema(), table.get_storage_options(), min_info.generation, min_info.sid, sstables::sstable_state::normal, min_info.version);
     sst->set_sstable_level(0);
     // The sstable was downloaded for this shard, which is why it was submitted here,
     // so there is nothing to work out: declare this shard its owner. The tablet is

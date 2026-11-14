@@ -96,7 +96,7 @@ static future<> load_sstable_for_tablet(const file_stream_id& ops_id, replica::d
         // co_await below. A suspension inserted between these two lines reopens the race.
         auto table_stream_op = t.stream_in_progress();
         auto& sstm = t.get_sstables_manager();
-        auto sst = sstm.make_sstable(t.schema(), t.get_storage_options(), desc.generation, desc.sid, state, desc.version, desc.format);
+        auto sst = sstm.make_sstable(t.schema(), t.get_storage_options(), desc.generation, desc.sid, state, desc.version);
         sstables::sstable_open_config cfg {
             .current_shard_as_sstable_owner = true,
             .unsealed_sstable = true,
@@ -987,10 +987,16 @@ future<stream_files_response> clone_sstable_handler(replica::database& db, db::v
     auto generation = sstables::generation_type(meta.generation);
     auto version = static_cast<sstables::sstable_version_types>(meta.version);
     auto format = static_cast<sstables::sstable_format_types>(meta.format);
+    // The peer sends the enumerator values. Reject values that this node
+    // does not know, and a format that is not that of the version.
+    if (!sstables::version_string.contains(version) || !sstables::format_string.contains(format)) {
+        throw std::invalid_argument(fmt::format("stream_sstables[{}]: unknown sstable version {} or format {}", req.ops_id, meta.version, meta.format));
+    }
+    sstables::check_format_of_version(version, format);
     replica::table& t = db.find_column_family(req.table);
     auto table_stream_op = t.stream_in_progress();
     auto& sstm = t.get_sstables_manager();
-    auto orig_sst = sstm.make_sstable(t.schema(), t.get_storage_options(), generation, meta.id, state, version, format);
+    auto orig_sst = sstm.make_sstable(t.schema(), t.get_storage_options(), generation, meta.id, state, version);
     bool use_reference_sharing = features.sstable_reference_sharing;
     if (!use_reference_sharing) {
         // The copy path only needs the component list (from the TOC) so that

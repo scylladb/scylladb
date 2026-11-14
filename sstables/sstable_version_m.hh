@@ -27,4 +27,14 @@ public:
     static const sstable_version_constants::component_map_t _component_map;
 };
 
+// The components of the `pq` format: those of `ms` and `mt`, without
+// CompressionInfo.db and CRC.db. The Parquet Data file holds its own
+// compression metadata and page checksums.
+class sstable_version_constants_pq final : public sstable_version_constants {
+public:
+    static const sstable_version_constants::component_map_t create_component_map();
+    sstable_version_constants_pq() = delete;
+    static const sstable_version_constants::component_map_t _component_map;
+};
+
 }

@@ -39,7 +39,7 @@ future<minimal_sst_info> clone_backup_sstable(replica::table& table, const sstab
     auto gen = table.get_sstable_generation_generator()();
     auto desc = co_await storage->clone_from(*sstable, gen, sst_manager.get_features().sstable_reference_sharing, snapshot_tag);
     logger.debug("SSTable gen={} sid={} restored from sid={}: shard {}", gen, desc.sid, *source_sid, shards.front());
-    co_return minimal_sst_info{shards.front(), gen, desc.version, desc.format, desc.sid, *source_sid};
+    co_return minimal_sst_info{shards.front(), gen, desc.version, desc.sid, *source_sid};
 }
 
 future<minimal_sst_info> download_sstable(replica::table& table, sstables::shared_sstable sstable, logging::logger& logger) {
@@ -124,7 +124,7 @@ future<minimal_sst_info> download_sstable(replica::table& table, sstables::share
                     on_internal_error(logger, "Fully-contained sstable must belong to one shard only");
                 }
                 logger.debug("SSTable gen={} sid={}: shards {}", gen, sst->sstable_identifier(), fmt::join(shards, ", "));
-                co_return minimal_sst_info{shards.front(), gen, descriptor.version, descriptor.format, std::nullopt, *source_sid};
+                co_return minimal_sst_info{shards.front(), gen, descriptor.version, std::nullopt, *source_sid};
             }
         } catch (...) {
             logger.info("Error downloading SSTable component {}. Reason: {:t}", it->first, std::current_exception());

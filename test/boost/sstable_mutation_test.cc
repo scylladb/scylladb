@@ -488,7 +488,7 @@ static schema_ptr tombstone_overlap_schema() {
 
 
 static future<sstable_ptr> ka_sst(sstables::test_env& env, schema_ptr schema, sstring dir, sstables::generation_type::int_t generation) {
-    return env.reusable_sst(std::move(schema), std::move(dir), sstables::generation_from_value(generation), sstables::sstable::version_types::ka, big, sstable_open_config{});
+    return env.reusable_sst(std::move(schema), std::move(dir), sstables::generation_from_value(generation), sstables::sstable::version_types::ka, sstable_open_config{});
 }
 
 //  Considering the schema above, the sstable looks like:

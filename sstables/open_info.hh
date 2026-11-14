@@ -34,14 +34,17 @@ struct entry_descriptor {
     generation_type generation;
     optimized_optional<sstable_id> sid;
     sstable_version_types version;
-    sstable_format_types format;
     component_type component;
     std::optional<sstable_state> state;
 
     entry_descriptor(generation_type generation, optimized_optional<sstable_id> sid,
-                     sstable_version_types version, sstable_format_types format,
+                     sstable_version_types version,
                      component_type component, std::optional<sstable_state> state = {})
-        : generation(generation), sid(sid), version(version), format(format), component(component), state(state) {}
+        : generation(generation), sid(sid), version(version), component(component), state(state) {}
+
+    sstable_format_types format() const {
+        return format_of(version);
+    }
 };
 
 // Parses sstable file path extracting entry_descriptor from it. Returns the descriptor
@@ -63,7 +66,6 @@ struct foreign_sstable_open_info {
     std::optional<seastar::file_handle> rows;
     generation_type generation;
     sstable_version_types version;
-    sstable_format_types format;
     uint64_t uncompressed_data_size;
     uint64_t metadata_size_on_disk;
 };
