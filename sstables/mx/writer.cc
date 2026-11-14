@@ -22,7 +22,7 @@
 #include "utils/assert.hh"
 #include "utils/exceptions.hh"
 #include "db/large_data_handler.hh"
-#include "db/corrupt_data_handler.hh"
+#include "dht/i_partitioner.hh"
 #include "keys/keys.hh"
 
 #include <functional>
@@ -658,23 +658,7 @@ private:
     }
 
     deletion_time to_deletion_time(tombstone t) {
-        deletion_time dt;
-        if (t) {
-            bool capped;
-            int32_t ldt = adjusted_local_deletion_time(t.deletion_time, capped);
-            if (capped) {
-                sstable_writer_log.warn("Capping tombstone local_deletion_time {} to max {}", t.deletion_time.time_since_epoch().count(), ldt);
-                sstable_writer_log.warn("Capping tombstone in sstable = {}, partition_key = {}", _sst.get_filename(), _partition_key->to_partition_key(_schema));
-                _sst.get_stats().on_capped_tombstone_deletion_time();
-            }
-            dt.local_deletion_time = ldt;
-            dt.marked_for_delete_at = t.timestamp;
-        } else {
-            // Default values for live, non-deleted rows.
-            dt.local_deletion_time = no_deletion_time;
-            dt.marked_for_delete_at = api::missing_timestamp;
-        }
-        return dt;
+        return writer_impl::to_deletion_time(t, *_partition_key);
     }
 
     struct row_time_properties {
@@ -682,8 +666,6 @@ private:
         std::optional<gc_clock::duration> ttl;
         std::optional<gc_clock::time_point> local_deletion_time;
     };
-
-    void record_corrupt_row(clustering_row&& clustered_row);
 
     // Writes single atomic cell
     void write_cell(bytes_ostream& writer, const clustering_key_prefix* clustering_key, atomic_cell_view cell, const column_definition& cdef,
@@ -756,17 +738,7 @@ public:
         , _sst_schema(make_sstable_schema(s, _enc_stats))
         , _run_identifier(cfg.run_identifier)
         , _write_regular_as_static(s.is_static_compact_table())
-        , _size_threshold([this] {
-                    // will allow size limit to be exceeded for 10%, so we won't perform unnecessary split
-                    // of a partition which crossed the limit by a small margin.
-                    const uint64_t max_size = std::numeric_limits<uint64_t>::max();
-                    if (_cfg.max_sstable_size == max_size) {
-                        return max_size;
-                    }
-                    uint64_t threshold_goal = _cfg.max_sstable_size * 1.1;
-                    // handle overflow.
-                    return threshold_goal < _cfg.max_sstable_size ? max_size : threshold_goal;
-                }())
+        , _size_threshold(partition_split_size_threshold(_cfg.max_sstable_size))
         , _large_data(sst, s, cfg.large_data_records_per_sstable)
     {
         // This can be 0 in some cases, which is albeit benign, can wreak havoc
@@ -1288,30 +1260,6 @@ void writer::write_clustered(const clustering_row& clustered_row, uint64_t prev_
     collect_row_stats(_data_writer->offset() - current_pos, &clustered_row.key(), is_dead);
 }
 
-void writer::record_corrupt_row(clustering_row&& clustered_row) {
-    auto& handler = _sst.get_corrupt_data_handler();
-
-    const auto pk = _partition_key->to_partition_key(_schema);
-    const auto ck = clustered_row.key();
-
-    db::corrupt_data_handler::entry_id corrupt_row_id;
-    sstring result;
-    try {
-        corrupt_row_id = handler.record_corrupt_clustering_row(_schema, pk, std::move(clustered_row), "sstable-write", fmt::to_string(_sst.get_filename())).get();
-        result = format("written corrupt row to {} with id {}", handler.storage_name(), corrupt_row_id);
-    } catch (...) {
-        result = format("failed to write corrupt row to {}: {:t}", handler.storage_name(), std::current_exception());
-    }
-
-    sstable_writer_log.error("found non-full clustering key {} in partition {} while writing sstable {} for non-compact table {}.{}; {}",
-            ck,
-            pk,
-            _sst.get_filename(),
-            _schema.ks_name(),
-            _schema.cf_name(),
-            result);
-}
-
 stop_iteration writer::consume(clustering_row&& cr) {
     if (_write_regular_as_static) {
         ensure_tombstone_is_written();
@@ -1319,7 +1267,7 @@ stop_iteration writer::consume(clustering_row&& cr) {
         return stop_iteration::no;
     }
     if (!_schema.is_compact_table() && !cr.key().is_full(_schema)) {
-        record_corrupt_row(std::move(cr));
+        record_corrupt_row(std::move(cr), *_partition_key);
         return stop_iteration::no;
     }
 

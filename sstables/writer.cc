@@ -10,11 +10,68 @@
 #include "sstable_writer.hh"
 #include "writer.hh"
 #include "mx/writer.hh"
+#include "db/corrupt_data_handler.hh"
 
 namespace sstables {
 
 // The name predates the writers of other formats, and users may refer to it.
 logging::logger sstable_writer_log("mc_writer");
+
+uint64_t partition_split_size_threshold(uint64_t max_sstable_size) {
+    // will allow size limit to be exceeded for 10%, so we won't perform unnecessary split
+    // of a partition which crossed the limit by a small margin.
+    const uint64_t max_size = std::numeric_limits<uint64_t>::max();
+    if (max_sstable_size == max_size) {
+        return max_size;
+    }
+    uint64_t threshold_goal = max_sstable_size * 1.1;
+    // handle overflow.
+    return threshold_goal < max_sstable_size ? max_size : threshold_goal;
+}
+
+deletion_time sstable_writer::writer_impl::to_deletion_time(tombstone t, const key& partition_key) {
+    deletion_time dt;
+    if (t) {
+        bool capped;
+        int32_t ldt = adjusted_local_deletion_time(t.deletion_time, capped);
+        if (capped) {
+            sstable_writer_log.warn("Capping tombstone local_deletion_time {} to max {}", t.deletion_time.time_since_epoch().count(), ldt);
+            sstable_writer_log.warn("Capping tombstone in sstable = {}, partition_key = {}", _sst.get_filename(), partition_key.to_partition_key(_schema));
+            _sst.get_stats().on_capped_tombstone_deletion_time();
+        }
+        dt.local_deletion_time = ldt;
+        dt.marked_for_delete_at = t.timestamp;
+    } else {
+        // Default values for live, non-deleted rows.
+        dt.local_deletion_time = no_deletion_time;
+        dt.marked_for_delete_at = api::missing_timestamp;
+    }
+    return dt;
+}
+
+void sstable_writer::writer_impl::record_corrupt_row(clustering_row&& clustered_row, const key& partition_key) {
+    auto& handler = _sst.get_corrupt_data_handler();
+
+    const auto pk = partition_key.to_partition_key(_schema);
+    const auto ck = clustered_row.key();
+
+    db::corrupt_data_handler::entry_id corrupt_row_id;
+    sstring result;
+    try {
+        corrupt_row_id = handler.record_corrupt_clustering_row(_schema, pk, std::move(clustered_row), "sstable-write", fmt::to_string(_sst.get_filename())).get();
+        result = format("written corrupt row to {} with id {}", handler.storage_name(), corrupt_row_id);
+    } catch (...) {
+        result = format("failed to write corrupt row to {}: {:t}", handler.storage_name(), std::current_exception());
+    }
+
+    sstable_writer_log.error("found non-full clustering key {} in partition {} while writing sstable {} for non-compact table {}.{}; {}",
+            ck,
+            pk,
+            _sst.get_filename(),
+            _schema.ks_name(),
+            _schema.cf_name(),
+            result);
+}
 
 sstable_writer::sstable_writer(sstable& sst, const schema& s, uint64_t estimated_partitions,
         const sstable_writer_config& cfg, encoding_stats enc_stats, shard_id shard) {

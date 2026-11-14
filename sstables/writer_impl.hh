@@ -14,12 +14,20 @@
 #include "mutation/mutation_fragment.hh"
 #include "metadata_collector.hh"
 #include "mutation/mutation_fragment_stream_validator.hh"
+#include "sstables/key.hh"
+#include "sstables/types.hh"
 #include "utils/log.hh"
 
 namespace sstables {
 
 // The logger of the sstable writers and their helpers.
 extern logging::logger sstable_writer_log;
+
+// The size above which a writer may end an sstable in the middle of a
+// partition, at a clustering boundary. It is 10% above `max_sstable_size`,
+// so that a partition that crosses the limit by a small margin is not split.
+// The writer compares it with the same measure as `max_sstable_size`.
+uint64_t partition_split_size_threshold(uint64_t max_sstable_size);
 
 struct sstable_writer::writer_impl {
     sstable& _sst;
@@ -57,6 +65,17 @@ struct sstable_writer::writer_impl {
         _collector.set_repaired_at(repaired_at);
     }
     virtual uint64_t data_file_position_for_tests() const = 0;
+protected:
+    // Converts a tombstone to its on-disk form. A tombstone whose local
+    // deletion time does not fit is capped, and the capping is logged with
+    // `partition_key` and counted.
+    // An empty tombstone becomes the "live" deletion_time.
+    deletion_time to_deletion_time(tombstone t, const key& partition_key);
+
+    // Records a clustering row that the writer drops because its key is not
+    // full in a table that is not compact. It reports the row to the corrupt
+    // data handler and logs it. Must be called in a seastar thread.
+    void record_corrupt_row(clustering_row&& clustered_row, const key& partition_key);
 };
 
 }
