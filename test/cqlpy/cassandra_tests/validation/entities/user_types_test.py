@@ -48,7 +48,6 @@ def testFor7684(cql, test_keyspace):
 
 # Reproduces #9215 (a UDT clustering column with descending order causes
 # errors)
-@pytest.mark.xfail(reason="#9215")
 def testDescendingOrderingOfUserTypesIsSupported(cql, test_keyspace):
     with create_type(cql, test_keyspace, "(x double)") as myType:
         with create_table(cql, test_keyspace, f"(k int, v frozen<{myType}>, b boolean static, PRIMARY KEY (k, v)) WITH CLUSTERING ORDER BY (v DESC)") as table:
