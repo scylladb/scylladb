@@ -13,6 +13,8 @@
 #include <expected>
 #include <seastar/coroutine/as_future.hh>
 #include <seastar/core/lowres_clock.hh>
+#include <seastar/core/metrics.hh>
+#include <seastar/core/smp.hh>
 
 using namespace seastar;
 
@@ -40,6 +42,11 @@ auto wait_for_signal(condition_variable& cv, lowres_clock::time_point timeout) -
     co_return;
 }
 
+/// The `endpoint` label of the per-endpoint metrics: the configured host and port.
+auto endpoint_name(const seastar::sstring& host, std::uint16_t port) -> seastar::sstring {
+    return seastar::format("{}:{}", host, port);
+}
+
 template <typename Variant>
 auto make_unexpected(const auto& err) {
     return std::unexpected{std::visit(
@@ -51,8 +58,8 @@ auto make_unexpected(const auto& err) {
 
 } // namespace
 
-clients::clients(logging::logger& logger, refresh_trigger_callback trigger_refresh, utils::updateable_value<uint32_t> unreachable_node_detection_time_in_ms,
-        truststore& truststore)
+clients::clients(logging::logger& logger, seastar::sstring role, refresh_trigger_callback trigger_refresh,
+        utils::updateable_value<uint32_t> unreachable_node_detection_time_in_ms, truststore& truststore)
     : _producer([&]() -> future<clients_vec> {
         return try_with_gate(_gate, [this] -> future<clients_vec> {
             _trigger_refresh();
@@ -64,7 +71,8 @@ clients::clients(logging::logger& logger, refresh_trigger_callback trigger_refre
     , _timeout(WAIT_FOR_CLIENT_TIMEOUT)
     , _logger(logger)
     , _unreachable_node_detection_time_in_ms(std::move(unreachable_node_detection_time_in_ms))
-    , _truststore(truststore) {
+    , _truststore(truststore)
+    , _role(std::move(role)) {
 }
 
 future<clients::request_result> clients::request(
@@ -79,6 +87,15 @@ future<clients::request_result> clients::request(
         load_balancer lb(std::move(*clients), random_engine);
         while (auto client = lb.next()) {
             auto result = co_await client->request(method, path, content, as);
+            // Count every attempt, so an endpoint that fails while another one
+            // answers is visible. The endpoint may have been removed meanwhile.
+            if (auto* m = find_endpoint_metrics(client->endpoint())) {
+                if (result) {
+                    ++m->ok;
+                } else if (std::holds_alternative<service_unavailable_error>(result.error())) {
+                    ++m->unavailable;
+                }
+            }
             if (result) {
                 co_return std::move(result.value());
             }
@@ -118,9 +135,15 @@ future<clients::get_clients_result> clients::get_clients(abort_source& as) {
 
 future<> clients::handle_changed(const std::vector<uri>& uris, const dns::host_address_map& addrs) {
     clear();
+    for (auto& [_, m] : _endpoint_metrics) {
+        m->addresses = 0;
+    }
     for (const auto& uri : uris) {
         auto it = addrs.find(uri.host);
         if (it != addrs.end()) {
+            if (auto m = _endpoint_metrics.find(endpoint_name(uri.host, uri.port)); m != _endpoint_metrics.end()) {
+                m->second->addresses = it->second.size();
+            }
             for (const auto& addr : it->second) {
                 _clients.push_back(co_await make_client(uri, addr));
             }
@@ -129,6 +152,61 @@ future<> clients::handle_changed(const std::vector<uri>& uris, const dns::host_a
 
     _refresh_cv.broadcast();
     co_await close_old_clients();
+}
+
+void clients::set_endpoints(const std::vector<uri>& uris) {
+    std::map<seastar::sstring, std::unique_ptr<endpoint_metrics>> kept;
+    for (const auto& uri : uris) {
+        auto name = endpoint_name(uri.host, uri.port);
+        if (kept.contains(name)) {
+            continue;
+        }
+        auto it = _endpoint_metrics.find(name);
+        if (it != _endpoint_metrics.end()) {
+            kept.emplace(name, std::move(it->second));
+        } else {
+            auto m = std::make_unique<endpoint_metrics>();
+            register_endpoint_metrics(name, *m);
+            kept.emplace(name, std::move(m));
+        }
+    }
+    // The metrics of the URIs left out are unregistered when they are destroyed here.
+    _endpoint_metrics = std::move(kept);
+}
+
+void clients::register_endpoint_metrics(const seastar::sstring& endpoint, endpoint_metrics& m) {
+    namespace sm = seastar::metrics;
+    sm::label role_label("role");
+    sm::label endpoint_label("endpoint");
+    sm::label status_label("status");
+    std::vector<sm::label_instance> labels{role_label(_role), endpoint_label(endpoint)};
+    auto with_status = [&](std::string_view status) {
+        auto l = labels;
+        l.push_back(status_label(status));
+        return l;
+    };
+    m.metrics.add_group("vector_store", {sm::make_counter("endpoint_requests",
+            sm::description("Number of attempts to send a request to one Vector Store endpoint, by outcome. "
+                            "A request that fails over to another endpoint is counted once for each endpoint it tried"),
+            with_status("ok"), m.ok).aggregate({sm::shard_label})});
+    m.metrics.add_group("vector_store", {sm::make_counter("endpoint_requests",
+            sm::description("Number of attempts to send a request to one Vector Store endpoint, by outcome. "
+                            "A request that fails over to another endpoint is counted once for each endpoint it tried"),
+            with_status("unavailable"), m.unavailable).aggregate({sm::shard_label})});
+    // Every shard resolves the same addresses, so the gauge is exported once, from shard 0.
+    if (this_shard_id() != 0) {
+        return;
+    }
+    m.metrics.add_group("vector_store", {sm::make_gauge("endpoint_addresses",
+            sm::description("Number of addresses resolved for a configured Vector Store endpoint; 0 when its host does not resolve"),
+            labels, [&m] {
+                return m.addresses;
+            })});
+}
+
+clients::endpoint_metrics* clients::find_endpoint_metrics(const client::endpoint_type& endpoint) {
+    auto it = _endpoint_metrics.find(endpoint_name(endpoint.host, endpoint.port));
+    return it == _endpoint_metrics.end() ? nullptr : it->second.get();
 }
 
 future<> clients::stop() {

@@ -21,6 +21,9 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/gate.hh>
 #include <seastar/core/condition-variable.hh>
+#include <seastar/core/metrics_registration.hh>
+#include <map>
+#include <memory>
 #include <vector>
 
 namespace vector_search {
@@ -36,13 +39,18 @@ public:
     using get_clients_error = std::variant<aborted_error, addr_unavailable_error>;
     using get_clients_result = std::expected<clients_vec, get_clients_error>;
 
-    explicit clients(logging::logger& logger, refresh_trigger_callback trigger_refresh, utils::updateable_value<uint32_t> unreachable_node_detection_time_in_ms,
-            truststore& truststore);
+    /// `role` ("primary" or "secondary") labels the per-endpoint metrics of these clients.
+    explicit clients(logging::logger& logger, seastar::sstring role, refresh_trigger_callback trigger_refresh,
+            utils::updateable_value<uint32_t> unreachable_node_detection_time_in_ms, truststore& truststore);
 
     seastar::future<request_result> request(
             seastar::httpd::operation_type method, seastar::sstring path, std::optional<seastar::sstring> content, seastar::abort_source& as);
 
     seastar::future<> handle_changed(const std::vector<uri>& uris, const dns::host_address_map& addrs);
+
+    /// Keeps one set of per-endpoint metrics for each configured URI: adds the
+    /// series of new URIs and removes those of URIs no longer configured.
+    void set_endpoints(const std::vector<uri>& uris);
 
     seastar::future<> stop();
 
@@ -64,6 +72,17 @@ public:
     }
 
 private:
+    /// Per-endpoint metrics, one set per configured URI (host:port).
+    struct endpoint_metrics {
+        uint64_t ok = 0;
+        uint64_t unavailable = 0;
+        uint64_t addresses = 0;
+        seastar::metrics::metric_groups metrics;
+    };
+
+    void register_endpoint_metrics(const seastar::sstring& endpoint, endpoint_metrics& m);
+    endpoint_metrics* find_endpoint_metrics(const client::endpoint_type& endpoint);
+
     seastar::future<> close_clients();
     seastar::future<> close_old_clients();
     seastar::future<seastar::lw_shared_ptr<client>> make_client(const uri& uri_, const seastar::net::inet_address& addr_);
@@ -78,6 +97,8 @@ private:
     logging::logger& _logger;
     utils::updateable_value<uint32_t> _unreachable_node_detection_time_in_ms;
     truststore& _truststore;
+    seastar::sstring _role;
+    std::map<seastar::sstring, std::unique_ptr<endpoint_metrics>> _endpoint_metrics;
 };
 
 } // namespace vector_search
