@@ -45,7 +45,8 @@ custom_args:
         - '-c2 -m3G'
     cache_algorithm_test:
         - '-c1 -m256M'
-    commitlog_cleanup_test:
+    # Its tests assume a single shard (e.g. all tables sharing one commitlog).
+    commitlog_cleanup_record_gc_test:
         - '-c1 -m2G'
     bloom_filter_test:
         - '-c1'
