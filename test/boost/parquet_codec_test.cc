@@ -37,6 +37,7 @@
 #include "sstables/file_writer.hh"
 #include "sstables/parquet/metadata.hh"
 #include "sstables/parquet/thrift.hh"
+#include "sstables/parquet/writer.hh"
 #include "utils/memory_data_sink.hh"
 
 namespace pq = sstables::parquet;
@@ -724,107 +725,11 @@ SEASTAR_THREAD_TEST_CASE(test_file_metadata_malformed) {
 
 namespace {
 
-// Builds a small Parquet file by hand, with uncompressed plain Data Page V2
-// pages of optional int32 columns. One page per column chunk.
-// The real column writer will replace this.
-class test_file_builder {
-    std::string _data;
-public:
-    test_file_builder() : _data(pq::magic) {}
-
-    uint64_t offset() const { return _data.size(); }
-
-    struct chunk_result {
-        pq::column_chunk chunk;
-        pq::offset_index index;
-    };
-
-    chunk_result write_int32_chunk(const std::vector<std::optional<int32_t>>& values) {
-        const int64_t start = offset();
-        // Definition levels: one bit-packed run of the RLE hybrid encoding, with bit width 1.
-        const size_t groups = (values.size() + 7) / 8;
-        std::string body;
-        body.push_back(char((groups << 1) | 1));
-        body.append(groups, '\0');
-        int32_t nulls = 0;
-        for (size_t i = 0; i < values.size(); ++i) {
-            if (values[i]) {
-                body[1 + i / 8] |= char(1 << (i % 8));
-            } else {
-                ++nulls;
-            }
-        }
-        const int32_t def_length = body.size();
-        for (const auto& v : values) {
-            if (v) {
-                char le[4];
-                auto u = uint32_t(*v);
-                for (int b = 0; b < 4; ++b) {
-                    le[b] = char(u >> (8 * b));
-                }
-                body.append(le, 4);
-            }
-        }
-        const auto crc = ::crc32(::crc32(0, nullptr, 0), reinterpret_cast<const Bytef*>(body.data()), body.size());
-        pq::page_header h{
-            .type = pq::page_type::data_page_v2,
-            .uncompressed_page_size = int32_t(body.size()),
-            .compressed_page_size = int32_t(body.size()),
-            .crc = int32_t(crc),
-            .data_page_v2 = pq::data_page_header_v2{
-                .num_values = int32_t(values.size()),
-                .num_nulls = nulls,
-                .num_rows = int32_t(values.size()),
-                .enc = pq::encoding::plain,
-                .definition_levels_byte_length = def_length,
-                .repetition_levels_byte_length = 0,
-                .is_compressed = false,
-            },
-        };
-        bytes_ostream header;
-        pq::write_page_header(h, header);
-        _data += to_string(header);
-        _data += body;
-        const int64_t size = offset() - start;
-        return chunk_result{
-            .chunk = pq::column_chunk{
-                .meta_data = pq::column_metadata{
-                    .type = pq::physical_type::int32,
-                    .encodings = {pq::encoding::rle, pq::encoding::plain},
-                    .codec = pq::compression_codec::uncompressed,
-                    .num_values = int64_t(values.size()),
-                    .total_uncompressed_size = size,
-                    .total_compressed_size = size,
-                    .data_page_offset = start,
-                    .stats = pq::statistics{.null_count = nulls},
-                },
-            },
-            .index = pq::offset_index{
-                .page_locations = {pq::page_location{.offset = start, .compressed_page_size = int32_t(size), .first_row_index = 0}},
-            },
-        };
-    }
-
-    // Writes the offset index of a chunk and records its location in the chunk.
-    void write_offset_index(chunk_result& c) {
-        bytes_ostream out;
-        pq::write_offset_index(c.index, out);
-        c.chunk.offset_index_offset = offset();
-        c.chunk.offset_index_length = out.size();
-        _data += to_string(out);
-    }
-
-    std::string finish(const pq::file_metadata& md) {
-        auto footer = to_string(pq::serialize_file_metadata(md));
-        _data += footer;
-        char len[4];
-        for (int b = 0; b < 4; ++b) {
-            len[b] = char(footer.size() >> (8 * b));
-        }
-        _data.append(len, 4);
-        _data += pq::magic;
-        return std::move(_data);
-    }
+// A memory handle whose target the test sets.
+struct test_memory_handle final : pq::writer_memory_handle {
+    uint64_t& target;
+    explicit test_memory_handle(uint64_t& t) : target(t) {}
+    uint64_t row_group_target() override { return target; }
 };
 
 struct arrow_column {
@@ -850,38 +755,47 @@ arrow_column read_with_arrow(::parquet::ParquetFileReader& reader, int rg, int c
 
 SEASTAR_THREAD_TEST_CASE(test_arrow_reads_our_metadata) {
     // Two row groups of columns a and b. Column b is null in the whole
-    // first row group, and its chunk there is written at the end of the
-    // file, as the writer does for a column that appears late. The row group
-    // is then not contiguous.
-    test_file_builder f;
-    auto a0 = f.write_int32_chunk({1, std::nullopt, 3});
-    f.write_offset_index(a0);
-    auto a1 = f.write_int32_chunk({4, 5, 6, 7, 8, 9, 10, 11, 12});
-    auto b1 = f.write_int32_chunk({std::nullopt, -1, std::nullopt, -2, -3, -4, -5, -6, -7});
-    f.write_offset_index(a1);
-    f.write_offset_index(b1);
-    auto b0 = f.write_int32_chunk({std::nullopt, std::nullopt, std::nullopt});
-    f.write_offset_index(b0);
-
-    pq::file_metadata md;
-    md.schema.push_back(pq::schema_element{.name = "schema", .num_children = 2});
-    for (auto name : {"a", "b"}) {
-        md.schema.push_back(pq::schema_element{.type = pq::physical_type::int32, .repetition = pq::repetition_type::optional, .name = name});
-    }
-    md.num_rows = 12;
-    auto add_row_group = [&] (int64_t rows, std::initializer_list<pq::column_chunk> chunks) {
-        pq::row_group rg{.total_byte_size = 0, .num_rows = rows};
-        for (auto& c : chunks) {
-            rg.total_byte_size += c.meta_data.total_uncompressed_size;
-            rg.columns.push_back(c);
-        }
-        md.row_groups.push_back(std::move(rg));
+    // first row group, so the writer places its chunk for that row group at
+    // the end of the file. The row group is then not contiguous.
+    // test/boost/parquet_writer_test.cc tests the writer itself.
+    pq::schema s;
+    const auto a = s.add_column(pq::schema::root, "a", pq::repetition_type::optional, pq::physical_type::int32);
+    const auto b = s.add_column(pq::schema::root, "b", pq::repetition_type::optional, pq::physical_type::int32);
+    // Page sets of 3 rows. The first ends the first row group, and later
+    // ones do not end a row group or a page.
+    uint64_t target = 0;
+    const pq::writer_config cfg{
+        .min_page_size = 1 << 20,
+        .max_page_set_rows = 3,
+        .created_by = "scylla-parquet-codec-test version 0.0.1",
     };
-    add_row_group(3, {a0.chunk, b0.chunk});
-    add_row_group(9, {a1.chunk, b1.chunk});
-    md.key_value_metadata.push_back({.key = "scylla.layout", .value = "1"});
-    md.created_by = "scylla-parquet-codec-test version 0.0.1";
-    const auto file = f.finish(md);
+    memory_data_sink_buffers bufs;
+    sstables::file_writer fw(data_sink(std::make_unique<memory_data_sink>(bufs)));
+    pq::writer w(fw, std::move(s), cfg, std::make_unique<test_memory_handle>(target));
+    const std::vector<std::optional<int32_t>> a_values = {1, std::nullopt, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12};
+    const std::vector<std::optional<int32_t>> b_values = {std::nullopt, std::nullopt, std::nullopt,
+            std::nullopt, -1, std::nullopt, -2, -3, -4, -5, -6, -7};
+    for (size_t row = 0; row < a_values.size(); ++row) {
+        if (a_values[row]) {
+            w.append(a, *a_values[row]);
+        }
+        if (b_values[row]) {
+            w.append(b, *b_values[row]);
+        }
+        const bool cut = w.end_row();
+        BOOST_REQUIRE_EQUAL(cut, row % 3 == 2);
+        if (cut) {
+            target = 1 << 20;
+        }
+    }
+    auto result = w.finish({{.key = "scylla.layout", .value = "1"}});
+    fw.close();
+    std::string file;
+    for (const auto& buf : bufs.buffers()) {
+        file.append(buf.get(), buf.size());
+    }
+    BOOST_REQUIRE_EQUAL(result.file_size, file.size());
+    BOOST_REQUIRE_EQUAL(result.row_groups, 2);
 
     ::parquet::ReaderProperties props;
     props.set_page_checksum_verification(true);
@@ -896,6 +810,13 @@ SEASTAR_THREAD_TEST_CASE(test_arrow_reads_our_metadata) {
     BOOST_REQUIRE_EQUAL(meta->created_by(), "scylla-parquet-codec-test version 0.0.1");
     BOOST_REQUIRE_EQUAL(meta->key_value_metadata()->Get("scylla.layout").ValueOrDie(), "1");
 
+    // The chunk of b in the first row group lies after the second row group.
+    const auto b0 = meta->RowGroup(0)->ColumnChunk(1);
+    const auto a1 = meta->RowGroup(1)->ColumnChunk(0);
+    const auto b1 = meta->RowGroup(1)->ColumnChunk(1);
+    BOOST_REQUIRE_GT(b0->data_page_offset(), b1->data_page_offset() + b1->total_compressed_size());
+    BOOST_REQUIRE_GT(b0->data_page_offset(), a1->data_page_offset() + a1->total_compressed_size());
+
     const std::vector<std::vector<int64_t>> null_counts = {{1, 3}, {0, 2}};
     for (int rg = 0; rg < 2; ++rg) {
         for (int col = 0; col < 2; ++col) {
@@ -906,46 +827,53 @@ SEASTAR_THREAD_TEST_CASE(test_arrow_reads_our_metadata) {
         }
     }
 
-    auto a = read_with_arrow(*reader, 0, 0, 3);
-    BOOST_REQUIRE((a.def_levels == std::vector<int16_t>{1, 0, 1}));
-    BOOST_REQUIRE((a.values == std::vector<int32_t>{1, 3}));
-    auto b = read_with_arrow(*reader, 0, 1, 3);
-    BOOST_REQUIRE((b.def_levels == std::vector<int16_t>{0, 0, 0}));
-    BOOST_REQUIRE(b.values.empty());
-    a = read_with_arrow(*reader, 1, 0, 9);
-    BOOST_REQUIRE((a.values == std::vector<int32_t>{4, 5, 6, 7, 8, 9, 10, 11, 12}));
-    b = read_with_arrow(*reader, 1, 1, 9);
-    BOOST_REQUIRE((b.def_levels == std::vector<int16_t>{0, 1, 0, 1, 1, 1, 1, 1, 1}));
-    BOOST_REQUIRE((b.values == std::vector<int32_t>{-1, -2, -3, -4, -5, -6, -7}));
+    auto ac = read_with_arrow(*reader, 0, 0, 3);
+    BOOST_REQUIRE((ac.def_levels == std::vector<int16_t>{1, 0, 1}));
+    BOOST_REQUIRE((ac.values == std::vector<int32_t>{1, 3}));
+    auto bc = read_with_arrow(*reader, 0, 1, 3);
+    BOOST_REQUIRE((bc.def_levels == std::vector<int16_t>{0, 0, 0}));
+    BOOST_REQUIRE(bc.values.empty());
+    ac = read_with_arrow(*reader, 1, 0, 9);
+    BOOST_REQUIRE((ac.values == std::vector<int32_t>{4, 5, 6, 7, 8, 9, 10, 11, 12}));
+    bc = read_with_arrow(*reader, 1, 1, 9);
+    BOOST_REQUIRE((bc.def_levels == std::vector<int16_t>{0, 1, 0, 1, 1, 1, 1, 1, 1}));
+    BOOST_REQUIRE((bc.values == std::vector<int32_t>{-1, -2, -3, -4, -5, -6, -7}));
 
+    // Each in-place chunk has one page, which its OffsetIndex locates. The
+    // late chunk has no OffsetIndex.
     auto page_index = reader->GetPageIndexReader();
     BOOST_REQUIRE(page_index);
-    const std::vector<std::vector<const pq::offset_index*>> indexes = {{&a0.index, &b0.index}, {&a1.index, &b1.index}};
-    for (int rg = 0; rg < 2; ++rg) {
-        for (int col = 0; col < 2; ++col) {
-            auto oi = page_index->RowGroup(rg)->GetOffsetIndex(col);
-            BOOST_REQUIRE(oi);
-            const auto& expected = indexes[rg][col]->page_locations;
-            const auto& locations = oi->page_locations();
-            BOOST_REQUIRE_EQUAL(locations.size(), expected.size());
-            for (size_t i = 0; i < locations.size(); ++i) {
-                BOOST_REQUIRE_EQUAL(locations[i].offset, expected[i].offset);
-                BOOST_REQUIRE_EQUAL(locations[i].compressed_page_size, expected[i].compressed_page_size);
-                BOOST_REQUIRE_EQUAL(locations[i].first_row_index, expected[i].first_row_index);
-            }
-        }
+    BOOST_REQUIRE(!page_index->RowGroup(0)->GetOffsetIndex(1));
+    for (auto [rg, col] : {std::pair(0, 0), std::pair(1, 0), std::pair(1, 1)}) {
+        auto oi = page_index->RowGroup(rg)->GetOffsetIndex(col);
+        BOOST_REQUIRE(oi);
+        auto chunk = meta->RowGroup(rg)->ColumnChunk(col);
+        const auto& locations = oi->page_locations();
+        BOOST_REQUIRE_EQUAL(locations.size(), 1);
+        BOOST_REQUIRE_EQUAL(locations[0].offset, chunk->data_page_offset());
+        BOOST_REQUIRE_EQUAL(locations[0].compressed_page_size, chunk->total_compressed_size());
+        BOOST_REQUIRE_EQUAL(locations[0].first_row_index, 0);
     }
 
     // A page with a wrong checksum is rejected, which shows that Arrow checks it.
+    auto a0 = meta->RowGroup(0)->ColumnChunk(0);
     auto damaged = file;
-    damaged[a0.chunk.meta_data.data_page_offset + a0.chunk.meta_data.total_compressed_size - 1] ^= 1;
+    damaged[a0->data_page_offset() + a0->total_compressed_size() - 1] ^= 1;
     auto damaged_reader = ::parquet::ParquetFileReader::Open(std::make_shared<::arrow::io::BufferReader>(::arrow::Buffer::FromString(damaged)), props);
     BOOST_REQUIRE_THROW(read_with_arrow(*damaged_reader, 0, 0, 3), ::parquet::ParquetException);
 
     // Our parser reads the footer back, locating it from the end of the file as a reader does.
     uint32_t footer_length = 0;
-    for (int b = 0; b < 4; ++b) {
-        footer_length |= uint32_t(uint8_t(file[file.size() - 8 + b])) << (8 * b);
+    for (int i = 0; i < 4; ++i) {
+        footer_length |= uint32_t(uint8_t(file[file.size() - 8 + i])) << (8 * i);
     }
-    BOOST_REQUIRE(parse_footer(file.substr(file.size() - 8 - footer_length, footer_length), 64) == md);
+    BOOST_REQUIRE_EQUAL(footer_length, result.footer.size);
+    const auto footer = file.substr(file.size() - 8 - footer_length, footer_length);
+    BOOST_REQUIRE_EQUAL(result.footer.crc32, ::crc32(0, reinterpret_cast<const Bytef*>(footer.data()), footer.size()));
+    const auto md = parse_footer(footer, 64);
+    BOOST_REQUIRE_EQUAL(md.num_rows, 12);
+    BOOST_REQUIRE_EQUAL(md.row_groups.size(), 2);
+    BOOST_REQUIRE_EQUAL(md.row_groups[0].num_rows, 3);
+    BOOST_REQUIRE_EQUAL(md.row_groups[1].num_rows, 9);
+    BOOST_REQUIRE_EQUAL(md.schema.size(), 3);
 }

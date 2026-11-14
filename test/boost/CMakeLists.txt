@@ -214,7 +214,8 @@ add_scylla_test(observable_test
 if(Parquet_FOUND)
   foreach(name
       parquet_codec_test
-      parquet_encoding_test)
+      parquet_encoding_test
+      parquet_writer_test)
     add_scylla_test(${name}
       KIND SEASTAR
       LIBRARIES
