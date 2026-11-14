@@ -11,10 +11,11 @@ from __future__ import annotations
 
 import os
 import pathlib
+
 import subprocess
 import sys
 
-
+print (1)
 def _ensure_running_under_uv() -> None:
     """Re-exec test.py under `uv run --locked`, so the whole process (not
     just some packages spliced onto sys.path) runs inside a venv synced
