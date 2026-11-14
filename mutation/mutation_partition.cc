@@ -16,6 +16,7 @@
 #include "converting_mutation_partition_applier.hh"
 #include "partition_builder.hh"
 #include "query/query-result-writer.hh"
+#include <ranges>
 #include "mutation_fragment.hh"
 #include "mutation_query.hh"
 #include "mutation_compactor.hh"
@@ -730,9 +731,15 @@ void write_counter_cell(RowWriter& w, const query::partition_slice& slice, ::ato
             .end_qr_cell();
 }
 
+// A cell's max timestamp, as fed to max_timestamp by the digest.
+static api::timestamp_type cell_max_timestamp(atomic_cell_or_collection_view c, const column_definition& def) {
+    return def.is_atomic() ? c.as_atomic_cell(def).timestamp() : c.as_collection_mutation().last_update(*def.type);
+}
+
+// Feeds the hash of each column in ids, or null_hash_value if it is absent.
 template<typename Hasher>
-void appending_hash<row>::operator()(Hasher& h, const row& cells, const schema& s, column_kind kind, const query::column_id_vector& columns, max_timestamp& max_ts) const {
-    for (auto id : columns) {
+static void feed_cell_hashes(Hasher& h, const row& cells, const schema& s, column_kind kind, std::ranges::input_range auto&& ids, max_timestamp& max_ts) {
+    for (column_id id : ids) {
         auto cell_and_hash = cells.find_cell_and_hash(id);
         if (!cell_and_hash) {
             feed_hash(h, appending_hash<row>::null_hash_value);
@@ -771,6 +778,51 @@ void appending_hash<row>::operator()(Hasher& h, const row& cells, const schema& 
         }
     }
 }
+template<typename Hasher>
+void appending_hash<row>::operator()(Hasher& h, const row& cells, const schema& s, column_kind kind, const query::column_id_vector& columns, max_timestamp& max_ts) const {
+    feed_cell_hashes(h, cells, s, kind, columns, max_ts);
+}
+
+bool is_all_columns(const schema& s, column_kind kind, const query::column_id_vector& columns) noexcept {
+    if (columns.size() != s.columns_count(kind)) {
+        return false;
+    }
+    for (column_id i = 0; i < columns.size(); ++i) {
+        if (columns[i] != i) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool wants_row_hashes(const schema& s, const query::partition_slice& slice, const query::result_options& opts) noexcept {
+    return opts.request != query::result_request::only_result && opts.digest_algo == query::digest_algorithm::xxHash_row
+            && is_all_columns(s, column_kind::static_column, slice.static_columns)
+            && is_all_columns(s, column_kind::regular_column, slice.regular_columns);
+}
+
+// The row's contribution to an xxHash_row digest of an all-columns slice: one hash of the cell hashes.
+static uint64_t row_digest(const row& cells, const schema& s, column_kind kind, const query::column_id_vector& columns, max_timestamp& max_ts) {
+    if (auto rh = cells.row_hash()) {
+        cells.for_each_cell([&] (column_id id, atomic_cell_or_collection_view c) {
+            max_ts.update(cell_max_timestamp(c, s.column_at(kind, id)));
+        });
+        return rh->hash;
+    }
+    xx_hasher rowh;
+    feed_cell_hashes(rowh, cells, s, kind, columns, max_ts);
+    return rowh.finalize_uint64();
+}
+
+// Partial slices are fed as with xxHash, so only all-columns rows can use the cached row hash.
+static void feed_row(query::digester& d, const row& cells, const schema& s, column_kind kind, const query::column_id_vector& columns, bool all_columns, max_timestamp& max_ts) {
+    if (all_columns) {
+        d.feed_hash(row_digest(cells, s, kind, columns, max_ts));
+    } else {
+        d.feed_hash(cells, s, kind, columns, max_ts);
+    }
+}
+
 // Instantiation for mutation_test.cc
 template void appending_hash<row>::operator()<xx_hasher>(xx_hasher& h, const row& cells, const schema& s, column_kind kind, const query::column_id_vector& columns, max_timestamp& max_ts) const;
 
@@ -779,8 +831,13 @@ cell_hash_opt row::cell_hash_for(column_id id) const {
     return cah ? cah->cached_hash() : cell_hash_opt();
 }
 
-void row::prepare_hash(const schema& s, column_kind kind) const {
+void row::prepare_hash_slow(const schema& s, column_kind kind, digest_request dr) const {
+    const bool row_hash = dr == digest_request::cells_and_row;
     // const to avoid removing const qualifiers on the read path
+    // Every path that clears a cell hash also clears _row_hash, so a set row hash implies all cell hashes are filled.
+    if (_row_hash) {
+        return;
+    }
     _cells.for_each_block([&s, kind] (block_index_type block_index, const block_type& block) {
         bitmask::for_each_set(block.hashed(), [&] (unsigned slot) {
             auto* hash = block.hash(slot);
@@ -791,9 +848,16 @@ void row::prepare_hash(const schema& s, column_kind kind) const {
             }
         });
     });
+    if (row_hash) {
+        xx_hasher rowh;
+        max_timestamp unused;
+        feed_cell_hashes(rowh, *this, s, kind, std::views::iota(column_id(0), column_id(s.columns_count(kind))), unused);
+        _row_hash = cell_hash{rowh.finalize_uint64()};
+    }
 }
 
 void row::clear_hash() const {
+    _row_hash = {};
     _cells.for_each_block([] (block_index_type, const block_type& block) {
         bitmask::for_each_set(block.hashed(), [&] (unsigned slot) {
             *block.hash(slot) = { };
@@ -1181,7 +1245,7 @@ row::put_cell(const block_type* old_block, column_id id, managed_bytes_view valu
     }
     auto new_block = builder.build();
     try {
-        _cells.set_block(block_index, std::move(new_block));
+        set_block(block_index, std::move(new_block));
     } catch (...) {
         builder.roll_back(std::move(new_block));
         throw;
@@ -1259,6 +1323,8 @@ row::cell_appender::flush() {
     if (_builder.empty()) {
         return;
     }
+    // The loader's blocks reach the row without set_block().
+    _row._row_hash = {};
     // While the row is empty, blocks go to the loader, which builds the row's tree
     // in finish(). A block before those the loader can take (appended out of
     // order) moves them to the row now, and is merged into the row from then on.
@@ -1279,7 +1345,7 @@ row::cell_appender::flush() {
         if (load) {
             _loader.set_block(_block_index, std::move(new_block));
         } else {
-            _row._cells.set_block(_block_index, std::move(new_block));
+            _row.set_block(_block_index, std::move(new_block));
         }
     } catch (...) {
         _builder.roll_back(std::move(new_block));
@@ -1321,7 +1387,7 @@ row::merge_block(const schema& s, column_kind kind, block_index_type block_index
         bitmask::for_each_set(other_block.present(), add_theirs);
         auto new_block = builder.build();
         try {
-            _cells.set_block(block_index, std::move(new_block), blocks_to_follow);
+            set_block(block_index, std::move(new_block), blocks_to_follow);
         } catch (...) {
             builder.roll_back(std::move(new_block));
             throw;
@@ -1389,7 +1455,7 @@ row::merge_block(const schema& s, column_kind kind, block_index_type block_index
     auto new_block = builder.build();
     auto* installed = new_block.get();
     try {
-        _cells.set_block(block_index, std::move(new_block));
+        set_block(block_index, std::move(new_block));
     } catch (...) {
         builder.roll_back(std::move(new_block));
         throw;
@@ -1716,17 +1782,25 @@ static atomic_cell_or_collection_block::ptr clone_block(const atomic_cell_or_col
 
 row::row(const schema& s, column_kind kind, const row& o)
     : _cells(o._cells.clone(clone_block))
+    , _row_hash(o._row_hash)
 {
+}
+
+[[gnu::noinline]] static row construct_slow(const schema& our_schema, const schema& their_schema, column_kind kind, const row& o) {
+    // A reversed schema differs only in clustering key types; row cells (and the cached row hash) are identical.
+    if (our_schema.version() == reversed(their_schema.version())) {
+        return row(our_schema, kind, o);
+    }
+    row r;
+    r.apply(our_schema, their_schema, kind, o);
+    return r;
 }
 
 row row::construct(const schema& our_schema, const schema& their_schema, column_kind kind, const row& o) {
     if (our_schema.version() == their_schema.version()) {
         return row(our_schema, kind, o);
-    } else {
-        row r;
-        r.apply(our_schema, their_schema, kind, o);
-        return r;
     }
+    return construct_slow(our_schema, their_schema, kind, o);
 }
 
 row::~row() {
@@ -1769,7 +1843,8 @@ row::row() {
 }
 
 row::row(row&& other) noexcept
-    : _cells(std::move(other._cells)) {
+    : _cells(std::move(other._cells))
+    , _row_hash(std::exchange(other._row_hash, {})) {
 }
 
 row& row::operator=(row&& other) noexcept {
@@ -1802,8 +1877,10 @@ void row::apply_monotonically(const schema& s, column_kind kind, row&& other, db
     }
     if (empty()) {
         _cells = std::move(other._cells);
+        _row_hash = std::exchange(other._row_hash, {});
         return;
     }
+    other._row_hash = {};
     // Each block of other is consumed as soon as it is merged, so that on
     // exception the sum of this and other is unchanged.
     other._cells.rebuild_blocks([&] (block_index_type block_index, block_being_rebuilt& block) {
@@ -1811,14 +1888,14 @@ void row::apply_monotonically(const schema& s, column_kind kind, row&& other, db
         if (!this_block) {
             // We don't have the block: move it over.
             block.release_to([&] (block_ptr&& b) {
-                _cells.set_block(block_index, std::move(b), blocks_to_follow_from(other, block_index));
+                set_block(block_index, std::move(b), blocks_to_follow_from(other, block_index));
             });
             return;
         }
         if (merge_block(s, kind, block_index, this_block, *block, true, tracker, std::nullopt)) {
             // other's block replaces ours: move it over.
             block.release_to([&] (block_ptr&& b) {
-                _cells.set_block(block_index, std::move(b));
+                set_block(block_index, std::move(b));
             });
             return;
         }
@@ -1854,6 +1931,7 @@ void row::apply_monotonically(const schema& our_schema, const schema& their_sche
     }
     apply_monotonically(our_schema, kind, converting_mutation_partition_applier::upgrade_row(our_schema, their_schema, kind, other), tracker);
     other._cells.clear();
+    other._row_hash = {};
 }
 
 void row::apply_monotonically(const schema& our_schema, const schema& their_schema, column_kind kind, const row& other, db::large_data_cache_tracker* tracker) {
@@ -1921,7 +1999,7 @@ compact_and_expire_result row::compact_and_expire(
     }
     res = {};
 
-    _cells.rebuild_blocks([&] (block_index_type block_index, block_being_rebuilt& block) {
+    rebuild_blocks([&] (block_index_type block_index, block_being_rebuilt& block) {
         // Most compactions change nothing, so start building a new block only on
         // the first change, adding the cells kept until then.
         atomic_cell_or_collection_block_builder builder;
@@ -2226,6 +2304,8 @@ mutation_querier::mutation_querier(const schema& s, query::result::partition_wri
     , _memory_accounter(memory_accounter)
     , _static_cells_wr(pw.start().start_static_row().start_cells())
     , _pw(std::move(pw))
+    , _static_all_columns(_pw.requested_digest() && _pw.digest().row_level() && is_all_columns(s, column_kind::static_column, _pw.slice().static_columns))
+    , _regular_all_columns(_pw.requested_digest() && _pw.digest().row_level() && is_all_columns(s, column_kind::regular_column, _pw.slice().regular_columns))
 {
 }
 
@@ -2250,7 +2330,7 @@ void mutation_querier::query_static_row(const row& r, tombstone current_tombston
             max_timestamp max_ts{_pw.last_modified()};
             _pw.digest().feed_hash(current_tombstone);
             max_ts.update(current_tombstone.timestamp);
-            _pw.digest().feed_hash(r, _schema, column_kind::static_column, slice.static_columns, max_ts);
+            feed_row(_pw.digest(), r, _schema, column_kind::static_column, slice.static_columns, _static_all_columns, max_ts);
             _pw.last_modified() = max_ts.max;
         }
     }
@@ -2281,7 +2361,7 @@ stop_iteration mutation_querier::consume(clustering_row&& cr, row_tombstone curr
         _pw.digest().feed_hash(current_tombstone);
         max_timestamp max_ts{_pw.last_modified()};
         max_ts.update(current_tombstone.tomb().timestamp);
-        _pw.digest().feed_hash(cr.cells(), _schema, column_kind::regular_column, slice.regular_columns, max_ts);
+        feed_row(_pw.digest(), cr.cells(), _schema, column_kind::regular_column, slice.regular_columns, _regular_all_columns, max_ts);
         _pw.last_modified() = max_ts.max;
     }
 

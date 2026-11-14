@@ -26,6 +26,7 @@
 #include "db/per_partition_rate_limit_info.hh"
 #include "query_id.hh"
 #include "bytes.hh"
+#include "mutation/digest_request.hh"
 
 using cql_protocol_version_type = uint8_t;
 
@@ -218,6 +219,9 @@ public:
         // timestamps and expiries to support WRITETIME(col[key])/TTL(col[key])
         // and WRITETIME(col.field)/TTL(col.field) selectors.
         send_collection_timestamps,
+        // Set by the replica on its reader's copy of the slice, never sent: the reader fills
+        // row hashes for an xxHash_row digest of an all-columns slice. Keep last.
+        with_row_digest,
     };
     using option_set = enum_set<super_enum<option,
         option::send_clustering_key,
@@ -234,7 +238,8 @@ public:
         option::always_return_static_content,
         option::range_scan_data_variant,
         option::allow_mutation_read_page_without_live_row,
-        option::send_collection_timestamps>>;
+        option::send_collection_timestamps,
+        option::with_row_digest>>;
     clustering_row_ranges _row_ranges;
 public:
     column_id_vector static_columns; // TODO: consider using bitmap
@@ -302,6 +307,14 @@ public:
     friend std::ostream& operator<<(std::ostream& out, const partition_slice& ps);
     friend std::ostream& operator<<(std::ostream& out, const specific_ranges& ps);
 };
+
+inline digest_request digest_request_of(const partition_slice& slice) {
+    using option = partition_slice::option;
+    if (!slice.options.contains<option::with_digest>()) {
+        return digest_request::none;
+    }
+    return slice.options.contains<option::with_row_digest>() ? digest_request::cells_and_row : digest_request::cells;
+}
 
 // See docs/dev/reverse-reads.md
 // In the following functions, `schema` may be reversed or not (both work).

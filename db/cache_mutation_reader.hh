@@ -646,9 +646,7 @@ void cache_mutation_reader::maybe_add_to_cache(const clustering_row& cr) {
         mutation_partition_v2& mp = _snp->version()->partition();
         rows_entry::tri_compare cmp(table_schema());
 
-        if (_read_context.digest_requested()) {
-            cr.cells().prepare_hash(*_schema, column_kind::regular_column);
-        }
+        cr.cells().prepare_hash(*_schema, column_kind::regular_column, _read_context.digest_requested());
         auto new_entry = alloc_strategy_unique_ptr<rows_entry>(
             current_allocator().construct<rows_entry>(table_schema(), cr.key(), cr.as_deletable_row()));
         new_entry->set_continuous(false);
@@ -1021,9 +1019,7 @@ void cache_mutation_reader::add_to_buffer(const partition_snapshot_row_cursor& r
     position_in_partition::less_compare less(*_schema);
     if (!row.dummy()) {
         _read_context.cache().on_row_hit();
-        if (_read_context.digest_requested()) {
-            row.latest_row_prepare_hash();
-        }
+        row.latest_row_prepare_hash(_read_context.digest_requested());
         add_clustering_row_to_buffer(mutation_fragment_v2(*_schema, _permit, row.row()));
     } else {
         if (less(_lower_bound, row.position())) {
@@ -1064,9 +1060,7 @@ void cache_mutation_reader::maybe_add_to_cache(const static_row& sr) {
         clogger.trace("csm {}: populate({})", fmt::ptr(this), static_row::printer(*_schema, sr));
         _read_context.cache().on_static_row_insert();
         _lsa_manager.run_in_update_section_with_allocator([&] {
-            if (_read_context.digest_requested()) {
-                sr.cells().prepare_hash(*_schema, column_kind::static_column);
-            }
+            sr.cells().prepare_hash(*_schema, column_kind::static_column, _read_context.digest_requested());
             // Static row is the same under table and query schema
             _snp->version()->partition().static_row().apply(table_schema(), column_kind::static_column, sr.cells());
         });

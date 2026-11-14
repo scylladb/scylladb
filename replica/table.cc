@@ -5582,7 +5582,12 @@ table::query(schema_ptr query_schema,
         if (!querier_opt) {
             co_await wait_for_tablet_truncate(range);
             querier_base::querier_config conf(_config.tombstone_warn_threshold);
-            querier_opt = querier(as_mutation_source(), query_schema, permit, range, qs.cmd.slice, trace_state,
+            auto slice = qs.cmd.slice;
+            // Row hashes are only used for digests of all-columns slices.
+            if (wants_row_hashes(*query_schema, slice, opts)) {
+                slice.options.set<query::partition_slice::option::with_row_digest>();
+            }
+            querier_opt = querier(as_mutation_source(), query_schema, permit, range, std::move(slice), trace_state,
                     get_tombstone_gc_state().with_commitlog_check_disabled(), conf);
         }
         auto& q = *querier_opt;

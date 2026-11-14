@@ -146,7 +146,7 @@ class partition_snapshot_row_cursor final {
     bool _dummy{};
     const bool _unique_owner;
     const bool _reversed;
-    const bool _digest_requested;
+    const digest_request _digest_requested;
     tombstone _range_tombstone;
     tombstone _range_tombstone_for_row;
     position_in_partition _position; // table domain
@@ -181,6 +181,17 @@ class partition_snapshot_row_cursor final {
         }
     };
 
+    // Out of line to keep recreate_current_row() small enough to inline its callees.
+    [[gnu::noinline]] void prepare_hashes() {
+        auto req = for_versions(_digest_requested, _current_row.size() == 1);
+        for (position_in_version& v : _current_row) {
+            if (v.it->dummy() || v.it->row().cells().empty()) {
+                continue;
+            }
+            v.it->row().cells().prepare_hash(*v.schema, column_kind::regular_column, req);
+        }
+    }
+
     // Removes the next row from _heap and puts it into _current_row
     bool recreate_current_row() {
         _current_row.clear();
@@ -203,9 +214,6 @@ class partition_snapshot_row_cursor final {
             memory::on_alloc_point();
             position_in_version& v = _heap.back();
             rows_entry& e = *v.it;
-            if (_digest_requested) {
-                e.row().cells().prepare_hash(*v.schema, column_kind::regular_column);
-            }
             _dummy &= bool(e.dummy());
             _continuous |= bool(v.continuous);
             _range_tombstone_for_row.apply(e.range_tombstone());
@@ -215,6 +223,11 @@ class partition_snapshot_row_cursor final {
             _current_row.push_back(v);
             _heap.pop_back();
         } while (!_heap.empty() && eq(_current_row[0].it->position(), _heap[0].it->position()));
+
+        // A merged row's hash is not cached; it is prepared only for a single version.
+        if (_digest_requested != digest_request::none) {
+            prepare_hashes();
+        }
 
         // FIXME: Optimize by dropping dummy() entries.
         for (position_in_version& v : _heap) {
@@ -376,7 +389,7 @@ public:
     // When reversed, s must be a reversed schema relative to snp->schema()
     // Positions and fragments accepted and returned by the cursor are from the domain of s.
     // Iterators are from the table's schema domain.
-    partition_snapshot_row_cursor(const schema& s, partition_snapshot& snp, bool unique_owner = false, bool reversed = false, bool digest_requested = false)
+    partition_snapshot_row_cursor(const schema& s, partition_snapshot& snp, bool unique_owner = false, bool reversed = false, digest_request digest_requested = digest_request::none)
         : _schema(s)
         , _snp(snp)
         , _unique_owner(unique_owner)
@@ -594,8 +607,8 @@ public:
     }
 
     // Can be called only when cursor is valid and pointing at a row.
-    void latest_row_prepare_hash() const {
-        _current_row[0].it->row().cells().prepare_hash(*_current_row[0].schema, column_kind::regular_column);
+    void latest_row_prepare_hash(digest_request dr) const {
+        _current_row[0].it->row().cells().prepare_hash(*_current_row[0].schema, column_kind::regular_column, for_versions(dr, _current_row.size() == 1));
     }
 
     // Can be called only when cursor is valid and pointing at a row.

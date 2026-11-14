@@ -118,18 +118,16 @@ inline Result squashed(const partition_version_ref& v, Map&& map, Reduce&& reduc
 
 }
 
-::static_row partition_snapshot::static_row(bool digest_requested) const {
+::static_row partition_snapshot::static_row(digest_request digest_requested) const {
     const partition_version* this_v = &*version();
     partition_version* it = this_v->last();
-    if (digest_requested) {
-        it->partition().static_row().prepare_hash(*it->get_schema(), column_kind::static_column);
-    }
+    // A merged row's hash is not cached; it is prepared only for a single version.
+    const auto dr = for_versions(digest_requested, it == this_v);
+    it->partition().static_row().prepare_hash(*it->get_schema(), column_kind::static_column, dr);
     row r = row::construct(*this_v->get_schema(), *it->get_schema(), column_kind::static_column, it->partition().static_row().get());
     while (it != this_v) {
         it = it->prev();
-        if (digest_requested) {
-            it->partition().static_row().prepare_hash(*it->get_schema(), column_kind::static_column);
-        }
+        it->partition().static_row().prepare_hash(*it->get_schema(), column_kind::static_column, dr);
         r.apply(*this_v->get_schema(), *it->get_schema(), column_kind::static_column, it->partition().static_row().get());
     }
     return ::static_row(std::move(r));

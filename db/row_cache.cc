@@ -866,7 +866,7 @@ mutation_reader row_cache::make_nonpopulating_reader(schema_ptr schema, reader_p
                     e.key(),
                     query::clustering_key_filter_ranges(slice.row_ranges(*schema, e.key().key())),
                     e.partition().read(_tracker.region(), _tracker.memtable_cleaner(), &_tracker, phase_of(pos)),
-                    false,
+                    digest_request::none,
                     _tracker.region(),
                     _read_section,
                     {},

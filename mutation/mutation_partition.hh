@@ -28,6 +28,7 @@
 #include "utils/managed_ref.hh"
 #include "mutation/atomic_cell_or_collection_block.hh"
 #include "mutation/cell_hash.hh"
+#include "mutation/digest_request.hh"
 #include "utils/immutable-collection.hh"
 #include "mutation/compact_and_expire_result.hh"
 
@@ -43,6 +44,8 @@ class tombstone_gc_state;
 
 namespace query {
     class clustering_key_filter_ranges;
+    class partition_slice;
+    struct result_options;
 } // namespace query
 
 struct cell_and_hash {
@@ -70,6 +73,12 @@ struct cell_and_hash_view {
 
 class compaction_garbage_collector;
 
+// True if columns is every column of kind in id order.
+bool is_all_columns(const schema& s, column_kind kind, const query::column_id_vector& columns) noexcept;
+
+// True if a data read with these options digests per-row hashes, i.e. should set with_row_digest.
+bool wants_row_hashes(const schema& s, const query::partition_slice& slice, const query::result_options& opts) noexcept;
+
 //
 // Container for cells of a row. Cells are identified by column_id.
 //
@@ -90,6 +99,8 @@ class row {
     using block_ptr = block_type::ptr;
     using block_being_rebuilt = cells_type::block_being_rebuilt;
     cells_type _cells;
+    // Hash of the hashes of all columns of the row's kind (see row_hash()); cleared on change.
+    mutable cell_hash_opt _row_hash;
 
     static block_index_type block_index_of(column_id id) noexcept {
         return id >> atomic_cell_or_collection_block_slot_bits;
@@ -99,6 +110,25 @@ class row {
     }
     static column_id column_of(block_index_type block_index, unsigned slot) noexcept {
         return (column_id(block_index) << atomic_cell_or_collection_block_slot_bits) | slot;
+    }
+    // All block replacement goes through these two (or cell_appender), which drop the stale row hash.
+    void set_block(block_index_type block_index, block_ptr&& block, std::optional<unsigned> blocks_to_follow = std::nullopt) {
+        _row_hash = {};
+        _cells.set_block(block_index, std::move(block), blocks_to_follow);
+    }
+    void rebuild_blocks(std::invocable<block_index_type, block_being_rebuilt&> auto&& func) {
+        _cells.rebuild_blocks([&] (block_index_type block_index, block_being_rebuilt& block) {
+            try {
+                func(block_index, block);
+            } catch (...) {
+                // func may have changed the block before throwing.
+                _row_hash = {};
+                throw;
+            }
+            if (block.changed()) {
+                _row_hash = {};
+            }
+        });
     }
 public:
     row();
@@ -167,6 +197,8 @@ public:
     };
 
 private:
+    // Out of line: its big hasher frame would otherwise tax the none case.
+    void prepare_hash_slow(const schema& s, column_kind kind, digest_request dr) const;
     // Replaces or inserts the cell at `id`. If `stealable` is not null, it holds
     // `value` and may be moved from.
     void put_cell(column_id id, managed_bytes_view value, managed_bytes* stealable, cell_hash_opt hash);
@@ -297,6 +329,7 @@ public:
     // Resets the cached hashes of the cells.
     template<typename Func>
     void for_each_cell_in_place(Func&& func) {
+        _row_hash = {};
         _cells.for_each_block([&func] (block_index_type block_index, block_type& block) {
             bitmask::for_each_set(block.present(), [&] (unsigned slot) {
                 func(column_of(block_index, slot), block.mutable_cell(slot));
@@ -371,8 +404,17 @@ public:
 
     cell_hash_opt cell_hash_for(column_id id) const;
 
-    void prepare_hash(const schema& s, column_kind kind) const;
+    // Fills missing cell hashes, and the row hash too for cells_and_row. No-op for none.
+    void prepare_hash(const schema& s, column_kind kind, digest_request dr) const {
+        if (dr == digest_request::none) {
+            return;
+        }
+        prepare_hash_slow(s, kind, dr);
+    }
     void clear_hash() const;
+    // The digest of all columns of the row's kind, in id order, as fed by
+    // digest_algorithm::xxHash_row. Set by prepare_hash(..., cells_and_row).
+    cell_hash_opt row_hash() const noexcept { return _row_hash; }
 
     bool is_live(const schema&, column_kind kind, tombstone tomb = tombstone(), gc_clock::time_point now = gc_clock::time_point::min()) const;
 
@@ -631,11 +673,11 @@ public:
         return _row->cell_hash_for(id);
     }
 
-    void prepare_hash(const schema& s, column_kind kind) const {
+    void prepare_hash(const schema& s, column_kind kind, digest_request dr) const {
         if (!_row) {
             return;
         }
-        _row->prepare_hash(s, kind);
+        _row->prepare_hash(s, kind, dr);
     }
 
     void clear_hash() const {

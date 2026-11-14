@@ -3442,7 +3442,7 @@ SEASTAR_THREAD_TEST_CASE(test_row_digest_independent_of_cached_hashes) {
     };
 
     const auto uncached = compute_hash(r);
-    r.prepare_hash(*s, column_kind::regular_column);
+    r.prepare_hash(*s, column_kind::regular_column, digest_request::cells);
     BOOST_REQUIRE(!r.cell_hash_for(0));
     BOOST_REQUIRE(r.cell_hash_for(1));
     BOOST_REQUIRE(r.cell_hash_for(2));
@@ -3457,6 +3457,309 @@ SEASTAR_THREAD_TEST_CASE(test_row_digest_independent_of_cached_hashes) {
     r.clear_hash();
     BOOST_REQUIRE(!r.cell_hash_for(1));
     BOOST_REQUIRE_EQUAL(compute_hash(r), uncached);
+}
+
+static schema_ptr make_row_hash_test_schema() {
+    return schema_builder(this_smp_shard_count(), "ks", "cf")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("ck", int32_type, column_kind::clustering_key)
+            .with_column("s1", int32_type, column_kind::static_column)
+            .with_column("r1", int32_type)
+            .with_column("r2", int32_type)
+            .with_column("r3", bytes_type)
+            .with_column("m", map_type_impl::get_instance(int32_type, bytes_type, true))
+            .build();
+}
+
+// r2 is never set; r3 is large enough to get a cached cell hash.
+static mutation make_row_hash_test_mutation(schema_ptr s, int32_t r1_value) {
+    mutation m(s, partition_key::from_single_value(*s, int32_type->decompose(0)));
+    m.set_static_cell("s1", data_value(int32_t(7)), 1);
+    auto& m_def = *s->get_column_definition(to_bytes("m"));
+    for (int32_t ck = 0; ck < 3; ++ck) {
+        auto key = clustering_key::from_single_value(*s, int32_type->decompose(ck));
+        m.set_clustered_cell(key, "r1", data_value(r1_value + ck), 1);
+        m.set_clustered_cell(key, "r3", data_value(bytes(ck * 5000, 'x')), 1);
+        collection_mutation_writer w(tombstone(0, gc_clock::now()));
+        for (int32_t i = 0; i < 3; ++i) {
+            w.push_back(managed_bytes_view(int32_type->decompose(i)),
+                    atomic_cell::make_live(*bytes_type, 2 + i, bytes(i + ck, 'y'), atomic_cell::collection_member::yes));
+        }
+        m.set_clustered_cell(key, m_def, atomic_cell_or_collection(std::move(w).finish()));
+    }
+    return m;
+}
+
+static query::result_digest row_hash_test_digest(const mutation& m, const query::partition_slice& ps, query::digest_algorithm algo, gc_clock::time_point now) {
+    return *query_mutation(mutation(m), ps, query::max_rows, now, query::result_options::only_digest(algo)).digest();
+}
+
+// xxHash_row digests are the same whether rows carry a cached row hash or not.
+SEASTAR_THREAD_TEST_CASE(test_row_digest_cached_row_hash) {
+    auto s = make_row_hash_test_schema();
+    const auto now = gc_clock::now();
+    auto m = make_row_hash_test_mutation(s, 1);
+
+    auto set_cached = [&] (bool cached) {
+        for (auto& e : m.partition().clustered_rows()) {
+            auto& cells = e.row().cells();
+            if (cached) {
+                cells.prepare_hash(*s, column_kind::regular_column, digest_request::cells_and_row);
+                BOOST_REQUIRE(cells.row_hash());
+            } else {
+                cells.clear_hash();
+                BOOST_REQUIRE(!cells.row_hash());
+            }
+        }
+        auto& sr = m.partition().static_row();
+        cached ? sr.prepare_hash(*s, column_kind::static_column, digest_request::cells_and_row) : sr.clear_hash();
+    };
+
+    const auto full = partition_slice_builder(*s).build();
+    const auto partial = partition_slice_builder(*s).with_regular_column(to_bytes("r1")).with_regular_column(to_bytes("r2"))
+            .with_regular_column(to_bytes("m")).build();
+    for (auto* ps : {&full, &partial}) {
+        set_cached(false);
+        const auto fresh = row_hash_test_digest(m, *ps, query::digest_algorithm::xxHash_row, now);
+        set_cached(true);
+        const auto cached = row_hash_test_digest(m, *ps, query::digest_algorithm::xxHash_row, now);
+        BOOST_REQUIRE(fresh == cached);
+        // Cached hashes don't leak into the per-cell algorithm either.
+        const auto cell_level_cached = row_hash_test_digest(m, *ps, query::digest_algorithm::xxHash, now);
+        set_cached(false);
+        BOOST_REQUIRE(cell_level_cached == row_hash_test_digest(m, *ps, query::digest_algorithm::xxHash, now));
+    }
+    const auto full_digest = row_hash_test_digest(m, full, query::digest_algorithm::xxHash_row, now);
+    BOOST_REQUIRE(full_digest != row_hash_test_digest(m, partial, query::digest_algorithm::xxHash_row, now));
+}
+
+SEASTAR_THREAD_TEST_CASE(test_row_digest_differs) {
+    auto s = make_row_hash_test_schema();
+    const auto now = gc_clock::now();
+    auto m1 = make_row_hash_test_mutation(s, 1);
+    auto m2 = make_row_hash_test_mutation(s, 2);
+    const auto ps = partition_slice_builder(*s).build();
+
+    BOOST_REQUIRE(row_hash_test_digest(m1, ps, query::digest_algorithm::xxHash_row, now)
+            != row_hash_test_digest(m1, ps, query::digest_algorithm::xxHash, now));
+    BOOST_REQUIRE(row_hash_test_digest(m1, ps, query::digest_algorithm::xxHash_row, now)
+            != row_hash_test_digest(m2, ps, query::digest_algorithm::xxHash_row, now));
+    for (auto& e : m2.partition().clustered_rows()) {
+        e.row().cells().prepare_hash(*s, column_kind::regular_column, digest_request::cells_and_row);
+    }
+    BOOST_REQUIRE(row_hash_test_digest(m1, ps, query::digest_algorithm::xxHash_row, now)
+            != row_hash_test_digest(m2, ps, query::digest_algorithm::xxHash_row, now));
+}
+
+static void set_row_hashes(mutation& m, bool cached) {
+    const auto& s = *m.schema();
+    for (auto& e : m.partition().clustered_rows()) {
+        auto& cells = e.row().cells();
+        cached ? cells.prepare_hash(s, column_kind::regular_column, digest_request::cells_and_row) : cells.clear_hash();
+    }
+    auto& sr = m.partition().static_row();
+    cached ? sr.prepare_hash(s, column_kind::static_column, digest_request::cells_and_row) : sr.clear_hash();
+}
+
+// The xxHash_row digest of m is the same with and without cached row hashes.
+static void check_cached_digest_matches_fresh(mutation m, const query::partition_slice& ps, gc_clock::time_point now) {
+    set_row_hashes(m, false);
+    const auto fresh = row_hash_test_digest(m, ps, query::digest_algorithm::xxHash_row, now);
+    set_row_hashes(m, true);
+    BOOST_REQUIRE(row_hash_test_digest(m, ps, query::digest_algorithm::xxHash_row, now) == fresh);
+}
+
+// Partial slices are digested as with xxHash, whatever is cached.
+SEASTAR_THREAD_TEST_CASE(test_row_digest_partial_slice_is_cell_level) {
+    auto s = make_row_hash_test_schema();
+    const auto now = gc_clock::now();
+    auto m = make_row_hash_test_mutation(s, 1);
+    const auto partial = partition_slice_builder(*s).with_regular_column(to_bytes("r1")).with_regular_column(to_bytes("m")).build();
+    check_cached_digest_matches_fresh(m, partial, now);
+    // The static row is fully selected above, so it still takes the per-row path; compare without it.
+    const auto partial_no_static = partition_slice_builder(*s).with_no_static_columns()
+            .with_regular_column(to_bytes("r1")).with_regular_column(to_bytes("m")).build();
+    set_row_hashes(m, true);
+    BOOST_REQUIRE(row_hash_test_digest(m, partial_no_static, query::digest_algorithm::xxHash_row, now)
+            == row_hash_test_digest(m, partial_no_static, query::digest_algorithm::xxHash, now));
+}
+
+SEASTAR_THREAD_TEST_CASE(test_row_digest_cached_after_schema_change) {
+    auto s = make_row_hash_test_schema();
+    const auto now = gc_clock::now();
+    const std::vector<schema_ptr> new_schemas{
+            schema_builder(s).with_column("r4", int32_type).build(),
+            schema_builder(s).remove_column(to_bytes("r2")).build()};
+    for (auto& new_s : new_schemas) {
+        auto m = make_row_hash_test_mutation(s, 1);
+        set_row_hashes(m, true);
+        m.upgrade(new_s);
+        const auto ps = partition_slice_builder(*new_s).build();
+        const auto expected = row_hash_test_digest(make_row_hash_test_mutation(new_s, 1), ps, query::digest_algorithm::xxHash_row, now);
+        // Whatever hashes survive the upgrade are still valid.
+        BOOST_REQUIRE(row_hash_test_digest(m, ps, query::digest_algorithm::xxHash_row, now) == expected);
+        set_row_hashes(m, true);
+        BOOST_REQUIRE(row_hash_test_digest(m, ps, query::digest_algorithm::xxHash_row, now) == expected);
+    }
+}
+
+SEASTAR_THREAD_TEST_CASE(test_row_digest_cached_expired_cell) {
+    auto s = make_row_hash_test_schema();
+    const auto now = gc_clock::now();
+    const auto ttl = gc_clock::duration(std::chrono::seconds(10));
+    auto m = make_row_hash_test_mutation(s, 1);
+    for (int32_t ck = 0; ck < 3; ++ck) {
+        m.set_clustered_cell(clustering_key::from_single_value(*s, int32_type->decompose(ck)), "r1", data_value(int32_t(5)), 2, ttl);
+    }
+    const auto ps = partition_slice_builder(*s).build();
+    check_cached_digest_matches_fresh(m, ps, now);
+    check_cached_digest_matches_fresh(m, ps, now + ttl + std::chrono::seconds(1));
+}
+
+SEASTAR_THREAD_TEST_CASE(test_row_digest_cached_counters_and_frozen_collections) {
+    auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("ck", int32_type, column_kind::clustering_key)
+            .with_column("c1", counter_type)
+            .build();
+    counter_cell_builder ccb;
+    std::vector<counter_id> ids;
+    for (int i = 0; i < 8; ++i) {
+        ids.emplace_back(utils::make_random_uuid());
+    }
+    std::ranges::sort(ids);
+    for (auto id : ids) {
+        ccb.add_shard(counter_shard(id, 1, 1));
+    }
+    mutation cm(s, partition_key::from_single_value(*s, int32_type->decompose(0)));
+    cm.set_clustered_cell(clustering_key::from_single_value(*s, int32_type->decompose(0)),
+            *s->get_column_definition(to_bytes("c1")), atomic_cell_or_collection(ccb.build(1)));
+    check_cached_digest_matches_fresh(cm, partition_slice_builder(*s).build(), gc_clock::now());
+
+    auto list_t = list_type_impl::get_instance(int32_type, false);
+    auto fs = schema_builder(this_smp_shard_count(), "ks", "cf")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("ck", int32_type, column_kind::clustering_key)
+            .with_column("fl", list_t)
+            .build();
+    list_type_impl::native_type elems;
+    for (int32_t i = 0; i < 100; ++i) {
+        elems.push_back(data_value(i));
+    }
+    mutation fm(fs, partition_key::from_single_value(*fs, int32_type->decompose(0)));
+    fm.set_clustered_cell(clustering_key::from_single_value(*fs, int32_type->decompose(0)), "fl", make_list_value(list_t, elems), 1);
+    check_cached_digest_matches_fresh(fm, partition_slice_builder(*fs).build(), gc_clock::now());
+}
+
+// A non-frozen set element whose TTL expires between caching the row hash and the read,
+// within gc_grace: the cached digest must match a fresh one (SCYLLADB-6240).
+SEASTAR_THREAD_TEST_CASE(test_row_digest_cached_expired_set_element) {
+    auto set_t = set_type_impl::get_instance(int32_type, true);
+    auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("ck", int32_type, column_kind::clustering_key)
+            .with_column("st", set_t)
+            .build();
+    const auto now = gc_clock::now();
+    const auto ttl = gc_clock::duration(std::chrono::seconds(10));
+    auto& def = *s->get_column_definition(to_bytes("st"));
+    mutation m(s, partition_key::from_single_value(*s, int32_type->decompose(0)));
+    collection_mutation_writer w{tombstone()};
+    // Large enough (>= hashed_cell_min_size) to keep a cached cell hash.
+    for (int32_t i = 0; i < 40; ++i) {
+        const auto key = int32_type->decompose(i);
+        // The first half expires, the rest is permanent.
+        if (i < 20) {
+            w.push_back(managed_bytes_view(key), atomic_cell::make_live(*bytes_type, 1, bytes(), now + ttl, ttl, atomic_cell::collection_member::yes));
+        } else {
+            w.push_back(managed_bytes_view(key), atomic_cell::make_live(*bytes_type, 1, bytes(), atomic_cell::collection_member::yes));
+        }
+    }
+    m.set_clustered_cell(clustering_key::from_single_value(*s, int32_type->decompose(0)), def, atomic_cell_or_collection(std::move(w).finish()));
+    const auto ps = partition_slice_builder(*s).build();
+    check_cached_digest_matches_fresh(m, ps, now);
+    check_cached_digest_matches_fresh(m, ps, now + ttl + std::chrono::seconds(1));
+    // Hashes cached before the expiry are read after it.
+    set_row_hashes(m, true);
+    const auto later = now + ttl + std::chrono::seconds(1);
+    const auto cached = row_hash_test_digest(m, ps, query::digest_algorithm::xxHash_row, later);
+    set_row_hashes(m, false);
+    BOOST_REQUIRE(cached == row_hash_test_digest(m, ps, query::digest_algorithm::xxHash_row, later));
+}
+
+
+SEASTAR_THREAD_TEST_CASE(test_row_hash_invalidation) {
+    auto s = make_row_hash_test_schema();
+    const auto kind = column_kind::regular_column;
+    const auto now = gc_clock::now();
+    auto& r1_def = *s->get_column_definition(to_bytes("r1"));
+    auto& r2_def = *s->get_column_definition(to_bytes("r2"));
+    auto live = [] (int32_t v) {
+        return atomic_cell_or_collection(atomic_cell::make_live(*int32_type, 1, int32_type->decompose(v)));
+    };
+
+    row r;
+    r.apply(r1_def, live(1));
+    r.prepare_hash(*s, kind, digest_request::cells_and_row);
+    BOOST_REQUIRE(r.row_hash());
+    r.apply(r2_def, live(2));
+    BOOST_REQUIRE(!r.row_hash());
+
+    r.prepare_hash(*s, kind, digest_request::cells_and_row);
+    BOOST_REQUIRE(r.row_hash());
+    r.for_each_cell_in_place([] (column_id, managed_bytes_mutable_view) { });
+    BOOST_REQUIRE(!r.row_hash());
+
+    // Nothing to compact: the hash survives.
+    r.prepare_hash(*s, kind, digest_request::cells_and_row);
+    auto res = r.compact_and_expire(*s, kind, row_tombstone(), now, always_gc, now);
+    BOOST_REQUIRE_EQUAL(res.live_cells, 2u);
+    BOOST_REQUIRE(r.row_hash());
+
+    // An expired cell is rewritten, so the hash goes.
+    r.apply(r2_def, atomic_cell_or_collection(atomic_cell::make_live(*int32_type, 2, int32_type->decompose(3),
+            now - std::chrono::seconds(1), std::chrono::seconds(10))));
+    r.prepare_hash(*s, kind, digest_request::cells_and_row);
+    BOOST_REQUIRE(r.row_hash());
+    res = r.compact_and_expire(*s, kind, row_tombstone(), now, never_gc, now);
+    BOOST_REQUIRE_EQUAL(res.dead_cells, 1u);
+    BOOST_REQUIRE(!r.row_hash());
+}
+
+SEASTAR_THREAD_TEST_CASE(test_row_hash_merge) {
+    auto s = make_row_hash_test_schema();
+    const auto kind = column_kind::regular_column;
+    auto& r1_def = *s->get_column_definition(to_bytes("r1"));
+    auto& r2_def = *s->get_column_definition(to_bytes("r2"));
+    auto live = [] (int32_t v) {
+        return atomic_cell_or_collection(atomic_cell::make_live(*int32_type, 1, int32_type->decompose(v)));
+    };
+
+    {
+        row a;
+        a.apply(r1_def, live(1));
+        a.prepare_hash(*s, kind, digest_request::cells_and_row);
+        row b;
+        b.apply(r2_def, live(2));
+        b.prepare_hash(*s, kind, digest_request::cells_and_row);
+        a.apply_monotonically(*s, kind, std::move(b));
+        BOOST_REQUIRE(!a.row_hash());
+        BOOST_REQUIRE(!b.row_hash());
+    }
+    {
+        row a;
+        row b;
+        b.apply(r1_def, live(1));
+        b.prepare_hash(*s, kind, digest_request::cells_and_row);
+        const auto b_hash = b.row_hash()->hash;
+        a.apply_monotonically(*s, kind, std::move(b));
+        BOOST_REQUIRE(a.row_hash());
+        BOOST_REQUIRE_EQUAL(a.row_hash()->hash, b_hash);
+        a.clear_hash();
+        a.prepare_hash(*s, kind, digest_request::cells_and_row);
+        BOOST_REQUIRE(a.row_hash());
+        BOOST_REQUIRE_EQUAL(a.row_hash()->hash, b_hash);
+    }
 }
 
 SEASTAR_THREAD_TEST_CASE(test_mutation_consume) {

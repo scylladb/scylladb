@@ -224,7 +224,8 @@ void test_scan_with_range_delete_over_rows() {
 
 // Point reads of single-row partitions resident in cache, through the replica query path.
 // With digest, results are built as for a CL>ONE data read (result_and_digest).
-void test_point_reads(unsigned columns, size_t value_size, unsigned collection_elements, bool digest, unsigned selected_columns) {
+void test_point_reads(unsigned columns, size_t value_size, unsigned collection_elements, bool digest, query::digest_algorithm algo,
+        unsigned selected_columns) {
     // Keep the total number of collection elements at or below 10M.
     const int partitions = collection_elements ? std::min<size_t>(10000, 10'000'000 / collection_elements) : 10000;
     // time_parallel() runs the callback on every shard, but the cache and ranges are this shard's.
@@ -235,7 +236,8 @@ void test_point_reads(unsigned columns, size_t value_size, unsigned collection_e
         throw std::runtime_error("--collection-elements must be at most 10000000");
     }
     std::cout << __FUNCTION__ << " columns=" << columns << " value_size=" << value_size << " collection_elements=" << collection_elements
-              << " partitions=" << partitions << " digest=" << digest << " selected_columns=" << selected_columns << std::endl;
+              << " partitions=" << partitions << " digest=" << digest << " algo=" << int(algo)
+              << " selected_columns=" << selected_columns << std::endl;
 
     auto sb = schema_builder(this_smp_shard_count(), "ks", "cf")
             .with_column("pk", int32_type, column_kind::partition_key);
@@ -297,10 +299,14 @@ void test_point_reads(unsigned columns, size_t value_size, unsigned collection_e
     }
     if (digest) {
         sl.with_option<query::partition_slice::option::with_digest>();
+        // As the replica does: the row hash serves only reads of all columns.
+        if (algo == query::digest_algorithm::xxHash_row && (!selected_columns || selected_columns >= columns)) {
+            sl.with_option<query::partition_slice::option::with_row_digest>();
+        }
     }
     const auto slice = sl.build();
     const auto opts = digest
-            ? query::result_options{query::result_request::result_and_digest, query::digest_algorithm::xxHash}
+            ? query::result_options{query::result_request::result_and_digest, algo}
             : query::result_options::only_result();
     // 64 MiB covers the largest case (a ~4 MB row) with short reads off.
     const auto max_size = query::max_result_size(64 << 20);
@@ -347,6 +353,7 @@ int main(int argc, char** argv) {
     app.add_options()
         ("point-reads", "run only the cached point-read benchmark")
         ("digest", "request a digest along with point-read results")
+        ("row-digest", "with --digest, use the per-row digest algorithm")
         ("columns", bpo::value<unsigned>()->default_value(5), "regular columns for point reads")
         ("selected-columns", bpo::value<unsigned>()->default_value(0), "regular columns selected by point reads (0: all)")
         ("collection-elements", bpo::value<unsigned>()->default_value(0), "elements of a non-frozen set column for point reads (0: none)")
@@ -360,6 +367,7 @@ int main(int argc, char** argv) {
             auto& cfg = app.configuration();
             if (cfg.contains("point-reads")) {
                 test_point_reads(cfg["columns"].as<unsigned>(), cfg["value-size"].as<size_t>(), cfg["collection-elements"].as<unsigned>(), cfg.contains("digest"),
+                        cfg.contains("row-digest") ? query::digest_algorithm::xxHash_row : query::digest_algorithm::xxHash,
                         cfg["selected-columns"].as<unsigned>());
                 return;
             }

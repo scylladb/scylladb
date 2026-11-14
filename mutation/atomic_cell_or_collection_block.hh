@@ -650,6 +650,8 @@ public:
             take(std::move(_block));
             _changed = true;
         }
+        // Whether replace(), remove() or release_to() was called.
+        bool changed() const noexcept { return _changed; }
     };
 
     // Calls func(block_index, block_being_rebuilt&) for each block in index order.

@@ -487,7 +487,7 @@ static mutation_partition read_using_cursor(partition_snapshot& snap, bool rever
     partition_snapshot_row_cursor cur(*s, snap, false, reversed);
     cur.advance_to(position_in_partition::before_all_clustered_rows());
     auto mp = read_partition_from(*s, cur);
-    mp.apply(*s, mutation_fragment(*s, semaphore.make_permit(), static_row(snap.static_row(false))));
+    mp.apply(*s, mutation_fragment(*s, semaphore.make_permit(), static_row(snap.static_row(digest_request::none))));
     mp.set_static_row_continuous(snap.static_row_continuous());
     mp.apply(snap.partition_tombstone());
     return mp;

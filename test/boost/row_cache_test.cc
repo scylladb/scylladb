@@ -46,6 +46,10 @@
 #include "readers/empty.hh"
 #include <seastar/testing/thread_test_case.hh>
 #include "service/raft/raft_group0_client.hh"
+#include "replica/querier.hh"
+#include "query/query-result-writer.hh"
+#include "mutation_query.hh"
+#include "mutation/collection_mutation.hh"
 
 using namespace std::chrono_literals;
 
@@ -3819,6 +3823,151 @@ SEASTAR_TEST_CASE(test_hash_is_cached) {
             BOOST_REQUIRE(row.cells().cell_hash_for(0));
         }
     });
+}
+
+static schema_ptr make_row_digest_test_schema() {
+    return schema_builder(this_smp_shard_count(), "ks", "cf")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("ck", int32_type, column_kind::clustering_key)
+            .with_column("s1", int32_type, column_kind::static_column)
+            .with_column("r1", int32_type)
+            .with_column("r2", int32_type)
+            .with_column("r3", bytes_type)
+            .with_column("m", map_type_impl::get_instance(int32_type, bytes_type, true))
+            .build();
+}
+
+// r2 is never set; r3 is empty for ck 0 and large enough for a cached cell hash otherwise.
+static mutation make_row_digest_test_mutation(schema_ptr s, const dht::decorated_key& dk) {
+    mutation m(s, dk);
+    m.set_static_cell("s1", data_value(int32_t(7)), 1);
+    auto& m_def = *s->get_column_definition(to_bytes("m"));
+    for (int32_t ck = 0; ck < 3; ++ck) {
+        auto key = clustering_key::from_single_value(*s, int32_type->decompose(ck));
+        m.set_clustered_cell(key, "r1", data_value(ck), 1);
+        m.set_clustered_cell(key, "r3", data_value(bytes(ck * 200, 'x')), 1);
+        collection_mutation_writer w(tombstone(0, gc_clock::now()));
+        for (int32_t i = 0; i < 3; ++i) {
+            w.push_back(managed_bytes_view(int32_type->decompose(i)),
+                    atomic_cell::make_live(*bytes_type, 2 + i, bytes(i + ck, 'y'), atomic_cell::collection_member::yes));
+        }
+        m.set_clustered_cell(key, m_def, atomic_cell_or_collection(std::move(w).finish()));
+    }
+    return m;
+}
+
+static query::partition_slice make_row_digest_slice(const schema& s) {
+    auto slice = s.full_slice();
+    slice.options.set<query::partition_slice::option::with_digest>();
+    slice.options.set<query::partition_slice::option::with_row_digest>();
+    return slice;
+}
+
+// The xxHash_row digest of a full query through the cache.
+static query::result_digest cache_row_digest(row_cache& cache, schema_ptr query_schema, const query::partition_slice& slice, gc_clock::time_point now) {
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    auto ms = mutation_source([&cache] (schema_ptr s, reader_permit permit, const dht::partition_range& range,
+            const query::partition_slice& sl, tracing::trace_state_ptr trace, streamed_mutation::forwarding fwd) {
+        return cache.make_reader(s, std::move(permit), range, sl, std::move(trace), std::move(fwd));
+    });
+    auto q = replica::querier(ms, query_schema, semaphore.make_permit(), query::full_partition_range, slice, {}, tombstone_gc_state::no_gc());
+    auto close_q = deferred_close(q);
+    query::result::builder builder(slice, query::result_options::only_digest(query::digest_algorithm::xxHash_row),
+            query::result_memory_accounter{query::result_memory_limiter::unlimited_result_size}, query::max_tombstones);
+    q.consume_page(query_result_builder(*query_schema, builder), query::max_rows, query::max_partitions, now).get();
+    return *builder.build().digest();
+}
+
+// The same digest computed from a plain mutation, without any cached hashes.
+static query::result_digest plain_row_digest(mutation m, const query::partition_slice& slice, gc_clock::time_point now) {
+    return *query_mutation(std::move(m), slice, query::max_rows, now, query::result_options::only_digest(query::digest_algorithm::xxHash_row)).digest();
+}
+
+static bool cache_rows_have_row_hash(row_cache& cache, cache_tracker& tracker, const dht::decorated_key& dk) {
+    return with_allocator(tracker.allocator(), [&] {
+        for (auto& e : cache.lookup(dk).partition().version()->partition().clustered_rows()) {
+            if (!e.dummy() && !e.row().cells().row_hash()) {
+                return false;
+            }
+        }
+        return true;
+    });
+}
+
+SEASTAR_THREAD_TEST_CASE(test_row_digest_reversed_read_through_cache) {
+    auto s = make_row_digest_test_schema();
+    auto rev_s = s->make_reversed();
+    const auto now = gc_clock::now();
+    auto dk = tests::generate_partition_key(s);
+    auto m = make_row_digest_test_mutation(s, dk);
+    memtable_snapshot_source underlying(s);
+    underlying.apply(m);
+    cache_tracker tracker;
+    row_cache cache(s, snapshot_source([&] { return underlying(); }), tracker);
+
+    const auto fwd_slice = make_row_digest_slice(*s);
+    const auto rev_slice = query::reverse_slice(*s, fwd_slice);
+    const auto expected_rev = plain_row_digest(reverse(m), rev_slice, now);
+
+    // The first read populates the cache and fills row hashes, the second one reuses them.
+    BOOST_REQUIRE(cache_row_digest(cache, rev_s, rev_slice, now) == expected_rev);
+    BOOST_REQUIRE(cache_rows_have_row_hash(cache, tracker, dk));
+    BOOST_REQUIRE(cache_row_digest(cache, rev_s, rev_slice, now) == expected_rev);
+
+    BOOST_REQUIRE(cache_row_digest(cache, s, fwd_slice, now) == plain_row_digest(m, fwd_slice, now));
+}
+
+// Rows merged from several MVCC versions must not use a single version's row hash.
+SEASTAR_THREAD_TEST_CASE(test_row_digest_multiple_versions_in_cache) {
+    auto s = make_row_digest_test_schema();
+    const auto now = gc_clock::now();
+    auto dk = tests::generate_partition_key(s);
+    auto m1 = make_row_digest_test_mutation(s, dk);
+    memtable_snapshot_source underlying(s);
+    underlying.apply(m1);
+    cache_tracker tracker;
+    row_cache cache(s, snapshot_source([&] { return underlying(); }), tracker);
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+
+    const auto slice = make_row_digest_slice(*s);
+    BOOST_REQUIRE(cache_row_digest(cache, s, slice, now) == plain_row_digest(m1, slice, now));
+    BOOST_REQUIRE(cache_rows_have_row_hash(cache, tracker, dk));
+
+    // ck 0 and ck 1 change in the new version, ck 2 stays in the old one only.
+    mutation m2(s, dk);
+    auto ck = [&] (int32_t v) { return clustering_key::from_single_value(*s, int32_type->decompose(v)); };
+    m2.set_clustered_cell(ck(0), "r1", data_value(int32_t(100)), 10);
+    m2.set_clustered_cell(ck(1), "r2", data_value(int32_t(5)), 10);
+    const auto expected = plain_row_digest(m1 + m2, slice, now);
+    BOOST_REQUIRE(expected != plain_row_digest(m1, slice, now));
+
+    auto version_count = [&] {
+        size_t n = 0;
+        for (auto& v : cache.lookup(dk).partition().versions()) {
+            (void)v;
+            ++n;
+        }
+        return n;
+    };
+
+    {
+        // A reader inside the partition holds a snapshot, so the update adds a version.
+        auto snap = cache.make_reader(s, semaphore.make_permit(), query::full_partition_range, s->full_slice());
+        auto close_snap = deferred_close(snap);
+        snap.set_max_buffer_size(1);
+        snap.fill_buffer().get();
+        apply(cache, underlying, m2);
+        BOOST_REQUIRE_EQUAL(version_count(), 2);
+
+        BOOST_REQUIRE(cache_row_digest(cache, s, slice, now) == expected);
+        BOOST_REQUIRE(cache_row_digest(cache, s, slice, now) == expected);
+    }
+
+    tracker.cleaner().drain().get();
+    BOOST_REQUIRE_EQUAL(version_count(), 1);
+    BOOST_REQUIRE(cache_row_digest(cache, s, slice, now) == expected);
+    BOOST_REQUIRE(cache_rows_have_row_hash(cache, tracker, dk));
+    BOOST_REQUIRE(cache_row_digest(cache, s, slice, now) == expected);
 }
 
 SEASTAR_TEST_CASE(test_random_population_with_many_versions) {
