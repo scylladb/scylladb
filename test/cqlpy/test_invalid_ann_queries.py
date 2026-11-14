@@ -220,3 +220,13 @@ def test_user_defined_ann_is_not_shadowed_by_native_ann(cql, test_keyspace, inde
         with pytest.raises(InvalidRequest, match="cannot be passed as argument 0 of function"):
             cql.execute(f"SELECT * FROM {indexed_vector_table} "
                         f"ORDER BY {test_keyspace}.ann(v, [0.1, 0.2, 0.3]) LIMIT 5")
+
+# A vector search query whose WHERE clause restricts both the token and the
+# partition key is rejected, like one restricting only the token (see
+# VECTOR-1050 in cassandra_tests/vector_local_test.py). If vector search ever
+# supports token restrictions, this combination must also work correctly -
+# the filter sent to the vector store must include the token restrictions.
+def test_ann_query_with_token_and_partition_key(cql, indexed_vector_table):
+    for where in ['p = 1 AND token(p) > 0', 'p IN (1, 2) AND token(p) > 0', 'p > 1 AND token(p) > 0']:
+        with pytest.raises(InvalidRequest, match='token'):
+            cql.execute(f'SELECT p FROM {indexed_vector_table} WHERE {where} ORDER BY v ANN OF [0.1, 0.2, 0.3] LIMIT 3')

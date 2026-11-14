@@ -341,6 +341,29 @@ def assert_rows_ignoring_order(result, *expected):
 
 assertRowsIgnoringOrder = assert_rows_ignoring_order
 
+# A query with IN on the partition key and ORDER BY sorts the rows from the
+# different partitions together. But the order of "ties" - rows from
+# different partitions which are equal in all the ORDER BY columns - isn't
+# specified, and Scylla and Cassandra order them differently when the
+# requested order is the reverse of the clustering order (see issue #15099).
+# assert_rows_with_ties() is like assert_rows(), but each expected item may
+# be ties(row1, row2, ...) - a group of rows which may appear in any order.
+class ties:
+    def __init__(self, *rows):
+        self.rows = rows
+
+def assert_rows_with_ties(result, *expected):
+    allresults = list(result)
+    assert len(allresults) == sum(len(e.rows) if isinstance(e, ties) else 1 for e in expected)
+    i = 0
+    for e in expected:
+        if isinstance(e, ties):
+            assert_rows_ignoring_order(allresults[i:i+len(e.rows)], *e.rows)
+            i += len(e.rows)
+        else:
+            assert_rows_list(allresults[i:i+1], [e])
+            i += 1
+
 # Unfortunately, collections.Counter objects don't implement comparison
 # operators <, <=, >, >=, as sets do. Lets implement the c1 <= c2:
 def is_subset(c1, c2):

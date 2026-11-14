@@ -167,12 +167,36 @@ public:
 
     void trim(size_t limit);
 
+    // Sorts the rows, keeping rows which are equal according to cmp in their
+    // current order (a stable sort). std::stable_sort() would need a temporary
+    // buffer of all the rows, contiguous in memory, so instead we sort the
+    // rows' indices - in a chunked_vector - breaking ties by index, and then
+    // move the rows into that order.
     template<typename RowComparator>
     requires requires (RowComparator cmp, const row_type& row) {
         { cmp(row, row) } -> std::same_as<bool>;
     }
-    void sort(const RowComparator& cmp) {
-        std::sort(_rows.begin(), _rows.end(), cmp);
+    void stable_sort(const RowComparator& cmp) {
+        utils::chunked_vector<size_t> order;
+        order.reserve(_rows.size());
+        for (size_t i = 0; i < _rows.size(); ++i) {
+            order.push_back(i);
+        }
+        std::sort(order.begin(), order.end(), [&] (size_t a, size_t b) {
+            if (cmp(_rows[a], _rows[b])) {
+                return true;
+            }
+            if (cmp(_rows[b], _rows[a])) {
+                return false;
+            }
+            return a < b;
+        });
+        rows_type sorted;
+        sorted.reserve(_rows.size());
+        for (size_t i : order) {
+            sorted.push_back(std::move(_rows[i]));
+        }
+        _rows = std::move(sorted);
     }
 
     metadata& get_metadata();
