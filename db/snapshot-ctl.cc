@@ -391,6 +391,31 @@ future<tasks::task_id> snapshot_ctl::start_global_backup(std::unordered_map<sstr
     co_return co_await snapshot::start_global_backup(*this, static_pointer_cast<tasks::task_manager::module>(_task_manager_module), tag, std::move(ks_tables), std::move(locations), move_files);
 }
 
+future<std::vector<db::snapshot::backup_location_info>>
+snapshot_ctl::list_global_backups(std::vector<snapshot_dc_location> locations, std::vector<sstring> ks_names, std::vector<sstring> tables, sstring tag) {
+    if (ks_names.size() != 1 && !tables.empty()) {
+        throw std::invalid_argument("Cannot name tables when doing multiple keyspaces snapshot backup");
+    }
+    std::unordered_multimap<sstring, sstring> ks_tables;
+
+    if (!ks_names.empty()) {
+        auto ks_name = ks_names[0];
+        for (auto& cf_name : tables) {
+            ks_tables.emplace(ks_name, cf_name);
+        }
+    }
+    if (ks_tables.empty()) {
+        for (auto& ks_name : ks_names) {
+            ks_tables.emplace(ks_name, "");
+        }
+    }
+
+    co_await coroutine::switch_to(_config.backup_sched_group);
+    snap_log.info("List backups at {} (snapshot = {}, tables = {})", locations, tag.empty() ? "any" : tag, ks_tables.empty() ? std::unordered_multimap<sstring, sstring>{{"*","*"}} : ks_tables);
+
+    co_return co_await snapshot::list_backups(_storage_manager.container().local(), tag, std::move(ks_tables), std::move(locations));
+}
+
 future<>
 snapshot_ctl::backup_sstables(table_id table_id, std::string tag, std::string endpoint, std::string bucket, std::string prefix, dht::token first_token, dht::token last_token, utils::chunked_vector<sstables::sstable_id> sstable_ids, bool use_move) {
     // Backups are created and run on shard 0
