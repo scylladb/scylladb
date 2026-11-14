@@ -749,6 +749,10 @@ int64_t compaction_strategy::get_resharding_group(const sstables::stats_metadata
     return _compaction_strategy_impl->get_resharding_group(stats);
 }
 
+uint64_t compaction_strategy::get_resharding_max_sstable_bytes() const {
+    return _compaction_strategy_impl->get_resharding_max_sstable_bytes();
+}
+
 uint64_t compaction_strategy::adjust_partition_estimate(const mutation_source_metadata& ms_meta, uint64_t partition_estimate, schema_ptr schema) const {
     return _compaction_strategy_impl->adjust_partition_estimate(ms_meta, partition_estimate, std::move(schema));
 }

@@ -135,6 +135,10 @@ public:
     // stats, so that its output doesn't mix data the strategy keeps apart, like the data of different
     // time windows. By default, all sstables belong to the same group.
     int64_t get_resharding_group(const sstables::stats_metadata& stats) const;
+
+    // The maximum size of the sstables written by resharding, so that its output has the
+    // sstable sizes the strategy expects. By default, the size is unlimited.
+    uint64_t get_resharding_max_sstable_bytes() const;
 };
 
 // Creates a compaction_strategy object from one of the strategies available.

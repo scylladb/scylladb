@@ -95,5 +95,9 @@ public:
     virtual int64_t get_resharding_group(const sstables::stats_metadata& stats) const {
         return 0;
     }
+
+    virtual uint64_t get_resharding_max_sstable_bytes() const {
+        return compaction_descriptor::default_max_sstable_bytes;
+    }
 };
 }

@@ -236,6 +236,7 @@ future<> reshard(sstables::sstable_directory& dir, std::vector<replica::reshard_
             desc.options = compaction_type_options::make_reshard(vnodes_resharding);
             desc.creator = creator;
             desc.sharder = &erm->get_sharder(*table.schema());
+            desc.max_sstable_bytes = table.get_compaction_strategy().get_resharding_max_sstable_bytes();
             desc.owned_ranges = owned_ranges_ptr;
 
             auto result = co_await compact_sstables(std::move(desc), info, t, progress_monitor);
