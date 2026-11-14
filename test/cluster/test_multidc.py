@@ -22,6 +22,7 @@ from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.random_tables import RandomTables, TextType, Column
 from test.pylib.rest_client import read_barrier
 from test.pylib.util import unique_name
+from test.cluster.util import reconnect_driver
 
 logger = logging.getLogger(__name__)
 CONFIG = {"endpoint_snitch": "GossipingPropertyFileSnitch"}
@@ -219,7 +220,7 @@ async def test_create_and_alter_keyspace_with_altering_rf_and_racks(manager: Scy
     # Step 1.
     # -------
     # dc1: r1=1, rzerotoken=1 (Note: zero-token nodes have NO impact. In this case, this rack should behave as if it never existed).
-    _ = await manager.server_add(property_file={"dc": "dc1", "rack": "r1"}, config=cfg)
+    servers = [await manager.server_add(property_file={"dc": "dc1", "rack": "r1"}, config=cfg)]
     _ = await manager.server_add(property_file={"dc": "dc1", "rack": "rzerotoken"}, config=cfg_zero_token)
     cql = manager.get_cql()
 
@@ -241,7 +242,11 @@ async def test_create_and_alter_keyspace_with_altering_rf_and_racks(manager: Scy
     # -------
     # dc1: r1=1, rzerotoken=1.
     # dc2: r1=1.
-    _ = await manager.server_add(property_file={"dc": "dc2", "rack": "r1"}, config=cfg)
+    servers.append(await manager.server_add(property_file={"dc": "dc2", "rack": "r1"}, config=cfg))
+
+    # Reconnect the driver as a workaround for scylladb/python-driver#317.
+    await reconnect_driver(manager)
+    cql, _ = await manager.get_ready_cql(servers)
 
     ks2 = await create_ok([1, 1])
 
@@ -289,7 +294,11 @@ async def test_create_and_alter_keyspace_with_altering_rf_and_racks(manager: Scy
     # -------
     # dc1: r1=1, r2=1, rzerotoken=1.
     # dc2: r1=1.
-    _ = await manager.server_add(property_file={"dc": "dc1", "rack": "r2"}, config=cfg)
+    servers.append(await manager.server_add(property_file={"dc": "dc1", "rack": "r2"}, config=cfg))
+
+    # Reconnect the driver as a workaround for scylladb/python-driver#317.
+    await reconnect_driver(manager)
+    cql, _ = await manager.get_ready_cql(servers)
 
     ks3 = await create_ok([2, 1])
     # RF = 1 is always OK!
@@ -581,9 +590,11 @@ async def test_warn_create_and_alter_rf_rack_invalid_ks(manager: ScyllaClusterMa
         manager.server_add(config=cfg, property_file={"dc": "dc2", "rack": "r4"}),
         manager.server_add(config=cfg, property_file={"dc": "dc2", "rack": "r5"}),
     ]
-    await asyncio.gather(*start_node_tasks)
+    servers = await asyncio.gather(*start_node_tasks)
 
-    cql = manager.get_cql()
+    # Reconnect the driver as a workaround for scylladb/python-driver#317.
+    await reconnect_driver(manager)
+    cql, _ = await manager.get_ready_cql(servers)
     # We need to set `max_schema_agreement_wait` to 0 to speed up this test.
     # Without it, the test takes 50 seconds (or 16 seconds if cases run in parallel).
     # With it, the test takes about 9 seconds. All results on my local machine of course.
