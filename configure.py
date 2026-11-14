@@ -845,6 +845,11 @@ arg_parser.add_argument('--tests-debuginfo', action='store', dest='tests_debugin
                         help='Enable(1)/disable(0)compiler debug information generation for tests')
 arg_parser.add_argument('--perf-tests-debuginfo', action='store', dest='perf_tests_debuginfo', type=int, default=0,
                         help='Enable(1)/disable(0)compiler debug information generation for perf tests')
+arg_parser.add_argument('--line-tables', dest='line_tables', action='store_true', default=False,
+                        help='Add line-number debug information (-gline-tables-only, compressed with zstd) '
+                             'to modes that would otherwise have no debug information: dev mode, and all modes with --debuginfo 0. '
+                             'Test executables in these modes, normally stripped, keep the line tables too. '
+                             'It does not change the generated code, and is needed by scripts/bpcov/bpcov.py.')
 arg_parser.add_argument('--split-dwarf', dest='split_dwarf', action='store_true', default=False,
                         help='use of split dwarf (https://gcc.gnu.org/wiki/DebugFission) to speed up linking')
 arg_parser.add_argument('--enable-alloc-failure-injector', dest='alloc_failure_injector', action='store_true', default=False,
@@ -1984,8 +1989,9 @@ tests_link_rule = 'link' if args.tests_debuginfo else 'link_stripped'
 perf_tests_link_rule = 'link' if args.perf_tests_debuginfo else 'link_stripped'
 
 # Strip if debuginfo is disabled, otherwise we end up with partial
-# debug info from the libraries we static link with
-regular_link_rule = 'link' if args.debuginfo else 'link_stripped'
+# debug info from the libraries we static link with. But don't strip
+# the line tables requested with --line-tables.
+regular_link_rule = 'link' if args.debuginfo or args.line_tables else 'link_stripped'
 
 has_sanitize_address_use_after_scope = try_compile(compiler=args.cxx, flags=['-fsanitize-address-use-after-scope'], source='int f() {}')
 
@@ -2821,6 +2827,13 @@ def get_extra_cxxflags(mode, mode_config, cxx, debuginfo):
 
     if debuginfo and mode_config['can_have_debug_info']:
         cxxflags += get_debuginfo_flags(mode_config)
+    elif args.line_tables:
+        # Compression halves the size of the debug information (see
+        # scripts/bpcov/README.md). Don't add -gno-column-info: without
+        # column numbers, clang marks fewer places in the code as the
+        # beginning of a line, and some lines - e.g., "if (a && b)" - lose
+        # every place that bpcov can use.
+        cxxflags += ['-gline-tables-only', '-gz=zstd']
 
     return cxxflags
 
@@ -3005,6 +3018,10 @@ def write_build_file(f,
               command = $cxx  $ld_flags_{mode} -s $ldflags -o $out $in $libs $libs_{mode}
               description = LINK (stripped) $out
               pool = link_pool
+            rule link_line_tables.{mode}
+              command = $cxx  $ld_flags_{mode} $ldflags -o $out $in $libs $libs_{mode} && llvm-objcopy --strip-all --keep-section='.debug_*' $out
+              description = LINK (stripped, keeping line tables) $out
+              pool = link_pool
             rule link_build.{mode}
               command = $cxx  $ld_flags_{mode} $ldflags_build -o $out $in $libs $libs_{mode}
               description = LINK (build) $out
@@ -3141,6 +3158,10 @@ def write_build_file(f,
                 # quickly re-link the test unstripped by adding a "_g"
                 # to the test name, e.g., "ninja build/release/testname_g"
                 link_rule = perf_tests_link_rule if binary.startswith('test/perf/') else tests_link_rule
+                # Except for the line tables requested with --line-tables:
+                # bpcov needs them in every executable it measures.
+                if link_rule == 'link_stripped' and '-gline-tables-only' in modes[mode]['cxxflags'].split():
+                    link_rule = 'link_line_tables'
                 f.write('build $builddir/{}/{}: {}.{} {} | {} {} {} {}\n'.format(mode, binary, link_rule, mode, str.join(' ', objs), seastar_dep, seastar_testing_dep, abseil_dep, fmt_dep))
                 f.write('   libs = {}\n'.format(local_libs))
                 f.write('build $builddir/{}/{}_g: {}.{} {} | {} {} {} {}\n'.format(mode, binary, regular_link_rule, mode, str.join(' ', objs), seastar_dep, seastar_testing_dep, abseil_dep, fmt_dep))
@@ -3212,6 +3233,21 @@ def write_build_file(f,
                 artifacts=str.join(' ', compiler_training_artifacts)
             )
         )
+        # With --line-tables, "ninja {mode}-bpcov-prepare" prepares the data that
+        # scripts/bpcov needs for each executable, in parallel. Optional: without
+        # it, the first run of each executable under bpcov prepares it.
+        if '-gline-tables-only' in modeval['cxxflags'].split() and not modeval['is_profile']:
+            f.write(textwrap.dedent(f'''\
+                rule bpcov_prepare.{mode}
+                  command = scripts/bpcov/bpcov.py prepare --quiet --dir $builddir/{mode} --binary $in && touch $out
+                  description = BPCOV_PREPARE $in
+                '''))
+            bpcov_infos = []
+            for binary in sorted(b for b in build_artifacts if b == 'scylla' or b in tests):
+                info = f'$builddir/{mode}/bpcov/{binary}/info'
+                f.write(f'build {info}: bpcov_prepare.{mode} $builddir/{mode}/{binary} | scripts/bpcov/bpcov.py scripts/bpcov/prepare.c\n')
+                bpcov_infos.append(info)
+            f.write(f'build {mode}-bpcov-prepare: phony {" ".join(bpcov_infos)}\n')
 
         gen_dir = '$builddir/{}/gen'.format(mode)
         gen_headers = []
@@ -3579,7 +3615,11 @@ def create_build_system(args):
     # the result in case one of the linked static libraries happens to
     ## have some debug symbols. See issue #23834.
     for mode, mode_config in build_modes.items():
-        if not has_debuginfo_flag(user_cflags.split() + mode_config['cxxflags'].split()):
+        if '-gline-tables-only' in mode_config['cxxflags'].split():
+            # Keep the line tables, compressed like the objects' (the linker
+            # writes uncompressed debug sections unless told otherwise).
+            mode_config['cxx_ld_flags'] += ' -Wl,--compress-debug-sections=zstd'
+        elif not has_debuginfo_flag(user_cflags.split() + mode_config['cxxflags'].split()):
             mode_config['cxx_ld_flags'] += ' -Wl,--strip-debug'
 
     ninja = find_ninja()
