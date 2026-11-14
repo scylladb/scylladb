@@ -27,6 +27,8 @@
 #include "schema/schema_builder.hh"
 #include "schema/schema_registry.hh"
 #include "db/schema_tables.hh"
+#include "db/paxos_grace_seconds_extension.hh"
+#include "query/query-result-set.hh"
 #include "types/list.hh"
 #include "types/user.hh"
 #include "db/system_keyspace.hh"
@@ -1206,6 +1208,47 @@ SEASTAR_TEST_CASE(metadata_id_unchanged) {
 
         cquery_nofail(e, "ALTER TABLE t DROP c2");
         BOOST_REQUIRE_EQUAL(initial_metadata_id, get_metadata_id(e, "t"));
+    });
+}
+
+// default_time_to_live and paxos_grace_seconds were not validated against
+// max_ttl before SCYLLADB-6065, so the schema tables can hold a larger value.
+// Loading such a schema clamps both. The schema tables are not rewritten on
+// load: a schema change persists the clamped default_time_to_live, as it
+// writes the table's row from the in-memory schema, while the paxos_grace_seconds
+// extension keeps its stored value.
+SEASTAR_TEST_CASE(test_schema_load_clamps_too_big_ttl_properties) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        const auto too_big = max_ttl + gc_clock::duration(1);
+        // The builder bypasses the CQL validation, like a schema from before it.
+        auto s = schema_builder(this_smp_shard_count(), "ks", "too_big_ttl_props")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .set_default_time_to_live(too_big)
+            .set_paxos_grace_seconds(gc_clock::as_int32(too_big))
+            .build();
+
+        auto ctxt = e.local_db().get_schema_ctxt();
+        auto load = [&] (schema_ptr s) {
+            auto sm = db::schema_tables::make_schema_mutations(s, api::new_timestamp(), true);
+            return db::schema_tables::create_table_from_mutations(ctxt, std::move(sm), ctxt.user_types(), nullptr);
+        };
+        auto stored_paxos_grace_seconds = [] (const schema& s) {
+            return get_schema_extension<db::paxos_grace_seconds_extension>(s.extensions(), db::paxos_grace_seconds_extension::NAME)->get_paxos_grace_seconds();
+        };
+
+        auto loaded = load(s);
+        BOOST_REQUIRE_EQUAL(loaded->default_time_to_live().count(), max_ttl.count());
+        BOOST_REQUIRE_EQUAL(loaded->paxos_grace_seconds().count(), max_ttl.count());
+        BOOST_REQUIRE_EQUAL(stored_paxos_grace_seconds(*loaded), gc_clock::as_int32(too_big));
+
+        // What a schema change writes for the table: the clamped
+        // default_time_to_live, and the paxos extension as stored.
+        auto sm = db::schema_tables::make_schema_mutations(loaded, api::new_timestamp(), true);
+        auto tables_rs = query::result_set(sm.columnfamilies_mutation());
+        BOOST_REQUIRE_EQUAL(tables_rs.row(0).get_nonnull<int32_t>("default_time_to_live"), gc_clock::as_int32(max_ttl));
+        auto reloaded = load(loaded);
+        BOOST_REQUIRE_EQUAL(reloaded->paxos_grace_seconds().count(), max_ttl.count());
+        BOOST_REQUIRE_EQUAL(stored_paxos_grace_seconds(*reloaded), gc_clock::as_int32(too_big));
     });
 }
 

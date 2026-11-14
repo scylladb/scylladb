@@ -13,6 +13,7 @@
 
 #include "bytes_fwd.hh"
 #include "cdc/cdc_options.hh"
+#include "gc_clock.hh"
 #include "schema/schema.hh"
 #include "serializer_impl.hh"
 
@@ -30,7 +31,12 @@ public:
     cdc_extension() = default;
     cdc_extension(const options& opts) : _cdc_options(opts) {}
     explicit cdc_extension(std::map<sstring, sstring> tags) : _cdc_options(std::move(tags)) {}
-    explicit cdc_extension(const bytes& b) : _cdc_options(cdc_extension::deserialize(b)) {}
+    // The persisted ttl was not validated against max_ttl before SCYLLADB-6065,
+    // so a stored value can exceed it; clamp it once here, so every consumer
+    // of the options sees a TTL the sstable reader accepts.
+    explicit cdc_extension(const bytes& b) : _cdc_options(cdc_extension::deserialize(b)) {
+        _cdc_options.clamp_ttl(gc_clock::as_int32(max_ttl));
+    }
     explicit cdc_extension(const sstring& s) {
         throw std::logic_error("Cannot create cdc info from string");
     }

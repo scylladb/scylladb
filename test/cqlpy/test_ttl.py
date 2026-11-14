@@ -8,8 +8,12 @@
 
 from .util import new_test_table, unique_key_int
 from cassandra.query import UNSET_VALUE
+from cassandra.protocol import ConfigurationException
 import pytest
 import time
+
+# The maximum TTL Scylla accepts, 20 years in seconds (max_ttl in gc_clock.hh).
+MAX_TTL = 20 * 365 * 24 * 60 * 60
 
 # Fixture with a table with a default TTL set to 1, so new data would be
 # inserted by default with TTL of 1.
@@ -68,3 +72,26 @@ def test_default_ttl_unset_override(cql, table_ttl_100):
     # possible in case of delays to be somewhat lower. But it wouldn't
     # be None - which would mean that the item will never expire.
     assert list(cql.execute(f'SELECT ttl(v) from {table_ttl_100} where p={p}')) != [(None,)]
+
+# The table properties which end up as the TTL of cells must respect the
+# same maximum as USING TTL does, otherwise the sstable reader rejects the
+# written cells ("Too big ttl"). Reproduces SCYLLADB-6065.
+def check_ttl_property_limit(cql, test_keyspace, prop):
+    too_large = rf"{prop} must be less than or equal to {MAX_TTL} \(got {MAX_TTL + 1}\)"
+    with pytest.raises(ConfigurationException, match=too_large):
+        with new_test_table(cql, test_keyspace, 'p int primary key, v int', f'with {prop} = {MAX_TTL + 1}'):
+            pass
+    # The maximum itself is accepted, on CREATE and ALTER TABLE.
+    with new_test_table(cql, test_keyspace, 'p int primary key, v int', f'with {prop} = {MAX_TTL}') as table:
+        cql.execute(f'ALTER TABLE {table} WITH {prop} = {MAX_TTL}')
+        with pytest.raises(ConfigurationException, match=too_large):
+            cql.execute(f'ALTER TABLE {table} WITH {prop} = {MAX_TTL + 1}')
+        # ALTER TABLE of an unrelated property is not affected.
+        cql.execute(f'ALTER TABLE {table} WITH comment = \'ttl\'')
+
+def test_default_time_to_live_limit(cql, test_keyspace):
+    check_ttl_property_limit(cql, test_keyspace, 'default_time_to_live')
+
+# Cassandra has no paxos_grace_seconds property.
+def test_paxos_grace_seconds_limit(scylla_only, cql, test_keyspace):
+    check_ttl_property_limit(cql, test_keyspace, 'paxos_grace_seconds')

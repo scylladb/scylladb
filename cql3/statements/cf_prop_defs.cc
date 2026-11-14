@@ -30,6 +30,7 @@
 #include "db/config.hh"
 #include "db/cluster_config_registry.hh"
 #include "cql3/statements/cluster_config_props.hh"
+#include "gc_clock.hh"
 
 #include <boost/algorithm/string/predicate.hpp>
 
@@ -175,8 +176,20 @@ void cf_prop_defs::validate(const data_dictionary::database db, sstring ks_name,
     auto tombstone_gc_options = get_tombstone_gc_options(schema_extensions);
     validate_tombstone_gc_options(tombstone_gc_options, db, ks_name);
 
+    // The CDC log rows get this TTL, which the sstable reader rejects above
+    // max_ttl. Checked here and not in cdc::options, which also decodes the
+    // persisted schema extension: a table created before this check must keep
+    // loading (its oversized value is clamped when the extension is decoded).
+    if (auto cdc_options = get_cdc_options(schema_extensions)) {
+        check_maximum_int("Invalid CDC option: ttl", cdc_options->ttl(), max_ttl.count());
+    }
+
     validate_minimum_int(KW_DEFAULT_TIME_TO_LIVE, 0, DEFAULT_DEFAULT_TIME_TO_LIVE);
     validate_minimum_int(KW_PAXOSGRACESECONDS, 0, DEFAULT_GC_GRACE_SECONDS);
+    // Both end up as the TTL of cells, which the sstable reader rejects above
+    // max_ttl, like USING TTL does (see attributes::get_time_to_live()).
+    validate_maximum_int(KW_DEFAULT_TIME_TO_LIVE, max_ttl.count(), DEFAULT_DEFAULT_TIME_TO_LIVE);
+    validate_maximum_int(KW_PAXOSGRACESECONDS, max_ttl.count(), DEFAULT_GC_GRACE_SECONDS);
 
     auto min_index_interval = get_int(KW_MIN_INDEX_INTERVAL, DEFAULT_MIN_INDEX_INTERVAL);
     auto max_index_interval = get_int(KW_MAX_INDEX_INTERVAL, DEFAULT_MAX_INDEX_INTERVAL);
@@ -455,6 +468,20 @@ void cf_prop_defs::validate_minimum_int(const sstring& field, int32_t minimum_va
     if (val < minimum_value) {
         throw exceptions::configuration_exception(format("{} cannot be smaller than {}, (default {})",
                                                          field, minimum_value, default_value));
+    }
+}
+
+void cf_prop_defs::validate_maximum_int(const sstring& field, int32_t maximum_value, int32_t default_value) const
+{
+    check_maximum_int(field, get_int(field, default_value), maximum_value);
+}
+
+void cf_prop_defs::check_maximum_int(const sstring& field, int32_t value, int32_t maximum_value)
+{
+    if (value > maximum_value) {
+        // Same message as Cassandra's TableParams.validate().
+        throw exceptions::configuration_exception(format("{} must be less than or equal to {} (got {})",
+                                                         field, maximum_value, value));
     }
 }
 

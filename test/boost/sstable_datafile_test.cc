@@ -3969,3 +3969,65 @@ SEASTAR_THREAD_TEST_CASE(test_small_sstable_has_reasonable_memory_usage) {
     BOOST_REQUIRE_LT(growth, upper_bound);
 #endif
 }
+
+// The sstable reader rejects cells and row markers whose TTL is above max_ttl
+// ("Too big ttl" malformed_sstable_exception), so the writer must clamp such a
+// TTL to max_ttl, keeping the write time (expiry - ttl) and moving the expiry,
+// instead of producing an sstable which cannot be read back. This includes a
+// live TTL of INT32_MAX, which the reader would otherwise take for the
+// expired-liveness sentinel and turn the row marker into a tombstone.
+// Reproduces SCYLLADB-6065.
+SEASTAR_TEST_CASE(test_writer_clamps_too_big_ttl) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto s = schema_builder(this_smp_shard_count(), "ks", "too_big_ttl")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("ck", int32_type, column_kind::clustering_key)
+            .with_column("v", int32_type)
+            .build();
+        const auto& v_def = *s->get_column_definition("v");
+        const auto pk = partition_key::from_single_value(*s, int32_type->decompose(1));
+
+        const auto ts = api::new_timestamp();
+        const auto write_time = gc_clock::now();
+        const auto clamped_expiry = write_time + max_ttl;
+        const std::vector<gc_clock::duration> too_big_ttls{max_ttl + gc_clock::duration(2), gc_clock::duration(sstables::expired_liveness_ttl)};
+
+        mutation m(s, pk);
+        for (unsigned i = 0; i < too_big_ttls.size(); ++i) {
+            const auto ck = clustering_key::from_single_value(*s, int32_type->decompose(int32_t(i)));
+            const auto expiry = write_time + too_big_ttls[i];
+            m.partition().clustered_row(*s, ck).apply(row_marker(ts, too_big_ttls[i], expiry));
+            // Not the row marker's TTL, so that the writer stores the cell's own
+            // TTL (minus, as the cell's TTL field is int32 and the sentinel is INT32_MAX).
+            const auto cell_ttl = too_big_ttls[i] - gc_clock::duration(1);
+            m.set_clustered_cell(ck, v_def, atomic_cell::make_live(*int32_type, ts, int32_type->decompose(1), write_time + cell_ttl, cell_ttl));
+        }
+
+        // validate::no: the clamped TTL does not compare equal to the input.
+        auto sst = make_sstable_containing(env.make_sstable(s), {m}, validate::no).get();
+
+        auto rd = sstable_mutation_reader(sst, s, env.make_reader_permit());
+        auto close_rd = deferred_close(rd);
+        auto mo = read_mutation_from_mutation_reader(rd).get();
+        BOOST_REQUIRE(mo);
+        BOOST_REQUIRE_EQUAL(mo->partition().clustered_rows().calculate_size(), too_big_ttls.size());
+        for (const auto& e : mo->partition().clustered_rows()) {
+            const auto& row = e.row();
+
+            BOOST_REQUIRE(row.marker().is_live());
+            BOOST_REQUIRE(row.marker().is_expiring());
+            BOOST_REQUIRE_EQUAL(row.marker().ttl().count(), max_ttl.count());
+            BOOST_REQUIRE(row.marker().expiry() == clamped_expiry);
+            // The write time is what tombstone GC uses once the marker expires.
+            BOOST_REQUIRE(row.marker().deletion_time() == write_time);
+
+            auto cell = row.cells().cell_at(v_def.id).as_atomic_cell(v_def);
+            BOOST_REQUIRE(cell.is_live_and_has_ttl());
+            BOOST_REQUIRE_EQUAL(cell.ttl().count(), max_ttl.count());
+            BOOST_REQUIRE(cell.expiry() == clamped_expiry);
+            BOOST_REQUIRE(cell.expiry() - cell.ttl() == write_time);
+        }
+
+        BOOST_REQUIRE(!read_mutation_from_mutation_reader(rd).get());
+    });
+}
