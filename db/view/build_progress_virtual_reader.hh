@@ -122,11 +122,13 @@ class build_progress_virtual_reader {
                         auto scylla_in_progress_row = std::move(mf).as_clustering_row();
                         auto legacy_in_progress_row = row();
                         // Drop the first_token from the regular columns
-                        scylla_in_progress_row.cells().for_each_cell([&, this] (column_id id, atomic_cell_or_collection& c) {
+                        scylla_in_progress_row.cells().for_each_cell([&, this] (column_id id, atomic_cell_or_collection_view c) {
                             if (id == _scylla_next_token_col) {
-                                legacy_in_progress_row.append_cell(_legacy_last_token_col, std::move(c));
+                                legacy_in_progress_row.append_cell(_legacy_last_token_col,
+                                        c.copy(*_schema->regular_column_at(_legacy_last_token_col).type));
                             } else if (id == _scylla_generation_number_col) {
-                                legacy_in_progress_row.append_cell(_legacy_generation_number_col, std::move(c));
+                                legacy_in_progress_row.append_cell(_legacy_generation_number_col,
+                                        c.copy(*_schema->regular_column_at(_legacy_generation_number_col).type));
                             }
                         });
                         auto ck = adjust_ckey(scylla_in_progress_row.key());

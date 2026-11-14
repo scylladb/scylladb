@@ -3855,16 +3855,25 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_clear_tombstone_in_discontinued_p
         reader.fill_buffer().get();
         BOOST_REQUIRE(!reader.is_end_of_stream());
         std::vector<range_tombstone_change> tombs;
+        size_t partition_starts = 0;
+        size_t partition_ends = 0;
         {
             auto mf_opt = reader().get();
             BOOST_REQUIRE(mf_opt->is_partition_start());
+            ++partition_starts;
         }
         while (auto mf_opt = reader().get()) {
             if (mf_opt->is_range_tombstone_change()) {
                 tombs.push_back(std::move(mf_opt->as_range_tombstone_change()));
+            } else if (mf_opt->is_partition_start()) {
+                ++partition_starts;
+            } else if (mf_opt->is_end_of_partition()) {
+                ++partition_ends;
             }
         }
 
+        // The discontinued partition is closed, even if the stream ends there.
+        BOOST_REQUIRE_EQUAL(partition_ends, partition_starts);
         BOOST_REQUIRE_EQUAL(tombs.size(), 2);
 
         BOOST_REQUIRE(tombs.front().equal(*schema, first_rtc));
@@ -4681,6 +4690,26 @@ public:
     }
 };
 
+// Check that the multishard reader's buffer hint saves shard reader fills
+// when partitions are larger than a shard reader's buffer.
+//
+// The multishard reader reads from one shard until it reaches a partition
+// which belongs to another shard. A visit to a shard is such a run of
+// consecutive partitions from that shard in the multishard reader's output.
+// Every shard reader fill admits the shard's reader and is followed by its
+// eviction (by evicting_semaphore_factory), so the number of admissions on a
+// shard's semaphore is the number of fills.
+//
+// Requirements:
+//  1. A shard which the multishard reader didn't visit is never read from.
+//  2. On a visited shard, the reader is admitted at least once, and is
+//     evicted as many times as it was admitted.
+//  3. With the hint, a visit to a shard costs at most one shard reader fill,
+//     even when the partition doesn't fit in a shard reader's buffer.
+//  4. Without the hint, shard readers fill buffers of the default size, so a
+//     partition larger than that needs several fills per visit: when the
+//     multishard reader's buffer is larger than a shard reader's buffer, it
+//     takes more fills than with the hint.
 SEASTAR_TEST_CASE(test_multishard_reader_buffer_hint_large_partitions) {
     return do_with_cql_env_thread([] (cql_test_env& env) {
         simple_schema ss;
@@ -4695,6 +4724,7 @@ SEASTAR_TEST_CASE(test_multishard_reader_buffer_hint_large_partitions) {
         std::vector<utils::chunked_vector<frozen_mutation>> frozen_muts(this_smp_shard_count(), utils::chunked_vector<frozen_mutation>{});
         std::vector<lw_shared_ptr<reader_concurrency_semaphore>> semaphore_registry(this_smp_shard_count(), nullptr);
 
+        std::map<dht::token, unsigned> shard_of_token;
         unsigned i = 0;
         for (const auto& [token, dk] : pkeys_by_tokens) {
             mutation mut(schema, dk);
@@ -4703,18 +4733,16 @@ SEASTAR_TEST_CASE(test_multishard_reader_buffer_hint_large_partitions) {
                 ss.add_row(mut, ss.make_ckey(ck), value);
             }
 
+            shard_of_token.emplace(token, i % this_smp_shard_count());
             frozen_muts[i++ % this_smp_shard_count()].emplace_back(mut);
         }
 
         size_t partition_size{0};
-        size_t partition_start_size{0};
-        size_t row_size{0};
-        size_t partition_end_size{0};
-        size_t range_tombstone_size{0};
         {
             auto reader = make_mutation_reader_from_mutations(schema, semaphore.make_permit(), frozen_muts.front().front().unfreeze(schema), schema->full_slice());
             auto close_reader = deferred_close(reader);
-            reader.set_max_buffer_size(1024*1024);
+            // Read the whole partition in one buffer.
+            reader.set_max_buffer_size(std::numeric_limits<size_t>::max());
             reader.fill_buffer().get();
             partition_size = reader.buffer_size();
 
@@ -4724,39 +4752,28 @@ SEASTAR_TEST_CASE(test_multishard_reader_buffer_hint_large_partitions) {
             BOOST_REQUIRE(buf[1].is_clustering_row());
             BOOST_REQUIRE(buf.back().is_end_of_partition());
             BOOST_REQUIRE(reader.is_end_of_stream());
-
-            partition_start_size = buf[0].memory_usage();
-            row_size = buf[1].memory_usage();
-            partition_end_size = buf.back().memory_usage();
-
-            auto rtc = mutation_fragment_v2(*schema, semaphore.make_permit(), range_tombstone_change(ss.make_ckey(0), tombstone()));
-            range_tombstone_size = rtc.memory_usage();
         }
-
-        std::vector<std::vector<size_t>> data_per_shard(this_smp_shard_count(), std::vector<size_t>{});
-        size_t total_data{0};
-        for (unsigned shard_id = 0; shard_id != this_smp_shard_count(); ++shard_id) {
-            for (const auto& _ : frozen_muts.at(shard_id)) {
-                data_per_shard.at(shard_id).push_back(partition_size);
-                total_data += partition_size;
-            }
-        }
+        // Partitions must be larger than a shard reader's buffer (requirement 4).
+        BOOST_REQUIRE_GT(partition_size, mutation_reader::default_max_buffer_size_in_bytes());
 
         auto sharder = std::make_unique<dummy_sharder>(schema->get_sharder(), std::move(pkeys_by_tokens));
 
         const auto reader_factory = [frozen_muts] (
                 schema_ptr schema,
                 reader_permit permit,
-                const dht::partition_range&,
+                const dht::partition_range& pr,
                 const query::partition_slice& ps,
                 tracing::trace_state_ptr,
                 mutation_reader::forwarding) {
             auto muts = frozen_muts.at(this_shard_id())
                     | std::views::transform([schema] (const frozen_mutation& fm) { return fm.unfreeze(schema); })
                     | std::ranges::to<utils::chunked_vector<mutation>>();
-            return make_mutation_reader_from_mutations(std::move(schema), std::move(permit), std::move(muts), ps);
+            // Honor the range: the evictable reader recreates the reader with a range
+            // starting at the partition it stopped at.
+            return make_mutation_reader_from_mutations(std::move(schema), std::move(permit), std::move(muts), pr, ps);
         };
 
+        std::map<std::pair<size_t, bool>, size_t> reads_by_buffer_size_and_hint;
         auto run_test = [&] (size_t buffer_size, multishard_reader_buffer_hint buffer_hint,
                 std::source_location sl = std::source_location::current()) {
             testlog.info("run_test(): buffer_size: {}, buffer_hint: {} @ {}:{}", buffer_size, bool(buffer_hint), sl.file_name(), sl.line());
@@ -4777,81 +4794,45 @@ SEASTAR_TEST_CASE(test_multishard_reader_buffer_hint_large_partitions) {
 
             reader.fill_buffer().get();
 
-            // simulate the expected read algorithm to calculate the amount each shard should have read
-            std::vector<size_t> buffer_fill_calls_per_shard(this_smp_shard_count(), 0);
-            size_t shards_visited{0};
-            {
-                size_t to_read = buffer_size;
-                size_t data_left = total_data;
-                auto shard_data_left = data_per_shard;
-                const auto shard_reader_buffer_size = buffer_hint ? buffer_size : mutation_reader::default_max_buffer_size_in_bytes();
-                while (to_read > 0 && data_left > 0) {
-                    for (unsigned shard_id = 0; shard_id != this_smp_shard_count() && to_read > 0 && data_left > 0; ++shard_id) {
-                        auto& shard_data = shard_data_left[shard_id];
-                        BOOST_REQUIRE(!shard_data.empty());
-
-                        size_t current_buffer_size{0};
-                        auto* current_partition = &shard_data.back();
-                        bool stop_on_full_buffer = false;
-                        while (to_read > 0 && data_left > 0) {
-                            const auto fragment_size = *current_partition == partition_size
-                                    ? partition_start_size
-                                    : (*current_partition == partition_end_size ? partition_end_size : row_size);
-
-                            current_buffer_size += fragment_size;
-                            testlog.trace("fill buffer loop for shard#{}: to_read={}, current_partition={}, fragment_size={}, current_buffer_size={}", shard_id, to_read, *current_partition, fragment_size, current_buffer_size);
-                            if (current_buffer_size >= shard_reader_buffer_size) {
-                                ++buffer_fill_calls_per_shard.at(shard_id);
-                                testlog.trace("fill buffer loop for shard#{}: finished buffer #{} with size {}", shard_id, buffer_fill_calls_per_shard.at(shard_id), current_buffer_size);
-                                // After each eviction, the evictable reader will
-                                // emit a range tombstone change resetting the
-                                // current tombstone.
-                                current_buffer_size = range_tombstone_size;
-                                if (stop_on_full_buffer) {
-                                    break;
-                                }
-                            }
-                            *current_partition -= fragment_size;
-                            to_read -= std::min(to_read, fragment_size);
-                            data_left -= fragment_size;
-
-                            if (!*current_partition) {
-                                if (buffer_hint) {
-                                    break;
-                                } else {
-                                    shard_data.pop_back();
-                                    current_partition = &shard_data.back();
-                                    stop_on_full_buffer = true;
-                                }
-                            }
-                        }
-                        if (current_buffer_size > range_tombstone_size) {
-                            ++buffer_fill_calls_per_shard.at(shard_id);
-                            testlog.trace("fill buffer loop for shard#{}: finished buffer #{} with size {}", shard_id, buffer_fill_calls_per_shard.at(shard_id), current_buffer_size);
-                        }
-
-                        if (!shard_data.back()) {
-                            shard_data.pop_back();
-                        }
-                        ++shards_visited;
+            // Count the visits to each shard: runs of consecutive partitions from
+            // the same shard in the multishard reader's output.
+            std::vector<size_t> visits(this_smp_shard_count(), 0);
+            std::optional<unsigned> previous_shard;
+            for (const auto& mf : reader.detach_buffer()) {
+                if (mf.is_partition_start()) {
+                    const auto shard = shard_of_token.at(mf.as_partition_start().key().token());
+                    if (shard != previous_shard) {
+                        ++visits.at(shard);
+                        previous_shard = shard;
                     }
                 }
             }
 
+            size_t reads{0};
             for (unsigned shard_id = 0; shard_id != this_smp_shard_count(); ++shard_id) {
                 testlog.trace("shard#{}", shard_id);
 
-                if (shards_visited > shard_id) {
-                    const auto reads_from_shard = buffer_fill_calls_per_shard.at(shard_id);
-
+                if (visits.at(shard_id)) {
                     auto& shard_semaphore = semaphore_registry.at(shard_id);
                     BOOST_REQUIRE(bool(shard_semaphore));
-                    BOOST_REQUIRE_EQUAL(shard_semaphore->get_stats().reads_admitted, reads_from_shard);
+                    const auto reads_from_shard = shard_semaphore->get_stats().reads_admitted;
+                    testlog.debug("shard#{}: visits: {}, reads: {}", shard_id, visits.at(shard_id), reads_from_shard);
+
+                    // Requirement 2
+                    BOOST_REQUIRE_GE(reads_from_shard, 1);
                     BOOST_REQUIRE_EQUAL(shard_semaphore->get_stats().permit_based_evictions, reads_from_shard);
+                    // Requirement 3. It's <=, since leftovers in a shard reader's
+                    // buffer can cover a visit without a fill.
+                    if (buffer_hint) {
+                        BOOST_REQUIRE_LE(reads_from_shard, visits.at(shard_id));
+                    }
+                    reads += reads_from_shard;
                 } else {
+                    // Requirement 1
                     BOOST_REQUIRE(!semaphore_registry.at(shard_id));
                 }
             }
+            reads_by_buffer_size_and_hint[{buffer_size, bool(buffer_hint)}] = reads;
         };
 
         run_test(mutation_reader::default_max_buffer_size_in_bytes(), multishard_reader_buffer_hint::no);
@@ -4861,6 +4842,13 @@ SEASTAR_TEST_CASE(test_multishard_reader_buffer_hint_large_partitions) {
         run_test(200 * 1024, multishard_reader_buffer_hint::yes);
         run_test(400 * 1024, multishard_reader_buffer_hint::no);
         run_test(400 * 1024, multishard_reader_buffer_hint::yes);
+
+        // Requirement 4
+        for (size_t buffer_size : {100 * 1024, 200 * 1024, 400 * 1024}) {
+            BOOST_REQUIRE_GT(buffer_size, mutation_reader::default_max_buffer_size_in_bytes());
+            BOOST_REQUIRE_GT(reads_by_buffer_size_and_hint.at({buffer_size, false}),
+                    reads_by_buffer_size_and_hint.at({buffer_size, true}));
+        }
     });
 }
 

@@ -20,6 +20,7 @@ class deletable_row;
 class column_definition;
 class abstract_type;
 class atomic_cell_or_collection;
+class atomic_cell_or_collection_view;
 namespace db { class large_data_cache_tracker; }
 
 // Mutation partition visitor which applies visited data into
@@ -35,10 +36,12 @@ private:
     static bool is_compatible(const column_definition& new_def, const abstract_type& old_type, column_kind kind);
     static atomic_cell upgrade_cell(const abstract_type& new_type, const abstract_type& old_type, atomic_cell_view cell,
                                     atomic_cell::collection_member cm = atomic_cell::collection_member::no);
-    static void accept_cell(row& dst, column_kind kind, const column_definition& new_def, const abstract_type& old_type, atomic_cell_view cell,
-            db::large_data_cache_tracker* tracker = nullptr);
-    static void accept_cell(row& dst, column_kind kind, const column_definition& new_def, const abstract_type& old_type, collection_mutation_view cell,
-            db::large_data_cache_tracker* tracker = nullptr);
+    // Converts a cell of old_type to new_def, or returns nullopt if it cannot be represented in it.
+    static std::optional<atomic_cell_or_collection> convert_cell(column_kind kind, const column_definition& new_def, const abstract_type& old_type, atomic_cell_view cell);
+    static std::optional<atomic_cell_or_collection> convert_cell(column_kind kind, const column_definition& new_def, const abstract_type& old_type, collection_mutation_view cell);
+    static std::optional<atomic_cell_or_collection> convert_cell(column_kind kind, const column_definition& new_def, const column_definition& old_def, atomic_cell_or_collection_view cell);
+    template <typename Cell>
+    static void accept_cell(row& dst, column_kind kind, const column_definition& new_def, const abstract_type& old_type, Cell cell);
 public:
     converting_mutation_partition_applier(
             const column_mapping& visited_column_mapping,
@@ -54,8 +57,6 @@ public:
     virtual void accept_row_cell(column_id id, atomic_cell_view cell) override;
     virtual void accept_row_cell(column_id id, collection_mutation_view collection) override;
 
-    // Appends the cell to dst upgrading it to the new schema.
-    // Cells must have monotonic names.
-    static void append_cell(row& dst, column_kind kind, const column_definition& new_def, const column_definition& old_def, const atomic_cell_or_collection& cell,
-            db::large_data_cache_tracker* tracker = nullptr);
+    // Returns a copy of r, which belongs to old_schema, converted to new_schema.
+    static row upgrade_row(const schema& new_schema, const schema& old_schema, column_kind kind, const row& r);
 };
