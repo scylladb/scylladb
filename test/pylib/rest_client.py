@@ -217,10 +217,17 @@ class ScyllaRESTAPIClient:
                                timeout = timeout)
         logger.debug("decommission_node %s finished", host_ip)
 
-    async def rebuild_node(self, host_ip: str, timeout: float, source_dc: str | None = None) -> None:
-        """Initiate rebuild of a node with host_ip"""
-        logger.debug("rebuild_node %s source_dc=%s", host_ip, source_dc)
+    async def rebuild_node(self, host_ip: str, timeout: float, source_dc: str | None = None,
+                           force: bool = False) -> None:
+        """Initiate rebuild of a node with host_ip.
+
+        `force` makes the node use `source_dc` even if it is unsafe to do so
+        (it maps to `nodetool rebuild --force <source_dc>`).
+        """
+        logger.debug("rebuild_node %s source_dc=%s force=%s", host_ip, source_dc, force)
         params = {"source_dc": source_dc} if source_dc else {}
+        if force:
+            params["force"] = "true"
         await self.client.post("/storage_service/rebuild", host=host_ip,
                                timeout=timeout, params=params)
         logger.debug("rebuild_node %s finished", host_ip)
@@ -526,8 +533,15 @@ class ScyllaRESTAPIClient:
         """Cleanup keyspace"""
         await self.client.post(f"/storage_service/keyspace_cleanup/{ks}", host=node_ip)
 
-    async def cleanup_all(self, node_ip: str):
-        await self.client.post("/storage_service/cleanup_all/", node_ip)
+    async def cleanup_all(self, node_ip: str, global_: bool = True):
+        """Clean up all vnode-based keyspaces.
+
+        With global_=True (the default) the cleanup runs cluster-wide via the
+        topology coordinator. With global_=False only the given node is cleaned up,
+        which is what `nodetool cleanup` with no arguments does.
+        """
+        params = None if global_ else {"global": "false"}
+        await self.client.post("/storage_service/cleanup_all/", node_ip, params=params)
 
     async def load_new_sstables(self, node_ip: str, keyspace: str, table: str, primary_replica : bool = False, scope: str = "all", load_and_stream : bool = False) -> None:
         """Load sstables from upload directory"""
@@ -686,6 +700,19 @@ class ScyllaRESTAPIClient:
             "/storage_service/repair_status", host=node_ip, params={"id": str(sequence_number)})
         if status != "SUCCESSFUL":
             raise RuntimeError(f"Repair on {node_ip} failed: keyspace={keyspace}, sequence_number={sequence_number}, status={status}")
+
+    async def repair_async(self, node_ip: str, keyspace: str, params: Optional[dict[str, str]] = None) -> int:
+        """Start a vnode repair of the keyspace and return its sequence number without waiting for it."""
+        return await self.client.post_json(f"/storage_service/repair_async/{keyspace}", host=node_ip, params=params)
+
+    async def repair_async_status(self, node_ip: str, keyspace: str, sequence_number: int) -> str:
+        """Return the current status of a repair started with repair_async, without waiting for it.
+
+        This is the legacy GET /storage_service/repair_async/{keyspace}?id=<n> endpoint, which returns
+        RUNNING, SUCCESSFUL or FAILED.
+        """
+        return await self.client.get_json(f"/storage_service/repair_async/{keyspace}", host=node_ip,
+                                          params={"id": str(sequence_number)})
 
     def __get_autocompaction_url(self, keyspace: str, table: Optional[str] = None) -> str:
         """Return autocompaction url for the given keyspace/table"""
