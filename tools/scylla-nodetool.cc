@@ -2953,7 +2953,6 @@ void tablehistograms_operation(scylla_rest_client& client, const bpo::variables_
 
     auto get_estimated_histogram = [&client, &keyspace, &table] (std::string_view histogram) {
         const auto res = client.get(seastar::format("/column_family/metrics/{}/{}:{}", histogram, keyspace, table));
-        const auto res_object = res.GetObject();
         if (!res.HasMember("bucket_offsets")) {
             return utils::estimated_histogram(0);
         }
@@ -3535,19 +3534,19 @@ void tasks_print_status(const rjson::value& res) {
     auto status = res.GetObject();
     for (const auto& x: status) {
         if (x.value.IsString()) {
-            if (strcmp(x.name.GetString(), "start_time") == 0 || strcmp(x.name.GetString(), "end_time") == 0) {
-                fmt::print("{}: {}\n", x.name.GetString(), get_time(x.value.GetString()));
+            if (rjson::to_string_view(x.name) == "start_time" || rjson::to_string_view(x.name) == "end_time") {
+                fmt::print("{}: {}\n", rjson::to_string_view(x.name), get_time(rjson::to_string_view(x.value)));
             } else {
-                fmt::print("{}: {}\n", x.name.GetString(), x.value.GetString());
+                fmt::print("{}: {}\n", rjson::to_string_view(x.name), rjson::to_string_view(x.value));
             }
         } else if (x.value.IsArray()) {
-            fmt::print("{}: [", x.name.GetString());
+            fmt::print("{}: [", rjson::to_string_view(x.name));
             sstring delim = "";
             for (const auto& el : x.value.GetArray()) {
                 fmt::print("{}{{", delim);
                 sstring ident_delim = "";
                 for (const auto& child_info : el.GetObject()) {
-                    fmt::print("{}{}: {}", ident_delim, child_info.name.GetString(), child_info.value.GetString());
+                    fmt::print("{}{}: {}", ident_delim, rjson::to_string_view(child_info.name), rjson::to_string_view(child_info.value));
                     ident_delim = ", ";
                 }
                 fmt::print(" }}");
@@ -3555,7 +3554,7 @@ void tasks_print_status(const rjson::value& res) {
             }
             fmt::print("]\n");
         } else {
-            fmt::print("{}: {}\n", x.name.GetString(), x.value);
+            fmt::print("{}: {}\n", rjson::to_string_view(x.name), x.value);
         }
     }
 }
@@ -3572,7 +3571,7 @@ void tasks_add_tree_to_statuses_lists(Tabulate& table, const rjson::value& res) 
                 children_ids += format("{}{{", delim);
                 sstring ident_delim = "";
                 for (const auto& child_info : el.GetObject()) {
-                    children_ids += format("{}{}: {}", ident_delim, child_info.name.GetString(), child_info.value.GetString());
+                    children_ids += format("{}{}: {}", ident_delim, rjson::to_string_view(child_info.name), rjson::to_string_view(child_info.value));
                     ident_delim = ", ";
                 }
                 children_ids += format(" }}");
@@ -3665,7 +3664,7 @@ void tasks_drain_operation(scylla_rest_client& client, const bpo::variables_map&
     }
     auto module_res = client.get("/task_manager/list_modules");
     for (const auto& module : module_res.GetArray()) {
-        auto drain_res = client.post(format("/task_manager/drain/{}", module.GetString()));
+        auto drain_res = client.post(format("/task_manager/drain/{}", rjson::to_string_view(module)));
     }
 }
 
@@ -3742,10 +3741,10 @@ void tasks_tree_operation(scylla_rest_client& client, const bpo::variables_map& 
 
     auto module_res = client.get("/task_manager/list_modules");
     for (const auto& module : module_res.GetArray()) {
-        auto list_res = client.get(format("/task_manager/list_module_tasks/{}", module.GetString()));
+        auto list_res = client.get(format("/task_manager/list_module_tasks/{}", rjson::to_string_view(module)));
         for (const auto& stats : list_res.GetArray()) {
             try {
-                res.push_back(client.get(format("/task_manager/task_status_recursive/{}", stats.GetObject()["task_id"].GetString())));
+                res.push_back(client.get(format("/task_manager/task_status_recursive/{}", rjson::to_string_view(stats.GetObject()["task_id"]))));
             } catch (const api_request_failed& e) {
                 if (e.status == http::reply::status_type::bad_request) {
                     // Task has already been unregistered.

@@ -196,7 +196,8 @@ static void resolve_path(parsed::path& p,
 
 static void resolve_constant(parsed::constant& c,
         const rjson::value* expression_attribute_values,
-        std::unordered_set<std::string>& used_attribute_values) {
+        std::unordered_set<std::string>& used_attribute_values,
+        bool borrow_values) {
     std::visit(overloaded_functor {
         [&] (const std::string& valref) {
             if (!expression_attribute_values) {
@@ -214,7 +215,7 @@ static void resolve_constant(parsed::constant& c,
             }
             validate_value(*value, "ExpressionAttributeValues");
             used_attribute_values.emplace(valref);
-            c.set(*value);
+            c.set(*value, borrow_values);
         },
         [&] (const parsed::constant::literal& lit) {
             // Nothing to do, already resolved
@@ -227,15 +228,16 @@ void resolve_value(parsed::value& rhs,
         const rjson::value* expression_attribute_names,
         const rjson::value* expression_attribute_values,
         std::unordered_set<std::string>& used_attribute_names,
-        std::unordered_set<std::string>& used_attribute_values) {
+        std::unordered_set<std::string>& used_attribute_values,
+        bool borrow_values) {
     std::visit(overloaded_functor {
         [&] (parsed::constant& c) {
-            resolve_constant(c, expression_attribute_values, used_attribute_values);
+            resolve_constant(c, expression_attribute_values, used_attribute_values, borrow_values);
         },
         [&] (parsed::value::function_call& f) {
             for (parsed::value& value : f._parameters) {
                 resolve_value(value, expression_attribute_names, expression_attribute_values,
-                        used_attribute_names, used_attribute_values);
+                        used_attribute_names, used_attribute_values, borrow_values);
             }
         },
         [&] (parsed::path& p) {
@@ -248,12 +250,13 @@ void resolve_set_rhs(parsed::set_rhs& rhs,
         const rjson::value* expression_attribute_names,
         const rjson::value* expression_attribute_values,
         std::unordered_set<std::string>& used_attribute_names,
-        std::unordered_set<std::string>& used_attribute_values) {
+        std::unordered_set<std::string>& used_attribute_values,
+        bool borrow_values) {
     resolve_value(rhs._v1, expression_attribute_names, expression_attribute_values,
-            used_attribute_names, used_attribute_values);
+            used_attribute_names, used_attribute_values, borrow_values);
     if (rhs._op != 'v') {
         resolve_value(rhs._v2, expression_attribute_names, expression_attribute_values,
-                used_attribute_names, used_attribute_values);
+                used_attribute_names, used_attribute_values, borrow_values);
     }
 }
 
@@ -261,22 +264,23 @@ void resolve_update_expression(parsed::update_expression& ue,
         const rjson::value* expression_attribute_names,
         const rjson::value* expression_attribute_values,
         std::unordered_set<std::string>& used_attribute_names,
-        std::unordered_set<std::string>& used_attribute_values) {
+        std::unordered_set<std::string>& used_attribute_values,
+        bool borrow_values) {
     for (parsed::update_expression::action& action : ue.actions()) {
         resolve_path(action._path, expression_attribute_names, used_attribute_names);
         std::visit(overloaded_functor {
             [&] (parsed::update_expression::action::set& a) {
                 resolve_set_rhs(a._rhs, expression_attribute_names, expression_attribute_values,
-                        used_attribute_names, used_attribute_values);
+                        used_attribute_names, used_attribute_values, borrow_values);
             },
             [&] (parsed::update_expression::action::remove& a) {
                 // nothing to do
             },
             [&] (parsed::update_expression::action::add& a) {
-                resolve_constant(a._valref, expression_attribute_values, used_attribute_values);
+                resolve_constant(a._valref, expression_attribute_values, used_attribute_values, borrow_values);
             },
             [&] (parsed::update_expression::action::del& a) {
-                resolve_constant(a._valref, expression_attribute_values, used_attribute_values);
+                resolve_constant(a._valref, expression_attribute_values, used_attribute_values, borrow_values);
             }
         }, action._action);
     }
@@ -286,11 +290,12 @@ static void resolve_primitive_condition(parsed::primitive_condition& pc,
         const rjson::value* expression_attribute_names,
         const rjson::value* expression_attribute_values,
         std::unordered_set<std::string>& used_attribute_names,
-        std::unordered_set<std::string>& used_attribute_values) {
+        std::unordered_set<std::string>& used_attribute_values,
+        bool borrow_values) {
     for (parsed::value& value : pc._values) {
         resolve_value(value,
                 expression_attribute_names, expression_attribute_values,
-                used_attribute_names, used_attribute_values);
+                used_attribute_names, used_attribute_values, borrow_values);
     }
 }
 
@@ -298,18 +303,19 @@ void resolve_condition_expression(parsed::condition_expression& ce,
         const rjson::value* expression_attribute_names,
         const rjson::value* expression_attribute_values,
         std::unordered_set<std::string>& used_attribute_names,
-        std::unordered_set<std::string>& used_attribute_values) {
+        std::unordered_set<std::string>& used_attribute_values,
+        bool borrow_values) {
     std::visit(overloaded_functor {
         [&] (parsed::primitive_condition& cond) {
             resolve_primitive_condition(cond,
                     expression_attribute_names, expression_attribute_values,
-                    used_attribute_names, used_attribute_values);
+                    used_attribute_names, used_attribute_values, borrow_values);
         },
         [&] (parsed::condition_expression::condition_list& list) {
             for (parsed::condition_expression& cond : list.conditions) {
                 resolve_condition_expression(cond,
                         expression_attribute_names, expression_attribute_values,
-                            used_attribute_names, used_attribute_values);
+                            used_attribute_names, used_attribute_values, borrow_values);
 
             }
         }
@@ -735,14 +741,15 @@ void validate_filter_expression(const parsed::condition_expression& ce) {
 // conventions - each level of a nested document is a map with one key -
 // a type (e.g., "M" for map) - and its value is the representation of
 // that value.
-static rjson::value extract_path(const rjson::value* item,
+// Returns null if the path doesn't exist.
+static const rjson::value* extract_path(const rjson::value* item,
         const parsed::path& p, calculate_value_caller caller) {
     if (!item) {
-        return rjson::null_value();
+        return nullptr;
     }
     const rjson::value* v = rjson::find(*item, p.root());
     if (!v) {
-        return rjson::null_value();
+        return nullptr;
     }
     for (const auto& op : p.operators()) {
         if (!v->IsObject() || v->MemberCount() != 1) {
@@ -752,18 +759,18 @@ static rjson::value extract_path(const rjson::value* item,
             // read.
             throw api_error::validation(format("{}: malformed item read: {}", caller, *item));
         }
-        const char* type = v->MemberBegin()->name.GetString();
+        std::string_view type = rjson::to_string_view(v->MemberBegin()->name);
         v = &(v->MemberBegin()->value);
         std::visit(overloaded_functor {
             [&] (const std::string& member) {
-                if (type[0] == 'M' && v->IsObject()) {
+                if (type.starts_with('M') && v->IsObject()) {
                     v = rjson::find(*v, member);
                 } else {
                     v = nullptr;
                 }
             },
             [&] (unsigned index) {
-                if (type[0] == 'L' && v->IsArray() && index < v->Size()) {
+                if (type.starts_with('L') && v->IsArray() && index < v->Size()) {
                     v = &(v->GetArray()[index]);
                 } else {
                     v = nullptr;
@@ -771,10 +778,10 @@ static rjson::value extract_path(const rjson::value* item,
             }
         }, op);
         if (!v) {
-            return rjson::null_value();
+            return nullptr;
         }
     }
-    return rjson::copy(*v);
+    return v;
 }
 
 // Given a parsed::value, which can refer either to a constant value from
@@ -783,29 +790,53 @@ static rjson::value extract_path(const rjson::value* item,
 // "caller" determines which expression - ConditionExpression or
 // UpdateExpression - is asking for this value. We need to know this because
 // DynamoDB allows a different choice of functions for different expressions.
-rjson::value calculate_value(const parsed::value& v,
+const rjson::value& calculate_value_ref(const parsed::value& v,
         calculate_value_caller caller,
-        const rjson::value* previous_item) {
+        const rjson::value* previous_item,
+        rjson::value& storage) {
     return std::visit(overloaded_functor {
-        [&] (const parsed::constant& c) -> rjson::value {
-            return rjson::copy(calculate_value(c));
+        [&] (const parsed::constant& c) -> const rjson::value& {
+            return calculate_value(c);
         },
-        [&] (const parsed::value::function_call& f) -> rjson::value {
+        [&] (const parsed::value::function_call& f) -> const rjson::value& {
             auto function_it = function_handlers.find(std::string_view(f._function_name));
             if (function_it == function_handlers.end()) {
                 throw api_error::validation(
                         fmt::format("{}: unknown function '{}' called.", caller, f._function_name));
             }
-            return function_it->second(caller, previous_item, f);
+            storage = function_it->second(caller, previous_item, f);
+            return storage;
         },
-        [&] (const parsed::path& p) -> rjson::value {
-            return extract_path(previous_item, p, caller);
+        [&] (const parsed::path& p) -> const rjson::value& {
+            if (const rjson::value* found = extract_path(previous_item, p, caller)) {
+                return *found;
+            }
+            storage = rjson::null_value();
+            return storage;
         }
     }, v._value);
 }
 
+rjson::value calculate_value(const parsed::value& v,
+        calculate_value_caller caller,
+        const rjson::value* previous_item) {
+    rjson::value storage;
+    const rjson::value& ret = calculate_value_ref(v, caller, previous_item, storage);
+    return &ret == &storage ? std::move(storage) : rjson::copy(ret);
+}
+
 // Same as calculate_value() above, except takes a set_rhs, which may be
 // either a single value, or v1+v2 or v1-v2.
+const rjson::value& calculate_value_ref(const parsed::set_rhs& rhs,
+        const rjson::value* previous_item,
+        rjson::value& storage) {
+    if (rhs._op == 'v') {
+        return calculate_value_ref(rhs._v1, calculate_value_caller::UpdateExpression, previous_item, storage);
+    }
+    storage = calculate_value(rhs, previous_item);
+    return storage;
+}
+
 rjson::value calculate_value(const parsed::set_rhs& rhs,
         const rjson::value* previous_item) {
     switch (rhs._op) {

@@ -146,7 +146,7 @@ public:
             [this, rep = std::move(rep), accept_encoding=std::move(accept_encoding)](future<executor::request_return_type> resf) mutable {
              auto res = !resf.failed() ? resf.get() : convert_exception_ptr_to_api_error(resf.get_exception());
              return std::visit(overloaded_functor {
-                [&] (std::string&& str) {
+                [&] (sstring&& str) {
                     return _response_compressor.generate_reply(std::move(rep), std::move(accept_encoding),
                                                                _content_type, std::move(str));
                 },
@@ -191,7 +191,7 @@ protected:
         }
         rjson::add(results, "__type", rjson::from_string("com.amazonaws.dynamodb.v20120810#" + err._type));
         rjson::add(results, "message", err._msg);
-        sstring content = rjson::print(std::move(results));
+        sstring content = rjson::print_sstring(results);
         slogger.trace("api_handler error case: {}", content);
         rep.set_status(err._http_code);
         rep.write_body(_content_type, std::move(content));
@@ -269,7 +269,7 @@ protected:
             }
         }
         rep->set_status(reply::status_type::ok);
-        rep->write_body("json", rjson::print(results));
+        rep->write_body("json", rjson::print_sstring(results));
         return make_ready_future<std::unique_ptr<reply>>(std::move(rep));
     }
 };
@@ -805,12 +805,13 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
     }
     _pending_requests.enter();
     auto leave = defer([this] () noexcept { _pending_requests.leave(); });
-    // JSON parsing can allocate up to roughly 2x the size of the raw
-    // document, + a couple of bytes for maintenance.
+    // Reserve memory for the request and for its parsed form, estimated to
+    // take as much as the request, + a couple of bytes for maintenance. When
+    // the parsed form takes more, the excess is reserved during parsing.
     // If the Content-Length of the request is not available, we assume
     // the largest possible request (request_content_length_limit, i.e., 16 MB)
     // and after reading the request we return_units() the excess.
-    size_t mem_estimate = (req->content_length ? req->content_length : request_content_length_limit) * 2 + 8000;
+    size_t mem_estimate = (req->content_length ? req->content_length : request_content_length_limit) * 2 + parsed_request_overhead;
     auto units_fut = get_units(*_memory_limiter, mem_estimate);
     if (_memory_limiter->waiters()) {
         ++_executor._stats.requests_blocked_memory;
@@ -825,7 +826,7 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
         for (const auto& chunk : content) {
             content_length += chunk.size();
         }
-        size_t new_mem_estimate = content_length * 2 + 8000;
+        size_t new_mem_estimate = content_length * 2 + parsed_request_overhead;
         units.return_units(mem_estimate - new_mem_estimate);
     }
     auto username = co_await verify_signature(*req, content);
@@ -880,7 +881,25 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
     auto f = [this, content = std::move(content), &callback = callback_it->second,
             client_state = std::move(client_state), trace_state = std::move(trace_state),
             units = std::move(units), req = std::move(req)] () mutable -> future<executor::request_return_type> {
-        rjson::value json_request = co_await _json_parser.parse(std::move(content));
+        // The reservation made before reading the request let its parsed
+        // form take as much memory as the request itself. A parsed form can
+        // take several times more (#31314), so reserve the excess as it is
+        // allocated. It doesn't wait for the memory, which could deadlock
+        // requests holding memory while waiting for more, but makes later
+        // requests wait until it is freed.
+        // The units were counted from the request as received, which is
+        // smaller than its content if it was compressed, so compare them
+        // with what the content and its parsed form take.
+        size_t content_size = 0;
+        for (const auto& chunk : content) {
+            content_size += chunk.size();
+        }
+        rjson::value json_request = co_await _json_parser.parse(std::move(content), [this, &units, content_size] (size_t allocated) {
+            size_t needed = content_size + allocated;
+            if (needed > units.count()) {
+                units.adopt(consume_units(*_memory_limiter, needed - units.count()));
+            }
+        });
         if (!json_request.IsObject()) {
             co_return api_error::validation("Request content must be an object");
         }
@@ -1208,49 +1227,20 @@ future<> server::stop() {
         return server.stop();
     }).then([this] {
         return _pending_requests.close();
-    }).then([this] {
-        return _json_parser.stop();
     });
 }
 
-server::json_parser::json_parser() : _run_parse_json_thread(async([this] {
-        while (true) {
-            _document_waiting.wait().get();
-            if (_as.abort_requested()) {
-                return;
-            }
-            try {
-                _parsed_document = rjson::parse_yieldable(std::move(_raw_document));
-                _current_exception = nullptr;
-            } catch (...) {
-                _current_exception = std::current_exception();
-            }
-            _document_parsed.signal();
-        }
-    })) {
-}
-
-future<rjson::value> server::json_parser::parse(chunked_content&& content) {
-    if (content.size() < yieldable_parsing_threshold) {
-        return make_ready_future<rjson::value>(rjson::parse(std::move(content)));
+future<rjson::value> server::json_parser::parse(chunked_content&& content, rjson::memory_observer observer) {
+    size_t size = 0;
+    for (const auto& chunk : content) {
+        size += chunk.size();
     }
-    return with_semaphore(_parsing_sem, 1, [this, content = std::move(content)] () mutable {
-        _raw_document = std::move(content);
-        _document_waiting.signal();
-        return _document_parsed.wait().then([this] {
-            if (_current_exception) {
-                return make_exception_future<rjson::value>(_current_exception);
-            }
-            return make_ready_future<rjson::value>(std::move(_parsed_document));
-        });
+    if (size < yieldable_parsing_threshold) {
+        return make_ready_future<rjson::value>(rjson::parse(std::move(content), rjson::default_max_nested_level, std::move(observer)));
+    }
+    return with_semaphore(_parsing_sem, 1, [content = std::move(content), observer = std::move(observer)] () mutable {
+        return rjson::parse_gently(std::move(content), rjson::default_max_nested_level, std::move(observer));
     });
-}
-
-future<> server::json_parser::stop() {
-    _as.request_abort();
-    _document_waiting.signal();
-    _document_parsed.broken();
-    return std::move(_run_parse_json_thread);
 }
 
 // Convert an entry in the server's list of ongoing Alternator requests

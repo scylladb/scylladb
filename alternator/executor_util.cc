@@ -9,6 +9,7 @@
 #include "alternator/executor_util.hh"
 #include "alternator/executor.hh"
 #include "alternator/error.hh"
+#include "types/listlike_partial_deserializing_iterator.hh"
 #include "auth/resource.hh"
 #include "auth/service.hh"
 #include "cdc/log.hh"
@@ -501,6 +502,86 @@ lw_shared_ptr<stats> get_stats_from_schema(service::storage_proxy& sp, const sch
     }
 }
 
+template<typename Writer>
+void write_item_cell(const column_definition& column, bytes_view cell, Writer& w,
+        const std::optional<attrs_to_get>& attrs_to_get,
+        bool include_all_embedded_attributes,
+        uint64_t* item_length_in_bytes) {
+    const sstring& column_name = column.name_as_text();
+    if (column_name != executor::ATTRS_COLUMN_NAME) {
+        if (item_length_in_bytes) {
+            (*item_length_in_bytes) += column_name.length() + cell.size();
+        }
+        if (!attrs_to_get || attrs_to_get->contains(column_name)) {
+            // The item's names are unique, so the member needn't be looked for.
+            w.key(column_name);
+            w.start_object(1);
+            w.key(type_to_string(column.type));
+            w.put(json_key_column_value(cell, column));
+            w.end_object();
+        }
+        return;
+    }
+    // Walk the serialized map of attributes in place, rather than
+    // deserializing it into a map, which copies every value.
+    int count = read_collection_size(cell);
+    w.size_hint(count);
+    for (int i = 0; i < count; ++i) {
+        bytes_view name_bytes = read_collection_key(cell);
+        bytes_view value = read_collection_value_nonnull(cell);
+        std::string_view attr_name(reinterpret_cast<const char*>(name_bytes.data()), name_bytes.size());
+        if (item_length_in_bytes) {
+            (*item_length_in_bytes) += attr_name.size();
+        }
+        if (item_length_in_bytes && value.size()) {
+            // ScyllaDB uses one extra byte compared to DynamoDB for the bytes length
+            (*item_length_in_bytes) += value.size() - 1;
+        }
+        const attrs_to_get_node* node = nullptr;
+        if (attrs_to_get) {
+            auto it = attrs_to_get->find(std::string(attr_name));
+            if (it != attrs_to_get->end()) {
+                node = &it->second;
+            } else if (!include_all_embedded_attributes) {
+                continue;
+            }
+        }
+        if (!node || node->has_value()) {
+            w.key(attr_name);
+            deserialize_item(value, w);
+        } else {
+            // A nested projection keeps only part of the attribute, so it
+            // needs the attribute parsed; false means nothing is left.
+            rjson::value v = deserialize_item(value);
+            if (hierarchy_filter(v, *node)) {
+                w.key(attr_name);
+                w.put(std::move(v));
+            }
+        }
+    }
+}
+
+template void write_item_cell(const column_definition&, bytes_view, rjson::value_writer&, const std::optional<attrs_to_get>&, bool, uint64_t*);
+template void write_item_cell(const column_definition&, bytes_view, rjson::text_writer&, const std::optional<attrs_to_get>&, bool, uint64_t*);
+
+template<typename Writer>
+static void write_item(const cql3::selection::selection& selection,
+        const std::vector<managed_bytes_opt>& result_row,
+        const std::optional<attrs_to_get>& attrs_to_get,
+        Writer& w,
+        uint64_t* item_length_in_bytes,
+        bool include_all_embedded_attributes) {
+    auto column_it = selection.get_columns().begin();
+    for (const managed_bytes_opt& cell : result_row) {
+        if (cell) {
+            cell->with_linearized([&] (bytes_view bv) {
+                write_item_cell(**column_it, bv, w, attrs_to_get, include_all_embedded_attributes, item_length_in_bytes);
+            });
+        }
+        ++column_it;
+    }
+}
+
 void describe_single_item(const cql3::selection::selection& selection,
     const std::vector<managed_bytes_opt>& result_row,
     const std::optional<attrs_to_get>& attrs_to_get,
@@ -508,60 +589,20 @@ void describe_single_item(const cql3::selection::selection& selection,
     uint64_t* item_length_in_bytes,
     bool include_all_embedded_attributes)
 {
-    const auto& columns = selection.get_columns();
-    auto column_it = columns.begin();
-    for (const managed_bytes_opt& cell : result_row) {
-        if (!cell) {
-            ++column_it;
-            continue;
-        }
-        const sstring& column_name = (*column_it)->name_as_text();
-        if (column_name != executor::ATTRS_COLUMN_NAME) {
-            if (item_length_in_bytes) {
-                (*item_length_in_bytes) += column_name.length() + cell->size();
-            }
-            if (!attrs_to_get || attrs_to_get->contains(column_name)) {
-                // item is expected to start empty, and column_name are unique
-                // so add() makes sense
-                rjson::add_with_string_name(item, column_name, rjson::empty_object());
-                rjson::value& field = item[column_name.c_str()];
-                cell->with_linearized([&] (bytes_view linearized_cell) {
-                    rjson::add_with_string_name(field, type_to_string((*column_it)->type), json_key_column_value(linearized_cell, **column_it));
-                });
-            }
-        } else {
-            auto deserialized = attrs_type()->deserialize(*cell);
-            const auto& keys_and_values = value_cast<map_type_impl::native_type>(deserialized);
-            for (const auto& entry : keys_and_values) {
-                const sstring& attr_name = value_cast<sstring>(entry.first);
-                if (item_length_in_bytes) {
-                    (*item_length_in_bytes) += attr_name.length();
-                }
-                const bytes& value = value_cast<bytes>(entry.second);
-                if (item_length_in_bytes && value.length()) {
-                    // ScyllaDB uses one extra byte compared to DynamoDB for the bytes length
-                    (*item_length_in_bytes) += value.length() - 1;
-                }
-                const attrs_to_get_node* node = nullptr;
-                if (attrs_to_get) {
-                    auto it = attrs_to_get->find(attr_name);
-                    if (it != attrs_to_get->end()) {
-                        node = &it->second;
-                    } else if (!include_all_embedded_attributes) {
-                        continue;
-                    }
-                }
-                rjson::value v = deserialize_item(value);
-                // A nested projection keeps only part of v; false means nothing is left.
-                if (node && !hierarchy_filter(v, *node)) {
-                    continue;
-                }
-                // item starts empty and names are unique, so add() is safe.
-                rjson::add_with_string_name(item, attr_name, std::move(v));
-            }
-        }
-        ++column_it;
-    }
+    rjson::value_writer w(item);
+    write_item(selection, result_row, attrs_to_get, w, item_length_in_bytes, include_all_embedded_attributes);
+}
+
+rjson::value describe_single_item_for_output(const cql3::selection::selection& selection,
+    const std::vector<managed_bytes_opt>& result_row,
+    const std::optional<attrs_to_get>& attrs_to_get,
+    uint64_t* item_length_in_bytes)
+{
+    rjson::text_writer w;
+    w.start_object();
+    write_item(selection, result_row, attrs_to_get, w, item_length_in_bytes, false);
+    w.end_object();
+    return std::move(w).result();
 }
 
 std::optional<rjson::value> describe_single_item(schema_ptr schema,
@@ -569,7 +610,8 @@ std::optional<rjson::value> describe_single_item(schema_ptr schema,
         const cql3::selection::selection& selection,
         const query::result& query_result,
         const std::optional<attrs_to_get>& attrs_to_get,
-        uint64_t* item_length_in_bytes) {
+        uint64_t* item_length_in_bytes,
+        bool for_output) {
     rjson::value item = rjson::empty_object();
 
     cql3::selection::result_set_builder builder(selection, gc_clock::now());
@@ -590,6 +632,9 @@ std::optional<rjson::value> describe_single_item(schema_ptr schema,
         // called describe_multi_item(), not this function.
         throw std::logic_error("describe_single_item() asked to describe multiple items");
     }
+    if (for_output) {
+        return describe_single_item_for_output(selection, *result_set->rows().begin(), attrs_to_get, item_length_in_bytes);
+    }
     describe_single_item(selection, *result_set->rows().begin(), attrs_to_get, item, item_length_in_bytes);
     return item;
 }
@@ -601,7 +646,9 @@ static void check_big_object(const rjson::value& val, int& size_left);
 // Alternator limits the depth of JSONs it reads from inputs, and doesn't
 // add more than a couple of levels in its own output construction.
 bool is_big(const rjson::value& val, int big_size) {
-    if (val.IsString()) {
+    if (val.IsRaw()) {
+        return ssize_t(val.GetRawJson().size()) > big_size;
+    } else if (val.IsString()) {
         return ssize_t(val.GetStringLength()) > big_size;
     } else if (val.IsObject()) {
         check_big_object(val, big_size);
@@ -625,6 +672,8 @@ static void check_big_array(const rjson::value& val, int& size_left) {
         // array or object) because usually those greatly outnumber the trunk.
         if (v.IsString()) {
             size_left -= v.GetStringLength();
+        } else if (v.IsRaw()) {
+            size_left -= v.GetRawJson().size();
         } else if (v.IsObject()) {
             check_big_object(v, size_left);
         } else if (v.IsArray()) {
@@ -642,6 +691,8 @@ static void check_big_object(const rjson::value& val, int& size_left) {
         size_left -= m.name.GetStringLength();
         if (m.value.IsString()) {
             size_left -= m.value.GetStringLength();
+        } else if (m.value.IsRaw()) {
+            size_left -= m.value.GetRawJson().size();
         } else if (m.value.IsObject()) {
             check_big_object(m.value, size_left);
         } else if (m.value.IsArray()) {

@@ -191,7 +191,7 @@ response_compressor::compression_type response_compressor::find_compression(std:
     return selected_ct;
 }
 
-static future<chunked_content> compress(response_compressor::compression_type ct, const db::config& cfg, std::string str) {
+static future<chunked_content> compress(response_compressor::compression_type ct, const db::config& cfg, sstring str) {
     chunked_content compressed;
     auto write = [&compressed](temporary_buffer<char>&& buf) -> future<> {
         compressed.push_back(std::move(buf));
@@ -217,7 +217,7 @@ static sstring flatten(chunked_content&& cc) {
     return result;
 }
 
-future<std::unique_ptr<http::reply>> response_compressor::generate_reply(std::unique_ptr<http::reply> rep, sstring accept_encoding, std::optional<std::string_view> content_type, std::string&& response_body) {
+future<std::unique_ptr<http::reply>> response_compressor::generate_reply(std::unique_ptr<http::reply> rep, sstring accept_encoding, std::optional<std::string_view> content_type, sstring&& response_body) {
     response_compressor::compression_type ct = find_compression(accept_encoding, response_body.size());
     if (ct != response_compressor::compression_type::none) {
         rep->add_header("Content-Encoding", get_encoding_name(ct));
@@ -226,8 +226,6 @@ future<std::unique_ptr<http::reply>> response_compressor::generate_reply(std::un
             return make_ready_future<std::unique_ptr<http::reply>>(std::move(rep));
         });
     } else {
-        // Note that despite the move, response_body (std::string) is copied
-        // into an sstring when passed to write_body().
         rep->write_body(content_type, std::move(response_body));
     }
     return make_ready_future<std::unique_ptr<http::reply>>(std::move(rep));

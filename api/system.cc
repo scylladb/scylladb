@@ -12,7 +12,7 @@
 #include "replica/database.hh"
 #include "sstables/sstables_manager.hh"
 
-#include <rapidjson/document.h>
+#include "utils/rjson.hh"
 #include <boost/lexical_cast.hpp>
 #include <seastar/core/reactor.hh>
 #include <seastar/core/metrics_api.hh>
@@ -53,39 +53,38 @@ void set_system(http_context& ctx, routes& r) {
     });
 
     hm::set_metrics_config.set(r, [](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
-        rapidjson::Document doc;
         auto content = co_await util::read_entire_stream_contiguous(*req->content_stream);
-        doc.Parse(content.c_str());
+        auto doc = rjson::try_parse(content).value_or(rjson::null_value());
         if (!doc.IsArray()) {
             throw bad_param_exception("Expected a json array");
         }
         std::vector<seastar::metrics::relabel_config> relabels;
         relabels.resize(doc.Size());
-        for (rapidjson::SizeType i = 0; i < doc.Size(); i++) {
+        for (rjson::size_type i = 0; i < doc.Size(); i++) {
             const auto& element = doc[i];
             if (element.HasMember("source_labels")) {
                 std::vector<std::string> source_labels;
                 source_labels.resize(element["source_labels"].Size());
 
                 for (size_t j = 0; j < element["source_labels"].Size(); j++) {
-                    source_labels[j] = element["source_labels"][j].GetString();
+                    source_labels[j] = rjson::to_string(element["source_labels"][j]);
                 }
                 relabels[i].source_labels = source_labels;
             }
             if (element.HasMember("action")) {
-                relabels[i].action = seastar::metrics::relabel_config_action(element["action"].GetString());
+                relabels[i].action = seastar::metrics::relabel_config_action(rjson::to_string(element["action"]));
             }
             if (element.HasMember("replacement")) {
-                relabels[i].replacement = element["replacement"].GetString();
+                relabels[i].replacement = rjson::to_string(element["replacement"]);
             }
             if (element.HasMember("separator")) {
-                relabels[i].separator = element["separator"].GetString();
+                relabels[i].separator = rjson::to_string(element["separator"]);
             }
             if (element.HasMember("target_label")) {
-                relabels[i].target_label = element["target_label"].GetString();
+                relabels[i].target_label = rjson::to_string(element["target_label"]);
             }
             if (element.HasMember("regex")) {
-                relabels[i].expr = element["regex"].GetString();
+                relabels[i].expr = rjson::to_string(element["regex"]);
             }
         }
         bool failed = false;

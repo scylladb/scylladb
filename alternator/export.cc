@@ -1038,7 +1038,7 @@ future<executor::request_return_type> executor::export_table_to_point_in_time(cl
 
     rjson::value response = rjson::empty_object();
     rjson::add(response, "ExportDescription", std::move(export_desc));
-    co_return rjson::print(std::move(response));
+    co_return rjson::print_sstring(std::move(response));
 }
 
 // An export ARN is a table ARN followed by `/export/<id>`.
@@ -1215,7 +1215,7 @@ future<executor::request_return_type> executor::describe_export(client_state& cl
 
     rjson::value response = rjson::empty_object();
     rjson::add(response, "ExportDescription", std::move(export_desc));
-    co_return rjson::print(std::move(response));
+    co_return rjson::print_sstring(std::move(response));
 }
 
 // Consistency level of the scan: LOCAL_QUORUM for NetworkTopologyStrategy, QUORUM otherwise
@@ -1609,7 +1609,7 @@ future<executor::request_return_type> executor::list_exports(client_state& clien
             co_return api_error::validation("TableArn: Invalid Table ARN - empty keyspace name");
         }
         validate_table_name(table_parts->table_name, "TableArn: Invalid Table ARN - table name");
-        co_return rjson::print(rjson::empty_object());
+        co_return rjson::print_sstring(rjson::empty_object());
     }
 
     auto exports = co_await get_all_exports(_proxy, client_state, std::move(trace_state), std::move(permit));
@@ -1669,6 +1669,6 @@ future<executor::request_return_type> executor::list_exports(client_state& clien
         rjson::add(response, "NextToken", rjson::from_string(*last_export_arn));
     }
 
-    co_return rjson::print(std::move(response));
+    co_return rjson::print_sstring(std::move(response));
 }
 } // namespace alternator

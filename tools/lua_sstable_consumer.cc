@@ -993,7 +993,7 @@ public:
         return invoke(l, __FUNCTION__, LUA_TSTRING, [l] (json_writer& w) {
             size_t len = 0;
             auto str = lua_tolstring(l, 2, &len);
-            w._writer.writer().rjson_writer().String(str, len, false);
+            w._writer.writer().String(std::string_view(str, len));
         });
     }
     static int start_object_l(lua_State* l) {
@@ -1005,7 +1005,7 @@ public:
         return invoke(l, __FUNCTION__, LUA_TSTRING, [l] (json_writer& w) {
             size_t len = 0;
             auto str = lua_tolstring(l, 2, &len);
-            w._writer.writer().rjson_writer().Key(str, len, false);
+            w._writer.writer().Key(std::string_view(str, len));
         });
     }
     static int end_object_l(lua_State* l) {

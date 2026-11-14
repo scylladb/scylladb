@@ -73,12 +73,24 @@ public:
 // The resolve_value() function replaces these constants by the JSON item
 // extracted from the ExpressionAttributeValues.
 struct constant {
-    // We use lw_shared_ptr<rjson::value> just to make rjson::value copyable,
-    // to make this entire object copyable as ANTLR needs.
-    using literal = lw_shared_ptr<rjson::value>;
+    // A value of the request's ExpressionAttributeValues: a copy, or when
+    // the request outlives the expression, a reference to it (see
+    // resolve_update_expression()). lw_shared_ptr makes it copyable, as
+    // ANTLR needs.
+    class literal {
+        lw_shared_ptr<rjson::value> _copy;
+        const rjson::value* _value;
+    public:
+        literal(const rjson::value& v, bool borrow)
+            : _copy(borrow ? nullptr : make_lw_shared<rjson::value>(rjson::copy(v)))
+            , _value(borrow ? &v : _copy.get())
+        {}
+        const rjson::value& operator*() const noexcept { return *_value; }
+        const rjson::value* operator->() const noexcept { return _value; }
+    };
     std::variant<std::string, literal> _value;
-    void set(const rjson::value& v) {
-        _value = make_lw_shared<rjson::value>(rjson::copy(v));
+    void set(const rjson::value& v, bool borrow) {
+        _value = literal(v, borrow);
     }
     void set(std::string& s) {
         _value = s;

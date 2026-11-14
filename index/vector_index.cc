@@ -95,7 +95,7 @@ static sstring targets_to_cql(const sstring& targets) {
 
     const rjson::value* fc = rjson::find(*json_value, FC_TARGET_KEY);
     if (fc && fc->IsArray()) {
-        for (rapidjson::SizeType i = 0; i < fc->Size(); ++i) {
+        for (rjson::size_type i = 0; i < fc->Size(); ++i) {
             result += ", ";
             result += cql3::util::maybe_quote(sstring(rjson::to_string_view((*fc)[i])));
         }

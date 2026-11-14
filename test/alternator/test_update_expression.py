@@ -519,6 +519,20 @@ def test_update_expression_list_append_basic(test_table_s):
             UpdateExpression='SET a = list_append(:val1, :val2)',
             ExpressionAttributeValues={':val1': [4, 'hello'], ':val2': 'hi'})
 
+# The same value reference can be used more than once, in the
+# UpdateExpression and in the ConditionExpression. Alternator doesn't copy the
+# referenced values when evaluating expressions, so check that every use sees
+# the whole value.
+def test_update_expression_reuse_value_reference(test_table_s):
+    p = random_string()
+    test_table_s.put_item(Item={'p': p, 'c': 'x', 'm': {'k': 'old'}})
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET a = :v, b = :v, d = list_append(:l, :l), m.k = :v',
+        ConditionExpression='c <> :v',
+        ExpressionAttributeValues={':v': 'hello', ':l': [1, 2]})
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {
+        'p': p, 'c': 'x', 'a': 'hello', 'b': 'hello', 'd': [1, 2, 1, 2], 'm': {'k': 'hello'}}
+
 # Additional list_append() tests, also using attribute paths as parameters
 # (i.e., read-modify-write).
 def test_update_expression_list_append(test_table_s):

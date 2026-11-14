@@ -130,7 +130,7 @@ public:
     // is written in chunks to the output_stream. This allows for efficient
     // handling of large responses without needing to allocate a large buffer
     // in memory.
-    using request_return_type = std::variant<std::string, body_writer, api_error>;
+    using request_return_type = std::variant<sstring, body_writer, api_error>;
     stats _stats;
     // The metric_groups object holds this stat object's metrics registered
     // as long as the stats object is alive.

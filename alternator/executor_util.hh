@@ -278,9 +278,19 @@ lw_shared_ptr<stats> get_stats_from_schema(service::storage_proxy& sp, const sch
 /// object. Removes members whose key is not in `tbl_name_filter`.
 void filter_batch_request_items_by_tbl_name(rjson::value& request, const audit::audit_table_set& tbl_name_filter);
 
+/// Writes to an rjson::value_writer or rjson::text_writer the members of an
+/// item held by one cell of a result row: a key column, or the map of the
+/// other attributes. If include_all_embedded_attributes is true, all
+/// attributes from the ATTRS_COLUMN map column are included regardless of
+/// attrs_to_get.
+template<typename Writer>
+void write_item_cell(const column_definition& column, bytes_view cell, Writer& w,
+    const std::optional<attrs_to_get>& attrs_to_get,
+    bool include_all_embedded_attributes = false,
+    uint64_t* item_length_in_bytes = nullptr);
+
 /// Writes one item's attributes into `item` from the given selection result
-/// row. If include_all_embedded_attributes is true, all attributes from the
-/// ATTRS_COLUMN map column are included regardless of attrs_to_get.
+/// row. include_all_embedded_attributes is as in write_item_cell().
 void describe_single_item(const cql3::selection::selection&,
     const std::vector<managed_bytes_opt>&,
     const std::optional<attrs_to_get>&,
@@ -288,14 +298,23 @@ void describe_single_item(const cql3::selection::selection&,
     uint64_t* item_length_in_bytes = nullptr,
     bool include_all_embedded_attributes = false);
 
+/// Returns an item, which will only be printed, from the given selection
+/// result row, as JSON text (an rjson::raw_json() value).
+rjson::value describe_single_item_for_output(const cql3::selection::selection&,
+    const std::vector<managed_bytes_opt>&,
+    const std::optional<attrs_to_get>&,
+    uint64_t* item_length_in_bytes = nullptr);
+
 /// Converts a single result row to a JSON item, or returns an empty optional
-/// if the result is empty.
+/// if the result is empty. If for_output is true, the item will only be
+/// printed, and is returned as JSON text.
 std::optional<rjson::value> describe_single_item(schema_ptr,
     const query::partition_slice&,
     const cql3::selection::selection&,
     const query::result&,
     const std::optional<attrs_to_get>&,
-    uint64_t* item_length_in_bytes = nullptr);
+    uint64_t* item_length_in_bytes = nullptr,
+    bool for_output = false);
 
 /// Make a body_writer (function that can write output incrementally to the
 /// HTTP stream) from the given JSON object.
