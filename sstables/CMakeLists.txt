@@ -17,6 +17,7 @@ target_sources(sstables
     parquet/bit_util.cc
     parquet/compression.cc
     parquet/encoding.cc
+    parquet/file_summary.cc
     parquet/metadata.cc
     parquet/rle.cc
     parquet/schema.cc
