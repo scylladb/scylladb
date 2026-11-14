@@ -440,6 +440,18 @@ def test_list_tables_wrong_limit(dynamodb):
     with pytest.raises(ClientError, match='ValidationException'):
         dynamodb.meta.client.list_tables(Limit=101)
 
+# A huge Limit, too large to fit in 32 bits, is rejected just like the
+# smaller out-of-range Limit in test_list_tables_wrong_limit() above, because
+# ListTables's Limit must be at most 100. (boto3 enforces a minimum of 1 on
+# Limit, but no maximum, so such a huge Limit reaches the server unmodified).
+def test_list_tables_huge_limit(dynamodb):
+    with pytest.raises(ClientError) as err:
+        dynamodb.meta.client.list_tables(Limit=2**64)
+    code = err.value.response['Error']['Code']
+    message = err.value.response['Error'].get('Message', '')
+    assert code in ('ValidationException', 'SerializationException'), \
+        f'Unexpected error code {code} for oversized Limit: {message}'
+
 # Even before Alternator gains support for configuring server-side encryption
 # ("encryption at rest") with CreateTable's SSESpecification option, we should
 # support the option "Enabled=false" which is the default, and means the server
