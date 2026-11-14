@@ -721,8 +721,30 @@ void write_counter_cell(RowWriter& w, const query::partition_slice& slice, ::ato
             .end_qr_cell();
 }
 
+// Collection elements feed many tiny fields, so buffer them; noinline keeps the 4 KB
+// buffer out of callers' frames. Same digest as xx_hasher.
+[[gnu::noinline]] static uint64_t collection_cell_digest(collection_mutation_view cm, const column_definition& def, api::timestamp_type* max_ts = nullptr) {
+    buffered_xx_hasher h;
+    feed_hash(h, cm, def, max_ts);
+    return h.finalize_uint64();
+}
+
+static uint64_t atomic_cell_digest(atomic_cell_view c, const column_definition& def) {
+    xx_hasher h;
+    feed_hash(h, c, def);
+    return h.finalize_uint64();
+}
+
+// Per-cell digest, shared by the digest and row::prepare_hash() so cached and fresh hashes match.
+static uint64_t cell_digest(const atomic_cell_or_collection& cell, const column_definition& def) {
+    return def.is_atomic() ? atomic_cell_digest(cell.as_atomic_cell(def), def) : collection_cell_digest(cell.as_collection_mutation(), def);
+}
+
 template<typename Hasher>
 void appending_hash<row>::operator()(Hasher& h, const row& cells, const schema& s, column_kind kind, const query::column_id_vector& columns, max_timestamp& max_ts) const {
+    // Cell digests (and those cached by prepare_hash()) are xx_hasher digests.
+    static_assert(!query::using_hash_of_hash_v<Hasher> || std::is_same_v<Hasher, xx_hasher> || std::is_same_v<Hasher, buffered_xx_hasher>,
+            "cell digests are XXH64 whatever the outer hasher; check that suits a new one");
     for (auto id : columns) {
         const cell_and_hash* cell_and_hash = cells.find_cell_and_hash(id);
         if (!cell_and_hash) {
@@ -736,32 +758,32 @@ void appending_hash<row>::operator()(Hasher& h, const row& cells, const schema& 
                 if (cell_and_hash->hash) {
                     feed_hash(h, *cell_and_hash->hash);
                 } else {
-                    Hasher cellh;
-                    feed_hash(cellh, cell_and_hash->cell.as_atomic_cell(def), def);
-                    feed_hash(h, cellh.finalize_uint64());
+                    feed_hash(h, atomic_cell_digest(cell_and_hash->cell.as_atomic_cell(def), def));
                 }
             } else {
                 feed_hash(h, cell_and_hash->cell.as_atomic_cell(def), def);
             }
         } else {
             auto cm = cell_and_hash->cell.as_collection_mutation();
-            max_ts.update(cm.last_update(*def.type));
+            api::timestamp_type last_update = api::missing_timestamp;
             if constexpr (query::using_hash_of_hash_v<Hasher>) {
                 if (cell_and_hash->hash) {
+                    last_update = cm.last_update(*def.type);
                     feed_hash(h, *cell_and_hash->hash);
                 } else {
-                    Hasher cellh;
-                    feed_hash(cellh, cm, def);
-                    feed_hash(h, cellh.finalize_uint64());
+                    feed_hash(h, collection_cell_digest(cm, def, &last_update));
                 }
             } else {
-                feed_hash(h, cm, def);
+                feed_hash(h, cm, def, &last_update);
             }
+            max_ts.update(last_update);
         }
     }
 }
-// Instantiation for mutation_test.cc
+// Instantiations for mutation_test.cc and perf_mutation_fragment.cc
 template void appending_hash<row>::operator()<xx_hasher>(xx_hasher& h, const row& cells, const schema& s, column_kind kind, const query::column_id_vector& columns, max_timestamp& max_ts) const;
+template void appending_hash<row>::operator()<buffered_xx_hasher>(
+        buffered_xx_hasher& h, const row& cells, const schema& s, column_kind kind, const query::column_id_vector& columns, max_timestamp& max_ts) const;
 
 cell_hash_opt row::cell_hash_for(column_id id) const {
     const cell_and_hash* cah = _cells.get(id);
@@ -772,9 +794,7 @@ void row::prepare_hash(const schema& s, column_kind kind) const {
     // const to avoid removing const qualifiers on the read path
     for_each_cell([&s, kind] (column_id id, const cell_and_hash& c_a_h) {
         if (!c_a_h.hash) {
-            query::default_hasher cellh;
-            feed_hash(cellh, c_a_h.cell, s.column_at(kind, id));
-            c_a_h.hash = cell_hash{cellh.finalize_uint64()};
+            c_a_h.hash = cell_hash{cell_digest(c_a_h.cell, s.column_at(kind, id))};
         }
     });
 }
@@ -1666,12 +1686,14 @@ compact_and_expire_result row::compact_and_expire(
                 res.live_cells++;
             }
         } else {
-            auto compact_res = ::compact_and_expire(c.as_collection_mutation(), id, *def.type, tomb, query_time, can_gc, gc_before, collector);
+            auto compact_res = ::compact_and_expire_if_changed(c.as_collection_mutation(), id, *def.type, tomb, query_time, can_gc, gc_before, collector);
             res += compact_res.result;
-            if (collection_mutation_view(compact_res.collection).empty()) {
+            if (!compact_res.collection) {
+                erase = c.as_collection_mutation().empty();
+            } else if (collection_mutation_view(*compact_res.collection).empty()) {
                  erase = true;
             } else {
-                c = std::move(compact_res.collection);
+                c = std::move(*compact_res.collection);
             }
         }
         return erase;

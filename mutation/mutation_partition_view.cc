@@ -10,6 +10,7 @@
 #include <seastar/core/simple-stream.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
+#include <boost/variant/get.hpp>
 
 #include "mutation_partition_view.hh"
 #include "schema/schema.hh"
@@ -86,39 +87,44 @@ atomic_cell read_atomic_cell(const abstract_type& type, atomic_cell_variant cv, 
     return boost::apply_visitor(atomic_cell_visitor(type, cm), cv);
 }
 
+namespace {
+
+template<typename Visitor>
+class atomic_cell_or_collection_visitor : public boost::static_visitor<> {
+    Visitor& _visitor;
+    column_id _id;
+    const column_mapping_entry& _col;
+public:
+    explicit atomic_cell_or_collection_visitor(Visitor& v, column_id id, const column_mapping_entry& col)
+        : _visitor(v), _id(id), _col(col) { }
+
+    void operator()(atomic_cell_variant& acv) const {
+        if (!_col.is_atomic()) {
+            throw std::runtime_error("A collection expected, got an atomic cell");
+        }
+        _visitor.accept_atomic_cell(_id, read_atomic_cell(*_col.type(), acv));
+    }
+    void operator()(ser::collection_cell_view& ccv) const {
+        if (_col.is_atomic()) {
+            throw std::runtime_error("An atomic cell expected, got a collection");
+        }
+        _visitor.accept_collection(_id, read_from_collection_cell_view(*_col.type(), ccv));
+    }
+    void operator()(ser::unknown_variant_type&) const {
+        throw std::runtime_error("Trying to deserialize unknown cell type");
+    }
+};
+
+}
+
 template<typename Visitor>
 void read_and_visit_row(ser::row_view rv, const column_mapping& cm, column_kind kind, Visitor&& visitor)
 {
     for (auto&& cv : rv.columns()) {
         auto id = cv.id();
         auto& col = cm.column_at(kind, id);
-
-        class atomic_cell_or_collection_visitor : public boost::static_visitor<> {
-            Visitor& _visitor;
-            column_id _id;
-            const column_mapping_entry& _col;
-        public:
-            explicit atomic_cell_or_collection_visitor(Visitor& v, column_id id, const column_mapping_entry& col)
-                : _visitor(v), _id(id), _col(col) { }
-
-            void operator()(atomic_cell_variant& acv) const {
-                if (!_col.is_atomic()) {
-                    throw std::runtime_error("A collection expected, got an atomic cell");
-                }
-                _visitor.accept_atomic_cell(_id, read_atomic_cell(*_col.type(), acv));
-            }
-            void operator()(ser::collection_cell_view& ccv) const {
-                if (_col.is_atomic()) {
-                    throw std::runtime_error("An atomic cell expected, got a collection");
-                }
-                _visitor.accept_collection(_id, read_from_collection_cell_view(*_col.type(), ccv));
-            }
-            void operator()(ser::unknown_variant_type&) const {
-                throw std::runtime_error("Trying to deserialize unknown cell type");
-            }
-        };
         auto&& cell = cv.c();
-        boost::apply_visitor(atomic_cell_or_collection_visitor(visitor, id, col), cell);
+        boost::apply_visitor(atomic_cell_or_collection_visitor<std::remove_reference_t<Visitor>>(visitor, id, col), cell);
     }
 }
 
@@ -188,6 +194,51 @@ void mutation_partition_view::do_accept(const column_mapping& cm, Visitor& visit
     }
 }
 
+namespace {
+
+// read_and_visit_row() that yields inside large collections; atomic cells are
+// small and go through the synchronous path.
+template<typename Visitor>
+future<> read_and_visit_row_gently(ser::row_view rv, const column_mapping& cm, column_kind kind, Visitor visitor)
+{
+    for (auto&& cv : rv.columns()) {
+        auto id = cv.id();
+        auto& col = cm.column_at(kind, id);
+        auto&& cell = cv.c();
+        // Decode cost is bounded by the frozen size; small cells skip the coroutine.
+        if (auto* ccv = boost::get<ser::collection_cell_view>(&cell); ccv && ccv->v.size() >= gentle_collection_min_size) {
+            if (col.is_atomic()) {
+                throw std::runtime_error("An atomic cell expected, got a collection");
+            }
+            visitor.accept_collection(id, co_await read_from_collection_cell_view_gently(*ccv));
+            continue;
+        }
+        boost::apply_visitor(atomic_cell_or_collection_visitor<Visitor>(visitor, id, col), cell);
+    }
+}
+
+bool has_gentle_collection(ser::row_view rv) {
+    for (auto&& cv : rv.columns()) {
+        auto&& cell = cv.c();
+        if (auto* ccv = boost::get<ser::collection_cell_view>(&cell); ccv && ccv->v.size() >= gentle_collection_min_size) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Rows without a large collection skip the coroutine frame.
+template<typename Visitor>
+future<> visit_row_gently(ser::row_view rv, const column_mapping& cm, column_kind kind, Visitor visitor) {
+    if (!has_gentle_collection(rv)) {
+        read_and_visit_row(rv, cm, kind, visitor);
+        return make_ready_future();
+    }
+    return read_and_visit_row_gently(rv, cm, kind, std::move(visitor));
+}
+
+}
+
 template<typename Visitor>
 requires (MutationViewVisitor<Visitor> && !AsyncMutationViewVisitor<Visitor>)
 future<> mutation_partition_view::do_accept_gently(const column_mapping& cm, Visitor& visitor) const {
@@ -206,7 +257,7 @@ future<> mutation_partition_view::do_accept_gently(const column_mapping& cm, Vis
            _visitor.accept_static_cell(id, std::move(cm));
         }
     };
-    read_and_visit_row(mpv.static_row(), cm, column_kind::static_column, static_row_cell_visitor{visitor});
+    co_await visit_row_gently(mpv.static_row(), cm, column_kind::static_column, static_row_cell_visitor{visitor});
     co_await coroutine::maybe_yield();
 
     for (auto rt : mpv.range_tombstones()) {
@@ -229,7 +280,7 @@ future<> mutation_partition_view::do_accept_gently(const column_mapping& cm, Vis
                _visitor.accept_row_cell(id, std::move(cm));
             }
         };
-        read_and_visit_row(cr.cells(), cm, column_kind::regular_column, cell_visitor{visitor});
+        co_await visit_row_gently(cr.cells(), cm, column_kind::regular_column, cell_visitor{visitor});
         co_await coroutine::maybe_yield();
     }
 }
@@ -252,7 +303,7 @@ future<> mutation_partition_view::do_accept_gently(const column_mapping& cm, Asy
            _visitor.accept_static_cell(id, std::move(cm));
         }
     };
-    read_and_visit_row(mpv.static_row(), cm, column_kind::static_column, static_row_cell_visitor{visitor});
+    co_await visit_row_gently(mpv.static_row(), cm, column_kind::static_column, static_row_cell_visitor{visitor});
     co_await coroutine::maybe_yield();
 
     for (auto rt : mpv.range_tombstones()) {
@@ -274,7 +325,7 @@ future<> mutation_partition_view::do_accept_gently(const column_mapping& cm, Asy
                _visitor.accept_row_cell(id, std::move(cm));
             }
         };
-        read_and_visit_row(cr.cells(), cm, column_kind::regular_column, cell_visitor{visitor});
+        co_await visit_row_gently(cr.cells(), cm, column_kind::regular_column, cell_visitor{visitor});
         co_await coroutine::maybe_yield();
     }
 
@@ -303,8 +354,13 @@ mutation_partition_view::accept_ordered_result mutation_partition_view::do_accep
                 _visitor.accept_static_cell(id, std::move(cm));
             }
         };
-        read_and_visit_row(mpv.static_row(), cm, column_kind::static_column, static_row_cell_visitor{visitor});
         cookie.accepted_static_row = true;
+        if (is_preemptible && has_gentle_collection(mpv.static_row())) {
+            cookie.gentle_cells = mpv.static_row();
+            cookie.gentle_kind = column_kind::static_column;
+            return accept_ordered_result{stop_iteration::no, std::move(cookie)};
+        }
+        read_and_visit_row(mpv.static_row(), cm, column_kind::static_column, static_row_cell_visitor{visitor});
     }
 
     if (!cookie.iterators) {
@@ -342,6 +398,11 @@ mutation_partition_view::accept_ordered_result mutation_partition_view::do_accep
                 _visitor.accept_row_cell(id, std::move(cm));
             }
         };
+        if (is_preemptible && has_gentle_collection(cr.cells())) {
+            cookie.gentle_cells = cr.cells();
+            cookie.gentle_kind = column_kind::regular_column;
+            return stop_iteration::no;
+        }
         read_and_visit_row(cr.cells(), cm, column_kind::regular_column, cell_visitor{visitor});
         return stop_iteration::no;
     };
@@ -385,7 +446,7 @@ mutation_partition_view::accept_ordered_result mutation_partition_view::do_accep
         } else {
             return accept_ordered_result{stop_iteration::yes, accept_ordered_cookie{}};
         }
-        if (stop || (is_preemptible && need_preempt())) {
+        if (stop || cookie.gentle_cells || (is_preemptible && need_preempt())) {
             return accept_ordered_result{stop, std::move(cookie)};
         }
     }
@@ -422,9 +483,23 @@ void mutation_partition_view::accept_ordered(const schema& s, mutation_partition
 }
 
 future<> mutation_partition_view::accept_gently_ordered(const schema& s, mutation_partition_view_virtual_visitor& visitor) const {
+    struct gentle_cell_visitor {
+        mutation_partition_view_virtual_visitor& _visitor;
+        column_kind _kind;
+
+        void accept_atomic_cell(column_id id, atomic_cell ac) const {
+            _kind == column_kind::static_column ? _visitor.accept_static_cell(id, std::move(ac)) : _visitor.accept_row_cell(id, std::move(ac));
+        }
+        void accept_collection(column_id id, collection_mutation cm) const {
+            _kind == column_kind::static_column ? _visitor.accept_static_cell(id, std::move(cm)) : _visitor.accept_row_cell(id, std::move(cm));
+        }
+    };
     accept_ordered_result res;
     do {
         res = do_accept_ordered<true>(s, visitor, std::move(res.cookie));
+        if (auto cells = std::exchange(res.cookie.gentle_cells, std::nullopt)) {
+            co_await read_and_visit_row_gently(*cells, s.get_column_mapping(), res.cookie.gentle_kind, gentle_cell_visitor{visitor, res.cookie.gentle_kind});
+        }
         co_await coroutine::maybe_yield();
     } while (!res.stop);
 }

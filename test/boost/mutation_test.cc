@@ -8,6 +8,7 @@
 
 
 #include <random>
+#include <seastar/util/defer.hh>
 #include <boost/range/algorithm_ext/push_back.hpp>
 #include <boost/range/combine.hpp>
 #include "compaction/compaction_garbage_collector.hh"
@@ -224,6 +225,384 @@ collection_mutation make_collection_mutation(tombstone t, bytes key1, atomic_cel
     w.push_back(bytes_view(key1), atomic_cell_view(cell1));
     w.push_back(bytes_view(key2), atomic_cell_view(cell2));
     return std::move(w).finish();
+}
+
+// serialize_for_cql() of a collection with dead and tombstoned elements, spanning
+// several fragments, must match the CQL encoding built from the iterator.
+SEASTAR_THREAD_TEST_CASE(test_collection_serialize_for_cql) {
+    auto map_type = map_type_impl::get_instance(int32_type, bytes_type, true);
+    auto set_type = set_type_impl::get_instance(long_type, true);
+    const auto now = gc_clock::now();
+    for (bool is_map : {false, true}) {
+        const abstract_type& type = is_map ? static_cast<const abstract_type&>(*map_type) : *set_type;
+        collection_mutation_writer w(tombstone(5, now));
+        for (int i = 0; i < 20000; ++i) {
+            auto key = is_map ? int32_type->decompose(int32_t(i)) : long_type->decompose(int64_t(i));
+            auto cell = i % 3 == 0 ? atomic_cell::make_dead(10, now)
+                    : atomic_cell::make_live(*bytes_type, i % 7 == 0 ? 5 : 10, bytes(i % 20, 'v'), atomic_cell::collection_member::yes);
+            w.push_back(managed_bytes_view(key), std::move(cell));
+        }
+        auto cm = std::move(w).finish();
+        collection_mutation_view v = cm;
+
+        bytes expected(bytes::initialized_later(), 4);
+        int32_t count = 0;
+        auto append = [&] (managed_bytes_view b) {
+            bytes len(bytes::initialized_later(), 4);
+            write_be(reinterpret_cast<char*>(len.data()), int32_t(b.size_bytes()));
+            expected += len;
+            expected += to_bytes(b);
+        };
+        for (auto&& [key, cell] : v) {
+            if (cell.is_live(v.tomb(), false)) {
+                append(key);
+                if (is_map) {
+                    append(cell.value());
+                }
+                ++count;
+            }
+        }
+        write_be(reinterpret_cast<char*>(expected.data()), count);
+        BOOST_REQUIRE_EQUAL(to_bytes(serialize_for_cql(type, v).linearize()), expected);
+    }
+}
+
+// A truncated element cell must fail hashing as on the checked path, not be read past its end.
+SEASTAR_THREAD_TEST_CASE(test_collection_hash_truncated_cell) {
+    auto s = schema_builder(this_smp_shard_count(), some_keyspace, some_column_family)
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("s", set_type_impl::get_instance(long_type, true))
+            .build();
+    auto& def = *s->get_column_definition(to_bytes("s"));
+    auto check = [&] (const atomic_cell& cell, size_t len) {
+        collection_mutation_writer w({});
+        w.push_back(managed_bytes_view(long_type->decompose(int64_t(1))), atomic_cell_view::from_bytes(cell.serialize().prefix(len)));
+        auto cm = std::move(w).finish();
+        xx_hasher h;
+        BOOST_REQUIRE_THROW(feed_hash(h, collection_mutation_view(cm), def), marshal_exception);
+    };
+    check(atomic_cell::make_live(*empty_type, 1, bytes_view(), atomic_cell::collection_member::yes), 5);
+    check(atomic_cell::make_dead(1, gc_clock::now()), 12);
+    auto expiring = atomic_cell::make_live(*empty_type, 1, bytes_view(), gc_clock::now(), std::chrono::seconds(10), atomic_cell::collection_member::yes);
+    check(expiring, 12);
+    check(expiring, 18);
+}
+
+// compact_and_expire() returns a collection with nothing to compact unchanged,
+// and still compacts one with a single expired element or a covering tombstone.
+SEASTAR_THREAD_TEST_CASE(test_collection_compact_and_expire_unchanged) {
+    auto set_type = set_type_impl::get_instance(long_type, true);
+    const auto now = gc_clock::now();
+    auto make = [&] (int n, tombstone tomb, int expired_at) {
+        collection_mutation_writer w(tomb);
+        for (int i = 0; i < n; ++i) {
+            auto key = long_type->decompose(int64_t(i));
+            if (i == expired_at) {
+                w.push_back(managed_bytes_view(key), atomic_cell::make_live(*bytes_type, 10, bytes(), now - std::chrono::seconds(1), std::chrono::seconds(10), atomic_cell::collection_member::yes));
+            } else {
+                w.push_back(managed_bytes_view(key), atomic_cell::make_live(*bytes_type, 10, bytes(), atomic_cell::collection_member::yes));
+            }
+        }
+        return std::move(w).finish();
+    };
+    auto bytes_of = [] (collection_mutation_view v) { return managed_bytes(v.data); };
+    auto compact = [&] (const collection_mutation& m, row_tombstone base) {
+        return compact_and_expire(m, 0, *set_type, base, now, always_gc, gc_clock::time_point::min(), nullptr);
+    };
+
+    // 20000 elements span several fragments.
+    for (int n : {1, 100, 20000}) {
+        for (auto tomb : {tombstone(), tombstone(5, now)}) {
+            auto m = make(n, tomb, -1);
+            auto r = compact(m, row_tombstone());
+            BOOST_REQUIRE(bytes_of(r.collection) == bytes_of(m));
+            BOOST_REQUIRE_EQUAL(r.result.live_cells, n);
+            BOOST_REQUIRE_EQUAL(r.result.dead_cells, 0);
+            BOOST_REQUIRE_EQUAL(r.result.collection_tombstones, bool(tomb));
+
+            BOOST_REQUIRE(!compact_and_expire_if_changed(m, 0, *set_type, row_tombstone(), now, always_gc, gc_clock::time_point::min(), nullptr).collection);
+
+            auto expired = make(n, tomb, n / 2);
+            auto re = compact(expired, row_tombstone());
+            BOOST_REQUIRE(bytes_of(re.collection) != bytes_of(expired));
+            BOOST_REQUIRE_EQUAL(re.result.live_cells, n - 1);
+            BOOST_REQUIRE_EQUAL(re.result.dead_cells, 1);
+            // The unchanged leading run is copied verbatim; the rest is rebuilt.
+            int i = 0;
+            collection_mutation_view(re.collection).for_each_element([&] (managed_bytes_view key, atomic_cell_view cell) {
+                BOOST_REQUIRE(managed_bytes(key) == managed_bytes(long_type->decompose(int64_t(i))));
+                BOOST_REQUIRE_EQUAL(cell.is_live(), i != n / 2);
+                ++i;
+                return true;
+            });
+            BOOST_REQUIRE_EQUAL(i, n);
+
+            // A row tombstone newer than the elements covers all of them.
+            auto rc = compact(m, row_tombstone(tombstone(20, now)));
+            BOOST_REQUIRE_EQUAL(rc.result.live_cells, 0);
+            BOOST_REQUIRE_EQUAL(rc.result.dead_cells, n);
+        }
+    }
+}
+
+// merge() splices a small delta into a large collection; the result must be
+// byte-identical to the general merge, in both argument orders.
+SEASTAR_THREAD_TEST_CASE(test_collection_merge_into_large_equivalence) {
+    auto map_type = map_type_impl::get_instance(int32_type, bytes_type, true);
+    auto set_type = set_type_impl::get_instance(long_type, true);
+    std::mt19937 rng(tests::random::get_int<uint32_t>());
+    auto rnd = [&] (int n) { return int(rng() % n); };
+    const auto now = gc_clock::now();
+
+    auto make_cell = [&] (const abstract_type& value_type, api::timestamp_type ts) {
+        switch (rnd(6)) {
+        case 0:
+            return atomic_cell::make_dead(ts, now);
+        case 1:
+            return atomic_cell::make_live(value_type, ts, bytes(rnd(40), 'e'), now + std::chrono::seconds(rnd(100)), std::chrono::seconds(100), atomic_cell::collection_member::yes);
+        default:
+            return atomic_cell::make_live(value_type, ts, bytes(rnd(40), 'v'), atomic_cell::collection_member::yes);
+        }
+    };
+    auto make = [&] (bool is_map, const std::vector<int64_t>& keys, tombstone tomb) {
+        collection_mutation_writer w(tomb);
+        for (auto k : keys) {
+            auto key = is_map ? int32_type->decompose(int32_t(k)) : long_type->decompose(k);
+            w.push_back(managed_bytes_view(key), make_cell(*bytes_type, rnd(4)));
+        }
+        return std::move(w).finish();
+    };
+    auto rnd_tomb = [&] (int chance) { return rnd(chance) ? tombstone() : tombstone(rnd(4), now); };
+    auto bytes_of = [] (const collection_mutation& m) { return managed_bytes(collection_mutation_view(m).data); };
+
+    const auto saved = collection_fast_path_min_size;
+    auto restore = seastar::defer([saved] () noexcept { collection_fast_path_min_size = saved; });
+    for (int iter = 0; iter < 300; ++iter) {
+        const bool is_map = rnd(2);
+        const abstract_type& type = is_map ? static_cast<const abstract_type&>(*map_type) : *set_type;
+        // Every 50th large side spans several 128 KB fragments.
+        const int n_large = iter % 50 == 0 ? 20000 : rnd(500);
+        std::vector<int64_t> large_keys, small_keys;
+        for (int i = 0; i < n_large; ++i) {
+            large_keys.push_back(rnd(4 * n_large + 10));
+        }
+        for (int i = rnd(6); i > 0; --i) {
+            // Half of the small keys collide with large ones.
+            small_keys.push_back(rnd(2) && n_large ? large_keys[rnd(n_large)] : rnd(4 * n_large + 10));
+        }
+        for (auto* v : {&large_keys, &small_keys}) {
+            std::ranges::sort(*v);
+            v->erase(std::unique(v->begin(), v->end()), v->end());
+        }
+        auto large = make(is_map, large_keys, rnd_tomb(3));
+        auto small = make(is_map, small_keys, rnd_tomb(4));
+        for (bool large_first : {true, false}) {
+            auto& a = large_first ? large : small;
+            auto& b = large_first ? small : large;
+            collection_fast_path_min_size = std::numeric_limits<size_t>::max();
+            auto expected = merge(type, a, b);
+            collection_fast_path_min_size = 0;
+            auto got = merge(type, a, b);
+            BOOST_REQUIRE_MESSAGE(bytes_of(got) == bytes_of(expected), fmt::format("iter {} large_first {} n_large {} n_small {}", iter, large_first, large_keys.size(), small_keys.size()));
+        }
+    }
+}
+
+// A frozen collection cell must unfreeze to the same bytes, whatever the cell
+// kinds, the legacy 32-bit ttl encoding, or elements split across fragments.
+SEASTAR_THREAD_TEST_CASE(test_collection_freeze_unfreeze_round_trip) {
+    auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("ck", int32_type, column_kind::clustering_key)
+            .with_column("m", map_type_impl::get_instance(int32_type, bytes_type, true))
+            .with_column("sm", map_type_impl::get_instance(int32_type, bytes_type, true), column_kind::static_column)
+            .build();
+    const auto& def = *s->get_column_definition(to_bytes("m"));
+    const auto& sdef = *s->get_column_definition(to_bytes("sm"));
+    const auto ckey = clustering_key::from_single_value(*s, int32_type->decompose(int32_t(1)));
+    const auto now = gc_clock::now();
+    const bool saved = ser::gc_clock_using_3_1_0_serialization;
+    auto restore = seastar::defer([saved] () noexcept { ser::gc_clock_using_3_1_0_serialization = saved; });
+    for (bool v3_1 : {false, true}) {
+        ser::gc_clock_using_3_1_0_serialization = v3_1;
+        for (bool tomb : {false, true}) {
+            collection_mutation_writer w(tomb ? tombstone(5, now) : tombstone());
+            for (int i = 0; i < 2000; ++i) {
+                // A few large values force elements to straddle fragments.
+                auto value = bytes(i % 500 == 7 ? 200000 : i % 50, 'v');
+                auto cell = i % 3 == 0 ? atomic_cell::make_dead(10 + i, now)
+                        : i % 3 == 1 ? atomic_cell::make_live(*bytes_type, 10 + i, value, atomic_cell::collection_member::yes)
+                        : atomic_cell::make_live(*bytes_type, 10 + i, value, now + std::chrono::seconds(i), std::chrono::seconds(i + 1), atomic_cell::collection_member::yes);
+                w.push_back(managed_bytes_view(int32_type->decompose(int32_t(i))), std::move(cell));
+            }
+            // Many fixed-size elements end chunks exactly on element boundaries.
+            for (int i = 2000; i < 60000; ++i) {
+                w.push_back(managed_bytes_view(int32_type->decompose(int32_t(i))), atomic_cell::make_live(*bytes_type, 1, bytes_view(), atomic_cell::collection_member::yes));
+            }
+            auto cm = std::move(w).finish();
+            mutation m(s, partition_key::from_single_value(*s, int32_type->decompose(int32_t(0))));
+            m.set_clustered_cell(ckey, def, atomic_cell_or_collection(collection_mutation(collection_mutation_view(cm))));
+            m.set_static_cell(sdef, atomic_cell_or_collection(collection_mutation(collection_mutation_view(cm))));
+            auto fm = freeze(m);
+            // The gentle variants must encode and decode the same bytes.
+            BOOST_REQUIRE(freeze_gently(m).get().representation() == fm.representation());
+            for (auto back : {fm.unfreeze(s), unfreeze_gently(fm, s).get()}) {
+                const auto* row = back.partition().find_row(*s, ckey);
+                BOOST_REQUIRE(row);
+                const auto* cell = row->find_cell(def.id);
+                BOOST_REQUIRE(cell);
+                BOOST_REQUIRE(cell->as_collection_mutation().data == collection_mutation_view(cm).data);
+                const auto* scell = back.partition().static_row().find_cell(sdef.id);
+                BOOST_REQUIRE(scell);
+                BOOST_REQUIRE(scell->as_collection_mutation().data == collection_mutation_view(cm).data);
+            }
+            // The ordered path read repair uses (frozen_mutation::consume_gently).
+            mutation_rebuilder_v2 rebuilder(s);
+            auto rebuilt = fm.consume_gently(s, rebuilder).get().result;
+            BOOST_REQUIRE(rebuilt);
+            assert_that(std::move(*rebuilt)).is_equal_to(m);
+        }
+    }
+}
+
+// difference() skips the inputs' common prefix and suffix; the result must match the
+// element-by-element definition however much of a and b is common.
+SEASTAR_THREAD_TEST_CASE(test_collection_difference_equivalence) {
+    auto set_type = set_type_impl::get_instance(long_type, true);
+    std::mt19937 rng(tests::random::get_int<uint32_t>());
+    auto rnd = [&] (int n) { return int(rng() % n); };
+    const auto now = gc_clock::now();
+    using element = std::pair<bytes, atomic_cell>;
+
+    auto make_cell = [&] (api::timestamp_type ts) {
+        switch (rnd(6)) {
+        case 0: return atomic_cell::make_dead(ts, now);
+        case 1: return atomic_cell::make_live(*bytes_type, ts, bytes(rnd(40), 'e'), now + std::chrono::seconds(rnd(100)), std::chrono::seconds(100), atomic_cell::collection_member::yes);
+        default: return atomic_cell::make_live(*bytes_type, ts, bytes(rnd(40), 'v'), atomic_cell::collection_member::yes);
+        }
+    };
+    auto make = [&] (const std::vector<element>& elements, tombstone tomb) {
+        collection_mutation_writer w(tomb);
+        for (auto& [k, c] : elements) {
+            w.push_back(managed_bytes_view(k), atomic_cell_view(c));
+        }
+        return std::move(w).finish();
+    };
+    auto reference = [&] (const std::vector<element>& a, const std::vector<element>& b, tombstone ta, tombstone tb) {
+        std::vector<element> out;
+        for (auto& [k, c] : a) {
+            auto it = std::ranges::find_if(b, [&] (const element& e) { return e.first == k; });
+            if (it == b.end() || compare_atomic_cell_for_merge(atomic_cell_view(c), atomic_cell_view(it->second)) > 0) {
+                out.emplace_back(k, atomic_cell(*bytes_type, atomic_cell_view(c)));
+            }
+        }
+        return make(out, ta > tb ? ta : tombstone());
+    };
+    auto bytes_of = [] (const collection_mutation& m) { return managed_bytes(collection_mutation_view(m).data); };
+
+    const auto saved = collection_fast_path_min_size;
+    auto restore = seastar::defer([saved] () noexcept { collection_fast_path_min_size = saved; });
+    collection_fast_path_min_size = 0;
+    for (int iter = 0; iter < 300; ++iter) {
+        // Every 50th case spans several 128 KB fragments.
+        const int n = iter % 50 == 0 ? 20000 : rnd(300);
+        std::vector<int64_t> keys;
+        for (int i = 0; i < n; ++i) {
+            keys.push_back(rnd(4 * n + 10));
+        }
+        std::ranges::sort(keys);
+        keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
+        std::vector<element> a;
+        for (auto k : keys) {
+            a.emplace_back(long_type->decompose(k), make_cell(rnd(4)));
+        }
+        // b is a with a few elements changed, dropped or added, so the common prefix varies.
+        std::vector<element> b;
+        for (auto& [k, c] : a) {
+            b.emplace_back(k, atomic_cell(*bytes_type, atomic_cell_view(c)));
+        }
+        for (int edits = rnd(4); edits > 0 && !b.empty(); --edits) {
+            auto i = rnd(b.size());
+            switch (rnd(3)) {
+            case 0: b[i].second = make_cell(rnd(4)); break;
+            case 1: b.erase(b.begin() + i); break;
+            default: b.emplace_back(long_type->decompose(int64_t(4 * n + 10 + rnd(100))), make_cell(rnd(4)));
+            }
+        }
+        std::ranges::sort(b, [] (const element& x, const element& y) { return long_type->less(x.first, y.first); });
+        b.erase(std::unique(b.begin(), b.end(), [] (const element& x, const element& y) { return x.first == y.first; }), b.end());
+        const tombstone ta = rnd(3) ? tombstone() : tombstone(rnd(4), now);
+        const tombstone tb = rnd(3) ? tombstone() : tombstone(rnd(4), now);
+        auto expected = reference(a, b, ta, tb);
+        auto got = difference(*set_type, make(a, ta), make(b, tb));
+        BOOST_REQUIRE_MESSAGE(bytes_of(got) == bytes_of(expected), fmt::format("iter {} n {} b {}", iter, a.size(), b.size()));
+    }
+}
+
+// merge() of two near-identical collections with equal tombstones skips their
+// common parts; the result must match the general merge.
+SEASTAR_THREAD_TEST_CASE(test_collection_merge_near_identical_equivalence) {
+    auto set_type = set_type_impl::get_instance(long_type, true);
+    std::mt19937 rng(tests::random::get_int<uint32_t>());
+    auto rnd = [&] (int n) { return int(rng() % n); };
+    const auto now = gc_clock::now();
+    using element = std::pair<bytes, atomic_cell>;
+
+    auto make_cell = [&] (api::timestamp_type ts) {
+        switch (rnd(6)) {
+        case 0: return atomic_cell::make_dead(ts, now);
+        case 1: return atomic_cell::make_live(*bytes_type, ts, bytes(rnd(40), 'e'), now + std::chrono::seconds(rnd(100)), std::chrono::seconds(100), atomic_cell::collection_member::yes);
+        default: return atomic_cell::make_live(*bytes_type, ts, bytes(rnd(40), 'v'), atomic_cell::collection_member::yes);
+        }
+    };
+    auto make = [&] (const std::vector<element>& elements, tombstone tomb) {
+        collection_mutation_writer w(tomb);
+        for (auto& [k, c] : elements) {
+            w.push_back(managed_bytes_view(k), atomic_cell_view(c));
+        }
+        return std::move(w).finish();
+    };
+    auto bytes_of = [] (const collection_mutation& m) { return managed_bytes(collection_mutation_view(m).data); };
+
+    const auto saved = collection_fast_path_min_size;
+    auto restore = seastar::defer([saved] () noexcept { collection_fast_path_min_size = saved; });
+    for (int iter = 0; iter < 300; ++iter) {
+        // Every 50th case spans several 128 KB fragments.
+        const int n = iter % 50 == 0 ? 20000 : rnd(300);
+        std::vector<int64_t> keys;
+        for (int i = 0; i < n; ++i) {
+            keys.push_back(rnd(4 * n + 10));
+        }
+        std::ranges::sort(keys);
+        keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
+        std::vector<element> a;
+        for (auto k : keys) {
+            a.emplace_back(long_type->decompose(k), make_cell(rnd(4)));
+        }
+        std::vector<element> b;
+        for (auto& [k, c] : a) {
+            b.emplace_back(k, atomic_cell(*bytes_type, atomic_cell_view(c)));
+        }
+        for (int edits = rnd(4); edits > 0 && !b.empty(); --edits) {
+            auto i = rnd(b.size());
+            switch (rnd(3)) {
+            case 0: b[i].second = make_cell(rnd(4)); break;
+            case 1: b.erase(b.begin() + i); break;
+            default: b.emplace_back(long_type->decompose(int64_t(4 * n + 10 + rnd(100))), make_cell(rnd(4)));
+            }
+        }
+        std::ranges::sort(b, [] (const element& x, const element& y) { return long_type->less(x.first, y.first); });
+        b.erase(std::unique(b.begin(), b.end(), [] (const element& x, const element& y) { return x.first == y.first; }), b.end());
+        // Equal tombstones, sometimes covering some of the elements.
+        const tombstone t = rnd(3) ? tombstone() : tombstone(rnd(4), now);
+        auto ca = make(a, t);
+        auto cb = make(b, t);
+        collection_fast_path_min_size = std::numeric_limits<size_t>::max();
+        auto expected = merge(*set_type, ca, cb);
+        collection_fast_path_min_size = 0;
+        auto got = merge(*set_type, ca, cb);
+        BOOST_REQUIRE_MESSAGE(bytes_of(got) == bytes_of(expected), fmt::format("iter {} n {} b {} tomb {}", iter, a.size(), b.size(), t));
+    }
 }
 
 // Unit tests for collection_mutation_writer and collection_mutation_view::iterator,
@@ -3233,6 +3612,166 @@ SEASTAR_THREAD_TEST_CASE(test_appending_hash_row_4567) {
     // Additional test for making sure that {"", NULL, "bbb"} is not equal to {"", "bbb", NULL}
     // due to ignoring NULL in a hash
     BOOST_CHECK_NE(compute_hash(r2, { 0, 1, 2 }), compute_hash(r3, { 0, 1, 2 }));
+}
+
+// Collection cells are hashed through buffered_xx_hasher; the digest, fresh or
+// cached by prepare_hash(), must stay what per-cell xx_hasher produces.
+SEASTAR_THREAD_TEST_CASE(test_appending_hash_row_collection_digest) {
+    auto map_type = map_type_impl::get_instance(int32_type, bytes_type, true);
+    auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
+                     .with_column("pk", int32_type, column_kind::partition_key)
+                     .with_column("v", int32_type)
+                     .with_column("m", map_type)
+                     .with_column("e", map_type)
+                     .build();
+    auto& v_def = *s->get_column_definition(to_bytes("v"));
+    auto& m_def = *s->get_column_definition(to_bytes("m"));
+    auto& e_def = *s->get_column_definition(to_bytes("e"));
+
+    // The tombstone is older than every element, so none is shadowed.
+    collection_mutation_writer w(tombstone(-3000, gc_clock::now()));
+    // Large enough to overflow the hasher's 4 KB buffer several times.
+    // Live, dead and expiring elements; some times need more than 32 bits.
+    const auto far = gc_clock::time_point(gc_clock::duration(int64_t(1) << 33));
+    for (int32_t i = 0; i < 2000; ++i) {
+        const auto key_bytes = int32_type->decompose(i);
+        const auto key = managed_bytes_view(key_bytes);
+        switch (i % 5) {
+        case 0:
+            w.push_back(key, atomic_cell::make_dead(i, i % 2 ? far : gc_clock::now()));
+            break;
+        case 1:
+            w.push_back(key, atomic_cell::make_live(*bytes_type, i, bytes(i % 50, 'x'), i % 2 ? far : gc_clock::now() + std::chrono::seconds(100),
+                    std::chrono::seconds(100), atomic_cell::collection_member::yes));
+            break;
+        default:
+            w.push_back(key, atomic_cell::make_live(*bytes_type, -i, bytes(i % 50, 'x'), atomic_cell::collection_member::yes));
+        }
+    }
+    // A value of bypass_size (256 B) or more skips the buffer.
+    w.push_back(managed_bytes_view(int32_type->decompose(int32_t(2000))),
+            atomic_cell::make_live(*bytes_type, 2, bytes(10000, 'y'), atomic_cell::collection_member::yes));
+    row r;
+    r.apply(v_def, atomic_cell_or_collection(atomic_cell::make_live(*int32_type, 1, int32_type->decompose(7))));
+    r.apply(m_def, atomic_cell_or_collection(std::move(w).finish()));
+    // Tombstone only: finalized with nothing buffered.
+    r.apply(e_def, atomic_cell_or_collection(collection_mutation_writer(tombstone(5, gc_clock::now())).finish()));
+
+    const query::column_id_vector columns{v_def.id, m_def.id, e_def.id};
+    xx_hasher expected_h;
+    std::map<column_id, uint64_t> cell_digest;
+    {
+        xx_hasher cellh;
+        feed_hash(cellh, *r.find_cell(v_def.id), v_def);
+        cell_digest[v_def.id] = cellh.finalize_uint64();
+    }
+    // Walk the collections with the iterator, independently of appending_hash.
+    for (auto* def : {&m_def, &e_def}) {
+        auto cm = r.find_cell(def->id)->as_collection_mutation();
+        xx_hasher cellh;
+        feed_hash(cellh, cm.tomb());
+        for (auto&& [key, cell] : cm) {
+            feed_hash(cellh, key);
+            feed_hash(cellh, cell, *def);
+        }
+        cell_digest[def->id] = cellh.finalize_uint64();
+    }
+    for (auto* def : {&v_def, &m_def, &e_def}) {
+        feed_hash(expected_h, cell_digest[def->id]);
+    }
+    const auto expected = expected_h.finalize_uint64();
+
+    // The cell digests must not depend on the outer hasher.
+    auto digest = [&](auto h) {
+        max_timestamp ts;
+        appending_hash<row>{}(h, r, *s, column_kind::regular_column, columns, ts);
+        return h.finalize_uint64();
+    };
+    BOOST_REQUIRE_EQUAL(digest(xx_hasher()), expected);
+    BOOST_REQUIRE_EQUAL(digest(buffered_xx_hasher()), expected);
+    r.prepare_hash(*s, column_kind::regular_column);
+    for (auto* def : {&v_def, &m_def, &e_def}) {
+        auto cached = r.cell_hash_for(def->id);
+        BOOST_REQUIRE(cached);
+        BOOST_REQUIRE_EQUAL(cached->hash, cell_digest[def->id]);
+    }
+    BOOST_REQUIRE_EQUAL(digest(xx_hasher()), expected);
+    BOOST_REQUIRE_EQUAL(digest(buffered_xx_hasher()), expected);
+}
+
+// The hashing walk reports a collection's last_update(); check it on random collections,
+// including elements split across fragments (the fallback path) and cached cell hashes.
+SEASTAR_THREAD_TEST_CASE(test_collection_hash_last_update) {
+    auto map_type = map_type_impl::get_instance(int32_type, bytes_type, true);
+    auto s = schema_builder(this_smp_shard_count(), "ks", "cf").with_column("pk", int32_type, column_kind::partition_key).with_column("m", map_type).build();
+    auto& def = *s->get_column_definition(to_bytes("m"));
+    std::mt19937 rng(tests::random::get_int<uint32_t>());
+    auto rand_int = [&](int64_t lo, int64_t hi) {
+        return std::uniform_int_distribution<int64_t>(lo, hi)(rng);
+    };
+    bool saw_fragmented = false;
+    for (int iter = 0; iter < 50; ++iter) {
+        collection_mutation_writer w(rand_int(0, 1) ? tombstone(rand_int(-1000, 1000), gc_clock::now()) : tombstone());
+        const auto count = iter % 10 == 0 ? 0 : rand_int(1, 60);
+        for (int32_t i = 0; i < count; ++i) {
+            const auto key_bytes = int32_type->decompose(i);
+            const auto key = managed_bytes_view(key_bytes);
+            const auto ts = rand_int(-1000, 1000);
+            switch (rand_int(0, 3)) {
+            case 0:
+                w.push_back(key, atomic_cell::make_dead(ts, gc_clock::now()));
+                break;
+            case 1:
+                w.push_back(key, atomic_cell::make_live(*bytes_type, ts, bytes(rand_int(0, 20000), 'x'), gc_clock::now() + std::chrono::seconds(100),
+                                         std::chrono::seconds(100), atomic_cell::collection_member::yes));
+                break;
+            case 2:
+                // Counter updates always take the fallback path.
+                w.push_back(key, atomic_cell::make_live_counter_update(ts, i));
+                break;
+            default:
+                w.push_back(key, atomic_cell::make_live(*bytes_type, ts, bytes(rand_int(0, 20000), 'x'), atomic_cell::collection_member::yes));
+            }
+        }
+        row r;
+        r.apply(def, atomic_cell_or_collection(std::move(w).finish()));
+        auto cm = r.find_cell(def.id)->as_collection_mutation();
+        const auto expected_ts = cm.last_update(*def.type);
+
+        // Expected digest from an independent iterator walk.
+        xx_hasher cellh;
+        feed_hash(cellh, cm.tomb());
+        for (auto&& [key, cell] : cm) {
+            saw_fragmented |= cell.serialize().current_fragment().size() != cell.serialize().size_bytes();
+            feed_hash(cellh, key);
+            feed_hash(cellh, cell, def);
+        }
+        const auto expected_hash = cellh.finalize_uint64();
+
+        xx_hasher h;
+        api::timestamp_type ts = 0;
+        feed_hash(h, cm, def, &ts);
+        BOOST_REQUIRE_EQUAL(h.finalize_uint64(), expected_hash);
+        BOOST_REQUIRE_EQUAL(ts, expected_ts);
+
+        const query::column_id_vector columns{def.id};
+        xx_hasher expected_row_h;
+        feed_hash(expected_row_h, expected_hash);
+        const auto expected_row = expected_row_h.finalize_uint64();
+        auto check_row = [&](auto h) {
+            max_timestamp max_ts;
+            appending_hash<row>{}(h, r, *s, column_kind::regular_column, columns, max_ts);
+            BOOST_REQUIRE_EQUAL(h.finalize_uint64(), expected_row);
+            BOOST_REQUIRE_EQUAL(max_ts.max, expected_ts);
+        };
+        check_row(xx_hasher());
+        check_row(buffered_xx_hasher());
+        r.prepare_hash(*s, column_kind::regular_column);
+        BOOST_REQUIRE(r.cell_hash_for(def.id));
+        check_row(xx_hasher());
+        check_row(buffered_xx_hasher());
+    }
+    BOOST_REQUIRE(saw_fragmented);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_mutation_consume) {

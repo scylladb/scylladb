@@ -1485,13 +1485,14 @@ class per_destination_mutation : public mutation_holder {
     std::unordered_map<locator::host_id, lw_shared_ptr<const frozen_mutation>> _mutations;
     dht::token _token;
 public:
-    per_destination_mutation(const std::unordered_map<locator::host_id, std::optional<mutation>>& mutations) {
+    per_destination_mutation(const std::unordered_map<locator::host_id, std::optional<mutation>>& mutations,
+            const std::unordered_map<locator::host_id, lw_shared_ptr<const frozen_mutation>>& frozen) {
         for (auto&& m : mutations) {
             lw_shared_ptr<const frozen_mutation> fm;
             if (m.second) {
                 _schema = m.second.value().schema();
                 _token = m.second.value().token();
-                fm = make_lw_shared<const frozen_mutation>(freeze(m.second.value()));
+                fm = frozen.at(m.first);
                 _size += fm->representation().size();
             }
             _mutations.emplace(m.first, std::move(fm));
@@ -3413,6 +3414,8 @@ struct batchlog_replay_mutation {
 struct read_repair_mutation {
     std::unordered_map<locator::host_id, std::optional<mutation>> value;
     locator::effective_replication_map_ptr ermp;
+    // value, frozen gently ahead: a diff can hold a large collection.
+    std::unordered_map<locator::host_id, lw_shared_ptr<const frozen_mutation>> frozen;
 };
 
 }
@@ -4002,7 +4005,7 @@ storage_proxy::create_write_response_handler(const read_repair_mutation& mut, db
     const auto& m = mut.value;
     endpoints.reserve(m.size());
     std::ranges::copy(m | std::views::keys, std::inserter(endpoints, endpoints.begin()));
-    auto mh = std::make_unique<per_destination_mutation>(m);
+    auto mh = std::make_unique<per_destination_mutation>(m, mut.frozen);
 
     slogger.trace("creating write handler for read repair token: {} endpoint: {}", mh->token(), endpoints);
     tracing::trace(tr_state, "Creating write handler for read repair token: {} endpoint: {}", mh->token(), endpoints);
@@ -4980,16 +4983,20 @@ size_t storage_proxy::hint_to_dead_endpoints(std::unique_ptr<mutation_holder>& m
 future<result<>> storage_proxy::schedule_repair(locator::effective_replication_map_ptr ermp, mutations_per_partition_key_map diffs, db::consistency_level cl, tracing::trace_state_ptr trace_state,
                                         service_permit permit) {
     if (diffs.empty()) {
-        return make_ready_future<result<>>(bo::success());
+        co_return bo::success();
     }
     get_stats().read_repair_diff_found++;
-    return mutate_internal(
-            diffs |
-                    std::views::values |
-                    std::views::transform([ermp] (auto& v) { return read_repair_mutation{std::move(v), ermp}; }) |
-                    // The transform above is destructive, materialize into a vector to make the range re-iterable.
-                    std::ranges::to<std::vector<read_repair_mutation>>()
-            , cl, std::move(trace_state), std::move(permit));
+    std::vector<read_repair_mutation> mutations;
+    mutations.reserve(diffs.size());
+    for (auto& v : diffs | std::views::values) {
+        auto& rm = mutations.emplace_back(std::move(v), ermp);
+        for (auto& [ep, m] : rm.value) {
+            if (m) {
+                rm.frozen.emplace(ep, make_lw_shared<const frozen_mutation>(co_await freeze_gently(*m)));
+            }
+        }
+    }
+    co_return co_await mutate_internal(std::move(mutations), cl, std::move(trace_state), std::move(permit));
 }
 
 class abstract_read_resolver {
@@ -5734,7 +5741,7 @@ public:
         vec.reserve(_partition_count);
         for (auto it = reconciled_partitions.rbegin(); it != reconciled_partitions.rend(); it++) {
             const mutation_and_live_row_count& m_a_rc = *it;
-            vec.emplace_back(partition(m_a_rc.live_row_count, freeze(m_a_rc.mut)));
+            vec.emplace_back(partition(m_a_rc.live_row_count, co_await freeze_gently(m_a_rc.mut)));
             co_await coroutine::maybe_yield();
         }
 
