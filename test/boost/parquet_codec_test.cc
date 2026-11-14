@@ -597,7 +597,30 @@ SEASTAR_THREAD_TEST_CASE(test_file_metadata_round_trip) {
         sstables::file_writer fw(data_sink(std::make_unique<memory_data_sink>(bufs)));
         auto written = pq::write_file_metadata(md, fw);
         fw.close();
-        BOOST_REQUIRE_EQUAL(written, input.size());
+        BOOST_REQUIRE_EQUAL(written.size, input.size());
+        BOOST_REQUIRE_EQUAL(written.crc32, ::crc32(0, reinterpret_cast<const Bytef*>(input.data()), input.size()));
+        std::string out;
+        for (const auto& b : bufs.buffers()) {
+            out.append(b.get(), b.size());
+        }
+        BOOST_REQUIRE_EQUAL(out, input);
+    }
+
+    // Through a file_writer, with the row groups from a source.
+    {
+        auto header = md;
+        header.row_groups.clear();
+        size_t next = 0;
+        memory_data_sink_buffers bufs;
+        sstables::file_writer fw(data_sink(std::make_unique<memory_data_sink>(bufs)));
+        auto written = pq::write_file_metadata(header, md.row_groups.size(), [&] (size_t i) {
+            BOOST_REQUIRE_EQUAL(i, next++);
+            return md.row_groups[i];
+        }, fw);
+        fw.close();
+        BOOST_REQUIRE_EQUAL(next, md.row_groups.size());
+        BOOST_REQUIRE_EQUAL(written.size, input.size());
+        BOOST_REQUIRE_EQUAL(written.crc32, ::crc32(0, reinterpret_cast<const Bytef*>(input.data()), input.size()));
         std::string out;
         for (const auto& b : bufs.buffers()) {
             out.append(b.get(), b.size());
@@ -638,7 +661,8 @@ SEASTAR_THREAD_TEST_CASE(test_file_metadata_large) {
     sstables::file_writer fw(data_sink(std::make_unique<memory_data_sink>(bufs)));
     auto written = pq::write_file_metadata(md, fw);
     fw.close();
-    BOOST_REQUIRE_EQUAL(written, input.size());
+    BOOST_REQUIRE_EQUAL(written.size, input.size());
+    BOOST_REQUIRE_EQUAL(written.crc32, ::crc32(0, reinterpret_cast<const Bytef*>(input.data()), input.size()));
     std::string out;
     for (const auto& b : bufs.buffers()) {
         out.append(b.get(), b.size());
