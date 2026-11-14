@@ -6,6 +6,7 @@ import pytest
 import sys
 import requests
 import time
+import re
 
 # Use the util.py library from ../cqlpy:
 from ..cqlpy.util import unique_name, new_test_table, new_test_keyspace, new_materialized_view, new_secondary_index
@@ -1078,3 +1079,33 @@ def test_disable_autocompaction_doesnt_block_user_initiated_compactions(cql, thi
                 resp.raise_for_status()
 
                 wait_for_log(logfile, to_find, timeout=180)
+# The endpoints behind "nodetool describecluster" and "nodetool version".
+# Replaces the REST-level checks of dtest's TestNodetool::test_describecluster.
+def test_describecluster_endpoints(cql, rest_api):
+    local = cql.execute("SELECT cluster_name, partitioner, release_version, schema_version, broadcast_address FROM system.local").one()
+
+    resp = rest_api.send("GET", "storage_service/cluster_name")
+    resp.raise_for_status()
+    assert resp.json() == local.cluster_name
+
+    resp = rest_api.send("GET", "storage_service/partitioner_name")
+    resp.raise_for_status()
+    assert resp.json() == "org.apache.cassandra.dht.Murmur3Partitioner"
+    assert resp.json() == local.partitioner
+
+    resp = rest_api.send("GET", "storage_service/release_version")
+    resp.raise_for_status()
+    assert re.match(r"^\d+\.\d+", resp.json())
+    assert resp.json() == local.release_version
+
+    resp = rest_api.send("GET", "storage_service/scylla_release_version")
+    resp.raise_for_status()
+    assert re.match(r"^\d+\.\d+", resp.json())
+
+    resp = rest_api.send("GET", "storage_proxy/schema_versions")
+    resp.raise_for_status()
+    versions = resp.json()
+    # A single node agrees with itself.
+    assert len(versions) == 1, versions
+    assert versions[0]["key"] == str(local.schema_version)
+    assert versions[0]["value"] == [str(local.broadcast_address)]
