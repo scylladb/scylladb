@@ -202,6 +202,14 @@ utils::object_storage_bytes client::bytes() const {
     return total;
 }
 
+uint64_t client::get_requests() const {
+    uint64_t total = 0;
+    for (auto& [sg, gc] : _https) {
+        total += gc.http.get_stats()[httpd::GET].ops;
+    }
+    return total;
+}
+
 void client::report_object_storage_metrics(utils::object_storage_metrics_labels labels) {
     _object_storage_metrics_labels = std::move(labels);
     for (auto& [name, gc] : _pools) {
@@ -417,7 +425,13 @@ void client::register_client_metrics() {
     defs.emplace_back(sm::make_counter("unclassified_groups", [this] { return _unclassified_groups; },
             sm::description("Scheduling groups with no object_storage_connections entry, which fell back to the shared pool"), {ep_label}));
 
-    _client_metrics.add_group("s3", defs);
+    try {
+        _client_metrics.add_group("s3", defs);
+    } catch (const seastar::metrics::double_registration& e) {
+        // Same race as group_client::register_metrics: a prior client for this
+        // endpoint can still be referenced. Must not throw from the request path.
+        s3l.warn("Not reporting s3 client metrics for {}: {}", _host, e.what());
+    }
 }
 
 client::group_client& client::find_or_create_client() {
