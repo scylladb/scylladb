@@ -1152,6 +1152,8 @@ where_clause_analysis::prepare_where_clause(
                 if (!functions::as_external_search_function(*fc)) {
                     on_internal_error(rlogger, "statement_restrictions: external function in WHERE is not a search function");
                 }
+                // The search call's own arguments are checked where the search is planned.
+                expr::verify_no_aggregate_or_search_functions(prepared_restriction.rhs, "WHERE clause");
                 result.scoring_functions.push_back(std::move(prepared_restriction));
                 continue;
             }
@@ -1162,6 +1164,9 @@ where_clause_analysis::prepare_where_clause(
                     "Only the token function and scoring functions are supported in function-call restrictions");
             }
         }
+        // Not a search relation, so a search function may appear nowhere in it, not even in a
+        // subscript of the left-hand side.
+        expr::verify_no_aggregate_or_search_functions(prepared_restriction, "WHERE clause");
         auto preds = to_predicates(prepared_restriction, schema.get());
         result.predicates.insert(result.predicates.end(),
                 std::make_move_iterator(preds.begin()), std::make_move_iterator(preds.end()));

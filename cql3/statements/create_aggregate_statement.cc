@@ -71,7 +71,7 @@ seastar::future<shared_ptr<db::functions::function>> create_aggregate_statement:
         auto dummy_ident = ::make_shared<column_identifier>("", true);
         auto column_spec = make_lw_shared<column_specification>("", "", dummy_ident, state_type);
         auto initcond_expr = prepare_expression(_ival.value(), db, _name.keyspace, nullptr, {column_spec});
-        expr::verify_no_aggregate_functions(initcond_expr, "INITCOND clause");
+        expr::verify_no_aggregate_or_search_functions(initcond_expr, "INITCOND clause");
         auto initcond_term = expr::evaluate(initcond_expr, query_options::DEFAULT);
         initcond = std::move(initcond_term).to_managed_bytes_opt();
     }
