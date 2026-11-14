@@ -43,44 +43,53 @@ void cql_server::event_notifier::unregister_connection(cql_server::connection* c
 
 void cql_server::event_notifier::on_create_keyspace(const sstring& ks_name)
 {
+    using namespace cql_transport;
+    event::schema_change evt{
+        event::schema_change::change_type::CREATED,
+        event::schema_change::target_type::KEYSPACE,
+        ks_name
+    };
+    shared_event_cache<uint8_t> cache;
     for (auto&& conn : _schema_change_listeners) {
-        using namespace cql_transport;
         if (!conn->_pending_requests_gate.is_closed()) {
-            conn->write_response(conn->make_schema_change_event(event::schema_change{
-                event::schema_change::change_type::CREATED,
-                event::schema_change::target_type::KEYSPACE,
-                ks_name
-            }));
+            conn->write_shared_response(get_or_make_shared_event(cache, conn->_version,
+                [&] { return conn->make_schema_change_event(evt); }));
         };
     }
 }
 
 void cql_server::event_notifier::on_create_column_family(const sstring& ks_name, const sstring& cf_name)
 {
+    using namespace cql_transport;
+    event::schema_change evt{
+        event::schema_change::change_type::CREATED,
+        event::schema_change::target_type::TABLE,
+        ks_name,
+        cf_name
+    };
+    shared_event_cache<uint8_t> cache;
     for (auto&& conn : _schema_change_listeners) {
-        using namespace cql_transport;
         if (!conn->_pending_requests_gate.is_closed()) {
-            conn->write_response(conn->make_schema_change_event(event::schema_change{
-                event::schema_change::change_type::CREATED,
-                event::schema_change::target_type::TABLE,
-                ks_name,
-                cf_name
-            }));
+            conn->write_shared_response(get_or_make_shared_event(cache, conn->_version,
+                [&] { return conn->make_schema_change_event(evt); }));
         };
     }
 }
 
 void cql_server::event_notifier::on_create_user_type(const sstring& ks_name, const sstring& type_name)
 {
+    using namespace cql_transport;
+    event::schema_change evt{
+        event::schema_change::change_type::CREATED,
+        event::schema_change::target_type::TYPE,
+        ks_name,
+        type_name
+    };
+    shared_event_cache<uint8_t> cache;
     for (auto&& conn : _schema_change_listeners) {
-        using namespace cql_transport;
         if (!conn->_pending_requests_gate.is_closed()) {
-            conn->write_response(conn->make_schema_change_event(event::schema_change{
-                event::schema_change::change_type::CREATED,
-                event::schema_change::target_type::TYPE,
-                ks_name,
-                type_name
-            }));
+            conn->write_shared_response(get_or_make_shared_event(cache, conn->_version,
+                [&] { return conn->make_schema_change_event(evt); }));
         };
     }
 }
@@ -102,44 +111,53 @@ void cql_server::event_notifier::on_create_aggregate(const sstring& ks_name, con
 
 void cql_server::event_notifier::on_update_keyspace(const sstring& ks_name)
 {
+    using namespace cql_transport;
+    event::schema_change evt{
+        event::schema_change::change_type::UPDATED,
+        event::schema_change::target_type::KEYSPACE,
+        ks_name
+    };
+    shared_event_cache<uint8_t> cache;
     for (auto&& conn : _schema_change_listeners) {
-        using namespace cql_transport;
         if (!conn->_pending_requests_gate.is_closed()) {
-            conn->write_response(conn->make_schema_change_event(event::schema_change{
-                event::schema_change::change_type::UPDATED,
-                event::schema_change::target_type::KEYSPACE,
-                ks_name
-            }));
+            conn->write_shared_response(get_or_make_shared_event(cache, conn->_version,
+                [&] { return conn->make_schema_change_event(evt); }));
         };
     }
 }
 
 void cql_server::event_notifier::on_update_column_family(const sstring& ks_name, const sstring& cf_name, bool columns_changed)
 {
+    using namespace cql_transport;
+    event::schema_change evt{
+        event::schema_change::change_type::UPDATED,
+        event::schema_change::target_type::TABLE,
+        ks_name,
+        cf_name
+    };
+    shared_event_cache<uint8_t> cache;
     for (auto&& conn : _schema_change_listeners) {
-        using namespace cql_transport;
         if (!conn->_pending_requests_gate.is_closed()) {
-            conn->write_response(conn->make_schema_change_event(event::schema_change{
-                event::schema_change::change_type::UPDATED,
-                event::schema_change::target_type::TABLE,
-                ks_name,
-                cf_name
-            }));
+            conn->write_shared_response(get_or_make_shared_event(cache, conn->_version,
+                [&] { return conn->make_schema_change_event(evt); }));
         };
     }
 }
 
 void cql_server::event_notifier::on_update_user_type(const sstring& ks_name, const sstring& type_name)
 {
+    using namespace cql_transport;
+    event::schema_change evt{
+        event::schema_change::change_type::UPDATED,
+        event::schema_change::target_type::TYPE,
+        ks_name,
+        type_name
+    };
+    shared_event_cache<uint8_t> cache;
     for (auto&& conn : _schema_change_listeners) {
-        using namespace cql_transport;
         if (!conn->_pending_requests_gate.is_closed()) {
-            conn->write_response(conn->make_schema_change_event(event::schema_change{
-                event::schema_change::change_type::UPDATED,
-                event::schema_change::target_type::TYPE,
-                ks_name,
-                type_name
-            }));
+            conn->write_shared_response(get_or_make_shared_event(cache, conn->_version,
+                [&] { return conn->make_schema_change_event(evt); }));
         };
     }
 }
@@ -161,44 +179,53 @@ void cql_server::event_notifier::on_update_aggregate(const sstring& ks_name, con
 
 void cql_server::event_notifier::on_drop_keyspace(const sstring& ks_name)
 {
+    using namespace cql_transport;
+    event::schema_change evt{
+        event::schema_change::change_type::DROPPED,
+        event::schema_change::target_type::KEYSPACE,
+        ks_name
+    };
+    shared_event_cache<uint8_t> cache;
     for (auto&& conn : _schema_change_listeners) {
-        using namespace cql_transport;
         if (!conn->_pending_requests_gate.is_closed()) {
-            conn->write_response(conn->make_schema_change_event(event::schema_change{
-                event::schema_change::change_type::DROPPED,
-                event::schema_change::target_type::KEYSPACE,
-                ks_name
-            }));
+            conn->write_shared_response(get_or_make_shared_event(cache, conn->_version,
+                [&] { return conn->make_schema_change_event(evt); }));
         };
     }
 }
 
 void cql_server::event_notifier::on_drop_column_family(const sstring& ks_name, const sstring& cf_name)
 {
+    using namespace cql_transport;
+    event::schema_change evt{
+        event::schema_change::change_type::DROPPED,
+        event::schema_change::target_type::TABLE,
+        ks_name,
+        cf_name
+    };
+    shared_event_cache<uint8_t> cache;
     for (auto&& conn : _schema_change_listeners) {
-        using namespace cql_transport;
         if (!conn->_pending_requests_gate.is_closed()) {
-            conn->write_response(conn->make_schema_change_event(event::schema_change{
-                event::schema_change::change_type::DROPPED,
-                event::schema_change::target_type::TABLE,
-                ks_name,
-                cf_name
-            }));
+            conn->write_shared_response(get_or_make_shared_event(cache, conn->_version,
+                [&] { return conn->make_schema_change_event(evt); }));
         };
     }
 }
 
 void cql_server::event_notifier::on_drop_user_type(const sstring& ks_name, const sstring& type_name)
 {
+    using namespace cql_transport;
+    event::schema_change evt{
+        event::schema_change::change_type::DROPPED,
+        event::schema_change::target_type::TYPE,
+        ks_name,
+        type_name
+    };
+    shared_event_cache<uint8_t> cache;
     for (auto&& conn : _schema_change_listeners) {
-        using namespace cql_transport;
         if (!conn->_pending_requests_gate.is_closed()) {
-            conn->write_response(conn->make_schema_change_event(event::schema_change{
-                event::schema_change::change_type::DROPPED,
-                event::schema_change::target_type::TYPE,
-                ks_name,
-                type_name
-            }));
+            conn->write_shared_response(get_or_make_shared_event(cache, conn->_version,
+                [&] { return conn->make_schema_change_event(evt); }));
         };
     }
 }
@@ -246,20 +273,26 @@ void cql_server::event_notifier::on_join_cluster(const gms::inet_address& endpoi
 
 void cql_server::event_notifier::send_join_cluster(const gms::inet_address& endpoint)
 {
+    using namespace cql_transport;
+    shared_event_cache<std::pair<uint8_t, uint16_t>> cache;
     for (auto&& conn : _topology_change_listeners) {
-        using namespace cql_transport;
         if (!conn->_pending_requests_gate.is_closed()) {
-            conn->write_response(conn->make_topology_change_event(event::topology_change::new_node(endpoint, conn->_server_addr.port())));
+            auto key = std::make_pair(conn->_version, conn->_server_addr.port());
+            conn->write_shared_response(get_or_make_shared_event(cache, key,
+                [&] { return conn->make_topology_change_event(event::topology_change::new_node(endpoint, conn->_server_addr.port())); }));
         };
     }
 }
 
 void cql_server::event_notifier::on_leave_cluster(const gms::inet_address& endpoint, const locator::host_id& hid)
 {
+    using namespace cql_transport;
+    shared_event_cache<std::pair<uint8_t, uint16_t>> cache;
     for (auto&& conn : _topology_change_listeners) {
-        using namespace cql_transport;
         if (!conn->_pending_requests_gate.is_closed()) {
-            conn->write_response(conn->make_topology_change_event(event::topology_change::removed_node(endpoint, conn->_server_addr.port())));
+            auto key = std::make_pair(conn->_version, conn->_server_addr.port());
+            conn->write_shared_response(get_or_make_shared_event(cache, key,
+                [&] { return conn->make_topology_change_event(event::topology_change::removed_node(endpoint, conn->_server_addr.port())); }));
         };
     }
 }
@@ -273,10 +306,13 @@ void cql_server::event_notifier::on_up(const gms::inet_address& endpoint, locato
     bool was_up = _last_status_change.contains(endpoint) && _last_status_change.at(endpoint) == event::status_change::status_type::UP;
     _last_status_change[endpoint] = event::status_change::status_type::UP;
     if (!was_up) {
+        using namespace cql_transport;
+        shared_event_cache<std::pair<uint8_t, uint16_t>> cache;
         for (auto&& conn : _status_change_listeners) {
-            using namespace cql_transport;
             if (!conn->_pending_requests_gate.is_closed()) {
-                conn->write_response(conn->make_status_change_event(event::status_change::node_up(endpoint, conn->_server_addr.port())));
+                auto key = std::make_pair(conn->_version, conn->_server_addr.port());
+                conn->write_shared_response(get_or_make_shared_event(cache, key,
+                    [&] { return conn->make_status_change_event(event::status_change::node_up(endpoint, conn->_server_addr.port())); }));
             };
         }
     }
@@ -287,10 +323,13 @@ void cql_server::event_notifier::on_down(const gms::inet_address& endpoint, loca
     bool was_down = _last_status_change.contains(endpoint) && _last_status_change.at(endpoint) == event::status_change::status_type::DOWN;
     _last_status_change[endpoint] = event::status_change::status_type::DOWN;
     if (!was_down) {
+        using namespace cql_transport;
+        shared_event_cache<std::pair<uint8_t, uint16_t>> cache;
         for (auto&& conn : _status_change_listeners) {
-            using namespace cql_transport;
             if (!conn->_pending_requests_gate.is_closed()) {
-                conn->write_response(conn->make_status_change_event(event::status_change::node_down(endpoint, conn->_server_addr.port())));
+                auto key = std::make_pair(conn->_version, conn->_server_addr.port());
+                conn->write_shared_response(get_or_make_shared_event(cache, key,
+                    [&] { return conn->make_status_change_event(event::status_change::node_down(endpoint, conn->_server_addr.port())); }));
             };
         }
     }
@@ -298,10 +337,13 @@ void cql_server::event_notifier::on_down(const gms::inet_address& endpoint, loca
 
 void cql_server::event_notifier::on_client_routes_change(const service::client_routes_service::client_route_keys& client_route_keys)
 {
+    using namespace cql_transport;
+    event::client_routes_change evt{client_route_keys};
+    shared_event_cache<uint8_t> cache;
     for (auto&& conn : _client_routes_change_listeners) {
-        using namespace cql_transport;
         if (!conn->_pending_requests_gate.is_closed()) {
-            conn->write_response(conn->make_client_routes_change_event(event::client_routes_change{client_route_keys}));
+            conn->write_shared_response(get_or_make_shared_event(cache, conn->_version,
+                [&] { return conn->make_client_routes_change_event(evt); }));
         };
     }
 }
