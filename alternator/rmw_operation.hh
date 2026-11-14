@@ -127,6 +127,16 @@ public:
             stats& per_table_stats,
             uint64_t& wcu_total);
     std::optional<service::cas_shard> shard_for_execute(bool needs_read_before_write);
+    // When the alternator_force_read_before_write option is enabled, an
+    // UpdateItem or DeleteItem which doesn't need to read the item still
+    // reads it before writing, only to calculate its WCU, which depends on
+    // the size of the old item. This read isn't part of the operation, so
+    // it is done separately, without LWT, as BatchWriteItem does, and the
+    // operation remains a write-only operation for its write isolation
+    // policy. Returns an error if the read failed.
+    future<std::optional<api_error>> read_previous_item_size(service::storage_proxy& proxy,
+            service::client_state& client_state, service_permit permit,
+            stats& global_stats, stats& per_table_stats);
 
 private:
     inline bool should_fill_preimage() const { return _schema->cdc_options().enabled(); }
