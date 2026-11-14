@@ -21,7 +21,6 @@ Use --manual for a dry run which prints cqlsh instructions instead of taking the
 from __future__ import annotations
 
 import argparse
-import csv
 import os
 import os.path
 import shutil
@@ -31,94 +30,23 @@ import shlex
 import sys
 import time
 from pathlib import Path
-from typing import Any, Callable, Generator, Sequence
+from typing import Generator
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from tablets.topology import CSV_DELIMITER
-from tablets.topology import Column
-from tablets.topology import SNAPSHOT_TABLES
-from tablets.topology import SnapshotTable
 from tablets.topology import add_topology_source_args
-from tablets.topology import get_live_topology_source_from_args
-
-
-def _format_field(value: Any, format_value: Callable[[Any], str]) -> str:
-    """
-    Renders one field; a null becomes the empty field reading takes for one.
-    """
-    if value is None:
-        return ""
-    return format_value(value)
-
-
-def _write_query_rows(path: str, rows, columns: Sequence[Column]) -> None:
-    """
-    Writes driver rows of a system table to a CSV dump.
-
-    Every column is written, not only the ones read back. Columns needing more than str() to
-    render say so in their Column.format.
-    """
-    formats = {column.name: column.format for column in columns}
-    with open(path, "w", newline="") as f:
-        writer = csv.writer(f, delimiter=CSV_DELIMITER)
-        if not rows:
-            return
-        fields = list(rows[0]._fields)
-        writer.writerow(fields)
-        for row in rows:
-            writer.writerow([
-                _format_field(getattr(row, field), formats.get(field, str))
-                for field in fields
-            ])
-
-
-def write_snapshot(snapshot_dir: str, src) -> None:
-    """
-    Writes a snapshot in a CSV format compatible with cqlsh COPY when used with
-    DELIMITER=';' and HEADER=TRUE.
-
-    ``snapshot_dir`` must already exist; the caller creates it atomically to claim
-    the name (see :func:`create_snapshot_dir`).
-
-    Read back by the csv module with the same quoting, so a field containing the delimiter
-    survives instead of splitting its row.
-    """
-    # All issued before any is awaited, so they run concurrently.
-    pending = {table: src.session.execute_async(src.queries[table]) for table in SNAPSHOT_TABLES}
-
-    for table, result in pending.items():
-        rows = list(result.result())
-        _write_query_rows(os.path.join(snapshot_dir, table.file), rows, table.columns)
+from tablets.topology import cqlsh_copy_commands
+from tablets.topology import dump_with_cqlsh
 
 
 def print_manual_snapshot_instructions(args: argparse.Namespace, snapshot_dir: str) -> None:
     """
-    Prints cqlsh commands that can be used to create a compatible snapshot manually.
+    Prints the cqlsh commands which take the snapshot, the same ones a direct capture runs.
     """
-
-    cqlsh_args = []
-    if args.user:
-        cqlsh_args.extend(["-u", args.user])
-    if args.password:
-        cqlsh_args.extend(["-p", args.password])
-    # cqlsh takes host then port positionally, so a port needs a host ahead of it.
-    if args.cluster or args.port:
-        cqlsh_args.append(args.cluster or "127.0.0.1")
-    if args.port:
-        cqlsh_args.append(str(args.port))
-
-    cqlsh_prefix = " ".join(["cqlsh"] + [shlex.quote(arg) for arg in cqlsh_args])
-
-    def copy_cmd(table: SnapshotTable) -> str:
-        query = (f"COPY {table.name} TO '{snapshot_dir}/{table.file}'"
-                 f" WITH DELIMITER='{CSV_DELIMITER}' AND HEADER=TRUE")
-        return f"{cqlsh_prefix} -e {shlex.quote(query)}"
-
     print(f"mkdir -p {shlex.quote(snapshot_dir)}")
-    for table in SNAPSHOT_TABLES:
-        print(copy_cmd(table))
+    for _, cmd in cqlsh_copy_commands(args, snapshot_dir):
+        print(shlex.join(cmd))
     if getattr(args, "gz", False):
         quoted_dir = shlex.quote(snapshot_dir)
         print(f"tar -czf {shlex.quote(archive_path_for(snapshot_dir))} {quoted_dir} && rm -r {quoted_dir}")
@@ -219,8 +147,7 @@ def take_snapshot(args: argparse.Namespace, workdir: Path = Path(".")) -> Path:
     process-global, so moving it would be seen by everything else in the process.
     """
     snapshot_dir = create_snapshot_dir(args.output_dir, gz=args.gz, workdir=workdir)
-    with get_live_topology_source_from_args(args) as src:
-        write_snapshot(snapshot_dir, src)
+    dump_with_cqlsh(args, snapshot_dir)
     return Path(pack_snapshot(snapshot_dir) if args.gz else snapshot_dir)
 
 

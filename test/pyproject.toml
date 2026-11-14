@@ -5,10 +5,10 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 
-# Python dependencies required to run test.py.
+# Python dependencies required to run test.py, and pgo/train.
 #
-# scylla-driver's pin here is intentionally independent of both
-# tools/cqlsh/requirements.txt and install-dependencies.sh: test.py syncs
+# scylla-driver's pin here is intentionally independent of
+# tools/cqlsh/requirements.txt (the toolchain has no driver): test.py syncs
 # this environment itself on startup (see _ensure_running_under_uv() in
 # test.py), so bumping the version here takes effect immediately and does
 # not require rebuilding the frozen toolchain image.

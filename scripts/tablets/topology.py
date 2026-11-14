@@ -45,9 +45,11 @@ import argparse
 import csv
 import io
 import os
+import subprocess
 import sys
 import re
 import tarfile
+import tempfile
 import uuid
 from abc import ABC, abstractmethod
 from collections import Counter, defaultdict
@@ -185,7 +187,7 @@ def iter_token_fractions(tablets: Sequence[Tablet]) -> Iterator[Tuple[Tablet, fl
 
 def parse_bool(value: str | bool) -> bool:
     """
-    Parses a boolean column, which the CQL driver yields as a bool and a dump as its text.
+    Parses a boolean column from a dump's text.
     """
     return value if isinstance(value, bool) else str(value).strip().lower() == "true"
 
@@ -233,30 +235,6 @@ def parse_host_set(value: str) -> List[HostId]:
     return [_parse_id(host) for host in _UUID_RE.findall(value or "")]
 
 
-def format_replica_list(replicas: ReplicaList) -> str:
-    """
-    Renders tablet replicas back to the form parse_replica_list() reads, e.g.
-    [(UUID('35d5e1a4-...'), 2)] to "{(35d5e1a4-a3e8-4d33-84c9-2b6f1a0c9e77, 2)}".
-    """
-    return "{" + ", ".join(f"({host}, {shard})" for host, shard in replicas) + "}"
-
-
-def format_host_set(hosts: Iterable[HostId]) -> str:
-    """
-    Renders host ids back to the form parse_host_set() reads, e.g.
-    [UUID('35d5e1a4-...')] to "{35d5e1a4-a3e8-4d33-84c9-2b6f1a0c9e77}".
-    """
-    return "{" + ", ".join(str(host) for host in hosts) + "}"
-
-
-def format_replica_size_map(sizes: Dict[HostId, int]) -> str:
-    """
-    Renders per-replica tablet sizes back to the form parse_replica_size_map() reads, e.g.
-    {UUID('35d5e1a4-...'): 18006543} to "{35d5e1a4-a3e8-4d33-84c9-2b6f1a0c9e77: 18006543}".
-    """
-    return "{" + ", ".join(f"{host}: {size}" for host, size in sizes.items()) + "}"
-
-
 @dataclass(frozen=True)
 class Column:
     """
@@ -264,10 +242,8 @@ class Column:
     """
 
     name: str
-    # Text form to the value type the CQL driver yields. Never called with a null value.
+    # Text form to the value type Topology works with. Never called with a null value.
     parse: Callable[[str], object]
-    # Inverse of parse(), for snapshot.py to dump. Never called with a null value.
-    format: Callable[[object], str] = str
     # A missing required column fails the build; a missing optional one reads as None.
     required: bool = True
 
@@ -277,8 +253,8 @@ TABLETS_COLUMNS = (
     Column("keyspace_name", str),
     Column("table_name", str),
     Column("last_token", int),
-    Column("replicas", parse_replica_list, format_replica_list),
-    Column("new_replicas", parse_replica_list, format_replica_list),
+    Column("replicas", parse_replica_list),
+    Column("new_replicas", parse_replica_list),
     Column("stage", str),
     Column("base_table", parse_uuid, required=False),
 )
@@ -311,10 +287,10 @@ LOAD_PER_NODE_COLUMNS = (
 TABLET_SIZES_COLUMNS = (
     Column("table_id", parse_uuid),
     Column("last_token", int),
-    Column("replicas", parse_replica_size_map, format_replica_size_map),
+    Column("replicas", parse_replica_size_map),
     # Replicas the server has no size for yet, e.g. one which has just been migrated to.
     # Optional, so a snapshot taken before the column existed still reads.
-    Column("missing_replicas", parse_host_set, format_host_set, required=False),
+    Column("missing_replicas", parse_host_set, required=False),
 )
 
 
@@ -342,12 +318,11 @@ TABLET_SIZES_TABLE = SnapshotTable("system.tablet_sizes", "system_tablet_sizes.c
 SNAPSHOT_TABLES = (TOPOLOGY_TABLE, TABLETS_TABLE, LOAD_PER_NODE_TABLE, TABLET_SIZES_TABLE)
 
 
-# A row with column values as attributes, as the CQL driver returns them. Columns the source
-# does not have read as None.
+# A row with column values as attributes. Columns the source does not have read as None.
 Row = SimpleNamespace
 
-# Dumps are CSV with a header, as snapshot.py and "cqlsh COPY ... WITH DELIMITER=';' AND
-# HEADER=TRUE" write them. Not a comma: collection values are full of those.
+# Dumps are CSV with a header, as "cqlsh COPY ... WITH DELIMITER=';' AND HEADER=TRUE" writes
+# them. Not a comma: collection values are full of those.
 CSV_DELIMITER = ";"
 
 # How a dump may spell a null.
@@ -379,8 +354,7 @@ def rows_from_csv(lines: Iterable[str], columns: Sequence[Column]) -> Iterator[R
     """
     Converts a dump of a system table into rows in CQL shape, lazily, a row at a time.
 
-    Values are parsed into the types the driver would have yielded, columns located by name,
-    quoting the csv module's, matching snapshot.py's writer.
+    Values are parsed by their Column.parse, columns located by name, quoting the csv module's.
 
     Raises:
         Exception: see _csv_column_indexes().
@@ -405,15 +379,6 @@ def rows_from_csv(lines: Iterable[str], columns: Sequence[Column]) -> Iterator[R
             value = row[idx] if idx is not None else ""
             values[column.name] = None if value in CSV_NULLS else column.parse(value)
         yield Row(**values)
-
-
-def rows_from_cql(rows: Iterable, columns: Sequence[Column]) -> Iterator[Row]:
-    """
-    Adapts driver rows to the row shape Topology is built from, filling in columns the cluster
-    does not have, as a snapshot's missing ones are filled in.
-    """
-    for row in rows:
-        yield Row(**{column.name: getattr(row, column.name, None) for column in columns})
 
 
 @dataclass
@@ -562,7 +527,7 @@ class Topology:
     def _build(self, rows_by_table: Dict[str, Iterable[Row]]) -> None:
         """
         Builds this topology from rows of the system tables, keyed by table name, as
-        rows_from_cql() and rows_from_csv() yield them. A table left out contributes nothing.
+        rows_from_csv() yields them. A table left out contributes nothing.
         Each is consumed in a single forward pass, so a source may stream it.
         """
         # Nodes first, so the tablets pass has nothing left to work out about them.
@@ -676,7 +641,6 @@ class Topology:
         See report_missing_tablet_sizes(), which a report calls to say so.
         """
         for row in rows:
-            # dict() because the driver's own map type would not compare equal to a dump's.
             self._tablet_sizes[(row.table_id, row.last_token)] = dict(row.replicas or {})
             for host_id in row.missing_replicas or ():
                 self._missing_tablet_sizes.add((row.table_id, row.last_token, host_id))
@@ -930,31 +894,90 @@ class TopologyFromSnapshot(TopologySource):
         return False
 
 
+# The cqlsh which --cluster runs. scylla-server doesn't bundle a CQL driver, so a live cluster
+# is read the way --manual tells a user to: by dumping the system tables with cqlsh COPY.
+CQLSH = "cqlsh"
+# Installed, this package is <prefix>/lib-python/tablets and cqlsh is in <prefix>/share/cassandra/bin,
+# which a --nonroot install doesn't put on PATH. dump_with_cqlsh() looks there after PATH.
+INSTALLED_CQLSH_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                                    "..", "..", "share", "cassandra", "bin"))
+
+
+def cqlsh_copy_commands(args: argparse.Namespace, snapshot_dir: str) -> List[Tuple[SnapshotTable, List[str]]]:
+    """
+    Returns the cqlsh commands which dump each system table a snapshot holds into snapshot_dir.
+    """
+    cqlsh_args = []
+    if args.user:
+        cqlsh_args.extend(["-u", args.user])
+    if args.password:
+        cqlsh_args.extend(["-p", args.password])
+    # cqlsh takes host then port positionally, so a port needs a host ahead of it.
+    if args.cluster or args.port:
+        cqlsh_args.append(args.cluster or "127.0.0.1")
+    if args.port:
+        cqlsh_args.append(str(args.port))
+
+    def copy_to(table: SnapshotTable) -> str:
+        # The filename is a CQL string literal, so an apostrophe in it is doubled.
+        path = os.path.join(snapshot_dir, table.file).replace("'", "''")
+        # CONFIGFILE='/dev/null' makes COPY ignore the [copy] sections of the user's cqlshrc,
+        # whose options (e.g. thousandssep) would change the format the reader expects.
+        return (f"COPY {table.name} TO '{path}'"
+                f" WITH DELIMITER='{CSV_DELIMITER}' AND HEADER=TRUE AND CONFIGFILE='/dev/null'")
+
+    return [(table, [CQLSH, *cqlsh_args, "-e", copy_to(table)]) for table in SNAPSHOT_TABLES]
+
+
+def dump_with_cqlsh(args: argparse.Namespace, snapshot_dir: str) -> None:
+    """
+    Runs cqlsh_copy_commands(), all at once. A table which fails to dump, e.g. one an older
+    cluster lacks, is reported and left out, as a snapshot may lack any but system.tablets.
+
+    Raises:
+        Exception: cqlsh is not installed, or system.tablets failed to dump.
+    """
+    env = dict(os.environ, PATH=os.pathsep.join([os.environ.get("PATH", os.defpath), INSTALLED_CQLSH_DIR]))
+    try:
+        running = [(table, subprocess.Popen(cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                                            text=True))
+                   for table, cmd in cqlsh_copy_commands(args, snapshot_dir)]
+    except FileNotFoundError:
+        raise Exception(f"Reading a live cluster runs {CQLSH}, which is not installed. "
+                        "Install scylla-cqlsh, or capture a snapshot with snapshot --manual")
+    required_failure = None
+    for table, proc in running:
+        _, err = proc.communicate()
+        if proc.returncode != 0:
+            failure = f"Failed to dump {table.name}: {err.strip()}"
+            path = os.path.join(snapshot_dir, table.file)
+            if os.path.exists(path):
+                os.remove(path)
+            if table is TABLETS_TABLE:
+                required_failure = failure
+            else:
+                print(failure, file=sys.stderr)
+    if required_failure:
+        raise Exception(required_failure)
+
+
 class LiveClusterTopologySource(TopologySource):
     """
-    Topology is constructed by querying system tables from a live cluster.
+    Topology is constructed from a live cluster, dumping its system tables with cqlsh into a
+    throwaway snapshot on every call.
     """
 
-    def __init__(self, cluster, session):
-        self.cluster = cluster
-        self.session = session
-        self.queries = {table: session.prepare(f"SELECT * FROM {table.name}")
-                        for table in SNAPSHOT_TABLES}
+    def __init__(self, args: argparse.Namespace):
+        self.args = args
 
     def get_topology(self) -> Topology:
-        pending = {table: self.session.execute_async(query) for table, query in self.queries.items()}
-
-        topo = Topology()
-        topo._build({table.name: rows_from_cql(result.result(), table.columns)
-                     for table, result in pending.items()})
-
+        with tempfile.TemporaryDirectory(prefix="tablet_snap_") as snapshot_dir:
+            dump_with_cqlsh(self.args, snapshot_dir)
+            topo = TopologyFromSnapshot(snapshot_dir).topo
         return self._with_shared_options(topo)
 
     def is_live(self):
         return True
-
-    def close(self) -> None:
-        self.cluster.shutdown()
 
 
 def parse_size(s: str) -> int:
@@ -1035,14 +1058,4 @@ def get_topology_source_from_args(args: argparse.Namespace) -> TopologySource:
 
 
 def get_live_topology_source_from_args(args: argparse.Namespace) -> TopologySource:
-    from cassandra.auth import PlainTextAuthProvider
-    from cassandra.cluster import Cluster
-
-    auth = None
-    if args.user is not None or args.password is not None:
-        auth = PlainTextAuthProvider(username=args.user, password=args.password)
-
-    port = int(args.port) if args.port is not None else 9042
-    cluster = Cluster([args.cluster or "127.0.0.1"], port=port, auth_provider=auth)
-    session = cluster.connect()
-    return LiveClusterTopologySource(cluster, session)
+    return LiveClusterTopologySource(args)

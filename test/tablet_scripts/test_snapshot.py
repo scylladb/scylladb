@@ -7,15 +7,11 @@
 from __future__ import annotations
 
 import argparse
-import csv
-import ipaddress
 import os
 import re
 import tarfile
 from datetime import datetime
-from collections import namedtuple
 from pathlib import Path
-from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
@@ -43,46 +39,6 @@ def write_snapshot_dir(path: Path) -> None:
 def read_lines(source) -> list[str]:
     with source() as lines:
         return list(lines)
-
-
-def driver_rows(name: str, fields: list[str], rows: list[tuple]) -> list:
-    """
-    Builds rows shaped as the CQL driver returns them, i.e. named tuples over every column of
-    the table, since snapshots are dumped from a "SELECT *".
-    """
-    row_type = namedtuple(name, fields)
-    return [row_type(*row) for row in rows]
-
-
-def fake_live_source() -> tuple[SimpleNamespace, dict]:
-    """
-    Stands in for LiveClusterTopologySource, returning it together with the rows it answers
-    with. Its query for a table is the table itself, which is all write_snapshot() needs.
-    """
-    rows = {
-        topology.TOPOLOGY_TABLE: driver_rows(
-            "topology",
-            ["key", "host_id", "shard_count", "node_state", "num_tokens", "version", "datacenter"],
-            [("local", HOST1, 4, "normal", 256, 7, "dc1")]),
-        topology.TABLETS_TABLE: driver_rows(
-            "tablets",
-            ["table_id", "last_token", "base_table", "keyspace_name", "table_name",
-             "replicas", "new_replicas", "stage", "resize_seq_number"],
-            [(TABLE, 0, None, "ks", "tbl", [(HOST1, 0)], None, "none", 0),
-             (TABLE, 100, None, "ks", "tbl", [(HOST1, 3)], [(HOST1, 1)], "streaming", 0)]),
-        topology.LOAD_PER_NODE_TABLE: driver_rows(
-            "load_per_node",
-            ["node", "dc", "rack", "ip", "storage_capacity", "effective_capacity"],
-            [(HOST1, "dc1", "rack1", ipaddress.ip_address("10.0.0.1"), 1000, 800)]),
-        topology.TABLET_SIZES_TABLE: driver_rows(
-            "tablet_sizes",
-            ["table_id", "last_token", "replicas"],
-            [(TABLE, 0, {HOST1: 10}), (TABLE, 100, {HOST1: 30})]),
-    }
-    src = SimpleNamespace(queries={table: table for table in rows},
-                          session=SimpleNamespace(
-                              execute_async=lambda query: SimpleNamespace(result=lambda: rows[query])))
-    return src, rows
 
 
 def test_pack_snapshot_produces_archive_that_unpacks_to_the_snapshot(tmp_path) -> None:
@@ -260,47 +216,65 @@ def test_topology_from_archive_missing_required_file(tmp_path) -> None:
         TopologyFromSnapshot(str(archive))
 
 
-def test_write_snapshot_dumps_every_table_and_reads_back_the_same_topology(tmp_path) -> None:
+def test_dump_with_cqlsh_leaves_out_a_table_it_fails_to_dump(tmp_path, monkeypatch, capsys) -> None:
     """
-    A dump has to yield the topology its rows would have built directly, which is what the
-    cluster test asserts against a real cluster.
+    Every table is dumped with its own cqlsh COPY. One which fails, as a table an older
+    cluster lacks does, is reported and left out, rather than failing the rest.
     """
-    src, rows = fake_live_source()
+    # Stands in for cqlsh: dumps system.tablets, and fails on every other table after
+    # leaving a partial file behind.
+    fake_cqlsh = tmp_path / "cqlsh"
+    fake_cqlsh.write_text(f"""#!/bin/sh
+query="$2"
+path=$(printf '%s' "$query" | sed -n "s/.* TO '\\([^']*\\)'.*/\\1/p")
+case "$query" in
+  "COPY system.tablets "*) printf '%s' '{TABLETS_CSV}' > "$path" ;;
+  *) echo partial > "$path"; echo "no such table" >&2; exit 2 ;;
+esac
+""")
+    fake_cqlsh.chmod(0o755)
+    monkeypatch.setattr(topology, "CQLSH", str(fake_cqlsh))
+    args = argparse.Namespace(cluster=None, port=None, user=None, password=None)
 
     snapshot_dir = tmp_path / "snap"
     snapshot_dir.mkdir()
-    snapshot.write_snapshot(str(snapshot_dir), src)
+    topology.dump_with_cqlsh(args, str(snapshot_dir))
 
-    assert sorted(os.listdir(snapshot_dir)) == sorted(table.file for table in topology.SNAPSHOT_TABLES)
-
-    expected = topology.Topology()
-    expected._build({table.name: topology.rows_from_cql(table_rows, table.columns)
-                     for table, table_rows in rows.items()})
-
-    assert TopologyFromSnapshot(str(snapshot_dir)).get_topology() == expected
+    assert os.listdir(snapshot_dir) == [topology.TABLETS_TABLE.file]
+    assert "Failed to dump system.topology: no such table" in capsys.readouterr().err
+    assert TopologyFromSnapshot(str(snapshot_dir)).get_topology().host_count() == 1
 
 
-def test_write_snapshot_renders_collections_the_way_they_are_read_back(tmp_path) -> None:
-    snapshot_dir = tmp_path / "snap"
-    snapshot_dir.mkdir()
-    snapshot.write_snapshot(str(snapshot_dir), fake_live_source()[0])
+def test_dump_with_cqlsh_finds_the_installed_cqlsh_off_path(tmp_path, monkeypatch) -> None:
+    """A --nonroot install leaves cqlsh off PATH, in the share/cassandra/bin of the same prefix."""
+    installed = tmp_path / "share" / "cassandra" / "bin"
+    installed.mkdir(parents=True)
+    (installed / "cqlsh").write_text("#!/bin/sh\necho installed cqlsh ran >&2\nexit 1\n")
+    (installed / "cqlsh").chmod(0o755)
+    monkeypatch.setattr(topology, "INSTALLED_CQLSH_DIR", str(installed))
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    args = argparse.Namespace(cluster=None, port=None, user=None, password=None)
 
-    with open(snapshot_dir / topology.TABLETS_TABLE.file, newline="") as dump:
-        header, first, second = list(csv.reader(dump, delimiter=topology.CSV_DELIMITER))
+    with pytest.raises(Exception, match="Failed to dump system.tablets: installed cqlsh ran"):
+        topology.dump_with_cqlsh(args, str(tmp_path))
 
-    # A collection is rendered by its column's Column.format, in the form parsing reads.
-    assert first[header.index("replicas")] == f"{{({HOST1}, 0)}}"
-    assert second[header.index("new_replicas")] == f"{{({HOST1}, 1)}}"
-    # A null becomes the empty field that reading takes for a null.
-    assert first[header.index("new_replicas")] == ""
-    assert first[header.index("base_table")] == ""
-    # Columns a snapshot is not read for are dumped all the same.
-    assert first[header.index("resize_seq_number")] == "0"
 
-    with open(snapshot_dir / topology.TABLET_SIZES_TABLE.file, newline="") as dump:
-        header, first, _ = list(csv.reader(dump, delimiter=topology.CSV_DELIMITER))
+def test_copy_commands_double_an_apostrophe_in_the_path() -> None:
+    args = argparse.Namespace(cluster=None, port=None, user=None, password=None)
 
-    assert first[header.index("replicas")] == f"{{{HOST1}: 10}}"
+    (_, cmd), *_ = topology.cqlsh_copy_commands(args, "bob's")
+
+    assert "TO 'bob''s/system_topology.csv'" in cmd[-1]
+
+
+def test_manual_instructions_quote_the_commands_for_a_shell(capsys) -> None:
+    args = argparse.Namespace(cluster="10.0.0.1", port=19042, user="u", password="p q", gz=False)
+
+    snapshot.print_manual_snapshot_instructions(args, "snap")
+
+    lines = capsys.readouterr().out.strip().splitlines()
+    assert lines[2] == ("cqlsh -u u -p 'p q' 10.0.0.1 19042 -e 'COPY system.tablets TO '\"'\"'snap/system_tablets.csv'\"'\"'"
+                        " WITH DELIMITER='\"'\"';'\"'\"' AND HEADER=TRUE AND CONFIGFILE='\"'\"'/dev/null'\"'\"''")
 
 
 def test_manual_instructions_pack_the_snapshot_with_gz(capsys) -> None:

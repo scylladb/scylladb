@@ -17,6 +17,4 @@ in {
     buildContrib = false;
     doCheck = false;
   };
-
-  scylla-driver = final.callPackage ./pkg/upstreamable/python-driver { };
 }
