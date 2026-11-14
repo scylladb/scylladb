@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import getpass
 import io
 import os
 import sys
@@ -1000,7 +1001,7 @@ def add_topology_source_args(parser: argparse.ArgumentParser):
     parser.add_argument(
         "-p", "--password",
         metavar="password",
-        help="Password to use when connecting to a cluster"
+        help="Password to use when connecting to a cluster. If --user is given without --password, the password is prompted for on the terminal"
     )
 
     # Options independent of the topology source
@@ -1039,8 +1040,12 @@ def get_live_topology_source_from_args(args: argparse.Namespace) -> TopologySour
     from cassandra.cluster import Cluster
 
     auth = None
-    if args.user is not None or args.password is not None:
-        auth = PlainTextAuthProvider(username=args.user, password=args.password)
+    password = args.password
+    if args.user is not None and password is None:
+        # Prompt on the terminal so the password need not appear on the command line.
+        password = getpass.getpass(f"Password for {args.user}: ")
+    if args.user is not None or password is not None:
+        auth = PlainTextAuthProvider(username=args.user, password=password)
 
     port = int(args.port) if args.port is not None else 9042
     cluster = Cluster([args.cluster or "127.0.0.1"], port=port, auth_provider=auth)
