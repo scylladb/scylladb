@@ -28,6 +28,7 @@
 #include "utils/managed_ref.hh"
 #include "mutation/atomic_cell_or_collection_block.hh"
 #include "mutation/cell_hash.hh"
+#include "mutation/digest_request.hh"
 #include "utils/immutable-collection.hh"
 #include "mutation/compact_and_expire_result.hh"
 
@@ -43,6 +44,8 @@ class tombstone_gc_state;
 
 namespace query {
     class clustering_key_filter_ranges;
+    class partition_slice;
+    struct result_options;
 } // namespace query
 
 struct cell_and_hash {
@@ -72,6 +75,9 @@ class compaction_garbage_collector;
 
 // True if columns is every column of kind in id order.
 bool is_all_columns(const schema& s, column_kind kind, const query::column_id_vector& columns) noexcept;
+
+// True if a data read with these options digests per-row hashes, i.e. should set with_row_digest.
+bool wants_row_hashes(const schema& s, const query::partition_slice& slice, const query::result_options& opts) noexcept;
 
 //
 // Container for cells of a row. Cells are identified by column_id.
@@ -174,6 +180,8 @@ public:
     };
 
 private:
+    // Out of line: its big hasher frame would otherwise tax the none case.
+    void prepare_hash_slow(const schema& s, column_kind kind, digest_request dr) const;
     // Replaces or inserts the cell at `id`. If `stealable` is not null, it holds
     // `value` and may be moved from.
     void put_cell(column_id id, managed_bytes_view value, managed_bytes* stealable, cell_hash_opt hash);
@@ -310,10 +318,16 @@ public:
 
     cell_hash_opt cell_hash_for(column_id id) const;
 
-    void prepare_hash(const schema& s, column_kind kind) const;
+    // Fills missing cell hashes, and the row hash too for cells_and_row. No-op for none.
+    void prepare_hash(const schema& s, column_kind kind, digest_request dr) const {
+        if (dr == digest_request::none) {
+            return;
+        }
+        prepare_hash_slow(s, kind, dr);
+    }
     void clear_hash() const;
     // The digest of all columns of the row's kind, in id order, as fed by
-    // digest_algorithm::xxHash_row. Set by prepare_hash().
+    // digest_algorithm::xxHash_row. Set by prepare_hash(..., cells_and_row).
     cell_hash_opt row_hash() const noexcept { return _row_hash; }
 
     bool is_live(const schema&, column_kind kind, tombstone tomb = tombstone(), gc_clock::time_point now = gc_clock::time_point::min()) const;
@@ -573,11 +587,11 @@ public:
         return _row->cell_hash_for(id);
     }
 
-    void prepare_hash(const schema& s, column_kind kind) const {
+    void prepare_hash(const schema& s, column_kind kind, digest_request dr) const {
         if (!_row) {
             return;
         }
-        _row->prepare_hash(s, kind);
+        _row->prepare_hash(s, kind, dr);
     }
 
     void clear_hash() const {

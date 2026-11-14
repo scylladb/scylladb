@@ -723,6 +723,11 @@ void write_counter_cell(RowWriter& w, const query::partition_slice& slice, ::ato
             .end_qr_cell();
 }
 
+// A cell's max timestamp, as fed to max_timestamp by the digest.
+static api::timestamp_type cell_max_timestamp(atomic_cell_or_collection_view c, const column_definition& def) {
+    return def.is_atomic() ? c.as_atomic_cell(def).timestamp() : c.as_collection_mutation().last_update(*def.type);
+}
+
 // Feeds the hash of each column in ids, or null_hash_value if it is absent.
 template<typename Hasher>
 static void feed_cell_hashes(Hasher& h, const row& cells, const schema& s, column_kind kind, std::ranges::input_range auto&& ids, max_timestamp& max_ts) {
@@ -782,12 +787,17 @@ bool is_all_columns(const schema& s, column_kind kind, const query::column_id_ve
     return true;
 }
 
+bool wants_row_hashes(const schema& s, const query::partition_slice& slice, const query::result_options& opts) noexcept {
+    return opts.request != query::result_request::only_result && opts.digest_algo == query::digest_algorithm::xxHash_row
+            && is_all_columns(s, column_kind::static_column, slice.static_columns)
+            && is_all_columns(s, column_kind::regular_column, slice.regular_columns);
+}
+
 // The row's contribution to an xxHash_row digest of an all-columns slice: one hash of the cell hashes.
 static uint64_t row_digest(const row& cells, const schema& s, column_kind kind, const query::column_id_vector& columns, max_timestamp& max_ts) {
     if (auto rh = cells.row_hash()) {
         cells.for_each_cell([&] (column_id id, atomic_cell_or_collection_view c) {
-            auto&& def = s.column_at(kind, id);
-            max_ts.update(def.is_atomic() ? c.as_atomic_cell(def).timestamp() : c.as_collection_mutation().last_update(*def.type));
+            max_ts.update(cell_max_timestamp(c, s.column_at(kind, id)));
         });
         return rh->hash;
     }
@@ -813,8 +823,10 @@ cell_hash_opt row::cell_hash_for(column_id id) const {
     return cah ? cah->cached_hash() : cell_hash_opt();
 }
 
-void row::prepare_hash(const schema& s, column_kind kind) const {
+void row::prepare_hash_slow(const schema& s, column_kind kind, digest_request dr) const {
+    const bool row_hash = dr == digest_request::cells_and_row;
     // const to avoid removing const qualifiers on the read path
+    // Every path that clears a cell hash also clears _row_hash, so a set row hash implies all cell hashes are filled.
     if (_row_hash) {
         return;
     }
@@ -829,10 +841,12 @@ void row::prepare_hash(const schema& s, column_kind kind) const {
             }
         }
     });
-    xx_hasher rowh;
-    max_timestamp unused;
-    feed_cell_hashes(rowh, *this, s, kind, std::views::iota(column_id(0), column_id(s.columns_count(kind))), unused);
-    _row_hash = cell_hash{rowh.finalize_uint64()};
+    if (row_hash) {
+        xx_hasher rowh;
+        max_timestamp unused;
+        feed_cell_hashes(rowh, *this, s, kind, std::views::iota(column_id(0), column_id(s.columns_count(kind))), unused);
+        _row_hash = cell_hash{rowh.finalize_uint64()};
+    }
 }
 
 void row::clear_hash() const {
@@ -1745,14 +1759,21 @@ row::row(const schema& s, column_kind kind, const row& o)
 {
 }
 
+[[gnu::noinline]] static row construct_slow(const schema& our_schema, const schema& their_schema, column_kind kind, const row& o) {
+    // A reversed schema differs only in clustering key types; row cells (and the cached row hash) are identical.
+    if (our_schema.version() == reversed(their_schema.version())) {
+        return row(our_schema, kind, o);
+    }
+    row r;
+    r.apply(our_schema, their_schema, kind, o);
+    return r;
+}
+
 row row::construct(const schema& our_schema, const schema& their_schema, column_kind kind, const row& o) {
     if (our_schema.version() == their_schema.version()) {
         return row(our_schema, kind, o);
-    } else {
-        row r;
-        r.apply(our_schema, their_schema, kind, o);
-        return r;
     }
+    return construct_slow(our_schema, their_schema, kind, o);
 }
 
 row::~row() {

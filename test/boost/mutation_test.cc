@@ -3389,7 +3389,7 @@ SEASTAR_THREAD_TEST_CASE(test_row_digest_cached_row_hash) {
         for (auto& e : m.partition().clustered_rows()) {
             auto& cells = e.row().cells();
             if (cached) {
-                cells.prepare_hash(*s, column_kind::regular_column);
+                cells.prepare_hash(*s, column_kind::regular_column, digest_request::cells_and_row);
                 BOOST_REQUIRE(cells.row_hash());
             } else {
                 cells.clear_hash();
@@ -3397,7 +3397,7 @@ SEASTAR_THREAD_TEST_CASE(test_row_digest_cached_row_hash) {
             }
         }
         auto& sr = m.partition().static_row();
-        cached ? sr.prepare_hash(*s, column_kind::static_column) : sr.clear_hash();
+        cached ? sr.prepare_hash(*s, column_kind::static_column, digest_request::cells_and_row) : sr.clear_hash();
     };
 
     const auto full = partition_slice_builder(*s).build();
@@ -3430,7 +3430,7 @@ SEASTAR_THREAD_TEST_CASE(test_row_digest_differs) {
     BOOST_REQUIRE(row_hash_test_digest(m1, ps, query::digest_algorithm::xxHash_row, now)
             != row_hash_test_digest(m2, ps, query::digest_algorithm::xxHash_row, now));
     for (auto& e : m2.partition().clustered_rows()) {
-        e.row().cells().prepare_hash(*s, column_kind::regular_column);
+        e.row().cells().prepare_hash(*s, column_kind::regular_column, digest_request::cells_and_row);
     }
     BOOST_REQUIRE(row_hash_test_digest(m1, ps, query::digest_algorithm::xxHash_row, now)
             != row_hash_test_digest(m2, ps, query::digest_algorithm::xxHash_row, now));
@@ -3440,10 +3440,10 @@ static void set_row_hashes(mutation& m, bool cached) {
     const auto& s = *m.schema();
     for (auto& e : m.partition().clustered_rows()) {
         auto& cells = e.row().cells();
-        cached ? cells.prepare_hash(s, column_kind::regular_column) : cells.clear_hash();
+        cached ? cells.prepare_hash(s, column_kind::regular_column, digest_request::cells_and_row) : cells.clear_hash();
     }
     auto& sr = m.partition().static_row();
-    cached ? sr.prepare_hash(s, column_kind::static_column) : sr.clear_hash();
+    cached ? sr.prepare_hash(s, column_kind::static_column, digest_request::cells_and_row) : sr.clear_hash();
 }
 
 // The xxHash_row digest of m is the same with and without cached row hashes.
@@ -3585,18 +3585,18 @@ SEASTAR_THREAD_TEST_CASE(test_row_hash_invalidation) {
 
     row r;
     r.apply(r1_def, live(1));
-    r.prepare_hash(*s, kind);
+    r.prepare_hash(*s, kind, digest_request::cells_and_row);
     BOOST_REQUIRE(r.row_hash());
     r.apply(r2_def, live(2));
     BOOST_REQUIRE(!r.row_hash());
 
-    r.prepare_hash(*s, kind);
+    r.prepare_hash(*s, kind, digest_request::cells_and_row);
     BOOST_REQUIRE(r.row_hash());
     r.for_each_cell_in_place([] (column_id, managed_bytes_mutable_view) { });
     BOOST_REQUIRE(!r.row_hash());
 
     // Nothing to compact: the hash survives.
-    r.prepare_hash(*s, kind);
+    r.prepare_hash(*s, kind, digest_request::cells_and_row);
     auto res = r.compact_and_expire(*s, kind, row_tombstone(), now, always_gc, now);
     BOOST_REQUIRE_EQUAL(res.live_cells, 2u);
     BOOST_REQUIRE(r.row_hash());
@@ -3604,7 +3604,7 @@ SEASTAR_THREAD_TEST_CASE(test_row_hash_invalidation) {
     // An expired cell is rewritten, so the hash goes.
     r.apply(r2_def, atomic_cell_or_collection(atomic_cell::make_live(*int32_type, 2, int32_type->decompose(3),
             now - std::chrono::seconds(1), std::chrono::seconds(10))));
-    r.prepare_hash(*s, kind);
+    r.prepare_hash(*s, kind, digest_request::cells_and_row);
     BOOST_REQUIRE(r.row_hash());
     res = r.compact_and_expire(*s, kind, row_tombstone(), now, never_gc, now);
     BOOST_REQUIRE_EQUAL(res.dead_cells, 1u);
@@ -3623,10 +3623,10 @@ SEASTAR_THREAD_TEST_CASE(test_row_hash_merge) {
     {
         row a;
         a.apply(r1_def, live(1));
-        a.prepare_hash(*s, kind);
+        a.prepare_hash(*s, kind, digest_request::cells_and_row);
         row b;
         b.apply(r2_def, live(2));
-        b.prepare_hash(*s, kind);
+        b.prepare_hash(*s, kind, digest_request::cells_and_row);
         a.apply_monotonically(*s, kind, std::move(b));
         BOOST_REQUIRE(!a.row_hash());
         BOOST_REQUIRE(!b.row_hash());
@@ -3635,13 +3635,13 @@ SEASTAR_THREAD_TEST_CASE(test_row_hash_merge) {
         row a;
         row b;
         b.apply(r1_def, live(1));
-        b.prepare_hash(*s, kind);
+        b.prepare_hash(*s, kind, digest_request::cells_and_row);
         const auto b_hash = b.row_hash()->hash;
         a.apply_monotonically(*s, kind, std::move(b));
         BOOST_REQUIRE(a.row_hash());
         BOOST_REQUIRE_EQUAL(a.row_hash()->hash, b_hash);
         a.clear_hash();
-        a.prepare_hash(*s, kind);
+        a.prepare_hash(*s, kind, digest_request::cells_and_row);
         BOOST_REQUIRE(a.row_hash());
         BOOST_REQUIRE_EQUAL(a.row_hash()->hash, b_hash);
     }

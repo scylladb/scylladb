@@ -109,7 +109,7 @@ PERF_TEST_F(clustering_row, copy_1M)
 PERF_TEST_F(clustering_row, hash_4)
 {
     clustering_row_4().mutate_as_clustering_row(*schema(), [&] (::clustering_row& cr) mutable {
-        cr.cells().prepare_hash(*schema(), column_kind::regular_column);
+        cr.cells().prepare_hash(*schema(), column_kind::regular_column, digest_request::cells);
         perf_tests::do_not_optimize(cr);
         cr.cells().clear_hash();
     });
@@ -118,7 +118,7 @@ PERF_TEST_F(clustering_row, hash_4)
 PERF_TEST_F(clustering_row, hash_4k)
 {
     clustering_row_4k().mutate_as_clustering_row(*schema(), [&] (::clustering_row& cr) mutable {
-        cr.cells().prepare_hash(*schema(), column_kind::regular_column);
+        cr.cells().prepare_hash(*schema(), column_kind::regular_column, digest_request::cells);
         perf_tests::do_not_optimize(cr);
         cr.cells().clear_hash();
     });
@@ -127,7 +127,7 @@ PERF_TEST_F(clustering_row, hash_4k)
 PERF_TEST_F(clustering_row, hash_1M)
 {
     clustering_row_1M().mutate_as_clustering_row(*schema(), [&] (::clustering_row& cr) mutable {
-        cr.cells().prepare_hash(*schema(), column_kind::regular_column);
+        cr.cells().prepare_hash(*schema(), column_kind::regular_column, digest_request::cells);
         perf_tests::do_not_optimize(cr);
         cr.cells().clear_hash();
     });

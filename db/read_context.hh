@@ -122,6 +122,7 @@ class read_context final : public enable_lw_shared_from_this<read_context> {
     reader_permit _permit;
     const dht::partition_range& _range;
     const query::partition_slice& _slice;
+    const digest_request _digest_requested;
     tracing::trace_state_ptr _trace_state;
     mutation_reader::forwarding _fwd_mr;
     bool _range_query;
@@ -158,6 +159,7 @@ public:
         , _permit(std::move(permit))
         , _range(range)
         , _slice(slice)
+        , _digest_requested(digest_request_of(slice))
         , _trace_state(std::move(trace_state))
         , _fwd_mr(fwd_mr)
         , _range_query(!query::is_single_partition(range))
@@ -196,7 +198,7 @@ public:
     const dht::decorated_key& key() const { return *_key; }
     bool partition_exists() const { return _partition_exists; }
     void on_underlying_created() { ++_underlying_created; }
-    bool digest_requested() const { return _slice.options.contains<query::partition_slice::option::with_digest>(); }
+    digest_request digest_requested() const { return _digest_requested; }
     const tombstone_gc_state& tombstone_gc_state() const { return _tombstone_gc_state; }
     max_purgeable get_max_purgeable(const dht::decorated_key& dk, is_shadowable is) const { return _get_max_purgeable(dk, is); }
 public:

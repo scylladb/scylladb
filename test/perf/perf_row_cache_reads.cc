@@ -290,6 +290,9 @@ void test_point_reads(unsigned columns, size_t value_size, unsigned collection_e
     auto sl = partition_slice_builder(*s);
     if (digest) {
         sl.with_option<query::partition_slice::option::with_digest>();
+        if (algo == query::digest_algorithm::xxHash_row) {
+            sl.with_option<query::partition_slice::option::with_row_digest>();
+        }
     }
     const auto slice = sl.build();
     const auto opts = digest
