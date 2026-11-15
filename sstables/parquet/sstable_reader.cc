@@ -409,6 +409,12 @@ class sstable_mutation_reader final : public mutation_reader::impl {
     bool consume_partition_start() {
         auto key = dht::decorate_key(*_schema, _rows->decode_partition_key());
         const tombstone tomb = _rows->decode_partition_tombstone();
+        return start_partition(std::move(key), tomb);
+    }
+
+    // Starts the partition whose head is at _next_row, with its key and
+    // tombstone. The head row itself is not consumed.
+    bool start_partition(dht::decorated_key key, tombstone tomb) {
         _in_partition = true;
         _head_row = _next_row;
         _mf_filter.emplace(*_schema, query::clustering_key_filter_ranges(_slice.row_ranges(*_schema, key.key())), _fwd);
@@ -646,12 +652,24 @@ class sstable_mutation_reader final : public mutation_reader::impl {
     }
 
     // The backward walk reached the first clustering row of the partition.
-    bool end_walk() {
+    future<bool> end_walk() {
         const uint64_t end = _walk->partition_end;
         _walk.reset();
         // The next partition starts there. Read-ahead restarts at its head.
         set_range(end, _end_row);
-        return consume_partition_end();
+        const bool go = consume_partition_end();
+        if (_before_partition && end < _end_row) {
+            // The index is in the partition that the walk ended. Moving it
+            // to the next one is a step in the trie. Then the walk of the
+            // next partition needs no lookup of its key, and its head can
+            // come from the index (start_partition_from_index()).
+            co_await _index_reader->advance_to_next_partition();
+            if (const uint64_t start = _index_reader->data_file_positions().start; start != end) {
+                malformed(seastar::format("the index puts the partition after the one that ends at row {} at row {}", end, start));
+            }
+            _index_in_current_partition = true;
+        }
+        co_return go;
     }
 
     // Records the row at the decoder for validate(), unless it is recorded.
@@ -683,7 +701,7 @@ class sstable_mutation_reader final : public mutation_reader::impl {
         while (true) {
             if (at_end()) {
                 if (_walk) {
-                    if (!end_walk()) {
+                    if (!co_await end_walk()) {
                         co_return;
                     }
                     continue;
@@ -807,7 +825,79 @@ class sstable_mutation_reader final : public mutation_reader::impl {
         if (_in_partition) {
             malformed("the reader is not at a partition boundary");
         }
+        if (co_await start_partition_from_index()) {
+            if (!_in_partition || _partition_finished) {
+                // The partition is not in the queried range.
+                co_return;
+            }
+            if (reversed()) {
+                if (!co_await begin_walk(_head_row)) {
+                    co_return;
+                }
+            } else {
+                // Moves the filter to its first clustering range, as
+                // begin_walk() does, so that fill_buffer() skips there with
+                // the index before it reads a row.
+                auto result = _mf_filter->apply(position_in_partition_view::before_all_clustered_rows());
+                if (result.action == mutation_fragment_filter::result::store_and_finish || _mf_filter->out_of_range()) {
+                    on_out_of_clustering_range();
+                    co_return;
+                }
+            }
+            if (!proceed()) {
+                co_return;
+            }
+            if (auto pos = maybe_skip()) {
+                co_await advance_context(std::move(pos));
+            }
+        }
         co_await consume_rows();
+    }
+
+    static bool will_likely_slice(const query::partition_slice& slice) {
+        return (!slice.default_row_ranges().empty() && !slice.default_row_ranges()[0].is_full())
+               || slice.get_specific_ranges();
+    }
+
+    // Starts the partition at _next_row with the key and the tombstone that
+    // the index stores for it, without reading its head from the Data file,
+    // as the mx reader does. A read that skips into the partition, or a
+    // reverse read, then does not read the partition's first page set.
+    //
+    // The index stores them only for a partition with a row index, in the
+    // header of its Rows.db entry. The reader reads that header when it
+    // expects to skip, or when the index has it already. Like the mx
+    // reader, it does not do this when the schema has static columns: the
+    // static row is the head, and the read needs it anyway. In a reverse
+    // read, the head row is then the bottom of the backward walk. If it is a
+    // stored static row, the read plan has no static columns to decode, so
+    // the walk ignores it.
+    //
+    // A partition tombstone whose deletion time may be capped is read from
+    // the Data file (see may_be_capped()).
+    future<bool> start_partition_from_index() {
+        if (full_scan() || !_index_in_current_partition || _schema->has_static_columns()) {
+            co_return false;
+        }
+        if (!_index_reader->partition_data_ready()) {
+            if (!reversed() && !will_likely_slice(_slice)) {
+                co_return false;
+            }
+            co_await _index_reader->read_partition_data();
+        }
+        if (_index_reader->data_file_positions().start != _next_row) {
+            co_return false;
+        }
+        const auto t = _index_reader->partition_tombstone();
+        if (!t || may_be_capped(tombstone(*t))) {
+            co_return false;
+        }
+        auto pk = _index_reader->get_partition_key();
+        if (!pk) {
+            co_return false;
+        }
+        start_partition(dht::decorate_key(*_schema, std::move(*pk)), tombstone(*t));
+        co_return true;
     }
 
     future<> read_next_partition() {
