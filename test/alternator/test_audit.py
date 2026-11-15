@@ -15,6 +15,7 @@ from cassandra import ConsistencyLevel, InvalidRequest
 from cassandra.query import SimpleStatement
 
 from test.alternator.util import new_test_table, unique_table_name
+from test.alternator.test_import import delete_table_afterwards
 from test.alternator.test_vector import need_vector_search_in_botocore
 
 
@@ -519,10 +520,10 @@ def test_audit_batch_get_item_respects_table_filter(dynamodb, cql, alternator_au
 
 
 # Test auditing of DDL operations: CreateTable, UpdateTable (with GSI),
-# TagResource, UntagResource, UpdateTimeToLive, DeleteTable.
+# TagResource, UntagResource, UpdateTimeToLive, DeleteTable, ImportTable.
 # DDL and metadata-query operations have no meaningful CL (stored as "").
 # The DescribeTable call (used to fetch the TableArn) also produces a QUERY entry.
-# Produces 7 audit entries.
+# Produces 8 audit entries.
 def test_audit_ddl_operations(dynamodb, cql, alternator_audit_enabled):
     client = dynamodb.meta.client
     table_name = unique_table_name()
@@ -534,7 +535,7 @@ def test_audit_ddl_operations(dynamodb, cql, alternator_audit_enabled):
     before_rows = _get_audit_log_rows(cql)
     # The format inside expected is: (category, consistency, error(bool), keyspace_name, table_name, [fragments that should appear in the operation text])
     expected = []
-    try:
+    with delete_table_afterwards(client, table_name):
         # CreateTable
         client.create_table(
             TableName=table_name,
@@ -580,21 +581,29 @@ def test_audit_ddl_operations(dynamodb, cql, alternator_audit_enabled):
         # DeleteTable
         client.delete_table(TableName=table_name)
         expected.append(("DDL", "", False, ks_name, table_name, ["DeleteTable", table_name]))
+        # ImportTable. It creates no table yet; if it does,
+        # delete_table_afterwards() above deletes it.
+        client.import_table(
+            S3BucketSource={"S3Bucket": "my-bucket"},
+            InputFormat="DYNAMODB_JSON",
+            TableCreationParameters={
+                "TableName": table_name,
+                "KeySchema": HASH_ONLY_SCHEMA["KeySchema"],
+                "AttributeDefinitions": HASH_ONLY_SCHEMA["AttributeDefinitions"],
+                "BillingMode": "PAY_PER_REQUEST",
+            },
+        )
+        expected.append(("DDL", "", False, ks_name, table_name, ["ImportTable", table_name, "my-bucket"]))
         # Each individual Alternator call above must be audited.
         new_rows = _get_new_audit_log_rows(cql, before_rows, expected_new_row_count=len(expected))
         _assert_audit_entries(new_rows, expected, ks_name, table_name)
-    finally:
-        try:
-            client.delete_table(TableName=table_name)
-        except ClientError:
-            pass  # Table was already deleted by the test
 
 
 # Test auditing of QUERY table-level operations: DescribeTable, ListTagsOfResource,
 # DescribeTimeToLive, DescribeContinuousBackups, ExportTableToPointInTime, DescribeExport,
-# ListExports, ListTables, DescribeEndpoints.
+# ListExports, DescribeImport, ListImports, ListTables, DescribeEndpoints.
 # ListTables and DescribeEndpoints have empty keyspace/table.
-# Produces 9 audit entries.
+# Produces 11 audit entries.
 def test_audit_query_table_operations(dynamodb, cql, alternator_audit_enabled):
     with new_test_table(dynamodb, **HASH_ONLY_SCHEMA) as table:
         ks_name = f"alternator_{table.name}"
@@ -618,21 +627,41 @@ def test_audit_query_table_operations(dynamodb, cql, alternator_audit_enabled):
         # DescribeContinuousBackups
         client.describe_continuous_backups(TableName=table.name)
         expected.append(("QUERY", "", False, ks_name, table.name, ["DescribeContinuousBackups", table.name]))
-        # ExportTableToPointInTime
-        response = client.export_table_to_point_in_time(TableArn=table_arn, S3Bucket="my-bucket")
-        export_arn = response['ExportDescription']['ExportArn']
-        expected.append(("QUERY", "", False, ks_name, table.name, ["ExportTableToPointInTime", table_arn, "my-bucket"]))
-        # DescribeExport
-        # FIXME: ExportTableToPointInTime does not create the metadata entry yet, so there is nothing
-        # to look up and the call must fail. Once it actually starts creating the export
-        # (SCYLLADB-1893), this test will start failing loudly, which is good, because that is
-        # exactly when this place needs correcting.
-        with pytest.raises(ClientError, match='ExportNotFoundException'):
-            client.describe_export(ExportArn=export_arn)
-        expected.append(("QUERY", "", True, ks_name, table.name, ["DescribeExport", export_arn]))
-        # ListExports (the table it is filtered by)
+        # ExportTableToPointInTime. Starting an export needs exactly one S3 endpoint in
+        # object_storage_endpoints, and without it the request is refused with
+        # ValidationException (test/alternator/run configures one only with the "--s3"
+        # option). Both outcomes are audited - the audit happens before the check.
+        try:
+            response = client.export_table_to_point_in_time(TableArn=table_arn, S3Bucket="my-bucket")
+            export_arn = response['ExportDescription']['ExportArn']
+            export_started = True
+        except ClientError as error:
+            assert error.response['Error']['Code'] == 'ValidationException'
+            # An export ARN in the DynamoDB format (a 14-digit start time in milliseconds, a
+            # dash and 8 hex digits) which no export has.
+            export_arn = f"{table_arn}/export/{int(time.time() * 1000):014d}-0123abcd"
+            export_started = False
+        expected.append(("QUERY", "", not export_started, ks_name, table.name, ["ExportTableToPointInTime", table_arn, "my-bucket"]))
+        # DescribeExport. If the export started, ExportTableToPointInTime above wrote the export
+        # row, so the lookup succeeds (the state of the background export is not important here).
+        # Otherwise there is no such export, and the failed lookup is audited just as well.
+        if export_started:
+            desc_export = client.describe_export(ExportArn=export_arn)
+            assert desc_export['ExportDescription']['ExportArn'] == export_arn
+        else:
+            with pytest.raises(ClientError, match='ExportNotFoundException'):
+                client.describe_export(ExportArn=export_arn)
+        expected.append(("QUERY", "", not export_started, ks_name, table.name, ["DescribeExport", export_arn]))
         client.list_exports(TableArn=table_arn)
         expected.append(("QUERY", "", False, ks_name, table.name, ["ListExports", table_arn]))
+        # DescribeImport. No import was started, so the call must fail.
+        import_arn = f"{table_arn}/import/01790264607542-abcdef12"
+        with pytest.raises(ClientError, match='ImportNotFoundException'):
+            client.describe_import(ImportArn=import_arn)
+        expected.append(("QUERY", "", True, ks_name, table.name, ["DescribeImport", import_arn]))
+        # ListImports (the table it is filtered by)
+        client.list_imports(TableArn=table_arn)
+        expected.append(("QUERY", "", False, ks_name, table.name, ["ListImports", table_arn]))
         # ListTables (empty keyspace)
         client.list_tables()
         expected.append(("QUERY", "", False, "", "", ["ListTables"]))

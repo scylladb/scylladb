@@ -1066,6 +1066,15 @@ server::server(executor& exec, service::storage_proxy& proxy, gms::gossiper& gos
         {"ListExports", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
             return e.list_exports(client_state, std::move(trace_state), std::move(permit), std::move(json_request), audit_info);
         }},
+        {"ImportTable", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+            return e.import_table(client_state, std::move(trace_state), std::move(permit), std::move(json_request), audit_info);
+        }},
+        {"DescribeImport", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+            return e.describe_import(client_state, std::move(trace_state), std::move(permit), std::move(json_request), audit_info);
+        }},
+        {"ListImports", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
+            return e.list_imports(client_state, std::move(trace_state), std::move(permit), std::move(json_request), audit_info);
+        }},
         {"UpdateContinuousBackups", [] (executor& e, executor::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value json_request, std::unique_ptr<request> req, std::unique_ptr<audit::audit_info_alternator>& audit_info) -> future<executor::request_return_type> {
             ++e._stats.unsupported_operations;
             ++e._stats.api_operations.update_continuous_backups;

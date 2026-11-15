@@ -11,10 +11,14 @@
 #include <seastar/core/future.hh>
 #include "dht/i_partitioner_fwd.hh"
 #include "audit/audit.hh"
+#include "schema/schema_builder.hh"
 #include "seastarx.hh"
 #include <seastar/core/future.hh>
 #include <seastar/core/sharded.hh>
 #include <seastar/util/noncopyable_function.hh>
+#include <optional>
+#include <utility>
+#include <vector>
 
 #include "service/migration_manager.hh"
 #include "service/client_state.hh"
@@ -88,6 +92,15 @@ namespace parsed {
 class expression_cache;
 }
 
+struct create_table_params {
+    schema_builder builder;
+    std::vector<schema_builder> view_builders;
+    std::string keyspace_name;
+    std::string table_name;
+    std::map<sstring, sstring> tags_map;
+    bool has_vector_indexes;
+};
+
 class executor : public peering_sharded_service<executor> {
     gms::gossiper& _gossiper;
     sstables::dictionary_service& _dicts;
@@ -114,6 +127,11 @@ class executor : public peering_sharded_service<executor> {
     abort_source _stop_as;
     // Runs db::modify_tags() on shard 0, with the _stop_as of shard 0's executor.
     future<> modify_tags(sstring ks, sstring cf, std::function<void(std::map<sstring, sstring>&)> modify);
+
+    // Owns the background fibers of S3 export (the export workers and the
+    // garbage collector). Defined in alternator/export.hh.
+    class s3_exports;
+    std::unique_ptr<s3_exports> _s3_exports;
 
     future<> cache_newly_calculated_size_on_all_shards(schema_ptr schema, std::uint64_t size_in_bytes, std::chrono::nanoseconds ttl);
     future<> fill_table_size(rjson::value &table_description, schema_ptr schema, bool deleting);
@@ -179,6 +197,9 @@ public:
     future<request_return_type> export_table_to_point_in_time(client_state& client_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info);
     future<request_return_type> describe_export(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info);
     future<request_return_type> list_exports(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info);
+    future<request_return_type> import_table(client_state& client_state, tracing::trace_state_ptr, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info);
+    future<request_return_type> describe_import(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info);
+    future<request_return_type> list_imports(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info);
 
     future<> start();
     future<> stop();
@@ -201,6 +222,7 @@ private:
                      std::optional<audit::audit_table_set> alternator_batch_tables = std::nullopt);
 
     future<std::variant<rjson::value, api_error>> fill_table_description(schema_ptr schema, table_status tbl_status, service::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit);
+    future<executor::request_return_type> commit_table_creation(rjson::value&& request, create_table_params&& validated, service::client_state&& client_state, const db::tablets_mode_t::mode tablets_mode);
     future<executor::request_return_type> create_table_on_shard0(service::client_state&& client_state, tracing::trace_state_ptr trace_state, rjson::value request, bool enforce_authorization,
             bool warn_authorization, const db::tablets_mode_t::mode tablets_mode, std::unique_ptr<audit::audit_info_alternator>& audit_info);
 
@@ -216,10 +238,15 @@ private:
 
 public:
     void request_stop() noexcept { _stop_as.request_abort(); }
-    static bool add_stream_options(const rjson::value& stream_spec, schema_builder&, service::storage_proxy& sp, const cdc::options& existing_cdc_opts = {});
+    static bool add_stream_options(const rjson::value& stream_spec, schema_builder&, const cdc::options& existing_cdc_opts = {});
     static void supplement_table_info(rjson::value& descr, const schema& schema, service::storage_proxy& sp);
     static void supplement_table_stream_info(rjson::value& descr, const schema& schema, const service::storage_proxy& sp);
 };
+
+create_table_params validate_create_table_request(const rjson::value& request, const gms::feature_service& feat, const db::tablets_mode_t::mode tablets_mode, const char* caller);
+
+// The ARN of a table, also for one which is not created yet.
+rjson::value generate_arn_for_table(std::string_view keyspace_name, std::string_view table_name);
 
 // returns table creation time in seconds since epoch for `db_clock`
 double get_table_creation_time(const schema &schema);
