@@ -2942,4 +2942,27 @@ SEASTAR_TEST_CASE(test_lowering_dirty_memory_threshold_triggers_flush) {
     });
 }
 
+// Dropping a table waits until every sstable of the table is destroyed, so that
+// a table created later with the same ID never shares its storage with sstables
+// of the dropped table.
+SEASTAR_TEST_CASE(drop_table_waits_for_its_sstables_to_be_destroyed) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE TABLE ks.cf (pk int PRIMARY KEY, v int)").get();
+        for (int pk = 0; pk < 100; ++pk) {
+            e.execute_cql(format("INSERT INTO ks.cf (pk, v) VALUES ({}, 0)", pk)).get();
+        }
+        replica::database::flush_table_on_all_shards(e.db(), "ks", "cf").get();
+        auto sstables = e.local_db().find_column_family("ks", "cf").get_sstables();
+        BOOST_REQUIRE(!sstables->empty());
+
+        auto drop = e.execute_cql("DROP TABLE ks.cf");
+        // A reader, for example, can keep the sstables alive.
+        sleep(std::chrono::milliseconds(100)).get();
+        BOOST_REQUIRE(!drop.available());
+
+        sstables = {};
+        drop.get();
+    });
+}
+
 BOOST_AUTO_TEST_SUITE_END()
