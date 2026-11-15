@@ -8,6 +8,7 @@
 
 
 #include <boost/test/unit_test.hpp>
+#include <boost/program_options.hpp>
 #include <stdlib.h>
 #include <iostream>
 #include <fmt/ranges.h>
@@ -1031,6 +1032,53 @@ SEASTAR_THREAD_TEST_CASE(test_parse_object_storage_endpoints_one_entry_broken) {
     BOOST_REQUIRE_EQUAL(endpoints.size(), 1);
     BOOST_CHECK(endpoints.front().is_gs_storage());
     BOOST_CHECK_EQUAL(endpoints.front().key(), "https://storage.googleapis.com");
+}
+
+// Parses a command line holding a single --object-storage-endpoints option
+// into cfg, the way the Scylla executable does.
+static void parse_object_storage_endpoints_option(config& cfg, const char* value) {
+    namespace bpo = boost::program_options;
+    auto opts = cfg.get_options_description();
+    const char* argv[] = {"scylla", "--object-storage-endpoints", value};
+    bpo::variables_map vm;
+    bpo::store(bpo::parse_command_line(std::size(argv), argv, opts), vm);
+    bpo::notify(vm);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_object_storage_endpoints_command_line) {
+    tests::tmp_unset_env no_region_env("AWS_DEFAULT_REGION");
+    // Check that the option accepts a JSON list of endpoints.
+    {
+        auto cfg = std::make_unique<config>();
+        parse_object_storage_endpoints_option(*cfg, R"foo([
+            {"name": "http://localhost:9000", "type": "s3", "aws_region": "us-east-1"},
+            {"name": "https://storage.googleapis.com", "type": "gs"}])foo");
+        const auto& endpoints = cfg->object_storage_endpoints();
+        BOOST_REQUIRE_EQUAL(endpoints.size(), 2);
+        BOOST_REQUIRE(endpoints[0].is_s3_storage());
+        BOOST_CHECK_EQUAL(endpoints[0].key(), "http://localhost:9000");
+        BOOST_CHECK_EQUAL(endpoints[0].get_s3_storage().region, "us-east-1");
+        BOOST_CHECK(endpoints[1].is_gs_storage());
+        BOOST_CHECK_EQUAL(endpoints[1].key(), "https://storage.googleapis.com");
+    }
+    // Check that the option also accepts the list in YAML flow syntax.
+    {
+        auto cfg = std::make_unique<config>();
+        parse_object_storage_endpoints_option(*cfg, "[{name: http://localhost:9000, aws_region: us-west-1}]");
+        const auto& endpoints = cfg->object_storage_endpoints();
+        BOOST_REQUIRE_EQUAL(endpoints.size(), 1);
+        BOOST_REQUIRE(endpoints[0].is_s3_storage());
+        BOOST_CHECK_EQUAL(endpoints[0].key(), "http://localhost:9000");
+        BOOST_CHECK_EQUAL(endpoints[0].get_s3_storage().region, "us-west-1");
+    }
+    // Check that a value which isn't a list of endpoints is reported as a
+    // command-line error, and leaves the option unset.
+    for (const char* bad : {R"foo({"name": "http://localhost:9000", "aws_region": "us-east-1"})foo",
+                            "[{unclosed", ""}) {
+        auto cfg = std::make_unique<config>();
+        BOOST_REQUIRE_THROW(parse_object_storage_endpoints_option(*cfg, bad), boost::program_options::error);
+        BOOST_CHECK(cfg->object_storage_endpoints().empty());
+    }
 }
 
 // Checks that a config that isn't broadcast to all shards can be used on a

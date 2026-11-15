@@ -26,6 +26,13 @@ object_storage_endpoints:
     aws_region: us-east-1
 ```
 
+The same list can also be given on the command line, as a single string in
+YAML or JSON syntax. This is convenient for tests, which then don't need to
+write a configuration file:
+```sh
+scylla --object-storage-endpoints '[{"name": "http://127.0.0.1:9000", "aws_region": "us-east-1"}]'
+```
+
 ## Configuring GCP storage access
 
 Similarly to AWS, define endpoint details in `scylla.yaml` like:

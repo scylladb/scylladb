@@ -768,6 +768,9 @@ void config_file::named_value<db::config::seed_provider_type>::add_command_line_
 template <>
 void config_file::named_value<std::vector<audit::audit_rule>>::add_command_line_option(
         boost::program_options::options_description_easy_init&);
+template <>
+void config_file::named_value<std::vector<db::object_storage_endpoint_param>>::add_command_line_option(
+        boost::program_options::options_description_easy_init&);
 
 } // namespace utils
 

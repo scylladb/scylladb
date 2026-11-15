@@ -1822,7 +1822,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , ldap_bind_dn(this, "ldap_bind_dn", value_status::Used, "", "Distinguished name used by LDAPRoleManager for binding to LDAP server.")
     , ldap_bind_passwd(this, "ldap_bind_passwd", value_status::Used, "", "Password used by LDAPRoleManager for binding to LDAP server.")
     , saslauthd_socket_path(this, "saslauthd_socket_path", value_status::Used, "", "UNIX domain socket on which saslauthd is listening.")
-    , object_storage_endpoints(this, "object_storage_endpoints", liveness::LiveUpdate, value_status::Used, {}, "Object storage endpoints configuration.")
+    , object_storage_endpoints(this, "object_storage_endpoints", liveness::LiveUpdate, value_status::Used, {}, "Object storage endpoints configuration. "
+        "In YAML, use a list of maps. On the command line, use the same list in YAML or JSON syntax, as a single string.")
     , object_storage_connections(this, "object_storage_connections", liveness::LiveUpdate, value_status::Used, {},
         "Maximum number of S3 connections per shard for each connection pool, as a map from the pool name to a positive count. "
         "A scheduling group uses the pool named after it, except that every service-level group uses service_levels and a group "
@@ -2073,6 +2074,31 @@ void config_file::named_value<std::vector<audit::audit_rule>>::add_command_line_
                 boost::program_options::options_description_easy_init& init) {
     init(hyphenate(name()).data(), value_ex<sstring>()->notifier([this] (sstring new_value) {
         set(audit::parse_audit_rules_from_json(new_value), config_source::CommandLine);
+    }), desc().data());
+}
+
+// The generic command-line parser cannot read a list of endpoints: it splits
+// the value on commas, drops the braces, and then tries to read each piece
+// with operator>>, which object_storage_endpoint_param doesn't implement.
+// Instead, take the whole value as a single string holding the same list as
+// in scylla.yaml, in YAML or JSON (JSON is valid YAML) syntax, and decode it
+// exactly as the YAML file is decoded, e.g.:
+//   --object-storage-endpoints '[{"name": "http://127.0.0.1:9000", "aws_region": "us-east-1"}]'
+// The value is read as std::string, not sstring: program_options reads an
+// sstring with operator>>, which stops at the first space.
+template<>
+void config_file::named_value<std::vector<db::object_storage_endpoint_param>>::add_command_line_option(
+                boost::program_options::options_description_easy_init& init) {
+    init(hyphenate(name()).data(), value_ex<std::string>()->notifier([this] (std::string new_value) {
+        std::vector<db::object_storage_endpoint_param> endpoints;
+        try {
+            endpoints = YAML::Load(new_value).as<std::vector<db::object_storage_endpoint_param>>();
+        } catch (const YAML::Exception& e) {
+            throw boost::program_options::error(fmt::format(
+                "invalid value for option '--{}': expected a YAML or JSON list of endpoints: {}",
+                hyphenate(name()), e.what()));
+        }
+        set(std::move(endpoints), config_source::CommandLine);
     }), desc().data());
 }
 
