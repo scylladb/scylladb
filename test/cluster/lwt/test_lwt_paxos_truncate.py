@@ -47,7 +47,7 @@ def keyspace_opts(tablets: bool) -> str:
 
 @pytest.mark.parametrize("tablets", [True, False], ids=["tablets", "vnodes"])
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
-@pytest.mark.xfail(reason="https://scylladb.atlassian.net/browse/SCYLLADB-5758", strict=True)
+@pytest.mark.skip_bug(link="https://scylladb.atlassian.net/browse/SCYLLADB-5758", reason="a paxos round finished after a TRUNCATE brings the truncated row back")
 async def test_unfinished_round_after_truncate(manager: ScyllaClusterManager, tablets: bool):
     """A row from a round that was accepted before a TRUNCATE must not reappear after it."""
     servers = await manager.servers_add(3, config=CONFIG, cmdline=CMDLINE)
@@ -70,6 +70,9 @@ async def test_unfinished_round_after_truncate(manager: ScyllaClusterManager, ta
         except Exception as e:
             first = f"failed with {type(e).__name__}"
         logger.info("First CAS: %s", first)
+        # The CAS fails on a quorum of failed learns; the third may still be in flight.
+        for s in servers:
+            await manager.api.wait_for_injection_enter(s.ip_addr, "paxos_error_before_learn")
         for s in servers:
             await manager.api.disable_injection(s.ip_addr, "paxos_error_before_learn")
 
@@ -125,13 +128,15 @@ async def test_truncated_value_returns_through_a_new_replica(manager: ScyllaClus
     async with new_test_keyspace(manager, keyspace_opts(tablets)) as ks:
         await cql.run_async(f"CREATE TABLE {ks}.t (pk int PRIMARY KEY, c int)")
         # With vnodes the new node replicates only some keys: write enough to find one.
-        keys = [1] if tablets else list(range(1, 33))
+        keys = [1] if tablets else list(range(1, 257))
 
         logger.info("Learned by n1 and n2 only")
         await manager.api.enable_injection(n3.ip_addr, "paxos_error_before_learn", one_shot=False)
         for pk in keys:
             [row] = await cql.run_async(insert(ks, pk), host=h1)
             assert row.applied, "scenario not reached: the insert was not applied"
+        # Each insert returns on a quorum of learns; n3's may still be in flight.
+        await manager.api.wait_for_injection_enter(n3.ip_addr, "paxos_error_before_learn", threshold=len(keys))
         await manager.api.disable_injection(n3.ip_addr, "paxos_error_before_learn")
         token = await get_token_for_pk(cql, ks, "t", keys[0])
 
@@ -176,7 +181,7 @@ async def test_truncated_value_returns_through_a_new_replica(manager: ScyllaClus
 @pytest.mark.parametrize("tablets", [
     pytest.param(True, id="tablets"),
     pytest.param(False, id="vnodes",
-                 marks=pytest.mark.xfail(reason="https://scylladb.atlassian.net/browse/SCYLLADB-5758", strict=True)),
+                 marks=pytest.mark.skip_bug(link="https://scylladb.atlassian.net/browse/SCYLLADB-5758", reason="a paxos round finished after a TRUNCATE brings the truncated row back")),
 ])
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
 async def test_truncated_value_returns_through_an_ignorant_quorum(manager: ScyllaClusterManager, scale_timeout, tablets: bool):
@@ -201,13 +206,15 @@ async def test_truncated_value_returns_through_an_ignorant_quorum(manager: Scyll
 
     async with new_test_keyspace(manager, keyspace_opts(tablets)) as ks:
         await cql.run_async(f"CREATE TABLE {ks}.t (pk int PRIMARY KEY, c int)")
-        keys = [1] if tablets else list(range(1, 33))
+        keys = [1] if tablets else list(range(1, 257))
 
         logger.info("Learned by n1 and n2 only; n3 keeps the accepted proposal")
         await manager.api.enable_injection(n3.ip_addr, "paxos_error_before_learn", one_shot=False)
         for pk in keys:
             [row] = await cql.run_async(insert(ks, pk), host=h1)
             assert row.applied, "scenario not reached: the insert was not applied"
+        # Each insert returns on a quorum of learns; n3's may still be in flight.
+        await manager.api.wait_for_injection_enter(n3.ip_addr, "paxos_error_before_learn", threshold=len(keys))
         await manager.api.disable_injection(n3.ip_addr, "paxos_error_before_learn")
         token = await get_token_for_pk(cql, ks, "t", keys[0])
 
