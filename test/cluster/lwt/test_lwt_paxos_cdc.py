@@ -94,6 +94,9 @@ async def test_update_is_logged_once_when_another_coordinator_finishes_its_round
         logger.info("The update through n1: accepted by all, learned by none")
         await inject(manager, servers, BEFORE_LEARN, True)
         told = await outcome(cql.run_async(cas(f"UPDATE {ks}.t SET c = 1 WHERE pk = 1 IF c = 0"), host=h1))
+        # The CAS fails on a quorum of failed learns; the third may still be in flight.
+        for s in servers:
+            await manager.api.wait_for_injection_enter(s.ip_addr, BEFORE_LEARN)
         await inject(manager, servers, BEFORE_LEARN, False)
         assert told.startswith("failed"), f"scenario not reached: the update {told}"
 

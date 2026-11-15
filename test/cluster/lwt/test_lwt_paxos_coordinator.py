@@ -65,6 +65,21 @@ async def inject(manager: ScyllaClusterManager, servers, name: str, enable: bool
             await manager.api.disable_injection(s.ip_addr, name)
 
 
+async def enters(manager: ScyllaClusterManager, servers, name: str) -> dict[int, int]:
+    return {s.server_id: await manager.api.get_injection_enter_count(s.ip_addr, name) for s in servers}
+
+
+async def wait_entered(manager: ScyllaClusterManager, servers, name: str, since: dict[int, int] | None = None) -> None:
+    """Wait until every server entered the injection once more than in since (or once at all).
+
+    A CAS returns on a quorum of answers, so a replica's failed step may still
+    be in flight when the client is answered; disabling the injection before
+    it lands lets the step through.
+    """
+    for s in servers:
+        await manager.api.wait_for_injection_enter(s.ip_addr, name, threshold=(since or {}).get(s.server_id, 0) + 1)
+
+
 async def outcome(coro) -> str:
     """What the client of a CAS was told."""
     try:
@@ -131,9 +146,11 @@ async def test_decision_is_pruned_only_once_a_quorum_learned_it(manager: ScyllaC
         await manager.api.disable_injection(n2.ip_addr, BEFORE_LEARN)
         await manager.api.wait_for_injection_enter(n1.ip_addr, BEFORE_ACCEPT)
         await manager.api.enable_injection(n2.ip_addr, BEFORE_LEARN, one_shot=False)
+        learns = await enters(manager, (n2, n3), BEFORE_LEARN)
         await manager.api.disable_injection(n3.ip_addr, BEFORE_PROMISE)
         await manager.api.message_injection(n1.ip_addr, BEFORE_ACCEPT)
         second = await outcome(round_b)
+        await wait_entered(manager, (n2, n3), BEFORE_LEARN, learns)
         await inject(manager, (n2, n3), BEFORE_LEARN, False)
         assert second == "applied", f"scenario not reached: round B {second}"
         # The decision of B's own update is the last one n1 committed; its prune is a "Delete paxos
@@ -206,6 +223,7 @@ async def test_in_progress_proposal_keeps_its_columns_across_a_schema_change(man
         await cql.run_async(f"ALTER TABLE {ks}.t ADD x int")
         await inject(manager, servers, BEFORE_LEARN, True)
         y = await outcome(cql.run_async(cas(f"UPDATE {ks}.t SET c = 1, x = 5 WHERE pk = 1 IF c = 0"), host=h3))
+        await wait_entered(manager, servers, BEFORE_LEARN)
         await inject(manager, servers, BEFORE_LEARN, False)
         assert y.startswith("failed"), f"scenario not reached: Y {y}"
 
