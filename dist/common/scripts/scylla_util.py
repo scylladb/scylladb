@@ -242,52 +242,80 @@ def cpuset_conf_cpus(root='/'):
         return None
     return parse_cpuset_conf(conf.read_text())[0]
 
-def setup_helper_slice_cpuset(cpuset, root='/', always_reload=True):
-    """Pin scylla-helper.slice to the CPUs outside Scylla's cpuset.
+# The units to pin to the CPUs outside Scylla's cpuset, as (drop-in under
+# /etc/systemd/system, unit file section). journald stays in system.slice:
+# Scylla logs through syslog() on the reactor thread, so the memory and IO
+# limits of scylla-helper.slice on journald could stall Scylla.
+SPARE_CPU_DROPINS = (
+    ('scylla-helper.slice.d/cpuset.conf', 'Slice'),
+    ('systemd-journald.service.d/scylla-cpuset.conf', 'Service'),
+)
+
+def setup_spare_cpu_pinning(cpuset, root='/', always_reload=True):
+    """Pin scylla-helper.slice and systemd-journald to the CPUs outside
+    Scylla's cpuset, with an AllowedCPUs= drop-in for each.
 
     cpuset is the --cpuset value of cpuset.conf, or None when Scylla is not
     pinned. Without a spare CPU, give an existing drop-in every online CPU
     instead of removing it: when AllowedCPUs= goes away, the kernel leaves the
-    running helpers on the old CPUs. Without systemd v244 or the cgroup v2
-    cpuset controller, AllowedCPUs= cannot apply, so remove the drop-in. Do
+    running processes on the old CPUs. Without systemd v244 or the cgroup v2
+    cpuset controller, AllowedCPUs= cannot apply, so remove the drop-ins. Do
     nothing without a running systemd (container images).
 
-    With always_reload=False, run daemon-reload only when the drop-in changed.
+    With always_reload=False, run daemon-reload only when a drop-in changed.
     """
     root = Path(root)
     if not (root / 'run/systemd/system').is_dir():
         return
-    dropin = root / 'etc/systemd/system/scylla-helper.slice.d/cpuset.conf'
-    old = dropin.read_text() if dropin.exists() else None
+    dropins = [(root / 'etc/systemd/system' / path, section)
+               for path, section in SPARE_CPU_DROPINS]
+    old = {dropin: dropin.read_text() if dropin.exists() else None
+           for dropin, _ in dropins}
     online = parse_cpu_list((root / 'sys/devices/system/cpu/online').read_text())
     free_cpus = online - parse_cpu_list(cpuset) if cpuset else set()
     controllers = root / 'sys/fs/cgroup/cgroup.controllers'
-    new = None
-    created_dir = False
-    if ((free_cpus or old is not None)
-            and controllers.exists() and 'cpuset' in controllers.read_text().split()
-            and systemd_version() >= ALLOWED_CPUS_MIN_SYSTEMD):
-        new = f'[Slice]\nAllowedCPUs={cpu_list_to_str(free_cpus or online)}\n'
-        if new != old:
-            created_dir = not dropin.parent.exists()
-            dropin.parent.mkdir(parents=True, exist_ok=True)
-            dropin.write_text(new)
-    elif old is not None:
-        dropin.unlink()
-    # The slice limits apply to the running helpers on daemon-reload.
-    if always_reload or new != old:
+    can_apply = ((free_cpus or any(text is not None for text in old.values()))
+                 and controllers.exists() and 'cpuset' in controllers.read_text().split()
+                 and systemd_version() >= ALLOWED_CPUS_MIN_SYSTEMD)
+    changed = False
+    write_error = None
+    created_dirs = set()
+    for dropin, section in dropins:
+        # A failure on one drop-in must not keep the other from applying.
+        try:
+            if can_apply and (free_cpus or old[dropin] is not None):
+                new = f'[{section}]\nAllowedCPUs={cpu_list_to_str(free_cpus or online)}\n'
+                if new != old[dropin]:
+                    if not dropin.parent.exists():
+                        created_dirs.add(dropin.parent)
+                    dropin.parent.mkdir(parents=True, exist_ok=True)
+                    dropin.write_text(new)
+                    changed = True
+            elif old[dropin] is not None:
+                dropin.unlink()
+                changed = True
+        except OSError as e:
+            write_error = write_error or e
+    # The limits apply to the running processes on daemon-reload.
+    if always_reload or changed:
         try:
             systemd_unit.reload(timeout=SYSTEMCTL_TIMEOUT)
         except Exception:
-            # Put the old drop-in back, so that the next run sees a change
-            # and reloads again. Remove the directory if this run made it.
-            if old is None:
-                dropin.unlink(missing_ok=True)
-                if created_dir:
-                    dropin.parent.rmdir()
-            else:
-                dropin.write_text(old)
+            # Put the old drop-ins back, so that the next run sees a change
+            # and reloads again. Remove the directories this run made.
+            for dropin, text in old.items():
+                try:
+                    if text is None:
+                        dropin.unlink(missing_ok=True)
+                        if dropin.parent in created_dirs:
+                            dropin.parent.rmdir()
+                    else:
+                        dropin.write_text(text)
+                except OSError:
+                    pass
             raise
+    if write_error:
+        raise write_error
 
 SYSTEM_PARTITION_UUIDS = [
         '21686148-6449-6e6f-744e-656564454649', # BIOS boot partition

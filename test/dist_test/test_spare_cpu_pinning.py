@@ -3,11 +3,13 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
-"""scylla_cpuset_setup and scylla_prepare pin scylla-helper.slice to the CPUs
-outside Scylla's cpuset, through setup_helper_slice_cpuset() in scylla_util.
+"""scylla_cpuset_setup and scylla_prepare pin scylla-helper.slice and
+systemd-journald to the CPUs outside Scylla's cpuset, through
+setup_spare_cpu_pinning() in scylla_util.
 
 On cloud images cpuset.conf is first written at first boot, after the package
-install. Without the pinning there, new nodes stayed unpinned (CLOUDEVOPS-2311).
+install. Without the pinning there, new nodes stayed unpinned (CLOUDEVOPS-2311,
+SCYLLADB-6198).
 """
 import importlib.machinery
 import importlib.util
@@ -81,12 +83,14 @@ def _load_scylla_prepare():
 
 scylla_prepare = _load_scylla_prepare()
 
-DROPIN = 'etc/systemd/system/scylla-helper.slice.d/cpuset.conf'
+SLICE_DROPIN = 'etc/systemd/system/scylla-helper.slice.d/cpuset.conf'
+JOURNALD_DROPIN = 'etc/systemd/system/systemd-journald.service.d/scylla-cpuset.conf'
+SECTIONS = {SLICE_DROPIN: 'Slice', JOURNALD_DROPIN: 'Service'}
 
 
 class FakeSystemd:
     """Stands in for systemctl. Records the commands it gets, and the
-    AllowedCPUs= of the drop-in at each daemon-reload."""
+    AllowedCPUs= of the slice and journald drop-ins at each daemon-reload."""
 
     def __init__(self, root, version=254):
         self.root = root
@@ -99,7 +103,8 @@ class FakeSystemd:
         self.calls.append(list(cmd))
         self.timeout = timeout
         if list(cmd) == ['systemctl', 'daemon-reload']:
-            self.dropin_at_reload.append(allowed_cpus(self.root))
+            self.dropin_at_reload.append((dropin_cpus(self.root, SLICE_DROPIN),
+                                          dropin_cpus(self.root, JOURNALD_DROPIN)))
         result = subprocess.CompletedProcess(cmd, 1 if self.fail else 0)
         if check:
             result.check_returncode()
@@ -130,14 +135,29 @@ def make_machine(tmp_path, *, online_cpus='0-3',
         (tmp_path / 'run/systemd/system').mkdir(parents=True)
 
 
-def allowed_cpus(tmp_path):
-    """The AllowedCPUs= of the drop-in, or None without a drop-in."""
-    path = tmp_path / DROPIN
+def dropin_cpus(tmp_path, dropin):
+    """The AllowedCPUs= of one drop-in, or None without that drop-in."""
+    path = tmp_path / dropin
     if not path.exists():
         return None
+    prefix = f'[{SECTIONS[dropin]}]\nAllowedCPUs='
     content = path.read_text()
-    assert content.startswith('[Slice]\nAllowedCPUs=')
-    return content.removeprefix('[Slice]\nAllowedCPUs=').strip()
+    assert content.startswith(prefix)
+    return content.removeprefix(prefix).strip()
+
+
+def write_dropin(tmp_path, dropin, cpus):
+    path = tmp_path / dropin
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f'[{SECTIONS[dropin]}]\nAllowedCPUs={cpus}\n')
+
+
+def allowed_cpus(tmp_path):
+    """The AllowedCPUs= of the drop-ins, or None without drop-ins. The slice
+    and journald drop-ins must agree."""
+    cpus = dropin_cpus(tmp_path, SLICE_DROPIN)
+    assert dropin_cpus(tmp_path, JOURNALD_DROPIN) == cpus
+    return cpus
 
 
 class TestCpuList:
@@ -236,10 +256,10 @@ class TestCpusetConfCpus:
         assert not (tmp_path / 'etc').exists()
 
 
-class TestSetupHelperSliceCpuset:
+class TestSetupSpareCpuPinning:
     def test_pins_the_slice_to_the_free_cpus(self, tmp_path, systemd):
         make_machine(tmp_path)
-        scylla_util.setup_helper_slice_cpuset('2-3', root=tmp_path)
+        scylla_util.setup_spare_cpu_pinning('2-3', root=tmp_path)
         assert allowed_cpus(tmp_path) == '0-1'
         assert systemd.reloaded()
         # scylla_prepare runs this before Scylla starts. A stuck daemon-reload
@@ -248,17 +268,17 @@ class TestSetupHelperSliceCpuset:
 
     def test_new_cpuset_updates_the_dropin(self, tmp_path, systemd):
         make_machine(tmp_path, online_cpus='0-7')
-        scylla_util.setup_helper_slice_cpuset('2-7', root=tmp_path)
-        scylla_util.setup_helper_slice_cpuset('1-7', root=tmp_path)
+        scylla_util.setup_spare_cpu_pinning('2-7', root=tmp_path)
+        scylla_util.setup_spare_cpu_pinning('1-7', root=tmp_path)
         assert allowed_cpus(tmp_path) == '0'
 
     def test_rerun_reloads_again(self, tmp_path, systemd):
         """An earlier daemon-reload may have failed. A rerun with the same
         cpuset must still apply the drop-in."""
         make_machine(tmp_path)
-        scylla_util.setup_helper_slice_cpuset('2-3', root=tmp_path)
+        scylla_util.setup_spare_cpu_pinning('2-3', root=tmp_path)
         systemd.calls.clear()
-        scylla_util.setup_helper_slice_cpuset('2-3', root=tmp_path)
+        scylla_util.setup_spare_cpu_pinning('2-3', root=tmp_path)
         assert systemd.reloaded()
 
     @pytest.mark.parametrize('cpuset', [
@@ -267,7 +287,7 @@ class TestSetupHelperSliceCpuset:
     ])
     def test_no_dropin_without_a_spare_cpu(self, tmp_path, systemd, cpuset):
         make_machine(tmp_path)
-        scylla_util.setup_helper_slice_cpuset(cpuset, root=tmp_path)
+        scylla_util.setup_spare_cpu_pinning(cpuset, root=tmp_path)
         assert allowed_cpus(tmp_path) is None
         assert systemd.reloaded()
 
@@ -279,8 +299,8 @@ class TestSetupHelperSliceCpuset:
         """When AllowedCPUs= goes away, the kernel leaves the running helpers
         on the old CPUs. Seen on a lab node with kernel 6.17 and systemd 255."""
         make_machine(tmp_path)
-        scylla_util.setup_helper_slice_cpuset('2-3', root=tmp_path)
-        scylla_util.setup_helper_slice_cpuset(cpuset, root=tmp_path)
+        scylla_util.setup_spare_cpu_pinning('2-3', root=tmp_path)
+        scylla_util.setup_spare_cpu_pinning(cpuset, root=tmp_path)
         assert allowed_cpus(tmp_path) == '0-3'
 
     @pytest.mark.parametrize('machine,version', [
@@ -292,10 +312,9 @@ class TestSetupHelperSliceCpuset:
                                                                machine, version):
         make_machine(tmp_path, **machine)
         systemd.version = version
-        stale = tmp_path / DROPIN
-        stale.parent.mkdir(parents=True)
-        stale.write_text('[Slice]\nAllowedCPUs=0\n')
-        scylla_util.setup_helper_slice_cpuset('2-3', root=tmp_path)
+        write_dropin(tmp_path, SLICE_DROPIN, '0')
+        write_dropin(tmp_path, JOURNALD_DROPIN, '0')
+        scylla_util.setup_spare_cpu_pinning('2-3', root=tmp_path)
         assert allowed_cpus(tmp_path) is None
         assert systemd.reloaded()
 
@@ -303,42 +322,42 @@ class TestSetupHelperSliceCpuset:
         """scylla_prepare runs before every Scylla start. It reloads systemd
         only when the drop-in changed."""
         make_machine(tmp_path)
-        scylla_util.setup_helper_slice_cpuset('2-3', root=tmp_path, always_reload=False)
+        scylla_util.setup_spare_cpu_pinning('2-3', root=tmp_path, always_reload=False)
         assert systemd.reloaded()
         systemd.calls.clear()
-        scylla_util.setup_helper_slice_cpuset('2-3', root=tmp_path, always_reload=False)
+        scylla_util.setup_spare_cpu_pinning('2-3', root=tmp_path, always_reload=False)
         assert systemd.calls == []
-        scylla_util.setup_helper_slice_cpuset('3', root=tmp_path, always_reload=False)
+        scylla_util.setup_spare_cpu_pinning('3', root=tmp_path, always_reload=False)
         assert allowed_cpus(tmp_path) == '0-2'
         # The reload must see the new drop-in, not the old one.
-        assert systemd.dropin_at_reload[-1] == '0-2'
+        assert systemd.dropin_at_reload[-1] == ('0-2', '0-2')
 
     def test_no_reload_without_a_dropin(self, tmp_path, systemd):
         make_machine(tmp_path)
-        scylla_util.setup_helper_slice_cpuset(None, root=tmp_path, always_reload=False)
+        scylla_util.setup_spare_cpu_pinning(None, root=tmp_path, always_reload=False)
         assert allowed_cpus(tmp_path) is None
         assert systemd.calls == []
 
     def test_cpu_count_change_updates_the_dropin(self, tmp_path, systemd):
         """After a resize, the online CPUs differ from the drop-in."""
         make_machine(tmp_path, online_cpus='0-3')
-        scylla_util.setup_helper_slice_cpuset('2-3', root=tmp_path)
+        scylla_util.setup_spare_cpu_pinning('2-3', root=tmp_path)
         (tmp_path / 'sys/devices/system/cpu/online').write_text('0-7\n')
         systemd.calls.clear()
-        scylla_util.setup_helper_slice_cpuset('2-3', root=tmp_path, always_reload=False)
+        scylla_util.setup_spare_cpu_pinning('2-3', root=tmp_path, always_reload=False)
         assert allowed_cpus(tmp_path) == '0-1,4-7'
         assert systemd.reloaded()
 
     def test_removal_reloads(self, tmp_path, systemd):
         make_machine(tmp_path)
-        scylla_util.setup_helper_slice_cpuset('2-3', root=tmp_path)
+        scylla_util.setup_spare_cpu_pinning('2-3', root=tmp_path)
         systemd.version = 243
         systemd.calls.clear()
-        scylla_util.setup_helper_slice_cpuset('2-3', root=tmp_path, always_reload=False)
+        scylla_util.setup_spare_cpu_pinning('2-3', root=tmp_path, always_reload=False)
         assert allowed_cpus(tmp_path) is None
         # The reload must run after the drop-in is gone.
         assert systemd.reloaded()
-        assert systemd.dropin_at_reload[-1] is None
+        assert systemd.dropin_at_reload[-1] == (None, None)
 
     @pytest.mark.parametrize('first,second', [
         pytest.param(None, '2-3', id='new-dropin'),
@@ -349,35 +368,78 @@ class TestSetupHelperSliceCpuset:
         scylla_prepare run sees a change and reloads again."""
         make_machine(tmp_path)
         if first:
-            scylla_util.setup_helper_slice_cpuset(first, root=tmp_path)
+            scylla_util.setup_spare_cpu_pinning(first, root=tmp_path)
         before = allowed_cpus(tmp_path)
         systemd.fail = True
         with pytest.raises(subprocess.CalledProcessError):
-            scylla_util.setup_helper_slice_cpuset(second, root=tmp_path, always_reload=False)
+            scylla_util.setup_spare_cpu_pinning(second, root=tmp_path, always_reload=False)
         assert allowed_cpus(tmp_path) == before
         systemd.fail = False
         systemd.calls.clear()
-        scylla_util.setup_helper_slice_cpuset(second, root=tmp_path, always_reload=False)
+        scylla_util.setup_spare_cpu_pinning(second, root=tmp_path, always_reload=False)
         assert systemd.reloaded()
 
     @pytest.mark.parametrize('other_dropin', [False, True])
-    def test_failed_reload_removes_only_a_new_directory(self, tmp_path, systemd, other_dropin):
-        """A failed reload removes the drop-in directory only when this run
+    def test_failed_reload_removes_only_new_directories(self, tmp_path, systemd, other_dropin):
+        """A failed reload removes a drop-in directory only when this run
         made it. A directory that holds memory.conf stays."""
         make_machine(tmp_path)
-        dropin_dir = (tmp_path / DROPIN).parent
+        slice_dir = (tmp_path / SLICE_DROPIN).parent
         if other_dropin:
-            dropin_dir.mkdir(parents=True)
-            (dropin_dir / 'memory.conf').write_text('[Slice]\nMemoryHigh=1200M\n')
+            slice_dir.mkdir(parents=True)
+            (slice_dir / 'memory.conf').write_text('[Slice]\nMemoryHigh=1200M\n')
         systemd.fail = True
         with pytest.raises(subprocess.CalledProcessError):
-            scylla_util.setup_helper_slice_cpuset('2-3', root=tmp_path)
+            scylla_util.setup_spare_cpu_pinning('2-3', root=tmp_path)
         assert allowed_cpus(tmp_path) is None
-        assert dropin_dir.exists() == other_dropin
+        assert slice_dir.exists() == other_dropin
+        assert not (tmp_path / JOURNALD_DROPIN).parent.exists()
+
+    @pytest.mark.parametrize('always_reload', [True, False])
+    def test_failed_journald_write_still_pins_the_slice(self, tmp_path, systemd, always_reload):
+        """A journald drop-in that cannot be written must not keep the slice
+        drop-in from applying. The error still reaches the caller."""
+        make_machine(tmp_path)
+        # A regular file where the drop-in directory should be.
+        blocker = tmp_path / JOURNALD_DROPIN
+        blocker.parent.parent.mkdir(parents=True, exist_ok=True)
+        blocker.parent.write_text('')
+        with pytest.raises(OSError):
+            scylla_util.setup_spare_cpu_pinning('2-3', root=tmp_path, always_reload=always_reload)
+        assert dropin_cpus(tmp_path, SLICE_DROPIN) == '0-1'
+        assert systemd.reloaded()
+
+    def test_upgrade_adds_the_journald_dropin(self, tmp_path, systemd):
+        """A node that an older version pinned has only the slice drop-in."""
+        make_machine(tmp_path)
+        write_dropin(tmp_path, SLICE_DROPIN, '0-1')
+        scylla_util.setup_spare_cpu_pinning('2-3', root=tmp_path, always_reload=False)
+        assert allowed_cpus(tmp_path) == '0-1'
+        assert systemd.reloaded()
+
+    def test_only_existing_dropins_widen(self, tmp_path, systemd):
+        """Without a spare CPU, widen the slice drop-in of an older version,
+        but do not add a journald drop-in."""
+        make_machine(tmp_path)
+        write_dropin(tmp_path, SLICE_DROPIN, '0-1')
+        scylla_util.setup_spare_cpu_pinning('0-3', root=tmp_path)
+        assert dropin_cpus(tmp_path, SLICE_DROPIN) == '0-3'
+        assert dropin_cpus(tmp_path, JOURNALD_DROPIN) is None
+
+    def test_other_journald_dropins_stay(self, tmp_path, systemd):
+        """systemd-journald.service.d is not ours. Remove only our file."""
+        make_machine(tmp_path)
+        scylla_util.setup_spare_cpu_pinning('2-3', root=tmp_path)
+        other = tmp_path / 'etc/systemd/system/systemd-journald.service.d/other.conf'
+        other.write_text('[Service]\n')
+        systemd.version = 243
+        scylla_util.setup_spare_cpu_pinning('2-3', root=tmp_path)
+        assert allowed_cpus(tmp_path) is None
+        assert other.exists()
 
     def test_nothing_without_systemd(self, tmp_path, systemd):
         """The container image runs scylla_cpuset_setup without systemd."""
         make_machine(tmp_path, systemd_running=False)
-        scylla_util.setup_helper_slice_cpuset('2-3', root=tmp_path)
+        scylla_util.setup_spare_cpu_pinning('2-3', root=tmp_path)
         assert not (tmp_path / 'etc').exists()
         assert systemd.calls == []

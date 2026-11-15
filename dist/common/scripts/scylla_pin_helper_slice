@@ -9,7 +9,7 @@
 
 import os
 import sys
-from scylla_util import cpuset_conf_cpus, setup_helper_slice_cpuset
+from scylla_util import cpuset_conf_cpus, setup_spare_cpu_pinning
 
 # scylla_post_install.sh runs this on upgrade. scylla_prepare makes the same
 # call before every Scylla start.
@@ -18,7 +18,7 @@ if __name__ == '__main__':
         print('Requires root permission.')
         sys.exit(1)
     try:
-        setup_helper_slice_cpuset(cpuset_conf_cpus(), always_reload=False)
+        setup_spare_cpu_pinning(cpuset_conf_cpus(), always_reload=False)
     except Exception as e:
-        print(f'Warning: could not pin scylla-helper.slice: {e}', file=sys.stderr)
+        print(f'Warning: could not pin scylla-helper.slice and systemd-journald: {e}', file=sys.stderr)
         sys.exit(1)
