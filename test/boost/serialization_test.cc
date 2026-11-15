@@ -324,3 +324,19 @@ BOOST_AUTO_TEST_CASE(vector_deserializer) {
     test_vector_deserializer(opt_bool_vect);
     test_reverse_vector_deserializer(opt_bool_vect);
 }
+
+// Reports more than 4 GiB without backing storage.
+struct oversized_fragment_range {
+    using fragment_type = bytes_view;
+    const bytes_view* begin() const { return nullptr; }
+    const bytes_view* end() const { return nullptr; }
+    size_t size_bytes() const { return (size_t(1) << 32) + 7; }
+    bool empty() const { return false; }
+};
+
+// Reproduces SCYLLADB-6305
+BOOST_AUTO_TEST_CASE(serialize_fragmented_too_big) {
+    bytes_ostream out;
+    BOOST_CHECK_THROW(ser::serialize_fragmented(out, oversized_fragment_range{}), std::runtime_error);
+    BOOST_CHECK_EQUAL(out.size(), 0);
+}
