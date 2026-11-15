@@ -25,7 +25,10 @@
 // - Damage to the Data file, which the reader reports as a malformed sstable.
 // - Rows that break the decoding rules of mapping.hh, written leaf by leaf
 //   with the codec writer, which the row decoder reports as corruption.
+// - The size measures that the reader and the sstable report (PLAN.md,
+//   "Size measures"): data_size(), read progress, and the key estimate.
 
+#include <filesystem>
 #include <fstream>
 
 #include <seastar/testing/thread_test_case.hh>
@@ -36,6 +39,7 @@
 #include "readers/reversing.hh"
 #include "schema/schema_builder.hh"
 #include "sstables/file_writer.hh"
+#include "sstables/metadata_collector.hh"
 #include "sstables/parquet/file_summary.hh"
 #include "sstables/parquet/mapping_reader.hh"
 #include "sstables/parquet/reader.hh"
@@ -1071,6 +1075,98 @@ SEASTAR_THREAD_TEST_CASE(test_reverse_read_io_is_bounded) {
             testlog.info("rows [{}, {}]: {} reads and {} bytes", first, first + 4, r.reads, r.bytes);
             BOOST_REQUIRE_EQUAL(r.rows, 5);
             BOOST_REQUIRE_LT(r.bytes * 10, full.bytes);
+        }
+    }).get();
+}
+
+namespace {
+
+// A table whose raw size per row is known: a clustering row with one cell
+// of `v` has the values of `_scylla.kind` (4 bytes), `_scylla.ts` (8 bytes),
+// `ck` (4 bytes), and `v`. The first row of a partition also has `pk`
+// (4 bytes). The cell has the row's default timestamp, so its own
+// timestamp column is null.
+schema_ptr sized_table(compression_parameters cp) {
+    return schema_builder(this_smp_shard_count(), "ks", "sized")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("ck", int32_type, column_kind::clustering_key)
+            .with_column("v", utf8_type)
+            .set_compressor_params(cp)
+            .build();
+}
+
+constexpr uint64_t sized_row_overhead = 4 + 8 + 4;
+constexpr uint64_t sized_partition_overhead = 4;
+
+// A partition of `rows` rows, whose values have sizes from `value_size`.
+mutation sized_partition(schema_ptr s, int32_t pk, int rows, std::function<size_t (int)> value_size) {
+    mutation m(s, partition_key::from_single_value(*s, int32_type->decompose(pk)));
+    const auto& v = *s->get_column_definition("v");
+    for (int i = 0; i < rows; ++i) {
+        auto ck = clustering_key::from_single_value(*s, int32_type->decompose(i));
+        sstring value(value_size(i), 'x');
+        m.set_clustered_cell(ck, v, atomic_cell::make_live(*utf8_type, 1000 + i, utf8_type->decompose(value)));
+    }
+    return m;
+}
+
+uint64_t raw_size_of(const mutation& m) {
+    const auto& v = *m.schema()->get_column_definition("v");
+    uint64_t size = sized_partition_overhead;
+    for (const auto& r : m.partition().clustered_rows()) {
+        size += sized_row_overhead + r.row().cells().cell_at(v.id).as_atomic_cell(v).value().size();
+    }
+    return size;
+}
+
+// Mutations of partitions on this shard, sorted.
+utils::chunked_vector<mutation> local_sorted(utils::chunked_vector<mutation> muts) {
+    utils::chunked_vector<mutation> local;
+    for (auto& m : muts) {
+        if (m.schema()->get_sharder().shard_for_reads(m.token()) == this_shard_id()) {
+            local.push_back(std::move(m));
+        }
+    }
+    std::ranges::sort(local, mutation_decorated_key_less_comparator());
+    return local;
+}
+
+} // anonymous namespace
+
+// data_size() is the total raw size of the rows, which Scylla.db stores, and
+// ondisk_data_size() is the size of the file. The compression ratio is
+// their quotient for a table with compression (PLAN.md, "Size measures").
+SEASTAR_THREAD_TEST_CASE(test_data_size) {
+    test_env::do_with_async([] (test_env& env) {
+        using algorithm = compression_parameters::algorithm;
+        for (const auto alg : {algorithm::none, algorithm::zstd}) {
+            testlog.info("compression {}", compression_parameters::algorithm_to_name(alg));
+            auto s = sized_table(compression_parameters(alg));
+            utils::chunked_vector<mutation> muts;
+            for (int pk = 0; pk < 50; ++pk) {
+                muts.push_back(sized_partition(s, pk, pk % 7 + 1, [pk] (int i) { return (pk * 37 + i * 101) % 500; }));
+            }
+            muts = local_sorted(std::move(muts));
+            BOOST_REQUIRE(!muts.empty());
+            const uint64_t raw = std::ranges::fold_left(muts | std::views::transform(raw_size_of), uint64_t(0), std::plus());
+            auto sst = write(env, s, muts, aa, [] (sstable_writer_config& cfg) {
+                cfg.parquet_row_group_size = 4096;
+            });
+            const auto* entry = sst->get_scylla_metadata()->get_parquet_data_file();
+            BOOST_REQUIRE(entry);
+            const uint64_t file_size = std::filesystem::file_size(sstables::test(sst).filename(component_type::Data).native());
+            BOOST_REQUIRE_EQUAL(sst->data_size(), raw);
+            BOOST_REQUIRE_EQUAL(entry->raw_size, raw);
+            BOOST_REQUIRE_EQUAL(sst->ondisk_data_size(), file_size);
+            BOOST_REQUIRE_EQUAL(entry->file_size, file_size);
+            const auto stats = sst->get_file_size_stats();
+            BOOST_REQUIRE_EQUAL(stats.on_disk - stats.before_compression, file_size - raw);
+            if (alg == algorithm::none) {
+                BOOST_REQUIRE_EQUAL(sst->get_compression_ratio(), metadata_collector::NO_COMPRESSION_RATIO);
+            } else {
+                BOOST_REQUIRE_LT(file_size, raw);
+                BOOST_REQUIRE_EQUAL(sst->get_compression_ratio(), double(file_size) / raw);
+            }
         }
     }).get();
 }

@@ -410,9 +410,12 @@ public:
     bool is_shared() const;
 
     // Returns uncompressed size of data component.
-    // For a Parquet Data file, the raw size (PLAN.md, "Size measures").
+    // For a Parquet Data file, the total raw size of its rows, which
+    // Scylla.db stores. It does not count the footer, the page headers, or
+    // the levels (PLAN.md, "Size measures").
     uint64_t data_size() const;
     // Returns on-disk size of data component.
+    // For a Parquet Data file, the size of the file, footer included.
     uint64_t ondisk_data_size() const;
     // The position of the end of the Data file, in the units of the index:
     // the uncompressed size, or the row count of a Parquet Data file.
@@ -1136,8 +1139,14 @@ public:
         _run_identifier = run_id::create_random_id();
     }
 
+    // The size of the Data file on disk divided by its uncompressed size,
+    // or NO_COMPRESSION_RATIO for an sstable without compression.
+    // For a Parquet Data file, the ratio of the file size to the raw size,
+    // which the writer records in Statistics.db for a table with compression.
     double get_compression_ratio() const;
 
+    // CompressionInfo.db. It is empty for a Parquet Data file, whose pages
+    // carry their own compression.
     const sstables::compression& get_compression() const {
         return _components->compression;
     }
