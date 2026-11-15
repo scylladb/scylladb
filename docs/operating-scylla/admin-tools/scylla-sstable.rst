@@ -371,6 +371,10 @@ The content is dumped in JSON, using the following schema:
         "pos": Uint64
     }
 
+For an SStable whose data component is a Parquet file (format ``pq``), the index
+stores the ordinal of the partition's first row in place of a byte position, and
+the entry has the key ``"row"`` in place of ``"pos"``.
+
 dump-compression-info
 ^^^^^^^^^^^^^^^^^^^^^
 
@@ -740,6 +744,7 @@ decompress
 ^^^^^^^^^^
 
 Decompress Data.db if compressed (no-op if not compressed). The decompressed data is written to Data.db.decompressed.
+An SStable whose data component is a Parquet file (format ``pq``) is skipped: its pages carry their own compression.
 For example, for the SStable:
 
 .. code-block:: console
