@@ -1994,7 +1994,6 @@ def test_mv_where_case_sensitive_function_name(cql, test_keyspace):
 # written, this was also what the default "repair" mode did in an RF=1
 # keyspace (and how it happened in CI), but we set it explicitly so the test
 # doesn't depend on that.
-@pytest.mark.xfail(reason='SCYLLADB-4747', strict=True)
 def test_view_build_cells_resurrected_by_compaction(cql, scylla_only):
     build_injection = 'view_building_worker_pause_after_flush_before_recording_flushed_views'
     compaction_injection = 'compaction_wait_before_reading'

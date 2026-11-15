@@ -1006,7 +1006,6 @@ def test_default_compaction_strategy(scylla_only, cql, test_keyspace):
 # but we set it explicitly so the test doesn't depend on that. The keyspace has
 # a single tablet, so the table has a single compaction, which the injection
 # pauses.
-@pytest.mark.xfail(reason='SCYLLADB-4747', strict=True)
 def test_tombstone_gc_with_memtable_flushed_during_compaction(scylla_only, cql):
     injection = 'compaction_wait_before_reading'
     ks_opts = "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}"
