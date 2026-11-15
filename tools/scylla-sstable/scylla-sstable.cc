@@ -1225,6 +1225,9 @@ void scrub_operation(schema_ptr schema, reader_permit permit, const std::vector<
 void write_index_component(schema_ptr schema, reader_permit permit, const sstables::shared_sstable& sst, json_writer& writer) {
     auto idx_reader = sst->make_index_reader(permit);
     auto close_idx_reader = deferred_close(*idx_reader);
+    // The index of a Parquet Data file stores row ordinals, not byte
+    // positions, so they get their own key.
+    const auto pos_key = sstables::has_parquet_data_file(sst->get_version()) ? "row" : "pos";
 
     writer.StartArray();
     while (!idx_reader->eof()) {
@@ -1237,7 +1240,7 @@ void write_index_component(schema_ptr schema, reader_permit permit, const sstabl
             writer.Key("key");
             writer.DataKey(*schema, *pkey);
         }
-        writer.Key("pos");
+        writer.Key(pos_key);
         writer.Uint64(pos);
         writer.EndObject();
 
@@ -2085,6 +2088,10 @@ void decompress_operation(schema_ptr schema, reader_permit permit, const std::ve
     }
 
     for (const auto& sst : sstables) {
+        if (sstables::has_parquet_data_file(sst->get_version())) {
+            sst_log.info("Sstable {} has a Parquet Data file, whose pages carry their own compression, nothing to do", sst->get_filename());
+            continue;
+        }
         if (!sst->get_compression()) {
             sst_log.info("Sstable {} is not compressed, nothing to do", sst->get_filename());
             continue;
