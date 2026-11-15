@@ -611,4 +611,3 @@ Additional Information
 ======================
 
 * :doc:`How does ScyllaDB LWT Differ from Apache Cassandra ? </kb/lwt-differences>` - How does ScyllaDB's implementation of lightweight transactions differ from Apache Cassandra?
-* :doc:`How to Change gc_grace_seconds for a Table </kb/gc-grace-seconds/>` - How to change the ``gc_grace_seconds`` parameter for a table
