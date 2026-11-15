@@ -468,7 +468,6 @@ struct buffered_writer_config {
     size_t buffer_size;
     size_t ring_size;
     seastar::scheduling_group flush_sg;
-    size_t max_queued_write_bytes{0};
     std::chrono::milliseconds sync_period{0};
 };
 
@@ -573,7 +572,6 @@ class buffered_writer {
 
     seastar::expiring_fifo<queued_write, on_queued_write_expiry, db::timeout_clock> _queued_writes;
     size_t _queued_write_bytes{0};
-    size_t _max_queued_write_bytes{0};
 
     seastar::timer<db::timeout_clock> _head_flush_timer;
     bool _head_deadline_expired = false;
@@ -604,7 +602,8 @@ class buffered_writer {
     std::optional<future<record_location_with_holder>> append_to_head_buffer(log_record_writer&, write_target&);
 
     // Puts a record that found no room in the ring on the queue of writes waiting for some, and
-    // waits there for it to be taken into a buffer.
+    // waits there for it to be taken into a buffer. The queue has no size limit, so a write waits
+    // until its timeout, as a memtable write waits for dirty memory.
     future<buffered_write_result> queue_write(log_record_writer, db::timeout_clock::time_point timeout, write_target,
             seastar::gate::holder);
 

@@ -28,7 +28,6 @@
 #include <seastar/util/defer.hh>
 
 #include "mutation/canonical_mutation.hh"
-#include "replica/exceptions.hh"
 #include "replica/logstor/index.hh"
 #include "replica/logstor/logstor.hh"
 #include "replica/logstor/ondisk.hh"
@@ -236,12 +235,11 @@ db::timeout_clock::time_point test_timeout() {
     return db::timeout_clock::now() + std::chrono::minutes(1);
 }
 
-buffered_writer_config make_buffered_writer_config(size_t buffer_size, size_t ring_size, size_t max_queued_write_bytes = 0, std::chrono::milliseconds sync_period = std::chrono::milliseconds(0)) {
+buffered_writer_config make_buffered_writer_config(size_t buffer_size, size_t ring_size, std::chrono::milliseconds sync_period = std::chrono::milliseconds(0)) {
     return buffered_writer_config{
         .buffer_size = buffer_size,
         .ring_size = ring_size,
         .flush_sg = seastar::default_scheduling_group(),
-        .max_queued_write_bytes = max_queued_write_bytes,
         .sync_period = sync_period,
     };
 }
@@ -2174,7 +2172,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_buffered_writer_flushes_partial_buffer_wit
     constexpr auto sync_period = std::chrono::hours(1);
 
     test_flush_controller flush_ctl;
-    buffered_writer writer(make_buffered_writer_config(buffer_size, 3, 0, sync_period), [&flush_ctl] (write_buffer& wb) {
+    buffered_writer writer(make_buffered_writer_config(buffer_size, 3, sync_period), [&flush_ctl] (write_buffer& wb) {
         return flush_ctl(wb);
     });
 
@@ -2420,68 +2418,6 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_buffered_writer_queued_writes_preserve_fif
     assert_records_in_order(schema, flush_ctl.all_records(), expected);
 }
 
-// Checks that queued writes are rejected once max_queued_write_bytes would be exceeded.
-SEASTAR_THREAD_TEST_CASE(test_logstor_buffered_writer_rejects_when_max_queued_write_bytes_exceeded) {
-    auto schema = make_kv_schema();
-    constexpr size_t buffer_size = 4 * 1024;
-    const auto large_value = make_single_buffer_value(schema, buffer_size);
-
-    auto record0 = make_buffered_writer_record(schema, 0, large_value, api::timestamp_type(400));
-    const auto queued_write_budget = log_record_writer(record0).record_size() * 2;
-
-    test_flush_controller flush_ctl{.pause_flushes = true};
-    buffered_writer writer(make_buffered_writer_config(buffer_size, 2, queued_write_budget), [&flush_ctl] (write_buffer& wb) {
-        return flush_ctl(wb);
-    });
-
-    writer.start().get();
-    auto stop = defer([&writer] noexcept {
-        writer.stop().get();
-    });
-
-    std::vector<log_record> expected{record0};
-    for (size_t i = 1; i < 4; ++i) {
-        expected.push_back(make_buffered_writer_record(schema, i, large_value, api::timestamp_type(400 + i)));
-    }
-
-    auto accepted0 = writer.write_to_buffer(log_record_writer(expected[0]), test_timeout()).get();
-    auto persisted0 = std::move(accepted0.persisted);
-    flush_ctl.wait_for_flush_starts(1);
-
-    auto accepted1 = writer.write_to_buffer(log_record_writer(expected[1]), test_timeout()).get();
-    auto persisted1 = std::move(accepted1.persisted);
-
-    auto queued2 = writer.write_to_buffer(log_record_writer(expected[2]), test_timeout());
-    auto queued3 = writer.write_to_buffer(log_record_writer(expected[3]), test_timeout());
-    BOOST_REQUIRE(!queued2.available());
-    BOOST_REQUIRE(!queued3.available());
-    BOOST_REQUIRE_EQUAL(writer.queued_write_count(), 2u);
-
-    auto rejected = make_buffered_writer_record(schema, 4, large_value, api::timestamp_type(404));
-    BOOST_REQUIRE_THROW(writer.write_to_buffer(log_record_writer(rejected), test_timeout()).get(), replica::rate_limit_exception);
-
-    flush_ctl.release_one_flush();
-    wait_for_persisted(persisted0);
-    flush_ctl.wait_for_flush_starts(2);
-    auto accepted2 = queued2.get();
-    auto persisted2 = std::move(accepted2.persisted);
-
-    flush_ctl.release_one_flush();
-    wait_for_persisted(persisted1);
-    flush_ctl.wait_for_flush_starts(3);
-    auto accepted3 = queued3.get();
-    auto persisted3 = std::move(accepted3.persisted);
-
-    flush_ctl.release_one_flush();
-    wait_for_persisted(persisted2);
-    flush_ctl.wait_for_flush_starts(4);
-
-    flush_ctl.release_one_flush();
-    wait_for_persisted(persisted3);
-
-    assert_records_in_order(schema, flush_ctl.all_records(), expected);
-}
-
 // Checks that a queued write that times out fails with timed_out_error, leaves the queue, and leaves
 // no failed future that nothing waits for.
 SEASTAR_THREAD_TEST_CASE(test_logstor_buffered_writer_queued_write_times_out) {
@@ -2614,7 +2550,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_buffered_writer_flush_failure_fails_all_wr
 
     test_flush_controller flush_ctl{.fail_flush_index = 0};
     // long sync period so both writes land in the same buffer.
-    buffered_writer writer(make_buffered_writer_config(buffer_size, 3, 0, std::chrono::hours(1)), [&flush_ctl] (write_buffer& wb) {
+    buffered_writer writer(make_buffered_writer_config(buffer_size, 3, std::chrono::hours(1)), [&flush_ctl] (write_buffer& wb) {
         return flush_ctl(wb);
     });
 

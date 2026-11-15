@@ -59,7 +59,6 @@ logstor::logstor(logstor_config config, ::cache_tracker& shared_cache_tracker)
             .buffer_size = _segment_manager.get_segment_size(),
             .ring_size = config.write_buffer_ring_size,
             .flush_sg = config.flush_sg,
-            .max_queued_write_bytes = config.max_queued_write_bytes,
         }, [&sm = _segment_manager] (write_buffer& buf) { return sm.write(buf); })
     , _cache_tracker(shared_cache_tracker) {
 

@@ -1047,7 +1047,6 @@ database::init_logstor() {
             .split_compaction_sg = _dbcfg.maintenance_scheduling_group,
         },
         .flush_sg = _dbcfg.commitlog_scheduling_group,
-        .max_queued_write_bytes = _dbcfg.available_memory * 1 / 100,
     };
     _logstor = std::make_unique<logstor::logstor>(std::move(cfg), _row_cache_tracker);
     _logstor_catalog = std::make_unique<database_logstor_catalog>(*this);
