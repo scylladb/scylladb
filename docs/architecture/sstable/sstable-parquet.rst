@@ -112,3 +112,23 @@ These operations check a Parquet SSTable:
   digest.
 * ``nodetool scrub`` in the other modes reads the data, as for native SSTables. A damaged page
   stops the read at the first row of that page.
+
+Monitoring
+----------
+
+The ``scylla_sstables_parquet_*`` metrics describe the work on Parquet SSTables, per shard:
+
+* Reads: ``read_requests``, ``read_bytes``, ``data_pages_read``, ``dictionary_pages_read``, and
+  ``offset_index_reads`` (the reads of the page locations of a row group).
+* The cache of page locations and dictionaries: ``offset_index_cache_hits``,
+  ``offset_index_cache_misses``, ``dictionary_cache_hits``, ``dictionary_cache_misses``, and
+  ``metadata_cache_bytes``.
+* The memory of the footer summaries of the open SSTables: ``footer_summary_bytes``.
+* Writes: ``data_pages_written``, ``dictionary_pages_written``, ``dictionary_fallbacks``,
+  ``row_groups_written``, and ``late_chunks_written``.
+
+The ``scylla_sstables_manager_parquet_*`` metrics describe the shared memory budget of the writers.
+
+The REST API that lists the SStables of a table (``/storage_service/sstable_info``) reports the
+compression of a Parquet SStable under ``compression_parameters``: the table compression algorithm
+that gives its page compression codec, and the codec itself under ``parquet_codec``.

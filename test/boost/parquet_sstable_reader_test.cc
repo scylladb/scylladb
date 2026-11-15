@@ -50,12 +50,16 @@
 #include "sstables/parquet/page_decoder.hh"
 #include "sstables/parquet/reader.hh"
 #include "sstables/parquet/sstable_reader.hh"
+#include "sstables/parquet/stats.hh"
+#include "sstables/parquet/sstable_writer.hh"
+#include "sstables/compressor.hh"
 #include "sstables/parquet/writer.hh"
 #include "sstables/serialization_header_builder.hh"
 #include "sstables/sstables.hh"
 // The serialization header is a Statistics.db component, whose virtual
 // write() needs the serialization templates.
 #include "sstables/writer.hh"
+#include "test/lib/eventually.hh"
 #include "test/lib/log.hh"
 #include "test/lib/memory_file.hh"
 #include "test/lib/mutation_reader_assertions.hh"
@@ -1693,6 +1697,94 @@ SEASTAR_THREAD_TEST_CASE(test_validate) {
             }, default_read_monitor()).get();
             BOOST_REQUIRE_GT(index_errors, 0);
             BOOST_REQUIRE_EQUAL(errors, index_errors);
+        }
+    }).get();
+}
+
+// The shard counters behind the Parquet metrics (sstables/parquet/stats.hh)
+// count the pages and row groups of a file when its writer finishes, the
+// reads of a reader when it closes, and the memory of the footer summary
+// and of the metadata cache while the sstable is open.
+SEASTAR_THREAD_TEST_CASE(test_shard_stats) {
+    test_env::do_with_async([] (test_env& env) {
+        const auto& stats = parquet::local_shard_stats;
+        const auto before = stats;
+        simple_schema ss;
+        auto s = ss.schema();
+        utils::chunked_vector<mutation> muts;
+        for (const auto& pk : ss.make_pkeys(4)) {
+            mutation m(s, pk);
+            for (int i = 0; i < 200; ++i) {
+                ss.add_row(m, ss.make_ckey(i), fmt::format("value {}", i % 7));
+            }
+            muts.push_back(std::move(m));
+        }
+        auto sst = write(env, s, muts, aa, [] (sstable_writer_config& cfg) {
+            cfg.parquet_page_set_size = 1024;
+            cfg.parquet_min_page_size = 256;
+            cfg.parquet_row_group_size = 4096;
+        });
+        const auto& summary = sst->get_parquet_file_summary();
+        BOOST_REQUIRE_GT(summary.row_groups(), 1);
+        BOOST_REQUIRE_EQUAL(stats.row_groups_written - before.row_groups_written, summary.row_groups());
+        BOOST_REQUIRE_GE(stats.data_pages_written - before.data_pages_written, summary.row_groups() * summary.columns().size());
+        BOOST_REQUIRE_GT(stats.dictionary_pages_written, before.dictionary_pages_written);
+        BOOST_REQUIRE_EQUAL(stats.footer_summary_bytes - before.footer_summary_bytes, summary.memory_usage());
+
+        const auto before_read = stats;
+        {
+            auto rd = sst->make_full_scan_reader(s, env.make_reader_permit());
+            auto close = deferred_close(rd);
+            while (rd().get()) {}
+        }
+        BOOST_REQUIRE_GT(stats.read_requests, before_read.read_requests);
+        BOOST_REQUIRE_GT(stats.bytes_read, before_read.bytes_read);
+        BOOST_REQUIRE_GE(stats.data_pages_read - before_read.data_pages_read, summary.row_groups());
+        BOOST_REQUIRE_GT(stats.dictionary_pages_read, before_read.dictionary_pages_read);
+        BOOST_REQUIRE_GE(stats.offset_index_reads - before_read.offset_index_reads, summary.row_groups());
+        BOOST_REQUIRE_GE(stats.offset_index_cache_misses - before_read.offset_index_cache_misses, summary.row_groups());
+        BOOST_REQUIRE_GT(stats.dictionary_cache_misses, before_read.dictionary_cache_misses);
+        const auto& cache = sst->get_parquet_read_state().cache();
+        BOOST_REQUIRE_GT(cache.memory_usage(), 0);
+        BOOST_REQUIRE_EQUAL(stats.metadata_cache_bytes - before.metadata_cache_bytes, cache.memory_usage());
+
+        // A second read finds the OffsetIndexes in the cache.
+        const auto before_second_read = stats;
+        {
+            auto rd = sst->make_full_scan_reader(s, env.make_reader_permit());
+            auto close = deferred_close(rd);
+            while (rd().get()) {}
+        }
+        BOOST_REQUIRE_EQUAL(stats.offset_index_reads, before_second_read.offset_index_reads);
+        BOOST_REQUIRE_GT(stats.offset_index_cache_hits, before_second_read.offset_index_cache_hits);
+
+        // The memory is released with the sstable.
+        sst = {};
+        REQUIRE_EVENTUALLY_EQUAL<uint64_t>([&] { return stats.footer_summary_bytes; }, before.footer_summary_bytes);
+        REQUIRE_EVENTUALLY_EQUAL<uint64_t>([&] { return stats.metadata_cache_bytes; }, before.metadata_cache_bytes);
+    }).get();
+}
+
+// compression_parameters_of() inverts the writer's choice of compression
+// codec, which the tool's schema loader and the REST API use to report the
+// compression of a Parquet sstable.
+SEASTAR_THREAD_TEST_CASE(test_compression_parameters_of_codec) {
+    test_env::do_with_async([] (test_env& env) {
+        using algorithm = compression_parameters::algorithm;
+        const std::vector<std::pair<algorithm, algorithm>> cases = {
+            {algorithm::none, algorithm::none},
+            {algorithm::lz4, algorithm::lz4},
+            {algorithm::lz4_with_dicts, algorithm::lz4},
+            {algorithm::snappy, algorithm::snappy},
+            {algorithm::deflate, algorithm::deflate},
+            {algorithm::zstd, algorithm::zstd},
+            {algorithm::zstd_with_dicts, algorithm::zstd},
+        };
+        const auto cfg = env.manager().configure_writer("test");
+        for (const auto& [table, expected] : cases) {
+            const auto codec = parquet::make_writer_config(cfg, compression_parameters(table)).codec;
+            BOOST_REQUIRE(parquet::compression_parameters_of(codec).get_algorithm() == expected);
+            BOOST_REQUIRE(parquet::make_writer_config(cfg, parquet::compression_parameters_of(codec)).codec == codec);
         }
     }).get();
 }

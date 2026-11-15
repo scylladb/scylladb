@@ -19,6 +19,7 @@
 #include "sstables/mutation_fragment_filter.hh"
 #include "sstables/parquet/file_verifier.hh"
 #include "sstables/parquet/reader.hh"
+#include "sstables/parquet/stats.hh"
 #include "sstables/sstable_mutation_reader.hh"
 #include "sstables/sstables.hh"
 #include "utils/error_injection.hh"
@@ -1115,6 +1116,14 @@ public:
         if (_codec) {
             _monitor.on_read_completed();
             co_await _codec->close();
+            // After close(), the counters include the reads that were in flight.
+            const auto& fs = _codec->stats();
+            auto& stats = local_shard_stats;
+            stats.read_requests += fs.reads;
+            stats.bytes_read += fs.bytes_read;
+            stats.data_pages_read += fs.pages_taken;
+            stats.dictionary_pages_read += fs.dictionary_pages_taken;
+            stats.offset_index_reads += fs.index_reads;
         }
         if (_index_reader) {
             try {

@@ -551,6 +551,7 @@ future<fragmented_temporary_buffer> fetcher::get_page(uint32_t g, leaf_index c, 
 future<fragmented_temporary_buffer> fetcher::get_dictionary_page(uint32_t g, leaf_index c, const row_group_index& idx) {
     consumer_call call(*this);
     resume_window();
+    ++_stats.dictionary_pages_taken;
     const page_key key{c, g, 0};
     if (!_pending.contains(key)) {
         want(key, idx.chunk_start(c), idx.dictionary_size(c), true);
