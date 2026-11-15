@@ -1137,6 +1137,16 @@ static bool is_system_table(const schema& s) {
     return is_system_table(s.ks_name());
 }
 
+void database::plug_cluster_config_manager(const db::cluster_config_manager& ccm) noexcept {
+    _user_sstables_manager->plug_cluster_config_manager(ccm);
+    _system_sstables_manager->plug_cluster_config_manager(ccm);
+}
+
+void database::unplug_cluster_config_manager() noexcept {
+    _user_sstables_manager->unplug_cluster_config_manager();
+    _system_sstables_manager->unplug_cluster_config_manager();
+}
+
 sstables::sstables_manager& database::get_sstables_manager(const schema& s) const {
     return get_sstables_manager(s.ks_name());
 }

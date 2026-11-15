@@ -62,6 +62,7 @@ constexpr bool is_single_domain(scope_set scopes) {
 // Defined below, with the other parsers and validators.
 // Declared here so that the automatic scrub period option may take their address.
 config_value parse_auto_scrub_period_seconds(std::string_view value);
+config_value parse_sstable_data_format(std::string_view value);
 
 // The tablet repair scheduler reads auto_repair_enabled and auto_repair_threshold_in_seconds on demand.
 // When no scope stores an override it falls back to the deprecated yaml options
@@ -117,6 +118,17 @@ constexpr std::array registry_options = {
         // The replica adds it to a clock. Ten years is as good as never and far from the
         // overflow.
         .valid_range = integer_range{.min = 1, .max = 10 * 365 * 24 * 3600},
+    },
+    // sstables_manager::choose_sstable_version() reads it on demand for every new sstable.
+    // Its feature also gates the Parquet format: see that function.
+    option{
+        .name = option_name::sstable_data_format,
+        .description = "The format of the Data file of new sstables of a table: 'native' or 'parquet'. "
+                "It affects only sstables written after the change. System tables and compact storage tables ignore it",
+        .scopes = table_oriented_scopes,
+        .default_value = std::string_view("native"),
+        .custom_parser = parse_sstable_data_format,
+        .custom_expected_description = "'native' or 'parquet'",
     },
 };
 
@@ -250,6 +262,13 @@ config_value parse_auto_scrub_period_seconds(std::string_view value) {
         throw marshal_exception("expected 0 or an integer between 3600 and 4294967295");
     }
     return parsed;
+}
+
+config_value parse_sstable_data_format(std::string_view value) {
+    if (value != "native" && value != "parquet") {
+        throw marshal_exception("unknown sstable data format");
+    }
+    return value;
 }
 
 static std::optional<seastar::sstring> validate_with_custom_parser(const option& opt, std::string_view value) {

@@ -24,15 +24,22 @@
 #include "sstables/sstables_registry.hh"
 #include "sstables/partition_index_cache.hh"
 #include "sstables/sstables.hh"
+#include "sstables/parquet/mapping.hh"
 #include "sstables/parquet/writer.hh"
 #include "object_storage_client.hh"
+#include "db/cluster_config_manager.hh"
+#include "db/cluster_config_registry.hh"
 #include "db/config.hh"
 #include "db/object_storage_endpoint_param.hh"
+#include "view_info.hh"
 #include "gms/feature.hh"
 #include "gms/feature_service.hh"
 #include "utils/assert.hh"
 #include "utils/http.hh"
 #include "exceptions/exceptions.hh"
+
+// Defined in replica/distributed_loader.cc.
+bool is_internal_keyspace(std::string_view name);
 
 namespace sstables {
 
@@ -404,10 +411,61 @@ sstables::sstable::version_types sstables_manager::get_highest_supported_format(
 }
 
 sstables::sstable::version_types sstables_manager::choose_sstable_version(const schema& s, sstable_version_set existing_versions) const {
-    // FIXME: consult the `sstable_data_format` option of the table once it
-    // exists. Never choose Parquet for a system table or for a table with
-    // compact storage.
+    if (table_uses_parquet(s)) {
+        return sstable_version_types::aa;
+    }
     return choose_big_sstable_version(existing_versions);
+}
+
+bool sstables_manager::may_use_parquet(const schema& s) noexcept {
+    // The system keyspaces, and the keyspaces of the tracing, auth, and
+    // encryption key tables, hold the node's own state.
+    // A compact storage table is rejected by the Parquet writer: the `mx`
+    // reader ignores the column names of its serialization header, so the
+    // header cannot be the authority for the column names of the Parquet file.
+    // A column or field name whose Parquet name is longer than the reader
+    // accepts makes the writer fail, so such a table keeps the `big` format.
+    return !is_internal_keyspace(s.ks_name()) && !s.is_compact_table() && parquet::parquet_names_fit(s);
+}
+
+bool sstables_manager::table_uses_parquet(const schema& s) const {
+    if (!_cluster_config_manager || !may_use_parquet(s)) {
+        return false;
+    }
+    const auto* opt = db::cluster_config_registry::find(db::cluster_config_registry::option_name::sstable_data_format);
+    // The option's cluster feature is the only gate of the Parquet format.
+    // A node advertises the feature only if it can read and write Parquet
+    // sstables, and the feature is enabled only when every node in the
+    // cluster advertises it. Until then the option cannot be set at any
+    // scope.
+    // So no node creates a Parquet sstable while some node could not read
+    // one, and file-based streaming, which sends sstables as they are, never
+    // sends one to such a node. A node without the feature cannot join a
+    // cluster that has enabled it, so this holds for joining nodes too.
+    // Downgrading the cluster, and restoring Parquet sstables into an older
+    // cluster, are not supported.
+    if (!opt || !db::cluster_config_registry::is_supported(*opt, _features)) {
+        return false;
+    }
+    // A view has no table scope of its own (CQL rejects cluster config
+    // options on views), so it follows the table scope of its base table.
+    // A secondary index is a view too.
+    const auto& table_name = s.is_view() ? s.view_info()->base_name() : s.cf_name();
+    const auto value = _cluster_config_manager->resolve_config(opt->name, db::cluster_config_manager::lookup_context{
+        .keyspace_name = s.ks_name(),
+        .table_name = table_name,
+    });
+    // A stored value passed validation, so it is one of the two formats. A
+    // value written out of band falls back to the native format.
+    return value == "parquet";
+}
+
+void sstables_manager::plug_cluster_config_manager(const db::cluster_config_manager& ccm) noexcept {
+    _cluster_config_manager = &ccm;
+}
+
+void sstables_manager::unplug_cluster_config_manager() noexcept {
+    _cluster_config_manager = nullptr;
 }
 
 sstables::sstable::version_types sstables_manager::choose_default_sstable_version() const {
