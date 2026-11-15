@@ -157,6 +157,7 @@ ln -sfT /etc/scylla /var/lib/scylla/conf
 %ghost /etc/systemd/system/scylla-helper.slice.d/
 %ghost /etc/systemd/system/scylla-helper.slice.d/memory.conf
 %ghost /etc/systemd/system/scylla-helper.slice.d/cpuset.conf
+%ghost /etc/systemd/system/systemd-journald.service.d/scylla-cpuset.conf
 %ghost /etc/systemd/system/scylla-server.service.d/capabilities.conf
 %ghost /etc/systemd/system/scylla-server.service.d/mounts.conf
 %ghost /etc/systemd/system/scylla-server.service.d/limitnofile.conf

@@ -10,7 +10,7 @@
 import os
 import sys
 import argparse
-from scylla_util import is_container, sysconfig_parser, parse_cpuset_conf, cpuset_conf_cpus, setup_helper_slice_cpuset
+from scylla_util import is_container, sysconfig_parser, parse_cpuset_conf, cpuset_conf_cpus, setup_spare_cpu_pinning
 
 def cpuset_conf_changed(text, cpuset, smp):
     """True when the cpuset.conf text does not set the --cpuset and --smp
@@ -48,8 +48,8 @@ if __name__ == '__main__':
 
     # On cloud images this runs at first boot, after the package install.
     # Read the cpuset back from the file, as scylla_prepare does, so that
-    # both pin the slice from the same value.
+    # both pin from the same value.
     try:
-        setup_helper_slice_cpuset(cpuset_conf_cpus())
+        setup_spare_cpu_pinning(cpuset_conf_cpus())
     except Exception as e:
-        print(f'Warning: could not pin scylla-helper.slice: {e}', file=sys.stderr)
+        print(f'Warning: could not pin scylla-helper.slice and systemd-journald: {e}', file=sys.stderr)
