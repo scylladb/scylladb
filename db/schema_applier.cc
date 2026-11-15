@@ -1265,13 +1265,181 @@ static future<> execute_do_merge_schema(sharded<service::storage_proxy>& proxy, 
     co_await ap.post_commit();
 }
 
-static future<> do_merge_schema(sharded<service::storage_proxy>& proxy,  sharded<service::storage_service>& ss, sharded<db::system_keyspace>& sys_ks, utils::chunked_vector<mutation> mutations)
+static future<> apply_schema_mutations(sharded<service::storage_proxy>& proxy,  sharded<service::storage_service>& ss, sharded<db::system_keyspace>& sys_ks, utils::chunked_vector<mutation> mutations)
 {
-    slogger.trace("do_merge_schema: {}", mutations);
     schema_applier ap(proxy, ss, sys_ks);
     co_await execute_do_merge_schema(proxy, ap, std::move(mutations)).finally([&ap]() {
         return ap.destroy();
     });
+}
+
+static bool holds_table_or_view_definitions(const schema& s) {
+    return s.id() == tables()->id() || s.id() == views()->id();
+}
+
+// The mutations of several schema changes can be applied together: group 0
+// merges the commands that it applies in one batch, and a snapshot transfer
+// brings in the whole schema at once. The applier tells tables apart by ID,
+// so if the mutations drop a table and create it again with the same ID, it
+// would see the table as altered, and keep the data of the dropped table in
+// the created one.
+//
+// If the mutations do that for some table, returns the timestamps of the
+// tombstones of all drops of tables and views in the mutations, so that the
+// drops can be applied alone first. All of them, and not only those of the
+// tables created again: the drop of a table may depend on earlier drops, for
+// example of its views. The state before the mutations plus all of their
+// drops is consistent, as the dependents of an object are dropped before it,
+// or by the same schema change. A drop writes all of its tombstones (for the
+// schema tables and for the tablet map) with the same timestamp.
+//
+// The tombstones are present even in a snapshot transfer: the tombstones of
+// group 0 tables are only purged once every member of group 0 has applied
+// the change that wrote them.
+static future<std::unordered_set<api::timestamp_type>> find_drops_to_apply_first(sharded<service::storage_proxy>& proxy,
+        const utils::chunked_vector<mutation>& mutations) {
+    // The mutations of the definitions of tables and views, by keyspace and
+    // schema table. A partition may have several mutations.
+    std::map<std::pair<sstring, table_id>, std::vector<const mutation*>> definitions;
+    // The IDs that the mutations write, with the timestamp of the write.
+    std::unordered_map<table_id, api::timestamp_type> written_ids;
+    for (const auto& m : mutations) {
+        if (!holds_table_or_view_definitions(*m.schema())) {
+            continue;
+        }
+        auto ks_name = value_cast<sstring>(utf8_type->deserialize(m.key().get_component(*m.schema(), 0)));
+        definitions[{std::move(ks_name), m.schema()->id()}].push_back(&m);
+        const auto& id_column = *m.schema()->get_column_definition("id");
+        for (const auto& e : m.partition().clustered_rows()) {
+            co_await coroutine::maybe_yield();
+            const auto* cell = e.row().cells().find_cell(id_column.id);
+            if (!cell) {
+                continue;
+            }
+            auto id_cell = cell->as_atomic_cell(id_column);
+            if (!id_cell.is_live()) {
+                continue;
+            }
+            auto id = table_id(value_cast<utils::UUID>(uuid_type->deserialize(id_cell.value().linearize())));
+            auto [it, _] = written_ids.try_emplace(id, id_cell.timestamp());
+            it->second = std::max(it->second, id_cell.timestamp());
+        }
+    }
+
+    // The tombstone of the mutations that covers the definition of the table
+    // or view, if it drops it: it must be newer than the persisted definition,
+    // or it drops an earlier table with the same name.
+    auto drop_of = [&] (const schema& existing) -> future<tombstone> {
+        auto definitions_schema = existing.is_view() ? views() : tables();
+        auto it = definitions.find({existing.ks_name(), definitions_schema->id()});
+        if (it == definitions.end()) {
+            co_return tombstone();
+        }
+        auto ckey = clustering_key::from_singular(*definitions_schema, existing.cf_name());
+        tombstone tomb;
+        for (const auto* m : it->second) {
+            tomb.apply(m->partition().tombstone_for_row(*definitions_schema, ckey).tomb());
+        }
+        if (!tomb) {
+            co_return tombstone();
+        }
+        auto persisted = co_await read_table_mutations(proxy, qualified_name(existing.ks_name(), existing.cf_name()), definitions_schema);
+        const auto& persisted_m = persisted.columnfamilies_mutation();
+        const auto* row = persisted_m.partition().find_row(*definitions_schema, ckey);
+        const auto& id_column = *definitions_schema->get_column_definition("id");
+        const auto* cell = row ? row->find_cell(id_column.id) : nullptr;
+        if (!cell || tomb.timestamp < cell->as_atomic_cell(id_column).timestamp()) {
+            co_return tombstone();
+        }
+        co_return tomb;
+    };
+
+    auto& db = proxy.local().get_db().local();
+    bool any_created_again = false;
+    for (const auto& [id, write_timestamp] : written_ids) {
+        co_await coroutine::maybe_yield();
+        // The table with this ID before the mutations are applied.
+        auto table = db.get_tables_metadata().get_table_if_exists(id);
+        if (!table) {
+            continue;
+        }
+        auto tomb = co_await drop_of(*table->schema());
+        // A drop newer than the last write of the ID drops the table for
+        // good, which the applier handles as a drop.
+        if (tomb && tomb.timestamp < write_timestamp) {
+            slogger.info("{}.{} id={} is dropped and created again with the same ID, applying the drops first",
+                    table->schema()->ks_name(), table->schema()->cf_name(), id);
+            any_created_again = true;
+        }
+    }
+    std::unordered_set<api::timestamp_type> drop_timestamps;
+    if (!any_created_again) {
+        co_return drop_timestamps;
+    }
+    for (const auto& [key, _] : definitions) {
+        const auto& [ks_name, definitions_schema_id] = key;
+        if (!db.has_keyspace(ks_name)) {
+            continue;
+        }
+        // Copied, as reading the persisted definitions may yield.
+        auto existing_tables = db.find_keyspace(ks_name).metadata()->cf_meta_data() | std::views::values | std::ranges::to<std::vector>();
+        for (const auto& existing : existing_tables) {
+            if (existing->is_view() != (definitions_schema_id == views()->id())) {
+                continue;
+            }
+            co_await coroutine::maybe_yield();
+            if (auto tomb = co_await drop_of(*existing)) {
+                drop_timestamps.insert(tomb.timestamp);
+            }
+        }
+    }
+    co_return drop_timestamps;
+}
+
+// Extracts the tombstones with the given timestamps, that is, the drops they
+// belong to. Only partition, range and row tombstones are extracted: those are
+// what drops write.
+static utils::chunked_vector<mutation> extract_drops(const utils::chunked_vector<mutation>& mutations,
+        const std::unordered_set<api::timestamp_type>& drop_timestamps) {
+    auto is_drop = [&] (tombstone t) {
+        return t && drop_timestamps.contains(t.timestamp);
+    };
+    utils::chunked_vector<mutation> drops;
+    for (const auto& m : mutations) {
+        const auto& s = *m.schema();
+        mutation drop(m.schema(), m.decorated_key());
+        if (is_drop(m.partition().partition_tombstone())) {
+            drop.partition().apply(m.partition().partition_tombstone());
+        }
+        for (const auto& rt : m.partition().row_tombstones()) {
+            if (is_drop(rt.tombstone().tomb)) {
+                drop.partition().apply_row_tombstone(s, rt.tombstone());
+            }
+        }
+        for (const auto& e : m.partition().clustered_rows()) {
+            if (is_drop(e.row().deleted_at().regular())) {
+                drop.partition().apply_delete(s, e.key(), e.row().deleted_at().regular());
+            }
+        }
+        if (!drop.partition().empty()) {
+            drops.push_back(std::move(drop));
+        }
+    }
+    return drops;
+}
+
+static future<> do_merge_schema(sharded<service::storage_proxy>& proxy,  sharded<service::storage_service>& ss, sharded<db::system_keyspace>& sys_ks, utils::chunked_vector<mutation> mutations)
+{
+    slogger.trace("do_merge_schema: {}", mutations);
+    // A table that is dropped and created again with the same ID must really
+    // be dropped, and its storage cleaned up, before it is created again. Apply
+    // the drops alone first. The mutations commute, so applying the drops
+    // again with the rest yields the same schema.
+    auto drop_timestamps = co_await find_drops_to_apply_first(proxy, mutations);
+    if (!drop_timestamps.empty()) {
+        co_await apply_schema_mutations(proxy, ss, sys_ks, extract_drops(mutations, drop_timestamps));
+    }
+    co_await apply_schema_mutations(proxy, ss, sys_ks, std::move(mutations));
 }
 
 /**

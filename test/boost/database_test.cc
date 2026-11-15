@@ -26,6 +26,7 @@
 
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/result_set_assertions.hh"
+#include "test/lib/cql_assertions.hh"
 #include "test/lib/log.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/simple_schema.hh"
@@ -57,6 +58,8 @@
 #include "compaction/compaction_manager.hh"
 #include "db/snapshot-ctl.hh"
 #include "db/system_keyspace.hh"
+#include "db/schema_tables.hh"
+#include "db/schema_applier.hh"
 #include "db/view/view_builder.hh"
 #include "replica/mutation_dump.hh"
 #include "test/boost/database_test.hh"
@@ -2962,6 +2965,66 @@ SEASTAR_TEST_CASE(drop_table_waits_for_its_sstables_to_be_destroyed) {
 
         sstables = {};
         drop.get();
+    });
+}
+
+// Group 0 merges the mutations of the schema changes that it applies together.
+// When a table is dropped and created again with the same ID, the applier must
+// still drop the table, rather than see one table that is altered and keeps the
+// data of the dropped one.
+SEASTAR_TEST_CASE(merged_drop_and_create_with_the_same_id_drops_the_table) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE KEYSPACE ks_vnodes WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}"
+                " AND tablets = {'enabled': false}").get();
+        e.execute_cql("CREATE TABLE ks_vnodes.cf (pk int PRIMARY KEY, v int)").get();
+        e.execute_cql("INSERT INTO ks_vnodes.cf (pk, v) VALUES (0, 0)").get();
+        replica::database::flush_table_on_all_shards(e.db(), "ks_vnodes", "cf").get();
+        e.execute_cql("INSERT INTO ks_vnodes.cf (pk, v) VALUES (1, 1)").get();
+
+        auto old_schema = e.local_db().find_schema("ks_vnodes", "cf");
+        auto new_schema = schema_builder(old_schema).with_column("w", int32_type).build();
+        BOOST_REQUIRE_EQUAL(new_schema->id(), old_schema->id());
+        auto ksm = e.local_db().find_keyspace("ks_vnodes").metadata();
+        auto ts = api::new_timestamp();
+        auto mutations = db::schema_tables::make_drop_table_mutations(ksm, old_schema, ts);
+        for (auto& m : db::schema_tables::make_create_table_mutations(new_schema, ts + 1)) {
+            mutations.push_back(std::move(m));
+        }
+        db::schema_tables::merge_schema(e.get_system_keyspace(), e.get_storage_proxy(), e.get_storage_service(), std::move(mutations)).get();
+
+        BOOST_REQUIRE(e.local_db().find_schema("ks_vnodes", "cf")->get_column_definition("w"));
+        assert_that(e.execute_cql("SELECT * FROM ks_vnodes.cf").get()).is_rows().is_empty();
+    });
+}
+
+// Like merged_drop_and_create_with_the_same_id_drops_the_table, but the table
+// has a view, which is dropped by an earlier schema change in the same batch.
+// The drop of the table can only be applied together with the drop of its view.
+SEASTAR_TEST_CASE(merged_drop_of_view_and_base_and_create_of_base_with_the_same_id) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE KEYSPACE ks_vnodes WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}"
+                " AND tablets = {'enabled': false}").get();
+        e.execute_cql("CREATE TABLE ks_vnodes.cf (pk int PRIMARY KEY, v int)").get();
+        e.execute_cql("CREATE MATERIALIZED VIEW ks_vnodes.mv AS SELECT * FROM ks_vnodes.cf WHERE v IS NOT NULL AND pk IS NOT NULL PRIMARY KEY (v, pk)").get();
+        e.execute_cql("INSERT INTO ks_vnodes.cf (pk, v) VALUES (0, 0)").get();
+
+        auto old_schema = e.local_db().find_schema("ks_vnodes", "cf");
+        auto view = view_ptr(e.local_db().find_schema("ks_vnodes", "mv"));
+        auto new_schema = schema_builder(old_schema).with_column("w", int32_type).build();
+        auto ksm = e.local_db().find_keyspace("ks_vnodes").metadata();
+        auto ts = api::new_timestamp();
+        auto mutations = db::schema_tables::make_drop_view_mutations(ksm, view, ts);
+        for (auto& m : db::schema_tables::make_drop_table_mutations(ksm, old_schema, ts + 1)) {
+            mutations.push_back(std::move(m));
+        }
+        for (auto& m : db::schema_tables::make_create_table_mutations(new_schema, ts + 2)) {
+            mutations.push_back(std::move(m));
+        }
+        db::schema_tables::merge_schema(e.get_system_keyspace(), e.get_storage_proxy(), e.get_storage_service(), std::move(mutations)).get();
+
+        BOOST_REQUIRE(!e.local_db().has_schema("ks_vnodes", "mv"));
+        BOOST_REQUIRE(e.local_db().find_schema("ks_vnodes", "cf")->get_column_definition("w"));
+        assert_that(e.execute_cql("SELECT * FROM ks_vnodes.cf").get()).is_rows().is_empty();
     });
 }
 
