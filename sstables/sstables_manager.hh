@@ -36,6 +36,7 @@ namespace db {
 class large_data_handler;
 class corrupt_data_handler;
 class config;
+class cluster_config_manager;
 
 }   // namespace db
 
@@ -200,6 +201,9 @@ private:
     reader_concurrency_semaphore _sstable_metadata_concurrency_sem;
     directory_semaphore& _dir_semaphore;
     std::unique_ptr<sstables::sstables_registry> _sstables_registry;
+    // The source of the `sstable_data_format` option. Null until the cluster
+    // config manager starts, and in the tools.
+    const db::cluster_config_manager* _cluster_config_manager = nullptr;
     // This function is bound to token_metadata.get_my_id() in the database constructor,
     // it can return unset value (bool(host_id) == false) until host_id is loaded
     // after system_keyspace initialization.
@@ -316,11 +320,22 @@ public:
     // sstable of the table with schema `s`. Every path that creates an
     // sstable for a table calls it: flush, compaction, streaming, repair,
     // upload, reshape, `upgradesstables`, and the tools. It is the only code
-    // that reads the `sstable_format` option. The sstable and its writer
+    // that reads the `sstable_format` node option and the
+    // `sstable_data_format` cluster config option. The sstable and its writer
     // receive the version and never read configuration.
     //
-    // The schema lets the choice depend on the table. For now, every table
-    // gets the version of the `big` format that the following rules give.
+    // The format is Parquet (version `aa`) when the `sstable_data_format`
+    // option of the table resolves to `parquet`, and `big` otherwise. The
+    // option resolves through the table, its keyspace, and the cluster, in
+    // this order. A materialized view or a secondary index follows the
+    // table scope of its base table. Some tables never get Parquet: see
+    // may_use_parquet(). The option is read for every new sstable, so a
+    // change takes effect on the next one. At startup, until the cluster
+    // config manager has loaded the option, every table gets the native
+    // format. This covers the resharding of sstables and the flush after the
+    // commitlog replay.
+    //
+    // The version within the `big` format follows these rules.
     //
     // 1. The choice must be new enough to support existing data.
     //    (For example, range tombstones with infinite endpoints were added in version "mc",
@@ -340,6 +355,17 @@ public:
     // The version that choose_sstable_version() picks for a table that makes
     // no choice of its own. The REST API reports it.
     sstables::sstable::version_types choose_default_sstable_version() const;
+    // Whether a new sstable of the table may be a Parquet sstable at all.
+    // System tables ignore the `sstable_data_format` option, and the Parquet
+    // writer does not support compact storage tables, nor column or field
+    // names whose Parquet names are longer than a reader accepts.
+    static bool may_use_parquet(const schema& s) noexcept;
+
+    // Connects choose_sstable_version() to the `sstable_data_format` option.
+    // Until then, and after unplug_cluster_config_manager(), no table gets
+    // Parquet. The manager must stay alive until it is unplugged.
+    void plug_cluster_config_manager(const db::cluster_config_manager& ccm) noexcept;
+    void unplug_cluster_config_manager() noexcept;
 
     locator::host_id get_local_host_id() const;
 
@@ -398,6 +424,9 @@ private:
     // The part of choose_sstable_version() that picks a version of the
     // `big` format.
     sstables::sstable::version_types choose_big_sstable_version(sstable_version_set existing_versions) const;
+    // The part of choose_sstable_version() that decides whether the table
+    // gets Parquet.
+    bool table_uses_parquet(const schema& s) const;
 
     void add(sstable* sst);
     // Transition the sstable to the "inactive" state. It has no

@@ -839,6 +839,12 @@ private:
             auto stop_cluster_config_manager = defer_verbose_shutdown("cluster config manager", [this] {
                 _cluster_config_manager.stop().get();
             });
+            _db.invoke_on_all([this] (replica::database& db) {
+                db.plug_cluster_config_manager(_cluster_config_manager.local());
+            }).get();
+            auto unplug_cluster_config_manager = defer_verbose_shutdown("cluster config manager in the database", [this] {
+                _db.invoke_on_all([] (replica::database& db) { db.unplug_cluster_config_manager(); }).get();
+            });
             _cluster_config_db_config_bridge.start(std::ref(_cluster_config_manager), std::ref(*cfg)).get();
             auto stop_cluster_config_db_config_bridge = defer_verbose_shutdown("cluster config db::config bridge", [this] {
                 _cluster_config_db_config_bridge.stop().get();

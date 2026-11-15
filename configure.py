@@ -633,6 +633,7 @@ scylla_tests = set([
     'test/boost/observable_test',
     'test/boost/parquet_codec_test',
     'test/boost/parquet_encoding_test',
+    'test/boost/parquet_format_selection_test',
     'test/boost/parquet_mapping_test',
     'test/boost/parquet_reader_test',
     'test/boost/parquet_sstable_reader_test',
