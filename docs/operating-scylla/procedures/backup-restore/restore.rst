@@ -81,6 +81,13 @@ and the ``snapshot`` name. The request body is a JSON array with one entry per d
 each giving the ``datacenter``, the ``endpoint``, ``bucket`` and ``prefix`` of the backup location, and ``manifests``,
 the paths of the table's backup manifests relative to that prefix.
 
+The optional ``repair`` query parameter says whether to repair each tablet once it is restored: ``full``, the default,
+runs a full repair of the tablet, and ``disabled`` leaves it unrepaired. The repair needs every node to support the
+``TABLET_RESTORE_REPAIR`` cluster feature. Until then the restore does not repair, and its task fails once the data is
+restored. A tablet whose repair fails, for example because one of its replicas is down, stays restored, and the restore
+task fails with an error naming it. In both cases the data is in place: repair the table, or run the restore again,
+which skips the SSTables it already downloaded and repairs the tablets.
+
 **Procedure**
 
 #. Complete the :ref:`prerequisites <restore-prerequisites>`. The destination table must use tablets; restoring into a vnode-based table fails.
