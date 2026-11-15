@@ -1873,18 +1873,23 @@ def test_scylla_sstable_format_version(cql, test_keyspace, scylla_data_dir):
     #
     # an sstable component filename looks like:
     #  me-3g8w_00qf_4pbog2i7h2c7am0uoe-big-Data.db
-    sstable_re = re.compile(r"""(?P<version>la|m[cdest])- # the sstable version
+    # or, for an sstable whose Data file is a Parquet file:
+    #  aa-3g8w_00qf_4pbog2i7h2c7am0uoe-pq-Data.db
+    sstable_re = re.compile(r"""(?P<version>la|m[cdest]|aa)- # the sstable version
                                 (?P<id>[^-]+)-          # sstable identifier
-                                (?P<format>\w+)-        # format: 'big'
+                                (?P<format>\w+)-        # format: 'big' or 'pq'
                                 (?P<component>.*)       # component: e.g., 'Data'""", re.X)
+    # "mt" is currently the default version of the native format "big".
+    # "aa" is the only version of the format "pq", which tests can make the
+    # default with SCYLLA_TEST_SSTABLE_DATA_FORMAT_DEFAULT.
+    default_versions = {"big": "mt", "pq": "aa"}
     with scylla_sstable(simple_clustering_table, cql, test_keyspace, scylla_data_dir) as (_, _, sstables):
         for fn in sstables:
             stem = pathlib.Path(fn).stem
             matched = sstable_re.match(stem)
             assert matched is not None, f"unmatched sstable component path: {fn}"
             sstable_version = matched["version"]
-            # "mt" is currently the default sstable format version.
-            assert sstable_version == "mt", f"unexpected sstable format: {sstable_version}"
+            assert sstable_version == default_versions.get(matched["format"]), f"unexpected sstable format: {sstable_version}"
 
 def test_create_local_key_file(scylla_path):
     with tempfile.TemporaryDirectory() as dir:

@@ -731,6 +731,23 @@ struct convert<compression_parameters> {
 static const db::config::value_status error_injection_value_status =
         ENABLE_ERROR_INJECTION_OPTIONS ? db::config::value_status::Used : db::config::value_status::Unused;
 
+// The environment variable that sets the default of test_sstable_data_format_default.
+// A test runner sets it once, and every node and every cql_test_env that the runner
+// starts inherits it. This is how a test suite runs with Parquet as the default.
+static constexpr const char* test_sstable_data_format_default_env = "SCYLLA_TEST_SSTABLE_DATA_FORMAT_DEFAULT";
+
+static sstring test_sstable_data_format_default_from_env() {
+    const char* value = std::getenv(test_sstable_data_format_default_env);
+    if (!value || !*value) {
+        return "native";
+    }
+    const std::string_view v(value);
+    if (v != "native" && v != "parquet") {
+        throw std::invalid_argument(fmt::format("{}: expected 'native' or 'parquet', got '{}'", test_sstable_data_format_default_env, v));
+    }
+    return sstring(v);
+}
+
 static db::tri_mode_restriction_t::mode strict_allow_filtering_default() {
     return db::tri_mode_restriction_t::mode::WARN; // TODO: make it TRUE after Scylla 4.6.
 }
@@ -1567,6 +1584,12 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , enable_sstables_mc_format(this, "enable_sstables_mc_format", value_status::Unused, true, "Enable SSTables 'mc' format to be used as the default file format.  Deprecated, please use \"sstable_format\" instead.")
     , enable_sstables_md_format(this, "enable_sstables_md_format", value_status::Unused, true, "Enable SSTables 'md' format to be used as the default file format.  Deprecated, please use \"sstable_format\" instead.")
     , sstable_format(this, "sstable_format", liveness::LiveUpdate, value_status::Used, "me", "Default sstable file format", {"md", "me", "ms", "mt"})
+    , test_sstable_data_format_default(this, "test_sstable_data_format_default", liveness::LiveUpdate, value_status::Used, test_sstable_data_format_default_from_env(),
+        "For tests only! The data format of new sstables of a table for which no scope stores the sstable_data_format cluster config option: "
+        "'native' or 'parquet'. Tests use it to run with Parquet as the default. "
+        "The environment variable SCYLLA_TEST_SSTABLE_DATA_FORMAT_DEFAULT sets its default. "
+        "System tables and compact storage tables ignore it, and it has no effect until every node knows the sstable_data_format option.",
+        {"native", "parquet"})
     , sstable_compression_user_table_options(this, "sstable_compression_user_table_options", value_status::Used, compression_parameters{compression_parameters::algorithm::lz4_with_dicts},
         "Server-global user table compression options. If enabled, all user tables"
         "will be compressed using the provided options, unless overridden"

@@ -164,6 +164,10 @@ public:
         // The fraction of available_memory that the Parquet writers share
         // for their row group buffers. See register_parquet_writer().
         utils::updateable_value<double> parquet_writer_memory_fraction = utils::updateable_value<double>(0.05);
+        // For tests only: the data format of new sstables of a table for which
+        // no scope stores the `sstable_data_format` cluster config option.
+        // See choose_sstable_version().
+        utils::updateable_value<sstring> test_sstable_data_format_default = utils::updateable_value<sstring>("native");
         // Registers the metrics of the manager, labeled with its name.
         bool register_metrics = false;
     };
@@ -328,12 +332,13 @@ public:
     // option of the table resolves to `parquet`, and `big` otherwise. The
     // option resolves through the table, its keyspace, and the cluster, in
     // this order. A materialized view or a secondary index follows the
-    // table scope of its base table. Some tables never get Parquet: see
-    // may_use_parquet(). The option is read for every new sstable, so a
-    // change takes effect on the next one. At startup, until the cluster
-    // config manager has loaded the option, every table gets the native
-    // format. This covers the resharding of sstables and the flush after the
-    // commitlog replay.
+    // table scope of its base table. When no scope stores the option, the
+    // test-only `test_sstable_data_format_default` applies. Some tables never
+    // get Parquet: see may_use_parquet(). The option is read for every new
+    // sstable, so a change takes effect on the next one. At startup, until
+    // the cluster config manager has loaded the option, every table gets the
+    // native format. This covers the resharding of sstables and the flush
+    // after the commitlog replay.
     //
     // The version within the `big` format follows these rules.
     //

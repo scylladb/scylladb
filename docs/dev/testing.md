@@ -153,6 +153,26 @@ command-line options and cluster topology. All test
 execution is delegated to pytest; `test.py` itself is a thin wrapper
 that builds the appropriate pytest arguments.
 
+### Running tests with Parquet sstables
+
+The environment variable `SCYLLA_TEST_SSTABLE_DATA_FORMAT_DEFAULT` makes
+Parquet the default format of new sstables. Its values are `native` and
+`parquet`. It sets the default of the node option
+`test_sstable_data_format_default`, which applies to every table for which
+no scope stores the `sstable_data_format` cluster config option. System
+tables and compact storage tables ignore it.
+
+Every Scylla node that `test.py` starts, and every `cql_test_env` in a
+boost test, inherits the variable. So one command runs boost tests, cqlpy
+tests, and cluster tests with Parquet as the default:
+
+    $ SCYLLA_TEST_SSTABLE_DATA_FORMAT_DEFAULT=parquet ./test.py --mode=dev test/cqlpy/test_null.py
+
+Tests that create sstables through `test_env` choose the version
+themselves, and the variable does not affect them. A test that needs a
+fixed default sets `test_sstable_data_format_default` in its node
+configuration.
+
 ## How it works
 
 `test.py` is a thin wrapper around `pytest`. On start it invokes `ninja`
