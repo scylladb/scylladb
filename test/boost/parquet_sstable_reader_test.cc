@@ -1170,3 +1170,92 @@ SEASTAR_THREAD_TEST_CASE(test_data_size) {
         }
     }).get();
 }
+
+// Read progress is the total raw size times the rows read, divided by the
+// total rows. It never goes back, and a full scan
+// ends at data_size(), which compaction and view building expect.
+SEASTAR_THREAD_TEST_CASE(test_read_progress) {
+    test_env::do_with_async([] (test_env& env) {
+        auto s = sized_table(compression_parameters(compression_parameters::algorithm::lz4));
+        utils::chunked_vector<mutation> muts;
+        // Partitions of different sizes, so that progress by raw size and
+        // progress by rows differ.
+        for (int pk = 0; pk < 40; ++pk) {
+            muts.push_back(sized_partition(s, pk, pk % 5 + 1, [pk] (int) { return pk % 2 ? 10 : 1000; }));
+        }
+        muts = local_sorted(std::move(muts));
+        BOOST_REQUIRE_GE(muts.size(), 4u);
+        auto sst = write(env, s, muts, aa, [] (sstable_writer_config& cfg) {
+            cfg.parquet_page_set_size = 512;
+            cfg.parquet_row_group_size = 4096;
+        });
+        const uint64_t data_size = sst->data_size();
+        const uint64_t total_rows = sst->get_parquet_file_summary().rows();
+        auto progress_at = [&] (uint64_t row) {
+            return uint64_t((unsigned __int128)data_size * row / total_rows);
+        };
+
+        {
+            progress_checker progress;
+            auto rd = sst->make_full_scan_reader(s, env.make_reader_permit(), nullptr, progress);
+            while (rd().get()) {
+                progress.check();
+            }
+            rd.close().get();
+            BOOST_REQUIRE_EQUAL(progress.total, data_size);
+            BOOST_REQUIRE_EQUAL(progress.final_position.value(), data_size);
+        }
+
+        // Each partition alone. Its first row is the sum of the rows of the
+        // partitions before it.
+        uint64_t first = 0;
+        for (const auto& m : muts) {
+            const uint64_t end = first + std::ranges::distance(m.partition().clustered_rows());
+            // The reader keeps a reference to the range.
+            const auto pr = dht::partition_range::make_singular(m.decorated_key());
+            progress_checker progress;
+            auto rd = sst->make_reader(s, env.make_reader_permit(), pr, s->full_slice(),
+                    nullptr, streamed_mutation::forwarding::no, mutation_reader::forwarding::no, progress);
+            uint64_t rows = 0;
+            while (auto mf = rd().get()) {
+                rows += mf->is_clustering_row();
+                progress.check();
+            }
+            rd.close().get();
+            BOOST_REQUIRE_EQUAL(rows, end - first);
+            BOOST_REQUIRE_EQUAL(progress.total, progress_at(end) - progress_at(first));
+            BOOST_REQUIRE_EQUAL(progress.final_position.value(), progress_at(end));
+            first = end;
+        }
+        BOOST_REQUIRE_EQUAL(first, total_rows);
+    }).get();
+}
+
+// The key estimate for a token range is the range of row ordinals that the
+// index gives, divided by the total rows, times the key count.
+// With one row per partition, it is exact up to the
+// inexactness of the trie index at each end, whatever the sizes of the
+// partitions.
+SEASTAR_THREAD_TEST_CASE(test_key_estimate_uses_ordinals) {
+    test_env::do_with_async([] (test_env& env) {
+        auto s = sized_table(compression_parameters::no_compression());
+        utils::chunked_vector<mutation> muts;
+        for (int pk = 0; pk < 2000; ++pk) {
+            // Some partitions are a hundred times larger than others.
+            muts.push_back(sized_partition(s, pk, 1, [pk] (int) { return pk % 3 ? 10 : 1000; }));
+        }
+        muts = local_sorted(std::move(muts));
+        const auto n = muts.size();
+        BOOST_REQUIRE_GE(n, 100u);
+        auto sst = write(env, s, muts, aa);
+        BOOST_REQUIRE_EQUAL(sst->get_estimated_key_count(), n);
+        BOOST_REQUIRE_EQUAL(sst->estimated_keys_for_range(dht::token_range::make_open_ended_both_sides()).get(), n);
+        for (const auto& [lower, upper] : {std::pair<size_t, size_t>{0, n / 10}, {n / 4, n / 2}, {n / 3, n / 3}, {n / 2, n - 1}}) {
+            const auto r = dht::token_range::make(muts[lower].token(), muts[upper].token());
+            const auto est = sst->estimated_keys_for_range(r).get();
+            testlog.info("[{}, {}]: {}", lower, upper, est);
+            BOOST_REQUIRE_GE(est, upper - lower + 1);
+            BOOST_REQUIRE_LE(est, upper - lower + 3);
+        }
+    }).get();
+}
