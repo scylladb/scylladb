@@ -70,8 +70,12 @@ def keyspace_opts(tablets: bool) -> str:
 async def create_table(manager: ScyllaClusterManager, cql, servers, ks: str, initial: int = 0) -> None:
     """One row with c = initial, durable on every replica before any injection."""
     await cql.run_async(f"CREATE TABLE {ks}.t (pk int PRIMARY KEY, c int)")
-    await cql.run_async(f"INSERT INTO {ks}.t (pk, c) VALUES (1, {initial}) IF NOT EXISTS")
-    await asyncio.gather(*(manager.api.flush_keyspace(s.ip_addr, ks) for s in servers))
+    await cql.run_async(SimpleStatement(f"INSERT INTO {ks}.t (pk, c) VALUES (1, {initial}) IF NOT EXISTS",
+                                        consistency_level=ConsistencyLevel.ALL))
+    # Only the base table: the paxos state table has just been created by that INSERT, and a flush
+    # that catches it before its storage is set up aborts the node.  Its durability is the
+    # commitlog's business anyway.
+    await asyncio.gather(*(manager.api.keyspace_flush(s.ip_addr, ks, "t") for s in servers))
 
 
 async def crash(manager: ScyllaClusterManager, cql, server) -> None:
@@ -96,6 +100,10 @@ async def first_round(manager: ScyllaClusterManager, cql, servers, h2, statement
         await manager.api.enable_injection(s.ip_addr, "paxos_error_before_learn", one_shot=False)
     [row] = await cql.run_async(statement, host=h2)
     assert row.applied, "scenario not reached: the first CAS was not applied"
+    # The CAS returns on n2's learn; n3's accept and the learns of n1 and n3 may still be in flight.
+    await manager.api.wait_for_injection_enter(n3.ip_addr, "paxos_error_before_save_proposal")
+    for s in (n1, n3):
+        await manager.api.wait_for_injection_enter(s.ip_addr, "paxos_error_before_learn")
     await manager.api.disable_injection(n3.ip_addr, "paxos_error_before_save_proposal")
     for s in (n1, n3):
         await manager.api.disable_injection(s.ip_addr, "paxos_error_before_learn")
