@@ -908,6 +908,8 @@ class counting_file_impl : public file_impl {
 public:
     uint64_t reads = 0;
     uint64_t bytes = 0;
+    // The lowest offset read by dma_read_bulk().
+    uint64_t lowest = std::numeric_limits<uint64_t>::max();
     explicit counting_file_impl(file f) : _file(std::move(f)) {}
     future<size_t> write_dma(uint64_t pos, const void* buffer, size_t len, io_intent* intent) override {
         return get_file_impl(_file)->write_dma(pos, buffer, len, intent);
@@ -930,6 +932,7 @@ public:
     future<temporary_buffer<uint8_t>> dma_read_bulk(uint64_t offset, size_t range_size, io_intent* intent) override {
         ++reads;
         bytes += range_size;
+        lowest = std::min(lowest, offset);
         return get_file_impl(_file)->dma_read_bulk(offset, range_size, intent);
     }
     future<> flush() override { return get_file_impl(_file)->flush(); }
@@ -978,8 +981,11 @@ public:
 // sequential read of the Data file, in both directions, and validate()
 // accepts the sstable.
 SEASTAR_THREAD_TEST_CASE(test_deletion_times_beyond_the_index_cap) {
-    test_env::do_with_async([] (test_env& env) {
-        simple_schema ss;
+  // Without static columns, the reader may take the partition tombstone
+  // from the index.
+  for (const auto ws : {simple_schema::with_static::yes, simple_schema::with_static::no}) {
+    test_env::do_with_async([ws] (test_env& env) {
+        simple_schema ss(ws);
         auto s = ss.schema();
         const auto rs = s->make_reversed();
         const auto far = gc_clock::time_point(gc_clock::duration(int64_t(1) << 33));
@@ -1027,6 +1033,7 @@ SEASTAR_THREAD_TEST_CASE(test_deletion_times_beyond_the_index_cap) {
         check({query::clustering_range::make_starting_with({ss.make_ckey(starts.back() + 250), true})});
         check({query::clustering_range::make_ending_with({ss.make_ckey(starts.front() + 250), true})});
     }).get();
+  }
 }
 
 // A reverse read of a few rows of a wide partition reads the pages of those
@@ -1930,5 +1937,57 @@ SEASTAR_THREAD_TEST_CASE(test_metadata_cache_holds_no_permit) {
         BOOST_REQUIRE_EQUAL(cache.memory_usage(), bytes);
         BOOST_REQUIRE(semaphore.available_resources() == initial);
         BOOST_REQUIRE_EQUAL(semaphore.get_stats().current_permits, 0);
+    }).get();
+}
+
+// For a partition with a row index, and a table without static columns,
+// the reader takes the partition's key and tombstone from the index, as
+// the mx reader does. A slice at the end of a wide partition then reads
+// nothing of the partition's first row group, forward or in reverse.
+SEASTAR_THREAD_TEST_CASE(test_partition_head_from_index) {
+    test_env::do_with_async([] (test_env& env) {
+        simple_schema ss(simple_schema::with_static::no);
+        auto s = ss.schema();
+        const auto rs = s->make_reversed();
+        const uint32_t rows = 4000;
+        auto pk = ss.make_pkey();
+        mutation m(s, pk);
+        m.partition().apply(ss.new_tombstone());
+        for (uint32_t i = 0; i < rows; ++i) {
+            ss.add_row(m, ss.make_ckey(i), fmt::format("value {} {}", i, tests::random::get_sstring(64)));
+        }
+        auto sst = write(env, s, {m}, aa, [] (sstable_writer_config& cfg) {
+            cfg.parquet_page_set_size = 4096;
+            cfg.parquet_min_page_size = 1024;
+            cfg.parquet_row_group_size = 64 * 1024;
+        });
+        const auto& summary = sst->get_parquet_file_summary();
+        BOOST_REQUIRE_GT(summary.row_groups(), 4);
+        const auto pr = dht::partition_range::make_singular(pk);
+
+        // Reads `range` with a fresh sstable object, whose caches are empty,
+        // and returns the lowest offset read from the Data file.
+        auto read = [&] (query::clustering_range range, bool reverse) {
+            auto fresh = env.reusable_sst(s, sst).get();
+            auto counting = make_shared<counting_file_impl>(sstables::test(fresh).data_file());
+            sstables::test(fresh).data_file() = file(counting);
+            const auto fwd_slice = partition_slice_builder(*s).with_range(std::move(range)).build();
+            auto permit = env.make_reader_permit();
+            if (reverse) {
+                check_equal(read_all(fresh->make_reader(rs, permit, pr, query::reverse_slice(*s, fwd_slice))),
+                        read_all(make_reversing_reader(make_mutation_reader_from_mutations(s, permit, m, fwd_slice), permit.max_result_size())));
+            } else {
+                check_equal(read_all(fresh->make_reader(s, permit, pr, fwd_slice)),
+                        read_all(make_mutation_reader_from_mutations(s, permit, m, fwd_slice)));
+            }
+            return counting->lowest;
+        };
+        for (const bool reverse : {false, true}) {
+            const auto lowest = read(ss.make_ckey_range(rows - 5, rows - 1), reverse);
+            testlog.info("reverse {}: lowest offset {}, row group 1 starts at {}", reverse, lowest, summary.region_start(1));
+            BOOST_REQUIRE_GE(lowest, summary.region_start(1));
+            // A full read reads the head.
+            BOOST_REQUIRE_LT(read(query::clustering_range::make_open_ended_both_sides(), reverse), summary.region_start(1));
+        }
     }).get();
 }
