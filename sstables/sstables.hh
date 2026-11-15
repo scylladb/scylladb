@@ -936,6 +936,13 @@ public:
     // for iteration through all the rows.
     future<temporary_buffer<char>> data_read(uint64_t pos, size_t len, reader_permit permit);
 
+    // Whether data_read() returns the uncompressed rows that a compression
+    // dictionary is trained on. A Parquet Data file holds encoded and
+    // compressed pages instead.
+    bool can_sample_data_for_dictionary() const noexcept {
+        return !has_parquet_data_file(_version);
+    }
+
 private:
     future<summary_entry&> read_summary_entry(size_t i);
 
