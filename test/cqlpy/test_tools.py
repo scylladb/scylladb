@@ -2931,3 +2931,34 @@ def test_scylla_sstable_parquet_decompress(cql, scylla_path):
         assert res.returncode == 0
         assert "Parquet Data file" in res.stderr
         assert not os.path.exists(f"{pq}.decompressed")
+
+
+def test_scylla_sstable_parquet_encrypted(cql, scylla_path):
+    """File-level encryption wraps a Parquet Data file as any other component:
+    the file on disk is not a Parquet file, and scylla-sstable reads it as it
+    reads an encrypted native sstable."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        schema_file, plain, _ = write_parquet_test_sstables(scylla_path, tmp_dir)
+        key_file = os.path.join(tmp_dir, "secret_key")
+        encrypted_schema_file = os.path.join(tmp_dir, "encrypted_schema.cql")
+        with open(encrypted_schema_file, "w") as f:
+            f.write(PARQUET_SCHEMA + f" AND scylla_encryption_options = {{'key_provider': 'LocalFileSystemKeyProviderFactory', "
+                                     f"'secret_key_file': '{key_file}', 'cipher_algorithm': 'AES/CBC/PKCS5Padding', 'secret_key_strength': 128}}")
+        out_dir = os.path.join(tmp_dir, "encrypted")
+        os.mkdir(out_dir)
+        subprocess.check_call([scylla_path, "sstable", "write", "--schema-file", encrypted_schema_file, "--input-format", "cql",
+                               "--input-file", os.path.join(tmp_dir, "input.cql"), "--output-dir", out_dir, "--sstable-version", "aa"])
+        encrypted = glob.glob(os.path.join(out_dir, "*-pq-Data.db"))
+        assert len(encrypted) == 1
+        encrypted = encrypted[0]
+
+        with open(plain, "rb") as f:
+            assert f.read(4) == b"PAR1"
+        with open(encrypted, "rb") as f:
+            data = f.read()
+            assert data[:4] != b"PAR1" and data[-4:] != b"PAR1"
+
+        schema_args = ["--schema-file", encrypted_schema_file]
+        assert dump_data(scylla_path, encrypted, *schema_args) == dump_data(scylla_path, plain, "--schema-file", schema_file)
+        assert sstable_json(scylla_path, "validate-checksums", encrypted, *schema_args) == {"has_checksums": True, "has_digest": True, "valid": True}
+        assert sstable_json(scylla_path, "validate", encrypted, *schema_args) == {"errors": 0, "valid": True}

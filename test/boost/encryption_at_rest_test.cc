@@ -534,6 +534,100 @@ static std::string read_whole_file(const fs::path& path) {
     return std::string(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
 }
 
+// A table that chooses Parquet sstables (PLAN.md, "Encryption at rest").
+// File-level encryption wraps the Parquet Data file as it wraps any other
+// component, so the Data file on disk is not a Parquet file, while writes,
+// reads, checksum validation, compaction, and a restart work.
+SEASTAR_TEST_CASE(test_parquet_sstables) {
+    tmpdir tmp;
+    const auto keyfile = tmp.path() / "secret_key";
+    const auto options = fmt::format("'key_provider': 'LocalFileSystemKeyProviderFactory', 'secret_key_file': '{}', "
+            "'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", keyfile.string());
+    auto make_config = [&] {
+        auto ext = std::make_shared<db::extensions>();
+        auto cfg = seastar::make_shared<db::config>(ext);
+        cfg->data_file_directories({tmp.path().string()});
+        {
+            boost::program_options::options_description desc;
+            boost::program_options::options_description_easy_init init(&desc);
+            configurable::append_all(*cfg, init);
+        }
+        cfg->test_sstable_data_format_default.set("parquet");
+        return std::make_tuple(cfg, ext);
+    };
+    auto flush = [] (cql_test_env& env) {
+        env.db().invoke_on_all([] (replica::database& db) {
+            return db.flush("ks", "t");
+        }).get();
+    };
+    auto expected_rows = [] (int count) {
+        std::vector<std::vector<bytes_opt>> rows;
+        for (int pk = 0; pk < count; ++pk) {
+            rows.push_back({int32_type->decompose(pk), utf8_type->decompose(fmt::format("value {}", pk))});
+        }
+        return rows;
+    };
+    // The live sstables of the table, which are all Parquet sstables whose
+    // Data file does not start or end with the Parquet magic bytes, and
+    // whose checksums are valid. Returns their count.
+    auto check_sstables = [] (cql_test_env& env) {
+        return env.db().map_reduce0([] (replica::database& db) -> future<size_t> {
+            auto& t = db.find_column_family("ks", "t");
+            size_t count = 0;
+            for (const auto& sst : *t.get_sstables()) {
+                BOOST_REQUIRE(sstables::format_of(sst->get_version()) == sstables::sstable_format_types::pq);
+                BOOST_REQUIRE(!encryption::encryption_provider(*sst).empty());
+                const auto data = read_whole_file(fs::path(fmt::to_string(sst->get_filename())));
+                BOOST_REQUIRE_GE(data.size(), 8);
+                BOOST_REQUIRE_NE(data.substr(0, 4), "PAR1");
+                BOOST_REQUIRE_NE(data.substr(data.size() - 4), "PAR1");
+                const auto res = co_await sstables::validate_checksums_and_digests(sst, db.get_reader_concurrency_semaphore().make_tracking_only_permit(
+                        nullptr, "test", db::no_timeout, {}));
+                BOOST_REQUIRE(res.status == sstables::validate_checksums_status::valid);
+                BOOST_REQUIRE(res.has_checksum);
+                ++count;
+            }
+            co_return count;
+        }, size_t(0), std::plus<size_t>()).get();
+    };
+
+    {
+        auto [cfg, ext] = make_config();
+        co_await do_with_cql_env_thread([&] (cql_test_env& env) {
+            env.execute_cql(fmt::format("CREATE TABLE ks.t (pk int PRIMARY KEY, v text) WITH scylla_encryption_options = {{{}}}", options)).get();
+            // Compaction runs only when the test asks for it, so that it
+            // does not remove the sstables that check_sstables() reads.
+            env.db().invoke_on_all([] (replica::database& db) {
+                return db.find_column_family("ks", "t").disable_auto_compaction();
+            }).get();
+            for (int round = 0; round < 2; ++round) {
+                for (int pk = round * 50; pk < round * 50 + 50; ++pk) {
+                    env.execute_cql(fmt::format("INSERT INTO ks.t (pk, v) VALUES ({}, 'value {}')", pk, pk)).get();
+                }
+                flush(env);
+            }
+            BOOST_REQUIRE_GT(check_sstables(env), 0);
+            assert_that(env.execute_cql("SELECT pk, v FROM ks.t").get()).is_rows().with_rows_ignore_order(expected_rows(100));
+
+            env.db().invoke_on_all([] (replica::database& db) {
+                return db.find_column_family("ks", "t").compact_all_sstables(tasks::make_empty_task_info());
+            }).get();
+            BOOST_REQUIRE_GT(check_sstables(env), 0);
+            assert_that(env.execute_cql("SELECT pk, v FROM ks.t").get()).is_rows().with_rows_ignore_order(expected_rows(100));
+        }, cfg, {}, cql_test_init_configurables{ *ext });
+    }
+    {
+        auto [cfg, ext] = make_config();
+        co_await do_with_cql_env_thread([&] (cql_test_env& env) {
+            env.db().invoke_on_all([] (replica::database& db) {
+                return db.find_column_family("ks", "t").disable_auto_compaction();
+            }).get();
+            BOOST_REQUIRE_GT(check_sstables(env), 0);
+            assert_that(env.execute_cql("SELECT pk, v FROM ks.t").get()).is_rows().with_rows_ignore_order(expected_rows(100));
+        }, cfg, {}, cql_test_init_configurables{ *ext });
+    }
+}
+
 // Writes a commitlog segment with a single entry to `dir` and returns its path.
 static fs::path write_commitlog_segment(const fs::path& dir, const db::extensions& exts) {
     fs::create_directories(dir);
