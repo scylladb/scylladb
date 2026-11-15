@@ -465,8 +465,7 @@ void buffered_writer::on_queued_write_removed(const queued_write& w) noexcept {
 }
 
 void buffered_writer::fail_queued_write(queued_write& request, std::exception_ptr ep) noexcept {
-    request.accepted_pr.set_exception(ep);
-    request.persisted_pr.set_exception(std::move(ep));
+    request.accepted_pr.set_exception(std::move(ep));
 }
 
 bool buffered_writer::maybe_advance_head() noexcept {
