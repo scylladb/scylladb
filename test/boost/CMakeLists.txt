@@ -219,6 +219,7 @@ if(Parquet_FOUND)
   foreach(name
       parquet_codec_test
       parquet_encoding_test
+      parquet_end_to_end_test
       parquet_mapping_test
       parquet_reader_test
       parquet_sstable_writer_test
