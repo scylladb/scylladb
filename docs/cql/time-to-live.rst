@@ -90,8 +90,6 @@ TTL with  LWT
 
 Refer to :doc:`LWT </features/lwt/>` for more information.
 
-The ``gc_grace_seconds`` parameter is defined :ref:`here <create-table-general-options>`.
-
 
 
 TTL for a Collection
