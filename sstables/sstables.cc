@@ -3558,6 +3558,15 @@ future<input_stream<char>> sstable::data_stream(uint64_t pos, size_t len,
     auto stream_creator = [this, f](uint64_t pos, uint64_t len, file_input_stream_options options) mutable -> future<input_stream<char>> {
         co_return input_stream<char>(co_await _storage->make_data_or_index_source(*this, component_type::Data, std::move(f), pos, len, std::move(options)));
     };
+    if (has_parquet_data_file(_version)) {
+        auto stream = co_await stream_creator(pos, len, std::move(options));
+        // The digest covers the whole file. A read of a part of it cannot
+        // check anything, because the pages are not decoded here.
+        if (digest && pos == 0 && len >= _data_file_size) {
+            co_return make_digest_checked_input_stream(std::move(stream), *digest, std::move(error_handler));
+        }
+        co_return stream;
+    }
     if (_components->compression && raw == raw_stream::no) {
         if (has_m_format_checksums(_version)) {
             co_return make_compressed_file_m_format_input_stream(stream_creator, &_components->compression,
@@ -3838,6 +3847,32 @@ future<lw_shared_ptr<checksum>> sstable::read_checksum() {
     co_return std::move(checksum);
 }
 
+// Validates the digest of a Parquet Data file, by reading the whole file.
+// The checksums of the pages are not validated: that is left for later.
+static future<validate_checksums_result> validate_parquet_data_file_digest(shared_sstable sst, reader_permit permit,
+        std::optional<uint32_t> digest, validate_checksums_result ret) {
+    if (!digest) {
+        sstlog.warn("No digest available for SSTable: {}", sst->get_filename());
+        ret.status = validate_checksums_status::no_checksum;
+        co_return ret;
+    }
+    auto stream = co_await sst->data_stream(0, sst->ondisk_data_size(), permit, nullptr, nullptr,
+            sstable::raw_stream::yes, integrity_check::yes, [&ret] (sstring msg) {
+                sstlog.error("{}", msg);
+                ret.status = validate_checksums_status::invalid;
+            });
+    std::exception_ptr ex;
+    try {
+        while (!(co_await stream.read()).empty()) {
+        }
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    co_await stream.close();
+    maybe_rethrow_exception(std::move(ex));
+    co_return ret;
+}
+
 future<validate_checksums_result> validate_checksums_and_digests(shared_sstable sst, reader_permit permit) {
     auto valid = true;
     std::exception_ptr ex;
@@ -3868,6 +3903,9 @@ future<validate_checksums_result> validate_checksums_and_digests(shared_sstable 
     }
 
     const auto digest = co_await sst->read_digest();
+    if (has_parquet_data_file(sst->get_version())) {
+        co_return co_await validate_parquet_data_file_digest(sst, std::move(permit), digest, ret);
+    }
     auto checksum = co_await sst->read_checksum();
     if (!checksum && !sst->get_compression()) {
         sstlog.warn("No checksums available for SSTable: {}", sst->get_filename());

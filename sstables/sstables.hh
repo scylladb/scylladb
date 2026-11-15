@@ -914,6 +914,11 @@ public:
     // When created with `integrity_check::yes`, the integrity mechanisms
     // of the underlying data streams will be enabled.
     //
+    // A Parquet Data file is always streamed as-is: its pages carry their
+    // own compression and checksums, and the stream does not decode them.
+    // With `integrity_check::yes`, a stream of the whole file checks the
+    // digest. A stream of a part of the file checks nothing.
+    //
     // The `error_handler` parameter allows to customize the error handling
     // logic when a checksum or digest mismatch is detected on an
     // integrity-checked stream with no compression. The parameter is ignored
@@ -1380,6 +1385,12 @@ private:
 // Digest component.
 // `has_checksum` is `true` if the sstable is compressed or has a CRC
 // component.
+//
+// A Parquet Data file (has_parquet_data_file()) has neither: its pages carry
+// their own checksums. For it, this function validates the digests of the
+// components and the digest of the whole Data file, but not the checksums
+// of the pages. `has_checksum` is then `false`. The status is `valid` or
+// `invalid` by the digest, and `no_checksum` if Digest.crc32 is missing.
 //
 // Validation errors are logged individually.
 enum class validate_checksums_status {

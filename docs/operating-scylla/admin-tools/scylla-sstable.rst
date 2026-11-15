@@ -719,6 +719,10 @@ Errors found are logged to stderr. The output contains an object for each SStabl
 for which ``CRC.db`` is not present in ``TOC.txt``), if the SStable has a digest, and if the SStable matches all checksums and the digest. If no digest is available,
 validation will proceed using only the per-chunk checksums.
 
+An SStable whose data component is a Parquet file (format ``pq``) has no ``CRC.db`` and no
+compressed chunks: each page of the file carries its own checksum. For such an SStable, this
+operation validates only the digest, and reports ``"has_checksums": false``.
+
 The content is dumped in JSON, using the following schema:
 
 .. code-block:: none
