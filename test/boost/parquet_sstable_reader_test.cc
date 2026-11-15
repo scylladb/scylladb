@@ -37,6 +37,7 @@
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/util/closeable.hh>
 
+#include "mutation/mutation_rebuilder.hh"
 #include "partition_slice_builder.hh"
 #include "readers/from_fragments.hh"
 #include "readers/from_mutations.hh"
@@ -1786,5 +1787,148 @@ SEASTAR_THREAD_TEST_CASE(test_compression_parameters_of_codec) {
             BOOST_REQUIRE(parquet::compression_parameters_of(codec).get_algorithm() == expected);
             BOOST_REQUIRE(parquet::make_writer_config(cfg, parquet::compression_parameters_of(codec)).codec == codec);
         }
+    }).get();
+}
+
+// The OffsetIndexes and dictionaries of an sstable are cached in the LSA
+// region and in the LRU of the cache_tracker, as index entries.
+// Memory reclaim evicts them through the cache_tracker, and a read fetches
+// them again. A reader keeps working when the entries that it uses are
+// evicted under it.
+SEASTAR_THREAD_TEST_CASE(test_metadata_cache_eviction) {
+    test_env::do_with_async([] (test_env& env) {
+        simple_schema ss;
+        auto s = ss.schema();
+        auto pk = ss.make_pkey();
+        mutation m(s, pk);
+        for (uint32_t i = 0; i < 2000; ++i) {
+            // Few distinct values, so that the chunks have dictionaries.
+            ss.add_row(m, ss.make_ckey(i), fmt::format("value {}", i % 7));
+        }
+        auto sst = write(env, s, {m}, aa, [] (sstable_writer_config& cfg) {
+            cfg.parquet_page_set_size = 1024;
+            cfg.parquet_min_page_size = 256;
+            cfg.parquet_row_group_size = 4096;
+        });
+        const auto row_groups = sst->get_parquet_file_summary().row_groups();
+        BOOST_REQUIRE_GT(row_groups, 4);
+        auto& tracker = env.manager().get_cache_tracker();
+        const auto& tracker_stats = tracker.get_parquet_metadata_cache_stats();
+        const auto& cache = sst->get_parquet_read_state().cache();
+        const auto& stats = parquet::local_shard_stats;
+        const std::vector<mutation> expected{m};
+        auto read = [&] {
+            check_equal(read_all(sst->make_reader(s, env.make_reader_permit(), query::full_partition_range, s->full_slice())), expected);
+        };
+
+        const auto misses = stats.offset_index_cache_misses;
+        read();
+        BOOST_REQUIRE_GT(cache.size(), row_groups);
+        BOOST_REQUIRE_GT(cache.memory_usage(), 0);
+        BOOST_REQUIRE_EQUAL(tracker_stats.used_bytes, cache.memory_usage());
+        BOOST_REQUIRE_GE(tracker.region().occupancy().used_space(), cache.memory_usage());
+        BOOST_REQUIRE_GE(stats.offset_index_cache_misses - misses, row_groups);
+        // A second read finds every OffsetIndex block in the cache.
+        const auto index_reads = stats.offset_index_reads;
+        read();
+        BOOST_REQUIRE_EQUAL(stats.offset_index_reads, index_reads);
+
+        // The evictor of the region evicts the entries in LRU order.
+        const auto evictions = stats.metadata_cache_evictions;
+        const auto entries = cache.size();
+        while (cache.size() && tracker.region().evict_some() == memory::reclaiming_result::reclaimed_something) {}
+        BOOST_REQUIRE_EQUAL(cache.size(), 0);
+        BOOST_REQUIRE_EQUAL(tracker_stats.used_bytes, 0);
+        BOOST_REQUIRE_EQUAL(stats.metadata_cache_evictions - evictions, entries);
+        read();
+        BOOST_REQUIRE_GT(stats.offset_index_reads, index_reads);
+        BOOST_REQUIRE_EQUAL(cache.size(), entries);
+
+        // Memory reclaim evicts from the LRU, here all of it, while a reader
+        // is in the middle of the partition.
+        auto rd = sst->make_reader(s, env.make_reader_permit(), query::full_partition_range, s->full_slice());
+        auto close = deferred_close(rd);
+        mutation_rebuilder_v2 rebuilder(s);
+        for (int i = 0; i < 1000; ++i) {
+            auto mf = rd().get();
+            BOOST_REQUIRE(mf);
+            rebuilder.consume(std::move(*mf));
+        }
+        tracker.clear();
+        BOOST_REQUIRE_EQUAL(cache.size(), 0);
+        BOOST_REQUIRE_EQUAL(tracker_stats.used_bytes, 0);
+        while (auto mf = rd().get()) {
+            rebuilder.consume(std::move(*mf));
+        }
+        auto result = rebuilder.consume_end_of_stream();
+        BOOST_REQUIRE(result);
+        assert_that(*result).is_equal_to(m);
+        BOOST_REQUIRE_GT(cache.size(), 0);
+
+        // Dropping the caches of the sstable evicts its entries.
+        sst->drop_caches().get();
+        BOOST_REQUIRE_EQUAL(cache.size(), 0);
+        BOOST_REQUIRE_EQUAL(tracker_stats.used_bytes, 0);
+    }).get();
+}
+
+// A read of an uncompressed sstable with dictionaries leaves no memory
+// charged to its permit once the reader is closed, while the cache holds
+// its OffsetIndexes and dictionary pages. Concurrent readers populate the
+// cache once.
+SEASTAR_THREAD_TEST_CASE(test_metadata_cache_holds_no_permit) {
+    test_env::do_with_async([] (test_env& env) {
+        auto s = sized_table(compression_parameters::no_compression());
+        utils::chunked_vector<mutation> muts;
+        for (int32_t pk = 0; pk < 4; ++pk) {
+            mutation m(s, partition_key::from_single_value(*s, int32_type->decompose(pk)));
+            for (int32_t i = 0; i < 2000; ++i) {
+                // Few distinct values, so that the chunks have dictionaries.
+                m.set_clustered_cell(clustering_key::from_single_value(*s, int32_type->decompose(i)), "v",
+                        data_value(fmt::format("value {}", i % 7)), api::timestamp_type(1));
+            }
+            muts.push_back(std::move(m));
+        }
+        std::ranges::sort(muts, mutation_decorated_key_less_comparator());
+        auto sst = write(env, s, muts, aa, [] (sstable_writer_config& cfg) {
+            cfg.parquet_page_set_size = 1024;
+            cfg.parquet_min_page_size = 256;
+            cfg.parquet_row_group_size = 4096;
+        });
+        const auto& summary = sst->get_parquet_file_summary();
+        BOOST_REQUIRE_GT(summary.row_groups(), 2);
+        const auto& cache = sst->get_parquet_read_state().cache();
+        const auto& stats = parquet::local_shard_stats;
+
+        reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::for_tests{}, "test", 100, 100 << 20, 100,
+                utils::updateable_value<uint32_t>(2));
+        auto stop = deferred_stop(semaphore);
+        const auto initial = semaphore.available_resources();
+        auto read = [&] {
+            auto rd = sst->make_reader(s, semaphore.obtain_permit(s, "read", 0, db::no_timeout, {}).get(),
+                    query::full_partition_range, s->full_slice());
+            auto close = deferred_close(rd);
+            while (rd().get()) {}
+        };
+        const auto dictionary_misses = stats.dictionary_cache_misses;
+        read();
+        BOOST_REQUIRE_GT(stats.dictionary_cache_misses, dictionary_misses);
+        BOOST_REQUIRE_GT(cache.size(), summary.row_groups());
+        BOOST_REQUIRE(semaphore.available_resources() == initial);
+        BOOST_REQUIRE_EQUAL(semaphore.get_stats().current_permits, 0);
+
+        // The entries stay, and readers that run at once find them or add
+        // them once.
+        const auto entries = cache.size();
+        const auto bytes = cache.memory_usage();
+        when_all_succeed(seastar::async(read), seastar::async(read)).get();
+        BOOST_REQUIRE_EQUAL(cache.size(), entries);
+        BOOST_REQUIRE_EQUAL(cache.memory_usage(), bytes);
+        env.manager().get_cache_tracker().clear();
+        when_all_succeed(seastar::async(read), seastar::async(read), seastar::async(read)).get();
+        BOOST_REQUIRE_EQUAL(cache.size(), entries);
+        BOOST_REQUIRE_EQUAL(cache.memory_usage(), bytes);
+        BOOST_REQUIRE(semaphore.available_resources() == initial);
+        BOOST_REQUIRE_EQUAL(semaphore.get_stats().current_permits, 0);
     }).get();
 }

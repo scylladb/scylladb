@@ -4462,6 +4462,8 @@ future<> init_metrics() {
             sm::description("Lookups of the dictionary of a column chunk of a Parquet Data file that the cache served")),
         sm::make_counter("parquet_dictionary_cache_misses", [&pq] { return pq.dictionary_cache_misses; },
             sm::description("Lookups of the dictionary of a column chunk of a Parquet Data file that the cache did not serve")),
+        sm::make_counter("parquet_metadata_cache_evictions", [&pq] { return pq.metadata_cache_evictions; },
+            sm::description("OffsetIndexes of row groups and dictionaries of Parquet Data files that memory reclaim evicted from their cache")),
         sm::make_gauge("parquet_metadata_cache_bytes", [&pq] { return pq.metadata_cache_bytes; },
             sm::description("Bytes of the OffsetIndexes and dictionaries of Parquet Data files that the caches hold in the cache region")),
         sm::make_gauge("parquet_footer_summary_bytes", [&pq] { return pq.footer_summary_bytes; },
