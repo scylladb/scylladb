@@ -135,6 +135,7 @@ private:
     entry* find(const key& k) noexcept;
     // Erases an entry that is not linked in the LRU, and frees it.
     void erase(entry& e) noexcept;
+    void count_lookup(const key& k, bool hit) noexcept;
 public:
     metadata_cache(logalloc::region& region, lru& lru, metadata_cache_stats& stats) noexcept
         : _region(region), _lru(lru), _stats(stats) {}

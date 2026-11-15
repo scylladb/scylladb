@@ -193,6 +193,8 @@ struct fetch_stats {
     uint64_t largest_request = 0;
     /// Pages that cursors asked for.
     uint64_t pages_taken = 0;
+    /// Dictionary pages that cursors asked for.
+    uint64_t dictionary_pages_taken = 0;
     /// Pages that cursors asked for and that were not fetched ahead.
     uint64_t page_misses = 0;
     /// The most bytes that were fetched or in flight and not yet taken,

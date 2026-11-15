@@ -16,6 +16,10 @@
 #include "api/api-doc/system.json.hh"
 #include <vector>
 #include <seastar/http/exception.hh>
+#include "sstables/compressor.hh"
+#include "sstables/parquet/compression.hh"
+#include "sstables/parquet/file_summary.hh"
+#include "sstables/parquet/sstable_writer.hh"
 #include "sstables/sstables.hh"
 #include "sstables/metadata_collector.hh"
 #include "utils/assert.hh"
@@ -320,6 +324,16 @@ public:
     }
 };
 
+// The page compression codec of an sstable with a Parquet Data file, or
+// nothing for another sstable.
+static std::optional<sstables::parquet::compression_codec> parquet_codec(const sstables::sstable& sst) {
+    if (!sstables::has_parquet_data_file(sst.get_version())) {
+        return std::nullopt;
+    }
+    const auto& columns = sst.get_parquet_file_summary().columns();
+    return columns.empty() ? sstables::parquet::compression_codec::uncompressed : columns.front().codec;
+}
+
 static double get_compression_ratio(replica::column_family& cf) {
     sum_ratio<double> result;
     for (auto sstables = cf.get_sstables(); auto& i : *sstables) {
@@ -487,6 +501,26 @@ sstable_info(sharded<replica::database>& db, std::unique_ptr<http::request> req)
                                     e.value = sstring(cp.name());
                                     nm.attributes.push(std::move(e));
                                 }
+                                info.extended_properties.push(std::move(nm));
+                            } else if (const auto codec = parquet_codec(*sstable); codec && *codec != sstables::parquet::compression_codec::uncompressed) {
+                                // A Parquet Data file has no CompressionInfo.db. Its
+                                // footer records the compression codec of each column,
+                                // and the writer uses the codec of the table's compression
+                                // for all of them. The footer does not record the
+                                // level or the use of dictionaries, so only the
+                                // algorithm is reported, as for a native sstable
+                                // without the hidden options.
+                                ss::named_maps nm;
+                                nm.group = "compression_parameters";
+                                ss::mapper e;
+                                e.key = compression_parameters::SSTABLE_COMPRESSION;
+                                e.value = compression_parameters::algorithm_to_qualified_name(
+                                        sstables::parquet::compression_parameters_of(*codec).get_algorithm());
+                                nm.attributes.push(std::move(e));
+                                ss::mapper c;
+                                c.key = "parquet_codec";
+                                c.value = sstring(sstables::parquet::codec_name(*codec));
+                                nm.attributes.push(std::move(c));
                                 info.extended_properties.push(std::move(nm));
                             }
 

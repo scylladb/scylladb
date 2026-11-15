@@ -11,6 +11,8 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 
+#include "sstables/parquet/stats.hh"
+
 namespace sstables::parquet {
 
 metadata_cache::entry::~entry() {
@@ -45,6 +47,7 @@ void metadata_cache::erase(entry& e) noexcept {
     _entries.erase(_entries.iterator_to(e));
     _used_bytes -= e._size;
     _stats.used_bytes -= e._size;
+    local_shard_stats.metadata_cache_bytes -= e._size;
     delete &e;
 }
 
@@ -57,9 +60,18 @@ bool metadata_cache::contains(const key& k) const noexcept {
     return _entries.find(k) != _entries.end();
 }
 
+void metadata_cache::count_lookup(const key& k, bool hit) noexcept {
+    if (k.column == key::offset_index) {
+        ++(hit ? local_shard_stats.offset_index_cache_hits : local_shard_stats.offset_index_cache_misses);
+    } else {
+        ++(hit ? local_shard_stats.dictionary_cache_hits : local_shard_stats.dictionary_cache_misses);
+    }
+}
+
 future<std::optional<metadata_cache::cached_bytes>> metadata_cache::get(key k, std::optional<reader_permit> permit) {
     entry* e = find(k);
     if (!e) {
+        count_lookup(k, false);
         co_return std::nullopt;
     }
     const uint64_t id = e->_id;
@@ -76,6 +88,7 @@ future<std::optional<metadata_cache::cached_bytes>> metadata_cache::get(key k, s
     while (true) {
         e = find(k);
         if (!e || e->_id != id) {
+            count_lookup(k, false);
             co_return std::nullopt;
         }
         const size_t n = std::min(size - pos, fragmented_temporary_buffer::default_fragment_size);
@@ -100,6 +113,7 @@ future<std::optional<metadata_cache::cached_bytes>> metadata_cache::get(key k, s
         co_await coroutine::maybe_yield();
     }
     _lru.touch(*e);
+    count_lookup(k, true);
     co_return std::move(r);
 }
 
@@ -111,6 +125,7 @@ future<std::optional<metadata_cache::cached_index>> metadata_cache::get_index(co
     const key k = index_key(g);
     entry* e = find(k);
     if (!e) {
+        count_lookup(k, false);
         co_return std::nullopt;
     }
     const uint64_t id = e->_id;
@@ -130,7 +145,8 @@ future<std::optional<metadata_cache::cached_index>> metadata_cache::get_index(co
     while (true) {
         e = find(k);
         if (!e || e->_id != id) {
-                co_return std::nullopt;
+            count_lookup(k, false);
+            co_return std::nullopt;
         }
         bool done;
         {
@@ -143,6 +159,7 @@ future<std::optional<metadata_cache::cached_index>> metadata_cache::get_index(co
         co_await coroutine::maybe_yield();
     }
     _lru.touch(*e);
+    count_lookup(k, true);
     co_return cached_index{std::move(copier).release(), std::move(memory)};
 }
 
@@ -166,6 +183,7 @@ void metadata_cache::insert(key k, byte_array_view bytes) noexcept {
         _lru.add(*e);
         _used_bytes += e->_size;
         _stats.used_bytes += e->_size;
+        local_shard_stats.metadata_cache_bytes += e->_size;
         e.release();
     } catch (const std::bad_alloc&) {
         // Nothing was inserted.

@@ -9,6 +9,7 @@
 #include "sstables/parquet/sstable_writer.hh"
 
 #include "sstables/parquet/mapping_writer.hh"
+#include "sstables/parquet/stats.hh"
 #include "sstables/compressor.hh"
 #include "sstables/filter_writer.hh"
 #include "sstables/large_data_tracker.hh"
@@ -368,6 +369,13 @@ public:
         _cfg.monitor->on_data_write_completed();
 
         const writer_result result = _mapping->finish();
+        const auto& ws = file().stats();
+        auto& stats = local_shard_stats;
+        stats.data_pages_written += ws.data_pages;
+        stats.dictionary_pages_written += ws.dictionary_pages;
+        stats.dictionary_fallbacks += ws.dictionary_fallbacks;
+        stats.row_groups_written += ws.row_groups;
+        stats.late_chunks_written += ws.late_chunks;
         _mapping.reset();
         if (_schema.get_compressor_params().compression_enabled() && result.raw_size) {
             _collector.add_compression_ratio(result.file_size, result.raw_size);

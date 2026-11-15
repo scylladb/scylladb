@@ -87,6 +87,7 @@
 #include "readers/mutation_source.hh"
 #include "readers/reversing.hh"
 #include "sstables/parquet/file_verifier.hh"
+#include "sstables/parquet/stats.hh"
 #include "sstables/parquet/sstable_reader.hh"
 #include "readers/forwardable.hh"
 #include "sstables/trie/bti_index.hh"
@@ -2113,6 +2114,8 @@ future<> sstable::open_parquet_data_file() {
                     filename(component_type::Data));
         }
         _components->parquet_summary.emplace(std::move(summary));
+        _components->parquet_summary_memory = parquet::accounted_memory(&parquet::shard_stats::footer_summary_bytes,
+                _components->parquet_summary->memory_usage());
     }
     try {
         auto& tracker = _manager.get_cache_tracker();
@@ -4439,6 +4442,41 @@ void register_index_page_metrics(seastar::metrics::metric_groups& metrics, parti
 future<> init_metrics() {
   return seastar::smp::invoke_on_all([] {
     namespace sm = seastar::metrics;
+    const auto& pq = parquet::local_shard_stats;
+    metrics.add_group("sstables", {
+        sm::make_counter("parquet_read_requests", [&pq] { return pq.read_requests; },
+            sm::description("Read requests that readers of Parquet Data files issued for pages and OffsetIndex blocks")),
+        sm::make_counter("parquet_read_bytes", [&pq] { return pq.bytes_read; },
+            sm::description("Bytes that readers of Parquet Data files read for pages and OffsetIndex blocks")),
+        sm::make_counter("parquet_data_pages_read", [&pq] { return pq.data_pages_read; },
+            sm::description("Data pages that readers of Parquet Data files decoded")),
+        sm::make_counter("parquet_dictionary_pages_read", [&pq] { return pq.dictionary_pages_read; },
+            sm::description("Dictionary pages that readers of Parquet Data files read, because the dictionary was not cached")),
+        sm::make_counter("parquet_offset_index_reads", [&pq] { return pq.offset_index_reads; },
+            sm::description("Read requests for the OffsetIndex blocks of row groups of Parquet Data files")),
+        sm::make_counter("parquet_offset_index_cache_hits", [&pq] { return pq.offset_index_cache_hits; },
+            sm::description("Lookups of the OffsetIndexes of a row group of a Parquet Data file that the cache served")),
+        sm::make_counter("parquet_offset_index_cache_misses", [&pq] { return pq.offset_index_cache_misses; },
+            sm::description("Lookups of the OffsetIndexes of a row group of a Parquet Data file that the cache did not serve")),
+        sm::make_counter("parquet_dictionary_cache_hits", [&pq] { return pq.dictionary_cache_hits; },
+            sm::description("Lookups of the dictionary of a column chunk of a Parquet Data file that the cache served")),
+        sm::make_counter("parquet_dictionary_cache_misses", [&pq] { return pq.dictionary_cache_misses; },
+            sm::description("Lookups of the dictionary of a column chunk of a Parquet Data file that the cache did not serve")),
+        sm::make_gauge("parquet_metadata_cache_bytes", [&pq] { return pq.metadata_cache_bytes; },
+            sm::description("Bytes of the OffsetIndexes and dictionaries of Parquet Data files that the caches hold in the cache region")),
+        sm::make_gauge("parquet_footer_summary_bytes", [&pq] { return pq.footer_summary_bytes; },
+            sm::description("Bytes of the footer summaries of the open Parquet Data files that this shard owns")),
+        sm::make_counter("parquet_data_pages_written", [&pq] { return pq.data_pages_written; },
+            sm::description("Data pages in the Parquet Data files that writers finished")),
+        sm::make_counter("parquet_dictionary_pages_written", [&pq] { return pq.dictionary_pages_written; },
+            sm::description("Dictionary pages in the Parquet Data files that writers finished")),
+        sm::make_counter("parquet_dictionary_fallbacks", [&pq] { return pq.dictionary_fallbacks; },
+            sm::description("Column chunks of Parquet Data files whose dictionary outgrew its limit, so that their later pages use another encoding")),
+        sm::make_counter("parquet_row_groups_written", [&pq] { return pq.row_groups_written; },
+            sm::description("Row groups in the Parquet Data files that writers finished")),
+        sm::make_counter("parquet_late_chunks_written", [&pq] { return pq.late_chunks_written; },
+            sm::description("All-null column chunks that writers of Parquet Data files added at the end of a file, for columns that got their first value late")),
+    });
     metrics.add_group("sstables", {
         sm::make_counter("pi_cache_hits_l0", [] { return promoted_index_cache_metrics.hits_l0; },
             sm::description("Number of requests for promoted index block in state l0 which didn't have to go to the page cache")),
