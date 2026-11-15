@@ -725,7 +725,8 @@ validation will proceed using only the per-chunk checksums.
 
 An SStable whose data component is a Parquet file (format ``pq``) has no ``CRC.db`` and no
 compressed chunks: each page of the file carries its own checksum. For such an SStable, this
-operation validates only the digest, and reports ``"has_checksums": false``.
+operation validates the checksum of every page, the checksum of the file's footer, and the digest,
+and reports ``"has_checksums": true``.
 
 The content is dumped in JSON, using the following schema:
 
