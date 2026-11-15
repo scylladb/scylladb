@@ -4,15 +4,16 @@
 
 # Tests for materialized views
 
+import concurrent.futures
 import time
 import pytest
 from . import rest_api
 
-from .util import new_test_table, unique_name, new_materialized_view, new_secondary_index, new_type, new_function, is_scylla
+from .util import new_test_table, new_test_keyspace, sleep_till_whole_second, unique_name, new_materialized_view, new_secondary_index, new_type, new_function, is_scylla
 from cassandra.protocol import ConfigurationException, InvalidRequest, SyntaxException
 from cassandra.cluster import ConsistencyLevel
 from cassandra.query import SimpleStatement
-from .rest_api import scylla_inject_error, wait_for_injection_enter, message_injection
+from .rest_api import scylla_inject_error, wait_for_injection_enter, wait_for_injection_parameter, message_injection
 
 from . import nodetool
 
@@ -1976,3 +1977,79 @@ def test_mv_where_case_sensitive_function_name(cql, test_keyspace):
                 ks, view = mv.split('.')
                 [where_clause] = [r[0] for r in cql.execute(f"SELECT where_clause FROM system_schema.views WHERE keyspace_name = '{ks}' AND view_name = '{view}'")]
                 assert f'{name}()' in where_clause
+
+# The view build reads only the base table's sstables, so while it runs it can
+# miss a recent change still in the base's memtable, and write to the view
+# cells which a newer view update (from that change) has already deleted. The
+# stale cells keep their old timestamps, so the newer tombstones still delete
+# them - as long as the tombstones exist. This test reproduces SCYLLADB-4747,
+# where a view compaction purged these tombstones while the stale cells moved
+# from the memtable to a new sstable, which the compaction didn't check for
+# data that its tombstones delete. The stale cells then came back to life, and
+# kept a view row alive after its base row was deleted. It is a rare race that
+# was seen once in CI, in test_partial_update_with_unselected_collections
+# (SCYLLADB-6308). Here, error injections pause the view build and the view
+# compaction at the right moments. The view uses "immediate" mode tombstone
+# GC, which purges a tombstone once a second has passed. When this test was
+# written, this was also what the default "repair" mode did in an RF=1
+# keyspace (and how it happened in CI), but we set it explicitly so the test
+# doesn't depend on that.
+@pytest.mark.xfail(reason='SCYLLADB-4747', strict=True)
+def test_view_build_cells_resurrected_by_compaction(cql, scylla_only):
+    build_injection = 'view_building_worker_pause_after_flush_before_recording_flushed_views'
+    compaction_injection = 'compaction_wait_before_reading'
+    # The row cache may still have the purged tombstones, and hide the bug, so
+    # disable it, and read from the memtables and sstables.
+    no_cache = "WITH caching = {'enabled': 'false'}"
+    # A single tablet, so the view has a single compaction, which the
+    # compaction injection pauses.
+    ks_opts = "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}"
+    with new_test_keyspace(cql, ks_opts) as ks, \
+            new_test_table(cql, ks, 'p int, c int, l list<int>, primary key (p, c)', extra=no_cache) as table:
+        with scylla_inject_error(cql, build_injection):
+            with new_materialized_view(cql, table, 'p, c', 'c, p', 'p IS NOT NULL AND c IS NOT NULL',
+                    extra=no_cache + " AND tombstone_gc = {'mode': 'immediate'}") as mv:
+                # The view build has flushed the base, and is paused before
+                # it reads the base's sstables.
+                wait_for_injection_enter(cql, build_injection)
+                # Add list items 1, 2 and 3. The view gets them through a
+                # view update, and flush_all() puts them in base and view
+                # sstables.
+                cql.execute(f'UPDATE {table} SET l = l + [1, 2, 3] WHERE p = 1 AND c = 1')
+                nodetool.flush_all(cql)
+                # Delete list items 1 and 2. This stays in the base memtable,
+                # which the build won't read, so the build will write items
+                # 1, 2 and 3 to the view again. Flush the view only, so its
+                # tombstones for items 1 and 2 are in a second view sstable.
+                cql.execute(f'UPDATE {table} SET l = l - [1, 2] WHERE p = 1 AND c = 1')
+                nodetool.flush(cql, mv)
+                # Let the build write its stale items 1, 2 and 3 to the view
+                # memtable, a second later than the tombstones. So when the
+                # compaction below runs, the tombstones are purgeable, and the
+                # commitlog no longer keeps them from being purged once the
+                # stale items are flushed.
+                sleep_till_whole_second()
+                message_injection(cql, build_injection)
+                wait_for_view_built(cql, mv)
+                nodetool.flush(cql, table)
+                # Compact the view without flushing its memtable first, and
+                # pause the compaction after it started, before it reads its
+                # sstables. While it's paused, flush_all() moves the stale
+                # items to a new sstable, and drops the commitlog segments
+                # that kept the tombstones from being purged.
+                with scylla_inject_error(cql, compaction_injection, parameters={'table_name': mv}):
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                        compaction = executor.submit(nodetool.compact, cql, mv, flush_memtables=False)
+                        # Always resume the compaction, or it waits for the injection's timeout.
+                        try:
+                            wait_for_injection_parameter(cql, compaction_injection, 'suspended')
+                            nodetool.flush_all(cql)
+                        finally:
+                            message_injection(cql, compaction_injection)
+                        compaction.result()
+                # Delete the last list item, so the base row is dead.
+                cql.execute(f'UPDATE {table} SET l = l - [3] WHERE p = 1 AND c = 1')
+                # Check that the base row is gone
+                assert list(cql.execute(f'SELECT p, c FROM {table} WHERE p = 1 AND c = 1')) == []
+                # Check that the view row is gone too
+                assert list(cql.execute(f'SELECT c, p FROM {mv} WHERE c = 1')) == []
