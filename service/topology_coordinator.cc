@@ -1998,12 +1998,15 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 replica::tablet_mutation_builder tablet_builder(guard.write_timestamp(), tid);
                 co_await tmap.for_each_tablet([&] (locator::tablet_id tablet, const locator::tablet_info& info) {
                     auto last_token = tmap.get_last_token(tablet);
+                    // Nothing in a restored tablet counts as repaired: compacting the sstables it already held
+                    // as repaired could otherwise purge a tombstone without seeing the restored data it deletes.
                     tablet_builder
                         .set_stage(last_token, locator::tablet_transition_stage::restore)
                         .set_new_replicas(last_token, info.replicas)
                         .set_snapshot_name(last_token, snap_name)
                         .set_transition(last_token, locator::tablet_transition_kind::restore)
-                        .set_session(last_token, service::session_id(req_id));
+                        .set_session(last_token, service::session_id(req_id))
+                        .set_sstables_repair_at(last_token, 0);
                     return make_ready_future<>();
                 });
                 updates.emplace_back(tablet_builder.build());
@@ -2646,15 +2649,67 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             }
         }
 
-        // Build table_id -> request_id mapping for ongoing restore requests
-        // so that we can find the owning request when a restore transition fails.
-        std::unordered_map<table_id, utils::UUID> restore_request_for_table;
+        // Build table_id -> request mapping for ongoing restore requests, so that we can
+        // find the owning request when a restore transition fails, and whether it repairs
+        // each tablet once the tablet is restored.
+        struct restore_request_info {
+            utils::UUID id;
+            bool repair;
+            bool failed;
+            // Written after the pass, so that a download error recorded in the same pass wins.
+            std::optional<sstring> repair_error;
+        };
+        std::unordered_map<table_id, restore_request_info> restore_request_for_table;
         for (const auto& req_id : _topo_sm._topology.ongoing_restore_requests) {
             auto req_entry = co_await _sys_ks.get_topology_request_entry(req_id);
             if (req_entry.restore_table_id) {
-                restore_request_for_table[*req_entry.restore_table_id] = req_id;
+                restore_request_for_table[*req_entry.restore_table_id] = {req_id, req_entry.restore_repair, !req_entry.error.empty()};
             }
         }
+
+        // The streaming load of the tablets in restore_repair, per replica shard. A restored tablet
+        // enters restore_repair only while its replicas' shards have room under the same per-shard
+        // limits the load balancer applies to repairs, so a restore does not repair every tablet
+        // of the table at once.
+        std::unordered_map<locator::tablet_replica, size_t> restore_repair_load;
+        const auto max_restore_repair_read_load = _db.get_config().tablet_streaming_read_concurrency_per_shard();
+        const auto max_restore_repair_write_load = _db.get_config().tablet_streaming_write_concurrency_per_shard();
+        {
+            // Don't keep the token metadata version past this block: the global barrier this
+            // handler may take waits for every older version to be released.
+            auto tm = get_token_metadata_ptr();
+            for (const auto& table : restore_request_for_table | std::views::keys) {
+                if (!tm->tablets().has_tablet_map(table)) {
+                    continue;
+                }
+                const auto& tmap = tm->tablets().get_tablet_map(table);
+                for (const auto& [tablet, trinfo] : tmap.transitions()) {
+                    co_await coroutine::maybe_yield();
+                    if (trinfo.stage == locator::tablet_transition_stage::restore_repair) {
+                        auto info = locator::get_migration_streaming_info(tm->get_topology(), tmap.get_tablet_info(tablet), trinfo);
+                        for (const auto& r : info.read_from) {
+                            restore_repair_load[r] += info.stream_weight;
+                        }
+                    }
+                }
+            }
+        }
+        auto admit_restore_repair = [&] (const locator::tablet_map& tmap, locator::tablet_id tablet, const locator::tablet_transition_info& trinfo) {
+            auto info = locator::get_migration_streaming_info(get_token_metadata().get_topology(), tmap.get_tablet_info(tablet), trinfo);
+            auto fits = [&] (const locator::tablet_replica& r, size_t max_load) {
+                auto it = restore_repair_load.find(r);
+                auto load = it == restore_repair_load.end() ? 0 : it->second;
+                return load == 0 || load + info.stream_weight <= max_load;
+            };
+            if (!std::ranges::all_of(info.read_from, [&] (const auto& r) { return fits(r, max_restore_repair_read_load); })
+                    || !std::ranges::all_of(info.written_to, [&] (const auto& r) { return fits(r, max_restore_repair_write_load); })) {
+                return false;
+            }
+            for (const auto& r : info.read_from) {
+                restore_repair_load[r] += info.stream_weight;
+            }
+            return true;
+        };
 
         // We operate here on groups of co-located tablets.
         // The tablets of several tables may be co-located and share the same tablet map, and in
@@ -3396,9 +3451,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         // Record error on the ongoing restore request so it's propagated to the caller.
                         if (auto it = restore_request_for_table.find(gid.table); it != restore_request_for_table.end()) {
                             updates.add(
-                                topology_request_tracking_mutation_builder(it->second)
+                                topology_request_tracking_mutation_builder(it->second.id)
                                     .set("error", format("Restore failed for tablet {}: {:t}", gid, ep))
                                     .build());
+                            it->second.failed = true;
                         }
                         break;
                     }
@@ -3423,6 +3479,23 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                             rtlogger.debug("Tablet {} restored on {}", gid, r.host);
                         });
                     })) {
+                        // An abort deletes the session, so a tablet whose download finished just
+                        // before the abort is not repaired.
+                        auto it = restore_request_for_table.find(gid.table);
+                        if (it != restore_request_for_table.end() && it->second.repair && trinfo.session_id) {
+                            // The transition kind stays restore, so the restore request stays open
+                            // until the repair finishes.
+                            if (!admit_restore_repair(tmap, gid.tablet, trinfo)) {
+                                rtlogger.debug("Tablet {} waits for its replicas' shards to have room for its repair", gid);
+                                break;
+                            }
+                            rtlogger.debug("Will set tablet {} stage to {}", gid, locator::tablet_transition_stage::restore_repair);
+                            _tablets.erase(gid);
+                            get_mutation_builder()
+                                    .del_snapshot_name(last_token)
+                                    .set_stage(last_token, locator::tablet_transition_stage::restore_repair);
+                            break;
+                        }
                         rtlogger.debug("Clearing restore transition for {}", gid);
                         _tablets.erase(gid);
                         get_mutation_builder().del_transition(last_token, _feature_service).del_snapshot_name(last_token).del_session(last_token);
@@ -3442,6 +3515,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         auto ep = tablet_state.restore_repair->get_exception();
                         rtlogger.warn("Repair of tablet {} after restoring it failed, the tablet is restored but not repaired: {}", gid, ep);
                         clear_transition();
+                        // Fail the restore request, unless it already failed for another reason.
+                        if (auto it = restore_request_for_table.find(gid.table); it != restore_request_for_table.end() && !it->second.repair_error) {
+                            it->second.repair_error = format("Tablet {} was restored, but its repair failed: {:t}", gid, ep);
+                        }
                         break;
                     }
                     // Aborting the restore deletes the session.
@@ -3513,6 +3590,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     break;
             }
         });
+
+        for (const auto& info : restore_request_for_table | std::views::values) {
+            if (info.repair_error && !info.failed) {
+                updates.add(topology_request_tracking_mutation_builder(info.id).set("error", *info.repair_error).build());
+            }
+        }
 
         co_await flush_tablet_builders(updates, tablet_builders);
 
