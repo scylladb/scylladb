@@ -9,6 +9,8 @@
 #pragma once
 
 #include "frozen_mutation.hh"
+#include "mutation_partition_view.hh"
+#include "range_tombstone_change_generator.hh"
 
 // mutation_partition_view visitor which consumes a frozen_mutation.
 template<FlattenedConsumerV2 Consumer>

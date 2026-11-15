@@ -16,6 +16,7 @@
 
 #include "mutation/mutation.hh"
 #include "mutation/mutation_fragment.hh"
+#include "mutation/mutation_partition_view.hh"
 #include "readers/mutation_reader.hh"
 #include "test/lib/mutation_source_test.hh"
 #include "readers/reversing.hh"

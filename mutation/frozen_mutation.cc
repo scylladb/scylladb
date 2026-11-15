@@ -138,6 +138,10 @@ frozen_mutation::printer frozen_mutation::pretty_printer(schema_ptr s) const {
     return { *this, std::move(s) };
 }
 
+auto fmt::formatter<frozen_mutation::printer>::format(const frozen_mutation::printer& pr, fmt::format_context& ctx) const -> decltype(ctx.out()) {
+    return fmt::format_to(ctx.out(), "{}", pr.self.unfreeze(pr.schema));
+}
+
 stop_iteration streamed_mutation_freezer::consume(tombstone pt) {
     _partition_tombstone = pt;
     return stop_iteration::no;

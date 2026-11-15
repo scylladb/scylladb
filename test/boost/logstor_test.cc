@@ -49,6 +49,7 @@
 #include "init.hh"
 #include <seastar/core/simple-stream.hh>
 #include "partition_slice_builder.hh"
+#include "serializer_impl.hh"
 #include "test/lib/exception_utils.hh"
 #include "test/lib/logstor_test_utils.hh"
 #include "test/lib/mutation_assertions.hh"

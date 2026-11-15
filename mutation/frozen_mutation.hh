@@ -12,13 +12,13 @@
 #include "replica/database_fwd.hh"
 #include "mutation_fragment.hh"
 #include "mutation_fragment_v2.hh"
-#include "mutation_partition_view.hh"
 #include "mutation_consumer_concepts.hh"
-#include "range_tombstone_change_generator.hh"
+#include "range_tombstone_list.hh"
 #include "schema/schema.hh"
 
 class mutation;
 class mutation_reader;
+class mutation_partition_view;
 
 namespace ser {
 class mutation_view;
@@ -193,9 +193,5 @@ public:
 frozen_mutation_fragment_v2 freeze(const schema& s, const mutation_fragment_v2& mf);
 
 template <> struct fmt::formatter<frozen_mutation::printer> : fmt::formatter<string_view> {
-    auto format(const frozen_mutation::printer& pr, fmt::format_context& ctx) const {
-        return fmt::format_to(ctx.out(), "{}", pr.self.unfreeze(pr.schema));
-    }
+    auto format(const frozen_mutation::printer& pr, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
-
-#include "frozen_mutation_consumer.hh"

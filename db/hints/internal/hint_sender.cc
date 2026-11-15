@@ -35,6 +35,7 @@
 #include "utils/div_ceil.hh"
 #include "utils/error_injection.hh"
 #include "mutation/converting_mutation_partition_applier.hh"
+#include "mutation/mutation_partition_view.hh"
 #include "gc_clock.hh"
 
 // STD.
