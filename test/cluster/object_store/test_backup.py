@@ -1280,9 +1280,10 @@ async def test_restore_tablets_abort(build_mode: str, manager: ScyllaClusterMana
         assert downloaded == 0, f"Expected no downloads to complete after abort, but {downloaded} of {total} sstables were downloaded"
 
 
+@pytest.mark.parametrize("repair", [False, True])
 @pytest.mark.parametrize("target", ['coordinator', 'replica', 'api'])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_restore_tablets_node_loss_resiliency(build_mode: str, manager: ScyllaClusterManager, object_storage, target):
+async def test_restore_tablets_node_loss_resiliency(build_mode: str, manager: ScyllaClusterManager, object_storage, target, repair):
     '''Check how restore handler node loss in the middle of operation'''
 
     topology = topo(rf = 2, nodes = 4, racks = 2, dcs = 1)
@@ -1310,8 +1311,9 @@ async def test_restore_tablets_node_loss_resiliency(build_mode: str, manager: Sc
         await manager.api.enable_injection(servers[2].ip_addr, "pause_tablet_restore", one_shot=True)
 
         manifests = [ f'{s.server_id}/{snap_name}/manifest.json' for s in servers ]
-        tid = await manager.api.restore_tablets(servers[1].ip_addr, ks, 'test', snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests)
+        tid = await manager.api.restore_tablets(servers[1].ip_addr, ks, 'test', snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests, repair='full' if repair else 'disabled')
         await manager.api.wait_for_injection_enter(servers[2].ip_addr, "pause_tablet_restore")
+        timeout = 300 if repair else 60
 
         if target == 'api':
             await manager.server_stop(servers[1].server_id, convict=True)
@@ -1320,9 +1322,9 @@ async def test_restore_tablets_node_loss_resiliency(build_mode: str, manager: Sc
             # The restore is still in flight on the coordinator. Re-issue it from
             # another node, which should join the in-flight restore rather than
             # fail or duplicate it. Release the pause and just make sure it finishes.
-            tid = await manager.api.restore_tablets(servers[3].ip_addr, ks, 'test', snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests)
+            tid = await manager.api.restore_tablets(servers[3].ip_addr, ks, 'test', snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests, repair='full' if repair else 'disabled')
             await manager.api.message_injection(servers[2].ip_addr, "pause_tablet_restore")
-            await asyncio.wait_for(manager.api.wait_task(servers[3].ip_addr, tid), timeout=60)
+            await asyncio.wait_for(manager.api.wait_task(servers[3].ip_addr, tid), timeout=timeout)
         else:
             if target == 'coordinator':
                 await manager.server_stop(servers[0].server_id, convict=True)
@@ -1332,7 +1334,7 @@ async def test_restore_tablets_node_loss_resiliency(build_mode: str, manager: Sc
 
             # Sometimes killing nodes manage to restore tablets before being killed
             # So the best thing to do is to make sure restore task finishes at all
-            await asyncio.wait_for(manager.api.wait_task(servers[1].ip_addr, tid), timeout=60)
+            await asyncio.wait_for(manager.api.wait_task(servers[1].ip_addr, tid), timeout=timeout)
 
 
 @pytest.mark.parametrize("target", ['replica', 'coordinator'])
@@ -1369,7 +1371,8 @@ async def test_restore_tablets_unresponsive_replica(build_mode: str, manager: Sc
         await cql.run_async(f"CREATE TABLE {ks}.test ( pk text primary key, value int ) WITH tablets = {{'min_tablet_count': {tablet_count}, 'max_tablet_count': {tablet_count}}};")
 
         await manager.api.enable_injection(victim.ip_addr, "pause_tablet_restore", one_shot=True)
-        tid = await manager.api.restore_tablets(api.ip_addr, ks, 'test', snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests)
+        # This test is about the restore itself losing a node, so leave the repair out.
+        tid = await manager.api.restore_tablets(api.ip_addr, ks, 'test', snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests, repair='disabled')
         await manager.api.wait_for_injection_enter(victim.ip_addr, "pause_tablet_restore")
 
         await manager.server_pause(victim.server_id)
@@ -1381,7 +1384,7 @@ async def test_restore_tablets_unresponsive_replica(build_mode: str, manager: Sc
 
         # The tablets of the paused node still have it as their only replica, so this restore
         # fails too. What matters is that it fails rather than waiting for an answer forever.
-        tid = await manager.api.restore_tablets(api.ip_addr, ks, 'test', snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests)
+        tid = await manager.api.restore_tablets(api.ip_addr, ks, 'test', snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests, repair='disabled')
         status = await asyncio.wait_for(manager.api.wait_task(api.ip_addr, tid), timeout=60)
         assert status['state'] == 'failed', f"restore of a tablet whose only replica is down should have failed: {status}"
 
@@ -1419,7 +1422,8 @@ async def test_restore_tablets_duplicate_after_failed_api_node(build_mode: str, 
         await manager.api.enable_injection(servers[1].ip_addr, "pause_tablet_restore", one_shot=True)
 
         manifests = [ f'{s.server_id}/{snap_name}/manifest.json' for s in servers ]
-        tid = await manager.api.restore_tablets(servers[1].ip_addr, ks, 'test', snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests)
+        # This test is about the restore itself losing a node, so leave the repair out.
+        tid = await manager.api.restore_tablets(servers[1].ip_addr, ks, 'test', snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests, repair='disabled')
         await manager.api.wait_for_injection_enter(servers[1].ip_addr, "pause_tablet_restore")
 
         await manager.server_stop(servers[1].server_id, convict=True)
@@ -1439,7 +1443,7 @@ async def test_restore_tablets_duplicate_after_failed_api_node(build_mode: str, 
         requests = await wait_for(failed_restore_done, deadline=time.time() + 60)
         assert len(requests) == 1 and requests[0].error, f"the restore should have failed after the loss of servers[1]: {requests}"
 
-        tid = await manager.api.restore_tablets(servers[3].ip_addr, ks, 'test', snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests)
+        tid = await manager.api.restore_tablets(servers[3].ip_addr, ks, 'test', snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests, repair='disabled')
         await asyncio.wait_for(manager.api.wait_task(servers[3].ip_addr, tid), timeout=60)
 
         # The previous restore succeeded. Issue one more restore of the same table/tablets (same gid) and make
@@ -1448,7 +1452,7 @@ async def test_restore_tablets_duplicate_after_failed_api_node(build_mode: str, 
         # the log of every live server now and look in the coordinator's log afterwards.
         logs = {s.server_id: await manager.server_open_log(s.server_id) for s in (servers[0], servers[2], servers[3])}
         marks = {server_id: await server_log.mark() for server_id, server_log in logs.items()}
-        tid = await manager.api.restore_tablets(servers[2].ip_addr, ks, 'test', snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests)
+        tid = await manager.api.restore_tablets(servers[2].ip_addr, ks, 'test', snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests, repair='disabled')
         await asyncio.wait_for(manager.api.wait_task(servers[2].ip_addr, tid), timeout=60)
         coordinator = await manager.find_server_by_host_id(servers, await get_topology_coordinator(manager))
         restored = await logs[coordinator.server_id].grep("Restoring tablet=", from_mark=marks[coordinator.server_id])
@@ -1546,14 +1550,15 @@ async def test_restore_tablets_hints_survive_node_loss(build_mode: str, manager:
         await manager.api.enable_injection(servers[2].ip_addr, "pause_tablet_restore", one_shot=True)
 
         manifests = [ f'{s.server_id}/{snap_name}/manifest.json' for s in servers ]
-        tid = await manager.api.restore_tablets(servers[1].ip_addr, ks, 'test', snap_name, servers[1].datacenter, object_storage.address, object_storage.bucket_name, manifests)
+        # This test is about the restore itself losing a node, so leave the repair out.
+        tid = await manager.api.restore_tablets(servers[1].ip_addr, ks, 'test', snap_name, servers[1].datacenter, object_storage.address, object_storage.bucket_name, manifests, repair='disabled')
         await manager.api.wait_for_injection_enter(servers[2].ip_addr, "pause_tablet_restore", deadline=time.time() + 120)
 
         await manager.server_stop(servers[1].server_id, convict=True)
         with pytest.raises(aiohttp.client_exceptions.ClientConnectorError):
             await manager.api.wait_task(servers[1].ip_addr, tid)
 
-        tid = await manager.api.restore_tablets(servers[3].ip_addr, ks, 'test', snap_name, servers[3].datacenter, object_storage.address, object_storage.bucket_name, manifests)
+        tid = await manager.api.restore_tablets(servers[3].ip_addr, ks, 'test', snap_name, servers[3].datacenter, object_storage.address, object_storage.bucket_name, manifests, repair='disabled')
         await manager.api.message_injection(servers[2].ip_addr, "pause_tablet_restore")
         status = await asyncio.wait_for(manager.api.wait_task(servers[3].ip_addr, tid), timeout=120)
         logger.info(f'Re-issued restore finished with: {status}')

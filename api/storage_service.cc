@@ -372,6 +372,21 @@ void unset_repair(http_context& ctx, routes& r) {
     ss::force_terminate_all_repair_sessions_new.unset(r);
 }
 
+static service::restore_repair parse_restore_repair(const sstring& repair_str) {
+    // The repair namespace would make an unqualified repair ambiguous.
+    using restore_repair_param = ss::ns_tablet_aware_restore::repair;
+    auto r = repair_str.empty() ? restore_repair_param::full : ss::ns_tablet_aware_restore::str2repair(repair_str);
+
+    switch (r) {
+    case restore_repair_param::full: return service::restore_repair::yes;
+    case restore_repair_param::disabled: return service::restore_repair::no;
+    case restore_repair_param::NUM_ITEMS:
+        break;
+    }
+
+    throw httpd::bad_param_exception("invalid repair parameter value");
+}
+
 static sstables_loader::stream_scope parse_stream_scope(const sstring& scope_str) {
     using namespace ss::ns_start_restore;
     auto sc = scope_str.empty() ? scope::all : str2scope(scope_str);
@@ -452,6 +467,7 @@ void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>&
         std::string keyspace = req->get_query_param("keyspace");
         std::string table = req->get_query_param("table");
         std::string snapshot = req->get_query_param("snapshot");
+        auto repair = parse_restore_repair(req->get_query_param("repair"));
 
         rjson::chunked_content content = co_await util::read_entire_stream(*req->content_stream);
         rjson::value parsed = rjson::parse(std::move(content));
@@ -506,7 +522,7 @@ void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>&
         }
 
         auto table_id = validate_table(ctx.db.local(), keyspace, table);
-        auto task_id = co_await sst_loader.local().restore_tablets(table_id, keyspace, table, snapshot, std::move(restore_locations));
+        auto task_id = co_await sst_loader.local().restore_tablets(table_id, keyspace, table, snapshot, std::move(restore_locations), repair);
         co_return json::json_return_type(fmt::to_string(task_id));
     });
 }
