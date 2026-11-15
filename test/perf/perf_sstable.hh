@@ -99,6 +99,8 @@ public:
         sstring dir;
         compaction::compaction_strategy_type compaction_strategy;
         api::timestamp_type timestamp_range;
+        sstables::sstable_version_types version = sstables::get_highest_sstable_version();
+        std::optional<compression_parameters> compression;
     };
 
 private:
@@ -137,6 +139,9 @@ private:
         }
         builder.set_comment("Perf tests");
         builder.set_compaction_strategy(type);
+        if (_cfg.compression) {
+            builder.set_compressor_params(*_cfg.compression);
+        }
         return builder.build(schema_builder::compact_storage::no);
     }
 
@@ -242,7 +247,7 @@ public:
             size_t partitions = _mt->partition_count();
 
             test_setup::create_empty_test_dir(dir()).get();
-            auto sst = _env.make_sstable(s, dir(), sstables::generation_type(idx), sstables::get_highest_sstable_version(), _cfg.buffer_size);
+            auto sst = _env.make_sstable(s, dir(), sstables::generation_type(idx), _cfg.version, _cfg.buffer_size);
 
             auto start = perf_sstable_test_env::now();
             write_memtable_to_sstable(*_mt, sst).get();
@@ -259,7 +264,7 @@ public:
         return test_setup::create_empty_test_dir(dir()).then([this] {
             return sstables::test_env::do_with_async_returning<double>([this] (sstables::test_env& env) {
                 auto sst_gen = [this] () mutable {
-                    return _env.make_sstable(s, dir(), _env.new_generation(), sstables::get_highest_sstable_version(), _cfg.buffer_size);
+                    return _env.make_sstable(s, dir(), _env.new_generation(), _cfg.version, _cfg.buffer_size);
                 };
 
                 std::vector<shared_sstable> ssts;

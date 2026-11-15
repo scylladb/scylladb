@@ -115,7 +115,9 @@ int scylla_sstable_main(int argc, char** argv) {
         ("testdir", bpo::value<sstring>()->default_value("/var/lib/scylla/perf-tests"), "directory in which to store the sstables")
         ("compaction-strategy", bpo::value<sstring>()->default_value("IncrementalCompactionStrategy"), "compaction strategy to use, one of "
              "(IncrementalCompactionStrategy, LeveledCompactionStrategy, TimeWindowCompactionStrategy)")
-        ("timestamp-range", bpo::value<api::timestamp_type>()->default_value(0), "Timestamp values to use, chosen uniformly from: [-x, +x]");
+        ("timestamp-range", bpo::value<api::timestamp_type>()->default_value(0), "Timestamp values to use, chosen uniformly from: [-x, +x]")
+        ("sstable-version", bpo::value<sstring>(), "the version of the sstables to write, for example mt or aa (the default is the highest version)")
+        ("compression", bpo::value<sstring>(), "the sstable_compression option of the table, for example LZ4Compressor or ZstdCompressor (the default is the table default)");
 
     return app.run(argc, argv, [&app] {
         return async([&app] {
@@ -140,6 +142,13 @@ int scylla_sstable_main(int argc, char** argv) {
             }
             cfg.compaction_strategy = compaction::compaction_strategy::type(app.configuration()["compaction-strategy"].as<sstring>());
             cfg.timestamp_range = app.configuration()["timestamp-range"].as<api::timestamp_type>();
+            if (app.configuration().contains("sstable-version")) {
+                cfg.version = sstables::version_from_string(app.configuration()["sstable-version"].as<sstring>());
+            }
+            if (app.configuration().contains("compression")) {
+                cfg.compression = compression_parameters(std::map<sstring, sstring>{
+                    {compression_parameters::SSTABLE_COMPRESSION, app.configuration()["compression"].as<sstring>()}});
+            }
             auto scf = make_sstable_compressor_factory_for_tests_in_thread();
             test.start(std::move(cfg), std::ref(*scf)).get();
             auto stop_test = deferred_stop(test);
