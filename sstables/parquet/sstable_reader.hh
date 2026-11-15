@@ -49,8 +49,10 @@
 // See sstable_reader.cc for the details.
 
 #include <array>
+#include <functional>
 #include <memory>
 
+#include <seastar/core/abort_source.hh>
 #include <seastar/core/shared_ptr.hh>
 
 #include "readers/mutation_reader.hh"
@@ -107,7 +109,8 @@ public:
 /// chunks that the footer says are entirely null, so they cannot change
 /// the output. A digest check would need a second pass over the whole
 /// file, because the reader does not read it in order. Checksum validation
-/// makes that pass (file_verifier.hh). Scrub does not, because the pass
+/// and the `validate` mode of scrub make that pass (file_verifier.hh, and
+/// validate() below). Scrub in its other modes does not, because the pass
 /// would double its I/O without checking anything that it outputs.
 mutation_reader make_reader(
         shared_sstable sstable,
@@ -133,5 +136,23 @@ mutation_reader make_full_scan_reader(
         tracing::trace_state_ptr trace_state,
         read_monitor& monitor,
         integrity_check integrity);
+
+/// Validates the sstable, as mx::validate() (PLAN.md, "Scrub and
+/// validation"). Reports each error through `error_handler`, and returns
+/// their number. Stops early when `abort` is requested. It checks:
+///
+/// - The whole Data file, in order, with file_verifier.hh: the checksum of
+///   every page, the OffsetIndexes against the footer and the page headers,
+///   the late chunks, the footer checksum, and the digest if the sstable
+///   has read it (read_digest()).
+/// - A full scan, with the order of fragments validated as sstable::validate()
+///   does for any format. A malformed sstable error ends the scan.
+/// - The structure of each row: the partition key columns and the partition
+///   tombstone are set exactly on the rows that start a partition.
+/// - The trie index against the rows: partition positions in both
+///   directions, partition keys and tombstones where the index has them,
+///   and row index blocks (see index_checker in sstable_reader.cc).
+future<uint64_t> validate(shared_sstable sst, reader_permit permit, abort_source& abort,
+        std::function<void(sstring)> error_handler, read_monitor& monitor);
 
 } // namespace sstables::parquet

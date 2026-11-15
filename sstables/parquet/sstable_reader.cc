@@ -15,7 +15,9 @@
 #include "query/query-request.hh"
 #include "schema/schema.hh"
 #include "sstables/abstract_index_reader.hh"
+#include "mutation/mutation_fragment_stream_validator.hh"
 #include "sstables/mutation_fragment_filter.hh"
+#include "sstables/parquet/file_verifier.hh"
 #include "sstables/parquet/reader.hh"
 #include "sstables/sstable_mutation_reader.hh"
 #include "sstables/sstables.hh"
@@ -58,6 +60,16 @@ bool may_be_capped(tombstone t) noexcept {
     return t && t.deletion_time.time_since_epoch().count() == max_deletion_time;
 }
 
+// The tombstone that the index stores for a tombstone of the Data file.
+tombstone as_in_index(tombstone t) noexcept {
+    if (!t) {
+        return t;
+    }
+    bool capped;
+    const int32_t ldt = adjusted_local_deletion_time(t.deletion_time, capped);
+    return tombstone(t.timestamp, gc_clock::time_point(gc_clock::duration(ldt)));
+}
+
 bool is_start_bound(fragment_kind k) noexcept {
     return k == fragment_kind::incl_start || k == fragment_kind::excl_start;
 }
@@ -65,6 +77,16 @@ bool is_start_bound(fragment_kind k) noexcept {
 bool is_end_bound(fragment_kind k) noexcept {
     return k == fragment_kind::incl_end || k == fragment_kind::excl_end;
 }
+
+// A row of the Data file, as a full scan consumes it, for validate().
+struct consumed_row {
+    uint64_t row;
+    // The key and the tombstone of a row that starts a partition.
+    std::optional<dht::decorated_key> key;
+    tombstone partition_tombstone;
+    // The position of a clustering row or a range tombstone bound row.
+    std::optional<position_in_partition> position;
+};
 
 // Reads partitions of an sstable with a Parquet Data file, in either
 // direction.
@@ -175,6 +197,11 @@ class sstable_mutation_reader final : public mutation_reader::impl {
     };
     // Engaged while a reverse read is in the walk of a partition.
     std::optional<backward_walk> _walk;
+
+    // Set for validate(): every row, in order, as the reader first positions
+    // its decoder there. A full scan positions it at every row.
+    std::vector<consumed_row>* _consumed = nullptr;
+    uint64_t _next_to_record = 0;
 
     bool full_scan() const noexcept {
         return !_index_reader;
@@ -626,6 +653,29 @@ class sstable_mutation_reader final : public mutation_reader::impl {
         return consume_partition_end();
     }
 
+    // Records the row at the decoder for validate(), unless it is recorded.
+    void maybe_record_row() {
+        const uint64_t row = _rows->current_row();
+        if (!_consumed || row != _next_to_record) [[likely]] {
+            return;
+        }
+        consumed_row r{.row = row};
+        _rows->check_partition_key_columns();
+        if (_rows->starts_partition()) {
+            r.key = dht::decorate_key(*_schema, _rows->decode_partition_key());
+            r.partition_tombstone = _rows->decode_partition_tombstone();
+        }
+        const fragment_kind kind = _rows->kind();
+        if (kind == fragment_kind::clustering_row || kind == fragment_kind::clustering_row_with_marker) {
+            r.position = position_in_partition::for_key(_rows->decode_clustering_key());
+        } else if (is_start_bound(kind) || is_end_bound(kind)) {
+            auto b = _rows->decode_bound();
+            r.position = position_in_partition(position_in_partition::range_tag_t(), b.kind, std::move(b.prefix));
+        }
+        _consumed->push_back(std::move(r));
+        ++_next_to_record;
+    }
+
     // Consumes rows until a step asks to stop, the buffer is full, or the
     // task should yield.
     future<> consume_rows() {
@@ -644,6 +694,7 @@ class sstable_mutation_reader final : public mutation_reader::impl {
             if (!_rows->try_position(row)) {
                 co_await _rows->finish_position();
             }
+            maybe_record_row();
             bool go;
             if (_rows->starts_partition() && !(_in_partition && row == _head_row)) {
                 if (_walk) {
@@ -675,6 +726,7 @@ class sstable_mutation_reader final : public mutation_reader::impl {
                         if (!_rows->try_position(*next)) {
                             co_await _rows->finish_position();
                         }
+                        maybe_record_row();
                         // In a walk, every row is in the partition. The
                         // last one is the head, which starts it.
                         const bool same_partition = _walk || !_rows->starts_partition();
@@ -921,7 +973,8 @@ public:
             [[maybe_unused]] mutation_reader::forwarding fwd_mr,
             read_monitor& monitor,
             std::unique_ptr<abstract_index_reader> ir,
-            const utils::hashed_key* single_partition_read_murmur_hash)
+            const utils::hashed_key* single_partition_read_murmur_hash,
+            std::vector<consumed_row>* consumed = nullptr)
         : impl(std::move(schema), std::move(permit))
         , _sst(std::move(sst))
         , _slice_holder(std::move(slice))
@@ -934,10 +987,14 @@ public:
         , _pr(pr)
         , _single_partition_read_murmur_hash(single_partition_read_murmur_hash
                 ? std::optional<utils::hashed_key>(*single_partition_read_murmur_hash) : std::nullopt)
+        , _consumed(consumed)
     {
         _permit.on_start_sstable_read();
         if (reversed() && !_index_reader) {
             on_internal_error(sstlog, "Parquet full scan reader: reversed reads are not supported");
+        }
+        if (_consumed && _index_reader) {
+            on_internal_error(sstlog, "Parquet sstable reader: only a full scan records its rows");
         }
     }
     sstable_mutation_reader(const sstable_mutation_reader&) = delete;
@@ -1085,6 +1142,142 @@ mutation_reader make_sstable_mutation_reader(
             std::move(slice), std::move(trace_state), fwd, fwd_mr, monitor, std::move(ir), single_partition_read_murmur_hash);
 }
 
+// Cross-checks the rows of a full scan against the trie index, for
+// validate(). The index stores row ordinals (see sstable_writer.hh):
+//
+// - Every partition has an entry, in order, whose position is the ordinal
+//   of the partition's first row, and whose key is the partition's key if
+//   the index stores it. The index has no other entries.
+// - In a partition with a row index, each row index block starts at a row
+//   of the partition. For each clustering row and range tombstone bound row,
+//   the index finds the block that starts at or before the row, and that
+//   block changes exactly at the rows where blocks start. The last block is
+//   the one that the index records as last.
+//
+// The index finds a block by a lookup per row, so validation pays a trie
+// walk per clustering row. It does not compare the index with the rows when
+// the rows are out of order, because the order validator reports that.
+class index_checker {
+    shared_sstable _sst;
+    const ::schema& _schema;
+    std::function<void(sstring)>& _report;
+    std::unique_ptr<abstract_index_reader> _index;
+    // The index has an entry for the current partition.
+    bool _in_partition = false;
+    bool _at_end = false;
+    uint64_t _partition_start = 0;
+    bool _has_row_index = false;
+    std::optional<uint64_t> _last_block_offset;
+    // The start of the block of the last row.
+    std::optional<uint64_t> _block;
+    std::optional<position_in_partition> _last_position;
+
+    void report(sstring what) {
+        _report(seastar::format("mismatching index/data: {}", what));
+    }
+
+    future<> end_partition() {
+        if (_has_row_index && _last_block_offset && (!_block || *_block - _partition_start != *_last_block_offset)) {
+            report(seastar::format("the last row index block of the partition at row {} starts at offset {}, the rows have it at {}",
+                    _partition_start, *_last_block_offset, _block ? int64_t(*_block - _partition_start) : -1));
+        }
+        _has_row_index = false;
+        if (_in_partition) {
+            co_await _index->advance_to_next_partition();
+            _in_partition = false;
+        }
+    }
+
+    future<> start_partition(const consumed_row& r) {
+        _partition_start = r.row;
+        _block.reset();
+        _last_position.reset();
+        _last_block_offset.reset();
+        if (_at_end) {
+            co_return;
+        }
+        if (_index->eof()) {
+            report(seastar::format("the index is at its end, but the partition {} starts at row {}", r.key->key().with_schema(_schema), r.row));
+            _at_end = true;
+            co_return;
+        }
+        co_await _index->read_partition_data();
+        _in_partition = true;
+        const uint64_t index_row = _index->data_file_positions().start;
+        if (index_row != r.row) {
+            report(seastar::format("the index puts a partition at row {}, the Data file has the partition {} at row {}",
+                    index_row, r.key->key().with_schema(_schema), r.row));
+        }
+        // The index stores the key and the tombstone of a partition only
+        // with its row index.
+        if (auto pk = _index->get_partition_key()) {
+            if (!pk->equal(_schema, r.key->key())) {
+                report(seastar::format("the index has the partition {} at row {}, the Data file has the partition {}",
+                        pk->with_schema(_schema), index_row, r.key->key().with_schema(_schema)));
+            }
+            _has_row_index = true;
+            _last_block_offset = co_await _index->last_block_offset();
+        }
+        // The index holds the deletion time capped (see may_be_capped()).
+        if (auto t = _index->partition_tombstone(); t && tombstone(*t) != as_in_index(r.partition_tombstone)) {
+            report(seastar::format("the index has the partition tombstone {} for the partition {}, the Data file has {}",
+                    tombstone(*t), r.key->key().with_schema(_schema), r.partition_tombstone));
+        }
+    }
+
+    future<> on_clustering_row(uint64_t row, const position_in_partition& pos) {
+        if (_last_position && !position_in_partition::less_compare(_schema)(*_last_position, pos)) {
+            if (!position_in_partition::equal_compare(_schema)(*_last_position, pos)) {
+                // Out of order. The block lookups would be meaningless.
+                _has_row_index = false;
+                co_return;
+            }
+        }
+        _last_position = pos;
+        co_await _index->advance_to(pos);
+        const uint64_t block = _index->data_file_positions().start;
+        if (block > row || block < _partition_start) {
+            report(seastar::format("the row index finds the block of row {} ({}) at row {}, outside the rows [{}, {}]",
+                    row, pos, block, _partition_start, row));
+        } else if (block != _block) {
+            if (block != row) {
+                report(seastar::format("the row index finds the block of row {} ({}) at row {}, which is neither the block of the previous row nor a block that starts at this row",
+                        row, pos, block));
+            }
+            _block = block;
+        }
+    }
+
+public:
+    index_checker(shared_sstable sst, const ::schema& s, reader_permit permit, std::function<void(sstring)>& report)
+        : _sst(std::move(sst))
+        , _schema(s)
+        , _report(report)
+        , _index(_sst->make_index_reader(std::move(permit), tracing::trace_state_ptr(), use_caching::no, false))
+    {}
+
+    future<> on_row(const consumed_row& r) {
+        if (r.key) {
+            co_await end_partition();
+            co_await start_partition(r);
+        }
+        if (r.position && _has_row_index) {
+            co_await on_clustering_row(r.row, *r.position);
+        }
+    }
+
+    future<> finish() {
+        co_await end_partition();
+        if (!_at_end && !_index->eof()) {
+            report(seastar::format("the index has a partition at row {} after the last partition of the Data file", _index->data_file_positions().start));
+        }
+    }
+
+    future<> close() noexcept {
+        return _index->close();
+    }
+};
+
 } // anonymous namespace
 
 mutation_reader make_reader(
@@ -1115,6 +1308,110 @@ mutation_reader make_full_scan_reader(
     return make_sstable_mutation_reader(std::move(sstable), std::move(schema), std::move(permit), query::full_partition_range,
             value_or_reference(slice), std::move(trace_state), streamed_mutation::forwarding::no, mutation_reader::forwarding::no,
             monitor, nullptr, nullptr);
+}
+
+future<uint64_t> validate(shared_sstable sst, reader_permit permit, abort_source& abort, std::function<void(sstring)> error_handler,
+        read_monitor& monitor) {
+    uint64_t errors = 0;
+    std::function<void(sstring)> report = [&] (sstring what) {
+        ++errors;
+        error_handler(std::move(what));
+    };
+    auto describe = [] (std::exception_ptr ex) -> sstring {
+        try {
+            std::rethrow_exception(std::move(ex));
+        } catch (const malformed_sstable_exception& e) {
+            return seastar::format("unrecoverable error: {}", e.what());
+        } catch (...) {
+            return seastar::format("unexpected exception: {}", std::current_exception());
+        }
+    };
+
+    // The whole file, in order: the checksums, the OffsetIndexes, the
+    // footer, and the digest.
+    {
+        auto in = co_await sst->data_stream(0, sst->ondisk_data_size(), permit, nullptr, nullptr);
+        std::exception_ptr ex;
+        try {
+            const auto* entry = sst->get_scylla_metadata()->get_parquet_data_file();
+            co_await verify_file(in, sst->make_data_file_for_read(permit, nullptr), sst->get_parquet_file_summary(), verify_options{
+                .file_size = sst->ondisk_data_size(),
+                .footer_crc32 = entry->footer_crc32,
+                .digest = sst->get_digest(),
+                .abort = &abort,
+                .permit = permit,
+            }, report);
+        } catch (...) {
+            ex = std::current_exception();
+        }
+        if (ex) {
+            report(describe(std::move(ex)));
+        }
+        co_await in.close();
+    }
+    if (abort.abort_requested()) {
+        co_return errors;
+    }
+
+    // A full scan with order validation, and the cross-check of its rows
+    // with the index.
+    auto schema = sst->get_schema();
+    std::vector<consumed_row> consumed;
+    const auto& slice = schema->full_slice();
+    auto reader = make_mutation_reader<sstable_mutation_reader>(sst, schema, permit, query::full_partition_range,
+            value_or_reference(slice), tracing::trace_state_ptr(), streamed_mutation::forwarding::no, mutation_reader::forwarding::no,
+            monitor, nullptr, nullptr, &consumed);
+    index_checker index(sst, *schema, permit, report);
+    mutation_fragment_stream_validator validator(*schema);
+    // The memory of the rows that the reader recorded since the previous
+    // fragment. The reader records them while it fills its buffer, so they
+    // are charged afterwards, while the index checks them.
+    auto consumed_memory = [&] {
+        size_t r = consumed.capacity() * sizeof(consumed_row);
+        for (const auto& row : consumed) {
+            r += (row.key ? row.key->external_memory_usage() : 0) + (row.position ? row.position->external_memory_usage() : 0);
+        }
+        return r;
+    };
+    std::exception_ptr ex;
+    try {
+        while (!abort.abort_requested()) {
+            auto mf = co_await reader();
+            {
+                auto memory = co_await permit.request_memory(consumed_memory());
+                for (const auto& r : consumed) {
+                    co_await index.on_row(r);
+                }
+                consumed.clear();
+            }
+            if (!mf) {
+                if (auto res = validator.on_end_of_stream(); !res) {
+                    report(res.what());
+                }
+                co_await index.finish();
+                break;
+            }
+            if (auto res = validator(*mf); !res) {
+                report(res.what());
+                validator.reset(*mf);
+            }
+            if (mf->is_partition_start()) {
+                const auto& key = mf->as_partition_start().key();
+                if (auto res = validator(key); !res) {
+                    report(res.what());
+                    validator.reset(key);
+                }
+            }
+        }
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    if (ex) {
+        report(describe(std::move(ex)));
+    }
+    co_await reader.close();
+    co_await index.close();
+    co_return errors;
 }
 
 } // namespace sstables::parquet

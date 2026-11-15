@@ -94,3 +94,21 @@ To get Zstd pages, choose ``ZstdCompressor`` or ``ZstdWithDictsCompressor``:
 Parquet SSTables use no trained compression dictionaries.
 The ``chunk_length_in_kb`` sub-option has no effect on them, because pages replace the compressed
 chunks of the native format.
+
+Integrity
+---------
+
+Each page of a Parquet file carries a checksum, and every read verifies it.
+The checksum of the file's footer is stored in ``Scylla.db``, and the footer is verified when the
+SSTable is opened.
+A Parquet SSTable has no ``CRC.db`` and no ``CompressionInfo.db``.
+
+These operations check a Parquet SSTable:
+
+* ``nodetool scrub --mode=VALIDATE`` checks the checksum of every page, the footer, and the digest of
+  the whole file. It reads the data and checks the order of partitions and rows, and it checks the
+  index against the data.
+* ``scylla sstable validate-checksums`` checks the checksum of every page, the footer, and the
+  digest.
+* ``nodetool scrub`` in the other modes reads the data, as for native SSTables. A damaged page
+  stops the read at the first row of that page.

@@ -690,6 +690,16 @@ void row_decoder::check_no_partition_tombstone() const {
     }
 }
 
+void row_decoder::check_partition_key_columns() const {
+    const bool start = starts_partition();
+    for (const auto& k : _plan.mapping().partition_key()) {
+        if (is_present(cursor(k.value)) != start || (!start && k.empty && is_present(cursor(*k.empty)))) {
+            malformed(seastar::format("row {}: the partition key columns disagree on whether the row starts a partition", _row));
+        }
+    }
+    check_no_partition_tombstone();
+}
+
 void row_decoder::check_no_cells() {
     for (const uint32_t s : _active) {
         if (_reader.cursor(s).def() > 0) {

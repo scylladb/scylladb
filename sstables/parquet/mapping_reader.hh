@@ -228,6 +228,11 @@ public:
     partition_key decode_partition_key();
     /// The partition tombstone, of a row that starts a partition.
     tombstone decode_partition_tombstone() const;
+    /// Checks that every partition key column, and the partition tombstone,
+    /// are set exactly when the first partition key column is, so exactly
+    /// on a row that starts a partition. Reads check only what they use, so
+    /// only validation calls this.
+    void check_partition_key_columns() const;
     /// Checks a row of kind none.
     void check_none_row();
     /// The static row, of a row of kind static_row. Cells of columns that

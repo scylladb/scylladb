@@ -2939,10 +2939,9 @@ future<uint64_t> sstable::validate(reader_permit permit, abort_source& abort,
     }
     co_await utils::get_local_injector().inject("sstable_validate/pause", utils::wait_for_message(std::chrono::seconds(5)));
 
-    // A Parquet Data file goes through the full scan below, which validates
-    // the order of the fragments. The cross-check with the trie index and
-    // the structural checks (PLAN.md, "Scrub and validation") are left
-    // for the operations phase.
+    if (has_parquet_data_file(_version)) {
+        co_return co_await parquet::validate(shared_from_this(), std::move(permit), abort, std::move(error_handler), monitor);
+    }
     if (has_mx_data_file(_version)) {
         co_return co_await mx::validate(shared_from_this(), std::move(permit), abort, std::move(error_handler), monitor);
     }
