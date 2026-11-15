@@ -710,8 +710,9 @@ future<buffered_write_result> buffered_writer::queue_write(log_record_writer wri
     const auto write_size = writer.record_size();
     queued_write request(std::move(writer), std::move(target), std::move(holder), timeout, _next_queued_write_id++, write_size);
     auto accepted = request.accepted_pr.get_future();
-    _queued_write_bytes += write_size;
     _queued_writes.push_back(std::move(request), timeout);
+    _queued_write_bytes += write_size;
+    ++_total_queued_writes;
     if (queue_was_empty) {
         _consumer_progress_cv.signal();
     }

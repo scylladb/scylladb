@@ -572,6 +572,7 @@ class buffered_writer {
 
     seastar::expiring_fifo<queued_write, on_queued_write_expiry, db::timeout_clock> _queued_writes;
     size_t _queued_write_bytes{0};
+    uint64_t _total_queued_writes{0};
 
     seastar::timer<db::timeout_clock> _head_flush_timer;
     bool _head_deadline_expired = false;
@@ -640,6 +641,8 @@ public:
     future<buffered_write_result> write_to_buffer(log_record_writer, db::timeout_clock::time_point timeout, write_target target = {}) noexcept;
 
     size_t queued_write_count() const noexcept { return _queued_writes.size(); }
+    size_t queued_write_bytes() const noexcept { return _queued_write_bytes; }
+    uint64_t total_queued_writes() const noexcept { return _total_queued_writes; }
 
     size_t memory_usage() const noexcept { return _ring_size * _buffer_size + _queued_write_bytes; }
 

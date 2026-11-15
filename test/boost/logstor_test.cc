@@ -2382,6 +2382,9 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_buffered_writer_queued_writes_preserve_fif
     BOOST_REQUIRE(!queued3.available());
     BOOST_REQUIRE(!queued4.available());
     BOOST_REQUIRE_EQUAL(writer.queued_write_count(), 3u);
+    const auto record_size = log_record_writer(expected[2]).record_size();
+    BOOST_REQUIRE_EQUAL(writer.queued_write_bytes(), 3 * record_size);
+    BOOST_REQUIRE_EQUAL(writer.total_queued_writes(), 3u);
 
     // FIFO acceptance is proven by the !available() checks after each drain step below:
     // each step frees exactly one buffer, and only the oldest queued write may be
@@ -2415,6 +2418,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_buffered_writer_queued_writes_preserve_fif
     flush_ctl.release_one_flush();
     wait_for_persisted(persisted4);
 
+    BOOST_REQUIRE_EQUAL(writer.queued_write_bytes(), 0u);
+    BOOST_REQUIRE_EQUAL(writer.total_queued_writes(), 3u);
     assert_records_in_order(schema, flush_ctl.all_records(), expected);
 }
 
@@ -2449,6 +2454,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_buffered_writer_queued_write_times_out) {
     BOOST_REQUIRE_EQUAL(writer.queued_write_count(), 1u);
     BOOST_REQUIRE_THROW(queued.get(), seastar::timed_out_error);
     BOOST_REQUIRE_EQUAL(writer.queued_write_count(), 0u);
+    BOOST_REQUIRE_EQUAL(writer.queued_write_bytes(), 0u);
+    BOOST_REQUIRE_EQUAL(writer.total_queued_writes(), 1u);
     BOOST_REQUIRE_EQUAL(seastar::engine().abandoned_failed_futures(), abandoned_before);
 
     flush_ctl.release_all_flushes();
