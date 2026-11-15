@@ -23,6 +23,7 @@ metadata_cache::entry::~entry() {
 }
 
 void metadata_cache::entry::on_evicted() noexcept {
+    ++local_shard_stats.metadata_cache_evictions;
     _parent.erase(*this);
 }
 

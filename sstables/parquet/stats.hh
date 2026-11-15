@@ -35,6 +35,8 @@ struct shard_stats {
     uint64_t dictionary_cache_misses = 0;
     // The memory that the caches hold in the LSA region of the cache_tracker.
     uint64_t metadata_cache_bytes = 0;
+    // Entries that memory reclaim evicted from the caches.
+    uint64_t metadata_cache_evictions = 0;
 
     // The memory of the footer summaries of the open sstables that this
     // shard owns (shareable_components::parquet_summary).
