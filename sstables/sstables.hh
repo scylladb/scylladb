@@ -916,8 +916,10 @@ public:
     //
     // A Parquet Data file is always streamed as-is: its pages carry their
     // own compression and checksums, and the stream does not decode them.
-    // With `integrity_check::yes`, a stream of the whole file checks the
-    // digest. A stream of a part of the file checks nothing.
+    // With `integrity_check::yes`, the stream must cover the whole file, and
+    // it checks the digest if the sstable has read it (read_digest()). A
+    // stream of a part of the file could check nothing, so asking for one
+    // with `integrity_check::yes` is an internal error.
     //
     // The `error_handler` parameter allows to customize the error handling
     // logic when a checksum or digest mismatch is detected on an
