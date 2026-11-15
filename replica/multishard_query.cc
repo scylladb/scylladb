@@ -9,6 +9,7 @@
 #include "schema/schema_registry.hh"
 #include "replica/multishard_query.hh"
 #include "mutation_query.hh"
+#include "mutation/mutation_compactor.hh"
 #include "replica/database.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "query/query-result-writer.hh"
@@ -946,6 +947,8 @@ private:
     query::result_options _opts;
 
 public:
+    static constexpr bool only_selected_columns = query_result_builder::only_selected_columns;
+
     data_query_result_builder(const schema& s, const query::partition_slice& slice, query::result_options opts,
             query::result_memory_accounter&& accounter, uint64_t tombstone_limit)
         : _res_builder(std::make_unique<query::result::builder>(slice, opts, std::move(accounter), tombstone_limit))
@@ -1001,6 +1004,9 @@ public:
         return *r.row_count();
     }
 };
+
+static_assert(ConsumesOnlySelectedColumns<query_result_builder>);
+static_assert(ConsumesOnlySelectedColumns<data_query_result_builder>);
 
 } // anonymous namespace
 

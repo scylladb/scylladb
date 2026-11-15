@@ -14,6 +14,7 @@
 #include <seastar/util/optimized_optional.hh>
 
 #include <ranges>
+#include <span>
 
 #include "schema/schema_fwd.hh"
 #include "tombstone.hh"
@@ -215,6 +216,18 @@ public:
             can_gc_fn&,
             gc_clock::time_point gc_before,
             compaction_garbage_collector* collector = nullptr);
+
+    struct drop_unselected_result {
+        bool any_unpurged = false; // among dropped cells; those compaction would have kept
+        bool any_live = false; // among dropped cells; dropped collections are checked only when `need_liveness`
+        // Dropped cells, live and dead. Elements of dropped collections are counted only when liveness depends on them.
+        compact_and_expire_result dropped;
+    };
+
+    // Removes cells of columns not set in `selected` (indexed by column id).
+    drop_unselected_result drop_unselected(const schema& s, column_kind kind, std::span<const bool> selected,
+            bool need_liveness, row_tombstone tomb, gc_clock::time_point now, const row_marker& marker,
+            can_gc_fn& can_gc, gc_clock::time_point gc_before);
 
     row difference(const schema&, column_kind, const row& other) const;
 

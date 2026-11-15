@@ -227,6 +227,40 @@ collection_mutation_compact_and_expire_result compact_and_expire(
     return {std::move(survivors).finish(), std::move(res)};
 }
 
+collection_mutation_liveness collection_liveness(
+        collection_mutation_view cmv,
+        row_tombstone base_tomb,
+        gc_clock::time_point query_time,
+        can_gc_fn& can_gc,
+        gc_clock::time_point gc_before) {
+    collection_mutation_liveness res;
+    auto tomb = cmv.tomb();
+    if (tomb) {
+        res.stats.collection_tombstones++;
+    }
+    auto t = tomb;
+    if (tomb > base_tomb.regular() && !(tomb.deletion_time < gc_before && can_gc(tomb, is_shadowable::no))) {
+        res.any_unpurged = true;
+    }
+    t.apply(base_tomb.regular());
+    for (auto& [key, cell] : cmv) {
+        auto cannot_erase_cell = [&] {
+            return cell.deletion_time() >= gc_before || !can_gc(tombstone(cell.timestamp(), cell.deletion_time()), is_shadowable::no);
+        };
+        if (cell.is_covered_by(t, false) || cell.is_covered_by(base_tomb.shadowable().tomb(), false)) {
+            res.stats.dead_cells++;
+        } else if (cell.has_expired(query_time) || !cell.is_live()) {
+            res.any_unpurged |= cannot_erase_cell();
+            res.stats.dead_cells++;
+        } else {
+            res.stats.live_cells++;
+            res.any_live = true;
+            break;
+        }
+    }
+    return res;
+}
+
 /// A CollectionMutationAdaptor is a static interface that adapts a collection
 /// element (an iterator value type) to the serialization requirements of
 /// serialize_collection_mutation(). It provides static methods to measure the

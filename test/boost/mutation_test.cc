@@ -29,6 +29,7 @@
 #include "utils/UUID_gen.hh"
 #include "keys/clustering_interval_set.hh"
 #include "schema/schema_builder.hh"
+#include "view_info.hh"
 #include "query/query-result-set.hh"
 #include "query/query-result-reader.hh"
 #include "partition_slice_builder.hh"
@@ -4259,6 +4260,144 @@ SEASTAR_TEST_CASE(test_compact_and_expire_cell_stats) {
                 .collection_column = make_collection(tombstone(dead_ts, now), std::pair(value, atomic_cell::make_dead(dead_ts, now)),
                          std::pair(value1, atomic_cell::make_live(*int32_type, live_ts, value1)))
             }, row_tombstone(tombstone(tomb_ts, now)), {.live_cells = 1, .dead_cells = 2, .collection_tombstones = 1});
+
+    // drop_unselected() on a row with no selected columns must agree with compact_and_expire() on a copy.
+    const auto make_cell = [&] (int state) {
+        switch (state) {
+        case 0: return atomic_cell::make_live(*int32_type, live_ts, value);
+        case 1: return atomic_cell::make_live(*int32_type, dead_ts, value); // covered if there is a tombstone
+        case 2: return atomic_cell::make_live(*int32_type, live_ts, value, now, gc_clock::duration(1)); // expired
+        case 3: return atomic_cell::make_dead(dead_ts, now - gc_clock::duration(1)); // purgeable
+        default: return atomic_cell::make_dead(dead_ts, now); // not purgeable
+        }
+    };
+    const std::array<bool, 2> none{};
+    const std::array tombs = {row_tombstone(), row_tombstone(tombstone(tomb_ts, now)),
+            row_tombstone(tombstone(), shadowable_tombstone(tomb_ts, now))};
+    const std::array markers = {row_marker(live_ts), row_marker(tombstone(dead_ts, now))};
+    const auto make_counter = [&] (int state) {
+        if (state > 1) {
+            return make_cell(state == 2 ? 3 : state); // counters have no TTL
+        }
+        counter_cell_builder b;
+        b.add_shard(counter_shard(counter_id::create_random_id(), 5, 1));
+        return b.build(state == 0 ? live_ts : dead_ts);
+    };
+    const auto cross_check = [&] (const ::schema& s, std::span<const column_kind> kinds, auto make_atomic) {
+        for (const auto kind : kinds) {
+            const bool is_static = kind == column_kind::static_column;
+            const auto& atomic_def = *s.get_column_definition(to_bytes(is_static ? "static_atomic" : "regular_atomic"));
+            // Counter tables cannot hold collections.
+            const auto* coll = s.get_column_definition(to_bytes(is_static ? "static_collection" : "regular_collection"));
+            const auto& collection_def = coll ? *coll : atomic_def;
+            for (const auto& tomb : tombs) {
+                for (const auto& marker : markers) {
+                    for (int a = -1; a < 5; ++a) {
+                        for (int c = -1; c < (coll ? 6 : 0); ++c) {
+                            const auto build = [&] {
+                                row r;
+                                if (a >= 0) {
+                                    r.apply(atomic_def, atomic_cell_or_collection(make_atomic(a)));
+                                }
+                                if (c >= 0) {
+                                    // c == 5: a non-purgeable collection tombstone and no elements.
+                                    r.apply(collection_def, atomic_cell_or_collection(c == 5
+                                            ? make_collection(tombstone(live_ts, now))
+                                            : make_collection({}, std::pair(value, make_cell(c)))));
+                                }
+                                return r;
+                            };
+                            BOOST_TEST_CONTEXT("kind=" << int(kind) << " tomb=" << (&tomb - tombs.data()) << " marker_live=" << marker.is_live() << " a=" << a << " c=" << c) {
+                                auto expected = build();
+                                const auto res = expected.compact_and_expire(s, kind, tomb, now, always_gc, now, marker);
+                                auto r = build();
+                                const auto d = r.drop_unselected(s, kind, none, true, tomb, now, marker, always_gc, now);
+                                BOOST_REQUIRE_EQUAL(d.any_live, res.is_live());
+                                // any_unpurged is not evaluated once a live cell is found.
+                                if (!d.any_live) {
+                                    BOOST_REQUIRE_EQUAL(d.any_unpurged, !expected.empty());
+                                }
+                                BOOST_REQUIRE(r.empty());
+                                // The collection decides liveness: its counts equal compaction's.
+                                if (a == -1 && !d.any_live) {
+                                    BOOST_REQUIRE_EQUAL(d.dropped, res);
+                                }
+                                // Collection elements are not counted once liveness is settled.
+                                if (c == -1) {
+                                    BOOST_REQUIRE_EQUAL(d.dropped.live_cells, res.live_cells);
+                                    BOOST_REQUIRE_EQUAL(d.dropped.dead_cells, res.dead_cells);
+                                }
+
+                                auto r2 = build();
+                                const auto d2 = r2.drop_unselected(s, kind, none, false, tomb, now, marker, always_gc, now);
+                                BOOST_REQUIRE(r2.empty());
+                                BOOST_REQUIRE(!d2.any_unpurged);
+                                if (c == -1) {
+                                    BOOST_REQUIRE_EQUAL(d2.any_live, res.is_live());
+                                    BOOST_REQUIRE_EQUAL(d2.dropped.live_cells, res.live_cells);
+                                    BOOST_REQUIRE_EQUAL(d2.dropped.dead_cells, res.dead_cells);
+                                }
+
+                                std::array<bool, 2> only_atomic{};
+                                only_atomic[atomic_def.id] = true;
+                                auto r3 = build();
+                                r3.drop_unselected(s, kind, only_atomic, true, tomb, now, marker, always_gc, now);
+                                BOOST_REQUIRE_EQUAL(r3.find_cell(atomic_def.id) != nullptr, a >= 0);
+                                BOOST_REQUIRE(!coll || r3.find_cell(collection_def.id) == nullptr);
+
+                                // Partial selection: the dropped cell alone decides any_live; the selected cell is kept.
+                                const auto only = [&] (const column_definition& keep, const column_definition& drop) {
+                                    row alone;
+                                    const auto full = build();
+                                    if (const auto* cell = full.find_cell(drop.id)) {
+                                        alone.apply(drop, cell->copy(*drop.type));
+                                    }
+                                    const auto exp = alone.compact_and_expire(s, kind, tomb, now, always_gc, now, marker);
+                                    std::array<bool, 2> sel{};
+                                    sel[keep.id] = true;
+                                    auto rp = build();
+                                    const auto dp = rp.drop_unselected(s, kind, sel, true, tomb, now, marker, always_gc, now);
+                                    BOOST_REQUIRE_EQUAL(dp.any_live, exp.is_live());
+                                    BOOST_REQUIRE_EQUAL(rp.find_cell(keep.id) != nullptr, &keep == &atomic_def ? a >= 0 : c >= 0);
+                                    BOOST_REQUIRE(rp.find_cell(drop.id) == nullptr);
+                                };
+                                if (coll) {
+                                    only(atomic_def, collection_def);
+                                    only(collection_def, atomic_def);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    };
+
+    const std::array both_kinds = {column_kind::static_column, column_kind::regular_column};
+    cross_check(s, both_kinds, make_cell);
+
+    auto counter_schema = schema_builder(this_smp_shard_count(), "test", "test_drop_unselected_counter")
+        .with_column("pk", int32_type, column_kind::partition_key)
+        .with_column("ck", int32_type, column_kind::clustering_key)
+        .with_column("static_atomic", counter_type, column_kind::static_column)
+        .with_column("regular_atomic", counter_type, column_kind::regular_column)
+        .build();
+    cross_check(*counter_schema, both_kinds, make_counter);
+
+    // A dead marker shadows the whole row in a view keyed by a base regular column.
+    auto base_schema = schema_builder(this_smp_shard_count(), "test", "test_drop_unselected_base")
+        .with_column("pk", int32_type, column_kind::partition_key)
+        .with_column("v", int32_type)
+        .build();
+    auto view_schema = schema_builder(this_smp_shard_count(), "test", "test_drop_unselected_view")
+        .with_column("v", int32_type, column_kind::partition_key)
+        .with_column("pk", int32_type, column_kind::clustering_key)
+        .with_column("regular_atomic", int32_type, column_kind::regular_column)
+        .with_column("regular_collection", collection_type, column_kind::regular_column)
+        .with_view_info(base_schema, false, "pk IS NOT NULL AND v IS NOT NULL")
+        .build();
+    BOOST_REQUIRE(view_schema->view_info()->has_base_non_pk_columns_in_view_pk()); // the dead-marker shadow applies
+    cross_check(*view_schema, std::array{column_kind::regular_column}, make_cell);
 
     return make_ready_future();
 }
