@@ -103,6 +103,12 @@ public:
     // than that of the candidate.
     bool is_up_to_date(index_t idx, term_t term) const;
     index_t next_idx() const;
+    // Return index of the first entry in memory, which may be a trailing entry
+    // at or below the snapshot index. If the log is empty, return the snapshot
+    // index + 1.
+    index_t first_idx() const {
+        return _first_idx;
+    }
     // Return index of the last entry. If the log is empty,
     // return the index of the last entry in the snapshot.
     index_t last_idx() const;
