@@ -4494,7 +4494,12 @@ future<utils::chunked_vector<temporary_buffer<char>>> database::sample_data_file
         std::vector<uint64_t> global_offset(this_smp_shard_count() + 1);
 
         // Watch out: static lambda. Don't add captures to it.
-        static auto size_in_chunks = [] (const sstables::shared_sstable& sst, uint64_t chunk_size) {
+        static auto size_in_chunks = [] (const sstables::shared_sstable& sst, uint64_t chunk_size) -> uint64_t {
+            // A Parquet Data file is not sampled. Its bytes are encoded and
+            // compressed pages, and there are no trained dictionaries for it.
+            if (!sst->can_sample_data_for_dictionary()) {
+                return 0;
+            }
             return sst->data_size() / chunk_size;
         };
 

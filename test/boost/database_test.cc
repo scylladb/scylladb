@@ -62,6 +62,7 @@
 #include "replica/mutation_dump.hh"
 #include "test/boost/database_test.hh"
 #include "test/lib/random_schema.hh"
+#include "test/lib/sstable_utils.hh"
 #include "dht/i_partitioner.hh"
 #include <seastar/core/reactor.hh>
 #include <seastar/core/with_scheduling_group.hh>
@@ -3026,6 +3027,41 @@ SEASTAR_TEST_CASE(test_update_cache_error_handling) {
         check_rows();
     });
 #endif
+}
+
+// The Data file of an `aa` sstable holds encoded and compressed Parquet
+// pages, which are no sample of the data for dictionary training. Only the
+// other sstables of a table are sampled.
+SEASTAR_TEST_CASE(test_sample_data_files_skips_parquet_data_files) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("CREATE KEYSPACE ks_sample WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}").get();
+        e.execute_cql("CREATE TABLE ks_sample.t (pk int PRIMARY KEY, v text)").get();
+        auto& db = e.local_db();
+        auto& t = db.find_column_family("ks_sample", "t");
+        auto s = t.schema();
+        constexpr uint64_t chunk_size = 4096;
+        constexpr uint64_t n_chunks = 16;
+
+        utils::chunked_vector<mutation> muts;
+        const auto& v = *s->get_column_definition("v");
+        for (const auto& dk : tests::generate_partition_keys(100, s)) {
+            mutation m(s, dk);
+            m.set_clustered_cell(clustering_key::make_empty(), v, atomic_cell::make_live(*utf8_type, 1, utf8_type->decompose(sstring(1000, 'x'))));
+            muts.push_back(std::move(m));
+        }
+        auto sst = make_sstable_containing(t.get_sstables_manager().make_sstable(s, t.get_storage_options(), t.get_sstable_generation_generator()(),
+                sstables::sstable_state::normal, sstables::sstable_version_types::aa), std::move(muts)).get();
+        BOOST_REQUIRE_GE(sst->data_size(), n_chunks * chunk_size);
+        t.add_sstable_and_update_cache(sst).get();
+        BOOST_REQUIRE(db.sample_data_files(s->id(), chunk_size, n_chunks).get().empty());
+
+        for (int i = 0; i < 100; ++i) {
+            e.execute_cql(format("INSERT INTO ks_sample.t (pk, v) VALUES ({}, '{}')", i, sstring(1000, 'y'))).get();
+        }
+        t.flush().get();
+        const auto samples = db.sample_data_files(s->id(), chunk_size, n_chunks).get();
+        BOOST_REQUIRE_EQUAL(samples.size(), n_chunks);
+    });
 }
 
 BOOST_AUTO_TEST_SUITE_END()

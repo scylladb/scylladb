@@ -51,7 +51,10 @@ dictionary_service::dictionary_service(abort_source& as, sharded<replica::databa
             auto& t = local_db.get_tables_metadata().get_table(t_id);
             auto snap = co_await t.take_sstable_set_snapshot();
             for (const auto& sst : snap) {
-                result += sst.get()->data_size();
+                // Only the sstables that sample_data_files() samples count.
+                if (sst.get()->can_sample_data_for_dictionary()) {
+                    result += sst.get()->data_size();
+                }
             }
             co_return result;
         }), uint64_t(0), std::plus());
