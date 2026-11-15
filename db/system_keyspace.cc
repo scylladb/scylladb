@@ -1929,18 +1929,43 @@ static data_value_or_unset make_data_value_or_unset(const std::optional<T>& opt)
         return unset_value{};
     }
 };
-
-static data_value_or_unset make_data_value_or_unset(const std::optional<std::unordered_set<dht::token>>& opt) {
-    if (opt) {
-        auto set_type = set_type_impl::get_instance(utf8_type, true);
-        return make_set_value(set_type, prepare_tokens(*opt));
-    } else {
-        return unset_value{};
-    }
-};
 }
 
-future<> system_keyspace::update_peer_info(gms::inet_address ep, locator::host_id hid, const peer_info& info) {
+// Order-independent: sum of splitmix64-mixed tokens.
+static uint64_t tokens_hash(const std::unordered_set<dht::token>& tokens) {
+    uint64_t h = tokens.size();
+    for (const auto& t : tokens) {
+        uint64_t x = t.unbias() + 0x9e3779b97f4a7c15;
+        x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9;
+        x = (x ^ (x >> 27)) * 0x94d049bb133111eb;
+        h += x ^ (x >> 31);
+    }
+    return h;
+}
+
+static uint64_t fnv1a(uint64_t h, std::string_view bytes) {
+    for (unsigned char c : bytes) {
+        h = (h ^ c) * 0x100000001b3;
+    }
+    return h;
+}
+
+// Hashes the same bytes as fmt::join(features, ",").
+static uint64_t features_hash(const std::set<sstring>& features) {
+    uint64_t h = 0xcbf29ce484222325;
+    bool first = true;
+    for (const auto& f : features) {
+        if (!first) {
+            h = fnv1a(h, ",");
+        }
+        first = false;
+        h = fnv1a(h, f);
+    }
+    return h;
+}
+
+future<> system_keyspace::update_peer_info(gms::inet_address ep, locator::host_id hid, peer_info info,
+        const std::unordered_set<dht::token>* tokens, const std::set<sstring>* features) {
     if (ep == gms::inet_address{}) {
         on_internal_error(slogger, format("update_peer_info called with empty inet_address, host_id {}", hid));
     }
@@ -1951,18 +1976,80 @@ future<> system_keyspace::update_peer_info(gms::inet_address ep, locator::host_i
         on_internal_error(slogger, format("update_peer_info called for this node: {}", ep));
     }
 
-    data_value_list values = {
-        data_value_or_unset(data_value(ep.addr())),
-        make_data_value_or_unset(info.data_center),
-        data_value_or_unset(hid.id),
-        make_data_value_or_unset(info.preferred_ip),
-        make_data_value_or_unset(info.rack),
-        make_data_value_or_unset(info.release_version),
-        make_data_value_or_unset(info.rpc_address),
-        make_data_value_or_unset(info.schema_version),
-        make_data_value_or_unset(info.tokens),
-        make_data_value_or_unset(info.supported_features),
+    // Hash before any suspension: tokens and features may point into state that changes meanwhile.
+    std::optional<uint64_t> tokens_h, features_h;
+    if (tokens || info.tokens) {
+        tokens_h = tokens_hash(tokens ? *tokens : *info.tokens);
+    }
+    if (features) {
+        features_h = features_hash(*features);
+    } else if (info.supported_features) {
+        features_h = fnv1a(0xcbf29ce484222325, *info.supported_features);
+    }
+
+    auto guard = try_get_units(_peers_cache_lock, 1);
+    if (!guard) {
+        // About to suspend: take own copies.
+        if (tokens) {
+            info.tokens = *tokens;
+            tokens = nullptr;
+        }
+        if (features) {
+            info.supported_features = fmt::to_string(fmt::join(*features, ","));
+            features = nullptr;
+        }
+        guard = co_await get_units(_peers_cache_lock, 1);
+    }
+    const auto it = _saved_peers.find(ep);
+    const saved_peer_row* saved = it != _saved_peers.end() && it->second.host_id == hid ? &it->second : nullptr;
+    bool changed = !saved;
+    // The real value if set in info and different from the saved one, otherwise unset.
+    auto plain = [&] (auto member, const auto& cur) -> data_value_or_unset {
+        if (!cur || (saved && (saved->info.*member) == cur)) {
+            return unset_value{};
+        }
+        changed = true;
+        return make_data_value_or_unset(cur);
     };
+    // Serialize the token set and features only when their hashes differ.
+    const bool tokens_written = tokens_h && !(saved && saved->tokens_hash == tokens_h);
+    const bool features_written = features_h && !(saved && saved->features_hash == features_h);
+    changed |= tokens_written || features_written;
+    auto tokens_value = [&] () -> data_value_or_unset {
+        if (!tokens_written) {
+            return unset_value{};
+        }
+        return make_set_value(set_type_impl::get_instance(utf8_type, true), prepare_tokens(tokens ? *tokens : *info.tokens));
+    };
+    auto features_value = [&] () -> data_value_or_unset {
+        if (!features_written) {
+            return unset_value{};
+        }
+        return data_value(features ? sstring(fmt::to_string(fmt::join(*features, ","))) : *info.supported_features);
+    };
+    query_data_vector values = {
+        data_value_or_unset(data_value(ep.addr())),
+        plain(&peer_info::data_center, info.data_center),
+        data_value_or_unset(hid.id),
+        plain(&peer_info::preferred_ip, info.preferred_ip),
+        plain(&peer_info::rack, info.rack),
+        plain(&peer_info::release_version, info.release_version),
+        plain(&peer_info::rpc_address, info.rpc_address),
+        plain(&peer_info::schema_version, info.schema_version),
+        tokens_value(),
+        features_value(),
+    };
+    // Refresh also when skipping: restores this host's entries lost when the peers cache was reloaded or invalidated.
+    auto refresh_cache = [&] {
+        if (auto* cache = get_peers_cache()) {
+            cache->host_id_to_inet_ip[hid] = ep;
+            cache->inet_ip_to_host_id[ep] = hid;
+        }
+    };
+    if (!changed) {
+        refresh_cache();
+        co_return;
+    }
 
     auto query = fmt::format("INSERT INTO system.{} "
             "(peer,data_center,host_id,preferred_ip,rack,release_version,rpc_address,schema_version,tokens,supported_features) VALUES"
@@ -1970,16 +2057,51 @@ future<> system_keyspace::update_peer_info(gms::inet_address ep, locator::host_i
 
     slogger.debug("{}: values={}", query, values);
 
-    const auto guard = co_await get_units(_peers_cache_lock, 1);
     try {
         co_await _qp.execute_internal(query, db::consistency_level::ONE, values, cql3::query_processor::cache_internal::yes);
-        if (auto* cache = get_peers_cache()) {
-            cache->host_id_to_inet_ip[hid] = ep;
-            cache->inet_ip_to_host_id[ep] = hid;
-        }
     } catch (...) {
         _peers_cache = nullptr;
+        std::erase_if(_saved_peers, [&] (const auto& e) { return e.first == ep || e.second.host_id == hid; });
         throw;
+    }
+
+    // The write committed; a failure here must not be reported as one, only force a rewrite next time.
+    try {
+        refresh_cache();
+        auto& row = _saved_peers[ep];
+        if (row.host_id != hid) {
+            row = saved_peer_row{.host_id = hid};
+        }
+        // Fields equal to the saved value are no-op assignments; values already holds copies.
+        if (info.data_center) {
+            row.info.data_center = std::move(info.data_center);
+        }
+        if (info.preferred_ip) {
+            row.info.preferred_ip = std::move(info.preferred_ip);
+        }
+        if (info.rack) {
+            row.info.rack = std::move(info.rack);
+        }
+        if (info.release_version) {
+            row.info.release_version = std::move(info.release_version);
+        }
+        if (info.rpc_address) {
+            row.info.rpc_address = std::move(info.rpc_address);
+        }
+        if (info.schema_version) {
+            row.info.schema_version = std::move(info.schema_version);
+        }
+        if (tokens_written) {
+            row.tokens_hash = tokens_h;
+        }
+        if (features_written) {
+            row.features_hash = features_h;
+        }
+        // Keep this row's WRITETIME(host_id) the newest for hid: a return to an old IP rewrites its row fully.
+        std::erase_if(_saved_peers, [&] (const auto& e) { return e.first != ep && e.second.host_id == hid; });
+    } catch (...) {
+        _peers_cache = nullptr;
+        std::erase_if(_saved_peers, [&] (const auto& e) { return e.first == ep || e.second.host_id == hid; });
     }
 }
 
@@ -2074,6 +2196,7 @@ future<> system_keyspace::remove_endpoint(gms::inet_address ep) {
     slogger.debug("DELETE FROM system.{} WHERE peer = {}", PEERS, ep);
 
     const auto guard = co_await get_units(_peers_cache_lock, 1);
+    _saved_peers.erase(ep);
     try {
         co_await execute_cql(req, ep.addr()).discard_result();
         if (auto* cache = get_peers_cache()) {
@@ -2081,7 +2204,10 @@ future<> system_keyspace::remove_endpoint(gms::inet_address ep) {
             if (it != cache->inet_ip_to_host_id.end()) {
                 const auto id = it->second;
                 cache->inet_ip_to_host_id.erase(it);
-                cache->host_id_to_inet_ip.erase(id);
+                // The id may already map to a newer IP.
+                if (const auto idit = cache->host_id_to_inet_ip.find(id); idit != cache->host_id_to_inet_ip.end() && idit->second == ep) {
+                    cache->host_id_to_inet_ip.erase(idit);
+                }
             }
         }
     } catch (...) {
@@ -2091,9 +2217,17 @@ future<> system_keyspace::remove_endpoint(gms::inet_address ep) {
 }
 
 future<> system_keyspace::update_tokens(const std::unordered_set<dht::token>& tokens) {
-    sstring req = format("INSERT INTO system.{} (key, tokens) VALUES (?, ?)", LOCAL);
+    // Only called from sync_raft_topology_nodes, serialized by the token metadata lock in topology_state_load.
+    const auto hash = tokens_hash(tokens);
+    if (_saved_local_tokens_hash == hash) {
+        co_return;
+    }
     auto set_type = set_type_impl::get_instance(utf8_type, true);
-    co_await execute_cql(req, sstring(LOCAL), make_set_value(set_type, prepare_tokens(tokens)));
+    auto value = make_set_value(set_type, prepare_tokens(tokens));
+    _saved_local_tokens_hash.reset();
+    sstring req = format("INSERT INTO system.{} (key, tokens) VALUES (?, ?)", LOCAL);
+    co_await execute_cql(req, sstring(LOCAL), std::move(value));
+    _saved_local_tokens_hash = hash;
 }
 
 future<> system_keyspace::force_blocking_flush(sstring cfname) {

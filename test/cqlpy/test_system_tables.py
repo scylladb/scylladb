@@ -17,6 +17,8 @@ import pytest
 from . import nodetool
 from cassandra.protocol import Unauthorized
 from cassandra.query import SimpleStatement
+import requests
+from test.pylib.skip_types import skip_env
 
 #############################################################################
 # system.size_estimates.partitions_count
@@ -199,3 +201,16 @@ def test_alter_system_table_properties(cql, test_keyspace):
         cql.execute("ALTER TABLE system.compaction_history WITH memtable_flush_period_in_ms = 80000 AND comment = ''")
 
     cql.execute("ALTER TABLE system.compaction_history WITH memtable_flush_period_in_ms = 80000")
+
+# A topology reload must not rewrite unchanged tokens in system.local.
+def test_topology_reload_keeps_unchanged_local_tokens(cql):
+    def reload():
+        if not nodetool.has_rest_api(cql):
+            skip_env("REST API not available")
+        requests.post(f"{nodetool.rest_api_url(cql)}/storage_service/raft_topology/reload", timeout=30).raise_for_status()
+    reload()
+    token = next(iter(cql.execute("SELECT tokens FROM system.local WHERE key = 'local'").one()[0]))
+    query = f"SELECT writetime(tokens['{token}']) FROM system.local WHERE key = 'local'"
+    before = cql.execute(query).one()[0]
+    reload()
+    assert cql.execute(query).one()[0] == before

@@ -11,6 +11,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <set>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -171,6 +172,8 @@ class system_keyspace : public seastar::peering_sharded_service<system_keyspace>
     semaphore _peers_cache_lock{1};
     peers_cache* get_peers_cache();
     future<lw_shared_ptr<const peers_cache>> get_or_load_peers_cache();
+    // Hash of the tokens last written; rewriting an unchanged set costs a tombstone plus every cell.
+    std::optional<uint64_t> _saved_local_tokens_hash;
 
 public:
     static schema_ptr size_estimates();
@@ -305,8 +308,23 @@ public:
         std::optional<sstring> supported_features;
     };
 
-    future<> update_peer_info(gms::inet_address ep, locator::host_id hid, const peer_info& info);
+    // `tokens`/`features`, when given, replace info.tokens/info.supported_features
+    // and are read only before the first suspension.
+    future<> update_peer_info(gms::inet_address ep, locator::host_id hid, peer_info info,
+            const std::unordered_set<dht::token>* tokens = nullptr, const std::set<sstring>* features = nullptr);
 
+private:
+    // Last value written to each column of a peer row; unchanged columns are not rewritten.
+    // info.tokens and info.supported_features are never set; tokens_hash and features_hash stand in for them.
+    struct saved_peer_row {
+        locator::host_id host_id;
+        peer_info info;
+        std::optional<uint64_t> tokens_hash;
+        std::optional<uint64_t> features_hash;
+    };
+    std::unordered_map<gms::inet_address, saved_peer_row> _saved_peers; // guarded by _peers_cache_lock
+
+public:
     // Return ip of the peers table entry with given host id
     future<std::optional<gms::inet_address>> get_ip_from_peers_table(locator::host_id id);
 
