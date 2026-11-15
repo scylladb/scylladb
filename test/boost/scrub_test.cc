@@ -1100,6 +1100,205 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_quarantine_mode_test) {
     }
 }
 
+// Scrub of an sstable with a Parquet Data file (version `aa`) has no code
+// of its own. The full-scan reader raises
+// the malformed sstable error at the first row that it cannot produce, and
+// the scrub code does the rest, as for `mx`.
+//
+// The trie index refuses partitions out of order, so the sstables here have
+// rows out of order within a partition of a single index block, or a damaged
+// page. The scrubbed sstables have the format that the table chooses, which
+// is the native one in test_env. parquet_format_selection_test checks that
+// scrub follows a table's choice of Parquet.
+namespace {
+
+using scrub_mode = compaction::compaction_type_options::scrub::mode;
+
+// Writes `aa` sstables from fragments, without validation of their order.
+shared_sstable make_parquet_sstable(test_env& env, schema_ptr s, std::deque<mutation_fragment_v2> frags, size_t partitions) {
+    auto sst = env.make_sstable(s, sstable_version_types::aa);
+    auto cfg = env.manager().configure_writer("test");
+    cfg.validation_level = mutation_fragment_stream_validation_level::partition_region;
+    // Small row groups, so that a damaged page is in the middle of the file.
+    cfg.parquet_page_set_size = 256;
+    cfg.parquet_min_page_size = 64;
+    cfg.parquet_row_group_size = 2048;
+    auto rd = make_mutation_reader_from_fragments(s, env.make_reader_permit(), std::move(frags));
+    sst->write_components(std::move(rd), partitions, s, cfg, encoding_stats{}).get();
+    sst->load(s->get_sharder()).get();
+    return sst;
+}
+
+// Partitions of `rows` rows each.
+utils::chunked_vector<mutation> make_parquet_scrub_mutations(simple_schema& ss, int partitions, int rows) {
+    utils::chunked_vector<mutation> muts;
+    for (const auto& pk : ss.make_pkeys(partitions)) {
+        mutation m(ss.schema(), pk);
+        for (int i = 0; i < rows; ++i) {
+            ss.add_row(m, ss.make_ckey(i), fmt::format("value {}", i));
+        }
+        muts.push_back(std::move(m));
+    }
+    return muts;
+}
+
+void flip_parquet_byte(shared_sstable sst, uint64_t at) {
+    auto path = sstables::test(sst).filename(component_type::Data).native();
+    auto f = open_file_dma(path, open_flags::rw).get();
+    auto close_f = deferred_close(f);
+    const auto align = f.disk_write_dma_alignment();
+    const auto block = align_down(at, align);
+    auto buf = temporary_buffer<char>::aligned(f.memory_dma_alignment(), align);
+    const auto size = f.size().get();
+    f.dma_read(block, buf.get_write(), align).get();
+    buf.get_write()[at - block] ^= 0x5a;
+    f.dma_write(block, buf.get(), align).get();
+    f.truncate(size).get();
+}
+
+std::vector<sstables::sstable_format_types> formats_of(const std::vector<shared_sstable>& ssts) {
+    std::vector<sstables::sstable_format_types> formats;
+    for (const auto& sst : ssts) {
+        formats.push_back(sst->get_format());
+    }
+    return formats;
+}
+
+} // anonymous namespace
+
+// Rows out of order, in every scrub mode.
+SEASTAR_THREAD_TEST_CASE(sstable_scrub_parquet_out_of_order_rows_test) {
+    simple_schema ss;
+    auto s = ss.schema();
+    const auto muts = make_parquet_scrub_mutations(ss, 4, 10);
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    auto permit = semaphore.make_permit();
+    // In the second partition, row 4 comes before row 3.
+    auto corrupt_fragments = explode(permit, muts);
+    const auto first_row = std::ranges::find_if(corrupt_fragments, [n = 0] (const mutation_fragment_v2& mf) mutable {
+        return mf.is_partition_start() && ++n == 2;
+    }) - corrupt_fragments.begin() + 1;
+    std::swap(corrupt_fragments.at(first_row + 3), corrupt_fragments.at(first_row + 4));
+    // Skip mode drops the row that is out of order: row 3.
+    auto skipped_fragments = explode(permit, muts);
+    skipped_fragments.erase(skipped_fragments.begin() + first_row + 3);
+
+    for (const auto mode : {scrub_mode::abort, scrub_mode::skip, scrub_mode::segregate, scrub_mode::validate}) {
+        for (const auto quarantine : {compaction::compaction_type_options::scrub::quarantine_invalid_sstables::yes,
+                compaction::compaction_type_options::scrub::quarantine_invalid_sstables::no}) {
+            if (mode != scrub_mode::validate && quarantine == compaction::compaction_type_options::scrub::quarantine_invalid_sstables::no) {
+                continue;
+            }
+            testlog.info("mode: {}, quarantine: {}", mode, bool(quarantine));
+            scrub_test_framework<random_schema::no> test;
+            auto sst = make_parquet_sstable(test.env(), s, clone(*s, permit, corrupt_fragments), muts.size());
+            test.run(s, sst, [&] (table_for_tests& table, compaction::compaction_group_view& ts, std::vector<sstables::shared_sstable> sstables) {
+                compaction::compaction_type_options::scrub opts = {
+                    .operation_mode = mode,
+                    .quarantine_sstables = quarantine,
+                };
+                auto& cm = table->get_compaction_manager();
+                switch (mode) {
+                case scrub_mode::abort:
+                    BOOST_REQUIRE_THROW(cm.perform_sstable_scrub(ts, opts, tasks::make_empty_task_info()).get(), compaction::compaction_aborted_exception);
+                    BOOST_REQUIRE(in_strategy_sstables(ts).get() == std::vector<shared_sstable>{sst});
+                    break;
+                case scrub_mode::skip:
+                    cm.perform_sstable_scrub(ts, opts, tasks::make_empty_task_info()).get();
+                    BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).get().size(), 1);
+                    BOOST_REQUIRE(in_strategy_sstables(ts).get().front() != sst);
+                    verify_fragments(in_strategy_sstables(ts).get(), test.env().make_reader_permit(), skipped_fragments);
+                    break;
+                case scrub_mode::segregate:
+                    cm.perform_sstable_scrub(ts, opts, tasks::make_empty_task_info()).get();
+                    BOOST_REQUIRE_GT(in_strategy_sstables(ts).get().size(), 1);
+                    verify_fragments(in_strategy_sstables(ts).get(), test.env().make_reader_permit(), explode(permit, muts));
+                    // The output follows the table's choice of format.
+                    for (const auto f : formats_of(in_strategy_sstables(ts).get())) {
+                        BOOST_REQUIRE(f == sstables::sstable_format_types::big);
+                    }
+                    break;
+                case scrub_mode::validate: {
+                    auto stats = cm.perform_sstable_scrub(ts, opts, tasks::make_empty_task_info()).get();
+                    BOOST_REQUIRE(stats.has_value());
+                    BOOST_REQUIRE_GT(stats->validation_errors, 0);
+                    const bool quarantined = quarantine == compaction::compaction_type_options::scrub::quarantine_invalid_sstables::yes;
+                    BOOST_REQUIRE_EQUAL(sst->is_quarantined(), quarantined);
+                    BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).get().size(), quarantined ? 0 : 1);
+                    break;
+                }
+                }
+            });
+        }
+    }
+}
+
+// A damaged page in the middle of the file. Skip mode keeps the rows before
+// the error and ends the stream there. Abort mode fails, and validate mode
+// reports the damage.
+SEASTAR_THREAD_TEST_CASE(sstable_scrub_parquet_damaged_page_test) {
+    simple_schema ss;
+    auto s = ss.schema();
+    const auto muts = make_parquet_scrub_mutations(ss, 8, 30);
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    auto permit = semaphore.make_permit();
+    const auto fragments = explode(permit, muts);
+
+    for (const auto mode : {scrub_mode::abort, scrub_mode::skip, scrub_mode::validate}) {
+        testlog.info("mode: {}", mode);
+        scrub_test_framework<random_schema::no> test;
+        auto sst = make_parquet_sstable(test.env(), s, clone(*s, permit, fragments), muts.size());
+        const auto& summary = sst->get_parquet_file_summary();
+        BOOST_REQUIRE_GT(summary.row_groups(), 3);
+        // A page of the third row group.
+        flip_parquet_byte(sst, summary.region_start(2) + summary.region_size(2) / 2);
+        sst = test.env().reusable_sst(s, sst).get();
+        sstables::scoped_no_abort_on_malformed_sstable_error no_abort;
+
+        test.run(s, sst, [&] (table_for_tests& table, compaction::compaction_group_view& ts, std::vector<sstables::shared_sstable> sstables) {
+            compaction::compaction_type_options::scrub opts = {
+                .operation_mode = mode,
+            };
+            auto& cm = table->get_compaction_manager();
+            switch (mode) {
+            case scrub_mode::abort:
+                BOOST_REQUIRE_THROW(cm.perform_sstable_scrub(ts, opts, tasks::make_empty_task_info()).get(), compaction::compaction_aborted_exception);
+                BOOST_REQUIRE(in_strategy_sstables(ts).get() == std::vector<shared_sstable>{sst});
+                break;
+            case scrub_mode::skip: {
+                cm.perform_sstable_scrub(ts, opts, tasks::make_empty_task_info()).get();
+                const auto output = in_strategy_sstables(ts).get();
+                BOOST_REQUIRE_EQUAL(output.size(), 1);
+                // The output is the input up to some row before the damaged
+                // page, and the end of that row's partition.
+                std::deque<mutation_fragment_v2> scrubbed;
+                auto rd = output.front()->make_full_scan_reader(s, test.env().make_reader_permit());
+                auto close_rd = deferred_close(rd);
+                while (auto mf = rd().get()) {
+                    scrubbed.push_back(std::move(*mf));
+                }
+                BOOST_REQUIRE_GT(scrubbed.size(), 2);
+                BOOST_REQUIRE_LT(scrubbed.size(), fragments.size());
+                BOOST_REQUIRE(scrubbed.back().is_end_of_partition());
+                for (size_t i = 0; i + 1 < scrubbed.size(); ++i) {
+                    BOOST_REQUIRE(scrubbed[i].equal(*s, fragments[i]));
+                }
+                break;
+            }
+            case scrub_mode::validate: {
+                auto stats = cm.perform_sstable_scrub(ts, opts, tasks::make_empty_task_info()).get();
+                BOOST_REQUIRE(stats.has_value());
+                BOOST_REQUIRE_GT(stats->validation_errors, 0);
+                BOOST_REQUIRE(sst->is_quarantined());
+                break;
+            }
+            default:
+                BOOST_FAIL("unexpected mode");
+            }
+        });
+    }
+}
+
 // Test the scrub_reader in segregate mode and segregate_by_partition together,
 // as they are used in scrub compaction in segregate mode.
 SEASTAR_THREAD_TEST_CASE(test_scrub_segregate_stack) {
