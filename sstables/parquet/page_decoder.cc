@@ -354,11 +354,21 @@ void check_dictionary_page_header(const leaf_column& col, leaf_index c, const pa
     if (dh.enc != encoding::plain && dh.enc != encoding::plain_dictionary) {
         malformed("a dictionary page of column {} has encoding {}", c, int(dh.enc));
     }
-    if (dh.num_values < 0) {
-        malformed("a dictionary page of column {} has {} values", c, dh.num_values);
-    }
     if (col.codec == compression_codec::uncompressed && h.uncompressed_page_size != h.compressed_page_size) {
         malformed("an uncompressed dictionary page of column {} declares {} bytes, it has {}", c, h.uncompressed_page_size, h.compressed_page_size);
+    }
+    // A dictionary page holds at least one entry: the writer writes it only
+    // if a data page uses it.
+    uint64_t width = 0;
+    switch (col.type) {
+    case physical_type::int32: case physical_type::float_: width = 4; break;
+    case physical_type::int64: case physical_type::double_: width = 8; break;
+    case physical_type::fixed_len_byte_array: width = col.type_length; break;
+    default: break;
+    }
+    const uint64_t size = h.uncompressed_page_size;
+    if (dh.num_values <= 0 || (width ? size != width * dh.num_values : size < sizeof(uint32_t) * uint64_t(dh.num_values))) {
+        malformed("a dictionary page of column {} declares {} entries in {} bytes", c, dh.num_values, size);
     }
 }
 
@@ -382,9 +392,24 @@ void check_data_page_header(const leaf_column& col, leaf_index c, const page_hea
             || rep_length + def_length > h.compressed_page_size || rep_length + def_length > h.uncompressed_page_size) {
         malformed("a page of column {} has invalid level lengths {} and {}", c, rep_length, def_length);
     }
+    // The writer compresses the values only when that makes them smaller.
+    // Stored as they are, they take exactly their uncompressed size.
+    const bool compressed = dp.is_compressed && col.codec != compression_codec::uncompressed;
+    if (compressed ? h.uncompressed_page_size <= h.compressed_page_size : h.uncompressed_page_size != h.compressed_page_size) {
+        malformed("a page of column {} declares {} compressed and {} uncompressed bytes, and is {}compressed",
+                c, h.compressed_page_size, h.uncompressed_page_size, compressed ? "" : "not ");
+    }
+    // Every encoding takes at least one byte for one value. A page
+    // without values is PLAIN and has no value bytes.
+    const bool has_values = dp.num_values > dp.num_nulls;
+    if ((!col.max_def && dp.num_nulls) || has_values != (h.uncompressed_page_size > rep_length + def_length)
+            || (!has_values && dp.enc != encoding::plain) || !is_decodable(col.type, dp.enc)) {
+        malformed("a page of column {} has {} nulls in {} entries, {} bytes of values, and encoding {}",
+                c, dp.num_nulls, dp.num_values, h.uncompressed_page_size - rep_length - def_length, int(dp.enc));
+    }
 }
 
-static void check_uncompressed_size(leaf_index c, const page_header& h, uint64_t max_uncompressed_size) {
+void check_uncompressed_size(leaf_index c, const page_header& h, uint64_t max_uncompressed_size) {
     if (uint64_t(h.uncompressed_page_size) > max_uncompressed_size) {
         malformed("a page of column {} declares {} uncompressed bytes, more than the {} bytes of the largest chunk of its row group",
                 c, h.uncompressed_page_size, max_uncompressed_size);

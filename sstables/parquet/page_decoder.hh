@@ -208,10 +208,15 @@ void check_page_sizes(const page_header& h, uint64_t body_size);
 /// check_page_sizes() must have passed.
 void check_page_checksum(const page_header& h, uint32_t crc);
 /// check_dictionary_page_header(): the dictionary page of column `c`.
+/// check_page_sizes() must have passed.
 void check_dictionary_page_header(const leaf_column& col, leaf_index c, const page_header& h);
 /// check_data_page_header(): a data page of column `c` that the OffsetIndex
 /// says covers `rows` rows. check_page_sizes() must have passed.
 void check_data_page_header(const leaf_column& col, leaf_index c, const page_header& h, uint64_t rows);
+/// check_uncompressed_size(): a page of column `c` declares at most
+/// `max_uncompressed_size` bytes. The reader and the verifier pass the size
+/// of the largest chunk of the row group (file_summary::row_group_entry).
+void check_uncompressed_size(leaf_index c, const page_header& h, uint64_t max_uncompressed_size);
 
 /// A decoded dictionary page. Booleans have no dictionary.
 using any_dictionary = std::variant<dictionary<int32_t>, dictionary<int64_t>, dictionary<float>, dictionary<double>, dictionary<byte_array_view>>;

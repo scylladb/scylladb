@@ -27,7 +27,8 @@
 //   with the codec writer, which the row decoder reports as corruption.
 // - The size measures that the reader and the sstable report:
 //   data_size(), read progress, and the key estimate.
-// - The digest check of checksum validation and of whole-file streams.
+// - Checksum validation: the checksums of the pages and the footer, and
+//   the digest, and the digest check of whole-file streams.
 
 #include <filesystem>
 #include <fstream>
@@ -42,7 +43,9 @@
 #include "sstables/file_writer.hh"
 #include "sstables/metadata_collector.hh"
 #include "sstables/parquet/file_summary.hh"
+#include "sstables/parquet/file_verifier.hh"
 #include "sstables/parquet/mapping_reader.hh"
+#include "sstables/parquet/page_decoder.hh"
 #include "sstables/parquet/reader.hh"
 #include "sstables/parquet/writer.hh"
 #include "sstables/serialization_header_builder.hh"
@@ -1261,11 +1264,272 @@ SEASTAR_THREAD_TEST_CASE(test_key_estimate_uses_ordinals) {
     }).get();
 }
 
-// Checksum validation of a Parquet Data file checks the digest of the whole
-// file, and reports that it has no chunk checksums. A whole-file stream
-// with the integrity check, as file streaming makes it, checks the digest
-// too.
+namespace {
+
+void flip_byte(shared_sstable sst, uint64_t at) {
+    std::fstream f(sstables::test(sst).filename(component_type::Data).native(), std::ios::in | std::ios::out | std::ios::binary);
+    BOOST_REQUIRE(f);
+    f.seekg(at);
+    char c;
+    f.read(&c, 1);
+    c ^= 0x5a;
+    f.seekp(at);
+    f.write(&c, 1);
+    BOOST_REQUIRE(f);
+}
+
+// A table whose column `w` gets its first value in the last partitions, so
+// that the Data file has late chunks (see sstables/parquet/writer.hh).
+schema_ptr late_column_table() {
+    return schema_builder(this_smp_shard_count(), "ks", "late")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("ck", int32_type, column_kind::clustering_key)
+            .with_column("v", utf8_type)
+            .with_column("w", int32_type)
+            .set_compressor_params(compression_parameters(compression_parameters::algorithm::lz4))
+            .build();
+}
+
+utils::chunked_vector<mutation> late_column_mutations(schema_ptr s) {
+    const auto& v = *s->get_column_definition("v");
+    const auto& w = *s->get_column_definition("w");
+    utils::chunked_vector<mutation> muts;
+    for (int pk = 0; pk < 40; ++pk) {
+        mutation m(s, partition_key::from_single_value(*s, int32_type->decompose(pk)));
+        for (int ck = 0; ck < 20; ++ck) {
+            auto key = clustering_key::from_single_value(*s, int32_type->decompose(ck));
+            m.set_clustered_cell(key, v, atomic_cell::make_live(*utf8_type, 1000, utf8_type->decompose(tests::random::get_sstring(16))));
+        }
+        muts.push_back(std::move(m));
+    }
+    muts = local_sorted(std::move(muts));
+    // Only the last partitions in the file have `w`.
+    for (size_t i = muts.size() - std::min<size_t>(muts.size(), 3); i < muts.size(); ++i) {
+        for (int ck = 0; ck < 20; ++ck) {
+            auto key = clustering_key::from_single_value(*s, int32_type->decompose(ck));
+            muts[i].set_clustered_cell(key, w, atomic_cell::make_live(*int32_type, 1000, int32_type->decompose(ck)));
+        }
+    }
+    return muts;
+}
+
+// Runs the verifier of the Data file directly, and returns the number of
+// problems. Without the digest, only the checksums of the pages and the
+// footer can detect damage.
+// `wrong_digest` replaces the digest by a wrong one.
+uint64_t count_problems(test_env& env, shared_sstable sst, bool with_digest, bool wrong_digest = false) {
+    auto permit = env.make_reader_permit();
+    auto in = sst->data_stream(0, sst->ondisk_data_size(), permit, nullptr, nullptr).get();
+    auto close = deferred_close(in);
+    auto digest = with_digest ? sst->read_digest().get() : std::nullopt;
+    if (digest && wrong_digest) {
+        *digest += 1;
+    }
+    return parquet::verify_file(in, sst->make_data_file_for_read(permit, nullptr), sst->get_parquet_file_summary(), parquet::verify_options{
+        .file_size = sst->ondisk_data_size(),
+        .footer_crc32 = sst->get_scylla_metadata()->get_parquet_data_file()->footer_crc32,
+        .digest = digest,
+        .permit = permit,
+    }, [] (sstring what) {
+        testlog.info("problem: {}", what);
+    }).get();
+}
+
+} // anonymous namespace
+
+static const tweak_config small_pages = [] (sstable_writer_config& cfg) {
+    cfg.parquet_page_set_size = 512;
+    cfg.parquet_min_page_size = 128;
+    cfg.parquet_row_group_size = 4096;
+};
+
+// Checksum validation of a Parquet Data file checks the checksum of every
+// page, the footer checksum, and the digest of the whole file. Damage
+// anywhere fails validation. A damaged page body or footer is reported
+// without the digest too. test_validate_page_damage covers pages byte by
+// byte.
 SEASTAR_THREAD_TEST_CASE(test_validate_checksums) {
+    struct damage {
+        const char* what;
+        std::function<uint64_t (const parquet::file_summary&)> offset;
+        // The exact number of problems that the verifier reports, without
+        // the digest. Unset where the byte may lie in a page header or an
+        // OffsetIndex, which a damaged byte may change to another valid
+        // value, or make contradict the pages.
+        std::optional<uint64_t> problems;
+    };
+    const std::vector<damage> damages = {
+        {"a page of the first row group", [] (const parquet::file_summary& s) { return s.region_start(0) + s.region_size(0) / 2; }, std::nullopt},
+        {"a page of the last row group", [] (const parquet::file_summary& s) {
+            const uint32_t g = s.row_groups() - 1;
+            return s.region_start(g) + s.region_size(g) / 3;
+        }, std::nullopt},
+        {"an OffsetIndex block", [] (const parquet::file_summary& s) {
+            return s.row_group(0).offset_index_offset + s.row_group(0).offset_index_length / 2;
+        }, std::nullopt},
+        {"a late chunk", [] (const parquet::file_summary& s) {
+            const uint64_t start = s.region_start(s.row_groups());
+            return start + (s.footer_offset() - start) / 2;
+        }, std::nullopt},
+        {"the footer", [] (const parquet::file_summary& s) { return s.footer_offset() + 10; }, 1},
+    };
+    for (const auto& d : damages) {
+        testlog.info("damage: {}", d.what);
+        test_env::do_with_async([&] (test_env& env) {
+            auto s = late_column_table();
+            auto sst = write(env, s, late_column_mutations(s), aa, small_pages);
+            const auto& summary = sst->get_parquet_file_summary();
+            BOOST_REQUIRE_GT(summary.row_groups(), 2);
+            BOOST_REQUIRE_LT(summary.region_start(summary.row_groups()), summary.footer_offset());
+            auto permit = env.make_reader_permit();
+
+            auto res = validate_checksums_and_digests(sst, permit).get();
+            BOOST_REQUIRE(res.status == validate_checksums_status::valid);
+            BOOST_REQUIRE(res.has_digest);
+            BOOST_REQUIRE(res.has_checksum);
+            BOOST_REQUIRE_EQUAL(count_problems(env, sst, true), 0);
+
+            flip_byte(sst, d.offset(summary));
+            res = validate_checksums_and_digests(sst, permit).get();
+            BOOST_REQUIRE(res.status == validate_checksums_status::invalid);
+            BOOST_REQUIRE_GE(count_problems(env, sst, true), 1);
+            if (d.problems) {
+                BOOST_REQUIRE_EQUAL(count_problems(env, sst, true), *d.problems + 1);
+                BOOST_REQUIRE_EQUAL(count_problems(env, sst, false), *d.problems);
+            }
+        }).get();
+    }
+
+    // The digest alone: the Data file is intact and the expected digest is
+    // wrong. Scylla.db holds the digest that the sstable uses, so this is
+    // tested with the verifier directly.
+    test_env::do_with_async([] (test_env& env) {
+        auto s = late_column_table();
+        auto sst = write(env, s, late_column_mutations(s), aa);
+        BOOST_REQUIRE_EQUAL(count_problems(env, sst, true, true), 1);
+    }).get();
+}
+
+// Damages each byte of the page headers of the first row group, and a few
+// bytes of each page body, one at a time. Validation must fail every time.
+// Without the digest, the verifier must report a damaged body exactly once,
+// and it reports most damaged header bytes too. file_verifier.hh lists the
+// fields that only the digest guards. In this file, that is the length of
+// the definition levels.
+SEASTAR_THREAD_TEST_CASE(test_validate_page_damage) {
+    test_env::do_with_async([] (test_env& env) {
+        auto s = late_column_table();
+        auto sst = write(env, s, late_column_mutations(s), aa, small_pages);
+        const auto& summary = sst->get_parquet_file_summary();
+        auto permit = env.make_reader_permit();
+        std::string data;
+        {
+            std::ifstream f(sstables::test(sst).filename(component_type::Data).native(), std::ios::binary);
+            data.assign(std::istreambuf_iterator<char>(f), {});
+        }
+        BOOST_REQUIRE_EQUAL(data.size(), sst->ondisk_data_size());
+
+        // The extents of the pages of row group 0: start, header size, size.
+        struct extent {
+            uint64_t start;
+            uint64_t header;
+            uint64_t size;
+        };
+        std::vector<extent> pages;
+        const auto& rg = summary.row_group(0);
+        temporary_buffer<char> block(data.data() + rg.offset_index_offset, rg.offset_index_length);
+        std::vector<temporary_buffer<char>> pieces;
+        pieces.push_back(std::move(block));
+        auto idx = parquet::decode_row_group_index(summary, 0, fragmented_temporary_buffer(std::move(pieces), rg.offset_index_length)).get();
+        auto add_page = [&] (uint64_t start, uint64_t size) {
+            parquet::thrift::decoder d(std::span<const char>(data.data() + start, size));
+            parquet::parse_page_header(d);
+            pages.push_back({start, d.position(), size});
+        };
+        for (parquet::leaf_index c = 0; c < summary.columns().size(); ++c) {
+            if (!summary.in_place(0, c)) {
+                continue;
+            }
+            if (summary.has_dictionary(0, c)) {
+                add_page(idx.chunk_start(c), idx.dictionary_size(c));
+            }
+            for (uint32_t j = 0; j < idx.pages(c); ++j) {
+                add_page(idx.page_at(c, j).offset, idx.page_at(c, j).size);
+            }
+        }
+        BOOST_REQUIRE_GT(pages.size(), 4);
+
+        uint64_t header_bytes = 0;
+        uint64_t header_bytes_detected = 0;
+        auto damage = [&] (uint64_t at, bool in_header) {
+            flip_byte(sst, at);
+            BOOST_REQUIRE(validate_checksums_and_digests(sst, permit).get().status == validate_checksums_status::invalid);
+            BOOST_REQUIRE_GE(count_problems(env, sst, true), 1);
+            const auto problems = count_problems(env, sst, false);
+            if (in_header) {
+                ++header_bytes;
+                header_bytes_detected += problems > 0;
+            } else {
+                BOOST_REQUIRE_EQUAL(problems, 1);
+            }
+            flip_byte(sst, at);
+        };
+        for (const auto& p : pages) {
+            for (uint64_t i = 0; i < p.header; ++i) {
+                damage(p.start + i, true);
+            }
+            const uint64_t body = p.size - p.header;
+            for (uint64_t i : {uint64_t(0), body / 2, body - 1}) {
+                damage(p.start + p.header + i, false);
+            }
+        }
+        BOOST_REQUIRE_EQUAL(count_problems(env, sst, true), 0);
+        testlog.info("damaged header bytes detected without the digest: {} of {}", header_bytes_detected, header_bytes);
+        // The writer's headers take about 30 bytes, and the definition
+        // level length takes one of them.
+        BOOST_REQUIRE_GE(header_bytes_detected * 10, header_bytes * 9);
+    }).get();
+}
+
+// The verifier charges the OffsetIndex block that it decodes, and the
+// totals of the row groups, to the permit of its options, and releases
+// them when it returns. The stream and the file use another permit, so
+// that their buffers do not count.
+SEASTAR_THREAD_TEST_CASE(test_verifier_charges_permit) {
+    test_env::do_with_async([] (test_env& env) {
+        auto s = late_column_table();
+        auto sst = write(env, s, late_column_mutations(s), aa, small_pages);
+        const auto& summary = sst->get_parquet_file_summary();
+        // The last byte of the region of row group 0 is in the body of its
+        // last page. The verifier reports it while it holds the block.
+        flip_byte(sst, summary.row_group(0).offset_index_offset - 1);
+
+        auto io_permit = env.make_reader_permit();
+        auto permit = env.make_reader_permit();
+        const auto baseline = permit.consumed_resources().memory;
+        auto in = sst->data_stream(0, sst->ondisk_data_size(), io_permit, nullptr, nullptr).get();
+        auto close = deferred_close(in);
+        std::optional<ssize_t> charged;
+        const auto problems = parquet::verify_file(in, sst->make_data_file_for_read(io_permit, nullptr), summary, parquet::verify_options{
+            .file_size = sst->ondisk_data_size(),
+            .footer_crc32 = sst->get_scylla_metadata()->get_parquet_data_file()->footer_crc32,
+            .permit = permit,
+        }, [&] (sstring what) {
+            testlog.info("problem: {}", what);
+            if (!charged) {
+                charged = permit.consumed_resources().memory - baseline;
+            }
+        }).get();
+        BOOST_REQUIRE_EQUAL(problems, 1);
+        BOOST_REQUIRE(charged);
+        BOOST_REQUIRE_GE(*charged, ssize_t(parquet::row_group_index_decode_memory(summary, 0) + summary.row_groups() * 32));
+        BOOST_REQUIRE_EQUAL(permit.consumed_resources().memory, baseline);
+    }).get();
+}
+
+// A whole-file stream with the integrity check checks the digest, once the
+// sstable has read it.
+SEASTAR_THREAD_TEST_CASE(test_whole_file_stream_checks_digest) {
     test_env::do_with_async([] (test_env& env) {
         auto s = sized_table(compression_parameters(compression_parameters::algorithm::lz4));
         utils::chunked_vector<mutation> muts;
@@ -1275,6 +1539,7 @@ SEASTAR_THREAD_TEST_CASE(test_validate_checksums) {
         muts = local_sorted(std::move(muts));
         auto sst = write(env, s, muts, aa);
         auto permit = env.make_reader_permit();
+        BOOST_REQUIRE(sst->read_digest().get());
 
         auto read_whole_file = [&] {
             auto in = sst->data_stream(0, sst->ondisk_data_size(), permit, nullptr, nullptr,
@@ -1286,27 +1551,8 @@ SEASTAR_THREAD_TEST_CASE(test_validate_checksums) {
             }
             return size;
         };
-
-        auto res = validate_checksums_and_digests(sst, permit).get();
-        BOOST_REQUIRE(res.status == validate_checksums_status::valid);
-        BOOST_REQUIRE(res.has_digest);
-        BOOST_REQUIRE(!res.has_checksum);
         BOOST_REQUIRE_EQUAL(read_whole_file(), sst->ondisk_data_size());
-
-        {
-            const uint64_t at = sst->get_parquet_file_summary().region_start(0) + 10;
-            std::fstream f(sstables::test(sst).filename(component_type::Data).native(), std::ios::in | std::ios::out | std::ios::binary);
-            BOOST_REQUIRE(f);
-            f.seekg(at);
-            char c;
-            f.read(&c, 1);
-            c ^= 0x5a;
-            f.seekp(at);
-            f.write(&c, 1);
-            BOOST_REQUIRE(f);
-        }
-        res = validate_checksums_and_digests(sst, permit).get();
-        BOOST_REQUIRE(res.status == validate_checksums_status::invalid);
+        flip_byte(sst, sst->get_parquet_file_summary().region_start(0) + 10);
         BOOST_REQUIRE_THROW(read_whole_file(), malformed_sstable_exception);
     }).get();
 }

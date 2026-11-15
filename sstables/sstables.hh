@@ -1393,11 +1393,12 @@ private:
 // `has_checksum` is `true` if the sstable is compressed or has a CRC
 // component.
 //
-// A Parquet Data file (has_parquet_data_file()) has neither: its pages carry
-// their own checksums. For it, this function validates the digests of the
-// components and the digest of the whole Data file, but not the checksums
-// of the pages. `has_checksum` is then `false`. The status is `valid` or
-// `invalid` by the digest, and `no_checksum` if Digest.crc32 is missing.
+// A Parquet Data file (has_parquet_data_file()) has neither, but its pages
+// carry their own checksums, so `has_checksum` is `true`. For it, this
+// function validates the digests of the components, the checksum of every
+// page, the checksum of the footer, and the digest of the whole Data file if
+// Digest.crc32 exists (see sstables/parquet/file_verifier.hh). The status is
+// `valid` or `invalid`, never `no_checksum`.
 //
 // Validation errors are logged individually.
 enum class validate_checksums_status {

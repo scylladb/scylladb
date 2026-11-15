@@ -47,7 +47,9 @@
 //   are those of the row groups from the first one in which the column has
 //   content to the last. Earlier chunks of the column are late: they are
 //   entirely null (every entry at level 0), lie after the last row group,
-//   and have no OffsetIndex.
+//   and have no OffsetIndex. The late chunks are adjacent, in schema order
+//   and then in row group order, from the end of the last row group's
+//   OffsetIndex block to the footer.
 // - A column without content in the whole file is not in the file's schema,
 //   unless it is declared always present. An always-present column without
 //   content has only late chunks.

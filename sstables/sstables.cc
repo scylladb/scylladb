@@ -85,6 +85,7 @@
 #include "reader_concurrency_semaphore.hh"
 #include "readers/mutation_source.hh"
 #include "readers/reversing.hh"
+#include "sstables/parquet/file_verifier.hh"
 #include "sstables/parquet/sstable_reader.hh"
 #include "readers/forwardable.hh"
 #include "sstables/trie/bti_index.hh"
@@ -3847,24 +3848,34 @@ future<lw_shared_ptr<checksum>> sstable::read_checksum() {
     co_return std::move(checksum);
 }
 
-// Validates the digest of a Parquet Data file, by reading the whole file.
-// The checksums of the pages are not validated: that is left for later.
-static future<validate_checksums_result> validate_parquet_data_file_digest(shared_sstable sst, reader_permit permit,
+// Validates a Parquet Data file: the checksum of every page, the footer
+// checksum, and the digest of the whole file if there is one. See
+// parquet/file_verifier.hh.
+static future<validate_checksums_result> validate_parquet_data_file(shared_sstable sst, reader_permit permit,
         std::optional<uint32_t> digest, validate_checksums_result ret) {
     if (!digest) {
         sstlog.warn("No digest available for SSTable: {}", sst->get_filename());
-        ret.status = validate_checksums_status::no_checksum;
+    }
+    const auto* entry = sst->get_scylla_metadata() ? sst->get_scylla_metadata()->get_parquet_data_file() : nullptr;
+    if (!entry) {
+        sstlog.error("{}: Scylla.db has no entry for the Parquet Data file", sst->get_filename());
+        ret.status = validate_checksums_status::invalid;
         co_return ret;
     }
-    auto stream = co_await sst->data_stream(0, sst->ondisk_data_size(), permit, nullptr, nullptr,
-            sstable::raw_stream::yes, integrity_check::yes, [&ret] (sstring msg) {
-                sstlog.error("{}", msg);
-                ret.status = validate_checksums_status::invalid;
-            });
+    auto stream = co_await sst->data_stream(0, sst->ondisk_data_size(), permit, nullptr, nullptr);
     std::exception_ptr ex;
     try {
-        while (!(co_await stream.read()).empty()) {
+        const auto errors = co_await parquet::verify_file(stream, sst->make_data_file_for_read(permit, nullptr), sst->get_parquet_file_summary(),
+                parquet::verify_options{.file_size = sst->ondisk_data_size(), .footer_crc32 = entry->footer_crc32, .digest = digest, .permit = permit},
+                [&sst] (sstring msg) {
+                    sstlog.error("{}: {}", sst->get_filename(), msg);
+                });
+        if (errors) {
+            ret.status = validate_checksums_status::invalid;
         }
+    } catch (const malformed_sstable_exception& e) {
+        sstlog.error("{}: {}", sst->get_filename(), e.what());
+        ret.status = validate_checksums_status::invalid;
     } catch (...) {
         ex = std::current_exception();
     }
@@ -3877,7 +3888,8 @@ future<validate_checksums_result> validate_checksums_and_digests(shared_sstable 
     auto valid = true;
     std::exception_ptr ex;
 
-    auto has_checksums = sst->has_component(component_type::CRC) || sst->get_compression();
+    // The pages of a Parquet Data file carry their own checksums.
+    auto has_checksums = sst->has_component(component_type::CRC) || sst->get_compression() || has_parquet_data_file(sst->get_version());
     auto has_digest = sst->has_component(component_type::Digest);
 
     validate_checksums_result ret = {
@@ -3904,7 +3916,7 @@ future<validate_checksums_result> validate_checksums_and_digests(shared_sstable 
 
     const auto digest = co_await sst->read_digest();
     if (has_parquet_data_file(sst->get_version())) {
-        co_return co_await validate_parquet_data_file_digest(sst, std::move(permit), digest, ret);
+        co_return co_await validate_parquet_data_file(sst, std::move(permit), digest, ret);
     }
     auto checksum = co_await sst->read_checksum();
     if (!checksum && !sst->get_compression()) {

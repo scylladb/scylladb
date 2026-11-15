@@ -3224,9 +3224,9 @@ SEASTAR_TEST_CASE(test_validate_checksums) {
         const std::map<sstring, sstring> no_compression_params = {};
         const std::map<sstring, sstring> lz4_compression_params = {{compression_parameters::SSTABLE_COMPRESSION, "LZ4Compressor"}};
 
-        // `aa` has no CRC.db and no compressed chunks to damage. Its digest
-        // check is tested by test_validate_checksums in
-        // parquet_sstable_reader_test.cc.
+        // `aa` has no CRC.db and no compressed chunks to damage. Its page
+        // checksums, footer checksum, and digest are tested by
+        // test_validate_checksums in parquet_sstable_reader_test.cc.
         for (const auto version : writable_sstable_versions_with_mx_data_file) {
             testlog.info("version={}", version);
             for (const auto& compression_params : {no_compression_params, lz4_compression_params}) {
