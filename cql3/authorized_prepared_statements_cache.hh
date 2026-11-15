@@ -128,46 +128,23 @@ private:
 
 public:
     // Choose the memory budget such that would allow us ~4K entries when a shard gets 1GB of RAM
-    authorized_prepared_statements_cache(utils::loading_cache_config c, logging::logger& logger)
-        : _cache(std::move(c), logger, [this] (const key_type& k) {
-            _cache.remove(k);
-            return make_ready_future<value_type>();
-        })
-    {}
+    authorized_prepared_statements_cache(utils::loading_cache_config c, logging::logger& logger);
 
-    future<> insert(auth::authenticated_user user, cql3::prepared_cache_key_type prep_cache_key, value_type v) noexcept {
-        return _cache.insert(key_type(std::move(user), std::move(prep_cache_key)), [v = std::move(v)] (const cache_key_type&) mutable {
-            return make_ready_future<value_type>(std::move(v));
-        });
-    }
+    future<> insert(auth::authenticated_user user, cql3::prepared_cache_key_type prep_cache_key, value_type v) noexcept;
 
-    value_ptr find(const auth::authenticated_user& user, const cql3::prepared_cache_key_type& prep_cache_key) {
-        return _cache.find(key_view_type{user, prep_cache_key}, key_view_hasher(), key_view_equal());
-    }
+    value_ptr find(const auth::authenticated_user& user, const cql3::prepared_cache_key_type& prep_cache_key);
 
-    void remove(const auth::authenticated_user& user, const cql3::prepared_cache_key_type& prep_cache_key) {
-        _cache.remove(key_view_type{user, prep_cache_key}, key_view_hasher(), key_view_equal());
-    }
+    void remove(const auth::authenticated_user& user, const cql3::prepared_cache_key_type& prep_cache_key);
 
-    size_t size() const {
-        return _cache.size();
-    }
+    size_t size() const;
 
-    size_t memory_footprint() const {
-        return _cache.memory_footprint();
-    }
+    size_t memory_footprint() const;
 
-    bool update_config(utils::loading_cache_config c) {
-        return _cache.update_config(std::move(c));
-    }
+    bool update_config(utils::loading_cache_config c);
 
-    void reset() {
-        _cache.reset();
-    }
+    void reset();
 
-    future<> stop() {
-        return _cache.stop();
-    }
+    future<> stop();
 };
 
 }
