@@ -263,6 +263,12 @@ async def test_tablet_split_and_merge_with_concurrent_topology_changes(manager: 
             logger.info("Waiting for topology ops")
             await topology_ops_task
 
+            # total_keys rows of 2000 bytes split until 8 tablets, where the average tablet size is below
+            # twice the 30000 target. A major compaction of a tablet which is still being split cannot drop
+            # the rows deleted below, see SCYLLADB-6203.
+            logger.info("Waiting for the last split")
+            await s1_log.wait_for(f'Detected tablet split for table {ks}.test, increasing from 4 to 8 tablets', from_mark=s1_mark)
+
             await check()
 
             old_tablet_count = tablet_count
