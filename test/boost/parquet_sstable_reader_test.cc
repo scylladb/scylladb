@@ -27,6 +27,7 @@
 //   with the codec writer, which the row decoder reports as corruption.
 // - The size measures that the reader and the sstable report (PLAN.md,
 //   "Size measures"): data_size(), read progress, and the key estimate.
+// - The digest check of checksum validation and of whole-file streams.
 
 #include <filesystem>
 #include <fstream>
@@ -1257,5 +1258,55 @@ SEASTAR_THREAD_TEST_CASE(test_key_estimate_uses_ordinals) {
             BOOST_REQUIRE_GE(est, upper - lower + 1);
             BOOST_REQUIRE_LE(est, upper - lower + 3);
         }
+    }).get();
+}
+
+// Checksum validation of a Parquet Data file checks the digest of the whole
+// file, and reports that it has no chunk checksums. A whole-file stream
+// with the integrity check, as file streaming makes it, checks the digest
+// too.
+SEASTAR_THREAD_TEST_CASE(test_validate_checksums) {
+    test_env::do_with_async([] (test_env& env) {
+        auto s = sized_table(compression_parameters(compression_parameters::algorithm::lz4));
+        utils::chunked_vector<mutation> muts;
+        for (int pk = 0; pk < 20; ++pk) {
+            muts.push_back(sized_partition(s, pk, 10, [] (int i) { return 100 + i; }));
+        }
+        muts = local_sorted(std::move(muts));
+        auto sst = write(env, s, muts, aa);
+        auto permit = env.make_reader_permit();
+
+        auto read_whole_file = [&] {
+            auto in = sst->data_stream(0, sst->ondisk_data_size(), permit, nullptr, nullptr,
+                    sstable::raw_stream::compressed_chunks, integrity_check::yes).get();
+            auto close = deferred_close(in);
+            uint64_t size = 0;
+            while (auto buf = in.read().get()) {
+                size += buf.size();
+            }
+            return size;
+        };
+
+        auto res = validate_checksums_and_digests(sst, permit).get();
+        BOOST_REQUIRE(res.status == validate_checksums_status::valid);
+        BOOST_REQUIRE(res.has_digest);
+        BOOST_REQUIRE(!res.has_checksum);
+        BOOST_REQUIRE_EQUAL(read_whole_file(), sst->ondisk_data_size());
+
+        {
+            const uint64_t at = sst->get_parquet_file_summary().region_start(0) + 10;
+            std::fstream f(sstables::test(sst).filename(component_type::Data).native(), std::ios::in | std::ios::out | std::ios::binary);
+            BOOST_REQUIRE(f);
+            f.seekg(at);
+            char c;
+            f.read(&c, 1);
+            c ^= 0x5a;
+            f.seekp(at);
+            f.write(&c, 1);
+            BOOST_REQUIRE(f);
+        }
+        res = validate_checksums_and_digests(sst, permit).get();
+        BOOST_REQUIRE(res.status == validate_checksums_status::invalid);
+        BOOST_REQUIRE_THROW(read_whole_file(), malformed_sstable_exception);
     }).get();
 }
