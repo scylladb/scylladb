@@ -33,6 +33,7 @@ target_sources(test-perf
     perf_cql_raw.cc
     perf_compaction_efficiency.cc
     perf_sstable.cc
+    perf_sstable_datasets.cc
     perf_tablets.cc
     tablet_load_balancing.cc
     perf.cc)
