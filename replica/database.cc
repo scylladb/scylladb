@@ -1256,7 +1256,7 @@ future<> database::create_local_system_table(
     auto lock = co_await get_tables_metadata().hold_write_lock();
     std::exception_ptr ex;
     try {
-        add_column_family(ks, table, std::move(cfg), replica::database::is_new_cf::no);
+        add_column_family(ks, table, std::move(cfg), ks.metadata()->get_storage_options_ptr(), replica::database::is_new_cf::no);
     } catch (...) {
         ex = std::current_exception();
     }
@@ -1276,7 +1276,7 @@ db::commitlog* database::commitlog_for(const schema_ptr& schema) {
         : _commitlog.get();
 }
 
-void database::add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg, is_new_cf is_new, locator::token_metadata_ptr not_commited_new_metadata, std::optional<service::storage_mode> storage_mode) {
+void database::add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg, lw_shared_ptr<const storage_options> sopts, is_new_cf is_new, locator::token_metadata_ptr not_commited_new_metadata, std::optional<service::storage_mode> storage_mode) {
     schema = local_schema_registry().learn(schema);
     auto&& rs = ks.get_replication_strategy();
     locator::effective_replication_map_ptr erm;
@@ -1311,7 +1311,7 @@ void database::add_column_family(keyspace& ks, schema_ptr schema, column_family:
 
     // avoid self-reporting
     auto& sst_manager = get_sstables_manager(*schema);
-    auto cf = make_lw_shared<column_family>(schema, std::move(cfg), ks.metadata()->get_storage_options_ptr(), _compaction_manager,
+    auto cf = make_lw_shared<column_family>(schema, std::move(cfg), std::move(sopts), _compaction_manager,
             schema->logstor_enabled() ? _logstor.get() : nullptr, sst_manager, *_cl_stats, _row_cache_tracker, erm, &ks);
     cf->set_durable_writes(ks.metadata()->durable_writes());
 
@@ -1345,7 +1345,7 @@ future<> database::add_column_family_and_make_directory(schema_ptr schema, is_ne
     auto& ks = find_keyspace(schema->ks_name());
     std::exception_ptr ex;
     try {
-        add_column_family(ks, schema, ks.make_column_family_config(*schema, *this), is_new, nullptr, storage_mode);
+        add_column_family(ks, schema, ks.make_column_family_config(*schema, *this), ks.metadata()->get_storage_options_ptr(), is_new, nullptr, storage_mode);
     } catch (...) {
         ex = std::current_exception();
     }
