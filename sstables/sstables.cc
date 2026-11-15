@@ -3130,9 +3130,14 @@ bool sstable::is_shared() const {
 
 uint64_t sstable::data_size() const {
     if (has_parquet_data_file(_version)) {
-        // FIXME: audit the users of the Data file size.
+        // The raw size is close to the uncompressed size of an `mx` Data
+        // file, so the size tiers of compaction, the backlog, and read and
+        // write progress keep their meaning.
+        // Scylla.db is read before the Data file is opened, and the writer
+        // sets the entry when it seals the sstable. Before either, the size
+        // is 0, as for an `mx` sstable before it is opened.
         const auto* p = _components->scylla_metadata ? _components->scylla_metadata->get_parquet_data_file() : nullptr;
-        return p ? p->raw_size : _data_file_size;
+        return p ? p->raw_size : 0;
     }
     if (has_component(component_type::CompressionInfo)) {
         return _components->compression.uncompressed_file_length();
@@ -3960,6 +3965,9 @@ std::strong_ordering sstable::compare_by_first_key(const sstable& other) const {
 }
 
 double sstable::get_compression_ratio() const {
+    if (has_parquet_data_file(_version)) {
+        return get_stats_metadata().compression_ratio;
+    }
     if (this->has_component(component_type::CompressionInfo)) {
         return double(_components->compression.compressed_file_length()) / _components->compression.uncompressed_file_length();
     } else {
