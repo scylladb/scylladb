@@ -310,6 +310,55 @@ SEASTAR_TEST_CASE(test_upgradesstables_converts_both_ways) {
     }, make_config());
 }
 
+// Scrub in a mode that rewrites sstables follows the table's choice of
+// format, as every compaction does: it scrubs a Parquet sstable into a
+// Parquet sstable, and converts a native one. The validate mode rewrites
+// nothing.
+SEASTAR_TEST_CASE(test_scrub_follows_the_table_choice) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        create_keyspace_and_table(e);
+        // A regular compaction would replace the sstables that the test
+        // compares before and after the validation.
+        e.db().invoke_on_all([] (replica::database& db) {
+            return db.find_column_family("tks", "t").disable_auto_compaction();
+        }).get();
+        alter(e, "ALTER TABLE tks.t WITH sstable_data_format = 'parquet'");
+        insert_rows(e, "tks.t", 0, 10);
+        flush(e, "tks", "t");
+        alter(e, "ALTER TABLE tks.t WITH sstable_data_format = 'native'");
+        insert_rows(e, "tks.t", 10, 20);
+        flush(e, "tks", "t");
+        BOOST_REQUIRE(formats_on_disk(e, "tks", "t") == big_and_pq);
+
+        auto scrub = [&] (compaction::compaction_type_options::scrub::mode mode) {
+            e.db().invoke_on_all([mode] (replica::database& db) -> future<> {
+                auto& t = db.find_column_family("tks", "t");
+                co_await t.parallel_foreach_compaction_group_view([&] (compaction::compaction_group_view& ts) -> future<> {
+                    compaction::compaction_type_options::scrub opts = {.operation_mode = mode};
+                    auto stats = co_await db.get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::make_empty_task_info());
+                    if (stats && stats->validation_errors) {
+                        throw std::runtime_error(seastar::format("{} validation errors", stats->validation_errors));
+                    }
+                });
+            }).get();
+        };
+
+        const auto generations = generations_on_disk(e, "tks", "t");
+        scrub(compaction::compaction_type_options::scrub::mode::validate);
+        BOOST_REQUIRE(generations_on_disk(e, "tks", "t") == generations);
+        BOOST_REQUIRE(formats_on_disk(e, "tks", "t") == big_and_pq);
+
+        alter(e, "ALTER TABLE tks.t WITH sstable_data_format = 'parquet'");
+        scrub(compaction::compaction_type_options::scrub::mode::skip);
+        BOOST_REQUIRE(formats_on_disk(e, "tks", "t") == pq_only);
+        require_rows(e, "tks.t", 20);
+
+        scrub(compaction::compaction_type_options::scrub::mode::abort);
+        BOOST_REQUIRE(formats_on_disk(e, "tks", "t") == pq_only);
+        require_rows(e, "tks.t", 20);
+    }, make_config());
+}
+
 // A materialized view or a secondary index has no table scope of its own,
 // and follows the table scope of its base table.
 SEASTAR_TEST_CASE(test_views_and_indexes_of_a_parquet_table) {
