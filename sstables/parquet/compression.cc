@@ -1319,6 +1319,20 @@ protected:
     }
 };
 
+std::string_view codec_name(compression_codec codec) noexcept {
+    switch (codec) {
+    case compression_codec::uncompressed: return "UNCOMPRESSED";
+    case compression_codec::snappy: return "SNAPPY";
+    case compression_codec::gzip: return "GZIP";
+    case compression_codec::lzo: return "LZO";
+    case compression_codec::brotli: return "BROTLI";
+    case compression_codec::lz4: return "LZ4";
+    case compression_codec::zstd: return "ZSTD";
+    case compression_codec::lz4_raw: return "LZ4_RAW";
+    }
+    return "UNKNOWN";
+}
+
 bool is_supported(compression_codec codec) noexcept {
     switch (codec) {
     case compression_codec::uncompressed:

@@ -58,6 +58,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <string_view>
 
 #include <seastar/core/future.hh>
 
@@ -113,6 +114,10 @@ public:
 
 /// Whether the reader and the writer support pages compressed with `codec`.
 bool is_supported(compression_codec codec) noexcept;
+
+/// The name of a compression codec in the Parquet specification, for
+/// example "LZ4_RAW".
+std::string_view codec_name(compression_codec codec) noexcept;
 
 /// Creates the compressor of `codec`, one of UNCOMPRESSED, SNAPPY, GZIP,
 /// LZ4_RAW, and ZSTD. `level` applies to ZSTD and GZIP, and the library's

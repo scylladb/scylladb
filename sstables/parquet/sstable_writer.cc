@@ -54,6 +54,17 @@ writer_config make_writer_config(const sstable_writer_config& cfg, const compres
     return wc;
 }
 
+compression_parameters compression_parameters_of(compression_codec codec) {
+    using algorithm = compression_parameters::algorithm;
+    switch (codec) {
+    case compression_codec::lz4_raw: return compression_parameters(algorithm::lz4);
+    case compression_codec::snappy: return compression_parameters(algorithm::snappy);
+    case compression_codec::gzip: return compression_parameters(algorithm::deflate);
+    case compression_codec::zstd: return compression_parameters(algorithm::zstd);
+    default: return compression_parameters::no_compression();
+    }
+}
+
 namespace {
 
 // The weight of an index entry's position, as the trie index encodes it.
