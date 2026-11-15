@@ -4061,7 +4061,6 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_stops_while_segment_allocation_fails) {
         return;
     }
 
-    auto schema = make_kv_schema();
     tmpdir dir;
 
     // The store has more segments than the segment pool holds, so that the replenisher allocates
@@ -4076,20 +4075,18 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_stops_while_segment_allocation_fails) {
     }), cache.shared_tracker);
     test_recovery_catalog no_tables;
     ls.do_recovery(no_tables).get();
-    ls.start().get();
-    auto stop_store = seastar::defer([&ls] noexcept { ls.stop().get(); });
 
+    // The pool is empty when the store starts, so the first allocation of the replenisher fails.
     utils::get_local_injector().enable("logstor_allocate_segment_fail");
     auto disable_injection = seastar::defer([] noexcept {
         utils::get_local_injector().disable("logstor_allocate_segment_fail");
     });
 
-    {
-        test_logstor_group cg(schema, ls);
-        write_and_flush_segment(ls, cg, make_kv_mutation(schema, "pk0", "value"));
-    }
-    // The replenisher tries to replace the segments the write took, fails, and waits before the next
-    // attempt. The count grows before that wait, so the stop starts during it.
+    ls.start().get();
+    auto stop_store = seastar::defer([&ls] noexcept { ls.stop().get(); });
+
+    // The replenisher waits before its next attempt, and the count grows before that wait, so the
+    // stop starts during the wait.
     BOOST_REQUIRE(eventually_true([] { return segment_manager_metric("segment_allocation_failures") > 0; }));
 
     ls.stop().get();
@@ -4195,9 +4192,12 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_uses_free_segments_when_file_format_fails)
         return (dir.path() / fmt::format("ls_{}-{}-Data.db", this_shard_id(), file_id)).string();
     };
 
-    // The replenisher fills the pool, which allocates the first files. Wait for the background
-    // format of the next file, and then make each later format fail. The format checks the injection
-    // before it creates the file, so the format of that file is not affected.
+    // The first write takes the active segment, and the replenisher fills the pool, which allocates
+    // the first files. The pool holds 4 files of segments, so the store is in the fifth file when the
+    // pool is full. Wait for the background format of the next file, and then make each later format
+    // fail. The format checks the injection before it creates the file, so the format of that file is
+    // not affected.
+    ls.write(make_kv_mutation(schema, "first", "value"), write_target(&cg, {}), db::no_timeout).get();
     BOOST_REQUIRE(eventually_true([&] { return sm.get_usage().disk_usage >= 5 * file_size; }));
     const auto allocated_files = sm.get_usage().disk_usage / file_size;
     BOOST_REQUIRE(eventually_true([&] { return seastar::file_exists(file_path(allocated_files)).get(); }));
