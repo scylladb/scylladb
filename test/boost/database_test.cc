@@ -2622,8 +2622,11 @@ struct scoped_execption_log_level {
     }
 };
 
-SEASTAR_TEST_CASE(replica_read_timeout_no_exception) {
+// The sstable format of the table decides which reader reads it from disk,
+// and each reader has its own injection point.
+static future<> test_replica_read_timeout_no_exception(sstring ks_name, sstring data_format) {
     cql_test_config cfg;
+    cfg.db_config->test_sstable_data_format_default.set(sstring(data_format));
     cfg.db_config->reader_concurrency_semaphore_preemptive_abort_factor.set(0.0);
     const auto read_timeout = 10ms;
     const auto write_timeout = 10s;
@@ -2636,8 +2639,7 @@ SEASTAR_TEST_CASE(replica_read_timeout_no_exception) {
             .cas_timeout = write_timeout,
             .other_timeout = read_timeout});
 
-    return do_with_cql_env_thread([] (cql_test_env& e) {
-        const sstring ks_name = get_name();
+    return do_with_cql_env_thread([ks_name, data_format] (cql_test_env& e) {
         const sstring tbl_name = "tbl";
 
         // Disable tablets because we want to exercise the legacy range-scan path too.
@@ -2715,7 +2717,8 @@ SEASTAR_TEST_CASE(replica_read_timeout_no_exception) {
             // The injection has to be armed on every shard: the partition may be
             // owned by a shard other than the one running this test (that depends
             // on the shard count), and the read happens on the owning shard.
-            scoped_error_injection injection("sstables_mx_reader_fill_buffer_timeout", {{"table", format("{}.{}", ks_name, tbl_name)}});
+            const auto injection_name = data_format == "parquet" ? "sstables_parquet_reader_fill_buffer_timeout" : "sstables_mx_reader_fill_buffer_timeout";
+            scoped_error_injection injection(injection_name, {{"table", format("{}.{}", ks_name, tbl_name)}});
             execute_test("disk reads", false);
             execute_test("disk reads", true);
         }
@@ -2744,6 +2747,14 @@ SEASTAR_TEST_CASE(replica_read_timeout_no_exception) {
             execute_test("queued reads", true);
         }
     }, cfg);
+}
+
+SEASTAR_TEST_CASE(replica_read_timeout_no_exception) {
+    return test_replica_read_timeout_no_exception(get_name(), "native");
+}
+
+SEASTAR_TEST_CASE(replica_read_timeout_no_exception_parquet) {
+    return test_replica_read_timeout_no_exception(get_name(), "parquet");
 }
 
 SEASTAR_THREAD_TEST_CASE(test_full_position_cmp_ring_order) {
