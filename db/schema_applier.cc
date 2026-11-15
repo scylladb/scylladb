@@ -1209,6 +1209,8 @@ future<> schema_applier::finalize_tables_and_views() {
 }
 
 future<> schema_applier::post_commit() {
+    co_await utils::get_local_injector().inject("schema_applier_pause_before_post_commit",
+            utils::wait_for_message(std::chrono::minutes(1)));
     co_await finalize_tables_and_views();
     auto& sharded_db = _proxy.local().get_db();
     co_await sharded_db.invoke_on_all([&] (replica::database& db) -> future<> {
