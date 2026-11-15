@@ -228,6 +228,13 @@ Available options
        the default, for example after a node stayed down for a long time. Must be between ``1``
        and ``315360000`` (ten years). Default: ``300``, in effect once every node runs a version
        that knows the option.
+   * - ``sstable_data_format``
+     - text
+     - ``CLUSTER``, ``KEYSPACE``, ``TABLE``
+     - The format of the data of new SSTables of a table: ``native`` or ``parquet``. Default:
+       ``native``. It applies to SSTables written after the change. System tables and tables with
+       ``COMPACT STORAGE`` ignore it. A materialized view or a secondary index follows its base
+       table. See :doc:`Parquet SSTables </architecture/sstable/sstable-parquet>`.
 
 .. _cql-cluster-config-yaml-options:
 

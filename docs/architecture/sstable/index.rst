@@ -6,5 +6,6 @@ ScyllaDB SSTable Format
 
    sstable2/index
    sstable3/index
+   sstable-parquet
 
 .. include:: _common/sstable_what_is.rst
