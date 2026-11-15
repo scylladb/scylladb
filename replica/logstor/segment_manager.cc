@@ -990,7 +990,7 @@ future<> segment_manager_impl::start() {
     // A start that fails is not repeated, so the stage changes before the work starts.
     _lifecycle = lifecycle::started;
 
-    // Start background replenisher before creating initial segment
+    // The replenisher fills the segment pool in the background.
     _reserve_replenisher = with_scheduling_group(_cfg.compaction_sg, [this] {
         return replenish_reserve();
     });
@@ -1001,8 +1001,14 @@ future<> segment_manager_impl::start() {
         return run_separator_fiber();
     });
 
-    co_await switch_active_segment();
-
+    // The start does not take the active segment, and the first write takes it. On a shard that
+    // recovery left with only the compaction reserve free, a segment comes only after compaction
+    // frees one, so a start that waits for a segment can wait for ever.
+    //
+    // The separation below can still wait for ever in the same way, because a separator buffer that
+    // it fills on a shard at the compaction reserve waits for a segment when it flushes. The
+    // separation must move off the start path, to a background fiber that separates the recovered
+    // segments after start() returns.
     co_await separate_recovered_segments();
 
     logstor_logger.info("Segment manager started with base directory {}", _cfg.base_dir.string());
