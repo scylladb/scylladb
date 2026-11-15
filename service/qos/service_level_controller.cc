@@ -183,6 +183,11 @@ future<> service_level_controller::stop() {
     _global_controller_db->notifications_serializer.broken();
     try {
         auto f = co_await coroutine::as_future(std::exchange(_global_controller_db->distributed_data_update, make_ready_future<>()));
+        // The workload_type gauges and `_sl_lookup` hold references to the entries of
+        // `_service_levels_db`, so unregister the gauges and clear `_sl_lookup` before the loop
+        // below erases the entries.
+        _metrics.clear();
+        _sl_lookup.clear();
         // delete all sg's in _service_levels_db, leaving it empty.
         for (auto it = _service_levels_db.begin(); it != _service_levels_db.end(); ) {
             _global_controller_db->deleted_scheduling_groups.emplace_back(it->second.sg);
