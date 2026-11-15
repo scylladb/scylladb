@@ -3283,6 +3283,11 @@ void compaction_manager::propagate_replacement(compaction_group_view& t,
     }
 }
 
+void compaction_manager::on_memtable_flush(compaction_group_view& t, const std::vector<sstables::shared_sstable>& flushed) {
+    // A flush replaces no sstable: the new sstables hold data of the memtables.
+    propagate_replacement(t, {}, flushed);
+}
+
 strategy_control& compaction_manager::get_strategy_control() const noexcept {
     return *_strategy_control;
 }

@@ -320,6 +320,12 @@ private:
     // about invoking it. Ref #10146
     compaction_manager(tasks::task_manager& tm);
 public:
+    // Tells the running compactions of the given view that a memtable flush
+    // added these sstables. A compaction which may purge tombstones looks for
+    // data they delete in the memtables, and in the sstables that existed when
+    // it started, so it must also look in sstables flushed after it started.
+    void on_memtable_flush(compaction::compaction_group_view& t, const std::vector<sstables::shared_sstable>& flushed);
+
     compaction_manager(config cfg, abort_source& as, tasks::task_manager& tm);
     ~compaction_manager();
     class for_testing_tag{};
