@@ -219,6 +219,10 @@ add_scylla_test(parquet_encoding_test
   KIND SEASTAR
   LIBRARIES
     Parquet::parquet_shared)
+add_scylla_test(parquet_end_to_end_test
+  KIND SEASTAR
+  LIBRARIES
+    Parquet::parquet_shared)
 add_scylla_test(parquet_format_selection_test
   KIND SEASTAR)
 add_scylla_test(parquet_mapping_test
