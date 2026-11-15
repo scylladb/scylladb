@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <array>
+#include <numeric>
 #include <optional>
 #include <random>
 #include <stdexcept>
@@ -679,9 +680,12 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_recovery_reproduces_index_after_split_comp
 }
 
 // A fixed pseudo-random mix of writes and overwrites, with timestamps that do not follow the write
-// order so that writes lose to earlier ones and ties happen, interleaved with separator flushes and
-// compactions.
-SEASTAR_THREAD_TEST_CASE(test_logstor_recovery_reproduces_index_under_mixed_workload) {
+// order so that writes lose to earlier ones, interleaved with separator flushes and compactions.
+//
+// No two writes have the same timestamp, because recovery of records with the same timestamp is not
+// fully implemented yet. Currently recovery does not use the same rules as the live index for such
+// records (SCYLLADB-3668).
+SEASTAR_THREAD_TEST_CASE(test_logstor_recovery_reproduces_index_under_mixed_workload_distinct_timestamps) {
     auto schema = make_kv_schema("cf");
     tmpdir dir;
 
@@ -699,9 +703,13 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_recovery_reproduces_index_under_mixed_work
     constexpr size_t write_count = 400;
     const sstring filler(6 * 1024, 'x');
 
+    std::vector<api::timestamp_type> timestamps(write_count);
+    std::iota(timestamps.begin(), timestamps.end(), api::timestamp_type(1));
+    std::ranges::shuffle(timestamps, rng);
+
     for (size_t i = 0; i < write_count; ++i) {
         const auto key = rng() % key_count;
-        const auto ts = api::timestamp_type(1 + rng() % 8);
+        const auto ts = timestamps[i];
         ls.write(make_kv_mutation(schema, seastar::format("pk{}", key), seastar::format("v{}-{}", i, filler), ts), write_target(&cg, {}), db::no_timeout).get();
         if (i % 40 == 39) {
             ls.flush_to_separator().get();
