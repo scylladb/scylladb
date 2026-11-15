@@ -5371,7 +5371,8 @@ future<service::tablet_operation_repair_result> storage_service::repair_tablet(l
         if (!trinfo) {
             throw std::runtime_error(fmt::format("No transition info for tablet {}", tablet));
         }
-        if (trinfo->stage != locator::tablet_transition_stage::repair && trinfo->stage != locator::tablet_transition_stage::rebuild_repair) {
+        if (trinfo->stage != locator::tablet_transition_stage::repair && trinfo->stage != locator::tablet_transition_stage::rebuild_repair
+                && trinfo->stage != locator::tablet_transition_stage::restore_repair) {
             throw std::runtime_error(fmt::format("Tablet {} stage is not at repair", tablet));
         }
         auto session = session_id ? session_id : trinfo->session_id;
@@ -5393,6 +5394,8 @@ future<service::tablet_operation_repair_result> storage_service::repair_tablet(l
                 throw std::runtime_error(fmt::format("Repair request for tablet {} was deleted", tablet));
             }
             global_tablet_repair_task_info = tasks::make_cluster_task_info(tasks::task_id{tinfo.repair_task_info->tablet_task_id.uuid()});
+        } else if (trinfo->stage == locator::tablet_transition_stage::restore_repair) {
+            replicas = tmap.get_tablet_info(tablet.tablet).replicas;
         } else {
             auto migration_streaming_info = get_migration_streaming_info(get_token_metadata_ptr()->get_topology(), tmap.get_tablet_info(tablet.tablet), *trinfo);
             replicas = locator::tablet_replica_set{migration_streaming_info.read_from.begin(), migration_streaming_info.read_from.end()};
@@ -5498,6 +5501,7 @@ static bool intranode_migration_needs_clone_on_startup(locator::tablet_transitio
         case locator::tablet_transition_stage::repair:
         case locator::tablet_transition_stage::end_repair:
         case locator::tablet_transition_stage::restore:
+        case locator::tablet_transition_stage::restore_repair:
             return false;
     }
     on_internal_error(slogger, format("Invalid tablet transition stage: {}", static_cast<int>(stage)));
