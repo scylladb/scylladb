@@ -38,6 +38,7 @@
 #include <seastar/util/closeable.hh>
 
 #include "partition_slice_builder.hh"
+#include "readers/from_fragments.hh"
 #include "readers/from_mutations.hh"
 #include "readers/reversing.hh"
 #include "schema/schema_builder.hh"
@@ -48,6 +49,7 @@
 #include "sstables/parquet/mapping_reader.hh"
 #include "sstables/parquet/page_decoder.hh"
 #include "sstables/parquet/reader.hh"
+#include "sstables/parquet/sstable_reader.hh"
 #include "sstables/parquet/writer.hh"
 #include "sstables/serialization_header_builder.hh"
 #include "sstables/sstables.hh"
@@ -101,6 +103,19 @@ shared_sstable write(test_env& env, schema_ptr s, const utils::chunked_vector<mu
     sst->write_components(make_mutation_reader_from_mutations(s, env.make_reader_permit(), muts), muts.size(), s, cfg, encoding_stats{}).get();
     sst->load(s->get_sharder()).get();
     return sst;
+}
+
+// Validates `sst` as the `validate` mode of scrub does, and returns the
+// number of errors.
+uint64_t validation_errors(test_env& env, shared_sstable sst) {
+    abort_source abort;
+    uint64_t reported = 0;
+    const auto errors = sst->validate(env.make_reader_permit(), abort, [&] (sstring what) {
+        ++reported;
+        testlog.info("validation error: {}", what);
+    }).get();
+    BOOST_REQUIRE_EQUAL(errors, reported);
+    return errors;
 }
 
 // Ranges of positions in the order of `s`, with bounds at random prefixes
@@ -362,6 +377,10 @@ void check_round_trip(test_env& env, schema_ptr s, const utils::chunked_vector<m
                     sst->make_reader(s, env.make_reader_permit(), pr, s->full_slice()),
                     true);
         }
+
+        // Validation finds no error in a valid sstable, also with many
+        // row index blocks.
+        BOOST_REQUIRE_EQUAL(validation_errors(env, sst), 0);
 
         std::mt19937 engine(seed);
         check_reverse_reads(env, s, muts, ref, sst, engine);
@@ -951,7 +970,8 @@ public:
 // The trie index stores a deletion time in 32 bits, capped at
 // max_deletion_time, while the Data file stores it uncapped. For tombstones
 // past 2038, reads that skip with the index see the same tombstones as a
-// sequential read of the Data file, in both directions.
+// sequential read of the Data file, in both directions, and validate()
+// accepts the sstable.
 SEASTAR_THREAD_TEST_CASE(test_deletion_times_beyond_the_index_cap) {
     test_env::do_with_async([] (test_env& env) {
         simple_schema ss;
@@ -981,6 +1001,7 @@ SEASTAR_THREAD_TEST_CASE(test_deletion_times_beyond_the_index_cap) {
         auto permit = env.make_reader_permit();
         // A full scan reads the Data file in order, without the index.
         check_equal(read_all(sst->make_full_scan_reader(s, permit)), {m});
+        BOOST_REQUIRE_EQUAL(validation_errors(env, sst), 0);
 
         const auto pr = dht::partition_range::make_singular(pk);
         auto check = [&] (std::vector<query::clustering_range> ranges) {
@@ -1572,6 +1593,106 @@ SEASTAR_THREAD_TEST_CASE(test_partial_stream_with_integrity_check) {
                     std::runtime_error);
             auto in = sst->data_stream(pos, len, permit, nullptr, nullptr, sstable::raw_stream::yes, integrity_check::no).get();
             in.close().get();
+        }
+    }).get();
+}
+
+namespace {
+
+// Writes fragments as they come, with validation of their order off, as the
+// scrub tests do to make an sstable with rows out of order.
+shared_sstable write_fragments(test_env& env, schema_ptr s, std::deque<mutation_fragment_v2> frags) {
+    auto sst = env.make_sstable(s, aa);
+    auto cfg = env.manager().configure_writer("test");
+    cfg.validation_level = mutation_fragment_stream_validation_level::partition_region;
+    auto rd = make_mutation_reader_from_fragments(s, env.make_reader_permit(), std::move(frags));
+    sst->write_components(std::move(rd), 1, s, cfg, encoding_stats{}).get();
+    sst->load(s->get_sharder()).get();
+    return sst;
+}
+
+} // anonymous namespace
+
+// The validate mode of scrub reports
+// errors and counts them, as for `mx`: rows out of order, a damaged page,
+// and an index that does not match the Data file. It stops when asked to.
+SEASTAR_THREAD_TEST_CASE(test_validate) {
+    test_env::do_with_async([] (test_env& env) {
+        simple_schema ss(simple_schema::with_static::yes);
+        auto s = ss.schema();
+        auto permit = env.make_reader_permit();
+        const auto keys = ss.make_pkeys(6);
+
+        testlog.info("rows out of order");
+        {
+            std::deque<mutation_fragment_v2> frags;
+            frags.emplace_back(*s, permit, partition_start(keys[0], {}));
+            for (int ck : {0, 2, 1, 3}) {
+                frags.push_back(ss.make_row_v2(permit, ss.make_ckey(ck), "v"));
+            }
+            frags.emplace_back(*s, permit, partition_end());
+            auto sst = write_fragments(env, s, std::move(frags));
+            BOOST_REQUIRE_GT(validation_errors(env, sst), 0);
+        }
+
+        // Partitions with many index blocks.
+        auto make_muts = [&] (int rows) {
+            utils::chunked_vector<mutation> muts;
+            for (const auto& pk : keys) {
+                mutation m(s, pk);
+                ss.add_static_row(m, "static");
+                for (int i = 0; i < rows; ++i) {
+                    ss.add_row(m, ss.make_ckey(i), fmt::format("value {}", i));
+                }
+                muts.push_back(std::move(m));
+            }
+            return muts;
+        };
+        const auto tweak = [] (sstable_writer_config& cfg) {
+            cfg.parquet_page_set_size = 256;
+            cfg.parquet_min_page_size = 64;
+            cfg.parquet_row_group_size = 4096;
+        };
+
+        testlog.info("a damaged page");
+        {
+            auto sst = write(env, s, make_muts(100), aa, tweak);
+            BOOST_REQUIRE_EQUAL(validation_errors(env, sst), 0);
+            const auto& summary = sst->get_parquet_file_summary();
+            flip_byte(sst, summary.region_start(1) + summary.region_size(1) / 2);
+            sst = env.reusable_sst(s, sst).get();
+            BOOST_REQUIRE_GT(validation_errors(env, sst), 0);
+
+            testlog.info("abort");
+            abort_source abort;
+            abort.request_abort();
+            BOOST_REQUIRE_EQUAL(sst->validate(permit, abort, [] (sstring) {}).get(), 0);
+        }
+
+        testlog.info("an index of another Data file");
+        {
+            // The same partitions with another number of rows: the
+            // partitions, and the row index blocks, are at other rows.
+            auto sst = write(env, s, make_muts(100), aa, tweak);
+            auto other = write(env, s, make_muts(90), aa, tweak);
+            for (auto c : {component_type::Partitions, component_type::Rows}) {
+                std::filesystem::copy_file(sstables::test(other).filename(c).native(), sstables::test(sst).filename(c).native(),
+                        std::filesystem::copy_options::overwrite_existing);
+            }
+            // A fresh object, which reads the copied index. Validation of
+            // the component digests would stop at the copied files, so the
+            // Parquet validation runs directly.
+            // The open must not read the first and the last rows with the index.
+            sst = env.reusable_sst(s, sstring(sst->get_storage().prefix()), sst->generation(), aa,
+                    sstable_open_config{.load_first_and_last_position_metadata = false}).get();
+            abort_source abort;
+            uint64_t index_errors = 0;
+            const auto errors = parquet::validate(sst, permit, abort, [&] (sstring what) {
+                testlog.info("validation error: {}", what);
+                index_errors += what.starts_with("mismatching index/data");
+            }, default_read_monitor()).get();
+            BOOST_REQUIRE_GT(index_errors, 0);
+            BOOST_REQUIRE_EQUAL(errors, index_errors);
         }
     }).get();
 }
