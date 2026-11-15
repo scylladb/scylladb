@@ -2771,3 +2771,163 @@ def test_scylla_sstable_layout_tablets(cql, test_keyspace_tablets, scylla_path, 
                     assert sst["tablet"] is not None
                     assert sst["shard"] == shard_id
                 assert groups[0]["name"] == f"TABLET #{sst['tablet']}, SHARD #{shard_id}"
+
+
+# Tests of the operations of scylla-sstable on sstables whose Data file is a
+# Parquet file (format `pq`, version `aa`). The `write` operation writes the
+# same content as an `aa` sstable and as a native one, and the operations
+# compare the two where they should agree.
+
+PARQUET_SCHEMA = ("CREATE TABLE ks.tbl (pk int, ck int, v text, s int STATIC, m map<int, text>, PRIMARY KEY (pk, ck))"
+                  " WITH compression = {'sstable_compression': 'ZstdCompressor'}")
+
+
+def write_parquet_test_sstables(scylla_path, tmp_dir):
+    """Writes the same content as an `aa` sstable and as an `me` sstable. Returns the schema file and the two Data files."""
+    schema_file = os.path.join(tmp_dir, "schema.cql")
+    with open(schema_file, "w") as f:
+        f.write(PARQUET_SCHEMA)
+    statements = []
+    for pk in range(10):
+        statements.append(f"UPDATE tbl USING TIMESTAMP 100 SET s = {pk} WHERE pk = {pk}")
+        for ck in range(20):
+            statements.append(f"INSERT INTO tbl (pk, ck, v, m) VALUES ({pk}, {ck}, 'value {ck}', {{{ck}: 'x'}}) USING TIMESTAMP {100 + ck}")
+        # The range covers no row: whether the memtable keeps a shadowed
+        # row of a dead collection depends on timing, so the two writes could differ.
+        statements.append(f"DELETE FROM tbl USING TIMESTAMP 200 WHERE pk = {pk} AND ck > 30 AND ck < 40")
+    input_file = os.path.join(tmp_dir, "input.cql")
+    with open(input_file, "w") as f:
+        f.write(";\n".join(statements))
+    data_files = []
+    for version in ("aa", "me"):
+        out_dir = os.path.join(tmp_dir, version)
+        os.mkdir(out_dir)
+        subprocess.check_call([scylla_path, "sstable", "write", "--schema-file", schema_file, "--input-format", "cql",
+                               "--input-file", input_file, "--output-dir", out_dir, "--sstable-version", version])
+        files = glob.glob(os.path.join(out_dir, "*-Data.db"))
+        assert len(files) == 1
+        data_files.append(files[0])
+    assert os.path.basename(data_files[0]).startswith("aa-") and data_files[0].endswith("-pq-Data.db")
+    return schema_file, data_files[0], data_files[1]
+
+
+def sstable_json(scylla_path, operation, sstable, *args):
+    """Runs an operation that dumps JSON for a single sstable, and returns that sstable's part."""
+    out = subprocess.check_output([scylla_path, "sstable", operation, *args, sstable])
+    return json.loads(out)["sstables"][sstable]
+
+
+def without_deletion_times(dump):
+    """A dump without the deletion times of tombstones. A DELETE takes the
+    current time as its deletion time, so two writes of the same input may
+    differ there."""
+    if isinstance(dump, dict):
+        return {k: without_deletion_times(v) for k, v in dump.items() if k != "deletion_time"}
+    if isinstance(dump, list):
+        return [without_deletion_times(v) for v in dump]
+    return dump
+
+
+def dump_data(scylla_path, sstable, *args):
+    return without_deletion_times(sstable_json(scylla_path, "dump-data", sstable, *args))
+
+
+def flip_byte(path, offset):
+    with open(path, "r+b") as f:
+        f.seek(offset)
+        b = f.read(1)
+        f.seek(offset)
+        f.write(bytes([b[0] ^ 0x5a]))
+
+
+def test_scylla_sstable_parquet_dump(cql, scylla_path):
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        schema_file, pq, native = write_parquet_test_sstables(scylla_path, tmp_dir)
+        schema_args = ["--schema-file", schema_file]
+
+        # The reader of a Parquet Data file produces the same content.
+        assert dump_data(scylla_path, pq, *schema_args) == dump_data(scylla_path, native, *schema_args)
+
+        # The index stores row ordinals, under the key "row".
+        index = sstable_json(scylla_path, "dump-index", pq, *schema_args)
+        assert len(index) == 10
+        assert all("row" in e and "pos" not in e for e in index)
+        assert index[0]["row"] == 0
+        assert [e["row"] for e in index] == sorted(e["row"] for e in index)
+
+        # There is no CompressionInfo.db: the compression codec of the Parquet
+        # file is dumped instead.
+        assert sstable_json(scylla_path, "dump-compression-info", pq, *schema_args) == {"parquet_codecs": ["ZSTD"]}
+        # There is no Summary.db.
+        assert sstable_json(scylla_path, "dump-summary", pq, *schema_args) is None
+
+        statistics = sstable_json(scylla_path, "dump-statistics", pq, *schema_args)
+        assert statistics["stats"]["rows_count"] == sstable_json(scylla_path, "dump-statistics", native, *schema_args)["stats"]["rows_count"]
+
+        metadata = sstable_json(scylla_path, "dump-scylla-metadata", pq, *schema_args)
+        parquet = metadata["parquet_data_file"]
+        assert parquet["file_size"] == os.path.getsize(pq)
+        assert parquet["rows"] > 0
+        assert "parquet_data_file" not in sstable_json(scylla_path, "dump-scylla-metadata", native, *schema_args)
+
+        # The schema loaded from the sstable keeps the table's compression,
+        # which the compression codec of the Parquet file gives.
+        schema = subprocess.check_output([scylla_path, "sstable", "dump-schema", pq], text=True)
+        assert "ZstdCompressor" in schema
+
+
+def test_scylla_sstable_parquet_query_and_shard_of(cql, scylla_path):
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        schema_file, pq, native = write_parquet_test_sstables(scylla_path, tmp_dir)
+        query = [scylla_path, "sstable", "query", "--schema-file", schema_file, "--output-format", "json"]
+        assert json.loads(subprocess.check_output(query + [pq])) == json.loads(subprocess.check_output(query + [native]))
+        shard_of = [scylla_path, "sstable", "shard-of", "--schema-file", schema_file, "--vnodes", "--shards", "4"]
+        assert (json.loads(subprocess.check_output(shard_of + [pq]))["sstables"][pq] ==
+                json.loads(subprocess.check_output(shard_of + [native]))["sstables"][native])
+
+
+def test_scylla_sstable_parquet_validate(cql, scylla_path):
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        schema_file, pq, _ = write_parquet_test_sstables(scylla_path, tmp_dir)
+        schema_args = ["--schema-file", schema_file]
+        assert sstable_json(scylla_path, "validate", pq, *schema_args) == {"errors": 0, "valid": True}
+        assert sstable_json(scylla_path, "validate-checksums", pq, *schema_args) == {"has_checksums": True, "has_digest": True, "valid": True}
+
+        # A byte in the middle of the pages. The footer's location is in
+        # the last 8 bytes of the file: its length, and the magic bytes.
+        flip_byte(pq, os.path.getsize(pq) // 4)
+        res = sstable_json(scylla_path, "validate-checksums", pq, *schema_args)
+        assert res["valid"] is False
+        assert res["has_checksums"] is True
+        res = sstable_json(scylla_path, "validate", pq, *schema_args)
+        assert res["valid"] is False
+        assert res["errors"] > 0
+
+
+def test_scylla_sstable_parquet_scrub(cql, scylla_path):
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        schema_file, pq, native = write_parquet_test_sstables(scylla_path, tmp_dir)
+        for version, fmt in (("aa", "pq"), ("me", "big")):
+            out_dir = os.path.join(tmp_dir, f"scrubbed-{version}")
+            os.mkdir(out_dir)
+            # Without --schema-file, the schema, and so the compression, come from the sstable.
+            subprocess.check_call([scylla_path, "sstable", "scrub", "--scrub-mode", "abort", "--output-dir", out_dir,
+                                   "--sstable-version", version, pq])
+            scrubbed = glob.glob(os.path.join(out_dir, "*-Data.db"))
+            assert len(scrubbed) == 1
+            assert scrubbed[0].endswith(f"-{fmt}-Data.db")
+            schema_args = ["--schema-file", schema_file]
+            assert dump_data(scylla_path, scrubbed[0], *schema_args) == dump_data(scylla_path, native, *schema_args)
+            if version == "aa":
+                assert sstable_json(scylla_path, "dump-compression-info", scrubbed[0]) == {"parquet_codecs": ["ZSTD"]}
+            else:
+                assert sstable_json(scylla_path, "dump-compression-info", scrubbed[0])["name"].endswith("ZstdCompressor")
+
+
+def test_scylla_sstable_parquet_decompress(cql, scylla_path):
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        schema_file, pq, _ = write_parquet_test_sstables(scylla_path, tmp_dir)
+        res = subprocess.run([scylla_path, "sstable", "decompress", "--schema-file", schema_file, pq], capture_output=True, text=True)
+        assert res.returncode == 0
+        assert "Parquet Data file" in res.stderr
+        assert not os.path.exists(f"{pq}.decompressed")

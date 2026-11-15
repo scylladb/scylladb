@@ -94,6 +94,14 @@ namespace sstables::parquet {
 /// chunk length has no effect.
 writer_config make_writer_config(const sstable_writer_config& cfg, const compression_parameters& compression);
 
+/// The table compression that gives pages of `codec`: the inverse of the
+/// choice of compression codec in make_writer_config(). The variants with
+/// dictionaries give the same codec, so they map to the algorithms without
+/// dictionaries. A Parquet file does not record the Zstd level, so Zstd
+/// gets the default level. A codec that our writer does not use gives no
+/// compression.
+compression_parameters compression_parameters_of(compression_codec codec);
+
 /// Creates the writer. `sst` must have a Parquet Data file, and `s` must
 /// not be a compact storage table.
 std::unique_ptr<sstable_writer::writer_impl> make_sstable_writer(sstable& sst,

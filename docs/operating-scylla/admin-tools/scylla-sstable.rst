@@ -402,6 +402,18 @@ The content is dumped in JSON, using the following schema:
         "offsets": [Uint64, ...]
     }
 
+An SStable whose data component is a Parquet file (format ``pq``) has no compression-info
+component: each page of the file is compressed on its own, and the file records the compression
+codec of each column. For such an SStable, the operation logs that the component does not exist,
+and dumps the compression codecs that the columns use, for example ``ZSTD`` or ``LZ4_RAW``:
+
+.. code-block:: none
+    :class: hide-copy-button
+
+    $SSTABLE := {
+        "parquet_codecs": [String, ...]
+    }
+
 .. _scylla sstable dump-summary:
 
 dump-summary
@@ -411,6 +423,10 @@ Dumps the content of the summary component. The summary is a sampled index of th
 content of the index-component (an index of the index). The sampling rate is chosen
 such that this file is small enough to be kept in memory even for very large
 SStables.
+
+An SStable whose data component is a Parquet file (format ``pq``) has a trie index and no summary
+component. For such an SStable, the operation logs that the component does not exist, and dumps
+``null``.
 
 The content is dumped in JSON, using the following schema:
 
@@ -705,7 +721,9 @@ Scrub has several modes:
 * **segregate** - Fixes partition/row/mutation-fragment out-of-order errors by segregating the output into as many SStables as required so that the content of each output SStable is properly ordered.
 * **validate** - Validates the content of the SStable and component digests, reporting any corruptions found. Writes no output SStables. In this mode, scrub has the same outcome as the `validate operation <scylla-sstable-validate-operation_>`_ - and the validate operation is recommended over scrub.
 
-Output SStables are written to the directory specified via ``--output-dir``. They will be written with the ``BIG`` format and the highest supported SStable format, with random generation.
+Output SStables are written to the directory specified via ``--output-dir``. They will be written with the SStable version that ScyllaDB would choose, with random generation.
+The version can be changed with ``--sstable-version``. For example, ``--sstable-version aa`` writes SStables whose data component is a Parquet file.
+When the schema is loaded from the SStable, the output keeps its compression: for a Parquet SStable, the schema's compression is the one that gives the compression codec of its pages.
 
 validate-checksums
 ^^^^^^^^^^^^^^^^^^
@@ -746,6 +764,7 @@ decompress
 
 Decompress Data.db if compressed (no-op if not compressed). The decompressed data is written to Data.db.decompressed.
 An SStable whose data component is a Parquet file (format ``pq``) is skipped: its pages carry their own compression.
+The operation writes no decompressed or decrypted copy of such a data component.
 For example, for the SStable:
 
 .. code-block:: console
