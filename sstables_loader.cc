@@ -1258,18 +1258,23 @@ class sstables_loader::tablet_restore_task_impl : public tasks::task_manager::ta
         auto& loader = _loader.local();
         auto& db = loader._db.local();
         auto s = db.find_schema(_tid);
-        auto md = db.get_token_metadata_ptr();
-        const auto& topo = md->get_topology();
-        auto dc = topo.get_datacenter();
+        // Copy the racks instead of holding the token metadata across the reads
+        // below: a global topology barrier waits until every node releases all
+        // older versions of the token metadata, so holding one during a slow read
+        // would block the topology coordinator - which also has to finish the
+        // restore that we are tracking.
+        const auto& topo = db.get_token_metadata().get_topology();
+        sstring dc = topo.get_datacenter();
         auto dc_racks_it = topo.get_datacenter_racks().find(dc);
         if (dc_racks_it == topo.get_datacenter_racks().end()) {
             co_return;
         }
+        auto racks = dc_racks_it->second | std::views::keys | std::ranges::to<std::vector<sstring>>();
 
         db::snapshot_table_helper sth(loader._sys_dist_ks.qp());
         tasks::task_manager::task::progress progress = {};
-        co_await max_concurrent_for_each(dc_racks_it->second, 16, [&](const auto& rack_entry) -> future<> {
-            auto p = co_await sth.get_snapshot_sstables_progress(_snap_name, s->ks_name(), s->cf_name(), dc, rack_entry.first);
+        co_await max_concurrent_for_each(racks, 16, [&](const sstring& rack) -> future<> {
+            auto p = co_await sth.get_snapshot_sstables_progress(_snap_name, s->ks_name(), s->cf_name(), dc, rack);
             progress.total += p.nr_sstables;
             progress.completed += p.nr_downloaded_sstables;
         });
@@ -1289,7 +1294,9 @@ public:
         , _original_max_tablet_count(original_max_tablet_count)
         , _progress_update_timer([this] {
             if (auto gh = _gate.try_hold()) {
-                std::ignore = update_progress().finally([this, gh = std::move(*gh)] {
+                std::ignore = update_progress().handle_exception([] (std::exception_ptr ep) {
+                    llog.warn("Failed to update the progress of a tablet restore, will retry: {}", ep);
+                }).finally([this, gh = std::move(*gh)] {
                     if (!_gate.is_closed()) {
                         _progress_update_timer.rearm(lowres_clock::now() + 5s);
                     }
