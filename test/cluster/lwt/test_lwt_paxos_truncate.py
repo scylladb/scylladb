@@ -209,12 +209,17 @@ async def test_truncated_value_returns_through_an_ignorant_quorum(manager: Scyll
         keys = [1] if tablets else list(range(1, 257))
 
         logger.info("Learned by n1 and n2 only; n3 keeps the accepted proposal")
+        # n3 saves every proposal and then fails the accept, so that its paxos state is known to
+        # hold the proposal: the coordinator needs only n1 and n2 to go on.
+        await manager.api.enable_injection(n3.ip_addr, "paxos_error_after_save_proposal", one_shot=False)
         await manager.api.enable_injection(n3.ip_addr, "paxos_error_before_learn", one_shot=False)
         for pk in keys:
             [row] = await cql.run_async(insert(ks, pk), host=h1)
             assert row.applied, "scenario not reached: the insert was not applied"
-        # Each insert returns on a quorum of learns; n3's may still be in flight.
+        # Each insert returns on a quorum of answers; n3's accept and learn may still be in flight.
+        await manager.api.wait_for_injection_enter(n3.ip_addr, "paxos_error_after_save_proposal", threshold=len(keys))
         await manager.api.wait_for_injection_enter(n3.ip_addr, "paxos_error_before_learn", threshold=len(keys))
+        await manager.api.disable_injection(n3.ip_addr, "paxos_error_after_save_proposal")
         await manager.api.disable_injection(n3.ip_addr, "paxos_error_before_learn")
         token = await get_token_for_pk(cql, ks, "t", keys[0])
 
