@@ -285,6 +285,7 @@ replica_set_view serving_replicas(const locator::tablet_info& tinfo, const locat
             // A strongly consistent tablet needs no repair: raft keeps its replicas
             // in sync.
         case restore:
+        case restore_repair:
             // FIXME: nothing refuses to schedule a repair or a restore of a strongly
             // consistent tablet yet.
             break;
