@@ -14,6 +14,7 @@
 #include <set>
 
 #include "dht/i_partitioner.hh"
+#include "db/config.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
 #include "types/types.hh"
@@ -115,11 +116,15 @@ SEASTAR_TEST_CASE(test_streaming_reader_reads_all_tablets_memtables) {
 // The test corrupts the Data component of an uncompressed sstable, whose
 // checksums are verified only by a reader which checks integrity, and
 // expects the read to fail the checksum check.
+// The test expects the message of the chunk checksums of a native Data
+// file, so it pins the native format.
 SEASTAR_TEST_CASE(test_streaming_reader_checks_integrity_of_single_partition) {
     if (this_smp_shard_count() > 1) {
         std::cerr << "Cannot run test " << get_name() << " with this_smp_shard_count() > 1" << std::endl;
         return make_ready_future<>();
     }
+    cql_test_config cfg;
+    cfg.db_config->test_sstable_data_format_default.set("native");
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("CREATE KEYSPACE test_ks "
                 "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} "
@@ -153,7 +158,7 @@ SEASTAR_TEST_CASE(test_streaming_reader_checks_integrity_of_single_partition) {
                 [] (const sstables::malformed_sstable_exception& e) {
                     return sstring(e.what()).find("failed checksum") != sstring::npos;
                 });
-    });
+    }, cfg);
 }
 
 // Verifies that the streaming reader checks the integrity of the sstables

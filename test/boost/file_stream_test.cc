@@ -584,24 +584,45 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_stream_uncompressed) {
     test_sstable_stream(compress_sstable::no);
 }
 
+// A config whose tables write sstables of the given data format, "native"
+// or "parquet", whatever the test-only default of the run is.
+static cql_test_config data_format_config(sstring data_format) {
+    cql_test_config cfg;
+    cfg.db_config->test_sstable_data_format_default.set(std::move(data_format));
+    return cfg;
+}
+
+// The checksum and digest tests below expect the messages of the checks of
+// a native Data file, and the index test corrupts Index.db. An `aa` sstable
+// has neither CRC.db nor Index.db, so these tests pin the native format.
 SEASTAR_THREAD_TEST_CASE(test_sstable_stream_checksum_mismatched_compressed) {
-    test_sstable_stream(compress_sstable::yes, corrupt_data_component, "failed checksum");
+    test_sstable_stream(compress_sstable::yes, corrupt_data_component, "failed checksum", data_format_config("native"));
 }
 
 SEASTAR_THREAD_TEST_CASE(test_sstable_stream_checksum_mismatched_uncompressed) {
-    test_sstable_stream(compress_sstable::no, corrupt_data_component, "failed checksum");
+    test_sstable_stream(compress_sstable::no, corrupt_data_component, "failed checksum", data_format_config("native"));
 }
 
 SEASTAR_THREAD_TEST_CASE(test_sstable_stream_digest_mismatched_compressed) {
-    test_sstable_stream(compress_sstable::yes, corrupt_digest_component, "Digest mismatch");
+    test_sstable_stream(compress_sstable::yes, corrupt_digest_component, "Digest mismatch", data_format_config("native"));
 }
 
 SEASTAR_THREAD_TEST_CASE(test_sstable_stream_digest_mismatched_uncompressed) {
-    test_sstable_stream(compress_sstable::no, corrupt_digest_component, "Digest mismatch");
+    test_sstable_stream(compress_sstable::no, corrupt_digest_component, "Digest mismatch", data_format_config("native"));
 }
 
 SEASTAR_THREAD_TEST_CASE(test_sstable_stream_index_digest_mismatched) {
-    test_sstable_stream(compress_sstable::no, corrupt_index_component_fn(), "digest mismatch");
+    test_sstable_stream(compress_sstable::no, corrupt_index_component_fn(), "digest mismatch", data_format_config("native"));
+}
+
+// The Data file of an `aa` sstable has no per-chunk checksums. The sender
+// detects damage through Digest.crc32, which covers the whole file.
+SEASTAR_THREAD_TEST_CASE(test_sstable_stream_checksum_mismatched_parquet) {
+    test_sstable_stream(compress_sstable::yes, corrupt_data_component, "digest mismatch", data_format_config("parquet"));
+}
+
+SEASTAR_THREAD_TEST_CASE(test_sstable_stream_digest_mismatched_parquet) {
+    test_sstable_stream(compress_sstable::yes, corrupt_digest_component, "digest mismatch", data_format_config("parquet"));
 }
 
 SEASTAR_THREAD_TEST_CASE(test_sstable_stream_scylla_digest_mismatched) {
@@ -1073,12 +1094,12 @@ do_test_sstable_stream_receiver_corruption(cql_test_env& env, std::optional<comp
     }
 }
 
-static void test_sstable_stream_receiver_corruption(std::optional<component_type> corrupted_type, compress_sstable compress = compress_sstable::yes, bool expected_error = true) {
+static void test_sstable_stream_receiver_corruption(std::optional<component_type> corrupted_type, compress_sstable compress = compress_sstable::yes, bool expected_error = true,
+        cql_test_config cfg = {}) {
 #ifndef SCYLLA_ENABLE_ERROR_INJECTION
     fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
     return;
 #endif
-    cql_test_config cfg{};
     cfg.ms_listen = true;
     do_with_cql_env_thread([&](cql_test_env& env) {
         scoped_error_injection receiver_caught_error_injection("stream_blob_handler_malformed_sstable_caught");
@@ -1094,8 +1115,9 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_stream_receiver_corruption_statistics) {
     test_sstable_stream_receiver_corruption(component_type::Statistics);
 }
 
+// An `aa` sstable has no Index.db.
 SEASTAR_THREAD_TEST_CASE(test_sstable_stream_receiver_corruption_index) {
-    test_sstable_stream_receiver_corruption(component_type::Index);
+    test_sstable_stream_receiver_corruption(component_type::Index, compress_sstable::yes, true, data_format_config("native"));
 }
 
 SEASTAR_THREAD_TEST_CASE(test_sstable_stream_receiver_corruption_compressed_data) {

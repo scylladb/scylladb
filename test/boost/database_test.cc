@@ -3061,7 +3061,12 @@ SEASTAR_TEST_CASE(test_sample_data_files_skips_parquet_data_files) {
         t.flush().get();
         const auto samples = db.sample_data_files(s->id(), chunk_size, n_chunks).get();
         BOOST_REQUIRE_EQUAL(samples.size(), n_chunks);
-    });
+    }, [] {
+        // The flush above must write a native sstable.
+        cql_test_config cfg;
+        cfg.db_config->test_sstable_data_format_default.set("native");
+        return cfg;
+    }());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

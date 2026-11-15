@@ -9,7 +9,7 @@
 // Tests of the choice of the format of new sstables: the
 // `sstable_data_format` cluster config option, its
 // resolution through the table, keyspace, and cluster scopes, the tables
-// that ignore it, and the paths that convert a
+// that ignore it, the test-only default, and the paths that convert a
 // table: flush, compaction, and `upgradesstables`.
 
 #include <set>
@@ -35,8 +35,11 @@ using sstables::sstable_format_types;
 
 namespace {
 
-cql_test_config make_config() {
+// The tests set the test-only default explicitly, so that they also pass
+// when the suite runs with Parquet as the default.
+cql_test_config make_config(sstring test_default = "native") {
     cql_test_config cfg;
+    cfg.db_config->test_sstable_data_format_default.set(std::move(test_default));
     cfg.db_config->enable_create_table_with_compact_storage.set(true);
     return cfg;
 }
@@ -184,9 +187,9 @@ SEASTAR_TEST_CASE(test_sstable_data_format_rejects_invalid_values) {
 }
 
 // The option's cluster feature gates it: until every node knows the option,
-// it cannot be set.
+// it cannot be set, and the test-only default has no effect either.
 SEASTAR_TEST_CASE(test_sstable_data_format_waits_for_its_feature) {
-    auto cfg = make_config();
+    auto cfg = make_config("parquet");
     cfg.disabled_features.emplace("CLUSTER_CONFIG_SSTABLE_DATA_FORMAT");
     return do_with_cql_env_thread([] (cql_test_env& e) {
         create_keyspace_and_table(e);
@@ -342,4 +345,27 @@ SEASTAR_TEST_CASE(test_views_and_indexes_of_a_parquet_table) {
                 .is_rows().with_rows({{int32_type->decompose(7), int32_type->decompose(70)}});
         require_rows(e, "tks.t", 20);
     }, make_config());
+}
+
+// The test-only default makes Parquet the default for the tables that do not
+// choose a format, and a stored override wins over it.
+SEASTAR_TEST_CASE(test_test_only_default) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        create_keyspace_and_table(e);
+        BOOST_REQUIRE(chosen_format(e, "tks", "t") == sstable_format_types::pq);
+        BOOST_REQUIRE(chosen_format(e, "system", "local") == sstable_format_types::big);
+
+        insert_rows(e, "tks.t", 0, 10);
+        flush(e, "tks", "t");
+        BOOST_REQUIRE(formats_on_disk(e, "tks", "t") == pq_only);
+        require_rows(e, "tks.t", 10);
+
+        alter(e, "ALTER TABLE tks.t WITH sstable_data_format = 'native'");
+        BOOST_REQUIRE(chosen_format(e, "tks", "t") == sstable_format_types::big);
+
+        // The option is live-updatable.
+        e.db_config().test_sstable_data_format_default.set("native");
+        e.execute_cql("CREATE TABLE tks.other (pk int PRIMARY KEY, v int)").get();
+        BOOST_REQUIRE(chosen_format(e, "tks", "other") == sstable_format_types::big);
+    }, make_config("parquet"));
 }

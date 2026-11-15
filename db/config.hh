@@ -469,6 +469,7 @@ public:
     named_value<bool> enable_sstables_mc_format;
     named_value<bool> enable_sstables_md_format;
     named_value<sstring> sstable_format;
+    named_value<sstring> test_sstable_data_format_default;
 
     // NOTE: Do not use this option directly.
     // Use get_sstable_compression_user_table_options() instead.

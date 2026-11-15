@@ -437,7 +437,7 @@ bool sstables_manager::table_uses_parquet(const schema& s) const {
     // A node advertises the feature only if it can read and write Parquet
     // sstables, and the feature is enabled only when every node in the
     // cluster advertises it. Until then the option cannot be set at any
-    // scope.
+    // scope, and this check makes the test-only default wait as well.
     // So no node creates a Parquet sstable while some node could not read
     // one, and file-based streaming, which sends sstables as they are, never
     // sends one to such a node. A node without the feature cannot join a
@@ -457,7 +457,7 @@ bool sstables_manager::table_uses_parquet(const schema& s) const {
     });
     // A stored value passed validation, so it is one of the two formats. A
     // value written out of band falls back to the native format.
-    return value == "parquet";
+    return value.value_or(_config.test_sstable_data_format_default()) == "parquet";
 }
 
 void sstables_manager::plug_cluster_config_manager(const db::cluster_config_manager& ccm) noexcept {

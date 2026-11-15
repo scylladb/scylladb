@@ -260,7 +260,9 @@ static future<> corrupt_data_component(sstables::shared_sstable sst) {
     co_await f.close();
 }
 
-static future<> run_repair_reader_corruption_test(random_mutation_generator::compress compress, const sstring& expected_error_msg) {
+static future<> run_repair_reader_corruption_test(random_mutation_generator::compress compress, const sstring& expected_error_msg, sstring data_format) {
+    cql_test_config cfg;
+    cfg.db_config->test_sstable_data_format_default.set(std::move(data_format));
     return do_with_cql_env([=](cql_test_env& e) -> future<> {
         sstables::scoped_no_abort_on_malformed_sstable_error no_abort;
         random_mutation_generator gen{random_mutation_generator::generate_counters::no, local_shard_only::no,
@@ -305,20 +307,34 @@ static future<> run_repair_reader_corruption_test(random_mutation_generator::com
         co_await reader.close();
 
         BOOST_REQUIRE(caught_expected_error);
-    });
+    }, cfg);
 }
 
+// These two tests expect the message of the chunk checksums of a native
+// Data file, so they pin the native format.
 SEASTAR_TEST_CASE(test_repair_reader_checksum_mismatch_compressed) {
     return run_repair_reader_corruption_test(
         random_mutation_generator::compress::yes,
-        "failed checksum"
+        "failed checksum",
+        "native"
     );
 }
 
 SEASTAR_TEST_CASE(test_repair_reader_checksum_mismatch_uncompressed) {
     return run_repair_reader_corruption_test(
         random_mutation_generator::compress::no,
-        "failed checksum"
+        "failed checksum",
+        "native"
+    );
+}
+
+// The damage hits the header of the first page of an `aa` Data file, so
+// the reader fails before it gets to the page checksum.
+SEASTAR_TEST_CASE(test_repair_reader_checksum_mismatch_parquet) {
+    return run_repair_reader_corruption_test(
+        random_mutation_generator::compress::yes,
+        "Parquet metadata is malformed",
+        "parquet"
     );
 }
 
