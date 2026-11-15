@@ -242,6 +242,32 @@ async def get_topology_coordinator(manager: ScyllaClusterManager) -> HostID:
     return await wait_for(lambda: manager.api.get_raft_leader(host_address), time.time() + 60, label="group0 leader")
 
 
+# Releases the tablets held by `injection` and waits for the ALTER. When the test body
+# failed, the ALTER's error is logged instead of raised, so that it does not hide the body's.
+async def release_tablets_and_await_alter(manager: ScyllaClusterManager, coord_serv: ServerInfo, injection: str,
+                                          alter: asyncio.Future, body_failed: bool) -> None:
+    await manager.api.disable_injection(coord_serv.ip_addr, injection)
+    # Wakes the topology coordinator, which otherwise sleeps before it retries the stage.
+    await manager.enable_tablet_balancing()
+    try:
+        await alter
+    except Exception as e:
+        if not body_failed:
+            raise
+        logger.warning(f"ALTER failed after the test body failed: {e}")
+
+
+# Called from a wait_for() predicate that waits for held tablets. wait_for() retries on Exception,
+# and pytest.fail() raises a BaseException, so an ALTER which ended early fails the test at once.
+def raise_if_alter_ended(alter: asyncio.Future) -> None:
+    if alter.done():
+        try:
+            alter.result()
+        except Exception as e:
+            pytest.fail(f"ALTER failed before the tablets reached the held stage: {e}")
+        pytest.fail("ALTER ended before the tablets reached the held stage")
+
+
 async def get_topology_version(cql: Session, host: Host) -> int:
     rows = await cql.run_async(
         "select version from system.topology where key = 'topology'",

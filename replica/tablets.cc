@@ -12,6 +12,7 @@
 #include "types/types.hh"
 #include "types/tuple.hh"
 #include "types/list.hh"
+#include "db/config.hh"
 #include "db/system_keyspace.hh"
 #include "gms/gossiper.hh"
 #include "schema/schema_builder.hh"
@@ -977,6 +978,9 @@ tablet_id process_one_row(replica::database* db, table_id table, tablet_map& map
 
 struct tablet_metadata_builder {
     tablet_metadata& tm;
+    const locator::topology& topo;
+    // In maintenance mode the topology holds only the local node, so other replica hosts are missing.
+    bool maintenance_mode;
     struct active_tablet_map {
         table_id table;
         tablet_map map;
@@ -990,12 +994,58 @@ struct tablet_metadata_builder {
     // to ensure the base table tablet map is already present when we apply the co-located tables.
     std::unordered_map<table_id, table_id> base_tables;
 
-    void process_row(const cql3::untyped_result_set_row& row, replica::database* db) {
-        auto table = table_id(row.get_as<utils::UUID>("table_id"));
+    // Tablets recomputed by this load with a replica whose datacenter is unknown. An incremental
+    // update counts only the tablets it changed.
+    size_t unknown_dc_tablets = 0;
 
+    // One report per load. Outside maintenance mode the topology loaded with the tablets knows every
+    // replica host, so a missing one is an internal error. Per-datacenter requests on the tablet
+    // fail until it is loaded again.
+    void report_unknown_dc_tablets() const {
+        if (!unknown_dc_tablets) {
+            return;
+        }
+        auto msg = format("{} tablets read from system.tablets have a replica whose host is not in topology", unknown_dc_tablets);
+        if (maintenance_mode) {
+            tablet_logger.info("{}", msg);
+        } else {
+            on_internal_error_noexcept(tablet_logger, msg);
+        }
+    }
+
+    // Computes the per-datacenter counts before publishing the map, since an erm fails
+    // reading the counts of a map which was changed and not updated.
+    future<> set_current_tablet_map() {
+        unknown_dc_tablets += co_await current->map.update_dc_counts(topo, tm.datacenters());
+        tm.set_tablet_map(current->table, std::move(current->map));
+        current = {};
+    }
+
+    // True if the map of the previous table must be published with set_current_tablet_map()
+    // before process_row() takes a row of table.
+    bool starts_new_table(table_id table) const {
+        return current && current->table != table;
+    }
+
+    // Query callback: publishes the previous table's map before the first row of a new table.
+    // Only such a row pays for a continuation. The row stays valid until the future resolves.
+    future<stop_iteration> process_row_async(const cql3::untyped_result_set_row& row, replica::database* db) {
+        auto table = table_id(row.get_as<utils::UUID>("table_id"));
+        if (starts_new_table(table)) {
+            return set_current_tablet_map().then([this, table, &row, db] {
+                process_row(table, row, db);
+                return stop_iteration::no;
+            });
+        }
+        process_row(table, row, db);
+        return make_ready_future<stop_iteration>(stop_iteration::no);
+    }
+
+    // table is the row's table_id, parsed by process_row_async().
+    void process_row(table_id table, const cql3::untyped_result_set_row& row, replica::database* db) {
         if (!current || current->table != table) {
             if (current) {
-                tm.set_tablet_map(current->table, std::move(current->map));
+                on_internal_error(tablet_logger, format("tablet map of table {} was not finalized", current->table));
             }
             if (row.has("base_table")) {
                 auto base_table = table_id(row.get_as<utils::UUID>("base_table"));
@@ -1063,7 +1113,7 @@ struct tablet_metadata_builder {
 
     future<> on_end_of_stream() {
         if (current) {
-            tm.set_tablet_map(current->table, std::move(current->map));
+            co_await set_current_tablet_map();
         }
         // Set co-located tables after setting all other tablet maps to ensure the tablet map
         // of the base table is found.
@@ -1075,16 +1125,19 @@ struct tablet_metadata_builder {
 
 } // anonymous namespace
 
-future<tablet_metadata> read_tablet_metadata(cql3::query_processor& qp) {
+future<tablet_metadata> read_tablet_metadata(cql3::query_processor& qp, const locator::topology& topo) {
     tablet_metadata tm;
-    tablet_metadata_builder builder{tm};
+    tablet_metadata_builder builder{tm, topo, qp.db().get_config().maintenance_mode()};
     tablet_logger.trace("Start reading tablet metadata");
     try {
         co_await qp.query_internal("select * from system.tablets",
-           [&] (const cql3::untyped_result_set_row& row) -> future<stop_iteration> {
-               builder.process_row(row, qp.db().real_database_ptr());
-               return make_ready_future<stop_iteration>(stop_iteration::no);
+           [&] (const cql3::untyped_result_set_row& row) {
+               return builder.process_row_async(row, qp.db().real_database_ptr());
            });
+        // Inside the try, so a failure counting the last table names it like the earlier tables.
+        if (builder.current) {
+            co_await builder.set_current_tablet_map();
+        }
     } catch (...) {
         if (builder.current) {
             std::throw_with_nested(std::runtime_error(format("Failed to read tablet metadata for table {}", builder.current->table)));
@@ -1093,6 +1146,7 @@ future<tablet_metadata> read_tablet_metadata(cql3::query_processor& qp) {
         }
     }
     co_await builder.on_end_of_stream();
+    builder.report_unknown_dc_tablets();
     tablet_logger.trace("Read tablet metadata: {}", tm);
     co_return std::move(tm);
 }
@@ -1139,13 +1193,11 @@ do_update_tablet_metadata_partition(cql3::query_processor& qp, tablet_metadata& 
             db::consistency_level::ONE,
             {data_value(hint.table_id.uuid())},
             1000,
-            [&] (const cql3::untyped_result_set_row& row) -> future<stop_iteration> {
-                builder.process_row(row, qp.db().real_database_ptr());
-                return make_ready_future<stop_iteration>(stop_iteration::no);
+            [&] (const cql3::untyped_result_set_row& row) {
+                return builder.process_row_async(row, qp.db().real_database_ptr());
             });
     if (builder.current) {
-        tm.set_tablet_map(builder.current->table, std::move(builder.current->map));
-        builder.current = {};
+        co_await builder.set_current_tablet_map();
     } else if (builder.base_tables.contains(hint.table_id)) {
         // it's a co-located table. we handle it later, after processing all tables, by builder.on_end_of_stream().
     } else {
@@ -1172,8 +1224,9 @@ do_update_tablet_metadata_rows(replica::database& db, cql3::query_processor& qp,
     }
 }
 
-future<> update_tablet_metadata(replica::database& db, cql3::query_processor& qp, tablet_metadata& tm, const locator::tablet_metadata_change_hint& hint) {
-    tablet_metadata_builder builder{tm};
+future<> update_tablet_metadata(replica::database& db, cql3::query_processor& qp, tablet_metadata& tm, const locator::tablet_metadata_change_hint& hint,
+        const locator::topology& topo) {
+    tablet_metadata_builder builder{tm, topo, db.get_config().maintenance_mode()};
 
     try {
         for (const auto& [_, table_hint] : hint.tables) {
@@ -1182,6 +1235,7 @@ future<> update_tablet_metadata(replica::database& db, cql3::query_processor& qp
             } else {
                 co_await tm.mutate_tablet_map_async(table_hint.table_id, [&] (tablet_map& tmap) -> future<> {
                     co_await do_update_tablet_metadata_rows(db, qp, tmap, table_hint);
+                    builder.unknown_dc_tablets += co_await tmap.update_dc_counts(topo, tm.datacenters());
                 });
             }
         }
@@ -1189,6 +1243,7 @@ future<> update_tablet_metadata(replica::database& db, cql3::query_processor& qp
         std::throw_with_nested(std::runtime_error("Failed to read tablet metadata"));
     }
     co_await builder.on_end_of_stream();
+    builder.report_unknown_dc_tablets();
     tablet_logger.trace("Updated tablet metadata: {}", tm);
 }
 
