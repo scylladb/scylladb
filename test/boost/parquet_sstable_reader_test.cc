@@ -33,6 +33,7 @@
 #include <filesystem>
 #include <fstream>
 
+#include <seastar/testing/on_internal_error.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/util/closeable.hh>
 
@@ -1554,5 +1555,23 @@ SEASTAR_THREAD_TEST_CASE(test_whole_file_stream_checks_digest) {
         BOOST_REQUIRE_EQUAL(read_whole_file(), sst->ondisk_data_size());
         flip_byte(sst, sst->get_parquet_file_summary().region_start(0) + 10);
         BOOST_REQUIRE_THROW(read_whole_file(), malformed_sstable_exception);
+    }).get();
+}
+
+// A stream of a part of a Parquet Data file cannot check its integrity, so
+// asking for one is an internal error, and not a stream that checks nothing.
+SEASTAR_THREAD_TEST_CASE(test_partial_stream_with_integrity_check) {
+    test_env::do_with_async([] (test_env& env) {
+        auto s = sized_table(compression_parameters(compression_parameters::algorithm::lz4));
+        auto sst = write(env, s, local_sorted({sized_partition(s, 0, 10, [] (int i) { return 100 + i; })}), aa);
+        auto permit = env.make_reader_permit();
+        BOOST_REQUIRE(sst->read_digest().get());
+        seastar::testing::scoped_no_abort_on_internal_error no_abort;
+        for (const auto& [pos, len] : {std::pair<uint64_t, uint64_t>{0, sst->ondisk_data_size() - 1}, {1, sst->ondisk_data_size() - 1}}) {
+            BOOST_REQUIRE_THROW(sst->data_stream(pos, len, permit, nullptr, nullptr, sstable::raw_stream::yes, integrity_check::yes).get(),
+                    std::runtime_error);
+            auto in = sst->data_stream(pos, len, permit, nullptr, nullptr, sstable::raw_stream::yes, integrity_check::no).get();
+            in.close().get();
+        }
     }).get();
 }

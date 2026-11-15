@@ -96,9 +96,19 @@ public:
 };
 
 /// A reader of a range of partitions, as mx::make_reader(). The index
-/// reader `ir` must be the sstable's. Page checksums are verified on every
-/// read, so `integrity` adds nothing yet. The check of the file digest is
-/// left for the operations phase of PLAN.md.
+/// reader `ir` must be the sstable's.
+///
+/// `integrity` adds nothing. For `mx`, it adds the chunk checksums of an
+/// uncompressed Data file, and the digest at the end of a read of the whole
+/// file. Here, every byte that the output depends on is checked on every
+/// read: each page against its CRC, the footer against the checksum in
+/// Scylla.db when the sstable is opened, and each OffsetIndex against the
+/// footer and the page headers. The bytes that a read skips are the
+/// chunks that the footer says are entirely null, so they cannot change
+/// the output. A digest check would need a second pass over the whole
+/// file, because the reader does not read it in order. Checksum validation
+/// makes that pass (file_verifier.hh). Scrub does not, because the pass
+/// would double its I/O without checking anything that it outputs.
 mutation_reader make_reader(
         shared_sstable sstable,
         schema_ptr schema,
@@ -115,7 +125,7 @@ mutation_reader make_reader(
 
 /// A reader of the whole sstable that does not use the index, as
 /// mx::make_full_scan_reader(). It does not support fast-forwarding or
-/// next_partition(). `integrity` is as for make_reader().
+/// next_partition(). `integrity` adds nothing, as for make_reader().
 mutation_reader make_full_scan_reader(
         shared_sstable sstable,
         schema_ptr schema,

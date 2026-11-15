@@ -3557,10 +3557,15 @@ future<input_stream<char>> sstable::data_stream(uint64_t pos, size_t len,
         co_return input_stream<char>(co_await _storage->make_data_or_index_source(*this, component_type::Data, std::move(f), pos, len, std::move(options)));
     };
     if (has_parquet_data_file(_version)) {
-        auto stream = co_await stream_creator(pos, len, std::move(options));
         // The digest covers the whole file. A read of a part of it cannot
-        // check anything, because the pages are not decoded here.
-        if (digest && pos == 0 && len >= _data_file_size) {
+        // check anything, because the pages are not decoded here. Such a
+        // read must not pass for a checked one.
+        if (integrity == integrity_check::yes && (pos != 0 || len < _data_file_size)) {
+            on_internal_error(sstlog, seastar::format("sstable {}: the integrity of a part [{}, {}) of a Parquet Data file of {} bytes cannot be checked",
+                    get_filename(), pos, pos + len, _data_file_size));
+        }
+        auto stream = co_await stream_creator(pos, len, std::move(options));
+        if (digest) {
             co_return make_digest_checked_input_stream(std::move(stream), *digest, std::move(error_handler));
         }
         co_return stream;
