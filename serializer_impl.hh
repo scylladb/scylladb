@@ -528,7 +528,7 @@ struct serializer<temporary_buffer<char>> {
     }
     template<typename Output>
     static void write(Output& out, const temporary_buffer<char>& v) {
-        safe_serialize_as_uint32(out, uint32_t(v.size()));
+        safe_serialize_as_uint32(out, v.size());
         out.write(reinterpret_cast<const char*>(v.get()), v.size());
     }
     template<typename Input>
@@ -548,7 +548,7 @@ struct serializer<bytes> {
     }
     template<typename Output>
     static void write(Output& out, bytes_view v) {
-        safe_serialize_as_uint32(out, uint32_t(v.size()));
+        safe_serialize_as_uint32(out, v.size());
         out.write(reinterpret_cast<const char*>(v.begin()), v.size());
     }
     template<typename Output>
@@ -557,14 +557,14 @@ struct serializer<bytes> {
     }
     template<typename Output>
     static void write(Output& out, const managed_bytes& mb) {
-        safe_serialize_as_uint32(out, uint32_t(mb.size()));
+        safe_serialize_as_uint32(out, mb.size());
         for (bytes_view frag : fragment_range(managed_bytes_view(mb))) {
             out.write(reinterpret_cast<const char*>(frag.data()), frag.size());
         }
     }
     template<typename Output>
     static void write(Output& out, const bytes_ostream& v) {
-        safe_serialize_as_uint32(out, uint32_t(v.size()));
+        safe_serialize_as_uint32(out, v.size());
         for (bytes_view frag : v.fragments()) {
             out.write(reinterpret_cast<const char*>(frag.begin()), frag.size());
         }
@@ -572,7 +572,7 @@ struct serializer<bytes> {
     template<typename Output, typename FragmentedBuffer>
     requires FragmentRange<FragmentedBuffer>
     static void write_fragmented(Output& out, FragmentedBuffer&& fragments) {
-        safe_serialize_as_uint32(out, uint32_t(fragments.size_bytes()));
+        safe_serialize_as_uint32(out, fragments.size_bytes());
         for (bytes_view frag : fragments) {
             out.write(reinterpret_cast<const char*>(frag.begin()), frag.size());
         }
@@ -666,7 +666,7 @@ struct serializer<sstring> {
     }
     template<typename Output>
     static void write(Output& out, const sstring& v) {
-        safe_serialize_as_uint32(out, uint32_t(v.size()));
+        safe_serialize_as_uint32(out, v.size());
         out.write(v.data(), v.size());
     }
     template<typename Input>
@@ -691,7 +691,7 @@ struct serializer<utils::chunked_string> {
     }
     template<typename Output>
     static void write(Output& out, const utils::chunked_string& v) {
-        safe_serialize_as_uint32(out, uint32_t(v.size()));
+        safe_serialize_as_uint32(out, v.size());
         for (bytes_view frag : fragment_range(managed_bytes_view(v.data()))) {
             out.write(reinterpret_cast<const char*>(frag.data()), frag.size());
         }
