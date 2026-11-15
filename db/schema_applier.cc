@@ -1121,6 +1121,8 @@ void schema_applier::commit_on_shard(replica::database& db, uint64_t commit_gen)
 // (requires switching all affected subsystems to 'applier' interface first)
 future<> schema_applier::commit() {
     auto& sharded_db = _proxy.local().get_db();
+    co_await utils::get_local_injector().inject("schema_applier_pause_before_commit",
+            utils::wait_for_message(std::chrono::minutes(1)));
     // Adding and dropping tables, or changing tablet metadata, uses this
     // locking mechanism to prevent changes to tables_metadata during preemptive
     // iteration over it (e.g., tables_metadata::for_each_table_gently).
@@ -1221,6 +1223,8 @@ future<> schema_applier::finalize_tables_and_views() {
 }
 
 future<> schema_applier::post_commit() {
+    co_await utils::get_local_injector().inject("schema_applier_pause_before_post_commit",
+            utils::wait_for_message(std::chrono::minutes(1)));
     co_await finalize_tables_and_views();
     auto& sharded_db = _proxy.local().get_db();
     co_await sharded_db.invoke_on_all([&] (replica::database& db) -> future<> {
