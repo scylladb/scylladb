@@ -144,6 +144,9 @@ struct affected_tables_and_views_per_shard {
     schema_diff_per_shard cdc;
     schema_diff_per_shard views;
     std::vector<bool> columns_changed;
+    // Storage of the created tables, cdc logs and views, set up before commit:
+    // a table accepts writes, and so flushes, as soon as it is registered.
+    std::unordered_map<table_id, lw_shared_ptr<const data_dictionary::storage_options>> storage;
 };
 
 struct affected_tables_and_views {
@@ -230,6 +233,7 @@ private:
     future<> merge_keyspaces();
     future<> merge_types();
     future<> merge_tables_and_views();
+    future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_storage(const schema& s);
     future<> update_tablets();
     future<> merge_functions();
     future<> merge_aggregates();
