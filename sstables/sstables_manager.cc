@@ -573,6 +573,7 @@ void sstables_manager::erase_from_reclaimed(sstable* sst) noexcept {
 }
 
 void sstables_manager::add(sstable* sst) {
+    ++_live_sstables_per_table[sst->get_schema()->id()];
     _active.push_back(*sst);
 }
 
@@ -595,9 +596,31 @@ void sstables_manager::deactivate(sstable* sst) {
 
 void sstables_manager::remove(sstable* sst) {
     _undergoing_close.erase(_undergoing_close.iterator_to(*sst));
+    auto live = _live_sstables_per_table.find(sst->get_schema()->id());
+    if (--live->second == 0) {
+        _live_sstables_per_table.erase(live);
+        _table_sstables_destroyed.broadcast();
+    }
     delete sst;
     _components_memory_change_event.signal();
     maybe_done();
+}
+
+future<> sstables_manager::await_table_sstables_destroyed(table_id id, abort_source& as) {
+    constexpr auto warning_interval = std::chrono::minutes(1);
+    auto wake_on_abort = as.subscribe([this] () noexcept {
+        _table_sstables_destroyed.broadcast();
+    });
+    while (_live_sstables_per_table.contains(id)) {
+        as.check();
+        try {
+            co_await _table_sstables_destroyed.wait(lowres_clock::now() + warning_interval);
+        } catch (const condition_variable_timed_out&) {
+            if (auto live = _live_sstables_per_table.find(id); live != _live_sstables_per_table.end()) {
+                smlogger.warn("Still waiting for {} sstables of table {} to be destroyed", live->second, id);
+            }
+        }
+    }
 }
 
 void sstables_manager::maybe_done() {
