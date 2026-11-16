@@ -9,6 +9,7 @@
 import asyncio
 import copy
 import errno
+import functools
 import glob
 import itertools
 import json
@@ -20,6 +21,7 @@ import re
 import shutil
 import signal
 import socket
+import subprocess
 import tempfile
 import threading
 import time
@@ -80,9 +82,20 @@ def make_scylla_conf(mode: str, host_addr: str, seed_addrs: List[str], cluster_n
 
         # Allow testing experimental features. Following issue #9467, we need
         # to add here specific experimental features as they are introduced.
+        # Every test runs with all of them, so that a feature which changes the
+        # node even when unused (strongly-consistent-tables switches the
+        # commitlog format, for one) is tested by the whole suite. A test
+        # which needs a feature off sets its own list, usually an empty one.
+        # Older versions, which lack some of the features, override this list
+        # in their ScyllaVersionDescription.
         'enable_user_defined_functions': True,
         'experimental_features': ['udf',
-                                  'views-with-tablets'],
+                                  'views-with-tablets',
+                                  'logstor',
+                                  'strongly-consistent-tables'],
+        # Logstor refuses to start without a disk size.
+        'logstor_disk_size_in_mb': 8,
+        'logstor_file_size_in_mb': 4,
 
         'skip_wait_for_gossip_to_settle': 0,
         'shutdown_announce_in_ms': 0,
@@ -174,6 +187,29 @@ class ScyllaVersionDescription(NamedTuple):
     config: dict # a dictionary of added scylla.yaml options
     argv: list[str] # a list of added CLI args
 
+# The experimental features which every version taking part in the tests can
+# run with. A version older than the current one sets this list instead of the
+# default one, so only features which all such versions have, and which don't
+# change their behaviour there, belong here. Not here: strongly-consistent-tables
+# (2025.1 lacks it, and before 2026.4 it turns tablet balancing off in the
+# whole cluster) and logstor (appeared in 2026.2).
+EXPERIMENTAL_FEATURES_IN_ALL_VERSIONS = ('udf', 'views-with-tablets')
+
+
+# The (year, minor) version of a Scylla executable which test.py did not build,
+# or None for a built one and for an executable which doesn't tell.
+@functools.cache
+def _prebuilt_scylla_version(path: str) -> tuple[int, int] | None:
+    if pathlib.Path(path).resolve().is_relative_to(pathlib.Path(TOP_SRC_DIR).resolve()):
+        return None
+    try:
+        out = subprocess.run([path, '--version'], capture_output=True, text=True, timeout=60, check=True).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    m = re.match(r'\s*(\d+)\.(\d+)', out)
+    return (int(m[1]), int(m[2])) if m else None
+
+
 # Returns the description of the current version.
 # (I.e. the one we just built and are now testing).
 #
@@ -181,9 +217,15 @@ class ScyllaVersionDescription(NamedTuple):
 # has no fixed location -- the build directory depends on the build mode,
 # and in the case of cmake can be moved to something different than `build`.)
 def get_current_version_description(path: str) -> ScyllaVersionDescription:
+    config = {}
+    # --exe-url and --exe-path can run a release which lacks a feature of the
+    # default list, and an unknown feature makes Scylla drop the whole list.
+    version = _prebuilt_scylla_version(path)
+    if version is not None and version < (2026, 4):
+        config['experimental_features'] = list(EXPERIMENTAL_FEATURES_IN_ALL_VERSIONS)
     return ScyllaVersionDescription(
         path=path,
-        config={},
+        config=config,
         argv=[
             '--logger-log-level', 'group0_voter_handler=debug',
         ]
@@ -199,13 +241,14 @@ async def get_scylla_2025_1_executable(build_mode: str) -> str:
 
 async def get_scylla_2025_1_description(build_mode: str) -> ScyllaVersionDescription:
     # Note: 2025.1 is the oldest version which participates in upgrade tests in test.py,
-    # so the added version-specific config is naturally empty.
+    # so the added version-specific config holds only what the newer versions
+    # added to the base config and 2025.1 can't take.
     #
     # SCYLLA_CMDLINE_OPTIONS is the 2025.1 baseline, and newer versions add their
     # own version-specific config.
     return ScyllaVersionDescription(
         path=str(await get_scylla_2025_1_executable(build_mode)),
-        config={},
+        config={'experimental_features': list(EXPERIMENTAL_FEATURES_IN_ALL_VERSIONS)},
         argv=[],
     )
 
@@ -220,7 +263,7 @@ async def get_scylla_2026_1_executable(build_mode: str) -> str:
 async def get_scylla_2026_1_description(build_mode: str) -> ScyllaVersionDescription:
     return ScyllaVersionDescription(
         path=str(await get_scylla_2026_1_executable(build_mode)),
-        config={},
+        config={'experimental_features': list(EXPERIMENTAL_FEATURES_IN_ALL_VERSIONS)},
         argv=[],
     )
 

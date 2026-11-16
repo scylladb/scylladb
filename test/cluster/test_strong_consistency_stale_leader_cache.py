@@ -10,7 +10,7 @@ from contextlib import suppress
 import pytest
 from cassandra.cluster import ConsistencyLevel
 
-from test.cluster.test_strong_consistency import DEFAULT_CMDLINE, DEFAULT_CONFIG, get_table_raft_group_id, wait_for_leader
+from test.cluster.test_strong_consistency import DEFAULT_CMDLINE, get_table_raft_group_id, wait_for_leader
 from test.cluster.util import ensure_raft_group_leader_on, new_test_keyspace, new_test_table, trigger_stepdown
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.tablets import get_tablet_replicas
@@ -57,7 +57,7 @@ async def test_stale_leader_cache_costs_one_hop_after_stepdown(manager: ScyllaCl
     leader-assigned timestamp, so the order also checks that the new leader's timestamps are
     above the old leader's.
     """
-    config = DEFAULT_CONFIG
+    config = {}
     if scenario == "election_in_flight":
         # A slow raft tick puts the election timeout (10-20 ticks) far beyond the moment for which
         # the old leader is kept leaderless, so it never starts a vote of its own. It costs no time:

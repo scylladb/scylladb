@@ -12,7 +12,7 @@ import pytest
 from cassandra import ConsistencyLevel
 from cassandra.query import SimpleStatement
 
-from test.cluster.test_strong_consistency import DEFAULT_CMDLINE, DEFAULT_CONFIG, get_table_raft_group_id
+from test.cluster.test_strong_consistency import DEFAULT_CMDLINE, get_table_raft_group_id
 from test.cluster.util import ensure_raft_group_leader_on, new_test_keyspace, new_test_table
 from test.pylib.internal_types import HostID
 from test.pylib.rest_client import read_barrier
@@ -50,7 +50,7 @@ async def test_paused_leader_uncommitted_write_resubmitted(manager: ScyllaCluste
     steps down on its own, is out of scope here.
     """
     cmdline = DEFAULT_CMDLINE + ['--logger-log-level', 'raft_group_registry=debug']
-    servers = await manager.servers_add(3, config=DEFAULT_CONFIG, cmdline=cmdline, auto_rack_dc='dc1')
+    servers = await manager.servers_add(3, cmdline=cmdline, auto_rack_dc='dc1')
     cql, hosts = await manager.get_ready_cql(servers)
     initial_leader, *followers = servers
     initial_leader_host, *follower_hosts = hosts

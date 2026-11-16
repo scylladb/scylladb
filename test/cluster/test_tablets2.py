@@ -1754,12 +1754,9 @@ async def test_drop_table_and_truncate_after_migration(manager: ScyllaClusterMan
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_drop_table_during_streaming(manager: ScyllaClusterManager, streaming_mode: str):
     cmdline = ['--logger-log-level', 'stream_blob=debug']
-    cfg = {}
     uses_logstor = streaming_mode == "logstor_after_snapshot"
-    if uses_logstor:
-        cfg['experimental_features'] = ['logstor']
 
-    servers = await manager.servers_add(2, cmdline=cmdline, config=cfg)
+    servers = await manager.servers_add(2, cmdline=cmdline)
 
     await manager.disable_tablet_balancing()
 

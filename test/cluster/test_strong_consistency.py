@@ -33,7 +33,6 @@ import asyncio
 logger = logging.getLogger(__name__)
 
 
-DEFAULT_CONFIG = {'experimental_features': ['strongly-consistent-tables']}
 DEFAULT_CMDLINE = [
         '--logger-log-level', 'sc_groups_manager=debug',
         '--logger-log-level', 'sc_coordinator=debug',
@@ -164,8 +163,8 @@ async def test_basic_write_read(manager: ScyllaClusterManager, build_mode: str):
     # In dev mode, stretch the strongly consistent raft group tick interval to
     # 20s so that any unwanted waiting on a raft tick during group startup shows
     # up as a multi-second delay, caught by the <10s assertion below.
-    default_config = DEFAULT_CONFIG | {'error_injections_at_startup': []}
-    config_with_big_ticks = DEFAULT_CONFIG | {'error_injections_at_startup': [{
+    default_config = {'error_injections_at_startup': []}
+    config_with_big_ticks = {'error_injections_at_startup': [{
         'name': 'strongly-consistent-raft-group-tick-interval-in-ms',
         'value': '20000'
     }]}
@@ -386,7 +385,7 @@ async def test_multi_shard_write_read(manager: ScyllaClusterManager):
     """
     logger.info("Bootstrapping cluster with 4 shards per node")
     cmdline = DEFAULT_CMDLINE + ['--smp=4']
-    servers = await manager.servers_add(3, config=DEFAULT_CONFIG, cmdline=cmdline, auto_rack_dc='my_dc')
+    servers = await manager.servers_add(3, cmdline=cmdline, auto_rack_dc='my_dc')
     (cql, hosts) = await manager.get_ready_cql(servers)
 
     logger.info("Creating a strongly-consistent keyspace with 4 tablets")
@@ -412,7 +411,7 @@ async def test_sc_multishard_metadata_reads(manager: ScyllaClusterManager):
         '--smp=4',
         '--logger-log-level', 'fixed_shard=trace',
     ]
-    server = await manager.server_add(config=DEFAULT_CONFIG, cmdline=cmdline)
+    server = await manager.server_add(cmdline=cmdline)
     (cql, hosts) = await manager.get_ready_cql([server])
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 8} AND consistency = 'global'") as ks:
@@ -514,7 +513,7 @@ async def test_sc_persistence_restart_with_smp_increase(manager: ScyllaClusterMa
         '--smp=2',
         '--logger-log-level', 'fixed_shard=trace',
     ]
-    server = await manager.server_add(config=DEFAULT_CONFIG, cmdline=cmdline)
+    server = await manager.server_add(cmdline=cmdline)
     (cql, hosts) = await manager.get_ready_cql([server])
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2} AND consistency = 'global'") as ks:
@@ -558,7 +557,7 @@ async def test_sc_persistence_with_compaction(manager: ScyllaClusterManager):
     verify that after compaction the raft metadata is still readable and correct.
     """
     cmdline = DEFAULT_CMDLINE + ['--logger-log-level', 'fixed_shard=trace']
-    server = await manager.server_add(config=DEFAULT_CONFIG, cmdline=cmdline)
+    server = await manager.server_add(cmdline=cmdline)
     (cql, hosts) = await manager.get_ready_cql([server])
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 4} AND consistency = 'global'") as ks:
@@ -600,7 +599,7 @@ async def test_sc_persistence_after_crash(manager: ScyllaClusterManager):
     after a non-graceful stop (crash simulation).
     """
     cmdline = DEFAULT_CMDLINE + ['--logger-log-level', 'fixed_shard=trace']
-    server = await manager.server_add(config=DEFAULT_CONFIG, cmdline=cmdline)
+    server = await manager.server_add(cmdline=cmdline)
     (cql, hosts) = await manager.get_ready_cql([server])
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 4} AND consistency = 'global'") as ks:
@@ -631,10 +630,10 @@ async def test_sc_persistence_after_crash(manager: ScyllaClusterManager):
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_no_schema_when_apply_write(manager: ScyllaClusterManager):
-    servers = await manager.servers_add(2, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
+    servers = await manager.servers_add(2, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
     # We don't want `servers[2]` to be a Raft leader (for both group0 and strong consistency groups),
     # because we want `servers[2]` to receive Raft commands from others.
-    config = DEFAULT_CONFIG | {'error_injections_at_startup': ['avoid_being_raft_leader']}
+    config = {'error_injections_at_startup': ['avoid_being_raft_leader']}
     servers += [await manager.server_add(config=config, cmdline=DEFAULT_CMDLINE, property_file={'dc':'my_dc', 'rack': 'rack3'})]
     (cql, hosts) = await manager.get_ready_cql(servers)
     host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
@@ -678,10 +677,10 @@ async def test_no_schema_when_apply_write(manager: ScyllaClusterManager):
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_old_schema_when_apply_write(manager: ScyllaClusterManager):
-    servers = await manager.servers_add(2, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
+    servers = await manager.servers_add(2, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
     # We don't want `servers[2]` to be a Raft leader (for both group0 and strong consistency groups),
     # because we want `servers[2]` to receive Raft commands from others.
-    config = DEFAULT_CONFIG | {'error_injections_at_startup': ['avoid_being_raft_leader']}
+    config = {'error_injections_at_startup': ['avoid_being_raft_leader']}
     servers += [await manager.server_add(config=config, cmdline=DEFAULT_CMDLINE, property_file={'dc':'my_dc', 'rack': 'rack3'})]
     (cql, hosts) = await manager.get_ready_cql(servers)
     host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
@@ -730,7 +729,6 @@ async def test_forward_cql_prepared_with_bound_values(manager: ScyllaClusterMana
     """
     cmdline = DEFAULT_CMDLINE + [
         '--logger-log-level', 'cql_server=trace',
-        '--experimental-features', 'strongly-consistent-tables',
     ]
     servers = await manager.servers_add(2, cmdline=cmdline, auto_rack_dc='dc1')
     (cql, hosts) = await manager.get_ready_cql(servers)
@@ -770,7 +768,6 @@ async def test_forward_cql_cache_invalidation(manager: ScyllaClusterManager):
     """
     cmdline = DEFAULT_CMDLINE + [
         '--logger-log-level', 'cql_server=trace',
-        '--experimental-features', 'strongly-consistent-tables',
     ]
     servers = await manager.servers_add(2, cmdline=cmdline, auto_rack_dc='dc1')
     (cql, hosts) = await manager.get_ready_cql(servers)
@@ -812,7 +809,6 @@ async def test_forward_cql_exception_passthrough(manager: ScyllaClusterManager):
     """
     cmdline = DEFAULT_CMDLINE + [
         '--logger-log-level', 'cql_server=trace',
-        '--experimental-features', 'strongly-consistent-tables',
     ]
     servers = await manager.servers_add(3, cmdline=cmdline, auto_rack_dc='dc1')
     (cql, hosts) = await manager.get_ready_cql(servers)
@@ -878,7 +874,7 @@ async def test_forward_cql_prepare_exception_passthrough(manager: ScyllaClusterM
     the statement again and that fails, the client gets the target's error, not SERVER_ERROR.
     """
     cmdline = ['--logger-log-level', 'cql_server=trace']
-    target, forwarder = await manager.servers_add(2, config=DEFAULT_CONFIG, cmdline=cmdline,
+    target, forwarder = await manager.servers_add(2, cmdline=cmdline,
                                                   property_file=[{'dc': 'dc1', 'rack': 'rack1'}, {'dc': 'dc2', 'rack': 'rack1'}])
     (cql, hosts) = await manager.get_ready_cql([target, forwarder])
     target_host = next(h for h in hosts if h.address == target.rpc_address)
@@ -926,7 +922,7 @@ async def test_forwarded_write_keeps_its_deadline(manager: ScyllaClusterManager,
     shift_injection = "forward_cql_shift_deadline_seconds"
     timeout_ms = scale_timeout(1000)
     # A BATCH request can't set its own timeout, so every opcode uses the configured one.
-    config = DEFAULT_CONFIG | {'write_request_timeout_in_ms': timeout_ms}
+    config = {'write_request_timeout_in_ms': timeout_ms}
     leader, forwarder = await manager.servers_add(2, config=config, cmdline=DEFAULT_CMDLINE,
                                                   property_file=[{'dc': 'dc1', 'rack': 'rack1'}, {'dc': 'dc2', 'rack': 'rack1'}])
     (cql, hosts) = await manager.get_ready_cql([leader, forwarder])
@@ -995,7 +991,7 @@ async def test_forwarded_request_arriving_after_its_deadline(manager: ScyllaClus
     query, timeout_error, errors_metric = {
         'insert': ("INSERT INTO {table} (pk, v) VALUES (1, 1) USING TIMEOUT {timeout_s}s", WriteTimeout, 'write_errors'),
         'select': ("SELECT v FROM {table} WHERE pk = 0 USING TIMEOUT {timeout_s}s", ReadTimeout, 'read_errors')}[kind]
-    leader, forwarder = await manager.servers_add(2, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE,
+    leader, forwarder = await manager.servers_add(2, cmdline=DEFAULT_CMDLINE,
                                                   property_file=[{'dc': 'dc1', 'rack': 'rack1'}, {'dc': 'dc2', 'rack': 'rack1'}])
     (cql, hosts) = await manager.get_ready_cql([leader, forwarder])
     leader_host, forwarder_host = hosts
@@ -1047,7 +1043,7 @@ async def test_shard_bounced_request_keeps_its_deadline(manager: ScyllaClusterMa
         'insert': ("INSERT INTO {table} (pk, v) VALUES ({pk}, {pk}) USING TIMEOUT {timeout_ms}ms", ConsistencyLevel.QUORUM, WriteTimeout),
         'select': (select, ConsistencyLevel.QUORUM, ReadTimeout),
         'non_linearizable_select': (select, ConsistencyLevel.ONE, ReadTimeout)}[kind]
-    server = await manager.server_add(config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE)
+    server = await manager.server_add(cmdline=DEFAULT_CMDLINE)
     cql, _ = await manager.get_ready_cql([server])
 
     ks_opts = "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1} AND consistency = 'global'"
@@ -1097,8 +1093,7 @@ async def test_drop_table_during_insert(manager: ScyllaClusterManager):
     which erases the raft group.  Resuming the INSERT used to hit on_internal_error
     in acquire_server and abort the node."""
 
-    config = {"experimental_features": ["strongly-consistent-tables"]}
-    server = await manager.server_add(config=config, cmdline=DEFAULT_CMDLINE)
+    server = await manager.server_add(cmdline=DEFAULT_CMDLINE)
     (cql, hosts) = await manager.get_ready_cql([server])
 
     async with new_test_keyspace(
@@ -1151,7 +1146,7 @@ async def test_timed_out_queries(manager: ScyllaClusterManager):
     getting stuck. It should be aborted when we reach the deadline.
     """
 
-    s1 = await manager.server_add(config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE)
+    s1 = await manager.server_add(cmdline=DEFAULT_CMDLINE)
     cql, _ = await manager.get_ready_cql([s1])
 
     async def try_query_with_timeout(exception_type, stmt: str, error_injection_name: str, timeout_sec: float, add_timeout: bool):
@@ -1277,7 +1272,7 @@ async def test_queries_while_dropping_table(manager: ScyllaClusterManager):
     immediately.
     """
 
-    servers = await manager.servers_add(2, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
+    servers = await manager.servers_add(2, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
     cql, hosts = await manager.get_ready_cql(servers)
     host_ids = [await manager.get_host_id(s.server_id) for s in servers]
 
@@ -1387,7 +1382,7 @@ async def test_queries_when_shutting_down(manager: ScyllaClusterManager, target:
     """
 
     smp = 2
-    config = DEFAULT_CONFIG | {"request_timeout_on_shutdown_in_seconds": 1}
+    config = {"request_timeout_on_shutdown_in_seconds": 1}
     cmdline = DEFAULT_CMDLINE + [
         f"--smp={smp}",
         "--logger-log-level", "cql_server=debug",
@@ -1474,13 +1469,13 @@ async def test_abort_state_machine_apply_after_dropping_table(manager: ScyllaClu
     """
 
     cmdline = DEFAULT_CMDLINE + ["--logger-log-level", "sc_state_machine=debug:raft=debug"]
-    leader_server = await manager.server_add(config=DEFAULT_CONFIG, cmdline=cmdline,
+    leader_server = await manager.server_add(cmdline=cmdline,
                                              property_file={"dc": "dc1", "rack": "rack1"})
 
     # We want to prevent target_server from becoming the leader of either group0
     # or the strongly consistent Raft group so it might not have the latest
     # schema version and is forced to perform a read barrier.
-    config = DEFAULT_CONFIG | {"error_injections_at_startup": ["avoid_being_raft_leader"]}
+    config = {"error_injections_at_startup": ["avoid_being_raft_leader"]}
     target_server = await manager.server_add(config=config, cmdline=cmdline, property_file={"dc": "dc1", "rack": "rack2"})
 
     cql, [leader_host, _] = await manager.get_ready_cql([leader_server, target_server])
@@ -1550,13 +1545,13 @@ async def test_abort_state_machine_apply_during_shutdown(manager: ScyllaClusterM
     """
 
     cmdline = DEFAULT_CMDLINE + ["--logger-log-level", "sc_state_machine=debug:raft=debug"]
-    leader_server = await manager.server_add(config=DEFAULT_CONFIG, cmdline=cmdline,
+    leader_server = await manager.server_add(cmdline=cmdline,
                                              property_file={"dc": "dc1", "rack": "rack1"})
 
     # We want to prevent target_server from becoming the leader of either group0
     # or the strongly consistent Raft group so it might not have the latest
     # schema version and is forced to perform a read barrier.
-    config = DEFAULT_CONFIG | {"error_injections_at_startup": ["avoid_being_raft_leader"]}
+    config = {"error_injections_at_startup": ["avoid_being_raft_leader"]}
     target_server = await manager.server_add(config=config, cmdline=cmdline, property_file={"dc": "dc1", "rack": "rack2"})
 
     cql, [leader_host, target_host] = await manager.get_ready_cql([leader_server, target_server])
@@ -1635,9 +1630,9 @@ async def test_write_resumed_during_shutdown_succeeds(manager: ScyllaClusterMana
     # which the shutdown requests as soon as that shard has no connections
     # (SCYLLADB-5405).
     cmdline = DEFAULT_CMDLINE + ["--smp", "1"]
-    leader_server = await manager.server_add(config=DEFAULT_CONFIG, cmdline=cmdline,
+    leader_server = await manager.server_add(cmdline=cmdline,
                                              property_file={"dc": "dc1", "rack": "rack1"})
-    config = DEFAULT_CONFIG | {"error_injections_at_startup": ["avoid_being_raft_leader"]}
+    config = {"error_injections_at_startup": ["avoid_being_raft_leader"]}
     target_server = await manager.server_add(config=config, cmdline=cmdline,
                                              property_file={"dc": "dc1", "rack": "rack2"})
 
@@ -1685,7 +1680,7 @@ async def test_maintenance_socket_write_after_drain(manager: ScyllaClusterManage
     Reproduces SCYLLADB-2423.
     """
 
-    server = await manager.server_add(config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE)
+    server = await manager.server_add(cmdline=DEFAULT_CMDLINE)
     cql = manager.get_cql()
 
     ks = await create_new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1} AND consistency = 'global'")
@@ -1722,7 +1717,6 @@ async def test_leader_cache_eliminates_redirect(manager: ScyllaClusterManager):
     """
     cmdline = DEFAULT_CMDLINE + [
         '--logger-log-level', 'cql_server=trace',
-        '--experimental-features', 'strongly-consistent-tables',
     ]
     # 2 racks with 2 nodes each
     property_file = [
@@ -1818,7 +1812,7 @@ async def test_read_forwarding(manager: ScyllaClusterManager):
     """
 
     logger.info("Bootstrapping cluster")
-    servers = await manager.servers_add(4, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
+    servers = await manager.servers_add(4, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
     (cql, hosts) = await manager.get_ready_cql(servers)
     host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
 
@@ -1914,7 +1908,7 @@ async def test_linearizable_read_waits_for_leader_apply(manager: ScyllaClusterMa
     value right away. It's what shows that the table really lacks the write, so
     the CL=QUORUM timeout is the barrier waiting, not something else stuck.
     """
-    servers = await manager.servers_add(3, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE, auto_rack_dc="dc1")
+    servers = await manager.servers_add(3, cmdline=DEFAULT_CMDLINE, auto_rack_dc="dc1")
     leader_server = servers[0]
     cql, [leader_host, _, _] = await manager.get_ready_cql(servers)
 
@@ -1973,7 +1967,7 @@ async def test_write_from_non_replica_after_leader_down(manager: ScyllaClusterMa
       so a new leader can be elected and the second write can succeed.
     """
     cmdline = DEFAULT_CMDLINE + ['--smp=1']
-    servers = await manager.servers_add(4, config=DEFAULT_CONFIG, cmdline=cmdline, auto_rack_dc='my_dc')
+    servers = await manager.servers_add(4, cmdline=cmdline, auto_rack_dc='my_dc')
     cql, hosts = await manager.get_ready_cql(servers)
     host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
 
@@ -2047,7 +2041,7 @@ async def test_unavailable_errors_metrics(manager: ScyllaClusterManager):
     read and a CL=ONE read.
     """
     # The leader cache is per shard. With one shard, both writes below use the same one.
-    servers = await manager.servers_add(2, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE + ['--smp=1'], property_file=[
+    servers = await manager.servers_add(2, cmdline=DEFAULT_CMDLINE + ['--smp=1'], property_file=[
         {'dc': 'dc1', 'rack': 'rack1'},
         {'dc': 'dc1', 'rack': 'rack2'},
     ])
@@ -2100,7 +2094,7 @@ async def test_redirected_requests_latency_metrics(manager: ScyllaClusterManager
     Setup: 2 nodes, RF=1, 1 tablet. Every write and read sent to the non-replica is
     redirected to the replica.
     """
-    servers = await manager.servers_add(2, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE, property_file=[
+    servers = await manager.servers_add(2, cmdline=DEFAULT_CMDLINE, property_file=[
         {'dc': 'dc1', 'rack': 'rack1'},
         {'dc': 'dc1', 'rack': 'rack2'},
     ])
@@ -2139,7 +2133,7 @@ async def test_stale_leader_retries_metrics(manager: ScyllaClusterManager, scale
     error injection names such a leader on every attempt, so each request waits for a
     new leader until its timeout.
     """
-    [server] = await manager.servers_add(1, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE)
+    [server] = await manager.servers_add(1, cmdline=DEFAULT_CMDLINE)
     cql, _ = await manager.get_ready_cql([server])
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
@@ -2165,7 +2159,7 @@ async def test_dropped_table_errors_metrics(manager: ScyllaClusterManager):
     Case 1 drops the table before the requests get their raft server, case 2 while
     they hold it.
     """
-    [server] = await manager.servers_add(1, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE)
+    [server] = await manager.servers_add(1, cmdline=DEFAULT_CMDLINE)
     cql, _ = await manager.get_ready_cql([server])
     log = await manager.server_open_log(server.server_id)
 
@@ -2249,7 +2243,7 @@ async def test_prepared_write_across_table_recreation(manager: ScyllaClusterMana
     driver returns it without retrying. The failed write leaves no row in the new
     table, and the next execution of the same prepared statement writes to it.
     """
-    [server] = await manager.servers_add(1, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE)
+    [server] = await manager.servers_add(1, cmdline=DEFAULT_CMDLINE)
     cql, _ = await manager.get_ready_cql([server])
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
@@ -2284,7 +2278,7 @@ async def test_foreground_requests_metrics(manager: ScyllaClusterManager):
     Verify that a write and a read are counted in foreground_writes and foreground_reads
     while the coordinator executes them, and no longer once they are done.
     """
-    [server] = await manager.servers_add(1, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE)
+    [server] = await manager.servers_add(1, cmdline=DEFAULT_CMDLINE)
     cql, _ = await manager.get_ready_cql([server])
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
@@ -2327,7 +2321,7 @@ async def test_stepdown_on_graceful_shutdown(manager: ScyllaClusterManager):
     the time this test gives the group to show its new leader.
     """
     tick_interval = 4
-    config = DEFAULT_CONFIG | {'error_injections_at_startup': [{
+    config = {'error_injections_at_startup': [{
         'name': 'strongly-consistent-raft-group-tick-interval-in-ms',
         'value': str(tick_interval * 1000)
     }]}
@@ -2387,9 +2381,6 @@ async def test_tablet_migration(manager: ScyllaClusterManager):
     # other node in the same rack, forcing the raft group membership to fully
     # rotate, and verify previously written data remains readable.
     logger.info("Bootstrapping cluster")
-    config = {
-        'experimental_features': ['strongly-consistent-tables']
-    }
     cmdline = [
         '--logger-log-level', 'sc_groups_manager=debug',
         '--logger-log-level', 'sc_coordinator=debug',
@@ -2398,7 +2389,7 @@ async def test_tablet_migration(manager: ScyllaClusterManager):
         '--logger-log-level', 'raft_topology=debug',
         '--logger-log-level', 'raft=debug'
     ]
-    servers = await manager.servers_add(6, config=config, cmdline=cmdline, property_file=[
+    servers = await manager.servers_add(6, cmdline=cmdline, property_file=[
         {'dc': 'dc1', 'rack': 'rack1'},
         {'dc': 'dc1', 'rack': 'rack1'},
         {'dc': 'dc1', 'rack': 'rack2'},
@@ -2491,9 +2482,6 @@ async def test_tablet_migration_rf1(manager: ScyllaClusterManager):
     # multiple nodes, verifying that leadership follows the replica and that
     # previously written data remains readable throughout the relocations.
     logger.info("Bootstrapping cluster")
-    config = {
-        'experimental_features': ['strongly-consistent-tables']
-    }
     cmdline = [
         '--logger-log-level', 'sc_groups_manager=debug',
         '--logger-log-level', 'sc_coordinator=debug',
@@ -2502,7 +2490,7 @@ async def test_tablet_migration_rf1(manager: ScyllaClusterManager):
         '--logger-log-level', 'raft_topology=debug',
         '--logger-log-level', 'raft=debug'
     ]
-    servers = await manager.servers_add(3, config=config, cmdline=cmdline, property_file=[
+    servers = await manager.servers_add(3, cmdline=cmdline, property_file=[
         {'dc': 'dc1', 'rack': 'rack1'},
         {'dc': 'dc1', 'rack': 'rack2'},
         {'dc': 'dc1', 'rack': 'rack3'},
@@ -2604,9 +2592,6 @@ async def test_tablet_migration_rf1(manager: ScyllaClusterManager):
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
 async def test_tablet_migration_rollback(manager: ScyllaClusterManager):
     logger.info("Bootstrapping cluster")
-    config = {
-        'experimental_features': ['strongly-consistent-tables']
-    }
     cmdline = [
         '--logger-log-level', 'sc_groups_manager=debug',
         '--logger-log-level', 'sc_coordinator=debug',
@@ -2616,7 +2601,7 @@ async def test_tablet_migration_rollback(manager: ScyllaClusterManager):
         '--logger-log-level', 'raft=debug',
         '--logger-log-level', 'debug_error_injection=debug'
     ]
-    servers = await manager.servers_add(4, config=config, cmdline=cmdline, property_file=[
+    servers = await manager.servers_add(4, cmdline=cmdline, property_file=[
         {'dc': 'dc1', 'rack': 'rack1'},
         {'dc': 'dc1', 'rack': 'rack3'},
         {'dc': 'dc1', 'rack': 'rack3'},
@@ -2731,14 +2716,13 @@ async def test_rf_change(manager: ScyllaClusterManager):
     after one node is stopped (quorum = 2/3 is sufficient).
     """
     logger.info("Bootstrapping cluster")
-    config = {'experimental_features': ['strongly-consistent-tables']}
     cmdline = [
         '--logger-log-level', 'sc_groups_manager=debug',
         '--logger-log-level', 'sc_coordinator=debug',
         '--logger-log-level', 'sc_state_machine=debug',
         '--logger-log-level', 'raft_groups_storage=debug',
     ]
-    servers = await manager.servers_add(3, config=config, cmdline=cmdline, property_file=[
+    servers = await manager.servers_add(3, cmdline=cmdline, property_file=[
         {'dc': 'dc1', 'rack': 'rack1'},
         {'dc': 'dc1', 'rack': 'rack2'},
         {'dc': 'dc1', 'rack': 'rack3'},
@@ -2816,7 +2800,7 @@ async def test_tablet_migration_config_change_retried(manager: ScyllaClusterMana
         '--logger-log-level', 'raft_topology=debug',
         '--logger-log-level', 'debug_error_injection=debug',
     ]
-    servers = await manager.servers_add(6, config=DEFAULT_CONFIG, cmdline=cmdline, property_file=[
+    servers = await manager.servers_add(6, cmdline=cmdline, property_file=[
         {'dc': 'dc1', 'rack': 'rack1'},
         {'dc': 'dc1', 'rack': 'rack1'},
         {'dc': 'dc1', 'rack': 'rack2'},
@@ -2901,7 +2885,7 @@ async def test_tablet_migration_rollback_from_sc_become_voter(manager: ScyllaClu
         '--logger-log-level', 'raft_topology=debug',
         '--logger-log-level', 'debug_error_injection=debug',
     ]
-    servers = await manager.servers_add(4, config=DEFAULT_CONFIG, cmdline=cmdline, property_file=[
+    servers = await manager.servers_add(4, cmdline=cmdline, property_file=[
         {'dc': 'dc1', 'rack': 'rack1'},
         {'dc': 'dc1', 'rack': 'rack2'},
         {'dc': 'dc1', 'rack': 'rack3'},
@@ -3038,7 +3022,7 @@ async def test_leader_not_among_tablet_replicas(manager: ScyllaClusterManager):
     arrives before its deadline, times out. The error injection emulates the condition
     directly, because the real window closes as soon as the group elects a new leader.
     """
-    servers = await manager.servers_add(1, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE)
+    servers = await manager.servers_add(1, cmdline=DEFAULT_CMDLINE)
     cql, _ = await manager.get_ready_cql(servers)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} "
@@ -3076,12 +3060,12 @@ async def boot_cluster_led_from_rack3(manager: ScyllaClusterManager):
         '--logger-log-level', 'raft_topology=debug',
         '--logger-log-level', 'debug_error_injection=debug',
     ]
-    servers = await manager.servers_add(2, config=DEFAULT_CONFIG, cmdline=cmdline, property_file=[
+    servers = await manager.servers_add(2, cmdline=cmdline, property_file=[
         {'dc': 'dc1', 'rack': 'rack3'},
         {'dc': 'dc1', 'rack': 'rack3'},
     ])
     servers += await manager.servers_add(2, cmdline=cmdline,
-                                         config=DEFAULT_CONFIG | {'error_injections_at_startup': ['avoid_being_raft_leader']},
+                                         config={'error_injections_at_startup': ['avoid_being_raft_leader']},
                                          property_file=[
         {'dc': 'dc1', 'rack': 'rack1'},
         {'dc': 'dc1', 'rack': 'rack2'},
@@ -3288,7 +3272,7 @@ async def test_tablet_migration_during_insert(manager: ScyllaClusterManager):
         '--logger-log-level', 'raft_topology=debug',
         '--logger-log-level', 'debug_error_injection=debug',
     ]
-    servers = await manager.servers_add(2, config=DEFAULT_CONFIG, cmdline=cmdline)
+    servers = await manager.servers_add(2, cmdline=cmdline)
     cql, hosts = await manager.get_ready_cql(servers)
     host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
 
@@ -3382,7 +3366,7 @@ async def test_pending_replica_skips_start_migration(manager: ScyllaClusterManag
         '--logger-log-level', 'group0_raft_sm=trace',
         '--logger-log-level', 'debug_error_injection=debug',
     ]
-    servers = await manager.servers_add(3, config=DEFAULT_CONFIG, cmdline=cmdline)
+    servers = await manager.servers_add(3, cmdline=cmdline)
     cql, hosts = await manager.get_ready_cql(servers)
     host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
 
@@ -3471,7 +3455,7 @@ async def test_raft_group_torn_down_before_tablet_cleanup(manager: ScyllaCluster
     """
     logger.info("Bootstrapping cluster")
     cmdline = DEFAULT_CMDLINE + ['--logger-log-level', 'raft_topology=debug']
-    servers = await manager.servers_add(4, config=DEFAULT_CONFIG, cmdline=cmdline, property_file=[
+    servers = await manager.servers_add(4, cmdline=cmdline, property_file=[
         {'dc': 'dc1', 'rack': 'rack1'},
         {'dc': 'dc1', 'rack': 'rack2'},
         {'dc': 'dc1', 'rack': 'rack3'},
@@ -3537,7 +3521,7 @@ async def test_late_raft_apply_after_tablet_cleanup(manager: ScyllaClusterManage
         '--logger-log-level', 'raft_topology=debug',
         '--logger-log-level', 'debug_error_injection=debug',
     ]
-    servers = await manager.servers_add(6, config=DEFAULT_CONFIG, cmdline=cmdline, property_file=[
+    servers = await manager.servers_add(6, cmdline=cmdline, property_file=[
         {'dc': 'dc1', 'rack': 'rack1'},
         {'dc': 'dc1', 'rack': 'rack1'},
         {'dc': 'dc1', 'rack': 'rack2'},
@@ -3651,7 +3635,7 @@ async def test_no_raft_replay_into_a_tablet_that_moved_away(manager: ScyllaClust
         '--logger-log-level', 'raft_topology=debug',
         '--logger-log-level', 'raft_commitlog_replay=debug',
     ]
-    servers = await manager.servers_add(4, config=DEFAULT_CONFIG, cmdline=cmdline, property_file=[
+    servers = await manager.servers_add(4, cmdline=cmdline, property_file=[
         {'dc': 'dc1', 'rack': 'rack1'},
         {'dc': 'dc1', 'rack': 'rack2'},
         {'dc': 'dc1', 'rack': 'rack3'},
@@ -3744,7 +3728,7 @@ async def test_write_paused_across_leadership_change(manager: ScyllaClusterManag
     with the first timestamp, the effect of the write would appear obscured
     by the other write, breaking linearizability.
     """
-    servers = await manager.servers_add(2, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE,
+    servers = await manager.servers_add(2, cmdline=DEFAULT_CMDLINE,
                                         auto_rack_dc='my_dc')
     cql, hosts = await manager.get_ready_cql(servers)
     host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
@@ -3829,14 +3813,14 @@ async def test_bootstrap_with_existing_sc_table(manager: ScyllaClusterManager):
     must not depend on the feature being enabled yet, otherwise the
     snapshot transfer fails and the node never joins.
     """
-    server = await manager.server_add(config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE)
+    server = await manager.server_add(cmdline=DEFAULT_CMDLINE)
     cql = manager.get_cql()
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
         async with new_test_table(manager, ks, "pk int PRIMARY KEY, c int") as table:
             await cql.run_async(f"INSERT INTO {table} (pk, c) VALUES (1, 1)")
 
-            new_server = await manager.server_add(config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE)
+            new_server = await manager.server_add(cmdline=DEFAULT_CMDLINE)
             cql, hosts = await manager.get_ready_cql([server, new_server])
 
             rows = await cql.run_async(f"SELECT c FROM {table} WHERE pk = 1", host=hosts[1])
@@ -3869,7 +3853,7 @@ async def wait_for_sc_applies(manager: ScyllaClusterManager, servers: list[Serve
     await wait_for(all_applied, time.time() + 60)
 
 async def test_sc_raft_metrics_aggregated_per_table(manager: ScyllaClusterManager):
-    servers = await manager.servers_add(3, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
+    servers = await manager.servers_add(3, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
     cql = manager.get_cql()
     host_ids = await get_host_ids(manager, servers)
 
@@ -3918,7 +3902,7 @@ async def test_sc_raft_metrics_aggregated_per_table(manager: ScyllaClusterManage
         await wait_for_sc_raft_series_gone(manager, leader)
 
 async def test_sc_raft_metrics_rpc_memory(manager: ScyllaClusterManager):
-    servers = await manager.servers_add(3, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
+    servers = await manager.servers_add(3, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
     cql = manager.get_cql()
     host_ids = await get_host_ids(manager, servers)
 
@@ -3951,7 +3935,7 @@ async def test_sc_raft_metrics_rpc_memory(manager: ScyllaClusterManager):
         assert metrics.get('scylla_raft_group0_append_entries_memory_waits') is not None
 
 async def test_sc_raft_metrics_per_shard(manager: ScyllaClusterManager):
-    config = DEFAULT_CONFIG | {'enable_keyspace_column_family_metrics': True}
+    config = {'enable_keyspace_column_family_metrics': True}
     servers = await manager.servers_add(3, config=config, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
     cql = manager.get_cql()
     host_ids = await get_host_ids(manager, servers)
@@ -4013,7 +3997,7 @@ async def test_sc_raft_metrics_per_shard(manager: ScyllaClusterManager):
         assert 'shard' in errors[0].labels
 
 async def test_sc_raft_metrics_disabled(manager: ScyllaClusterManager):
-    config = DEFAULT_CONFIG | {'enable_node_aggregated_table_metrics': False}
+    config = {'enable_node_aggregated_table_metrics': False}
     servers = await manager.servers_add(3, config=config, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
     cql = manager.get_cql()
 
@@ -4033,7 +4017,7 @@ async def test_sc_raft_metrics_disabled(manager: ScyllaClusterManager):
             assert metrics.lines_by_prefix('scylla_raft_add_entries')
 
 async def test_sc_raft_metrics_survive_tablet_migration(manager: ScyllaClusterManager):
-    servers = await manager.servers_add(3, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
+    servers = await manager.servers_add(3, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
     cql = manager.get_cql()
     host_ids = await get_host_ids(manager, servers)
     await manager.disable_tablet_balancing()
@@ -4085,7 +4069,7 @@ async def test_sc_raft_metrics_survive_tablet_migration(manager: ScyllaClusterMa
         await wait_for_sc_raft_series_gone(manager, src)
 
 async def test_sc_request_metrics_per_table(manager: ScyllaClusterManager):
-    servers = await manager.servers_add(3, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
+    servers = await manager.servers_add(3, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
     cql, hosts = await manager.get_ready_cql(servers)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
@@ -4134,7 +4118,7 @@ async def test_sc_request_metrics_per_table(manager: ScyllaClusterManager):
         await wait_for(series_gone, time.time() + 60)
 
 async def test_sc_apply_metrics_per_table(manager: ScyllaClusterManager):
-    servers = await manager.servers_add(3, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
+    servers = await manager.servers_add(3, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
     cql = manager.get_cql()
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
@@ -4182,7 +4166,7 @@ async def test_non_pure_pk_function_is_evaluated_once_per_request(manager: Scyll
     a request costs: it goes straight to the leader, nobody redirects it and nobody bounces
     it. The same requests with `uuid()` as the key must leave the counters just as they are.
     """
-    servers = await manager.servers_add(2, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE, auto_rack_dc='dc1')
+    servers = await manager.servers_add(2, cmdline=DEFAULT_CMDLINE, auto_rack_dc='dc1')
     # A tablet that moves during the run is redirected for a reason that has nothing to do
     # with uuid().
     await manager.disable_tablet_balancing()
@@ -4232,7 +4216,7 @@ async def test_non_pure_pk_function_shard_bounce_is_at_most_one(manager: ScyllaC
     shard, so about half of the requests need one bounce. A second bounce for the same
     request means the receiving shard ran `uuid()` again and got a different token.
     """
-    server = await manager.server_add(config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE)
+    server = await manager.server_add(cmdline=DEFAULT_CMDLINE)
     # A tablet that moves between shards during the run is bounced twice for a reason that has
     # nothing to do with uuid().
     await manager.disable_tablet_balancing()
@@ -4285,7 +4269,7 @@ async def test_truncate_basic(manager: ScyllaClusterManager):
     """TRUNCATE goes through the raft log of each tablet: every tablet is empty afterwards, writes
     issued after it are visible, and every replica records the truncate in system.raft_groups once
     its state machine applies the entry."""
-    servers = await manager.servers_add(3, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
+    servers = await manager.servers_add(3, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
     (cql, hosts) = await manager.get_ready_cql(servers)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 4} AND consistency = 'global'") as ks:
@@ -4340,7 +4324,7 @@ async def test_truncate_record_survives_replay(manager: ScyllaClusterManager, fl
     record is durable by the time the truncate returns, so the replay drops the entries at or
     below the recorded truncate index and keeps the writes after it, whether they are still in
     the commitlog or already in an sstable the replayed truncate would otherwise delete."""
-    server = await manager.server_add(config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE)
+    server = await manager.server_add(cmdline=DEFAULT_CMDLINE)
     (cql, hosts) = await manager.get_ready_cql([server])
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 4} AND consistency = 'global'") as ks:
@@ -4369,7 +4353,7 @@ async def test_truncate_twice_survives_replay(manager: ScyllaClusterManager, flu
     """Two truncates with writes between them, then a kill. The replay has to tell the second
     truncate from a retry of the first and drop the writes between them too, keeping only the
     writes after the second one, in the commitlog or already flushed."""
-    server = await manager.server_add(config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE)
+    server = await manager.server_add(cmdline=DEFAULT_CMDLINE)
     (cql, hosts) = await manager.get_ready_cql([server])
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 4} AND consistency = 'global'") as ks:
@@ -4400,7 +4384,7 @@ async def test_truncate_replays_entry_when_record_not_flushed(manager: ScyllaClu
     """The node is killed after the tablet was emptied but before the truncate record was
     written. The entry is still in the commitlog: the replay applies the writes it finds
     below the entry and then the entry itself, which drops them again."""
-    server = await manager.server_add(config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE)
+    server = await manager.server_add(cmdline=DEFAULT_CMDLINE)
     (cql, hosts) = await manager.get_ready_cql([server])
     log = await manager.server_open_log(server.server_id)
 
@@ -4431,7 +4415,7 @@ async def test_truncate_in_one_batch_with_writes_survives_replay(manager: Scylla
     writes. Nothing is written after it and every node is killed: the replay floor from the
     batch headers is below the truncate, and the record alone has to keep the writes from
     going back to raft and being applied again."""
-    servers = await manager.servers_add(3, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
+    servers = await manager.servers_add(3, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
     (cql, hosts) = await manager.get_ready_cql(servers)
     host_ids = {await manager.get_host_id(s.server_id): s for s in servers}
 
@@ -4485,7 +4469,7 @@ async def test_truncate_coordinator_crash_dedup(manager: ScyllaClusterManager):
     """The topology coordinator is killed right after the tablet's truncate entry is committed. The
     new coordinator re-drives the request and the group gets a second entry with the same request
     id, which the state machine applies as a no-op: a row written between the two entries survives."""
-    servers = await manager.servers_add(3, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
+    servers = await manager.servers_add(3, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
     (cql, hosts) = await manager.get_ready_cql(servers)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:

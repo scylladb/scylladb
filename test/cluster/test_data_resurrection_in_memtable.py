@@ -195,6 +195,9 @@ TBL_SCHEMA = ("     WITH speculative_retry = 'NONE'"
 # cache so every repair flushes and reports the time it did so.
 NODE_CMDLINE = ["--enable-commitlog", "0",
                 "--repair-hints-batchlog-flush-cache-time-in-ms", "0"]
+# Strongly consistent tables refuse to start without the commitlog, so run without
+# experimental features.
+NODE_CONFIG = {'experimental_features': []}
 
 
 KS_SCHEMA = ("WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}"
@@ -210,7 +213,7 @@ async def test_major_compaction_without_flush_keeps_tombstone_over_memtable_row(
     merge: the memtable still holds a live row older than the tombstone, and collecting the
     tombstone would bring that row back as soon as the memtable is flushed.
     """
-    nodes = await manager.servers_add(3, cmdline=NODE_CMDLINE, auto_rack_dc="dc1")
+    nodes = await manager.servers_add(3, cmdline=NODE_CMDLINE, config=NODE_CONFIG, auto_rack_dc="dc1")
     cql = manager.get_cql()
     hosts = await wait_for_cql_and_get_hosts(cql, nodes, time.time() + 60)
 
@@ -251,7 +254,7 @@ async def test_major_compaction_with_flush_collects_tombstone_over_later_memtabl
     deliberate consequence of the narrowing, not a regression; what is asserted is that the
     tombstone was collected at all, which without the narrowing it would not be.
     """
-    nodes = await manager.servers_add(3, cmdline=NODE_CMDLINE, auto_rack_dc="dc1")
+    nodes = await manager.servers_add(3, cmdline=NODE_CMDLINE, config=NODE_CONFIG, auto_rack_dc="dc1")
     cql = manager.get_cql()
     hosts = await wait_for_cql_and_get_hosts(cql, nodes, time.time() + 60)
 
@@ -289,7 +292,7 @@ async def test_major_compaction_with_flush_keeps_tombstone_made_gc_eligible_afte
     can have arrived after the flush, sitting in a memtable. So the major works with the gc state
     from before its flush, under which the tombstone here is not yet GC-eligible.
     """
-    nodes = await manager.servers_add(3, cmdline=NODE_CMDLINE, auto_rack_dc="dc1")
+    nodes = await manager.servers_add(3, cmdline=NODE_CMDLINE, config=NODE_CONFIG, auto_rack_dc="dc1")
     cql = manager.get_cql()
     hosts = await wait_for_cql_and_get_hosts(cql, nodes, time.time() + 60)
 

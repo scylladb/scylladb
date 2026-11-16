@@ -12,8 +12,8 @@
 # blocks by itself, and it only sends well-formed requests. The tests need to
 # choose the blocks, and to send malformed requests, so they send raw CQL
 # frames. The server only supports the extension with the
-# strongly-consistent-tables experimental feature enabled, which is why the
-# tests are in this directory, but the extension applies to all tablet tables.
+# strongly-consistent-tables experimental feature enabled, but the extension
+# applies to all tablet tables.
 #############################################################################
 
 import socket
@@ -23,8 +23,8 @@ import pytest
 
 from test.pylib.skip_types import skip_env
 
-from .. import cql_frames
-from ..util import new_test_table, paging_plan_rederivations
+from . import cql_frames
+from .util import new_test_table, paging_plan_rederivations
 
 
 EXTENSION = "TABLETS_ROUTING_V2_EXPERIMENTAL"
