@@ -3481,8 +3481,17 @@ future<input_stream<char>> sstable::data_stream(uint64_t pos, size_t len,
 
 future<temporary_buffer<char>> sstable::data_read(uint64_t pos, size_t len, reader_permit permit) {
     auto stream = co_await data_stream(pos, len, std::move(permit), tracing::trace_state_ptr(), {});
-    auto buff = co_await stream.read_exactly(len);
+    // Close the stream even if the read fails, for example on a checksum
+    // mismatch. Destroying a stream with read-aheads in flight aborts.
+    temporary_buffer<char> buff;
+    std::exception_ptr ex;
+    try {
+        buff = co_await stream.read_exactly(len);
+    } catch (...) {
+        ex = std::current_exception();
+    }
     co_await stream.close();
+    maybe_rethrow_exception(std::move(ex));
     co_return buff;
 }
 

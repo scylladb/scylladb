@@ -1528,3 +1528,39 @@ SEASTAR_TEST_CASE(writer_handles_subsequent_range_tombstone_changes_without_tomb
     });
 }
 
+// Checks that data_read() reports a corrupt chunk with an exception.
+// data_read() must close the stream before it rethrows; destroying the stream
+// with reads in flight aborts. The corrupt chunk lies inside the second read
+// buffer, not at its start. The second buffer is normally read by the time it
+// is needed, so the stream takes it without waiting, issues the read-ahead of
+// the third buffer, and finds the corrupt chunk while that read is in flight.
+SEASTAR_TEST_CASE(test_data_read_corrupt_chunk) {
+    return test_env::do_with_async([] (test_env& env) {
+        for (const auto version : writable_sstable_versions) {
+            simple_schema ss;
+            auto s = ss.schema();
+            mutation m(s, ss.make_pkey());
+            for (uint32_t i = 0; i < 40000; ++i) {
+                ss.add_row(m, ss.make_ckey(i), tests::random::get_sstring(50));
+            }
+            auto sst = make_sstable_containing(env.make_sstable(s, version), {std::move(m)}).get();
+            BOOST_REQUIRE(sst->has_component(component_type::CompressionInfo));
+            BOOST_REQUIRE_GT(sst->ondisk_data_size(), 4 * default_sstable_buffer_size);
+
+            // Flip a bit in the chunk that contains corrupt_pos.
+            {
+                const uint64_t corrupt_pos = default_sstable_buffer_size * 5 / 4;
+                auto f = open_file_dma(test(sst).filename(component_type::Data).native(), open_flags::rw).get();
+                auto close_f = deferred_close(f);
+                const auto block_size = f.disk_write_dma_alignment();
+                const auto block_pos = align_down<uint64_t>(corrupt_pos, block_size);
+                auto buf = temporary_buffer<char>::aligned(f.memory_dma_alignment(), block_size);
+                BOOST_REQUIRE_EQUAL(f.dma_read(block_pos, buf.get_write(), block_size).get(), block_size);
+                buf.get_write()[corrupt_pos - block_pos] ^= 1;
+                BOOST_REQUIRE_EQUAL(f.dma_write(block_pos, buf.get(), block_size).get(), block_size);
+            }
+
+            BOOST_REQUIRE_THROW(sst->data_read(0, sst->data_size(), env.make_reader_permit()).get(), malformed_sstable_exception);
+        }
+    });
+}
