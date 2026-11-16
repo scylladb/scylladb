@@ -681,6 +681,7 @@ scylla_tests = set([
     'test/boost/trie_writer_test',
     'test/boost/symmetric_key_test',
     'test/boost/types_test',
+    'test/boost/usdt_test',
     'test/boost/utf8_test',
     'test/boost/vint_serialization_test',
     'test/boost/virtual_table_mutation_source_test',
@@ -1688,6 +1689,7 @@ pure_boost_tests = set([
     'test/boost/small_vector_test',
     'test/boost/top_k_test',
     'test/boost/vint_serialization_test',
+    'test/boost/usdt_test',
     'test/boost/utf8_test',
     'test/boost/string_format_test',
     'test/manual/streaming_histogram_test',
@@ -1875,6 +1877,7 @@ deps['test/boost/reusable_buffer_test'] = [
     "test/boost/reusable_buffer_test.cc",
     "test/lib/log.cc",
 ]
+deps['test/boost/usdt_test'] = ['test/boost/usdt_test.cc']
 deps['test/boost/utf8_test'] = ['utils/utf8.cc', 'test/boost/utf8_test.cc']
 deps['test/boost/small_vector_test'] = ['test/boost/small_vector_test.cc']
 deps['test/boost/vint_serialization_test'] = ['test/boost/vint_serialization_test.cc', 'vint-serialization.cc', 'bytes.cc']
