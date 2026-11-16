@@ -12,13 +12,17 @@
 #include <boost/regex.hpp>
 #include <seastar/coroutine/all.hh>
 
+future<> utils::http::add_system_trust(tls::credentials_builder& builder) {
+    co_await builder.set_system_trust();
+}
+
 future<shared_ptr<tls::certificate_credentials>> utils::http::system_trust_credentials() {
     static thread_local shared_ptr<tls::certificate_credentials> system_trust_credentials;
     if (!system_trust_credentials) {
         // can race, and overwrite the object. that is fine.
-        auto cred = make_shared<tls::certificate_credentials>();
-        co_await cred->set_system_trust();
-        system_trust_credentials = std::move(cred);
+        tls::credentials_builder builder;
+        co_await add_system_trust(builder);
+        system_trust_credentials = builder.build_certificate_credentials();
     }
     co_return system_trust_credentials;
 }

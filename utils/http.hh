@@ -18,6 +18,10 @@
 
 namespace utils::http {
 
+// Adds the CAs the host trusts to the builder. For any credentials that
+// should trust what the host trusts.
+future<> add_system_trust(tls::credentials_builder& builder);
+
 future<shared_ptr<tls::certificate_credentials>> system_trust_credentials();
 
 class dns_connection_factory : public seastar::http::connection_factory {
