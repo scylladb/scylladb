@@ -107,3 +107,36 @@ def test_routing_information_after_query_plan_change(cql, connect, test_keyspace
             response = cql_frames.execute(sock, statement_id, [pk, 1], page_size=1, paging_state=paging_state)
             assert paging_plan_rederivations(cql) > rederivations
             assert has_routing_information(response)
+
+
+# Protocol v3 has no custom payload to carry the routing information, so the
+# server doesn't advertise the extension on a v3 connection. Reproduces
+# SCYLLADB-5742.
+def test_not_advertised_on_protocol_v3(connect):
+    with connect(version=3) as sock:
+        assert EXTENSION not in cql_frames.supported(sock, version=3)
+
+
+# Nor does the server enable the extension on a v3 connection if the driver
+# asks for it anyway: the response to a request that reaches a shard other than
+# the one of the partition carries no routing information, while on a v4
+# connection it does. Reproduces SCYLLADB-5742.
+def test_not_negotiated_on_protocol_v3(cql, connect, test_keyspace_tablets):
+    if not test_keyspace_tablets:
+        skip_env("The test needs a keyspace with tablets")
+    # Enough tablets to have some on every shard.
+    extras = "WITH tablets = {'min_tablet_count': 8}"
+    with new_test_table(cql, test_keyspace_tablets, "pk int PRIMARY KEY, v int", extras) as table:
+        with tablet_balancing_disabled(cql):
+            # Balancing is off, so the partitions stay on the shards they're on now.
+            for pk in range(16):
+                cql.execute(f"INSERT INTO {table} (pk, v) VALUES ({pk}, 1)")
+            shards = partition_shards(cql, table)
+            statement_id = cql.prepare(f"SELECT v FROM {table} WHERE pk = ?").query_id
+            for version in (4, 3):
+                with connect(version=version) as sock:
+                    shard = shard_of(sock, version)
+                    remote_pks = [pk for pk, pk_shard in shards.items() if pk_shard != shard]
+                    assert remote_pks, f"No partition on a shard other than {shard}"
+                    response = cql_frames.execute(sock, statement_id, [remote_pks[0]], version=version)
+                    assert has_routing_information(response) == (version == 4), f"protocol v{version}"
