@@ -2444,6 +2444,8 @@ private:
     semaphore _sample_data_files_local_concurrency_limiter{1};
 public:
     // Returns a vector of file chunks randomly sampled from all Data.db files of this table.
+    // Returns fewer than `n_chunks` chunks if the table has no data, or if
+    // some samples run past the end of the data.
     future<utils::chunked_vector<temporary_buffer<char>>> sample_data_files(
         table_id id,
         uint64_t chunk_size,

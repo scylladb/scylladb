@@ -34,6 +34,7 @@
 // level Cassandra rows, not disk blocks.
 
 #include "utils/assert.hh"
+#include "utils/div_ceil.hh"
 #include <vector>
 #include <cstdint>
 #include <iterator>
@@ -292,6 +293,10 @@ struct compression {
     disk_string<uint16_t> name;
     disk_array<uint32_t, option> options;
     uint64_t data_len = 0;
+    // The offset of each chunk in the compressed data file. Empty for sstables
+    // that use physical positions (`mu`): their CompressionInfo.db stores only a
+    // sample of the offsets (see sampled_chunk), and their readers don't need
+    // the offsets.
     segmented_offsets offsets;
 
 private:
@@ -303,6 +308,25 @@ private:
     uint32_t chunk_len = 0;
     uint32_t _full_checksum = 0;
     compressor_ptr _compressor;
+    // `mu` only. CompressionInfo.db holds a random sample of the chunk offsets.
+    // The writer keeps each chunk with probability 1 / _sampling_denominator,
+    // independently of the other chunks. When it writes CompressionInfo.db, it
+    // leaves out the chunks near the end of the data (see
+    // sampled_chunk_min_data).
+    struct sampled_chunk {
+        // The offset of the chunk in the compressed data file.
+        uint64_t offset;
+        // The position of the chunk in the uncompressed data.
+        uint64_t uncompressed_start;
+    };
+    // The sampled chunks, in increasing order. Filled during a write, and
+    // freed when CompressionInfo.db is written.
+    std::vector<sampled_chunk> _sampled_chunks;
+    uint32_t _sampling_denominator = 0;
+    // Where the sample starts inside CompressionInfo.db, and how many offsets
+    // it has. They let a reader fetch the sample from the file.
+    uint64_t _offsets_start_pos = 0;
+    uint32_t _sample_size = 0;
 public:
     // Set the compressor algorithm, please check the definition of enum compressor.
     void set_compressor(compressor_ptr c);
@@ -360,6 +384,50 @@ public:
 
     void set_full_checksum(uint32_t checksum) {
         _full_checksum = checksum;
+    }
+
+    // The number of chunks in the compressed data file. Every chunk except the
+    // last holds uncompressed_chunk_length() bytes of uncompressed data.
+    uint64_t chunk_count() const noexcept {
+        return chunk_len ? div_ceil(data_len, chunk_len) : 0;
+    }
+
+    // `mu` only. Adds a chunk to the sample. Chunks must be added in
+    // increasing order.
+    void add_sampled_chunk(uint64_t offset, uint64_t uncompressed_start) {
+        _sampled_chunks.push_back({offset, uncompressed_start});
+    }
+
+    // `mu` only. Returns the offsets of the sampled chunks, and frees the
+    // sample. Leaves out the chunks that start less than
+    // max(sampled_chunk_min_data, uncompressed_chunk_length()) bytes before
+    // the end of the uncompressed data. Call it after all the data is written.
+    std::vector<uint64_t> take_sampled_offsets();
+
+    // `mu` only. The writer keeps a chunk in the sample with probability
+    // 1 / sampling_denominator().
+    uint32_t sampling_denominator() const noexcept {
+        return _sampling_denominator;
+    }
+
+    void set_sampling_denominator(uint32_t d) noexcept {
+        _sampling_denominator = d;
+    }
+
+    // `mu` only. The position of the sample in CompressionInfo.db.
+    uint64_t offsets_start_pos() const noexcept {
+        return _offsets_start_pos;
+    }
+
+    // `mu` only. The number of offsets in the sample.
+    uint32_t sample_size() const noexcept {
+        return _sample_size;
+    }
+
+    // `mu` only. Records where the sample is in CompressionInfo.db.
+    void set_sample_location(uint64_t start_pos, uint32_t size) noexcept {
+        _offsets_start_pos = start_pos;
+        _sample_size = size;
     }
 
     friend class sstable;
@@ -430,11 +498,27 @@ input_stream<char> make_compressed_raw_file_input_stream(sstables::stream_creato
 // pre-compression (uncompressed) size.
 using compressed_chunk_observer = std::function<void(uint64_t post_compression_pos, uint64_t pre_compression_pos, uint64_t size, uint64_t uncompressed_size)>;
 
+// The probability that the writer of a `mu` sstable keeps a chunk offset in the
+// sample of CompressionInfo.db is 1 / default_offset_sampling_denominator.
+constexpr uint32_t default_offset_sampling_denominator = 64;
+
+// The writer of a `mu` sstable keeps a chunk in the sample of CompressionInfo.db
+// only if at least max(sampled_chunk_min_data, chunk length) bytes of
+// uncompressed data start at the chunk. Then a sample of up to that many bytes,
+// read from the start of a sampled chunk, doesn't run past the end of the data.
+// This covers the samples that dictionary training reads: 4 KiB, 16 KiB, or one
+// chunk. A reader can't rely on this: the value is a choice of the writer, and
+// isn't stored in the file.
+constexpr uint64_t sampled_chunk_min_data = 16 * 1024;
+
+// `sampling_seed` seeds the choice of the sampled chunk offsets of a `mu`
+// sstable (see compression::add_sampled_chunk()).
 output_stream<char> make_compressed_file_m_format_output_stream(output_stream<char> out,
                 sstables::compression* cm,
                 sstable_version_types version,
                 const compression_parameters& cp,
                 compressor_ptr,
+                uint64_t sampling_seed,
                 compressed_chunk_observer observer = {});
 
 
