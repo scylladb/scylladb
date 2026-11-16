@@ -21,13 +21,14 @@ round.
 """
 
 import logging
+import struct
 import time
 
 import pytest
 from cassandra import ConsistencyLevel
+from cassandra.murmur3 import murmur3
 from cassandra.query import SimpleStatement
 
-from test.cluster.lwt.lwt_common import get_token_for_pk
 from test.cluster.util import new_test_keyspace
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.tablets import get_tablet_replicas
@@ -98,6 +99,13 @@ def read(ks: str, pk: int, cl: ConsistencyLevel) -> SimpleStatement:
     return SimpleStatement(f"SELECT c FROM {ks}.t WHERE pk = {pk}", consistency_level=cl)
 
 
+def token_of(pk: int) -> int:
+    """The token of an int key, computed here: a read of the key before the TRUNCATE is
+    not safe, since it also asks n3, whose answer lacks the row, and the background read
+    repair that follows writes the row back on the replicas concurrently with the TRUNCATE."""
+    return murmur3(struct.pack(">i", pk))
+
+
 @pytest.mark.parametrize("tablets", [True, False], ids=["tablets", "vnodes"])
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
 async def test_truncated_value_returns_through_a_new_replica(manager: ScyllaClusterManager, scale_timeout, tablets: bool):
@@ -138,7 +146,7 @@ async def test_truncated_value_returns_through_a_new_replica(manager: ScyllaClus
         # Each insert returns on a quorum of learns; n3's may still be in flight.
         await manager.api.wait_for_injection_enter(n3.ip_addr, "paxos_error_before_learn", threshold=len(keys))
         await manager.api.disable_injection(n3.ip_addr, "paxos_error_before_learn")
-        token = await get_token_for_pk(cql, ks, "t", keys[0])
+        token = token_of(keys[0])
 
         logger.info("TRUNCATE, then add n4")
         await cql.run_async(f"TRUNCATE {ks}.t")
@@ -161,7 +169,7 @@ async def test_truncated_value_returns_through_a_new_replica(manager: ScyllaClus
                 pytest.fail("scenario not reached: no key is replicated on exactly n1, n2 and n4")
             logger.info("Key %d is replicated on n1, n2 and n4", pk)
 
-        assert not await cql.run_async(read(ks, pk, ConsistencyLevel.QUORUM), host=h1), (
+        assert not await cql.run_async(read(ks, pk, ConsistencyLevel.ALL), host=h1), (
             "scenario not reached: the row is there before any paxos round")
         # The SERIAL read repairs what the answering replicas lack; the data it
         # returns was prefetched before that, so read again afterwards, and
@@ -221,7 +229,7 @@ async def test_truncated_value_returns_through_an_ignorant_quorum(manager: Scyll
         await manager.api.wait_for_injection_enter(n3.ip_addr, "paxos_error_before_learn", threshold=len(keys))
         await manager.api.disable_injection(n3.ip_addr, "paxos_error_after_save_proposal")
         await manager.api.disable_injection(n3.ip_addr, "paxos_error_before_learn")
-        token = await get_token_for_pk(cql, ks, "t", keys[0])
+        token = token_of(keys[0])
 
         logger.info("TRUNCATE, then add n4")
         await cql.run_async(f"TRUNCATE {ks}.t")
@@ -246,7 +254,7 @@ async def test_truncated_value_returns_through_an_ignorant_quorum(manager: Scyll
             [third] = [s for s in (n1, n2) if s.ip_addr in replicas]
             logger.info("Key %d is replicated on n3, n4 and %s", pk, third.ip_addr)
 
-        assert not await cql.run_async(read(ks, pk, ConsistencyLevel.QUORUM), host=h4), (
+        assert not await cql.run_async(read(ks, pk, ConsistencyLevel.ALL), host=h4), (
             "scenario not reached: the row is there before any paxos round")
         await manager.server_stop_gracefully(third.server_id)
         rows = await cql.run_async(read(ks, pk, ConsistencyLevel.SERIAL), host=h4)
