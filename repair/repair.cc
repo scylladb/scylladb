@@ -973,7 +973,9 @@ future<> repair_service::do_repair_range(shard_repair_state& rstate, const dht::
     }
     rlogger.debug("repair[{}]: Repair {} out of {} ranges, keyspace={}, table={}, range={}, peers={}, live_peers={}",
         rstate.global_repair_id.uuid(), rstate.ranges_index, rstate.ranges_size(), rstate.get_keyspace(), table.name, range, neighbors, live_neighbors);
+    auto sync_schema_start = std::chrono::steady_clock::now();
     co_await _mm.sync_schema(rstate.db.local(), neighbors);
+    SCYLLA_USDT(repair_sync_schema_done, rstate.get_keyspace().c_str(), table.name.c_str(), utils::usdt_us_since(sync_schema_start));
 
     // Row level repair
     if (rstate.dropped_tables.contains(table.name)) {
@@ -1297,10 +1299,12 @@ future<> repair_service::do_repair_ranges(shard_repair_state& rstate, gc_clock::
             co_await coroutine::maybe_yield();
 
             rstate._topology_guard.check();
+            auto wait_start = std::chrono::steady_clock::now();
             // Get the system range parallelism
             auto permit = co_await seastar::get_units(get_repair_module().range_parallelism_semaphore(), 1);
             // Get the range parallelism specified by user
             auto user_permit = rstate._user_ranges_parallelism ? co_await seastar::get_units(*rstate._user_ranges_parallelism, 1) : semaphore_units<>();
+            SCYLLA_USDT(repair_range_wait_done, rstate.get_keyspace().c_str(), table_info.name.c_str(), utils::usdt_us_since(wait_start));
             co_await repair_range(rstate, range, table_info, flush_time);
             if (2 * (rstate._ranges_complete + 1) > rstate.ranges_size()) {
                 // The test that arms this injection releases it only after a
@@ -2634,6 +2638,9 @@ future<gc_clock::time_point> repair_service::repair_tablet(gms::gossip_address_m
     auto start = std::chrono::steady_clock::now();
     bool sched_by_scheduler = true;
     tablet_repair_sched_info sched_info{sched_by_scheduler, stage == locator::tablet_transition_stage::rebuild_repair, incremental_mode};
+    // mode: 0 full, 1 incremental, 2 rebuild repair
+    const unsigned usdt_mode = sched_info.for_tablet_rebuild ? 2 : (incremental_mode != locator::tablet_repair_incremental_mode::disabled ? 1 : 0);
+    SCYLLA_USDT(tablet_repair_start, keyspace_name.c_str(), table_name.c_str(), tablet_id.value(), nodes.size(), usdt_mode);
     task_metas.push_back(tablet_repair_task_meta{keyspace_name, table_name, table_id, *master_shard_id, range, repair_neighbors(nodes, shards), replicas});
 
     gc_clock::time_point flush_time = gc_clock::time_point();
@@ -2653,9 +2660,14 @@ future<gc_clock::time_point> repair_service::repair_tablet(gms::gossip_address_m
         flush_time = res.flush_time;
         should_flush_and_flush_failed = res.should_flush_and_flush_failed;
     });
-    co_await task->done();
+    auto done = co_await coroutine::as_future(task->done());
+    if (done.failed()) {
+        SCYLLA_USDT(tablet_repair_failed, keyspace_name.c_str(), table_name.c_str(), tablet_id.value(), utils::usdt_us_since(start));
+        co_await coroutine::return_exception_ptr(done.get_exception());
+    }
 
     if (should_flush_and_flush_failed) {
+        SCYLLA_USDT(tablet_repair_failed, keyspace_name.c_str(), table_name.c_str(), tablet_id.value(), utils::usdt_us_since(start));
         throw std::runtime_error(fmt::format("Flush is needed for repair {} with parent {}, but failed", task->id(), task->get_parent_id()));
     }
 
@@ -2667,6 +2679,7 @@ future<gc_clock::time_point> repair_service::repair_tablet(gms::gossip_address_m
     auto duration = std::chrono::duration<float>(std::chrono::steady_clock::now()- start);
     rlogger.info("repair[{}]: Finished tablet repair for table={}.{} range={} duration={} replicas={} global_tablet_id={} flush_time={}",
             id.uuid(), keyspace_name, table_name, range, duration, replicas, gid, flush_time);
+    SCYLLA_USDT(tablet_repair_done, keyspace_name.c_str(), table_name.c_str(), tablet_id.value(), utils::usdt_us_since(start));
     co_return flush_time;
 }
 
@@ -2778,9 +2791,12 @@ future<repair_service::tablet_repair_result> repair_service::run_tablet_repair(
                     co_await seastar::sleep(std::chrono::milliseconds(*delay));
                 }
                 switch (flush.mode) {
-                case service::tablet_repair_flush_mode::flush:
+                case service::tablet_repair_flush_mode::flush: {
+                    auto flush_start = std::chrono::steady_clock::now();
                     std::tie(needs_flush_before_repair, hints_batchlog_flushed, flush_time) = co_await rs.flush_hints(id, m.keyspace_name, tables, ignore_nodes, rs.get_repair_module().abort_source());
+                    SCYLLA_USDT(repair_flush_hints_done, m.keyspace_name.c_str(), utils::usdt_us_since(flush_start), needs_flush_before_repair, hints_batchlog_flushed);
                     break;
+                }
                 case service::tablet_repair_flush_mode::skip:
                     break;
                 case service::tablet_repair_flush_mode::flushed:
