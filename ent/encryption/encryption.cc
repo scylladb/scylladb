@@ -294,6 +294,7 @@ class encryption_context_impl : public encryption_context {
     bool _allow_per_table_encryption;
     // also per-shard
     std::vector<sm::metric_groups> _metrics;
+    seastar::scheduling_group _cache_maintainance_group;
 
 public:
     encryption_context_impl(std::unique_ptr<encryption_config> cfg, const service_set& services)
@@ -312,6 +313,10 @@ public:
         , _allow_per_table_encryption(_cfg->allow_per_table_encryption())
         , _metrics(this_smp_shard_count())
     {}
+
+    seastar::scheduling_group cache_maintainance_group() const override {
+        return _cache_maintainance_group;
+    }
 
     template<typename T>
     static sharded<T>* find_or_null(const service_set& services) {
@@ -461,7 +466,9 @@ public:
     sharded<service::migration_manager>& get_migration_manager() const override {
         return check_service_object(_mm);
     }
-
+    future<> init() {
+        _cache_maintainance_group = co_await create_scheduling_group("key_cache", "timer", 200);
+    }
     future<> start() override {
         co_await smp::invoke_on_all([this] {
             register_key_cache_metrics(_metrics[this_shard_id()]);
@@ -471,7 +478,7 @@ public:
         }
     }
     future<> stop() override {
-        return smp::invoke_on_all([this]() -> future<> {
+        co_await smp::invoke_on_all([this]() -> future<> {
             for (auto&& [id, h] : _per_thread_kmip_host_cache[this_shard_id()]) {
                 try {
                     co_await h->disconnect();
@@ -502,19 +509,20 @@ public:
 
             _metrics[this_shard_id()].clear();
 
-            // only relevant for testing, but...
-            // If we are re-starting, say, cql-test-env, the thread_local statics that are the system schemas will
-            // retain any extension we place into them when test ends. If we then run a second test after, these
-            // stale extension will be alive and potentially mess a whole lot with us.
-            // This is perhaps an additional argument to refactor away the extension usage...
-            co_await smp::invoke_on_all([] {
+            {
+                // only relevant for testing, but...
+                // If we are re-starting, say, cql-test-env, the thread_local statics that are the system schemas will
+                // retain any extension we place into them when test ends. If we then run a second test after, these
+                // stale extension will be alive and potentially mess a whole lot with us.
+                // This is perhaps an additional argument to refactor away the extension usage...
                 db::extensions exts;
                 for (auto& s : { db::system_keyspace::paxos(), db::system_keyspace::batchlog(), db::system_keyspace::dicts(), db::system_keyspace::raft() }) {
                     exts.add_extension_to_schema(s, encryption_attribute, {});
                 }
-            });
-
+            }
         });
+
+        co_await seastar::destroy_scheduling_group(_cache_maintainance_group);
     }
 
     void add_global_user_encryption(shared_ptr<encryption_schema_extension> ext) {
@@ -1081,6 +1089,9 @@ public:
 future<seastar::shared_ptr<encryption_context>> register_extensions(const db::config&, std::unique_ptr<encryption_config> cfg_in, db::extensions& exts, const ::service_set& services) {
     auto& cfg = *cfg_in;
     auto ctxt = ::make_shared<encryption_context_impl>(std::move(cfg_in), services);
+
+    co_await ctxt->init();
+
     // Note: extensions are immutable and shared across shards.
     // Object in them must be stateless. We anchor the context in the
     // extension objects, and while it is not as such 100% stateless,
