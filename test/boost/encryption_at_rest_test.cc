@@ -2139,6 +2139,72 @@ SEASTAR_FIXTURE_TEST_CASE(test_azure_host, fake_azure, *check_azure_mock_test_de
     auto host = info.host;
     auto port = info.port;
 
+    class fake_encryption_context : public encryption::encryption_context {
+    public:
+        [[noreturn]]
+        void not_implemented() const {
+            throw std::runtime_error("Not implemented");
+        }
+        shared_ptr<key_provider> get_provider(const encryption::options&) override {
+            not_implemented();
+        }
+        shared_ptr<system_key> get_system_key(const sstring&) override {
+            not_implemented();
+        }
+        shared_ptr<kmip_host> get_kmip_host(const sstring&) override {
+            not_implemented();
+        }
+        shared_ptr<kms_host> get_kms_host(const sstring&) override {
+            not_implemented();
+        }
+        shared_ptr<gcp_host> get_gcp_host(const sstring&) override {
+            not_implemented();
+        }
+        shared_ptr<azure_host> get_azure_host(const sstring&) override {
+            not_implemented();
+        }
+
+        shared_ptr<key_provider> get_cached_provider(const sstring& id) const override {
+            not_implemented();
+        }
+        void cache_provider(const sstring& id, shared_ptr<key_provider>) override {
+            not_implemented();
+        }
+
+        const encryption_config& config() const override {
+            not_implemented();
+        }
+        shared_ptr<symmetric_key> get_config_encryption_key() const override {
+            not_implemented();
+        }
+
+        sharded<cql3::query_processor>& get_query_processor() const override {
+            not_implemented();
+        }
+        sharded<service::storage_service>& get_storage_service() const override {
+            not_implemented();
+        }
+        sharded<replica::database>& get_database() const override {
+            not_implemented();
+        }
+        sharded<service::migration_manager>& get_migration_manager() const override {
+            not_implemented();
+        }
+
+        seastar::scheduling_group cache_maintainance_group() const override {
+            return seastar::default_scheduling_group();
+        }
+
+        future<> start() override {
+            not_implemented();
+        }
+        future<> stop() override {
+            not_implemented();
+        }
+    };
+
+    fake_encryption_context ctxt;
+
     key_info kinfo { .alg = "AES/CBC/PKCS5Padding", .len = 128};
     azure_host::host_options options {
         .imds_endpoint = fmt::format("http://{}:{}", host, port),
@@ -2147,20 +2213,20 @@ SEASTAR_FIXTURE_TEST_CASE(test_azure_host, fake_azure, *check_azure_mock_test_de
 
     {
         testlog.info("Testing Key Vault success path");
-        azure_host azhost {"azure_test", options};
+        azure_host azhost {ctxt, "azure_test", options};
         co_await azhost.get_or_create_key(kinfo, nullptr);
     }
 
     {
         testlog.info("Testing Key Vault transient errors");
-        azure_host azhost {"azure_test", options};
+        azure_host azhost {ctxt, "azure_test", options};
         co_await configure_azure_mock_server(host, port, "vault", "Throttled", 1);
         co_await azhost.get_or_create_key(kinfo, nullptr);
     }
 
     {
         testlog.info("Testing Key Vault non-transient errors");
-        azure_host azhost {"azure_test", options};
+        azure_host azhost {ctxt, "azure_test", options};
         co_await configure_azure_mock_server(host, port, "vault", "Forbidden", 1);
         BOOST_REQUIRE_THROW(
             co_await azhost.get_or_create_key(kinfo, nullptr),
