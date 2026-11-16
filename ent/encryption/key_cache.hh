@@ -72,5 +72,6 @@ cache_expiry adjust_expiry(std::chrono::milliseconds exp, std::chrono::milliseco
 
 utils::loading_cache_config make_key_cache_config(std::chrono::milliseconds exp, std::chrono::milliseconds ref);
 
+int adjust_service_call_retries(const encryption_context&, int max_retries);
 
 }

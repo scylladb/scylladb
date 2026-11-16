@@ -102,3 +102,9 @@ utils::loading_cache_config encryption::make_key_cache_config(std::chrono::milli
     };
 }
 
+int encryption::adjust_service_call_retries(const encryption_context& ctxt, int max_retries) {
+    if (seastar::current_scheduling_group() == ctxt.cache_maintainance_group()) {
+        return 1;
+    }
+    return max_retries;
+}

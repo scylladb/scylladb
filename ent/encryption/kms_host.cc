@@ -343,7 +343,7 @@ struct encryption::kms_host::impl::aws_query {
 };
 
 future<rjson::value> encryption::kms_host::impl::post(std::string_view target, std::string_view aws_assume_role_arn, const rjson::value& query) {
-    static constexpr auto max_retries = 10;
+    auto max_retries = adjust_service_call_retries(_ctxt, 10);
 
     exponential_backoff_retry exr(10ms, 10000ms);
 
