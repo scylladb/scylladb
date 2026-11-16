@@ -359,7 +359,11 @@ future<rjson::value> azure_host::impl::send_request_with_retry(const sstring& ho
                     status == http::reply::status_type::gateway_timeout;
 
             if (!should_retry) {
-                std::throw_with_nested(service_error(fmt::format("{}/{}", host, path)));
+                auto msg = fmt::format("{}/{}", host, path);
+                if (http::reply::classify_status(e.status()) == http::reply::status_class::client_error) {
+                    std::throw_with_nested(missing_resource_error(msg));
+                }
+                std::throw_with_nested(service_error(msg));
             }
 
             backoff = DELTA_BACKOFF * (1 << retries);
