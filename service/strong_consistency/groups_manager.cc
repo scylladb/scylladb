@@ -1346,17 +1346,11 @@ void groups_manager::update(token_metadata_ptr new_tm) {
             if (const auto host = utils::get_local_injector().inject_parameter<std::string_view>("sc_preferred_leader_override")) {
                 priority_members = {raft::server_id(utils::UUID(*host))};
             }
-            const auto old_priority_members = std::exchange(state.priority_members, std::move(priority_members));
+            set_priority_members(state, id, std::move(priority_members));
             // Start the server, unless it is started or starting already and not being
-            // deleted. A new server gets the list on its start; a started or starting one
-            // gets it after the control operation in flight, if any.
+            // deleted. A new server gets the list on its start.
             if (!state.gate || state.gate->is_closed()) {
                 schedule_raft_group_start(tablet, id, state, new_tm, get_table_metrics(*table->schema()));
-            } else if (old_priority_members != state.priority_members) {
-                chain_control_op(state, id, [&state] {
-                    state.server->set_priority_members(state.effective_priority_members());
-                    return make_ready_future<>();
-                });
             }
         }
     }
@@ -1414,6 +1408,19 @@ future<raft_server> groups_manager::acquire_server(table_id table_id, raft::grou
     return state.server_control_op.get_future(as).then([&state, h = std::move(*h)] mutable {
         return raft_server(state, std::move(h));
     });
+}
+
+void groups_manager::set_priority_members(raft_group_state& state, raft::group_id gid, std::vector<raft::server_id> members) {
+    if (members == state.priority_members) {
+        return;
+    }
+    state.priority_members = std::move(members);
+    if (state.gate && !state.gate->is_closed()) {
+        chain_control_op(state, gid, [&state] {
+            state.server->set_priority_members(state.effective_priority_members());
+            return make_ready_future<>();
+        });
+    }
 }
 
 void groups_manager::start() {

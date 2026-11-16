@@ -285,6 +285,10 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     // group for a while once this replica has gained its leadership too often.
     static void maybe_reset_priority_members(raft_group_state& state, raft::group_id gid);
 
+    // Replaces the priority members of the group's raft server. A started or starting server
+    // gets them after the control operation in flight, if any.
+    static void set_priority_members(raft_group_state& state, raft::group_id gid, std::vector<raft::server_id> members);
+
     void init_messaging_service();
 
     // Unregisters the RPC handlers, waiting for those that are running. Has to complete
