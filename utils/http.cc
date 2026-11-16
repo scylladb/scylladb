@@ -10,7 +10,82 @@
 #include "rest/client.hh"
 
 #include <boost/regex.hpp>
+#include <seastar/core/file.hh>
+#include <seastar/core/fstream.hh>
 #include <seastar/coroutine/all.hh>
+
+static constexpr std::string_view pem_begin_marker = "-----BEGIN CERTIFICATE-----";
+static constexpr std::string_view pem_end_marker = "-----END CERTIFICATE-----";
+// A certificate in a CA bundle is a few KB. Anything longer without an end
+// marker is not a certificate, and must not grow a buffer to the file's size.
+static constexpr size_t max_pem_certificate_size = 64 * 1024;
+
+// Text outside the certificates is skipped, as gnutls and p11-kit skip it:
+// comments, or what openssl x509 -text prints before a certificate. But a
+// PEM marker there, whole or not, is a certificate cut short.
+static bool has_pem_marker(std::string_view text) {
+    return text.find("-----") != std::string_view::npos;
+}
+
+// A truncated, empty or corrupt bundle is never taken for the host's trust.
+// The bundle is a few hundred KB. Reading it whole would be an oversized
+// allocation on the shard (seastar warns above 128 KiB, and SCT turns that
+// warning into a test error), so it is read and checked one certificate at a
+// time.
+future<std::vector<sstring>> utils::http::internal::read_ca_bundle(const char* path) {
+    auto f = co_await open_file_dma(path, open_flags::ro);
+    auto in = make_file_input_stream(std::move(f), file_input_stream_options{.buffer_size = 32 * 1024});
+    std::vector<sstring> certificates;
+    std::exception_ptr ex;
+    try {
+        // Only to have gnutls reject a malformed certificate here, before the
+        // caller has taken any of the bundle.
+        tls::certificate_credentials check;
+        std::string pending;
+        for (auto buf = co_await in.read(); !buf.empty(); buf = co_await in.read()) {
+            // Checked before the append, so that not even the append allocates
+            // more than the bound.
+            if (pending.size() + buf.size() > max_pem_certificate_size) {
+                throw std::runtime_error(fmt::format("no certificate end within {} bytes", max_pem_certificate_size));
+            }
+            pending.append(buf.get(), buf.size());
+            for (auto pos = pending.find(pem_end_marker); pos != std::string::npos; pos = pending.find(pem_end_marker)) {
+                auto begin = pending.find(pem_begin_marker);
+                if (begin > pos) {
+                    throw std::runtime_error("certificate end without a beginning");
+                }
+                // gnutls would skip anything before the BEGIN line, a
+                // certificate cut short among them.
+                if (has_pem_marker(std::string_view(pending).substr(0, begin))) {
+                    throw std::runtime_error("a broken PEM marker before a certificate");
+                }
+                auto end = pos + pem_end_marker.size();
+                check.set_x509_trust(tls::blob(pending.data(), end), tls::x509_crt_format::PEM);
+                certificates.emplace_back(pending.data(), end);
+                pending.erase(0, end);
+            }
+        }
+        // A marker after the last certificate is a certificate cut short, even
+        // inside its BEGIN line, and so is a last line of fewer dashes than a
+        // marker has.
+        auto tail = std::string_view(pending);
+        tail = tail.substr(0, tail.find_last_not_of(" \t\r\n") + 1);
+        auto last_line = tail.substr(tail.find_last_of('\n') + 1);
+        if (has_pem_marker(tail) || last_line.starts_with('-')) {
+            throw std::runtime_error("the file ends inside a certificate");
+        }
+        if (certificates.empty()) {
+            throw std::runtime_error("no certificates");
+        }
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    co_await in.close();
+    if (ex) {
+        std::rethrow_exception(std::move(ex));
+    }
+    co_return certificates;
+}
 
 future<> utils::http::add_system_trust(tls::credentials_builder& builder) {
     co_await builder.set_system_trust();

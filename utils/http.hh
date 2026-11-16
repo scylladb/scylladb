@@ -24,6 +24,16 @@ future<> add_system_trust(tls::credentials_builder& builder);
 
 future<shared_ptr<tls::certificate_credentials>> system_trust_credentials();
 
+namespace internal {
+
+// Reads a PEM CA bundle into one blob per certificate. It throws unless the
+// file holds at least one certificate, gnutls accepts every one, and no PEM
+// marker stands outside them, as a certificate cut short leaves. Text
+// between the certificates is skipped. Exposed for tests.
+future<std::vector<sstring>> read_ca_bundle(const char* path);
+
+}
+
 class dns_connection_factory : public seastar::http::connection_factory {
 protected:
     std::string _host;
