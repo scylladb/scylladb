@@ -97,12 +97,6 @@ class raft_groups_storage : public raft::persistence {
     // that cell alone when nothing changed.
     std::vector<truncation_record> _persisted_truncations;
 
-    // The future of the currently executing (or already finished) write operation.
-    //
-    // Used to linearize write operations to system.raft_groups table.
-    // This is managed by `execute_with_linearization_point` helper function.
-    future<> _pending_op_fut;
-
 public:
     explicit raft_groups_storage(cql3::query_processor& qp, replica::database& db, raft::group_id gid,
         raft::server_id server_id, shard_id shard, db::commitlog& commit_log, table_id target_table_id,
@@ -211,8 +205,6 @@ private:
     // Write the released record's descriptor and the group's truncation history into
     // the raft_groups memtable, pruning truncations whose segment is already gone.
     void write_descriptor_and_purge_stale_truncations(segment_record& record);
-
-    future<> execute_with_linearization_point(std::function<future<>()> f);
 };
 
 } // namespace service::strong_consistency
