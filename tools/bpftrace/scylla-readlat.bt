@@ -1,0 +1,38 @@
+#!/usr/bin/env bpftrace
+/*
+ * scylla-readlat: live per-table read latency histograms from the
+ * scylla:query_done USDT probe. No restart, no config change; zero
+ * cost when not attached.
+ *
+ * Usage (as root):
+ *     bpftrace tools/bpftrace/scylla-readlat.bt -p $(pgrep -x scylla | head -1)
+ *
+ * Probe arguments (see database::query in replica/database.cc):
+ *     arg0: keyspace name (const char*)
+ *     arg1: table name (const char*)
+ *     arg2: duration in microseconds
+ *     arg3: result buffer size in bytes
+ *     arg4: short read flag
+ */
+
+BEGIN
+{
+    printf("Tracing scylla data queries... hit ^C to print histograms\n");
+}
+
+usdt:*:scylla:query_done
+{
+    @us[str(arg0), str(arg1)] = hist(arg2);
+    @bytes[str(arg0), str(arg1)] = sum(arg3);
+    @queries[str(arg0), str(arg1)] = count();
+}
+
+usdt:*:scylla:query_failed
+{
+    @failed[str(arg0), str(arg1)] = count();
+}
+
+interval:s:10
+{
+    print(@queries);
+}
