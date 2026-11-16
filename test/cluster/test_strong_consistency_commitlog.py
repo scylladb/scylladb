@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 
-from test.cluster.util import new_test_keyspace, reconnect_driver
+from test.cluster.util import commitlog_segments, get_commitlog_segment_id, new_test_keyspace, reconnect_driver
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
 from test.pylib.tablets import get_tablet_replica
@@ -765,3 +765,204 @@ async def test_crash_after_recycling_a_segment(manager: ScyllaClusterManager):
         for pk in (0, rows // 2, rows - 1):
             got = await cql.run_async(f"SELECT c FROM {ks}.test WHERE pk = {pk}")
             assert len(got) == 1 and got[0].c == pk * 10, f"pk={pk} did not survive the crash"
+
+
+# Raft entries that together span several 1 MB segments: each a command just under the
+# 100 KB raft command limit, so that a segment holds about five of them.  A burst of
+# concurrent writes sometimes makes the leader hand the persistence one append larger
+# than a commitlog entry may be (half a segment), which store_log_entries() writes as
+# several batches; whether it does depends on timing, and the raft_commitlog trace says.
+# A single entry never spans segments: the boot check makes a commitlog entry large
+# enough for one command, and the commitlog never fragments a raft batch.
+SPANNING_PAYLOAD = 80 * 1024
+SPANNING_WRITES = 24
+SPANNING_CONFIG = {
+    'commitlog_segment_size_in_mb': 1,
+}
+# One shard, so that every segment in the commitlog directory is the group's shard's.
+SPANNING_CMDLINE = [
+    '--smp', '1',
+    '--logger-log-level', 'raft_commitlog=trace',
+    '--logger-log-level', 'raft_groups_storage=debug',
+]
+SC_UNAPPLIED_ENTRIES = 'scylla_strong_consistency_raft_unapplied_entries'
+
+
+def segment_ids(workdir: str) -> set[int]:
+    return {get_commitlog_segment_id(path) for path in commitlog_segments(workdir)}
+
+
+async def spanning_burst_segments(log, mark: int) -> set[int]:
+    """The segments the burst's raft batches were written to, from the raft_commitlog trace.
+
+    Read from the log rather than from the directory: a segment of the burst may be
+    gone again before the test lists the directory, and a new segment may hold
+    nothing of it.  Only batches of at least one burst entry count; the group's
+    other entries are a few hundred bytes.
+    """
+    lines = await log.grep(r"wrote raft batch: .*, size=(\d+), rp=\{\d+, (\d+), \d+\}", from_mark=mark)
+    return {int(match.group(2)) for _, match in lines if int(match.group(1)) >= SPANNING_PAYLOAD}
+
+
+def write_spanning_burst(cql, ks: str) -> list[asyncio.Future]:
+    """Start SPANNING_WRITES concurrent writes of SPANNING_PAYLOAD bytes each; pk i gets c = i."""
+    insert = cql.prepare(f"INSERT INTO {ks}.test (pk, c, padding) VALUES (?, ?, ?)")
+    padding = b'x' * SPANNING_PAYLOAD
+    return [cql.run_async(insert, (pk, pk, padding)) for pk in range(SPANNING_WRITES)]
+
+
+async def assert_spanning_rows(cql, ks: str) -> None:
+    # One partition at a time: a strongly consistent query cannot span them.
+    for pk in range(SPANNING_WRITES):
+        got = await cql.run_async(f"SELECT c FROM {ks}.test WHERE pk = {pk}")
+        assert [r.c for r in got] == [pk], f"pk={pk}: {[r.c for r in got]}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
+async def test_unapplied_entries_spanning_segments_survive_a_graceful_stop(manager: ScyllaClusterManager):
+    """
+    Committed raft entries that were never applied keep every segment they span
+    through a graceful stop, and come back on the restart.
+
+    The group's records hold a reference to each segment until the entries in it
+    are applied. A graceful stop flushes every memtable and lets the commitlog
+    delete each segment no reference holds; the group's records then let go of
+    their segments without releasing them (raft_commitlog's destructor detaches
+    the references), so the segments stay on disk for the replay. The crash tests
+    above never take this path: a crash deletes nothing.
+
+    The entries span several segments, so that a reference which held only the
+    first or only the last of them would lose the rest. With a single replica the
+    restarted node has nothing but its own commitlog to recover them from.
+
+    What SCYLLADB-3748 asked for, without the oversized entry that the commitlog
+    would write in fragments: no raft entry is ever fragmented.
+    """
+    config = SPANNING_CONFIG | {
+        # No flush of its own: only the test's flush below decides what is deleted.
+        'commitlog_total_space_in_mb': 10000,
+    }
+    cmdline = SPANNING_CMDLINE + [
+        # The aborted apply stops the group's applier fiber, which a strongly
+        # consistent group reports through on_internal_error.
+        '--abort-on-internal-error', '0',
+    ]
+    server = await manager.server_add(config=config, cmdline=cmdline)
+    cql, _ = await manager.get_ready_cql([server])
+    workdir = await manager.server_get_workdir(server.server_id)
+    log = await manager.server_open_log(server.server_id)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', "
+                                 "'replication_factor': 1} AND tablets = {'initial': 1} "
+                                 "AND consistency = 'global'") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int, padding blob)")
+        # Start a fresh segment, so that the earlier entries of the group (its
+        # configuration) keep no segment of the burst alive.
+        await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES (-1, -1)")
+        await manager.api.flush_all_keyspaces(server.ip_addr)
+
+        # Hold the applier while the burst is committed, then make it fail before
+        # the first entry reaches a memtable: every entry of the burst is committed
+        # and none is applied.
+        await manager.api.enable_injection(server.ip_addr, "strong_consistency_state_machine_wait_before_apply",
+                                           one_shot=True)
+        await manager.api.enable_injection(server.ip_addr,
+                                           "strong_consistency_state_machine_abort_before_apply_in_memory",
+                                           one_shot=True)
+        mark = await log.mark()
+        writes = write_spanning_burst(cql, ks)
+
+        labels = {'ks': ks, 'cf': 'test'}
+        async def all_committed():
+            unapplied = (await manager.metrics.query(server.ip_addr)).get(SC_UNAPPLIED_ENTRIES, labels) or 0
+            return True if unapplied >= SPANNING_WRITES else None
+        await wait_for(all_committed, time.time() + 60)
+
+        await manager.api.message_injection(server.ip_addr, "strong_consistency_state_machine_wait_before_apply")
+        await log.wait_for(r"applier fiber stopped because of the error: "
+                           r".*strong_consistency_state_machine_abort_before_apply_in_memory",
+                           from_mark=mark, timeout=60)
+
+        burst = await spanning_burst_segments(log, mark)
+        logger.info(f"The burst went to segments {sorted(burst)}")
+        assert len(burst) >= 2, f"the burst did not span segments: {sorted(burst)}"
+        assert burst <= segment_ids(workdir), f"segments of the burst are already gone: {sorted(burst)}"
+        split = await log.grep(r"store_log_entries: .* batches=", from_mark=mark)
+        logger.info(f"{len(split)} appends were written as several batches")
+
+        # Close the active segment and flush every memtable, then stop: the
+        # commitlog deletes every segment no reference holds, at the flush and at
+        # the stop.
+        await manager.api.flush_all_keyspaces(server.ip_addr)
+        await manager.server_stop_gracefully(server.server_id)
+        await asyncio.gather(*writes, return_exceptions=True)
+
+        left = segment_ids(workdir)
+        assert burst <= left, f"segments {sorted(burst - left)} of unapplied entries were deleted at the stop"
+
+        mark = await log.mark()
+        await manager.server_start(server.server_id)
+        await log.wait_for('Log replay complete for user tables', from_mark=mark, timeout=120)
+        cql, _ = await manager.get_ready_cql([server])
+        await assert_spanning_rows(cql, ks)
+
+
+@pytest.mark.asyncio
+async def test_segments_of_applied_entries_spanning_segments_are_reclaimed(manager: ScyllaClusterManager):
+    """
+    Once raft entries that span several segments are applied and their memtable
+    is flushed, the commitlog deletes every one of those segments.
+
+    The happy-path counterpart of the test above: references that keep a segment
+    past the apply leak it, and a node under a steady stream of large writes runs
+    out of commitlog space. The boost test
+    test_segment_of_applied_entries_is_reclaimed checks the same for entries in a
+    single segment.
+
+    A group lets go of a segment in a flush round that names it, and the segment
+    goes once the descriptor the release writes is flushed too. A one-second data
+    lifetime and a 100 ms commitlog timer run such a round for every segment older
+    than a second.
+
+    Refs SCYLLADB-3748.
+    """
+    config = SPANNING_CONFIG | {
+        'commitlog_max_data_lifetime_in_seconds': 1,
+        'commitlog_sync_period_in_ms': 100,
+    }
+    server = await manager.server_add(config=config, cmdline=SPANNING_CMDLINE)
+    cql, _ = await manager.get_ready_cql([server])
+    workdir = await manager.server_get_workdir(server.server_id)
+    log = await manager.server_open_log(server.server_id)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', "
+                                 "'replication_factor': 1} AND tablets = {'initial': 1} "
+                                 "AND consistency = 'global'") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int, padding blob)")
+        await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES (-1, -1)")
+        await manager.api.flush_all_keyspaces(server.ip_addr)
+
+        mark = await log.mark()
+        await asyncio.gather(*write_spanning_burst(cql, ks))
+        # A strongly consistent read runs a read barrier, which waits until every
+        # committed entry is applied; an unapplied one would hold its segment.
+        await cql.run_async(f"SELECT c FROM {ks}.test WHERE pk = 0")
+
+        # Some of the burst's segments may be gone already: the one-second
+        # lifetime runs flush rounds while the burst is still being written.
+        burst = await spanning_burst_segments(log, mark)
+        logger.info(f"The burst went to segments {sorted(burst)}")
+        assert len(burst) >= 2, f"the burst did not span segments: {sorted(burst)}"
+
+        await manager.api.flush_all_keyspaces(server.ip_addr)
+        async def burst_reclaimed():
+            held = burst & segment_ids(workdir)
+            if held:
+                logger.info(f"Segments of the burst still on disk: {sorted(held)}")
+                return None
+            return True
+        await wait_for(burst_reclaimed, time.time() + 60, period=1)
+
+        # Reclaiming the segments must not have lost the rows.
+        await assert_spanning_rows(cql, ks)
