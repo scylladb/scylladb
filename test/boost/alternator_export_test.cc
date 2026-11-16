@@ -21,10 +21,12 @@
 #include "service/storage_proxy.hh"
 #include "service/client_state.hh"
 #include "service_permit.hh"
+#include "test/lib/log.hh"
 #include "test/lib/s3_fixture.hh"
 #include "test/lib/test_utils.hh"
 #include "utils/base64.hh"
 #include "utils/error_injection.hh"
+#include "utils/exceptions.hh"
 #include "utils/hashers.hh"
 #include "utils/rjson.hh"
 #include "utils/s3/aws_error.hh"
@@ -40,6 +42,7 @@
 #include <seastar/core/temporary_buffer.hh>
 #include <seastar/core/timer.hh>
 #include <seastar/util/defer.hh>
+#include <seastar/util/later.hh>
 #include <seastar/testing/test_fixture.hh>
 
 #include "utils/base64.hh"
@@ -55,6 +58,7 @@
 #include <ranges>
 #include <set>
 #include <span>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -984,6 +988,445 @@ SEASTAR_TEST_CASE(test_s3_close_without_read_all, *boost::unit_test::preconditio
             co_return;
         });
         BOOST_CHECK_EQUAL(received, 0u);
+    });
+}
+
+// Tests of alternator::read_s3_prefix(), which reads every object under a key prefix - what
+// ImportTable's S3KeyPrefix selects.
+
+// Puts `lines`, each ended with a newline, as the object `key` of the test's bucket.
+static future<> put_lines(shared_ptr<s3::client> client, std::string_view key, std::initializer_list<std::string_view> lines) {
+    std::string content;
+    for (auto line : lines) {
+        content += line;
+        content += '\n';
+    }
+    co_await client->put_object(test_s3_object_name(key), temporary_buffer<char>(content.data(), content.size()));
+}
+
+// Puts `items` as the object `key` of the test's bucket, gzip-compressed by the export's sink. With
+// `truncated`, the gzip trailer is left out, so the object holds every item, but is incomplete.
+static future<> put_gzip_items(shared_ptr<s3::client> client, std::string_view key, std::initializer_list<std::string_view> items,
+        bool truncated = false) {
+    auto storage = std::make_shared<alternator::in_memory_test_storage>();
+    auto sink = co_await alternator::create_sink_pipeline(alternator::in_memory_target_config{ storage }, alternator::gzip_compression{});
+    for (auto item : items) {
+        co_await sink->process(rjson::parse(item));
+    }
+    co_await sink->flush_and_close();
+    auto data = storage->data();
+    if (truncated) {
+        constexpr size_t gzip_trailer_size = 8;
+        BOOST_REQUIRE_GT(data.size(), gzip_trailer_size);
+        data = data.subspan(0, data.size() - gzip_trailer_size);
+    }
+    co_await client->put_object(test_s3_object_name(key), temporary_buffer<char>(reinterpret_cast<const char*>(data.data()), data.size()));
+}
+
+struct prefix_read {
+    alternator::s3_prefix_read_result result;
+    std::vector<rjson::value> items;
+};
+
+// Reads `prefix` of the test's bucket with read_s3_prefix() into `read`, which collects the items.
+// `check`, if set, is called for each item before it is collected, and can reject it by throwing.
+static future<> read_prefix(shared_ptr<s3::client> client, sstring prefix, prefix_read& read,
+        std::function<void(const rjson::value&)> check = {}, abort_source* as = nullptr,
+        alternator::compression_type compression = alternator::no_compression{}) {
+    co_await alternator::read_s3_prefix(client, tests::getenv_safe("S3_BUCKET_FOR_TEST"), std::move(prefix),
+            compression, as, [&read, &check](rjson::value item) -> future<> {
+        if (check) {
+            check(item);
+        }
+        read.items.push_back(std::move(item));
+        co_return;
+    }, read.result);
+}
+
+// Every object under the prefix is read, those under a deeper "directory" too, one after another
+// in the order of their keys. Objects outside the prefix are not read, even one whose key starts
+// with the prefix's "directory" name but not with the prefix ("import-other/" for "import/"). The
+// keys are such that the order of keys and the order of a walk of the directories of the test's S3
+// server, which stores an object as a file, are the same.
+SEASTAR_TEST_CASE(test_s3_prefix_reads_every_object_under_it, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
+    co_await with_test_s3_client([](shared_ptr<s3::client> client) -> future<> {
+        co_await put_lines(client, "import/1.json", { R"({"id": 1})", R"({"id": 2})" });
+        co_await put_lines(client, "import/2.json", { R"({"id": 3})" });
+        co_await put_lines(client, "import/sub/3.json", { R"({"id": 4})", R"({"id": 5})" });
+        co_await put_lines(client, "import-other/4.json", { R"({"id": 6})" });
+        co_await put_lines(client, "other/5.json", { R"({"id": 7})" });
+
+        prefix_read read;
+        co_await read_prefix(client, "import/", read);
+
+        BOOST_CHECK_EQUAL(read.result.object_count, 3u);
+        BOOST_CHECK_EQUAL(read.result.error_count, 0u);
+        require_same_items(read.items, parse_items({ R"({"id": 1})", R"({"id": 2})", R"({"id": 3})", R"({"id": 4})", R"({"id": 5})" }));
+    });
+}
+
+// The objects are read across listing requests too: bucket_lister asks for 64 objects at a time.
+SEASTAR_TEST_CASE(test_s3_prefix_reads_more_than_one_listing_page, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
+    co_await with_test_s3_client([](shared_ptr<s3::client> client) -> future<> {
+        // The keys are zero-padded, so that their order is that of the ids.
+        constexpr int objects = 70;
+        std::vector<std::string> lines;
+        for (int i = 0; i < objects; ++i) {
+            lines.push_back(seastar::format(R"({{"id": {}}})", i));
+            co_await put_lines(client, seastar::format("pages/{:03}.json", i), { lines.back() });
+        }
+
+        prefix_read read;
+        co_await read_prefix(client, "pages/", read);
+
+        BOOST_CHECK_EQUAL(read.result.object_count, size_t(objects));
+        BOOST_CHECK_EQUAL(read.result.error_count, 0u);
+        require_same_items(read.items, lines | std::views::transform([] (const std::string& line) { return rjson::parse(line); }) | std::ranges::to<std::vector>());
+    });
+}
+
+// A prefix which matches no object reads as no items, and is not an error - as on DynamoDB, where
+// such an import completes. The bucket is not empty, so that a read of the whole bucket would be
+// noticed.
+SEASTAR_TEST_CASE(test_s3_prefix_matching_no_object_reads_nothing, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
+    co_await with_test_s3_client([](shared_ptr<s3::client> client) -> future<> {
+        co_await put_lines(client, "elsewhere/1.json", { R"({"id": 1})" });
+
+        prefix_read read;
+        co_await read_prefix(client, "nothing-here/", read);
+
+        BOOST_CHECK_EQUAL(read.result.object_count, 0u);
+        BOOST_CHECK_EQUAL(read.result.error_count, 0u);
+        BOOST_CHECK(read.items.empty());
+    });
+}
+
+// An empty prefix - ImportTable without S3KeyPrefix - reads the whole bucket. The bucket is the
+// test's own, so it holds only these objects. The items are compared without their order, which
+// for keys in different "directories" depends on the test's S3 server.
+SEASTAR_TEST_CASE(test_s3_empty_prefix_reads_the_whole_bucket, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
+    co_await with_test_s3_client([](shared_ptr<s3::client> client) -> future<> {
+        co_await put_lines(client, "1.json", { R"({"id": 1})" });
+        co_await put_lines(client, "a/2.json", { R"({"id": 2})" });
+        co_await put_lines(client, "b/c/3.json", { R"({"id": 3})" });
+
+        prefix_read read;
+        co_await read_prefix(client, "", read);
+
+        BOOST_CHECK_EQUAL(read.result.object_count, 3u);
+        BOOST_CHECK_EQUAL(read.result.error_count, 0u);
+        auto ids = read.items | std::views::transform([] (const rjson::value& item) { return rjson::print(item); }) | std::ranges::to<std::multiset>();
+        BOOST_CHECK(ids == (std::multiset<std::string>{ R"({"id":1})", R"({"id":2})", R"({"id":3})" }));
+    });
+}
+
+// A key may hold characters which have to be URL-encoded in a request. put_object() takes the name
+// as it goes into the request, so the key is spelled encoded here: the object's key is
+// "special/a b+c%d?e.json", which read_s3_prefix() lists and has to encode to read the object.
+SEASTAR_TEST_CASE(test_s3_prefix_keys_with_special_characters, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
+    co_await with_test_s3_client([](shared_ptr<s3::client> client) -> future<> {
+        co_await put_lines(client, "special/a%20b%2Bc%25d%3Fe.json", { R"({"id": 1})" });
+
+        prefix_read read;
+        co_await read_prefix(client, "special/", read);
+
+        BOOST_CHECK_EQUAL(read.result.object_count, 1u);
+        BOOST_CHECK_EQUAL(read.result.error_count, 0u);
+        require_same_items(read.items, parse_items({ R"({"id": 1})" }));
+    });
+}
+
+// Blank lines - empty, or only whitespace - are skipped wherever they are, as DynamoDB skips empty
+// and space-only ones: also the "\r" of a CRLF line end, and a blank last line without a newline.
+SEASTAR_TEST_CASE(test_s3_prefix_blank_lines_are_skipped, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
+    co_await with_test_s3_client([](shared_ptr<s3::client> client) -> future<> {
+        co_await put_lines(client, "blank/1.json", { "", "   ", R"({"id": 1})", "\t", "\r", R"({"id": 2})" "\r", "  " });
+        const std::string_view no_final_newline = "{\"id\": 3}\n \t\r";
+        co_await client->put_object(test_s3_object_name("blank/2.json"), temporary_buffer<char>(no_final_newline.data(), no_final_newline.size()));
+
+        prefix_read read;
+        co_await read_prefix(client, "blank/", read);
+
+        BOOST_CHECK_EQUAL(read.result.object_count, 2u);
+        BOOST_CHECK_EQUAL(read.result.error_count, 0u);
+        require_same_items(read.items, parse_items({ R"({"id": 1})", R"({"id": 2})", R"({"id": 3})" }));
+    });
+}
+
+// An object with a line which is not JSON does not fail the read. Like DynamoDB, the read skips
+// the rest of the object after its first invalid line, counts the object as one error, logs it by
+// name, and goes on with the next object. The items before the invalid line have been read by then.
+SEASTAR_TEST_CASE(test_s3_prefix_invalid_objects_are_counted, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
+    co_await with_test_s3_client([](shared_ptr<s3::client> client) -> future<> {
+        co_await put_lines(client, "invalid/1-good.json", { R"({"id": 1})", R"({"id": 2})" });
+        co_await put_lines(client, "invalid/2-bad.json", { R"({"id": 3})", "not JSON at all", R"({"id": "skipped"})" });
+        co_await put_lines(client, "invalid/3-bad.json", { R"({"Item": )", R"({"id": "skipped"})" });
+        co_await put_lines(client, "invalid/4-good.json", { R"({"id": 4})" });
+
+        prefix_read read;
+        std::ostringstream log;
+        {
+            scoped_logger_level log_level("alternator-export", seastar::log_level::warn);
+            seastar::logger::set_ostream(log);
+            auto restore_log = defer([] () noexcept {
+                seastar::logger::set_ostream(std::cerr);
+            });
+            co_await read_prefix(client, "invalid/", read);
+        }
+
+        BOOST_CHECK_EQUAL(read.result.object_count, 4u);
+        BOOST_CHECK_EQUAL(read.result.error_count, 2u);
+        BOOST_CHECK_EQUAL(read.result.unparsable_line_count, 2u);
+        require_same_items(read.items, parse_items({ R"({"id": 1})", R"({"id": 2})", R"({"id": 3})", R"({"id": 4})" }));
+        const auto logged = log.str();
+        BOOST_CHECK(logged.contains("invalid/2-bad.json"));
+        BOOST_CHECK(logged.contains("invalid/3-bad.json"));
+        BOOST_CHECK(!logged.contains("invalid/1-good.json"));
+        BOOST_CHECK(!logged.contains("invalid/4-good.json"));
+    });
+}
+
+// A line longer than the parser accepts is invalid data, like a line which is not JSON.
+SEASTAR_TEST_CASE(test_s3_prefix_too_long_line_is_counted, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
+    co_await with_test_s3_client([](shared_ptr<s3::client> client) -> future<> {
+        const std::string too_long(17 * 1024 * 1024, 'x');
+        co_await put_lines(client, "long/1-bad.json", { R"({"id": 1})", too_long, R"({"id": "skipped"})" });
+        co_await put_lines(client, "long/2-good.json", { R"({"id": 2})" });
+
+        prefix_read read;
+        co_await read_prefix(client, "long/", read);
+
+        BOOST_CHECK_EQUAL(read.result.object_count, 2u);
+        BOOST_CHECK_EQUAL(read.result.error_count, 1u);
+        BOOST_CHECK_EQUAL(read.result.unparsable_line_count, 1u);
+        require_same_items(read.items, parse_items({ R"({"id": 1})", R"({"id": 2})" }));
+    });
+}
+
+// The prefix is matched as a string, not as a "directory" name: "data" selects "data/1.json",
+// "data-2.json" and "database.json" alike. The items are compared without their order, as in
+// test_s3_empty_prefix_reads_the_whole_bucket.
+SEASTAR_TEST_CASE(test_s3_prefix_is_not_a_directory, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
+    co_await with_test_s3_client([](shared_ptr<s3::client> client) -> future<> {
+        co_await put_lines(client, "data/1.json", { R"({"id": 1})" });
+        co_await put_lines(client, "data-2.json", { R"({"id": 2})" });
+        co_await put_lines(client, "database.json", { R"({"id": 3})" });
+        co_await put_lines(client, "dat.json", { R"({"id": 4})" });
+        co_await put_lines(client, "other.json", { R"({"id": 5})" });
+
+        prefix_read read;
+        co_await read_prefix(client, "data", read);
+
+        BOOST_CHECK_EQUAL(read.result.object_count, 3u);
+        BOOST_CHECK_EQUAL(read.result.error_count, 0u);
+        auto ids = read.items | std::views::transform([] (const rjson::value& item) { return rjson::print(item); }) | std::ranges::to<std::multiset>();
+        BOOST_CHECK(ids == (std::multiset<std::string>{ R"({"id":1})", R"({"id":2})", R"({"id":3})" }));
+    });
+}
+
+// With gzip compression, which applies to every object whatever its key, an object which is not
+// gzip and a truncated one are invalid data, while a zero-byte object is an empty stream. The
+// items of the truncated object are read before its end shows the truncation.
+SEASTAR_TEST_CASE(test_s3_prefix_invalid_gzip_objects_are_counted, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
+    co_await with_test_s3_client([](shared_ptr<s3::client> client) -> future<> {
+        co_await put_gzip_items(client, "gzip/1-good.json.gz", { R"({"id": 1})", R"({"id": 2})" });
+        co_await put_lines(client, "gzip/2-not-gzip.json", { R"({"id": "skipped"})" });
+        co_await put_lines(client, "gzip/3-empty.json.gz", {});
+        co_await put_gzip_items(client, "gzip/4-truncated.json.gz", { R"({"id": 3})" }, true);
+        co_await put_gzip_items(client, "gzip/5-good.json.gz", { R"({"id": 4})" });
+
+        prefix_read read;
+        co_await read_prefix(client, "gzip/", read, {}, nullptr, alternator::gzip_compression{});
+
+        BOOST_CHECK_EQUAL(read.result.object_count, 5u);
+        BOOST_CHECK_EQUAL(read.result.error_count, 2u);
+        BOOST_CHECK_EQUAL(read.result.unparsable_line_count, 0u);
+        require_same_items(read.items, parse_items({ R"({"id": 1})", R"({"id": 2})", R"({"id": 3})", R"({"id": 4})" }));
+    });
+}
+
+// An item which the callback rejects with a ValidationException or SerializationException, or with
+// an rjson::error - as the validation of an Alternator item would - is invalid data like a line
+// which is not JSON: the rest of its object is skipped, and the object counts as one error. It is
+// not an unparsable line: the item reached the callback.
+SEASTAR_TEST_CASE(test_s3_prefix_items_rejected_by_callback_are_counted, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
+    co_await with_test_s3_client([](shared_ptr<s3::client> client) -> future<> {
+        co_await put_lines(client, "rejected/1.json", { R"({"id": 1})", R"({"id": 2, "bad": true})", R"({"id": "skipped"})" });
+        co_await put_lines(client, "rejected/2.json", { R"({"id": 3, "malformed": true})", R"({"id": "skipped"})" });
+        co_await put_lines(client, "rejected/3.json", { R"({"id": 4, "no_item": true})", R"({"id": "skipped"})" });
+        co_await put_lines(client, "rejected/4.json", { R"({"id": 5})" });
+
+        prefix_read read;
+        co_await read_prefix(client, "rejected/", read, [](const rjson::value& item) {
+            if (rjson::find(item, "bad")) {
+                throw alternator::api_error::validation("bad item");
+            }
+            if (rjson::find(item, "malformed")) {
+                throw alternator::api_error::serialization("malformed item");
+            }
+            if (rjson::find(item, "no_item")) {
+                throw rjson::error("no Item member");
+            }
+        });
+
+        BOOST_CHECK_EQUAL(read.result.object_count, 4u);
+        BOOST_CHECK_EQUAL(read.result.error_count, 3u);
+        BOOST_CHECK_EQUAL(read.result.unparsable_line_count, 0u);
+        require_same_items(read.items, parse_items({ R"({"id": 1})", R"({"id": 5})" }));
+    });
+}
+
+struct item_write_failed : public std::runtime_error {
+    item_write_failed() : std::runtime_error("item write failed") {}
+};
+
+// Any other exception from the callback is not about the data, so it fails the read with that
+// exception, and no other object is read. So does an api_error of another type, such as an
+// internal error, or a RequestLimitExceeded, although its status is a 4xx. The invalid object read
+// before the failure stays counted.
+template <typename Exception>
+static future<> check_s3_prefix_callback_failure_fails_the_read(Exception failure) {
+    co_await with_test_s3_client([&failure](shared_ptr<s3::client> client) -> future<> {
+        co_await put_lines(client, "failing/0-bad.json", { "not JSON at all" });
+        co_await put_lines(client, "failing/1.json", { R"({"id": 1})", R"({"id": 2})" });
+        co_await put_lines(client, "failing/2.json", { R"({"id": 3})" });
+
+        size_t checked = 0;
+        prefix_read read;
+        BOOST_CHECK_THROW(co_await read_prefix(client, "failing/", read, [&](const rjson::value&) {
+            if (++checked == 2) {
+                throw failure;
+            }
+        }), Exception);
+        BOOST_CHECK_EQUAL(checked, 2u);
+        BOOST_CHECK_EQUAL(read.result.object_count, 2u);
+        BOOST_CHECK_EQUAL(read.result.error_count, 1u);
+    });
+}
+
+SEASTAR_TEST_CASE(test_s3_prefix_callback_failure_fails_the_read, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
+    co_await check_s3_prefix_callback_failure_fails_the_read(item_write_failed{});
+}
+
+SEASTAR_TEST_CASE(test_s3_prefix_callback_internal_error_fails_the_read, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
+    co_await check_s3_prefix_callback_failure_fails_the_read(alternator::api_error::internal("internal error"));
+}
+
+SEASTAR_TEST_CASE(test_s3_prefix_callback_request_limit_exceeded_fails_the_read, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
+    co_await check_s3_prefix_callback_failure_fails_the_read(alternator::api_error::request_limit_exceeded("overloaded"));
+}
+
+// A missing bucket is an S3 error, not invalid data, so it fails the read - as on DynamoDB, where
+// it fails the import with S3NoSuchBucket.
+SEASTAR_TEST_CASE(test_s3_prefix_missing_bucket_fails_the_read, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
+    co_await with_test_s3_client([](shared_ptr<s3::client> client) -> future<> {
+        alternator::s3_prefix_read_result result;
+        BOOST_REQUIRE_EXCEPTION(
+            co_await alternator::read_s3_prefix(client, seastar::format("{}-missing", tests::getenv_safe("S3_BUCKET_FOR_TEST")), "",
+                    alternator::no_compression{}, nullptr, [](rjson::value) { return make_ready_future(); }, result),
+            storage_io_error, [](const storage_io_error& e) {
+                return e.code().value() == ENOENT;
+            });
+    });
+}
+
+// An abort before the read fails it with the abort's exception, before the bucket is listed.
+SEASTAR_TEST_CASE(test_s3_prefix_abort_wins_over_missing_bucket, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
+    co_await with_test_s3_client([](shared_ptr<s3::client> client) -> future<> {
+        abort_source as;
+        as.request_abort_ex(s3_read_aborted{});
+        alternator::s3_prefix_read_result result;
+        BOOST_CHECK_THROW(
+            co_await alternator::read_s3_prefix(client, seastar::format("{}-missing", tests::getenv_safe("S3_BUCKET_FOR_TEST")), "",
+                    alternator::no_compression{}, &as, [](rjson::value) { return make_ready_future(); }, result),
+            s3_read_aborted);
+    });
+}
+
+// The abort comes once the read waits for the listing request. The listing does not watch `as`,
+// and fails - the bucket name, longer than S3 allows, is invalid - but the read fails with the
+// abort's exception.
+SEASTAR_TEST_CASE(test_s3_prefix_abort_during_listing_wins_over_its_failure, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
+    co_await with_test_s3_client([](shared_ptr<s3::client> client) -> future<> {
+        abort_source as;
+        auto abort = seastar::yield().then([&as] {
+            as.request_abort_ex(s3_read_aborted{});
+        });
+        alternator::s3_prefix_read_result result;
+        BOOST_CHECK_THROW(
+            co_await alternator::read_s3_prefix(client, seastar::format("{}-missing", tests::getenv_safe("S3_BUCKET_FOR_TEST")), "",
+                    alternator::no_compression{}, &as, [](rjson::value) { return make_ready_future(); }, result),
+            s3_read_aborted);
+        co_await std::move(abort);
+    });
+}
+
+// An abort fails the read with the abort's exception, and no other object is read: either an abort
+// in the callback of the first object's only item, which the next read of that object notices, or
+// an abort before the read, which is noticed before the first object.
+static future<> check_s3_prefix_aborted_read_is_rejected(abort_point point) {
+    co_await with_test_s3_client([point](shared_ptr<s3::client> client) -> future<> {
+        co_await put_lines(client, "aborted/1.json", { R"({"id": 1})" });
+        co_await put_lines(client, "aborted/2.json", { R"({"id": 2})" });
+
+        abort_source as;
+        if (point == abort_point::before_read_all) {
+            as.request_abort_ex(s3_read_aborted{});
+        }
+        size_t received = 0;
+        prefix_read read;
+        BOOST_CHECK_THROW(co_await read_prefix(client, "aborted/", read, [&](const rjson::value&) {
+            if (++received == 1 && point == abort_point::in_first_item) {
+                as.request_abort_ex(s3_read_aborted{});
+            }
+        }, &as), s3_read_aborted);
+        const size_t expected = point == abort_point::in_first_item ? 1 : 0;
+        BOOST_CHECK_EQUAL(received, expected);
+        BOOST_CHECK_EQUAL(read.result.object_count, expected);
+    });
+}
+
+SEASTAR_TEST_CASE(test_s3_prefix_aborted_read_is_rejected, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
+    co_await check_s3_prefix_aborted_read_is_rejected(abort_point::in_first_item);
+}
+
+SEASTAR_TEST_CASE(test_s3_prefix_abort_before_read_is_rejected, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
+    co_await check_s3_prefix_aborted_read_is_rejected(abort_point::before_read_all);
+}
+
+// An abort wins over invalid data: the callback aborts and rejects the item at once, so the read
+// fails with the abort's exception, and the object is not counted as an error.
+SEASTAR_TEST_CASE(test_s3_prefix_abort_wins_over_invalid_data, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
+    co_await with_test_s3_client([](shared_ptr<s3::client> client) -> future<> {
+        co_await put_lines(client, "aborted/1.json", { R"({"id": 1})" });
+
+        abort_source as;
+        prefix_read read;
+        BOOST_CHECK_THROW(co_await read_prefix(client, "aborted/", read, [&](const rjson::value&) {
+            as.request_abort_ex(s3_read_aborted{});
+            throw alternator::api_error::validation("bad item");
+        }, &as), s3_read_aborted);
+        BOOST_CHECK_EQUAL(read.result.error_count, 0u);
     });
 }
 

@@ -34,6 +34,7 @@
 #include "utils/assert.hh"
 #include "utils/base64.hh"
 #include "utils/error_injection.hh"
+#include "utils/exceptions.hh"
 #include "utils/hashers.hh"
 #include "utils/overloaded_functor.hh"
 #include "utils/rjson.hh"
@@ -43,8 +44,10 @@
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/temporary_buffer.hh>
+#include <seastar/coroutine/exception.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/switch_to.hh>
+#include <seastar/http/url.hh>
 #include <seastar/util/defer.hh>
 #include <seastar/util/log.hh>
 
@@ -490,6 +493,9 @@ public:
 class json_parser : public parsing_interface {
     std::function<future<>(rjson::value)> _on_item;
     std::string _buffer;
+    static bool is_blank(std::string_view line) noexcept {
+        return line.find_first_not_of(" \t\r\n") == std::string_view::npos;
+    }
 public:
     json_parser(std::function<future<>(rjson::value)> on_item) : _on_item(std::move(on_item)) {}
     future<> parse(std::span<const std::byte> data) override {
@@ -508,11 +514,12 @@ public:
             _buffer.append(sv.substr(pos, nl - pos));
             // We found a newline character, so we have a complete line to process.
             if (nl < sv.size()) {
-                // We ignore empty lines here as a good will (those should not happen in valid JSON input).
-                if (!_buffer.empty()) {
-                    auto _ = defer([&]() noexcept {
-                        _buffer.clear();
-                    });
+                // We ignore blank lines - empty, or only whitespace - here as a good will (those should not
+                // happen in valid JSON input). DynamoDB's ImportTable skips empty and space-only lines too.
+                auto _ = defer([&]() noexcept {
+                    _buffer.clear();
+                });
+                if (!is_blank(_buffer)) {
                     co_await _on_item(rjson::parse(_buffer));
                     co_await coroutine::maybe_yield();
                 }
@@ -524,11 +531,11 @@ public:
         _buffer.clear();
     }
     future<> close() override {
-        if (!_buffer.empty()) {
+        auto _ = defer([&]() noexcept {
+            _buffer.clear();
+        });
+        if (!is_blank(_buffer)) {
             // Process any remaining data as a final line (even if it doesn't end with a newline).
-            auto _ = defer([&]() noexcept {
-                _buffer.clear();
-            });
             co_await _on_item(rjson::parse(_buffer));
         }
         co_return;
@@ -907,6 +914,128 @@ future<std::unique_ptr<import_pipeline_interface>> create_source_pipeline(std::v
         }
     }
     std::rethrow_exception(exception);
+}
+
+// Whether `ep` means that an object read by read_s3_prefix() holds invalid data, rather than
+// that it could not be read. See read_s3_prefix() in export.hh for the list. The parser throws an
+// rjson::error for a line which is not JSON and PayloadTooLarge for one which is too long, and the
+// gzip decompressor a ValidationException for a corrupt or truncated stream; the validation of an
+// Alternator item throws ValidationException, or SerializationException for a number which is not
+// given as a string or for invalid base64.
+static bool is_invalid_import_data(std::exception_ptr& ep) {
+    if (try_catch<rjson::error>(ep)) {
+        return true;
+    }
+    if (auto* e = try_catch<api_error>(ep)) {
+        return e->_type == "ValidationException" || e->_type == "SerializationException" || e->_type == "PayloadTooLarge";
+    }
+    return false;
+}
+
+// Whether the invalid data behind `ep`, if it did not come from on_item, is a line which the parser
+// could not hand to on_item.
+static bool is_unparsable_line_error(std::exception_ptr& ep) {
+    if (try_catch<rjson::error>(ep)) {
+        return true;
+    }
+    auto* e = try_catch<api_error>(ep);
+    return e && e->_type == "PayloadTooLarge";
+}
+
+// The name of the object `key` of `bucket` for s3::client, which puts it into the request as it is,
+// and signs it so. A listed key may hold any character, so each of its segments is URL-encoded the
+// way SigV4 expects, as the client encodes query parameters. A bucket name needs no encoding.
+static sstring s3_object_path(std::string_view bucket, std::string_view key) {
+    auto path = seastar::format("/{}", bucket);
+    for (auto segment : std::views::split(key, '/')) {
+        path += "/";
+        path += http::internal::url_encode(std::string_view(segment.begin(), segment.end()));
+    }
+    return path;
+}
+
+struct s3_object_read_outcome {
+    // What stopped the reading of the object, if anything did.
+    std::exception_ptr exception;
+    // Whether `exception` came from on_item, rather than from reading or parsing the object.
+    bool on_item_failed = false;
+};
+
+// Reads one object for read_s3_prefix(), and returns what stopped the reading, if anything did.
+static future<s3_object_read_outcome> read_s3_object(shared_ptr<s3::client> client, sstring object_name,
+        compression_type compression, abort_source* as, const std::function<future<>(rjson::value)>& on_item) {
+    std::unique_ptr<import_pipeline_interface> source;
+    s3_object_read_outcome outcome;
+    try {
+        // The pipeline's callback forwards to `on_item`, so that it is not copied for every object.
+        source = co_await create_source_pipeline(s3_target_config{ std::move(client), std::move(object_name), as },
+                [&on_item, &outcome] (rjson::value item) {
+                    return futurize_invoke(on_item, std::move(item)).handle_exception([&outcome] (std::exception_ptr ep) {
+                        outcome.on_item_failed = true;
+                        return make_exception_future<>(std::move(ep));
+                    });
+                }, compression);
+        co_await source->read_all();
+    } catch (...) {
+        outcome.exception = std::current_exception();
+    }
+    if (source) {
+        try {
+            co_await source->close();
+        } catch (...) {
+            if (!outcome.exception) {
+                outcome.exception = std::current_exception();
+            }
+        }
+    }
+    co_return outcome;
+}
+
+future<> read_s3_prefix(shared_ptr<s3::client> client, sstring bucket, sstring key_prefix,
+        compression_type compression, abort_source* as, std::function<future<>(rjson::value)> on_item,
+        s3_prefix_read_result& result) {
+    if (!client) {
+        on_internal_error(xlogger, "read_s3_prefix(): client is null");
+    }
+    s3::client::bucket_lister lister(client, bucket, key_prefix);
+    std::exception_ptr exception;
+    try {
+        while (true) {
+            if (as) {
+                as->check();
+            }
+            auto entry = co_await lister.get();
+            if (!entry) {
+                break;
+            }
+            ++result.object_count;
+            // The lister names an object by what follows the prefix in its key.
+            auto key = seastar::format("{}{}", key_prefix, entry->name);
+            auto outcome = co_await read_s3_object(client, s3_object_path(bucket, key), compression, as, on_item);
+            if (!outcome.exception) {
+                continue;
+            }
+            // Whatever failed after an abort, the abort is what the caller has to learn about.
+            if (as) {
+                as->check();
+            }
+            if (!is_invalid_import_data(outcome.exception)) {
+                std::rethrow_exception(std::move(outcome.exception));
+            }
+            ++result.error_count;
+            if (!outcome.on_item_failed && is_unparsable_line_error(outcome.exception)) {
+                ++result.unparsable_line_count;
+            }
+            xlogger.warn("S3 import: skipping the rest of object {} of bucket {}, which holds invalid data: {}", key, bucket, outcome.exception);
+        }
+    } catch (...) {
+        // As above. The listing does not watch `as`, so a listing request may fail after an abort.
+        exception = as && as->abort_requested() ? as->abort_requested_exception_ptr() : std::current_exception();
+    }
+    co_await lister.close();
+    if (exception) {
+        co_await coroutine::return_exception_ptr(std::move(exception));
+    }
 }
 
 // DynamoDB reports the timestamps of an export as seconds since the epoch, keeping the sub-second
