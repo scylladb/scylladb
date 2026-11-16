@@ -16,6 +16,7 @@ import subprocess
 import json
 import uuid
 
+from test import DEBUG_MODES
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.internal_types import ServerInfo
 from test.pylib.util import wait_for_cql_and_get_hosts
@@ -26,6 +27,7 @@ from test.pylib import nodetool
 from test.pylib.encryption_provider import KeyProviderFactory, KeyProvider, make_key_provider_factory, KMSKeyProviderFactory, LocalFileSystemKeyProviderFactory
 from test.cluster.util import new_test_keyspace, new_test_table, FeatureConfig
 from test.cluster.dtest.tools.assertions import assert_one
+from test.cqlpy.test_tools import _generate_key_for_shard
 
 from typing import Callable, Coroutine
 
@@ -122,18 +124,16 @@ async def create_encrypted_cf(manager: ScyllaClusterManager, ks: str,
 
     return new_test_table(manager, ks, columns, extra)
 
-async def prepare_write_workload(cql: CassandraSession, table_name, flush=True, n: int = None) -> list[str]:
+async def do_prepare_write_workload(cql: CassandraSession, table_name, key_ids, flush=True) -> list[str]:
     """write some data, returns list of written partition keys"""
-    key_ids = list(range(n if n else 100))
     c1_values = ['value1']
     c2_values = ['value2']
 
     statement = cql.prepare(f"INSERT INTO {table_name} (key, c1, c2) VALUES (?, ?, ?)")
     statement.consistency_level = ConsistencyLevel.ALL
 
-    keys = [f"k{x}" for x in key_ids]
     await asyncio.gather(*[cql.run_async(statement, params) for params in
-                           list(map(lambda x, y, z: [x, y, z], keys,
+                           list(map(lambda x, y, z: [x, y, z], key_ids,
                                     itertools.cycle(c1_values),
                                     itertools.cycle(c2_values)))]
                                     )
@@ -141,7 +141,13 @@ async def prepare_write_workload(cql: CassandraSession, table_name, flush=True, 
     if flush:
         await nodetool.flush(cql, table_name)
 
-    return keys
+    return key_ids
+
+
+async def prepare_write_workload(cql: CassandraSession, table_name, flush=True, n: int = None) -> list[str]:
+    """write some data, returns list of written partition keys"""
+    key_ids = [f"k{x}" for x in range(n if n else 100)]
+    return await do_prepare_write_workload(cql, table_name, key_ids, flush=flush)
 
 async def read_verify_workload(cql: CassandraSession, table_name: str, keys: list[str]):
     """check written data using single-partition queries"""
@@ -555,3 +561,93 @@ async def test_system_encryption_reboot(manager: ScyllaClusterManager, tmpdir):
                           ciphers={"AES/CBC/PKCS5Padding": [128]},
                           options=options,
                           restart=restart)
+
+def millis_now():
+    return time.perf_counter_ns() / 1_000_000
+
+@pytest.mark.parametrize(
+        "provider", [ KeyProvider.kms, KeyProvider.gcp, KeyProvider.azure ]
+)
+@pytest.mark.skip_mode(mode=DEBUG_MODES, reason='slow test with timing dependencies')
+async def test_keycache_does_not_expire_when_active(manager, tmpdir, suite_log_dir, scylla_binary, provider):
+    """
+    Reproduces (and tests) two nightmare conditions for remote key providers:
+    1.) Keys only being used on shards != 0. This can, if cache values are
+        bad, lead to values expiring on shard 0 while they are still actually
+        being used on other shards. 
+    2.) Even if we also refresh shard 0 (at least via other shard refresh calls), 
+        if a remote is unaccessible long enough, we will fail all reload attempts 
+        and eventually reach expiration anyway. Calls from other shards will not
+        help this, as reload counts into expiry
+        Now, a key actually being in use will become expired even though we
+        have not verified it should be discarded.
+
+    This is a rather slow test, and has some timing dependency, i.e. if we stall
+    such that the assumed cache reloads do not happen, it can fail "spuriourly",
+    however, upping the timeouts makes the test slower overall.
+    """
+
+    # Doing this only with fake GCP kms. Because we control this mock, and can make
+    # it do server errors on demand.
+    # TODO: add error proxies for AWS and Azure.
+    async with make_key_provider_factory(provider, tmpdir, suite_log_dir, scylla_binary) as key_provider:
+        async with key_provider.create_error_state_object() as error_state:
+            options = error_state.configuration_parameters()
+            additional_options = error_state.additional_cf_options()
+            expiry_ms = 2000
+            refresh_ms = 200 # set real low to reduce risk of flakyness.
+            epconf = error_state.get_endpoint_config(options)
+            epconf['key_cache_expiry'] = f'{expiry_ms}ms'
+            epconf['key_cache_refresh'] = f'{refresh_ms}ms'
+
+            cmd = ['--smp', '2']
+            await manager.servers_add(servers_num = 1, config=options, cmdline=cmd)
+            cql = manager.get_cql()
+
+            logger.info("Creating shard 1 keys")
+            all_keys_for_shard = _generate_key_for_shard(scylla_binary, 2, 1)
+            keys = list(itertools.islice(all_keys_for_shard, 20))
+
+            logger.info("Creating shard 0 keys")
+            all_keys_for_shard0 = _generate_key_for_shard(scylla_binary, 2, 0)
+            keys0 = list(itertools.islice(all_keys_for_shard0, 10))
+
+            async with new_test_keyspace(manager,opts="with replication = {'class': 'SimpleStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}") as ks:
+                columns = "key int PRIMARY KEY, c1 text, c2 text"
+                async with await create_encrypted_cf(manager, ks, additional_options=additional_options, columns=columns) as table_name:
+                    logger.info("Doing shard 0 workload")
+                    await do_prepare_write_workload(cql, table_name, keys)
+                    cql.execute(f"SELECT * from {table_name}") # make sure reading keys are made available
+
+                    logger.info("Putting key server into error mode")
+                    error_state.enter_error_state(True)
+
+                    start = millis_now()
+                    last = start
+                    now = last
+
+                    try:
+                        # Do inserts on shard 1 until we've exceeded the expiry enough.
+                        # Depending on cache values, this could have let the keys on 
+                        # shard 0 expire since remote is not reachable
+                        while (now - start) < (expiry_ms*8):
+                            await asyncio.sleep(expiry_ms / float(2000))
+                            now = millis_now()
+                            try:
+                                logger.info("Doing shard 1 workload")
+                                await do_prepare_write_workload(cql, table_name, keys)
+                            except Exception as e:
+                                if (now - last) > expiry_ms:
+                                    logger.info("Sleep took too long. Expiry might have happened: %s", e)
+                                    break
+                                raise e
+                            last = millis_now()
+
+                        # If we kept alive cached keys even though we get server
+                        # errors, this should be fine to do. If not, this will fail
+                        # with a somewhat lengthy timeout for the flush call
+                        logger.info("Doing shard 0 workload")
+                        await do_prepare_write_workload(cql, table_name, keys0)
+                    finally:
+                        error_state.enter_error_state(False)
+
