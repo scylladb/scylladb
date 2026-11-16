@@ -2152,6 +2152,16 @@ protected:
 
         while (!_sstables.empty() && can_proceed()) {
             auto sst = consume_sstable();
+            // perform_task_on_all_files() captured the sstables before it registered
+            // this task, so an operation that removed sstables from the group in
+            // between, like a truncate, could not stop this task (SCYLLADB-6095).
+            // A truncate unlinks them before it re-enables compaction, so skip the
+            // unlinked ones: they are no longer in the group to be replaced.
+            if (sst->unlinked_at()) {
+                cmlog.info("{}: skipping {}, which was already deleted", *this, sst->get_filename());
+                _compacting.release_compacting({sst});
+                continue;
+            }
             auto res = co_await rewrite_sstable(std::move(sst));
             _cm._validation_errors += res.stats.validation_errors;
             stats += res.stats;
