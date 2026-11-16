@@ -38,12 +38,9 @@ public:
     using service_error::service_error;
 };
 
-// #4970 - not 100% correct, but network errors are 
-// generally intermittent/recoverable. Mark as a non-isolating
-// error.
-class network_error : public missing_resource_error {
+class network_error : public service_error {
 public:
-    using missing_resource_error::missing_resource_error;
+    using service_error::service_error;
 };
 
 class malformed_response_error : public service_error {
