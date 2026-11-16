@@ -10,6 +10,7 @@
 
 #include "seastarx.hh"
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <span>
@@ -101,6 +102,14 @@ struct import_pipeline_interface {
     // with no bytes at all is accepted as an empty stream and read back as zero items instead, because AWS
     // produces zero-byte .gz objects for empty partitions.
     virtual future<> close() = 0;
+
+    // The number of uncompressed bytes which the pipeline read so far: the lines it read, blank ones
+    // included, with their newlines, and what it read so far of the line it is reading. Can be
+    // called at any time, also after `close()`.
+    virtual uint64_t processed_size_bytes() const noexcept = 0;
+    // The number of lines which the pipeline read so far, blank ones included: the number of the
+    // line which `on_item` is called for. Can be called at any time, also after `close()`.
+    virtual uint64_t processed_lines() const noexcept = 0;
 
     virtual ~import_pipeline_interface() = default;
 };
