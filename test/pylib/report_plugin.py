@@ -34,8 +34,7 @@ class ReportPlugin:
             if report.capstderr:
                 allure.attach(report.capstderr, "stderr", allure.attachment_type.TEXT, None)
 
-    @pytest.fixture(autouse=True)
-    def allure_run_parameters(self, request):
+    def pytest_runtest_setup(self, item: pytest.Item) -> None:
         """
         Make Allure tell architectures, modes and repeats apart.
 
@@ -48,7 +47,7 @@ class ReportPlugin:
         from test.pylib.runner import BUILD_MODE, RUN_ID
 
         allure.dynamic.parameter("arch", platform.machine())
-        if (mode := request.node.stash.get(BUILD_MODE, None)) is not None:
+        if (mode := item.stash.get(BUILD_MODE, None)) is not None:
             allure.dynamic.tag(mode)
             allure.dynamic.parameter("build_mode", mode)
-            allure.dynamic.parameter("run_id", request.node.stash[RUN_ID])
+            allure.dynamic.parameter("run_id", item.stash[RUN_ID])
