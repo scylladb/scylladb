@@ -55,12 +55,16 @@ struct reshard_shard_descriptor {
 
 namespace compaction {
 
-// Collects shared SSTables from all shards and sstables that require cleanup and returns a vector containing them all.
+// Shared sstables to be resharded, grouped by the compaction strategy, as only the ones of the same
+// group can be resharded together.
+using reshard_groups = std::map<int64_t, sstables::sstable_directory::sstable_open_info_vector>;
+
+// Collects shared SSTables from all shards and sstables that require cleanup and returns them all, grouped.
 // This function assumes that the list of SSTables can be fairly big so it is careful to
 // manipulate it in a do_for_each loop (which yields) instead of using standard accumulators.
-future<sstables::sstable_directory::sstable_open_info_vector>
+future<reshard_groups>
 collect_all_shared_sstables(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, sstring ks_name, sstring table_name, compaction::owned_ranges_ptr owned_ranges_ptr) {
-    auto info_vec = sstables::sstable_directory::sstable_open_info_vector();
+    auto groups = reshard_groups();
 
     // We want to make sure that each distributed object reshards about the same amount of data.
     // Each sharded object has its own shared SSTables. We can use a clever algorithm in which they
@@ -69,38 +73,41 @@ collect_all_shared_sstables(sharded<sstables::sstable_directory>& dir, sharded<r
     // move in bulk and that's efficient. That shard can then distribute the work among all the
     // others who will reshard.
     auto coordinator = this_shard_id();
-    // We will first move all of the foreign open info to temporary storage so that we can sort
-    // them. We want to distribute bigger sstables first.
     const auto* sorted_owned_ranges_ptr = owned_ranges_ptr.get();
     co_await dir.invoke_on_all([&] (sstables::sstable_directory& d) -> future<> {
-        auto shared_sstables = d.retrieve_shared_sstables();
-        sstables::sstable_directory::sstable_open_info_vector need_cleanup;
+        const auto& cs = db.local().find_column_family(ks_name, table_name).get_compaction_strategy();
+        utils::chunked_vector<std::pair<int64_t, sstables::foreign_sstable_open_info>> to_reshard;
+        // The group is determined on the shard that created the open info, where its components live.
+        auto add = [&] (sstables::foreign_sstable_open_info info) {
+            const auto& stats = *info.components->statistics.contents.at(sstables::metadata_type::Stats);
+            auto group = cs.get_resharding_group(static_cast<const sstables::stats_metadata&>(stats));
+            to_reshard.emplace_back(group, std::move(info));
+        };
+        for (auto& info : d.retrieve_shared_sstables()) {
+            add(std::move(info));
+            co_await coroutine::maybe_yield();
+        }
         if (sorted_owned_ranges_ptr) {
             co_await d.filter_sstables([&] (sstables::shared_sstable sst) -> future<bool> {
                 if (needs_cleanup(sst, *sorted_owned_ranges_ptr)) {
-                    need_cleanup.push_back(co_await sst->get_open_info());
+                    add(co_await sst->get_open_info());
                     co_return false;
                 }
                 co_return true;
             });
         }
-        if (shared_sstables.empty() && need_cleanup.empty()) {
+        if (to_reshard.empty()) {
             co_return;
         }
         co_await smp::submit_to(coordinator, [&] () -> future<> {
-            info_vec.reserve(info_vec.size() + shared_sstables.size() + need_cleanup.size());
-            for (auto& info : shared_sstables) {
-                info_vec.emplace_back(std::move(info));
-                co_await coroutine::maybe_yield();
-            }
-            for (auto& info : need_cleanup) {
-                info_vec.emplace_back(std::move(info));
+            for (auto& [group, info] : to_reshard) {
+                groups[group].emplace_back(std::move(info));
                 co_await coroutine::maybe_yield();
             }
         });
     });
 
-    co_return info_vec;
+    co_return groups;
 }
 
 // A resharding job writes as much as it reads, and its input is only deleted once it's done, so it
@@ -1138,8 +1145,8 @@ future<tasks::task_manager::task_ptr> task_manager_module::start_shard_reshaping
 }
 
 static future<> run_table_resharding_compaction(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, std::string keyspace, std::string table, compaction_sstable_creator_fn creator, compaction::owned_ranges_ptr owned_ranges_ptr, bool vnodes_resharding, std::optional<uint64_t>& expected_workload, tasks::task_info task_info) {
-    auto all_sstables = co_await collect_all_shared_sstables(dir, db, keyspace, table, owned_ranges_ptr);
-    if (all_sstables.empty()) {
+    auto groups = co_await collect_all_shared_sstables(dir, db, keyspace, table, owned_ranges_ptr);
+    if (groups.empty()) {
         // The directory of an sstable state might not even exist, so its free space can't be queried.
         expected_workload = 0;
         co_return;
@@ -1148,9 +1155,15 @@ static future<> run_table_resharding_compaction(sharded<sstables::sstable_direct
     auto cfg = co_await make_reshape_config(dir.local().get_storage(), reshape_mode::strict);
     uint64_t max_job_size = cfg.free_storage_space * reshard_target_space_overhead;
     auto max_sstables_per_job = db.local().find_column_family(keyspace, table).schema()->max_compaction_threshold();
-    auto total_bytes_on_disk = std::ranges::fold_left(all_sstables | std::views::transform(&sstables::foreign_sstable_open_info::bytes_on_disk), uint64_t(0), std::plus{});
+    uint64_t total_bytes_on_disk = 0;
+    for (const auto& [_, ssts] : groups) {
+        total_bytes_on_disk += std::ranges::fold_left(ssts | std::views::transform(&sstables::foreign_sstable_open_info::bytes_on_disk), uint64_t(0), std::plus{});
+    }
     auto fair_share = (total_bytes_on_disk + this_smp_shard_count() - 1) / this_smp_shard_count();
-    auto jobs = co_await make_reshard_jobs(std::move(all_sstables), max_job_size, max_sstables_per_job, fair_share);
+    std::vector<replica::reshard_job> jobs;
+    for (auto& [_, ssts] : groups) {
+        std::ranges::move(co_await make_reshard_jobs(std::move(ssts), max_job_size, max_sstables_per_job, fair_share), std::back_inserter(jobs));
+    }
     dblog.debug("Resharding {}.{} in {} jobs, each limited to {} and {} sstables", keyspace, table, jobs.size(),
             utils::pretty_printed_data_size(max_job_size), max_sstables_per_job);
     auto destinations = co_await distribute_reshard_jobs(std::move(jobs));

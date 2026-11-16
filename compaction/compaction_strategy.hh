@@ -22,6 +22,7 @@ namespace sstables {
 class sstable;
 class sstable_set;
 class storage;
+struct stats_metadata;
 }
 
 namespace compaction {
@@ -130,6 +131,10 @@ public:
     // SSTables that can be added into a single job.
     compaction_descriptor get_reshaping_job(std::vector<sstables::shared_sstable> input, schema_ptr schema, reshape_config cfg) const;
 
+    // Resharding only compacts together shared sstables of the same group, determined from their
+    // stats, so that its output doesn't mix data the strategy keeps apart, like the data of different
+    // time windows. By default, all sstables belong to the same group.
+    int64_t get_resharding_group(const sstables::stats_metadata& stats) const;
 };
 
 // Creates a compaction_strategy object from one of the strategies available.
