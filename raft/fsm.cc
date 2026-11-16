@@ -37,7 +37,7 @@ fsm::fsm(server_id id, sstring tag, term_t current_term, server_id voted_for, lo
     _commit_idx = std::max(_commit_idx, commit_idx);
 
     // Otherwise sampled on tick, but the first election timer is armed below.
-    _clock_ok = lease_time_now().has_value();
+    sample_clock();
 
     // A node "starts as a candidate" -- calls an election immediately instead of
     // waiting for the randomized election timeout, skipping prevoting since there
@@ -322,12 +322,6 @@ void fsm::become_leader() {
         // completed, so it is a conservative lower bound on how long ago every
         // prior-term entry was created.
         leader_state().lease_wait_mono_start = _config.leaseguard->clock.monotonic_now();
-        // Spread clock-loss leadership transfers across groups; see
-        // clock_stepdown_jitter.
-        static thread_local std::default_random_engine re{std::random_device{}()};
-        leader_state().clock_stepdown_jitter = mono_clock::duration{
-                std::uniform_int_distribution<mono_clock::rep>{
-                        0, _config.leaseguard->delta.count()}(re)};
         // No prior-term entry means no deposed lease to wait for, so the
         // deferred-commit restriction does not apply for this leadership term.
         leader_state().lease_wait_done = leader_state().last_prev_term_idx == index_t{0};
@@ -790,32 +784,37 @@ bool fsm::can_serve_lease_read() {
 }
 
 // How long our clock must stay unusable before we hand leadership away, as a
-// multiple of delta (a per-group jitter is added on top). Long enough that a
-// brief unsync -- a chrony restart, a resync -- does not move leadership, since
-// the transfer is not free: the successor inherits our unstamped entries and
-// must itself wait out a delta before it can commit. Short enough that a real
-// outage is not paid for indefinitely.
+// multiple of delta. Long enough that a brief unsync -- a chrony restart, a
+// resync -- does not move leadership, since the transfer is not free: the
+// successor inherits our unstamped entries and must itself wait out a delta
+// before it can commit. Short enough that a real outage is not paid for
+// indefinitely.
 static constexpr int clock_stepdown_delta_multiple = 2;
 
-void fsm::maybe_transfer_leadership_on_clock_loss() {
-    auto& state = leader_state();
-
+void fsm::sample_clock() {
+    if (!leaseguard_enabled()) {
+        return;
+    }
+    _clock_ok = _config.leaseguard->clock.interval_now().has_value();
     if (_clock_ok) {
         // Usable again: cancel any wait in progress. A clock that flaps in and
         // out therefore never accumulates enough time to move leadership, which
         // is what we want -- each transfer costs the group a delta.
-        state.clock_unusable_since.reset();
-        return;
+        _clock_unusable_since.reset();
+    } else if (!_clock_unusable_since) {
+        _clock_unusable_since = _config.leaseguard->clock.monotonic_now();
     }
+}
 
-    const auto now = _config.leaseguard->clock.monotonic_now();
-    if (!state.clock_unusable_since) {
-        state.clock_unusable_since = now;
-        return;
-    }
-    const auto wait = _config.leaseguard->delta * clock_stepdown_delta_multiple
-            + state.clock_stepdown_jitter;
-    if (now - *state.clock_unusable_since < wait) {
+bool fsm::clock_lost() const {
+    return _clock_unusable_since
+            && _config.leaseguard->clock.monotonic_now() - *_clock_unusable_since
+                    >= _config.leaseguard->delta * clock_stepdown_delta_multiple;
+}
+
+void fsm::maybe_transfer_leadership_on_clock_loss() {
+    auto& state = leader_state();
+    if (!clock_lost()) {
         return;
     }
 
@@ -836,7 +835,7 @@ void fsm::maybe_transfer_leadership_on_clock_loss() {
     // Re-arm before initiating: if the transfer does not complete, the stepdown
     // times out and we stay leader, and we should then back off a full window
     // rather than retry on the next tick.
-    state.clock_unusable_since = now;
+    _clock_unusable_since = _config.leaseguard->clock.monotonic_now();
     transfer_leadership(ELECTION_TIMEOUT);
 }
 
@@ -1029,9 +1028,7 @@ void fsm::tick() {
 
     // Refresh the clock-health bit we report to the leader. Here rather than in
     // the reply path so that append_entries costs no clock read; see _clock_ok.
-    if (leaseguard_enabled()) {
-        _clock_ok = _config.leaseguard->clock.interval_now().has_value();
-    }
+    sample_clock();
 
     auto has_stable_leader = [this]() {
         // A leader that is not voting member of a current configuration

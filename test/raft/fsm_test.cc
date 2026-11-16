@@ -3156,13 +3156,9 @@ bool sent_timeout_now(const raft::fsm_output& o) {
     });
 }
 
-// The wait is 2*delta plus a per-group jitter of at most delta, and the jitter is
-// drawn randomly, so tests assert either side of that range rather than an exact
-// boundary. Both bounds hold for every possible jitter.
-const auto lease_below_stepdown_wait =
+// How long a leader's clock must stay unusable before it hands the leadership away.
+const auto lease_stepdown_wait =
         std::chrono::duration_cast<raft::mono_clock::duration>(lease_delta) * 2;
-const auto lease_above_stepdown_wait =
-        std::chrono::duration_cast<raft::mono_clock::duration>(lease_delta) * 3;
 
 } // anonymous namespace
 
@@ -3183,7 +3179,7 @@ BOOST_AUTO_TEST_CASE(test_leaseguard_transfers_leadership_on_clock_loss) {
     // Short of the wait, leadership must not move however many ticks pass: a
     // clock that recovers quickly is not worth a transfer, which costs the
     // successor a delta of deferred commits.
-    clock.advance_monotonic(lease_below_stepdown_wait - 1ms);
+    clock.advance_monotonic(lease_stepdown_wait - 1ms);
     for (int i = 0; i < 5; i++) {
         f.fsm.tick();
         BOOST_CHECK(!sent_timeout_now(f.fsm.get_output()));
@@ -3191,7 +3187,7 @@ BOOST_AUTO_TEST_CASE(test_leaseguard_transfers_leadership_on_clock_loss) {
     BOOST_REQUIRE(f.fsm.is_leader());
 
     // Past it, leadership is handed to the follower.
-    clock.advance_monotonic(lease_above_stepdown_wait);
+    clock.advance_monotonic(1ms);
     f.fsm.tick();
     BOOST_CHECK(sent_timeout_now(f.fsm.get_output()));
 }
@@ -3208,7 +3204,7 @@ BOOST_AUTO_TEST_CASE(test_leaseguard_stepdown_during_clock_loss_transfer_keeps_w
 
     clock.set_unsynchronized();
     f.fsm.tick();
-    clock.advance_monotonic(lease_above_stepdown_wait);
+    clock.advance_monotonic(lease_stepdown_wait);
     f.fsm.tick();
     BOOST_REQUIRE(sent_timeout_now(f.fsm.get_output()));
     BOOST_REQUIRE(f.fsm.leadership_transfer_active());
@@ -3239,7 +3235,7 @@ BOOST_AUTO_TEST_CASE(test_leaseguard_no_transfer_when_follower_clock_also_broken
     f.fsm.tick();
     BOOST_CHECK(!sent_timeout_now(f.fsm.get_output()));
 
-    clock.advance_monotonic(lease_above_stepdown_wait * 2);
+    clock.advance_monotonic(lease_stepdown_wait * 2);
     for (int i = 0; i < 5; i++) {
         f.fsm.tick();
         BOOST_CHECK(!sent_timeout_now(f.fsm.get_output()));
@@ -3260,11 +3256,11 @@ BOOST_AUTO_TEST_CASE(test_leaseguard_clock_recovery_cancels_transfer) {
         f.fsm.tick();
         BOOST_CHECK(!sent_timeout_now(f.fsm.get_output()));
         // Nearly long enough, but the clock comes back before the wait elapses.
-        clock.advance_monotonic(lease_below_stepdown_wait - 1ms);
+        clock.advance_monotonic(lease_stepdown_wait - 1ms);
         clock.set(lease_t0, lease_err);
         f.fsm.tick();
         BOOST_CHECK(!sent_timeout_now(f.fsm.get_output()));
-        clock.advance_monotonic(lease_above_stepdown_wait);
+        clock.advance_monotonic(lease_stepdown_wait);
     }
     BOOST_CHECK(f.fsm.is_leader());
 }
