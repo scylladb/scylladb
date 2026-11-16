@@ -278,8 +278,22 @@ future<> db::commitlog_replayer::impl::process(
             // Everything for this batch is decided as it arrives: see
             // raft_commitlog_replay_buffer.
             try {
-                co_await _raft_buffer->local().add_batch(_db.local(), _qp->local(), _sys_ks.local(),
-                        batch.group_id, rp.id, batch.commit_idx, batch.entries);
+                auto& raft_buffer = _raft_buffer->local();
+                const auto* hosted = raft_buffer.find_hosted_group(_db.local(), batch.group_id);
+                if (!hosted) {
+                    rlogger.debug("raft batch at {}: group {} is not hosted by this shard. skipping", rp, batch.group_id);
+                    co_return;
+                }
+                // The tablet's commitlog cleanup record, as for a mutation below: a
+                // batch at or below it was written by a replica of the tablet that
+                // has left this shard, not by the one hosted now.
+                if (rp <= token_min_pos(hosted->tablet.table, rp.shard_id(), hosted->last_token)) {
+                    rlogger.debug("raft batch at {}: group {} wrote it before tablet {} was last cleaned up. skipping",
+                            rp, batch.group_id, hosted->tablet);
+                    co_return;
+                }
+                co_await raft_buffer.add_batch(_db.local(), _qp->local(), _sys_ks.local(),
+                        batch.group_id, *hosted, rp.id, batch.commit_idx, batch.entries);
             } catch (...) {
                 std::throw_with_nested(raft_replay_error(fmt::format(
                         "failed to replay raft batch for group {} at {}", batch.group_id, rp)));

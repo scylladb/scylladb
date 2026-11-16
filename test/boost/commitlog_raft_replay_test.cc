@@ -1656,6 +1656,17 @@ raft::log_entry_ptr make_mutation_entry(const schema_ptr& schema, raft::term_t t
             .term = term, .idx = idx, .data = std::move(cmd)});
 }
 
+// Hands one raft batch to the buffer the way commitlog_replayer does for a group this
+// shard hosts. The group must be in tablet metadata before the buffer is asked about
+// any group: the buffer builds its map of hosted groups once.
+void replay_batch(cql_test_env& env, db::raft_commitlog_replay_buffer& buffer, raft::group_id gid,
+        db::segment_id_type segment, raft::index_t commit_idx, const std::vector<raft::log_entry_ptr>& entries) {
+    const auto* hosted = buffer.find_hosted_group(env.local_db(), gid);
+    BOOST_REQUIRE(hosted);
+    buffer.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
+            gid, *hosted, segment, commit_idx, entries).get();
+}
+
 } // anonymous namespace
 
 // Replay persists a floor of commit_idx, so every index at or below it has to have been
@@ -1686,8 +1697,7 @@ SEASTAR_TEST_CASE(test_replay_refuses_a_gap_below_the_commit_index) {
             for (auto i = first; i <= last; i = i + raft::index_t{1}) {
                 batch.push_back(make_dummy_entry(raft::term_t(1), i));
             }
-            buffer.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
-                    gid, segment, commit_idx, batch).get();
+            replay_batch(env, buffer, gid, segment, commit_idx, batch);
         };
         const auto run_in_term = [&](raft::group_id gid, raft::term_t term, raft::index_t first,
                 raft::index_t last, raft::index_t commit_idx, db::segment_id_type segment,
@@ -1696,8 +1706,7 @@ SEASTAR_TEST_CASE(test_replay_refuses_a_gap_below_the_commit_index) {
             for (auto i = first; i <= last; i = i + raft::index_t{1}) {
                 batch.push_back(make_dummy_entry(term, i));
             }
-            buffer.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
-                    gid, segment, commit_idx, batch).get();
+            replay_batch(env, buffer, gid, segment, commit_idx, batch);
         };
         const auto refuses_with = [](db::raft_commitlog_replay_buffer& buffer, cql_test_env& env,
                 const sstring& detail) {
@@ -1813,8 +1822,7 @@ SEASTAR_TEST_CASE(test_replay_refuses_a_gap_below_the_commit_index) {
                 for (auto i = first; i <= last; i = i + raft::index_t{1}) {
                     entries.push_back(make_dummy_entry(term, i));
                 }
-                buffer.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
-                        gid, segment, commit_idx, entries).get();
+                replay_batch(env, buffer, gid, segment, commit_idx, entries);
             };
             batch(raft::term_t(1), raft::index_t(1), raft::index_t(2), raft::index_t(0), 1);
             batch(raft::term_t(2), raft::index_t(1), raft::index_t(1), raft::index_t(0), 2);
@@ -1845,8 +1853,7 @@ SEASTAR_TEST_CASE(test_the_damage_override_does_not_start_a_node_over_a_gap) {
             for (auto i = first; i <= last; i = i + raft::index_t{1}) {
                 batch.push_back(make_dummy_entry(raft::term_t(1), i));
             }
-            buffer.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
-                    gid, segment, commit_idx, batch).get();
+            replay_batch(env, buffer, gid, segment, commit_idx, batch);
         };
 
         // The gap of the first case in test_replay_refuses_a_gap_below_the_commit_index:
@@ -1889,8 +1896,7 @@ SEASTAR_TEST_CASE(test_a_refused_replay_leaves_the_row_untouched) {
             for (auto i = first; i <= last; i = i + raft::index_t{1}) {
                 batch.push_back(make_dummy_entry(raft::term_t(1), i));
             }
-            buffer.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
-                    gid, segment, commit_idx, batch).get();
+            replay_batch(env, buffer, gid, segment, commit_idx, batch);
         };
         const auto refuses_with = [&](db::raft_commitlog_replay_buffer& buffer,
                 const sstring& missing, const sstring& detail) {
@@ -1958,8 +1964,7 @@ struct damaged_segment_fixture {
         const auto batch = std::vector<raft::log_entry_ptr>{
             make_dummy_entry(raft::term_t(1), raft::index_t(6)),
         };
-        buffer.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
-                gid, 2, raft::index_t(5), batch).get();
+        replay_batch(env, buffer, gid, 2, raft::index_t(5), batch);
     }
 };
 
@@ -1973,15 +1978,16 @@ SEASTAR_TEST_CASE(test_replay_refuses_a_damaged_segment) {
     return do_with_cql_env_thread([] (cql_test_env& env) {
         const auto my_id = env.local_db().get_token_metadata().get_my_id();
 
-        // The group's only replica is on another host. This shard recovers no log, so
-        // the unread bytes cost it nothing. This case runs first: the tablet metadata the
-        // second block writes stays in the environment, and one hosted group is enough to refuse.
+        // The group's only replica is on another host, so this shard does not host the
+        // group: the replayer skips its batches and the shard recovers no log. The unread
+        // bytes cost it nothing. This case runs first: the tablet metadata the second
+        // block writes stays in the environment, and one hosted group is enough to refuse.
         {
             damaged_segment_fixture fixture{env};
             fixture.seed(locator::tablet_replica_set{
                     {locator::host_id{utils::UUID_gen::get_time_UUID()}, 0}});
             db::raft_commitlog_replay_buffer buffer;
-            fixture.read_one_batch(buffer);
+            BOOST_REQUIRE(!buffer.find_hosted_group(env.local_db(), fixture.gid));
             buffer.note_unreadable_segment(3);
             BOOST_REQUIRE_NO_THROW(buffer.finish_replay(env.local_db(), env.local_qp()).get());
             drop_sc_tablet_metadata(env, fixture.table).get();
@@ -2092,10 +2098,11 @@ BOOST_AUTO_TEST_CASE(test_hosts_raft_group_per_stage) {
     }
 }
 
-// Test that replay discards a group whose tablet has no replica on this shard, even
+// Test that replay skips a group whose tablet has no replica on this shard, even
 // though the group is still present in tablet metadata because it lives on its other
 // replicas. Applying its entries here resurrects data on a node that gave the
-// range up.
+// range up. The replayer asks find_hosted_group() about every raft batch, and hands
+// add_batch() only the batches of a group it returns.
 SEASTAR_TEST_CASE(test_replay_discards_groups_without_local_replica) {
     return do_with_cql_env_thread([] (cql_test_env& env) {
         const auto gid = make_group_id();
@@ -2103,8 +2110,8 @@ SEASTAR_TEST_CASE(test_replay_discards_groups_without_local_replica) {
         const auto my_id = env.local_db().get_token_metadata().get_my_id();
 
         // The group has persisted state here - the replica used to be a member and its
-        // cleanup hasn't erased it yet - so only the ownership test can discard these
-        // entries. Index 0, so nothing the batch carries counts as committed.
+        // cleanup hasn't erased it yet - so only the ownership test can skip its
+        // batches. Index 0, so nothing the batch carries counts as committed.
         service::strong_consistency::raft_groups_storage::store_descriptor(
                 env.local_qp(), gid, this_shard_id(), raft::index_t(0), raft::term_t(0),
                 raft::configuration{}, {}).get();
@@ -2119,8 +2126,7 @@ SEASTAR_TEST_CASE(test_replay_discards_groups_without_local_replica) {
                 locator::tablet_replica_set{{locator::host_id{utils::UUID_gen::get_time_UUID()}, 0}}).get();
 
         db::raft_commitlog_replay_buffer buffer;
-        buffer.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
-                gid, 1, raft::index_t(0), batch).get();
+        BOOST_CHECK(!buffer.find_hosted_group(env.local_db(), gid));
         buffer.finish_replay(env.local_db(), env.local_qp()).get();
         drop_sc_tablet_metadata(env, table).get();
 
@@ -2129,13 +2135,17 @@ SEASTAR_TEST_CASE(test_replay_discards_groups_without_local_replica) {
         BOOST_CHECK(data.records.empty());
         buffer.stop().get();
 
-        // The same group, now with a replica on this shard, is not discarded.
+        // The same group, now with a replica on this shard, is hosted, and its tablet
+        // is the one tablet of the table's map.
         set_sc_tablet_metadata(env, table, gid,
                 locator::tablet_replica_set{{my_id, this_shard_id()}}).get();
 
         db::raft_commitlog_replay_buffer owned_buffer;
+        const auto* hosted = owned_buffer.find_hosted_group(env.local_db(), gid);
+        BOOST_REQUIRE(hosted);
+        BOOST_CHECK(hosted->tablet == (locator::global_tablet_id{table, locator::tablet_id(0)}));
         owned_buffer.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
-                gid, 1, raft::index_t(0), batch).get();
+                gid, *hosted, 1, raft::index_t(0), batch).get();
         owned_buffer.finish_replay(env.local_db(), env.local_qp()).get();
 
         // Nothing is committed - the floor is 0 - so both entries are kept for the
@@ -2147,10 +2157,10 @@ SEASTAR_TEST_CASE(test_replay_discards_groups_without_local_replica) {
     }, sc_replay_config());
 }
 
-// Test that replay discards a group this shard hosts but has no row for: a cleanup erased
-// the row when the tablet left, and the tablet came back before start_raft_group()
-// bootstrapped a new one. hosts_raft_group() answers yes here, so only the persisted-state
-// test can discard these entries.
+// Test that replay discards a group this shard hosts but has no row for: the group was
+// not bootstrapped here, and start_raft_group() will bootstrap it with an empty log.
+// hosts_raft_group() answers yes here, so only the persisted-state test can discard these
+// entries.
 SEASTAR_TEST_CASE(test_replay_discards_groups_without_persisted_state) {
     return do_with_cql_env_thread([] (cql_test_env& env) {
         const auto gid = make_group_id();
@@ -2163,11 +2173,9 @@ SEASTAR_TEST_CASE(test_replay_discards_groups_without_persisted_state) {
                 env.local_qp(), gid, this_shard_id()).get().exists);
 
         db::raft_commitlog_replay_buffer buffer;
-        buffer.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
-                gid, 1, raft::index_t(0), std::vector<raft::log_entry_ptr>{
-                    make_dummy_entry(raft::term_t(1), raft::index_t(1)),
-                    make_dummy_entry(raft::term_t(1), raft::index_t(2)),
-                }).get();
+        replay_batch(env, buffer, gid, 1, raft::index_t(0), std::vector<raft::log_entry_ptr>{
+                make_dummy_entry(raft::term_t(1), raft::index_t(1)),
+                make_dummy_entry(raft::term_t(1), raft::index_t(2))});
         buffer.finish_replay(env.local_db(), env.local_qp()).get();
 
         auto data = buffer.take_replayed_group_entries(gid);
@@ -2206,8 +2214,7 @@ SEASTAR_TEST_CASE(test_second_replay_recovers_the_rewritten_tail) {
         const auto replay = [&] (const std::vector<replayed_batch>& batches) {
             db::raft_commitlog_replay_buffer buffer;
             for (const auto& batch : batches) {
-                buffer.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
-                        gid, batch.segment, batch.commit_idx, batch.entries).get();
+                replay_batch(env, buffer, gid, batch.segment, batch.commit_idx, batch.entries);
             }
             buffer.finish_replay(env.local_db(), env.local_qp()).get();
             auto data = buffer.take_replayed_group_entries(gid);
@@ -2358,8 +2365,7 @@ SEASTAR_TEST_CASE(test_second_replay_drops_the_copies_the_first_one_superseded) 
         const auto replay = [&] (const std::vector<replayed_batch>& batches) {
             db::raft_commitlog_replay_buffer buffer;
             for (const auto& batch : batches) {
-                buffer.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
-                        gid, batch.segment, batch.commit_idx, batch.entries).get();
+                replay_batch(env, buffer, gid, batch.segment, batch.commit_idx, batch.entries);
             }
             buffer.finish_replay(env.local_db(), env.local_qp()).get();
             auto data = buffer.take_replayed_group_entries(gid);
@@ -2438,17 +2444,15 @@ SEASTAR_TEST_CASE(test_replay_persists_the_committed_configuration) {
 
         db::raft_commitlog_replay_buffer buffer;
         // 1..3 are committed, so the configuration at 2 is the one raft agreed on.
-        buffer.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
-                gid, 1, raft::index_t(3),
+        replay_batch(env, buffer, gid, 1, raft::index_t(3),
                 std::vector<raft::log_entry_ptr>{
                         make_dummy_entry(raft::term_t(1), raft::index_t(1)),
                         committed_config,
-                        make_dummy_entry(raft::term_t(1), raft::index_t(3))}).get();
-        buffer.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
-                gid, 2, raft::index_t(3),
+                        make_dummy_entry(raft::term_t(1), raft::index_t(3))});
+        replay_batch(env, buffer, gid, 2, raft::index_t(3),
                 std::vector<raft::log_entry_ptr>{
                         make_dummy_entry(raft::term_t(1), raft::index_t(4)),
-                        uncommitted_config}).get();
+                        uncommitted_config});
         buffer.finish_replay(env.local_db(), env.local_qp()).get();
 
         const auto persisted = service::strong_consistency::raft_groups_storage::load_descriptor(
@@ -2484,8 +2488,7 @@ SEASTAR_TEST_CASE(test_replay_keeps_the_floors_configuration_over_an_older_copy)
         const auto older_config = make_config_entry(raft::term_t(1), raft::index_t(5));
         const auto add = [&](db::segment_id_type segment, raft::index_t commit_idx,
                 std::vector<raft::log_entry_ptr> entries, db::raft_commitlog_replay_buffer& buffer) {
-            buffer.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
-                    gid, segment, commit_idx, entries).get();
+            replay_batch(env, buffer, gid, segment, commit_idx, entries);
         };
 
         db::raft_commitlog_replay_buffer buffer;
@@ -2528,8 +2531,7 @@ SEASTAR_TEST_CASE(test_replay_takes_the_commit_term_from_the_entry_at_the_floor)
 
         const auto add = [&](db::segment_id_type segment, raft::index_t commit_idx,
                 std::vector<raft::log_entry_ptr> entries, db::raft_commitlog_replay_buffer& buffer) {
-            buffer.add_batch(env.local_db(), env.local_qp(), env.get_system_keyspace().local(),
-                    gid, segment, commit_idx, entries).get();
+            replay_batch(env, buffer, gid, segment, commit_idx, entries);
         };
 
         db::raft_commitlog_replay_buffer buffer;
