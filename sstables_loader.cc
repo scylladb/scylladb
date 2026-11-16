@@ -72,7 +72,7 @@ sstables::sstable_id to_sstable_id(const rjson::value& v) {
 class send_meta_data {
     locator::host_id _node;
     seastar::rpc::sink<frozen_mutation_fragment, streaming::stream_mutation_fragments_cmd> _sink;
-    seastar::rpc::source<int32_t> _source;
+    seastar::rpc::source<streaming::stream_mutation_fragments_status> _source;
     const bool _abort_supported = false;
     bool _error_from_peer = false;
     size_t _num_partitions_sent = 0;
@@ -80,24 +80,31 @@ class send_meta_data {
     future<> _receive_done;
 private:
     future<> do_receive() {
-        int32_t status = 0;
+        auto status = streaming::stream_mutation_fragments_status::ok;
         while (auto status_opt = co_await _source()) {
             status = std::get<0>(*status_opt);
-            llog.debug("send_meta_data: got error code={}, from node={}", status, _node);
-            if (status == -1) {
+            llog.debug("send_meta_data: got error code={}, from node={}", fmt::underlying(status), _node);
+            switch (status) {
+            case streaming::stream_mutation_fragments_status::ok:
+            case streaming::stream_mutation_fragments_status::table_dropped:
+                break;
+            case streaming::stream_mutation_fragments_status::error:
+            default:
+                // A status this node doesn't know (sent by a newer node) is not a success
                 _error_from_peer = true;
+                break;
             }
         }
         llog.debug("send_meta_data: finished reading source from node={}", _node);
         if (_error_from_peer) {
-            throw std::runtime_error(format("send_meta_data: got error code={} from node={}", status, _node));
+            throw std::runtime_error(format("send_meta_data: got error code={} from node={}", fmt::underlying(status), _node));
         }
         co_return;
     }
 public:
     send_meta_data(locator::host_id node,
             seastar::rpc::sink<frozen_mutation_fragment, streaming::stream_mutation_fragments_cmd> sink,
-            seastar::rpc::source<int32_t> source, bool abort_supported)
+            seastar::rpc::source<streaming::stream_mutation_fragments_status> source, bool abort_supported)
         : _node(std::move(node))
         , _sink(std::move(sink))
         , _source(std::move(source))
