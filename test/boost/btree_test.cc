@@ -8,10 +8,19 @@
 
 #include <boost/test/data/test_case.hpp>
 #include <boost/test/unit_test.hpp>
+#include <algorithm>
 #include <fmt/core.h>
+#include <functional>
+#include <iterator>
+#include <new>
+#include <numeric>
+#include <random>
+#include <utility>
+#include <vector>
 
 #include "test/lib/scylla_test_case.hh"
 #include <seastar/testing/thread_test_case.hh>
+#include <seastar/util/defer.hh>
 #include "collection_stress.hh"
 #include "btree_validation.hh"
 #include "tree_test_key.hh"
@@ -30,10 +39,15 @@ public:
         std::strong_ordering operator()(const A& a, const B& b) const noexcept { return _cmp(a, b); }
     };
     using test_tree = tree<test_key, &test_key::b_hook, tri_compare, 4, 5, key_search::both, with_debug::yes>;
+    // `rows_test_tree` has the node size and the linear threshold of rows_entry::container_type.
+    using rows_test_tree = tree<test_key, &test_key::b_hook, tri_compare, 12, 20, key_search::both, with_debug::yes>;
+    using rows_test_validator = validator<test_key, &test_key::b_hook, tri_compare, 12, 20>;
     test_key(int nr, int cookie) noexcept : tree_test_key_base(nr, cookie) {}
     test_key(int nr) noexcept : tree_test_key_base(nr) {}
     test_key(const test_key& o) : tree_test_key_base(o, tree_test_key_base::force_copy_tag{}) {}
     test_key(test_key&&) = delete;
+    bool linked() const noexcept { return b_hook.attached(); }
+    const void* hook_node() const noexcept { return b_hook.node(); }
 };
 
 using test_tree = test_key::test_tree;
@@ -476,6 +490,177 @@ BOOST_AUTO_TEST_CASE(test_tree_size) {
     }
 
     t.clear_and_dispose(key_deleter);
+}
+
+// Calls `fn` with the keys from 0 to `count - 1` in ascending, descending and shuffled order.
+static void for_each_key_order(int count, std::function<void(const std::vector<int>&)> fn) {
+    std::vector<int> keys(count);
+    std::iota(keys.begin(), keys.end(), 0);
+    fn(keys);
+    std::ranges::reverse(keys);
+    fn(keys);
+    std::ranges::shuffle(keys, std::mt19937(42));
+    fn(keys);
+}
+
+// Checks that an insert into a full leaf allocates no node when the leaf can push a key to a
+// sibling instead of splitting. Ascending or descending keys fill the rightmost or the leftmost
+// leaf again and again, and that leaf pushes keys to its sibling until the sibling is full too.
+// Shuffled keys make the leaves inside the tree push.
+SEASTAR_THREAD_TEST_CASE(test_insert_push_allocates_no_node) {
+    using rows_test_tree = test_key::rows_test_tree;
+
+    for_each_key_order(10000, [] (const std::vector<int>& keys) {
+        logalloc::region mem;
+        with_allocator(mem.allocator(), [&] {
+            rows_test_tree t;
+            auto clear_tree = defer([&] () noexcept { t.clear_and_dispose(key_deleter); });
+            // The stats count no leaf while the root is inline or linear.
+            unsigned long leaves = 0;
+            for (int k : keys) {
+                const auto before = logalloc::shard_tracker().statistics().num_allocations;
+                auto ti = t.insert(std::make_unique<test_key>(k), cmp);
+                BOOST_REQUIRE(ti.second);
+                const auto allocations = logalloc::shard_tracker().statistics().num_allocations - before;
+                if (allocations == 0) {
+                    continue;
+                }
+                // The keys come from the standard allocator, so the region allocates only nodes.
+                // An insert into a tree that has leaves needs a node only when it splits a leaf,
+                // so an insert that allocates must add a leaf.
+                const auto leaves_before = std::exchange(leaves, t.get_stats().leaves);
+                if (leaves_before > 0) {
+                    BOOST_REQUIRE_GT(leaves, leaves_before);
+                }
+            }
+            BOOST_REQUIRE_GT(leaves, 0);
+        });
+    });
+}
+
+// Returns the node of each key of the tree, in the order of the keys.
+static std::vector<const void*> key_nodes(const test_key::rows_test_tree& t) {
+    std::vector<const void*> nodes;
+    for (const auto& k : t) {
+        nodes.push_back(k.hook_node());
+    }
+    return nodes;
+}
+
+// Checks that an insert that fails to allocate a node leaves the tree unchanged and does not
+// link the key, so that a retry of the same insert succeeds. Each insert runs again and again,
+// with an allocation failure at each allocation point in turn.
+SEASTAR_THREAD_TEST_CASE(test_insert_exception_safety) {
+    using rows_test_tree = test_key::rows_test_tree;
+    using rows_test_validator = test_key::rows_test_validator;
+
+    // `key_ref` is a key pointer that does not own the key, so that the key outlives a failed insert.
+    struct key_ref {
+        test_key* k;
+        test_key& operator*() const noexcept { return *k; }
+        test_key* release() noexcept { return k; }
+    };
+
+    for_each_key_order(2000, [] (const std::vector<int>& keys) {
+        logalloc::region mem;
+        with_allocator(mem.allocator(), [&] {
+            rows_test_tree t;
+            rows_test_validator tv;
+            auto clear_tree = defer([&] () noexcept { t.clear_and_dispose(key_deleter); });
+            size_t size = 0;
+            [[maybe_unused]] size_t allocating_inserts = 0;
+            for (int k : keys) {
+                auto* key = new test_key(k);
+                bool inserted = false;
+                // The tree owns a linked key, so the test deletes the key only when the tree
+                // did not link the key.
+                auto delete_key = defer([&] () noexcept {
+                    if (!key->linked()) {
+                        delete key;
+                    }
+                });
+                const auto nodes_before = key_nodes(t);
+                [[maybe_unused]] size_t failures = 0;
+                [[maybe_unused]] size_t allocations = 0;
+                memory::with_allocation_failures([&] {
+                    // with_allocation_failures() runs the function again when an allocation
+                    // failed and the function did not throw, and the key is then in the tree.
+                    if (key->linked()) {
+                        return;
+                    }
+                    const auto allocations_before = logalloc::shard_tracker().statistics().num_allocations;
+                    try {
+                        inserted = t.insert(key_ref{key}, cmp).second;
+                    } catch (const std::bad_alloc&) {
+                        failures++;
+                        // The injector stops after the first failure, so these checks can allocate.
+                        BOOST_REQUIRE(!key->linked());
+                        BOOST_REQUIRE_EQUAL(t.calculate_size(), size);
+                        BOOST_REQUIRE(tv.validate(t));
+                        // The tree keeps a single key in the inline root, and an insert into such
+                        // a tree moves that key to a new linear root before the allocation that
+                        // can fail. So the test compares the nodes of the keys only when the tree
+                        // does not hold a single key.
+                        if (size != 1) {
+                            BOOST_REQUIRE(key_nodes(t) == nodes_before);
+                        }
+                        throw;
+                    }
+                    allocations = logalloc::shard_tracker().statistics().num_allocations - allocations_before;
+                });
+                BOOST_REQUIRE(inserted);
+                BOOST_REQUIRE(tv.validate(t));
+                size++;
+#ifdef SEASTAR_ENABLE_ALLOC_FAILURE_INJECTION
+                // Every insert fails once at the allocation point at the start of tree::insert().
+                // An insert that allocates a node must also fail at the allocation of that node.
+                if (allocations > 0) {
+                    BOOST_REQUIRE_GE(failures, 2);
+                    allocating_inserts++;
+                }
+#endif
+            }
+            BOOST_REQUIRE_EQUAL(t.calculate_size(), keys.size());
+#ifdef SEASTAR_ENABLE_ALLOC_FAILURE_INJECTION
+            BOOST_REQUIRE_GT(allocating_inserts, 0);
+#endif
+        });
+    });
+}
+
+// Checks an insert that takes the key from another tree with a key_grabber, also when a full
+// leaf pushes a key to a sibling. key_grabber::release() erases the key from the source tree
+// through the hook of the key, so the insert must release the key before it links the key.
+BOOST_AUTO_TEST_CASE(test_insert_with_key_grabber) {
+    using rows_test_tree = test_key::rows_test_tree;
+    using rows_test_validator = test_key::rows_test_validator;
+
+    for_each_key_order(1000, [] (const std::vector<int>& keys) {
+        rows_test_tree src;
+        rows_test_tree dst;
+        rows_test_validator tv;
+        auto clear_trees = defer([&] () noexcept {
+            src.clear_and_dispose(key_deleter);
+            dst.clear_and_dispose(key_deleter);
+        });
+        for (int k : keys) {
+            src.insert(std::make_unique<test_key>(k), cmp);
+        }
+        size_t moved = 0;
+        for (int k : keys) {
+            auto it = src.find(k, cmp);
+            const auto next = std::next(it);
+            auto ti = dst.insert(rows_test_tree::key_grabber(it), cmp);
+            moved++;
+            BOOST_REQUIRE(ti.second);
+            BOOST_REQUIRE(*ti.first == k);
+            BOOST_REQUIRE(it == next);
+            BOOST_REQUIRE_EQUAL(dst.calculate_size(), moved);
+            BOOST_REQUIRE_EQUAL(src.calculate_size(), keys.size() - moved);
+            BOOST_REQUIRE(tv.validate(dst));
+            BOOST_REQUIRE(tv.validate(src));
+        }
+    });
 }
 
 BOOST_AUTO_TEST_CASE(test_swap_between_trees_1) {

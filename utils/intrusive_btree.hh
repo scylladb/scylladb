@@ -1578,10 +1578,11 @@ private:
     }
 
     /*
-     * This is the only throwing part of the insertion. It
-     * pre-allocates the nodes (if needed), then grabs the
-     * key from the pointer and dives into the non-failing
-     * continuation
+     * This is the only throwing part of the insertion. A full
+     * leaf first tries to push a key to a sibling, which needs
+     * no new node. Otherwise it pre-allocates the nodes, then
+     * grabs the key from the pointer and dives into the
+     * non-failing continuation
      */
     template <typename KeyPointer>
     void insert(kid_index idx, KeyPointer kptr) {
@@ -1601,9 +1602,24 @@ private:
             return;
         }
 
+        /*
+         * The push must take the key from `kptr` before it links the key,
+         * because release() can unlink the key from another tree, as the
+         * release() of key_grabber does.
+         */
+        if (try_push_to_sibling(idx, [&kptr] () noexcept -> member_hook& { return kptr.release()->*Hook; }, nullptr)) {
+            return;
+        }
+
+        /*
+         * maybe_allocate_nodes() also allocates a node for each full node
+         * above the leaf, and the tree frees that node when the full node
+         * pushes a key to a sibling instead. This waste is small, because
+         * only an insert that splits the leaf comes to this point.
+         */
         prealloc nodes;
         maybe_allocate_nodes(nodes);
-        insert_into_full(idx, kptr.release()->*Hook, nullptr, nodes);
+        split_and_insert(idx, kptr.release()->*Hook, nullptr, nodes);
     }
 
     void insert(kid_index idx, member_hook& key, node* kid, prealloc& nodes) noexcept {
