@@ -497,6 +497,34 @@ BOOST_AUTO_TEST_CASE(stress_test) {
     delete itc;
 }
 
+// Checks that an insert into a full leaf does not allocate and free a node when the leaf can
+// push a key to a sibling instead of splitting. Sequential keys fill the rightmost leaf again
+// and again, and that leaf pushes to its left sibling until the sibling is full too.
+SEASTAR_THREAD_TEST_CASE(test_insert_push_allocates_no_node) {
+    constexpr int TEST_NODE_SIZE = 7;
+    using test_tree = tree<int, unsigned long, int_compare, TEST_NODE_SIZE, key_search::both, with_debug::yes>;
+
+    logalloc::region mem;
+    with_allocator(mem.allocator(), [&] {
+        tree_pointer<test_tree> t(int_compare{});
+        const auto before = logalloc::shard_tracker().statistics().num_allocations;
+        constexpr int count = 10000;
+        for (int i = 0; i < count; i++) {
+            auto ti = t->emplace(i, i);
+            BOOST_REQUIRE(ti.second);
+        }
+        const auto allocations = logalloc::shard_tracker().statistics().num_allocations - before;
+        const auto st = t->get_stats();
+        const auto live = st.datas + st.leaves + st.nodes;
+        // Every data and every node of the tree is one allocation. A full inner node still
+        // gets a node ahead of a push, and a split gets a node for each full node above the
+        // leaf. For these sequential inserts the number of leaves bounds what is allocated
+        // beyond the tree, and the old code allocated about six times more than that.
+        BOOST_REQUIRE_GE(allocations, live);
+        BOOST_REQUIRE_LE(allocations - live, st.leaves);
+    });
+}
+
 SEASTAR_THREAD_TEST_CASE(stress_compaction_test) {
     constexpr int TEST_NODE_SIZE = 7;
 

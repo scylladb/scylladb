@@ -1393,7 +1393,12 @@ class node final {
         destroy(*this);
     }
 
-    void insert_into_full(kid_index idx, Key k, node_or_data nd, Less less, prealloc& nodes) noexcept {
+    /*
+     * Tries to make room in a full node for a new key at idx by pushing an
+     * existing key to a sibling that has room. Returns true when the node
+     * has room afterwards, and then idx is the index for the new key.
+     */
+    bool try_push_to_sibling(kid_index& idx, Less less) noexcept {
         if (!is_root()) {
             node& p = *_parent;
             kid_index i = p.index_for(_keys[0].v, less);
@@ -1430,17 +1435,16 @@ class node final {
                     right->grab_from_left(*this, p._keys[i]);
                 }
             }
+        }
 
-            if (_num_keys < NodeSize) {
-                do_insert(idx, std::move(k), nd, less);
-                nodes.drain();
-                return;
-            }
+        return _num_keys < NodeSize;
+    }
 
-            /*
-             * We can only get here if both ->can_push_to() checks above
-             * had failed. In this case -- go ahead and split this.
-             */
+    void insert_into_full(kid_index idx, Key k, node_or_data nd, Less less, prealloc& nodes) noexcept {
+        if (try_push_to_sibling(idx, less)) {
+            do_insert(idx, std::move(k), nd, less);
+            nodes.drain();
+            return;
         }
 
         split_and_insert(idx, std::move(k), nd, less, nodes);
@@ -1626,12 +1630,24 @@ class node final {
     }
 
     void insert(kid_index i, Key k, data* d, Less less) {
+        /*
+         * A full leaf tries to push a key to a sibling before it allocates
+         * anything, because a push needs no new node and is the common case
+         * once the leaves have filled up.
+         */
+        if (_num_keys < NodeSize || try_push_to_sibling(i, less)) {
+            do_insert(i, std::move(k), node_or_data{.d = d}, less);
+            return;
+        }
+
         prealloc nodes;
 
         /*
-         * Prepare the nodes for split in advaice, if the node::create will
+         * Prepare the nodes for split in advance, if the node::create will
          * start throwing while splitting we'll have troubles "unsplitting"
-         * the nodes back.
+         * the nodes back. A full node above the leaf gets its node here
+         * even when it will push instead of splitting, because a full
+         * inner node is much less frequent than a full leaf.
          */
         node* cur = this;
         while (cur->_num_keys == NodeSize) {
@@ -1643,7 +1659,7 @@ class node final {
             cur = cur->_parent;
         }
 
-        insert(i, std::move(k), node_or_data{.d = d}, less, nodes);
+        split_and_insert(i, std::move(k), node_or_data{.d = d}, less, nodes);
         SCYLLA_ASSERT(nodes.empty());
     }
 
