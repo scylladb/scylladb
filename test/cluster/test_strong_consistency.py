@@ -4,7 +4,9 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 
+import itertools
 import re
+import struct
 from datetime import datetime
 from typing import Tuple
 
@@ -15,6 +17,7 @@ from test.pylib.internal_types import HostID, ServerInfo
 from cassandra import InvalidRequest, ReadTimeout, Unavailable, WriteTimeout, WriteFailure
 from cassandra.cluster import ConsistencyLevel
 from cassandra.connection import UnixSocketEndPoint
+from cassandra.murmur3 import murmur3
 from cassandra.policies import FallthroughRetryPolicy, WhiteListRoundRobinPolicy
 from cassandra.query import BatchStatement, SimpleStatement, BoundStatement
 from test.pylib.tablets import get_all_tablet_replicas, get_tablet_info, get_tablet_replicas
@@ -1052,38 +1055,51 @@ async def test_shard_bounced_request_keeps_its_deadline(manager: ScyllaClusterMa
         'select': (select, ConsistencyLevel.QUORUM, ReadTimeout),
         'non_linearizable_select': (select, ConsistencyLevel.ONE, ReadTimeout)}[kind]
     server = await manager.server_add(cmdline=DEFAULT_CMDLINE)
+    # The test picks a key by the shard of its tablet, so no tablet may move until the test ends.
+    await manager.disable_tablet_balancing()
     cql, _ = await manager.get_ready_cql([server])
 
-    ks_opts = "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1} AND consistency = 'global'"
+    # With tablets on both shards, whichever shard the connection below reaches, some keys belong to the other one.
+    ks_opts = "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 8} AND consistency = 'global'"
     ks = await create_new_test_keyspace(cql, ks_opts)
     table = f"{ks}.test"
     await cql.run_async(f"CREATE TABLE {table} (pk int PRIMARY KEY, v int)")
-    logger.info("Write once, so that the requests below don't wait for the first leader")
-    await cql.run_async(f"INSERT INTO {table} (pk, v) VALUES (-1, -1)")
-    timeout_ms = scale_timeout(1000)
-    await manager.api.enable_injection(server.ip_addr, injection, one_shot=False)
-    try:
-        logger.info(f"Send text statements, which land on random shards, until a {kind} lands on a shard other than its tablet's")
-        for pk in range(30):
-            request = asyncio.ensure_future(cql.run_async(SimpleStatement(
-                query.format(table=table, pk=pk, timeout_ms=timeout_ms),
-                consistency_level=consistency_level, retry_policy=FallthroughRetryPolicy())))
-            held = asyncio.ensure_future(manager.api.wait_for_injection_enter(server.ip_addr, injection))
-            await asyncio.wait([request, held], return_when=asyncio.FIRST_COMPLETED)
-            if held.done():
-                break
-            held.cancel()
-            await request
-        else:
-            pytest.fail(f"None of the {kind}s was bounced to another shard")
+    tablets = await get_all_tablet_replicas(manager, server, ks, "test")
+    shards = {t.replicas[0][1] for t in tablets}
+    logger.info(f"The tablets are on shards {shards}")
+    assert len(shards) > 1
 
-        logger.info(f"Release the {kind} of pk={pk}, held before its bounce, after its deadline has passed")
-        await asyncio.sleep(2 * timeout_ms / 1000)
-        await manager.api.message_injection(server.ip_addr, injection)
-        with pytest.raises(timeout_error, match=f"Query timed out for {table}"):
-            await request
-    finally:
-        await manager.api.disable_injection(server.ip_addr, injection)
+    def shard_of(pk):
+        token = murmur3(struct.pack('>i', pk))
+        return next(t.replicas[0][1] for t in tablets if t.last_token >= token)
+
+    # Without shard awareness the session sends every request over its single connection to the node, so they all reach that connection's shard.
+    pinned_cluster = manager.con_gen([server.ip_addr], manager.port, manager.use_ssl, manager.auth_provider)
+    pinned_cluster.shard_aware_options.disable = True
+    with safe_shutting_down(pinned_cluster):
+        pinned_cql = pinned_cluster.connect()
+        [pool] = pinned_cql.get_pools()
+        [connection] = pool.get_connections()
+        connection_shard = connection.features.shard_id
+        pk = next(pk for pk in itertools.count() if shard_of(pk) != connection_shard)
+        logger.info(f"Read pk={pk} once, so that the {kind} below doesn't wait for the first leader of its tablet")
+        await cql.run_async(f"SELECT v FROM {table} WHERE pk = {pk}")
+        timeout_ms = scale_timeout(1000)
+        await manager.api.enable_injection(server.ip_addr, injection, one_shot=False)
+        try:
+            logger.info(f"Send the {kind} of pk={pk} to shard {connection_shard}, which bounces it to shard {shard_of(pk)}")
+            request = pinned_cql.run_async(SimpleStatement(
+                query.format(table=table, pk=pk, timeout_ms=timeout_ms),
+                consistency_level=consistency_level, retry_policy=FallthroughRetryPolicy()))
+            await manager.api.wait_for_injection_enter(server.ip_addr, injection)
+
+            logger.info(f"Release the {kind} of pk={pk}, held before its bounce, after its deadline has passed")
+            await asyncio.sleep(2 * timeout_ms / 1000)
+            await manager.api.message_injection(server.ip_addr, injection)
+            with pytest.raises(timeout_error, match=f"Query timed out for {table}"):
+                await request
+        finally:
+            await manager.api.disable_injection(server.ip_addr, injection)
 
     if kind == 'insert':
         rows = await cql.run_async(SimpleStatement(f"SELECT v FROM {table} WHERE pk = {pk}",
