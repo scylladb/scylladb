@@ -42,6 +42,9 @@ This document highlights ScyllaDB's key data modeling features.
     state and the history of all changes made to tables in the database.
   * :doc:`Workload Attributes </features/workload-attributes>` assigned to your workloads
     specify how ScyllaDB will handle requests depending on the workload.
+  * :doc:`Workload Prioritization </features/workload-prioritization>` lets you
+    assign service levels to roles, so that each workload gets the share of
+    resources it needs.
   * :doc:`Backup and Restore </features/backup-and-restore>` allows you to create
     backups of your data and restore it when needed.
   * :doc:`Incremental Repair </features/incremental-repair/>` provides a much more
