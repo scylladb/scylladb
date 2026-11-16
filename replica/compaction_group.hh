@@ -186,7 +186,7 @@ public:
     // Clear memtable(s) content
     future<> clear_memtables();
 
-    future<> flush(std::optional<db::replay_position> = {}) noexcept;
+    future<> flush_memtables(std::optional<db::replay_position> = {}) noexcept;
     bool can_flush() const;
     bool needs_flush() const;
 
@@ -454,8 +454,7 @@ public:
 
     future<utils::chunked_vector<logstor::segment_snapshot>> take_logstor_snapshot() const;
 
-    // Flush all memtables.
-    future<> flush() noexcept;
+    future<> flush_memtables() noexcept;
     future<> flush_separator() noexcept;
     bool can_flush() const;
     bool needs_flush() const;

@@ -1350,7 +1350,7 @@ future<> storage_group::split(compaction::compaction_type_options::split opt, ta
             continue;
         }
         auto holder = cg->async_gate().hold();
-        co_await cg->flush();
+        co_await cg->flush_memtables();
         co_await cg->flush_separator();
         co_await cg->split(opt, tablet_split_task_info);
     }
@@ -1795,7 +1795,7 @@ future<utils::chunked_vector<sstables::sstable_files_snapshot>> table::take_stor
         // deadlock might occur due to memtable flush backpressure waiting on
         // compaction to reduce the backlog.
 
-        co_await sg->flush();
+        co_await sg->flush_memtables();
 
         // The sstable set must be obtained *after* the deletion lock is taken,
         // otherwise components of sstables in the set might be unlinked from the filesystem
@@ -1857,7 +1857,7 @@ table::clone_tablet_storage(locator::tablet_id tid, bool leave_unsealed) {
     }
     auto& sg = *sgp;
     auto sg_holder = sg.async_gate().hold();
-    co_await sg.flush();
+    co_await sg.flush_memtables();
     // The sstable set must be obtained *after* the deletion lock is taken,
     // otherwise components of sstables in the set might be unlinked from the filesystem
     // by compaction while we are waiting for the lock.
@@ -3630,7 +3630,7 @@ future<> compaction_group::stop(sstring reason) noexcept {
     // compaction_manager::stop_ongoing_compactions swallows all encountered errors. So the closed_gate_fut
     // future will not get abandoned.
     co_await std::move(closed_gate_fut);
-    auto flush_future = co_await seastar::coroutine::as_future(flush());
+    auto flush_future = co_await seastar::coroutine::as_future(flush_memtables());
     auto separator_flush_future = co_await coroutine::as_future(flush_separator());
 
     if (_t.uses_logstor()) {
@@ -3756,7 +3756,7 @@ future<> table::flush_on_timer() {
                 next = std::min(next, now + period);
                 co_return;
             }
-            co_await cg.flush();
+            co_await cg.flush_memtables();
             // A non-flushable list keeps its memtable; never re-arm before now + period.
             next = std::min(next, std::max(cg.memtables()->back()->created_at(), now) + period);
         }).finally([&] {
@@ -4756,7 +4756,7 @@ future<table::snapshot_details> table::get_snapshot_details(fs::path snapshot_di
     co_return details;
 }
 
-future<> compaction_group::flush(std::optional<db::replay_position> pos) noexcept {
+future<> compaction_group::flush_memtables(std::optional<db::replay_position> pos) noexcept {
     if (pos && *pos < _lowest_rp) {
         return make_ready_future<>();
     }
@@ -4771,9 +4771,9 @@ future<> compaction_group::flush(std::optional<db::replay_position> pos) noexcep
     }
 }
 
-future<> storage_group::flush() noexcept {
+future<> storage_group::flush_memtables() noexcept {
     for (auto& cg : compaction_groups_immediate()) {
-        co_await cg->flush();
+        co_await cg->flush_memtables();
     }
 }
 
@@ -4822,7 +4822,7 @@ future<> table::flush_memtables(std::optional<db::replay_position> pos) {
     }
     auto op = _pending_flushes_phaser.start();
     // no std::bind_back in the clang version I'm on... :-(
-    co_await parallel_foreach_compaction_group([pos](auto& cg) { return cg.flush(pos); });
+    co_await parallel_foreach_compaction_group([pos](auto& cg) { return cg.flush_memtables(pos); });
 }
 
 future<> table::flush_separator(std::optional<logstor::segment_sequence> seq_num) {
@@ -6134,12 +6134,6 @@ future<> table::stop_compaction_groups(storage_group& sg) {
     return sg.stop("tablet cleanup");
 }
 
-future<> table::flush_compaction_groups(storage_group& sg) {
-    for (auto& cg_ptr : sg.compaction_groups_immediate()) {
-        co_await cg_ptr->flush();
-    }
-}
-
 future<> table::cleanup_compaction_groups(db::system_keyspace& sys_ks, locator::tablet_id tid, storage_group& sg) {
     for (auto& cg_ptr : sg.compaction_groups_immediate()) {
         co_await cg_ptr->cleanup();
@@ -6179,7 +6173,7 @@ future<> table::cleanup_tablet_without_deallocation(database& db, db::system_key
     auto& sg = storage_group_for_id(tid.value());
 
     co_await clear_inactive_reads_for_tablet(db, sg);
-    co_await flush_compaction_groups(sg);
+    co_await sg.flush_memtables();
     co_await cleanup_compaction_groups(sys_ks, tid, sg);
 }
 
