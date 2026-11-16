@@ -19,6 +19,7 @@ from test.pylib.dockerized_service import DockerizedServer
 from test.pylib.kmip_wrapper import KMIPServerWrapper
 from test.pylib.azure_vault_server_mock import MockAzureVaultServer
 from test.pylib.gcp_kms_server_mock import MockGcpKmsServer
+from test.pylib.aws_kms_proxy import AWSKMSForwardingServer
 
 import boto3
 
@@ -32,10 +33,12 @@ class KeyProvider(Enum):
     azure = "AzureKeyProviderFactory"
     gcp = "GcpKeyProviderFactory"
 
+
 class KeyProviderFactory:
     """Base class for provider factories"""
     def __init__(self, key_provider : KeyProvider, tmpdir):
         self.key_provider = key_provider
+        self.tmpdir = tmpdir
         self.system_key_location = os.path.join(tmpdir, "resources/system_keys")
 
     async def __aenter__(self):
@@ -44,6 +47,18 @@ class KeyProviderFactory:
     async def __aexit__(self, exception_type, exception_value, exception_traceback):
         pass
 
+    def can_create_error_state_object(self):
+        """
+        Can the provider create a proxy/whatever that can toggle generating server errors
+        """
+        return False
+
+    def create_error_state_object(self) -> CanEnterErrorState:
+        """
+        Default is fail
+        """
+        raise RuntimeError("Cannot enter error state")
+   
     def supported_cipher(self, cipher_algorithm, secret_key_strength):
         # pylint: disable=unused-argument
         """Is cipher type supported by provider"""
@@ -63,6 +78,42 @@ class KeyProviderFactory:
         if self.key_provider:
             return {"key_provider": self.key_provider.value}
         return {}
+
+class CanEnterErrorState(KeyProviderFactory):
+    def enter_error_state(self, on: bool):
+        pass
+    def get_endpoint_config(self, options:dict):
+        pass
+
+class KeyProviderFactoryProxy(KeyProviderFactory):
+    """Proxy for factory wrapping"""
+    def __init__(self, factory : KeyProviderFactory):
+        super(KeyProviderFactoryProxy, self).__init__(factory.key_provider, factory.tmpdir)
+        self.factory = factory
+
+    async def __aenter__(self):
+        return self.factory.__aenter__()
+
+    async def __aexit__(self, exception_type, exception_value, exception_traceback):
+        return self.factory.__aexit__(exception_type, exception_value, exception_traceback)
+
+    def can_create_error_state_object(self):
+        return self.factory.can_create_error_state_object()
+
+    def create_error_state_object(self):
+        return self.factory.create_error_state_object()
+    
+    def supported_cipher(self, cipher_algorithm, secret_key_strength):
+        return self.factory.supported_cipher(cipher_algorithm, secret_key_strength)
+
+    def require_restart(self):
+        return self.factory.require_restart()
+
+    def configuration_parameters(self) -> dict[str, str]:
+        return self.factory.configuration_parameters()
+
+    def additional_cf_options(self) -> dict[str, str]:
+        return self.factory.additional_cf_options()
 
 class LocalFileSystemKeyProviderFactory(KeyProviderFactory):
     """LocalFileSystemKeyProviderFactory proxy"""
@@ -251,6 +302,39 @@ class KMSKeyProviderFactory(KeyProviderFactory):
     def require_restart(self):
         return True
 
+    def can_create_error_state_object(self):
+        return self.endpoint_url != None
+
+    def create_error_state_object(self):
+        if not self.can_create_error_state_object():
+            super().create_error_state_object() # will throw
+
+        class MyProxy(KeyProviderFactoryProxy, CanEnterErrorState):
+            proxy: AWSKMSForwardingServer
+
+            def enter_error_state(self, on: bool):
+                self.proxy.set_generate_errors(on)
+
+            def get_endpoint_config(self, options:dict):
+                return options['kms_hosts'][self.factory.kms_host]
+
+            def configuration_parameters(self) -> dict[str, str]:
+                addr = self.proxy.server.socket.getsockname()
+                options = self.factory.configuration_parameters()
+                options['kms_hosts'][self.factory.kms_host]['endpoint'] = f'http://{addr[0]}:{addr[1]}/'
+                return options
+
+            async def __aenter__(self):
+                self.proxy = AWSKMSForwardingServer("127.0.0.1", 0, self.factory.endpoint_url, logging.getLogger("AWS KMS Proxy"))
+                await self.proxy.start()
+                return self
+
+            async def __aexit__(self, exception_type, exception_value, exception_traceback):
+                if self.proxy:
+                    await self.proxy.stop()
+                    self.proxy = None
+
+        return MyProxy(self)
 
 class AzureKeyProviderFactory(KeyProviderFactory):
     """AzureKeyProviderFactory proxy"""
@@ -291,6 +375,25 @@ class AzureKeyProviderFactory(KeyProviderFactory):
 
     def require_restart(self):
         return True
+
+    def can_create_error_state_object(self):
+        return True
+
+    def create_error_state_object(self):
+        class MyProxy(KeyProviderFactoryProxy, CanEnterErrorState):
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exception_type, exception_value, exception_traceback):
+                pass
+
+            def enter_error_state(self, on: bool):
+                self.factory.azure_server.enter_error_state(on)
+
+            def get_endpoint_config(self, options:dict):
+                return options['azure_hosts'][self.factory.azure_host]
+
+        return MyProxy(self)
 
 
 class GcpKeyProviderFactory(KeyProviderFactory):
@@ -377,6 +480,25 @@ class GcpKeyProviderFactory(KeyProviderFactory):
 
     def require_restart(self):
         return True
+
+    def can_create_error_state_object(self):
+        return True
+
+    def create_error_state_object(self):
+        class MyProxy(KeyProviderFactoryProxy, CanEnterErrorState):
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exception_type, exception_value, exception_traceback):
+                pass
+
+            def enter_error_state(self, on: bool):
+                self.factory.gcp_server.enter_error_state(on)
+
+            def get_endpoint_config(self, options:dict):
+                return options['gcp_hosts'][self.factory.gcp_host]
+
+        return MyProxy(self)
 
 
 def make_key_provider_factory(provider: KeyProvider, tmpdir, log_dir, scylla_exe):
