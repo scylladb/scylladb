@@ -8,7 +8,8 @@
 
 Three nodes, RF=3, and one disruptor per test: a replica killed and restarted, random
 nodes crashed and restarted again and again, the majority of a tablet's replicas lost
-and restored, the whole cluster killed and restarted.
+and restored, a leader killed with an uncommitted tail that the next leader overwrites,
+the whole cluster killed and restarted.
 
 Every test is one run of the workload in three parts: a warmup on the whole cluster,
 the disruption, and a healed part on the whole cluster again, after which the run
@@ -24,6 +25,12 @@ so the crash tests also run with 1 MB segments and a node flushed every second o
 descriptors forward, and the commitlog deletes the segments, while the nodes are being
 killed.  A crash lands between a release and the flush of its descriptor, and the replay
 starts from a descriptor the run moved.
+
+The commitlog is append-only, so a raft log truncation leaves the discarded copies on
+disk.  A truncation needs a leader change while the old leader holds entries nobody
+else has, which a plain kill makes only by chance; the uncommitted-tail test makes one in
+every round, so that replay has to drop superseded copies after crashes that land
+before and after the truncation, and after releases that persisted it.
 """
 
 from __future__ import annotations
@@ -34,7 +41,8 @@ from typing import Optional
 import pytest
 
 from test.cluster.strong_consistency.rig import (
-    COMMITLOG_SETUPS, GAP_S, GROUPS_START_TIMEOUT_S, RESTART_S, assert_local_reads_match, sc_rig, total)
+    COMMITLOG_SETUPS, ELECT_S, GAP_S, GROUPS_START_TIMEOUT_S, RESTART_S, UNCOMMITTED_TAIL_CMDLINE,
+    assert_doomed_writes_absent, assert_local_reads_match, sc_rig, total)
 from test.pylib.internal_types import ServerInfo
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 
@@ -177,6 +185,58 @@ async def test_majority_lost_and_restored_under_load(manager: ScyllaClusterManag
         assert total(in_outage) >= MIN_REQUESTS_IN_OUTAGE, f"only {total(in_outage)} requests happened during the outage"
         assert in_outage.write_ok == 0 and in_outage.reads == 0, f"operations were acknowledged without a quorum: {in_outage}"
         await rig.check(tmp_path)
+
+
+# --- a leader killed with an uncommitted tail ---------------------------------------
+
+ROUNDS = 2
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.parametrize("commitlog", list(COMMITLOG_SETUPS))
+async def test_uncommitted_tail_truncated_under_load(manager: ScyllaClusterManager, tmp_path, slow: int,
+                                                  commitlog: str):
+    """Kill a leader that holds entries nobody else has, under load, and let the next leader overwrite them.
+
+    Rig.truncate_uncommitted_tail in each of two rounds: the leader is cut off, takes a
+    tail of the workload's writes and of doomed writes sent straight to it, and is killed
+    with the tail in its commitlog; the successor commits at the same indexes, the old
+    leader comes back and truncates its tail, and is crashed again, so a replay meets
+    both copies.  test_truncated_copies_are_dropped_on_replay in
+    test_strong_consistency_commitlog.py takes the same path on one node without load;
+    this one runs it under the register workload, with the checker over the history.
+
+    The checker verifies the whole history; the writes cut off with the tail are
+    indeterminate to it.  The doomed writes are not in it, and must never be read back:
+    a CL=ONE and a linearizable read on every replica after the run find none, so no
+    replay applied a truncated copy.
+
+    Run over each COMMITLOG_SETUPS: with small segments and flushes the groups release
+    segments around the truncation, and persist it as truncation records, which a later
+    replay then drops copies by.
+    """
+    async with sc_rig(manager, slow, commitlog=COMMITLOG_SETUPS[commitlog], cmdline=UNCOMMITTED_TAIL_CMDLINE) as rig:
+        [group_id] = rig.group_ids
+        rounds_done = 0
+        dropped_truncated = superseded = 0
+
+        async def disrupt() -> None:
+            nonlocal rounds_done, dropped_truncated, superseded
+            while rounds_done < ROUNDS and not rig.workload.stop_event.is_set():
+                if rounds_done:
+                    await rig.sleep(GAP_S)
+                tail = await rig.truncate_uncommitted_tail(group_id)
+                dropped_truncated += tail.dropped_truncated
+                superseded += tail.superseded
+                rounds_done += 1
+
+        await rig.run(ROUNDS * (ELECT_S + 2 * RESTART_S) + (ROUNDS - 1) * GAP_S, disrupt)
+        assert rounds_done == ROUNDS, f"only {rounds_done} of {ROUNDS} rounds fit in the run"
+        # Which of the two drops the replays after the truncations took depends on what the
+        # groups released before each crash, so it is reported, not required.
+        logger.info("Replays after the truncations: dropped_truncated=%d superseded=%d", dropped_truncated, superseded)
+        await rig.check(tmp_path)
+        await assert_doomed_writes_absent(rig, await rig.wait_caught_up())
 
 
 # --- the whole cluster killed and restarted -----------------------------------------
