@@ -4375,24 +4375,61 @@ db::replay_position table::highest_flushed_replay_position(const dht::token_rang
     return rp.value_or(db::replay_position());
 }
 
+using snapshot_sstable_set = foreign_ptr<std::unique_ptr<utils::chunked_vector<sstables::sstable_snapshot_metadata>>>;
+
 class snapshot_writer {
 public:
     virtual future<> init() = 0;
     virtual future<> sync() = 0;
-    virtual future<output_stream<char>> stream_for(sstring component) = 0;
+    virtual future<> write_schema_as_cql(cql3::description schema_desc) = 0;
+    virtual future<> write_manifest(const locator::topology& topology,
+                                    const std::vector<snapshot_sstable_set>& sstable_sets,
+                                    const std::vector<db::snapshot_tablet_entry>& tablets,
+                                    sstring name, db::snapshot_options opts,
+                                    schema_ptr schema,
+                                    std::optional<int64_t> tablet_count,
+                                    std::optional<locator::tablet_layout> tablet_layout) = 0;
     virtual ~snapshot_writer() = default;
 };
 
-using snapshot_sstable_set = foreign_ptr<std::unique_ptr<utils::chunked_vector<sstables::sstable_snapshot_metadata>>>;
+class local_snapshot_writer : public snapshot_writer {
+    std::filesystem::path _dir;
+    db::snapshot_options _opts;
 
-static future<> write_manifest(const locator::topology& topology,
-                               snapshot_writer& writer,
-                               const std::vector<snapshot_sstable_set>& sstable_sets,
-                               const std::vector<db::snapshot_tablet_entry>& tablets,
-                               sstring name, db::snapshot_options opts,
-                               schema_ptr schema,
-                               std::optional<int64_t> tablet_count,
-                               std::optional<locator::tablet_layout> tablet_layout) {
+    future<output_stream<char>> stream_for(sstring component) {
+        auto file_name = (_dir / component).native();
+        auto f = co_await open_checked_file_dma(general_disk_error_handler, file_name, open_flags::wo | open_flags::create | open_flags::truncate);
+        co_return co_await make_file_output_stream(std::move(f));
+    }
+
+public:
+    local_snapshot_writer(std::filesystem::path dir, sstring name, db::snapshot_options opts)
+            : _dir(dir / sstables::snapshots_dir / name)
+            , _opts(std::move(opts))
+    {}
+    future<> init() override {
+        co_await io_check([this] { return recursive_touch_directory(_dir.native()); });
+    }
+    future<> sync() override {
+        co_await io_check([this] { return sync_directory(_dir.native()); });
+    }
+    future<> write_schema_as_cql(cql3::description schema_desc) override;
+    future<> write_manifest(const locator::topology& topology,
+                            const std::vector<snapshot_sstable_set>& sstable_sets,
+                            const std::vector<db::snapshot_tablet_entry>& tablets,
+                            sstring name, db::snapshot_options opts,
+                            schema_ptr schema,
+                            std::optional<int64_t> tablet_count,
+                            std::optional<locator::tablet_layout> tablet_layout) override;
+};
+
+future<> local_snapshot_writer::write_manifest(const locator::topology& topology,
+                                               const std::vector<snapshot_sstable_set>& sstable_sets,
+                                               const std::vector<db::snapshot_tablet_entry>& tablets,
+                                               sstring name, db::snapshot_options opts,
+                                               schema_ptr schema,
+                                               std::optional<int64_t> tablet_count,
+                                               std::optional<locator::tablet_layout> tablet_layout) {
     using namespace db::snapshot;
 
     manifest_json manifest;
@@ -4436,7 +4473,7 @@ static future<> write_manifest(const locator::topology& topology,
     }
 
     auto streamer = json::stream_object(std::move(manifest));
-    auto out = co_await writer.stream_for("manifest.json");
+    auto out = co_await stream_for("manifest.json");
     std::exception_ptr ex;
     try {
         co_await streamer(std::move(out));
@@ -4465,9 +4502,9 @@ static future<> write_manifest(const locator::topology& topology,
  * CREATE INDEX command.
  * The same is true for local index and MATERIALIZED VIEW.
  */
-static future<> write_schema_as_cql(snapshot_writer& writer, cql3::description schema_desc) {
+future<> local_snapshot_writer::write_schema_as_cql(cql3::description schema_desc) {
     auto schema_description = std::move(*schema_desc.create_statement);
-    auto out = co_await writer.stream_for("schema.cql");
+    auto out = co_await stream_for("schema.cql");
     std::exception_ptr ex;
 
     auto view = managed_bytes_view(schema_description.as_managed_bytes());
@@ -4487,28 +4524,6 @@ static future<> write_schema_as_cql(snapshot_writer& writer, cql3::description s
         co_await coroutine::return_exception_ptr(std::move(ex));
     }
 }
-
-class local_snapshot_writer : public snapshot_writer {
-    std::filesystem::path _dir;
-    db::snapshot_options _opts;
-
-public:
-    local_snapshot_writer(std::filesystem::path dir, sstring name, db::snapshot_options opts)
-            : _dir(dir / sstables::snapshots_dir / name)
-            , _opts(std::move(opts))
-    {}
-    future<> init() override {
-        co_await io_check([this] { return recursive_touch_directory(_dir.native()); });
-    }
-    future<> sync() override {
-        co_await io_check([this] { return sync_directory(_dir.native()); });
-    }
-    future<output_stream<char>> stream_for(sstring component) override {
-        auto file_name = (_dir / component).native();
-        auto f = co_await open_checked_file_dma(general_disk_error_handler, file_name, open_flags::wo | open_flags::create | open_flags::truncate);
-        co_return co_await make_file_output_stream(std::move(f));
-    }
-};
 
 // Runs the orchestration code on an arbitrary shard to balance the load.
 future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, const global_table_ptr& table_shards, sstring name, db::snapshot_options opts, snapshot_callback ssc) {
@@ -4552,7 +4567,7 @@ future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, c
         // With internals, so that schema.cql records the table's dropped columns: without them, an
         // sstable that still holds a dropped column's data is unreadable once restored.
         auto schema_desc = s->describe(replica::make_schema_describe_helper(table_shards), cql3::describe_option::STMTS_AND_INTERNALS);
-        co_await write_schema_as_cql(*writer, std::move(schema_desc)).handle_exception([&] (std::exception_ptr ptr) {
+        co_await writer->write_schema_as_cql(std::move(schema_desc)).handle_exception([&] (std::exception_ptr ptr) {
             tlogger.error("Failed writing schema file in snapshot in {} with exception {}", name, ptr);
             ex = std::move(ptr);
         });
@@ -4586,8 +4601,8 @@ future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, c
                 }
             }
         }
-        co_await write_manifest(topology, *writer, sstable_sets, tablets, name, opts, s, 
-                                tablet_count, tablet_layout).handle_exception([&] (std::exception_ptr ptr) {
+        co_await writer->write_manifest(topology, sstable_sets, tablets, name, opts, s,
+                                        tablet_count, tablet_layout).handle_exception([&] (std::exception_ptr ptr) {
             tlogger.error("Failed to seal snapshot in {}: {}.", name, ptr);
             ex = std::move(ptr);
         });
