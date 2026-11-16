@@ -70,6 +70,13 @@ enum class stream_mutation_fragments_cmd : uint8_t {
     error,
     mutation_fragment_data,
     end_of_stream,
+    abort,
+};
+
+enum class stream_mutation_fragments_status : int32_t {
+    ok = 0,
+    error = -1,
+    table_dropped = -2,
 };
 
 class file_stream_id final {
