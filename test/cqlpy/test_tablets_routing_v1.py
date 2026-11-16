@@ -38,14 +38,14 @@ def connect(request, host, scylla_only):
     if int(supported["SCYLLA_NR_SHARDS"][0]) < 2:
         skip_env("The tests need a shard other than the one of the partition")
 
-    def open_connection():
-        return cql_frames.connection(host, port, {EXTENSION: ""})
+    def open_connection(version: int = 4):
+        return cql_frames.connection(host, port, {EXTENSION: ""}, version)
     return open_connection
 
 
 # The shard the connection is on.
-def shard_of(sock: socket.socket) -> int:
-    return int(cql_frames.supported(sock)["SCYLLA_SHARD"][0])
+def shard_of(sock: socket.socket, version: int = 4) -> int:
+    return int(cql_frames.supported(sock, version)["SCYLLA_SHARD"][0])
 
 
 # The shard of each partition of the table with an int partition key pk, by the
