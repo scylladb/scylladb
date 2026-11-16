@@ -24,6 +24,7 @@
 
 #include <vector>
 #include <map>
+#include <stdexcept>
 #include <string_view>
 
 namespace cql3 {
@@ -112,6 +113,18 @@ using schema_result = std::map<sstring, lw_shared_ptr<query::result_set>>;
 using schema_result_value_type = std::pair<sstring, lw_shared_ptr<query::result_set>>;
 
 const std::string COMMITLOG_FILENAME_PREFIX("SchemaLog-");
+
+// Thrown by merge_schema() when the schema mutations were already persisted
+// to system_schema, but the in-memory schema could not be updated. The node's
+// in-memory schema no longer matches system_schema, and later merges will not
+// detect the difference, because they compare persisted state before and after
+// applying their mutations. Only a restart, which rebuilds the in-memory schema
+// from system_schema, brings them back in sync.
+// The original error is nested.
+class schema_persisted_but_not_applied : public std::runtime_error {
+public:
+    schema_persisted_but_not_applied() : std::runtime_error("schema mutations were persisted, but the in-memory schema was not updated") {}
+};
 
 namespace v3 {
 
