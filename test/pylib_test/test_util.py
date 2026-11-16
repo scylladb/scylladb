@@ -33,7 +33,7 @@ def test_read_last_line():
     "mode,base_timeout,expected",
     [
         ("debug", 10, 30),
-        ("sanitize", 10, 30),
+        ("sanitize", 10, 25),
         ("release", 10, 10),
         ("dev", 10, 20),
         ("coverage", 10, 30),

@@ -5,6 +5,7 @@
 #
 from __future__ import annotations
 
+import math
 import re
 import shutil
 import subprocess
@@ -532,10 +533,15 @@ def get_modes_to_run(config) -> list[str]:
 
 def scale_timeout_by_mode(mode: str, timeout: int | float) -> int | float:
     """Scale timeout according to test.py mode semantics.
-    Each mode has a different scale: debug, coverage, and sanitize modes are multiplied by 3, dev by 2.
+    Each mode has a different scale: debug and coverage modes are multiplied by 3, sanitize by 2.5, dev by 2.
     Unknown modes are left unchanged.
+
+    The factors are not all integers, so an integer timeout is rounded up to stay an
+    integer: callers put the result into Scylla's integer config options and into CQL,
+    where "75000.0" is not accepted. A fractional timeout is scaled as is.
     """
-    return MODES_TIMEOUT_FACTOR.get(mode, 1) * timeout
+    scaled = MODES_TIMEOUT_FACTOR.get(mode, 1) * timeout
+    return math.ceil(scaled) if isinstance(timeout, int) else scaled
 
 
 # Base timeout for stopping a Scylla server gracefully, before mode scaling.

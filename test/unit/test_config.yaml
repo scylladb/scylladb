@@ -4,6 +4,16 @@ skip_in_debug_modes:
     - lsa_sync_eviction_test
     - row_cache_alloc_stress_test
     - row_cache_stress_test
+# Sanitize runs the tests that the debug modes skip for being slow, but not
+# these. Like debug, it uses the standard allocator, which ignores -m, and
+# these tests are built around running out of memory: without a limit they
+# evict nothing and keep allocating instead. lsa_sync_eviction_test also leaks
+# its objects on purpose, which LeakSanitizer reports.
+skip_in_sanitize:
+    - lsa_async_eviction_test
+    - lsa_sync_eviction_test
+    - row_cache_alloc_stress_test
+    - row_cache_stress_test
 # Custom command line arguments for some of the tests
 custom_args:
     lsa_async_eviction_test:

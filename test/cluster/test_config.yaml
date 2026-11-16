@@ -28,9 +28,18 @@ skip_in_debug_modes:
   - test_node_shutdown_waits_for_pending_requests
   - test_cdc_generation_clearing
   - test_cdc_generation_publishing
+# Sanitize runs the tests that the debug modes skip for being slow, but not
+# these. limits_test is a stress test: test_max_cells creates a table with 32K
+# columns and fills 16M cells, which stalls the reactor under the sanitizers
+# for longer than the client timeout. It also puts the host under memory
+# stress: sanitize uses the standard allocator, which ignores the node's
+# --memory 2G limit, so a few of these running in parallel use up the memory
+# that test.py budgeted for its jobs.
+skip_in_sanitize:
+  - dtest/limits_test
 run_in_release:
   - test_gossiper
-run_in_dev:
+run_in_dev: &dev_only
   - test_raft_ignore_nodes
   - test_group0_schema_versioning
   - test_zero_token_nodes_no_replication
@@ -46,5 +55,8 @@ run_in_dev:
   - dtest/cfid_test
   - dtest/rebuild_test
   - dtest/schema_management_test
+# Sanitize runs everything dev does: it is the mode that covers these tests
+# in CI runs that do not include dev.
+run_in_sanitize: *dev_only
 run_in_debug_modes:
   - random_failures/test_random_failures

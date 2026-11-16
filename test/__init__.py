@@ -10,8 +10,8 @@ import time
 import os
 from pathlib import Path
 
-__all__ = ["ALL_MODES", "BUILD_DIR", "DEBUG_MODES", "HOST_ID", "TEST_DIR", "TEST_RUNNER", "TOP_SRC_DIR",
-           "asan_options", "path_to", "ubsan_options", "use_traditional_build"]
+__all__ = ["ALL_MODES", "BUILD_DIR", "DEBUG_AND_SANITIZE_MODES", "DEBUG_MODES", "HOST_ID", "SANITIZE_MODE", "TEST_DIR", "TEST_RUNNER",
+           "TOP_SRC_DIR", "asan_options", "path_to", "ubsan_options", "use_traditional_build"]
 
 
 TEST_RUNNER = os.environ.get("SCYLLA_TEST_RUNNER", "pytest")
@@ -28,8 +28,25 @@ ALL_MODES = {
     "coverage": "Coverage",
 }
 
-DEBUG_MODES = {"debug", "sanitize", "coverage"}
-MODES_TIMEOUT_FACTOR = {"release": 1, "sanitize": 3, "debug": 3, "dev": 2, "coverage": 3}
+# Unoptimized builds: tests need much longer timeouts and smaller workloads there.
+DEBUG_MODES = {"debug", "coverage"}
+# Sanitize is built with -O2, so it runs almost as fast as dev and is not a debug
+# mode: it gets dev-sized workloads and runs the tests that the debug modes skip.
+# It still carries the sanitizers' overhead and the DEBUG define, so use
+# DEBUG_AND_SANITIZE_MODES for things that depend on those:
+# - Deadlines: how long to wait for a node to start or stop, for a log line, for
+#   a test executable to finish. The wait ends as soon as the awaited thing
+#   happens, so a passing test never spends the deadline and the debug value
+#   costs sanitize nothing. Only a failing test pays for it, by being reported
+#   later. A deadline that is too short costs a spurious failure, and the
+#   sanitizers' overhead is uneven, so sanitize keeps the debug value rather
+#   than a tuned one.
+# - Things the binary decides with #ifdef DEBUG, such as default timeouts.
+# Do not use it for a time that a test waits out in full, or for a workload
+# size: those make every run slower, and sanitize gets the dev value there.
+SANITIZE_MODE = "sanitize"
+DEBUG_AND_SANITIZE_MODES = DEBUG_MODES | {SANITIZE_MODE}
+MODES_TIMEOUT_FACTOR = {"release": 1, "sanitize": 2.5, "debug": 3, "dev": 2, "coverage": 3}
 
 HOST_ID = os.environ.get("SCYLLA_TEST_HOST_ID")
 if HOST_ID is None:

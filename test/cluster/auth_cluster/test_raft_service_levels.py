@@ -7,7 +7,6 @@ import pytest
 import time
 import asyncio
 import logging
-from test import DEBUG_MODES
 from test.pylib.rest_client import get_host_api_address, read_barrier
 from test.pylib.util import unique_name, wait_for_cql_and_get_hosts, wait_for, wait_for_view
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
@@ -116,7 +115,7 @@ async def assert_connections_params(manager: ScyllaClusterManager, hosts, expect
             assert param["scheduling_group"]
 
 @pytest.mark.skip_mode(mode='release', reason='cql server testing REST API is not supported in release mode')
-async def test_connections_parameters_auto_update(manager: ScyllaClusterManager, build_mode):
+async def test_connections_parameters_auto_update(manager: ScyllaClusterManager, scale_timeout):
     servers = await manager.servers_add(3, config=auth_config, auto_rack_dc="dc1")
     cql = manager.get_cql()
     hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
@@ -127,21 +126,23 @@ async def test_connections_parameters_auto_update(manager: ScyllaClusterManager,
     cluster_connections, sessions = await get_roles_connections(manager, servers)
 
     logging.info("Asserting all connections have default parameters")
-    str_to = lambda build_mode : "1m" if build_mode=="dev" else ("1m30s" if build_mode in DEBUG_MODES else f"Faild bad mode {build_mode}")
+    # The server prints the timeout as a CQL duration, which omits zero components ("1m", not "1m0s").
+    minutes, seconds = divmod(scale_timeout(30), 60)
+    str_to = f"{minutes}m{seconds}s" if seconds else f"{minutes}m"
     await assert_connections_params(manager, hosts, {
         "r1": {
             "workload_type": "unspecified",
-            "timeout": str_to(build_mode),
+            "timeout": str_to,
             "scheduling_group": "sl:default",
         },
         "r2": {
             "workload_type": "unspecified",
-            "timeout": str_to(build_mode),
+            "timeout": str_to,
             "scheduling_group": "sl:default",
         },
         "r3": {
             "workload_type": "unspecified",
-            "timeout": str_to(build_mode),
+            "timeout": str_to,
             "scheduling_group": "sl:default",
         },
     })

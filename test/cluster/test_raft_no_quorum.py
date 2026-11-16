@@ -7,7 +7,7 @@ import logging
 
 import pytest
 import asyncio
-from test import DEBUG_MODES
+from test import DEBUG_MODES, SANITIZE_MODE
 from test.pylib.internal_types import ServerNum
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import inject_error_one_shot, InjectionHandler, read_barrier
@@ -18,7 +18,9 @@ logger = logging.getLogger(__name__)
 
 @pytest.fixture(name="raft_op_timeout")  # avoid the W0621:redefined-outer-name pylint warning
 def fixture_raft_op_timeout(build_mode):
-    return 10000 if build_mode in DEBUG_MODES else 1000
+    if build_mode in DEBUG_MODES:
+        return 10000
+    return 2000 if build_mode == SANITIZE_MODE else 1000
 
 
 async def update_group0_raft_op_timeout(server_id: ServerNum, manager: ScyllaClusterManager, timeout: int) -> None:

@@ -32,7 +32,7 @@ import yaml
 from _pytest.junitxml import xml_key
 
 
-from test import ALL_MODES, DEBUG_MODES, TEST_DIR, TOP_SRC_DIR, path_to
+from test import ALL_MODES, DEBUG_AND_SANITIZE_MODES, DEBUG_MODES, TEST_DIR, TOP_SRC_DIR, path_to
 from test.pylib.artifact_registry import ArtifactRegistry as artifacts
 from test.pylib.coverage_utils import coverage_dir
 from test.pylib.ldap_server import start_ldap
@@ -774,6 +774,9 @@ class TestSuiteConfig:
         run_in_this_mode = set(self.cfg.get(f"run_in_{build_mode}", []))
         if build_mode in DEBUG_MODES:
             result.update(self.cfg.get("skip_in_debug_modes", []))
+        # Sanitize is fast enough to run what the debug modes skip, but it still
+        # runs the tests that need the checks only the debug modes and it have.
+        if build_mode in DEBUG_AND_SANITIZE_MODES:
             run_in_this_mode.update(self.cfg.get("run_in_debug_modes", []))
         result.update(self._run_in_specific_mode - run_in_this_mode)
         return result
