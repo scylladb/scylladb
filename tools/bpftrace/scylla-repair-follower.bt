@@ -1,0 +1,109 @@
+#!/usr/bin/env bpftrace
+/*
+ * Copyright (C) 2026-present ScyllaDB
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
+ */
+/*
+ * scylla-repair-follower: is this node slow to read, slow to write, or
+ * waiting, in the repairs it takes part in. Attach on any replica; the
+ * probes fire for the node's own repair_meta whether it is the master or
+ * a follower. Prints a line when a reader is created (strategy,
+ * incremental selection) and when a writer finishes; on exit, prints per
+ * table the disk read time and throughput per buffer, the reader permit
+ * wait, the time to apply a batch of received rows, the wait for the
+ * writer to seal its sstables at stop, and the repair_meta stop time.
+ *
+ * Usage: bpftrace tools/bpftrace/scylla-repair-follower.bt -p $(pgrep -x scylla)
+ *
+ * A repair_meta is keyed by (repair_meta_id, master host id msb): the id
+ * is unique per master only, and a node follows several masters.
+ *
+ * Reading the output: read throughput far below the disk's means the
+ * reader is starved (IO shares, many sstables, cache misses) or hashing
+ * is CPU bound (confirm with scylla-cpuprofile.bt); a large writer_wait
+ * means the sstable seal or the view update path is slow; a large permit
+ * wait means reader admission is the bottleneck.
+ */
+
+BEGIN
+{
+    printf("Watching scylla repair reads and writes on this node... Hit Ctrl-C to end.\n");
+}
+
+usdt:*:scylla:repair_meta_start
+{
+    @ks[arg0, arg1] = str(arg3);
+    @tbl[arg0, arg1] = str(arg4);
+    @metas[str(arg3), str(arg4), arg5 ? "master" : "follower"] = count();
+}
+
+usdt:*:scylla:repair_meta_permit_done
+{
+    @permit_wait_us[str(arg0), str(arg1)] = hist(arg2);
+}
+
+/* strategy: 0 local, 1 multishard_split, 2 multishard_filter, 3 incremental */
+usdt:*:scylla:repair_meta_reader_created
+{
+    printf("%s meta=%u/%016lx %s.%s reader strategy %ld, selected %ld KB skipped %ld KB, created in %ld us\n", strftime("%H:%M:%S", nsecs),
+           arg0, arg1, @ks[arg0, arg1], @tbl[arg0, arg1], arg2, arg3 / 1024, arg4 / 1024, arg5);
+    @reader_strategy[@ks[arg0, arg1], @tbl[arg0, arg1], arg2] = count();
+    @inc_selected_bytes[@ks[arg0, arg1], @tbl[arg0, arg1]] = sum(arg3);
+    @inc_skipped_bytes[@ks[arg0, arg1], @tbl[arg0, arg1]] = sum(arg4);
+}
+
+usdt:*:scylla:repair_meta_read_rows_done
+{
+    $ks = @ks[arg0, arg1];
+    $tbl = @tbl[arg0, arg1];
+    @read_us[$ks, $tbl] = hist(arg4);
+    @read_bytes[$ks, $tbl] = sum(arg3);
+    @read_rows[$ks, $tbl] = sum(arg2);
+    /* bytes per microsecond is MB/s */
+    if (arg4 > 0 && arg3 > 0) {
+        @read_mbps[$ks, $tbl] = hist(arg3 / arg4);
+    }
+}
+
+usdt:*:scylla:repair_meta_apply_rows_done
+{
+    $ks = @ks[arg0, arg1];
+    $tbl = @tbl[arg0, arg1];
+    @apply_us[$ks, $tbl] = hist(arg4);
+    @apply_rows[$ks, $tbl] = sum(arg2);
+    @apply_bytes[$ks, $tbl] = sum(arg3);
+}
+
+usdt:*:scylla:repair_meta_writer_done
+{
+    @writer_wait_ms[@ks[arg0, arg1], @tbl[arg0, arg1]] = hist(arg2 / 1000);
+}
+
+usdt:*:scylla:repair_meta_mark_repaired_done
+{
+    @mark_repaired_ms[str(arg0), str(arg1)] = hist(arg2 / 1000);
+}
+
+usdt:*:scylla:repair_meta_stop
+{
+    @stop_ms[@ks[arg0, arg1], @tbl[arg0, arg1]] = hist(arg2 / 1000);
+    /* the start probe may predate the attach */
+    if (@tbl[arg0, arg1] != "") {
+        delete(@ks[arg0, arg1]);
+        delete(@tbl[arg0, arg1]);
+    }
+}
+
+usdt:*:scylla:repair_writer_done
+{
+    printf("%s writer %s.%s wrote %ld partitions in %ld ms\n", strftime("%H:%M:%S", nsecs),
+           str(arg0), str(arg1), arg2, arg3 / 1000);
+    @writer_ms[str(arg0), str(arg1)] = hist(arg3 / 1000);
+    @writer_partitions[str(arg0), str(arg1)] = sum(arg2);
+}
+
+END
+{
+    clear(@ks);
+    clear(@tbl);
+}

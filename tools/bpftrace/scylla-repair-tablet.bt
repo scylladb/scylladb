@@ -1,0 +1,195 @@
+#!/usr/bin/env bpftrace
+/*
+ * Copyright (C) 2026-present ScyllaDB
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
+ */
+/*
+ * scylla-repair-tablet: where does a tablet repair spend its time. Attach
+ * on the node that runs the repair (the tablet replica the coordinator
+ * picked as master). Prints one line per finished tablet and, for each
+ * row-level repair range, its time split into: pre (memory and permit
+ * waits plus the start and estimated-partitions RPCs), rounds, and stop
+ * (the peers sealing their sstables). On exit, prints histograms of
+ * tablet duration, rounds per range, round duration by outcome, the
+ * sync-boundary latency per peer (the time a peer takes to read and hash
+ * one buffer, plus the network), and the fixed per-tablet overheads
+ * (hints flush, range slot wait, schema sync).
+ *
+ * Usage: bpftrace tools/bpftrace/scylla-repair-tablet.bt -p $(pgrep -x scylla)
+ *
+ * Reading the output: a tablet whose range time is mostly "pre" and
+ * "stop" is dominated by per-tablet machinery, not data; many rounds that
+ * are all synced_by_boundary mean the data is in sync and the repair is
+ * bound by round trips and peer reads; slow_path rounds with large rx/tx
+ * mean real differences; one peer standing out in the sync-boundary
+ * histogram is the peer to look at with scylla-repair-follower.bt.
+ */
+
+BEGIN
+{
+    printf("Watching scylla tablet repairs... Hit Ctrl-C to end.\n");
+}
+
+/* ---- tablet lifecycle and per-tablet overheads ---- */
+
+usdt:*:scylla:tablet_repair_done
+{
+    printf("%s tablet %s.%s id=%ld done in %ld ms\n", strftime("%H:%M:%S", nsecs),
+           str(arg0), str(arg1), arg2, arg3 / 1000);
+    @tablet_ms[str(arg0), str(arg1)] = hist(arg3 / 1000);
+    @tablets_done = count();
+}
+
+usdt:*:scylla:tablet_repair_failed
+{
+    printf("%s tablet %s.%s id=%ld FAILED after %ld ms\n", strftime("%H:%M:%S", nsecs),
+           str(arg0), str(arg1), arg2, arg3 / 1000);
+    @tablets_failed = count();
+}
+
+usdt:*:scylla:repair_flush_hints_done
+{
+    /* arg2: a flush was needed, arg3: hints and batchlog were flushed */
+    @hints_flush_ms[str(arg0), arg2 ? (arg3 ? "flushed" : "not flushed") : "not needed"] = hist(arg1 / 1000);
+}
+
+usdt:*:scylla:repair_range_wait_done
+{
+    @range_slot_wait_ms[str(arg0), str(arg1)] = hist(arg2 / 1000);
+}
+
+usdt:*:scylla:repair_sync_schema_done
+{
+    @sync_schema_ms[str(arg0), str(arg1)] = hist(arg2 / 1000);
+}
+
+/* ---- one row-level repair range (= one tablet), keyed by repair_meta_id ---- */
+
+usdt:*:scylla:repair_master_start
+{
+    @ks[arg0] = str(arg1);
+    @tbl[arg0] = str(arg2);
+    @peers[arg0] = arg3;
+    @t_wait[arg0] = (uint64)0;
+    @t_setup[arg0] = (uint64)0;
+    @t_rounds[arg0] = (uint64)0;
+    @t_stop[arg0] = (uint64)0;
+    @disk[arg0] = (uint64)0;
+}
+
+usdt:*:scylla:repair_master_peer
+{
+    @peer_msb[arg0, arg1] = arg2;
+    @setup_peer[arg0, arg1] = (uint64)0;
+    if (@seen_peer[arg2] == 0) {
+        @seen_peer[arg2] = 1;
+        printf("peer %016lx%016lx appears in histograms as %lu\n", arg2, arg3, (uint64)arg2);
+    }
+}
+
+usdt:*:scylla:repair_master_wait_done
+{
+    @t_wait[arg0] = arg1 + arg2;
+}
+
+/* steps 1..3 run per peer in parallel: the slowest peer sets the setup time */
+usdt:*:scylla:repair_master_rpc_done /arg2 < 4/
+{
+    @setup_peer[arg0, arg1] = @setup_peer[arg0, arg1] + arg3;
+    if (@setup_peer[arg0, arg1] > @t_setup[arg0]) {
+        @t_setup[arg0] = @setup_peer[arg0, arg1];
+    }
+}
+
+usdt:*:scylla:repair_master_rpc_done /arg2 == 4/
+{
+    if (arg3 > @t_stop[arg0]) {
+        @t_stop[arg0] = arg3;
+    }
+    /* node 0 is this node and has no @peer_msb entry; reading one would create it */
+    $peer = (uint64)0;
+    if (arg1 != 0) {
+        $peer = (uint64)@peer_msb[arg0, arg1];
+    }
+    @stop_ms_by_peer[$peer] = hist(arg3 / 1000);
+    /* row_level_stop is the last RPC to this node in this range */
+    if (arg1 != 0) {
+        delete(@peer_msb[arg0, arg1]);
+    }
+    delete(@setup_peer[arg0, arg1]);
+}
+
+usdt:*:scylla:repair_round_sync_boundary_done
+{
+    @disk[arg0] = @disk[arg0] + arg4;
+    $peer = (uint64)0;
+    if (arg2 != 0) {
+        $peer = (uint64)@peer_msb[arg0, arg2];
+    }
+    @sync_boundary_us_by_peer[$peer] = hist(arg5);
+    @read_bytes_by_peer[$peer] = sum(arg4);
+}
+
+usdt:*:scylla:repair_round_done
+{
+    @t_rounds[arg0] = @t_rounds[arg0] + arg3;
+    @round_us[arg2 == 0 ? "synced_by_boundary" : (arg2 == 1 ? "synced_by_combined_hash" : (arg2 == 2 ? "slow_path" : "no_more_data"))] = hist(arg3);
+}
+
+usdt:*:scylla:repair_master_done
+{
+    @m_dur[arg0] = arg1;
+    @m_rounds[arg0] = arg2;
+    @m_slow[arg0] = arg4;
+    @m_failed[arg0] = arg5;
+    $ks = @ks[arg0];
+    $tbl = @tbl[arg0];
+    @rounds_per_range[$ks, $tbl] = hist(arg2);
+    @range_ms[$ks, $tbl] = hist(arg1 / 1000);
+}
+
+/* fires right after repair_master_done with the byte totals */
+usdt:*:scylla:repair_master_stats
+{
+    printf("  range meta=%u %s.%s peers=%ld %s%ld ms = pre %ld + rounds %ld + stop %ld\n",
+           arg0, @ks[arg0], @tbl[arg0], @peers[arg0], @m_failed[arg0] ? "FAILED " : "",
+           @m_dur[arg0] / 1000, (@t_wait[arg0] + @t_setup[arg0]) / 1000, @t_rounds[arg0] / 1000, @t_stop[arg0] / 1000);
+    printf("  range meta=%u %ld rounds (%ld slow), disk %ld KB, rx %ld KB, tx %ld KB, hashes rx %ld tx %ld\n",
+           arg0, @m_rounds[arg0], @m_slow[arg0], @disk[arg0] / 1024, arg3 / 1024, arg2 / 1024, arg5, arg4);
+    @ranges_done = count();
+    /* the start probe may predate the attach */
+    if (@tbl[arg0] != "") {
+        delete(@ks[arg0]);
+        delete(@tbl[arg0]);
+        delete(@peers[arg0]);
+        delete(@t_wait[arg0]);
+        delete(@t_setup[arg0]);
+        delete(@t_rounds[arg0]);
+        delete(@t_stop[arg0]);
+        delete(@disk[arg0]);
+        delete(@m_dur[arg0]);
+        delete(@m_rounds[arg0]);
+        delete(@m_slow[arg0]);
+        delete(@m_failed[arg0]);
+    }
+}
+
+END
+{
+    /* per-range scratch state of repairs still in flight is not a result */
+    clear(@ks);
+    clear(@tbl);
+    clear(@peers);
+    clear(@t_wait);
+    clear(@t_setup);
+    clear(@t_rounds);
+    clear(@t_stop);
+    clear(@disk);
+    clear(@m_dur);
+    clear(@m_rounds);
+    clear(@m_slow);
+    clear(@m_failed);
+    clear(@peer_msb);
+    clear(@setup_peer);
+    clear(@seen_peer);
+}
