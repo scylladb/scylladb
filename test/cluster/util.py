@@ -827,20 +827,54 @@ def get_commitlog_segment_id(segment_name: str) -> int:
     return int(prefix)
 
 
+# The header a commitlog segment starts with: magic, version, segment id, alignment, CRC.
+COMMITLOG_SEGMENT_HEADER = struct.Struct(">IIQII")
+COMMITLOG_SEGMENT_MAGIC = b"SCLC"
+
+
 def get_commitlog_segment_alignment(path: str) -> int:
     """
     The sector size of a commitlog segment, read from its header.
     """
-    segment_header_size = 24
-    segment_magic = b"SCLC"
-
     with open(path, "rb") as f:
-        header = f.read(segment_header_size)
+        header = f.read(COMMITLOG_SEGMENT_HEADER.size)
 
-    assert len(header) == segment_header_size, f"{path} is too short to hold a segment header"
-    magic, _version, _segment_id, alignment, _checksum = struct.unpack(">IIQII", header)
-    assert magic.to_bytes(4, "big") == segment_magic, f"{path} is not a commitlog segment"
+    assert len(header) == COMMITLOG_SEGMENT_HEADER.size, f"{path} is too short to hold a segment header"
+    magic, _version, _segment_id, alignment, _checksum = COMMITLOG_SEGMENT_HEADER.unpack(header)
+    assert magic.to_bytes(4, "big") == COMMITLOG_SEGMENT_MAGIC, f"{path} is not a commitlog segment"
     return alignment
+
+
+def commitlog_segments(workdir: str) -> list[str]:
+    """
+    The paths of a node's commitlog segments, newest id first.
+
+    Only segments the commitlog wrote under their own name, which its header
+    repeats.  A recycled spare is renamed to Recycled-<prefix>-<version>-<id>.log,
+    and again to a segment's name once it is taken into the reserve, and until it
+    is written it still holds the header of the segment it was; a pre-allocated
+    spare has no header yet.
+
+    Safe to call on a running node: a segment deleted or renamed meanwhile is
+    left out.
+    """
+    commitlog_dir = os.path.join(workdir, "commitlog")
+    found = []
+    for name in os.listdir(commitlog_dir):
+        if not name.endswith(".log") or name.startswith("Recycled-"):
+            continue
+        path = os.path.join(commitlog_dir, name)
+        try:
+            with open(path, "rb") as f:
+                header = f.read(COMMITLOG_SEGMENT_HEADER.size)
+        except FileNotFoundError:
+            continue
+        if len(header) < COMMITLOG_SEGMENT_HEADER.size or header[:len(COMMITLOG_SEGMENT_MAGIC)] != COMMITLOG_SEGMENT_MAGIC:
+            continue
+        _magic, _version, segment_id, _alignment, _checksum = COMMITLOG_SEGMENT_HEADER.unpack(header)
+        if segment_id == get_commitlog_segment_id(path):
+            found.append(path)
+    return sorted(found, key=get_commitlog_segment_id, reverse=True)
 
 
 def _commitlog_sector_has_data(file, sector: int, alignment: int) -> bool:
