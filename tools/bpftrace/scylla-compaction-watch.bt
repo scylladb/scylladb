@@ -1,0 +1,46 @@
+#!/usr/bin/env bpftrace
+/*
+ * Copyright (C) 2026-present ScyllaDB
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
+ */
+/*
+ * scylla-compaction-watch: print every compaction as it finishes, with
+ * table, type, input and output sizes, duration and throughput. On exit,
+ * print per-type duration histograms, per-table byte totals, and a
+ * histogram of input sstable counts per table and type.
+ *
+ * Usage: bpftrace tools/bpftrace/scylla-compaction-watch.bt -p $(pgrep -x scylla)
+ */
+
+BEGIN
+{
+    printf("Watching scylla compactions... Hit Ctrl-C to end.\n");
+    printf("%-10s %-30s %-8s %10s %10s %8s %10s\n",
+           "TIME", "TABLE", "TYPE", "IN_KB", "OUT_KB", "MS", "MB/S");
+}
+
+usdt:*:scylla:compaction_start
+{
+    @input_sstables[str(arg0), str(arg1), str(arg2)] = hist(arg3);
+}
+
+usdt:*:scylla:compaction_done
+{
+    $in_kb = arg4 / 1024;
+    $out_kb = arg5 / 1024;
+    $ms = arg3 / 1000;
+    $mbps = arg3 > 0 ? (arg4 * 1000000 / arg3) / 1048576 : 0;
+    printf("%s   %s.%-20s %-8s %10d %10d %8d %10d\n", strftime("%H:%M:%S", nsecs),
+           str(arg0), str(arg1), str(arg2), $in_kb, $out_kb, $ms, $mbps);
+    @duration_ms[str(arg2)] = hist(arg3 / 1000);
+    @bytes_in[str(arg0), str(arg1)] = sum(arg4);
+    @bytes_out[str(arg0), str(arg1)] = sum(arg5);
+    @done[str(arg2)] = count();
+}
+
+usdt:*:scylla:compaction_failed
+{
+    printf("%s   %s.%-20s %-8s FAILED after %d ms\n", strftime("%H:%M:%S", nsecs), str(arg0), str(arg1), str(arg2), arg3 / 1000);
+    @failed[str(arg0), str(arg1), str(arg2)] = count();
+}
+
