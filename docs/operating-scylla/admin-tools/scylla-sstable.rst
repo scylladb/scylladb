@@ -409,8 +409,15 @@ The content is dumped in JSON, using the following schema:
         },
         "chunk_len": Uint,
         "data_len": Uint64,
-        "offsets": [Uint64, ...]
+        "offsets": [Uint64, ...], // not for mu
+        "sampling_denominator": Uint, // only for mu
+        "sampled_offsets": [Uint64, ...] // only for mu
     }
+
+A compressed SStable of the ``mu`` format doesn't store the offset of every
+chunk. It stores a random sample of the chunk offsets, ``sampled_offsets``. The
+writer keeps each chunk with a probability of ``1 / sampling_denominator``,
+except the chunks near the end of the data.
 
 .. _scylla sstable dump-summary:
 

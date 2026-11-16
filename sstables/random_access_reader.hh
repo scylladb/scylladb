@@ -23,6 +23,7 @@ namespace sstables {
 
 class random_access_reader {
     std::unique_ptr <input_stream<char>> _in;
+    uint64_t _offset = 0;
 protected:
     virtual input_stream<char> open_at(uint64_t pos) = 0;
 
@@ -35,6 +36,9 @@ public:
     virtual future <temporary_buffer<char>> read_exactly(size_t n) noexcept;
 
     virtual future<> seek(uint64_t pos) noexcept;
+
+    // The position in the file the next read will start at.
+    uint64_t offset() const noexcept { return _offset; }
 
     bool eof() const noexcept { return _in->eof(); }
 
