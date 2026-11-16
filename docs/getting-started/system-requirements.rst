@@ -34,7 +34,7 @@ ScyllaDB tries to maximize the resource usage of all system components. The shar
 CPU
 ^^^
 
-ScyllaDB requires modern Intel/AMD CPUs that support the SSE4.2 instruction set and will not boot without it.
+On x86_64, ScyllaDB requires modern Intel/AMD CPUs that support the SSE4.2 instruction set and will not boot without it.
 
 
 ScyllaDB supports the following CPUs:
@@ -46,6 +46,7 @@ ScyllaDB supports the following CPUs:
 * Apple M1 and M2
 * Ampere Altra
 * AWS Graviton, Graviton2, Graviton3
+* Google Axion
 
 
 In terms of the number of cores, any number will work since ScyllaDB scales up with the number of cores. 
