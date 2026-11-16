@@ -379,41 +379,10 @@ future<> raft_commitlog_replay_buffer::finish_replay(replica::database& db, cql3
         throw std::runtime_error(fmt::format(
                 "cannot replay the raft log: committed entries are missing: {}. Starting "
                 "would persist a commit index covering entries that were never applied. "
-                "{} Recovering means restoring the segment files that held them, or "
-                "rebuilding this replica once they are gone for good",
-                fmt::join(lost, "; "),
-                _unreadable_segments.empty()
-                    ? sstring("No segment was reported damaged, so the entries were in a "
-                              "segment file that is no longer there.")
-                    : sstring(fmt::format("Segments {} could not be read in full.",
-                            _unreadable_segments))));
-    }
-    // A damaged segment may have taken raft batches with it. A lost tail leaves no evidence:
-    // the batch that would have declared the higher commit_idx went down with the unread
-    // bytes, so no index check sees a log short of entries the node acknowledged.
-    if (!_unreadable_segments.empty()) {
-        if (!_hosted_groups) {
-            _hosted_groups = build_hosted_groups_map(db);
-        }
-        if (!_hosted_groups->empty()) {
-            if (db.get_config().strongly_consistent_tables_start_on_damaged_commitlog()) {
-                logger.warn("segments {} could not be read in full while this shard hosts {} "
-                        "strongly consistent raft group(s), and the unread bytes may have held "
-                        "raft batches this node acknowledged. Starting because "
-                        "strongly_consistent_tables_start_on_damaged_commitlog is set",
-                        _unreadable_segments, _hosted_groups->size());
-            } else {
-                throw std::runtime_error(fmt::format(
-                        "cannot replay the raft log: segments {} could not be read in full, and "
-                        "this shard hosts {} strongly consistent raft group(s). The unread bytes "
-                        "may have held raft batches this node acknowledged, and nothing left on "
-                        "disk says whether they did. Starting would hand raft a log short of "
-                        "committed entries. Recovering means restoring the segment files, or "
-                        "rebuilding this replica once they are gone for good. Setting "
-                        "strongly_consistent_tables_start_on_damaged_commitlog starts the node "
-                        "on what replay could read", _unreadable_segments, _hosted_groups->size()));
-            }
-        }
+                "They were in a segment file that is no longer there, or in one that could "
+                "not be read in full. Recovering means restoring the segment files that "
+                "held them, or rebuilding this replica once they are gone for good",
+                fmt::join(lost, "; ")));
     }
 
     if (_groups.empty()) {
@@ -504,6 +473,36 @@ future<> raft_commitlog_replay_buffer::finish_replay(replica::database& db, cql3
     }
     _groups.clear();
     logger.info("Raft groups commit log replayed data processing complete");
+}
+
+void raft_commitlog_replay_buffer::on_unreadable_segment(replica::database& db, db::segment_id_type segment) {
+    if (!_hosted_groups) {
+        _hosted_groups = build_hosted_groups_map(db);
+    }
+    if (_hosted_groups->empty()) {
+        return;
+    }
+    // The unread bytes may have held raft batches. A lost end of a group's log leaves
+    // no evidence: the batch that would have carried the higher commit index is among
+    // the unread bytes, so no index check sees a log short of entries the node
+    // acknowledged.
+    if (db.get_config().strongly_consistent_tables_start_on_damaged_commitlog()) {
+        logger.warn("segment {} could not be read in full while this shard hosts {} "
+                "strongly consistent raft group(s), and the unread bytes may have held "
+                "raft batches this node acknowledged. Starting because "
+                "strongly_consistent_tables_start_on_damaged_commitlog is set",
+                segment, _hosted_groups->size());
+        return;
+    }
+    throw std::runtime_error(fmt::format(
+            "cannot replay the raft log: segment {} could not be read in full, and "
+            "this shard hosts {} strongly consistent raft group(s). The unread bytes "
+            "may have held raft batches this node acknowledged, and nothing left on "
+            "disk says whether they did. Starting would hand raft a log short of "
+            "committed entries. Recovering means restoring the segment file, or "
+            "rebuilding this replica once it is gone for good. Setting "
+            "strongly_consistent_tables_start_on_damaged_commitlog starts the node "
+            "on what replay could read", segment, _hosted_groups->size()));
 }
 
 raft_commitlog_replay_buffer::~raft_commitlog_replay_buffer() {

@@ -441,10 +441,11 @@ A segment the replay could not read in full refuses the boot too, once this shar
 a strongly consistent group. The index checks above catch a gap they can see, and a lost
 tail is the case they cannot: the batch declaring the higher `commit_idx` went down with
 the unread bytes, so raft gets a log shorter than the one the node acknowledged. Replay
-names the segments and stops. `strongly_consistent_tables_start_on_damaged_commitlog`
-starts the node without them, which is the way out while the commitlog still reports an
-intact segment as damaged (SCYLLADB-4853). The node that starts that way runs a log that
-may be short of entries the quorum committed.
+names the segment and stops as soon as it meets it (`on_unreadable_segment()`).
+`strongly_consistent_tables_start_on_damaged_commitlog` starts the node without it, which
+is the way out while the commitlog still reports an intact segment as damaged
+(SCYLLADB-4853). The node that starts that way runs a log that may be short of entries the
+quorum committed.
 
 The replayer decides for every raft batch whether it belongs to a group that runs on this
 shard now, and skips the batch otherwise:

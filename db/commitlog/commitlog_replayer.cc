@@ -220,9 +220,7 @@ db::commitlog_replayer::impl::recover(const commitlog::descriptor& d, const comm
             f.get();
         } catch (commitlog::segment_data_corruption_error& e) {
             // Counted, skipped and reported: a bad sector or chunk header ends the read,
-            // and a broken entry header skips the rest of its chunk. finish_replay() refuses
-            // the boot over the unread bytes while this shard hosts a strongly consistent
-            // group, unless strongly_consistent_tables_start_on_damaged_commitlog is set.
+            // and a broken entry header skips the rest of its chunk.
             s->corrupt_bytes += e.bytes();
             unreadable = true;
         } catch (commitlog::segment_truncation& e) {
@@ -238,8 +236,9 @@ db::commitlog_replayer::impl::recover(const commitlog::descriptor& d, const comm
         }
         if (unreadable && _raft_buffer) {
             // What the unread part held is unknowable, so the raft side decides,
-            // where it knows whether this shard hosts a group at all.
-            _raft_buffer->local().note_unreadable_segment(id);
+            // where it knows whether this shard hosts a group at all: it throws to
+            // refuse the boot.
+            _raft_buffer->local().on_unreadable_segment(_db.local(), id);
         }
         return make_ready_future<stats>(*s);
     });

@@ -132,9 +132,6 @@ private:
     // changes no tablet.
     std::optional<std::unordered_map<raft::group_id, hosted_group>> _hosted_groups;
 
-    // Segments a replay could not read in full; see note_unreadable_segment().
-    std::vector<db::segment_id_type> _unreadable_segments;
-
     // Read back the group's persisted state. A hosted group that has a batch
     // also has a row: the row is written before the group's first batch, and the
     // batches of an earlier stay of its tablet never get here.
@@ -192,14 +189,13 @@ public:
         return _total_entries;
     }
 
-    // A segment the replay could not read whole: a bad sector, or a header that failed
-    // its check and skipped the file. finish_replay() refuses the boot on any such segment
-    // while this shard hosts a strongly consistent group, unless
-    // strongly_consistent_tables_start_on_damaged_commitlog is set. A truncated tail,
-    // where writing stopped at the crash, is not recorded.
-    void note_unreadable_segment(db::segment_id_type segment) {
-        _unreadable_segments.push_back(segment);
-    }
+    // Called for a segment the replay could not read whole: a bad sector, or a header
+    // that failed its check and skipped the file. Not for a truncated tail, where
+    // writing stopped at the crash.
+    //
+    // Throws, which refuses the boot, if this shard hosts a strongly consistent group
+    // and strongly_consistent_tables_start_on_damaged_commitlog is not set.
+    void on_unreadable_segment(replica::database& db, db::segment_id_type segment);
 
     // Detach the references of anything no group claimed, as ~raft_commitlog does.
     // A rewritten tail nobody took must survive into the next replay: a decrement

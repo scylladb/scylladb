@@ -1670,8 +1670,8 @@ void replay_batch(cql_test_env& env, db::raft_commitlog_replay_buffer& buffer, r
 
 // Replay persists a floor of commit_idx, so every index at or below it has to have been
 // read. A gap there refuses the boot. Above commit_idx no header read here claims the
-// entries were committed, so replay lets that tail go. A gap refuses with nothing
-// reported damaged, so the refusal does not hang off the damage report.
+// entries were committed, so replay lets that tail go. No segment is reported damaged
+// here: a segment file that is gone is enough to refuse.
 SEASTAR_TEST_CASE(test_replay_refuses_a_gap_below_the_commit_index) {
     return do_with_cql_env_thread([] (cql_test_env& env) {
         const auto table = table_id(utils::UUID_gen::get_time_UUID());
@@ -1726,21 +1726,7 @@ SEASTAR_TEST_CASE(test_replay_refuses_a_gap_below_the_commit_index) {
             db::raft_commitlog_replay_buffer buffer;
             run(gid, raft::index_t(1), raft::index_t(3), raft::index_t(0), 1, buffer);
             run(gid, raft::index_t(11), raft::index_t(12), raft::index_t(10), 3, buffer);
-            buffer.note_unreadable_segment(2);
             refuses_with(buffer, env, "read only to 3");
-            buffer.stop().get();
-        }
-
-        // The same gap with nothing reported damaged. A segment file that is gone
-        // leaves the same evidence and gets the same answer, so the refusal does not
-        // hang off the damage report.
-        {
-            const auto gid = make_group_id();
-            seed(gid, {});
-            db::raft_commitlog_replay_buffer buffer;
-            run(gid, raft::index_t(1), raft::index_t(3), raft::index_t(0), 1, buffer);
-            run(gid, raft::index_t(11), raft::index_t(12), raft::index_t(10), 3, buffer);
-            refuses_with(buffer, env, "No segment was reported damaged");
             buffer.stop().get();
         }
 
@@ -1754,7 +1740,6 @@ SEASTAR_TEST_CASE(test_replay_refuses_a_gap_below_the_commit_index) {
             db::raft_commitlog_replay_buffer buffer;
             run(gid, raft::index_t(1), raft::index_t(3), raft::index_t(0), 1, buffer);
             run(gid, raft::index_t(5), raft::index_t(5), raft::index_t(4), 3, buffer);
-            buffer.note_unreadable_segment(2);
             refuses_with(buffer, env, "read only to 1");
             buffer.stop().get();
         }
@@ -1834,7 +1819,7 @@ SEASTAR_TEST_CASE(test_replay_refuses_a_gap_below_the_commit_index) {
 
 // The damage override starts a node over an unreadable segment. A gap below the commit
 // index is a separate refusal that the override must not reach: finish_replay() throws for
-// the missing entries before it ever reads the flag.
+// the missing entries and never reads the flag.
 SEASTAR_TEST_CASE(test_the_damage_override_does_not_start_a_node_over_a_gap) {
     return do_with_cql_env_thread([] (cql_test_env& env) {
         const auto table = table_id(utils::UUID_gen::get_time_UUID());
@@ -1860,7 +1845,7 @@ SEASTAR_TEST_CASE(test_the_damage_override_does_not_start_a_node_over_a_gap) {
         db::raft_commitlog_replay_buffer buffer;
         run(raft::index_t(1), raft::index_t(3), raft::index_t(0), 1, buffer);
         run(raft::index_t(11), raft::index_t(12), raft::index_t(10), 3, buffer);
-        buffer.note_unreadable_segment(2);
+        buffer.on_unreadable_segment(env.local_db(), 2);
         BOOST_REQUIRE_EXCEPTION(
                 buffer.finish_replay(env.local_db(), env.local_qp()).get(),
                 std::runtime_error,
@@ -1987,8 +1972,7 @@ SEASTAR_TEST_CASE(test_replay_refuses_a_damaged_segment) {
                     {locator::host_id{utils::UUID_gen::get_time_UUID()}, 0}});
             db::raft_commitlog_replay_buffer buffer;
             BOOST_REQUIRE(!buffer.find_hosted_group(env.local_db(), fixture.gid));
-            buffer.note_unreadable_segment(3);
-            BOOST_REQUIRE_NO_THROW(buffer.finish_replay(env.local_db(), env.local_qp()).get());
+            BOOST_REQUIRE_NO_THROW(buffer.on_unreadable_segment(env.local_db(), 3));
             drop_sc_tablet_metadata(env, fixture.table).get();
             buffer.stop().get();
         }
@@ -2000,9 +1984,8 @@ SEASTAR_TEST_CASE(test_replay_refuses_a_damaged_segment) {
             fixture.seed(locator::tablet_replica_set{{my_id, this_shard_id()}});
             db::raft_commitlog_replay_buffer buffer;
             fixture.read_one_batch(buffer);
-            buffer.note_unreadable_segment(3);
             BOOST_REQUIRE_EXCEPTION(
-                    buffer.finish_replay(env.local_db(), env.local_qp()).get(),
+                    buffer.on_unreadable_segment(env.local_db(), 3),
                     std::runtime_error,
                     [](const std::runtime_error& e) {
                         const sstring what(e.what());
@@ -2029,8 +2012,8 @@ SEASTAR_TEST_CASE(test_replay_starts_on_a_damaged_segment_when_the_override_is_s
         fixture.seed(locator::tablet_replica_set{{my_id, this_shard_id()}});
         db::raft_commitlog_replay_buffer buffer;
         fixture.read_one_batch(buffer);
-        buffer.note_unreadable_segment(3);
-        BOOST_REQUIRE_NO_THROW(buffer.finish_replay(env.local_db(), env.local_qp()).get());
+        BOOST_REQUIRE_NO_THROW(buffer.on_unreadable_segment(env.local_db(), 3));
+        buffer.finish_replay(env.local_db(), env.local_qp()).get();
         // The tail replay recovered is handed over, so the group starts with index 6.
         auto data = buffer.take_replayed_group_entries(fixture.gid);
         BOOST_REQUIRE_EQUAL(data.entries.size(), 1u);
