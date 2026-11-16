@@ -271,24 +271,11 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
     auto* commitlog = _db.commitlog();
     SCYLLA_ASSERT(commitlog);
 
-    // A group this shard persists nothing about has no history here, so any commitlog
-    // entries replay left for it belong to an earlier membership: replay recovered them
-    // while this shard still hosted the group, the group was torn down and its raft
-    // state erased by the cleanup before it was ever started in this process, and the
-    // tablet has now migrated back. Handing those to the group would give it a log from
-    // an incarnation it knows nothing about, indices and terms included. Taken out of
-    // the buffer either way, so that its bookkeeping stays right.
-    const auto persisted = co_await raft_groups_storage::load_commit_idx_if_persisted(_qp, group_id, this_shard_id());
     auto replayed_data = _raft_replay_buffer.take_replayed_group_entries(group_id);
-    if (!persisted && !replayed_data.entries.empty()) {
-        logger.warn("start_raft_group(): tablet {}, group id {}: no persisted raft state, discarding {} "
-                "replayed commitlog entries left over from an earlier membership",
-                tablet, group_id, replayed_data.entries.size());
-        replayed_data = replayed_data_per_group{};
-    }
+    const auto replayed_entries = replayed_data.entries.size();
     if (logger.is_enabled(log_level::debug)) {
-        logger.debug("Starting the raft group of tablet {}, group id {}, with persisted commit index {} and {} replayed commitlog entries, "
-                "indexes {}.", tablet, group_id, persisted ? fmt::to_string(*persisted) : std::string("none"), replayed_data.entries.size(),
+        logger.debug("Starting the raft group of tablet {}, group id {}, with {} replayed commitlog entries, indexes {}.",
+                tablet, group_id, replayed_data.entries.size(),
                 replayed_data.entries.empty() ? std::string("none")
                         : fmt::format("{} to {}", replayed_data.entries.front()->idx, replayed_data.entries.back()->idx));
     }
@@ -309,6 +296,17 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
     // on this node
     const auto snapshot = co_await storage->load_snapshot_descriptor();
     if (!snapshot.id) {
+        // Replayed entries always come with the group's row. Commitlog replay hands over
+        // entries only for a group that has a row, and never those of a stay of the
+        // tablet on this shard that ended before the node started: it skips the batches
+        // written before the tablet's last cleanup. After replay the row is erased only
+        // by cleanup_group(), which drops the replayed entries first, or once the group
+        // has been started and has taken them.
+        if (replayed_entries != 0) {
+            on_internal_error(logger, format("start_raft_group(): tablet {}, group id {}: commitlog replay "
+                    "left {} entries for a group that has no row in system.raft_groups",
+                    tablet, group_id, replayed_entries));
+        }
         const auto& tablet_map = tm->tablets().get_tablet_map(tablet.table);
         const auto& tablet_info = tablet_map.get_tablet_info(tablet.tablet);
         const auto* trinfo = tablet_map.get_tablet_transition_info(tablet.tablet);
@@ -594,6 +592,12 @@ future<> groups_manager::cleanup_group(global_tablet_id tablet, raft::group_id g
                     "cleanup_group({}-{}): the raft server was not torn down before the deadline", tablet, group_id)));
         }
     }
+    // Commitlog replay can have recovered entries for this group while the shard still
+    // hosted it, with the group then torn down before it was ever started in this
+    // process. Nothing has taken those entries, and they go with the row: a later
+    // return of the tablet to this shard must not find them. Destroying them drops
+    // their segment reference, as release_all() does for a group that was running.
+    _raft_replay_buffer.take_replayed_group_entries(group_id);
     co_await raft_groups_storage::erase_persisted_state(_qp, group_id, this_shard_id());
 }
 
