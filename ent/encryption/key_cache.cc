@@ -71,3 +71,34 @@ void encryption::register_key_cache_metrics(sm::metric_groups& metrics) {
 
 template class encryption::detail::key_cache_stats_updater<encryption::key_cache_type::id_cache>;
 template class encryption::detail::key_cache_stats_updater<encryption::key_cache_type::attr_cache>;
+
+using namespace std::chrono_literals;
+
+encryption::cache_expiry encryption::adjust_expiry(std::chrono::milliseconds exp, std::chrono::milliseconds ref) {
+    auto shard = this_shard_id();
+    if (shard == 0) {
+        return cache_expiry { exp, ref };
+    }
+    // Assume shard zero is the master cache. Adjust so we lower refresh than expiry 
+    // on other shards -> until expired, keepalive shard 0. But also refreshes a replaced
+    // key from shard 0 -> other shard (potentially) earlier.
+    // This does not affect any attempts to reach an endpoint service, as only shard 0
+    // does those ops.
+    auto shard_ref = std::min(ref, exp / 2);
+    if (shard_ref < 1ms) {
+        shard_ref = exp;
+    }
+    return cache_expiry {
+        exp, shard_ref
+    };
+}
+
+utils::loading_cache_config encryption::make_key_cache_config(std::chrono::milliseconds exp, std::chrono::milliseconds ref) {
+    auto expiry = adjust_expiry(exp, ref);
+    return utils::loading_cache_config{ 
+        .max_size = std::numeric_limits<size_t>::max(),
+        .expiry = expiry.key_cache_expiry,
+        .refresh = expiry.key_cache_refresh,
+    };
+}
+

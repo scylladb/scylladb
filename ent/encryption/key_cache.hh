@@ -63,4 +63,14 @@ template<typename Key,
      typename EqualPred = std::equal_to<Key>>
 using attr_cache = key_cache<key_cache_type::attr_cache, Key, Tp, Hash, EqualPred>;
 
+struct cache_expiry {
+    std::chrono::milliseconds key_cache_expiry;
+    std::chrono::milliseconds key_cache_refresh;
+};
+
+cache_expiry adjust_expiry(std::chrono::milliseconds exp, std::chrono::milliseconds ref);
+
+utils::loading_cache_config make_key_cache_config(std::chrono::milliseconds exp, std::chrono::milliseconds ref);
+
+
 }
