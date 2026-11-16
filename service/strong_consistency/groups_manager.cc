@@ -711,50 +711,66 @@ future<> groups_manager::leader_info_updater(raft_group_state& state, table_id t
             logger.trace("The raft group of tablet {}, group id {}, is in term {} with leader {}.",
                 tablet, gid, current_term, current_leader);
 
-            if (current_leader == server_id) {
-                logger.debug("leader_info_updater({}, group_id={}): current term {}, running read_barrier()",
-                    tablet, gid,
-                    current_term);
+            const bool leading = current_leader == server_id;
+            const bool up_to_date = leading
+                    ? state.leader_info && state.leader_info->term == current_term
+                    : !state.leader_info;
+            if (up_to_date) {
+                // Every pass which changed leader_info ends here before the fiber sleeps,
+                // so the begin_mutate() waiters always see the latest value.
+                state.leader_info_cond.broadcast();
                 // We intentionally pass nullptr here. If the tablet is leaving this node,
                 // the Raft server will be aborted and the loop will break.
                 // The same will happen when the node is shutting down.
                 // There's no reason to abort this operation in any other case.
-                co_await state.server->read_barrier(nullptr);
+                //
+                // wait_for_state_change() reports only the changes made after it is called.
+                // Nothing yields between the check above and this call, so no change can
+                // slip in between.
+                co_await state.server->wait_for_state_change(nullptr);
+                continue;
+            }
 
-                const auto last_timestamp = schema->table().get_max_timestamp_for_token_range(range);
-                if (!last_timestamp) {
-                    // This shard stores nothing for the group, so there is no clock here to seed
-                    // the term from. The tablet is not served here any more - the storage goes
-                    // when it leaves - and the group's own teardown follows. We end the fiber
-                    // rather than hand out timestamps this replica cannot back.
-                    logger.debug("leader_info_updater({}, group_id={}): the range is not stored by this shard, stopping",
-                        tablet, gid);
-                    state.leader_info = std::nullopt;
-                    state.leader_info_cond.broadcast();
-                    co_return;
-                }
-                const auto truncate = co_await raft_groups_storage::load_truncate_record(_qp, gid, this_shard_id());
-                state.leader_info = leader_info {
-                    .term = current_term,
-                    .last_timestamp = std::max(*last_timestamp, truncate.truncated_at)
-                };
-                logger.debug("leader_info_updater({}, group_id={}): read_barrier() completed, "
-                    "new leader term {}, last_timestamp {}",
-                    tablet, gid,
-                    state.leader_info->term,
-                    state.leader_info->last_timestamp);
-            } else if (state.leader_info) {
+            if (!leading) {
                 logger.debug("leader_info_updater({}, group_id={}): this replica {} is no longer a leader, current leader {}",
                     tablet, gid, server_id, current_leader);
                 state.leader_info = std::nullopt;
+                continue;
             }
-            state.leader_info_cond.broadcast();
 
+            logger.debug("leader_info_updater({}, group_id={}): current term {}, running read_barrier()",
+                tablet, gid,
+                current_term);
             // We intentionally pass nullptr here. If the tablet is leaving this node,
             // the Raft server will be aborted and the loop will break.
             // The same will happen when the node is shutting down.
             // There's no reason to abort this operation in any other case.
-            co_await state.server->wait_for_state_change(nullptr);
+            co_await state.server->read_barrier(nullptr);
+
+            const auto last_timestamp = schema->table().get_max_timestamp_for_token_range(range);
+            if (!last_timestamp) {
+                // This shard stores nothing for the group, so there is no clock here to seed
+                // the term from. The tablet is not served here any more - the storage goes
+                // when it leaves - and the group's own teardown follows. We end the fiber
+                // rather than hand out timestamps this replica cannot back.
+                logger.debug("leader_info_updater({}, group_id={}): the range is not stored by this shard, stopping",
+                    tablet, gid);
+                state.leader_info = std::nullopt;
+                state.leader_info_cond.broadcast();
+                co_return;
+            }
+            const auto truncate = co_await raft_groups_storage::load_truncate_record(_qp, gid, this_shard_id());
+            // The leadership may have changed during the barrier. The next pass re-checks
+            // it without yielding, so a stale value is never handed out.
+            state.leader_info = leader_info {
+                .term = current_term,
+                .last_timestamp = std::max(*last_timestamp, truncate.truncated_at)
+            };
+            logger.debug("leader_info_updater({}, group_id={}): read_barrier() completed, "
+                "new leader term {}, last_timestamp {}",
+                tablet, gid,
+                state.leader_info->term,
+                state.leader_info->last_timestamp);
         }
     } catch (const raft::request_aborted&) {
         // thrown from read_barrier() and wait_for_state_change when the tablet leaves this shard
