@@ -86,7 +86,6 @@ public:
         std::optional<std::chrono::milliseconds> key_cache_refresh;
     };
 
-    azure_host(const std::string& name, const host_options&); // used for testing
     azure_host(encryption_context&, const std::string& name, const host_options&);
     azure_host(encryption_context&, const std::string& name, const std::unordered_map<sstring, sstring>&);
     ~azure_host();

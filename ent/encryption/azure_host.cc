@@ -82,14 +82,14 @@ public:
     static inline constexpr std::chrono::milliseconds default_expiry = 600s;
     static inline constexpr std::chrono::milliseconds default_refresh = 1200s;
 
-    impl(encryption_context*, const std::string& name, const host_options& options);
+    impl(encryption_context&, const std::string& name, const host_options& options);
     future<> init();
     future<> stop();
     const host_options& options() const;
     future<key_and_id_type> get_or_create_key(const key_info&, const option_override* = nullptr);
     future<key_ptr> get_key_by_id(const id_type&, const key_info&);
 private:
-    encryption_context* _ctxt;
+    encryption_context& _ctxt;
     const std::string _name;
     const std::string _log_prefix;
     const host_options _options;
@@ -143,7 +143,7 @@ private:
     future<bytes> find_key(const id_cache_key&);
 };
 
-azure_host::impl::impl(encryption_context* ctxt, const std::string& name, const azure_host::host_options& options)
+azure_host::impl::impl(encryption_context& ctxt, const std::string& name, const azure_host::host_options& options)
     : _ctxt(ctxt)
     , _name(name)
     , _log_prefix(fmt::format("AzureVault:{}", name))
@@ -320,7 +320,7 @@ future<rjson::value> azure_host::impl::send_request_with_retry(const sstring& ho
     std::chrono::milliseconds backoff;
 
     int retries = 0;
-    int max_retries = adjust_service_call_retries(*_ctxt, MAX_RETRIES);
+    int max_retries = adjust_service_call_retries(_ctxt, MAX_RETRIES);
 
     while (true) {
         try {
@@ -413,9 +413,9 @@ future<rjson::value> azure_host::impl::send_request(const sstring& host, unsigne
 future<azure_host::key_and_id_type> azure_host::impl::create_key(const attr_cache_key& k) {
     static const vault_log_filter filter{vault_log_filter::op_type::wrapkey};
     auto& info = k.info;
-    if (_ctxt && this_shard_id() != 0) {
+    if (this_shard_id() != 0) {
         auto [data, id] = co_await smp::submit_to(0, [this, k]() -> future<std::tuple<bytes, id_type>> {
-            auto host = _ctxt->get_azure_host(_name);
+            auto host = _ctxt.get_azure_host(_name);
             auto [key, id] = co_await host->_impl->_attr_cache.get(k);
             co_return std::make_tuple(key != nullptr ? key->key() : bytes{}, id);
         });
@@ -469,9 +469,9 @@ future<azure_host::key_and_id_type> azure_host::impl::create_key(const attr_cach
 
 future<bytes> azure_host::impl::find_key(const id_cache_key& k) {
     static const vault_log_filter filter{vault_log_filter::op_type::unwrapkey};
-    if (_ctxt && this_shard_id() != 0) {
+    if (this_shard_id() != 0) {
         co_return co_await smp::submit_to(0, [this, k]() -> future<bytes> {
-            auto host = _ctxt->get_azure_host(_name);
+            auto host = _ctxt.get_azure_host(_name);
             auto bytes = co_await host->_impl->_id_cache.get(k);
             co_return bytes;
         });
@@ -516,12 +516,8 @@ future<bytes> azure_host::impl::find_key(const id_cache_key& k) {
 
 // ==================== azure_host class implementation ====================
 
-azure_host::azure_host(const std::string& name, const host_options& options)
-    : _impl(std::make_unique<impl>(nullptr, name, options))
-{}
-
 azure_host::azure_host(encryption_context& ctxt, const std::string& name, const host_options& options)
-    : _impl(std::make_unique<impl>(&ctxt, name, options))
+    : _impl(std::make_unique<impl>(ctxt, name, options))
 {}
 
 azure_host::azure_host(encryption_context& ctxt, const std::string& name, const std::unordered_map<sstring, sstring>& map)
