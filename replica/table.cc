@@ -4423,6 +4423,23 @@ public:
                             std::optional<locator::tablet_layout> tablet_layout) override;
 };
 
+class noop_snapshot_writer : public snapshot_writer {
+public:
+    future<> init() override {
+        return make_ready_future<>();
+    }
+    future<> sync() override {
+        return make_ready_future<>();
+    }
+    future<> write_schema_as_cql(cql3::description) override {
+        return make_ready_future<>();
+    }
+    future<> write_manifest(const locator::topology&, const std::vector<snapshot_sstable_set>&, const std::vector<db::snapshot_tablet_entry>&,
+            sstring, db::snapshot_options, schema_ptr, std::optional<int64_t>, std::optional<locator::tablet_layout>) override {
+        return make_ready_future<>();
+    }
+};
+
 future<> local_snapshot_writer::write_manifest(const locator::topology& topology,
                                                const std::vector<snapshot_sstable_set>& sstable_sets,
                                                const std::vector<db::snapshot_tablet_entry>& tablets,
@@ -4536,8 +4553,21 @@ future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, c
 
             return std::make_unique<local_snapshot_writer>(loc.dir, name, opts);
         },
-        [] (const data_dictionary::storage_options::s3&) -> std::unique_ptr<snapshot_writer> {
-            throw std::runtime_error("Snapshotting non-local tables is not implemented");
+        [&] (const data_dictionary::storage_options::s3&) -> std::unique_ptr<snapshot_writer> {
+            auto s = table_shards->schema();
+            if (!ssc) {
+                // Only the cluster snapshot flow passes the catalog callback. Without
+                // it the snapshot would be recorded nowhere.
+                throw std::invalid_argument(fmt::format("Cannot snapshot {}.{}: tables on object storage are snapshotted by the cluster snapshot API",
+                        s->ks_name(), s->cf_name()));
+            }
+            if (!table_shards->uses_tablets()) {
+                throw std::invalid_argument(fmt::format("Cannot snapshot {}.{}: snapshots of tables on object storage require tablets", s->ks_name(), s->cf_name()));
+            }
+            if (opts.expires_at) {
+                on_internal_error(tlogger, "snapshot expiry is not supported for tables on object storage");
+            }
+            return std::make_unique<noop_snapshot_writer>();
         }
     }, table_shards->get_storage_options().value);
     if (!writer) {
@@ -4551,13 +4581,19 @@ future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, c
         tlogger.debug("Taking snapshot of {}.{}: name={}", s->ks_name(), s->cf_name(), name);
 
         std::vector<snapshot_sstable_set> sstable_sets(this_smp_shard_count());
+        using sstable_hold = foreign_ptr<std::unique_ptr<std::vector<sstables::shared_sstable>>>;
+        std::vector<sstable_hold> holds(this_smp_shard_count());
 
         co_await writer->init();
         co_await smp::invoke_on_all([&] -> future<> {
             auto& t = *table_shards;
             auto [tables, permit] = co_await t.snapshot_sstables();
-            auto sstables_metadata = co_await t.get_sstables_manager().take_snapshot(std::move(tables), name);
+            auto sstables_metadata = co_await t.get_sstables_manager().take_snapshot(tables, name);
             sstable_sets[this_shard_id()] = make_foreign(std::make_unique<utils::chunked_vector<sstables::sstable_snapshot_metadata>>(std::move(sstables_metadata)));
+            holds[this_shard_id()] = make_foreign(std::make_unique<std::vector<sstables::shared_sstable>>(std::move(tables)));
+            // The list permit is dropped here. The shared_sstable references
+            // from `holds` keep the collected sstables alive until the snapshot
+            // references are in place.
         });
         co_await writer->sync();
 
@@ -4629,7 +4665,22 @@ future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, c
                 .sstables = std::move(sstables), 
                 .tablets = std::move(tablets)
             });
+
+            // A failure from here on leaves rows and references behind, under the
+            // attempt's name. The coordinator collects them once a later attempt
+            // commits, cluster clearsnapshot collects whatever is left.
+            co_await utils::get_local_injector().inject("object_storage_snapshot_after_rows", [] {
+                return std::make_exception_ptr(std::runtime_error("injected error after writing snapshot catalog rows"));
+            });
         }
+
+        co_await smp::invoke_on_all([&] -> future<> {
+            co_await table_shards->get_sstables_manager().finalize_snapshot(*holds[this_shard_id()], name);
+        });
+
+        co_await utils::get_local_injector().inject("object_storage_snapshot_after_refs", [] {
+            return std::make_exception_ptr(std::runtime_error("injected error after creating snapshot references"));
+        });
 
         co_await writer->sync();
 
