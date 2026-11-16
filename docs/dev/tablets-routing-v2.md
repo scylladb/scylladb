@@ -86,6 +86,7 @@ During connection setup, the driver and server negotiate `TABLETS_ROUTING_V2` su
 `TABLETS_ROUTING_V2` subsumes `TABLETS_ROUTING_V1`. A driver that negotiates v2 **does not** negotiate v1. If a driver only negotiates v1, the server falls back to the existing v1 behavior.
 
 The extension is gated behind the experimental feature `strongly-consistent-tables`.
+It is also only available in protocol v4.
 
 **Note:** We temporarily use a different name for the protocol extension: `TABLETS_ROUTING_V2_EXPERIMENTAL`.
 The name explicitly conveys that the feature is still experimental and may be modified.

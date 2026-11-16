@@ -326,6 +326,8 @@ Having a designated flag gives the ability to skip tablet metadata generation
 The feature is identified by the `TABLETS_ROUTING_V1` key, which is meant to be sent
 in the SUPPORTED message.
 
+The extension is only available in protocol v4.
+
 ## Tablets routing v2
 
 The `tablets-routing-v1` payload described above is only sent when a request is
@@ -422,6 +424,8 @@ Unlike `TABLETS_ROUTING_V1`, the server advertises
 `TABLETS_ROUTING_V2_EXPERIMENTAL` only when the `strongly-consistent-tables`
 experimental feature is enabled. The `_EXPERIMENTAL` suffix indicates the
 feature is still under development and its format may change.
+
+The extension is only available in protocol v4.
 
 ## Negotiate sending metadata id
 
