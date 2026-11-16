@@ -212,6 +212,12 @@ class raft_commitlog {
     // The pin_table of the record holding `idx`. Aborts if there is none.
     const db::rp_handle& pin_table(raft::index_t idx);
 
+    // Error injection raft_commitlog_pause_after_store: holds a store of this
+    // group's entries after they are written and accounted, before raft's io
+    // fiber sends the batch's messages and reports commits. A node killed there
+    // has the entries in its commitlog while nobody was told it stored them.
+    future<> maybe_pause_after_store() const;
+
 public:
     raft_commitlog(raft::group_id group_id, db::commitlog& commit_log, table_id target_table_id,
         db::cf_id_type raft_groups_table_id, replayed_data_per_group replayed_data);

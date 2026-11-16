@@ -11,6 +11,7 @@
 #include "db/commitlog/commitlog.hh"
 #include "db/commitlog/commitlog_entry.hh"
 #include "raft/raft.hh"
+#include "utils/error_injection.hh"
 
 #include "raft_commitlog.hh"
 
@@ -230,6 +231,7 @@ future<> raft_commitlog::store_log_entries(const std::vector<raft::log_entry_ptr
         logger.trace("store_log_entries: group_id={}, entries=[{}, {}], segments={}",
                 _group_id, entries.front()->idx, entries.back()->idx,
                 _commitlog_segment_queue.size());
+        co_await maybe_pause_after_store();
         co_return;
     }
 
@@ -248,6 +250,22 @@ future<> raft_commitlog::store_log_entries(const std::vector<raft::log_entry_ptr
     logger.trace("store_log_entries: group_id={}, entries=[{}, {}], batches={}, segments={}",
             _group_id, entries.front()->idx, entries.back()->idx, batch_ends.size(),
             _commitlog_segment_queue.size());
+    co_await maybe_pause_after_store();
+}
+
+future<> raft_commitlog::maybe_pause_after_store() const {
+    // Parameter group_id: only that group's stores wait, so the other groups on the
+    // shard keep going.
+    return utils::get_local_injector().inject("raft_commitlog_pause_after_store",
+            [group_id = _group_id] (auto& handler) -> future<> {
+        const auto target = handler.get("group_id");
+        if (!target || utils::UUID(*target) != group_id.id) {
+            co_return;
+        }
+        logger.info("raft_commitlog_pause_after_store: group_id={} waits", group_id);
+        co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes(5));
+        logger.info("raft_commitlog_pause_after_store: group_id={} resumed", group_id);
+    });
 }
 
 void raft_commitlog::truncate_log(const raft::index_t idx) {
