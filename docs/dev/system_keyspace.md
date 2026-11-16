@@ -1013,6 +1013,7 @@ Schema:
 CREATE TABLE system.protocol_servers (
     name text PRIMARY KEY,
     listen_addresses frozen<list<text>>,
+    listen_backlog int,
     protocol text,
     protocol_version text
 );
@@ -1021,6 +1022,7 @@ CREATE TABLE system.protocol_servers (
 **Columns:**
 - `name`: Name/alias of the server (e.g., `"native"` for the CQL server)
 - `listen_addresses`: List of addresses this server listens on
+- `listen_backlog`: Backlog the server passes to `listen()` for its listening sockets, or null if the server doesn't report one or isn't running. The kernel caps it at `net.core.somaxconn`. For the CQL server it comes from `native_transport_listen_backlog`.
 - `protocol`: Name of the protocol this server serves (e.g., `"cql"`)
 - `protocol_version`: Version of the protocol this server understands
 

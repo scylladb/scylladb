@@ -12,6 +12,7 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/sharded.hh>
 #include <seastar/net/socket_defs.hh>
+#include <optional>
 #include <vector>
 #include "client_data.hh"
 #include "utils/chunked_vector.hh"
@@ -32,6 +33,11 @@ public:
     virtual sstring protocol_version() const = 0;
     /// Addresses the server is listening on, shall be empty when server is not running.
     virtual std::vector<socket_address> listen_addresses() const = 0;
+    /// Backlog passed to listen() for the listening sockets, if the server reports one
+    /// and is running.
+    virtual std::optional<uint32_t> listen_backlog() const {
+        return std::nullopt;
+    }
     /// Start the server.
     /// Can be called multiple times, in any state of the server.
     virtual future<> start_server() = 0;

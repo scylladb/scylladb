@@ -90,6 +90,7 @@ public:
     virtual sstring protocol() const override;
     virtual sstring protocol_version() const override;
     virtual std::vector<socket_address> listen_addresses() const override;
+    virtual std::optional<uint32_t> listen_backlog() const override;
     virtual future<> start_server() override;
     virtual future<> stop_server() override;
     virtual future<> request_stop_server() override;

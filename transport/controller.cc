@@ -107,6 +107,13 @@ std::vector<socket_address> controller::listen_addresses() const {
     return _server ? _listen_addresses : std::vector<socket_address>();
 }
 
+std::optional<uint32_t> controller::listen_backlog() const {
+    if (!_server) {
+        return std::nullopt;
+    }
+    return _server->local().listen_backlog();
+}
+
 future<> controller::start_server() {
     if (!_ops_sem.try_wait()) {
         throw std::runtime_error(format("CQL server is stopping, try again later"));

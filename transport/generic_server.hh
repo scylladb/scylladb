@@ -155,6 +155,9 @@ public:
         std::function<server&()> get_shard_instance = {}
         );
 
+    // The backlog listen() passes to the listening sockets.
+    uint32_t listen_backlog() const { return _listen_backlog; }
+
     future<> do_accepts(int which, bool keepalive, socket_address server_addr, bool is_tls);
 
 protected:

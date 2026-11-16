@@ -482,11 +482,13 @@ private:
         sstring protocol;
         sstring protocol_version;
         std::vector<sstring> listen_addresses;
+        std::optional<uint32_t> listen_backlog;
 
         explicit protocol_server_info(protocol_server& s)
             : name(s.name())
             , protocol(s.protocol())
-            , protocol_version(s.protocol_version()) {
+            , protocol_version(s.protocol_version())
+            , listen_backlog(s.listen_backlog()) {
             for (const auto& addr : s.listen_addresses()) {
                 listen_addresses.push_back(format("{}:{}", addr.addr(), addr.port()));
             }
@@ -506,6 +508,7 @@ public:
             .with_column("protocol", utf8_type)
             .with_column("protocol_version", utf8_type)
             .with_column("listen_addresses", list_type_impl::get_instance(utf8_type, false))
+            .with_column("listen_backlog", int32_type)
             .set_comment("Lists all client protocol servers and their status.")
             .with_hash_version()
             .build();
@@ -529,6 +532,9 @@ public:
             set_cell(cr, "protocol_version", server.protocol_version);
             std::vector<data_value> addresses(server.listen_addresses.begin(), server.listen_addresses.end());
             set_cell(cr, "listen_addresses", make_list_value(schema()->get_column_definition("listen_addresses")->type, std::move(addresses)));
+            if (server.listen_backlog) {
+                set_cell(cr, "listen_backlog", int32_t(*server.listen_backlog));
+            }
             mutation_sink(std::move(m));
         }
     }
