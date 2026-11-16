@@ -376,7 +376,8 @@ class repair_writer;
 future<> repair_cf_range_row_level(shard_repair_state& rstate,
         sstring cf_name, table_id table_id, dht::token_range range,
         const std::vector<locator::host_id>& all_peer_nodes, gc_clock::time_point flush_time);
-future<std::list<repair_row>> to_repair_rows_list(repair_rows_on_wire rows,
+// Returns the rows and the wire size of the fragments they were built from.
+future<std::pair<std::list<repair_row>, size_t>> to_repair_rows_list(repair_rows_on_wire rows,
         schema_ptr s, uint64_t seed, repair_master is_master,
         reader_permit permit, repair_hasher hasher);
 void flush_rows(schema_ptr s, std::list<repair_row>& rows, lw_shared_ptr<repair_writer>& writer, std::optional<small_table_optimization_params> small_table_optimization = std::nullopt, repair_meta* rm = nullptr);

@@ -586,6 +586,7 @@ void repair_writer_impl::create_writer(lw_shared_ptr<repair_writer> w) {
     if (_writer_done) {
         return;
     }
+    auto usdt_start = std::chrono::steady_clock::now();
     replica::table& t = _db.local().find_column_family(_schema->id());
     rlogger.debug("repair_writer: keyspace={}, table={}, estimated_partitions={}", w->schema()->ks_name(), w->schema()->cf_name(), w->get_estimated_partitions());
     // #17384 don't use off-strategy for repair (etc) if using tablets. sstables generated will 
@@ -626,9 +627,10 @@ void repair_writer_impl::create_writer(lw_shared_ptr<repair_writer> w) {
     }
     _writer_done = mutation_writer::distribute_reader_and_consume_on_shards(_schema, sharder.sharder, std::move(_queue_reader),
             std::move(consumer),
-    t.stream_in_progress()).then([w] (uint64_t partitions) {
+    t.stream_in_progress()).then([w, usdt_start] (uint64_t partitions) {
         rlogger.debug("repair_writer: keyspace={}, table={}, managed to write partitions={} to sstable",
             w->schema()->ks_name(), w->schema()->cf_name(), partitions);
+        SCYLLA_USDT(repair_writer_done, w->schema()->ks_name().c_str(), w->schema()->cf_name().c_str(), partitions, utils::usdt_us_since(usdt_start));
         return utils::get_local_injector().inject("repair_writer_impl_create_writer_wait", utils::wait_for_message(200s));
     }).handle_exception([w, keepalive = std::move(sharder.keepalive)] (std::exception_ptr ep) {
         rlogger.warn("repair_writer: keyspace={}, table={}, multishard_writer failed: {}",
@@ -740,8 +742,9 @@ static bool is_tablet_rebuild_repair(replica::table& t, const dht::token_range& 
     return trinfo && trinfo->transition == locator::tablet_transition_kind::rebuild_v2;
 }
 
-future<std::list<repair_row>> to_repair_rows_list(repair_rows_on_wire rows, schema_ptr s, uint64_t seed, repair_master is_master, reader_permit permit, repair_hasher hasher) {
+future<std::pair<std::list<repair_row>, size_t>> to_repair_rows_list(repair_rows_on_wire rows, schema_ptr s, uint64_t seed, repair_master is_master, reader_permit permit, repair_hasher hasher) {
     std::list<repair_row> row_list;
+    size_t wire_bytes = 0;
     std::exception_ptr ex;
     try {
         lw_shared_ptr<const decorated_key_with_hash> dk_ptr;
@@ -773,6 +776,7 @@ future<std::list<repair_row>> to_repair_rows_list(repair_rows_on_wire rows, sche
 
                     _metrics.rx_row_nr += 1;
                     _metrics.rx_row_bytes += fmf.representation().size();
+                    wire_bytes += fmf.representation().size();
                     // Keep the mutation_fragment in repair_row as an
                     // optimization to avoid unfreeze again when
                     // mutation_fragment is needed by _repair_writer.do_write()
@@ -789,6 +793,7 @@ future<std::list<repair_row>> to_repair_rows_list(repair_rows_on_wire rows, sche
 
                     _metrics.rx_row_nr += 1;
                     _metrics.rx_row_bytes += fmf.representation().size();
+                    wire_bytes += fmf.representation().size();
                     auto mf = make_lw_shared<mutation_fragment>(fmf.unfreeze(*s, permit));
                     // If the mutation_fragment has the same position as
                     // the last mutation_fragment, it means they are the
@@ -815,7 +820,7 @@ future<std::list<repair_row>> to_repair_rows_list(repair_rows_on_wire rows, sche
         co_await utils::clear_gently(row_list);
         co_await coroutine::return_exception_ptr(std::move(ex));
     }
-    co_return std::move(row_list);
+    co_return std::pair(std::move(row_list), wire_bytes);
 }
 
 class repair_meta {
@@ -902,6 +907,19 @@ private:
     const bool _is_eligible_to_repair_rejection;
 private:
     incremental_repair_meta _incremental_repair_meta;
+    // Bytes on disk selected and skipped by prepare_sstables_for_incremental_repair().
+    uint64_t _inc_sst_read_bytes = 0;
+    uint64_t _inc_sst_skipped_bytes = 0;
+
+    // The master's host id. On a follower, node 1 is the master that sent
+    // repair_row_level_start. With _repair_meta_id, which is unique per
+    // master only, it identifies this repair_meta on any node.
+    const locator::host_id& master_host() const {
+        return _all_node_states[_repair_master ? 0 : 1].node;
+    }
+    int64_t master_host_msb() const {
+        return master_host().uuid().get_most_significant_bits();
+    }
 public:
     bool is_incremental_repair() {
         return _repaired_at.has_value();
@@ -1059,6 +1077,8 @@ public:
             // Prevent this by marking the permit as evictable ASAP.
             // FIXME: provide a better API for this, this is very clunky
             _fake_inactive_read_handle = _db.local().get_reader_concurrency_semaphore().register_inactive_read(make_empty_mutation_reader(_schema, _permit));
+            SCYLLA_USDT(repair_meta_start, _repair_meta_id, master_host_msb(), master_host().uuid().get_least_significant_bits(),
+                    _schema->ks_name().c_str(), _schema->cf_name().c_str(), bool(master));
     }
 
     // follower constructor
@@ -1112,11 +1132,16 @@ public:
         auto f2 = _sink_source_for_get_row_diff.close();
         auto f3 = _sink_source_for_put_row_diff.close();
         rlogger.debug("repair_meta::stop");
+        auto usdt_stop_start = std::chrono::steady_clock::now();
         // move to background.  waited on via _stopped->get_future.
-        when_all_succeed(std::move(gate_future), std::move(f1), std::move(f2), std::move(f3)).discard_result().finally([this] {
-            return _repair_writer->wait_for_writer_done().finally([this] {
+        when_all_succeed(std::move(gate_future), std::move(f1), std::move(f2), std::move(f3)).discard_result().finally([this, usdt_stop_start] {
+            auto usdt_writer_start = std::chrono::steady_clock::now();
+            return _repair_writer->wait_for_writer_done().finally([this, usdt_stop_start, usdt_writer_start] {
+                SCYLLA_USDT(repair_meta_writer_done, _repair_meta_id, master_host_msb(), utils::usdt_us_since(usdt_writer_start));
                 return close().then([this] {
                     return clear_gently();
+                }).finally([this, usdt_stop_start] {
+                    SCYLLA_USDT(repair_meta_stop, _repair_meta_id, master_host_msb(), utils::usdt_us_since(usdt_stop_start));
                 });
             });
         }).forward_to(std::move(stopped));
@@ -1393,6 +1418,7 @@ private:
                 rlogger.info("Skipped adding sst={} repaired_at={} sstables_repaired_at={} being_repaired={} session_id={} for incremental repair",
                     sst->toc_filename(), sst->get_stats_metadata().repaired_at, sstables_repaired_at, sst->being_repaired, _frozen_topology_guard);
                 _metrics.inc_sst_skipped_bytes += bytes_on_disk;
+                _inc_sst_skipped_bytes += bytes_on_disk;
             } else {
                 if (!_for_tablet_rebuild) {
                     sst->mark_as_being_repaired(_frozen_topology_guard);
@@ -1401,6 +1427,7 @@ private:
                     sst->toc_filename(), sst->get_stats_metadata().repaired_at, sstables_repaired_at, sst->being_repaired, _frozen_topology_guard, _for_tablet_rebuild);
                 _incremental_repair_meta.sst_set->insert(sst);
                 _metrics.inc_sst_read_bytes += bytes_on_disk;
+                _inc_sst_read_bytes += bytes_on_disk;
             }
         }
         // Note: It is safe to re-enable compaction again because all
@@ -1424,6 +1451,7 @@ private:
         size_t new_rows_size = 0;
         std::list<repair_row> cur_rows;
         std::exception_ptr ex;
+        auto usdt_read_start = std::chrono::steady_clock::now();
         if (!_repair_reader) {
             // We are about to create a real evictable reader, so drop the fake
             // reader (evicted or not), we don't need it anymore.
@@ -1431,6 +1459,63 @@ private:
             if (is_incremental_repair()) {
                 co_await prepare_sstables_for_incremental_repair();
             }
+            auto strategy = std::invoke([this]() {
+                if (is_incremental_repair()) {
+                    return repair_reader::read_strategy::incremental_repair;
+                }
+
+                if (can_read_locally()) {
+                    rlogger.debug("repair_reader: meta_id={}, _repair_master={}, _same_sharding_config={},"
+                                  "read_strategy {} is chosen",
+                       _repair_meta_id, _repair_master, _same_sharding_config,
+                       repair_reader::read_strategy::local);
+                    return repair_reader::read_strategy::local;
+                }
+
+                // multishard_filter means load all the data in the range and apply
+                // filter by master shard on top, discarding partitions from other shards.
+                // multishard_split means split the range into multiple subranges,
+                // each containing only the required data from the master shard.
+                // For situations with a sparse data set spread across numerous ranges,
+                // the overhead from continuously switching between these ranges,
+                // specifically during the fast_forward_to function on the multishard_reader,
+                // can become the main factor in performance.
+                // Similarly, with multishard_filter, reading all the partitions within
+                // the range can lead to the next_partition cost dominating the overall cost.
+                // The heuristic here chooses the strategy with minimal such cost.
+                // Note that with multishard_filter we don't read entire partitions which
+                // can be a huge waste. We only fill the buffer inside
+                // mutation_reader, if a partition is found to belong to the incorrect
+                // master shard, we call next_partition(), which effectively clears
+                // the buffer until the next partition is reached.
+
+                if (utils::get_local_injector().enter("repair_reader_force_multishard_split")) {
+                    rlogger.debug("repair_reader: meta_id={}, read_strategy {} is forced by error injection",
+                        _repair_meta_id, repair_reader::read_strategy::multishard_split);
+                    return repair_reader::read_strategy::multishard_split;
+                }
+
+                if (!_local_range_estimation) {
+                    // this should not normally happen since the master
+                    // calls get_estimated_partitions before get_sync_boundary
+                    rlogger.warn("repair_reader: meta_id={}, no _local_range_estimation, "
+                                 "read_strategy {} is chosen",
+                        _repair_meta_id, repair_reader::read_strategy::multishard_split);
+                    return repair_reader::read_strategy::multishard_split;
+                }
+
+                const auto read_strategy =
+                    _local_range_estimation->partitions_count <= _local_range_estimation->master_subranges_count
+                    ? repair_reader::read_strategy::multishard_filter
+                    : repair_reader::read_strategy::multishard_split;
+                rlogger.debug("repair_reader: meta_id={}, _local_range_estimation: partitions_count={}, "
+                              "master_subranges_count={}, read_strategy {} is chosen",
+                    _repair_meta_id,
+                    _local_range_estimation->partitions_count,
+                    _local_range_estimation->master_subranges_count,
+                    read_strategy);
+                return read_strategy;
+            });
             _repair_reader.emplace(_db,
                 _db.local().find_column_family(_schema->id()),
                 _schema,
@@ -1439,67 +1524,13 @@ private:
                 _remote_sharder,
                 _master_node_shard_config.shard,
                 _seed,
-                std::invoke([this]() {
-                    if (is_incremental_repair()) {
-                        return repair_reader::read_strategy::incremental_repair;
-                    }
-
-                    if (can_read_locally()) {
-                        rlogger.debug("repair_reader: meta_id={}, _repair_master={}, _same_sharding_config={},"
-                                      "read_strategy {} is chosen",
-                           _repair_meta_id, _repair_master, _same_sharding_config,
-                           repair_reader::read_strategy::local);
-                        return repair_reader::read_strategy::local;
-                    }
-
-                    // multishard_filter means load all the data in the range and apply
-                    // filter by master shard on top, discarding partitions from other shards.
-                    // multishard_split means split the range into multiple subranges,
-                    // each containing only the required data from the master shard.
-                    // For situations with a sparse data set spread across numerous ranges,
-                    // the overhead from continuously switching between these ranges,
-                    // specifically during the fast_forward_to function on the multishard_reader,
-                    // can become the main factor in performance.
-                    // Similarly, with multishard_filter, reading all the partitions within
-                    // the range can lead to the next_partition cost dominating the overall cost.
-                    // The heuristic here chooses the strategy with minimal such cost.
-                    // Note that with multishard_filter we don't read entire partitions which
-                    // can be a huge waste. We only fill the buffer inside
-                    // mutation_reader, if a partition is found to belong to the incorrect
-                    // master shard, we call next_partition(), which effectively clears
-                    // the buffer until the next partition is reached.
-
-                    if (utils::get_local_injector().enter("repair_reader_force_multishard_split")) {
-                        rlogger.debug("repair_reader: meta_id={}, read_strategy {} is forced by error injection",
-                            _repair_meta_id, repair_reader::read_strategy::multishard_split);
-                        return repair_reader::read_strategy::multishard_split;
-                    }
-
-                    if (!_local_range_estimation) {
-                        // this should not normally happen since the master
-                        // calls get_estimated_partitions before get_sync_boundary
-                        rlogger.warn("repair_reader: meta_id={}, no _local_range_estimation, "
-                                     "read_strategy {} is chosen",
-                            _repair_meta_id, repair_reader::read_strategy::multishard_split);
-                        return repair_reader::read_strategy::multishard_split;
-                    }
-
-                    const auto read_strategy =
-                        _local_range_estimation->partitions_count <= _local_range_estimation->master_subranges_count
-                        ? repair_reader::read_strategy::multishard_filter
-                        : repair_reader::read_strategy::multishard_split;
-                    rlogger.debug("repair_reader: meta_id={}, _local_range_estimation: partitions_count={}, "
-                                  "master_subranges_count={}, read_strategy {} is chosen",
-                        _repair_meta_id,
-                        _local_range_estimation->partitions_count,
-                        _local_range_estimation->master_subranges_count,
-                        read_strategy);
-                    return read_strategy;
-                }),
+                strategy,
                 _compaction_time,
                 _incremental_repair_meta,
                 _rs.get_config().repair_multishard_reader_buffer_hint_size(),
                 bool(_rs.get_config().repair_multishard_reader_enable_read_ahead()));
+            SCYLLA_USDT(repair_meta_reader_created, _repair_meta_id, master_host_msb(), unsigned(strategy),
+                    _inc_sst_read_bytes, _inc_sst_skipped_bytes, utils::usdt_us_since(usdt_read_start));
         }
         try {
             while (cur_size < _max_row_buf_size) {
@@ -1519,6 +1550,7 @@ private:
             co_await coroutine::return_exception_ptr(std::move(ex));
         }
         _repair_reader->pause();
+        SCYLLA_USDT(repair_meta_read_rows_done, _repair_meta_id, master_host_msb(), cur_rows.size(), new_rows_size, utils::usdt_us_since(usdt_read_start));
         co_return value_type(std::move(cur_rows), new_rows_size);
     }
 
@@ -1680,7 +1712,7 @@ private:
         if (rows.empty()) {
             return;
         }
-        auto row_diff = to_repair_rows_list(std::move(rows), _schema, _seed, _repair_master, _permit, _repair_hasher).get();
+        auto row_diff = to_repair_rows_list(std::move(rows), _schema, _seed, _repair_master, _permit, _repair_hasher).get().first;
         auto sz = get_repair_rows_size(row_diff).get();
         stats().rx_row_bytes += sz;
         stats().rx_row_nr += row_diff.size();
@@ -1767,8 +1799,11 @@ private:
         if (rows.empty()) {
             co_return;
         }
-        std::list<repair_row> row_diff = co_await to_repair_rows_list(std::move(rows), _schema, _seed, _repair_master, _permit, _repair_hasher);
+        auto usdt_start = std::chrono::steady_clock::now();
+        auto [row_diff, bytes] = co_await to_repair_rows_list(std::move(rows), _schema, _seed, _repair_master, _permit, _repair_hasher);
+        auto nr_rows = row_diff.size();
         co_await do_apply_rows(std::move(row_diff), update_working_row_buf::no);
+        SCYLLA_USDT(repair_meta_apply_rows_done, _repair_meta_id, master_host_msb(), nr_rows, bytes, utils::usdt_us_since(usdt_start));
     }
 
     struct fragments_limiter {
@@ -2002,7 +2037,9 @@ public:
         if (remote_node == myhostid()) {
             co_await stop();
             if (mark_as_repaired) {
+                auto usdt_start = std::chrono::steady_clock::now();
                 co_await mark_sstable_as_repaired();
+                SCYLLA_USDT(repair_meta_mark_repaired_done, ks_name.c_str(), cf_name.c_str(), utils::usdt_us_since(usdt_start));
             }
             co_return;
         }
@@ -4340,7 +4377,9 @@ repair_service::insert_repair_meta(
         bool explicit_dst_cpu_id) {
     schema_ptr s = co_await get_migration_manager().get_schema_for_write(schema_version, from_id, src_cpu_id, get_messaging(), as);
     auto& db = get_db();
+    auto usdt_permit_start = std::chrono::steady_clock::now();
     reader_permit permit = co_await db.local().obtain_reader_permit(db.local().find_column_family(s->id()), "repair-meta", db::no_timeout, {});
+    SCYLLA_USDT(repair_meta_permit_done, s->ks_name().c_str(), s->cf_name().c_str(), utils::usdt_us_since(usdt_permit_start));
     node_repair_meta_id id{from_id, repair_meta_id};
     auto rm = seastar::make_shared<repair_meta>(*this,
             get_db().local().find_column_family(s->id()),
@@ -4423,7 +4462,9 @@ repair_service::remove_repair_meta(const locator::host_id& from,
         rlogger.debug("remove_repair_meta: Stop repair_meta_id {} for node {} started", id.repair_meta_id, id.ip);
         co_await rm->stop();
         if (mark_as_repaired) {
+            auto usdt_start = std::chrono::steady_clock::now();
             co_await rm->mark_sstable_as_repaired();
+            SCYLLA_USDT(repair_meta_mark_repaired_done, ks_name.c_str(), cf_name.c_str(), utils::usdt_us_since(usdt_start));
         }
         rlogger.debug("remove_repair_meta: Stop repair_meta_id {} for node {} finished", id.repair_meta_id, id.ip);
     }
