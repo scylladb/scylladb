@@ -326,7 +326,7 @@ bool repair_needs_hints_batchlog_flush(const schema& s);
 struct tablet_repair_sched_info {
     bool sched_by_scheduler = false;
     bool for_tablet_rebuild = false;
-    locator::tablet_repair_incremental_mode incremental_mode;
+    locator::tablet_repair_incremental_mode incremental_mode = locator::tablet_repair_incremental_mode::disabled;
 };
 
 namespace repair {
