@@ -1474,6 +1474,13 @@ bool groups_manager::colocate_leader(raft::group_id child_gid) {
     if (!child) {
         return false;
     }
+    if (child_state.priority_members_hold.armed()) {
+        // The guard against a ping-pong of the leadership has withdrawn the child's priority
+        // members, and it puts them back when the hold ends. Until then we give the child the
+        // parent's leader alone. The replicas learn it from the parent's raft group, so they
+        // cannot disagree on it for long, and the child ends up with its parent.
+        child->server().set_priority_members({parent_leader});
+    }
     return !child->server().is_leader() || parent_leader == child->server().id();
 }
 

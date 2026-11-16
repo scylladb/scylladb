@@ -717,3 +717,12 @@ change of the Raft state is certain to follow:
 A replica which only follows both groups gets no update until the token metadata changes, so
 its list can hold an earlier leader of the parent. That list only decides which election slot
 the replica itself takes, never where the leadership goes.
+
+The guard which withdraws the list of a group whose leadership keeps moving back and forth
+covers a child too, because the list of a child starts with servers which come from the cluster
+metadata, and two replicas can disagree on those for as long as one of them lags behind. A
+child without a list would stay wherever it is, though, and the hand-off of requests to it will
+wait for its leader to join the parent's. While the guard holds the list of a child back,
+`groups_manager::colocate_leader()` therefore gives the child the leader of its parent alone.
+The replicas learn that leader from the parent's Raft group, so they cannot disagree on it for
+long, and the child ends up with its parent.

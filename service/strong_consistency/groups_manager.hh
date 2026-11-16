@@ -305,6 +305,8 @@ class groups_manager : public peering_sharded_service<groups_manager> {
 
     // Sets the priority members of `child_gid`, a child of a resize, to its preferred leaders
     // followed by the parent's leader, if this replica knows one and it is not among them.
+    // While the guard against a ping-pong of the leadership withholds the child's priority
+    // members, its raft server gets the parent's leader alone.
     // Changes nothing if the resize is over on this replica.
     //
     // Returns false while one of the following holds. The caller must then call it again
