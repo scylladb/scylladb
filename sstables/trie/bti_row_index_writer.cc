@@ -24,7 +24,7 @@ public:
     row_index_writer_impl(row_index_writer_impl&&) = delete;
 private:
     // Writes _last_key to the trie.
-    void flush_last_key(size_t mismatch, size_t last_key_size, const trie_payload& payload);
+    void flush_last_key(size_t mismatch, size_t last_key_size, const trie_payload& payload, uint32_t mark);
     static trie_payload make_payload(
         uint64_t offset_from_partition_start,
         sstables::deletion_time range_tombstone_before_first_ck);
@@ -34,7 +34,8 @@ public:
         const sstables::clustering_info& first_ck,
         const sstables::clustering_info& last_ck,
         uint64_t offset_from_partition_start,
-        sstables::deletion_time range_tombstone_before_first_ck);
+        sstables::deletion_time range_tombstone_before_first_ck,
+        uint32_t mark);
     int64_t finish(
         sstable_version_types,
         const schema&,
@@ -47,6 +48,10 @@ public:
 private:
     trie_writer<bti_node_sink> _wr;
     size_t _added_blocks = 0;
+    // The mark of the last block added, and the largest mark of the
+    // partition's blocks (see bti_row_index_writer::set_mark_observer()).
+    uint32_t _last_block_mark = 0;
+    uint32_t _max_block_mark = 0;
     // Storage for _last_key, _last_separator and _tmp_key.
     // 
     // They are pointers to an array of lazy_comparable_bytes_from_rpv
@@ -76,7 +81,7 @@ row_index_writer_impl::row_index_writer_impl(bti_node_sink& out)
 row_index_writer_impl::~row_index_writer_impl() {
 }
 
-void row_index_writer_impl::flush_last_key(size_t mismatch, size_t last_key_size, const trie_payload& payload) {
+void row_index_writer_impl::flush_last_key(size_t mismatch, size_t last_key_size, const trie_payload& payload, uint32_t mark) {
     size_t i = 0;
     // We find the first fragment of `_last_key` that contains the mismatch position,
     // and then insert the `last_key_size - mismatch` bytes starting from that point
@@ -96,7 +101,7 @@ void row_index_writer_impl::flush_last_key(size_t mismatch, size_t last_key_size
         if (i + frag.size() < last_key_size) {
             _wr.add_partial(i, frag);
         } else {
-            _wr.add(i, frag, payload);
+            _wr.add(i, frag, payload, mark);
             break;
         }
 
@@ -141,7 +146,8 @@ void row_index_writer_impl::add(
     const sstables::clustering_info& first_ck_info,
     const sstables::clustering_info& last_ck_info,
     uint64_t offset_from_partition_start,
-    sstables::deletion_time range_tombstone_before_first_ck
+    sstables::deletion_time range_tombstone_before_first_ck,
+    uint32_t mark
 ) {
     expensive_log("row_index_writer_impl::add() this={} first_ck={},{} last_ck={},{} offset_from_partition_start={} range_tombstone_before_first_ck={}",
         fmt::ptr(this),
@@ -154,13 +160,16 @@ void row_index_writer_impl::add(
     _tmp_key->emplace(s, std::move(last_ck_info));
 
     auto payload = make_payload(offset_from_partition_start, range_tombstone_before_first_ck);
+    auto payload_mark = std::max(mark, _last_block_mark);
+    _last_block_mark = mark;
+    _max_block_mark = std::max(_max_block_mark, mark);
 
     if (_added_blocks == 0) {
         // For the first separator, which points to the first clustering key,
         // we use an empty string.
         // This is an arbitrary choice. (Mirrored from Cassandra).
         // If you wish to change this, adjust the `_added_blocks == 1` branch in `finish()` accordingly.
-        _wr.add(0, {}, payload);
+        _wr.add(0, {}, payload, payload_mark);
     } else {
         auto [separator_mismatch_idx, separator_mismatch_ptr] = lcb_mismatch(first_ck.begin(), (**_last_key).begin());
         // We assume a prefix-free encoding here.
@@ -197,7 +206,7 @@ void row_index_writer_impl::add(
         (**_last_key).trim(separator_mismatch_idx + 1);
 
         size_t mismatch = _added_blocks > 1 ? lcb_mismatch((**_last_key).begin(), (**_last_separator).begin()).first : 0;
-        flush_last_key(mismatch, separator_mismatch_idx + 1, payload);
+        flush_last_key(mismatch, separator_mismatch_idx + 1, payload, payload_mark);
     }
 
     _added_blocks += 1;
@@ -321,12 +330,14 @@ int64_t row_index_writer_impl::finish(
         (**_last_key).trim(nudge_idx + 1);
         auto final_payload = make_payload(partition_data_end - partition_data_start, sstables::deletion_time::make_live());
         expensive_log("row_index_writer_impl::finish() final_payload: {}", partition_data_end);
-        flush_last_key(mismatch_idx, nudge_idx + 1, final_payload);
+        flush_last_key(mismatch_idx, nudge_idx + 1, final_payload, _max_block_mark);
     }
 
     auto result = _wr.finish();
     auto added_blocks_for_header = _added_blocks;
     _added_blocks = 0;
+    _last_block_mark = 0;
+    _max_block_mark = 0;
     _last_separator->reset();
     _last_key->reset();
     _tmp_key->reset();
@@ -384,9 +395,14 @@ void bti_row_index_writer::add(
     const sstables::clustering_info& first_ck,
     const sstables::clustering_info& last_ck,
     uint64_t offset_from_partition_start,
-    const sstables::deletion_time& range_tombstone_before_first_ck
+    const sstables::deletion_time& range_tombstone_before_first_ck,
+    uint32_t mark
 ) {
-    return _impl->add(s, first_ck, last_ck, offset_from_partition_start, range_tombstone_before_first_ck);
+    return _impl->add(s, first_ck, last_ck, offset_from_partition_start, range_tombstone_before_first_ck, mark);
+}
+
+void bti_row_index_writer::set_mark_observer(std::function<void(uint64_t pos, uint32_t mark)> observer) {
+    _impl->set_mark_observer(std::move(observer));
 }
 
 } // namespace sstables::trie
