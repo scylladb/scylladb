@@ -2156,11 +2156,11 @@ SEASTAR_TEST_CASE(test_replay_discards_groups_without_local_replica) {
     }, sc_replay_config());
 }
 
-// Test that replay discards a group this shard hosts but has no row for: the group was
-// not bootstrapped here, and start_raft_group() will bootstrap it with an empty log.
-// hosts_raft_group() answers yes here, so only the persisted-state test can discard these
-// entries.
-SEASTAR_TEST_CASE(test_replay_discards_groups_without_persisted_state) {
+// Test: a batch of a group this shard hosts but has no row for is an internal error.
+// The row is written before the group's first batch, and the replayer skips the
+// batches of an earlier stay of the tablet by its commitlog cleanup record, so no
+// batch reaches add_batch() without a row.
+SEASTAR_TEST_CASE(test_replay_of_a_hosted_group_without_a_row_is_an_internal_error) {
     return do_with_cql_env_thread([] (cql_test_env& env) {
         const auto gid = make_group_id();
         const auto table = table_id(utils::UUID_gen::get_time_UUID());
@@ -2172,14 +2172,17 @@ SEASTAR_TEST_CASE(test_replay_discards_groups_without_persisted_state) {
                 env.local_qp(), gid, this_shard_id()).get().exists);
 
         db::raft_commitlog_replay_buffer buffer;
-        replay_batch(env, buffer, gid, 1, raft::index_t(0), std::vector<raft::log_entry_ptr>{
-                make_dummy_entry(raft::term_t(1), raft::index_t(1)),
-                make_dummy_entry(raft::term_t(1), raft::index_t(2))});
-        buffer.finish_replay(env.local_db(), env.local_qp()).get();
-
-        auto data = buffer.take_replayed_group_entries(gid);
-        BOOST_CHECK(data.entries.empty());
-        BOOST_CHECK(data.records.empty());
+        {
+            seastar::testing::scoped_no_abort_on_internal_error no_abort;
+            BOOST_REQUIRE_EXCEPTION(
+                    replay_batch(env, buffer, gid, 1, raft::index_t(0), std::vector<raft::log_entry_ptr>{
+                            make_dummy_entry(raft::term_t(1), raft::index_t(1)),
+                            make_dummy_entry(raft::term_t(1), raft::index_t(2))}),
+                    std::runtime_error,
+                    [](const std::runtime_error& e) {
+                        return sstring(e.what()).find("no row in system.raft_groups") != sstring::npos;
+                    });
+        }
         buffer.stop().get();
     }, sc_replay_config());
 }

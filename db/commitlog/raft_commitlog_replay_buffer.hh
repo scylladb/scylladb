@@ -87,10 +87,8 @@ public:
 
 private:
     struct group_state {
-        // Resolved at the group's first batch, by reading its row. A group without a
-        // row is not known, and everything read for it is discarded.
+        // Set at the group's first batch, when its row is read.
         bool resolved = false;
-        bool known = false;
         locator::global_tablet_id tablet{table_id{}, locator::tablet_id(0)};
 
         // The running commit index and the term of the entry at it.
@@ -137,7 +135,9 @@ private:
     // Segments a replay could not read in full; see note_unreadable_segment().
     std::vector<db::segment_id_type> _unreadable_segments;
 
-    // Read back the group's persisted state.
+    // Read back the group's persisted state. A hosted group that has a batch
+    // also has a row: the row is written before the group's first batch, and the
+    // batches of an earlier stay of its tablet never get here.
     future<> resolve_group(cql3::query_processor& qp, raft::group_id group_id,
         const hosted_group& hosted, group_state& group);
 

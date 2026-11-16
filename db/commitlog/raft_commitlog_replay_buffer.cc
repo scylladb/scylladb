@@ -163,13 +163,10 @@ future<> raft_commitlog_replay_buffer::resolve_group(cql3::query_processor& qp, 
     // The floor: every index at or below it is committed.
     auto persisted = co_await service::strong_consistency::raft_groups_storage::load_descriptor(qp, group_id, this_shard_id());
     if (!persisted.exists) {
-        // This shard hosts the group but has no row for it, so the group was not
-        // bootstrapped here: start_raft_group() will bootstrap it with an empty log.
-        // Whatever is read for it is not its log.
-        logger.info("group {} has no persisted raft state on this shard, discarding its entries", group_id);
-        co_return;
+        on_internal_error(logger, fmt::format(
+                "group {} is hosted by this shard and has a raft batch in the commitlog, but no row in "
+                "system.raft_groups: the row is written before the group's first batch", group_id));
     }
-    group.known = true;
     group.tablet = hosted.tablet;
     // The truncate record is written once its entry is committed, so its index is a floor
     // too, and it can run ahead of the row's: the descriptor advances only when a segment
@@ -266,9 +263,6 @@ future<> raft_commitlog_replay_buffer::add_batch(replica::database& db, cql3::qu
     auto& group = _groups[group_id];
     if (!group.resolved) {
         co_await resolve_group(qp, group_id, hosted, group);
-    }
-    if (!group.known) {
-        co_return;
     }
     _total_entries += entries.size();
     group.commit_idx = std::max(group.commit_idx, commit_idx);
@@ -376,7 +370,7 @@ future<> raft_commitlog_replay_buffer::finish_replay(replica::database& db, cql3
     // covers every group that can be wrong.
     std::vector<sstring> lost;
     for (const auto& [group_id, group] : _groups) {
-        if (group.known && group.contiguous_to < group.commit_idx) {
+        if (group.contiguous_to < group.commit_idx) {
             lost.push_back(fmt::format("{} committed to {} but read only to {}",
                     group_id, group.commit_idx, group.contiguous_to));
         }
@@ -438,7 +432,7 @@ future<> raft_commitlog_replay_buffer::finish_replay(replica::database& db, cql3
     // Checked before any descriptor is written, so a refused boot leaves the rows
     // unchanged.
     for (const auto& [group_id, group] : _groups) {
-        if (!group.known || group.buf.empty()) {
+        if (group.buf.empty()) {
             continue;
         }
         if (group.buf.front().entry->idx != group.commit_idx + raft::index_t{1}) {
@@ -471,9 +465,6 @@ future<> raft_commitlog_replay_buffer::finish_replay(replica::database& db, cql3
     }
 
     for (auto& [group_id, group] : _groups) {
-        if (!group.known) {
-            continue;
-        }
         // The recovered floor is a real descriptor: every index at or below
         // commit_idx is committed, and commit_term is the term of the entry there.
         co_await service::strong_consistency::raft_groups_storage::store_descriptor(

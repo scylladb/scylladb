@@ -465,6 +465,10 @@ shard now, and skips the batch otherwise:
   same record, and the same comparison, that keeps the mutations of a cleaned-up tablet
   of an eventually consistent table from being replayed.
 
+A batch that passes both checks belongs to the group as it runs on this shard now, and
+that group has a row: the row is written before the group's first batch. A missing row
+is an internal error.
+
 ### Shutdown behavior
 
 On clean shutdown a group is dropped with `log_disposition::keep`, and
