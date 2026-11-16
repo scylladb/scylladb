@@ -705,7 +705,7 @@ future<kmip_host::impl::con_ptr> kmip_host::impl::get_connection(KMIP_CMD* cmd) 
 
     return repeat_until_value([this, i = size_t(0)]() mutable {
         if (i++ == _options.hosts.size()) {
-            throw missing_resource_error("Could not connect to any server");
+            throw network_error("Could not connect to any server");
         }
         auto& host = _options.hosts[_index % _options.hosts.size()];
         return get_connection(host).then([](con_ptr cp) {
