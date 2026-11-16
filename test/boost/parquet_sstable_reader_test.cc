@@ -39,6 +39,7 @@
 
 #include "mutation/mutation_rebuilder.hh"
 #include "partition_slice_builder.hh"
+#include "readers/combined.hh"
 #include "readers/from_fragments.hh"
 #include "readers/from_mutations.hh"
 #include "readers/reversing.hh"
@@ -910,6 +911,7 @@ public:
     uint64_t bytes = 0;
     // The lowest offset read by dma_read_bulk().
     uint64_t lowest = std::numeric_limits<uint64_t>::max();
+    std::vector<std::pair<uint64_t, uint64_t>> requests;
     explicit counting_file_impl(file f) : _file(std::move(f)) {}
     future<size_t> write_dma(uint64_t pos, const void* buffer, size_t len, io_intent* intent) override {
         return get_file_impl(_file)->write_dma(pos, buffer, len, intent);
@@ -933,6 +935,7 @@ public:
         ++reads;
         bytes += range_size;
         lowest = std::min(lowest, offset);
+        requests.emplace_back(offset, range_size);
         return get_file_impl(_file)->dma_read_bulk(offset, range_size, intent);
     }
     future<> flush() override { return get_file_impl(_file)->flush(); }
@@ -945,6 +948,29 @@ public:
     std::unique_ptr<seastar::file_handle_impl> dup() override { return get_file_impl(_file)->dup(); }
     subscription<directory_entry> list_directory(std::function<future<> (directory_entry de)> next) override {
         return get_file_impl(_file)->list_directory(std::move(next));
+    }
+};
+
+// Holds every read until `release` is set.
+class blocking_file_impl : public counting_file_impl {
+public:
+    shared_promise<> release;
+    uint64_t waiting = 0;
+    using counting_file_impl::counting_file_impl;
+    future<size_t> read_dma(uint64_t pos, void* buffer, size_t len, io_intent* intent) override {
+        ++waiting;
+        co_await release.get_shared_future();
+        co_return co_await counting_file_impl::read_dma(pos, buffer, len, intent);
+    }
+    future<size_t> read_dma(uint64_t pos, std::vector<iovec> iov, io_intent* intent) override {
+        ++waiting;
+        co_await release.get_shared_future();
+        co_return co_await counting_file_impl::read_dma(pos, std::move(iov), intent);
+    }
+    future<temporary_buffer<uint8_t>> dma_read_bulk(uint64_t offset, size_t range_size, io_intent* intent) override {
+        ++waiting;
+        co_await release.get_shared_future();
+        co_return co_await counting_file_impl::dma_read_bulk(offset, range_size, intent);
     }
 };
 
@@ -1989,5 +2015,300 @@ SEASTAR_THREAD_TEST_CASE(test_partition_head_from_index) {
             // A full read reads the head.
             BOOST_REQUIRE_LT(read(query::clustering_range::make_open_ended_both_sides(), reverse), summary.region_start(1));
         }
+    }).get();
+}
+
+namespace {
+
+// A table with `columns` regular int columns.
+schema_ptr int_columns_table(size_t columns) {
+    const auto name = fmt::format("int_columns_{}", columns);
+    schema_builder b(this_smp_shard_count(), "ks", name);
+    b.with_column("pk", int32_type, column_kind::partition_key);
+    b.with_column("ck", int32_type, column_kind::clustering_key);
+    for (size_t i = 0; i < columns; ++i) {
+        b.with_column(to_bytes(fmt::format("c{}", i)), int32_type);
+    }
+    return b.build();
+}
+
+utils::chunked_vector<mutation> int_columns_partitions(schema_ptr s, int partitions, int rows, uint32_t seed) {
+    std::mt19937 engine(seed);
+    utils::chunked_vector<mutation> muts;
+    const api::timestamp_type ts = 1;
+    for (int p = 0; p < partitions; ++p) {
+        mutation m(s, partition_key::from_single_value(*s, int32_type->decompose(int32_t(p))));
+        for (int r = 0; r < rows; ++r) {
+            const auto ck = clustering_key::from_single_value(*s, int32_type->decompose(int32_t(r)));
+            for (const auto& cdef : s->regular_columns()) {
+                m.set_clustered_cell(ck, cdef, atomic_cell::make_live(*int32_type, ts, int32_type->decompose(int32_t(engine()))));
+            }
+        }
+        muts.push_back(std::move(m));
+    }
+    return local_sorted(std::move(muts));
+}
+
+struct read_measure {
+    uint64_t reads = 0;
+    uint64_t bytes = 0;
+    uint64_t index_reads = 0;
+    uint64_t pages = 0;
+    uint64_t dictionary_pages = 0;
+    // The most memory that the read's permit held: read buffers and pages.
+    int64_t peak_memory = 0;
+};
+
+} // anonymous namespace
+
+// Measures read-ahead and the cost of point reads by counters, for tables
+// of 5, 20, and 100 int columns, and logs the numbers. The bounds checked
+// are loose: they catch unbounded windows and refetching, not tuning.
+// While a read waits for its pages, its permit is marked as waiting for
+// I/O, as an mx read is. The reader concurrency semaphore admits new reads
+// only while few admitted reads need the CPU, so a read that counted as
+// needing the CPU while it waited would hold back the reads behind it.
+SEASTAR_THREAD_TEST_CASE(test_permit_awaits_while_reading) {
+    test_env::do_with_async([] (test_env& env) {
+        simple_schema ss;
+        auto s = ss.schema();
+        auto pk = ss.make_pkey();
+        mutation m(s, pk);
+        for (uint32_t i = 0; i < 100; ++i) {
+            ss.add_row(m, ss.make_ckey(i), fmt::format("value {}", i));
+        }
+        auto sst = env.reusable_sst(s, write(env, s, {m}, aa)).get();
+        auto blocking = make_shared<blocking_file_impl>(sstables::test(sst).data_file());
+        auto original = sstables::test(sst).data_file();
+        sstables::test(sst).data_file() = file(blocking);
+
+        auto permit = env.make_reader_permit();
+        reader_permit::need_cpu_guard need_cpu(permit);
+        BOOST_REQUIRE(permit.get_state() == reader_permit::state::active_need_cpu);
+        const auto pr = dht::partition_range::make_singular(pk);
+        auto rd = sst->make_reader(s, permit, pr, s->full_slice());
+        auto close = deferred_close(rd);
+        auto first = rd();
+        for (int i = 0; i < 1000 && !blocking->waiting; ++i) {
+            seastar::sleep(std::chrono::milliseconds(1)).get();
+        }
+        BOOST_REQUIRE(blocking->waiting);
+        const auto state = permit.get_state();
+        blocking->release.set_value();
+        first.get();
+        BOOST_REQUIRE_EQUAL(int(state), int(reader_permit::state::active_await));
+        while (rd().get()) {
+        }
+        BOOST_REQUIRE(permit.get_state() == reader_permit::state::active_need_cpu);
+        sstables::test(sst).data_file() = original;
+    }).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_read_ahead_counters) {
+    test_env::do_with_async([] (test_env& env) {
+        for (const size_t columns : {5, 20, 100}) {
+            auto s = int_columns_table(columns);
+            const int partitions = 8;
+            const int rows = columns == 100 ? 500 : 2500;
+            const auto muts = int_columns_partitions(s, partitions, rows, 7);
+            // Row groups of 1 MiB, so that the files have several with
+            // little data. The numbers in fetcher.hh come from a run with
+            // the default size and about 8 MiB per file.
+            auto tweak = [] (sstable_writer_config& cfg) {
+                cfg.parquet_row_group_size = 1 << 20;
+            };
+            auto sst = write(env, s, muts, aa, tweak);
+            const auto& summary = sst->get_parquet_file_summary();
+            const size_t leaves = summary.columns().size();
+
+            // Reads with a fresh sstable object, whose caches are empty, or
+            // with `warm` and its caches.
+            auto measure = [&] (shared_sstable warm, std::function<mutation_reader (shared_sstable, reader_permit)> make) {
+                auto fresh = warm ? warm : env.reusable_sst(s, sst).get();
+                auto counting = make_shared<counting_file_impl>(sstables::test(fresh).data_file());
+                auto original = sstables::test(fresh).data_file();
+                sstables::test(fresh).data_file() = file(counting);
+                read_measure r;
+                const auto stats_before = parquet::local_shard_stats;
+                auto& sem = env.semaphore();
+                const auto base = sem.consumed_resources().memory;
+                auto rd = make(fresh, env.make_reader_permit());
+                while (auto mf = rd().get()) {
+                    r.peak_memory = std::max(r.peak_memory, sem.consumed_resources().memory - base);
+                }
+                rd.close().get();
+                sstables::test(fresh).data_file() = original;
+                testlog.debug("requests: {}", counting->requests);
+                r.index_reads = parquet::local_shard_stats.offset_index_reads - stats_before.offset_index_reads;
+                r.pages = parquet::local_shard_stats.data_pages_read - stats_before.data_pages_read;
+                r.dictionary_pages = parquet::local_shard_stats.dictionary_pages_read - stats_before.dictionary_pages_read;
+                r.reads = counting->reads;
+                r.bytes = counting->bytes;
+                return r;
+            };
+            const auto file_size = sst->ondisk_data_size();
+            const auto scan = measure(nullptr, [&] (shared_sstable x, reader_permit p) { return x->make_full_scan_reader(s, p); });
+            testlog.info("{} columns, {} leaves, {} row groups, {} bytes: full scan: {} reads, {} bytes, {:.1f} reads per MiB, peak memory {}",
+                    columns, leaves, summary.row_groups(), file_size, scan.reads, scan.bytes, scan.reads * double(1 << 20) / file_size, scan.peak_memory);
+            // A scan reads every byte once, apart from the blocks at the
+            // ends of its requests, which are aligned to 4 KiB (the
+            // alignment of counting_file_impl).
+            const uint64_t alignment = 4096;
+            BOOST_REQUIRE_LE(scan.bytes, file_size + 2 * alignment * scan.reads);
+            uint64_t largest_region = 0;
+            for (uint32_t g = 0; g < summary.row_groups(); ++g) {
+                largest_region = std::max(largest_region, summary.region_size(g) + summary.row_group(g).offset_index_length);
+            }
+            // The window is at most a row group, plus the pages that the
+            // cursors hold, plus one more row group's OffsetIndexes.
+            BOOST_REQUIRE_LE(uint64_t(scan.peak_memory), 3 * std::max<uint64_t>(largest_region, 640 << 10));
+
+            // The partitions are those of the local shard.
+            const auto& pk = muts[muts.size() / 2].decorated_key();
+            const auto pr = dht::partition_range::make_singular(pk);
+            auto point_slice = [&] (int row) {
+                return partition_slice_builder(*s).with_range(query::clustering_range::make_singular(
+                        clustering_key::from_single_value(*s, int32_type->decompose(int32_t(row))))).build();
+            };
+            auto point = [&] (shared_sstable warm, int row) {
+                auto slice = point_slice(row);
+                return measure(warm, [&] (shared_sstable x, reader_permit p) { return x->make_reader(s, p, pr, slice); });
+            };
+            // The first read fills the caches of OffsetIndexes and dictionaries.
+            auto warm = env.reusable_sst(s, sst).get();
+            point(warm, rows / 2);
+            const auto warm_point = point(warm, rows / 2 + 1);
+            const auto other_point = point(warm, rows / 4);
+            auto describe = [] (const read_measure& r) {
+                return fmt::format("{} reads, {} bytes, {} pages, {} dictionary pages, {} OffsetIndex blocks", r.reads, r.bytes, r.pages,
+                        r.dictionary_pages, r.index_reads);
+            };
+            testlog.info("{} columns: point read: {}; another row: {}, peak memory {}",
+                    columns, describe(warm_point), describe(other_point), other_point.peak_memory);
+            // A page per leaf, and no dictionary, because the values are
+            // random. At most one request per page, plus one for each page
+            // that crosses a multiple of the largest request.
+            for (const auto& r : {warm_point, other_point}) {
+                BOOST_REQUIRE_EQUAL(r.pages, leaves);
+                BOOST_REQUIRE_LE(r.reads, leaves + r.bytes / (128 << 10) + 1);
+            }
+
+            const auto rs = s->make_reversed();
+            const auto rev_slice = query::reverse_slice(*s, partition_slice_builder(*s).with_range(query::clustering_range::make(
+                    {clustering_key::from_single_value(*s, int32_type->decompose(int32_t(rows - 100))), true},
+                    {clustering_key::from_single_value(*s, int32_type->decompose(int32_t(rows - 1))), true})).build());
+            const auto reverse = measure(nullptr, [&] (shared_sstable x, reader_permit p) { return x->make_reader(rs, p, pr, rev_slice); });
+            testlog.info("{} columns: reverse slice of 100 rows: {} reads, {} bytes, peak memory {}", columns, reverse.reads, reverse.bytes, reverse.peak_memory);
+            // Nothing is read twice, apart from the blocks at the ends of
+            // the requests. The files are small, so the slice's pages may
+            // cover much of them.
+            BOOST_REQUIRE_LE(reverse.bytes, file_size + 2 * alignment * reverse.reads);
+
+            // A compaction reads several sstables at once.
+            std::vector<shared_sstable> ssts;
+            for (int i = 0; i < 4; ++i) {
+                ssts.push_back(write(env, s, int_columns_partitions(s, partitions, rows, 100 + i), aa, tweak));
+            }
+            auto permit = env.make_reader_permit();
+            std::vector<mutation_reader> readers;
+            for (auto& x : ssts) {
+                readers.push_back(x->make_full_scan_reader(s, permit));
+            }
+            auto& sem = env.semaphore();
+            const auto base = sem.consumed_resources().memory;
+            int64_t peak = 0;
+            auto rd = make_combined_reader(s, permit, std::move(readers));
+            while (auto mf = rd().get()) {
+                peak = std::max(peak, sem.consumed_resources().memory - base);
+            }
+            rd.close().get();
+            testlog.info("{} columns: compaction of 4 sstables: peak memory {}", columns, peak);
+            BOOST_REQUIRE_LE(uint64_t(peak), 4 * 3 * std::max<uint64_t>(largest_region, 640 << 10));
+        }
+    }).get();
+}
+
+// Read-ahead stops at the end of the reader's current partition range. A
+// reader that may be fast-forwarded to another range reads no further than
+// one that may not.
+SEASTAR_THREAD_TEST_CASE(test_read_ahead_stops_at_the_end_of_the_range) {
+    test_env::do_with_async([] (test_env& env) {
+        auto s = int_columns_table(5);
+        // The partitions are those of the local shard.
+        const auto muts = int_columns_partitions(s, 64, 150, 9);
+        const size_t n = muts.size();
+        BOOST_REQUIRE_GE(n, 16);
+        auto sst = write(env, s, muts, aa, [] (sstable_writer_config& cfg) {
+            cfg.parquet_page_set_size = 4096;
+            cfg.parquet_min_page_size = 1024;
+            cfg.parquet_row_group_size = 16 << 10;
+        });
+        BOOST_REQUIRE_GE(sst->get_parquet_file_summary().row_groups(), 6);
+        auto range = [&] (size_t first, size_t last) {
+            return dht::partition_range::make({muts[first].decorated_key(), true}, {muts[last].decorated_key(), true});
+        };
+        const dht::partition_range_vector ranges{range(n / 8, n / 8 + 2), range(5 * n / 8, 5 * n / 8 + 2)};
+
+        // Reads `ranges` in turn with a fresh sstable object, and returns
+        // the end of the furthest read of the Data file after each range.
+        auto furthest = [&] (const dht::partition_range_vector& ranges, mutation_reader::forwarding fwd_mr) {
+            auto fresh = env.reusable_sst(s, sst).get();
+            auto counting = make_shared<counting_file_impl>(sstables::test(fresh).data_file());
+            auto original = sstables::test(fresh).data_file();
+            sstables::test(fresh).data_file() = file(counting);
+            auto permit = env.make_reader_permit();
+            auto rd = fresh->make_reader(s, permit, ranges.front(), s->full_slice(), nullptr, streamed_mutation::forwarding::no, fwd_mr);
+            auto close = deferred_close(rd);
+            std::vector<uint64_t> ends;
+            for (size_t i = 0; i < ranges.size(); ++i) {
+                if (i) {
+                    rd.fast_forward_to(ranges[i]).get();
+                }
+                while (rd().get()) {
+                }
+                uint64_t end = 0;
+                for (const auto& [offset, size] : counting->requests) {
+                    end = std::max(end, offset + size);
+                }
+                ends.push_back(end);
+            }
+            sstables::test(fresh).data_file() = original;
+            return ends;
+        };
+        const auto forwarded = furthest(ranges, mutation_reader::forwarding::yes);
+        const auto first = furthest({ranges[0]}, mutation_reader::forwarding::no);
+        const auto second = furthest({ranges[1]}, mutation_reader::forwarding::no);
+        testlog.info("file of {} bytes: forwarded reads up to {} and {}, single ranges up to {} and {}",
+                sst->ondisk_data_size(), forwarded[0], forwarded[1], first[0], second[0]);
+        BOOST_REQUIRE_LT(first[0], sst->ondisk_data_size() / 2);
+        BOOST_REQUIRE_LE(forwarded[0], first[0]);
+        BOOST_REQUIRE_LE(forwarded[1], second[0]);
+    }).get();
+}
+
+// The read side of a table with many columns makes no allocation above
+// 128 KiB: the footer summary, the mapping, the read plan, and the reader.
+// The sstable is written before the check, which covers reads only.
+SEASTAR_THREAD_TEST_CASE(test_many_columns_read_allocations) {
+    test_env::do_with_async([] (test_env& env) {
+        // Each column has one leaf in the file, and 7 nodes in the mapping.
+        auto s = int_columns_table(2000);
+        const auto muts = int_columns_partitions(s, 2, 2, 11);
+        auto sst = write(env, s, muts, aa);
+        BOOST_REQUIRE_GT(sst->get_parquet_file_summary().columns().size(), 2000);
+        auto read = [&] {
+            auto fresh = env.reusable_sst(s, sst).get();
+            return read_all(fresh->make_reader(s, env.make_reader_permit(), query::full_partition_range, s->full_slice()));
+        };
+        const std::vector<mutation> expected(muts.begin(), muts.end());
+        check_equal(read(), expected);
+        const auto before = seastar::memory::stats();
+        std::vector<mutation> actual;
+        {
+            const seastar::memory::scoped_large_allocation_warning_threshold guard((128 << 10) + 1);
+            actual = read();
+        }
+        BOOST_REQUIRE_EQUAL(seastar::memory::stats().large_allocations(), before.large_allocations());
+        check_equal(actual, expected);
     }).get();
 }
