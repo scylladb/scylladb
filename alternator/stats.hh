@@ -163,6 +163,21 @@ public:
     uint64_t user_errors = 0;
     // Count of HTTP 500 errors (DynamoDB "SystemErrors")
     uint64_t system_errors = 0;
+    // Exports to S3 (ExportTableToPointInTime) that this shard ran. The gauge of the running
+    // exports is registered by the executor.
+    struct {
+        uint64_t started = 0;
+        // The exports that wrote their data file and manifests to S3. The count comes before the
+        // write of the COMPLETED state, so it includes an export whose row the garbage collector
+        // took before that write.
+        uint64_t completed = 0;
+        // The exports that failed while they ran. An export that failed before it started, or
+        // that the garbage collector failed, is not counted.
+        uint64_t failed = 0;
+        // The items that the exports wrote to S3. If exports run and this does not increase for a
+        // long time, an export can be stuck.
+        uint64_t items = 0;
+    } s3_exports;
     // Miscellaneous event counters
     uint64_t total_operations = 0;
     uint64_t unsupported_operations = 0;

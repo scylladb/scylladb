@@ -391,6 +391,17 @@ extend the options of a used server, you can do it by adding
 `extra_scylla_cmdline_options` or `extra_scylla_config_options`
 to your test_config.yaml.
 
+`test.py` starts an S3 server for every run and points the
+`S3_SERVER_ADDRESS_FOR_TEST` and `S3_SERVER_PORT_FOR_TEST` environment
+variables at it, which is enough for a test talking to that server itself.
+A test which needs the tested Scylla to reach it - to back up to it or to
+export to it - needs the server in Scylla's `object_storage_endpoints`,
+and its address is known only once the run starts, so it cannot be written
+into `extra_scylla_config_options`. Add `object_storage_endpoint_from_env:
+true` to your test_config.yaml instead, and the servers created for that
+suite get that endpoint configured (see `test/alternator/test_config.yaml`,
+which uses it for `test_export.py`).
+
 ## Topology pytests
 
 Some pytest suites run against Scylla clusters

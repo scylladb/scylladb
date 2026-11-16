@@ -213,6 +213,14 @@ static void register_metrics_with_optional_table(seastar::metrics::metric_groups
                     seastar::metrics::description("number of HTTP 400 client error responses, excluding ConditionalCheckFailedException"), labels).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
             seastar::metrics::make_total_operations("system_errors", stats.system_errors,
                     seastar::metrics::description("number of HTTP 500 internal server error responses"), labels).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
+            seastar::metrics::make_total_operations("s3_exports_started", stats.s3_exports.started,
+                    seastar::metrics::description("number of exports to S3 that started"), labels).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
+            seastar::metrics::make_total_operations("s3_exports_completed", stats.s3_exports.completed,
+                    seastar::metrics::description("number of exports to S3 that wrote their data file and manifests"), labels).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
+            seastar::metrics::make_total_operations("s3_exports_failed", stats.s3_exports.failed,
+                    seastar::metrics::description("number of exports to S3 that failed while they ran"), labels).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
+            seastar::metrics::make_total_operations("s3_exported_items", stats.s3_exports.items,
+                    seastar::metrics::description("number of items that the exports to S3 wrote"), labels).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
         });
     }
 }
