@@ -507,7 +507,16 @@ void evictable_reader::validate_position_in_partition(position_in_partition_view
 
 void evictable_reader::examine_first_fragments(mutation_fragment_v2_opt& mf1, mutation_fragment_v2_opt& mf2, mutation_fragment_v2_opt& mf3) {
     if (!mf1) {
-        return; // the reader is at EOS
+        // The reader is at EOS. If we stopped in the middle of a partition,
+        // nothing is left of it in the range and slice (e.g. it was the last
+        // partition and we read all its rows, or it was compacted away), so
+        // close it, like validate_partition_start() does when the reader
+        // continues from another partition.
+        if (_next_position_in_partition.region() != partition_region::partition_start) {
+            push_mutation_fragment(*_schema, _permit, partition_end{});
+            _next_position_in_partition = position_in_partition::for_partition_start();
+        }
+        return;
     }
 
     // If engaged, the first fragment is always a partition-start.
