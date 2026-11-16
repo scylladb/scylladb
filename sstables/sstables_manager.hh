@@ -312,6 +312,7 @@ public:
 
     atomic_deletion make_atomic_deletion(std::vector<shared_sstable> ssts);
     future<utils::chunked_vector<sstable_snapshot_metadata>> take_snapshot(std::vector<shared_sstable> ssts, sstring jsondir);
+    future<> finalize_snapshot(const std::vector<shared_sstable>& ssts, sstring name);
     future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_storage(const schema& s, const data_dictionary::storage_options& so);
     future<> destroy_table_storage(const data_dictionary::storage_options& so);
     future<> init_keyspace_storage(const data_dictionary::storage_options& so, sstring dir);
