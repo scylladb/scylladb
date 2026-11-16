@@ -152,7 +152,11 @@ UNCOMMITTED_TAIL_CMDLINE = (
     '--logger-log-level', 'raft_group_registry=debug',  # "Dropping append request"
     '--logger-log-level', 'raft_commitlog=debug',  # "truncate_log: group_id="
     '--logger-log-level', 'raft_commitlog_replay=debug',  # what each replay dropped
+    '--logger-log-level', 'raft_groups_storage=debug',  # "released record for group_id="
 )
+# A release that wrote the group's truncation history into its descriptor; a release that
+# found it unchanged says "(unchanged, not rewritten)".
+RELEASE_WITH_TRUNCATIONS = r"released record for group_id={}: .*truncations=[1-9]\d*$"
 # The summary line raft_commitlog_replay_buffer::finish_replay() logs per group.
 REPLAY_SUMMARY = r"group {}: floor=.*dropped_truncated=(\d+), dropped_by_truncate=\d+, superseded=(\d+)"
 
@@ -201,6 +205,8 @@ class Rig:
     flush_every_s: Optional[tuple[float, float]] = None
     # The server ids of the nodes killed and not yet caught up again; the flusher leaves them alone.
     down: set[int] = dataclasses.field(default_factory=set)
+    # The server ids a test keeps the flusher away from for a while.
+    no_flush: set[int] = dataclasses.field(default_factory=set)
     # Every key a doomed write was sent to (truncate_uncommitted_tail).
     doomed_pks: list[int] = dataclasses.field(default_factory=list)
     kills: int = 0
@@ -253,7 +259,7 @@ class Rig:
         rng = self.workload.rng_for("flusher")
         while not self.workload.stop_event.is_set():
             await self.sleep(rng.uniform(*self.flush_every_s))
-            live = [s for s in self.servers if s.server_id not in self.down]
+            live = [s for s in self.servers if s.server_id not in self.down | self.no_flush]
             if not live:
                 continue
             server = rng.choice(live)
@@ -406,7 +412,7 @@ class Rig:
         for f in followers:
             await self.manager.api.disable_injection(f.ip_addr, DROP_APPENDS)
 
-    async def truncate_uncommitted_tail(self, group_id: str) -> TailRound:
+    async def truncate_uncommitted_tail(self, group_id: str, persist: bool) -> TailRound:
         """Kill the leader of `group_id` holding entries nobody else has, under load, let the
         next leader overwrite them, and crash the old leader again.
 
@@ -426,6 +432,10 @@ class Rig:
         recovers the tail as uncommitted, and raft truncates it when the successor's
         entries arrive.  The old leader is then crashed again, so a replay meets both
         copies of those indexes, the superseded one still in its segment.
+
+        With `persist` the old leader persists the truncation in the group's descriptor
+        before that crash, and keeps the segment with the truncated copies on disk: the
+        replay must drop copies by the persisted truncation.
         """
         pks = self.doomed_keys(group_id)
         value = -1 - len(self.doomed_pks) // DOOMED_WRITES  # negative: no workload write uses it
@@ -433,6 +443,8 @@ class Rig:
         hosts = await wait_for_cql_and_get_hosts(self.cql, self.servers, time.time() + 60)
         async with self.disruption():
             leader_id, leader, followers, follower_marks = await self.cut_off(group_id)
+            # A flush of the whole node would clean the segment that holds the tail.
+            self.no_flush.add(leader.server_id)
             leader_log = self.logs[leader.server_id]
             before = await leader_log.mark()
             logger.info("Cut off the leader %s of group %s", leader.ip_addr, group_id)
@@ -470,14 +482,34 @@ class Rig:
             logger.info("The doomed writes ended with %s",
                         [type(r).__name__ if isinstance(r, BaseException) else "success" for r in results])
 
+            if persist:
+                # A flush of one table closes the active segment on every shard, so the
+                # group's next batch lands in a new one and the group releases the
+                # record before it: the first release after the truncation writes the
+                # history into the descriptor.  The descriptor goes to the
+                # system.raft_groups memtable only, and a crash before that memtable is
+                # flushed loses it (the segment's pin keeps the entries instead), so
+                # system.raft_groups is flushed once more.  The register table is never
+                # flushed here, and with ROOM_FOR_HELD_SEGMENTS the commitlog stays far
+                # below its flush threshold, so the segment stays dirty and on disk until
+                # the crash.
+                await self.manager.api.keyspace_flush(leader.ip_addr, "system", "raft_groups")
+                await leader_log.wait_for(RELEASE_WITH_TRUNCATIONS.format(group_id), from_mark=truncated_at,
+                                          timeout=60 * self.slow)
+                await self.manager.api.keyspace_flush(leader.ip_addr, "system", "raft_groups")
+
             replay_mark = await leader_log.mark()
             await self.kill(leader)
             await self.restart(leader)
+            self.no_flush.discard(leader.server_id)
 
         dropped = superseded = 0
         for _, match in await leader_log.grep(REPLAY_SUMMARY.format(group_id), from_mark=replay_mark):
             dropped += int(match.group(1))
             superseded += int(match.group(2))
+        assert not persist or dropped > 0, (
+            f"group {group_id}: the replay after a persisted truncation on {leader.ip_addr} dropped no copy by it "
+            f"(seed={self.workload.seed})")
         logger.info("%s truncated the tail of group %s and replayed it: dropped_truncated=%d superseded=%d; "
                     "the successor was %s", leader.ip_addr, group_id, dropped, superseded, successor)
         return TailRound(leader=leader, successor=successor, dropped_truncated=dropped, superseded=superseded)

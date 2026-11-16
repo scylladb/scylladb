@@ -216,11 +216,14 @@ async def test_uncommitted_tail_truncated_under_load(manager: ScyllaClusterManag
     a CL=ONE and a linearizable read on every replica after the run find none, so no
     replay applied a truncated copy.
 
-    Run over each COMMITLOG_SETUPS: with small segments and flushes the groups release
-    segments around the truncation, and persist it as truncation records, which a later
-    replay then drops copies by.
+    Run over each COMMITLOG_SETUPS.  With the default segments nothing is released, and
+    the replay drops the truncated copies by the newer copies after them.  With small
+    segments and flushes the truncation is persisted in the group's descriptor before the
+    second crash, and that replay must drop the copies by it.
     """
-    async with sc_rig(manager, slow, commitlog=COMMITLOG_SETUPS[commitlog], cmdline=UNCOMMITTED_TAIL_CMDLINE) as rig:
+    setup = COMMITLOG_SETUPS[commitlog]
+    async with sc_rig(manager, slow, commitlog=setup, cmdline=UNCOMMITTED_TAIL_CMDLINE,
+                      config=ROOM_FOR_HELD_SEGMENTS if setup.flush_every_s else None) as rig:
         [group_id] = rig.group_ids
         rounds_done = 0
         dropped_truncated = superseded = 0
@@ -230,15 +233,15 @@ async def test_uncommitted_tail_truncated_under_load(manager: ScyllaClusterManag
             while rounds_done < ROUNDS and not rig.workload.stop_event.is_set():
                 if rounds_done:
                     await rig.sleep(GAP_S)
-                tail = await rig.truncate_uncommitted_tail(group_id)
+                tail = await rig.truncate_uncommitted_tail(group_id, persist=bool(setup.flush_every_s))
                 dropped_truncated += tail.dropped_truncated
                 superseded += tail.superseded
                 rounds_done += 1
 
         await rig.run(ROUNDS * (ELECT_S + 2 * RESTART_S) + (ROUNDS - 1) * GAP_S, disrupt)
         assert rounds_done == ROUNDS, f"only {rounds_done} of {ROUNDS} rounds fit in the run"
-        # Which of the two drops the replays after the truncations took depends on what the
-        # groups released before each crash, so it is reported, not required.
+        # Without the flushes the groups release nothing, so the replays drop the
+        # truncated copies only by the newer copies that supersede them.
         logger.info("Replays after the truncations: dropped_truncated=%d superseded=%d", dropped_truncated, superseded)
         await rig.check(tmp_path)
         await assert_doomed_writes_absent(rig, await rig.wait_caught_up())
