@@ -12,6 +12,7 @@
 #include <seastar/util/alloc_failure_injector.hh>
 #include <cassert>
 #include <fmt/core.h>
+#include <type_traits>
 #include "utils/assert.hh"
 #include "utils/collection-concepts.hh"
 #include "utils/neat-object-id.hh"
@@ -1614,6 +1615,25 @@ private:
     }
 
     void insert_into_full(kid_index idx, member_hook& key, node* kid, prealloc& nodes) noexcept {
+        if (!try_push_to_sibling(idx, [&key] () noexcept -> member_hook& { return key; }, kid)) {
+            split_and_insert(idx, key, kid, nodes);
+        }
+    }
+
+    /*
+     * Tries to insert a key into a full node by pushing an existing key to a
+     * sibling that has room. Returns true when the function inserts the key,
+     * and returns false when the function moves no key, which leaves the tree
+     * unchanged. For an inner node, the function can return false although a
+     * sibling has room, because an inner node does not push a key when the
+     * new key goes to the end of the node that is next to that sibling.
+     *
+     * The function calls get_key() to get the hook of the new key only when
+     * the insert succeeds, at most once, and before it links the key.
+     */
+    template <typename GetKey>
+    requires std::is_nothrow_invocable_r_v<member_hook&, GetKey&>
+    bool try_push_to_sibling(kid_index idx, GetKey get_key, node* kid) noexcept {
         if (!is_root()) {
             /*
              * An exception from classical B-tree split-balancing -- an
@@ -1663,8 +1683,8 @@ private:
                         SCYLLA_ASSERT(kid == nullptr);
                         p->move_key(i - 1, *left, left->_base.num_keys);
                         left->_base.num_keys++;
-                        p->set_key(i - 1, &key);
-                        return;
+                        p->set_key(i - 1, &get_key());
+                        return true;
                     }
                 }
             }
@@ -1678,19 +1698,19 @@ private:
                         SCYLLA_ASSERT(kid == nullptr);
                         right->shift_right(0);
                         p->move_key(i, *right, 0);
-                        p->set_key(i, &key);
-                        return;
+                        p->set_key(i, &get_key());
+                        return true;
                     }
                 }
             }
 
             if (_base.num_keys < NodeSize) {
-                do_insert(idx, key, kid);
-                return;
+                do_insert(idx, get_key(), kid);
+                return true;
             }
         }
 
-        split_and_insert(idx, key, kid, nodes);
+        return false;
     }
 
     void split_and_insert(kid_index idx, member_hook& key, node* kid, prealloc& nodes) noexcept {
