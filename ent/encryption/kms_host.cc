@@ -285,19 +285,7 @@ future<std::tuple<shared_ptr<encryption::symmetric_key>, encryption::kms_host::i
     if (key.master_key.empty() && _options.master_key.empty()) {
         throw configuration_error("No master key set in kms host config or encryption attributes");
     }
-    try {
-        co_return co_await _attr_cache.get(key);
-    } catch (kms_error& e) {
-        translate_kms_error(e);
-    } catch (base_error&) {
-        throw;
-    } catch (std::system_error& e) {
-        std::throw_with_nested(network_error(e.what()));
-    } catch (rjson::malformed_value& e) {
-        std::throw_with_nested(malformed_response_error(e.what()));
-    } catch (...) {
-        std::throw_with_nested(service_error(fmt::format("get_key_by_id: {:t}", std::current_exception())));
-    }
+    co_return co_await _attr_cache.get(key);
 }
 
 future<shared_ptr<encryption::symmetric_key>> encryption::kms_host::impl::get_key_by_id(const id_type& id, const key_info& info, const option_override* oov) {
@@ -308,22 +296,8 @@ future<shared_ptr<encryption::symmetric_key>> encryption::kms_host::impl::get_ke
         .id = id,
         .aws_assume_role_arn = get_option(oov, &option_override::aws_assume_role_arn, _options.aws_assume_role_arn),
     };
-    try {
-        auto data = co_await _id_cache.get(key);
-        co_return make_shared<symmetric_key>(info, data);
-    } catch (kms_error& e) {
-        translate_kms_error(e);
-    } catch (base_error&) {
-        throw;
-    } catch (std::system_error& e) {
-        std::throw_with_nested(network_error(e.what()));
-    } catch (std::invalid_argument& e) {
-        std::throw_with_nested(configuration_error(fmt::format("get_key_by_id: {}", e.what())));
-    } catch (rjson::malformed_value& e) {
-        std::throw_with_nested(malformed_response_error(e.what()));
-    } catch (...) {
-        std::throw_with_nested(service_error(fmt::format("get_key_by_id: {:t}", std::current_exception())));
-    }
+    auto data = co_await _id_cache.get(key);
+    co_return make_shared<symmetric_key>(info, data);
 }
 
 std::string make_aws_host(std::string_view aws_region, std::string_view service) {
@@ -958,12 +932,12 @@ future<encryption::kms_host::impl::key_and_id_type> encryption::kms_host::impl::
     rjson::add(query, "KeyId", std::string(master_key.begin(), master_key.end()));
     rjson::add(query, "NumberOfBytes", info.len/8);
 
-    auto response = co_await post("GenerateDataKey", aws_assume_role_arn, query);
-    auto data = base64_decode(rjson::get<std::string>(response, "Plaintext"));
-    auto enc = rjson::get<std::string>(response, "CiphertextBlob");
-    auto kid = rjson::get<std::string>(response, "KeyId");
-
     try {
+        auto response = co_await post("GenerateDataKey", aws_assume_role_arn, query);
+        auto data = base64_decode(rjson::get<std::string>(response, "Plaintext"));
+        auto enc = rjson::get<std::string>(response, "CiphertextBlob");
+        auto kid = rjson::get<std::string>(response, "KeyId");
+
         auto key = make_shared<symmetric_key>(info, data);
         bytes id(kid.size() + 1 + enc.size(), 0);
         auto i = std::copy(kid.begin(), kid.end(), id.begin());
@@ -981,8 +955,18 @@ future<encryption::kms_host::impl::key_and_id_type> encryption::kms_host::impl::
         });
 
         co_return key_and_id_type{ key, id };
+    } catch (kms_error& e) {
+        translate_kms_error(e);
     } catch (std::invalid_argument& e) {
         std::throw_with_nested(configuration_error(e.what()));
+    } catch (base_error&) {
+        throw;
+    } catch (std::system_error& e) {
+        std::throw_with_nested(network_error(e.what()));
+    } catch (rjson::malformed_value& e) {
+        std::throw_with_nested(malformed_response_error(e.what()));
+    } catch (...) {
+        std::throw_with_nested(service_error(fmt::format("create_key: {:t}", std::current_exception())));
     }
 }
 
@@ -1014,11 +998,23 @@ future<bytes> encryption::kms_host::impl::find_key(const id_cache_key& k) {
     rjson::add(query, "CiphertextBlob", enc);
     rjson::add(query, "KeyId", kid);
 
-    auto response = co_await post("Decrypt", k.aws_assume_role_arn, query);
-    auto data = base64_decode(rjson::get<std::string>(response, "Plaintext"));
+    try {
+        auto response = co_await post("Decrypt", k.aws_assume_role_arn, query);
+        auto data = base64_decode(rjson::get<std::string>(response, "Plaintext"));
 
-    // we know nothing about key type etc, so just return data.
-    co_return data;
+        // we know nothing about key type etc, so just return data.
+        co_return data;
+    } catch (kms_error& e) {
+        translate_kms_error(e);
+    } catch (base_error&) {
+        throw;
+    } catch (std::system_error& e) {
+        std::throw_with_nested(network_error(e.what()));
+    } catch (rjson::malformed_value& e) {
+        std::throw_with_nested(malformed_response_error(e.what()));
+    } catch (...) {
+        std::throw_with_nested(service_error(fmt::format("find_key: {:t}", std::current_exception())));
+    }
 }
 
 encryption::kms_host::kms_host(encryption_context& ctxt, const std::string& name, const host_options& options)
