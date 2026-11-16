@@ -1323,11 +1323,7 @@ logstor::compaction_manager& compaction_group_logstor_state::logstor_compaction_
 }
 
 future<> compaction_group::flush_separator(std::optional<logstor::segment_sequence> seq_num) {
-    if (!_logstor_state) {
-        co_return;
-    }
-
-    co_await _logstor_state->flush_separator(seq_num);
+    return _logstor_state->flush_separator(seq_num);
 }
 
 future<utils::chunked_vector<logstor::segment_snapshot>> compaction_group::take_logstor_snapshot() {
@@ -1350,8 +1346,7 @@ future<> storage_group::split(compaction::compaction_type_options::split opt, ta
             continue;
         }
         auto holder = cg->async_gate().hold();
-        co_await cg->flush_memtables();
-        co_await cg->flush_separator();
+        co_await cg->flush();
         co_await cg->split(opt, tablet_split_task_info);
     }
 }
@@ -3630,8 +3625,7 @@ future<> compaction_group::stop(sstring reason) noexcept {
     // compaction_manager::stop_ongoing_compactions swallows all encountered errors. So the closed_gate_fut
     // future will not get abandoned.
     co_await std::move(closed_gate_fut);
-    auto flush_future = co_await seastar::coroutine::as_future(flush_memtables());
-    auto separator_flush_future = co_await coroutine::as_future(flush_separator());
+    auto flush_future = co_await seastar::coroutine::as_future(flush());
 
     if (_t.uses_logstor()) {
         co_await get_logstor_compaction_manager().remove(as_logstor_group());
@@ -3647,9 +3641,6 @@ future<> compaction_group::stop(sstring reason) noexcept {
 
     if (flush_future.failed()) {
         co_await seastar::coroutine::return_exception_ptr(flush_future.get_exception());
-    }
-    if (separator_flush_future.failed()) {
-        co_await seastar::coroutine::return_exception_ptr(separator_flush_future.get_exception());
     }
 }
 
@@ -4769,6 +4760,10 @@ future<> compaction_group::flush_memtables(std::optional<db::replay_position> po
     } catch (...) {
         return current_exception_as_future<>();
     }
+}
+
+future<> compaction_group::flush() noexcept {
+    return _logstor_state ? flush_separator() : flush_memtables();
 }
 
 future<> storage_group::flush_memtables() noexcept {
