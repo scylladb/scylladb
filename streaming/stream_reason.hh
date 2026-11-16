@@ -26,6 +26,9 @@ enum class stream_reason : uint8_t {
     tablet_rebuild,
 };
 
+// The last stream_reason member. Update it when a member is added.
+constexpr stream_reason max_stream_reason = stream_reason::tablet_rebuild;
+
 }
 
 template <>
