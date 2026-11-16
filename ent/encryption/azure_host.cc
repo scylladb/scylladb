@@ -322,6 +322,8 @@ future<rjson::value> azure_host::impl::send_request_with_retry(const sstring& ho
     std::chrono::milliseconds backoff;
 
     int retries = 0;
+    int max_retries = adjust_service_call_retries(*_ctxt, MAX_RETRIES);
+
     while (true) {
         try {
             co_return co_await send_request(host, port, use_https, path, body, filter);
@@ -330,7 +332,7 @@ future<rjson::value> azure_host::impl::send_request_with_retry(const sstring& ho
         } catch (vault_error& e) {
             auto status = e.status();
 
-            if (retries >= MAX_RETRIES) {
+            if (retries >= max_retries) {
                 if (status == http::reply::status_type::unauthorized) {
                     std::throw_with_nested(permission_error(fmt::format("{}/{}", host, path)));
                 } else {

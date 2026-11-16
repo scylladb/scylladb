@@ -271,7 +271,7 @@ future<rjson::value> encryption::gcp_host::impl::gcp_auth_post_with_retry(std::s
 
     auto& creds = i->second;
 
-    static constexpr auto max_retries = 10;
+    auto max_retries = adjust_service_call_retries(_ctxt, 10);
 
     exponential_backoff_retry exr(10ms, 10000ms);
     bool do_backoff = false;
