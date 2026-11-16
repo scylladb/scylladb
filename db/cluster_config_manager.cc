@@ -26,6 +26,7 @@
 #include "db/schema_tables.hh"
 #include "locator/topology.hh"
 #include "replica/database.hh"
+#include "utils/chunked_vector.hh"
 #include "utils/on_internal_error.hh"
 
 namespace db {
@@ -366,7 +367,7 @@ future<> cluster_config_manager::run_config_callbacks() {
         // A table-oriented option resolves per table (table -> keyspace -> cluster), so
         // there is one target per table; a node-oriented one has the local node as its
         // single target.
-        std::vector<lookup_context> contexts;
+        utils::chunked_vector<lookup_context> contexts;
         if (table_oriented) {
             _db.get_tables_metadata().for_each_table([&] (table_id, lw_shared_ptr<replica::table> t) {
                 const auto& s = t->schema();
@@ -383,7 +384,6 @@ future<> cluster_config_manager::run_config_callbacks() {
         // callback's last_pushed at the end, so entries for targets that no longer exist
         // (dropped tables) are pruned instead of accumulating.
         callback_values pushed_this_pass;
-        pushed_this_pass.reserve(contexts.size());
         for (const auto& ctx : contexts) {
             // There is one context per table on this shard and the body below only
             // suspends when a target's value changed, so on a steady-state pass this

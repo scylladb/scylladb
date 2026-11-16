@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <vector>
 
+#include <absl/container/btree_map.h>
 #include <absl/container/flat_hash_map.h>
 
 #include <seastar/core/abort_source.hh>
@@ -150,7 +151,9 @@ private:
     // A callback invocation target: (keyspace, table) for a table-oriented option, a single
     // empty key for a node-oriented one (whose only target is the local node).
     using callback_target_key = std::tuple<sstring, sstring>;
-    using callback_values = absl::flat_hash_map<callback_target_key, std::optional<sstring>, utils::tuple_hash>;
+    // A tree, not a flat hash map: it holds one entry per table, and a flat slot array for
+    // thousands of tables is an oversized contiguous allocation.
+    using callback_values = absl::btree_map<callback_target_key, std::optional<sstring>>;
 
     // One refresh pass's fully loaded view of every config table. Loaded once per pass on
     // the coordinating shard (load_caches) and then copied onto each shard (apply_refresh),
