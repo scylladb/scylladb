@@ -55,6 +55,7 @@ protected:
 
 public:
     virtual future<> check_access(query_processor& qp, const service::client_state& state) const override;
+    virtual future<> grant_permissions_to_creator(const service::client_state&, service::group0_batch&) const override;
 };
 
 // common logic for dropping UDF and UDA

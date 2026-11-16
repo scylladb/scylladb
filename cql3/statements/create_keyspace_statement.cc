@@ -166,15 +166,19 @@ cql3::statements::create_keyspace_statement::prepare(data_dictionary::database d
 }
 
 future<> cql3::statements::create_keyspace_statement::grant_permissions_to_creator(const service::client_state& cs, service::group0_batch& mc) const {
-    auto resource = auth::make_data_resource(keyspace());
-    try {
-        co_await auth::grant_applicable_permissions(
-                *cs.get_auth_service(),
-                *cs.user(),
-                resource,
-                mc);
-    } catch (const auth::unsupported_authorization_operation&) {
-        // Nothing.
+    // The creator of a keyspace gets all permissions on the keyspace and
+    // its tables, and on all functions in the keyspace.
+    const std::array resources{auth::make_data_resource(keyspace()), auth::make_functions_resource(keyspace())};
+    for (const auto& resource : resources) {
+        try {
+            co_await auth::grant_applicable_permissions(
+                    *cs.get_auth_service(),
+                    *cs.user(),
+                    resource,
+                    mc);
+        } catch (const auth::unsupported_authorization_operation&) {
+            // Nothing.
+        }
     }
 }
 
