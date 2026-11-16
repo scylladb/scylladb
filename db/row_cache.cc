@@ -17,7 +17,6 @@
 #include <seastar/util/defer.hh>
 #include "replica/memtable.hh"
 #include <boost/version.hpp>
-#include <sys/sdt.h>
 #include "read_context.hh"
 #include "real_dirty_memory_accounter.hh"
 #include "readers/delegating.hh"
@@ -28,6 +27,7 @@
 #include "keys/clustering_key_filter.hh"
 #include "utils/assert.hh"
 #include "utils/updateable_value.hh"
+#include "utils/usdt.hh"
 #include "utils/labels.hh"
 #include "utils/chunked_vector.hh"
 
@@ -1045,10 +1045,10 @@ future<> row_cache::do_update(external_updater eu, replica::memtable& m, Updater
     m.on_detach_from_region_group();
     _tracker.region().merge(m); // Now all data in memtable belongs to cache
     _tracker.memtable_cleaner().merge(m._cleaner);
-    STAP_PROBE(scylla, row_cache_update_start);
+    SCYLLA_USDT(row_cache_update_start);
     auto cleanup = defer([&m, this] () noexcept {
         invalidate_sync(m);
-        STAP_PROBE(scylla, row_cache_update_end);
+        SCYLLA_USDT(row_cache_update_end);
     });
 
     return seastar::async([this, &m, &preempt_src, updater = std::move(updater), real_dirty_acc = std::move(real_dirty_acc)] () mutable {
@@ -1072,9 +1072,9 @@ future<> row_cache::do_update(external_updater eu, replica::memtable& m, Updater
                 {
                     size_t partition_count = 0;
                     {
-                        STAP_PROBE(scylla, row_cache_update_one_batch_start);
+                        SCYLLA_USDT(row_cache_update_one_batch_start);
                         do {
-                          STAP_PROBE(scylla, row_cache_update_partition_start);
+                          SCYLLA_USDT(row_cache_update_partition_start);
                           {
                             if (!update) {
                                 _update_section(_tracker.region(), [&] {
@@ -1101,7 +1101,7 @@ future<> row_cache::do_update(external_updater eu, replica::memtable& m, Updater
                             });
                             ++partition_count;
                           }
-                          STAP_PROBE(scylla, row_cache_update_partition_end);
+                          SCYLLA_USDT(row_cache_update_partition_end);
                         } while (!m.partitions.empty() && !preempt_src.should_preempt());
                         with_allocator(standard_allocator(), [&] {
                             if (m.partitions.empty()) {
@@ -1112,7 +1112,7 @@ future<> row_cache::do_update(external_updater eu, replica::memtable& m, Updater
                                 });
                             }
                         });
-                        STAP_PROBE1(scylla, row_cache_update_one_batch_end, partition_count);
+                        SCYLLA_USDT(row_cache_update_one_batch_end, partition_count);
                     }
                 }
             });
