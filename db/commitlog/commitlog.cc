@@ -3874,6 +3874,20 @@ db::commitlog::read_log_file(const replay_state& state, sstring filename, sstrin
                 auto& shard_states = state.fragment_states[shard]; 
                 auto& frag_states = shard_states[id];
 
+                // Fragment ids restart from 1 in every process run, so fragments left
+                // under this id can belong to an entry of an earlier run: one whose
+                // write a crash cut short, or whose first segment is already deleted.
+                // A shard writes the fragments of an entry in offset order, with
+                // nothing in between, and its segments are read in the order they
+                // were written. So a fragment at offset 0 always starts a new entry,
+                // and whatever is collected under its id is an entry that will never
+                // be completed.
+                if (off == 0 && !frag_states.empty()) {
+                    clogger.debug("fragment shard={} id={}: dropping {} fragments of an incomplete earlier entry",
+                            shard, id, frag_states.size());
+                    frag_states.clear();
+                }
+
                 auto join = [](entry_fragment& f1, entry_fragment& f2) {
                     auto size1 = f1.rpbuf.buffer.size_bytes();
                     auto size2 = f2.rpbuf.buffer.size_bytes();
