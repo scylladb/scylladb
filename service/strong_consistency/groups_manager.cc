@@ -239,11 +239,12 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
     SCYLLA_ASSERT(commitlog);
 
     // A group this shard persists nothing about has no history here, so any commitlog
-    // entries replay left for it belong to an earlier membership: the tablet was migrated
-    // away, its raft state erased by the cleanup, and migrated back before the old segments
-    // were recycled. Handing those to the group would give it a log from an incarnation it
-    // knows nothing about, indices and terms included. Taken out of the buffer either way,
-    // so that its bookkeeping stays right.
+    // entries replay left for it belong to an earlier membership: replay recovered them
+    // while this shard still hosted the group, the group was torn down and its raft
+    // state erased by the cleanup before it was ever started in this process, and the
+    // tablet has now migrated back. Handing those to the group would give it a log from
+    // an incarnation it knows nothing about, indices and terms included. Taken out of
+    // the buffer either way, so that its bookkeeping stays right.
     const auto persisted = co_await raft_groups_storage::load_commit_idx_if_persisted(_qp, group_id, this_shard_id());
     auto replayed_data = _raft_replay_buffer.take_replayed_group_entries(group_id);
     if (!persisted && !replayed_data.entries.empty()) {
