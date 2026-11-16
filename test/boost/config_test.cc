@@ -10,6 +10,7 @@
 #include <boost/test/unit_test.hpp>
 #include <stdlib.h>
 #include <iostream>
+#include <limits>
 #include <fmt/ranges.h>
 
 #include "test/lib/scylla_test_case.hh"
@@ -20,6 +21,7 @@
 #include "db/config.hh"
 #include "db/object_storage_endpoint_param.hh"
 #include "utils/updateable_value.hh"
+#include "transport/controller.hh"
 
 using namespace db;
 
@@ -1046,4 +1048,47 @@ SEASTAR_THREAD_TEST_CASE(test_config_not_broadcast_on_other_shard) {
         cfg->data_file_directories.set({"/some/dir"});
         BOOST_REQUIRE_EQUAL(cfg->data_file_directories(), std::vector<sstring>{"/some/dir"});
     }).get();
+}
+
+// An explicit native_transport_listen_backlog is used as is, whatever the
+// shard count and even above somaxconn.
+SEASTAR_THREAD_TEST_CASE(test_listen_backlog_explicit) {
+    using cql_transport::compute_listen_backlog;
+    BOOST_REQUIRE_EQUAL(compute_listen_backlog(1000, 1, 4096), 1000u);
+    BOOST_REQUIRE_EQUAL(compute_listen_backlog(50, 90, 4096), 50u);
+    BOOST_REQUIRE_EQUAL(compute_listen_backlog(10000, 90, 4096), 10000u);
+}
+
+// The default is 64 per shard, but never below 100. Reproduces SCYLLADB-6181.
+SEASTAR_THREAD_TEST_CASE(test_listen_backlog_default_scales_with_shards) {
+    using cql_transport::compute_listen_backlog;
+    BOOST_REQUIRE_EQUAL(compute_listen_backlog(0, 1, 4096), 100u);
+    BOOST_REQUIRE_EQUAL(compute_listen_backlog(0, 2, 4096), 128u);
+    BOOST_REQUIRE_EQUAL(compute_listen_backlog(0, 16, 4096), 1024u);
+}
+
+// somaxconn caps the default, including below the floor of 100, and is the
+// only cap: without it the default keeps growing with the shard count.
+SEASTAR_THREAD_TEST_CASE(test_listen_backlog_default_capped_at_somaxconn) {
+    using cql_transport::compute_listen_backlog;
+    BOOST_REQUIRE_EQUAL(compute_listen_backlog(0, 90, 4096), 4096u);
+    BOOST_REQUIRE_EQUAL(compute_listen_backlog(0, 8, 128), 128u);
+    BOOST_REQUIRE_EQUAL(compute_listen_backlog(0, 1, 64), 64u);
+    BOOST_REQUIRE_EQUAL(compute_listen_backlog(0, 90, 65535), 5760u);
+    BOOST_REQUIRE_EQUAL(compute_listen_backlog(0, 90, 0), 5760u);
+}
+
+// A configured value that doesn't fit listen()'s int is rejected.
+SEASTAR_THREAD_TEST_CASE(test_listen_backlog_too_large) {
+    using cql_transport::compute_listen_backlog;
+    const uint32_t int_max = std::numeric_limits<int>::max();
+    BOOST_REQUIRE_EQUAL(compute_listen_backlog(int_max, 1, 4096), int_max);
+    BOOST_REQUIRE_THROW(compute_listen_backlog(int_max + 1, 1, 4096), std::invalid_argument);
+}
+
+// The db::config overload uses native_transport_listen_backlog.
+SEASTAR_THREAD_TEST_CASE(test_listen_backlog_from_config) {
+    auto cfg = std::make_unique<config>();
+    cfg->native_transport_listen_backlog.set(1000u);
+    BOOST_REQUIRE_EQUAL(cql_transport::compute_listen_backlog(*cfg), 1000u);
 }
