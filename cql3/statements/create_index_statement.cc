@@ -390,6 +390,12 @@ create_index_statement::validate(query_processor& qp, const service::client_stat
             format("You cannot use view properties with a {}", *_idx_properties->custom_class));
     }
 
+    // logstor doesn't support indexes, so reject it outright here, before
+    // view_prop_defs::validate_raw() hits the same property with a materialized-view-specific message.
+    if (_view_properties.properties()->has_property(cf_prop_defs::KW_STORAGE_ENGINE)) {
+        throw exceptions::invalid_request_exception("Cannot set storage_engine on an index");
+    }
+
     const schema::extensions_map exts = _view_properties.properties()->make_schema_extensions(qp.db().extensions());
     _view_properties.validate_raw(view_prop_defs::op_type::create, qp.db(), keyspace(), exts);
 
@@ -425,6 +431,11 @@ create_index_statement::validate_while_executing(data_dictionary::database db, l
 
     if (schema->is_counter()) {
         throw exceptions::invalid_request_exception("Secondary indexes are not supported on counter tables");
+    }
+
+    // View-backed indexes can't be built or kept consistent on logstor; custom indexes are untested there.
+    if (schema->logstor_enabled()) {
+        throw exceptions::invalid_request_exception("Cannot create an index on a logstor table");
     }
 
     if (schema->is_view()) {

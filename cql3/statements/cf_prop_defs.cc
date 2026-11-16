@@ -103,8 +103,16 @@ data_dictionary::keyspace cf_prop_defs::find_keyspace(const data_dictionary::dat
     }
 }
 
-void cf_prop_defs::validate(const data_dictionary::database db, sstring ks_name, const schema::extensions_map& schema_extensions) const {
+void cf_prop_defs::validate(const data_dictionary::database db, sstring ks_name, const schema::extensions_map& schema_extensions, is_alter alter) const {
     const auto& ks = find_keyspace(db, ks_name);
+
+    // These options are creation-time-only and cannot be modified on an existing table.
+    if (alter && has_property(KW_STORAGE_ENGINE)) {
+        throw exceptions::configuration_exception("Cannot alter storage_engine of an existing table");
+    }
+    if (alter && has_property(KW_ID)) {
+        throw exceptions::configuration_exception("Cannot alter table id.");
+    }
 
     cluster_config_props::ensure_registry_supported(table_scope, *this, db.features());
 

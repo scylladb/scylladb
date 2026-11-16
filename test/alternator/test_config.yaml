@@ -10,10 +10,14 @@ extra_scylla_cmdline_options:
   - '--logger-log-level=paxos=trace'
   - '--tablet-load-stats-refresh-interval-in-seconds=1'
   - '--tablets-initial-scale-factor=1'
+  - '--logstor-disk-size-in-mb=8'
+  - '--logstor-file-size-in-mb=4'
+  - '--logstor-sparse-files=true'
 extra_scylla_config_options:
   {
     experimental_features: [
-                             udf
+                             udf,
+                             logstor
     ],
     alternator_port: 8000,
     query_tombstone_page_limit: 1000,
