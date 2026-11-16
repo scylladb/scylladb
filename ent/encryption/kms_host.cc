@@ -142,17 +142,15 @@ public:
     static inline constexpr std::chrono::milliseconds default_refresh = 1200s;
 
     impl(encryption_context& ctxt, const std::string& name, const host_options& options)
+        : impl(ctxt, name, options, make_key_cache_config(options.key_cache_expiry.value_or(default_expiry), options.key_cache_refresh.value_or(default_refresh)))
+    {}
+
+    impl(encryption_context& ctxt, const std::string& name, const host_options& options, utils::loading_cache_config lccfg)
         : _ctxt(ctxt)
         , _name(name)
         , _options(options)
-        , _attr_cache(utils::loading_cache_config{
-            .max_size = std::numeric_limits<size_t>::max(),
-            .expiry = options.key_cache_expiry.value_or(default_expiry),
-            .refresh = options.key_cache_refresh.value_or(default_refresh)}, kms_log, std::bind(&impl::create_key, this, std::placeholders::_1))
-        , _id_cache(utils::loading_cache_config{
-            .max_size = std::numeric_limits<size_t>::max(),
-            .expiry = options.key_cache_expiry.value_or(default_expiry),
-            .refresh = options.key_cache_refresh.value_or(default_refresh)}, kms_log, std::bind(&impl::find_key, this, std::placeholders::_1))
+        , _attr_cache(ctxt, lccfg, kms_log, std::bind(&impl::create_key, this, std::placeholders::_1))
+        , _id_cache(ctxt, lccfg, kms_log, std::bind(&impl::find_key, this, std::placeholders::_1))
     {
         // check if we have an explicit endpoint set.
         if (!_options.endpoint.empty()) {
