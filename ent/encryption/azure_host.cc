@@ -84,7 +84,12 @@ public:
     // The timer ticks every refresh, so an entry can age 2*refresh before reload; expiry must exceed that.
     static_assert(2 * default_refresh < default_expiry);
 
-    impl(encryption_context&, const std::string& name, const host_options& options);
+    impl(encryption_context&, const std::string& name, const host_options& options, utils::loading_cache_config lccfg);
+
+    impl(encryption_context& ctxt, const std::string& name, const host_options& options)
+        : impl(ctxt, name, options, make_key_cache_config(options.key_cache_expiry.value_or(default_expiry), options.key_cache_refresh.value_or(default_refresh)))
+    {}
+
     future<> init();
     future<> stop();
     const host_options& options() const;
@@ -145,21 +150,15 @@ private:
     future<bytes> find_key(const id_cache_key&);
 };
 
-azure_host::impl::impl(encryption_context& ctxt, const std::string& name, const azure_host::host_options& options)
+azure_host::impl::impl(encryption_context& ctxt, const std::string& name, const azure_host::host_options& options, utils::loading_cache_config lccfg)
     : _ctxt(ctxt)
     , _name(name)
     , _log_prefix(fmt::format("AzureVault:{}", name))
     , _options(options)
     , _credentials()
     , _initialized(false)
-    , _attr_cache(utils::loading_cache_config{
-        .max_size = std::numeric_limits<size_t>::max(),
-        .expiry = options.key_cache_expiry.value_or(default_expiry),
-        .refresh = options.key_cache_refresh.value_or(default_refresh)}, azlog, std::bind_front(&impl::create_key, this))
-    , _id_cache(utils::loading_cache_config{
-        .max_size = std::numeric_limits<size_t>::max(),
-        .expiry = options.key_cache_expiry.value_or(default_expiry),
-        .refresh = options.key_cache_refresh.value_or(default_refresh)}, azlog, std::bind_front(&impl::find_key, this))
+    , _attr_cache(ctxt, lccfg, azlog, std::bind_front(&impl::create_key, this))
+    , _id_cache(ctxt, lccfg, azlog, std::bind_front(&impl::find_key, this))
 {
     if (!_options.tenant_id.empty() && !_options.client_id.empty() && (!_options.client_secret.empty() || !_options.client_cert.empty())) {
         _credentials = std::make_unique<azure::service_principal_credentials>(
