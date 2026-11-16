@@ -877,6 +877,23 @@ def commitlog_segments(workdir: str) -> list[str]:
     return sorted(found, key=get_commitlog_segment_id, reverse=True)
 
 
+def commitlog_segment_payload(path: str) -> bytes:
+    """
+    What a commitlog segment's sectors hold, without the overhead at the end of
+    each sector (the segment id and the sector's CRC), so that an entry written
+    across a sector boundary reads as one run of bytes.  Empty if the segment is
+    gone.
+    """
+    sector_overhead_size = 8 + 4
+    try:
+        alignment = get_commitlog_segment_alignment(path)
+        with open(path, "rb") as f:
+            data = f.read()
+    except FileNotFoundError:
+        return b""
+    return b"".join(data[i:i + alignment - sector_overhead_size] for i in range(0, len(data), alignment))
+
+
 def _commitlog_sector_has_data(file, sector: int, alignment: int) -> bool:
     """
     Whether a sector of an open segment holds anything the reader would look at.

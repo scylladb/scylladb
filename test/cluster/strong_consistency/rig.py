@@ -8,7 +8,8 @@
 the node-failure tests inflict on it.
 
 Rig owns the cluster, the workload over its register table and the actions that break
-it: nodes crashed and restarted.  A test picks the action and when to take it; Rig keeps
+it: nodes crashed and restarted, and a leader cut off with a tail that the next leader
+truncates.  A test picks the action and when to take it; Rig keeps
 the cluster whole between two actions and tells the clients' errors apart: the errors of
 a lost node are accepted only in an operation that overlaps a REBOOT window
 (``Rig.disruption``), so anything failing outside one fails the test.
@@ -24,12 +25,16 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import logging
+import os
+import struct
 import time
+import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, Awaitable, Callable, Mapping, Optional, Sequence
 
 from cassandra import ConsistencyLevel, OperationTimedOut, Unavailable
+from cassandra.murmur3 import murmur3
 from cassandra.pool import Host
 
 from test.cluster.strong_consistency.config import boot_sc_cluster, sc_keyspace_opts
@@ -37,7 +42,7 @@ from test.cluster.strong_consistency.outcomes import FailureContext, Outcome, on
 from test.cluster.strong_consistency.register_workload import (
     DisruptionWindow, RegisterWorkload, Stats, check_linearizable, run_workload)
 from test.cluster.test_strong_consistency import wait_for_leader
-from test.cluster.util import new_test_keyspace
+from test.cluster.util import commitlog_segment_payload, commitlog_segments, new_test_keyspace
 from test.pylib.internal_types import ServerInfo
 from test.pylib.rest_client import read_barrier
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
@@ -116,10 +121,47 @@ COMMITLOG_SETUPS = {
                               flush_every_s=(1, 2)),
 }
 
+# --- a leader cut off with an uncommitted tail ------------------------------------------
+
+# Allowed for raft to notice a dead leader, elect a successor and commit on it; about 4s
+# on an idle machine.  Only an allowance, like RESTART_S.
+ELECT_S = 10
+# Writes the successor must commit before the old leader comes back.  Its first entry,
+# the dummy of its term, already lands on the first index of the old leader's tail, so
+# the tail conflicts; the writes make the conflict longer than one entry.
+MIN_WRITES_ON_NEW_LEADER = 20
+# Sent straight to the cut-off leader, at keys outside the workload's, so the checker
+# never sees them.  Only that leader ever holds them, so nobody may ever read them back,
+# on any replica, at any consistency.
+DOOMED_WRITES = 3
+DOOMED_PK_BASE = 1_000_000
+DROP_APPENDS = "raft_drop_incoming_append_entries_for_specified_group"
+# Attempts at cutting a group's leader off while its leadership keeps moving.
+CUT_ATTEMPTS = 5
+UNCOMMITTED_TAIL_CMDLINE = (
+    '--logger-log-level', 'raft_group_registry=debug',  # "Dropping append request"
+    '--logger-log-level', 'raft_commitlog=debug',  # "truncate_log: group_id="
+    '--logger-log-level', 'raft_commitlog_replay=debug',  # what each replay dropped
+)
+# The summary line raft_commitlog_replay_buffer::finish_replay() logs per group.
+REPLAY_SUMMARY = r"group {}: floor=.*dropped_truncated=(\d+), dropped_by_truncate=\d+, superseded=(\d+)"
+
 
 def total(stats: Stats) -> int:
     """Every operation the stats count, whatever became of it."""
     return sum(dataclasses.astuple(stats))
+
+
+@dataclass
+class TailRound:
+    """What one truncate_uncommitted_tail() did."""
+
+    leader: ServerInfo  # the leader cut off, whose tail was truncated
+    successor: str  # the host id of the leader that overwrote the tail
+    # What the replay after the old leader's second crash dropped: copies by a persisted
+    # truncation, and copies superseded by newer ones.
+    dropped_truncated: int
+    superseded: int
 
 
 @dataclass
@@ -135,9 +177,15 @@ class Rig:
     slow: int
     # SELECT of one key at CL=ONE: what a node holds locally.
     local_read: Any
+    # The node logs, by server id.
+    logs: dict[int, Any]
+    # (last token, raft group id) of every tablet, by token: which group a key belongs to.
+    tablets: list[tuple[int, str]]
     flush_every_s: Optional[tuple[float, float]] = None
     # The server ids of the nodes killed and not yet caught up again; the flusher leaves them alone.
     down: set[int] = dataclasses.field(default_factory=set)
+    # Every key a doomed write was sent to (truncate_uncommitted_tail).
+    doomed_pks: list[int] = dataclasses.field(default_factory=list)
     kills: int = 0
     flushes: int = 0
 
@@ -290,6 +338,133 @@ class Rig:
         await self.read_every_key()
         await check_linearizable(self.workload, output_dir=tmp_path / "porcupine-checker-output")
 
+    # --- a leader cut off with an uncommitted tail --------------------------------------
+
+    def group_of(self, pk: int) -> str:
+        """The raft group of the tablet that holds key `pk`."""
+        token = murmur3(struct.pack('>i', pk))
+        return next(group_id for last_token, group_id in self.tablets if token <= last_token)
+
+    def doomed_keys(self, group_id: str) -> list[int]:
+        """DOOMED_WRITES keys of `group_id`'s tablet that no doomed write took yet."""
+        pks: list[int] = []
+        pk = DOOMED_PK_BASE + len(self.doomed_pks) * 1000  # past every key an earlier round could take
+        while len(pks) < DOOMED_WRITES:
+            if self.group_of(pk) == group_id:
+                pks.append(pk)
+            pk += 1
+        return pks
+
+    async def cut_off(self, group_id: str) -> tuple[str, ServerInfo, list[ServerInfo], list[int]]:
+        """Make the followers of `group_id`'s leader drop its appends of the group.
+
+        Returns the leader's host id, the leader, its followers and a mark of each
+        follower's log taken before its cut.  Every node must be up.  Leadership can
+        move between reading it and the cut, more likely right after a restart, and
+        the doomed writes would then commit through the new leader: such a cut is
+        undone and made again around the leader the followers name.
+        """
+        for _ in range(CUT_ATTEMPTS):
+            leader_id = await wait_for_leader(self.manager, self.servers[0], group_id)
+            leader = self.by_host_id[leader_id]
+            followers = [s for s in self.servers if s != leader]
+            marks = [await self.logs[f.server_id].mark() for f in followers]
+            try:
+                for f in followers:
+                    await self.manager.api.enable_injection(f.ip_addr, DROP_APPENDS, one_shot=False,
+                                                            parameters={"value": group_id})
+                seen = {str(await self.manager.api.get_raft_leader(f.ip_addr, group_id)) for f in followers}
+            except BaseException:
+                await self.uncut(followers)
+                raise
+            if seen == {leader_id}:
+                return leader_id, leader, followers, marks
+            logger.info("The leader of group %s moved from %s to %s before the cut; cutting again", group_id,
+                        leader_id, seen)
+            await self.uncut(followers)
+        raise AssertionError(f"the leader of group {group_id} moved before each of {CUT_ATTEMPTS} cuts "
+                             f"(seed={self.workload.seed})")
+
+    async def uncut(self, followers: list[ServerInfo]) -> None:
+        for f in followers:
+            await self.manager.api.disable_injection(f.ip_addr, DROP_APPENDS)
+
+    async def truncate_uncommitted_tail(self, group_id: str) -> TailRound:
+        """Kill the leader of `group_id` holding entries nobody else has, under load, let the
+        next leader overwrite them, and crash the old leader again.
+
+        The leader is cut off: both followers drop its appends of the group, so whatever
+        it appends from then on never commits.  The workload's writes and DOOMED_WRITES
+        doomed writes sent straight to it go into its log and its commitlog; it is killed
+        only once both followers dropped a non-empty append and every doomed key is in its
+        commitlog's files.  Seeing the followers drop appends alone is not enough: a doomed
+        write can wait for log memory while nothing commits, and never reach the log.  The
+        followers cannot elect a successor while the leader lives, whatever they drop: a
+        follower does not campaign while the failure detector sees its leader alive, and a
+        leader counts a follower as active by the same detector.  So the leader is still
+        the leader when the doomed writes reach it; a successor would commit them instead.
+
+        The followers elect a successor, which commits MIN_WRITES_ON_NEW_LEADER writes at
+        the same indexes in a newer term, and the old leader is restarted: its replay
+        recovers the tail as uncommitted, and raft truncates it when the successor's
+        entries arrive.  The old leader is then crashed again, so a replay meets both
+        copies of those indexes, the superseded one still in its segment.
+        """
+        pks = self.doomed_keys(group_id)
+        value = -1 - len(self.doomed_pks) // DOOMED_WRITES  # negative: no workload write uses it
+        self.doomed_pks.extend(pks)
+        hosts = await wait_for_cql_and_get_hosts(self.cql, self.servers, time.time() + 60)
+        async with self.disruption():
+            leader_id, leader, followers, follower_marks = await self.cut_off(group_id)
+            leader_log = self.logs[leader.server_id]
+            before = await leader_log.mark()
+            logger.info("Cut off the leader %s of group %s", leader.ip_addr, group_id)
+            doomed: list[Awaitable] = []
+            try:
+                sent_at = time.time()
+                doomed = [self.cql.run_async(self.workload.write_stmt.bind([value, pk]),
+                                             host=hosts[self.servers.index(leader)])
+                          for pk in pks]
+                for f, mark in zip(followers, follower_marks):
+                    await self.logs[f.server_id].wait_for(
+                        rf"Dropping append request \(size: [1-9]\d*\) from .* for group {group_id}",
+                        from_mark=mark, timeout=60 * self.slow)
+                await wait_for_keys_in_commitlog(self.manager, leader, pks, since=sent_at - 1,
+                                                 timeout=60 * self.slow)
+                await self.kill(leader)
+            finally:
+                await self.uncut(followers)
+            killed_ns = time.monotonic_ns()
+
+            successor = await wait_for_new_leader(self.manager, followers, group_id, leader_id)
+
+            async def committed_on_successor() -> Optional[int]:
+                ok = self.workload.stats(within_ns=(killed_ns, time.monotonic_ns())).write_ok
+                return ok if ok >= MIN_WRITES_ON_NEW_LEADER else None
+            await wait_for(committed_on_successor, time.time() + 60 * self.slow,
+                           label=f"{MIN_WRITES_ON_NEW_LEADER} writes committed by the successor {successor}")
+
+            await self.restart(leader)
+            # From before the cut: the old leader may have heard of the successor and
+            # truncated before it was killed, which leaves the same copies on disk.
+            truncated_at, _ = await leader_log.wait_for(rf"truncate_log: group_id={group_id}", from_mark=before,
+                                                        timeout=60 * self.slow)
+            results = await asyncio.gather(*doomed, return_exceptions=True)
+            logger.info("The doomed writes ended with %s",
+                        [type(r).__name__ if isinstance(r, BaseException) else "success" for r in results])
+
+            replay_mark = await leader_log.mark()
+            await self.kill(leader)
+            await self.restart(leader)
+
+        dropped = superseded = 0
+        for _, match in await leader_log.grep(REPLAY_SUMMARY.format(group_id), from_mark=replay_mark):
+            dropped += int(match.group(1))
+            superseded += int(match.group(2))
+        logger.info("%s truncated the tail of group %s and replayed it: dropped_truncated=%d superseded=%d; "
+                    "the successor was %s", leader.ip_addr, group_id, dropped, superseded, successor)
+        return TailRound(leader=leader, successor=successor, dropped_truncated=dropped, superseded=superseded)
+
 
 @asynccontextmanager
 async def sc_rig(manager: ScyllaClusterManager, slow: int, *, initial_tablets: int = 1,
@@ -308,14 +483,17 @@ async def sc_rig(manager: ScyllaClusterManager, slow: int, *, initial_tablets: i
         local_read.consistency_level = ConsistencyLevel.ONE
 
         table_id = await manager.get_table_id(ks, workload.table_name)
-        rows = await cql.run_async(f"SELECT raft_group_id FROM system.tablets WHERE table_id = {table_id}")
-        group_ids = [str(r.raft_group_id) for r in rows]
+        rows = await cql.run_async(f"SELECT last_token, raft_group_id FROM system.tablets WHERE table_id = {table_id}")
+        tablets = sorted((r.last_token, str(r.raft_group_id)) for r in rows)
+        group_ids = [group_id for _, group_id in tablets]
         for group_id in group_ids:
             await wait_for_leader(manager, servers[0], group_id)
         by_host_id = {str(await manager.get_host_id(s.server_id)): s for s in servers}
+        logs = {s.server_id: await manager.server_open_log(s.server_id) for s in servers}
 
         yield Rig(manager=manager, cql=cql, servers=servers, workload=workload, group_ids=group_ids,
-                  by_host_id=by_host_id, slow=slow, local_read=local_read, flush_every_s=commitlog.flush_every_s)
+                  by_host_id=by_host_id, slow=slow, local_read=local_read, logs=logs, tablets=tablets,
+                  flush_every_s=commitlog.flush_every_s)
 
 
 async def assert_local_reads_match(rig: Rig, server: ServerInfo, hosts: Optional[list[Host]] = None) -> None:
@@ -331,3 +509,63 @@ async def assert_local_reads_match(rig: Rig, server: ServerInfo, hosts: Optional
         linearizable = [r.c for r in await rig.cql.run_async(rig.workload.read_stmt.bind([pk]), host=host)]
         local = [r.c for r in await rig.cql.run_async(rig.local_read.bind([pk]), host=host)]
         assert local == linearizable, f"pk={pk}: {server.ip_addr} holds {local} locally, the group says {linearizable}"
+
+
+async def assert_doomed_writes_absent(rig: Rig, hosts: list[Host]) -> None:
+    """No replica holds a write sent into a truncated tail, locally or by a linearizable read.
+
+    `hosts`: what rig.wait_caught_up() returned.
+    """
+    for server, host in zip(rig.servers, hosts):
+        for pk in rig.doomed_pks:
+            local = [r.c for r in await rig.cql.run_async(rig.local_read.bind([pk]), host=host)]
+            assert not local, f"{server.ip_addr} holds the truncated write of pk={pk} locally: {local}"
+            linearizable = [r.c for r in await rig.cql.run_async(rig.workload.read_stmt.bind([pk]), host=host)]
+            assert not linearizable, f"a linearizable read on {server.ip_addr} returns the truncated write of pk={pk}: {linearizable}"
+
+
+def register_key_bytes(pk: int) -> bytes:
+    """The bytes by which key `pk` is found in the commitlog segments (the count and
+    length of the key's components little-endian, the int itself big-endian)."""
+    return struct.pack("<II", 1, 4) + struct.pack(">i", pk)
+
+
+async def wait_for_keys_in_commitlog(manager: ScyllaClusterManager, server: ServerInfo, pks: Sequence[int],
+                                     since: float, timeout: float) -> None:
+    """Wait until a write of every key in `pks` is in `server`'s commitlog.
+
+    Read from the segment files, so the entries were written there and a kill cannot
+    lose them.  Only segments modified since `since` (a time.time()) are read.  An
+    entry that never reaches raft's log -- held for memory while nothing commits --
+    times this out rather than passing unseen.
+    """
+    workdir = await manager.server_get_workdir(server.server_id)
+    patterns = {pk: register_key_bytes(pk) for pk in pks}
+
+    def missing() -> set[int]:
+        left = set(pks)
+        for path in commitlog_segments(workdir):
+            try:
+                if os.path.getmtime(path) < since:
+                    continue
+            except FileNotFoundError:
+                continue
+            payload = commitlog_segment_payload(path)
+            left = {pk for pk in left if patterns[pk] not in payload}
+            if not left:
+                break
+        return left
+
+    async def all_written() -> Optional[bool]:
+        return True if not await asyncio.to_thread(missing) else None
+    await wait_for(all_written, time.time() + timeout, period=0.2,
+                   label=f"the writes of keys {list(pks)} in the commitlog of {server.ip_addr}")
+
+
+async def wait_for_new_leader(manager: ScyllaClusterManager, servers: list[ServerInfo], group_id: str, old_leader: str) -> str:
+    """Wait until every one of `servers` names the same leader of `group_id`, and it is not `old_leader`."""
+    async def agreed() -> str | None:
+        seen = {str(await manager.api.get_raft_leader(s.ip_addr, group_id)) for s in servers}
+        leader = seen.pop() if len(seen) == 1 else None
+        return leader if leader and leader != old_leader and uuid.UUID(leader).int != 0 else None
+    return await wait_for(agreed, time.time() + 60, label=f"every replica of group {group_id} to know a leader other than {old_leader}")
