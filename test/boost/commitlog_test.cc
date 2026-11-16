@@ -2827,6 +2827,96 @@ SEASTAR_TEST_CASE(test_commitlog_broken_large_mutation_on_multiple_shards) {
     });
 }
 
+// Fragment ids restart in every commitlog instance, so the fragments an earlier
+// instance left on disk can have the id of an entry a later instance wrote. Here the
+// first segment of the earlier entry is gone, as when it was deleted before a crash:
+// its remaining fragments can never be put together. They must not be mixed with the
+// later entry, which replay has to deliver whole. Reproduces SCYLLADB-6201.
+SEASTAR_TEST_CASE(test_commitlog_replay_fragment_id_reused_by_a_later_instance) {
+    commitlog::config cfg;
+
+    constexpr uint64_t max_size_mb = 1;
+
+    cfg.commitlog_segment_size_in_mb = max_size_mb;
+    cfg.commitlog_total_space_in_mb = 16 * max_size_mb * this_smp_shard_count();
+    cfg.allow_going_over_size_limit = false;
+    cfg.allow_fragmented_entries = true;
+    cfg.use_o_dsync = false;
+
+    tmpdir tmp;
+    cfg.commit_log_location = tmp.path().string();
+
+    auto uuid = make_table_id();
+    size_t size = 0;
+    // Where each instance's entry starts. Each instance writes one fragmented entry,
+    // its first, so both entries get the same fragment id.
+    std::vector<replay_position> written;
+
+    for (int instance = 0; instance < 2; ++instance) {
+        auto log = co_await commitlog::create_commitlog(cfg);
+        // Three times the largest record: more than a segment holds, so the entry has
+        // fragments in at least two segments.
+        size = log.max_record_size() * 3;
+        const char fill = 'a' + instance;
+        auto h = co_await log.add_mutation(uuid, size, db::commitlog::force_sync::no, [&](db::commitlog::output& dst) {
+            for (size_t i = 0; i < size; ++i) {
+                dst.write(&fill, 1);
+            }
+        });
+        written.push_back(h.release()); // no freeing for you
+
+        co_await log.sync_all_segments();
+        // as if we crashed -> segments left on disk
+        co_await log.release();
+        co_await log.shutdown();
+    }
+
+    // new log, for replay.
+    auto log = co_await commitlog::create_commitlog(cfg);
+    auto replay_set = co_await log.get_segments_to_replay();
+
+    // A shard's segments are replayed in the order they were written, which is id order.
+    auto cmp = [](auto& d1, auto& d2) { return d1.id < d2.id; };
+    std::set<commitlog::descriptor, decltype(cmp)> segments(replay_set.begin(), replay_set.end());
+
+    auto first_segment = std::find_if(segments.begin(), segments.end(), [&](auto& d) {
+        return d.id == written[0].id;
+    });
+    BOOST_REQUIRE(first_segment != segments.end());
+    segments.erase(first_segment);
+
+    commitlog::replay_state state;
+    size_t n_replays = 0;
+
+    for (auto& d : segments) {
+        try {
+            co_await commitlog::read_log_file(state, d.filename(), d.filename_prefix, [&](commitlog::buffer_and_replay_position buf_rp) {
+                auto&& [buf, rp] = buf_rp;
+                BOOST_CHECK_EQUAL(rp, written[1]);
+                BOOST_CHECK_EQUAL(buf.size_bytes(), size);
+                auto in = buf.get_istream();
+                for (size_t i = 0; i < size; ++i) {
+                    auto c = in.read<char>();
+                    BOOST_REQUIRE(c);
+                    if (c.value() != 'b') {
+                        BOOST_CHECK_EQUAL(c.value(), 'b');
+                        break;
+                    }
+                }
+                ++n_replays;
+                return make_ready_future<>();
+            });
+        } catch (commitlog::segment_truncation&) {
+            // The segments were abandoned, not closed. The count below tells whether
+            // the entry was read.
+        }
+    }
+    BOOST_CHECK_EQUAL(n_replays, 1);
+
+    co_await log.shutdown();
+    co_await log.clear();
+}
+
 // Test for #24346. Writing last entry, of last chunk at exactly segment EOF boundary
 SEASTAR_TEST_CASE(test_segment_end_on_entry_end) {
     static auto replay_segment = [] (sstring path) -> future<> {
