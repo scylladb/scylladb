@@ -16,6 +16,7 @@
 #include "utils/UUID.hh"
 #include "utils/UUID_gen.hh"
 #include "utils/log.hh"
+#include "utils/error_injection.hh"
 
 #include "serializer.hh"
 #include "idl/raft_storage.dist.hh"
@@ -411,6 +412,13 @@ void raft_groups_storage::write_descriptor_and_purge_stale_truncations(segment_r
     // for good. On the way out the spare is destroyed, undoing the clone.
     auto spare_pin = record.pin_table.clone(_raft_groups_table_id);
     try {
+        // Takes the failure path of a write that does not land. Parameter group_id:
+        // only that group's releases fail.
+        if (const auto target = utils::get_local_injector().inject_parameter<std::string_view>(
+                    "raft_groups_storage_fail_descriptor_write", "group_id");
+                target && utils::UUID(*target) == _group_id.id) {
+            throw std::runtime_error("raft_groups_storage_fail_descriptor_write error injection");
+        }
         // Synchronous and IO-free, straight into the raft_groups memtable.
         cf.apply(m, std::move(record.pin_raft_groups));
     } catch (...) {
