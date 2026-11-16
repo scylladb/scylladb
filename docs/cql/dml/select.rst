@@ -70,7 +70,7 @@ and returns them as a single row (see :ref:`SELECT without FROM <select-without-
 :ref:`limit <limit-clause>` the results. Lastly, :ref:`queries that require filtering <allow-filtering>` can be allowed
 if the ``ALLOW FILTERING`` flag is provided.
 
-If your ``SELECT`` query results in what appears to be missing data, see this :doc:`KB Article </kb/cqlsh-results>` for information. 
+If your ``SELECT`` query results in what appears to be missing data, see this :doc:`KB Article </kb/cqlsh-more>` for information. 
 
 .. _selection-clause:
 
