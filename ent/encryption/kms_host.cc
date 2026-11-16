@@ -120,6 +120,7 @@ namespace kms_errors {
     [[maybe_unused]] static const char* NotFoundException = "NotFoundException";
     [[maybe_unused]] static const char* AlreadyExistsException = "AlreadyExistsException";
     [[maybe_unused]] static const char* KMSInvalidStateException = "KMSInvalidStateException";
+    [[maybe_unused]] static const char* DisabledException = "DisabledException";
 }
 
 static std::string to_lower(std::string_view s) {
@@ -272,7 +273,7 @@ static void translate_kms_error(const kms_error& e) {
     if (e.type() == OptInRequired || e.type() == InvalidClientTokenId || e.type() == InvalidAction || e.type() == KMSInvalidStateException) {
         std::throw_with_nested(configuration_error(e.what()));
     }
-    if (e.type() == NotFoundException || e.type() == DependencyTimeoutException) {
+    if (e.type() == NotFoundException || e.type() == DisabledException) {
         std::throw_with_nested(missing_resource_error(e.what()));
     }
     std::throw_with_nested(service_error(e.what()));
