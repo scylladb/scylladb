@@ -1,0 +1,54 @@
+#!/usr/bin/env bpftrace
+/*
+ * Copyright (C) 2026-present ScyllaDB
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
+ */
+/*
+ * scylla-memory-watch: print every memtable flush as it finishes (table,
+ * memtable size, sstables and bytes written, duration, MB/s) and every LSA
+ * reclaim that stalled the reactor or ran non-preemptibly. On exit, print
+ * flush duration histograms per table and reclaim duration histograms per
+ * reclaim kind (reclaim, reclaim_segments, compact, evict).
+ *
+ * Usage: bpftrace tools/bpftrace/scylla-memory-watch.bt -p $(pgrep -x scylla)
+ */
+
+BEGIN
+{
+    printf("Watching scylla memtable flushes and LSA reclaims... Hit Ctrl-C to end.\n");
+    printf("%-10s %-8s %-30s %10s %6s %10s %8s %8s\n",
+           "TIME", "EVENT", "TABLE/KIND", "IN_KB", "SSTS", "OUT_KB", "MS", "MB/S");
+}
+
+usdt:*:scylla:memtable_flush_done
+{
+    $in_kb = arg2 / 1024;
+    $out_kb = arg5 / 1024;
+    $ms = arg3 / 1000;
+    $mbps = arg3 > 0 ? (arg2 * 1000000 / arg3) / 1048576 : 0;
+    printf("%s   %-8s %s.%-20s %10d %6d %10d %8d %8d\n", strftime("%H:%M:%S", nsecs),
+           "flush", str(arg0), str(arg1), $in_kb, arg4, $out_kb, $ms, $mbps);
+    @flush_ms[str(arg0), str(arg1)] = hist(arg3 / 1000);
+    @flushed_bytes[str(arg0), str(arg1)] = sum(arg2);
+}
+
+usdt:*:scylla:memtable_flush_failed
+{
+    printf("%s   %-8s %s.%-20s FAILED after %d ms\n", strftime("%H:%M:%S", nsecs), "flush", str(arg0), str(arg1), arg3 / 1000);
+    @flush_failed[str(arg0), str(arg1)] = count();
+}
+
+usdt:*:scylla:lsa_reclaim_done
+{
+    @reclaim_us[str(arg0)] = hist(arg3);
+    @reclaimed_bytes[str(arg0)] = sum(arg2);
+    @reclaims[str(arg0), arg4 ? "preemptible" : "non-preemptible"] = count();
+}
+
+/* arg5 is the stall flag: the reclaim took longer than blocked-reactor-notify-ms. */
+usdt:*:scylla:lsa_reclaim_done /arg5 || !arg4/
+{
+    printf("%s   %-8s %-30s %10d %6s %10d %8d %s%s\n", strftime("%H:%M:%S", nsecs),
+           "reclaim", str(arg0), arg1 / 1024, "", arg2 / 1024, arg3 / 1000,
+           arg4 ? "" : "non-preemptible ", arg5 ? "STALL" : "");
+}
