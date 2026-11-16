@@ -1094,9 +1094,9 @@ future<> storage_service::sstable_vnodes_cleanup_fiber(raft::server& server, gat
                     return sp.await_stale_pending_writes();
                 });
 
-                rtlogger.info("vnodes_cleanup: flush_all_tables");
+                rtlogger.info("vnodes_cleanup: flush_commitlog");
                 co_await _db.invoke_on_all([&] (replica::database& db) {
-                    return db.flush_all_tables();
+                    return db.flush_commitlog();
                 });
 
                 co_await coroutine::parallel_for_each(ks_tables, [&](auto& item) -> future<> {

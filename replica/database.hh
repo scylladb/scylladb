@@ -1949,6 +1949,8 @@ public:
 private:
     future<> flush_non_system_column_families();
     future<> flush_system_column_families();
+    // Makes the commitlog start a new segment, and calls `flush_table` for each table on this shard.
+    future<> do_flush_all_tables(std::function<future<>(table&)> flush_table);
 
     using system_keyspace = bool_class<struct system_keyspace_tag>;
     future<std::unique_ptr<keyspace>> create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::effective_replication_map_factory& erm_factory, const locator::token_metadata_ptr& token_metadata, system_keyspace system);
@@ -2254,8 +2256,11 @@ public:
     // Note: force_new_active_segment in the commitlog, so that
     // flushing all tables will allow reclaiming of all commitlog segments
     future<> flush_all_tables();
-    // a wrapper around flush_all_tables, allowing the caller to express intent more clearly
-    future<> flush_commitlog() { return flush_all_tables(); }
+    // Makes the commitlog start a new segment and flushes the memtables of all tables on this
+    // shard, so that the commitlog can free all of its older segments. Unlike flush_all_tables(),
+    // it does not flush the separator buffers of a logstor table, because a logstor table does not
+    // write to the commitlog.
+    future<> flush_commitlog();
 
     static future<> trigger_logstor_compaction_on_all_shards(sharded<database>& sharded_db, bool major);
     void trigger_logstor_compaction(bool major);

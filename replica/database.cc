@@ -3132,16 +3132,28 @@ future<> database::flush_keyspace_on_all_shards(sharded<database>& sharded_db, s
     });
 }
 
-future<> database::flush_all_tables() {
+future<> database::do_flush_all_tables(std::function<future<>(table&)> flush_table) {
     // see above
     dblog.info("Forcing new commitlog segment and flushing all tables");
     co_await _commitlog->force_new_active_segment();
-    co_await get_tables_metadata().parallel_for_each_table([] (table_id, lw_shared_ptr<table> t) {
-        return t->flush();
+    co_await get_tables_metadata().parallel_for_each_table([&flush_table] (table_id, lw_shared_ptr<table> t) {
+        return flush_table(*t);
     });
     _all_tables_flushed_at = db_clock::now();
     co_await _commitlog->wait_for_pending_deletes();
     dblog.info("Forcing new commitlog segment and flushing all tables complete");
+}
+
+future<> database::flush_all_tables() {
+    return do_flush_all_tables([] (table& t) {
+        return t.flush();
+    });
+}
+
+future<> database::flush_commitlog() {
+    return do_flush_all_tables([] (table& t) {
+        return t.flush_memtables();
+    });
 }
 
 future<db_clock::time_point> database::get_all_tables_flushed_at(sharded<database>& sharded_db) {
