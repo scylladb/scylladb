@@ -7154,6 +7154,9 @@ future<storage_proxy::cas_result> storage_proxy::cas(schema_ptr schema, cas_shar
         bool bypass_large_data_guardrails) {
 
     auto& table = local_db().find_column_family(schema->id());
+    // Take the guardrail before the first co_await: a concurrent DROP TABLE can
+    // destroy the table while cas() is suspended.
+    auto ld_guardrail = bypass_large_data_guardrails ? db::noop_large_data_guardrail::instance() : table.get_large_data_guardrail();
     if (table.uses_tablets()) {
         if (!_features.lwt_with_tablets) {
             auto msg = format("Cannot use LightWeight Transactions for table {}.{}: LWT is not yet supported with tablets", schema->ks_name(), schema->cf_name());
@@ -7231,7 +7234,6 @@ future<storage_proxy::cas_result> storage_proxy::cas(schema_ptr schema, cas_shar
         auto l = co_await paxos::paxos_state::get_cas_lock(token, write_timeout);
 
         co_await utils::get_local_injector().inject("cas_timeout_after_lock", write_timeout + std::chrono::milliseconds(100));
-        auto ld_guardrail = bypass_large_data_guardrails ? db::noop_large_data_guardrail::instance() : table.get_large_data_guardrail();
 
         while (true) {
             // An unmet condition lowers the level of the learn to ANY for the dummy decision of
