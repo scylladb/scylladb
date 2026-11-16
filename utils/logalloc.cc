@@ -29,6 +29,7 @@
 #include "utils/assert.hh"
 #include "utils/logalloc.hh"
 #include "utils/log.hh"
+#include "utils/usdt.hh"
 #include "utils/dynamic_bitset.hh"
 #include "utils/log_heap.hh"
 #include "utils/preempt.hh"
@@ -1546,6 +1547,7 @@ reclaim_timer::reclaim_timer(const char* name,
         return;
     }
 
+    SCYLLA_USDT(lsa_reclaim_start, _name, _memory_to_release, _segments_to_release, bool(_preemptible));
     _start = clock::now();
     sample_stats(_start_stats);
 }
@@ -1558,6 +1560,8 @@ reclaim_timer::~reclaim_timer() {
     _duration = clock::now() - _start;
     _total_duration += _duration;
     _stall_detected = _duration >= _duration_threshold;
+    SCYLLA_USDT(lsa_reclaim_done, _name, _memory_to_release, _memory_released,
+                std::chrono::duration_cast<std::chrono::microseconds>(_duration).count(), bool(_preemptible), _stall_detected);
     if (_debug_enabled || _stall_detected) {
         sample_stats(_end_stats);
         _stat_diff = _end_stats - _start_stats;
