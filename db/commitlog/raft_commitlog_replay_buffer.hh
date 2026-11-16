@@ -14,6 +14,7 @@
 #include <seastar/core/future.hh>
 #include "utils/chunked_vector.hh"
 #include "raft/raft.hh"
+#include "dht/token.hh"
 #include "db/commitlog/replay_position.hh"
 #include "service/strong_consistency/raft_commitlog.hh"
 #include "service/strong_consistency/state_machine.hh"
@@ -75,9 +76,19 @@ class raft_commitlog_replay_buffer {
     // Lets a test seed the buffer directly, skipping the replay that fills it.
     friend class ::raft_replay_buffer_tester;
 
+public:
+    // A raft group this shard hosts, and where its tablet is.
+    struct hosted_group {
+        locator::global_tablet_id tablet;
+        // The last token of the tablet. Commitlog cleanup records are kept per
+        // token range of a table, and the tablet's record covers this token.
+        dht::token last_token;
+    };
+
+private:
     struct group_state {
-        // Resolved on first sight from tablet metadata. A group that is missing has
-        // moved away or been dropped; everything read for it is discarded.
+        // Resolved at the group's first batch, by reading its row. A group without a
+        // row is not known, and everything read for it is discarded.
         bool resolved = false;
         bool known = false;
         locator::global_tablet_id tablet{table_id{}, locator::tablet_id(0)};
@@ -118,17 +129,17 @@ class raft_commitlog_replay_buffer {
     // across all groups. Created on first use.
     std::optional<service::strong_consistency::schema_store> _schemas;
 
-    // The tablet of each raft group this shard hosts, by hosts_raft_group(). Built
-    // once, on first use, by walking every tablet in the cluster's metadata; replay
+    // The raft groups this shard hosts, by hosts_raft_group(). Built once, on
+    // first use, by walking every tablet in the cluster's metadata; replay
     // changes no tablet.
-    std::optional<std::unordered_map<raft::group_id, locator::global_tablet_id>> _group_to_tablet;
+    std::optional<std::unordered_map<raft::group_id, hosted_group>> _hosted_groups;
 
     // Segments a replay could not read in full; see note_unreadable_segment().
     std::vector<db::segment_id_type> _unreadable_segments;
 
-    // Resolve the group against tablet metadata and read back its persisted state.
-    future<> resolve_group(replica::database& db, cql3::query_processor& qp,
-        raft::group_id group_id, group_state& group);
+    // Read back the group's persisted state.
+    future<> resolve_group(cql3::query_processor& qp, raft::group_id group_id,
+        const hosted_group& hosted, group_state& group);
 
     // Apply one committed command entry: a write to its table's memtable, a resize marker
     // to the group's row in system.raft_groups, a truncate to the tablet. A write the
@@ -144,10 +155,20 @@ class raft_commitlog_replay_buffer {
     static void note_committed(group_state& group, const raft::log_entry_ptr& entry);
 
 public:
-    // Called once per raft batch during replay, in write order.
+    // The group `group_id` if this shard hosts it, by the rule that tears a running
+    // group down (hosts_raft_group()); nullptr otherwise. A batch of a group that
+    // is not hosted must be skipped. Such batches are routine: a group gives up
+    // its segment references when its tablet leaves the shard or its table is
+    // dropped, and the segments stay on disk until their other users let them go.
+    const hosted_group* find_hosted_group(replica::database& db, raft::group_id group_id);
+
+    // Called once per raft batch of a hosted group during replay, in write order.
+    // The caller has checked that the batch is not covered by a commitlog cleanup
+    // record of the group's tablet, that is, that it does not belong to an earlier
+    // stay of the tablet on this shard.
     future<> add_batch(replica::database& db, cql3::query_processor& qp, db::system_keyspace& sys_ks,
-        raft::group_id group_id, db::segment_id_type segment, raft::index_t commit_idx,
-        const std::vector<raft::log_entry_ptr>& entries);
+        raft::group_id group_id, const hosted_group& hosted, db::segment_id_type segment,
+        raft::index_t commit_idx, const std::vector<raft::log_entry_ptr>& entries);
 
     // Called after commitlog replay completes, but before the old segments are
     // deleted and the memtables flushed. Persists each group's recovered descriptor

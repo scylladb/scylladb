@@ -69,6 +69,7 @@
 #include "dht/i_partitioner.hh"
 #include "replica/global_table_ptr.hh"
 #include "locator/tablets.hh"
+#include "locator/tablet_replication_strategy.hh"
 
 #include "utils/error_injection.hh"
 #include "readers/reversing.hh"
@@ -1035,6 +1036,11 @@ public:
 
 bool table::uses_tablets() const {
     return _erm && _erm->get_replication_strategy().uses_tablets();
+}
+
+bool table::uses_strong_consistency() const {
+    const auto* rs = _erm ? _erm->get_replication_strategy().maybe_as_tablet_aware() : nullptr;
+    return rs && data_dictionary::is_strongly_consistent(rs->get_consistency());
 }
 
 static bool may_publish_tablet_routing_info(const table& t) {

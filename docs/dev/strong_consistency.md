@@ -446,12 +446,24 @@ starts the node without them, which is the way out while the commitlog still rep
 intact segment as damaged (SCYLLADB-4853). The node that starts that way runs a log that
 may be short of entries the quorum committed.
 
-A group this shard no longer hosts is discarded rather than recovered: its entries
-belong to whoever holds the tablet now. The test is `hosts_raft_group()`, the same one
-that decides whether the running group is torn down, and it is stage-aware - a leaving
-replica stops hosting the group at `cleanup`, while it is still listed in
-`tablet_info::replicas`. Deciding by the replica list instead would recover a log whose
-segments the teardown has already given up.
+The replayer decides for every raft batch whether it belongs to a group that runs on this
+shard now, and skips the batch otherwise:
+
+- **The shard does not host the group.** Its entries belong to whoever holds the tablet
+  now. The test is `hosts_raft_group()`, the same one that decides whether the running
+  group is torn down, and it is stage-aware - a leaving replica stops hosting the group at
+  `cleanup`, while it is still listed in `tablet_info::replicas`. Deciding by the replica
+  list instead would recover a log whose segments the teardown has already given up.
+- **The batch is at or below the tablet's commitlog cleanup record.** The tablet left this
+  shard and came back, so the shard hosts the group again, under the same group id and
+  with a new row. The batches of the earlier stay are still in the commitlog, and replaying
+  them would put entries of that stay into the log of the new one. The tablet's storage
+  cleanup records the last position written to the shard's commitlog
+  (`commitlog::last_written_position()`). The group writes no batch after its server is
+  stopped, which happens before the cleanup, so every batch of the earlier stay is at or
+  below that position, and every batch written after the return is above it. This is the
+  same record, and the same comparison, that keeps the mutations of a cleaned-up tablet
+  of an eventually consistent table from being replayed.
 
 ### Shutdown behavior
 

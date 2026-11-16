@@ -310,10 +310,25 @@ future<> shared_tombstone_gc_state::flush_pending_repair_time_update(sharded<rep
                     // range past its unflushed writes once another range of the table
                     // flushes on this shard, losing them on commitlog replay.
                     db::replay_position high_rp;
-                    if (t) {
+                    // A strongly consistent table gets no cleanup record and no position.
+                    //
+                    // Replay does not need the record. It applies a raft group's entries
+                    // above the group's persisted snapshot index, in log order and without
+                    // gaps, and the leader assigns write timestamps in log order. So if
+                    // replay applies a write, it also applies every tombstone covering it.
+                    //
+                    // The record would break replay. The commands of a raft batch enter
+                    // the memtable with the position of the start of the batch's commitlog
+                    // segment, so the flushed position only tells which segments have
+                    // commands in sstables. Replay would drop the group's batches below
+                    // it, and fail on the gap if the persisted snapshot index is lower.
+                    //
+                    // With no position, commitlog::min_gc_time() exempts no segment when
+                    // tombstones of this range are purged.
+                    if (t && !t->uses_strong_consistency()) {
                         high_rp = t->highest_flushed_replay_position(update.range);
+                        co_await local_sys_ks.save_commitlog_cleanup_record(table, update.range, high_rp);
                     }
-                    co_await local_sys_ks.save_commitlog_cleanup_record(table, update.range, high_rp);
                     do_update_repair_time(*shard_maps, table, update.range, update.time, high_rp);
                     dblog.debug("Flush pending repair time for tombstone gc: table={} range={} repair_time={}",
                             table, update.range, update.time);

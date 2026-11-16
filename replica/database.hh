@@ -1111,6 +1111,9 @@ public:
     void detach_from_keyspace() noexcept { _keyspace = nullptr; }
     void update_effective_replication_map(locator::effective_replication_map_ptr);
     [[gnu::always_inline]] bool uses_tablets() const;
+    // True for a table of a keyspace whose consistency option is not eventual:
+    // each of its tablets is a raft group.
+    bool uses_strong_consistency() const;
     int64_t calculate_tablet_count() const;
     // Routing info to attach to the response of a single-partition request for `token`
     // that landed on `original_shard`, or that carried `block` as the client's view of
