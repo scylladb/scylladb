@@ -38,6 +38,18 @@ namespace {
     return ::service::raft_timeout{.value = lowres_clock::now() + *timeout};
 }
 
+// The Raft API is registered before group 0 is set up and unregistered after
+// group 0 is aborted and destroyed. Group 0 is also never set up in maintenance
+// mode. A missing group 0 is therefore a regular state, not an internal error.
+//
+// Group 0 is alive exactly when it is set up and not aborted, so it is safe to
+// call raft_group_registry::group0() after this check.
+void check_group0_alive(const service::raft_group_registry& raft_gr) {
+    if (!raft_gr.is_group0_alive()) {
+        throw httpd::base_exception("Group 0 is not available", http::reply::status_type::service_unavailable);
+    }
+}
+
 }  // namespace
 
 
@@ -73,6 +85,7 @@ void set_raft(http_context&, httpd::routes& r, sharded<service::raft_group_regis
         const auto gid_param = try_get_query_param<raft::group_id>(*req, "group_id");
         if (!gid_param) {
             const auto leader_id = co_await raft_gr.invoke_on(0, [] (service::raft_group_registry& raft_gr) {
+                check_group0_alive(raft_gr);
                 auto& srv = raft_gr.group0();
                 return srv.current_leader();
             });
@@ -104,6 +117,7 @@ void set_raft(http_context&, httpd::routes& r, sharded<service::raft_group_regis
         if (!gid_param) {
             // Read barrier on group 0 by default
             co_await raft_gr.invoke_on(0, [timeout] (service::raft_group_registry& raft_gr) -> future<> {
+                check_group0_alive(raft_gr);
                 co_await raft_gr.group0_with_timeouts().read_barrier(nullptr, timeout);
             });
             co_return json_void{};
@@ -133,6 +147,7 @@ void set_raft(http_context&, httpd::routes& r, sharded<service::raft_group_regis
         if (!gid_param) {
             // Wait on group 0 by default
             const auto idx = co_await raft_gr.invoke_on(0, [timeout] (service::raft_group_registry& raft_gr) -> future<raft::index_t> {
+                check_group0_alive(raft_gr);
                 const auto idx = raft_gr.group0().get_status().commit_idx;
                 co_await raft_gr.group0_with_timeouts().wait_for_apply(idx, nullptr, timeout);
                 co_return idx;
@@ -171,6 +186,7 @@ void set_raft(http_context&, httpd::routes& r, sharded<service::raft_group_regis
         if (!gid_param) {
             // Stepdown on group 0 by default
             co_await raft_gr.invoke_on(0, [timeout_dur, target] (service::raft_group_registry& raft_gr) {
+                check_group0_alive(raft_gr);
                 apilog.info("Triggering stepdown for group0, target {}", target);
                 return raft_gr.group0().stepdown(timeout_dur, target);
             });
