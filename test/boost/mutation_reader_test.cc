@@ -55,6 +55,7 @@
 #include "mutation/mutation_rebuilder.hh"
 
 #include "readers/from_mutations.hh"
+#include "mutation/mutation_fragment_stream_validator.hh"
 #include "readers/forwardable.hh"
 #include "readers/from_fragments.hh"
 #include "readers/mutation_fragment_v1_stream.hh"
@@ -2295,6 +2296,112 @@ SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_next_partition) {
     }).get();
 }
 
+// Regression test for SCYLLADB-4229: a shard reader is evicted in the middle of
+// a partition, and the partition is gone when the reader is recreated (as with
+// system.clients, when the client disconnects in the meanwhile). The shard
+// reader then ends without closing the partition, after the null range
+// tombstone change the evictable reader emits on recreation, and the next
+// shard's partition start follows it: "out-of-order mutation fragment
+// partition start, previous mutation fragment was range tombstone change".
+SEASTAR_THREAD_TEST_CASE(test_multishard_combining_reader_partition_vanishes_after_eviction) {
+    if (this_smp_shard_count() < 2) {
+        std::cerr << "Cannot run test " << get_name() << " with this_smp_shard_count() < 2" << std::endl;
+        return;
+    }
+
+    do_with_cql_env_thread([&] (cql_test_env& env) -> future<> {
+        simple_schema s;
+        auto schema = s.schema();
+        dht::static_sharder sharder(2, 0);
+
+        // Partition A lives on shard 0 and partition B, which follows it, on shard 1.
+        auto pkeys = s.make_pkeys(64);
+        std::ranges::sort(pkeys, [&] (const dht::decorated_key& a, const dht::decorated_key& b) {
+            return a.less_compare(*schema, b);
+        });
+        auto pkey_a_it = std::ranges::find_if(pkeys, [&] (const dht::decorated_key& dk) { return sharder.shard_for_reads(dk.token()) == 0; });
+        BOOST_REQUIRE(pkey_a_it != pkeys.end());
+        auto pkey_b_it = std::find_if(pkey_a_it, pkeys.end(), [&] (const dht::decorated_key& dk) { return sharder.shard_for_reads(dk.token()) == 1; });
+        BOOST_REQUIRE(pkey_b_it != pkeys.end());
+
+        const auto rows_in_partition_a = 10;
+        mutation mutation_a(schema, *pkey_a_it);
+        for (int i = 0; i < rows_in_partition_a; ++i) {
+            s.add_row(mutation_a, s.make_ckey(i), "v");
+        }
+        mutation mutation_b(schema, *pkey_b_it);
+        s.add_row(mutation_b, s.make_ckey(0), "v");
+        const auto frozen_mutation_a = freeze(mutation_a);
+        const auto frozen_mutation_b = freeze(mutation_b);
+
+        // Partition A is visible to the first two readers created on shard 0
+        // (the second one being the reader recreated after the first eviction),
+        // and gone for the later ones.
+        const unsigned readers_seeing_partition_a = 2;
+        std::vector<std::atomic<unsigned>> readers_created(this_smp_shard_count());
+
+        auto factory = [&] (
+                schema_ptr schema,
+                reader_permit permit,
+                const dht::partition_range& range,
+                const query::partition_slice& slice,
+                tracing::trace_state_ptr trace_state,
+                mutation_reader::forwarding fwd_mr) {
+            const auto readers_created_before = readers_created[this_shard_id()]++;
+            if (this_shard_id() == 0 && readers_created_before < readers_seeing_partition_a) {
+                auto reader = make_mutation_reader_from_mutations(schema, std::move(permit), frozen_mutation_a.unfreeze(schema), slice);
+                // Return one fragment per buffer, so the partition is read
+                // across several buffers, with evictions between them.
+                reader.set_max_buffer_size(1);
+                return reader;
+            }
+            if (this_shard_id() == 1) {
+                return make_mutation_reader_from_mutations(schema, std::move(permit), frozen_mutation_b.unfreeze(schema), slice);
+            }
+            return make_empty_mutation_reader(schema, std::move(permit));
+        };
+
+        // Create the shard semaphores with no memory, so paused shard readers are evicted immediately.
+        class evicting_semaphore_factory : public test_reader_lifecycle_policy::semaphore_factory {
+        public:
+            virtual lw_shared_ptr<reader_concurrency_semaphore> create(sstring name) override {
+                return make_lw_shared<reader_concurrency_semaphore>(reader_concurrency_semaphore::for_tests{}, std::move(name), 1, 0);
+            }
+        };
+
+        auto reader = make_multishard_combining_reader_for_tests(
+                sharder,
+                seastar::make_shared<test_reader_lifecycle_policy>(std::move(factory), std::make_unique<evicting_semaphore_factory>()),
+                schema,
+                make_reader_permit(env),
+                query::full_partition_range,
+                schema->full_slice());
+        auto close_reader = deferred_close(reader);
+
+        mutation_fragment_stream_validator validator(*schema);
+        std::vector<dht::decorated_key> partitions_read;
+        while (auto mf_opt = reader().get()) {
+            if (mf_opt->is_partition_start()) {
+                partitions_read.push_back(mf_opt->as_partition_start().key());
+            }
+            if (auto result = validator(*mf_opt); !result) {
+                BOOST_FAIL(result.what());
+            }
+        }
+        if (auto result = validator.on_end_of_stream(); !result) {
+            BOOST_FAIL(result.what());
+        }
+
+        // Make sure the shard 0 reader was recreated after partition A vanished.
+        BOOST_REQUIRE_GT(readers_created[0].load(), readers_seeing_partition_a);
+        BOOST_REQUIRE_EQUAL(partitions_read.size(), 2);
+        BOOST_REQUIRE(partitions_read[0].equal(*schema, *pkey_a_it));
+        BOOST_REQUIRE(partitions_read[1].equal(*schema, *pkey_b_it));
+
+        return make_ready_future<>();
+    }).get();
+}
+
 // Test the multishard streaming reader in the context it was designed to work
 // in: as a mean to read data belonging to a shard according to a different
 // sharding configuration.
@@ -3649,16 +3756,25 @@ SEASTAR_THREAD_TEST_CASE(test_evictable_reader_clear_tombstone_in_discontinued_p
         reader.fill_buffer().get();
         BOOST_REQUIRE(!reader.is_end_of_stream());
         std::vector<range_tombstone_change> tombs;
+        size_t partition_starts = 0;
+        size_t partition_ends = 0;
         {
             auto mf_opt = reader().get();
             BOOST_REQUIRE(mf_opt->is_partition_start());
+            ++partition_starts;
         }
         while (auto mf_opt = reader().get()) {
             if (mf_opt->is_range_tombstone_change()) {
                 tombs.push_back(std::move(mf_opt->as_range_tombstone_change()));
+            } else if (mf_opt->is_partition_start()) {
+                ++partition_starts;
+            } else if (mf_opt->is_end_of_partition()) {
+                ++partition_ends;
             }
         }
 
+        // The discontinued partition is closed, even if the stream ends there.
+        BOOST_REQUIRE_EQUAL(partition_ends, partition_starts);
         BOOST_REQUIRE_EQUAL(tombs.size(), 2);
 
         BOOST_REQUIRE(tombs.front().equal(*schema, first_rtc));
