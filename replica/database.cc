@@ -3193,7 +3193,7 @@ future<> database::flush_logstor_separator_on_all_shards(sharded<database>& shar
 
 future<> database::flush_logstor_separator(std::optional<logstor::segment_sequence> seq_num) {
     return _tables_metadata.parallel_for_each_table([seq_num] (table_id, lw_shared_ptr<table> table) {
-        return table->flush_separator(seq_num);
+        return table->uses_logstor() ? table->flush_separator(seq_num) : make_ready_future<>();
     });
 }
 

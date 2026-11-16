@@ -1202,7 +1202,8 @@ public:
     void start();
     future<> stop() noexcept;
     future<> flush_memtables(std::optional<db::replay_position> = {});
-    // Flushes the memtables, as flush_memtables() does without a replay position.
+    // Flushes the memtables of the table, or the separator buffers of a logstor table, so that the
+    // recent writes of the table reach its storage.
     future<> flush();
     bool needs_flush() const;
     future<> clear(); // discards memtable(s) without flushing them to disk.
@@ -1302,6 +1303,7 @@ public:
 
     logstor::compaction_manager& get_logstor_compaction_manager() noexcept;
 
+    // Flushes the separator buffers of the table. The table must use logstor.
     future<> flush_separator(std::optional<logstor::segment_sequence> seq_num = std::nullopt);
 
     table_stats& get_stats() const {

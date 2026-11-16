@@ -4812,7 +4812,7 @@ size_t storage_group::memtable_count() const {
 }
 
 future<> table::flush() {
-    return flush_memtables();
+    return uses_logstor() ? flush_separator() : flush_memtables();
 }
 
 future<> table::flush_memtables(std::optional<db::replay_position> pos) {
@@ -4826,9 +4826,6 @@ future<> table::flush_memtables(std::optional<db::replay_position> pos) {
 }
 
 future<> table::flush_separator(std::optional<logstor::segment_sequence> seq_num) {
-    if (!uses_logstor()) {
-        co_return;
-    }
     // table::stop() closes the phaser only after it stopped all compaction groups, and
     // compaction_group::stop() flushes the separator buffers of its group, so there is nothing to
     // flush. The check is also necessary because start() throws on a closed phaser.
