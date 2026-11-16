@@ -459,14 +459,11 @@ void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_
         const auto marker_timestamp = _resize_tracker.max_marker_timestamp(id);
         _resize_tracker.erase_group(id);
         // We erase the persisted state while the group is still in _raft_groups, which is what
-        // stop_shard() waits for.
+        // stop_shard() waits for. A failed erase is fatal, like any failure of a control
+        // operation (see chain_control_op()): nothing repeats this erase, and a row left behind
+        // would make the group read as bootstrapped.
         if (clean_up) {
-            try {
-                co_await raft_groups_storage::erase_persisted_state(_qp, id, this_shard_id(), marker_timestamp);
-            } catch (...) {
-                logger.warn("schedule_raft_group_deletion(): group id {}: failed to erase its persisted state: {}",
-                    id, std::current_exception());
-            }
+            co_await raft_groups_storage::erase_persisted_state(_qp, id, this_shard_id(), marker_timestamp);
             // A start may have arrived during the erase, as above.
             if (state.gate.get() != g.get()) {
                 co_return;
