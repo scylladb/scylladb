@@ -255,17 +255,6 @@ struct leader {
     // commit is deferred, so the warning is emitted once per leadership term
     // rather than once per tick.
     bool clock_unavailable_warned = false;
-    // LeaseGuard: elapsed-time reading at which our clock last became unusable,
-    // or empty while it is usable. A leader with no clock can serve no local
-    // reads, stamp nothing and renew nothing, so once this has persisted we hand
-    // leadership to a replica whose clock works. Measured on the monotonic clock
-    // precisely because the clock being judged is the one that failed.
-    std::optional<mono_clock::time_point> clock_unusable_since;
-    // LeaseGuard: per-group delay added to that wait. Scylla runs one raft group
-    // per strongly-consistent tablet, so without it a single node's clock
-    // failure would transfer every group it leads at the same instant -- and
-    // again in reverse when the clock recovers. Drawn once per leadership term.
-    mono_clock::duration clock_stepdown_jitter{0};
 
     leader(size_t max_log_size, const class fsm& fsm_) : fsm(fsm_), log_limiter_semaphore(make_lw_shared<seastar::semaphore>(max_log_size)) {}
     leader(leader&&) = default;
@@ -347,6 +336,13 @@ class fsm {
     // only feeds a leadership decision gated on the failure persisting for
     // multiples of delta -- a tick of staleness cannot matter.
     bool _clock_ok = false;
+    // LeaseGuard: elapsed-time reading at which our clock last became unusable,
+    // or empty while it is usable. A leader with no clock can serve no local
+    // reads, stamp nothing and renew nothing, so once this has persisted we hand
+    // leadership to a replica whose clock works. Measured on the monotonic clock
+    // precisely because the clock being judged is the one that failed. Never set
+    // while leases are off.
+    std::optional<mono_clock::time_point> _clock_unusable_since;
     // memory_usage_of() the first entry the last append_request that carried
     // entries had no room for, or 0 if it had room for all of them. The log is
     // contiguous, so it is the entry a leader has to send us next.
@@ -448,9 +444,15 @@ private:
     // delta old. When true the leader may serve a linearizable read locally
     // without a quorum round-trip. Precondition: is_leader().
     bool can_serve_lease_read();
+    // LeaseGuard: samples the clock into _clock_ok and _clock_unusable_since. A
+    // no-op unless leases are enabled.
+    void sample_clock();
+    // LeaseGuard: whether our clock has been unusable long enough to hand the
+    // leadership away. False unless leases are enabled.
+    bool clock_lost() const;
     // LeaseGuard: hand leadership to a replica whose clock still works, if ours
-    // has been unusable long enough and such a replica exists. A no-op unless
-    // leases are enabled. Precondition: is_leader(), not already stepping down.
+    // is lost and such a replica exists. A no-op unless leases are enabled.
+    // Precondition: is_leader(), not already stepping down.
     void maybe_transfer_leadership_on_clock_loss();
     // The first of the priority members which can vote and, if `skip_dead`, is not
     // reported dead by the failure detector; nullopt if there is none.
