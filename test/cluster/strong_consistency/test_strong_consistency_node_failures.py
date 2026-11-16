@@ -31,6 +31,11 @@ disk.  A truncation needs a leader change while the old leader holds entries nob
 else has, which a plain kill makes only by chance; the uncommitted-tail test makes one in
 every round, so that replay has to drop superseded copies after crashes that land
 before and after the truncation, and after releases that persisted it.
+
+Two moments a kill hits only by chance are pinned by error injections in the raft log's
+persistence: a node holding entries in its commitlog that raft has not acknowledged yet
+(raft_commitlog_pause_after_store), and a node whose releases keep failing to write the
+group's descriptor (raft_groups_storage_fail_descriptor_write).
 """
 
 from __future__ import annotations
@@ -41,8 +46,8 @@ from typing import Optional
 import pytest
 
 from test.cluster.strong_consistency.rig import (
-    COMMITLOG_SETUPS, ELECT_S, GAP_S, GROUPS_START_TIMEOUT_S, RESTART_S, UNCOMMITTED_TAIL_CMDLINE,
-    assert_doomed_writes_absent, assert_local_reads_match, sc_rig, total)
+    COMMITLOG_SETUPS, ELECT_S, FAILING_S, GAP_S, GROUPS_START_TIMEOUT_S, HELD_S, RESTART_S, ROOM_FOR_HELD_SEGMENTS,
+    UNCOMMITTED_TAIL_CMDLINE, assert_doomed_writes_absent, assert_local_reads_match, sc_rig, total)
 from test.pylib.internal_types import ServerInfo
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 
@@ -237,6 +242,86 @@ async def test_uncommitted_tail_truncated_under_load(manager: ScyllaClusterManag
         logger.info("Replays after the truncations: dropped_truncated=%d superseded=%d", dropped_truncated, superseded)
         await rig.check(tmp_path)
         await assert_doomed_writes_absent(rig, await rig.wait_caught_up())
+
+
+# --- error injections in the raft log's persistence -----------------------------------
+
+# Writes that must succeed while a follower's stores are held: the other follower makes
+# the quorum.  About 100 fit in 3s on an idle machine.
+MIN_WRITES_WHILE_HELD = 20
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+@pytest.mark.parametrize("role", ["follower", "leader"])
+async def test_crash_between_store_and_ack_under_load(manager: ScyllaClusterManager, tmp_path, slow: int, role: str):
+    """Kill a replica whose raft log is on disk but not yet acknowledged, under load.
+
+    Rig.hold_stores_then_kill on the follower or the leader of the tablet's group: its
+    stores are held once they are in its commitlog, it is killed while held and
+    restarted, and replay must bring the unacknowledged entries back in agreement with
+    the group.
+
+    While a follower is held the other one makes the quorum, so writes go on; while the
+    leader is held no write commits, which shows the hold is real.  After the restart
+    nothing may fail, the checker verifies the whole history, and a CL=ONE read on the
+    victim answers what a linearizable read does.
+    """
+    async with sc_rig(manager, slow) as rig:
+        [group_id] = rig.group_ids
+        victim: Optional[ServerInfo] = None
+        held = None
+
+        async def disrupt() -> None:
+            nonlocal victim, held
+            leader = await rig.leader()
+            victim = leader if role == "leader" else next(s for s in rig.servers if s != leader)
+            logger.info("Holding the stores of group %s on %s, the %s", group_id, victim.ip_addr, role)
+            held = await rig.hold_stores_then_kill(group_id, victim, held_s=HELD_S, down_s=GAP_S)
+            logger.info("%s is back and caught up", victim.ip_addr)
+
+        await rig.run(HELD_S + GAP_S + RESTART_S, disrupt)
+
+        while_held = rig.workload.stats(within_ns=held.span_ns)
+        if role == "follower":
+            assert while_held.write_ok >= MIN_WRITES_WHILE_HELD, (
+                f"only {while_held.write_ok} writes succeeded while a follower's stores were held: {while_held}")
+        else:
+            assert while_held.write_ok == 0, f"writes committed while the leader's stores were held: {while_held}"
+        await rig.check(tmp_path)
+        await assert_local_reads_match(rig, victim)
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_descriptor_write_failures_under_load(manager: ScyllaClusterManager, tmp_path, slow: int):
+    """Fail every descriptor write of a group on one replica under load, then crash the replica.
+
+    Rig.fail_descriptor_writes with a crash at the end: while the writes fail no request
+    may fail and no release of the group may succeed on the victim; the victim is then
+    killed with its releases behind, so replay starts from an older descriptor and meets
+    segments its group meant to release, and restarted without the injection: its
+    releases must succeed again.  Small segments and a node flushed every second or two
+    make the releases.  The checker verifies the whole history, and a CL=ONE read on the
+    victim answers what a linearizable read does.
+
+    This is also where the cost of segments held for long shows (SCYLLADB-3748): a
+    group whose releases keep failing holds its segments, and at the small-segments
+    setup's 8 MB budget its shard runs out of commitlog space within seconds and
+    stalls every write, so the test runs with ROOM_FOR_HELD_SEGMENTS.
+    """
+    async with sc_rig(manager, slow, commitlog=COMMITLOG_SETUPS["small-segments"], config=ROOM_FOR_HELD_SEGMENTS,
+                      cmdline=('--logger-log-level', 'raft_groups_storage=debug')) as rig:
+        [group_id] = rig.group_ids
+        victim: Optional[ServerInfo] = None
+
+        async def disrupt() -> None:
+            nonlocal victim
+            victim = rig.workload.rng_for("victim").choice(rig.servers)
+            logger.info("Failing the descriptor writes of group %s on %s", group_id, victim.ip_addr)
+            await rig.fail_descriptor_writes(group_id, victim, failing_s=FAILING_S, crash=True)
+
+        await rig.run(FAILING_S + RESTART_S, disrupt)
+        await rig.check(tmp_path)
+        await assert_local_reads_match(rig, victim)
 
 
 # --- the whole cluster killed and restarted -----------------------------------------

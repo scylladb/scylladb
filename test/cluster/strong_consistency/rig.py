@@ -8,8 +8,11 @@
 the node-failure tests inflict on it.
 
 Rig owns the cluster, the workload over its register table and the actions that break
-it: nodes crashed and restarted, and a leader cut off with a tail that the next leader
-truncates.  A test picks the action and when to take it; Rig keeps
+it: nodes crashed and restarted, a leader cut off with a tail that the next leader
+truncates, a group's stores held before a crash, a group's descriptor writes failing.
+The scenario tests in test_strong_consistency_node_failures.py and the random sequences
+of test_strong_consistency_persistence_nemesis.py take the same actions, so both exercise
+one implementation.  A test picks the action and when to take it; Rig keeps
 the cluster whole between two actions and tells the clients' errors apart: the errors of
 a lost node are accepted only in an operation that overlaps a REBOOT window
 (``Rig.disruption``), so anything failing outside one fails the test.
@@ -121,6 +124,13 @@ COMMITLOG_SETUPS = {
                               flush_every_s=(1, 2)),
 }
 
+# Over the small-segments setups, for a test that keeps segments from being released: at
+# their 8 MB, 4 MB per shard, a shard whose group cannot release runs out of commitlog
+# space within seconds and stalls every write on it -- what held segments do by design,
+# not what is tested -- and the commitlog flushes memtables on its own, which releases
+# segments a test wants kept.
+ROOM_FOR_HELD_SEGMENTS = {'commitlog_total_space_in_mb': 64}
+
 # --- a leader cut off with an uncommitted tail ------------------------------------------
 
 # Allowed for raft to notice a dead leader, elect a successor and commit on it; about 4s
@@ -145,6 +155,13 @@ UNCOMMITTED_TAIL_CMDLINE = (
 )
 # The summary line raft_commitlog_replay_buffer::finish_replay() logs per group.
 REPLAY_SUMMARY = r"group {}: floor=.*dropped_truncated=(\d+), dropped_by_truncate=\d+, superseded=(\d+)"
+
+# --- error injections in the raft log's persistence -----------------------------------
+
+PAUSE_AFTER_STORE = "raft_commitlog_pause_after_store"
+FAIL_DESCRIPTOR_WRITE = "raft_groups_storage_fail_descriptor_write"
+HELD_S = 3  # a victim's stores held before the kill
+FAILING_S = 5  # every descriptor write of a group fails on the victim for this long
 
 
 def total(stats: Stats) -> int:
@@ -464,6 +481,88 @@ class Rig:
         logger.info("%s truncated the tail of group %s and replayed it: dropped_truncated=%d superseded=%d; "
                     "the successor was %s", leader.ip_addr, group_id, dropped, superseded, successor)
         return TailRound(leader=leader, successor=successor, dropped_truncated=dropped, superseded=superseded)
+
+    # --- error injections in the raft log's persistence ---------------------------------
+
+    async def disable_unless_down(self, server: ServerInfo, injection: str) -> None:
+        """Turn `injection` off on `server` after an action failed half-way; a killed node lost it anyway."""
+        if server.server_id not in self.down:
+            await self.manager.api.disable_injection(server.ip_addr, injection)
+
+    async def hold_stores_then_kill(self, group_id: str, victim: ServerInfo, held_s: float,
+                                    down_s: float) -> DisruptionWindow:
+        """Kill `victim` while its stores of `group_id` are on disk but not acknowledged.
+
+        raft_commitlog_pause_after_store holds every store of the group on the victim
+        once the entries are written to its commitlog, before raft's io fiber sends the
+        batch's messages and reports commits: a follower does not answer the append, a
+        leader sends its followers nothing, heartbeats included.  The victim is killed
+        after `held_s` of that, so its commitlog holds entries raft never acknowledged,
+        and restarted after `down_s`: replay brings them back as the tail of its log, and
+        they must agree with what the group committed.  The injection dies with the
+        process.  Returns the window the stores were held in.
+        """
+        log = self.logs[victim.server_id]
+        async with self.disruption():
+            mark = await log.mark()
+            await self.manager.api.enable_injection(victim.ip_addr, PAUSE_AFTER_STORE, one_shot=False,
+                                                    parameters={"group_id": group_id})
+            try:
+                await log.wait_for(f"{PAUSE_AFTER_STORE}: group_id={group_id} waits", from_mark=mark,
+                                   timeout=60 * self.slow)
+                async with self.workload.disruption_window("held") as held:
+                    await self.sleep(held_s)
+                await self.kill(victim)
+            finally:
+                await self.disable_unless_down(victim, PAUSE_AFTER_STORE)
+            await self.sleep(down_s)
+            await self.restart(victim)
+        return held
+
+    async def fail_descriptor_writes(self, group_id: str, victim: ServerInfo, failing_s: float, crash: bool) -> int:
+        """Fail every descriptor write of `group_id` on `victim` for `failing_s`; then crash the
+        victim if `crash`, or turn the failures off; either way its releases must succeed again.
+
+        A release persists the group's descriptor before it lets go of a segment.  Under
+        raft_groups_storage_fail_descriptor_write each of those writes on the victim fails,
+        the way a write under memory pressure does: the record stays, the segment stays
+        held, and the next commit, apply or flush round tries again.  A failing release
+        must not be felt: this is no disruption, no request may fail meanwhile, and no
+        release of the group may succeed on the victim.  A crashed victim replays from an
+        older descriptor and meets segments its group meant to release.
+
+        Needs the releases that small segments and flushes make, and room for the segments
+        they keep (ROOM_FOR_HELD_SEGMENTS).  Returns how many failed writes the victim
+        logged, a lower bound: the log line is rate-limited.
+        """
+        log = self.logs[victim.server_id]
+        failed_line = rf"group_id={group_id}: writing the descriptor for segment \d+ failed"
+        mark = await log.mark()
+        await self.manager.api.enable_injection(victim.ip_addr, FAIL_DESCRIPTOR_WRITE, one_shot=False,
+                                                parameters={"group_id": group_id})
+        try:
+            # Releases are synchronous, so none can succeed once the injection is on.
+            failing_from = await log.mark()
+            # Close the victim's segments now, so that the group tries a release within the
+            # window: the flusher alone reaches this node only every few seconds.
+            await self.manager.api.flush_all_keyspaces(victim.ip_addr)
+            await self.sleep(failing_s)
+            await log.wait_for(failed_line, from_mark=mark, timeout=60 * self.slow)
+            failing_until = await log.mark()
+            released = await log.grep(rf"released record for group_id={group_id}:", from_mark=failing_from)
+            assert not released, (
+                f"a release of group {group_id} succeeded on {victim.ip_addr} while writes failed: {released[0][0]} "
+                f"(seed={self.workload.seed})")
+            failed = len(await log.grep(failed_line, from_mark=mark))
+            if crash:
+                await self.crash(victim)
+        finally:
+            await self.disable_unless_down(victim, FAIL_DESCRIPTOR_WRITE)
+        await self.manager.api.flush_all_keyspaces(victim.ip_addr)
+        await log.wait_for(rf"released record for group_id={group_id}:", from_mark=failing_until,
+                           timeout=60 * self.slow)
+        logger.info("%s releases group %s again after %d failed descriptor writes", victim.ip_addr, group_id, failed)
+        return failed
 
 
 @asynccontextmanager
