@@ -45,8 +45,8 @@ def connect(request, host, scylla_only):
     if EXTENSION not in supported:
         skip_env(f"The server doesn't support {EXTENSION}")
 
-    def open_connection(negotiate: bool = True):
-        return cql_frames.connection(host, port, {EXTENSION: ""} if negotiate else {})
+    def open_connection(negotiate: bool = True, version: int = 4):
+        return cql_frames.connection(host, port, {EXTENSION: ""} if negotiate else {}, version)
     return open_connection
 
 
