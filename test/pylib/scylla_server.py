@@ -50,7 +50,7 @@ from test.pylib.driver_utils import control_connection_query_fallback_options, s
 from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo, ServerUpState
 from test.pylib.rest_client import ScyllaRESTAPIClient, HTTPError
 from test.pylib.util import async_rmtree, read_last_line, get_xdist_worker_id, scale_timeout_by_mode
-from test.pylib.version_fetch_utils import fetch_and_install_scylla_version
+from test.pylib.version_fetch_utils import DOWNLOADS_BUCKET, fetch_and_install_scylla_version
 
 
 def make_scylla_conf(mode: str, host_addr: str, seed_addrs: List[str], cluster_name: str,
@@ -232,11 +232,28 @@ def get_current_version_description(path: str) -> ScyllaVersionDescription:
     )
 
 
-async def get_scylla_2025_1_executable(build_mode: str) -> str:
+# Old releases that upgrade tests run against are pinned to exact archives
+# rather than "the newest patch release of the branch": the tests check our
+# checkout, not whatever patch release was uploaded last. Resolving "newest"
+# also races with uploads of new patch releases, and needs network access even
+# when the archive is already cached. To move to a newer patch release, update
+# the version and build id below.
+PINNED_SCYLLA_2025_1 = ("2025.1", "2025.1.17-0.20261111.ba0acfcb6d74")
+PINNED_SCYLLA_2026_1 = ("2026.1", "2026.1.16-0.20261110.086ce53c1894")
+
+
+def fetch_and_install_pinned_scylla_version(pinned_release: tuple[str, str], build_mode: str) -> str:
+    branch, full_version = pinned_release
     is_debug = build_mode == 'debug' or build_mode == 'sanitize'
-    package = "debug" if is_debug else ""
+    package_infix = "-debug" if is_debug else ""
     arch = platform.machine()
-    return fetch_and_install_scylla_version(2025, 1, arch=arch, pack=package)
+    url = (f"https://{DOWNLOADS_BUCKET}/downloads/scylla/relocatable/scylladb-{branch}/"
+           f"scylla{package_infix}-{full_version}.{arch}.tar.gz")
+    return fetch_and_install_scylla_version(url=url, arch=arch)
+
+
+async def get_scylla_2025_1_executable(build_mode: str) -> str:
+    return fetch_and_install_pinned_scylla_version(PINNED_SCYLLA_2025_1, build_mode)
 
 
 async def get_scylla_2025_1_description(build_mode: str) -> ScyllaVersionDescription:
@@ -254,10 +271,7 @@ async def get_scylla_2025_1_description(build_mode: str) -> ScyllaVersionDescrip
 
 
 async def get_scylla_2026_1_executable(build_mode: str) -> str:
-    is_debug = build_mode == 'debug' or build_mode == 'sanitize'
-    package = "debug" if is_debug else ""
-    arch = platform.machine()
-    return fetch_and_install_scylla_version(2026, 1, arch=arch, pack=package)
+    return fetch_and_install_pinned_scylla_version(PINNED_SCYLLA_2026_1, build_mode)
 
 
 async def get_scylla_2026_1_description(build_mode: str) -> ScyllaVersionDescription:
