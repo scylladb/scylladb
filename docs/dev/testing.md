@@ -468,8 +468,8 @@ and see that they pass successfully.
 ## Allure reporting
 
 To make analyzing of the test results more convenient, an allure reporting tool is introduced.
-Python module allure-pytest is included in the toolchain image and an additional parameter added to gather allure
-data for the test run.
+Python module allure-pytest is installed by uv with the other test dependencies (see test/pyproject.toml), and test.py
+gathers allure data for every test run into `testlog/report/allure_{HOST_ID}/`.
 However, the allure binary is not a part of the toolchain image.
 So to have the full benefit of the new reporting tool allure binary should be installed locally.
 
@@ -482,7 +482,7 @@ So manual installation of allure is required.
 
 ### Basic allure usage
 
-1. Open directory with the test results, e.g. testlog/report/
+1. Open directory with the test results, e.g. `testlog/report/allure_{HOST_ID}/`
 2. Execute allure serve to show report
 ```shell
 $ allure serve -h localhost .
