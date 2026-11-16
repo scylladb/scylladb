@@ -60,7 +60,8 @@ def test_from_path_stops_at_test_dir(suite: pathlib.Path, monkeypatch: pytest.Mo
     ("test_off.py", ["release"], True),  # disable
     ("sub/test_c.py", ["dev"], True),  # skip_in_<mode>, entry relative to the suite
     ("sub/test_c.py", ["release"], False),
-    ("test_dbg.py", ["debug", "sanitize"], True),  # skip_in_debug_modes
+    ("test_dbg.py", ["debug", "coverage"], True),  # skip_in_debug_modes
+    ("test_dbg.py", ["debug", "sanitize"], False),  # sanitize is not a debug mode
     ("test_dbg.py", ["debug", "dev"], False),
     ("test_b.py", ["dev"], False),  # not in the config
 ])

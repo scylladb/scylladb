@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
 import pprint
 import re
@@ -19,7 +20,7 @@ from cassandra.cluster import EXEC_PROFILE_DEFAULT, NoHostAvailable, default_lbp
 from cassandra.cluster import Cluster as PyCluster
 from cassandra.policies import ExponentialReconnectionPolicy, WhiteListRoundRobinPolicy
 
-from test import DEBUG_MODES
+from test import DEBUG_MODES, SANITIZE_MODE
 from test.pylib.driver_utils import safe_driver_shutdown
 
 from test.cluster.dtest.dtest_class import (
@@ -576,9 +577,14 @@ class DTestSetup:
         if isinstance(self.cluster, ScyllaCluster):
             if self.cluster.scylla_mode in DEBUG_MODES:
                 factor = 3
+            elif self.cluster.scylla_mode == SANITIZE_MODE:
+                factor = 2.5
             elif self.cluster.scylla_mode != "release":
                 factor = 2
-        return seconds * factor
+        # The result ends up in integer *_timeout_in_ms config options, so an
+        # integer timeout is rounded up to stay an integer.
+        scaled = seconds * factor
+        return math.ceil(scaled) if isinstance(seconds, int) else scaled
 
     def disable_error(self, name, node):
         """Disable error injection

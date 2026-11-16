@@ -20,7 +20,7 @@ import pytest
 from _pytest._code.code import ReprFileLocation
 
 from scripts import coverage as coverage_script
-from test import DEBUG_MODES, TEST_DIR, TOP_SRC_DIR, asan_options, path_to, ubsan_options, use_traditional_build
+from test import DEBUG_AND_SANITIZE_MODES, TEST_DIR, TOP_SRC_DIR, asan_options, path_to, ubsan_options, use_traditional_build
 from test.pylib.coverage_utils import coverage_dir
 from test.pylib.runner import BUILD_MODE, CPP_TEST_LOG, CPP_TEST_LOG_KEPT, RUN_ID, TEST_SUITE
 from test.pylib.scylla_server import merge_cmdline_options
@@ -249,7 +249,7 @@ class CppTestCase(pytest.Item):
             return self.run_exe_under_gdb(test_args=test_args, output_file=output_file)
 
         args = [str(self.parent.exe_path), *test_args, *self.test_custom_args]
-        timeout = TIMEOUT_DEBUG if self.parent.build_mode in DEBUG_MODES else TIMEOUT
+        timeout = TIMEOUT_DEBUG if self.parent.build_mode in DEBUG_AND_SANITIZE_MODES else TIMEOUT
         env = {**os.environ, **self.parent.test_env}
 
         with output_file.open(mode="w", encoding="utf-8") as output_handle:

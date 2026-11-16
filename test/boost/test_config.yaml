@@ -69,3 +69,5 @@ run_in_debug_modes:
 # for statistical accuracy and are prohibitively slow under those modes.
 skip_in_debug_modes:
     - hwlb_test
+skip_in_sanitize:
+    - hwlb_test

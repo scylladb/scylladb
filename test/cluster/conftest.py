@@ -7,6 +7,7 @@
 # defines common test fixtures for all of them to use
 
 import asyncio
+import math
 import sys
 import tempfile
 import logging
@@ -310,7 +311,8 @@ async def key_provider(request, tmpdir, suite_log_dir, scylla_binary):
 
 @pytest.fixture(scope="function")
 def failure_detector_timeout(build_mode):
-    return 5000 * MODES_TIMEOUT_FACTOR[build_mode]
+    # Goes into an integer config option, so round the scaled value up.
+    return math.ceil(5000 * MODES_TIMEOUT_FACTOR[build_mode])
 
 
 @pytest.fixture(params=[None, "s3", "gs"], ids=["local", "s3", "gs"])

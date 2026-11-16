@@ -97,7 +97,7 @@ import humanfriendly
 import treelib
 
 from scripts import coverage
-from test import ALL_MODES, HOST_ID, TOP_SRC_DIR, path_to, DEBUG_MODES
+from test import ALL_MODES, HOST_ID, TOP_SRC_DIR, path_to, DEBUG_MODES, SANITIZE_MODE
 from test.pylib import coverage_utils
 from test.pylib.runner import drop_disabled_tests
 from test.pylib.util import LogPrefixAdapter, get_configured_modes, palette
@@ -121,6 +121,8 @@ class ThreadsCalculator:
                  test_memory_fraction: float = 8.0,
                  debug_test_memory_multiplier: float = 1.5,
                  debug_cpus_per_test_job=1.5,
+                 sanitize_test_memory_multiplier: float = 1.4,
+                 sanitize_cpus_per_test_job: float = 1.0,
                  non_debug_cpus_per_test_job: float =1.0,
                  non_debug_max_test_memory: float = 4e9
                  ):
@@ -135,11 +137,18 @@ class ThreadsCalculator:
             sys_mem / test_memory_fraction,
             max_test_memory if is_debug else non_debug_max_test_memory,
         )
+        # Sanitize is optimized, so a test needs no more CPU than in dev, only
+        # some extra memory for the sanitizers. When it is run together with a
+        # debug mode, the more demanding debug settings win.
+        is_sanitize = SANITIZE_MODE in modes
         if is_debug:
             test_mem *= debug_test_memory_multiplier
-        self.cpus_per_test_job = (
-            debug_cpus_per_test_job if is_debug else non_debug_cpus_per_test_job
-        )
+            self.cpus_per_test_job = debug_cpus_per_test_job
+        elif is_sanitize:
+            test_mem *= sanitize_test_memory_multiplier
+            self.cpus_per_test_job = sanitize_cpus_per_test_job
+        else:
+            self.cpus_per_test_job = non_debug_cpus_per_test_job
         self.default_num_jobs_mem = max(1, int(available_mem // test_mem))
         self.threadt_multiplier = threads_multiplier
 

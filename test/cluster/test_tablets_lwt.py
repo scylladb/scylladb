@@ -11,7 +11,7 @@ from cassandra.query import SimpleStatement, ConsistencyLevel
 from cassandra.protocol import InvalidRequest, WriteTimeout
 from cassandra import Unauthorized
 
-from test import DEBUG_MODES
+from test import DEBUG_MODES, SANITIZE_MODE
 from test.cluster.lwt.lwt_common import wait_for_tablet_count
 from test.cluster.util import new_test_keyspace, unique_name, reconnect_driver, FeatureConfig
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
@@ -470,7 +470,7 @@ async def test_lwt_concurrent_base_table_recreation(manager: ScyllaClusterManage
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_lwt_timeout_while_creating_paxos_state_table(manager: ScyllaClusterManager, build_mode,
                                                             storage_config: FeatureConfig):
-    timeout = 10000 if build_mode in DEBUG_MODES else 1000
+    timeout = 10000 if build_mode in DEBUG_MODES else 2000 if build_mode == SANITIZE_MODE else 1000
     config = {
         'write_request_timeout_in_ms': timeout,
         'error_injections_at_startup': [
