@@ -981,7 +981,7 @@ database::init_commitlog() {
                 return;
             }
             // Initiate a background flush. Waited upon in `stop()`.
-            (void)_tables_metadata.get_table(id).flush(pos);
+            (void)_tables_metadata.get_table(id).flush_memtables(pos);
         }).release(); // we have longer life time than CL. Ignore reg anchor
 
         _cfg.commitlog_max_data_lifetime_in_seconds.observe([this](uint32_t max_time) {
@@ -1170,7 +1170,7 @@ void database::init_schema_commitlog() {
             return;
         }
         // Initiate a background flush. Waited upon in `stop()`.
-        (void)_tables_metadata.get_table(id).flush(pos);
+        (void)_tables_metadata.get_table(id).flush_memtables(pos);
     }).release();
 }
 
@@ -3064,7 +3064,7 @@ future<> database::stop() {
 
 future<> database::flush_all_memtables() {
     return _tables_metadata.parallel_for_each_table([] (table_id, lw_shared_ptr<table> table) {
-        return table->flush();
+        return table->flush_memtables();
     });
 }
 
@@ -3376,7 +3376,7 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, s
     dblog.trace("{} {}.{} and views on all shards", should_flush ? "Flushing" : "Clearing", s->ks_name(), s->cf_name());
     auto flush_or_clear = [should_flush] (replica::table& cf) {
             if (should_flush && cf.can_flush()) {
-                return cf.flush();
+                return cf.flush_memtables();
             } else {
                 return cf.clear();
             }

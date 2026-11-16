@@ -1749,7 +1749,7 @@ SEASTAR_TEST_CASE(test_groups_requested_flushes_reclaim_the_segment) {
         // What groups_manager::request_flush() does for each of them.
         for (const auto& [id, pos] : flushes.requests) {
             if (auto table = env.local_db().get_tables_metadata().get_table_if_exists(id)) {
-                co_await table->flush(pos);
+                co_await table->flush_memtables(pos);
             }
         }
 

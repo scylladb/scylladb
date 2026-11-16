@@ -1410,7 +1410,7 @@ void groups_manager::request_flush(db::cf_id_type id, db::replay_position pos) {
     }
     // In the background. The continuation holds the table and captures nothing of
     // groups_manager's, so neither this groups_manager nor the table need outlive it.
-    auto flushed = table->flush(pos);
+    auto flushed = table->flush_memtables(pos);
     (void)flushed.handle_exception([table = std::move(table), id, pos](std::exception_ptr error) {
         logger.warn("flush request for table {} at {} failed: {}", id, pos, error);
     });

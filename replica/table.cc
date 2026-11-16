@@ -2985,7 +2985,7 @@ table::compact_all_sstables(tasks::task_info info, do_flush do_flush, bool consi
     std::optional<tombstone_gc_state> pre_flush_gc_state;
     if (do_flush) {
         pre_flush_gc_state = get_tombstone_gc_state().snapshot();
-        co_await flush();
+        co_await flush_memtables();
     }
     // Forces off-strategy before major, so sstables previously sitting on maintenance set will be included
     // in the compaction's input set, to provide same semantics as before maintenance set came into existence.
@@ -3073,7 +3073,7 @@ future<> table::perform_cleanup_compaction(compaction::owned_ranges_ptr sorted_o
     }
 
     if (do_flush) {
-        co_await flush();
+        co_await flush_memtables();
     }
 
     auto lock_holder = co_await get_compaction_manager().get_incremental_repair_read_lock(cg->as_view_for_static_sharding(), "perform_cleanup_compaction");
@@ -4811,7 +4811,11 @@ size_t storage_group::memtable_count() const {
     return count;
 }
 
-future<> table::flush(std::optional<db::replay_position> pos) {
+future<> table::flush() {
+    return flush_memtables();
+}
+
+future<> table::flush_memtables(std::optional<db::replay_position> pos) {
     // There is nothing to flush if the table was stopped.
     if (_pending_flushes_phaser.is_closed()) {
         co_return;
