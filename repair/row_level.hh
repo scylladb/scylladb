@@ -232,6 +232,7 @@ public:
     // Repair a single local range, multiple column families.
     // Comparable to RepairSession in Origin
     future<> repair_range(shard_repair_state& rstate, const dht::token_range& range, table_info table, gc_clock::time_point flush_time);
+    future<> do_repair_range(shard_repair_state& rstate, const dht::token_range& range, const table_info& table, gc_clock::time_point flush_time);
 
     // Repair the given shard_repair_state's ranges for all its tables, in limited
     // parallelism.

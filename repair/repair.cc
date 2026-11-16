@@ -30,6 +30,7 @@
 #include "utils/chain_abort_source.hh"
 #include "utils/error_injection.hh"
 #include "utils/from_chars_exactly.hh"
+#include "utils/usdt.hh"
 
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/algorithm/string/split.hpp>
@@ -916,6 +917,18 @@ locator::effective_replication_map_ptr shard_repair_state::get_erm() {
 future<> repair_service::repair_range(shard_repair_state& rstate, const dht::token_range& range, table_info table, gc_clock::time_point flush_time) {
     rstate.check_in_abort_or_shutdown();
     rstate.ranges_index++;
+    auto usdt_start = std::chrono::steady_clock::now();
+    SCYLLA_USDT(repair_range_start, rstate.get_keyspace().c_str(), table.name.c_str(), rstate.ranges_index, rstate.ranges_size());
+    try {
+        co_await do_repair_range(rstate, range, table, flush_time);
+    } catch (...) {
+        SCYLLA_USDT(repair_range_failed, rstate.get_keyspace().c_str(), table.name.c_str(), utils::usdt_us_since(usdt_start));
+        throw;
+    }
+    SCYLLA_USDT(repair_range_done, rstate.get_keyspace().c_str(), table.name.c_str(), utils::usdt_us_since(usdt_start));
+}
+
+future<> repair_service::do_repair_range(shard_repair_state& rstate, const dht::token_range& range, const table_info& table, gc_clock::time_point flush_time) {
     repair_neighbors r_neighbors = rstate.get_repair_neighbors(range);
     auto neighbors = std::move(r_neighbors.all);
     auto mandatory_neighbors = std::move(r_neighbors.mandatory);
