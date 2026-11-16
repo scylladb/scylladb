@@ -1726,22 +1726,16 @@ void fsm::transfer_leadership(logical_clock::duration timeout, server_id target)
         leader_state().log_limiter_semaphore->consume(_config.max_log_size);
     }
     leader_state().stepdown = _clock.now() + timeout;
-    // If there is a fully up-to-date eligible replica make it start an election.
-    //
-    // Prefer one whose clock still works: the reason we transfer automatically
-    // is that ours does not, and moving to another clockless node would not
-    // restore lease reads. The second pass keeps the original behaviour for an
-    // operator-requested transfer, which has no opinion about clocks (and for
-    // which every peer reports clock_ok == false when leases are disabled).
-    for (const bool require_clock_ok : {true, false}) {
-        for (auto&& [_, p] : leader_state().tracker) {
-            if (p.id != _my_id && p.can_vote && p.match_idx == _log.last_idx()
-                    && (!require_clock_ok || p.clock_ok)
-                    && (!leader_state().leadership_transfer_target || *leader_state().leadership_transfer_target == p.id)) {
-                send_timeout_now(p.id);
-                return;
-            }
-        }
+    // The log is frozen from here on. A voter missing some of it would lose the
+    // election on the log check, so timeout_now goes only to one which has acked it
+    // all. If several already have, the one which would lead best gets it. If none
+    // has, the append_reply handler sends it to the first voter to ack: we never wait
+    // for a particular voter unless the caller named one.
+    const auto& only = leader_state().leadership_transfer_target;
+    if (const auto* p = best_leader([&] (const follower_progress& f) {
+            return f.match_idx == _log.last_idx() && (!only || f.id == *only);
+        })) {
+        send_timeout_now(p->id);
     }
 }
 

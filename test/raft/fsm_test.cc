@@ -4806,3 +4806,29 @@ BOOST_AUTO_TEST_CASE(test_leader_with_a_lost_clock_keeps_the_writes_flowing_if_n
     f.ack(C_id, true);
     BOOST_CHECK(ticks_until_handover(f.fsm, 1) == C_id);
 }
+
+// A stepdown without a target, such as the one on shutdown, waits for nobody: timeout_now
+// goes to the first voter which has acked the whole log. But when several have when the
+// stepdown starts, the one the list ranks best gets it.
+BOOST_AUTO_TEST_CASE(test_stepdown_prefers_a_priority_member_among_caught_up_servers) {
+    for (int preferred = 1; preferred <= 2; preferred++) {
+        server_id A_id = id(), B_id = id(), C_id = id();
+        const std::vector<server_id> ids{A_id, B_id, C_id};
+
+        raft::configuration cfg = config_from_ids(ids);
+        raft::log log(raft::snapshot_descriptor{.idx = index_t{0}, .config = cfg});
+
+        // A leads the list, so it keeps the leadership until it steps down.
+        const std::vector<server_id> prefer{A_id, ids[preferred]};
+        auto A = create_follower(A_id, raft::log(log), prefer);
+        auto B = create_follower(B_id, raft::log(log), prefer);
+        auto C = create_follower(C_id, raft::log(log), prefer);
+
+        election_timeout(A);
+        communicate(A, B, C);
+        BOOST_CHECK(A.is_leader());
+
+        A.transfer_leadership(ELECTION_TIMEOUT);
+        BOOST_CHECK(timeout_now_target(A.get_output()) == ids[preferred]);
+    }
+}
