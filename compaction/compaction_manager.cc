@@ -2664,6 +2664,12 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_tas
     if (sstables.empty()) {
         co_return std::nullopt;
     }
+    if constexpr (std::is_same_v<TaskType, split_compaction_task_executor>) {
+        // Lets a test change the table, e.g., truncate it, after the split captured
+        // its sstables but before the task that rewrites them is registered.
+        co_await utils::get_local_injector().inject("split_compaction_after_capturing_sstables",
+                utils::wait_for_message(std::chrono::minutes(5)));
+    }
     co_return co_await perform_compaction<TaskType>(std::move(params), do_throw_if_stopping, info, &t, std::move(options), std::move(owned_ranges_ptr), std::move(sstables), std::move(compacting), std::forward<Args>(args)...);
 }
 
