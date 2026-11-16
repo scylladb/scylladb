@@ -4,6 +4,7 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 
+import asyncio
 import json
 import logging
 import pytest
@@ -342,3 +343,31 @@ async def test_read_repair_with_trace_logging(request, manager):
             found_read_repair |= "digest mismatch, starting read repair" == event.description
 
         assert found_read_repair
+
+
+async def test_no_digest_mismatch_on_expired_data(manager: ManagerClient):
+    """
+    Replicas must agree on whether expired data past gc_grace_seconds is purged
+    from query results, however old their commitlogs are. A replica whose
+    commitlog still held older entries for the table used to keep the dead cells
+    and return a different digest than a freshly restarted one, and every CL=ALL
+    read went to read repair, which could not make the digests match.
+    """
+    servers = await manager.servers_add(3, auto_rack_dc="dc1")
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.t (pk int, ck int, v int, PRIMARY KEY (pk, ck))"
+                            " WITH gc_grace_seconds = 0 AND tombstone_gc = {'mode': 'timeout'}")
+
+        # Written first, so that the table's oldest commitlog entry is not newer than the expiring row.
+        await cql.run_async(SimpleStatement(f"INSERT INTO {ks}.t (pk, ck, v) VALUES (0, 0, 0)", consistency_level=ConsistencyLevel.ALL))
+        await cql.run_async(SimpleStatement(f"INSERT INTO {ks}.t (pk, ck, v) VALUES (1, 0, 0) USING TTL 1", consistency_level=ConsistencyLevel.ALL))
+        expired_at = time.time() + 1
+
+        # The restarted replica's commitlog has no entries for the table.
+        await manager.rolling_restart([servers[0]])
+        await asyncio.sleep(max(0, expired_at + 1 - time.time()))
+
+        tracing = execute_with_tracing(cql, SimpleStatement(f"SELECT * FROM {ks}.t WHERE pk = 1", consistency_level=ConsistencyLevel.ALL), log=True)
+        assert not any(event.description == "digest mismatch, starting read repair" for page in tracing for event in page)
