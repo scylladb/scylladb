@@ -991,7 +991,7 @@ class ScyllaClusterManager:
                                     s, host_id)
         raise RuntimeError(f"Host ID {host_id} not found in {servers}")
 
-    async def server_stop(self, server_id: ServerNum, convict: bool) -> None:
+    async def server_stop(self, server_id: ServerNum, convict: bool, seen_by: list[ServerInfo] | None = None) -> None:
         """Stop specified server.
 
         convict: If True, immediately marks the node as DOWN on all live nodes,
@@ -1001,6 +1001,7 @@ class ScyllaClusterManager:
                  remove_node, replace, or waiting for failure detection).
                  Set to False when conviction is pointless (single node, all stopped, immediate restart)
                  or the test wants to exercise natural failure detection.
+        seen_by: Servers which must see the server as dead before returning.
         """
         host_id = None
         if convict:
@@ -1018,13 +1019,29 @@ class ScyllaClusterManager:
                 # It's a best-effort attempt, ignore errors
                 # In some scenarios errors are expected, e.g. when server_stop() is called concurrently on many servers.
                 pass
+        await self._server_seen_dead_by(server_id, seen_by)
 
-    async def server_stop_gracefully(self, server_id: ServerNum, timeout: float | None = None) -> None:
+    async def _server_seen_dead_by(self, server_id: ServerNum, seen_by: list[ServerInfo] | None, interval: float = 45.) -> None:
+        """Wait till the given servers see a stopped server as dead."""
+        if seen_by:
+            server_ip = await self.get_host_ip(server_id)
+            await gather_safely(*(self.server_not_sees_other_server(s.ip_addr, server_ip, interval=interval) for s in seen_by))
+
+    async def _server_seen_live_by(self, server_id: ServerNum, seen_by: list[ServerInfo] | None, interval: float = 45.) -> None:
+        """Wait till the given servers see a started server as alive."""
+        if seen_by:
+            server_ip = await self.get_host_ip(server_id)
+            await gather_safely(*(self.server_sees_other_server(s.ip_addr, server_ip, interval=interval) for s in seen_by))
+
+    async def server_stop_gracefully(self, server_id: ServerNum, timeout: float | None = None,
+                                     seen_by: list[ServerInfo] | None = None) -> None:
         """Stop specified server gracefully.
 
         With no timeout given, outlast the server's own graceful-stop timeout
         for this build mode, so that a slow stop is reported by the server --
         which knows why it was slow -- instead of timing out here first.
+
+        Optionally waits for the servers in seen_by to see it as dead.
         """
         assert self.cluster, "ScyllaClusterManager is not running"
         if timeout is None:
@@ -1032,6 +1049,7 @@ class ScyllaClusterManager:
 
         async with asyncio.timeout(timeout):
             await self._server_stop_gracefully(server_id)
+        await self._server_seen_dead_by(server_id, seen_by)
 
     async def disable_tablet_balancing(self) -> None:
         """Disables background tablet load-balancing.
@@ -1067,6 +1085,7 @@ class ScyllaClusterManager:
                            expected_crash: bool = False,
                            wait_others: int = 0,
                            wait_interval: float = 45,
+                           seen_by: list[ServerInfo] | None = None,
                            seeds: list[IPAddress] | None = None,
                            timeout: float | None = ScyllaServer.TOPOLOGY_TIMEOUT,
                            connect_driver: bool = True,
@@ -1083,7 +1102,11 @@ class ScyllaClusterManager:
         performed. When connect_driver=False, the effective wait state is
         capped at HOST_ID_QUERIED regardless of expected_server_up_state.
 
-        Optionally waits for it to learn of other servers (wait_others).
+        Optionally waits for it to learn of other servers (wait_others),
+        and for the servers in seen_by to see it as alive, e.g. the one that
+        coordinates the requests which follow. When restarting a server, pass
+        them as seen_by when stopping it too, or they may still see it as alive
+        from before it was stopped.
         Replace CLI options and environment variables with `cmdline_options_override` and `append_env_override`
         if provided.
 
@@ -1108,6 +1131,7 @@ class ScyllaClusterManager:
                 auth_provider=auth_provider,
             )
         await self.server_sees_others(server_id, wait_others, interval = wait_interval)
+        await self._server_seen_live_by(server_id, seen_by, interval=wait_interval)
         if expected_error is None and connect_driver:
             if self.cql:
                 self._driver_update()
