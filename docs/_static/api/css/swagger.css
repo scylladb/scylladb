@@ -130,10 +130,56 @@
 }
 
 
-.swagger-section label {
+.swagger-section label,
+.swagger-section .swagger-label {
+    display: block;
     line-height: 28px;
     font-size: 14px;
     color: var(--text-color);
+}
+
+.swagger-section .content ul.swagger-allowed-values {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    list-style: none;
+    margin: 8px 0 0;
+    padding: 0;
+}
+
+.swagger-section .swagger-values-heading {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    line-height: 1.5;
+    cursor: pointer;
+    list-style: none;
+}
+
+.swagger-section .swagger-values-heading::-webkit-details-marker {
+    display: none;
+}
+
+.swagger-section .swagger-values-heading .icon-chevron-down {
+    font-size: 12px;
+    line-height: 1;
+}
+
+.swagger-section details[open] > .swagger-values-heading .icon-chevron-down {
+    transform: rotate(180deg);
+}
+
+.swagger-section .swagger-required {
+    display: block;
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.swagger-section .swagger-values-heading:focus-visible,
+.swagger-section .table-wrapper:focus-visible {
+    outline: 2px solid var(--link-color);
+    outline-offset: 2px;
 }
 
 /* Code */
@@ -159,7 +205,16 @@
 
 /* Table */
 .swagger-section table {
-    border-radius: 4px;
+    border-radius: 0;
+    overflow: visible;
+}
+
+.swagger-section table.parameters {
+    min-width: 40rem;
+}
+
+.swagger-section table.parameters td.markdown {
+    min-width: 14rem;
 }
 
 .swagger-section table th{

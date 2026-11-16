@@ -1,13 +1,121 @@
 <script>
 window.addEventListener('load', function() {
     let swaggerUi = new SwaggerUi({
-        
+
         url: "{{ custom_pathto(swagger_file_path, 1) }}",
         dom_id: "swagger-ui-{{swagger_file_name}}",
         docExpansion: "full",
         jsonEditor: false,
+        supportedSubmitMethods: [],  // Reference only: no API request execution.
         onComplete: function() {
+            const root = document.getElementById('swagger-ui-{{swagger_file_name}}');
 
+            // Make overflowing tables keyboard-scrollable, including after a resize.
+            const tableObserver = new ResizeObserver(entries => {
+                entries.forEach(({ target }) => {
+                    if (target.scrollWidth > target.clientWidth) {
+                        target.tabIndex = 0;
+                        target.setAttribute('role', 'region');
+                    } else {
+                        target.removeAttribute('tabindex');
+                        target.removeAttribute('role');
+                    }
+                });
+            });
+            // Apply the theme's table frame after Swagger has rendered its tables.
+            root.querySelectorAll('table:not(.optionsWrapper)').forEach(table => {
+                if (table.closest('.table-wrapper') || !table.rows.length) {
+                    return;
+                }
+                const wrapper = document.createElement('div');
+                wrapper.className = 'table-wrapper';
+                const heading = table.caption || table.previousElementSibling;
+                wrapper.setAttribute('aria-label', (heading?.textContent.trim() || 'API reference') + ' table');
+                table.before(wrapper);
+                wrapper.append(table);
+                tableObserver.observe(wrapper);
+            });
+
+            // Show required flags and body examples without editable request fields.
+            root.querySelectorAll('table.parameters > tbody > tr').forEach(row => {
+                const label = row.cells[0]?.querySelector('label');
+                const valueCell = row.cells[1];
+                if (!label || !valueCell) {
+                    return;
+                }
+                if (row.cells[0].classList.contains('required')) {
+                    const marker = document.createElement('span');
+                    marker.className = 'swagger-required';
+                    marker.textContent = 'Required';
+                    label.after(marker);
+                }
+                // In read-only mode, Swagger still puts body examples in textareas.
+                valueCell.querySelectorAll('textarea.body-textarea:not([hidden])').forEach(field => {
+                    if (field.value) {
+                        let value = document.createElement('code');
+                        value.textContent = field.value;
+                        if (field.value.includes('\n')) {
+                            const block = document.createElement('pre');
+                            block.append(value);
+                            value = block;
+                        }
+                        field.after(value);
+                    }
+                    field.hidden = true;
+                });
+                if (!valueCell.children.length && valueCell.textContent.trim() === '(empty)') {
+                    valueCell.textContent = '';
+                }
+            });
+
+            // Show content types and allowed values as text; hidden controls still supply Swagger's examples.
+            root.querySelectorAll('select:not([hidden])').forEach(select => {
+                const options = Array.from(select.options).filter(option => option.value !== '' || option.text.trim());
+                const contentType = ['contentType', 'responseContentType', 'parameterContentType'].includes(select.name);
+                if (contentType && options.length === 1) {
+                    const value = document.createElement('code');
+                    value.textContent = options[0].text;
+                    select.after(value);
+                } else if (options.length) {
+                    const values = document.createElement('ul');
+                    values.className = 'swagger-allowed-values';
+                    values.setAttribute('role', 'list');
+                    options.forEach(option => {
+                        const item = document.createElement('li');
+                        const code = document.createElement('code');
+                        code.textContent = option.text.trim();
+                        item.append(code);
+                        values.append(item);
+                    });
+                    const expanded = options.length > 4;
+                    const wrapper = document.createElement(expanded ? 'details' : 'div');
+                    if (expanded) {
+                        const heading = document.createElement('summary');
+                        heading.className = 'swagger-values-heading';
+                        heading.textContent = 'View allowed values';
+                        const caret = document.createElement('i');
+                        caret.className = 'icon-chevron-down';
+                        caret.setAttribute('aria-hidden', 'true');
+                        heading.append(caret);
+                        wrapper.append(heading);
+                    }
+                    wrapper.append(values);
+                    select.after(wrapper);
+                }
+                select.hidden = true;
+            });
+
+            // Use plain captions where Swagger no longer has a visible control.
+            root.querySelectorAll('label[for]').forEach(label => {
+                if (!label.control || label.control.hidden) {
+                    const caption = document.createElement('span');
+                    caption.className = 'swagger-label';
+                    caption.textContent = label.textContent;
+                    label.replaceWith(caption);
+                }
+            });
+
+            // Use the API-specific footer class so the shared stylesheet hides it.
             document.querySelectorAll('#swagger-ui-{{swagger_file_name}} .footer').forEach(function(element) {
                 element.className = 'swagger-footer';
             });
