@@ -68,6 +68,10 @@ public:
     bool has_handlers() const noexcept { return _impl.has_handlers(); }
 };
 
+// A plain socket, or in error-injection builds a socket that can stall a
+// gossip send to the peer on request (see messaging_service.cc).
+seastar::socket make_rpc_client_socket(const socket_address& addr);
+
 // This wrapper pretends to be rpc_protocol::client, but also handles
 // stopping it before destruction, in case it wasn't stopped already.
 // This should be integrated into messaging_service proper.
@@ -77,7 +81,7 @@ class messaging_service::rpc_protocol_client_wrapper {
 public:
     rpc_protocol_client_wrapper(rpc_protocol &proto, rpc::client_options opts, socket_address addr,
                                 socket_address local = {})
-            : _p(std::make_unique<rpc_protocol::client>(proto, std::move(opts), addr, local)) {
+            : _p(std::make_unique<rpc_protocol::client>(proto, std::move(opts), make_rpc_client_socket(addr), addr, local)) {
     }
 
     rpc_protocol_client_wrapper(rpc_protocol &proto, rpc::client_options opts, socket_address addr,
