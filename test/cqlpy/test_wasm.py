@@ -492,6 +492,133 @@ def test_abi_v2(cql, test_keyspace, table1, scylla_with_wasm_only):
         res = [row for row in cql.execute(f"SELECT {test_keyspace}.{ri_name}(txt) AS result FROM {table} WHERE p = 2000")]
         assert len(res) == 1 and res[0].result == 'doggo'
 
+# A function returning a non-native type (here, a blob) returns its result
+# as an i64: the result's size in the top 32 bits and its offset in the
+# module's memory in the bottom 32 bits. This function, with a memory of one
+# 64 KB page, returns the given size and offset.
+def return_offset_and_size_module(name, offset, size):
+    return f'''
+(module
+  (func ${name} (param i32) (result i64)
+    i64.const {((size & 0xffffffff) << 32) | offset})
+  (memory (;0;) 1)
+  (global (;0;) i32 (i32.const 0))
+  (export "memory" (memory 0))
+  (export "{name}" (func ${name}))
+  (export "_scylla_abi" (global 0)))
+'''
+
+# Test that if a function returns a result whose offset and size aren't
+# inside the module's memory, calling it fails with an error.
+# Reproduces SCYLLADB-6376.
+@pytest.mark.parametrize('offset,size', [(0, 0x100000), (0x7fff0000, 1), (0xffff, 2), (0, -2), (0x10001, 0)])
+def test_return_outside_memory(cql, test_keyspace, table1, scylla_with_wasm_only, offset, size):
+    name = 'return_outside_' + unique_name()
+    source = return_offset_and_size_module(name, offset, size)
+    src = f"(input int) RETURNS NULL ON NULL INPUT RETURNS blob LANGUAGE wasm AS '{source}'"
+    with new_function(cql, test_keyspace, src, name):
+        cql.execute(f'INSERT INTO {table1} (p, i) VALUES (3000, 1)')
+        with pytest.raises(InvalidRequest, match='outside the module'):
+            cql.execute(f'SELECT {test_keyspace}.{name}(i) AS result FROM {table1} WHERE p = 3000')
+
+# Test that a function can return a result that ends exactly at the end of
+# the module's memory, including an empty result right at the end - the check
+# in test_return_outside_memory isn't off by one.
+@pytest.mark.parametrize('offset,size', [(0x10000 - 5, 5), (0x10000, 0)])
+def test_return_at_end_of_memory(cql, test_keyspace, table1, scylla_with_wasm_only, offset, size):
+    name = 'return_at_end_' + unique_name()
+    source = return_offset_and_size_module(name, offset, size)
+    src = f"(input int) RETURNS NULL ON NULL INPUT RETURNS blob LANGUAGE wasm AS '{source}'"
+    with new_function(cql, test_keyspace, src, name):
+        cql.execute(f'INSERT INTO {table1} (p, i) VALUES (3001, 1)')
+        res = list(cql.execute(f'SELECT {test_keyspace}.{name}(i) AS result FROM {table1} WHERE p = 3001'))
+        assert len(res) == 1 and res[0].result == bytes(size)
+
+# Test that a result size of -1 means a null result, whatever the offset is.
+def test_return_null_with_any_offset(cql, test_keyspace, table1, scylla_with_wasm_only):
+    name = 'return_null_' + unique_name()
+    source = return_offset_and_size_module(name, 0x7fffffff, -1)
+    src = f"(input int) RETURNS NULL ON NULL INPUT RETURNS blob LANGUAGE wasm AS '{source}'"
+    with new_function(cql, test_keyspace, src, name):
+        cql.execute(f'INSERT INTO {table1} (p, i) VALUES (3004, 1)')
+        res = list(cql.execute(f'SELECT {test_keyspace}.{name}(i) AS result FROM {table1} WHERE p = 3004'))
+        assert len(res) == 1 and res[0].result is None
+
+# With ABI version 2, Scylla passes a non-native argument (here, a text)
+# by calling the module's _scylla_malloc for the argument's size, and copying
+# the argument to the offset it returns. This module's _scylla_malloc returns
+# the given offset (or runs the given body), in a memory of one 64 KB page.
+def abi2_malloc_module(name, malloc_offset=None, malloc_body=None):
+    malloc_body = malloc_body or f'    i32.const {malloc_offset}'
+    return f'''
+(module
+  (func ${name} (param i64) (result i32)
+    i32.const 1)
+  (func $_scylla_malloc (param i32) (result i32)
+{malloc_body})
+  (func $_scylla_free (param i32))
+  (memory (;0;) 1)
+  (global (;0;) i32 (i32.const 1024))
+  (export "memory" (memory 0))
+  (export "{name}" (func ${name}))
+  (export "_scylla_malloc" (func $_scylla_malloc))
+  (export "_scylla_free" (func $_scylla_free))
+  (export "_scylla_abi" (global 0))
+  (data (i32.const 1024) "\\02\\00\\00\\00"))
+'''
+
+# Test that if a module's _scylla_malloc returns an offset that doesn't
+# leave room for the argument inside the module's memory, calling the
+# function fails with an error.
+# Reproduces SCYLLADB-6376.
+@pytest.mark.parametrize('malloc_offset', [0x7ff00000, -16, 0x10000 - 4])
+def test_abi_v2_malloc_outside_memory(cql, test_keyspace, table1, scylla_with_wasm_only, malloc_offset):
+    name = 'malloc_outside_' + unique_name()
+    src = f"(input text) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE wasm AS '{abi2_malloc_module(name, malloc_offset)}'"
+    with new_function(cql, test_keyspace, src, name):
+        cql.execute(f"INSERT INTO {table1} (p, txt) VALUES (3002, 'hello')")
+        with pytest.raises(InvalidRequest, match='outside the module'):
+            cql.execute(f'SELECT {test_keyspace}.{name}(txt) AS result FROM {table1} WHERE p = 3002')
+
+# Test that a module's _scylla_malloc may return an offset that leaves room
+# for the argument exactly until the end of the memory - the check in
+# test_abi_v2_malloc_outside_memory isn't off by one.
+def test_abi_v2_malloc_at_end_of_memory(cql, test_keyspace, table1, scylla_with_wasm_only):
+    name = 'malloc_at_end_' + unique_name()
+    src = f"(input text) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE wasm AS '{abi2_malloc_module(name, 0x10000 - 5)}'"
+    with new_function(cql, test_keyspace, src, name):
+        cql.execute(f"INSERT INTO {table1} (p, txt) VALUES (3003, 'hello')")
+        res = list(cql.execute(f'SELECT {test_keyspace}.{name}(txt) AS result FROM {table1} WHERE p = 3003'))
+        assert len(res) == 1 and res[0].result == 1
+
+# Test that a module's _scylla_malloc may grow the memory, and return an
+# offset in the new part of the memory - the check in
+# test_abi_v2_malloc_outside_memory uses the memory's size after the call.
+def test_abi_v2_malloc_grows_memory(cql, test_keyspace, table1, scylla_with_wasm_only):
+    name = 'malloc_grows_' + unique_name()
+    malloc_body = '    i32.const 1\n    memory.grow\n    drop\n    i32.const 0x10000'
+    src = f"(input text) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE wasm AS '{abi2_malloc_module(name, malloc_body=malloc_body)}'"
+    with new_function(cql, test_keyspace, src, name):
+        cql.execute(f"INSERT INTO {table1} (p, txt) VALUES (3005, 'hello')")
+        res = list(cql.execute(f'SELECT {test_keyspace}.{name}(txt) AS result FROM {table1} WHERE p = 3005'))
+        assert len(res) == 1 and res[0].result == 1
+
+# Test that after a module's _scylla_malloc returns an offset outside the
+# module's memory, Scylla doesn't reuse the instance of the module (which
+# may have, e.g., allocated memory it will never free), so every call
+# creates a new instance - a cache miss.
+def test_abi_v2_malloc_outside_memory_discards_instance(cql, test_keyspace, table1, scylla_with_wasm_only, metrics):
+    name = 'malloc_discard_' + unique_name()
+    src = f"(input text) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE wasm AS '{abi2_malloc_module(name, 0x7ff00000)}'"
+    with new_function(cql, test_keyspace, src, name):
+        cql.execute(f"INSERT INTO {table1} (p, txt) VALUES (3006, 'hello')")
+        misses_before = get_metric(metrics, 'scylla_user_functions_cache_misses')
+        for _ in range(4):
+            with pytest.raises(InvalidRequest, match='outside the module'):
+                cql.execute(f'SELECT {test_keyspace}.{name}(txt) AS result FROM {table1} WHERE p = 3006')
+        misses_after = get_metric(metrics, 'scylla_user_functions_cache_misses')
+        assert misses_after - misses_before >= 4
+
 @pytest.fixture(scope="module")
 def metrics(request, scylla_with_wasm_only, cql):
     # The Prometheus API is on port 9180, and always http
