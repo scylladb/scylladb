@@ -21,6 +21,7 @@
 #include "dht/token-sharding.hh"
 #include "alternator/expressions.hh"
 #include "alternator/streams.hh"
+#include "alternator/node_incarnation.hh"
 #include "schema/schema_builder.hh"
 #include "types/types.hh"
 #include <seastar/core/coroutine.hh>
@@ -198,6 +199,55 @@ BOOST_AUTO_TEST_CASE(test_extract_table_name_from_arn_empty) {
     std::string_view arn = "";
 
     BOOST_REQUIRE_THROW(alternator::parse_arn(arn, "", "", ""), alternator::api_error);
+}
+
+// A job row stores the incarnation of its node as "{host_id}:{gossip_generation}", which
+// from_string() reads back. A missing or incorrect value reads as "no node" (the default value).
+BOOST_AUTO_TEST_CASE(test_live_node_identifier_to_and_from_string) {
+    const alternator::live_node_identifier id{
+        .host_id = locator::host_id(utils::UUID("0f3b6d4e-1c2a-4b5d-8e9f-a1b2c3d4e5f6")),
+        .gossip_generation = 1700000000,
+    };
+    BOOST_REQUIRE_EQUAL(id.to_string(), "0f3b6d4e-1c2a-4b5d-8e9f-a1b2c3d4e5f6:1700000000");
+    BOOST_REQUIRE(alternator::live_node_identifier::from_string(id.to_string()) == id);
+    const alternator::live_node_identifier max_generation_id{ .host_id = id.host_id, .gossip_generation = 4294967295 };
+    BOOST_REQUIRE(alternator::live_node_identifier::from_string(max_generation_id.to_string()) == max_generation_id);
+
+    BOOST_REQUIRE_EQUAL(alternator::live_node_identifier{}.to_string(), "");
+    for (std::string_view invalid : {
+            "",
+            "0f3b6d4e-1c2a-4b5d-8e9f-a1b2c3d4e5f6",
+            ":1700000000",
+            "0f3b6d4e-1c2a-4b5d-8e9f-a1b2c3d4e5f6:",
+            "0f3b6d4e-1c2a-4b5d-8e9f-a1b2c3d4e5f6:x",
+            "0f3b6d4e-1c2a-4b5d-8e9f-a1b2c3d4e5f6:17x",
+            "0f3b6d4e-1c2a-4b5d-8e9f-a1b2c3d4e5f6:-1",
+            "0f3b6d4e-1c2a-4b5d-8e9f-a1b2c3d4e5f6:4294967296",
+            "not-a-host-id:1700000000"}) {
+        BOOST_REQUIRE_MESSAGE(alternator::live_node_identifier::from_string(invalid) == alternator::live_node_identifier{},
+                fmt::format("'{}' should read as no node", invalid));
+    }
+}
+
+// The incarnation of a job row may still run the job if its node is one of the running nodes, with
+// the generation of the row or a lower one: a lower one is old gossip state, or the 0 of an unknown
+// incarnation. A higher generation shows that the node restarted. A node which is not one of them
+// (unreachable for too long, or not a member any more) runs no job. A row without a node may be
+// running, as nobody can tell.
+BOOST_AUTO_TEST_CASE(test_running_node_ids_may_be_running) {
+    const locator::host_id node(utils::UUID("00000000-0000-0000-0000-000000000001"));
+    const locator::host_id unknown_incarnation_node(utils::UUID("00000000-0000-0000-0000-000000000002"));
+    const locator::host_id gone_node(utils::UUID("00000000-0000-0000-0000-000000000003"));
+    alternator::running_node_ids running;
+    running.generations.emplace(node, 10);
+    running.generations.emplace(unknown_incarnation_node, 0);
+
+    BOOST_REQUIRE(running.may_be_running({ .host_id = node, .gossip_generation = 10 }));
+    BOOST_REQUIRE(running.may_be_running({ .host_id = node, .gossip_generation = 11 }));
+    BOOST_REQUIRE(!running.may_be_running({ .host_id = node, .gossip_generation = 9 }));
+    BOOST_REQUIRE(running.may_be_running({ .host_id = unknown_incarnation_node, .gossip_generation = 5 }));
+    BOOST_REQUIRE(!running.may_be_running({ .host_id = gone_node, .gossip_generation = 10 }));
+    BOOST_REQUIRE(running.may_be_running(alternator::live_node_identifier{}));
 }
 
 static std::map<std::string, std::string> strings {

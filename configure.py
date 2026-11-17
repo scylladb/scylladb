@@ -1532,7 +1532,8 @@ alternator = [
        'alternator/ttl.cc',
        'alternator/http_compression.cc',
        'alternator/export.cc',
-       'alternator/import.cc'
+       'alternator/import.cc',
+       'alternator/node_incarnation.cc',
 ]
 
 idls = ['idl/gossip_digest.idl.hh',
