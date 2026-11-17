@@ -609,6 +609,8 @@ protected:
     state _state = state::none;
     throw_if_stopping _do_throw_if_stopping;
     compaction_progress_monitor _progress_monitor;
+    // The scheduling group the task runs its compactions in, recorded as each starts.
+    seastar::scheduling_group _scheduling_group;
 
 private:
     shared_future<compaction_manager::compaction_stats_opt> _compaction_done = make_ready_future<compaction_manager::compaction_stats_opt>();
@@ -697,6 +699,13 @@ public:
 
     bool compaction_running() const noexcept {
         return _state == state::active;
+    }
+
+    // The scheduling group the task runs its compactions in: the compaction one for regular
+    // compaction, whose shares the compaction controller sets, the maintenance one for the
+    // other kinds.
+    seastar::scheduling_group scheduling_group() const noexcept {
+        return _scheduling_group;
     }
 
     const ::compaction::compaction_data& compaction_data() const noexcept {

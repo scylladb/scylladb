@@ -557,6 +557,7 @@ future<compaction_result> compaction_task_executor::compact_sstables(compaction_
         }
     }
 
+    _scheduling_group = current_scheduling_group();
     co_return co_await ::compaction::compact_sstables(std::move(descriptor), cdata, t, _progress_monitor);
 }
 future<> compaction_manager::update_history(compaction_group_view& t, compaction_result&& res, const ::compaction::compaction_data& cdata) {
