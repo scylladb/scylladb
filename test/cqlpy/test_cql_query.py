@@ -872,11 +872,16 @@ def test_map_elements_validation(cql, test_keyspace, raw_utf8_serialization):
         test_bind("proper utf8 string", False)
 
 
-def test_in_clause_validation(cql, test_keyspace, raw_utf8_serialization):
+def test_in_clause_validation(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, "p1 int, c1 int, r1 date, PRIMARY KEY (p1, c1, r1)") as tbl:
         with pytest.raises(InvalidRequest):
             cql.execute(f"SELECT r1 FROM {tbl} WHERE (c1,r1) IN ((1, 'definitely not a date value')) ALLOW FILTERING")
         cql.execute(f"SELECT r1 FROM {tbl} WHERE (c1,r1) IN ((1, '2015-05-03')) ALLOW FILTERING")
+
+# Like test_in_clause_validation, but with invalid UTF-8 in a bound IN list.
+# Cassandra 6 reports this as a server error (an unhandled MarshalException)
+# instead of an invalid request (CASSANDRA-21902), which Cassandra 5 didn't do.
+def test_in_clause_validation_bind_utf8(cql, test_keyspace, raw_utf8_serialization, cassandra_6_bug):
     with new_test_table(cql, test_keyspace, "p1 int, c1 int, r1 text, PRIMARY KEY (p1, c1, r1)") as tbl2:
         stmt = cql.prepare(f"SELECT r1 FROM {tbl2} WHERE (c1,r1) IN ? ALLOW FILTERING")
         with pytest.raises(InvalidRequest, match=bad_utf8_error):

@@ -33,7 +33,10 @@ def table1(cql, test_keyspace):
 # Note that issue #7856 can only be reproduced for a nested frozen collection,
 # where a set is the key of a map. If we had just a frozen set, this issue
 # does not reproduce (see test_wrong_set_order() below).
-def test_wrong_set_order_in_nested(cql, table1):
+# Cassandra 6 has the same bug (CASSANDRA-21901), which Cassandra 5 didn't
+# have: a frozen set nested in a bound value is no longer sorted, apparently
+# since CASSANDRA-18813 stopped rebuilding bound collection values.
+def test_wrong_set_order_in_nested(cql, table1, cassandra_6_bug):
     k = unique_key_int()
     # When inserting or selecting with a frozen<map<set<int>, int>> key
     # where the value is specified inline in CQL, the order of the set
@@ -77,7 +80,9 @@ def test_wrong_set_order_in_nested(cql, table1):
 # of a problem in cassandra_tests/validation/entities/frozen_collections_test.py
 # testNestedPartitionKeyUsage where we inserted set set as a Python frozenset()
 # which does not use any specific order.
-def test_wrong_set_order_in_nested_2(cql, table1):
+# Cassandra 6 has the same bug (CASSANDRA-21901) - see
+# test_wrong_set_order_in_nested().
+def test_wrong_set_order_in_nested_2(cql, table1, cassandra_6_bug):
     k = unique_key_int()
     insert = cql.prepare(f"INSERT INTO {table1} (k) VALUES (?)")
     # Insert map with frozen-set key in "wrong" order:
