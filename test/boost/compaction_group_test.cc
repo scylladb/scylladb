@@ -131,6 +131,7 @@ public:
     virtual compaction::compaction_backlog_tracker& get_backlog_tracker() override { return _backlog_tracker; }
     virtual const std::string get_group_id() const noexcept override { return "0"; }
     void add_compacted_bytes(uint64_t) noexcept override {}
+    void add_completed_compaction(uint64_t, uint64_t) noexcept override {}
     virtual seastar::condition_variable& get_staging_done_condition() noexcept override { return _staging_done_condition; }
     dht::token_range get_token_range_after_split(const dht::token& t) const noexcept override { return dht::token_range(); }
     int64_t get_sstables_repaired_at() const noexcept override { return 0; }
@@ -345,6 +346,7 @@ SEASTAR_THREAD_TEST_CASE(compaction_group_credits_regular_compaction_input_once_
         cm.await_ongoing_compactions(nullptr).get();
         BOOST_REQUIRE_GT(credited_in_flight, 0);
         BOOST_REQUIRE_LE(credited_in_flight, input_data_size);
+        BOOST_REQUIRE_EQUAL(rates().completed_input_bytes.amount(), input_data_size);
         BOOST_REQUIRE_EQUAL(rates().compacted_bytes.amount(), input_data_size);
         // Nothing is left to credit once it ended.
         BOOST_REQUIRE_EQUAL(cm.credit_compaction_progress(), 0);

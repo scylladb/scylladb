@@ -1145,6 +1145,7 @@ public:
     virtual compaction::compaction_backlog_tracker& get_backlog_tracker() override { return _backlog_tracker; }
     virtual const std::string get_group_id() const noexcept override { return _group_id; }
     void add_compacted_bytes(uint64_t) noexcept override {}
+    void add_completed_compaction(uint64_t, uint64_t) noexcept override {}
     virtual seastar::condition_variable& get_staging_done_condition() noexcept override { return _staging_done_condition; }
     dht::token_range get_token_range_after_split(const dht::token& t) const noexcept override { return dht::token_range(); }
     int64_t get_sstables_repaired_at() const noexcept override { return 0; }
