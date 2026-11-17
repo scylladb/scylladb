@@ -462,6 +462,54 @@ def test_validate_params(cql, test_keyspace, table1, scylla_with_wasm_only):
         with pytest.raises(InvalidRequest, match="number.*arguments"):
             cql.execute(f"SELECT {test_keyspace}.{inc_float_name}(i, f) AS result FROM {table} WHERE p = 700")
 
+# A function returning a non-native type returns its result as an i64: the
+# result's size in the top 32 bits and its offset in the module's memory in
+# the bottom 32 bits. This module's function returns the given bytes, which
+# it stores at offset 0 of its memory.
+def return_bytes_module(name, value):
+    data = ''.join(f'\\{b:02x}' for b in value)
+    return f'''
+(module
+  (func ${name} (param i32) (result i64)
+    i64.const {len(value) << 32})
+  (memory (;0;) 1)
+  (global (;0;) i32 (i32.const 0))
+  (export "memory" (memory 0))
+  (export "{name}" (func ${name}))
+  (export "_scylla_abi" (global 0))
+  (data (i32.const 0) "{data}"))
+'''
+
+# Test that a function returning an invalid value of its return type fails
+# with an error: a list claiming to have 2^31-1 elements while it has none,
+# a text which isn't valid UTF-8, and a vector which is too short.
+# Reproduces SCYLLADB-6380.
+@pytest.mark.parametrize('return_type,value', [('list<int>', b'\x7f\xff\xff\xff'), ('text', b'\xff\xfe'), ('vector<int, 2>', b'\x00\x00\x00\x01')])
+def test_return_invalid_value(cql, test_keyspace, table1, scylla_with_wasm_only, return_type, value):
+    name = 'invalid_' + unique_name()
+    src = f"(input int) RETURNS NULL ON NULL INPUT RETURNS {return_type} LANGUAGE wasm AS '{return_bytes_module(name, value)}'"
+    with new_function(cql, test_keyspace, src, name):
+        cql.execute(f'INSERT INTO {table1} (p, i) VALUES (6000, 1)')
+        with pytest.raises(InvalidRequest, match='invalid value'):
+            cql.execute(f'SELECT {test_keyspace}.{name}(i) AS result FROM {table1} WHERE p = 6000')
+
+# Test that after a function returns an invalid value, Scylla doesn't reuse
+# the instance of the module (which may have, e.g., allocated memory for the
+# result which it will never free), so every call creates a new instance - a
+# cache miss.
+def test_return_invalid_value_discards_instance(cql, test_keyspace, table1, scylla_with_wasm_only, metrics):
+    name = 'invalid_' + unique_name()
+    source = return_bytes_module(name, b'\xff\xfe')
+    src = f"(input int) RETURNS NULL ON NULL INPUT RETURNS text LANGUAGE wasm AS '{source}'"
+    with new_function(cql, test_keyspace, src, name):
+        cql.execute(f'INSERT INTO {table1} (p, i) VALUES (6002, 1)')
+        misses_before = get_metric(metrics, 'scylla_user_functions_cache_misses')
+        for _ in range(4):
+            with pytest.raises(InvalidRequest, match='invalid value'):
+                cql.execute(f'SELECT {test_keyspace}.{name}(i) AS result FROM {table1} WHERE p = 6002')
+        misses_after = get_metric(metrics, 'scylla_user_functions_cache_misses')
+        assert misses_after - misses_before >= 4
+
 # Test that calling a wasm-based function on a string works.
 # The function doubles the string: dog -> dogdog.
 def test_word_double(cql, test_keyspace, table1, scylla_with_wasm_only):
