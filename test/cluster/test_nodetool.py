@@ -5,8 +5,6 @@ from test.pylib.internal_types import ServerInfo
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for_first_completed
 
-pytestmark = pytest.mark.prepare_3_nodes_cluster
-
 
 async def run_nodetool(manager: ScyllaClusterManager, server: ServerInfo, *args: str) -> subprocess.CompletedProcess:
     """Runs `nodetool <args>` against `server`, with the server's executable."""
@@ -81,6 +79,7 @@ async def validate_status_operation(result: str, live_eps: list, down_eps: list,
     assert lines[i] == ""
 
 
+@pytest.mark.prepare_3_nodes_cluster
 async def test_zero_token_node_normal(manager: ScyllaClusterManager):
     zero_token_nodes = await manager.servers_add(servers_num=2, config={'join_ring': False})
 
@@ -116,6 +115,7 @@ async def test_zero_token_node_normal(manager: ScyllaClusterManager):
                                     host_id_map, config['num_tokens'])
 
 
+@pytest.mark.prepare_3_nodes_cluster
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_zero_token_node_down_leaving(manager: ScyllaClusterManager):
     servers = await manager.running_servers()
@@ -156,6 +156,7 @@ async def test_zero_token_node_down_leaving(manager: ScyllaClusterManager):
     await task
 
 
+@pytest.mark.prepare_3_nodes_cluster
 async def test_zero_token_node_down_normal(manager: ScyllaClusterManager):
     servers = await manager.running_servers()
 
@@ -186,6 +187,7 @@ async def test_zero_token_node_down_normal(manager: ScyllaClusterManager):
                                     host_id_map, config['num_tokens'])
 
 
+@pytest.mark.prepare_3_nodes_cluster
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_regular_node_joining(manager: ScyllaClusterManager):
     servers = await manager.running_servers()
