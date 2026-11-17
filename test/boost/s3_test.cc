@@ -254,6 +254,33 @@ static future<uint32_t> create_file(const std::string& path, size_t file_size) {
     co_return ret_val;
 }
 
+// Closes an upload stream when the test leaves the scope with an exception.
+// seastar::deferred_close() can't do it: when an upload fails, the stream's
+// close() fails as well, and deferred_close closes in a noexcept destructor,
+// so the test binary would abort with std::terminate() instead of failing the
+// test with the upload's error. This closer ignores a close() failure on that
+// path, because the exception already in flight reports the problem. On the
+// success path, the test calls close_now(), which does throw.
+class upload_stream_closer {
+    output_stream<char>& _out;
+    bool _closed = false;
+public:
+    explicit upload_stream_closer(output_stream<char>& out) noexcept : _out(out) {}
+    upload_stream_closer(const upload_stream_closer&) = delete;
+    upload_stream_closer& operator=(const upload_stream_closer&) = delete;
+    ~upload_stream_closer() {
+        if (!_closed) {
+            _out.close().handle_exception([] (std::exception_ptr ex) {
+                testlog.info("Ignoring the failure to close a failed upload: {}", ex);
+            }).get();
+        }
+    }
+    void close_now() {
+        _closed = true;
+        _out.close().get();
+    }
+};
+
 /*
  * Tests below expect an S3 server to be running on localhost
  * with s3_test_fixture creating per-test buckets for isolation
@@ -340,7 +367,7 @@ void do_test_client_multipart_upload(const client_maker_function& client_maker, 
         // would be split into several 15Mb pieces
         with_copy_upload ? cln->make_upload_jumbo_sink(name, s3::object_metadata{}, 3) : cln->make_upload_sink(name)
     );
-    auto close = seastar::deferred_close(out);
+    auto close = upload_stream_closer(out);
 
     static constexpr unsigned chunk_size = 1000;
     auto rnd = tests::random::get_bytes(chunk_size);
@@ -520,7 +547,7 @@ void do_test_client_upload_empty_object(const client_maker_function& client_make
     auto out = output_stream<char>(
         with_copy_upload ? cln->make_upload_jumbo_sink(name, s3::object_metadata{}, 3) : cln->make_upload_sink(name)
     );
-    auto close = seastar::deferred_close(out);
+    auto close = upload_stream_closer(out);
 
     // Nothing is written to the stream.
     testlog.info("Flush upload\n");
@@ -580,7 +607,7 @@ void do_test_client_upload_jumbo_sink_etag(const client_maker_function& client_m
     testlog.info("Upload object of {} bytes\n", object_size);
     auto [sink, etag_f] = cln->make_upload_jumbo_sink_and_get_etag(name, s3::object_metadata{}, 3);
     auto out = output_stream<char>(std::move(sink));
-    auto close = seastar::deferred_close(out);
+    auto close = upload_stream_closer(out);
 
     const auto content = sstring(object_size, 'x');
     out.write(content.data(), content.size()).get();
@@ -613,7 +640,7 @@ void do_test_client_upload_sink_etag(const client_maker_function& client_maker, 
     testlog.info("Upload object of {} bytes\n", object_size);
     auto [sink, etag_f] = cln->make_upload_sink_and_get_etag(name);
     auto out = output_stream<char>(std::move(sink));
-    auto close = seastar::deferred_close(out);
+    auto close = upload_stream_closer(out);
 
     const auto chunk = sstring(1000, 'x');
     for (size_t written = 0; written < object_size; written += chunk.size()) {
@@ -1028,12 +1055,13 @@ void test_download_data_source(const client_maker_function& client_maker, bool i
     auto rnd = tests::random::get_bytes(chunk_size);
     {
         auto out = output_stream<char>(cln->make_upload_sink(name));
-        auto close = seastar::deferred_close(out);
+        auto close = upload_stream_closer(out);
 
         for (unsigned ch = 0; ch < chunks; ch++) {
             out.write(reinterpret_cast<char*>(rnd.begin()), rnd.size()).get();
         }
         out.flush().get();
+        close.close_now();
     }
 
     testlog.info("Download object");
