@@ -67,7 +67,7 @@ Snapshot **a** keyspace (mykeyspace)
 
 .. code-block:: shell
 
-   > nodetool snapshot mykeyspace;
+   > nodetool snapshot mykeyspace
    Requested creating snapshot(s) for [mykeyspace] with snapshot name [1564577611409] and options {skipFlush=false}
    Snapshot directory: 1564577611409
 
@@ -75,7 +75,7 @@ Snapshot a **list** of keyspaces
    
 .. code-block:: shell
 
-   >nodetool snapshot -kc mykeyspace,yourkeyspace
+   > nodetool snapshot -kc mykeyspace,yourkeyspace
    Requested creating snapshot(s) for [mykeyspace,yourkeyspace] with snapshot name [1564639559884] and options {skipFlush=false}
    Snapshot directory: 1564639559884
 
@@ -83,7 +83,7 @@ Snapshot **a** table (heartrate)
   
 .. code-block:: shell
 
-   > nodetool snapshot --table heartrate mykeyspace;
+   > nodetool snapshot --table heartrate mykeyspace
    Requested creating snapshot(s) for [mykeyspace] with snapshot name [1564577586524] and options {skipFlush=false}
    Snapshot directory: 1564577586524
 
@@ -98,7 +98,7 @@ The snapshot is created in a ``snapshot`` directory in the table SSTable data di
    > ls /var/lib/scylla/data/mykeyspace/heartrate-07669030b39211e9a057000000000000/snapshots/
    1564577586524  1564577611409  1564577645291
 
-Each of the snapshots is a **hardlink** to to the SSTable directory.
+Each of the snapshots is a **hardlink** to the SSTable directory.
 
 .. code-block:: shell
 
