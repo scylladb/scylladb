@@ -336,13 +336,18 @@ class TestSchemaManagement(Tester):
                 try:
                     query_c1c2(session=session, key=key, consistency=ConsistencyLevel.QUORUM)
                 except AssertionError:
-                    all_rows = rows_to_list(session.execute(SimpleStatement("SELECT * FROM ks.cf;", consistency_level=ConsistencyLevel.QUORUM)))
-                    logger.error(f"Key k{key} not found via QUORUM. All rows in ks.cf: {all_rows}")
+                    logger.error(f"Key k{key} not found via QUORUM")
+                    # Log what each node holds itself. A CL=ONE read through a node can't show this: when the
+                    # node's own read is slow, its speculative retry asks another replica, whose answer may come
+                    # first. MUTATION_FRAGMENTS reads only the node that runs the query. Read before the QUORUM
+                    # scan below, whose read repair can copy the row to more nodes.
                     for node, node_name in [(node1, "node1"), (node2, "node2"), (node3, "node3")]:
                         node_session = self.patient_exclusive_cql_connection(node)
-                        node_rows = rows_to_list(node_session.execute(SimpleStatement(
-                            f"SELECT * FROM ks.cf WHERE key='k{key}';", consistency_level=ConsistencyLevel.ONE)))
-                        logger.error(f"  {node_name} ({node.address()}) has key k{key}: {node_rows}")
+                        fragments = [(r.mutation_source, r.mutation_fragment_kind, r.metadata) for r in node_session.execute(
+                            f"SELECT * FROM MUTATION_FRAGMENTS(ks.cf) WHERE key='k{key}';")]
+                        logger.error(f"  {node_name} ({node.address()}) holds for key k{key}: {fragments}")
+                    all_rows = rows_to_list(session.execute(SimpleStatement("SELECT * FROM ks.cf;", consistency_level=ConsistencyLevel.QUORUM)))
+                    logger.error(f"All rows in ks.cf: {all_rows}")
                     raise
 
         expected_case_result_map = {
