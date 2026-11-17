@@ -25,7 +25,10 @@
 #include "replica/schema_describe_helper.hh"
 
 #include "service/migration_manager.hh"
+#include "service/cas_shard.hh"
 #include "locator/host_id.hh"
+#include "dht/i_partitioner.hh"
+#include "keys/keys.hh"
 #include "view_info.hh"
 
 #include <seastar/core/seastar.hh>
@@ -35,7 +38,10 @@
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 
+#include <concepts>
 #include <optional>
+#include <type_traits>
+#include <variant>
 #include <vector>
 #include "service/raft/raft_group0_client.hh"
 #include "locator/tablets.hh"
@@ -394,7 +400,8 @@ schema_ptr alternator_import_from_s3_imports() {
                 .with_column("accepted_at", timestamp_type)
                 // When the import reached a terminal state (COMPLETED or FAILED)
                 .with_column("completed_at", timestamp_type)
-                // The node which drives this import, in the format of node_id in alternator_export_to_s3_exports
+                // The node incarnation which drives this import, "{host_id}:{gossip_generation}" (see
+                // alternator::live_node_identifier)
                 .with_column("node_id", utf8_type)
                 .set_comment("Alternator import from S3 import metadata")
                 .with_hash_version()
@@ -754,6 +761,267 @@ system_distributed_keyspace::cdc_current_generation_timestamp(context ctx) {
     co_return timestamp_cql->one().get_as<db_clock::time_point>("time");
 }
 
+alternator_import_table_helper::alternator_import_table_helper(cql3::query_processor& qp)
+    : _qp(qp)
+{}
+
+// system_distributed has RF=3, and QUORUM of that is not possible with a single token owner. No
+// context gives the number of token owners here, so read it.
+static db::consistency_level import_table_consistency_level(cql3::query_processor& qp) {
+    return quorum_if_many(qp.proxy().get_token_metadata_ptr()->count_normal_token_owners());
+}
+
+static alternator_import_table_helper::import_row to_import_row(const cql3::untyped_result_set_row& row) {
+    return alternator_import_table_helper::import_row{
+        .import_arn = row.get_as<sstring>("import_arn"),
+        .client_token = row.get_or<sstring>("client_token", sstring()),
+        .request = row.get_or<sstring>("request", sstring()),
+        .requester_role = row.get_or<sstring>("requester_role", sstring()),
+        .table_id = row.has("table_id") ? ::table_id(row.get_as<utils::UUID>("table_id")) : ::table_id(),
+        .target_table_existed = row.get_or<bool>("target_table_existed", false),
+        .import_status = row.get_or<sstring>("import_status", sstring()),
+        .failure_code = row.get_opt<sstring>("failure_code"),
+        .failure_message = row.get_opt<sstring>("failure_message"),
+        .processed_item_count = row.get_or<int64_t>("processed_item_count", 0),
+        .imported_item_count = row.get_or<int64_t>("imported_item_count", 0),
+        .error_count = row.get_or<int64_t>("error_count", 0),
+        .processed_size_bytes = row.get_opt<int64_t>("processed_size_bytes"),
+        .import_id_token = row.get_or<sstring>("import_id_token", sstring()),
+        .accepted_at = row.get_or<db_clock::time_point>("accepted_at", db_clock::time_point()),
+        .completed_at = row.get_opt<db_clock::time_point>("completed_at"),
+        .node_id = row.get_or<sstring>("node_id", sstring()),
+    };
+}
+
+static alternator_import_table_helper::client_token_row to_import_client_token_row(const cql3::untyped_result_set_row& row) {
+    return alternator_import_table_helper::client_token_row{
+        .client_token = row.get_as<sstring>("client_token"),
+        .import_arn = row.get_or<sstring>("import_arn", sstring()),
+        .request = row.get_or<sstring>("request", sstring()),
+        .node_id = row.get_or<sstring>("node_id", sstring()),
+    };
+}
+
+// Runs the conditional (LWT) `query` on the shard which owns the partition `key` (a single text
+// partition key) of `table`: on another shard, LWT answers bounce_to_shard, which
+// execute_internal() does not follow. `make_values` makes the bound values on that shard, because
+// a data_value holds a per-shard data_type and must not cross shards. Returns nullopt if the
+// condition held and the statement applied. Otherwise returns the row which the statement returned
+// with `[applied]`, converted by `convert_row` on that shard. Note that a column condition
+// (`IF x = ?`) returns only the columns of the condition, while `IF NOT EXISTS` returns all the
+// columns of the existing row.
+template <typename MakeValues, typename ConvertRow>
+requires std::same_as<std::invoke_result_t<MakeValues>, query_data_vector>
+static future<std::optional<std::invoke_result_t<ConvertRow, const cql3::untyped_result_set_row&>>>
+execute_import_table_conditionally(cql3::query_processor& qp, std::string_view table, const sstring& key,
+        const sstring& query, MakeValues make_values, ConvertRow convert_row) {
+    using row_type = std::invoke_result_t<ConvertRow, const cql3::untyped_result_set_row&>;
+    auto schema = qp.db().find_schema(system_distributed_keyspace::NAME, table);
+    auto pk = partition_key::from_single_value(*schema, utf8_type->decompose(key));
+    // Pins the effective replication map for the whole call, so that the statement is executed on
+    // the shard chosen here.
+    auto cas_shard = service::cas_shard(*schema, dht::get_token(*schema, pk));
+    co_return co_await qp.container().invoke_on(cas_shard.shard(),
+            [&query, &make_values, &convert_row] (cql3::query_processor& local_qp) -> future<std::optional<row_type>> {
+        query_data_vector values = make_values();
+        auto rs = co_await local_qp.execute_internal(query, import_table_consistency_level(local_qp),
+                internal_distributed_query_state(), values, cql3::query_processor::cache_internal::yes);
+        const cql3::untyped_result_set_row& row = rs->one();
+        if (row.get_as<bool>("[applied]")) {
+            co_return std::nullopt;
+        }
+        co_return convert_row(row);
+    });
+}
+
+static data_value import_ttl_value(std::chrono::seconds ttl) {
+    return data_value(int32_t(ttl.count()));
+}
+
+future<std::optional<alternator_import_table_helper::import_row>>
+alternator_import_table_helper::insert_import(const import_row& row, std::chrono::seconds ttl) {
+    static const sstring query = format(
+        "INSERT INTO {}.{} (import_arn, client_token, request, requester_role, table_id, target_table_existed,"
+        " import_status, failure_code, failure_message, processed_item_count, imported_item_count, error_count,"
+        " processed_size_bytes, import_id_token, accepted_at, completed_at, node_id)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) IF NOT EXISTS USING TTL ?",
+        system_distributed_keyspace::NAME, system_distributed_keyspace::ALTERNATOR_IMPORT_FROM_S3_IMPORTS);
+    co_return co_await execute_import_table_conditionally(_qp, system_distributed_keyspace::ALTERNATOR_IMPORT_FROM_S3_IMPORTS,
+        row.import_arn, query,
+        [&row, ttl] () -> query_data_vector {
+            return { row.import_arn, row.client_token, row.request, row.requester_role, row.table_id.uuid(),
+                     row.target_table_existed, row.import_status, row.failure_code, row.failure_message,
+                     row.processed_item_count, row.imported_item_count, row.error_count, row.processed_size_bytes,
+                     row.import_id_token, row.accepted_at, row.completed_at, row.node_id, import_ttl_value(ttl) };
+        },
+        to_import_row);
+}
+
+// The statement of update_import() and take_import(): it writes all the columns of the row, if the
+// row has the expected status and node, and passes `extra_conditions`.
+static sstring update_import_query(std::string_view extra_conditions) {
+    return format(
+        "UPDATE {}.{} USING TTL ? SET client_token = ?, request = ?, requester_role = ?, table_id = ?,"
+        " target_table_existed = ?, import_status = ?, failure_code = ?, failure_message = ?, processed_item_count = ?,"
+        " imported_item_count = ?, error_count = ?, processed_size_bytes = ?, import_id_token = ?, accepted_at = ?,"
+        " completed_at = ?, node_id = ? WHERE import_arn = ? IF import_status = ? AND node_id = ?{}",
+        system_distributed_keyspace::NAME, system_distributed_keyspace::ALTERNATOR_IMPORT_FROM_S3_IMPORTS, extra_conditions);
+}
+
+// The values of update_import_query() before those of its conditions.
+static query_data_vector update_import_values(const alternator_import_row& row, std::chrono::seconds ttl) {
+    return { import_ttl_value(ttl), row.client_token, row.request, row.requester_role, row.table_id.uuid(),
+             row.target_table_existed, row.import_status, row.failure_code, row.failure_message,
+             row.processed_item_count, row.imported_item_count, row.error_count, row.processed_size_bytes,
+             row.import_id_token, row.accepted_at, row.completed_at, row.node_id,
+             row.import_arn };
+}
+
+future<bool> alternator_import_table_helper::update_import(const import_row& row, const sstring& expected_status,
+        const sstring& expected_node_id, std::chrono::seconds ttl) {
+    static const sstring query = update_import_query("");
+    co_return !co_await execute_import_table_conditionally(_qp, system_distributed_keyspace::ALTERNATOR_IMPORT_FROM_S3_IMPORTS,
+        row.import_arn, query,
+        [&row, &expected_status, &expected_node_id, ttl] () -> query_data_vector {
+            auto values = update_import_values(row, ttl);
+            values.emplace_back(expected_status);
+            values.emplace_back(expected_node_id);
+            return values;
+        },
+        [] (const cql3::untyped_result_set_row&) { return std::monostate{}; });
+}
+
+future<bool> alternator_import_table_helper::take_import(const import_row& row, const import_row& expected,
+        std::chrono::seconds ttl) {
+    static const sstring query = update_import_query(
+        " AND processed_item_count = ? AND imported_item_count = ? AND error_count = ? AND processed_size_bytes = ?");
+    co_return !co_await execute_import_table_conditionally(_qp, system_distributed_keyspace::ALTERNATOR_IMPORT_FROM_S3_IMPORTS,
+        row.import_arn, query,
+        [&row, &expected, ttl] () -> query_data_vector {
+            auto values = update_import_values(row, ttl);
+            values.emplace_back(expected.import_status);
+            values.emplace_back(expected.node_id);
+            values.emplace_back(expected.processed_item_count);
+            values.emplace_back(expected.imported_item_count);
+            values.emplace_back(expected.error_count);
+            values.emplace_back(expected.processed_size_bytes);
+            return values;
+        },
+        [] (const cql3::untyped_result_set_row&) { return std::monostate{}; });
+}
+
+future<std::optional<alternator_import_table_helper::client_token_row>>
+alternator_import_table_helper::insert_client_token(const client_token_row& row) {
+    static const sstring query = format(
+        "INSERT INTO {}.{} (client_token, import_arn, request, node_id) VALUES (?, ?, ?, ?) IF NOT EXISTS",
+        system_distributed_keyspace::NAME, system_distributed_keyspace::ALTERNATOR_IMPORT_FROM_S3_CLIENT_TOKENS);
+    co_return co_await execute_import_table_conditionally(_qp, system_distributed_keyspace::ALTERNATOR_IMPORT_FROM_S3_CLIENT_TOKENS,
+        row.client_token, query,
+        [&row] () -> query_data_vector {
+            return { row.client_token, row.import_arn, row.request, row.node_id };
+        },
+        to_import_client_token_row);
+}
+
+future<std::optional<alternator_import_table_helper::import_row>>
+alternator_import_table_helper::get_import(const sstring& import_arn, bool serial) const {
+    static const sstring query = format(
+        "SELECT import_arn, client_token, request, requester_role, table_id, target_table_existed, import_status,"
+        " failure_code, failure_message, processed_item_count, imported_item_count, error_count, processed_size_bytes,"
+        " import_id_token, accepted_at, completed_at, node_id FROM {}.{} WHERE import_arn = ?",
+        system_distributed_keyspace::NAME, system_distributed_keyspace::ALTERNATOR_IMPORT_FROM_S3_IMPORTS);
+    if (!serial) {
+        auto rs = co_await _qp.execute_internal(query, import_table_consistency_level(_qp), internal_distributed_query_state(),
+            { import_arn }, cql3::query_processor::cache_internal::yes);
+        if (rs->empty()) {
+            co_return std::nullopt;
+        }
+        co_return to_import_row(rs->one());
+    }
+    auto schema = _qp.db().find_schema(system_distributed_keyspace::NAME, system_distributed_keyspace::ALTERNATOR_IMPORT_FROM_S3_IMPORTS);
+    auto pk = partition_key::from_single_value(*schema, utf8_type->decompose(import_arn));
+    auto cas_shard = service::cas_shard(*schema, dht::get_token(*schema, pk));
+    co_return co_await _qp.container().invoke_on(cas_shard.shard(),
+            [&import_arn] (cql3::query_processor& local_qp) -> future<std::optional<import_row>> {
+        auto rs = co_await local_qp.execute_internal(query, db::consistency_level::SERIAL, internal_distributed_query_state(),
+            { import_arn }, cql3::query_processor::cache_internal::yes);
+        if (rs->empty()) {
+            co_return std::nullopt;
+        }
+        co_return to_import_row(rs->one());
+    });
+}
+
+future<std::optional<alternator_import_table_helper::client_token_row>>
+alternator_import_table_helper::get_client_token(const sstring& client_token, bool serial) const {
+    static const sstring query = format(
+        "SELECT client_token, import_arn, request, node_id FROM {}.{} WHERE client_token = ?",
+        system_distributed_keyspace::NAME, system_distributed_keyspace::ALTERNATOR_IMPORT_FROM_S3_CLIENT_TOKENS);
+    if (!serial) {
+        auto rs = co_await _qp.execute_internal(query, import_table_consistency_level(_qp), internal_distributed_query_state(),
+            { client_token }, cql3::query_processor::cache_internal::yes);
+        if (rs->empty()) {
+            co_return std::nullopt;
+        }
+        co_return to_import_client_token_row(rs->one());
+    }
+    auto schema = _qp.db().find_schema(system_distributed_keyspace::NAME, system_distributed_keyspace::ALTERNATOR_IMPORT_FROM_S3_CLIENT_TOKENS);
+    auto pk = partition_key::from_single_value(*schema, utf8_type->decompose(client_token));
+    auto cas_shard = service::cas_shard(*schema, dht::get_token(*schema, pk));
+    co_return co_await _qp.container().invoke_on(cas_shard.shard(),
+            [&client_token] (cql3::query_processor& local_qp) -> future<std::optional<client_token_row>> {
+        auto rs = co_await local_qp.execute_internal(query, db::consistency_level::SERIAL, internal_distributed_query_state(),
+            { client_token }, cql3::query_processor::cache_internal::yes);
+        if (rs->empty()) {
+            co_return std::nullopt;
+        }
+        co_return to_import_client_token_row(rs->one());
+    });
+}
+
+// Reads a whole import table with paging - an unpaged read fails above
+// max_memory_for_unlimited_query_hard_limit - and returns its rows converted by `convert`.
+template <typename Converter>
+static future<utils::chunked_vector<std::invoke_result_t<Converter, const cql3::untyped_result_set_row&>>>
+scan_import_table(cql3::query_processor& qp, const sstring& query, const seastar::abort_source* as, Converter convert) {
+    utils::chunked_vector<std::invoke_result_t<Converter, const cql3::untyped_result_set_row&>> results;
+    co_await qp.query_internal(
+        query,
+        import_table_consistency_level(qp),
+        {},
+        cql3::query_processor::default_internal_page_size,
+        [&] (const cql3::untyped_result_set_row& row) -> future<stop_iteration> {
+            if (as) {
+                as->check();
+            }
+            results.push_back(convert(row));
+            co_return stop_iteration::no;
+        },
+        internal_distributed_query_state());
+    co_return results;
+}
+
+future<utils::chunked_vector<alternator_import_table_helper::import_summary_row>>
+alternator_import_table_helper::get_all_imports(const seastar::abort_source* as) const {
+    static const sstring query = format(
+        "SELECT import_arn, import_status, node_id FROM {}.{}",
+        system_distributed_keyspace::NAME, system_distributed_keyspace::ALTERNATOR_IMPORT_FROM_S3_IMPORTS);
+    co_return co_await scan_import_table(_qp, query, as, [] (const cql3::untyped_result_set_row& row) {
+        return import_summary_row{
+            .import_arn = row.get_as<sstring>("import_arn"),
+            .import_status = row.get_opt<sstring>("import_status"),
+            .node_id = row.get_opt<sstring>("node_id"),
+        };
+    });
+}
+
+future<utils::chunked_vector<alternator_import_table_helper::client_token_row>>
+alternator_import_table_helper::get_all_client_tokens(const seastar::abort_source* as) const {
+    static const sstring query = format(
+        "SELECT client_token, import_arn, request, node_id FROM {}.{}",
+        system_distributed_keyspace::NAME, system_distributed_keyspace::ALTERNATOR_IMPORT_FROM_S3_CLIENT_TOKENS);
+    co_return co_await scan_import_table(_qp, query, as, to_import_client_token_row);
+}
 
 snapshot_table_helper::snapshot_table_helper(cql3::query_processor& qp)
     : _qp(qp)
