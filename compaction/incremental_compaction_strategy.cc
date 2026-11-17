@@ -188,7 +188,7 @@ incremental_compaction_strategy::create_run_and_length_pairs(const std::vector<s
     return run_length_pairs;
 }
 
-std::vector<std::vector<sstables::frozen_sstable_run>>
+std::vector<sstable_run_bucket_and_length>
 incremental_compaction_strategy::get_buckets(const std::vector<sstables::frozen_sstable_run>& runs, const incremental_compaction_strategy_options& options) {
     auto sorted_runs = create_run_and_length_pairs(runs);
 
@@ -202,8 +202,7 @@ incremental_compaction_strategy::get_buckets(const std::vector<sstables::frozen_
         return !recently_written && size < options.min_sstable_size;
     };
 
-    using bucket_type = std::vector<sstables::frozen_sstable_run>;
-    std::vector<bucket_type> bucket_list;
+    std::vector<sstable_run_bucket_and_length> bucket_list;
     std::vector<double> bucket_average_size_list;
 
     for (auto& pair : sorted_runs) {
@@ -217,7 +216,7 @@ incremental_compaction_strategy::get_buckets(const std::vector<sstables::frozen_
 
             if ((size > (bucket_average_size * options.bucket_low) && size < (bucket_average_size * options.bucket_high)) ||
                     (min_sstable_size_check(size) && min_sstable_size_check(bucket_average_size))) {
-                auto& bucket = bucket_list.back();
+                auto& [bucket, bucket_size] = bucket_list.back();
                 auto total_size = bucket.size() * bucket_average_size;
                 auto new_average_size = (total_size + size) / (bucket.size() + 1);
                 auto smallest_run_in_bucket = bucket[0]->data_size();
@@ -228,6 +227,7 @@ incremental_compaction_strategy::get_buckets(const std::vector<sstables::frozen_
                 // SSTable might fall out of range.
                 if (min_sstable_size_check(size) || smallest_run_in_bucket > new_average_size * options.bucket_low) {
                     bucket.push_back(pair.first);
+                    bucket_size += size;
                     bucket_average_size = new_average_size;
                     continue;
                 }
@@ -235,8 +235,7 @@ incremental_compaction_strategy::get_buckets(const std::vector<sstables::frozen_
         }
 
         // no similar bucket found; put it in a new one
-        bucket_type new_bucket = {pair.first};
-        bucket_list.push_back(std::move(new_bucket));
+        bucket_list.emplace_back(std::vector<sstables::frozen_sstable_run>{pair.first}, size);
         bucket_average_size_list.push_back(size);
     }
 
@@ -353,7 +352,9 @@ incremental_compaction_strategy::get_sstables_for_compaction(compaction_group_vi
     size_t min_threshold = t.min_compaction_threshold();
     size_t max_threshold = t.schema()->max_compaction_threshold();
 
-    auto buckets = get_buckets(candidates);
+    auto buckets = get_buckets(candidates)
+            | std::views::transform([] (sstable_run_bucket_and_length& bucket) { return std::move(bucket.first); })
+            | std::ranges::to<std::vector>();
 
     if (is_any_bucket_interesting(buckets, min_threshold)) {
         std::vector<sstables::frozen_sstable_run> most_interesting = most_interesting_bucket(std::move(buckets), min_threshold, max_threshold);
@@ -438,7 +439,7 @@ future<int64_t> incremental_compaction_strategy::estimated_pending_compactions(c
     int64_t n = 0;
 
     auto main_set = co_await t.main_sstable_set();
-    for (auto& bucket : get_buckets(main_set->all_sstable_runs())) {
+    for (auto& [bucket, _] : get_buckets(main_set->all_sstable_runs())) {
         if (bucket.size() >= min_threshold) {
             n += (bucket.size() + max_threshold - 1) / max_threshold;
         }
@@ -498,7 +499,7 @@ incremental_compaction_strategy::get_reshaping_job(std::vector<sstables::shared_
         }
     }
 
-    for (auto& bucket : get_buckets(sstables_to_runs(std::move(input)))) {
+    for (auto& [bucket, _] : get_buckets(sstables_to_runs(std::move(input)))) {
         if (bucket.size() >= offstrategy_threshold) {
             // preserve token contiguity by prioritizing runs with the lowest first keys.
             if (bucket.size() > max_sstables) {
@@ -520,7 +521,7 @@ incremental_compaction_strategy::get_cleanup_compaction_jobs(compaction_group_vi
     const auto& schema = t.schema();
     unsigned max_threshold = schema->max_compaction_threshold();
 
-    for (auto& bucket : get_buckets(sstables_to_runs(std::move(candidates)))) {
+    for (auto& [bucket, _] : get_buckets(sstables_to_runs(std::move(candidates)))) {
         if (bucket.size() > max_threshold) {
             // preserve token contiguity
             sort_run_bucket_by_first_key(bucket, bucket.size(), schema);
