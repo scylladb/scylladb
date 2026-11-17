@@ -46,7 +46,7 @@ static void init_abstract_arg(const abstract_type& t, const bytes_opt& param, wa
         if (param) {
             switch (uint32_t abi_ver = wasmtime::get_abi(instance, store, *memory)) {
                 case 1: {
-                    auto pre_grow = memory->grow(store, 1 + (serialized_size - 1) / WASM_PAGE_SIZE);
+                    auto pre_grow = memory->grow(store, (serialized_size + WASM_PAGE_SIZE - 1) / WASM_PAGE_SIZE);
                     mem_size = pre_grow * WASM_PAGE_SIZE;
                     break;
                 }

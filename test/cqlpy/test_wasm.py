@@ -462,6 +462,33 @@ def test_validate_params(cql, test_keyspace, table1, scylla_with_wasm_only):
         with pytest.raises(InvalidRequest, match="number.*arguments"):
             cql.execute(f"SELECT {test_keyspace}.{inc_float_name}(i, f) AS result FROM {table} WHERE p = 700")
 
+# Test that a function using ABI version 1 can be called with an argument
+# of any size, including an empty one. The function returns the size of its
+# text argument.
+# Reproduces SCYLLADB-6381.
+@pytest.mark.parametrize('value', ['', 'hello'])
+def test_abi_v1_argument_size(cql, test_keyspace, table1, scylla_with_wasm_only, value):
+    name = 'abi1_size_' + unique_name()
+    source = f'''
+(module
+  (func ${name} (param i64) (result i32)
+    local.get 0
+    i64.const 32
+    i64.shr_s
+    i32.wrap_i64)
+  (memory (;0;) 1)
+  (global (;0;) i32 (i32.const 1024))
+  (export "memory" (memory 0))
+  (export "{name}" (func ${name}))
+  (export "_scylla_abi" (global 0))
+  (data (i32.const 1024) "\\01\\00\\00\\00"))
+'''
+    src = f"(input text) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE wasm AS '{source}'"
+    with new_function(cql, test_keyspace, src, name):
+        cql.execute(f'INSERT INTO {table1} (p, txt) VALUES (6001, %s)', [value])
+        res = list(cql.execute(f'SELECT {test_keyspace}.{name}(txt) AS result FROM {table1} WHERE p = 6001'))
+        assert len(res) == 1 and res[0].result == len(value)
+
 # A function returning a non-native type returns its result as an i64: the
 # result's size in the top 32 bits and its offset in the module's memory in
 # the bottom 32 bits. This module's function returns the given bytes, which
