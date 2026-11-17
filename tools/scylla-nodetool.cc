@@ -686,17 +686,20 @@ void cluster_repair_operation(scylla_rest_client& client, const bpo::variables_m
                         log("Repair with task_id={} finished", task_id);
                     }
                 } catch (const api_request_failed& ex) {
-                    if (std::string(ex.what()).contains("because it is colocated") && tables.empty()) {
+                    const std::string_view errmsg{ex.what()};
+                    if (errmsg.contains("because it is colocated") && tables.empty()) {
                         // ignore the error about not being able to request repair for colocated tables if the repair
                         // was requested for all tables and not for a specific colocated table.
                         // if repair is requested for all tables then in particular it repairs all base tables, which
                         // will repair also their colocated tables.
                         continue;
-                    }
-                    if (tables.empty() && std::string(ex.what()).contains("Can't find a column family")) {
+                    } else if (tables.empty() && errmsg.contains("Can't find a column family")) {
                         continue;
+                    } else {
+                        log("ERROR: Repair request for keyspace={} table={} failed with {}",
+                                keyspace, table, ex);
                     }
-                    log("ERROR: Repair request for keyspace={} table={} failed with {}", keyspace, table, ex);
+
                     exit_code = EXIT_FAILURE;
                 }
             }
