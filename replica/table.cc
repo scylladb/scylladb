@@ -3535,6 +3535,10 @@ public:
         _cg._compacted_bytes.add(bytes);
         _cg._compacted_bytes_long.add(bytes);
     }
+    void add_completed_compaction(uint64_t bytes_in, uint64_t bytes_out) noexcept override {
+        _cg._completed_input_bytes.add(bytes_in);
+        _cg._completed_output_bytes.add(bytes_out);
+    }
     bool is_auto_compaction_disabled_by_user() const noexcept override {
         return _t.is_auto_compaction_disabled_by_user();
     }
@@ -4909,6 +4913,8 @@ compaction::rate_stats compaction_group::rates() const {
         .mean_flush_size = flushed_bytes.amount() > 0 ? flushed_squared_bytes.per(flushed_bytes) : 0,
         .compacted_bytes = _compacted_bytes.rate(now),
         .compacted_bytes_long = _compacted_bytes_long.rate(now),
+        .completed_input_bytes = _completed_input_bytes.rate(now),
+        .completed_output_bytes = _completed_output_bytes.rate(now),
     };
 }
 

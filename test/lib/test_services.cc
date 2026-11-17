@@ -148,6 +148,7 @@ public:
         return _group_id;
     }
     void add_compacted_bytes(uint64_t) noexcept override {}
+    void add_completed_compaction(uint64_t, uint64_t) noexcept override {}
     seastar::condition_variable& get_staging_done_condition() noexcept override {
         return _staging_condition;
     }

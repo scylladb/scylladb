@@ -69,6 +69,8 @@ public:
     // Bytes regular compaction compacted since it last reported, counted toward the
     // group's compacted bytes, the rate the compaction controller compares to its target.
     virtual void add_compacted_bytes(uint64_t bytes) noexcept = 0;
+    // A regular compaction ended, having read bytes_in of data and written bytes_out.
+    virtual void add_completed_compaction(uint64_t bytes_in, uint64_t bytes_out) noexcept = 0;
     virtual bool is_auto_compaction_disabled_by_user() const noexcept = 0;
     virtual bool tombstone_gc_enabled() const noexcept = 0;
     virtual tombstone_gc_state get_tombstone_gc_state() const noexcept = 0;

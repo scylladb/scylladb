@@ -570,6 +570,8 @@ future<compaction_result> compaction_task_executor::compact_sstables(compaction_
         // What the progress didn't credit yet, e.g. as nothing credited it since, is credited
         // now, so that the input counts in full.
         t.add_compacted_bytes(_progress_monitor.credit_up_to(input_data_size));
+        t.add_completed_compaction(input_data_size,
+                std::ranges::fold_left(res.new_sstables | std::views::transform(&sstables::sstable::data_size), uint64_t(0), std::plus()));
     }
     co_return res;
 }

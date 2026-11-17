@@ -40,6 +40,11 @@ struct rate_stats {
     utils::rate<utils::units::bytes> compacted_bytes;
     // The same over the flushed rates' window, so that it covers the interval they do.
     utils::rate<utils::units::bytes> compacted_bytes_long;
+    // The data the regular compactions that ended within the last two hours read, and the
+    // data they wrote, both counted as each ends: how much a compaction keeps of what it reads,
+    // one version of each row, less what overwrites and deletions dropped.
+    utils::rate<utils::units::bytes> completed_input_bytes;
+    utils::rate<utils::units::bytes> completed_output_bytes;
 };
 
 // What a backlog tracker needs to know about the data it accounts for: the sstables

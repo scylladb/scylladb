@@ -114,6 +114,11 @@ class compaction_group : public compaction::compaction_backlog_source {
     // FIXME: make the windows configurable.
     static constexpr lowres_db_clock::duration rate_window = std::chrono::minutes(30);
     static constexpr lowres_db_clock::duration achieved_window = std::chrono::minutes(5);
+    // The window of what the regular compactions that ended read and wrote. Longer than the
+    // rate window: the compactions of the largest tier are rare, about one an hour per shard in
+    // round 8 write-heavy, and big, and keep the least, so over half an hour their ratio
+    // would swing with whether one of them ended in it.
+    static constexpr lowres_db_clock::duration completed_window = std::chrono::hours(2);
     lowres_db_clock::time_point _rates_start = lowres_db_clock::now();
     // Bytes flushed from memtables into this group, which the compaction controller
     // will use to match compaction to ingestion.
@@ -130,6 +135,9 @@ class compaction_group : public compaction::compaction_backlog_source {
     utils::moving_average_rate<utils::units::bytes, uint64_t, lowres_db_clock> _compacted_bytes{achieved_window, _rates_start};
     // The same over the rate window.
     utils::moving_average_rate<utils::units::bytes, uint64_t, lowres_db_clock> _compacted_bytes_long{rate_window, _rates_start};
+    // The data regular compactions read and wrote, as each ends.
+    utils::moving_average_rate<utils::units::bytes, uint64_t, lowres_db_clock> _completed_input_bytes{completed_window, _rates_start};
+    utils::moving_average_rate<utils::units::bytes, uint64_t, lowres_db_clock> _completed_output_bytes{completed_window, _rates_start};
     friend class table;
 private:
     std::unique_ptr<compaction_group_view> make_compacting_view();
