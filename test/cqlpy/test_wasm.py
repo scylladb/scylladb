@@ -215,6 +215,21 @@ def test_panic_in_create(cql, test_keyspace, table1, scylla_with_wasm_only):
     # Check that Scylla is still alive
     cql.execute(f'SELECT p FROM {table1} WHERE p = 5000')
 
+# Test that calling a function whose module doesn't export a memory fails
+# with an error - every time it is called, not just the first time. Creating
+# the function doesn't need the memory, but the instance used for calling it
+# does, so creating that instance fails on every call.
+# Reproduces SCYLLADB-6378.
+def test_call_without_memory(cql, test_keyspace, table1, scylla_with_wasm_only):
+    name = 'no_memory_' + unique_name()
+    source = f'(module (func ${name} (param i32) (result i32) local.get 0) (export "{name}" (func ${name})))'
+    src = f"(input int) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE wasm AS '{source}'"
+    with new_function(cql, test_keyspace, src, name):
+        cql.execute(f'INSERT INTO {table1} (p, i) VALUES (5001, 1)')
+        for _ in range(2):
+            with pytest.raises(InvalidRequest, match='Memory export not found'):
+                cql.execute(f'SELECT {test_keyspace}.{name}(i) AS result FROM {table1} WHERE p = 5001', timeout=30)
+
 # Test a wasm function which decreases given double by 1
 def test_f64_param(cql, test_keyspace, table1, scylla_with_wasm_only):
     table = table1
