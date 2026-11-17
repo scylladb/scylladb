@@ -1,6 +1,8 @@
 import pytest
 import asyncio
+import re
 import subprocess
+from test.cluster.util import create_new_test_keyspace
 from test.pylib.internal_types import ServerInfo
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for_first_completed
@@ -227,3 +229,34 @@ async def test_regular_node_joining(manager: ScyllaClusterManager):
     [await manager.api.message_injection(s.ip_addr, 'delay_node_bootstrap') for s in servers]
 
     await task
+
+
+async def test_cluster_repair_skips_strongly_consistent_keyspaces(manager: ScyllaClusterManager):
+    """
+    `nodetool cluster repair` without a keyspace repairs every tablet keyspace. It skips a
+    strongly consistent one, which the server refuses to repair, and repairs the others.
+    Repairing a strongly consistent keyspace by name fails.
+    """
+    servers = await manager.servers_add(3, config={'experimental_features': ['strongly-consistent-tables']}, auto_rack_dc='dc1')
+    cql, _ = await manager.get_ready_cql(servers)
+
+    sc_ks = await create_new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} "
+                                                "AND tablets = {'initial': 2} "
+                                                "AND consistency = 'global'")
+    ec_ks = await create_new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} "
+                                                "AND tablets = {'initial': 2}")
+    await cql.run_async(f"CREATE TABLE {sc_ks}.test1 (pk int PRIMARY KEY, c int)")
+    await cql.run_async(f"CREATE TABLE {sc_ks}.test2 (pk int PRIMARY KEY, c int)")
+    await cql.run_async(f"CREATE TABLE {ec_ks}.test (pk int PRIMARY KEY, c int)")
+
+    result = await run_nodetool(manager, servers[0], "cluster", "repair")
+    assert result.returncode == 0, result.stdout
+    assert f"Skipping keyspace={sc_ks}: it is strongly consistent" in result.stdout
+    started = re.search(f"Starting repair with task_id=(\\S+) keyspace={ec_ks} table=test", result.stdout)
+    assert started, result.stdout
+    assert f"Repair with task_id={started.group(1)} finished" in result.stdout
+    assert f"keyspace={sc_ks} table=" not in result.stdout
+
+    result = await run_nodetool(manager, servers[0], "cluster", "repair", sc_ks)
+    assert result.returncode != 0, result.stdout
+    assert f"keyspace '{sc_ks}' is strongly consistent" in result.stdout

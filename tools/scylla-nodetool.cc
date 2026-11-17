@@ -695,6 +695,17 @@ void cluster_repair_operation(scylla_rest_client& client, const bpo::variables_m
                         continue;
                     } else if (tables.empty() && errmsg.contains("Can't find a column family")) {
                         continue;
+                    } else if (errmsg.contains("is strongly consistent")) {
+                        // Consistency is a property of the keyspace, so the other tables
+                        // would be refused too.
+                        if (vm.contains("keyspace")) {
+                            log("ERROR: Repair request for keyspace={} table={} failed with {}",
+                                    keyspace, table, ex);
+                            exit_code = EXIT_FAILURE;
+                        } else {
+                            log("Skipping keyspace={}: it is strongly consistent", keyspace);
+                        }
+                        break;
                     } else {
                         log("ERROR: Repair request for keyspace={} table={} failed with {}",
                                 keyspace, table, ex);
