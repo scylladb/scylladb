@@ -101,11 +101,37 @@ mod ffi {
     }
 }
 
+// A panic must not unwind into the C++ code calling the functions above -
+// cxx aborts the process if it does. So every function that calls into
+// wasmtime catches panics with catch_panic(), and returns them as ordinary
+// errors (with a message starting with PANIC_MARKER), which fail the UDF like
+// other errors. The C++ code doesn't reuse a store and instance after such
+// an error, because a panic may have left their state inconsistent.
+const PANIC_MARKER: &str = "Rust panic: ";
+
+fn catch_panic<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(result) => result,
+        Err(payload) => {
+            let message = payload
+                .downcast_ref::<&str>()
+                .map(|s| s.to_string())
+                .or_else(|| payload.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "unknown panic".to_string());
+            Err(anyhow!("{}{}", PANIC_MARKER, message))
+        }
+    }
+}
+
 pub struct Instance {
     wasmtime_instance: wasmtime::Instance,
 }
 
 fn create_instance(engine: &Engine, module: &Module, store: &mut Store) -> Result<Box<Instance>> {
+    catch_panic(move || create_instance_impl(engine, module, store))
+}
+
+fn create_instance_impl(engine: &Engine, module: &Module, store: &mut Store) -> Result<Box<Instance>> {
     let mut linker = wasmtime::Linker::new(&engine.wasmtime_engine);
     wasmtime_wasi::preview1::add_to_linker_async(&mut linker, |s| s).context("Failed to add wasi to linker")?;
     let wasmtime_module = module
@@ -141,6 +167,10 @@ pub struct Module {
 }
 
 fn create_module(engine: &mut Engine, script: &str) -> Result<Box<Module>> {
+    catch_panic(move || create_module_impl(engine, script))
+}
+
+fn create_module_impl(engine: &mut Engine, script: &str) -> Result<Box<Module>> {
     let module_bytes = engine
         .wasmtime_engine
         .precompile_module((&script).as_bytes())
@@ -161,6 +191,9 @@ impl Module {
         self.wasmtime_module.is_some()
     }
     fn compile(&mut self, engine: &mut Engine) -> Result<()> {
+        catch_panic(move || self.compile_impl(engine))
+    }
+    fn compile_impl(&mut self, engine: &mut Engine) -> Result<()> {
         if self.is_compiled() {
             return Ok(());
         }
@@ -191,6 +224,10 @@ pub struct Store {
 }
 
 fn create_store(engine: &mut Engine, total_fuel: u64, yield_fuel: u64) -> Result<Box<Store>> {
+    catch_panic(move || create_store_impl(engine, total_fuel, yield_fuel))
+}
+
+fn create_store_impl(engine: &mut Engine, total_fuel: u64, yield_fuel: u64) -> Result<Box<Store>> {
     let wasi = wasmtime_wasi::WasiCtxBuilder::new().build_p1();
     let mut store = wasmtime::Store::new(&engine.wasmtime_engine, wasi);
     store.set_fuel(total_fuel)?;
@@ -212,11 +249,18 @@ impl Memory {
         self.wasmtime_memory.size(&store.wasmtime_store)
     }
     fn grow(&self, store: &mut Store, delta: u64) -> Result<u64> {
+        catch_panic(move || self.grow_impl(store, delta))
+    }
+    fn grow_impl(&self, store: &mut Store, delta: u64) -> Result<u64> {
         self.wasmtime_memory.grow(&mut store.wasmtime_store, delta)
     }
 }
 
 fn get_memory(instance: &Instance, store: &mut Store) -> Result<Box<Memory>> {
+    catch_panic(move || get_memory_impl(instance, store))
+}
+
+fn get_memory_impl(instance: &Instance, store: &mut Store) -> Result<Box<Memory>> {
     let export = instance
         .wasmtime_instance
         .get_export(&mut store.wasmtime_store, "memory")
@@ -232,6 +276,10 @@ fn get_memory(instance: &Instance, store: &mut Store) -> Result<Box<Memory>> {
 }
 
 fn get_abi(instance: &Instance, store: &mut Store, memory: &Memory) -> Result<u32> {
+    catch_panic(move || get_abi_impl(instance, store, memory))
+}
+
+fn get_abi_impl(instance: &Instance, store: &mut Store, memory: &Memory) -> Result<u32> {
     let export = instance
         .wasmtime_instance
         .get_export(&mut store.wasmtime_store, "_scylla_abi")
@@ -257,6 +305,10 @@ pub struct Engine {
 }
 
 fn create_engine(max_size: u32) -> Result<Box<Engine>> {
+    catch_panic(move || create_engine_impl(max_size))
+}
+
+fn create_engine_impl(max_size: u32) -> Result<Box<Engine>> {
     let mut config = wasmtime::Config::new();
     config.async_support(true);
     config.consume_fuel(true);
@@ -281,6 +333,10 @@ fn create_engine(max_size: u32) -> Result<Box<Engine>> {
 }
 
 fn create_test_engine(max_size: u32, fail_after: usize) -> Result<Box<Engine>> {
+    catch_panic(move || create_test_engine_impl(max_size, fail_after))
+}
+
+fn create_test_engine_impl(max_size: u32, fail_after: usize) -> Result<Box<Engine>> {
     let mut config = wasmtime::Config::new();
     config.async_support(true);
     config.consume_fuel(true);
@@ -308,6 +364,10 @@ pub struct Func {
 }
 
 fn create_func(instance: &Instance, store: &mut Store, name: &str) -> Result<Box<Func>> {
+    catch_panic(move || create_func_impl(instance, store, name))
+}
+
+fn create_func_impl(instance: &Instance, store: &mut Store, name: &str) -> Result<Box<Func>> {
     let export = instance
         .wasmtime_instance
         .get_export(&mut store.wasmtime_store, name)
@@ -406,6 +466,9 @@ pub struct Fut<'a> {
 
 impl<'a> Fut<'a> {
     fn resume(&mut self) -> Result<bool> {
+        catch_panic(move || self.resume_impl())
+    }
+    fn resume_impl(&mut self) -> Result<bool> {
         match self.fut.as_mut().poll(&mut core::task::Context::from_waker(
             futures::task::noop_waker_ref(),
         )) {
@@ -420,6 +483,15 @@ impl<'a> Fut<'a> {
 }
 
 fn get_func_future<'a>(
+    store: &'a mut Store,
+    func: &'a Func,
+    args: &'a ValVec,
+    rets: &'a mut ValVec,
+) -> Result<Box<Fut<'a>>> {
+    catch_panic(move || get_func_future_impl(store, func, args, rets))
+}
+
+fn get_func_future_impl<'a>(
     store: &'a mut Store,
     func: &'a Func,
     args: &'a ValVec,

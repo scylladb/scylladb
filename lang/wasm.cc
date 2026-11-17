@@ -307,6 +307,16 @@ seastar::future<bytes_opt> run_script(const db::functions::function_name& name, 
     } catch (const wasm::instance_corrupting_exception& e) {
         func_inst->instance = std::nullopt;
         ex = std::current_exception();
+    } catch (const rust::Error& e) {
+        // An error from the Rust bindings outside the function call itself -
+        // e.g., while passing the arguments, reading the result or creating
+        // the instance - possibly a panic, which the bindings return as an
+        // error. The instance's state may be inconsistent, so don't reuse it,
+        // and report the error like the other errors of the UDF.
+        if (func_inst) {
+            func_inst->instance = std::nullopt;
+        }
+        ex = std::make_exception_ptr(wasm::exception(fmt::format("Calling wasm function failed: {}", e.what())));
     } catch (...) {
         ex = std::current_exception();
     }
