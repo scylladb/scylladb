@@ -510,21 +510,27 @@ def test_token_bind_marker_name(cql, test_keyspace):
 
 # In the following test we check what error message appears if multi-column relation contains null values.    
 # Reproduces #13217
+# Scylla and Cassandra 5 say "Invalid null value in condition for column b",
+# Cassandra 6 says "Invalid null value for b in tuple (b, c, d)".
 def test_multi_column_relation_tuples_null_check(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, 'a int, b int, c int, d int, primary key (a, b, c, d)') as table:
-         with pytest.raises(InvalidRequest, match='Invalid null value in condition for column'): 
+         with pytest.raises(InvalidRequest, match='Invalid null value (in condition for column|for b in tuple)'):
                 cql.execute(f'SELECT * FROM {table} WHERE a = 0 AND (b, c, d) IN ((null, 2, 3), (2, 1, 4))')
-         with pytest.raises(InvalidRequest, match='Invalid null value in condition for column'): 
+         with pytest.raises(InvalidRequest, match='Invalid null value (in condition for column|for d in tuple)'):
                 cql.execute(f'SELECT * FROM {table} WHERE a = 0 AND (b, c, d) IN ((1, 2, 3), (2, 1, null))')      
 
 # This test shows how Scylla handles invalid number of items in one of the tuples of multi-column relation.
 # Reproduces #13217
 # Reproduces #13241
+# Scylla and Cassandra 5 say "Expected 3 elements in value tuple, but got 2",
+# Cassandra 6 says "Expected 3 elements in value for tuple (b, c, d), but got 2"
+# for too few elements, and "... too many elements. Type frozen<tuple<int, int,
+# int>> expects 3 but got 5" for too many.
 def test_multi_column_relation_wrong_number_of_items_in_tuple(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, 'a int, b int, c int, d int, primary key (a, b, c, d)') as table:
-        with pytest.raises(InvalidRequest, match='Expected 3 elements in value tuple, but got 2'):
+        with pytest.raises(InvalidRequest, match=r'Expected 3 elements in value (for )?tuple( \(b, c, d\))?, but got 2'):
             cql.execute(f'SELECT * FROM {table} WHERE a = 0 AND (b, c, d) IN ((1, 2), (2, 1, 4))')
-        with pytest.raises(InvalidRequest, match='Expected 3 elements in value tuple, but got 5'):
+        with pytest.raises(InvalidRequest, match=r'Expected 3 elements in value (for )?tuple( \(b, c, d\))?, but got 5|expects 3 but got 5'):
             cql.execute(f'SELECT * FROM {table} WHERE a = 0 AND (b, c, d) IN ((1, 2, 3, 4, 5), (2, 1, 4))')
 
 # Test for a bug found while developing the fix for #10357. The bug was that if a regular column was selected

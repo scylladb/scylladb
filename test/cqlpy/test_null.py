@@ -51,11 +51,13 @@ def test_insert_missing_key(cql, table1):
 
 # A null key, like a missing one, is also not allowed.
 # This reproduces issue #7852.
+# Scylla and Cassandra 5 say "Invalid null value in condition for column c",
+# Cassandra 6 says "Invalid null value for column c".
 def test_insert_null_key(cql, table1):
     s = unique_key_string()
-    with pytest.raises(InvalidRequest, match='Invalid null value in condition for column c'):
+    with pytest.raises(InvalidRequest, match='Invalid null value (in condition )?for column c'):
         cql.execute(f"INSERT INTO {table1} (p,c) VALUES ('{s}', null)")
-    with pytest.raises(InvalidRequest, match='Invalid null value in condition for column p'):
+    with pytest.raises(InvalidRequest, match='Invalid null value (in condition )?for column p'):
         cql.execute(f"INSERT INTO {table1} (p,c) VALUES (null, '{s}')")
     # Try the same thing with prepared statement, where a "None" stands for
     # a null. Note that this is completely different from UNSET_VALUE - only
