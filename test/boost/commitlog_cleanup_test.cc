@@ -228,6 +228,50 @@ SEASTAR_TEST_CASE(test_commitlog_cleanup_record_gc) {
     }, cfg);
 }
 
+// Test that the cleanup record of a tablet holds the position of the newest entry in
+// the shard's commitlog, not the highest position applied to the tablet's table.
+// Replay then skips everything the cleaned replica left in the commitlog for the
+// tablet, including what was never applied to the table's memtables: the raft log of a
+// strongly consistent tablet is in the commitlog as batches, and a batch whose entries
+// were not applied yet is above every position the table has seen.
+SEASTAR_TEST_CASE(test_commitlog_cleanup_record_position) {
+    BOOST_REQUIRE_EQUAL(this_smp_shard_count(), 1);
+    auto cfg = cql_test_config();
+    cfg.db_config->auto_snapshot.set(false);
+    cfg.db_config->commitlog_sync.set("batch");
+    cfg.db_config->tablets_mode_for_new_keyspaces.set(db::tablets_mode_t::mode::enabled);
+    cfg.initial_tablets = 1;
+
+    return do_with_cql_env_thread([](cql_test_env& e) {
+        e.execute_cql("create table ks.cf1 (pk int, ck int, primary key (pk, ck))").get();
+        e.execute_cql("create table ks.cf2 (pk int, ck int, primary key (pk, ck))").get();
+
+        auto& db = e.local_db();
+        auto& sys_ks = e.get_system_keyspace().local();
+        auto& cl = *db.commitlog();
+        auto cf1_id = db.find_schema("ks", "cf1")->id();
+
+        // The last write of cf1, then a write of another table, which is above it in
+        // the commitlog.
+        e.execute_cql("insert into ks.cf1 (pk,ck) values (0, 0)").get();
+        auto cf1_highest = cl.last_written_position();
+        e.execute_cql("insert into ks.cf2 (pk,ck) values (0, 0)").get();
+        auto newest = cl.last_written_position();
+        BOOST_REQUIRE(cf1_highest < newest);
+
+        db.find_column_family("ks", "cf1").cleanup_tablet_without_deallocation(db, sys_ks, locator::tablet_id(0)).get();
+
+        auto map = sys_ks.get_commitlog_cleanup_records().get();
+        auto local_map = map.find({cf1_id, int32_t(this_shard_id())});
+        BOOST_REQUIRE(local_map != map.end());
+        // The table has one tablet, so its record covers every token.
+        auto rp = local_map->second.get(0);
+        BOOST_REQUIRE(rp.has_value());
+        BOOST_REQUIRE(*rp >= newest);
+        BOOST_REQUIRE(*rp <= cl.last_written_position());
+    }, cfg);
+}
+
 // Test that system_keyspace::drop_all_commitlog_cleanup_records() deletes all records,
 // including those of shards which don't exist in the current boot cycle, and that it
 // issues one DELETE per partition (shard), not one per record.
