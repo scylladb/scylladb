@@ -57,7 +57,7 @@ Querying with BM25
 -------------------
 
 FTS queries use the ``BM25()`` function to score rows against a search term.
-``BM25()`` takes two arguments: a column name and a query string.
+``BM25()`` takes two arguments: a column name and a search term.
 
 A full-text search query must use ``BM25()`` in **both** of these clauses, on
 the **same** column and with the **same** search term:
@@ -160,7 +160,7 @@ combined filtering is planned for a future release.
 Using bind markers
 ~~~~~~~~~~~~~~~~~~
 
-The query term can be supplied with a bind marker in prepared statements::
+The search term can be supplied with a bind marker in prepared statements::
 
     SELECT * FROM ks.t
         WHERE BM25(v, ?) > 0

@@ -465,7 +465,7 @@ Full-Text Search queries (BM25) :label-note:`ScyllaDB Cloud`
 
 The ``BM25()`` function enables full-text search queries over text columns that
 have a :ref:`full-text index <create-fulltext-index-statement>` created with
-``USING 'fulltext_index'``. ``BM25()`` takes a column name and a query string
+``USING 'fulltext_index'``. ``BM25()`` takes a column name and a search term
 and scores rows using the BM25 ranking algorithm.
 
 A full-text search query must contain **both** of the following clauses,
@@ -512,7 +512,7 @@ Filter and rank by relevance::
         ORDER BY BM25(body, 'distributed database')
         LIMIT 10;
 
-Use bind markers for the query term::
+Use bind markers for the search term::
 
     SELECT * FROM articles
         WHERE BM25(body, ?) > 0
