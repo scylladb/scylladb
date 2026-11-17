@@ -33,6 +33,7 @@
 #include <seastar/core/scheduling.hh>
 #include <seastar/core/reactor.hh>
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/sleep.hh>
 #include "service/client_routes.hh"
 #include "service/migration_manager.hh"
 #include "service/qos/raft_service_level_distributed_data_accessor.hh"
@@ -147,6 +148,26 @@ static const sstring testing_superuser = "tester";
 data_dictionary::database
 cql_test_env::data_dictionary() {
     return db().local().as_data_dictionary();
+}
+
+void
+cql_test_env::wait_until_schema_change_waits() {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    for (;;) {
+        // A new holder is ready at once, unless a schema change waits: then
+        // it waits behind the schema change.
+        auto holder = data_dictionary().hold_off_schema_changes();
+        if (!holder.available()) {
+            // It lets go as soon as it gets its turn.
+            (void)holder.discard_result();
+            return;
+        }
+        (void)holder.get();
+        if (std::chrono::steady_clock::now() > deadline) {
+            throw std::runtime_error("wait_until_schema_change_waits(): no schema change waited within 30s");
+        }
+        seastar::sleep(std::chrono::milliseconds(1)).get();
+    }
 }
 
 class single_node_cql_env : public cql_test_env {

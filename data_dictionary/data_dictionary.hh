@@ -12,6 +12,8 @@
 #include <set>
 #include <string_view>
 #include <vector>
+#include <seastar/core/future.hh>
+#include <seastar/core/rwlock.hh>
 #include <seastar/core/shared_ptr.hh>
 #include "seastarx.hh"
 #include "schema/schema_fwd.hh"
@@ -133,6 +135,9 @@ public:
     const gms::feature_service& features() const;
     replica::database& real_database() const; // For transition; remove
     replica::database* real_database_ptr() const;
+    // Do not nest: a schema change that waits for the outer holder blocks the
+    // inner one, so neither ends.
+    future<seastar::rwlock::holder> hold_off_schema_changes() const;
 };
 
 }

@@ -1748,6 +1748,7 @@ public:
         std::unordered_map<ks_cf_t, table_id, utils::tuple_hash, string_pair_eq>;
     class tables_metadata {
         rwlock _cf_lock;
+        rwlock _schema_change_lock;
         std::unordered_map<table_id, lw_shared_ptr<column_family>> _column_families;
         ks_cf_to_uuid_t _ks_cf_to_uuid;
     private:
@@ -1758,6 +1759,8 @@ public:
 
         // write lock is needed during adding or removing table
         future<rwlock::holder> hold_write_lock();
+        future<rwlock::holder> hold_schema_change_lock();
+        future<rwlock::holder> hold_off_schema_changes();
         void add_table(database& db, keyspace& ks, table& cf, schema_ptr s);
         void remove_table(database& db, table& cf) noexcept;
 

@@ -261,6 +261,11 @@ public:
 
     data_dictionary::database data_dictionary();
 
+    // Waits until a schema change waits for the holders of
+    // data_dictionary::database::hold_off_schema_changes() on this shard.
+    // Runs in a seastar thread.
+    void wait_until_schema_change_waits();
+
     virtual sharded<qos::service_level_controller>& service_level_controller_service() = 0;
 
     // Call only on shard0.

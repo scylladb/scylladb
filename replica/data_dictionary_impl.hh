@@ -139,6 +139,9 @@ public:
     virtual replica::database* real_database_ptr(data_dictionary::database db) const override {
         return &real_database(db);
     }
+    virtual future<rwlock::holder> hold_off_schema_changes(data_dictionary::database db) const override {
+        return real_database(db).get_tables_metadata().hold_off_schema_changes();
+    }
     virtual schema_ptr get_cdc_base_table(data_dictionary::database db, const schema& s) const override {
         return cdc::get_base_table(unwrap(db), s);
     }

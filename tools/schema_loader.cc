@@ -220,6 +220,10 @@ private:
     virtual replica::database* real_database_ptr(data_dictionary::database db) const override {
         return nullptr;
     }
+    virtual future<rwlock::holder> hold_off_schema_changes(data_dictionary::database db) const override {
+        // The schema does not change here.
+        return make_ready_future<rwlock::holder>();
+    }
 };
 
 class user_types_storage : public data_dictionary::user_types_storage {

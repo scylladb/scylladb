@@ -564,6 +564,36 @@ SEASTAR_TEST_CASE(test_drop_nested_user_type_in_use) {
     });
 }
 
+// A schema change waits for a holder of hold_off_schema_changes(), and is
+// applied when the holder is released.
+SEASTAR_TEST_CASE(test_schema_change_waits_for_hold_off_schema_changes) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("create table ks.t (pk int primary key, v int);").get();
+        auto db = e.data_dictionary();
+        const auto version = db.find_schema("ks", "t")->version();
+
+        auto holder = db.hold_off_schema_changes().get();
+        auto alter = e.execute_cql("alter table ks.t add c int;");
+        e.wait_until_schema_change_waits();
+        BOOST_REQUIRE(!alter.available());
+        BOOST_REQUIRE(db.find_schema("ks", "t")->version() == version);
+
+        holder.return_all();
+        alter.get();
+        BOOST_REQUIRE(db.find_schema("ks", "t")->version() != version);
+    });
+}
+
+// A flush of all tables holds the tables metadata lock for reading until it
+// ends, and a schema change waits for the flush with the write side. Holding
+// off schema changes must wait for neither. The test holds the write side.
+SEASTAR_TEST_CASE(test_hold_off_schema_changes_does_not_wait_for_the_tables_metadata_lock) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto lock = e.local_db().get_tables_metadata().hold_write_lock().get();
+        BOOST_REQUIRE(e.data_dictionary().hold_off_schema_changes().available());
+    });
+}
+
 SEASTAR_TEST_CASE(test_prepared_statement_is_invalidated_by_schema_change) {
     return do_with_cql_env([](cql_test_env& e) {
         return seastar::async([&] {
