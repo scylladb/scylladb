@@ -261,6 +261,9 @@ binary_operator validate_and_prepare_new_restriction(const binary_operator& rest
     } else if (is<function_call>(prepared_binop.lhs)) {
         // Non-token function-call restrictions (e.g. BM25(col, term) > 0)
         // Validated in statement_restrictions
+    } else if (is<field_selection>(prepared_binop.lhs)) {
+        throw exceptions::invalid_request_exception(
+            format("Restricting a field of a user-defined type is not supported: {:user}", restriction));
     } else {
         // Anything else
         throw exceptions::invalid_request_exception(

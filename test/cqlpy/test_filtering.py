@@ -191,6 +191,19 @@ def test_filtering_with_not_in_relation(cql, test_keyspace):
         res = cql.execute(f"select * from {table} where v NOT IN (5,NULL) ALLOW FILTERING")
         assert set(res) == set()
 
+# WHERE parses a relation on a field of a user-defined type and an IN on a map
+# element, as LWT IF conditions do (SCYLLADB-447). WHERE doesn't support these
+# restrictions, and rejects them. Cassandra rejects them as syntax errors.
+def test_filtering_udt_field_and_map_element_in(cql, test_keyspace, scylla_only):
+    with new_type(cql, test_keyspace, "(a int)") as typ:
+        with new_test_table(cql, test_keyspace, f"p int PRIMARY KEY, u {typ}, m map<int, int>") as table:
+            with pytest.raises(InvalidRequest, match="field of a user-defined type"):
+                cql.execute(f"SELECT * FROM {table} WHERE u.a = 1 ALLOW FILTERING")
+            with pytest.raises(InvalidRequest, match="Only EQ relations"):
+                cql.execute(f"SELECT * FROM {table} WHERE m[1] IN (1, 2) ALLOW FILTERING")
+            with pytest.raises(InvalidRequest, match="Only EQ relations"):
+                cql.execute(f"SELECT * FROM {table} WHERE m[1] NOT IN (1, 2) ALLOW FILTERING")
+
 
 # Test that subscripts in expressions work as expected. They should only work
 # on map columns, and must have the correct type. Test that they also work

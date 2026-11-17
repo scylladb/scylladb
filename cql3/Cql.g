@@ -1926,6 +1926,15 @@ columnCondition returns [uexpression e]
         )
     ;
 
+elementOrFieldRelation[expression lhs] returns [uexpression e]
+    : op=relationType t=term
+        { $e = binary_operator(std::move(lhs), op, std::move(t)); }
+    | K_IN values=singleColumnInValuesOrMarkerExpr
+        { $e = binary_operator(std::move(lhs), oper_t::IN, std::move(values)); }
+    | K_NOT K_IN values=singleColumnInValuesOrMarkerExpr
+        { $e = binary_operator(std::move(lhs), oper_t::NOT_IN, std::move(values)); }
+    ;
+
 properties[cql3::statements::property_definitions& props]
     : property[props] (K_AND property[props])*
     ;
@@ -2001,7 +2010,8 @@ relation returns [uexpression e]
           }); }
       | K_CONTAINS { rt = oper_t::CONTAINS; } (K_KEY { rt = oper_t::CONTAINS_KEY; })?
           t=term { $e = binary_operator(unresolved_identifier{std::move(name)}, rt, std::move(t)); }
-      | '[' key=term ']' type=relationType t=term { $e = binary_operator(subscript{.val = unresolved_identifier{std::move(name)}, .sub = std::move(key)}, type, std::move(t)); }
+      | '[' key=term ']' r=elementOrFieldRelation[subscript{.val = unresolved_identifier{std::move(name)}, .sub = std::move(key)}] { $e = std::move(r); }
+      | '.' field=cident r=elementOrFieldRelation[field_selection{unresolved_identifier{std::move(name)}, std::move(field)}] { $e = std::move(r); }
       )
     | ids=tupleOfIdentifiers
       ( K_IN
