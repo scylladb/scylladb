@@ -62,7 +62,17 @@ static void init_abstract_arg(const abstract_type& t, const bytes_opt& param, wa
                     // The future only calls malloc, which should complete quickly enough to not need yielding.
                     while (!fut->resume());
                     auto val = rets->pop_val();
-                    mem_size = val->i32();
+                    // The offset returned by the module's _scylla_malloc is an unsigned
+                    // 32-bit offset, which must leave room for the argument inside the
+                    // memory (which _scylla_malloc may have grown). If it doesn't, the
+                    // module is broken, so don't reuse this instance.
+                    uint32_t offset = val->i32();
+                    size_t current_mem_size = memory->size(store) * WASM_PAGE_SIZE;
+                    if (offset > current_mem_size || size_t(serialized_size) > current_mem_size - offset) {
+                        throw wasm::instance_corrupting_exception(fmt::format("_scylla_malloc returned offset {} for an argument of size {}, outside the module's memory of size {}",
+                                offset, serialized_size, current_mem_size));
+                    }
+                    mem_size = offset;
                     break;
                 }
                 default:
@@ -173,11 +183,19 @@ struct from_val_visitor {
         expect_kind(wasmtime::ValKind::I64);
         auto memory = wasmtime::get_memory(instance, store);
         uint8_t* mem_base = memory->data(store);
-        uint8_t* data = mem_base + (val.i64() & 0xffffffff);
+        uint32_t offset = val.i64() & 0xffffffff;
         int32_t ret_size = val.i64() >> 32;
         if (ret_size == -1) {
             return bytes_opt{};
         }
+        // The returned offset and size must describe a value inside the module's
+        // memory. If they don't, the module is broken, so don't reuse this instance.
+        size_t mem_size = memory->size(store) * WASM_PAGE_SIZE;
+        if (ret_size < 0 || offset > mem_size || size_t(ret_size) > mem_size - offset) {
+            throw wasm::instance_corrupting_exception(fmt::format("Function returned a value at offset {} of size {}, outside the module's memory of size {}",
+                    offset, ret_size, mem_size));
+        }
+        uint8_t* data = mem_base + offset;
         bytes_opt ret;
         const counter_type_impl* counter = dynamic_cast<const counter_type_impl*>(&t);
         if (counter) {
