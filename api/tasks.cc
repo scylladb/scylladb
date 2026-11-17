@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
+#include <atomic>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/exception.hh>
 #include <fmt/ranges.h>
@@ -84,6 +85,24 @@ static future<tasks::task_manager::task_ptr> force_keyspace_cleanup(http_context
     co_return co_await compaction_module.start_cleanup_keyspace_compaction(db, std::move(keyspace), table_infos, compaction::flush_mode::all_tables, tasks::is_user_task::yes);
 }
 
+// The name of the snapshot that scrub takes before it starts, with the time in
+// milliseconds. Two scrubs of a table that start in the same millisecond must
+// not get the same name, because the snapshot of the second would fail with
+// "snapshot already exists". So if the clock hasn't advanced since the
+// previous scrub, use the previous scrub's time plus one millisecond. The
+// requests of the REST API can be handled on any shard, so the previous time
+// is kept in an atomic variable shared by all shards.
+static sstring pre_scrub_snapshot_tag() {
+    static std::atomic<int64_t> previous{0};
+    const int64_t now = db_clock::now().time_since_epoch().count();
+    int64_t prev = previous.load(std::memory_order_relaxed);
+    int64_t t;
+    do {
+        t = std::max(now, prev + 1);
+    } while (!previous.compare_exchange_weak(prev, t, std::memory_order_relaxed));
+    return fmt::format("pre-scrub-{:d}", t);
+}
+
 static scrub_info parse_scrub_options(const http_context& ctx, std::unique_ptr<http::request> req) {
     scrub_info info;
     auto [ keyspace, table_infos ] = parse_table_infos(ctx, *req, "cf");
@@ -113,7 +132,7 @@ static scrub_info parse_scrub_options(const http_context& ctx, std::unique_ptr<h
     }
 
     if (!get_query_param<bool>(*req, "disable_snapshot") && !info.column_families.empty()) {
-        info.snapshot_tag = format("pre-scrub-{:d}", db_clock::now().time_since_epoch().count());
+        info.snapshot_tag = pre_scrub_snapshot_tag();
     }
 
     info.opts = {
