@@ -318,11 +318,13 @@ def test_group_by_paging(cql, test_table, scylla_only):
 
     with util.config_value_context(cql, 'select_internal_page_size', '5'):
         # The table is shared with the other tests, so only our own partitions
-        # are compared. The small fetch size must not split the result either.
+        # are compared. The small fetch size must not split a group into two
+        # rows either, so read all the pages: today Scylla returns all the
+        # groups in the first page (SCYLLADB-5393), but once that is fixed,
+        # each page will hold one group.
         query = f"SELECT pk1, pk2, COUNT(*) FROM MUTATION_FRAGMENTS({test_table}) GROUP BY pk1, pk2"
         res = cql.execute(cassandra.query.SimpleStatement(query, fetch_size=1))
-        assert sorted((r.pk2, r.count) for r in res.current_rows if r.pk1 == pk1) == expected
-        assert not res.has_more_pages
+        assert sorted((r.pk2, r.count) for r in res if r.pk1 == pk1) == expected
 
 @pytest.mark.parametrize("test_keyspace", ["tablets", "vnodes"], indirect=True)
 def test_many_partition_scan(cql, test_keyspace, scylla_only):
