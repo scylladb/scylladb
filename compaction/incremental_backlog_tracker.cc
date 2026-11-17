@@ -73,17 +73,22 @@ incremental_backlog_tracker::calculate_sstables_backlog_contribution(const compa
     };
 }
 
+void incremental_backlog_tracker::refresh(const compaction_backlog_source& src) const {
+    if (!_backlog_dirty) {
+        return;
+    }
+    auto result = calculate_sstables_backlog_contribution(src, _options);
+    _total_bytes = result.total_bytes;
+    _total_backlog_bytes = result.total_backlog_bytes;
+    _sstables_backlog_contribution = result.sstables_backlog_contribution;
+    _sstable_runs_contributing_backlog = std::move(result.sstable_runs_contributing_backlog);
+    _backlog_dirty = false;
+}
+
 incremental_backlog_tracker::incremental_backlog_tracker(incremental_compaction_strategy_options options) : _options(std::move(options)) {}
 
 double incremental_backlog_tracker::backlog(const compaction_backlog_source& src, const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const {
-    if (_backlog_dirty) {
-        auto result = calculate_sstables_backlog_contribution(src, _options);
-        _total_bytes = result.total_bytes;
-        _total_backlog_bytes = result.total_backlog_bytes;
-        _sstables_backlog_contribution = result.sstables_backlog_contribution;
-        _sstable_runs_contributing_backlog = std::move(result.sstable_runs_contributing_backlog);
-        _backlog_dirty = false;
-    }
+    refresh(src);
 
     inflight_component compacted = compacted_backlog(oc);
 
