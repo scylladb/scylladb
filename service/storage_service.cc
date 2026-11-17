@@ -5810,6 +5810,17 @@ future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_
         }
 
         auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
+
+        // Raft keeps the replicas of a strongly consistent tablet in sync, and its requests
+        // can't be served while it's in the repair stage.
+        if (tmap.has_raft_info()) {
+            auto table_schema = _db.local().find_schema(table);
+            throw std::invalid_argument(::format(
+                "Cannot repair table '{}'.'{}' because keyspace '{}' is strongly consistent. "
+                "Raft keeps the replicas of a strongly consistent table in sync, so there is nothing to repair.",
+                table_schema->ks_name(), table_schema->cf_name(), table_schema->ks_name()));
+        }
+
         group0_update_collector updates;
 
         if (all_tokens) {
