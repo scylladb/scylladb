@@ -411,11 +411,22 @@ future<> view_building_worker::run_view_building_state_observer() {
             auto read_apply_mutex_holder = co_await _group0.client().hold_read_apply_mutex(_as);
 
             co_await update_built_views();
-            co_await check_for_aborted_tasks();
+            auto building_state = _vb_state_machine.building_state;
+            auto seen_version = _vb_state_machine.version;
+            read_apply_mutex_holder.return_all();
+
+            // Waits for base table flushes and streams on all shards, so it must not hold
+            // the read-apply mutex: holding it blocks group0 apply on this node for as long
+            // as the streams last, and can deadlock when a stream itself needs a group0
+            // operation to finish (SCYLLADB-4994, SCYLLADB-5061).
+            co_await check_for_aborted_tasks(std::move(building_state));
             _as.check();
 
-            read_apply_mutex_holder.return_all();
-            co_await _vb_state_machine.event.wait();
+            // Wait with a predicate, so a state change applied while this fiber
+            // is not waiting on `event` is not lost.
+            co_await _vb_state_machine.event.when([&] {
+                return _as.abort_requested() || _vb_state_machine.version != seen_version;
+            });
         } catch (abort_requested_exception&) {
         } catch (broken_condition_variable&) {
         } catch (...) {
@@ -472,8 +483,8 @@ future<> view_building_worker::update_built_views() {
 }
 
 // Must be executed on shard0
-future<> view_building_worker::check_for_aborted_tasks() {
-    return container().invoke_on_all([building_state = _vb_state_machine.building_state] (view_building_worker& vbw) -> future<> {
+future<> view_building_worker::check_for_aborted_tasks(view_building_state building_state) {
+    return container().invoke_on_all([building_state = std::move(building_state)] (view_building_worker& vbw) -> future<> {
         auto lock = co_await get_units(vbw._state._mutex, 1, vbw._as);
         co_await vbw._state.update_processing_base_table(vbw._db, building_state, vbw._as);
         if (!vbw._state._batch) {
@@ -557,13 +568,16 @@ future<> view_building_worker::state::flush_base_table(replica::database& db, ta
     }
 
     auto cf = db.find_column_family(base_table_id).shared_from_this();
+    vbw_logger.debug("Awaiting penging writes and streams on base table {}.{}", cf->schema()->ks_name(), cf->schema()->cf_name());
     co_await when_all(cf->await_pending_writes(), cf->await_pending_streams());
     auto views_to_flush = get_ids_of_all_views(db, base_table_id);
+    vbw_logger.debug("Flushing base table {}.{}", cf->schema()->ks_name(), cf->schema()->cf_name());
     co_await flush_base(cf, as);
     co_await utils::get_local_injector().inject("view_building_worker_pause_after_flush_before_recording_flushed_views",
             utils::wait_for_message(std::chrono::minutes(5)));
     processing_base_table = base_table_id;
     flushed_views = std::move(views_to_flush);
+    vbw_logger.debug("Flushed base table {}.{} for views: {}", cf->schema()->ks_name(), cf->schema()->cf_name(), flushed_views);
 }
 
 future<> view_building_worker::state::clear() {
