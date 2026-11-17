@@ -2913,3 +2913,54 @@ async def test_alternator_basic_ops_audit_disabled(manager: ScyllaClusterManager
             client.delete_table(TableName=table_name)
         except ClientError:
             pass
+
+
+async def test_syslog_queued_write_retains_username(manager: ScyllaClusterManager):
+    """PR #31303: retain authenticated names while syslog semaphore admission waits."""
+    with AuditBackendSyslog(socket_path=syslog_socket_path) as helper:
+        tester = CQLAuditTester(manager)
+        cql = await tester.prepare(helper=helper, user="cassandra", password="cassandra",
+            cmdline=["--smp", "1"], audit_settings={
+                "audit": "syslog", "audit_categories": "DML", "audit_keyspaces": "ks",
+            })
+        server = (await manager.running_servers())[0]
+        await cql.run_async("CREATE TABLE ks.queued_audit (id int PRIMARY KEY)")
+        users = [f"audit_owner_{letter}_" + letter * 64 for letter in ("a", "b")]
+        sessions = []
+        for user in users:
+            await cql.run_async(f"CREATE ROLE {user} WITH PASSWORD = 'password' AND LOGIN = true")
+            await cql.run_async(f"GRANT MODIFY ON ks.queued_audit TO {user}")
+            sessions.append(await manager.get_cql_exclusive(
+                server, auth_provider=PlainTextAuthProvider(username=user, password="password")))
+        helper.unix_socket_listener.lines.clear()
+        injection = "audit_syslog_after_acquire"
+        await manager.api.enable_injection(server.ip_addr, injection, one_shot=True)
+        writes = []
+        try:
+            queries = [f"INSERT INTO ks.queued_audit (id) VALUES ({i})" for i in range(8)]
+            writes = [asyncio.ensure_future(sessions[i % 2].run_async(query)) for i, query in enumerate(queries)]
+            await asyncio.wait_for(manager.api.wait_for_injection_enter(server.ip_addr, injection), timeout=30)
+
+            async def all_rows_written():
+                rows = await cql.run_async("SELECT count(*) FROM ks.queued_audit")
+                return rows[0].count == len(writes) or None
+
+            await wait_for_async(all_rows_written, time.time() + 30)
+            # One write owns the semaphore; later writes wait before formatting.
+            assert all(not write.done() for write in writes)
+        finally:
+            await manager.api.message_injection(server.ip_addr, injection)
+            await manager.api.disable_injection(server.ip_addr, injection)
+            if writes:
+                await asyncio.wait_for(asyncio.gather(*writes), timeout=30)
+
+        async def all_records_received():
+            with helper.unix_socket_listener.condition:
+                lines = [line for line in helper.unix_socket_listener.lines if "queued_audit" in line]
+            return lines if len(lines) == len(writes) else None
+
+        lines = await wait_for_async(all_records_received, time.time() + 30)
+        for i, query in enumerate(queries):
+            matching = [line for line in lines if f'query="{query}"' in line]
+            assert len(matching) == 1, matching
+            assert f'username="{users[i % 2]}"' in matching[0], matching[0]
