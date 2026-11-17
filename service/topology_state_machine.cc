@@ -8,6 +8,9 @@
  */
 
 #include "topology_state_machine.hh"
+#include <algorithm>
+#include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 #include "utils/log.hh"
 #include "db/system_keyspace.hh"
 #include "gms/gossiper.hh"
@@ -46,6 +49,74 @@ bool topology::contains(raft::server_id id) {
 
 bool topology::is_busy() const {
     return tstate.has_value();
+}
+
+// Hosts in `wanted` holding any tablet replica (current, pending or leaving), as in has_replica_on(); stops once all are found.
+static future<std::unordered_set<locator::host_id>> hosts_with_tablet_replicas(const locator::tablet_metadata& tablets,
+        const std::unordered_set<locator::host_id>& wanted) {
+    std::unordered_set<locator::host_id> hosts;
+    if (wanted.empty()) {
+        co_return hosts;
+    }
+    auto note = [&] (locator::host_id h) {
+        if (wanted.contains(h)) {
+            hosts.insert(h);
+        }
+    };
+    for (auto&& [id, map] : tablets.all_tables_ungrouped()) {
+        for (auto&& tablet : map->tablet_ids()) {
+            auto& tinfo = map->get_tablet_info(tablet);
+            for (auto&& r : tinfo.replicas) {
+                note(r.host);
+            }
+            auto* trinfo = map->get_tablet_transition_info(tablet);
+            if (trinfo && trinfo->pending_replica) {
+                note(trinfo->pending_replica->host);
+            }
+            if (hosts.size() == wanted.size()) {
+                co_return hosts;
+            }
+            co_await coroutine::maybe_yield();
+        }
+    }
+    co_return hosts;
+}
+
+future<> topology::update_tablet_dependent_state(const locator::tablet_metadata& tablets, const gms::feature_service& features) {
+    std::unordered_set<locator::host_id> wanted;
+    for (const auto& [id, _] : left_nodes_rs) {
+        wanted.insert(locator::host_id(id.uuid()));
+    }
+    if (features.parallel_tablet_draining) {
+        for (const auto& [id, req] : requests) {
+            if (req == topology_request::leave || req == topology_request::remove) {
+                wanted.insert(locator::host_id(id.uuid()));
+            }
+        }
+    }
+    auto hosts_with_replicas = co_await hosts_with_tablet_replicas(tablets, wanted);
+
+    // left_nodes_rs: drop nodes that no longer have a tablet replica; new
+    // `left` nodes are added by the caller, not here.
+    std::erase_if(left_nodes_rs, [&] (auto& kv) {
+        return !hosts_with_replicas.contains(locator::host_id(kv.first.uuid()));
+    });
+    excluded_tablet_nodes = ignored_nodes;
+    for (const auto& [id, _] : left_nodes_rs) {
+        excluded_tablet_nodes.insert(id);
+    }
+
+    if (features.parallel_tablet_draining) {
+        // paused_requests is fully derived from requests + tablet placement,
+        // so rebuild it from scratch rather than only ever adding to it.
+        paused_requests.clear();
+        for (auto&& [node, req] : requests) {
+            if ((req == topology_request::leave || req == topology_request::remove)
+                    && hosts_with_replicas.contains(locator::host_id(node.uuid()))) {
+                paused_requests.emplace(node, req);
+            }
+        }
+    }
 }
 
 raft::server_id topology::parse_replaced_node(const std::optional<request_param>& req_param) {

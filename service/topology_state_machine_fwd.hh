@@ -13,6 +13,7 @@
 // gms/feature_service.hh and more).
 
 #include <cstdint>
+#include <optional>
 
 namespace service {
 
@@ -62,6 +63,19 @@ enum class global_topology_request: uint16_t {
 enum class storage_mode : uint16_t {
     vnodes,
     tablets,
+};
+
+// Scope of a group0 command's system.topology change, used as topology_state_load()'s reload scope.
+// No hint at all means a full reload.
+struct topology_change_hint {
+    enum class scope {
+        tablets_only,  // command carried no system.topology mutations at all
+        versions_only, // only version/fence_version static cells changed
+        full,          // some other static column, a clustering row, or a tombstone changed
+    };
+    scope reload_scope = scope::full;
+    std::optional<int64_t> version;
+    std::optional<int64_t> fence_version;
 };
 
 } // namespace service

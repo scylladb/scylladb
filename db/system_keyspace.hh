@@ -35,6 +35,9 @@
 #include "auth_version.hh"
 #include "db/view/view_building_state.hh"
 #include "service/topology_state_machine_fwd.hh"
+#include "utils/chunked_vector.hh"
+
+class canonical_mutation;
 
 namespace netw {
     class shared_dict;
@@ -759,6 +762,9 @@ public:
         return _qp;
     }
 }; // class system_keyspace
+
+// Classifies how much of system.topology the mutations change; see service::topology_change_hint::scope.
+future<service::topology_change_hint> get_topology_change_hint(const utils::chunked_vector<canonical_mutation>& mutations);
 
 } // namespace db
 
