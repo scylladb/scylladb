@@ -7,6 +7,7 @@ import time
 import shutil
 import signal
 import atexit
+import ctypes
 import requests
 
 # run_with_temporary_dir() is a utility function for running a process, such
@@ -19,6 +20,25 @@ import requests
 # command line to run and map of extra environment variables. This function
 # can put files in the directory (which already exists when it is called).
 # See below the example run_scylla_cmd.
+
+# The children of this script - the tested server and pytest - each run in
+# their own session (see os.setsid() below), so they don't get the signals
+# sent to this script's process group. cleanup_all() below kills them when
+# this script exits normally, on an exception, or on SIGTERM or SIGHUP. But
+# if this script is killed with SIGKILL (e.g., by a timeout of whatever ran
+# it, or by the OOM killer), cleanup_all() can't run, and the children would
+# keep running forever - a Scylla process, or a Cassandra Docker container
+# with its "docker run" client. So each child calls die_with_parent() right
+# after the fork, which asks the kernel to send it a SIGTERM when this
+# script dies, however it dies. parent_pid is this script's process id: if
+# it already died before the request, the child exits.
+PR_SET_PDEATHSIG = 1
+def die_with_parent(parent_pid):
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.prctl(PR_SET_PDEATHSIG, signal.SIGTERM) != 0:
+        return
+    if os.getppid() != parent_pid:
+        os._exit(1)
 
 def pid_to_dir(pid):
     return os.path.join(os.getenv('TMPDIR', '/tmp'), 'scylla-test-'+str(pid))
@@ -35,9 +55,11 @@ def run_with_generated_dir(run_cmd_generator, run_dir_generator):
     signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGQUIT, signal.SIGTERM})
     sys.stdout.flush()
     sys.stderr.flush()
+    parent_pid = os.getpid()
     pid = os.fork()
     if pid == 0:
         # Child
+        die_with_parent(parent_pid)
         run_with_temporary_dir_pids = set() # no children to clean up on child
         run_pytest_pids = set()
         pid = os.getpid()
@@ -621,9 +643,11 @@ def run_pytest(pytest_dir, additional_parameters):
     sys.stdout.flush()
     sys.stderr.flush()
     additional_parameters = _prepare_pytest_args(additional_parameters)
+    parent_pid = os.getpid()
     pid = os.fork()
     if pid == 0:
         # child:
+        die_with_parent(parent_pid)
         run_with_temporary_dir_pids = set() # no children to clean up on child
         run_pytest_pids = set()
         os.environ.setdefault('SCYLLA_TEST_RUNNER', 'runpy')
