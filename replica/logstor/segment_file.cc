@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <charconv>
 #include <cstring>
+#include <limits>
 #include <ranges>
 #include <set>
 #include <stdexcept>
@@ -18,13 +19,17 @@
 #include <utility>
 #include <vector>
 
+#include <seastar/core/align.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/loop.hh>
 #include <seastar/core/seastar.hh>
 #include <seastar/core/with_scheduling_group.hh>
 #include <seastar/coroutine/as_future.hh>
+#include <seastar/coroutine/exception.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
+#include <seastar/coroutine/try_future.hh>
 
+#include "exceptions/exceptions.hh"
 #include "replica/logstor/ondisk.hh"
 #include "utils/checked-file-impl.hh"
 #include "utils/disk-error-handler.hh"
@@ -32,6 +37,37 @@
 #include "utils/lister.hh"
 
 namespace replica::logstor {
+
+segment_geometry::segment_geometry(uint64_t segment_size, uint64_t file_size, uint64_t disk_size)
+    : _segment_size(checked_segment_size(segment_size, file_size, disk_size))
+    , _segments_per_file(file_size / segment_size)
+    , _file_count(disk_size / file_size)
+{}
+
+uint64_t segment_geometry::checked_segment_size(uint64_t segment_size, uint64_t file_size, uint64_t disk_size) {
+    if (segment_size == 0) {
+        throw exceptions::configuration_exception("Segment size must not be zero");
+    }
+    if (segment_size % ondisk::block_alignment != 0) {
+        throw exceptions::configuration_exception(fmt::format("Segment size {} must be a multiple of the block alignment {}", segment_size, ondisk::block_alignment));
+    }
+    // The append offset is equal to the segment size after the last append, so the type of the
+    // offset must hold the segment size itself.
+    constexpr uint64_t max_segment_size = std::numeric_limits<decltype(segment_position::offset)>::max();
+    if (segment_size > max_segment_size) {
+        throw exceptions::configuration_exception(fmt::format("Segment size {} must be less than or equal to {}", segment_size, max_segment_size));
+    }
+    if (file_size == 0) {
+        throw exceptions::configuration_exception("File size must not be zero");
+    }
+    if (segment_size > file_size) {
+        throw exceptions::configuration_exception(fmt::format("Segment size {} must be less than or equal to file size {}", segment_size, file_size));
+    }
+    if (file_size > disk_size) {
+        throw exceptions::configuration_exception(fmt::format("Disk size {} must be greater than or equal to file size {}", disk_size, file_size));
+    }
+    return segment_size;
+}
 
 file_manager::file_manager(file_manager_config cfg)
     : _cfg(std::move(cfg))
@@ -328,6 +364,18 @@ future<seastar::file> file_manager::open_file(file_id_t file_id) {
         seastar::open_flags::rw | seastar::open_flags::dsync
     );
 
+    // The segments write chunks with direct writes, and a chunk is aligned to ondisk::block_alignment
+    // in the file and in memory. A write that the device cannot take fails as a disk error, which
+    // isolates the node, thus a device that needs a larger alignment is refused here.
+    const auto write_alignment = file.disk_write_dma_alignment();
+    const auto memory_alignment = file.memory_dma_alignment();
+    if (ondisk::block_alignment % write_alignment != 0 || ondisk::block_alignment % memory_alignment != 0) [[unlikely]] {
+        co_await file.close();
+        co_await coroutine::return_exception(std::runtime_error(fmt::format(
+                "Cannot use logstor file {}: its device needs direct writes aligned to {} bytes in the file and {} bytes in memory, and the block size {} is not a multiple of them",
+                file_path(file_id).string(), write_alignment, memory_alignment, ondisk::block_alignment)));
+    }
+
     // Each file is opened once. The file is open now if the caller opened an open file, or if
     // another caller opened it at the same time.
     if (_open_files[file_id]) [[unlikely]] {
@@ -345,6 +393,157 @@ future<> file_manager::zero_region(file_id_t file_id, uint64_t offset, uint64_t 
                 offset, offset + size, file_id, _cfg.file_size));
     }
     co_await write_zeros(get_open_file(file_id), offset, size);
+}
+
+segment::segment(log_segment_id id, seastar::file file, uint64_t file_offset, uint64_t size)
+    : _id(id)
+    , _file(std::move(file))
+    , _file_offset(file_offset)
+    , _size(size) {
+}
+
+void segment::start(segment_ref seg_ref, segment_sequence seq_num) {
+    _seg_ref = std::move(seg_ref);
+    _seq_num = seq_num;
+}
+
+future<> segment::stop() {
+    if (_write_gate.is_closed()) {
+        co_return;
+    }
+    co_await _write_gate.close();
+}
+
+future<std::optional<segment::appender>> segment::begin_append(size_t size) {
+    if (_failed) [[unlikely]] {
+        co_return std::nullopt;
+    }
+
+    auto units_result = co_await coroutine::as_future(get_units(_append_sem, 1));
+    if (units_result.failed()) [[unlikely]] {
+        // Only a failed write breaks _append_sem, and the failure can occur while this call waits
+        // for the unit. Nothing is written, thus the caller can try again on another segment.
+        units_result.ignore_ready_future();
+        co_return std::nullopt;
+    }
+
+    if (!can_fit(size)) {
+        co_return std::nullopt;
+    }
+
+    co_return appender(*this, units_result.get());
+}
+
+future<segment_position> segment::append(bytes_view data) {
+    auto a = co_await coroutine::try_future(begin_append(data.size()));
+    if (!a) {
+        co_await coroutine::return_exception(std::runtime_error(_failed
+                ? fmt::format("Cannot append write of size {} to {}, which failed a write", data.size(), _id)
+                : fmt::format("Cannot append write of size {} to {} with {} bytes remaining", data.size(), _id, bytes_remaining())));
+    }
+    co_return co_await coroutine::try_future(std::move(*a).append(data));
+}
+
+future<segment_position> segment::appender::append(bytes_view data) && {
+    // An appender that was used or moved has no unit, and a write without the unit could run at the
+    // same time as another write.
+    if (!_units) [[unlikely]] {
+        on_internal_error(logstor_logger, fmt::format("Attempted to append to {} through an appender that was used or moved", _segment->_id));
+    }
+
+    // The unit stays in this frame until the write completes, also when the appender is destroyed.
+    auto units = std::move(_units);
+    segment& seg = *_segment;
+
+    // A chunk starts at a block boundary, and the file takes only aligned direct writes. The file
+    // reports a failed write as a disk error, which isolates the node. Empty data is refused too,
+    // because its position is the position of the next append.
+    if (data.size() == 0 || data.size() % ondisk::block_alignment != 0) [[unlikely]] {
+        on_internal_error(logstor_logger, fmt::format("Attempted to append {} bytes to {}, which is not a positive multiple of the block size {}",
+                data.size(), seg._id, ondisk::block_alignment));
+    }
+    // do_write() starts each direct write at a block boundary of the data, thus the data must also
+    // start at a block boundary in memory.
+    if (reinterpret_cast<uintptr_t>(data.data()) % ondisk::block_alignment != 0) [[unlikely]] {
+        on_internal_error(logstor_logger, fmt::format("Attempted to append data at address {} to {}, which is not aligned to the block size {}",
+                fmt::ptr(data.data()), seg._id, ondisk::block_alignment));
+    }
+
+    // Data that does not fit would overwrite the next segment in the file. Nothing is written, thus
+    // the segment does not fail.
+    if (!seg.can_fit(data.size())) [[unlikely]] {
+        on_internal_error(logstor_logger, fmt::format("Attempted to append {} bytes to {} with {} bytes remaining",
+                data.size(), seg._id, seg.bytes_remaining()));
+    }
+
+    const segment_position pos{
+        .segment = seg._id,
+        .offset = seg._append_offset,
+    };
+    // After this line the region stays used, also when the write fails, because a failed write fails
+    // the segment.
+    seg._append_offset += data.size();
+
+    auto write_result = co_await coroutine::as_future(seg.do_write(pos, data));
+    if (write_result.failed()) {
+        auto ex = write_result.get_exception();
+
+        // A segment must have no holes, thus a failed write also fails all the later writes to the
+        // segment. The segment accepts no more appends, so that the callers write to a new segment
+        // and do not fail again.
+        seg._failed = true;
+        seg._append_sem.broken(ex);
+        logstor_logger.warn("Write to segment {} seq {} failed: {}, retiring segment", seg._id, seg._seq_num, ex);
+
+        co_await coroutine::return_exception_ptr(std::move(ex));
+    }
+    co_return pos;
+}
+
+future<> segment::do_write(segment_position pos, bytes_view data) {
+    utils::get_local_injector().inject("logstor_fail_segment_write", [] {
+        throw std::runtime_error("segment write failed by injection");
+    });
+
+    utils::get_local_injector().inject("logstor_segment_write_io_error", [] {
+        // Simulates a device error that the file layer reports. The handler fires the logstor
+        // disk error signal, which isolates the node, and turns the error into a storage_io_error.
+        logstor_error_handler(std::make_exception_ptr(std::system_error(EIO, std::system_category(),
+                "segment write I/O error by injection")));
+    });
+
+    const uint64_t total = data.size();
+    auto base_offset = absolute_offset(pos.offset);
+    uint64_t written = 0;
+
+    while (written < total) {
+        auto new_written = co_await coroutine::try_future(_file.dma_write(
+                base_offset + written, data.data() + written, total - written));
+
+        const auto previous_written = written;
+        written += new_written;
+        if (written == total) {
+            break;
+        }
+
+        // A DMA write can write less than it was given, and the next DMA write must start at an
+        // aligned offset in the file and in memory. The data starts at a block boundary in both,
+        // and open_file() refuses a device whose alignments do not divide the block size. Thus the
+        // next write starts at the last boundary of the larger alignment that was written, and
+        // writes the bytes after that boundary again.
+        const auto write_alignment = std::max(_file.disk_write_dma_alignment(), _file.memory_dma_alignment());
+        written = align_down(written, uint64_t(write_alignment));
+        // A write that did not reach the next boundary would make the loop repeat the same write
+        // forever. Such a write made no progress, so the short write is a disk error, which
+        // isolates the node, as an EIO from the file does.
+        if (written == previous_written) [[unlikely]] {
+            auto ex = std::make_exception_ptr(std::system_error(EIO, std::system_category(), fmt::format(
+                    "Short write to {} wrote {} bytes at offset {}, less than the write alignment {}",
+                    _id, new_written, pos.offset + written, write_alignment)));
+            logstor_error_handler(ex);
+            co_await coroutine::return_exception_ptr(std::move(ex));
+        }
+    }
 }
 
 }
