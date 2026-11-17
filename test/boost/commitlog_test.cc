@@ -2917,6 +2917,65 @@ SEASTAR_TEST_CASE(test_commitlog_replay_fragment_id_reused_by_a_later_instance) 
     co_await log.clear();
 }
 
+// last_written_position() is the end of the newest entry added on this shard: the
+// entries added so far are at or below it, and the ones added later are above it. Tablet
+// cleanup records it as the position up to which commitlog replay skips what the cleaned
+// tablet wrote.
+SEASTAR_TEST_CASE(test_commitlog_last_written_position) {
+    return cl_test([](commitlog& log) -> future<> {
+        BOOST_CHECK(!log.last_written_position().valid());
+
+        auto uuid = make_table_id();
+        const sstring tmp = "hej bubba cow";
+        replay_position previous;
+        for (int i = 0; i < 3; ++i) {
+            auto h = co_await log.add_mutation(uuid, tmp.size(), db::commitlog::force_sync::no, [&tmp](db::commitlog::output& dst) {
+                dst.write(tmp.data(), tmp.size());
+            });
+            BOOST_CHECK(h.rp().valid());
+            BOOST_CHECK_GT(h.rp(), previous);
+            BOOST_CHECK_GE(log.last_written_position(), h.rp());
+            previous = log.last_written_position();
+        }
+
+        // The position follows the entries into a new segment.
+        co_await log.force_new_active_segment();
+        auto h = co_await log.add_mutation(uuid, tmp.size(), db::commitlog::force_sync::no, [&tmp](db::commitlog::output& dst) {
+            dst.write(tmp.data(), tmp.size());
+        });
+        BOOST_CHECK_GE(log.last_written_position(), h.rp());
+        BOOST_CHECK_GT(h.rp().id, previous.id);
+    });
+}
+
+// An entry spread over several segments reports the position of its first fragment,
+// while last_written_position() is in the segment of its last one, so that everything
+// the entry wrote is at or below it.
+SEASTAR_TEST_CASE(test_commitlog_last_written_position_of_a_fragmented_entry) {
+    commitlog::config cfg;
+
+    constexpr uint64_t max_size_mb = 1;
+
+    cfg.commitlog_segment_size_in_mb = max_size_mb;
+    cfg.commitlog_total_space_in_mb = 16 * max_size_mb * this_smp_shard_count();
+    cfg.allow_going_over_size_limit = false;
+    cfg.allow_fragmented_entries = true;
+    cfg.use_o_dsync = false;
+
+    return cl_test(cfg, [](commitlog& log) -> future<> {
+        auto uuid = make_table_id();
+        // Three times the largest record: more than a segment holds, so the last
+        // fragment is in a later segment than the first.
+        auto size = log.max_record_size() * 3;
+        auto h = co_await log.add_mutation(uuid, size, db::commitlog::force_sync::no, [size](db::commitlog::output& dst) {
+            for (size_t i = 0; i < size; ++i) {
+                dst.write("A", 1);
+            }
+        });
+        BOOST_CHECK_GT(log.last_written_position().id, h.rp().id);
+    });
+}
+
 // Test for #24346. Writing last entry, of last chunk at exactly segment EOF boundary
 SEASTAR_TEST_CASE(test_segment_end_on_entry_end) {
     static auto replay_segment = [] (sstring path) -> future<> {

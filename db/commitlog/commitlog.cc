@@ -356,6 +356,12 @@ public:
 
     replay_position min_position() const;
     replay_position current_position() const;
+    replay_position last_written_position() const {
+        return _last_written_position;
+    }
+    // See commitlog::last_written_position(). Set by the callers of segment::allocate(),
+    // from segment::last_written_position().
+    replay_position _last_written_position;
     size_t sector_overhead(segment_id_type, size_t) const;
 
     template<typename T>
@@ -1483,6 +1489,12 @@ public:
     position_type position() const {
         return position_type(_file_pos + buffer_position());
     }
+    // The position just below where the next entry of this segment will start, so
+    // everything written to the segment so far is at or below it.
+    replay_position last_written_position() const {
+        SCYLLA_ASSERT(position() > 0);
+        return replay_position(_desc.id, position() - 1);
+    }
     position_type available() const {
         auto pos = position();
         auto lim = _segment_manager->cfg.commitlog_segment_size_in_mb*1024*1024;
@@ -1625,6 +1637,7 @@ future<R> db::commitlog::segment_manager::allocate_when_possible(T writer, db::t
 
             switch (s->allocate(writer, permit, timeout)) {
                 case write_result::ok:
+                    _last_written_position = s->last_written_position();
                     co_return writer.result();
                 case write_result::must_sync:
                     s = co_await with_timeout(timeout, s->sync());
@@ -1633,6 +1646,9 @@ future<R> db::commitlog::segment_manager::allocate_when_possible(T writer, db::t
                     s = co_await s->finish_and_get_new(timeout);
                     continue;
                 case write_result::ok_need_batch_sync:
+                    // Before the wait: the entry is in the segment whether or not the
+                    // sync succeeds.
+                    _last_written_position = s->last_written_position();
                     s = co_await s->batch_cycle(timeout);
                     co_return writer.result();
                 case write_result::too_large:
@@ -1977,6 +1993,11 @@ future<> db::commitlog::segment_manager::oversized_allocation(entry_writer& writ
     SCYLLA_ASSERT(nw > 0 || _request_controller.available_units() == (avail + ssize_t(max_request_controller_units())));
 
     if (!failed) {
+        // Only now, not after each part: this write waits for IO between its parts,
+        // and if it fails it is rolled back, after which later entries take the
+        // positions its parts had used. The permit shuts out every other writer, so
+        // the last segment used here still ends with this write.
+        _last_written_position = maybe_clear.back().first->last_written_position();
         clogger.trace("Oversized allocation succeeded.");
         co_return;
     }
@@ -4102,6 +4123,10 @@ db::replay_position db::commitlog::current_position() const {
 
 db::replay_position db::commitlog::flush_position() const {
     return _segment_manager->flush_position();
+}
+
+db::replay_position db::commitlog::last_written_position() const {
+    return _segment_manager->last_written_position();
 }
 
 size_t db::commitlog::sector_overhead(segment_id_type id, size_t size) const {
