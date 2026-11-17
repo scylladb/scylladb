@@ -22,7 +22,8 @@ The IF clause
 =============
 
 Creating a conditional statement with an IF clause can include a query of individual cells and or collection elements.
-It can use IN clauses or comparison operators, such as ``<``, ``>``, ``>=``, ``<=``, ``==``, and ``!=``.
+It can use comparison operators (``=``, ``!=``, ``<``, ``<=``, ``>``, ``>=``), ``IN``, ``NOT IN``, ``LIKE``,
+``CONTAINS``, ``CONTAINS KEY``, ``IS NULL`` and ``IS NOT NULL``.
 The important part to keep in mind is that in order to initiate the transaction, the condition must evaluate to true and if there are several different elements in the conditional statement, each part must evaluate to true.
 If any part evaluates to false the transaction does not complete.
 
