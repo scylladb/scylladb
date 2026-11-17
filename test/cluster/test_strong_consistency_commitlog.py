@@ -4,9 +4,10 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 
+from test.cluster.test_strong_consistency import DEFAULT_CMDLINE, DEFAULT_CONFIG, get_table_raft_group_id, wait_for_leader
 from test.cluster.util import new_test_keyspace, reconnect_driver
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
-from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
+from test.pylib.util import unique_name, wait_for, wait_for_cql_and_get_hosts
 from test.pylib.tablets import get_tablet_replica
 
 import aiohttp
@@ -776,3 +777,70 @@ async def test_crash_after_recycling_a_segment(manager: ScyllaClusterManager):
         for pk in (0, rows // 2, rows - 1):
             got = await cql.run_async(f"SELECT c FROM {ks}.test WHERE pk = {pk}")
             assert len(got) == 1 and got[0].c == pk * 10, f"pk={pk} did not survive the crash"
+
+
+@pytest.mark.parametrize("group0_lags", [
+    pytest.param(True, id="group0_lags", marks=pytest.mark.skip_bug(
+        link="https://scylladb.atlassian.net/browse/SCYLLADB-5027",
+        reason="commitlog replay aborts the node on a committed entry whose schema version is unknown locally")),
+    pytest.param(False, id="control"),
+])
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_restart_with_committed_entries_in_an_unknown_schema_version(manager: ScyllaClusterManager, group0_lags: bool):
+    """A replica restarts holding committed entries written under a schema version
+    that group0 has not delivered to it yet.
+
+    Idea: a tablet's raft group and group0 are independent, so a replica persists
+    and commits the group's entries whatever schema version they carry. While the
+    node runs, the applier of such an entry waits in a group0 read barrier for the
+    version. A restart replays the committed entries before group0 is started, so
+    nothing can fetch the version then, and the node has to start anyway.
+
+    Setup: three nodes and an SC table with RF 3 and one tablet. The third node
+    runs avoid_being_raft_leader, so it follows both group0 and the table's group.
+    With group0_lags it drops group0 append entries, so an ALTER TABLE changes the
+    schema version on the other two nodes only. Writes through one of those nodes
+    reach the third as committed entries in the new version, and its applier is
+    seen waiting in the barrier. The node is then restarted gracefully and must
+    come back and serve the rows. In the control case group0 is not blocked.
+    """
+    servers = await manager.servers_add(2, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
+    config = DEFAULT_CONFIG | {'error_injections_at_startup': ['avoid_being_raft_leader']}
+    follower = await manager.server_add(config=config, cmdline=DEFAULT_CMDLINE, property_file={'dc': 'my_dc', 'rack': 'rack3'})
+    servers.append(follower)
+    cql, hosts = await manager.get_ready_cql(servers)
+    follower_host_id = await manager.get_host_id(follower.server_id)
+
+    ks = unique_name()
+    await cql.run_async(f"CREATE KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 3}}"
+                        " AND tablets = {'initial': 1} AND consistency = 'global'")
+    await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+    group_id = await get_table_raft_group_id(manager, ks, 'test')
+    assert await wait_for_leader(manager, servers[0], group_id) != follower_host_id
+
+    if group0_lags:
+        group0_id = (await cql.run_async("SELECT value FROM system.scylla_local WHERE key = 'raft_group0_id'"))[0].value
+        await manager.api.enable_injection(follower.ip_addr, "raft_drop_incoming_append_entries_for_specified_group",
+                                           one_shot=False, parameters={'value': group0_id})
+
+    # A new schema version. With group0 blocked the follower never gets it: the
+    # driver's schema agreement wait times out and the ALTER returns anyway.
+    await cql.run_async(f"ALTER TABLE {ks}.test ADD v int", host=hosts[0])
+
+    log = await manager.server_open_log(follower.server_id)
+    mark = await log.mark()
+    # Entries in the new version. The follower learns each commit index from the
+    # next append, so all but the last are committed in its commitlog batch headers.
+    rows = 5
+    for pk in range(rows):
+        await cql.run_async(f"INSERT INTO {ks}.test (pk, c, v) VALUES ({pk}, {pk * 10}, {pk})", host=hosts[0])
+    if group0_lags:
+        await log.wait_for("has no local schema version .* running a group0 read barrier", from_mark=mark, timeout=60)
+
+    # Replay applies the committed entries before group0 starts.
+    await manager.server_stop_gracefully(follower.server_id)
+    await manager.server_start(follower.server_id)
+    cql, hosts = await manager.get_ready_cql(servers)
+    for pk in range(rows):
+        got = await cql.run_async(f"SELECT c, v FROM {ks}.test WHERE pk = {pk}", host=hosts[2])
+        assert len(got) == 1 and (got[0].c, got[0].v) == (pk * 10, pk), f"pk={pk} did not survive the restart"
