@@ -465,7 +465,8 @@ lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata(s
     auto initial_tablets = get_initial_tablets(default_initial_tablets, cfg.enforce_tablets());
     bool uses_tablets = initial_tablets.has_value();
     bool rack_list_enabled = utils::get_local_injector().enter("create_with_numeric") ? false : feat.rack_list_rf;
-    auto options = prepare_options(sc, tm, cfg.rf_rack_valid_keyspaces(), cfg.enforce_rack_list(), get_replication_options(), {}, rack_list_enabled, uses_tablets);
+    bool enforce_rack_list = cfg.enforce_rack_list() || data_dictionary::is_strongly_consistent(get_consistency_option());
+    auto options = prepare_options(sc, tm, cfg.rf_rack_valid_keyspaces(), enforce_rack_list, get_replication_options(), {}, rack_list_enabled, uses_tablets);
     auto config_options = apply_config_updates({}, *this, feat);
     return data_dictionary::keyspace_metadata::new_keyspace(ks_name, sc,
             std::move(options), initial_tablets, get_consistency_option(), get_boolean(KW_DURABLE_WRITES, true), get_storage_options(), {}, std::nullopt, std::move(config_options));
@@ -483,7 +484,8 @@ lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata_u
     auto sc = get_replication_strategy_class();
     bool rack_list_enabled = utils::get_local_injector().enter("create_with_numeric") ? false : feat.rack_list_rf;
     if (sc) {
-        options = prepare_options(*sc, tm, cfg.rf_rack_valid_keyspaces(), cfg.enforce_rack_list(), get_replication_options(), old_options, rack_list_enabled, uses_tablets);
+        bool enforce_rack_list = cfg.enforce_rack_list() || data_dictionary::is_strongly_consistent(old->consistency_option());
+        options = prepare_options(*sc, tm, cfg.rf_rack_valid_keyspaces(), enforce_rack_list, get_replication_options(), old_options, rack_list_enabled, uses_tablets);
     } else {
         sc = old->strategy_name();
         options = old_options;
