@@ -78,6 +78,9 @@ class gossiper;
 
 class schema_builder;
 
+namespace data_dictionary {
+class keyspace_metadata;
+}
 
 namespace alternator {
 
@@ -212,6 +215,15 @@ private:
                      std::optional<audit::audit_table_set> alternator_batch_tables = std::nullopt);
 
     future<std::variant<rjson::value, api_error>> fill_table_description(schema_ptr schema, table_status tbl_status, service::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit);
+    // The checks of the keyspace of a new table which depend on the cluster - its topology,
+    // configuration and storage. Returns the error to refuse the table with, or nullopt.
+    std::optional<api_error> check_keyspace_of_new_table(const data_dictionary::keyspace_metadata& ksm, std::string_view keyspace_name,
+            std::string_view table_name, bool has_vector_indexes, bool has_views);
+    // Makes the checks which commit_table_creation() makes of the keyspace of the table which
+    // `validated` describes, on any shard, for ImportTable, which is to create the table only after
+    // it accepted the request: so that it can refuse up front what CreateTable would refuse.
+    // Returns the error to refuse the table with, or nullopt.
+    std::optional<api_error> check_new_table(const create_table_params& validated, const db::tablets_mode_t::mode tablets_mode);
     // Creates the table which `validated` describes. Must run on shard 0, because it takes
     // the group0 guard and announces the new table.
     future<executor::request_return_type> commit_table_creation(rjson::value&& request, create_table_params&& validated, service::client_state&& client_state, const db::tablets_mode_t::mode tablets_mode);
