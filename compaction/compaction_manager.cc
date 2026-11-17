@@ -1241,10 +1241,10 @@ compaction_manager::compaction_manager(config cfg, abort_source& as, tasks::task
     register_metrics();
 }
 
-compaction_manager::compaction_manager(tasks::task_manager& tm)
+compaction_manager::compaction_manager(tasks::task_manager& tm, scheduling_group compaction_sched_group, scheduling_group maintenance_sched_group)
     : _task_manager_module(make_shared<task_manager_module>(tm))
     , _sys_ks("compaction_manager::system_keyspace")
-    , _cfg(config{ .available_memory = 1 })
+    , _cfg(config{ .compaction_sched_group = compaction_sched_group, .maintenance_sched_group = maintenance_sched_group, .available_memory = 1 })
     , _compaction_submission_timer(compaction_sg(), compaction_submission_callback())
     , _automatic_scrub_submission_timer(maintenance_sg(), automatic_scrub_submission_callback())
     , _compaction_controller(make_compaction_controller(compaction_sg(), 1, std::nullopt, [] () -> float { return 1.0; }))
