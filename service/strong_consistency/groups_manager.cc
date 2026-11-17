@@ -1323,12 +1323,11 @@ void groups_manager::start() {
     // schema at all: asking for its id without the flag aborts.
     if (_db.get_config().check_experimental(
                 db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES)) {
+        // The database always has a commitlog. The enable_commitlog and
+        // enable_in_memory_data_store options only keep the user tables from writing
+        // to it.
         auto* commitlog = _db.commitlog();
-        if (!commitlog) {
-            // Fail at startup: without the commitlog the first group trips an assert.
-            throw std::runtime_error(
-                    "strongly consistent tables require the commitlog, which is disabled");
-        }
+        SCYLLA_ASSERT(commitlog);
         check_commitlog_can_hold_a_raft_entry(*commitlog);
 
         // A round names one table, and only a round naming system.raft_groups says
