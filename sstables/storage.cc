@@ -989,6 +989,38 @@ future<> release_object_storage_snapshot_refs_by_listing(object_storage_client& 
     co_await delete_object_storage_components(client, bucket, prefix, sid, std::move(components));
 }
 
+future<> release_object_storage_backup_ref(object_storage_client& client, sstring bucket, sstring prefix,
+        sstable_id sid, std::string_view tag) {
+    auto objects = co_await list_object_storage_sstable_objects(client, bucket, prefix, sid);
+    const auto tag_prefix = fmt::format("refs/snapshot-{}/", tag);
+    bool other_refs = false;
+    std::vector<sstring> components;
+    std::optional<sstring> toc;
+    for (auto& name : objects) {
+        std::string_view sv(name);
+        if (sv.starts_with(std::string_view(tag_prefix))) {
+            co_await delete_object_storage_snapshot_ref(client, object_name(bucket, prefix, sid, name));
+        } else if (sv.starts_with("refs/")) {
+            other_refs = true;
+        } else if (sv.ends_with(std::string_view(sstable_version_constants::TOC_SUFFIX))) {
+            toc = std::move(name);
+        } else {
+            components.push_back(std::move(name));
+        }
+    }
+    if (other_refs) {
+        co_return;
+    }
+    co_await coroutine::parallel_for_each(components, [&] (const sstring& component) -> future<> {
+        co_await client.delete_object(object_name(bucket, prefix, sid, component));
+    });
+    // The TOC is deleted last. While it exists the sstable is still discoverable,
+    // so a crash mid-way leaves a deletable sstable.
+    if (toc) {
+        co_await client.delete_object(object_name(bucket, prefix, sid, *toc));
+    }
+}
+
 future<> delete_object_storage_components(object_storage_client& client, sstring bucket,
         sstring prefix, sstable_id sid, std::vector<sstring> components,
         seastar::abort_source* as, bool log_errors) {
