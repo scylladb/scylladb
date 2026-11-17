@@ -22,7 +22,7 @@
 
 static logging::logger tlogger("table_helper");
 
-schema_ptr table_helper::parse_new_cf_statement(cql3::query_processor& qp, const sstring& create_cql) {
+future<schema_ptr> table_helper::parse_new_cf_statement(cql3::query_processor& qp, const sstring& create_cql) {
     auto db = qp.db();
 
     // The input may contain trailing statements after the leading CREATE TABLE one,
@@ -39,8 +39,8 @@ schema_ptr table_helper::parse_new_cf_statement(cql3::query_processor& qp, const
         throw std::runtime_error(format("Expected a CREATE TABLE statement: {}", create_cql));
     }
     (void)parsed_cf_stmt->keyspace(); // This will SCYLLA_ASSERT if cql statement did not contain keyspace
-    auto statement = dynamic_pointer_cast<cql3::statements::create_table_statement>(
-                                    parsed_cf_stmt->prepare(db, qp.get_cql_stats(), qp.get_cql_config())->statement);
+    auto prepared = co_await parsed_cf_stmt->prepare(db, qp.get_cql_stats(), qp.get_cql_config());
+    auto statement = dynamic_pointer_cast<cql3::statements::create_table_statement>(prepared->statement);
     if (!statement) {
         throw std::runtime_error(format("Expected a CREATE TABLE statement: {}", create_cql));
     }
@@ -54,13 +54,13 @@ schema_ptr table_helper::parse_new_cf_statement(cql3::query_processor& qp, const
     schema_builder b(schema);
     b.set_uuid(uuid);
 
-    return b.build();
+    co_return b.build();
 }
 
 future<> table_helper::setup_table(cql3::query_processor& qp, service::migration_manager& mm, const sstring& create_cql) {
     auto db = qp.db();
 
-    auto schema = parse_new_cf_statement(qp, create_cql);
+    auto schema = co_await parse_new_cf_statement(qp, create_cql);
 
     if (db.has_schema(schema->ks_name(), schema->cf_name())) {
         co_return;
@@ -240,7 +240,7 @@ future<> table_helper::setup_keyspace(cql3::query_processor& qp, service::migrat
         utils::chunked_vector<mutation> table_mutations;
 
         co_await coroutine::parallel_for_each(tables, [&] (auto&& table) -> future<> {
-            auto schema = parse_new_cf_statement(qp, table->_create_cql);
+            auto schema = co_await parse_new_cf_statement(qp, table->_create_cql);
             if (!db.has_schema(schema->ks_name(), schema->cf_name())) {
                 co_return co_await service::prepare_new_column_family_announcement(table_mutations, qp.proxy(), *ksm, schema, ts);
             }

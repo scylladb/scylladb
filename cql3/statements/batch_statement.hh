@@ -16,6 +16,10 @@
 #include "exceptions/coordinator_result.hh"
 #include "tracing/trace_state.hh"
 #include "cql3/statements/batch_executor.hh"
+#include "schema/schema_fwd.hh"
+#include <optional>
+#include <unordered_map>
+#include <utility>
 
 namespace cql_transport::messages {
     class result_message;
@@ -32,6 +36,29 @@ class query_processor;
 namespace statements {
 
 class modification_statement;
+
+// A schema change while a batch is prepared can leave two of its statements
+// on different versions of one table. The batch is then prepared again.
+class mixed_schema_versions : public std::runtime_error {
+public:
+    explicit mixed_schema_versions(const schema& s);
+};
+
+// How many times a batch is prepared before mixed_schema_versions fails it.
+constexpr unsigned batch_prepare_attempts = 10;
+
+// Remembers the version of each table that a batch's statements use.
+class table_versions {
+    // The statements of a batch often use one table. The first table is kept
+    // outside the map, so that such a batch allocates nothing here.
+    std::optional<std::pair<table_id, table_schema_version>> _first;
+    std::unordered_map<table_id, table_schema_version> _others;
+public:
+    // Returns false if a table was added before in another version.
+    bool try_add(const schema& s);
+    // Throws mixed_schema_versions if a table was added before in another version.
+    void add(const schema& s);
+};
 
 /**
  * A <code>BATCH</code> statement parsed from a CQL query.

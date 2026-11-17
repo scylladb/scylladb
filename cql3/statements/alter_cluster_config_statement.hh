@@ -50,7 +50,7 @@ public:
     future<> check_access(query_processor& qp, const service::client_state& state) const override;
     void validate(query_processor& qp, const service::client_state& state) const override;
     future<std::tuple<::shared_ptr<event_t>, cql3::cql_warnings_vec>> prepare_schema_mutations(query_processor& qp, service::query_state& state, const query_options& options, service::group0_batch& mc) const override;
-    std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) override;
+    future<std::unique_ptr<prepared_statement>> prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) override;
 
 protected:
     audit::audit_info_ptr audit_info() const override {
