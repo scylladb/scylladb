@@ -166,7 +166,10 @@ public:
                     // Nothing of this entry reaches a memtable, so no pin. The entry is
                     // reported applied only below, once the record is durable, so its
                     // segment outlives the record's sync and a crash replays the entry.
-                    co_await apply_truncate_command(_db, _tablet, _group_id, command[i]->idx, *tc, record);
+                    // A dropped table has no tablet map either: fail here with the
+                    // no_such_column_family that apply() handles, before current_tablet().
+                    _db.find_column_family(_tablet.table);
+                    co_await apply_truncate_command(_db, {_tablet.table, current_tablet()}, _group_id, command[i]->idx, *tc, record);
                     _persistence.note_applied(command[i]->idx);
                     continue;
                 }
