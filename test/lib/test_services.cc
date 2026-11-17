@@ -258,6 +258,8 @@ struct test_env::impl {
     sstables::sstable_generation_generator gen;
     data_dictionary::storage_options storage;
     abort_source abort;
+    seastar::scheduling_group compaction_scheduling_group;
+    seastar::scheduling_group maintenance_scheduling_group;
 
     impl(test_env_config cfg, sstable_compressor_factory&, sstables::storage_manager* sstm, tmpdir* tdir);
     impl(impl&&) = delete;
@@ -300,6 +302,8 @@ test_env::impl::impl(test_env_config cfg, sstable_compressor_factory& scfarg, ss
             sstm)
     , semaphore(reader_concurrency_semaphore::no_limits{}, "sstables::test_env", reader_concurrency_semaphore::register_metrics::no)
     , storage(std::move(cfg.storage))
+    , compaction_scheduling_group(cfg.compaction_scheduling_group)
+    , maintenance_scheduling_group(cfg.maintenance_scheduling_group)
 {
 }
 
@@ -314,7 +318,7 @@ test_env::~test_env() = default;
 
 void test_env::maybe_start_compaction_manager(bool enable) {
     if (!_impl->cmgr) {
-        _impl->cmgr = std::make_unique<test_env_compaction_manager>();
+        _impl->cmgr = std::make_unique<test_env_compaction_manager>(_impl->compaction_scheduling_group, _impl->maintenance_scheduling_group);
         if (enable) {
             _impl->cmgr->get_compaction_manager().enable();
         }

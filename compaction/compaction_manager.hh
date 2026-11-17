@@ -318,13 +318,15 @@ private:
 
     // This constructor is supposed to only be used for testing so lets be more explicit
     // about invoking it. Ref #10146
-    compaction_manager(tasks::task_manager& tm);
+    compaction_manager(tasks::task_manager& tm, scheduling_group compaction_sched_group, scheduling_group maintenance_sched_group);
 public:
     compaction_manager(config cfg, abort_source& as, tasks::task_manager& tm);
     ~compaction_manager();
     class for_testing_tag{};
-    // An inline constructor for testing
-    compaction_manager(tasks::task_manager& tm, for_testing_tag) : compaction_manager(tm) {}
+    // An inline constructor for testing. Regular compaction and the other kinds run in the
+    // main scheduling group, unless given groups of their own.
+    compaction_manager(tasks::task_manager& tm, for_testing_tag, scheduling_group compaction_sched_group = {}, scheduling_group maintenance_sched_group = {})
+        : compaction_manager(tm, compaction_sched_group, maintenance_sched_group) {}
 
     compaction::task_manager_module& get_task_manager_module() noexcept {
         return *_task_manager_module;
