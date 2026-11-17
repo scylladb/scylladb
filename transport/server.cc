@@ -2055,8 +2055,11 @@ class batch_message {
     const bool _trace_entries;
     const cql3::statements::batch_statement::type _type;
     const uint16_t _entry_count;
+    const request_reader _first_entry;
     request_reader _in;
     uint16_t _entries_read = 0;
+    // Entries can be read twice, see restart(), but each is traced once.
+    uint16_t _entries_traced = 0;
     std::vector<cql3::statements::batch_statement::single_statement> _modifications;
     std::vector<std::reference_wrapper<const audit::audit_info>> _audit_infos;
     std::vector<cql3::raw_value_view_vector_with_unset> _values;
@@ -2076,6 +2079,7 @@ public:
         , _trace_entries(init_trace && _trace_state)
         , _type(type)
         , _entry_count(entry_count)
+        , _first_entry(in)
         , _in(in)
     {
         _modifications.reserve(entry_count);
@@ -2093,16 +2097,26 @@ public:
         return _entries_read == _entry_count;
     }
 
-    // Reads a message that has a textual entry, from that entry to the end.
+    // Reads a message that has a textual entry. Its parse and prepare can
+    // yield. This parses the textual entries first, then holds off schema
+    // changes and reads all entries again. All entries use one keyspace.
     future<> read_with_textual_entries();
 
     // Executes the batch. All entries must be read.
     future<cql_server::process_fn_return_type> execute(uint16_t stream, service_permit permit, cql3::computed_function_values cached_pk_fn_calls,
             std::optional<db::timeout_clock::time_point> deadline, cql_sg_stats& sg_stats, api::timestamp_type request_start_timestamp);
 private:
+    // A textual entry's statement, and the bytes its parse allocated.
+    using parsed_entry = std::pair<std::unique_ptr<cql3::statements::raw::parsed_statement>, uint64_t>;
+
+    // Parses the textual entries from the current one to the end of the
+    // message, and reads the prepared entries between them.
+    future<std::vector<parsed_entry>> parse_textual_entries();
+    utils::result_with_exception_ptr<void> skip_values();
     utils::result_with_exception_ptr<void> add_prepared();
     utils::result_with_exception_ptr<void> add_statement(cql3::statements::prepared_statement::checked_weak_ptr ps,
             const cql3::prepared_cache_key_type* prepared_key, bool needs_authorization);
+    void restart();
 };
 
 utils::result_with_exception_ptr<void>
@@ -2134,28 +2148,79 @@ batch_message::read_prepared_entries() {
 
 future<>
 batch_message::read_with_textual_entries() {
+    // The statement of a textual entry is awaited, so other tasks run from
+    // here on. A USE on this connection among them could change the keyspace
+    // that the entries resolve their tables against, so they all use the
+    // keyspace from now.
+    const auto client_state = _client_state.snapshot();
+    // A parse does not depend on the schema, so a schema change does not wait
+    // for the parses.
+    auto parsed = co_await coroutine::try_future(parse_textual_entries());
+    // A schema change could leave two entries on different versions of one
+    // table, so none runs until all entries are read.
+    auto schema_lock = co_await _qp.local().db().hold_off_schema_changes();
+    // A schema change may have run after the prepared entries were read.
+    // Read them again.
+    restart();
+    for (auto& [statement, allocated_in_parse] : parsed) {
+        // The prepared entries before this textual one.
+        auto status = read_prepared_entries();
+        if (!status) {
+            co_await coroutine::return_exception_ptr(std::move(status).assume_error());
+        }
+        utils::result_with_exception_ptr<utils::chunked_string> query = _in.read_long_chunked_string();
+        if (!query) {
+            co_await coroutine::return_exception_ptr(std::move(query).assume_error());
+        }
+        auto prepared = co_await coroutine::try_future(_qp.local().prepare_batch_message_statement(
+                std::move(statement), allocated_in_parse, std::move(query).assume_value(), client_state));
+        auto added = add_statement(prepared->checked_weak_from_this(), nullptr, true);
+        if (!added) {
+            co_await coroutine::return_exception_ptr(std::move(added).assume_error());
+        }
+    }
+    // The prepared entries after the last textual one.
+    auto status = read_prepared_entries();
+    if (!status) {
+        co_await coroutine::return_exception_ptr(std::move(status).assume_error());
+    }
+}
+
+future<std::vector<batch_message::parsed_entry>>
+batch_message::parse_textual_entries() {
+    std::vector<parsed_entry> parsed;
     for (;;) {
         utils::result_with_exception_ptr<utils::chunked_string> query = _in.read_long_chunked_string();
         if (!query) {
             co_await coroutine::return_exception_ptr(std::move(query).assume_error());
         }
-        auto statement = co_await coroutine::try_future_without_preemption_check(_qp.local().get_statement(
-                std::move(query).assume_value(), _client_state, _dialect, cql3::query_processor::prepared_for_driver::no));
-        if (_trace_entries) {
-            tracing::add_query(_trace_state, statement->statement->raw_cql_statement);
-        }
-        auto added = add_statement(statement->checked_weak_from_this(), nullptr, true);
-        if (!added) {
-            co_await coroutine::return_exception_ptr(std::move(added).assume_error());
+        parsed.push_back(co_await coroutine::try_future(_qp.local().parse_batch_message_statement(query.assume_value(), _dialect)));
+        auto skipped = skip_values();
+        if (!skipped) {
+            co_await coroutine::return_exception_ptr(std::move(skipped).assume_error());
         }
         auto status = read_prepared_entries();
         if (!status) {
             co_await coroutine::return_exception_ptr(std::move(status).assume_error());
         }
         if (at_end()) {
-            co_return;
+            co_return parsed;
         }
     }
+}
+
+// Reads past the values of a textual entry. They are read again once its
+// statement is prepared.
+utils::result_with_exception_ptr<void>
+batch_message::skip_values() {
+    std::vector<cql3::raw_value_view> values;
+    cql3::unset_bind_variable_vector unset;
+    auto rvl = _in.read_value_view_list(_version, values, unset);
+    if (!rvl) {
+        return bo::failure(std::move(rvl).assume_error());
+    }
+    ++_entries_read;
+    return bo::success();
 }
 
 utils::result_with_exception_ptr<void>
@@ -2177,9 +2242,6 @@ batch_message::add_prepared() {
         }
         // authorize a particular prepared statement only once
         needs_authorization = _pending_authorization_entries.emplace(cache_key, ps->checked_weak_from_this()).second;
-    }
-    if (_trace_entries) {
-        tracing::add_query(_trace_state, ps->statement->raw_cql_statement);
     }
     return add_statement(std::move(ps), &cache_key, needs_authorization);
 }
@@ -2208,9 +2270,12 @@ batch_message::add_statement(cql3::statements::prepared_statement::checked_weak_
         }
         _current_schema = &s;
     }
-    if (_trace_entries) {
+    // Skip tracing entries already traced before restart().
+    if (_trace_entries && _entries_read == _entries_traced) {
+        tracing::add_query(_trace_state, ps->statement->raw_cql_statement);
         tracing::add_table_name(_trace_state, modif_statement_ptr->keyspace(), modif_statement_ptr->column_family());
         tracing::add_prepared_statement(_trace_state, ps);
+        ++_entries_traced;
     }
     if (auto* inner_ai = ps->statement->get_audit_info()) {
         _audit_infos.emplace_back(*inner_ai);
@@ -2233,6 +2298,17 @@ batch_message::add_statement(cql3::statements::prepared_statement::checked_weak_
     _values.emplace_back(cql3::raw_value_view_vector_with_unset(std::move(tmp), std::move(unset)));
     ++_entries_read;
     return bo::success();
+}
+
+// Makes the entries be read again from the first one.
+void batch_message::restart() {
+    _in = _first_entry;
+    _entries_read = 0;
+    _modifications.clear();
+    _audit_infos.clear();
+    _values.clear();
+    _pending_authorization_entries.clear();
+    _current_schema = nullptr;
 }
 
 future<cql_server::process_fn_return_type>

@@ -560,6 +560,21 @@ public:
             std::optional<service::pager::query_plan> pinned_plan = std::nullopt,
             std::optional<std::string_view> forced_keyspace = std::nullopt);
 
+    // Parses a textual entry of a BATCH message. Returns the statement and the
+    // bytes its parse allocated. Anything but INSERT, UPDATE or DELETE fails.
+    // A BEGIN BATCH would hold off schema changes in its prepare, inside the
+    // handler's hold, and that can deadlock, see hold_off_schema_changes().
+    future<std::pair<std::unique_ptr<statements::raw::parsed_statement>, uint64_t>> parse_batch_message_statement(
+            utils::chunked_string_view query,
+            dialect d);
+
+    // Prepares what parse_batch_message_statement() returned.
+    future<std::unique_ptr<statements::prepared_statement>> prepare_batch_message_statement(
+            std::unique_ptr<statements::raw::parsed_statement> statement,
+            uint64_t allocated_in_parse,
+            utils::chunked_string query,
+            const service::client_state& client_state);
+
     static std::optional<service::pager::query_plan> pinned_plan_from_paging_state(
             const lw_shared_ptr<const service::pager::paging_state>& paging_state);
 

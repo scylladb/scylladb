@@ -423,3 +423,10 @@ service::client_state::client_state_for_another_shard service::client_state::mov
         _auth_service ? &_auth_service->container() : nullptr,
         _sl_controller ? &_sl_controller->container() : nullptr);
 }
+
+service::client_state service::client_state::snapshot() const {
+    return client_state(this,
+        _auth_service ? &_auth_service->container() : nullptr,
+        _sl_controller ? &_sl_controller->container() : nullptr,
+        nullptr);
+}

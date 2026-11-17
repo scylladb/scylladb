@@ -498,6 +498,12 @@ public:
     // other shards.
     client_state_for_another_shard move_to_other_shard() const;
 
+    // A copy for this shard, to read while the connection's own state may
+    // change, for example by a USE. It has the fields that
+    // move_to_other_shard() carries over, among them the keyspace and the
+    // user. Changes to the copy do not reach the connection.
+    client_state snapshot() const;
+
 #if 0
     public static SemanticVersion[] getCQLSupportedVersion()
     {

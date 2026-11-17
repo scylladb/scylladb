@@ -861,6 +861,38 @@ query_processor::get_statement(utils::chunked_string query, const service::clien
     }
 }
 
+// Fails for a statement that a BATCH message cannot contain.
+static void check_is_modification(const raw::parsed_statement& statement) {
+    if (!dynamic_cast<const raw::modification_statement*>(&statement)) {
+        throw exceptions::invalid_request_exception("Invalid statement in batch: only UPDATE, INSERT and DELETE statements are allowed.");
+    }
+}
+
+future<std::pair<std::unique_ptr<raw::parsed_statement>, uint64_t>>
+query_processor::parse_batch_message_statement(utils::chunked_string_view query, dialect d) {
+    using parsed = std::pair<std::unique_ptr<raw::parsed_statement>, uint64_t>;
+    try {
+        utils::total_bytes_allocated_counter allocated;
+        auto statement = parse_statement(query, d);
+        check_is_modification(*statement);
+        return make_ready_future<parsed>(std::move(statement), allocated.value());
+    } catch (...) {
+        return current_exception_as_future<parsed>();
+    }
+}
+
+future<std::unique_ptr<prepared_statement>>
+query_processor::prepare_batch_message_statement(std::unique_ptr<raw::parsed_statement> statement, uint64_t allocated_in_parse,
+        utils::chunked_string query, const service::client_state& client_state) {
+    try {
+        utils::total_bytes_allocated_counter allocated;
+        set_keyspace_and_plan(*statement, client_state, std::nullopt, std::nullopt);
+        return prepare_parsed_statement(std::move(statement), allocated_in_parse + allocated.value(), std::move(query), prepared_for_driver::no);
+    } catch (...) {
+        return current_exception_as_future<std::unique_ptr<prepared_statement>>();
+    }
+}
+
 future<std::unique_ptr<prepared_statement>>
 query_processor::prepare_parsed_statement(std::unique_ptr<raw::parsed_statement> statement, uint64_t allocated_before_prepare,
         utils::chunked_string query, prepared_for_driver for_driver) {
