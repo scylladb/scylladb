@@ -267,3 +267,38 @@ def test_udf_prepared_after_alter_type(cql, test_keyspace, has_java_udf):
                 [result] = [r[0] for r in cql.execute(stmt)]
                 assert tuple(result) == (7,)
                 assert result._fields == ('c',)
+
+# Returns the warnings which an ALTER TYPE statement returned.
+def alter_type_warnings(cql, udt, alteration):
+    return cql.execute(f'ALTER TYPE {udt} {alteration}').response_future.warnings or []
+
+# Test that ALTER TYPE of a user type which a function uses warns that the
+# function's code, written for the previous version of the type, may need to
+# be updated: e.g., a Lua function which reads a field by its name no longer
+# sees a renamed field, and a WebAssembly function decodes the serialized
+# value, which changes when a field is added. So any ALTER TYPE warns -
+# whether the function uses the type as an argument, as its return type, or
+# inside another type. This test is scylla_only because Cassandra doesn't
+# warn here.
+def test_alter_type_used_by_function_warns(cql, test_keyspace, scylla_only):
+    with new_type(cql, test_keyspace, '(a int)') as udt:
+        with new_type(cql, test_keyspace, f'(n frozen<{udt}>)') as outer:
+            for signature in [f'(x {udt}) CALLED ON NULL INPUT RETURNS int',
+                              f'(x int) CALLED ON NULL INPUT RETURNS {udt}',
+                              f'(x list<frozen<{outer}>>) CALLED ON NULL INPUT RETURNS int']:
+                # The functions are never called, so they just return null.
+                with new_function(cql, test_keyspace, f"{signature} LANGUAGE lua AS 'return nil'") as f:
+                    for alteration in [f'ADD {unique_name()} int', 'RENAME a TO c', 'RENAME c TO a']:
+                        warnings = alter_type_warnings(cql, udt, alteration)
+                        assert len(warnings) == 1
+                        assert f'{test_keyspace}.{f}' in warnings[0]
+                        assert 'may need to be updated' in warnings[0]
+
+# Test that ALTER TYPE of a user type which no function uses doesn't warn,
+# even if a function uses another user type in the same keyspace.
+def test_alter_type_unused_by_functions_no_warning(cql, test_keyspace, has_java_udf):
+    body = "LANGUAGE java AS 'return x;'" if has_java_udf else "LANGUAGE lua AS 'return x'"
+    with new_type(cql, test_keyspace, '(a int)') as used, new_type(cql, test_keyspace, '(a int)') as unused:
+        with new_function(cql, test_keyspace, f'(x {used}) CALLED ON NULL INPUT RETURNS {used} {body}'):
+            assert alter_type_warnings(cql, unused, 'ADD b int') == []
+            assert alter_type_warnings(cql, unused, 'RENAME a TO c') == []
