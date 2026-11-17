@@ -2061,6 +2061,8 @@ class batch_message {
     std::vector<std::reference_wrapper<const audit::audit_info>> _audit_infos;
     std::vector<cql3::raw_value_view_vector_with_unset> _values;
     std::unordered_map<cql3::prepared_cache_key_type, cql3::authorized_prepared_statements_cache::value_type> _pending_authorization_entries;
+    // The schema of the last prepared entry that was compared with its table.
+    const schema* _current_schema = nullptr;
 public:
     // in is at the first entry.
     batch_message(service::client_state& client_state, sharded<cql3::query_processor>& qp, request_reader in, cql_protocol_version_type version,
@@ -2099,7 +2101,8 @@ public:
             std::optional<db::timeout_clock::time_point> deadline, cql_sg_stats& sg_stats, api::timestamp_type request_start_timestamp);
 private:
     utils::result_with_exception_ptr<void> add_prepared();
-    utils::result_with_exception_ptr<void> add_statement(cql3::statements::prepared_statement::checked_weak_ptr ps, bool needs_authorization);
+    utils::result_with_exception_ptr<void> add_statement(cql3::statements::prepared_statement::checked_weak_ptr ps,
+            const cql3::prepared_cache_key_type* prepared_key, bool needs_authorization);
 };
 
 utils::result_with_exception_ptr<void>
@@ -2141,7 +2144,7 @@ batch_message::read_with_textual_entries() {
         if (_trace_entries) {
             tracing::add_query(_trace_state, statement->statement->raw_cql_statement);
         }
-        auto added = add_statement(statement->checked_weak_from_this(), true);
+        auto added = add_statement(statement->checked_weak_from_this(), nullptr, true);
         if (!added) {
             co_await coroutine::return_exception_ptr(std::move(added).assume_error());
         }
@@ -2173,20 +2176,37 @@ batch_message::add_prepared() {
             return bo::failure(std::make_exception_ptr(exceptions::prepared_query_not_found_exception(cql3::prepared_cache_key_type::cql_id(cache_key))));
         }
         // authorize a particular prepared statement only once
-        needs_authorization = _pending_authorization_entries.emplace(std::move(cache_key), ps->checked_weak_from_this()).second;
+        needs_authorization = _pending_authorization_entries.emplace(cache_key, ps->checked_weak_from_this()).second;
     }
     if (_trace_entries) {
         tracing::add_query(_trace_state, ps->statement->raw_cql_statement);
     }
-    return add_statement(std::move(ps), needs_authorization);
+    return add_statement(std::move(ps), &cache_key, needs_authorization);
 }
 
-// Adds the statement of an entry and reads the entry's values.
+// Adds the statement of an entry and reads the entry's values. prepared_key
+// is the cache key of a prepared entry, and null for a textual one.
 utils::result_with_exception_ptr<void>
-batch_message::add_statement(cql3::statements::prepared_statement::checked_weak_ptr ps, bool needs_authorization) {
+batch_message::add_statement(cql3::statements::prepared_statement::checked_weak_ptr ps,
+        const cql3::prepared_cache_key_type* prepared_key, bool needs_authorization) {
     auto modif_statement_ptr = dynamic_pointer_cast<cql3::statements::modification_statement>(ps->statement);
     if (!modif_statement_ptr) {
         return bo::failure(std::make_exception_ptr(exceptions::invalid_request_exception("Invalid statement in batch: only UPDATE, INSERT and DELETE statements are allowed.")));
+    }
+    const schema& s = *modif_statement_ptr->s;
+    if (prepared_key && &s != _current_schema) {
+        // A schema change is applied to a table first, and the table's
+        // prepared statements leave the cache a little later. A statement
+        // found in between is older than its table, and the batch could mix
+        // it with a statement of the new version. Drop it, and the driver
+        // prepares it again.
+        auto table = _qp.local().db().try_find_table(s.id());
+        if (!table || table->schema()->version() != s.version()) {
+            _qp.local().remove_prepared(_client_state.user(), *prepared_key, *ps);
+            return bo::failure(std::make_exception_ptr(
+                    exceptions::prepared_query_not_found_exception(cql3::prepared_cache_key_type::cql_id(*prepared_key))));
+        }
+        _current_schema = &s;
     }
     if (_trace_entries) {
         tracing::add_table_name(_trace_state, modif_statement_ptr->keyspace(), modif_statement_ptr->column_family());

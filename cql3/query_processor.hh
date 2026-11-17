@@ -266,6 +266,19 @@ public:
         return _prepared_cache.find(key);
     }
 
+    // For a statement older than its table. Also removes the user's authorized
+    // entry, which still finds the statement while a PREPARE response holds it.
+    void remove_prepared(const std::optional<auth::authenticated_user>& user, const prepared_cache_key_type& key,
+            const statements::prepared_statement& stale) {
+        if (user) {
+            _authorized_prepared_cache.remove(*user, key);
+        }
+        auto cached = _prepared_cache.find(key);
+        if (cached && cached.get() == &stale) {
+            _prepared_cache.remove(key);
+        }
+    }
+
     inline
     future<::shared_ptr<cql_transport::messages::result_message>>
     execute_prepared(
