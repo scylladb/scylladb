@@ -37,6 +37,12 @@ class incremental_backlog_tracker final : public compaction_backlog_tracker::imp
         size_t tiers_below;
     };
 
+    // URGENCY_FACTOR: the runs the eligible tiers hold over the runs they hold at the
+    // threshold, eligible_runs / (eligible_tiers * threshold), times the read discount.
+    // 1 when every eligible tier has just reached the threshold and the reads pay for it,
+    // more the further past the threshold the tiers are, and 1 with no tier eligible,
+    // when the target is 0 anyway.
+    double urgency_factor(double threshold, double read_discount) const;
     // The sstables a point read touched, on average, over the threshold, between
     // 1 / threshold and 1: how far the reads pay for the tiers past the threshold. A read
     // touching threshold sstables, or more, pays for a tier's worth of runs that should
@@ -88,8 +94,15 @@ class incremental_backlog_tracker final : public compaction_backlog_tracker::imp
         // sstables don't, e.g. with compaction_enforce_min_threshold or once bootstrap ends,
         // so the result is recalculated then too.
         unsigned threshold = 0;
-        // The tiers with enough runs to compact: what the target is made of.
+        // The shape of the tree, for the compaction rates: the runs eligible for compaction
+        // and the tiers they fall into, logged with the rates.
+        size_t runs = 0;
+        size_t tiers = 0;
+        size_t max_runs_in_tier = 0;
+        // The tiers with enough runs to compact and the runs their next compactions read:
+        // what the target is made of.
         size_t eligible_tiers = 0;
+        size_t eligible_runs = 0;
         std::vector<pending_tier> pending_tiers;
         // The mean size of the flushed sstables the tiers were placed by, relative to the
         // flush tier, so rates() places them by the same one.

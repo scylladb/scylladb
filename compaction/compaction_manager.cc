@@ -39,6 +39,7 @@
 #include "utils/labels.hh"
 
 static logging::logger cmlog("compaction_manager");
+logging::logger compaction::compaction_rates_logger("compaction_rates");
 using namespace std::chrono_literals;
 
 namespace compaction {

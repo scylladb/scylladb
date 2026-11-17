@@ -27,6 +27,10 @@ namespace compaction {
 
 class compaction_backlog_manager;
 
+// Logs what the compaction controller matches compaction to, per compaction group
+// and per shard, at debug level.
+extern logging::logger compaction_rates_logger;
+
 // Rates of a compaction group, which the compaction controller compares to match
 // compaction to ingestion. Each covers its window of minutes, or the time since the
 // group was created while it is younger than that; the flushed rates share one

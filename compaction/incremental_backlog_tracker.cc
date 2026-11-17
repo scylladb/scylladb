@@ -5,11 +5,13 @@
  */
 
 #include <algorithm>
+#include <iterator>
 
 #include "incremental_backlog_tracker.hh"
 #include "compaction.hh"
 #include "sstables/sstables.hh"
 #include "sstables/sstable_set.hh"
+#include "utils/log.hh"
 
 namespace compaction {
 
@@ -53,11 +55,15 @@ incremental_backlog_tracker::calculate_sstables_backlog_contribution(const compa
         }
     }
 
+    size_t tiers = 0;
+    size_t max_runs_in_tier = 0;
     size_t eligible_tiers = 0;
+    size_t eligible_runs = 0;
     std::vector<pending_tier> pending_tiers;
     const double mean_flush_size = src.stats().rates.mean_flush_size;
     if (!all.empty()) {
       auto buckets = incremental_compaction_strategy::get_buckets(all, options);
+      tiers = buckets.size();
       // The mean size of the runs of each bucket, ascending, as runs are put in buckets in
       // ascending order of size.
       std::vector<double> run_sizes;
@@ -70,6 +76,7 @@ incremental_backlog_tracker::calculate_sstables_backlog_contribution(const compa
       size_t flush_tier = std::ranges::lower_bound(run_sizes, flush_tier_size(mean_flush_size, options)) - run_sizes.begin();
       for (size_t i = 0; i < buckets.size(); i++) {
         auto& bucket = buckets[i].first;
+        max_runs_in_tier = std::max(max_runs_in_tier, bucket.size());
         if (!incremental_compaction_strategy::is_bucket_interesting(bucket, threshold)) {
             continue;
         }
@@ -78,6 +85,7 @@ incremental_backlog_tracker::calculate_sstables_backlog_contribution(const compa
         // Runs being compacted are still in the set and count: the tier has work until
         // the compaction ends.
         auto runs = std::min(bucket.size(), max_threshold);
+        eligible_runs += runs;
         pending_tiers.push_back(pending_tier{
             .runs = runs,
             .run_size = run_sizes[i],
@@ -104,7 +112,11 @@ incremental_backlog_tracker::calculate_sstables_backlog_contribution(const compa
         .sstables_backlog_contribution = sstables_backlog_contribution,
         .sstable_runs_contributing_backlog = std::move(sstable_runs_contributing_backlog),
         .threshold = unsigned(threshold),
+        .runs = all.size(),
+        .tiers = tiers,
+        .max_runs_in_tier = max_runs_in_tier,
         .eligible_tiers = eligible_tiers,
+        .eligible_runs = eligible_runs,
         .pending_tiers = std::move(pending_tiers),
         .mean_flush_size = mean_flush_size,
     };
@@ -120,6 +132,10 @@ void incremental_backlog_tracker::refresh(const compaction_backlog_source& src) 
 
 double incremental_backlog_tracker::read_discount(double threshold, double sstables_per_read) {
     return std::clamp(sstables_per_read / threshold, 1 / threshold, 1.0);
+}
+
+double incremental_backlog_tracker::urgency_factor(double threshold, double read_discount) const {
+    return _last_result.eligible_tiers > 0 ? _last_result.eligible_runs / (_last_result.eligible_tiers * threshold) * read_discount : 1;
 }
 
 compaction_rates incremental_backlog_tracker::rates(const compaction_backlog_source& src) const {
@@ -178,12 +194,16 @@ compaction_rates incremental_backlog_tracker::rates(const compaction_backlog_sou
     // is deferred.
     auto sstables_per_read = stats.read_amplification.mean_sstables_read();
     auto discount = read_discount(threshold, sstables_per_read);
+    auto urgency = urgency_factor(threshold, discount);
     const auto& flushed = stats.rates.flushed_bytes;
     const bool flushing = flushed.amount() > 0;
     // What a compaction keeps of what it reads; all of it until a regular compaction ended.
     const auto& compacted_input = stats.rates.completed_input_bytes;
     const double kept = compacted_input.amount() > 0 ? std::clamp(stats.rates.completed_output_bytes.amount() / compacted_input.amount(), 0.0, 1.0) : 1.0;
     utils::rate<utils::units::bytes> needed;
+    // Each pending tier's runs, mean run size, tiers below it, inflow and need, for the log.
+    const bool log_tiers = compaction_rates_logger.is_enabled(seastar::log_level::debug);
+    std::string tiers_log;
     for (const auto& tier : _last_result.pending_tiers) {
         auto inflow = tier.ingestion;
         if (flushing) {
@@ -204,12 +224,27 @@ compaction_rates incremental_backlog_tracker::rates(const compaction_backlog_sou
             per_second = runs_for_next_refill * tier.run_size / refill * discount;
             needed = needed + utils::rate<utils::units::bytes>(per_second * inflow.interval().count(), inflow.interval());
         }
+        if (log_tiers) {
+            fmt::format_to(std::back_inserter(tiers_log), "{}{} runs of {:.0f} B, {} tiers below, inflow {:.0f} B/s, needed {:.0f} B/s",
+                    tiers_log.empty() ? "" : "; ", tier.runs, tier.run_size, tier.tiers_below, inflow.per_second(), per_second);
+        }
     }
     auto target = needed;
     if (flushing) {
         target = _last_result.eligible_tiers == 0 ? flushed * 0.0 : (needed.per_second() > flushed.per_second() ? needed : flushed);
     }
 
+    compaction_rates_logger.debug("{}.{}: flushed {:.0f} B/s over {}s, {} runs in {} pending tiers of {} tiers ({} runs, {} at most in a tier), threshold {}, "
+            "point reads {:.1f}/s touching {:.2f} sstables over {}s, read discount {:.2f}, urgency {:.2f}, "
+            "needed by the pending tiers {:.0f} B/s over {}s, target {:.0f} B/s, achieved {:.0f} B/s over {}s and {:.0f} B/s over {}s, "
+            "compactions kept {:.2f} of {:.0f} bytes read over {}s, pending tiers [{}]",
+            src.schema()->ks_name(), src.schema()->cf_name(), stats.rates.flushed_bytes.per_second(), stats.rates.flushed_bytes.interval().count(),
+            _last_result.eligible_runs, _last_result.eligible_tiers, _last_result.tiers, _last_result.runs, _last_result.max_runs_in_tier, threshold,
+            stats.read_amplification.point_reads.per_second(), sstables_per_read, stats.read_amplification.point_reads.interval().count(), discount, urgency,
+            needed.per_second(), needed.interval().count(), target.per_second(),
+            stats.rates.compacted_bytes.per_second(), stats.rates.compacted_bytes.interval().count(),
+            stats.rates.compacted_bytes_long.per_second(), stats.rates.compacted_bytes_long.interval().count(),
+            kept, compacted_input.amount(), compacted_input.interval().count(), tiers_log);
     return compaction_rates{
         .target = target,
         .achieved = stats.rates.compacted_bytes,
