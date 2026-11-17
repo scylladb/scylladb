@@ -123,12 +123,9 @@ def testConditionalUpdate(cql, test_keyspace, is_scylla):
         assertInvalidMessage(cql, table, "IN on the clustering key columns is not supported with conditional updates",
                              "UPDATE %s SET v1 = 'A' WHERE k = 0 AND c IN (1, 2) IF EXISTS")
 
-        # Due to issue #13586, ScyllaDB is missing support for CONTAINS in
-        # LWT expressions, so this check failed with a syntax error instead
-        # of an error message. We have tests for this syntax already in
-        # insert_update_if_condition_collections_test.py so let's not
-        # repeat it here.
-        #assertInvalidMessage(cql, table, "Cannot use CONTAINS on non-collection column v1", "UPDATE %s SET v1 = 'B' WHERE k = 0 IF v1 CONTAINS 'A'")
+        # ScyllaDB quotes the column name in this message, so we don't check it.
+        # Reproduces #13586:
+        assertInvalidMessage(cql, table, "Cannot use CONTAINS on non-collection column", "UPDATE %s SET v1 = 'B' WHERE k = 0 IF v1 CONTAINS 'A'")
 
 # Migrated from cql_tests.py:TestCQL.non_eq_conditional_update_test()
 def testNonEqConditionalUpdate(cql, test_keyspace, is_scylla):

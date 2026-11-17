@@ -1084,16 +1084,20 @@ OK
 +-------------+-----+
 > -- list contains
 > update lwt set c=0 where a = 1 if listint contains null;
-<Error from server: code=2000 [Syntax error in CQL query] message="line 1:42 no viable alternative at input 'contains'">
+Error from server: code=2200 [Invalid query] message="Invalid comparison with null for operator "CONTAINS""
 > -- map contains
 > update lwt set c=0 where a = 1 if mapint contains key 1;
-<Error from server: code=2000 [Syntax error in CQL query] message="line 1:41 no viable alternative at input 'contains'">
++-------------+----------+
+| [applied]   | mapint   |
+|-------------+----------|
+| False       | null     |
++-------------+----------+
 > -- set contains
 > update lwt set c=0 where a = 1 if setint contains key 1;
-<Error from server: code=2000 [Syntax error in CQL query] message="line 1:41 no viable alternative at input 'contains'">
+Error from server: code=2200 [Invalid query] message="Cannot use CONTAINS KEY on non-map column setint"
 > -- multi-value set contaias
 > update lwt set c=0 where a = 1 if setint contains key 1;
-<Error from server: code=2000 [Syntax error in CQL query] message="line 1:41 no viable alternative at input 'contains'">
+Error from server: code=2200 [Invalid query] message="Cannot use CONTAINS KEY on non-map column setint"
 > -- addressing map element
 > update lwt set c=0 where a = 1 if mapint[2] = 3;
 +-------------+----------+
@@ -1269,6 +1273,67 @@ OK
 |   a |   c | listint   | mapint   | setint   |
 |-----+-----+-----------+----------+----------|
 |   1 |  12 | [1]       | [1]      | [1]      |
++-----+-----+-----------+----------+----------+
+> -- contains and contains key, see #13586
+> update lwt set c=14 where a = 1 if listint contains 1;
++-------------+-----------+
+| [applied]   | listint   |
+|-------------+-----------|
+| True        | [1]       |
++-------------+-----------+
+> select * from lwt allow filtering;
++-----+-----+-----------+----------+----------+
+|   a |   c | listint   | mapint   | setint   |
+|-----+-----+-----------+----------+----------|
+|   1 |  14 | [1]       | [1]      | [1]      |
++-----+-----+-----------+----------+----------+
+> update lwt set c=15 where a = 1 if listint contains 2;
++-------------+-----------+
+| [applied]   | listint   |
+|-------------+-----------|
+| False       | [1]       |
++-------------+-----------+
+> select * from lwt allow filtering;
++-----+-----+-----------+----------+----------+
+|   a |   c | listint   | mapint   | setint   |
+|-----+-----+-----------+----------+----------|
+|   1 |  14 | [1]       | [1]      | [1]      |
++-----+-----+-----------+----------+----------+
+> update lwt set c=16 where a = 1 if mapint contains 1 and mapint contains key 1;
++-------------+----------+
+| [applied]   | mapint   |
+|-------------+----------|
+| True        | [1]      |
++-------------+----------+
+> select * from lwt allow filtering;
++-----+-----+-----------+----------+----------+
+|   a |   c | listint   | mapint   | setint   |
+|-----+-----+-----------+----------+----------|
+|   1 |  16 | [1]       | [1]      | [1]      |
++-----+-----+-----------+----------+----------+
+> update lwt set c=17 where a = 1 if mapint contains key 2;
++-------------+----------+
+| [applied]   | mapint   |
+|-------------+----------|
+| False       | [1]      |
++-------------+----------+
+> select * from lwt allow filtering;
++-----+-----+-----------+----------+----------+
+|   a |   c | listint   | mapint   | setint   |
+|-----+-----+-----------+----------+----------|
+|   1 |  16 | [1]       | [1]      | [1]      |
++-----+-----+-----------+----------+----------+
+> update lwt set c=18 where a = 1 if setint contains 1;
++-------------+----------+
+| [applied]   | setint   |
+|-------------+----------|
+| True        | [1]      |
++-------------+----------+
+> select * from lwt allow filtering;
++-----+-----+-----------+----------+----------+
+|   a |   c | listint   | mapint   | setint   |
+|-----+-----+-----------+----------+----------|
+|   1 |  18 | [1]       | [1]      | [1]      |
 +-----+-----+-----------+----------+----------+
 > drop table lwt;
 OK
