@@ -5,6 +5,7 @@
 import pytest
 import sys
 import requests
+import threading
 import time
 
 # Use the util.py library from ../cqlpy:
@@ -181,6 +182,27 @@ def test_storage_service_keyspace_scrub(cql, this_dc, rest_api):
                 # non-existing table
                 resp = rest_api.send("POST", f"storage_service/keyspace_scrub/{keyspace}", { "cf": f"{test_tables[0]},XXX" })
                 assert resp.status_code == requests.codes.not_found
+
+# Before a scrub of named tables, scrub takes a snapshot named after the time
+# in milliseconds. Check that several scrubs of the same table that start at
+# the same time all succeed, instead of failing because the snapshot name of
+# one of them already exists.
+# Reproduces SCYLLADB-6361.
+def test_storage_service_keyspace_scrub_concurrent(cql, this_dc, rest_api):
+    with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}") as keyspace:
+        with new_test_table(cql, keyspace, 'a int, PRIMARY KEY (a)') as table:
+            cf = table.split('.')[1]
+            n = 8
+            barrier = threading.Barrier(n)
+            def scrub():
+                barrier.wait()
+                return rest_api.send('GET', f'storage_service/keyspace_scrub/{keyspace}', {'cf': cf})
+            threads = [ThreadWrapper(target=scrub) for _ in range(n)]
+            for t in threads:
+                t.start()
+            responses = [t.join() for t in threads]
+            for resp in responses:
+                assert resp.status_code == requests.codes.ok, resp.text
 
 def test_storage_service_keyspace_scrub_abort(cql, this_dc, rest_api):
     with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}") as keyspace:
