@@ -8,6 +8,7 @@
  */
 
 #include <array>
+#include <filesystem>
 
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/seastar.hh>
@@ -18,6 +19,7 @@
 #include "utils/lister.hh"
 #include "replica/database.hh"
 #include "replica/global_table_ptr.hh"
+#include "data_dictionary/storage_options.hh"
 #include "db/config.hh"
 #include "db/snapshot-ctl.hh"
 #include "db/system_distributed_keyspace.hh"
@@ -66,6 +68,86 @@ std::string db::snapshot::snapshot_prefix_from_manifest(std::string_view manifes
         .parent_path() // <prefix>/snapshots/
         .parent_path() // <prefix>
         .string();
+}
+
+future<> db::snapshot::collect_snapshot_residue(replica::database& db, const locator::token_metadata& tm, const sstring& name,
+        const utils::chunked_vector<std::pair<sstring, sstring>>& tables, db::snapshot_table_helper& sth) {
+    auto nodes = co_await sth.get_snapshot_nodes(name, {}, {}, db::consistency_level::QUORUM);
+    std::set<std::pair<std::string, std::string>> partitions;
+    for (const auto& n : nodes) {
+        partitions.emplace(n.datacenter, n.rack);
+    }
+    // A replica writes its nodes row first, so no partitions means no
+    // rows of any other kind either.
+    if (partitions.empty()) {
+        co_return;
+    }
+    for (const auto& [ks_name, cf_name] : tables) {
+        auto tp = db.get_tables_metadata().get_table_if_exists(
+                db.get_tables_metadata().get_table_id_if_exists({std::string_view(ks_name), std::string_view(cf_name)}));
+        if (!tp) {
+            snap_log.warn("Snapshot '{}': table {}.{} no longer exists, deleting its catalog rows,"
+                    " its leftover references can only be reclaimed by bucket healing", name, ks_name, cf_name);
+        }
+        const bool remote_table = tp && tp->get_storage_options().is_object_storage_type();
+        std::optional<data_dictionary::storage_options::s3> os;
+        shared_ptr<sstables::object_storage_client> client;
+        if (remote_table) {
+            os = std::get<data_dictionary::storage_options::s3>(tp->get_storage_options().value);
+            try {
+                client = tp->get_sstables_manager().get_endpoint_client(os->endpoint);
+            } catch (const std::invalid_argument&) {
+                throw std::runtime_error(fmt::format("Snapshot '{}' of {}.{}: object-storage endpoint '{}' is not configured on this node,"
+                        " cannot release the attempt's references", name, ks_name, cf_name, os->endpoint));
+            }
+        }
+        for (const auto& [dc, rack] : partitions) {
+            auto residue = co_await sth.get_snapshot_sstables_for_cleanup(name, ks_name, cf_name, dc, rack);
+            if (residue.empty()) {
+                continue;
+            }
+            snap_log.info("Snapshot '{}' of {}.{}: collecting {} catalog rows in ({}, {})", name, ks_name, cf_name, residue.size(), dc, rack);
+            co_await max_concurrent_for_each(residue, 16, [&] (const db::snapshot_sstable_cleanup_entry& e) -> future<> {
+                if (remote_table) {
+                    // The reference goes first
+                    bool released = false;
+                    if (!e.toc_name.empty()) {
+                        auto desc = sstables::parse_path(std::filesystem::path(std::string_view(e.toc_name)), ks_name, cf_name);
+                        if (desc) {
+                            desc->sid = e.sstable_id;
+                            co_await sstables::release_object_storage_snapshot_ref(*client, *os, name, *desc);
+                            released = true;
+                        } else {
+                            snap_log.warn("Snapshot '{}' of {}.{}: cannot derive the snapshot reference of {} from toc_name '{}': {}",
+                                    name, ks_name, cf_name, e.sstable_id, e.toc_name, desc.error());
+                        }
+                    }
+                    if (!released) {
+                        // The row cannot name its reference, but we can do it with the
+                        // sstable_id and a list op. Every reference of `name` is residue.
+                        // The components go with the last reference.
+                        co_await sstables::release_object_storage_snapshot_refs_by_listing(*client, *os, e.sstable_id, name);
+                    }
+                }
+
+                auto ts = e.write_timestamp ? e.write_timestamp : api::new_timestamp();
+                co_await sth.delete_snapshot_sstable_entry(name, ks_name, cf_name, dc, rack,
+                        e.first_token, e.sstable_id, ts);
+            });
+        }
+    }
+
+    const auto& dcs = tm.get_topology().get_datacenters();
+    for (const auto& [ks_name, table_name] : tables) {
+        for (const auto& dc : dcs) {
+            auto rows = co_await sth.get_snapshot_tablets_for_cleanup(name, ks_name, table_name, dc);
+            for (const auto& row : rows) {
+                co_await sth.delete_snapshot_tablet_entry(name, ks_name, table_name, dc, row.first_token, row.write_timestamp);
+            }
+        }
+    }
+    // The nodes rows name the partitions, they go last.
+    co_await sth.delete_snapshot_nodes_rows(name, api::new_timestamp());
 }
 
 static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string& snapshot_name, const std::unordered_multimap<sstring, sstring>& ks_tables, std::unordered_map<sstring, db::snapshot_dc_location>& dc_locations, bool remove_on_uploaded, tasks::task_manager::task::progress& total_progress, abort_source& as) {

@@ -31,6 +31,7 @@
 #include "cdc/generation.hh"
 #include "cdc/generation_service.hh"
 #include "cql3/statements/ks_prop_defs.hh"
+#include "db/snapshot/cluster_backup.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "db/system_keyspace.hh"
 #include "dht/boot_strapper.hh"
@@ -46,9 +47,6 @@
 #include "replica/database.hh"
 #include "replica/tablet_mutation_builder.hh"
 #include "replica/tablets.hh"
-#include "sstables/open_info.hh"
-#include "sstables/sstables_manager.hh"
-#include "sstables/storage.hh"
 #include "db/config.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "db/schema_tables.hh"
@@ -4257,92 +4255,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         );
     }
 
-    // Releases the references and deletes the catalog rows written under
-    // `name`, a snapshot attempt that failed. `tables` are the names on the schema
-    // rows of `name`, written before the round's RPCs, so they cover tables
-    // dropped since. A reference may be a compacted-away sstable's last claim,
-    // so it is released, not deleted, and its components go with it. Local
-    // tables have no references, their residue is the rows alone.
-    future<> collect_snapshot_residue(const sstring& name, const utils::chunked_vector<std::pair<sstring, sstring>>& tables, db::snapshot_table_helper& sth) {
-        auto nodes = co_await sth.get_snapshot_nodes(name, {}, {}, db::consistency_level::QUORUM);
-        std::set<std::pair<std::string, std::string>> partitions;
-        for (const auto& n : nodes) {
-            partitions.emplace(n.datacenter, n.rack);
-        }
-        // A replica writes its nodes row first, so no partitions means no
-        // rows of any other kind either.
-        if (partitions.empty()) {
-            co_return;
-        }
-        for (const auto& [ks_name, cf_name] : tables) {
-            auto tp = _db.get_tables_metadata().get_table_if_exists(
-                    _db.get_tables_metadata().get_table_id_if_exists({std::string_view(ks_name), std::string_view(cf_name)}));
-            if (!tp) {
-                rtlogger.warn("Snapshot '{}': table {}.{} no longer exists, deleting its catalog rows,"
-                        " its leftover references can only be reclaimed by bucket healing", name, ks_name, cf_name);
-            }
-            const bool remote_table = tp && tp->get_storage_options().is_object_storage_type();
-            std::optional<data_dictionary::storage_options::s3> os;
-            shared_ptr<sstables::object_storage_client> client;
-            if (remote_table) {
-                os = std::get<data_dictionary::storage_options::s3>(tp->get_storage_options().value);
-                try {
-                    client = tp->get_sstables_manager().get_endpoint_client(os->endpoint);
-                } catch (const std::invalid_argument&) {
-                    throw std::runtime_error(fmt::format("Snapshot '{}' of {}.{}: object-storage endpoint '{}' is not configured on this node,"
-                            " cannot release the attempt's references", name, ks_name, cf_name, os->endpoint));
-                }
-            }
-            for (const auto& [dc, rack] : partitions) {
-                auto residue = co_await sth.get_snapshot_sstables_for_cleanup(name, ks_name, cf_name, dc, rack);
-                if (residue.empty()) {
-                    continue;
-                }
-                rtlogger.info("Snapshot '{}' of {}.{}: collecting {} catalog rows in ({}, {})", name, ks_name, cf_name, residue.size(), dc, rack);
-                co_await max_concurrent_for_each(residue, 16, [&] (const db::snapshot_sstable_cleanup_entry& e) -> future<> {
-                    if (remote_table) {
-                        // The reference goes first
-                        bool released = false;
-                        if (!e.toc_name.empty()) {
-                            auto desc = sstables::parse_path(std::filesystem::path(std::string_view(e.toc_name)), ks_name, cf_name);
-                            if (desc) {
-                                desc->sid = e.sstable_id;
-                                co_await sstables::release_object_storage_snapshot_ref(*client, *os, name, *desc);
-                                released = true;
-                            } else {
-                                rtlogger.warn("Snapshot '{}' of {}.{}: cannot derive the snapshot reference of {} from toc_name '{}': {}",
-                                        name, ks_name, cf_name, e.sstable_id, e.toc_name, desc.error());
-                            }
-                        }
-                        if (!released) {
-                            // The row cannot name its reference, but we can do it with the
-                            // sstable_id and a list op. Every reference of `name` is residue.
-                            // The components go with the last reference.
-                            co_await sstables::release_object_storage_snapshot_refs_by_listing(*client, *os, e.sstable_id, name);
-                        }
-                    }
-
-                    auto ts = e.write_timestamp ? e.write_timestamp : api::new_timestamp();
-                    co_await sth.delete_snapshot_sstable_entry(name, ks_name, cf_name, dc, rack,
-                            e.first_token, e.sstable_id, ts);
-                });
-            }
-        }
-
-        const auto tmptr = get_token_metadata_ptr();
-        const auto& dcs = tmptr->get_topology().get_datacenters();
-        for (const auto& [ks_name, table_name] : tables) {
-            for (const auto& dc : dcs) {
-                auto rows = co_await sth.get_snapshot_tablets_for_cleanup(name, ks_name, table_name, dc);
-                for (const auto& row : rows) {
-                    co_await sth.delete_snapshot_tablet_entry(name, ks_name, table_name, dc, row.first_token, row.write_timestamp);
-                }
-            }
-        }
-        // The nodes rows name the partitions, they go last.
-        co_await sth.delete_snapshot_nodes_rows(name, api::new_timestamp());
-    }
-
     // Called from handle_snapshot_tables before the RPCs are sent out, once
     // the attempt is in the request entry. Records the round in the snapshot_attempts
     // table and writes its schema rows under the attempt name, so a failed
@@ -4376,6 +4288,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         if (_term != _raft.get_current_term()) {
             throw term_changed_error{};
         }
+        const auto tmptr = get_token_metadata_ptr();
         for (const auto& a : attempts) {
             if (committed && a.attempt == *committed) {
                 continue;
@@ -4383,7 +4296,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
 
             const auto name = db::make_snapshot_attempt_name(tag, a.attempt);
             const auto tables = co_await sth.get_snapshot_schema_rows_for_cleanup(name);
-            co_await collect_snapshot_residue(name, tables, sth);
+            co_await db::snapshot::collect_snapshot_residue(_db, *tmptr, name, tables, sth);
             co_await sth.delete_snapshot_schema_rows(name, api::new_timestamp());
             co_await sth.delete_snapshot_attempt(tag, a.attempt);
         }
