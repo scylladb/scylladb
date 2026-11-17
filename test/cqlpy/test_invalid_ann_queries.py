@@ -53,7 +53,9 @@ def test_ann_query_with_null_vector(cql, test_keyspace, skip_on_scylla_vnodes):
     with new_test_table(cql, test_keyspace, schema) as table:
         cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING '{custom_index}'")
 
-        with pytest.raises(InvalidRequest, match="Unsupported null value for column v"):
+        # Scylla and Cassandra 5 say "Unsupported null value", Cassandra 6
+        # says "Invalid null value".
+        with pytest.raises(InvalidRequest, match="(Unsupported|Invalid) null value for column v"):
             cql.execute(f"SELECT * FROM {table} ORDER BY v ANN OF null LIMIT 5")
 
 ###############################################################################
