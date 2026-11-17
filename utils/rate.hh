@@ -58,6 +58,11 @@ public:
         return _interval > interval_type::zero() ? _amount / _interval.count() : 0;
     }
 
+    /// The rate scaled by `factor`, over the same interval.
+    friend constexpr rate operator*(const rate& r, double factor) noexcept {
+        return rate(r._amount * factor, r._interval);
+    }
+
     /// The sum of two rates of the same thing, per second. When they cover different
     /// intervals, e.g. of compaction groups created at different times, the sum covers
     /// the shorter one, which both end with. A rate over an empty interval measured
