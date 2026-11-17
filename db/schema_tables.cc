@@ -1119,9 +1119,23 @@ future<shared_ptr<cql3::functions::user_function>> create_func(replica::database
     auto arg_names = get_list<sstring>(row, "argument_names");
     auto body = row.get_nonnull<sstring>("body");
     auto language = row.get_nonnull<sstring>("language");
-    auto ctx = co_await db.lang().create(language, name.name, arg_names, body);
-    if (!ctx) {
-        throw std::runtime_error(format("Unsupported language for UDF: {}", language));
+    // The function was successfully compiled when it was created, but its
+    // compilation may fail now - e.g., if a limit became stricter since. Such
+    // a failure must not fail loading the schema (which, at startup, skips all
+    // the functions of the keyspace) or applying a schema change. Instead, the
+    // function is created in a state where calling it fails with this error,
+    // while it can still be dropped or replaced.
+    std::optional<cql3::functions::user_function::context> ctx;
+    try {
+        auto created_ctx = co_await db.lang().create(language, name.name, arg_names, body);
+        if (!created_ctx) {
+            throw std::runtime_error(format("Unsupported language for UDF: {}", language));
+        }
+        ctx.emplace(std::move(*created_ctx));
+    } catch (...) {
+        auto error = fmt::format("{}", std::current_exception());
+        slogger.warn("Failed to compile function {}: {}", name, error);
+        ctx.emplace(cql3::functions::user_function::failed_context{error});
     }
     co_return ::make_shared<cql3::functions::user_function>(std::move(name), std::move(arg_types), std::move(arg_names),
             std::move(body), language, std::move(return_type),
