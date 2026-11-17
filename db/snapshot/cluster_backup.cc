@@ -85,14 +85,15 @@ static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string&
         }
     }
     // The catalog rows of a cluster snapshot live under the committed
-    // attempt's name, "{tag}/{attempt}". The backup's own rows, the
-    // manifest and the uploaded references keep the user tag.
+    // attempt's name, "{tag}/{attempt}", and so do the backup's location
+    // rows. A restore of the tag writes its own location row under the plain tag, with a
+    // TTL, and must not replace them.
     const auto committed_name = co_await sth.find_committed_snapshot_name(snapshot_name);
     if (!committed_name) {
         throw std::runtime_error(fmt::format("Snapshot '{}' has no committed attempt", snapshot_name));
     }
 
-    auto locations = co_await sth.get_snapshot_remote_locations(snapshot_name);
+    auto locations = co_await sth.get_snapshot_remote_locations(*committed_name);
     std::unordered_map<std::string, db::snapshot_state> state_filter;
 
     for (auto& dc : dc_locations | std::views::keys) {
@@ -129,7 +130,7 @@ static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string&
 
     auto new_locations = dc_locations | std::views::transform([&](auto& p) {
         return db::snapshot_remote_location_entry {
-            .snapshot_name = snapshot_name,
+            .snapshot_name = *committed_name,
             .datacenter = p.first,
             .endpoint = p.second.endpoint,
             .bucket = p.second.bucket,
