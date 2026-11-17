@@ -5,12 +5,41 @@
 # Tests for basic keyspace operations: CREATE KEYSPACE, DROP KEYSPACE,
 # ALTER KEYSPACE
 
-from .util import new_test_keyspace, unique_name
+from .util import new_test_keyspace, unique_name, is_scylla
 import pytest
 from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException
 from threading import Thread
 
-from test.cluster.util import get_replication, get_replica_count
+# Returns a keyspace's replication options, as a map from each option's
+# name to its value. In Scylla, a DC's replication factor can also be a list
+# of racks, which the replication_v2 column of system_schema.keyspaces stores
+# as one key per rack, "dc:0", "dc:1" and so on - or "dc:-1" for an empty
+# list (see docs/dev/system_schema_keyspace.md). This function returns such
+# a replication factor as a list of racks. Cassandra has no rack lists, and
+# no replication_v2 column.
+def get_replication(cql, keyspace):
+    if is_scylla(cql):
+        row = cql.execute(f"SELECT replication, replication_v2 FROM system_schema.keyspaces WHERE keyspace_name='{keyspace}'").one()
+        options = row.replication_v2 or row.replication
+    else:
+        options = cql.execute(f"SELECT replication FROM system_schema.keyspaces WHERE keyspace_name='{keyspace}'").one().replication
+    result = {}
+    for key, value in options.items():
+        dc, colon, index = key.partition(':')
+        if not colon:
+            result[key] = value
+            continue
+        racks = result.setdefault(dc, [])
+        index = int(index)
+        if index >= 0:
+            racks.extend([None] * (index + 1 - len(racks)))
+            racks[index] = value
+    return result
+
+# Returns the number of replicas of a replication factor that
+# get_replication() returned: a number, or a list of racks.
+def get_replica_count(rf):
+    return len(rf) if isinstance(rf, list) else int(rf)
 
 
 # A basic tests for successful CREATE KEYSPACE and DROP KEYSPACE
