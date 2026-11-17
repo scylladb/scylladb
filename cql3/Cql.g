@@ -678,8 +678,8 @@ updateConditions returns [uexpression cond]
     @init {
         std::vector<expression> conditions;
     }
-    : c1=columnCondition { conditions.emplace_back(std::move(c1)); }
-         ( K_AND cn=columnCondition { conditions.emplace_back(std::move(cn)); } )*
+    : c1=relation { conditions.emplace_back(std::move(c1)); }
+         ( K_AND cn=relation { conditions.emplace_back(std::move(cn)); } )*
     {
         return conjunction{std::move(conditions)};
     }
@@ -1898,32 +1898,6 @@ subscriptExpr returns [uexpression e]
 singleColumnInValuesOrMarkerExpr returns [uexpression e]
     : values=singleColumnInValues { e = collection_constructor{collection_constructor::style_type::list_or_vector, std::move(values)}; }
     | m=marker { e = std::move(m); }
-    ;
-
-columnCondition returns [uexpression e]
-    // Note: we'll reject duplicates later
-    : key=subscriptExpr
-        ( op=relationType t=term {
-                    e = binary_operator(
-                            std::move(key),
-                            op,
-                            std::move(t));
-                }
-        | K_IN
-            values=singleColumnInValuesOrMarkerExpr {
-                    e = binary_operator(
-                            std::move(key),
-                            oper_t::IN,
-                            std::move(values));
-                }
-        | K_NOT K_IN
-            values=singleColumnInValuesOrMarkerExpr {
-                    e = binary_operator(
-                            std::move(key),
-                            oper_t::NOT_IN,
-                            std::move(values));
-                }
-        )
     ;
 
 elementOrFieldRelation[expression lhs] returns [uexpression e]
