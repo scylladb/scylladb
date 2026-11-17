@@ -12,6 +12,7 @@ from urllib import response
 
 import pytest
 import boto3
+import botocore
 import time
 import uuid
 import json
@@ -22,11 +23,13 @@ import decimal
 import os
 import re
 import requests
+import struct
 
 from botocore.exceptions import ClientError
 from cassandra import ConsistencyLevel
 from cassandra.query import SimpleStatement
 from contextlib import contextmanager, ExitStack
+from packaging.version import Version
 
 from test.alternator.util import get_table_arn, is_aws, manual_request, ManualRequestError, new_test_table, create_test_table, random_string, scylla_config_read, scylla_config_temporary, scylla_inject_error
 from test.pylib.s3mock_server import S3MockServer
@@ -665,6 +668,59 @@ def test_export_with_data_full(dynamodb, s3_prefix_value, export_format_value, n
 
             assert 'outputFormat' in manifest_summary
             assert manifest_summary['outputFormat'] == export_format_value
+
+# FLOAT32VECTOR is an Alternator extension, which readers of DynamoDB JSON (e.g. AWS ImportTable or
+# scylla-hermes) do not know. So an export writes a FLOAT32VECTOR, also a nested one, as a list ("L")
+# of numbers ("N"), the DynamoDB form of a vector. Each number is the shortest decimal of the 32-bit
+# float. The test also checks that Alternator accepts the exported item back, where the vector is
+# the attribute of a vector index.
+def test_export_float32vector_as_list(dynamodb, scylla_only, s3):
+    if Version(botocore.__version__) < Version('1.43.64'):
+        skip_env("Botocore version 1.43.64 or above required to create a table with VectorIndexes")
+    # The values need a fraction, an exponent and both signs.
+    vector = [1.0, -2.5, 0.1, 1 / 3, 1e-30, -3.4028234663852886e38]
+    exported_vector = {'L': [{'N': n} for n in ['1', '-2.5', '0.1', '0.33333334', '1e-30', '-3.4028235e+38']]}
+    with new_test_table(dynamodb,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}],
+            VectorIndexes=[{'IndexName': 'vind',
+                            'VectorAttribute': {'AttributeName': 'v'},
+                            'Dimensions': len(vector),
+                            'DistanceFunction': 'COSINE',
+                            'Projection': {'ProjectionType': 'KEYS_ONLY'}}]) as table:
+        manual_request(table, 'PutItem', json.dumps({'TableName': table.name, 'Item': {
+            'p': {'S': 'exported'},
+            'v': {'FLOAT32VECTOR': vector},
+            'm': {'M': {'v': {'FLOAT32VECTOR': vector}}},
+            'l': {'L': [{'FLOAT32VECTOR': vector}, {'S': 'abc'}]},
+            'e': {'FLOAT32VECTOR': []},
+        }}))
+        client = table.meta.client
+        with new_s3_bucket(s3) as bucket:
+            response = client.export_table_to_point_in_time(TableArn=get_table_arn(table), S3Bucket=bucket, ExportFormat='DYNAMODB_JSON')
+            final = wait_for_export(client, response['ExportDescription']['ExportArn'])
+            assert final['ExportStatus'] == 'COMPLETED'
+            items = []
+            for page in s3.get_paginator('list_objects_v2').paginate(Bucket=bucket):
+                for obj in page.get('Contents', []):
+                    if obj['Key'].endswith('.json.gz'):
+                        content = gzip.decompress(s3.get_object(Bucket=bucket, Key=obj['Key'])['Body'].read()).decode('utf-8')
+                        items.extend(json.loads(line)['Item'] for line in content.splitlines())
+        assert items == [{
+            'p': {'S': 'exported'},
+            'v': exported_vector,
+            'm': {'M': {'v': exported_vector}},
+            'l': {'L': [exported_vector, {'S': 'abc'}]},
+            'e': {'L': []},
+        }]
+
+        # The vector index accepts the exported vector, and each number is the same 32-bit float.
+        item = items[0] | {'p': {'S': 'imported'}}
+        manual_request(table, 'PutItem', json.dumps({'TableName': table.name, 'Item': item}))
+        result = manual_request(table, 'GetItem', json.dumps({'TableName': table.name, 'Key': {'p': {'S': 'imported'}}, 'ConsistentRead': True}))
+        assert result['Item'] == item
+        to_float32 = lambda x: struct.unpack('f', struct.pack('f', x))[0]
+        assert [to_float32(float(n['N'])) for n in exported_vector['L']] == [to_float32(x) for x in vector]
 
 # Test that sending the same ClientToken twice returns the same export.
 def test_export_client_token_idempotent(test_table_s, s3):

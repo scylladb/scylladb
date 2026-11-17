@@ -10,6 +10,7 @@
 #include "alternator/error.hh"
 #include "alternator/executor.hh"
 #include "alternator/executor_util.hh"
+#include "alternator/serialization.hh"
 
 #include "bytes.hh"
 #include "cql3/query_options.hh"
@@ -2672,6 +2673,35 @@ static sstring format_manifest_time(db_clock::time_point tp) {
     return fmt::format("{:%FT%T}.{:03}Z", fmt::gmtime(db_clock::to_time_t(tp)), millis);
 }
 
+// FLOAT32VECTOR is an Alternator-only type, so readers of DynamoDB JSON (e.g. AWS ImportTable or
+// scylla-hermes) reject it. Replace each one in the typed value, also a nested one, with a list
+// ("L") of numbers ("N"), the DynamoDB form of a vector. SearchVectors returns a vector in the same
+// form. A vector index accepts both forms, so an import of the export can be indexed. The
+// elements are 32-bit floats, and the shortest decimal which parses back to the same float is
+// exact.
+static void float32vectors_to_lists(rjson::value& typed_value) {
+    auto it = typed_value.MemberBegin();
+    std::string_view type = rjson::to_string_view(it->name);
+    if (type == float32vector_type_name) {
+        rjson::value list = rjson::empty_array();
+        for (const rjson::value& element : it->value.GetArray()) {
+            rjson::value number = rjson::empty_object();
+            rjson::add_with_string_name(number, "N", rjson::from_string(fmt::format("{}", element.GetFloat())));
+            rjson::push_back(list, std::move(number));
+        }
+        typed_value = rjson::empty_object();
+        rjson::add_with_string_name(typed_value, "L", std::move(list));
+    } else if (type == "L") {
+        for (rjson::value& element : it->value.GetArray()) {
+            float32vectors_to_lists(element);
+        }
+    } else if (type == "M") {
+        for (auto& member : it->value.GetObject()) {
+            float32vectors_to_lists(member.value);
+        }
+    }
+}
+
 // The fiber of one export. The state is the pair (export_status, node_id) of the export row.
 // The worker changes the row from IN_PROGRESS to COMPLETED or FAILED. The garbage collector
 // changes the row of a dead incarnation from IN_PROGRESS to FAILED. Each write is
@@ -2770,6 +2800,9 @@ static future<std::optional<export_row>> run_export(
                         co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{5}, &as);
                     });
 
+            for (auto& attribute : item.GetObject()) {
+                float32vectors_to_lists(attribute.value);
+            }
             rjson::value wrapper = rjson::empty_object();
             rjson::add(wrapper, "Item", std::move(item));
             co_await pipeline->process(wrapper);

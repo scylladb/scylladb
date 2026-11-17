@@ -442,6 +442,11 @@ Exports differ from DynamoDB as follows:
 * Only a full export in the DYNAMODB_JSON format is supported.
   IncrementalExportSpecification, FilterSpecification, S3BucketOwner,
   S3SseAlgorithm and S3SseKmsKeyId are rejected.
+* A value of the Alternator-only type `FLOAT32VECTOR` (see
+  [Vector Search](vector-search.md)), also a nested one, is exported as a
+  list (`L`) of numbers (`N`), the DynamoDB form of a vector, so that
+  readers of DynamoDB JSON can load it. A vector index accepts both forms,
+  but an import stores the list form, which takes more space.
 * The bucket is reached through the one S3 endpoint of the
   `object_storage_endpoints` configuration, with the credentials of the
   node, not of the caller. Thus a role with MODIFY on ALL OBJECT STORAGE
