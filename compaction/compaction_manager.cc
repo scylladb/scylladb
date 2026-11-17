@@ -1047,6 +1047,14 @@ inline std::unique_ptr<compaction_controller> make_compaction_controller(const c
     return std::make_unique<backlog_proportional_compaction_controller>(csg, static_shares, max_shares, 250ms, std::move(fn));
 }
 
+lowres_clock::duration compaction_manager::regular_compaction_busy_time() const noexcept {
+    auto busy_time = _stats.regular_compaction_busy_time;
+    if (_stats.running_regular_compactions) {
+        busy_time += lowres_clock::now() - _stats.regular_compaction_busy_since;
+    }
+    return busy_time;
+}
+
 compaction::compaction_state::~compaction_state() {
     compaction_done.broken();
 }
@@ -1132,6 +1140,9 @@ compaction_task_executor::state compaction_task_executor::switch_state(state new
         break;
     case state::active:
         --_cm._stats.active_tasks;
+        if (_type == compaction_type::Compaction && --_cm._stats.running_regular_compactions == 0) {
+            _cm._stats.regular_compaction_busy_time += lowres_clock::now() - _cm._stats.regular_compaction_busy_since;
+        }
         break;
     }
     switch (new_state) {
@@ -1144,6 +1155,9 @@ compaction_task_executor::state compaction_task_executor::switch_state(state new
         break;
     case state::active:
         ++_cm._stats.active_tasks;
+        if (_type == compaction_type::Compaction && _cm._stats.running_regular_compactions++ == 0) {
+            _cm._stats.regular_compaction_busy_since = lowres_clock::now();
+        }
         break;
     case state::done:
         ++_cm._stats.completed_tasks;
