@@ -304,6 +304,10 @@ public:
     future<locator::mutable_token_metadata_ptr> prepare_tablet_metadata(const locator::tablet_metadata_change_hint& hint, mutable_token_metadata_ptr pending_token_metadata);
     void wake_up_topology_state_machine() noexcept;
     future<> update_tablet_metadata(const locator::tablet_metadata_change_hint& hint);
+    // Clones the storage of local tablets in the streaming stage of an intra-node migration
+    // from the leaving shard into the pending one.
+    // Must be called on startup, after the sstables were loaded and the commitlog was replayed.
+    future<> clone_tablets_in_intranode_migration();
 
     // Prepares a vnode-based keyspace for migration to tablets.
     // Builds tablet maps from vnode token boundaries for all tables and
