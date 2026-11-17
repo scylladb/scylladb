@@ -237,6 +237,7 @@ public:
         for (size_t i = 0; i < NUM_BUCKETS; i++) {
             _buckets[i] += b.get(i);
         }
+        _total_sum += b._total_sum;
         return *this;
     }
 

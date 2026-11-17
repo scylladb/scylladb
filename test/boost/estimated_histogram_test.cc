@@ -141,6 +141,17 @@ BOOST_AUTO_TEST_CASE(test_estimated_statistics) {
     BOOST_CHECK_EQUAL(hist.get(1), 1);
 }
 
+BOOST_AUTO_TEST_CASE(test_histogram_merge) {
+    utils::approx_exponential_histogram<128, 1024, 4> a;
+    utils::approx_exponential_histogram<128, 1024, 4> b;
+    a.add(130);
+    b.add(130);
+    b.add(700);
+    a.merge(b);
+    BOOST_CHECK_EQUAL(a.count(), 3);
+    BOOST_CHECK_EQUAL(a.sum(), 130 + 130 + 700);
+}
+
 BOOST_AUTO_TEST_CASE(test_summary_p95_p99) {
     utils::summary_calculator sc;
     std::vector<int> ms{512, 640, 768, 896, 1024, 1280, 1536, 1792, 2048, 2560,
