@@ -3169,6 +3169,33 @@ BOOST_AUTO_TEST_CASE(evaluate_binary_operator_in_lwt_nulls) {
     BOOST_REQUIRE_EQUAL(eval(lwt_binary_operator(null, oper_t::IN, null_list)), f);
 }
 
+// CONTAINS in an LWT condition (#13586) follows Cassandra's null rules.
+BOOST_AUTO_TEST_CASE(evaluate_binary_operator_contains_lwt_nulls) {
+    auto list = make_int_list_const({1, 3});
+    auto map = make_int_int_map_const({{1, 2}});
+    auto null_list = constant::make_null(list.type);
+    auto null_map = constant::make_null(map.type);
+    auto one = make_int_const(1);
+    auto two = make_int_const(2);
+    auto null = constant::make_null(int32_type);
+    auto t = make_bool_raw(true);
+    auto f = make_bool_raw(false);
+    auto eval = [] (const expression& e) { return evaluate(e, evaluation_inputs{}); };
+
+    BOOST_REQUIRE_EQUAL(eval(lwt_binary_operator(list, oper_t::CONTAINS, one)), t);
+    BOOST_REQUIRE_EQUAL(eval(lwt_binary_operator(list, oper_t::CONTAINS, two)), f);
+    BOOST_REQUIRE_EQUAL(eval(lwt_binary_operator(null_list, oper_t::CONTAINS, one)), f);
+    BOOST_REQUIRE_THROW(eval(lwt_binary_operator(list, oper_t::CONTAINS, null)), exceptions::invalid_request_exception);
+    BOOST_REQUIRE_THROW(eval(lwt_binary_operator(null_list, oper_t::CONTAINS, null)), exceptions::invalid_request_exception);
+
+    BOOST_REQUIRE_EQUAL(eval(lwt_binary_operator(map, oper_t::CONTAINS, two)), t);
+    BOOST_REQUIRE_EQUAL(eval(lwt_binary_operator(map, oper_t::CONTAINS_KEY, one)), t);
+    BOOST_REQUIRE_EQUAL(eval(lwt_binary_operator(map, oper_t::CONTAINS_KEY, two)), f);
+    BOOST_REQUIRE_EQUAL(eval(lwt_binary_operator(null_map, oper_t::CONTAINS_KEY, one)), f);
+    BOOST_REQUIRE_THROW(eval(lwt_binary_operator(map, oper_t::CONTAINS_KEY, null)), exceptions::invalid_request_exception);
+    BOOST_REQUIRE_THROW(eval(lwt_binary_operator(null_map, oper_t::CONTAINS_KEY, null)), exceptions::invalid_request_exception);
+}
+
 BOOST_AUTO_TEST_CASE(evaluate_binary_operator_lt) {
     expression true_lt_binop = binary_operator(make_int_const(1), oper_t::LT, make_int_const(2));
     BOOST_REQUIRE_EQUAL(evaluate(true_lt_binop, evaluation_inputs{}), make_bool_raw(true));
