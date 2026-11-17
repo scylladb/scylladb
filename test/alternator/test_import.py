@@ -256,8 +256,8 @@ def delete_table_afterwards(client, table_name):
                 if code == 'ResourceInUseException' and time.time() < deadline:
                     time.sleep(_poll_interval(client))
                     continue
-                # Every test here is xfail, so pytest.fail alone shows as
-                # XFAIL. The warning shows in pytest's summary regardless.
+                # In an xfail test, pytest.fail alone shows as XFAIL. The
+                # warning shows in pytest's summary regardless.
                 warnings.warn(f'Leaked table {table_name}: {e}')
                 pytest.fail(f'Leaked table {table_name}: {e}')
 
@@ -534,7 +534,6 @@ def test_import_into_existing_table(dynamodb, scylla_only):
 
 # ClientToken is documented as optional but is required. botocore generates
 # one when it is missing, so the request is sent without botocore's handlers.
-@pytest.mark.xfail(reason="SCYLLADB-1369")
 def test_client_token_required(dynamodb):
     kwargs = import_kwargs(unique_bucket_name(), unique_prefix('unused'))
     assert 'ClientToken' not in kwargs
@@ -544,7 +543,6 @@ def test_client_token_required(dynamodb):
 
 # ClientToken must match ^[^\$]+$. botocore checks neither the pattern nor a
 # minimum length, so these reach the server.
-@pytest.mark.xfail(reason="SCYLLADB-1369")
 def test_client_token_invalid(dynamodb):
     for token in ['$', 'has$dollar', '$leading', 'trailing$', '']:
         kwargs = import_kwargs(unique_bucket_name(), unique_prefix('unused'),
@@ -772,7 +770,8 @@ def test_import_without_s3_key_prefix(dynamodb):
 
 # BillingMode defaults to PROVISIONED, as in CreateTable, so a request without
 # ProvisionedThroughput is refused.
-@pytest.mark.xfail(reason="SCYLLADB-1369")
+@pytest.mark.xfail(reason="Alternator refuses it with CreateTable's message: "
+                          "When BillingMode=PROVISIONED, ProvisionedThroughput must be specified.")
 def test_import_default_billing_mode_is_provisioned(dynamodb):
     kwargs = import_kwargs(unique_bucket_name(), unique_prefix('unused'),
                            TableCreationParameters={'BillingMode': None})
@@ -1032,21 +1031,25 @@ def test_processed_size_bytes_is_uncompressed(dynamodb, compression):
 
 # DynamoDB refuses CsvOptions with DYNAMODB_JSON. The documentation does not
 # say so.
-@pytest.mark.xfail(reason="SCYLLADB-1369")
 def test_csv_options_with_dynamodb_json_rejected(dynamodb):
     kwargs = import_kwargs(unique_bucket_name(), unique_prefix('unused'),
                            InputFormatOptions={'Csv': {'Delimiter': ','}})
     with pytest.raises(ClientError, match='ValidationException.*[Ii]nputFormatOptions'):
         dynamodb.meta.client.import_table(**kwargs)
 
-# Invalid parameters. The error must name the parameter.
-@pytest.mark.xfail(reason="SCYLLADB-1369")
+# Invalid or missing parameters. The error must name the parameter.
 @pytest.mark.parametrize('overrides,parameter', [
     pytest.param({'InputFormat': 'NOT_A_FORMAT'}, '[Ii]nputFormat', id='bad_format'),
+    pytest.param({'InputFormat': None}, '[Ii]nputFormat', id='missing_format'),
     pytest.param({'InputCompressionType': 'BZIP2'}, '[Ii]nputCompressionType', id='bad_compression'),
-    pytest.param({'S3BucketSource': {'S3Bucket': 'x' * 256}}, '[Ss]3Bucket', id='bucket_too_long'),
-    pytest.param({'S3BucketSource': {'S3Bucket': '-nope!'}}, '[Ss]3Bucket', id='bucket_bad_chars'),
-    pytest.param({'S3BucketSource': {'S3KeyPrefix': 'p' * 1025}}, '[Ss]3KeyPrefix', id='prefix_too_long'),
+    pytest.param({'S3BucketSource': None}, '[Ss]3BucketSource', id='missing_bucket_source'),
+    pytest.param({'S3BucketSource': {'S3Bucket': None}}, '[Ss]3Bucket', id='missing_bucket'),
+    pytest.param({'S3BucketSource': {'S3Bucket': 'x' * 256}}, '[Ss]3Bucket', id='bucket_too_long',
+                 marks=pytest.mark.xfail(reason="Alternator leaves validating the S3 bucket name and key prefix to S3")),
+    pytest.param({'S3BucketSource': {'S3Bucket': '-nope!'}}, '[Ss]3Bucket', id='bucket_bad_chars',
+                 marks=pytest.mark.xfail(reason="Alternator leaves validating the S3 bucket name and key prefix to S3")),
+    pytest.param({'S3BucketSource': {'S3KeyPrefix': 'p' * 1025}}, '[Ss]3KeyPrefix', id='prefix_too_long',
+                 marks=pytest.mark.xfail(reason="Alternator leaves validating the S3 bucket name and key prefix to S3")),
     pytest.param({'TableCreationParameters': {'TableName': 'n' * 256}}, '[Tt]ableName', id='name_too_long'),
     pytest.param({'TableCreationParameters': {'TableName': 'not a table name!'}},
                  '[Tt]ableName', id='name_bad_chars'),
@@ -1059,9 +1062,23 @@ def test_import_table_validation(dynamodb, overrides, parameter):
     with pytest.raises(ClientError, match=f'ValidationException.*({parameter})'):
         dynamodb.meta.client.import_table(**kwargs)
 
+# A missing TableCreationParameters makes DynamoDB fail with InternalFailure
+# (HTTP 500) instead of a ValidationException, although the member is
+# required. Alternator refuses it with a ValidationException naming it.
+def test_import_table_missing_table_creation_parameters(dynamodb):
+    kwargs = import_kwargs(unique_bucket_name(), unique_prefix('unused'),
+                           ClientToken=random_string(20),
+                           TableCreationParameters=None)
+    with client_no_transform(dynamodb.meta.client) as client:
+        if is_aws(client):
+            with pytest.raises(ClientError, match='InternalFailure'):
+                client.import_table(**kwargs)
+        else:
+            with pytest.raises(ClientError, match='ValidationException.*TableCreationParameters'):
+                client.import_table(**kwargs)
+
 # DynamoDB refuses WarmThroughput on a GSI, though ImportTable's documented
 # request syntax lists it.
-@pytest.mark.xfail(reason="SCYLLADB-1369")
 def test_gsi_warm_throughput_rejected(dynamodb):
     gsi = [{**A_GSI[0], 'WarmThroughput': {'ReadUnitsPerSecond': 12000,
                                            'WriteUnitsPerSecond': 4000}}]
@@ -1127,9 +1144,12 @@ def test_unsupported_creation_parameters_dropped(dynamodb, extra, absent):
 
 # Because the LSI is dropped before validation, a valid LSI makes the request
 # invalid: its key attribute is left defined but unused by KeySchema.
-@pytest.mark.xfail(reason="SCYLLADB-1369")
+@pytest.mark.xfail(reason="Alternator refuses it with CreateTable's message: "
+                          "AttributeDefinitions defines spurious attributes not used by any KeySchema")
 def test_valid_lsi_leaves_unused_attribute(dynamodb):
+    # manual_request(), unlike botocore, does not generate a ClientToken.
     request = import_kwargs(unique_bucket_name(), unique_prefix('unused'),
+                            ClientToken=random_string(20),
                             TableCreationParameters={
                                 'AttributeDefinitions': GROUND_TRUTH_SCHEMA['AttributeDefinitions'] + [
                                     {'AttributeName': 'lsi_key', 'AttributeType': 'S'}],
@@ -1138,6 +1158,27 @@ def test_valid_lsi_leaves_unused_attribute(dynamodb):
                        'in KeySchema does not exactly match number of attributes defined '
                        'in AttributeDefinitions'):
         manual_request(dynamodb, 'ImportTable', json.dumps(request))
+
+# ImportTable's response to an accepted request, as far as it is fixed at
+# acceptance. The bucket does not exist, so on DynamoDB the import fails
+# later; ImportStatus is not checked.
+def test_import_table_description(dynamodb):
+    client = dynamodb.meta.client
+    table_name = unique_table_name()
+    initial = client.import_table(**import_kwargs(
+        unique_bucket_name(), unique_prefix('nowhere'), table_name))['ImportTableDescription']
+    with delete_table_afterwards(client, table_name):
+        for member in INITIAL_MEMBERS:
+            assert member in initial, member
+        for member in ABSENT_UNTIL_THE_END:
+            assert member not in initial, member
+        # An import ARN is its table's ARN with an import id appended.
+        table_arn, separator, import_id = initial['ImportArn'].rpartition('/import/')
+        assert separator and import_id
+        assert table_arn == initial['TableArn']
+        assert initial['TableArn'].endswith(f':table/{table_name}')
+        if is_aws(client):
+            wait_for_import(client, initial['ImportArn'])
 
 # A missing bucket fails the import with S3NoSuchBucket, and no table is left.
 @pytest.mark.xfail(reason="SCYLLADB-1369")
