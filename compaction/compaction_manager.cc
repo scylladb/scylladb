@@ -16,6 +16,7 @@
 #include "sstables/sstables_manager.hh"
 #include <algorithm>
 #include <array>
+#include <limits>
 #include <memory>
 #include <ranges>
 #include <fmt/ranges.h>
@@ -3485,6 +3486,56 @@ double compaction_backlog_manager::backlog() const {
         // Like a disabled tracker: the controller gives compaction its maximum shares.
         return compaction_controller::disable_backlog;
     }
+}
+
+namespace {
+
+// Accumulates the data of sstables that came from memtable flushes, and the period it was
+// flushed in.
+struct ingestion_accumulator {
+    double ingested_bytes = 0;
+    int64_t ingested_from = std::numeric_limits<int64_t>::max();
+    int64_t ingested_until = std::numeric_limits<int64_t>::min();
+
+    void add(const sstables::shared_sstable& sst) {
+        auto ingestion = sst->get_ingestion_metadata();
+        if (!ingestion || ingestion->fraction <= 0) {
+            return;
+        }
+        ingested_bytes += ingestion->fraction * sst->data_size();
+        ingested_from = std::min(ingested_from, ingestion->ingested_from);
+        ingested_until = std::max(ingested_until, ingestion->ingested_until);
+    }
+
+    utils::rate<utils::units::bytes> rate(std::chrono::duration<double> min_span) const {
+        if (ingested_bytes <= 0) {
+            return {};
+        }
+        auto span = std::max<std::chrono::duration<double>>(std::chrono::milliseconds(ingested_until - ingested_from), min_span);
+        return utils::rate<utils::units::bytes>(ingested_bytes, span);
+    }
+};
+
+}
+
+utils::rate<utils::units::bytes> ingestion_rate_from_sstables(const std::vector<sstables::shared_sstable>& sstables,
+        std::chrono::duration<double> min_span) {
+    ingestion_accumulator acc;
+    for (const auto& sst : sstables) {
+        acc.add(sst);
+    }
+    return acc.rate(min_span);
+}
+
+utils::rate<utils::units::bytes> ingestion_rate_from_sstables(const std::vector<sstables::frozen_sstable_run>& runs,
+        std::chrono::duration<double> min_span) {
+    ingestion_accumulator acc;
+    for (const auto& run : runs) {
+        for (const auto& sst : run->all()) {
+            acc.add(sst);
+        }
+    }
+    return acc.rate(min_span);
 }
 
 compaction_rates compaction_backlog_manager::rates() const {
