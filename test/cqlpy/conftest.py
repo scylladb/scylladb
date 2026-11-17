@@ -214,6 +214,15 @@ def new_to_cassandra_6(cql):
     if is_cassandra_older_than(cql, (6, 0)):
         skip_env('Test needs Cassandra 6 or newer')
 
+# "cassandra_6_bug" is like "cassandra_bug", but for a bug which Cassandra
+# introduced in Cassandra 6: A test using this fixture is expected to fail
+# (xfail) on Cassandra 6 or newer, but runs normally on Scylla and on older
+# Cassandra, where it passes.
+@pytest.fixture(scope=dynamic_scope())
+def cassandra_6_bug(cql):
+    if not is_scylla(cql) and not is_cassandra_older_than(cql, (6, 0)):
+        pytest.xfail('A known Cassandra 6 bug')
+
 # Older versions of the Cassandra driver had a bug where if Scylla returns
 # an empty page, the driver would immediately stop reading even if this was
 # not the last page. Some tests which filter out most of the results can end

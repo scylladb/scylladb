@@ -502,7 +502,12 @@ def test_filter_token(cql, test_keyspace):
 # In a query with a token restriction the name assigned to the bind marker should be "partition key token".
 # Java driver relies on this assumption, having a different name there breaks it.
 # Reproduces #13769
-def test_token_bind_marker_name(cql, test_keyspace):
+# Cassandra 6 names this bind marker "token(p1, p2)" instead, since its
+# refactoring of restrictions (CASSANDRA-19341). So a client can no longer
+# bind it by the name "partition key token", as the Apache Cassandra Java
+# driver's TokenITBase test still does, with setToken("partition key token",
+# token) (CASSANDRA-21900).
+def test_token_bind_marker_name(cql, test_keyspace, cassandra_6_bug):
     with new_test_table(cql, test_keyspace, 'p1 int, p2 int, c1 int, c2 int, r int, PRIMARY KEY ((p1, p2), c1, c2)') as table:
         stmt = cql.prepare(f'SELECT * FROM {table} WHERE token(p1, p2) = ?')
         assert stmt.column_metadata[0].name == 'partition key token'
