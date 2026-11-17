@@ -917,7 +917,6 @@ def check_invalid_map(cql, table, condition, expected):
     assertInvalidThrow(cql, table, expected, "DELETE FROM %s WHERE k=0 IF " + condition)
     assertRows(execute(cql, table, "SELECT * FROM %s"), row(0, {"foo": "bar"}))
 
-@pytest.mark.xfail(reason="Issue #13586")
 def testInMarkerWithUDTs(cql, test_keyspace):
     with create_type(cql, test_keyspace, "(a int, b text)") as typename:
         for frozen in [False, True]:
@@ -949,8 +948,9 @@ def testInMarkerWithUDTs(cql, test_keyspace):
                        row(False, v))
                 assertRows(execute(cql, table, "UPDATE %s SET v = {a: 0, b: 'bc'} WHERE k = 0 IF v.a IN ?", [1, 2]),
                        row(False, v))
-                assertRows(execute(cql, table, "UPDATE %s SET v = {a: 0, b: 'bc'} WHERE k = 0 IF v.a IN (?, ?)", 1, unset()),
-                       row(False, v))
+                # Scylla doesn't allow this - see discussion in #13659.
+                #assertRows(execute(cql, table, "UPDATE %s SET v = {a: 0, b: 'bc'} WHERE k = 0 IF v.a IN (?, ?)", 1, unset()),
+                #       row(False, v))
 
                 # Does apply
                 assert list(execute(cql, table, "UPDATE %s SET v = {a: 0, b: 'bc'} WHERE k = 0 IF v IN (?, ?)", userType("a", 0, "b", "abc"), userType("a", 0, "b", "ac")))[0][0] == True
@@ -962,7 +962,8 @@ def testInMarkerWithUDTs(cql, test_keyspace):
                 assert list(execute(cql, table, "UPDATE %s SET v = {a: 0, b: 'bc'} WHERE k = 0 IF v.a IN (?, ?)", 1, 0))[0][0] == True
                 assert list(execute(cql, table, "UPDATE %s SET v = {a: 0, b: 'abc'} WHERE k = 0 IF v.a IN (?, ?)", 0, None))[0][0] == True
                 assert list(execute(cql, table, "UPDATE %s SET v = {a: 0, b: 'bc'} WHERE k = 0 IF v.a IN ?", [0, 1]))[0][0] == True
-                assert list(execute(cql, table, "UPDATE %s SET v = {a: 0, b: 'abc'} WHERE k = 0 IF v.a IN (?, ?, ?)", 1, unset(), 0))[0][0] == True
+                # Scylla doesn't allow this - see discussion in #13659.
+                #assert list(execute(cql, table, "UPDATE %s SET v = {a: 0, b: 'abc'} WHERE k = 0 IF v.a IN (?, ?, ?)", 1, unset(), 0))[0][0] == True
 
                 # Scylla does allow "IN null", the condition simply fails.
                 #assertInvalidMessage(cql, table, "Invalid null list in IN condition",
