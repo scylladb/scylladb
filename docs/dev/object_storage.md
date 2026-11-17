@@ -33,6 +33,13 @@ write a configuration file:
 scylla --object-storage-endpoints '[{"name": "http://127.0.0.1:9000", "aws_region": "us-east-1"}]'
 ```
 
+The option can also be changed while Scylla is running, by updating the
+`system.config` table with the same string. The new list replaces the old one:
+```cql
+UPDATE system.config SET value = '[{"name": "http://127.0.0.1:9000", "aws_region": "us-east-1"}]'
+    WHERE name = 'object_storage_endpoints';
+```
+
 ## Configuring GCP storage access
 
 Similarly to AWS, define endpoint details in `scylla.yaml` like:
