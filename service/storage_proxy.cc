@@ -3535,7 +3535,13 @@ storage_proxy::unique_response_handler::operator=(unique_response_handler&& x) n
 
 storage_proxy::unique_response_handler::~unique_response_handler() {
     if (id) {
-        p.remove_response_handler(id);
+        // A holder may keep a handler across a preemption point (e.g. a logged
+        // batch across its batchlog write), and the shutdown paths
+        // (cancel_nonlocal_write_response_handlers(),
+        // cancel_all_write_response_handlers()) may have removed it meanwhile.
+        if (auto it = p._response_handlers.find(id); it != p._response_handlers.end()) {
+            p.remove_response_handler_entry(std::move(it));
+        }
     }
 }
 storage_proxy::response_id_type storage_proxy::unique_response_handler::release() {
