@@ -21,3 +21,7 @@
 [submodule "c-ares"]
 	path = c-ares
 	url = ../c-ares
+[submodule "clock-bound"]
+	path = clock-bound
+	url = https://github.com/aws/clock-bound.git
+	ignore = dirty
