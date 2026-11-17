@@ -73,3 +73,38 @@ CQL Limits
    * - Dimension of a vector
      - 16000 (according to OpenSearch limitations)
  
+.. _limits-system:
+
+System Limits
+--------------
+
+When ScyllaDB runs as a systemd service, the following resource limits are
+set in the ``/lib/systemd/system/scylla-server.service`` unit file.
+
+.. list-table::
+   :widths: 25 25 50
+   :header-rows: 1
+
+   * - Name
+     - Value
+     - Description
+   * - ``LimitCORE``
+     - ``infinity``
+     - Maximum core dump size
+   * - ``LimitMEMLOCK``
+     - ``infinity``
+     - Maximum locked-in-memory address space
+   * - ``LimitNOFILE``
+     - ``infinity``
+     - Maximum number of open file descriptors (resolved by systemd to
+       the ``fs.nr_open`` sysctl value)
+   * - ``LimitAS``
+     - ``infinity``
+     - Address space limit
+   * - ``LimitNPROC``
+     - ``8096``
+     - Maximum number of processes
+
+Limits configured in ``/etc/security/limits.d`` do not apply to systemd
+services. To override the default values, see
+:doc:`Increase ScyllaDB resource limits over systemd </kb/scylla-limits-systemd>`.
