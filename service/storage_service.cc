@@ -6636,6 +6636,35 @@ future<utils::UUID> storage_service::submit_quiesce_topology_request() {
     }
 }
 
+// How often do_await_topology_quiesced() reports while it waits for the topology to settle.
+static constexpr auto quiesce_wait_log_interval = std::chrono::minutes(1);
+
+// Describes what keeps the topology from being idle, for do_await_topology_quiesced().
+static sstring describe_busy_topology(const locator::tablet_metadata& tablets, const std::optional<topology::transition_state>& tstate) {
+    std::map<locator::tablet_transition_kind, size_t> in_transition;
+    size_t total_in_transition = 0;
+    // A table keeps its resize decision while the replicas prepare the split or merge, with no
+    // tablet in transition, and tablet_metadata::is_idle() waits for that too.
+    size_t pending_splits = 0;
+    size_t pending_merges = 0;
+    for (const auto& [table, tables] : tablets.all_table_groups()) {
+        const auto& tmap = tablets.get_tablet_map(table);
+        for (const auto& [tid, trinfo] : tmap.transitions()) {
+            ++in_transition[trinfo.transition];
+            ++total_in_transition;
+        }
+        pending_splits += tmap.needs_split();
+        pending_merges += tmap.needs_merge();
+    }
+    return fmt::format("transition state: {}, tablets in transition: {}{}, tables pending split: {}, tables pending merge: {}",
+            tstate ? fmt::format("{}", *tstate) : std::string("none"),
+            total_in_transition,
+            total_in_transition ? fmt::format(" ({})", fmt::join(in_transition | std::views::transform([] (const auto& e) {
+                return fmt::format("{}: {}", e.first, e.second);
+            }), ", ")) : std::string(),
+            pending_splits, pending_merges);
+}
+
 // Submit a topology request and retry until the coordinator observes an empty tablet
 // balance plan with fresh stats. Runs as _quiesce_topology, so at most one of these is
 // in flight at a time, see await_topology_quiesced().
@@ -6650,6 +6679,23 @@ future<> storage_service::do_await_topology_quiesced() {
     unsigned attempts = 0;
     auto elapsed_s = [start_time] {
         return std::chrono::duration_cast<std::chrono::seconds>(lowres_clock::now() - start_time).count();
+    };
+    // Waits locally for the topology to settle before the next attempt. While nothing is queued,
+    // the coordinator keeps asking the load balancer for more work, so this lasts until the
+    // balancer runs out of it, which may be never: with a balancer which doesn't converge, or
+    // with a tablet repair which keeps failing and is retried. Report what keeps the topology
+    // busy every quiesce_wait_log_interval rather than waiting silently.
+    auto wait_reporting = [&] (auto settled) -> future<> {
+        while (true) {
+            try {
+                co_await _topology_state_machine.event.when(quiesce_wait_log_interval, std::ref(settled));
+                co_return;
+            } catch (const condition_variable_timed_out&) {
+            }
+            slogger.info("quiesce: waiting for {} s for the topology to settle before attempt {}: {}",
+                         elapsed_s(), attempts + 1,
+                         describe_busy_topology(get_token_metadata_ptr()->tablets(), _topology_state_machine._topology.tstate));
+        }
     };
     while (true) {
         ++attempts;
@@ -6682,10 +6728,8 @@ future<> storage_service::do_await_topology_quiesced() {
                         request_id, error, attempts, elapsed_s());
         }
         // Wait locally for topology to settle before resubmitting.
-        co_await _topology_state_machine.await_not_busy(_group0_as);
-        co_await _topology_state_machine.event.when([this] {
-            return get_token_metadata_ptr()->tablets().is_idle();
-        });
+        co_await wait_reporting([this] { return !_topology_state_machine._topology.is_busy(); });
+        co_await wait_reporting([this] { return get_token_metadata_ptr()->tablets().is_idle(); });
     }
 }
 
