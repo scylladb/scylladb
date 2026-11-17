@@ -185,6 +185,7 @@ template raw_write_buffer::append_result raw_write_buffer::append<log_record_byt
 write_buffer::write_buffer(size_t buffer_size, segment_kind kind)
         : _raw(buffer_size, kind)
 {
+    _waiters.reserve(_raw.buffer_size() / 100);
     if (with_record_copy()) {
         _records_copy.reserve(_raw.buffer_size() / 100);
     }
@@ -192,7 +193,7 @@ write_buffer::write_buffer(size_t buffer_size, segment_kind kind)
 
 void write_buffer::reset() {
     _raw.reset();
-    _written = {};
+    _waiters.clear();
     _records_copy.clear();
     _write_gate = {};
 }
@@ -209,42 +210,59 @@ bool write_buffer::is_closed() const noexcept {
 
 template <log_record_writer_concept Writer>
 future<record_location_with_holder> write_buffer::write(Writer writer, write_target target) {
-    auto append_result = _raw.append(writer);
-
+    // Everything that can throw happens before the append, so a record in the buffer always has
+    // its waiter and, in a mixed buffer, its copy for the separator.
     if (with_record_copy()) {
-        if constexpr (std::same_as<Writer, log_record_writer>) {
-            _records_copy.push_back(record_in_buffer {
-                .writer = std::move(writer),
-                .frame_offset = append_result.frame_offset,
-                .frame_size = append_result.frame_size,
-                .target = std::move(target)
-            });
-        } else {
+        if constexpr (!std::same_as<Writer, log_record_writer>) {
             on_internal_error(logstor_logger, "Record byte writes are not supported for mixed write buffers");
+        }
+        if (_records_copy.size() == _records_copy.capacity()) {
+            _records_copy.reserve(std::max({size_t(1), _raw.buffer_size() / 100, 2 * _records_copy.capacity()}));
         }
     }
 
     // hold the write buffer until the write is complete, and pass the holder to the
     // caller for follow-up operations that should continue holding the buffer, such
     // as index updates.
-    auto op = _write_gate.hold();
+    auto& waiter = _waiters.emplace_back(pending_write{.op = _write_gate.hold()});
 
-    return _written.get_shared_future().then(
-            [frame_offset = append_result.frame_offset, frame_size = append_result.frame_size, op = std::move(op)]
-            (segment_position chunk_position) mutable {
-        return std::make_tuple(locate_record(chunk_position, frame_offset, frame_size), std::move(op));
-    });
+    raw_write_buffer::append_result append_result;
+    try {
+        append_result = _raw.append(writer);
+    } catch (...) {
+        _waiters.pop_back();
+        throw;
+    }
+    waiter.frame_offset = append_result.frame_offset;
+    waiter.frame_size = append_result.frame_size;
+
+    if constexpr (std::same_as<Writer, log_record_writer>) {
+        if (with_record_copy()) {
+            _records_copy.push_back(record_in_buffer {
+                .writer = std::move(writer),
+                .frame_offset = append_result.frame_offset,
+                .frame_size = append_result.frame_size,
+                .target = std::move(target)
+            });
+        }
+    }
+
+    return waiter.done.get_future();
 }
 
 future<> write_buffer::complete_writes(segment_position chunk_position) {
-    _written.set_value(chunk_position);
+    for (auto& waiter : _waiters) {
+        waiter.done.set_value(locate_record(chunk_position, waiter.frame_offset, waiter.frame_size), std::move(waiter.op));
+    }
+    _waiters.clear();
     co_await close();
 }
 
 future<> write_buffer::abort_writes(std::exception_ptr ex) {
-    if (!_written.available()) {
-        _written.set_exception(std::move(ex));
+    for (auto& waiter : _waiters) {
+        waiter.done.set_exception(ex);
     }
+    _waiters.clear();
 
     // Mixed buffers keep copies of their records for separator rewriting. A failed flush has no
     // separator pass to consume them, and they were never written anywhere, so drop them.
@@ -253,8 +271,8 @@ future<> write_buffer::abort_writes(std::exception_ptr ex) {
     co_await close();
 }
 
-std::vector<write_buffer::record_in_buffer> write_buffer::take_separator_records() {
-    return std::move(_records_copy);
+std::vector<write_buffer::record_in_buffer> write_buffer::take_separator_records(std::vector<record_in_buffer> spare) noexcept {
+    return std::exchange(_records_copy, std::move(spare));
 }
 
 template future<record_location_with_holder> write_buffer::write<log_record_writer>(log_record_writer, write_target);
