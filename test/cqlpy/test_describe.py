@@ -3277,8 +3277,13 @@ def test_desc_restore(cql):
 
     with AuthSLContext(cql):
         try:
-            for stmt in extract_create_statements(restore_stmts):
-                cql.execute(stmt)
+            for create_statement in extract_create_statements(restore_stmts):
+                # Since CASSANDRA-20943, Cassandra 6 follows the CREATE
+                # statement of an element which has a comment with a COMMENT
+                # ON statement (and potentially a SECURITY LABEL ON statement),
+                # in the same row. Each of them must be executed separately.
+                for stmt in re.split(r'\n(?=(?:COMMENT|SECURITY LABEL) ON )', create_statement):
+                    cql.execute(stmt)
 
             # Only Scylla supports the `... WITH PASSWORDS` form of `DESC SCHEMA`.
             if is_scylla(cql):
