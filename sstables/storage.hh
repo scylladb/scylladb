@@ -215,6 +215,12 @@ future<> release_object_storage_snapshot_ref(object_storage_client& client,
         const data_dictionary::storage_options::object_storage& os,
         std::string_view tag, const entry_descriptor& desc);
 
+// Releases the references "refs/snapshot-{tag}/*" a backup of a local
+// table uploaded next to the sstable's components at "{prefix}/{sid}/".
+// A missing reference is not an error.
+future<> release_object_storage_backup_ref(object_storage_client& client, sstring bucket, sstring prefix,
+        sstable_id sid, std::string_view tag);
+
 // Deletes the component objects of one sstable, forgiving missing objects.
 // TOC goes last, so a crash mid-way leaves the sstable discoverable.
 // `components` must not contain the TOC.
