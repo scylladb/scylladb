@@ -54,6 +54,7 @@ mod ffi {
             total_fuel: u64,
             yield_fuel: u64,
         ) -> Result<Box<Store>>;
+        fn set_fuel(self: &mut Store, fuel: u64) -> Result<()>;
 
         type Memory;
         fn data(self: &Memory, store: &Store) -> *mut u8;
@@ -198,6 +199,12 @@ fn create_store(engine: &mut Engine, total_fuel: u64, yield_fuel: u64) -> Result
     Ok(Box::new(Store {
         wasmtime_store: store,
     }))
+}
+
+impl Store {
+    fn set_fuel(&mut self, fuel: u64) -> Result<()> {
+        self.wasmtime_store.set_fuel(fuel)
+    }
 }
 
 pub struct Memory {

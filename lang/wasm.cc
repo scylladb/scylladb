@@ -241,6 +241,9 @@ seastar::future<> precompile(alien_thread_runner& alien_runner, context& ctx, co
 }
 seastar::future<bytes_opt> run_script(context& ctx, wasmtime::Store& store, wasmtime::Instance& instance, wasmtime::Func& func, const std::vector<data_type>& arg_types, std::span<const bytes_opt> params, data_type return_type, bool allow_null_input) {
     wasm_logger.debug("Running function {}", ctx.function_name);
+    // The fuel limit applies to each call, but the store (with the instance)
+    // is reused for many calls, so refill its fuel before each call.
+    store.set_fuel(ctx.total_fuel);
 
     rust::Box<wasmtime::ValVec> argv = wasmtime::get_val_vec();
     for (size_t i = 0; i < arg_types.size(); ++i) {

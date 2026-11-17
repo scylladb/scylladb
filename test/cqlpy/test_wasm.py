@@ -635,6 +635,43 @@ def test_drop(cql, test_keyspace, table1, scylla_with_wasm_only, metrics):
             assert(get_metric(metrics, 'scylla_user_functions_cache_instace_count_any') > 0)
         assert(get_metric(metrics, 'scylla_user_functions_cache_instace_count_any') == 0)
 
+# Test that the fuel limit (wasm_udf_total_fuel) applies to each call of a
+# function separately: a function using a large part of the limit in each
+# call can be called many times - the instance running it is reused between
+# calls, but its fuel must not run out.
+# Reproduces SCYLLADB-6383.
+def test_fuel_limit_per_call(cql, test_keyspace, table1, scylla_with_wasm_only):
+    total_fuel = int(list(cql.execute("SELECT value FROM system.config WHERE name = 'wasm_udf_total_fuel'"))[0].value)
+    name = 'fuel_' + unique_name()
+    # Each iteration of the loop uses 7 units of fuel (one per instruction),
+    # so each call uses about a twentieth of the limit
+    iterations = total_fuel // (7 * 20)
+    source = f'''
+(module
+  (func ${name} (param i32) (result i32)
+    (local $i i32)
+    (loop $l
+      local.get $i
+      i32.const 1
+      i32.add
+      local.tee $i
+      i32.const {iterations}
+      i32.lt_s
+      br_if $l)
+    local.get 0)
+  (memory (;0;) 1)
+  (global (;0;) i32 (i32.const 0))
+  (export "memory" (memory 0))
+  (export "{name}" (func ${name}))
+  (export "_scylla_abi" (global 0)))
+'''
+    src = f"(input int) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE wasm AS '{source}'"
+    with new_function(cql, test_keyspace, src, name):
+        cql.execute(f'INSERT INTO {table1} (p, i) VALUES (7000, 1)')
+        for _ in range(50):
+            res = list(cql.execute(f'SELECT {test_keyspace}.{name}(i) AS result FROM {table1} WHERE p = 7000'))
+            assert len(res) == 1 and res[0].result == 1
+
 # Test that we can use counters as the return type of a WASM UDF.
 def test_counter(cql, test_keyspace, scylla_only):
     schema = "p int, c counter, PRIMARY KEY (p)"
