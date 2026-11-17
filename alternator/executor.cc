@@ -11,6 +11,7 @@
 #include <seastar/core/on_internal_error.hh>
 #include "alternator/executor.hh"
 #include "alternator/executor_util.hh"
+#include "alternator/put_or_delete_item.hh"
 #include "alternator/consumed_capacity.hh"
 #include "auth/permission.hh"
 #include "auth/resource.hh"
@@ -2744,11 +2745,6 @@ future<executor::request_return_type> executor::create_table(client_state& clien
     });
 }
 
-struct search_schema_attribute_info {
-    std::string type;
-    bool is_hash;
-};
-
 // Get, for every SearchSchema attribute (HASH or INLINE_FILTER) of every
 // vector index on this table, its declared AttributeType and whether it's
 // the HASH on any of the vector indexes (as opposed to INLINE_FILTER on all
@@ -3547,71 +3543,6 @@ void validate_value(const rjson::value& v, const char* caller) {
         throw api_error::validation(fmt::format("{}: unknown type {} for value {}", caller, type, v));
     }
 }
-
-// Per-table information needed to validate the attribute values written by
-// PutItem, UpdateItem or a BatchWriteItem PutRequest against GSI/LSI keys
-// and vector-index constraints (see si_key_attributes(),
-// vector_index_attributes() and search_schema_attributes() below). It
-// depends only on the table's schema, not on the item being written, so a
-// caller writing multiple items to the same table (BatchWriteItem) should
-// compute it once and reuse it, instead of recomputing it - and re-parsing
-// the vector indexes' JSON-encoded options - for every item.
-struct write_item_index_info {
-    std::unordered_map<bytes, std::string> key_attributes;
-    std::unordered_map<bytes, int> vec_attrs;
-    std::unordered_map<bytes, search_schema_attribute_info> search_schema_attrs;
-
-    // Defined below, once si_key_attributes(), vector_index_attributes() and
-    // search_schema_attributes() are all in scope.
-    write_item_index_info(service::storage_proxy& proxy, const schema& s);
-};
-
-// The put_or_delete_item class builds the mutations needed by the PutItem and
-// DeleteItem operations - either as stand-alone commands or part of a list
-// of commands in BatchWriteItem.
-// put_or_delete_item splits each operation into two stages: Constructing the
-// object parses and validates the user input (throwing exceptions if there
-// are input errors). Later, build() generates the actual mutation, with a
-// specified timestamp. This split is needed because of the peculiar needs of
-// BatchWriteItem and LWT. BatchWriteItem needs all parsing to happen before
-// any writing happens (if one of the commands has an error, none of the
-// writes should be done). LWT makes it impossible for the parse step to
-// generate "mutation" objects, because the timestamp still isn't known.
-class put_or_delete_item {
-private:
-    partition_key _pk;
-    clustering_key _ck;
-    struct cell {
-        bytes column_name;
-        bytes value;
-    };
-    // PutItem: engaged _cells, write these cells to item (_pk, _ck).
-    // DeleteItem: disengaged _cells, delete the entire item (_pk, _ck).
-    std::optional<std::vector<cell>> _cells;
-    // WCU calculation takes into account some length in bytes,
-    // that length can have different meaning depends on the operation but the
-    // the calculation of length in bytes to WCU is the same.
-    uint64_t _length_in_bytes = 0;
-public:
-    struct delete_item {};
-    struct put_item {};
-    put_or_delete_item(const rjson::value& key, schema_ptr schema, delete_item);
-    put_or_delete_item(const rjson::value& item, schema_ptr schema, put_item, const write_item_index_info& index_info);
-    // put_or_delete_item doesn't keep a reference to schema (so it can be
-    // moved between shards for LWT) so it needs to be given again to build():
-    mutation build(schema_ptr schema, api::timestamp_type ts) const;
-    const partition_key& pk() const { return _pk; }
-    const clustering_key& ck() const { return _ck; }
-    uint64_t length_in_bytes() const noexcept {
-        return _length_in_bytes;
-    }
-    void set_length_in_bytes(uint64_t length) noexcept {
-        _length_in_bytes = length;
-    }
-    bool is_put_item() noexcept {
-        return _cells.has_value();
-    }
-};
 
 put_or_delete_item::put_or_delete_item(const rjson::value& key, schema_ptr schema, delete_item)
         : _pk(pk_from_json(key, schema)), _ck(ck_from_json(key, schema)) {
@@ -4481,20 +4412,6 @@ future<executor::request_return_type> executor::delete_item(client_state& client
     _stats.api_operations.delete_item_latency.mark(std::chrono::steady_clock::now() - start_time);
     co_return res;
 }
-
-using primary_key = std::pair<partition_key, clustering_key>;
-struct primary_key_hash {
-    schema_ptr _s;
-    size_t operator()(const primary_key& key) const {
-        return utils::hash_combine(partition_key::hashing(*_s)(key.first), clustering_key::hashing(*_s)(key.second));
-    }
-};
-struct primary_key_equal {
-    schema_ptr _s;
-    bool operator()(const primary_key& k1, const primary_key& k2) const {
-        return partition_key::equality(*_s)(k1.first, k2.first) && clustering_key::equality(*_s)(k1.second, k2.second);
-    }
-};
 
 // This is a cas_request subclass for applying given put_or_delete_items to
 // one partition using LWT as part as BatchWriteItem. This is a write-only
