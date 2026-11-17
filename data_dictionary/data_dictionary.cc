@@ -254,7 +254,7 @@ void keyspace_metadata::validate(const gms::feature_service& fs, const locator::
     locator::replication_strategy_params params(strategy_options(), initial_tablets(), consistency_option());
     auto strategy = locator::abstract_replication_strategy::create_replication_strategy(strategy_name(), params, topology);
     strategy->validate_options(fs, topology);
-    if (!params.initial_tablets && params.consistency.value_or(data_dictionary::consistency_config_option::eventual) != data_dictionary::consistency_config_option::eventual) {
+    if (!params.initial_tablets && is_strongly_consistent(params.consistency)) {
         throw exceptions::configuration_exception("Only eventual consistency is supported for non-tablet keyspaces");
     }
     if (params.consistency && !fs.strongly_consistent_tables) {
