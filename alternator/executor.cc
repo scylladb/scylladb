@@ -216,7 +216,8 @@ void executor::maybe_audit(
 }
 
 static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_view keyspace_name, service::storage_proxy& sp, gms::gossiper& gossiper, api::timestamp_type,
-        const std::map<sstring, sstring>& tags_map, const gms::feature_service& feat, const db::tablets_mode_t::mode tablets_mode);
+        const std::map<sstring, sstring>& tags_map, const gms::feature_service& feat, const db::tablets_mode_t::mode tablets_mode,
+        bool warn_about_unsafe_rf = true);
 
 static std::optional<unsigned> get_initial_tablet_count(const std::map<sstring, sstring>& tags_map,
     const gms::feature_service& feat, const db::tablets_mode_t::mode tablets_mode);
@@ -2531,6 +2532,102 @@ create_table_params validate_create_table_request(const rjson::value& request, c
     };
 }
 
+// The checks which CreateTable makes of the keyspace of a new table. Unlike
+// those of validate_create_table_request(), they depend on the cluster - its
+// topology, configuration and storage - so commit_table_creation() makes them
+// when it creates the table, and check_new_table() makes them for ImportTable,
+// which creates the table only after it accepted the request. Returns the
+// error to refuse the table with, or nullopt.
+std::optional<api_error> executor::check_keyspace_of_new_table(const keyspace_metadata& ksm, std::string_view keyspace_name,
+        std::string_view table_name, bool has_vector_indexes, bool has_views, bool warn) {
+    locator::replication_strategy_params params(ksm.strategy_options(), ksm.initial_tablets(), ksm.consistency_option());
+    const auto& topo = _proxy.local_db().get_token_metadata().get_topology();
+    auto rs = locator::abstract_replication_strategy::create_replication_strategy(ksm.strategy_name(), params, topo);
+
+    // Vector indexes is a new feature that we decided to only support
+    // on tablets.
+    if (has_vector_indexes) {
+        if (!rs->uses_tablets()) {
+            return api_error::validation("Vector indexes are not supported on tables using vnodes.");
+        }
+    }
+    // Creating an index in tablets mode requires the keyspace to be RF-rack-valid.
+    // GSI and LSI indexes are based on materialized views which require RF-rack-validity to avoid consistency issues.
+    if (has_views || _proxy.data_dictionary().get_config().rf_rack_valid_keyspaces()) {
+        try {
+            locator::assert_rf_rack_valid_keyspace(keyspace_name, _proxy.local_db().get_token_metadata_ptr(), *rs);
+        } catch (const std::invalid_argument& ex) {
+            if (has_views) {
+                return api_error::validation(fmt::format("GlobalSecondaryIndexes and LocalSecondaryIndexes on a table "
+                    "using tablets require the number of racks in the cluster to be either 1 or 3"));
+            } else {
+                return api_error::validation(fmt::format("Cannot create table '{}' with tablets: the configuration "
+                    "option 'rf_rack_valid_keyspaces' is enabled, which enforces that tables using tablets can only be created in clusters "
+                    "that have either 1 or 3 racks", table_name));
+            }
+        }
+    }
+    // Alternator asks for no storage options, so the keyspace it creates
+    // keeps its data locally. restrict_mixed_storage_clusters decides
+    // whether the mix is refused, warned about or allowed -- except for a
+    // cluster which is already mixed, which only ever gets a warning:
+    // refusing the table would not bring it back to either kind.
+    const auto storage_restriction = _proxy.local_db().get_config().restrict_mixed_storage_clusters();
+    if (storage_restriction != db::tri_mode_restriction_t::mode::FALSE) {
+        if (_proxy.local_db().has_keyspace(keyspace_name)) {
+            // The keyspace can predate the table: nothing stops CREATE KEYSPACE
+            // from naming one and asking for object storage. The table is then
+            // built from that keyspace's metadata rather than from the one
+            // assembled here, so it would inherit the object storage with it.
+            if (_proxy.local_db().find_keyspace(keyspace_name).metadata()->get_storage_options().is_object_storage_type()) {
+                auto message = fmt::format("Cannot create table {}: keyspace {} keeps its data in object storage, and an Alternator "
+                                           "table keeps its data in local storage.",
+                                           table_name, keyspace_name);
+                if (storage_restriction == db::tri_mode_restriction_t::mode::TRUE) {
+                    return api_error::validation(std::move(message));
+                }
+                if (warn) {
+                    elogger.warn("{}", message);
+                }
+            }
+        } else {
+            switch (_proxy.local_db().get_user_storage_kind()) {
+                using enum replica::database::user_storage_kind;
+            case object_storage: {
+                auto message = fmt::format("Cannot create table {}: this cluster keeps its user data in object storage, and an Alternator "
+                                           "table keeps its data in local storage.",
+                                           table_name);
+                if (storage_restriction == db::tri_mode_restriction_t::mode::TRUE) {
+                    return api_error::validation(std::move(message));
+                }
+                if (warn) {
+                    elogger.warn("{}", message);
+                }
+                break;
+            }
+            case mixed:
+                if (warn) {
+                    elogger.warn("Creating table {}: this cluster keeps some of its user data locally and some in object "
+                                 "storage. Such a cluster is not supported.",
+                                 table_name);
+                }
+                break;
+            case none:
+            case local:
+                break;
+            }
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<api_error> executor::check_new_table(const create_table_params& validated, const db::tablets_mode_t::mode tablets_mode) {
+    auto ksm = create_keyspace_metadata(validated.keyspace_name, _proxy, _gossiper, api::new_timestamp(), validated.tags_map, _proxy.features(), tablets_mode,
+            /* warn_about_unsafe_rf */ false);
+    return check_keyspace_of_new_table(*ksm, validated.keyspace_name, validated.table_name, validated.has_vector_indexes, !validated.view_builders.empty(),
+            /* warn */ false);
+}
+
 future<executor::request_return_type> executor::commit_table_creation(
     rjson::value&& request,
     create_table_params&& validated,
@@ -2565,77 +2662,9 @@ future<executor::request_return_type> executor::commit_table_creation(
         auto ts = group0_guard.write_timestamp();
         utils::chunked_vector<mutation> schema_mutations;
         auto ksm = create_keyspace_metadata(keyspace_name, _proxy, _gossiper, ts, tags_map, _proxy.features(), tablets_mode);
-        locator::replication_strategy_params params(ksm->strategy_options(), ksm->initial_tablets(), ksm->consistency_option());
-        const auto& topo = _proxy.local_db().get_token_metadata().get_topology();
-        auto rs = locator::abstract_replication_strategy::create_replication_strategy(ksm->strategy_name(), params, topo);
-
-        // Vector indexes is a new feature that we decided to only support
-        // on tablets.
-        if (validated.has_vector_indexes) {
-            if (!rs->uses_tablets()) {
-                co_return api_error::validation("Vector indexes are not supported on tables using vnodes.");
-            }
-        }
-        // Creating an index in tablets mode requires the keyspace to be RF-rack-valid.
-        // GSI and LSI indexes are based on materialized views which require RF-rack-validity to avoid consistency issues.
-        if (!view_builders.empty() || _proxy.data_dictionary().get_config().rf_rack_valid_keyspaces()) {
-            try {
-                locator::assert_rf_rack_valid_keyspace(keyspace_name, _proxy.local_db().get_token_metadata_ptr(), *rs);
-            } catch (const std::invalid_argument& ex) {
-                if (!view_builders.empty()) {
-                    co_return api_error::validation(fmt::format("GlobalSecondaryIndexes and LocalSecondaryIndexes on a table "
-                        "using tablets require the number of racks in the cluster to be either 1 or 3"));
-                } else {
-                    co_return api_error::validation(fmt::format("Cannot create table '{}' with tablets: the configuration "
-                        "option 'rf_rack_valid_keyspaces' is enabled, which enforces that tables using tablets can only be created in clusters "
-                        "that have either 1 or 3 racks", table_name));
-                }
-            }
-        }
-        // Alternator asks for no storage options, so the keyspace it creates
-        // keeps its data locally. restrict_mixed_storage_clusters decides
-        // whether the mix is refused, warned about or allowed -- except for a
-        // cluster which is already mixed, which only ever gets a warning:
-        // refusing the table would not bring it back to either kind.
-        const auto storage_restriction = _proxy.local_db().get_config().restrict_mixed_storage_clusters();
-        if (storage_restriction != db::tri_mode_restriction_t::mode::FALSE) {
-            if (_proxy.local_db().has_keyspace(keyspace_name)) {
-                // The keyspace can predate the table: nothing stops CREATE KEYSPACE
-                // from naming one and asking for object storage. The table is then
-                // built from that keyspace's metadata rather than from the one
-                // assembled here, so it would inherit the object storage with it.
-                if (_proxy.local_db().find_keyspace(keyspace_name).metadata()->get_storage_options().is_object_storage_type()) {
-                    auto message = fmt::format("Cannot create table {}: keyspace {} keeps its data in object storage, and an Alternator "
-                                               "table keeps its data in local storage.",
-                                               table_name, keyspace_name);
-                    if (storage_restriction == db::tri_mode_restriction_t::mode::TRUE) {
-                        co_return api_error::validation(std::move(message));
-                    }
-                    elogger.warn("{}", message);
-                }
-            } else {
-                switch (_proxy.local_db().get_user_storage_kind()) {
-                    using enum replica::database::user_storage_kind;
-                case object_storage: {
-                    auto message = fmt::format("Cannot create table {}: this cluster keeps its user data in object storage, and an Alternator "
-                                               "table keeps its data in local storage.",
-                                               table_name);
-                    if (storage_restriction == db::tri_mode_restriction_t::mode::TRUE) {
-                        co_return api_error::validation(std::move(message));
-                    }
-                    elogger.warn("{}", message);
-                    break;
-                }
-                case mixed:
-                    elogger.warn("Creating table {}: this cluster keeps some of its user data locally and some in object "
-                                 "storage. Such a cluster is not supported.",
-                                 table_name);
-                    break;
-                case none:
-                case local:
-                    break;
-                }
-            }
+        if (auto error = check_keyspace_of_new_table(*ksm, keyspace_name, table_name, validated.has_vector_indexes, !view_builders.empty(),
+                /* warn */ true)) {
+            co_return std::move(*error);
         }
         bool table_already_exists = false;
         try {
@@ -5766,8 +5795,11 @@ static std::optional<unsigned> get_initial_tablet_count(const std::map<sstring, 
 // of nodes in the cluster: A cluster with 3 or more live nodes, gets RF=3.
 // A smaller cluster (presumably, a test only), gets RF=1. The user may
 // manually create the keyspace to override this predefined behavior.
+// warn_about_unsafe_rf is false for a caller which only checks the keyspace
+// and does not create it (check_new_table()).
 static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_view keyspace_name, service::storage_proxy& sp, gms::gossiper& gossiper, api::timestamp_type ts,
-            const std::map<sstring, sstring>& tags_map, const gms::feature_service& feat, const db::tablets_mode_t::mode tablets_mode) {
+            const std::map<sstring, sstring>& tags_map, const gms::feature_service& feat, const db::tablets_mode_t::mode tablets_mode,
+            bool warn_about_unsafe_rf) {
     auto initial_tablets = get_initial_tablet_count(tags_map, feat, tablets_mode);
     if (feat.tablets) {
         if (tags_map.contains(INITIAL_TABLETS_TAG_KEY)) {
@@ -5792,8 +5824,10 @@ static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_vie
     int rf = 3;
     if (endpoint_count < rf) {
         rf = 1;
-        elogger.warn("Creating keyspace '{}' for Alternator with unsafe RF={} because cluster only has {} nodes.",
-                     keyspace_name, rf, endpoint_count);
+        if (warn_about_unsafe_rf) {
+            elogger.warn("Creating keyspace '{}' for Alternator with unsafe RF={} because cluster only has {} nodes.",
+                         keyspace_name, rf, endpoint_count);
+        }
     }
     auto opts = get_network_topology_options(sp, gossiper, rf);
     cql3::statements::ks_prop_defs props;
