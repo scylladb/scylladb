@@ -15,6 +15,7 @@
 #include <seastar/core/shared_mutex.hh>
 #include <seastar/util/defer.hh>
 #include <unistd.h>
+#include <unordered_map>
 
 namespace wasm {
 
@@ -109,6 +110,41 @@ void instance_cache::on_timer() noexcept {
     while (!_lru.empty() && _lru.front().timestamp + _timer_period < now) {
         evict_lru();
     }
+    remove_orphaned_entries();
+}
+
+void instance_cache::remove_orphaned_entries() noexcept {
+    // An entry may be created for a function after the function was dropped or
+    // replaced, by a query which was still running the old function. When that
+    // query finishes, the old function no longer exists, and its module is
+    // owned only by the cache's entries (which may be several, e.g., for
+    // different scheduling groups) - so remove them. Such entries aren't in use,
+    // because a query running a function keeps the function alive.
+    try {
+        std::unordered_map<const rust::Box<wasmtime::Module>*, long> entries_per_module;
+        for (auto& [name, entry] : _cache) {
+            ++entries_per_module[entry->module.get()];
+        }
+        // Decide which entries to remove before removing any of them, because
+        // removing an entry decreases its module's use count
+        std::vector<decltype(_cache)::iterator> orphaned;
+        for (auto it = _cache.begin(); it != _cache.end(); ++it) {
+            if (it->second->module.use_count() == entries_per_module[it->second->module.get()]) {
+                orphaned.push_back(it);
+            }
+        }
+        for (auto it : orphaned) {
+            auto& entry = it->second;
+            if (entry->it != _lru.end()) {
+                _total_size -= entry->it->instance_size;
+                _lru.erase(entry->it);
+                entry->it = _lru.end();
+            }
+            _cache.erase(it);
+        }
+    } catch (...) {
+        // We'll try again on the next timer tick
+    }
 }
 
 static uint32_t get_instance_size(wasm_instance& instance) {
@@ -119,7 +155,8 @@ static uint32_t get_instance_size(wasm_instance& instance) {
 seastar::future<instance_cache::value_type> instance_cache::get(const db::functions::function_name& name, const std::vector<data_type>& arg_types, wasm::context& ctx) {
     auto [it, end_it] = _cache.equal_range(name);
     while (it != end_it) {
-        if (it->second->scheduling_group == seastar::current_scheduling_group() && it->second->arg_types == arg_types) {
+        if (it->second->scheduling_group == seastar::current_scheduling_group() && it->second->arg_types == arg_types
+                && it->second->module == ctx.module) {
             break;
         }
         ++it;
@@ -130,9 +167,9 @@ seastar::future<instance_cache::value_type> instance_cache::get(const db::functi
             .scheduling_group = seastar::current_scheduling_group(),
             .arg_types = arg_types,
             .mutex = seastar::shared_mutex(),
+            .module = ctx.module,
             .instance = std::nullopt,
             .it = _lru.end(),
-            .module = *ctx.module.value(),
         }));
     }
     auto& entry = it->second;
@@ -177,6 +214,11 @@ void instance_cache::recycle(instance_cache::value_type val) noexcept {
     // While the instance is in cache, it is not used and no stack is allocated for it.
     free_wasm_stack();
     val->mutex.unlock();
+    if (val->removed) {
+        // The function was dropped or replaced while this instance ran it
+        val->instance = std::nullopt;
+        return;
+    }
     size_t size;
     try {
         if (!val->instance) {
@@ -213,6 +255,7 @@ void instance_cache::remove(const db::functions::function_name& name, const std:
     while (it != end_it) {
         auto& entry_ptr = it->second;
         if (entry_ptr->arg_types == arg_types) {
+            entry_ptr->removed = true;
             if (entry_ptr->it != _lru.end()) {
                 _total_size -= entry_ptr->it->instance_size;
                 _lru.erase(entry_ptr->it);

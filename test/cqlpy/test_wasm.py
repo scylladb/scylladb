@@ -10,8 +10,10 @@
 from cassandra.protocol import InvalidRequest
 from cassandra.cluster import NoHostAvailable
 from .util import new_test_table, unique_name, new_function, new_aggregate
+from cassandra.query import SimpleStatement
 
 import pytest
+import time
 import requests
 import re
 import os.path
@@ -671,6 +673,60 @@ def test_fuel_limit_per_call(cql, test_keyspace, table1, scylla_with_wasm_only):
         for _ in range(50):
             res = list(cql.execute(f'SELECT {test_keyspace}.{name}(i) AS result FROM {table1} WHERE p = 7000'))
             assert len(res) == 1 and res[0].result == 1
+
+# A module whose function takes an int and returns the given value, after
+# looping the given number of times - each call takes a while, and yields
+# many times (whenever it uses wasm_udf_yield_fuel fuel).
+def slow_function_module(name, iterations, ret):
+    return f'''
+(module
+  (func ${name} (param i32) (result i32)
+    (local $i i32)
+    (loop $l
+      local.get $i
+      i32.const 1
+      i32.add
+      local.tee $i
+      i32.const {iterations}
+      i32.lt_s
+      br_if $l)
+    i32.const {ret})
+  (memory (;0;) 1)
+  (global (;0;) i32 (i32.const 0))
+  (export "memory" (memory 0))
+  (export "{name}" (func ${name}))
+  (export "_scylla_abi" (global 0)))
+'''
+
+# Test that after CREATE OR REPLACE FUNCTION, the function runs its new code,
+# even if the replacement happened while a query was still running the old
+# function. Such a query used to put an instance of the old function in the
+# cache, which calls of the new function then used.
+# Reproduces SCYLLADB-6398.
+def test_replace_while_running(cql, test_keyspace, scylla_with_wasm_only, metrics):
+    name = 'replaced_' + unique_name()
+    src = "(input int) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE wasm AS '{}'"
+    with new_test_table(cql, test_keyspace, 'p int, c int, v int, PRIMARY KEY (p, c)') as table:
+        insert = cql.prepare(f'INSERT INTO {table} (p, c, v) VALUES (1, ?, 1)')
+        for c in range(1000):
+            cql.execute(insert, [c])
+        with new_function(cql, test_keyspace, src.format(slow_function_module(name, 1000000, 1)), name):
+            # Start a query running the old function on all rows, wait until it
+            # is running the function (each call after the first is a cache hit),
+            # and replace the function while the query is still running
+            hits_before = get_metric(metrics, 'scylla_user_functions_cache_hits')
+            query = cql.execute_async(SimpleStatement(f'SELECT {test_keyspace}.{name}(v) AS result FROM {table} WHERE p = 1', fetch_size=None))
+            deadline = time.monotonic() + 60
+            while get_metric(metrics, 'scylla_user_functions_cache_hits') < hits_before + 10:
+                assert time.monotonic() < deadline
+            cql.execute(f'CREATE OR REPLACE FUNCTION {test_keyspace}.{name} ' + src.format(slow_function_module(name, 1, 2)))
+            # Check that the query, which began with the old function, used it
+            # for all rows
+            assert [row.result for row in query.result()] == [1] * 1000
+            # Check that calls of the new function return its new result
+            for c in range(5):
+                res = list(cql.execute(f'SELECT {test_keyspace}.{name}(v) AS result FROM {table} WHERE p = 1 AND c = {c}'))
+                assert len(res) == 1 and res[0].result == 2
 
 # Test that we can use counters as the return type of a WASM UDF.
 def test_counter(cql, test_keyspace, scylla_only):

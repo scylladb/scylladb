@@ -64,7 +64,7 @@ SEASTAR_TEST_CASE(test_long_udf_yields) {
   (export "_scylla_abi" (global 0))
   (data (;0;) (i32.const 1024) "01"))
 )");
-    wasm_ctx.module.value()->compile(*wasm_engine);
+    (*wasm_ctx.module)->compile(*wasm_engine);
     auto argv = wasmtime::get_val_vec();
     argv->push_i64(42);
     auto rets = wasmtime::get_val_vec();
@@ -139,7 +139,8 @@ SEASTAR_TEST_CASE(test_remove_while_waiting_for_instance) {
     // The second call continues, and gets the instance
     auto second = co_await std::move(second_fut);
     BOOST_REQUIRE(second->instance);
-    // We don't give the instance back to the cache with recycle(): the cache
-    // would keep it although the function was removed, and the instance would
-    // outlive the function's module in wasm_ctx (see SCYLLADB-6398).
+    // The second call finishes. The function was removed from the cache, so
+    // the cache must not keep its instance.
+    wasm_cache->recycle(second);
+    BOOST_REQUIRE(!second->instance);
 }
