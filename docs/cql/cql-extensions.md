@@ -376,8 +376,25 @@ The LWT IF clauses
 IF some_column LIKE :pattern
 ```
 
-is an error if `:pattern` is `NULL` on Cassandra, but is accepted by
-Scylla. The result of the pattern match is `FALSE`.
+is accepted by Scylla even if `:pattern` is `NULL`. The result of the
+pattern match is then `FALSE`. Cassandra doesn't accept `LIKE` in an IF
+clause at all.
+
+## Conditions in LWT IF clauses
+
+Beyond the conditions Cassandra accepts in an LWT `IF` clause, ScyllaDB
+accepts `NOT IN`, `LIKE`, `IS NULL`, `IS NOT NULL`, parenthesized
+conditions, and conditions on an element of a set:
+
+```cql
+UPDATE t SET v = 1 WHERE p = 0 IF v IS NULL;
+UPDATE t SET v = 2 WHERE p = 0 IF (v NOT IN (3, 4)) AND m[1] NOT IN (5, 6);
+UPDATE t SET v = 3 WHERE p = 0 IF s['a'] = 'a';
+```
+
+`IS NULL` holds exactly when `= NULL` does, and `IS NOT NULL` when `!= NULL`
+does. An element `s[x]` of a set is `x` if the set contains `x`, and `NULL`
+otherwise.
 
 For more details, see:
 - [Lightweight Transactions](../features/lwt.rst)
