@@ -642,9 +642,27 @@ a) Collection of failed attempts, done by the coordinator after the commit. For 
 stopped being replicas since. A failed request collects its own attempt the same way. A crash between the group0 write of the
 attempt and its snapshot_attempts row leaves an attempt named only in the request entry.
 b) Boot GC, it's node local, it reaps the registry entries of sstables whose creation or removal did not complete, deleting their refs and components if the last ref was dropped.
-c) (future work) `clearsnapshot --force` it's operator driven which is able to delete garbage if no re-take happens for a previously crashed tag.
+c) `nodetool cluster clearsnapshot`, operator driven. It collects every attempt of the tag the same way, the committed one included, and with `--force` the residue of a tag that never committed, when no re-take is wanted. See "Clearing a snapshot" below.
 d) (future work) background healing operation as a last resort process: cleaning refs whose rows are gone, also covers some edge cases like
 departed nodes or tables dropped in a particular bad moment. It'll also do automatic expiration of snapshots.
+
+### Clearing a snapshot
+
+`nodetool cluster clearsnapshot -t tag` runs as a task on the node that gets the request. It reads the marker, the
+`snapshot_attempts` ledger, the schema rows and the `snapshot_remote_locations` rows of every attempt, and
+rejects the request (HTTP 400) when the tag is unknown, when a backup or a snapshot of it is in progress, and, unless
+`--force`, when the tag has no marker (the residue of a failed attempt) or has location rows (it is backed up, and the
+backup goes with the snapshot). Then, in this order:
+
+1. the committed attempt is flipped to `committed=false`, so a backup started from now on finds no committed attempt instead of writing under a tag going away;
+2. the manifests of the backups, at every location of the tag, for every table of every attempt;
+3. the `refs/snapshot-{tag}/{gen}` references a backup uploaded from local tables, with the components when the reference was the sstable's last claim;
+4. for every attempt: the snapshot directories of local tables on the nodes of its `snapshot_nodes` rows, then its references and rows through the collector the coordinator uses for failed attempts, its schema rows, its location rows and its ledger row;
+5. the marker last.
+
+A crash anywhere leaves the marker, so the clear is accepted again with the same flags and resumes from whatever is left;
+until the marker is gone the tag cannot be retaken. Nodes that left the cluster keep their snapshot directories, and a
+dropped table's references can only be reclaimed by bucket healing.
 
 ### Layout examples for local and remote tables
 
