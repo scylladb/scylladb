@@ -2413,7 +2413,7 @@ async def run_cluster_backup(object_storage, prefix: str, manager: ScyllaCluster
     assert not missing, f"manifest references sstables that were not uploaded: {[(sst['node'], sst['toc_name']) for sst in missing]}"
 
     for ss in servers:
-        locations = list(cql.execute(f"SELECT * FROM system_distributed.snapshot_remote_locations WHERE snapshot_name = '{snapshot_name}' AND datacenter = '{s.datacenter}'"))
+        locations = list(cql.execute(f"SELECT * FROM system_distributed.snapshot_remote_locations WHERE snapshot_name = '{snapshot_rows_name(cql, snapshot_name)}' AND datacenter = '{s.datacenter}'"))
         assert len(locations) == 1
         assert locations[0].state >= 3
         assert locations[0].endpoint == object_storage.address
@@ -3612,7 +3612,7 @@ async def test_object_storage_backup_in_place(manager: ScyllaClusterManager, obj
             assert backup_sstable_ids(object_storage, [manifest_key]) == promoted
 
             locations = list(cql.execute(f"SELECT * FROM system_distributed.snapshot_remote_locations"
-                                         f" WHERE snapshot_name = '{tag}' AND datacenter = '{server.datacenter}'"))
+                                         f" WHERE snapshot_name = '{snapshot_rows_name(cql, tag)}' AND datacenter = '{server.datacenter}'"))
             assert len(locations) == 1 and locations[0].state >= 3
 
             # Re-run: recognized as already backed up, changes nothing.
@@ -3676,6 +3676,13 @@ async def test_object_storage_backup_restore_end_to_end(manager: ScyllaClusterMa
                     # Re-duplication: the manifest's single copy was fanned
                     # out, so every key is replicated rf times again.
                     await check_mutation_replicas(cql, manager, servers, range(50), topology, logger, ks2, cf2)
+
+                    # The restore writes its own location row under the plain
+                    # tag, with a TTL. The backup's row lives under the attempt
+                    # name and is left alone.
+                    rows = list(cql.execute(f"SELECT state, TTL(state) AS ttl FROM system_distributed.snapshot_remote_locations"
+                                            f" WHERE snapshot_name = '{snapshot_rows_name(cql, tag)}' AND datacenter = '{server.datacenter}'"))
+                    assert len(rows) == 1 and rows[0].state >= 3 and rows[0].ttl is None, f'The restore touched the backup location row: {rows}'
 
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')

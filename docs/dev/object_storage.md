@@ -623,7 +623,7 @@ Restoring into the cluster where the snapshot still lives must not let the resto
 Restore writes its working rows (`snapshot_sstables`, `snapshot_remote_locations`, `snapshot_tables`) under the snapshot name of the restore request,
 with a 3-day TTL so that crashed restores and currently even successful restores clean up their rows automatically.
 The snapshot's rows live under the attempt name `{tag}/{attempt}`, so the restore never touches them, and the snapshot's references keep the components alive while cloning.
-The `snapshot_remote_locations` row of a backup is keyed by the plain tag like the restore's, so an in-place restore of a backup overwrites it with a TTL'd row.
+A backup keys its `snapshot_remote_locations` rows by the attempt name as well, so the restore's TTL'd row under the plain tag does not replace them.
 
 ### Crashing behavior
 
@@ -682,7 +682,7 @@ catalog (in this order):
 ~~~
 
 b) Backup
-The coordinator marks the destination in `snapshot_remote_locations` (state=being_backed_up) and fans out per-node upload requests.
+The coordinator marks the destination in `snapshot_remote_locations` under the committed attempt name (state=being_backed_up) and fans out per-node upload requests.
 Each node uploads its snapshotted components into the refs-based layout under the destination prefix `bucket/bk/sstables/3gqe…tor/<component>`
 and creates a snapshot reference `bucket/bk/sstables/3gqe…tor/refs/snapshot-<tag>/<gen>` before uploading, so the uploaded sstable is pinned exactly like a native object-storage one. As uploads complete, the node's `snapshot_sstables` rows flip to state=remote_and_local (or remote, when the local snapshot files are removed after upload).
 Finally one manifest per destination is written at `bucket/bk/snapshots/ks/t/tagalong/manifest.json` and `snapshot_remote_locations` flips to the final state.
@@ -700,7 +700,7 @@ bucket (per destination, last):
   backups/bk/snapshots/ks/t/tagalong/manifest.json
 
 catalog:
-  snapshot_remote_locations ('tagalong','dc1') -> endpoint, 'backups', 'bk',
+  snapshot_remote_locations ('tagalong/<attempt>','dc1') -> endpoint, 'backups', 'bk',
                             state: being_backed_up -> remote_and_local
                             (remote with --move-files)
   snapshot_sstables         row of 3gqe…tor rewritten with state=remote_and_local,
@@ -771,7 +771,7 @@ bucket:
        snapshot references since snapshot time)
 
 catalog:
-  snapshot_remote_locations ('tagalong','dc1') -> endpoint, 'scylla-bucket',
+  snapshot_remote_locations ('tagalong/<attempt>','dc1') -> endpoint, 'scylla-bucket',
                             'sstables', state=remote
   snapshot_sstables         rows rewritten with state=remote
 ~~~
