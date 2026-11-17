@@ -45,6 +45,9 @@ class incremental_backlog_tracker final : public compaction_backlog_tracker::imp
         std::unordered_set<sstables::run_id> sstable_runs_contributing_backlog;
     };
 
+    // Recalculates the cached fields if the sstables changed since.
+    void refresh(const compaction_backlog_source& src) const;
+
 public:
     static double log4(double x) {
         static const double inv_log_4 = 1.0f / std::log(4);
