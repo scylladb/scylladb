@@ -92,13 +92,13 @@ static future<utils::rate_moving_average>  sum_timed_rate(sharded<proxy>& d, uin
 static future<json::json_return_type>  sum_timed_rate_as_obj(sharded<proxy>& d, uint64_t service::storage_proxy_stats::stats::*f) {
     return sum_timed_rate(d, f).then([](const utils::rate_moving_average& val) {
         httpd::utils_json::rate_moving_average m;
-        m = val;
+        m.count = val.count;
         return make_ready_future<json::json_return_type>(m);
     });
 }
 
 httpd::utils_json::rate_moving_average_and_histogram get_empty_moving_average() {
-    return timer_to_json(utils::rate_moving_average_and_histogram());
+    return timer_to_json(utils::time_estimated_histogram());
 }
 
 static future<json::json_return_type>  sum_timed_rate_as_long(sharded<proxy>& d, uint64_t service::storage_proxy_stats::stats::*f) {
@@ -137,7 +137,7 @@ static future<json::json_return_type>  sum_estimated_histogram(sharded<service::
 
 static future<json::json_return_type>  total_latency(sharded<service::storage_proxy>& proxy, utils::timed_rate_moving_average_summary_and_histogram service::storage_proxy_stats::stats::*f) {
     return two_dimensional_map_reduce(proxy, [f] (service::storage_proxy_stats::stats& stats) {
-            return (stats.*f).hist.mean * (stats.*f).hist.count;
+            return double((stats.*f).histogram().sum());
         }, std::plus<double>(), 0.0).then([](double val) {
         int64_t res = val;
         return make_ready_future<json::json_return_type>(res);
@@ -157,9 +157,9 @@ future<json::json_return_type>
 sum_histogram_stats_storage_proxy(sharded<proxy>& d,
         utils::timed_rate_moving_average_summary_and_histogram F::*f) {
     return two_dimensional_map_reduce(d, [f] (service::storage_proxy_stats::stats& stats) {
-        return (stats.*f).hist;
-    }, std::plus<utils::ihistogram>(), utils::ihistogram()).
-            then([](const utils::ihistogram& val) {
+        return (stats.*f).histogram();
+    }, utils::time_estimated_histogram_merge, utils::time_estimated_histogram()).
+            then([](const utils::time_estimated_histogram& val) {
         return make_ready_future<json::json_return_type>(to_json(val));
     });
 }
@@ -178,9 +178,9 @@ sum_timer_stats_storage_proxy(sharded<proxy>& d,
         utils::timed_rate_moving_average_summary_and_histogram F::*f) {
 
     return two_dimensional_map_reduce(d, [f] (service::storage_proxy_stats::stats& stats) {
-        return (stats.*f).rate();
-    }, std::plus<utils::rate_moving_average_and_histogram>(),
-            utils::rate_moving_average_and_histogram()).then([](const utils::rate_moving_average_and_histogram& val) {
+        return (stats.*f).histogram();
+    }, utils::time_estimated_histogram_merge,
+            utils::time_estimated_histogram()).then([](const utils::time_estimated_histogram& val) {
         return make_ready_future<json::json_return_type>(timer_to_json(val));
     });
 }

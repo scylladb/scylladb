@@ -3033,19 +3033,16 @@ class table_metrics {
         uint64_t sum;
         uint64_t min;
         uint64_t max;
-        double variance;
         double mean;
     };
     histogram get_histogram(std::string_view metric_name) {
         auto res = _client.get(fmt::format("/column_family/metrics/{}/{}:{}",
                                            metric_name, _ks_name, _cf_name));
         const auto& obj = res.GetObject();
-        // we don't use sample here
         return histogram(obj["count"].GetUint64(),
                          obj["sum"].GetUint64(),
                          obj["min"].GetUint64(),
                          obj["max"].GetUint64(),
-                         obj["variance"].GetDouble(),
                          obj["mean"].GetDouble());
     }
 

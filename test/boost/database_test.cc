@@ -308,7 +308,7 @@ SEASTAR_TEST_CASE(test_drop_does_not_save_truncation_records) {
         };
         // Writes to system.truncated, summed over all shards.
         auto truncated_writes = [&] {
-            return truncated_stats([] (const replica::table_stats& stats) { return int64_t(stats.writes.hist.count); });
+            return truncated_stats([] (const replica::table_stats& stats) { return int64_t(stats.writes.histogram().count()); });
         };
         // Flushes that switch out a non-empty memtable of system.truncated, summed over all shards.
         auto truncated_flushes = [&] {

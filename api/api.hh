@@ -56,51 +56,40 @@ future<json::json_return_type>  sum_stats(sharded<T>& d, V F::*f) {
 
 
 
+// The REST API's histogram is derived from the latency histogram. The latter
+// keeps buckets rather than values, so min and max are bucket limits.
 inline
-httpd::utils_json::histogram to_json(const utils::ihistogram& val) {
+httpd::utils_json::histogram to_json(const utils::time_estimated_histogram& val) {
     httpd::utils_json::histogram h;
-    h = val;
-    h.sum = val.estimated_sum();
+    auto count = val.count();
+    h.count = count;
+    h.sum = val.sum();
+    h.min = val.min();
+    h.max = std::min(val.max(), utils::time_estimated_histogram::MAX);
+    h.mean = count ? double(val.sum()) / count : 0;
     return h;
 }
 
 inline
 httpd::utils_json::rate_moving_average meter_to_json(const utils::rate_moving_average& val) {
     httpd::utils_json::rate_moving_average m;
-    m = val;
+    m.count = val.count;
     return m;
 }
 
+// The latency histogram is also the counter; no rates are kept for latencies.
 inline
-httpd::utils_json::rate_moving_average_and_histogram timer_to_json(const utils::rate_moving_average_and_histogram& val) {
+httpd::utils_json::rate_moving_average_and_histogram timer_to_json(const utils::time_estimated_histogram& val) {
     httpd::utils_json::rate_moving_average_and_histogram h;
-    h.hist = to_json(val.hist);
-    h.meter = meter_to_json(val.rate);
+    h.hist = to_json(val);
+    h.meter = meter_to_json(utils::rate_moving_average{.count = val.count()});
     return h;
 }
 
 template<class T, class F>
-future<json::json_return_type>  sum_histogram_stats(sharded<T>& d, utils::timed_rate_moving_average_and_histogram F::*f) {
-
-    return d.map_reduce0([f](const T& p) {return (p.get_stats().*f).hist;}, utils::ihistogram(),
-            std::plus<utils::ihistogram>()).then([](const utils::ihistogram& val) {
-        return make_ready_future<json::json_return_type>(to_json(val));
-    });
-}
-
-template<class T, class F>
-future<json::json_return_type>  sum_timer_stats(sharded<T>& d, utils::timed_rate_moving_average_and_histogram F::*f) {
-
-    return d.map_reduce0([f](const T& p) {return (p.get_stats().*f).rate();}, utils::rate_moving_average_and_histogram(),
-            std::plus<utils::rate_moving_average_and_histogram>()).then([](const utils::rate_moving_average_and_histogram& val) {
-        return make_ready_future<json::json_return_type>(timer_to_json(val));
-    });
-}
-
-template<class T, class F>
 future<json::json_return_type>  sum_timer_stats(sharded<T>& d, utils::timed_rate_moving_average_summary_and_histogram F::*f) {
-    return d.map_reduce0([f](const T& p) {return (p.get_stats().*f).rate();}, utils::rate_moving_average_and_histogram(),
-            std::plus<utils::rate_moving_average_and_histogram>()).then([](const utils::rate_moving_average_and_histogram& val) {
+    return d.map_reduce0([f](const T& p) {return (p.get_stats().*f).histogram();}, utils::time_estimated_histogram(),
+            utils::time_estimated_histogram_merge).then([](const utils::time_estimated_histogram& val) {
         return make_ready_future<json::json_return_type>(timer_to_json(val));
     });
 }
