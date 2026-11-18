@@ -56,6 +56,9 @@ namespace {
 
 static seastar::logger dict_trainer_logger("alternator_import_test_dict_trainer");
 
+// The scheduling group in which the last import on this shard made its source, see set_source().
+thread_local sstring import_source_scheduling_group;
+
 // Wraps a sharded<alternator::executor>, taking DynamoDB-style JSON requests.
 class alternator_test_executor {
     sharded<cdc::metadata> _cdc_md;
@@ -147,6 +150,23 @@ public:
         _exec.invoke_on_all(&alternator::executor::request_stop).get();
     }
 
+    // Makes every import, on every shard, read `objects` instead of S3.
+    void set_source(std::vector<std::pair<sstring, std::string>> objects) {
+        _exec.invoke_on_all([objects] (alternator::executor& exec) {
+            exec.get_s3_imports().set_source_factory([objects] (sstring, sstring, abort_source&) {
+                import_source_scheduling_group = current_scheduling_group().name();
+                std::vector<std::pair<sstring, std::shared_ptr<alternator::in_memory_test_storage>>> storages;
+                for (const auto& [key, content] : objects) {
+                    auto storage = std::make_shared<alternator::in_memory_test_storage>();
+                    storage->append(std::as_bytes(std::span(content)));
+                    storages.emplace_back(key, std::move(storage));
+                }
+                return make_ready_future<std::unique_ptr<alternator::import_source>>(
+                        alternator::make_in_memory_import_source(std::move(storages)));
+            });
+        }).get();
+    }
+
     std::variant<rjson::value, alternator::api_error> import_table(rjson::value request) {
         return call(&alternator::executor::import_table, std::move(request));
     }
@@ -168,10 +188,36 @@ public:
     rjson::value import_table_successfully(rjson::value request) {
         return call_successfully(&alternator::executor::import_table, "ImportTable", std::move(request));
     }
+    void create_table(rjson::value request) {
+        call_successfully(&alternator::executor::create_table, "CreateTable", std::move(request));
+    }
+    void put_item(rjson::value request) {
+        call_successfully(&alternator::executor::put_item, "PutItem", std::move(request));
+    }
+    rjson::value update_table_successfully(rjson::value request) {
+        return call_successfully(&alternator::executor::update_table, "UpdateTable", std::move(request));
+    }
     std::variant<rjson::value, alternator::api_error> describe_table(std::string_view table_name) {
         rjson::value request = rjson::empty_object();
         rjson::add(request, "TableName", rjson::from_string(table_name));
         return call(&alternator::executor::describe_table, std::move(request));
+    }
+    // Returns the item of hash key `p` and sort key `c` (a number), or nullopt if there is none.
+    std::optional<rjson::value> get_item(std::string_view table_name, std::string_view p, std::string_view c) {
+        auto request = rjson::parse(fmt::format(R"({{"TableName": "{}", "ConsistentRead": true,
+                "Key": {{"p": {{"S": "{}"}}, "c": {{"N": "{}"}}}}}})", table_name, p, c));
+        auto response = call_successfully(&alternator::executor::get_item, "GetItem", std::move(request));
+        if (const rjson::value* item = rjson::find(response, "Item")) {
+            return rjson::copy(*item);
+        }
+        return std::nullopt;
+    }
+    // Returns the string attribute "v" of the item of hash key `p` and sort key `c`, failing the
+    // test if there is no such item.
+    std::string get_item_v(std::string_view table_name, std::string_view p, std::string_view c) {
+        auto item = get_item(table_name, p, c);
+        BOOST_REQUIRE_MESSAGE(item, fmt::format("the table {} has no item {}/{}", table_name, p, c));
+        return std::string(rjson::to_string_view(rjson::get(rjson::get(*item, "v"), "S")));
     }
 };
 
@@ -187,6 +233,10 @@ constexpr std::string_view table_creation_parameters = R"(
         {"AttributeName": "c", "KeyType": "RANGE"}
     ])";
 
+rjson::value make_create_table_request(std::string_view table_name) {
+    return rjson::parse(fmt::format(R"({{"TableName": "{}", {}}})", table_name, table_creation_parameters));
+}
+
 rjson::value make_import_table_request(std::string_view table_name, std::string_view client_token) {
     return rjson::parse(fmt::format(R"({{
         "ClientToken": "{}",
@@ -194,6 +244,11 @@ rjson::value make_import_table_request(std::string_view table_name, std::string_
         "S3BucketSource": {{"S3Bucket": "bucket", "S3KeyPrefix": "prefix/"}},
         "TableCreationParameters": {{"TableName": "{}", {}}}
     }})", client_token, table_name, table_creation_parameters));
+}
+
+// A line of an object of DYNAMODB_JSON: the item {p: <p>, c: <c>, v: <v>}.
+std::string item_line(std::string_view p, int c, std::string_view v) {
+    return fmt::format(R"({{"Item": {{"p": {{"S": "{}"}}, "c": {{"N": "{}"}}, "v": {{"S": "{}"}}}}}})", p, c, v) + "\n";
 }
 
 std::string get_string(const rjson::value& v, std::string_view member) {
@@ -219,6 +274,16 @@ alternator::import_row wait_for_import(cql_test_env& e, const sstring& import_ar
 // its row.
 alternator::import_row wait_for_import(cql_test_env& e, const rjson::value& response) {
     return wait_for_import(e, sstring(get_string(rjson::get(response, "ImportTableDescription"), "ImportArn")));
+}
+
+// Waits until done() returns true, failing the test after two minutes.
+template <typename Done>
+void wait_until(Done done, std::string_view what) {
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(2);
+    while (!done()) {
+        BOOST_REQUIRE_MESSAGE(std::chrono::steady_clock::now() < deadline, fmt::format("timed out waiting for {}", what));
+        seastar::sleep(std::chrono::milliseconds(10)).get();
+    }
 }
 
 cql_test_config import_test_config() {
@@ -254,6 +319,93 @@ void check_import_row_ttl(cql_test_env& e, std::string_view import_arn, std::chr
 }
 
 } // anonymous namespace
+
+// An Alternator extension: an import into an existing table writes into it, and keeps its items and
+// its id.
+SEASTAR_TEST_CASE(test_import_into_existing_table) {
+    return with_import_executor([] (cql_test_env& e, alternator_test_executor& exec) {
+        exec.create_table(make_create_table_request("existing"));
+        exec.put_item(rjson::parse(R"({"TableName": "existing", "Item": {"p": {"S": "old"}, "c": {"N": "1"}, "v": {"S": "kept"}}})"));
+        auto table_id = get_string(rjson::get(std::get<rjson::value>(exec.describe_table("existing")), "Table"), "TableId");
+
+        exec.set_source({{"0", item_line("new", 1, "imported")}});
+        auto response = exec.import_table_successfully(make_import_table_request("existing", "token-existing"));
+        BOOST_REQUIRE_EQUAL(get_string(rjson::get(response, "ImportTableDescription"), "TableId"), table_id);
+        auto row = wait_for_import(e, response);
+        BOOST_REQUIRE_EQUAL(row.import_status, "COMPLETED");
+        BOOST_REQUIRE(row.target_table_existed);
+        BOOST_REQUIRE_EQUAL(row.table_id.to_sstring(), table_id);
+        BOOST_REQUIRE_EQUAL(exec.get_item_v("existing", "old", "1"), "kept");
+        BOOST_REQUIRE_EQUAL(exec.get_item_v("existing", "new", "1"), "imported");
+    });
+}
+
+// An import into an existing table whose TableCreationParameters give another key schema: the live
+// table's schema governs the import - the items are validated against it - and the table keeps its
+// id.
+SEASTAR_TEST_CASE(test_import_into_existing_table_with_other_parameters) {
+    return with_import_executor([] (cql_test_env& e, alternator_test_executor& exec) {
+        exec.create_table(make_create_table_request("existing_other"));
+        auto table_id = get_string(rjson::get(std::get<rjson::value>(exec.describe_table("existing_other")), "Table"), "TableId");
+
+        exec.set_source({{"0", item_line("a", 1, "x") + item_line("a", 2, "y")}});
+        auto response = exec.import_table_successfully(rjson::parse(R"({
+            "ClientToken": "token-existing-other",
+            "InputFormat": "DYNAMODB_JSON",
+            "S3BucketSource": {"S3Bucket": "bucket", "S3KeyPrefix": "prefix/"},
+            "TableCreationParameters": {
+                "TableName": "existing_other",
+                "BillingMode": "PAY_PER_REQUEST",
+                "AttributeDefinitions": [{"AttributeName": "k", "AttributeType": "B"}],
+                "KeySchema": [{"AttributeName": "k", "KeyType": "HASH"}]
+            }
+        })"));
+        BOOST_REQUIRE_EQUAL(get_string(rjson::get(response, "ImportTableDescription"), "TableId"), table_id);
+        auto row = wait_for_import(e, response);
+        BOOST_REQUIRE_EQUAL(row.import_status, "COMPLETED");
+        BOOST_REQUIRE(row.target_table_existed);
+        BOOST_REQUIRE_EQUAL(row.imported_item_count, 2);
+        BOOST_REQUIRE_EQUAL(exec.get_item_v("existing_other", "a", "1"), "x");
+        BOOST_REQUIRE_EQUAL(exec.get_item_v("existing_other", "a", "2"), "y");
+    });
+}
+
+// An import into a table with a GSI fills its view. The import writes in the scheduling group of
+// exports and imports, which therefore has its own view update concurrency semaphore (see
+// replica::database::start()) - without it, the view updates of the replicas on this node would log
+// an error and use another group's semaphore.
+SEASTAR_TEST_CASE(test_import_into_table_with_gsi) {
+    return with_import_executor([] (cql_test_env& e, alternator_test_executor& exec) {
+        auto& db = e.local_db();
+        auto view_update_sem = [&] (scheduling_group sg) {
+            return seastar::with_scheduling_group(sg, [&] { return &db.get_view_update_concurrency_sem(); }).get();
+        };
+        // The group has a semaphore of its own. (Asking in a group without one, such as the default
+        // group, would log an error and give the semaphore of the default service level.)
+        BOOST_REQUIRE(view_update_sem(db.get_export_import_scheduling_group()) != view_update_sem(get_scheduling_groups().get().statement_scheduling_group));
+
+        auto create = make_create_table_request("with_gsi");
+        rjson::push_back(rjson::get(create, "AttributeDefinitions"), rjson::parse(R"({"AttributeName": "v", "AttributeType": "S"})"));
+        rjson::add(create, "GlobalSecondaryIndexes", rjson::parse(R"([{
+            "IndexName": "by_v",
+            "KeySchema": [{"AttributeName": "v", "KeyType": "HASH"}],
+            "Projection": {"ProjectionType": "ALL"}
+        }])"));
+        exec.create_table(std::move(create));
+
+        exec.set_source({{"0", item_line("a", 1, "x") + item_line("a", 2, "y")}});
+        auto response = exec.import_table_successfully(make_import_table_request("with_gsi", "token-with-gsi"));
+        auto row = wait_for_import(e, response);
+        BOOST_REQUIRE_EQUAL(row.import_status, "COMPLETED");
+        BOOST_REQUIRE_EQUAL(row.imported_item_count, 2);
+        wait_until([&] {
+            auto res = e.execute_cql(R"(SELECT * FROM alternator_with_gsi."with_gsi:by_v")").get();
+            auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(res);
+            BOOST_REQUIRE(rows);
+            return rows->rs().result_set().size() == 2;
+        }, "the view of the GSI to have the imported items");
+    });
+}
 
 // Reading S3 is not implemented yet, so the default source fails as soon as it is made, and the
 // import fails with NotImplemented without creating a table.

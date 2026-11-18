@@ -73,8 +73,9 @@ struct export_pipeline_interface {
 };
 
 // An interface encapsulating read (source) pipeline. This mirrors write (sink) pipeline - what sink pipeline can produce, source pipeline will consume.
-// This will be used in future for DynamoDB import api (ImportTable call).
-// Added currently for testing purposes - so we have a consistent way to read exported data without relying on connection to S3 / DynamoDB.
+// ImportTable's execution engine (alternator/import.cc) reads the objects of an import through it. Until ImportTable's S3 source,
+// which lists the objects under the prefix, is implemented (SCYLLADB-4047), its only source is the in-memory one of
+// tests. The pipeline also lets tests read exported data without a connection to S3 / DynamoDB.
 // Call respective factory method below (`create_source_pipeline`) to construct.
 // Call `read_all()` (only once!) method to start reading the data - it will read all data, pass it through the decompressor and parser
 // and call the callback provided to the factory function for each parsed item. The pipeline will wait
