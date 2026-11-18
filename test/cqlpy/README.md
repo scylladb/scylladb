@@ -27,6 +27,13 @@ this tool is again expected to be in the user's path, or be overridden with
 the `NODETOOL` environment variable. Nodetool is **not** needed to test
 Scylla.
 
+Each of "run" and "run-cassandra" runs itself, and pytest, in a Python virtual environment (in
+`build/test-dependencies`) with the packages listed in `test/pyproject.toml`,
+which it creates or updates as needed using `uv` - like `test.py` does.
+This also allows running the tests with the frozen toolchain, e.g.,
+`tools/toolchain/dbuild test/cqlpy/run`. Set the `DISABLE_VENV=1` environment
+variable to use the Python packages installed on the system instead.
+
 Modern Linux distributions usually do not carry a Cassandra package, so if
 you want to install Cassandra to run tests against it, please refer to the
 appendix below on _Installing Cassandra_.
@@ -39,8 +46,9 @@ to control which tests to run:
 * To run the same test or tests 100 times, add the `--count=100` option.
   This is faster than running `run` 100 times, because Scylla is only run
   once, and also counts for you how many of the runs failed.
-  For `pytest` to support the `--count` option, you need to install a
-  pytest extension: `pip install pytest-repeat`
+  The `--count` option comes from the pytest-repeat extension, which `run`
+  installs in its venv. To use it with `pytest` directly or with
+  `DISABLE_VENV=1`, install it yourself: `pip install pytest-repeat`
 
 Additional useful pytest options, especially useful for debugging tests:
 

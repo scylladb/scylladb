@@ -26,6 +26,13 @@ much faster.
 `build/*/scylla` - but this choice of Scylla executable can be overridden with
 the `SCYLLA` environment variable.
 
+`run` runs itself, and pytest, in a Python virtual environment (in
+`build/test-dependencies`) with the packages listed in `test/pyproject.toml`,
+which it creates or updates as needed using `uv` - like `test.py` does.
+This also allows running the tests with the frozen toolchain, e.g.,
+`tools/toolchain/dbuild test/alternator/run`. Set the `DISABLE_VENV=1` environment
+variable to use the Python packages installed on the system instead.
+
 By default, `pytest` or `test/alternator/run` run all Alternator tests.
 You can pass different options to control which tests run:
 
