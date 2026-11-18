@@ -13,6 +13,7 @@
 #include <seastar/util/closeable.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/sleep.hh>
+#include <seastar/testing/on_internal_error.hh>
 #include "test/lib/scylla_test_case.hh"
 #include "test/lib/test_utils.hh"
 #include "locator/token_metadata.hh"
@@ -322,6 +323,14 @@ SEASTAR_THREAD_TEST_CASE(test_topology_change_info_survives_clone) {
             token_metadata->add_leaving_endpoint(e2_id);
         } else {
             token_metadata->add_bootstrap_token(dht::token::from_int64(100), e2_id);
+        }
+
+        // Without the topology change info the map would silently lack pending replicas.
+        {
+            auto strategy = seastar::make_shared<simple_strategy>(
+                    replication_strategy_params(opts, std::nullopt, std::nullopt), &token_metadata->get_topology());
+            seastar::testing::scoped_no_abort_on_internal_error abort_guard;
+            BOOST_REQUIRE_THROW(calculate_vnode_effective_replication_map(std::move(strategy), token_metadata).get(), std::runtime_error);
         }
 
         auto erm = create_erm<simple_strategy>(token_metadata, opts);

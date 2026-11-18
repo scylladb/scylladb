@@ -598,19 +598,23 @@ future<> distributed_loader::init_non_system_keyspaces(sharded<replica::database
         // Load the node's intended storage mode from topology.
         // This determines the ERM flavor and resharding direction for tables
         // under vnodes-to-tablets migration.
-        auto topology = [&] {
-            // load_topology_state() reads in pages, so keep group0 from
-            // applying between them.
-            auto holder = group0_client.hold_read_apply_mutex(as).get();
-            return sys_ks.local().load_topology_state({}).get();
-        }();
+        // load_topology_state() reads in pages, so keep group0 from applying between them,
+        // and keep the ring version until every shard parsed the system tables.
+        auto holder = group0_client.hold_read_apply_mutex(as).get();
+        auto topology = sys_ks.local().load_topology_state({}).get();
         auto host_id = db.local().get_token_metadata().get_my_id();
         auto node = topology.normal_nodes.find(raft::server_id{host_id.uuid()});
         std::optional<service::storage_mode> storage_mode = node != topology.normal_nodes.end() ? node->second.intended_storage_mode : std::nullopt;
 
-        db.invoke_on_all([&proxy, &sys_ks, &storage_mode] (replica::database& db) {
+        // Shard 0 first: the other shards must clone its effective replication maps,
+        // since only shard 0's token_metadata has the topology change info.
+        SCYLLA_ASSERT(this_shard_id() == 0);
+        auto parse = [&proxy, &sys_ks, &storage_mode] (replica::database& db) {
             return db.parse_system_tables(proxy, sys_ks, storage_mode);
-        }).get();
+        };
+        parse(db.local()).get();
+        db.invoke_on_others(parse).get();
+        holder.return_all();
 
         const auto& cfg = db.local().get_config();
 

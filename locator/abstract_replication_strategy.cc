@@ -443,6 +443,14 @@ future<mutable_static_effective_replication_map_ptr> calculate_vnode_effective_r
     ring_mapping read_endpoints;
     std::unordered_set<locator::host_id> dirty_endpoints;
 
+    // Cross-shard clones drop the topology change info, so they would yield a map without pending and read replicas.
+    // A replacing node without a ring has none legitimately, so only bootstrap and leave are checked.
+    if (!tmptr->get_topology_change_info() && (!tmptr->get_bootstrap_tokens().empty() || !tmptr->get_leaving_endpoints().empty())) {
+        on_internal_error(rslogger,
+                format("calculate_vnode_effective_replication_map: token_metadata of ring version {} on shard {} has a topology change but no topology change info",
+                        tmptr->get_ring_version(), this_shard_id()));
+    }
+
     const auto depend_on_token = rs->natural_endpoints_depend_on_token();
     const auto& sorted_tokens = tmptr->sorted_tokens();
     replication_map.reserve(depend_on_token ? sorted_tokens.size() : 1);
