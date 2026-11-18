@@ -104,11 +104,26 @@ static bool is_not_found(const std::exception_ptr& ex) {
     }
 }
 
+// An error from the operating system (EMFILE, EIO, ...), which can pass
+// without any trust file changing, unlike a bundle whose content is wrong.
+static bool is_os_error(const std::exception_ptr& ex) {
+    try {
+        std::rethrow_exception(ex);
+    } catch (const std::system_error& e) {
+        return e.code().category() == std::system_category() || e.code().category() == std::generic_category();
+    } catch (...) {
+        return false;
+    }
+}
+
 // What add_host_trust() put into the builder, and what went wrong on the
 // way.
 struct host_trust {
     sstring source;
     std::vector<sstring> problems;
+    // The system trust store was taken because of an error that may pass;
+    // the bundle is worth trying again even if no trust file changes.
+    bool retry = false;
 };
 
 // p11-kit can distrust a certificate, an intermediate for instance, which a
@@ -158,6 +173,7 @@ static future<bool> host_distrusts_certificates(host_trust& result) {
         } catch (...) {
             if (auto ex = std::current_exception(); !is_not_found(ex)) {
                 result.problems.push_back(fmt::format("Could not list {}: {}", dir, ex));
+                result.retry = is_os_error(ex);
                 co_return true;
             }
         }
@@ -230,6 +246,7 @@ static future<bool> host_trust_sources_may_distrust(host_trust& result) {
         } catch (...) {
             if (auto ex = std::current_exception(); !is_not_found(ex)) {
                 result.problems.push_back(fmt::format("Could not list {}: {}", dir, ex));
+                result.retry = is_os_error(ex);
                 co_return true;
             }
             continue;
@@ -251,6 +268,7 @@ static future<bool> host_trust_sources_may_distrust(host_trust& result) {
                 // read either.
                 if (auto ex = std::current_exception(); !is_not_found(ex)) {
                     result.problems.push_back(fmt::format("Could not read {}: {}", path, ex));
+                    result.retry = is_os_error(ex);
                     co_return true;
                 }
             }
@@ -331,6 +349,7 @@ static future<host_trust> add_host_trust(tls::credentials_builder& builder) {
             // Any error makes the bundle unusable; only its absence is expected.
             if (auto ex = std::current_exception(); !is_not_found(ex)) {
                 result.problems.push_back(fmt::format("Could not load the CA trust list from {}: {}", path, ex));
+                result.retry = result.retry || is_os_error(ex);
             }
             continue;
         }
@@ -338,6 +357,7 @@ static future<host_trust> add_host_trust(tls::credentials_builder& builder) {
             builder.set_x509_trust(certificate, tls::x509_crt_format::PEM);
         }
         result.source = fmt::format("Loaded {} trusted certificates from {}", certificates.size(), path);
+        result.retry = false;
         co_return result;
     }
     result.source = "No usable CA bundle file, using the system trust store";
@@ -353,8 +373,63 @@ future<> utils::http::add_system_trust(tls::credentials_builder& builder) {
     trust_log.info("{}", result.source);
 }
 
+// What the trust store was built from: the stat of every bundle path, of the
+// blocklist and trust source directories, and of every entry in the trust
+// source directories, since a file edited in place leaves its directory
+// unchanged; nothing for one that does not exist. p11-kit
+// re-reads the host's trust when it changes on disk, so trust changes take
+// effect without a restart; a change of this fingerprint does the same for
+// the in-memory trust list.
+using trust_fingerprint = std::vector<std::optional<std::tuple<uint64_t, uint64_t,
+        std::chrono::system_clock::time_point, std::chrono::system_clock::time_point>>>;
+
+static future<trust_fingerprint> read_trust_fingerprint() {
+    trust_fingerprint fingerprint;
+    auto add = [&fingerprint] (const char* path) -> future<> {
+        try {
+            auto st = co_await file_stat(path);
+            fingerprint.emplace_back(std::tuple(st.inode_number, st.size, st.time_modified, st.time_changed));
+        } catch (...) {
+            fingerprint.emplace_back(std::nullopt);
+        }
+    };
+    for (auto path : all_bundles) {
+        co_await add(path);
+    }
+    for (auto dir : p11_kit_blocklist_dirs) {
+        co_await add(dir);
+    }
+    for (auto dir : p11_kit_source_dirs) {
+        co_await add(dir);
+        try {
+            for (const auto& name : co_await list_directory_names(dir)) {
+                auto path = fmt::format("{}/{}", dir, name);
+                co_await add(path.c_str());
+            }
+        } catch (...) {
+            fingerprint.emplace_back(std::nullopt);
+        }
+    }
+    co_return fingerprint;
+}
+
+// How often the host's trust files are checked for changes. A change reaches
+// new connections within this long.
+static constexpr auto trust_check_interval = std::chrono::seconds(10);
+
 struct system_trust_cache {
     shared_ptr<tls::certificate_credentials> credentials;
+    // Empty after an error that may pass, which no fingerprint matches, so
+    // that the next check loads again.
+    trust_fingerprint fingerprint;
+    // The last failure to build credentials, logged once.
+    sstring build_error;
+    lowres_clock::time_point last_check;
+    // What the last check saw, and what was logged for the current
+    // credentials, so that a check finding the same is not logged again.
+    trust_fingerprint seen;
+    sstring source;
+    std::vector<sstring> problems;
     // Taken by the fiber doing the first load, so that the others wait for
     // its result instead of each loading the bundle again.
     semaphore first_load{1};
@@ -362,16 +437,75 @@ struct system_trust_cache {
 
 static thread_local system_trust_cache system_trust;
 
+// Rebuilds the credentials if the host's trust files changed since they were
+// built, or the last load hit an error that may pass. What the load built is
+// installed even then: the current credentials are outdated if the files
+// changed, and already the system trust store otherwise. Only when nothing
+// can be built are the current credentials kept; a failed first load throws.
+static future<> refresh_system_trust(system_trust_cache& trust) {
+    auto fingerprint = co_await read_trust_fingerprint();
+    if (trust.credentials && fingerprint == trust.fingerprint) {
+        co_return;
+    }
+    bool changed = trust.credentials && !trust.fingerprint.empty() && fingerprint != trust.seen;
+    trust.seen = fingerprint;
+    if (changed) {
+        trust_log.info("The host's trust store changed, reloading it");
+    }
+    shared_ptr<tls::certificate_credentials> credentials;
+    host_trust loaded;
+    try {
+        tls::credentials_builder builder;
+        loaded = co_await add_host_trust(builder);
+        credentials = builder.build_certificate_credentials();
+    } catch (...) {
+        if (!trust.credentials) {
+            throw;
+        }
+        if (auto error = fmt::format("{}", std::current_exception()); error != trust.build_error) {
+            trust_log.warn("Could not reload the host's trust store, keeping the current one: {}", error);
+            trust.build_error = std::move(error);
+        }
+        co_return;
+    }
+    trust.build_error = {};
+    if (loaded.problems != trust.problems) {
+        for (const auto& problem : loaded.problems) {
+            trust_log.warn("{}", problem);
+        }
+        trust.problems = loaded.problems;
+    }
+    // Still falling back to the system trust store after the same error: the
+    // current credentials already are that, so they are kept rather than
+    // replaced by an equal object at every check.
+    if (loaded.retry && trust.fingerprint.empty() && trust.credentials && loaded.source == trust.source) {
+        co_return;
+    }
+    trust.credentials = std::move(credentials);
+    trust.fingerprint = loaded.retry ? trust_fingerprint{} : std::move(fingerprint);
+    if (changed || loaded.source != trust.source) {
+        trust_log.info("{}", loaded.source);
+        trust.source = std::move(loaded.source);
+    }
+}
+
 future<shared_ptr<tls::certificate_credentials>> utils::http::system_trust_credentials() {
     auto& trust = system_trust;
     if (!trust.credentials) {
         auto units = co_await get_units(trust.first_load, 1);
         if (!trust.credentials) {
-            tls::credentials_builder builder;
-            co_await add_system_trust(builder);
-            trust.credentials = builder.build_certificate_credentials();
+            trust.last_check = lowres_clock::now();
+            co_await refresh_system_trust(trust);
         }
+        co_return trust.credentials;
     }
+    if (lowres_clock::now() - trust.last_check < trust_check_interval) {
+        co_return trust.credentials;
+    }
+    // Set before waiting, so that callers in the meantime keep using the
+    // current credentials rather than all checking at once.
+    trust.last_check = lowres_clock::now();
+    co_await refresh_system_trust(trust);
     co_return trust.credentials;
 }
 
