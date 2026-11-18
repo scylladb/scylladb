@@ -31,6 +31,7 @@ See https://cloud.google.com/storage/docs/performing-resumable-uploads
 
 import argparse
 import contextlib
+import errno
 import http.client
 import json
 import re
@@ -660,6 +661,31 @@ class validating_server(ThreadingHTTPServer):
         super().handle_error(request, client_address)
 
 
+# How many times make_server() tries a fresh kernel-picked port.
+EPHEMERAL_PORT_ATTEMPTS = 10
+
+
+def make_server(address):
+    """Create the server, retrying if a port the kernel picked gets taken.
+
+    HTTPServer sets SO_REUSEADDR, and between bind() and listen() a port so
+    bound can still be bound by another SO_REUSEADDR socket - e.g. a docker or
+    podman port forwarder publishing a container port that tests running in
+    parallel asked for, which picks host ports from the same range. If that
+    socket listens first, our listen() fails with EADDRINUSE. Another port
+    from the kernel is then as good as the first.
+    """
+    port = address[1]
+    for attempt in range(1, EPHEMERAL_PORT_ATTEMPTS + 1):
+        try:
+            return validating_server(address, handler)
+        except OSError as e:
+            if port != 0 or e.errno != errno.EADDRINUSE or attempt == EPHEMERAL_PORT_ATTEMPTS:
+                raise
+            sys.stderr.write(f"Port picked for the GCS upload validator was taken before it listened ({e}), "
+                             f"retrying ({attempt}/{EPHEMERAL_PORT_ATTEMPTS})\n")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--upstream-host", default="127.0.0.1")
@@ -671,7 +697,7 @@ def main():
                     help="port to listen on, 0 to pick a free one")
     args = ap.parse_args()
 
-    srv = validating_server((args.bind_host, args.port), handler)
+    srv = make_server((args.bind_host, args.port))
     srv.upstream_host = args.upstream_host
     srv.upstream_port = args.upstream_port
     srv.public_host = args.bind_host
