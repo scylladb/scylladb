@@ -253,6 +253,10 @@ void cf_prop_defs::validate(const data_dictionary::database db, sstring ks_name,
     }
 
     if (has_property(KW_LARGE_DATA_GUARDRAILS_ENABLED) && get_boolean(KW_LARGE_DATA_GUARDRAILS_ENABLED, false)) {
+        // Not supported yet: SCYLLADB-6585.
+        if (strong_consistency::is_strongly_consistent(db, ks_name)) {
+            throw exceptions::configuration_exception("Large data guardrails are not supported in strongly consistent keyspaces");
+        }
         if (!db.features().large_data_guardrails) {
             throw exceptions::configuration_exception("large_data_guardrails_enabled cannot be used until all nodes in the cluster enable this feature");
         }
