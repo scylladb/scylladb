@@ -25,6 +25,7 @@
 #include "sstables/mx/types.hh"
 #include "sstables/trie/bti_index.hh"
 #include "sstables/trie/bti_index_internal.hh"
+#include "sstables/trie/bti_node_sink.hh"
 #include "schema/schema_builder.hh"
 #include "test/lib/log.hh"
 #include "test/lib/nondeterministic_choice_stack.hh"
@@ -1460,9 +1461,10 @@ SEASTAR_THREAD_TEST_CASE(test_read_row_index_header) {
         {
             sstables::file_writer fw(data_sink(std::make_unique<memory_data_sink>(bufs)));
             auto close_fw = defer([&] noexcept { fw.close(); });
+            sstables::trie::bti_node_sink sink(fw, sstables::trie::BTI_PAGE_SIZE);
             sstables::trie::write_row_index_header(
                 sst_ver,
-                fw,
+                sink,
                 pk,
                 position_to_write,
                 encoding,

@@ -112,10 +112,24 @@ public:
     uint64_t bytes_left_in_page() const;
     // Appends bytes_left_in_page() nul bytes to the file.
     void pad_to_page_boundary();
-    // Returns the position reported by the underlying `file_writer`.
+    // Returns the current position in the file.
     sink_pos pos() const;
-    sstables::file_writer& file_writer();
+
+    // Writes bytes that aren't a trie node (e.g. a row index header).
+    void write_raw(const char* data, size_t n);
+    // Returns the position of the next byte that write_raw() will write.
+    // Use it, not pos(), to record the position of raw bytes.
+    sink_pos raw_pos();
 };
 static_assert(trie_writer_sink<bti_node_sink>);
+
+// Writes raw bytes through bti_node_sink::write_raw().
+// Satisfies the sstables::Writer concept, for the serialization helpers.
+struct bti_raw_writer {
+    bti_node_sink& sink;
+    void write(const char* data, size_t n) {
+        sink.write_raw(data, n);
+    }
+};
 
 } // namespace sstables::trie
