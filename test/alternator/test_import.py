@@ -488,6 +488,35 @@ def test_client_token_reuse(dynamodb):
                     client.import_table(**other)
             wait_for_import(client, initial['ImportArn'])
 
+# The ClientToken check, without an S3 source: the import fails without
+# creating a table (on DynamoDB because the bucket does not exist), and the
+# replays can be checked also after it ended.
+def test_client_token_reuse_of_failed_import(dynamodb):
+    client = dynamodb.meta.client
+    table_name = unique_table_name()
+    kwargs = import_kwargs(unique_bucket_name(), unique_prefix('nowhere'), table_name,
+                           ClientToken=random_string(20))
+    initial = client.import_table(**kwargs)['ImportTableDescription']
+    with delete_table_afterwards(client, table_name):
+        # DescribeImport is not implemented yet, so the replays poll the
+        # import until it ends.
+        deadline = time.time() + (1800 if is_aws(client) else 60)
+        replayed = client.import_table(**kwargs)['ImportTableDescription']
+        while replayed['ImportStatus'] not in TERMINAL_IMPORT_STATUSES:
+            assert time.time() < deadline, 'the import did not end'
+            time.sleep(_poll_interval(client))
+            replayed = client.import_table(**kwargs)['ImportTableDescription']
+        assert replayed['ImportStatus'] == 'FAILED'
+        for member in IMMUTABLE_MEMBERS:
+            assert replayed[member] == initial[member], member
+        other_name = unique_table_name()
+        other = copy_with_member_override(
+            kwargs, 'TableCreationParameters', {'TableName': other_name})
+        with delete_table_afterwards(client, other_name):
+            with pytest.raises(ClientError,
+                               match='ImportConflictException.*Duplicate request'):
+                client.import_table(**other)
+
 # DynamoDB refuses to import into an existing table, whatever the token:
 # botocore generates a different one per call. Alternator deliberately allows
 # the import; see test_import_into_existing_table.

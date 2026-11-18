@@ -372,10 +372,11 @@ schema_ptr alternator_import_from_s3_imports() {
                 // ListImports echo its parameters back to the user, and when the target table did not
                 // exist, the import creates it from its TableCreationParameters.
                 .with_column("request", utf8_type)
-                // The role which called ImportTable; the import creates (if needed) and writes the target table on its behalf
+                // The role which called ImportTable. It is to get the permissions on the table which the
+                // import creates, as with CreateTable (SCYLLADB-4045); the import does not grant them yet.
                 .with_column("requester_role", utf8_type)
                 // Id of the target table (ImportTableDescription.TableId): the id allocated for the new
-                // table when the request was accepted, or the current id of an existing target table
+                // table when the request was accepted, or the current id of an existing target table.
                 .with_column("table_id", uuid_type)
                 // True if the target table existed when the request was accepted (an Alternator
                 // extension). The import then writes into that table and does not create it.
@@ -421,7 +422,8 @@ schema_ptr alternator_import_from_s3_client_tokens() {
                 .with_column("import_arn", utf8_type)
                 // The request this token was used with, as JSON. Needed because repeating a token
                 // with a different TableName is an error (ImportConflictException), so the two
-                // requests have to be compared.
+                // requests have to be compared. It also holds the TableId of the import, as this table
+                // has no table_id column.
                 .with_column("request", utf8_type)
                 // The node which accepted that request, in the format of node_id in alternator_import_from_s3_imports
                 .with_column("node_id", utf8_type)
