@@ -626,6 +626,10 @@ async def test_hints_consistency_during_decommission(manager: ScyllaClusterManag
     })
     # All writes go through node 1, so all hints are stored there.
     cql = await manager.get_cql_exclusive(server1)
+    # The coordinator splits the system keyspaces' tablets and balances them onto the
+    # new nodes; its commits can make the DDL below lose every attempt if node 1 is a
+    # group0 follower.
+    await manager.api.quiesce_topology(server1.ip_addr)
 
     logger.info("Creatting a keyspace with RF=1 and a table")
     ks = await create_new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = { 'enabled': false }")

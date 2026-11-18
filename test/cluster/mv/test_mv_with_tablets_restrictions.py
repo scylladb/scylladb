@@ -55,6 +55,9 @@ async def test_create_mv_and_index_restrictions_in_tablet_keyspaces(manager: Scy
             await cql.run_async(f"CREATE KEYSPACE ks WITH replication = "
                                  f"{{'class': 'NetworkTopologyStrategy', 'dc1': {rf_str}}} "
                                  "AND tablets = {'enabled': true}")
+            # The keyspace makes racks eligible for auto-RF (or lets it give them up); its
+            # commits can make the DDL below lose every attempt on a group0 follower.
+            await manager.api.quiesce_topology(servers[0].ip_addr)
             if schema_kind == "vector":
                 await cql.run_async("CREATE TABLE ks.t (p int PRIMARY KEY, v vector<float, 3>)")
             else:
