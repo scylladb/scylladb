@@ -28,7 +28,8 @@ from test.pylib.encryption_provider import LocalFileSystemKeyProviderFactory
 from test.cluster.util import (check_token_ring_and_group0_consistency,
                                commitlog_sector_has_data, corrupt_commitlog_segment,
                                create_new_test_keyspace, get_commitlog_segment_id,
-                               get_topology_coordinator, keyspace_has_tablets)
+                               get_topology_coordinator, keyspace_has_tablets,
+                               quiesce_and_disable_tablet_balancing, wait_for_auto_rf_settled)
 
 
 logger = logging.getLogger(__name__)
@@ -812,6 +813,11 @@ async def test_canceling_hint_draining(manager: ScyllaClusterManager):
     # A row is hinted towards s2 only if s2 is its rack2 replica. With enough
     # tablets, the load balancer places some of rack2's replicas on s2.
     await cql.run_async("CREATE TABLE ks.t (pk int PRIMARY KEY, v int) WITH tablets = {'min_tablet_count': 8}")
+    # The keyspace makes rack2 eligible, so auto-RF extends the system keyspaces into it.
+    # Let that finish while every node is up, or the removal of s2 below queues behind
+    # a rebuild which may be streaming to the stopped node.
+    await wait_for_auto_rf_settled(manager, time.time() + 120)
+    await manager.api.quiesce_topology(s1.ip_addr)
 
     await manager.server_stop_gracefully(s2.server_id)
     await manager.others_not_see_server(s2.ip_addr)
@@ -1499,6 +1505,10 @@ async def test_support_max_hh_concurrency_param(manager: ScyllaClusterManager,
 
     cql = await manager.get_cql_exclusive(s2)
     await cql.run_async("CREATE KEYSPACE ks WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}")
+    # Auto-RF's commits for the new rack can fail the DDL below, issued on a group0
+    # follower (s2 may be one); let them finish first.
+    await wait_for_auto_rf_settled(manager, time.time() + 120)
+    await manager.api.quiesce_topology(s1.ip_addr)
     await cql.run_async("CREATE TABLE ks.t (pk int PRIMARY KEY, v int)")
 
     await pause_servers(manager, [s1], [s2])
@@ -1572,6 +1582,11 @@ async def test_hints_switch_config_in_runtime_via_http_api(manager: ScyllaCluste
     await cql.run_async("CREATE KEYSPACE ks WITH REPLICATION = "
                         "{'class': 'NetworkTopologyStrategy', 'dc1': 1, 'dc2': 1, 'dc3': 1}")
     await cql.run_async("CREATE TABLE ks.t (pk int PRIMARY KEY, v int)")
+    # Let auto-RF extend the system keyspaces while all nodes are up, then keep the
+    # balancer still: a migration of a ks.t tablet during the hint replay makes the
+    # sender write the hint to every replica, dc2's included.
+    await wait_for_auto_rf_settled(manager, time.time() + 120)
+    await quiesce_and_disable_tablet_balancing(manager, s1.ip_addr)
 
     await pause_servers(manager, [s2, s3], [s1])
 
