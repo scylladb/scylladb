@@ -356,6 +356,27 @@ def test_per_row_ttl_on_sc_table(cql, sc_keyspace):
             cql.execute(f"ALTER TABLE {table} TTL NULL")
 
 
+def test_large_data_guardrails_on_sc_table(cql, sc_keyspace):
+    """
+    large_data_guardrails_enabled must be rejected for tables in strongly
+    consistent keyspaces, at CREATE TABLE and with ALTER TABLE. The limits
+    are checked on the write path of eventually consistent tables, which
+    strongly consistent writes bypass, so none of them would apply.
+    Setting the option to false asks for nothing and is accepted.
+    Reproduces SCYLLADB-2579.
+    """
+    error_msg = "Large data guardrails are not supported in strongly consistent keyspaces"
+
+    with pytest.raises(ConfigurationException, match=error_msg):
+        cql.execute(f"CREATE TABLE {sc_keyspace}.{unique_name()} (pk int PRIMARY KEY, v int)"
+                    " WITH large_data_guardrails_enabled = true")
+
+    with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, v int", " WITH large_data_guardrails_enabled = false") as table:
+        with pytest.raises(ConfigurationException, match=error_msg):
+            cql.execute(f"ALTER TABLE {table} WITH large_data_guardrails_enabled = true")
+        cql.execute(f"ALTER TABLE {table} WITH large_data_guardrails_enabled = false")
+
+
 @pytest.mark.parametrize("columns, options, error, message", [
     pytest.param("pk int PRIMARY KEY, c counter", "",
                  InvalidRequest, "counters are not supported in strongly consistent keyspaces", id="counter"),
@@ -365,6 +386,8 @@ def test_per_row_ttl_on_sc_table(cql, sc_keyspace):
                  ConfigurationException, "Per-row TTL is not supported in strongly consistent keyspaces", id="ttl_column"),
     pytest.param("pk int PRIMARY KEY, e bigint", "WITH scylla_tags = {'system:ttl_attribute': 'e'}",
                  ConfigurationException, "Per-row TTL is not supported in strongly consistent keyspaces", id="ttl_tag"),
+    pytest.param("pk int PRIMARY KEY, v int", "WITH large_data_guardrails_enabled = true",
+                 ConfigurationException, "Large data guardrails are not supported in strongly consistent keyspaces", id="guardrails"),
 ])
 def test_prepared_create_table_after_keyspace_recreated(cql, sc_keyspace, columns, options, error, message):
     """
