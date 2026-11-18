@@ -152,8 +152,10 @@ static bool is_password_empty(const sstring& password) {
     return password.size() == 1 && password[0] == static_cast<char>(-1);
 }
 
-/// Removes single-quoted passwords - plaintext, or hashed (HASHED PASSWORD).
-static void sanitize_audit_info_password(audit::audit_info* ai, const sstring& raw_password) {
+/// Returns `text` with the single-quoted plaintext or hashed password
+/// `raw_password` replaced by '***'. A hashed password is a secret as well:
+/// it is the Alternator secret access key of the role.
+static sstring mask_password(const sstring& text, const sstring& raw_password) {
     sstring password;
     if (!is_password_empty(raw_password)) {
         // Password needs escaping to be searchable literally:
@@ -161,12 +163,11 @@ static void sanitize_audit_info_password(audit::audit_info* ai, const sstring& r
     }
     const std::regex re(R"(((WITH|AND)\s*(HASHED\s+)?PASSWORD\s*=?\s*)')" + std::string(password) + "'",
             std::regex_constants::ECMAScript | std::regex_constants::icase);
-    const auto replace_result = std::regex_replace(ai->query().c_str(), re, "$1'***'");
-    ai->set_query_string(static_cast<std::string_view>(replace_result));
+    return std::regex_replace(text.c_str(), re, "$1'***'");
 }
 
-/// A heuristic to mask the values of `OPTIONS' map when key is like "PASSWORD".
-static void sanitize_audit_info_options(audit::audit_info* ai, const std::map<sstring,sstring>& options) {
+/// A heuristic to mask the values of `OPTIONS' map in `text` when key is like "PASSWORD".
+static sstring mask_password_options(sstring text, const std::map<sstring,sstring>& options) {
     for (const auto& [k, v] : options) {
         const auto key_trimmed = boost::trim_copy(k);
         if (!boost::iequals(key_trimmed, "PASSWORD")) { // Case-insensitive comp.
@@ -181,23 +182,22 @@ static void sanitize_audit_info_options(audit::audit_info* ai, const std::map<ss
         //   capture "' PassWord ' : " and match "'1234vcxz!@#$'"
         const std::regex re(R"(('\s*)" + std::string(key_trimmed) + R"(\s*'\s*:\s*)')"
                 + std::string(password) + "'", std::regex_constants::ECMAScript);
-        const auto replace_result = std::regex_replace(ai->query().c_str(), re, "$1'***'");
-        ai->set_query_string(static_cast<std::string_view>(replace_result));
+        text = std::regex_replace(text.c_str(), re, "$1'***'");
     }
+    return text;
 }
 
-void create_role_statement::sanitize_audit_info() {
-    if (audit::audit_info* ai = get_audit_info(); ai != nullptr) {
-        if (_options.password) {
-            sanitize_audit_info_password(ai, *_options.password);
-        }
-        if (_options.hashed_password) {
-            sanitize_audit_info_password(ai, *_options.hashed_password);
-        }
-        if (_options.options) {
-            sanitize_audit_info_options(ai, *_options.options);
-        }
+sstring create_role_statement::mask_secrets(sstring text) const {
+    if (_options.password) {
+        text = mask_password(text, *_options.password);
     }
+    if (_options.hashed_password) {
+        text = mask_password(text, *_options.hashed_password);
+    }
+    if (_options.options) {
+        text = mask_password_options(std::move(text), *_options.options);
+    }
+    return text;
 }
 
 //
@@ -275,18 +275,17 @@ alter_role_statement::execute(query_processor&, service::query_state& state, con
     co_return nullptr;
 }
 
-void alter_role_statement::sanitize_audit_info() {
-    if (audit::audit_info* ai = get_audit_info(); ai != nullptr) {
-        if (_options.password) {
-            sanitize_audit_info_password(ai, *_options.password);
-        }
-        if (_options.hashed_password) {
-            sanitize_audit_info_password(ai, *_options.hashed_password);
-        }
-        if (_options.options) {
-            sanitize_audit_info_options(ai, *_options.options);
-        }
+sstring alter_role_statement::mask_secrets(sstring text) const {
+    if (_options.password) {
+        text = mask_password(text, *_options.password);
     }
+    if (_options.hashed_password) {
+        text = mask_password(text, *_options.hashed_password);
+    }
+    if (_options.options) {
+        text = mask_password_options(std::move(text), *_options.options);
+    }
+    return text;
 }
 
 //
