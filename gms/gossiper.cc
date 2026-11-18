@@ -551,7 +551,7 @@ void gossiper::init_messaging_service_handler() {
         auto from_hid = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
         return handle_echo_msg(from_hid, timeout, generation_number_opt, notify_up_opt.value_or(false));
     });
-    ser::gossip_rpc_verbs::register_gossip_shutdown(&_messaging, [this] (const rpc::client_info& cinfo, inet_address from, rpc::optional<int64_t> generation_number_opt) {
+    ser::gossip_rpc_verbs::register_gossip_shutdown(&_messaging, [this] (const rpc::client_info& cinfo, rpc::opt_time_point, inet_address from, rpc::optional<int64_t> generation_number_opt) {
         auto from_hid = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
         return background_msg("GOSSIP_SHUTDOWN", [from_hid, generation_number_opt] (gms::gossiper& gossiper) {
             return gossiper.handle_shutdown_msg(from_hid, generation_number_opt);
@@ -2353,11 +2353,20 @@ future<> gossiper::do_stop_gossiping() {
                 "gossiper_pause_after_shutdown_announce", utils::wait_for_message(60s));
 
         auto live_endpoints = _live_endpoints;
-        co_await coroutine::parallel_for_each(live_endpoints, [this, &local_generation] (locator::host_id id) -> future<> {
+        // The announcement is best-effort. Without a deadline a send to a peer
+        // that is live in our view but unreachable waits for the connection
+        // to be established or to fail, minutes or never.
+        auto deadline = netw::messaging_service::clock_type::now() + std::chrono::seconds(2);
+        co_await coroutine::parallel_for_each(live_endpoints, [this, &local_generation, deadline] (locator::host_id id) -> future<> {
             logger.info("Sending a GossipShutdown to {} with generation {}", id, local_generation);
             try {
-                co_await ser::gossip_rpc_verbs::send_gossip_shutdown(&_messaging, id, get_broadcast_address(), local_generation.value());
-                logger.trace("Got GossipShutdown Reply");
+                co_await ser::gossip_rpc_verbs::send_gossip_shutdown(&_messaging, id, deadline, get_broadcast_address(), local_generation.value());
+                // An expired one-way send resolves successfully, unsent.
+                if (netw::messaging_service::clock_type::now() >= deadline) {
+                    logger.warn("GossipShutdown to {} was not sent before the deadline", id);
+                } else {
+                    logger.trace("Sent a GossipShutdown to {}", id);
+                }
             } catch (...) {
                 logger.warn("Fail to send GossipShutdown to {}: {:t}", id, std::current_exception());
             }

@@ -110,7 +110,7 @@ public:
             return make_ready_future<rpc::no_wait_type>(netw::messaging_service::no_wait());
         });
 
-        ser::gossip_rpc_verbs::register_gossip_shutdown(&ms, [] (const rpc::client_info& cinfo, inet_address from, rpc::optional<int64_t> generation_number_opt) {
+        ser::gossip_rpc_verbs::register_gossip_shutdown(&ms, [] (const rpc::client_info& cinfo, rpc::opt_time_point, inet_address from, rpc::optional<int64_t> generation_number_opt) {
             test_logger.info("Server got shutdown msg = {}", from);
             return make_ready_future<rpc::no_wait_type>(netw::messaging_service::no_wait());
         });
@@ -150,7 +150,7 @@ public:
         test_logger.info("=== {} ===", __func__);
         inet_address from("127.0.0.1");
         int64_t gen = 0x1;
-        return ser::gossip_rpc_verbs::send_gossip_shutdown(&ms, _server_id, from, gen).then([] () {
+        return ser::gossip_rpc_verbs::send_gossip_shutdown(&ms, _server_id, netw::messaging_service::clock_type::now() + std::chrono::seconds(2), from, gen).then([] () {
             test_logger.info("Client sent gossip_shutdown got reply = void");
             return make_ready_future<>();
         });
