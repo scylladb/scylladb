@@ -157,6 +157,93 @@ def test_infinite_loop(cql, test_keyspace, table1, scylla_with_wasm_only):
         elapsed_s = time.monotonic() - start
         print(f"Breaking the loop took {elapsed_s*1000:.2f}ms")
 
+# A module whose function, taking and returning an int, runs the given body,
+# with a memory of one page and the given extra declarations.
+def int_function_module(name, body, extra=''):
+    return f'''
+(module
+  (func ${name} (param i32) (result i32)
+{body})
+  (memory (;0;) 1)
+  (global (;0;) i32 (i32.const 0))
+{extra}
+  (export "memory" (memory 0))
+  (export "{name}" (func ${name}))
+  (export "_scylla_abi" (global 0)))
+'''
+
+# Test that a function which calls itself forever fails with an error once
+# it exhausts its stack.
+def test_infinite_recursion(cql, test_keyspace, table1, scylla_with_wasm_only):
+    name = 'recursion_' + unique_name()
+    source = int_function_module(name, f'    local.get 0\n    call ${name}')
+    src = f"(input int) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE wasm AS '{source}'"
+    with new_function(cql, test_keyspace, src, name):
+        cql.execute(f'INSERT INTO {table1} (p, i) VALUES (4000, 1)')
+        with pytest.raises(InvalidRequest, match='call stack exhausted'):
+            cql.execute(f'SELECT {test_keyspace}.{name}(i) AS result FROM {table1} WHERE p = 4000')
+
+# Test that a function with very deeply nested blocks can be created and
+# called.
+def test_deeply_nested_blocks(cql, test_keyspace, table1, scylla_with_wasm_only):
+    name = 'nested_' + unique_name()
+    n = 10000
+    source = int_function_module(name, '    ' + '(block ' * n + ')' * n + '\n    local.get 0')
+    src = f"(input int) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE wasm AS '{source}'"
+    with new_function(cql, test_keyspace, src, name):
+        cql.execute(f'INSERT INTO {table1} (p, i) VALUES (4001, 17)')
+        res = list(cql.execute(f'SELECT {test_keyspace}.{name}(i) AS result FROM {table1} WHERE p = 4001'))
+        assert len(res) == 1 and res[0].result == 17
+
+# Test that a module declaring a huge table is rejected when the function is
+# created.
+def test_huge_table(cql, test_keyspace, scylla_with_wasm_only):
+    name = 'huge_table_' + unique_name()
+    source = int_function_module(name, '    local.get 0', '  (table (;0;) 1000000000 funcref)')
+    with pytest.raises(InvalidRequest, match='Compilation failed'):
+        cql.execute(f"CREATE FUNCTION {test_keyspace}.{name} (input int) RETURNS NULL ON NULL INPUT "
+                f"RETURNS int LANGUAGE wasm AS '{source}'")
+
+# Test that the table.grow instruction fails, returning -1, when trying to
+# grow a table hugely, but a small growth succeeds. The function grows its
+# table by its argument, and returns table.grow's result.
+def test_table_grow(cql, test_keyspace, scylla_with_wasm_only):
+    name = 'table_grow_' + unique_name()
+    source = int_function_module(name, '    ref.null func\n    local.get 0\n    table.grow 0',
+                                 '  (table (;0;) 1 funcref)')
+    src = f"(input int) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE wasm AS '{source}'"
+    with new_function(cql, test_keyspace, src, name):
+        # Check that growing the table by a billion elements fails
+        res = list(cql.execute(f'SELECT {test_keyspace}.{name}(1000000000) AS result FROM system.local'))
+        assert len(res) == 1 and res[0].result == -1
+        # Check that growing the table by 10 elements succeeds, returning the
+        # previous size (which isn't -1)
+        res = list(cql.execute(f'SELECT {test_keyspace}.{name}(10) AS result FROM system.local'))
+        assert len(res) == 1 and res[0].result >= 1
+
+# Test that a module may have more than one memory.
+def test_multiple_memories(cql, test_keyspace, table1, scylla_with_wasm_only):
+    name = 'two_memories_' + unique_name()
+    source = int_function_module(name, '    local.get 0', '  (memory (;1;) 1)')
+    src = f"(input int) RETURNS NULL ON NULL INPUT RETURNS int LANGUAGE wasm AS '{source}'"
+    with new_function(cql, test_keyspace, src, name):
+        cql.execute(f'INSERT INTO {table1} (p, i) VALUES (4004, 17)')
+        res = list(cql.execute(f'SELECT {test_keyspace}.{name}(i) AS result FROM {table1} WHERE p = 4004'))
+        assert len(res) == 1 and res[0].result == 17
+
+# Test that the memory limit (wasm_udf_memory_limit) applies to the total
+# size of a module's memories: a module whose two memories are each within
+# the limit, but together exceed it, is rejected when the function is created.
+def test_multiple_memories_over_limit(cql, test_keyspace, scylla_with_wasm_only):
+    limit = int(list(cql.execute("SELECT value FROM system.config WHERE name = 'wasm_udf_memory_limit'"))[0].value)
+    limit_pages = limit // 0x10000
+    name = 'two_memories_' + unique_name()
+    # The first memory has 1 page, so the total is one page over the limit
+    source = int_function_module(name, '    local.get 0', f'  (memory (;1;) {limit_pages})')
+    with pytest.raises(InvalidRequest, match='Compilation failed'):
+        cql.execute(f"CREATE FUNCTION {test_keyspace}.{name} (input int) RETURNS NULL ON NULL INPUT "
+                f"RETURNS int LANGUAGE wasm AS '{source}'")
+
 # Test a wasm function which decreases given double by 1
 def test_f64_param(cql, test_keyspace, table1, scylla_with_wasm_only):
     table = table1

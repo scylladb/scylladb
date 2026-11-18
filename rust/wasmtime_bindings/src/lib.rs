@@ -107,7 +107,7 @@ pub struct Instance {
 
 fn create_instance(engine: &Engine, module: &Module, store: &mut Store) -> Result<Box<Instance>> {
     let mut linker = wasmtime::Linker::new(&engine.wasmtime_engine);
-    wasmtime_wasi::preview1::add_to_linker_async(&mut linker, |s| s).context("Failed to add wasi to linker")?;
+    wasmtime_wasi::preview1::add_to_linker_async(&mut linker, |s: &mut StoreData| &mut s.wasi).context("Failed to add wasi to linker")?;
     let wasmtime_module = module
         .wasmtime_module
         .as_ref()
@@ -186,13 +186,78 @@ impl Module {
     }
 }
 
+struct StoreData {
+    wasi: wasmtime_wasi::preview1::WasiP1Ctx,
+    limiter: Limiter,
+}
+
+// The memory limit (wasm_udf_memory_limit) applies to each memory, but a
+// module may have several memories, and also tables, which wasmtime allocates
+// itself (not through ScyllaMemoryCreator) - and if such an allocation fails,
+// Rust aborts Scylla. So Limiter limits the total size of a UDF's memories to
+// the memory limit, and the total size of its tables to the same amount.
+// With this limiter, creating too large memories or tables fails instantiation,
+// and the memory.grow and table.grow instructions return -1 instead of growing
+// beyond the limit.
+struct Limiter {
+    max_size: usize,
+    memories_size: usize,
+    tables_size: usize,
+    // The size added by the last allowed growth, undone if it fails
+    last_memory_growth: usize,
+    last_table_growth: usize,
+}
+
+// The size of a table element (a pointer to a function, or a reference)
+const TABLE_ELEMENT_SIZE: usize = 8;
+
+impl Limiter {
+    // Allow growing an item from current to desired bytes if the total stays
+    // within the limit
+    fn grow(max_size: usize, total: &mut usize, last_growth: &mut usize, current: usize, desired: usize) -> bool {
+        let growth = desired.saturating_sub(current);
+        if growth > max_size - *total {
+            return false;
+        }
+        *total += growth;
+        *last_growth = growth;
+        true
+    }
+}
+
+impl wasmtime::ResourceLimiter for Limiter {
+    fn memory_growing(&mut self, current: usize, desired: usize, _maximum: Option<usize>) -> Result<bool> {
+        Ok(Limiter::grow(self.max_size, &mut self.memories_size, &mut self.last_memory_growth, current, desired))
+    }
+    fn memory_grow_failed(&mut self, _error: anyhow::Error) -> Result<()> {
+        self.memories_size -= self.last_memory_growth;
+        Ok(())
+    }
+    fn table_growing(&mut self, current: u32, desired: u32, _maximum: Option<u32>) -> Result<bool> {
+        Ok(Limiter::grow(self.max_size, &mut self.tables_size, &mut self.last_table_growth,
+                (current as usize).saturating_mul(TABLE_ELEMENT_SIZE), (desired as usize).saturating_mul(TABLE_ELEMENT_SIZE)))
+    }
+    fn table_grow_failed(&mut self, _error: anyhow::Error) -> Result<()> {
+        self.tables_size -= self.last_table_growth;
+        Ok(())
+    }
+}
+
 pub struct Store {
-    wasmtime_store: wasmtime::Store<wasmtime_wasi::preview1::WasiP1Ctx>,
+    wasmtime_store: wasmtime::Store<StoreData>,
 }
 
 fn create_store(engine: &mut Engine, total_fuel: u64, yield_fuel: u64) -> Result<Box<Store>> {
     let wasi = wasmtime_wasi::WasiCtxBuilder::new().build_p1();
-    let mut store = wasmtime::Store::new(&engine.wasmtime_engine, wasi);
+    let limiter = Limiter {
+        max_size: engine.max_size,
+        memories_size: 0,
+        tables_size: 0,
+        last_memory_growth: 0,
+        last_table_growth: 0,
+    };
+    let mut store = wasmtime::Store::new(&engine.wasmtime_engine, StoreData { wasi, limiter });
+    store.limiter(|data| &mut data.limiter);
     store.set_fuel(total_fuel)?;
     store.fuel_async_yield_interval(Some(yield_fuel))?;
     Ok(Box::new(Store {
@@ -254,6 +319,8 @@ fn get_abi(instance: &Instance, store: &mut Store, memory: &Memory) -> Result<u3
 
 pub struct Engine {
     wasmtime_engine: wasmtime::Engine,
+    // The maximum size of a module's memory
+    max_size: usize,
 }
 
 fn create_engine(max_size: u32) -> Result<Box<Engine>> {
@@ -277,6 +344,7 @@ fn create_engine(max_size: u32) -> Result<Box<Engine>> {
         wasmtime::Engine::new(&config).map_err(|e| anyhow!("Failed to create engine: {:?}", e))?;
     Ok(Box::new(Engine {
         wasmtime_engine: engine,
+        max_size: max_size as usize,
     }))
 }
 
@@ -300,6 +368,7 @@ fn create_test_engine(max_size: u32, fail_after: usize) -> Result<Box<Engine>> {
         wasmtime::Engine::new(&config).map_err(|e| anyhow!("Failed to create engine: {:?}", e))?;
     Ok(Box::new(Engine {
         wasmtime_engine: engine,
+        max_size: max_size as usize,
     }))
 }
 
