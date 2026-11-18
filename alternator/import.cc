@@ -50,9 +50,12 @@ static bool is_terminal_status(std::string_view status) {
 
 // ClientToken must match the pattern DynamoDB documents for it, ^[^$]+$:
 // at least one character, none of which is '$'. The caller already
-// refuses an empty one.
+// refuses an empty one. The token is also the partition key of the client
+// token table, where a long key makes the insert fail, so its length (in
+// bytes) is kept well below the limit of a key.
+static constexpr size_t max_client_token_length = 1024;
 static bool is_valid_client_token(std::string_view client_token) {
-    return !client_token.contains('$');
+    return !client_token.contains('$') && client_token.size() <= max_client_token_length;
 }
 
 // Like ExportTableToPointInTime, only check that S3Bucket is a non-empty
@@ -118,7 +121,8 @@ import_table_request parse_import_table_request(const rjson::value& request, con
     // Documented as optional, but DynamoDB requires it.
     auto client_token = get_non_empty_string_attribute(request, "ClientToken");
     if (!is_valid_client_token(client_token)) {
-        throw api_error::validation("ClientToken attribute: value does not match the required pattern ^[^$]+$");
+        throw api_error::validation(fmt::format("ClientToken attribute: value does not match the required pattern ^[^$]+$, "
+                "or is longer than {} bytes", max_client_token_length));
     }
 
     // FIXME: CSV and ION are not supported yet.

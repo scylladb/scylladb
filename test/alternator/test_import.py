@@ -579,6 +579,22 @@ def test_client_token_invalid(dynamodb):
         with pytest.raises(ClientError, match='ValidationException.*[Cc]lientToken'):
             dynamodb.meta.client.import_table(**kwargs)
 
+# Alternator refuses a ClientToken longer than 1024 bytes - the token is the
+# partition key of an internal table - while DynamoDB documents no maximum.
+# The limit is in bytes: 342 three-byte characters are 1026 bytes. A token of
+# exactly 1024 bytes is accepted.
+def test_client_token_too_long(dynamodb, scylla_only):
+    for token in ['x' * 1025, '\u65e5' * 342]:
+        kwargs = import_kwargs(unique_bucket_name(), unique_prefix('unused'),
+                               ClientToken=token)
+        with pytest.raises(ClientError, match='ValidationException.*[Cc]lientToken.*1024 bytes'):
+            dynamodb.meta.client.import_table(**kwargs)
+    # A random token: an accepted one is kept for 8 hours, and a run of the
+    # test on the same server within them would replay it with another table.
+    kwargs = import_kwargs(unique_bucket_name(), unique_prefix('unused'),
+                           ClientToken=random_string(1024))
+    dynamodb.meta.client.import_table(**kwargs)
+
 # A well-formed ARN of an import which does not exist.
 def unknown_import_arn(table):
     return f'{get_table_arn(table)}/import/{int(time.time() * 1000):014}-0badf00d'
