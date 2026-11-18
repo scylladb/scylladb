@@ -208,8 +208,8 @@ public:
     };
 public:
     struct stats {
-        utils::timed_rate_moving_average hits;
-        utils::timed_rate_moving_average misses;
+        uint64_t hits = 0;
+        uint64_t misses = 0;
         utils::timed_rate_moving_average reads_with_misses;
         utils::timed_rate_moving_average reads_with_no_misses;
     };

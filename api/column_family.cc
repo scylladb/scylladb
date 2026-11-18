@@ -1046,7 +1046,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
 
     cf::get_row_cache_hit.set(r, [&db] (std::unique_ptr<http::request> req) {
         return map_reduce_cf_raw(db, req->get_path_param("name"), utils::rate_moving_average(), [](const replica::column_family& cf) {
-            return cf.get_row_cache().stats().hits.rate();
+            return utils::rate_moving_average{.count = cf.get_row_cache().stats().hits};
         }, std::plus<utils::rate_moving_average>()).then([](const utils::rate_moving_average& m) {
             return make_ready_future<json::json_return_type>(meter_to_json(m));
         });
@@ -1054,7 +1054,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
 
     cf::get_all_row_cache_hit.set(r, [&db] (std::unique_ptr<http::request> req) {
         return map_reduce_cf_raw(db, utils::rate_moving_average(), [](const replica::column_family& cf) {
-            return cf.get_row_cache().stats().hits.rate();
+            return utils::rate_moving_average{.count = cf.get_row_cache().stats().hits};
         }, std::plus<utils::rate_moving_average>()).then([](const utils::rate_moving_average& m) {
             return make_ready_future<json::json_return_type>(meter_to_json(m));
         });
@@ -1062,7 +1062,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
 
     cf::get_row_cache_miss.set(r, [&db] (std::unique_ptr<http::request> req) {
         return map_reduce_cf_raw(db, req->get_path_param("name"), utils::rate_moving_average(), [](const replica::column_family& cf) {
-            return cf.get_row_cache().stats().misses.rate();
+            return utils::rate_moving_average{.count = cf.get_row_cache().stats().misses};
         }, std::plus<utils::rate_moving_average>()).then([](const utils::rate_moving_average& m) {
             return make_ready_future<json::json_return_type>(meter_to_json(m));
         });
@@ -1070,7 +1070,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
 
     cf::get_all_row_cache_miss.set(r, [&db] (std::unique_ptr<http::request> req) {
         return map_reduce_cf_raw(db, utils::rate_moving_average(), [](const replica::column_family& cf) {
-            return cf.get_row_cache().stats().misses.rate();
+            return utils::rate_moving_average{.count = cf.get_row_cache().stats().misses};
         }, std::plus<utils::rate_moving_average>()).then([](const utils::rate_moving_average& m) {
             return make_ready_future<json::json_return_type>(meter_to_json(m));
         });
