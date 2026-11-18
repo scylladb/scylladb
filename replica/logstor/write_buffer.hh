@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <memory>
+#include <utility>
 #include <vector>
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/future.hh>
@@ -118,21 +119,28 @@ struct buffered_write_result {
     future<record_location_with_holder> persisted;
 };
 
-// Builds one chunk in memory.
+// Builds one chunk in memory, in a buffer of buffer_size() bytes:
 //
-// Callers append log records one by one and then seal the buffer with a target
-// segment sequence number, which completes the chunk, before writing it out. The
-// chunk's layout is:
-//   chunk_header
-//   (segment_header)?                 // for segment_kind::full only
-//   record_frame_header + record_header (fixed fields + partition key) + record value
-//   ...
-//   zero padding to the requested final alignment
+//   0                     +------------------+
+//                         |   chunk header   |  seal()
+//   chunk_header_size()   +------------------+
+//                         |   record frame   |  append(), one frame per record,
+//                         |   record frame   |  each padded to record_alignment
+//                         |       ...        |
+//   + records_size        +------------------+
+//                         |   zero padding   |  seal(), to the alignment it is given
+//   serialized_size()     +------------------+
+//                         |      unused      |
+//   buffer_size()         +------------------+
 //
-// Each record frame is padded to record_alignment. For a full segment's chunk,
-// the segment header stores the owning table and the min/max token range of the
-// appended records. This type is serialization-only and is used directly by tests
-// and internally by write_buffer.
+// reset() reserves the space for the header, so the records start at chunk_header_size().
+// The header of a full segment also holds the table and the token range of the records. The
+// record frames are the body of the chunk, which the body CRC covers.
+//
+// seal() pads the chunk and then writes the header, because it holds the size and the CRC of
+// the body, and the sequence number of the segment that receives the chunk.
+//
+// This type only serializes a chunk. Tests and write_buffer use it directly.
 class raw_write_buffer {
 public:
 
@@ -153,9 +161,7 @@ private:
     aligned_buffer_type _buffer;
     segment_kind _segment_kind;
     ostream _stream;
-    ondisk::chunk_header _chunk_header;
     ostream _header_stream;
-    ostream _segment_header_stream;
 
     // The frame sizes of the appended records summed, their padding excluded.
     size_t _record_bytes{0};
@@ -197,7 +203,7 @@ public:
     // empty buffer of this size and kind. The kinds differ in what they carry ahead of their
     // records, so a record can fit a buffer of one kind and not of the other.
     static constexpr size_t max_record_size(size_t buffer_size, segment_kind kind) noexcept {
-        const size_t overhead = chunk_headers_size(kind) + ondisk::record_frame_header_size;
+        const size_t overhead = ondisk::chunk_header_size(kind) + ondisk::record_frame_header_size;
         return buffer_size > overhead ? buffer_size - overhead : 0;
     }
 
@@ -227,25 +233,11 @@ public:
     // How many segments of this kind `record_count` records of `record_bytes` bytes take.
     static size_t estimate_required_segments(size_t record_bytes, size_t record_count, size_t segment_size, segment_kind);
 
-    bool with_segment_header() const noexcept {
-        return _segment_kind == segment_kind::full;
+    size_t chunk_header_size() const noexcept {
+        return ondisk::chunk_header_size(_segment_kind);
     }
 
-    // What a chunk of this kind carries ahead of its records: the chunk header, and the
-    // segment header too for a full segment.
-    static constexpr size_t chunk_headers_size(segment_kind kind) noexcept {
-        size_t s = ondisk::chunk_header_size;
-        if (kind == segment_kind::full) {
-            s += ondisk::segment_header_size;
-        }
-        return s;
-    }
-
-    size_t chunk_headers_size() const noexcept {
-        return chunk_headers_size(_segment_kind);
-    }
-
-    // Completes the chunk: pads it to `alignment` and writes its headers. `table` is set for
+    // Completes the chunk: pads it to `alignment` and writes its header. `table` is set for
     // segment_kind::full.
     void seal(segment_sequence segment_seq, std::optional<table_id> table, size_t alignment);
 
@@ -255,7 +247,7 @@ public:
 private:
 
     // table is set for segment_kind::full
-    void write_header(segment_sequence segment_seq, std::optional<table_id> table);
+    void write_header(segment_sequence segment_seq, std::optional<table_id> table, uint32_t records_size);
 
     void pad_to_alignment(size_t alignment);
 
@@ -344,7 +336,13 @@ public:
 
 private:
     bool with_record_copy() const noexcept {
-        return _raw.kind() == segment_kind::mixed;
+        switch (_raw.kind()) {
+        case segment_kind::mixed:
+            return true;
+        case segment_kind::full:
+            return false;
+        }
+        std::unreachable();
     }
 
     std::vector<record_in_buffer> take_separator_records();

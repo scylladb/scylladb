@@ -23,23 +23,11 @@
 
 namespace replica::logstor {
 
-struct segment_info {
-    segment_kind kind;
-    segment_sequence segment_seq;
-
-    struct mixed {};
-    struct full {
-        table_id table;
-        dht::token first_token;
-        dht::token last_token;
-    };
-
-    std::variant<mixed, full> v;
-};
-
-// The segment info of the chunk at the start of `in`, or nothing if its headers are not valid.
-// The chunk's body is not read, so a torn chunk is told apart only by a segment_scanner.
-future<std::optional<segment_info>> read_chunk_info(seastar::input_stream<char>& in);
+// Returns the segment info of the chunk at the start of `in`, or nullopt if its header is not
+// valid. This function does not read the chunk body, so only a segment_scanner can find a torn
+// chunk. Throws std::runtime_error if the chunk has a format version that this code does not read
+// or an unknown flag. `segment_id` is the segment that `in` reads, and the error message names it.
+future<std::optional<segment_info>> read_chunk_info(seastar::input_stream<char>& in, log_segment_id segment_id);
 
 // Reads a segment through its input stream, and keeps the position in the segment of what it
 // reads next.
@@ -95,7 +83,8 @@ struct chunk_record : ondisk::parsed_record_frame {
 class scanned_chunk;
 
 // The records of a chunk body, in order. The range ends at the first record frame that does not
-// parse.
+// parse. An increment of the iterator throws std::runtime_error at a record with an unknown flag,
+// as parse_record_frame() does.
 class chunk_records {
 public:
     class iterator {
@@ -132,7 +121,7 @@ private:
     const scanned_chunk& _chunk;
 };
 
-// A chunk with valid headers, of the same use of the segment as the first chunk.
+// A chunk with a valid header, of the same use of the segment as the first chunk.
 class scanned_chunk {
 public:
     const segment_info& info() const noexcept { return _info; }
@@ -167,13 +156,18 @@ private:
 };
 
 // Scans the chunks of a segment in order. The scanner reads from the stream, and does not close
-// it.
+// it. The scan handles a chunk in one of these ways:
 //
-// The scan stops at the first chunk whose headers are invalid or cut short, or whose segment_seq is
-// not the one of the first chunk. That chunk is not returned. A chunk whose body is cut short is
-// returned with its info and no records, and the scan stops after it. A chunk whose body fails its
-// CRC check is returned with its info and no records, and the scan continues at the next chunk. The
-// scan also stops after the only chunk of a full segment.
+//   - At a chunk whose header is invalid or cut short, or whose segment_seq is not the one of
+//     the first chunk, the scan stops and does not return the chunk.
+//   - At a chunk whose body is cut short, the scan returns the chunk with its info and no records,
+//     and then stops.
+//   - At a chunk whose body fails its CRC check, the scan returns the chunk with its info and no
+//     records, and then continues at the next chunk.
+//   - At the only chunk of a full segment, the scan returns the chunk and then stops.
+//   - At a chunk that has the segment_seq of the segment and a format version that this code does
+//     not read or an unknown flag, next_chunk() throws std::runtime_error. Such a chunk is from
+//     another release and does not mark the end of the segment.
 class segment_scanner {
 public:
     segment_scanner(seastar::input_stream<char>& in, log_segment_id segment_id, size_t segment_size);
@@ -216,7 +210,7 @@ class streamed_segment_rewriter {
     std::optional<size_t> _initial_header_size;
     bool _header_rewritten = false;
 
-    ondisk::chunk_header read_chunk_header() const;
+    ondisk::chunk_header_common read_chunk_header_common() const;
     void maybe_parse_initial_header();
     void rewrite_chunk_header();
     future<> flush_pending_data();
