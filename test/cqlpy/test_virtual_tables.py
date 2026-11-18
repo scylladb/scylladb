@@ -7,6 +7,7 @@ from typing import Tuple
 
 import pytest
 from cassandra import WriteFailure
+from cassandra.protocol import ConfigurationException
 from . import nodetool
 from . import util
 import json
@@ -233,6 +234,52 @@ def test_system_config_update_boolean(scylla_only, cql):
     cql.execute(f"UPDATE system.config SET value = '{value}' WHERE name = '{var}'")
     readback = cql.execute(f"SELECT value FROM system.config WHERE name = '{var}'").one().value
     assert readback == value
+
+# Check that the list of object storage endpoints can be changed while Scylla
+# runs, by an UPDATE of system.config holding the same list as in scylla.yaml,
+# in JSON or YAML syntax. Check that the new endpoint is really used, not only
+# shown in system.config: a keyspace can be created in object storage only on
+# a configured endpoint. Nothing needs to listen on the endpoint, because
+# creating and dropping an empty keyspace doesn't reach the object storage.
+def test_system_config_update_object_storage_endpoints(scylla_only, cql):
+    var = 'object_storage_endpoints'
+    select = f"SELECT value FROM system.config WHERE name = '{var}'"
+    def get_endpoints():
+        # system.config shows the endpoints as a map from each endpoint's
+        # name to its other parameters.
+        return json.loads(cql.execute(select).one().value)
+    def set_endpoints(value):
+        cql.execute(f"UPDATE system.config SET value = '{value}' WHERE name = '{var}'")
+    # The map which system.config shows isn't a valid value for an UPDATE,
+    # so this test can only restore the original value if it is empty.
+    if get_endpoints() != {}:
+        skip_env('Scylla was started with object_storage_endpoints')
+    endpoint = 'http://127.0.0.1:9000'
+    ksdef = ("WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : '1' } "
+             f"AND STORAGE = {{ 'type' : 'S3', 'bucket' : 'b', 'endpoint' : '{endpoint}' }}")
+    # By default, a keyspace in object storage is refused while the other
+    # user keyspaces, created by other tests, are in local storage.
+    with util.config_value_context(cql, 'restrict_mixed_storage_clusters', 'false'):
+        with pytest.raises(ConfigurationException, match='not configured'):
+            with util.new_test_keyspace(cql, ksdef):
+                pass
+        try:
+            set_endpoints(f'[{{"name": "{endpoint}", "aws_region": "us-east-1"}}]')
+            assert list(get_endpoints()) == [endpoint]
+            with util.new_test_keyspace(cql, ksdef):
+                pass
+            # A value which isn't a list of endpoints is refused, and leaves
+            # the option unchanged.
+            for bad in [f'{{"name": "{endpoint}", "aws_region": "us-east-1"}}', '[{unclosed', '']:
+                with pytest.raises(WriteFailure, match='list of endpoints'):
+                    set_endpoints(bad)
+                assert list(get_endpoints()) == [endpoint]
+            # The same list in YAML syntax also works.
+            set_endpoints('[{name: http://127.0.0.2:9000, aws_region: us-west-1}]')
+            assert list(get_endpoints()) == ['http://127.0.0.2:9000']
+        finally:
+            set_endpoints('[]')
+        assert get_endpoints() == {}
 
 def test_token_ring_vnodes(scylla_only, cql, test_keyspace_vnodes):
     rows = list(cql.execute(f"SELECT * FROM system.token_ring WHERE keyspace_name = '{test_keyspace_vnodes}'"))

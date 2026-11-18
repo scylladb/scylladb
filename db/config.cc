@@ -162,6 +162,11 @@ config_from_string(std::string_view value) {
     return audit::parse_audit_rules_from_json(sstring(value));
 }
 
+// Defined below, after the YAML decoder of the list of endpoints.
+template <>
+std::vector<db::object_storage_endpoint_param>
+config_from_string(std::string_view value);
+
 template <>
 const config_type& config_type_for<bool>() {
     static config_type ct("bool", value_to_json<bool>);
@@ -1822,7 +1827,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , ldap_bind_dn(this, "ldap_bind_dn", value_status::Used, "", "Distinguished name used by LDAPRoleManager for binding to LDAP server.")
     , ldap_bind_passwd(this, "ldap_bind_passwd", value_status::Used, "", "Password used by LDAPRoleManager for binding to LDAP server.")
     , saslauthd_socket_path(this, "saslauthd_socket_path", value_status::Used, "", "UNIX domain socket on which saslauthd is listening.")
-    , object_storage_endpoints(this, "object_storage_endpoints", liveness::LiveUpdate, value_status::Used, {}, "Object storage endpoints configuration.")
+    , object_storage_endpoints(this, "object_storage_endpoints", liveness::LiveUpdate, value_status::Used, {}, "Object storage endpoints configuration. "
+        "In YAML, use a list of maps. On the command line or in an update of the system.config table, use the same list in YAML or JSON syntax, as a single string.")
     , object_storage_connections(this, "object_storage_connections", liveness::LiveUpdate, value_status::Used, {},
         "Maximum number of S3 connections per shard for each connection pool, as a map from the pool name to a positive count. "
         "A scheduling group uses the pool named after it, except that every service-level group uses service_levels and a group "
@@ -2073,6 +2079,46 @@ void config_file::named_value<std::vector<audit::audit_rule>>::add_command_line_
                 boost::program_options::options_description_easy_init& init) {
     init(hyphenate(name()).data(), value_ex<sstring>()->notifier([this] (sstring new_value) {
         set(audit::parse_audit_rules_from_json(new_value), config_source::CommandLine);
+    }), desc().data());
+}
+
+// A list of endpoints given as a string, e.g., in an UPDATE of the
+// system.config table, holds the same list as in scylla.yaml, in YAML or JSON
+// (JSON is valid YAML) syntax, and is decoded exactly as the YAML file is.
+// Without this, the generic lexical_cast would read each endpoint with
+// operator>>, which object_storage_endpoint_param doesn't implement.
+// A value which isn't a list of endpoints throws std::invalid_argument,
+// which an UPDATE of system.config reports as an invalid value.
+template <>
+std::vector<db::object_storage_endpoint_param>
+config_from_string(std::string_view value) {
+    try {
+        return YAML::Load(std::string(value)).as<std::vector<db::object_storage_endpoint_param>>();
+    } catch (const YAML::Exception& e) {
+        throw std::invalid_argument(fmt::format("expected a YAML or JSON list of endpoints: {}", e.what()));
+    }
+}
+
+// The generic command-line parser cannot read a list of endpoints: it splits
+// the value on commas, drops the braces, and then tries to read each piece
+// with operator>>, which object_storage_endpoint_param doesn't implement.
+// Instead, take the whole value as a single string and decode it with
+// config_from_string() above, e.g.:
+//   --object-storage-endpoints '[{"name": "http://127.0.0.1:9000", "aws_region": "us-east-1"}]'
+// The value is read as std::string, not sstring: program_options reads an
+// sstring with operator>>, which stops at the first space.
+template<>
+void config_file::named_value<std::vector<db::object_storage_endpoint_param>>::add_command_line_option(
+                boost::program_options::options_description_easy_init& init) {
+    init(hyphenate(name()).data(), value_ex<std::string>()->notifier([this] (std::string new_value) {
+        std::vector<db::object_storage_endpoint_param> endpoints;
+        try {
+            endpoints = config_from_string<std::vector<db::object_storage_endpoint_param>>(new_value);
+        } catch (const std::invalid_argument& e) {
+            throw boost::program_options::error(fmt::format(
+                "invalid value for option '--{}': {}", hyphenate(name()), e.what()));
+        }
+        set(std::move(endpoints), config_source::CommandLine);
     }), desc().data());
 }
 
