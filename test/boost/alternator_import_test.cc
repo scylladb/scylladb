@@ -1088,6 +1088,55 @@ SEASTAR_TEST_CASE(test_import_table_is_creating_during_the_import) {
     });
 }
 
+// An import writes its progress while it runs. When its row is taken over, as the garbage
+// collector takes it, the import stops at its next write of the progress - it writes no more of
+// its row - but still removes the tag of the table it created. The test writes the progress at
+// each item, so the import stops at the item after the takeover and writes none of the items
+// which follow. Without that, nothing fences the writes of items: an import writes the batches
+// which it fills until its next write of the progress, see maybe_write_progress().
+SEASTAR_TEST_CASE(test_import_progress_and_takeover) {
+    return with_import_executor([] (cql_test_env& e, alternator_test_executor& exec) {
+        constexpr auto pause = "alternator_import_from_s3_pause_in_item_handler";
+        constexpr auto progress = "alternator_import_from_s3_progress_at_each_item";
+        scoped_error_injection pause_injection(pause);
+        scoped_error_injection progress_injection(progress);
+        exec.set_source({{"0", item_line("a", 1, "x") + item_line("a", 2, "y") + item_line("a", 3, "z")}});
+
+        auto response = exec.import_table_successfully(make_import_table_request("progress", "token-progress"));
+        const sstring import_arn(get_string(rjson::get(response, "ImportTableDescription"), "ImportArn"));
+        wait_until([&] { return utils::error_injection<true>::enter_count_on_all(pause).get() != 0; }, "the import to pause");
+        utils::error_injection<true>::receive_message_on_all(pause).get();
+        wait_until([&] { return utils::error_injection<true>::enter_count_on_all(pause).get() >= 2; }, "the import to pause at its second item");
+        db::alternator_import_table_helper helper(e.qp().local());
+        auto row = helper.get_import(import_arn).get();
+        BOOST_REQUIRE(row);
+        BOOST_REQUIRE_EQUAL(row->import_status, "IN_PROGRESS");
+        BOOST_REQUIRE_EQUAL(row->processed_item_count, 1);
+        BOOST_REQUIRE(row->processed_size_bytes.value_or(0) > 0);
+        // The write of the progress set the TTL of the row too.
+        check_import_row_ttl(e, import_arn, std::chrono::days(90));
+
+        auto taken = *row;
+        taken.import_status = "FAILING";
+        taken.node_id = "collector";
+        BOOST_REQUIRE(helper.take_import(taken, *row, std::chrono::hours(1)).get());
+        check_import_row_ttl(e, import_arn, std::chrono::hours(1));
+        utils::get_local_injector().disable_on_all(pause).get();
+
+        // The table becomes ACTIVE when the import, which found its row taken, removed the tag.
+        wait_until([&] {
+            auto described = std::get<rjson::value>(exec.describe_table("progress"));
+            return get_string(rjson::get(described, "Table"), "TableStatus") == "ACTIVE";
+        }, "the import to stop");
+        auto after = helper.get_import(import_arn).get();
+        BOOST_REQUIRE(after);
+        BOOST_REQUIRE_EQUAL(after->node_id, "collector");
+        BOOST_REQUIRE_EQUAL(after->import_status, "FAILING");
+        BOOST_REQUIRE_EQUAL(after->processed_item_count, 1);
+        BOOST_REQUIRE(!exec.get_item("progress", "a", "3"));
+    });
+}
+
 // Stopping the node during an import fails it with ImportInterrupted. The table keeps the
 // import-in-progress tag, because the shutdown aborts its removal (a schema change).
 SEASTAR_TEST_CASE(test_import_interrupted_by_shutdown) {
@@ -1229,6 +1278,46 @@ SEASTAR_TEST_CASE(test_batch_write_lwt_write_on_another_shard_after_alter) {
         utils::error_injection<true>::receive_message_on_all(wait).get();
         std::exchange(write, std::nullopt)->get();
         BOOST_REQUIRE_EQUAL(exec.get_item_v("batch_altered", moved_p, "1"), "x");
+    });
+}
+
+// A batch counts every item, also those which a later item with the key replaced, so the items of
+// a few keys are written while the import reads them, not held until its end.
+SEASTAR_TEST_CASE(test_import_flushes_batches_of_one_key) {
+    return with_import_executor([] (cql_test_env& e, alternator_test_executor& exec) {
+        constexpr auto pause = "alternator_import_from_s3_pause_in_item_handler";
+        constexpr auto progress = "alternator_import_from_s3_progress_at_each_item";
+        scoped_error_injection pause_injection(pause);
+        scoped_error_injection progress_injection(progress);
+        constexpr int items = 300;
+        std::string object;
+        for (int i = 0; i < items; ++i) {
+            object += item_line("one", 1, fmt::format("{}", i));
+        }
+        exec.set_source({{"0", object}});
+
+        auto response = exec.import_table_successfully(make_import_table_request("one_key", "token-one-key"));
+        const sstring import_arn(get_string(rjson::get(response, "ImportTableDescription"), "ImportArn"));
+        db::alternator_import_table_helper helper(e.qp().local());
+        // Each message lets one item go on. Sending one only when the import waits for it keeps
+        // unread messages from piling up - e.g. while the import creates its table - which could
+        // let the import run to its end between two reads of its row.
+        size_t resumed_items = 0;
+        wait_until([&] {
+            if (utils::error_injection<true>::enter_count_on_all(pause).get() > resumed_items) {
+                utils::error_injection<true>::receive_message_on_all(pause).get();
+                ++resumed_items;
+            }
+            auto row = helper.get_import(import_arn).get();
+            return row && row->import_status == "IN_PROGRESS" && row->imported_item_count >= 100;
+        }, "a batch of one key to be written while the import runs");
+
+        utils::get_local_injector().disable_on_all(progress).get();
+        utils::get_local_injector().disable_on_all(pause).get();
+        auto row = wait_for_import(e, import_arn);
+        BOOST_REQUIRE_EQUAL(row.import_status, "COMPLETED");
+        BOOST_REQUIRE_EQUAL(row.imported_item_count, items);
+        BOOST_REQUIRE_EQUAL(exec.get_item_v("one_key", "one", "1"), fmt::format("{}", items - 1));
     });
 }
 
