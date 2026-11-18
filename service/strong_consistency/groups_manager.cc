@@ -459,9 +459,11 @@ void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_
         // The group's part in its resize, if any: a parent's whole state, or a child's mapping.
         const auto marker_timestamp = _resize_tracker.max_marker_timestamp(id);
         _resize_tracker.erase_group(id);
+        // Checked here, not when scheduled: the table may be dropped during the teardown.
+        const bool table_dropped = disposition == log_disposition::release && !_db.column_family_exists(state.table);
         // We erase the persisted state while the group is still in _raft_groups, which is what
         // stop_shard() waits for.
-        if (clean_up) {
+        if (clean_up || table_dropped) {
             try {
                 co_await raft_groups_storage::erase_persisted_state(_qp, id, this_shard_id(), marker_timestamp);
             } catch (...) {
@@ -472,6 +474,9 @@ void groups_manager::schedule_raft_group_deletion(raft::group_id id, raft_group_
             if (state.gate.get() != g.get()) {
                 co_return;
             }
+        } else if (disposition == log_disposition::release) {
+            // The tablet's cleanup stage erases the row, unless the table is dropped first.
+            _awaiting_cleanup.emplace(id, state.table);
         }
         if (_raft_groups.erase(id) != 1) {
             on_internal_error(logger, format("raft group {} is already deleted", id));
@@ -564,7 +569,8 @@ void groups_manager::schedule_raft_groups_deletion(bool all, log_disposition dis
             }
             // A resizing parent which the tablet map dropped is gone for good: its resize replaced
             // it, or its table was dropped. A shutdown keeps what it persisted, which a restart in
-            // the middle of the resize needs.
+            // the middle of the resize needs. A group of a dropped table is cleaned up by the
+            // teardown itself.
             schedule_raft_group_deletion(group_id, group_state, disposition, !all && _resize_tracker.is_resizing(group_id));
         }
         it = next;
@@ -593,6 +599,8 @@ future<> groups_manager::cleanup_group(global_tablet_id tablet, raft::group_id g
                     "cleanup_group({}-{}): the raft server was not torn down before the deadline", tablet, group_id)));
         }
     }
+    // After the teardown, which adds the group.
+    _awaiting_cleanup.erase(group_id);
     co_await raft_groups_storage::erase_persisted_state(_qp, group_id, this_shard_id());
 }
 
@@ -1196,6 +1204,7 @@ future<> groups_manager::wait_for_snapshot_transfer(global_tablet_id tablet, raf
 void groups_manager::schedule_raft_group_start(global_tablet_id tablet, raft::group_id id, raft_group_state& state,
         token_metadata_ptr tm, table_metrics& metrics) {
     logger.info("update(): starting raft server for tablet {}, group id {}", tablet, id);
+    _awaiting_cleanup.erase(id);
     state.gate = make_lw_shared<gate>();
     // Still linked if the previous start hasn't finished yet.
     if (!state.is_linked()) {
@@ -1342,6 +1351,7 @@ void groups_manager::update(token_metadata_ptr new_tm) {
 
             auto& state = _raft_groups[id];
             state.has_tablet = true;
+            state.table = table_id;
             // During a migration within the rack, both the leaving and the pending replica may
             // be listed; Raft takes whichever is a voter.
             auto priority_members = preferred_leaders(*preferred_rack,
@@ -1368,6 +1378,22 @@ void groups_manager::update(token_metadata_ptr new_tm) {
 
     // A group whose tablet left this shard is never replayed, so release its segments.
     schedule_raft_groups_deletion(false, log_disposition::release);
+
+    // A table dropped before the cleanup stage reached this shard: that stage never comes.
+    for (auto it = _awaiting_cleanup.begin(); it != _awaiting_cleanup.end(); ) {
+        if (_db.column_family_exists(it->second)) {
+            ++it;
+            continue;
+        }
+        const auto id = it->first;
+        it = _awaiting_cleanup.erase(it);
+        logger.info("update(): group id {}: its table was dropped before the cleanup, erasing its row", id);
+        (void)with_gate(_background_erases, [this, id] {
+            return raft_groups_storage::erase_persisted_state(_qp, id, this_shard_id()).handle_exception([id] (std::exception_ptr e) {
+                logger.warn("update(): group id {}: failed to erase its persisted state: {}", id, e);
+            });
+        });
+    }
 }
 
 future<raft_server> groups_manager::acquire_server(table_id table_id, raft::group_id group_id, abort_source& as) {
@@ -1554,6 +1580,7 @@ future<> groups_manager::stop_shard() {
     while (!_raft_groups.empty()) {
         co_await _raft_groups.begin()->second.server_control_op.get_future();
     }
+    co_await _background_erases.close();
     _started = false;
 
     logger.info("stop_shard() completed");

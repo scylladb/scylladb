@@ -152,6 +152,8 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     // try_acquire_server(), acquire_server(), or from a control operation.
     struct raft_group_state : public boost::intrusive::list_base_hook<boost::intrusive::link_mode<boost::intrusive::auto_unlink>> {
         bool has_tablet = false;
+        // Of the group's tablet; once it is dropped, the teardown erases the group's row.
+        table_id table;
         lw_shared_ptr<gate> gate = nullptr;
         raft::server* server = nullptr;
         // Of the table of this tablet; expires when the table is dropped.
@@ -195,6 +197,11 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     db::raft_commitlog_replay_buffer& _raft_replay_buffer;
     raft_resize_tracker& _resize_tracker;
     std::unordered_map<raft::group_id, raft_group_state> _raft_groups = {};
+    // Torn down groups whose row waits for cleanup_group(), with their tables. update()
+    // erases the row if the table is dropped first. A restart forgets them, and
+    // erase_rows_of_gone_groups() takes over.
+    std::unordered_map<raft::group_id, table_id> _awaiting_cleanup;
+    gate _background_erases;
     // Keyed by keyspace and table name, which is what the series are labelled
     // with, so that two entries can never register colliding series.
     using table_metrics_map = std::unordered_map<std::pair<sstring, sstring>, table_metrics, utils::tuple_hash>;
@@ -246,8 +253,9 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     enum class log_disposition { keep, release };
 
     // If `clean_up`, also does what cleanup_group() does for a migrated tablet, erasing the
-    // group's persisted raft state, for a group whose tablet has no cleanup stage: a resizing
-    // parent which the tablet map dropped. Only valid with log_disposition::release.
+    // group's persisted raft state, for a resizing parent which the tablet map dropped: its
+    // tablet has no cleanup stage. Only valid with log_disposition::release. A group whose
+    // table is dropped by the end of the teardown is cleaned up regardless.
     void schedule_raft_group_deletion(raft::group_id group_id, raft_group_state& group_state,
         log_disposition disposition, bool clean_up = false);
 
