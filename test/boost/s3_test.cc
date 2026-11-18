@@ -1585,7 +1585,7 @@ static void client_list_objects_round_trips(const client_maker_function& client_
     auto before = gets();
     s3::client::bucket_lister by_default(client, bucket, prefix);
     drain(by_default);
-    BOOST_REQUIRE_EQUAL(gets() - before, 3); // ceil(150 / 64), the default page size
+    BOOST_REQUIRE_EQUAL(gets() - before, 2); // ceil(150 / 100), the default page size
 
     before = gets();
     s3::client::bucket_lister max_page(client, bucket, prefix, 1000);
