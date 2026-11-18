@@ -2939,9 +2939,15 @@ future<> database::start(sharded<qos::service_level_controller>& sl_controller, 
         _reader_concurrency_semaphores_group.add_or_update(_dbcfg.statement_scheduling_group, 1000);
         _view_update_read_concurrency_semaphores_group.add_or_update(_dbcfg.statement_scheduling_group, 1000);
     }
-    // In the default scheduling groups, view updates may be generated in the statement and streaming scheduling groups.
+    // In the default scheduling groups, view updates may be generated in the statement and streaming scheduling groups,
+    // and in the export/import group, in which Alternator's ImportTable coordinates the writes of its items (replicas on
+    // other nodes apply them in the group of their RPC connection). The base-table reads of the view
+    // updates of that group still use the view update read semaphore of the default service level, as those of hint
+    // replay in the streaming group do: a read semaphore of its own would re-split the memory of that semaphore group
+    // for all the service levels.
     _view_update_concurrency_semaphores.emplace(_dbcfg.statement_scheduling_group, max_concurrent_local_view_updates);
     _view_update_concurrency_semaphores.emplace(_dbcfg.streaming_scheduling_group, max_concurrent_local_view_updates);
+    _view_update_concurrency_semaphores.emplace(_dbcfg.export_import_scheduling_group, max_concurrent_local_view_updates);
 
     // This will wait for the semaphores to be given some memory.
     // We need this since the below statements (get_distributed_service_levels in particular) will need
