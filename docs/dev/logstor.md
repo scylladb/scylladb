@@ -106,6 +106,8 @@ CREATE TABLE keyspace.user_profiles (
 ) WITH storage_engine = 'logstor';
 ```
 
+Logstor tables cannot be created in strongly consistent keyspaces (`consistency = 'global'`) yet.
+
 ### Basic Operations
 
 **Insert/Update:**
