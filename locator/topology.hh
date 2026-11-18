@@ -241,6 +241,7 @@ public:
 
 public:
     const config& get_config() const noexcept { return _cfg; }
+    unsigned shard() const noexcept { return _shard; }
 
     void set_host_id_cfg(host_id this_host_id);
 

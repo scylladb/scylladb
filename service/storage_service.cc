@@ -4711,10 +4711,11 @@ void storage_service::start_tablet_split_monitor() {
 future<> storage_service::snitch_reconfigured() {
     SCYLLA_ASSERT(this_shard_id() == 0);
     auto& snitch = _snitch.local();
-    co_await mutate_token_metadata([&snitch] (mutable_token_metadata_ptr tmptr) -> future<> {
+    co_await mutate_token_metadata([this, &snitch] (mutable_token_metadata_ptr tmptr) -> future<> {
         // re-read local rack and DC info
         tmptr->update_topology(tmptr->get_my_id(), snitch->get_location());
-        return make_ready_future<>();
+        // The target ring of a topology change holds this node's location too.
+        return tmptr->get_topology_change_info() ? update_topology_change_info(std::move(tmptr), "snitch reconfiguration") : make_ready_future<>();
     });
 
     if (_gossiper.is_enabled()) {

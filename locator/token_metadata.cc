@@ -355,6 +355,17 @@ future<std::unique_ptr<token_metadata_impl>> token_metadata_impl::clone_async() 
     }
     ret->_leaving_endpoints = _leaving_endpoints;
     ret->_replacing_endpoints = _replacing_endpoints;
+    // Same shard only, as the target token_metadata is shared.
+    // Other shards get the pending and read replicas by cloning shard 0's effective replication maps.
+    if (_topology_change_info && _topology.shard() == this_shard_id()) {
+        utils::chunked_vector<token> all_tokens;
+        all_tokens.reserve(_topology_change_info->all_tokens.size());
+        for (const auto& t : _topology_change_info->all_tokens) {
+            all_tokens.push_back(t);
+            co_await coroutine::maybe_yield();
+        }
+        ret->_topology_change_info.emplace(_topology_change_info->target_token_metadata, std::move(all_tokens), _topology_change_info->read_new);
+    }
     ret->_ring_version = _ring_version;
     ret->_version = _version;
     co_return ret;
