@@ -144,6 +144,8 @@
 #include "idl/strong_consistency/groups_manager.dist.impl.hh"
 #include "gms/feature_service.hh"
 #include "utils/error_injection.hh"
+#include <seastar/net/stack.hh>
+#include <seastar/core/byteorder.hh>
 #include "idl/sstables_loader.dist.impl.hh"
 
 namespace netw {
@@ -154,6 +156,104 @@ static_assert(std::is_nothrow_move_constructible_v<msg_addr>);
 
 static logging::logger mlogger("messaging_service");
 static logging::logger rpc_logger("rpc");
+
+#ifdef SCYLLA_ENABLE_ERROR_INJECTION
+namespace {
+
+// Test-only. "messaging_service_stall_gossip_syn" (parameter "ip") stalls
+// the write of the first GOSSIP_DIGEST_SYN frame to that peer inside the RPC
+// client's socket sink, standing in for a socket whose send buffer is full
+// because the peer is partitioned away. The RPC send loop awaits the flush
+// of the entry it is writing, so the stalled SYN is the front entry of the
+// RPC outgoing queue, which neither a timeout nor a cancel withdraws.
+// The stall ends on message_injection(), or with an error when the connection
+// is shut down, as a kernel write ends on shutdown(SHUT_WR).
+// Internode compression (off by default) hides the verb, so the stall never
+// triggers with it; a frame longer than the stream buffer is put in several
+// chunks, and only the first one starts with the frame header.
+constexpr std::string_view stall_gossip_syn_injection = "messaging_service_stall_gossip_syn";
+
+class stalling_sink : public data_sink_impl {
+    data_sink _sink;
+    socket_address _peer;
+    lw_shared_ptr<abort_source> _shutdown;
+public:
+    stalling_sink(data_sink sink, socket_address peer, lw_shared_ptr<abort_source> shutdown)
+        : _sink(std::move(sink)), _peer(peer), _shutdown(std::move(shutdown)) {}
+    future<> put(std::span<temporary_buffer<char>> data) override {
+        std::vector<temporary_buffer<char>> bufs(std::make_move_iterator(data.begin()), std::make_move_iterator(data.end()));
+        // A request frame starts with the le64 timeout, which every Scylla
+        // server negotiates, followed by the le64 verb (rpc.cc, request_frame).
+        bool is_syn = !bufs.empty() && bufs.front().size() >= 16
+            && read_le<uint64_t>(bufs.front().get() + 8) == uint64_t(messaging_verb::GOSSIP_DIGEST_SYN);
+        if (is_syn) {
+            co_await utils::get_local_injector().inject(stall_gossip_syn_injection, [this] (auto& handler) -> future<> {
+                mlogger.info("stalling a GOSSIP_DIGEST_SYN send to {}", _peer);
+                co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes(10), _shutdown.get());
+            });
+        }
+        co_await _sink.put(std::span(bufs));
+    }
+    future<> flush() override { return _sink.flush(); }
+    future<> close() override { return _sink.close(); }
+    size_t buffer_size() const noexcept override { return _sink.buffer_size(); }
+};
+
+class stalling_connected_socket : public net::connected_socket_impl {
+    connected_socket _s;
+    socket_address _peer;
+    lw_shared_ptr<abort_source> _shutdown = make_lw_shared<abort_source>();
+public:
+    stalling_connected_socket(connected_socket s, socket_address peer) : _s(std::move(s)), _peer(peer) {}
+    data_source source() override { return std::move(_s.input()).detach(); }
+    data_source source(connected_socket_input_stream_config csisc) override { return std::move(_s.input(csisc)).detach(); }
+    data_sink sink() override {
+        return data_sink(std::make_unique<stalling_sink>(std::move(_s.output()).detach(), _peer, _shutdown));
+    }
+    void shutdown_input() override { _s.shutdown_input(); }
+    void shutdown_output() override {
+        if (!_shutdown->abort_requested()) {
+            _shutdown->request_abort();
+        }
+        _s.shutdown_output();
+    }
+    void set_nodelay(bool v) override { _s.set_nodelay(v); }
+    bool get_nodelay() const override { return _s.get_nodelay(); }
+    void set_keepalive(bool v) override { _s.set_keepalive(v); }
+    bool get_keepalive() const override { return _s.get_keepalive(); }
+    void set_keepalive_parameters(const net::keepalive_params& p) override { _s.set_keepalive_parameters(p); }
+    net::keepalive_params get_keepalive_parameters() const override { return _s.get_keepalive_parameters(); }
+    void set_sockopt(int level, int optname, const void* data, size_t len) override { _s.set_sockopt(level, optname, data, len); }
+    int get_sockopt(int level, int optname, void* data, size_t len) const override { return _s.get_sockopt(level, optname, data, len); }
+    socket_address local_address() const noexcept override { return _s.local_address(); }
+    socket_address remote_address() const noexcept override { return _s.remote_address(); }
+    future<> wait_input_shutdown() override { return _s.wait_input_shutdown(); }
+};
+
+class stalling_socket : public net::socket_impl {
+    seastar::socket _s = seastar::make_socket();
+public:
+    future<connected_socket> connect(socket_address sa, socket_address local, transport proto) override {
+        auto s = co_await _s.connect(sa, local, proto);
+        co_return connected_socket(std::make_unique<stalling_connected_socket>(std::move(s), sa));
+    }
+    void set_reuseaddr(bool v) override { _s.set_reuseaddr(v); }
+    bool get_reuseaddr() const override { return _s.get_reuseaddr(); }
+    void shutdown() override { _s.shutdown(); }
+};
+
+} // anonymous namespace
+#endif
+
+seastar::socket make_rpc_client_socket(const socket_address& addr) {
+#ifdef SCYLLA_ENABLE_ERROR_INJECTION
+    auto ip = utils::get_local_injector().inject_parameter<std::string_view>(stall_gossip_syn_injection, "ip");
+    if (ip && *ip == fmt::format("{}", addr.addr())) {
+        return seastar::socket(std::make_unique<stalling_socket>());
+    }
+#endif
+    return seastar::make_socket();
+}
 
 using inet_address = gms::inet_address;
 using gossip_digest_syn = gms::gossip_digest_syn;
