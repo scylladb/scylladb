@@ -1376,6 +1376,17 @@ void groups_manager::update(token_metadata_ptr new_tm) {
     }
     _leader_cache.end_sweep();
 
+    // A group that is never started never takes its replayed entries, and their references
+    // would pin the segments until shutdown, e.g. when its table was dropped before start().
+    // A group in _raft_groups has a start scheduled, which takes them even if it is leaving.
+    _raft_replay_buffer.discard_groups([this] (raft::group_id id) {
+        if (_raft_groups.contains(id)) {
+            return false;
+        }
+        logger.info("update(): group id {} is not hosted by this shard, discarding its replayed commitlog entries", id);
+        return true;
+    });
+
     // A group whose tablet left this shard is never replayed, so release its segments.
     schedule_raft_groups_deletion(false, log_disposition::release);
 
