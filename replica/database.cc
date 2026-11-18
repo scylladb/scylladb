@@ -981,7 +981,7 @@ database::init_commitlog() {
                 return;
             }
             // Initiate a background flush. Waited upon in `stop()`.
-            (void)_tables_metadata.get_table(id).flush(pos);
+            (void)_tables_metadata.get_table(id).flush_memtables(pos);
         }).release(); // we have longer life time than CL. Ignore reg anchor
 
         _cfg.commitlog_max_data_lifetime_in_seconds.observe([this](uint32_t max_time) {
@@ -1170,7 +1170,7 @@ void database::init_schema_commitlog() {
             return;
         }
         // Initiate a background flush. Waited upon in `stop()`.
-        (void)_tables_metadata.get_table(id).flush(pos);
+        (void)_tables_metadata.get_table(id).flush_memtables(pos);
     }).release();
 }
 
@@ -3064,7 +3064,7 @@ future<> database::stop() {
 
 future<> database::flush_all_memtables() {
     return _tables_metadata.parallel_for_each_table([] (table_id, lw_shared_ptr<table> table) {
-        return table->flush();
+        return table->flush_memtables();
     });
 }
 
@@ -3132,16 +3132,28 @@ future<> database::flush_keyspace_on_all_shards(sharded<database>& sharded_db, s
     });
 }
 
-future<> database::flush_all_tables() {
+future<> database::do_flush_all_tables(std::function<future<>(table&)> flush_table) {
     // see above
     dblog.info("Forcing new commitlog segment and flushing all tables");
     co_await _commitlog->force_new_active_segment();
-    co_await get_tables_metadata().parallel_for_each_table([] (table_id, lw_shared_ptr<table> t) {
-        return t->flush();
+    co_await get_tables_metadata().parallel_for_each_table([&flush_table] (table_id, lw_shared_ptr<table> t) {
+        return flush_table(*t);
     });
     _all_tables_flushed_at = db_clock::now();
     co_await _commitlog->wait_for_pending_deletes();
     dblog.info("Forcing new commitlog segment and flushing all tables complete");
+}
+
+future<> database::flush_all_tables() {
+    return do_flush_all_tables([] (table& t) {
+        return t.flush();
+    });
+}
+
+future<> database::flush_commitlog() {
+    return do_flush_all_tables([] (table& t) {
+        return t.flush_memtables();
+    });
 }
 
 future<db_clock::time_point> database::get_all_tables_flushed_at(sharded<database>& sharded_db) {
@@ -3170,18 +3182,6 @@ void database::trigger_logstor_compaction(bool major) {
         if (tp->uses_logstor()) {
             tp->trigger_logstor_compaction();
         }
-    });
-}
-
-future<> database::flush_logstor_separator_on_all_shards(sharded<database>& sharded_db) {
-    return sharded_db.invoke_on_all([] (replica::database& db) {
-        return db.flush_logstor_separator();
-    });
-}
-
-future<> database::flush_logstor_separator(std::optional<logstor::segment_sequence> seq_num) {
-    return _tables_metadata.parallel_for_each_table([seq_num] (table_id, lw_shared_ptr<table> table) {
-        return table->flush_separator(seq_num);
     });
 }
 
@@ -3376,7 +3376,7 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, s
     dblog.trace("{} {}.{} and views on all shards", should_flush ? "Flushing" : "Clearing", s->ks_name(), s->cf_name());
     auto flush_or_clear = [should_flush] (replica::table& cf) {
             if (should_flush && cf.can_flush()) {
-                return cf.flush();
+                return cf.flush_memtables();
             } else {
                 return cf.clear();
             }

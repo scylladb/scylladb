@@ -186,7 +186,11 @@ public:
     // Clear memtable(s) content
     future<> clear_memtables();
 
-    future<> flush(std::optional<db::replay_position> = {}) noexcept;
+    future<> flush_memtables(std::optional<db::replay_position> = {}) noexcept;
+    // Flushes the memtables of the group, or the separator buffers of the group when the table uses
+    // logstor. Unlike table::flush(), it does not first wait for the writes that are not in a
+    // separator buffer yet.
+    future<> flush() noexcept;
     bool can_flush() const;
     bool needs_flush() const;
 
@@ -350,7 +354,8 @@ public:
 
     future<> discard_logstor_segments();
 
-    future<> flush_separator(std::optional<logstor::segment_sequence> seq_num = std::nullopt);
+    // Flushes the separator buffers of the group. The table must use logstor.
+    future<> flush_separator();
 
     logstor::segment_set& logstor_segments() noexcept;
     const logstor::segment_set& logstor_segments() const noexcept;
@@ -454,8 +459,7 @@ public:
 
     future<utils::chunked_vector<logstor::segment_snapshot>> take_logstor_snapshot() const;
 
-    // Flush all memtables.
-    future<> flush() noexcept;
+    future<> flush_memtables() noexcept;
     future<> flush_separator() noexcept;
     bool can_flush() const;
     bool needs_flush() const;

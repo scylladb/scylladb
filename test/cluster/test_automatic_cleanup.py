@@ -146,18 +146,18 @@ async def test_cleanup_waits_for_stale_writes(manager: ScyllaClusterManager):
         await log0.wait_for(f"vnodes cleanup required by 'leave' of the node {host1_id}: global_token_metadata_barrier threw an error", timeout=15)
         await log0.wait_for(f"update_fence_version: new fence_version {version_after_node2_bootstrap} is set, prev fence_version {version_after_node2_bootstrap - 1}, pending stale writes 1", timeout=15)
         await log0.wait_for("vnodes_cleanup: wait for stale pending writes", timeout=15)
-        flush_matches = await log0.grep("vnodes_cleanup: flush_all_tables")
+        flush_matches = await log0.grep("vnodes_cleanup: flush_commitlog")
         assert len(flush_matches) == 0
         await log1.wait_for(f"update_fence_version: new fence_version {version_after_node2_bootstrap} is set, prev fence_version {version_after_node2_bootstrap - 1}, pending stale writes 1", timeout=15)
         await log1.wait_for("vnodes_cleanup: wait for stale pending writes", timeout=15)
-        flush_matches = await log0.grep("vnodes_cleanup: flush_all_tables")
+        flush_matches = await log0.grep("vnodes_cleanup: flush_commitlog")
         assert len(flush_matches) == 0
 
         # Release the write -- the cleanup process should resume and the decommission succeed
         await manager.api.message_injection(servers[0].ip_addr, "database_apply")
-        await log0.wait_for("vnodes_cleanup: flush_all_tables", timeout=15)
+        await log0.wait_for("vnodes_cleanup: flush_commitlog", timeout=15)
         await manager.api.message_injection(servers[1].ip_addr, "database_apply")
-        await log1.wait_for("vnodes_cleanup: flush_all_tables", timeout=15)
+        await log1.wait_for("vnodes_cleanup: flush_commitlog", timeout=15)
 
         await decommission_task
 

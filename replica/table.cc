@@ -1322,12 +1322,8 @@ logstor::compaction_manager& compaction_group_logstor_state::logstor_compaction_
     return _cg->get_logstor_compaction_manager();
 }
 
-future<> compaction_group::flush_separator(std::optional<logstor::segment_sequence> seq_num) {
-    if (!_logstor_state) {
-        co_return;
-    }
-
-    co_await _logstor_state->flush_separator(seq_num);
+future<> compaction_group::flush_separator() {
+    return _logstor_state->flush_separator();
 }
 
 future<utils::chunked_vector<logstor::segment_snapshot>> compaction_group::take_logstor_snapshot() {
@@ -1351,7 +1347,6 @@ future<> storage_group::split(compaction::compaction_type_options::split opt, ta
         }
         auto holder = cg->async_gate().hold();
         co_await cg->flush();
-        co_await cg->flush_separator();
         co_await cg->split(opt, tablet_split_task_info);
     }
 }
@@ -1795,7 +1790,7 @@ future<utils::chunked_vector<sstables::sstable_files_snapshot>> table::take_stor
         // deadlock might occur due to memtable flush backpressure waiting on
         // compaction to reduce the backlog.
 
-        co_await sg->flush();
+        co_await sg->flush_memtables();
 
         // The sstable set must be obtained *after* the deletion lock is taken,
         // otherwise components of sstables in the set might be unlinked from the filesystem
@@ -1857,7 +1852,7 @@ table::clone_tablet_storage(locator::tablet_id tid, bool leave_unsealed) {
     }
     auto& sg = *sgp;
     auto sg_holder = sg.async_gate().hold();
-    co_await sg.flush();
+    co_await sg.flush_memtables();
     // The sstable set must be obtained *after* the deletion lock is taken,
     // otherwise components of sstables in the set might be unlinked from the filesystem
     // by compaction while we are waiting for the lock.
@@ -2985,7 +2980,7 @@ table::compact_all_sstables(tasks::task_info info, do_flush do_flush, bool consi
     std::optional<tombstone_gc_state> pre_flush_gc_state;
     if (do_flush) {
         pre_flush_gc_state = get_tombstone_gc_state().snapshot();
-        co_await flush();
+        co_await flush_memtables();
     }
     // Forces off-strategy before major, so sstables previously sitting on maintenance set will be included
     // in the compaction's input set, to provide same semantics as before maintenance set came into existence.
@@ -3018,20 +3013,6 @@ void table::try_trigger_compaction(compaction_group& cg) noexcept {
     } catch (...) {
         tlogger.error("Failed to trigger compaction: {:t}", std::current_exception());
     }
-}
-
-future<> table::flush_separator(std::optional<logstor::segment_sequence> seq_num) {
-    if (!uses_logstor()) {
-        co_return;
-    }
-
-    // wait for all previous writes to be written to a separator buffer
-    co_await _logstor->flush_to_separator();
-
-    // flush separator buffers
-    co_await parallel_foreach_compaction_group([seq_num] (compaction_group& cg) {
-        return cg.flush_separator(seq_num);
-    });
 }
 
 void compaction_group::trigger_compaction() {
@@ -3087,7 +3068,7 @@ future<> table::perform_cleanup_compaction(compaction::owned_ranges_ptr sorted_o
     }
 
     if (do_flush) {
-        co_await flush();
+        co_await flush_memtables();
     }
 
     auto lock_holder = co_await get_compaction_manager().get_incremental_repair_read_lock(cg->as_view_for_static_sharding(), "perform_cleanup_compaction");
@@ -3645,7 +3626,6 @@ future<> compaction_group::stop(sstring reason) noexcept {
     // future will not get abandoned.
     co_await std::move(closed_gate_fut);
     auto flush_future = co_await seastar::coroutine::as_future(flush());
-    auto separator_flush_future = co_await coroutine::as_future(flush_separator());
 
     if (_t.uses_logstor()) {
         co_await get_logstor_compaction_manager().remove(as_logstor_group());
@@ -3661,9 +3641,6 @@ future<> compaction_group::stop(sstring reason) noexcept {
 
     if (flush_future.failed()) {
         co_await seastar::coroutine::return_exception_ptr(flush_future.get_exception());
-    }
-    if (separator_flush_future.failed()) {
-        co_await seastar::coroutine::return_exception_ptr(separator_flush_future.get_exception());
     }
 }
 
@@ -3770,7 +3747,7 @@ future<> table::flush_on_timer() {
                 next = std::min(next, now + period);
                 co_return;
             }
-            co_await cg.flush();
+            co_await cg.flush_memtables();
             // A non-flushable list keeps its memtable; never re-arm before now + period.
             next = std::min(next, std::max(cg.memtables()->back()->created_at(), now) + period);
         }).finally([&] {
@@ -4770,7 +4747,7 @@ future<table::snapshot_details> table::get_snapshot_details(fs::path snapshot_di
     co_return details;
 }
 
-future<> compaction_group::flush(std::optional<db::replay_position> pos) noexcept {
+future<> compaction_group::flush_memtables(std::optional<db::replay_position> pos) noexcept {
     if (pos && *pos < _lowest_rp) {
         return make_ready_future<>();
     }
@@ -4785,9 +4762,13 @@ future<> compaction_group::flush(std::optional<db::replay_position> pos) noexcep
     }
 }
 
-future<> storage_group::flush() noexcept {
+future<> compaction_group::flush() noexcept {
+    return _logstor_state ? flush_separator() : flush_memtables();
+}
+
+future<> storage_group::flush_memtables() noexcept {
     for (auto& cg : compaction_groups_immediate()) {
-        co_await cg->flush();
+        co_await cg->flush_memtables();
     }
 }
 
@@ -4825,14 +4806,36 @@ size_t storage_group::memtable_count() const {
     return count;
 }
 
-future<> table::flush(std::optional<db::replay_position> pos) {
+future<> table::flush() {
+    return uses_logstor() ? flush_separator() : flush_memtables();
+}
+
+future<> table::flush_memtables(std::optional<db::replay_position> pos) {
     // There is nothing to flush if the table was stopped.
     if (_pending_flushes_phaser.is_closed()) {
         co_return;
     }
     auto op = _pending_flushes_phaser.start();
     // no std::bind_back in the clang version I'm on... :-(
-    co_await parallel_foreach_compaction_group([pos](auto& cg) { return cg.flush(pos); });
+    co_await parallel_foreach_compaction_group([pos](auto& cg) { return cg.flush_memtables(pos); });
+}
+
+future<> table::flush_separator() {
+    // table::stop() closes the phaser only after it stopped all compaction groups, and
+    // compaction_group::stop() flushes the separator buffers of its group, so there is nothing to
+    // flush. The check is also necessary because start() throws on a closed phaser.
+    if (_pending_flushes_phaser.is_closed()) {
+        co_return;
+    }
+    auto op = _pending_flushes_phaser.start();
+
+    // wait for all previous writes to be written to a separator buffer
+    co_await _logstor->flush_to_separator();
+
+    // flush separator buffers
+    co_await parallel_foreach_compaction_group([] (compaction_group& cg) {
+        return cg.flush_separator();
+    });
 }
 
 bool storage_group::can_flush() const {
@@ -6123,12 +6126,6 @@ future<> table::stop_compaction_groups(storage_group& sg) {
     return sg.stop("tablet cleanup");
 }
 
-future<> table::flush_compaction_groups(storage_group& sg) {
-    for (auto& cg_ptr : sg.compaction_groups_immediate()) {
-        co_await cg_ptr->flush();
-    }
-}
-
 future<> table::cleanup_compaction_groups(db::system_keyspace& sys_ks, locator::tablet_id tid, storage_group& sg) {
     for (auto& cg_ptr : sg.compaction_groups_immediate()) {
         co_await cg_ptr->cleanup();
@@ -6168,7 +6165,7 @@ future<> table::cleanup_tablet_without_deallocation(database& db, db::system_key
     auto& sg = storage_group_for_id(tid.value());
 
     co_await clear_inactive_reads_for_tablet(db, sg);
-    co_await flush_compaction_groups(sg);
+    co_await sg.flush_memtables();
     co_await cleanup_compaction_groups(sys_ks, tid, sg);
 }
 

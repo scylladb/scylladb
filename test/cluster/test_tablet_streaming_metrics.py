@@ -49,10 +49,7 @@ async def _run_tablet_migration_metrics_test(manager: ScyllaClusterManager, *, u
         for i in range(nrows):
             await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({i}, '{i}_{value}')")
 
-        if use_logstor:
-            await manager.api.logstor_flush(s1.ip_addr)
-        else:
-            await manager.api.keyspace_flush(s1.ip_addr, ks, 'test')
+        await manager.api.keyspace_flush(s1.ip_addr, ks, 'test')
 
         s2 = await manager.server_add(cmdline=cmdline, config=cfg, property_file={"dc": "dc1", "rack": "rack1"})
         servers.append(s2)

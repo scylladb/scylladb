@@ -558,7 +558,7 @@ future<tasks::task_manager::task_ptr> task_manager_module::start_table_major_com
 static future<> run_cleanup_keyspace_compaction(sharded<replica::database>& db, std::string keyspace, lw_shared_ptr<std::vector<table_info>> tables, flush_mode fm, tasks::task_info task_info) {
     co_await db.invoke_on_all([&] (replica::database& local_db) -> future<> {
         if (fm == flush_mode::all_tables) {
-            co_await local_db.flush_all_tables();
+            co_await local_db.flush_commitlog();
         }
         auto& module = local_db.get_compaction_manager().get_task_manager_module();
         auto task = co_await module.start_shard_cleanup_compaction(local_db, keyspace, *tables, task_info);
@@ -586,7 +586,7 @@ future<tasks::task_manager::task_ptr> task_manager_module::start_cleanup_keyspac
 
 static future<> run_global_cleanup_compaction(sharded<replica::database>& db, tasks::task_info task_info) {
     co_await db.invoke_on_all([&] (replica::database& local_db) -> future<> {
-        co_await local_db.flush_all_tables();
+        co_await local_db.flush_commitlog();
         // Local keyspaces do not require cleanup.
         // Keyspaces using tablets do not support cleanup.
         const auto keyspaces = db.local().get_non_local_vnode_based_strategy_keyspaces();
