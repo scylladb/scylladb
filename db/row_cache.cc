@@ -519,7 +519,7 @@ void row_cache::on_partition_miss() {
 }
 
 void row_cache::on_row_hit() {
-    _stats.hits.mark();
+    ++_stats.hits;
     _tracker.on_row_hit();
 }
 
@@ -528,7 +528,7 @@ void row_cache::on_mispopulate() {
 }
 
 void row_cache::on_row_miss() {
-    _stats.misses.mark();
+    ++_stats.misses;
     _tracker.on_row_miss();
 }
 
