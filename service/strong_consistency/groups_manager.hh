@@ -197,9 +197,9 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     db::raft_commitlog_replay_buffer& _raft_replay_buffer;
     raft_resize_tracker& _resize_tracker;
     std::unordered_map<raft::group_id, raft_group_state> _raft_groups = {};
-    // Torn down groups whose row waits for cleanup_group(), with their tables. update()
-    // erases the row if the table is dropped first. A restart forgets them, and
-    // erase_rows_of_gone_groups() takes over.
+    // Groups not hosted here whose row waits for cleanup_group(), with their tables: added by
+    // a teardown, and at boot by erase_rows_of_gone_groups(). update() erases the row if the
+    // table is dropped first.
     std::unordered_map<raft::group_id, table_id> _awaiting_cleanup;
     gate _background_erases;
     // Keyed by keyspace and table name, which is what the series are labelled
@@ -260,6 +260,11 @@ class groups_manager : public peering_sharded_service<groups_manager> {
         log_disposition disposition, bool clean_up = false);
 
     void schedule_raft_groups_deletion(bool all, log_disposition disposition);
+
+    // Erases this shard's rows of the groups gone from tablet metadata, which a crash
+    // between their teardown and its erase leaves behind. Adds the rows of the groups
+    // still in it but not started here to _awaiting_cleanup.
+    future<> erase_rows_of_gone_groups();
 
     // Queues a start or deletion of the group's raft::server behind the
     // previous one; at most one control operation runs per group. `op` is
@@ -364,7 +369,7 @@ public:
 
     // Called during node boot. Starts all raft::server instances corresponding
     // to the latest group0 state in the background.
-    void start();
+    future<> start();
 
     // Stops the groups of every shard, from any shard: unregisters the RPC handlers
     // on every shard, waiting for those still running, and then stops every shard.
