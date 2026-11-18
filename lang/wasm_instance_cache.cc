@@ -161,9 +161,13 @@ seastar::future<instance_cache::value_type> instance_cache::get(const db::functi
             // and also because we can't track its size efficiently, we remove it from
             // lru and subtract its size from the total size until it is no longer used
             ++shard_stats().cache_hits;
-            _total_size -= entry->it->instance_size;
-            _lru.erase(entry->it);
-            entry->it = _lru.end();
+            // The entry may no longer be in the lru: while we waited for its lock,
+            // remove() may have removed it from the cache and the lru.
+            if (entry->it != _lru.end()) {
+                _total_size -= entry->it->instance_size;
+                _lru.erase(entry->it);
+                entry->it = _lru.end();
+            }
         }
         return make_ready_future<instance_cache::value_type>(entry);
     });
@@ -212,6 +216,8 @@ void instance_cache::remove(const db::functions::function_name& name, const std:
             if (entry_ptr->it != _lru.end()) {
                 _total_size -= entry_ptr->it->instance_size;
                 _lru.erase(entry_ptr->it);
+                // A get() waiting for the entry's lock may still use the entry
+                entry_ptr->it = _lru.end();
             }
             it = _cache.erase(it);
         } else {
