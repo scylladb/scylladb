@@ -31,10 +31,13 @@
 #include "data_dictionary/data_dictionary.hh"
 #include "db/config.hh"
 #include "db/system_distributed_keyspace.hh"
+#include "db/tags/extension.hh"
+#include "db/tags/utils.hh"
 #include "db_clock.hh"
 #include "gms/gossiper.hh"
 #include "replica/database.hh"
 #include "service/client_state.hh"
+#include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
 #include "service_permit.hh"
 #include "tracing/trace_state.hh"
@@ -454,6 +457,43 @@ static future<> write_final_import_row(db::system_distributed_keyspace& sdks, co
     }
 }
 
+future<> executor::s3_imports::remove_import_in_progress_tag(::table_id table_id, sstring import_arn, bool wait_for_agreement) {
+    auto table = _e._proxy.data_dictionary().try_find_table(table_id);
+    if (!table) {
+        co_return;
+    }
+    auto tag = db::find_tag(*table->schema(), IMPORT_IN_PROGRESS_TAG_KEY);
+    if (!tag || *tag != std::string_view(import_arn)) {
+        co_return;
+    }
+    try {
+        co_await _e.modify_tags(table->schema()->ks_name(), table->schema()->cf_name(), [&import_arn] (std::map<sstring, sstring>& tags) {
+            if (auto it = tags.find(IMPORT_IN_PROGRESS_TAG_KEY); it != tags.end() && it->second == import_arn) {
+                tags.erase(it);
+            }
+        });
+    } catch (const data_dictionary::no_such_column_family&) {
+        // The table was dropped meanwhile.
+        co_return;
+    }
+    // An import waits, as CreateTable and UpdateTable do (see wait_for_schema_agreement_after_ddl()),
+    // so that DescribeTable on any node reports the table ACTIVE once the import has ended. The
+    // tag is removed anyway, so a timeout is only logged.
+    // The garbage collector of imports does not wait: nobody waits for the tables whose tags it
+    // removes, and a round which removes many tags must not wait for each of them - up to 30
+    // seconds while the cluster knows other nodes but none of them is alive, as
+    // have_schema_agreement() is false then.
+    if (!wait_for_agreement) {
+        co_return;
+    }
+    try {
+        co_await _e._mm.wait_for_schema_agreement(_e._proxy.local_db(), db::timeout_clock::now() + std::chrono::seconds(30), &_e._stop_as);
+    } catch (const service::migration_manager::schema_agreement_timeout&) {
+        ilogger.warn("Import {}: removed the {} tag of its table, but the schema agreement after it timed out",
+                import_arn, IMPORT_IN_PROGRESS_TAG_KEY);
+    }
+}
+
 // --- The source of an import ---
 
 namespace {
@@ -539,6 +579,8 @@ class executor::s3_imports::import_task {
     // The target table. Refreshed when its schema changes, see refresh_schema().
     schema_ptr _schema;
     std::optional<write_item_index_info> _index_info;
+    // True if this import created the target table, and thus tagged it.
+    bool _created_table = false;
 
     // Progress of reading the source: processed_size_bytes() of the objects already read, and the
     // pipeline of the object being read, if any.
@@ -695,7 +737,7 @@ class executor::s3_imports::import_task {
     }
 
     // Creates the target table from the TableCreationParameters of the request, with the id
-    // allocated when the import was accepted.
+    // allocated when the import was accepted and with the import-in-progress tag.
     future<> create_table() {
         const auto tablets_mode = _e._proxy.data_dictionary().get_config().tablets_mode_for_new_keyspaces();
         auto parameters = sstring(rjson::print(rjson::get(_request->request, "TableCreationParameters")));
@@ -707,12 +749,14 @@ class executor::s3_imports::import_task {
             // ImportTable (requester_role) is not given the permissions on it which CreateTable gives
             // to the role which creates a table (SCYLLADB-4045).
             error = co_await _e.container().invoke_on(0, [parameters = std::move(parameters), table_id = _row.table_id,
-                    tablets_mode] (executor& e) -> future<std::optional<std::pair<sstring, sstring>>> {
+                    import_arn = _row.import_arn, tablets_mode] (executor& e) -> future<std::optional<std::pair<sstring, sstring>>> {
                 rjson::value request = rjson::parse(parameters);
                 std::optional<std::pair<sstring, sstring>> error;
                 try {
                     auto validated = validate_create_table_request(request, e._proxy.features(), tablets_mode, "ImportTable");
                     validated.builder.set_uuid(table_id);
+                    validated.tags_map[IMPORT_IN_PROGRESS_TAG_KEY] = import_arn;
+                    validated.builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(validated.tags_map));
                     auto result = co_await e.commit_table_creation(std::move(request), std::move(validated),
                             service::client_state(service::client_state::internal_tag{}), tablets_mode);
                     if (auto* err = std::get_if<api_error>(&result)) {
@@ -730,6 +774,7 @@ class executor::s3_imports::import_task {
         // A creation which failed late, e.g. waiting for schema agreement, may have created the
         // table. The id was allocated for this import, so a table with it is ours.
         if (_e._proxy.data_dictionary().try_find_table(_row.table_id)) {
+            _created_table = true;
             co_return;
         }
         // The creation succeeded, but there is no table with our id any more: it was dropped right
@@ -738,6 +783,9 @@ class executor::s3_imports::import_task {
             throw table_deleted();
         }
         if (ex) {
+            // FIXME: the schema change of the creation may still be applied later, e.g. after a
+            // timeout or an abort at shutdown, leaving a table with the import-in-progress tag which
+            // this import does not know of, and which nothing removes.
             std::rethrow_exception(ex);
         }
         if (error && error->first == "ResourceInUseException") {
@@ -1053,6 +1101,26 @@ class executor::s3_imports::import_task {
         }
     }
 
+    // Removes the import-in-progress tag of the table, if this import created it. Also when the garbage
+    // collector took the import: it may have taken it before this import created the table, and then
+    // found no tag to remove.
+    future<> remove_tag_of_created_table() {
+        if (!_created_table) {
+            co_return;
+        }
+        try {
+            co_await _e.container().invoke_on(0, [table_id = _row.table_id, import_arn = _row.import_arn] (executor& e) {
+                return e._s3_imports->remove_import_in_progress_tag(table_id, import_arn, true);
+            });
+        } catch (...) {
+            // The table stays CREATING for DescribeTable, but it is usable. A failure must not keep
+            // run() from writing the final state of the import.
+            // FIXME: nothing removes the tag then.
+            ilogger.warn("Import {}: failed to remove the {} tag of the table: {}", _row.import_arn,
+                    IMPORT_IN_PROGRESS_TAG_KEY, std::current_exception());
+        }
+    }
+
     // Reads the source and writes its items. Throws import_failure (or another exception) if the
     // import fails. Sets `source` as soon as it is made, so that run() closes it also when this
     // throws.
@@ -1130,6 +1198,7 @@ public:
             try {
                 if (!co_await update_import(_e._sdks, _row, import_status_in_progress, _row.node_id)) {
                     ilogger.warn("Import {}: the garbage collector took the import, stopping", _row.import_arn);
+                    co_await remove_tag_of_created_table();
                     co_return std::nullopt;
                 }
             } catch (...) {
@@ -1147,6 +1216,9 @@ public:
         } else {
             _row.import_status = sstring(import_status_completed);
         }
+        // Before the terminal state is written, so that DescribeTable reports the table ACTIVE once
+        // the import is reported as ended.
+        co_await remove_tag_of_created_table();
         _row.completed_at = db_clock::now();
         try {
             if (!co_await try_write_final_import_row(_e._sdks, _row)) {
