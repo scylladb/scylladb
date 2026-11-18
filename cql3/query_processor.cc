@@ -613,10 +613,13 @@ future<::shared_ptr<cql_transport::messages::result_message>> query_processor::e
         try {
             auto guard = co_await remote_.get().mm.start_group0_operation(std::nullopt,
                     query_state.get_client_state().get_abort_source_ptr());
+            utils::get_local_injector().inject("execute_with_guard_concurrent_modification", [] {
+                throw service::group0_concurrent_modification{};
+            });
             co_return co_await fn(query_state, statement, options, std::move(guard));
         } catch (const service::group0_concurrent_modification& ex) {
             log.warn("Failed to execute statement \"{}\" due to guard conflict.{}.",
-                    statement->raw_cql_statement.linearize(), retries ? " Retrying" : " Number of retries exceeded, giving up");
+                    statement->mask_secrets(statement->raw_cql_statement.linearize()), retries ? " Retrying" : " Number of retries exceeded, giving up");
             if (retries--) {
                 continue;
             }
