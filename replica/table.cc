@@ -3437,7 +3437,7 @@ public:
         }
     }
     bool compaction_enforce_min_threshold() const noexcept override {
-        return _t.get_config().compaction_enforce_min_threshold || _t._is_bootstrap_or_replace;
+        return _cg.compaction_enforce_min_threshold();
     }
     future<lw_shared_ptr<const sstables::sstable_set>> main_sstable_set() const override {
         return make_sstable_set_for_this_view(_cg.main_sstables(), [this] { return _cg.make_main_sstable_set(); });
@@ -5917,6 +5917,10 @@ std::vector<mutation_source> table::select_memtables_as_mutation_sources(dht::to
 
 compaction::compaction_backlog_tracker& compaction_group::get_backlog_tracker() {
     return *_backlog_tracker;
+}
+
+bool compaction_group::compaction_enforce_min_threshold() const noexcept {
+    return _t.get_config().compaction_enforce_min_threshold || _t._is_bootstrap_or_replace;
 }
 
 lw_shared_ptr<const sstables::sstable_set> compaction_group::sstables_for_backlog() const {

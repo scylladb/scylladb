@@ -349,20 +349,17 @@ incremental_compaction_strategy::get_sstables_for_compaction(compaction_group_vi
     auto candidates = co_await control.candidates_as_runs(t);
 
     // make local copies so they can't be changed out from under us mid-method
-    size_t min_threshold = t.min_compaction_threshold();
+    size_t min_threshold = incremental_compaction_strategy_options::effective_min_threshold(t.min_compaction_threshold(), t.compaction_enforce_min_threshold());
     size_t max_threshold = t.schema()->max_compaction_threshold();
 
     auto buckets = get_buckets(candidates)
             | std::views::transform([] (sstable_run_bucket_and_length& bucket) { return std::move(bucket.first); })
             | std::ranges::to<std::vector>();
 
+    // The bucket with the most runs is picked, so a tier holding min_threshold runs goes
+    // before a pair, which is compacted only when min_threshold isn't enforced.
     if (is_any_bucket_interesting(buckets, min_threshold)) {
         std::vector<sstables::frozen_sstable_run> most_interesting = most_interesting_bucket(std::move(buckets), min_threshold, max_threshold);
-        co_return compaction_descriptor(runs_to_sstables(std::move(most_interesting)), 0, _fragment_size);
-    }
-    // If we are not enforcing min_threshold explicitly, try any pair of sstable runs in the same tier.
-    if (!t.compaction_enforce_min_threshold() && is_any_bucket_interesting(buckets, 2)) {
-        std::vector<sstables::frozen_sstable_run> most_interesting = most_interesting_bucket(std::move(buckets), 2, max_threshold);
         co_return compaction_descriptor(runs_to_sstables(std::move(most_interesting)), 0, _fragment_size);
     }
 

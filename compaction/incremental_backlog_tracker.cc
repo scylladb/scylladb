@@ -30,7 +30,7 @@ incremental_backlog_tracker::inflight_component incremental_backlog_tracker::com
 
 incremental_backlog_tracker::backlog_calculation_result
 incremental_backlog_tracker::calculate_sstables_backlog_contribution(const compaction_backlog_source& src, const incremental_compaction_strategy_options& options) {
-    auto threshold = src.schema()->min_compaction_threshold();
+    auto threshold = incremental_compaction_strategy_options::effective_min_threshold(src.schema()->min_compaction_threshold(), src.compaction_enforce_min_threshold());
     int64_t total_bytes = 0;
     int64_t total_backlog_bytes = 0;
     float sstables_backlog_contribution = 0.0f;

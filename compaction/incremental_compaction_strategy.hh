@@ -42,6 +42,12 @@ public:
 
     static void validate(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options);
 
+    // The runs a tier has to hold for regular compaction to compact it: min_threshold when
+    // it's enforced, otherwise as few as two.
+    static unsigned effective_min_threshold(unsigned min_threshold, bool enforce_min_threshold) noexcept {
+        return enforce_min_threshold ? min_threshold : std::min(min_threshold, 2u);
+    }
+
     friend class incremental_compaction_strategy;
 };
 

@@ -84,6 +84,9 @@ public:
     // What the group measures, for matching compaction to ingestion and telling how
     // urgent it is.
     virtual compaction_group_stats stats() const = 0;
+    // Whether regular compaction waits for a tier to hold min_threshold runs, rather than
+    // compacting as few as two.
+    virtual bool compaction_enforce_min_threshold() const noexcept = 0;
 };
 
 // Compaction rates of a compaction group, which the compaction controller compares
