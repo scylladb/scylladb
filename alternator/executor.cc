@@ -28,6 +28,7 @@
 #include "mutation/tombstone.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "utils/log.hh"
+#include "schema/schema_registry.hh"
 #include "schema/schema_builder.hh"
 #include "exceptions/exceptions.hh"
 #include "service/client_state.hh"
@@ -4482,21 +4483,26 @@ future<> executor::cas_write(schema_ptr schema, service::cas_shard cas_shard, co
                     [cs = client_state.move_to_other_shard(),
                     &mb = mutation_builders,
                     &dk,
-                    ks = schema->ks_name(),
-                    cf = schema->cf_name(),
+                    gs = global_schema_ptr(schema),
                     gt = tracing::global_trace_state_ptr(trace_state),
                     permit = std::move(permit)]
                     (executor& self) mutable {
-            return do_with(cs.get(), [&mb, &dk, ks = std::move(ks), cf = std::move(cf),
-                                    trace_state = tracing::trace_state_ptr(gt), &self]
-                                    (service::client_state& client_state) mutable {
-                auto schema = self._proxy.data_dictionary().find_schema(ks, cf);
-                service::cas_shard cas_shard(*schema, dk.token());
+            // Build the write with the schema which encoded the items, not with the table found again
+            // by name: after a CQL ALTER, build() would put a value encoded for :attrs into a regular
+            // column, or the reverse; after a drop and a re-creation, the write would go to the new
+            // table. With this schema, cas_shard throws no_such_column_family if the table was dropped.
+            // (The work item of invoke_on() keeps this lambda and its captures until its future resolves.)
+            return gs.get(executor::default_timeout()).then([&self, &mb, &dk, &cs, &gt] (schema_ptr schema) {
+                return do_with(cs.get(), [&mb, &dk, schema = std::move(schema),
+                                        trace_state = tracing::trace_state_ptr(gt), &self]
+                                        (service::client_state& client_state) mutable {
+                    service::cas_shard cas_shard(*schema, dk.token());
 
-                //FIXME: Instead of passing empty_service_permit() to the background operation,
-                // the current permit's lifetime should be prolonged, so that it's destructed
-                // only after all background operations are finished as well.
-                return self.cas_write(schema, std::move(cas_shard), dk, mb, client_state, std::move(trace_state), empty_service_permit());
+                    //FIXME: Instead of passing empty_service_permit() to the background operation,
+                    // the current permit's lifetime should be prolonged, so that it's destructed
+                    // only after all background operations are finished as well.
+                    return self.cas_write(schema, std::move(cas_shard), dk, mb, client_state, std::move(trace_state), empty_service_permit());
+                });
             });
         });
     }
