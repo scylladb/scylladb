@@ -839,8 +839,7 @@ query_processor::get_statement(utils::chunked_string_view query, const service::
     p->statement->raw_cql_statement = utils::chunked_string(query);
     auto audit_info = p->statement->get_audit_info();
     if (audit_info) {
-        audit_info->set_query_string(query.linearize()); // Audit system may need linearized form
-        p->statement->sanitize_audit_info();
+        audit_info->set_query_string(p->statement->mask_secrets(query.linearize())); // Audit system may need linearized form
     }
     auto bytes_after = seastar::memory::stats().total_bytes_allocated();
     _parsing_cost_tracker.add_sample(bytes_after - bytes_before);
