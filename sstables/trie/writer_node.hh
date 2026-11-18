@@ -9,6 +9,7 @@
 #pragma once
 
 #include <cstdint>
+#include <limits>
 #include <new>
 #include "common.hh"
 #include "utils/assert.hh"
@@ -371,6 +372,14 @@ struct trie_payload {
     // For the writer, the meaning of the "bits" is opaque,
     // we just store an explicit size of the "bytes".
     uint8_t _payload_size = 0;
+    // If not `no_chunk`, the payload refers to a Data.db chunk through the
+    // chunk table of the page it is written to. The value identifies the chunk.
+    // It is opaque to the trie writer, which only counts distinct values to bound
+    // the growth of the page's chunk table. For this count to be exact, equal
+    // values must be contiguous in key order among the payloads that have one.
+    // The node sink chooses the slot when it writes the node.
+    uint64_t _chunk = no_chunk;
+    constexpr static uint64_t no_chunk = std::numeric_limits<uint64_t>::max();
 
     trie_payload() noexcept = default;
     trie_payload(uint8_t bits, const_bytes blob) noexcept {
@@ -385,11 +394,49 @@ struct trie_payload {
     // For tests.
     bool operator==(const trie_payload& other) const {
         return other._payload_bits == _payload_bits
+            && other._chunk == _chunk
             && std::ranges::equal(other.blob(), blob());
+    }
+
+    bool has_chunk() const noexcept {
+        return _chunk != no_chunk;
     }
 
     const_bytes blob() const noexcept{
         return {_payload_buf.data(), _payload_size};
+    }
+};
+
+// The distinct chunks (see trie_payload::_chunk) among the unwritten payloads
+// of a subtree.
+//
+// It holds their number, and the first and last of them in key order.
+// The sets of adjacent subtrees are joined in key order. Equal chunks are
+// contiguous in key order, so two subtrees share a chunk only if the last
+// chunk of the first one equals the first chunk of the second one. Thus the
+// count is exact, even if some subtrees between them were written out already.
+struct chunk_set {
+    uint32_t count = 0;
+    uint64_t first = 0;
+    uint64_t last = 0;
+
+    static chunk_set of(const trie_payload& p) noexcept {
+        if (!p.has_chunk()) {
+            return {};
+        }
+        return {1, p._chunk, p._chunk};
+    }
+    // Appends the set of a subtree that follows this one in key order.
+    void append(const chunk_set& next) noexcept {
+        if (!next.count) {
+            return;
+        }
+        if (!count) {
+            *this = next;
+            return;
+        }
+        count += next.count - (last == next.first);
+        last = next.last;
     }
 };
 
@@ -401,6 +448,16 @@ class writer_node;
 // We pass the serialization logic to trie_writer via a template parameter for the sake
 // of testability. This way the logic of trie_writer and the serialization format can be tested
 // in isolation from each other.
+//
+// Each page of the output can end with a table, which grows as nodes are written
+// to the page. Each payload with a chunk (see trie_payload::_chunk) adds at most
+// one entry to the table of its page: an entry for a chunk that the table holds
+// already is shared. Nodes must not overlap the table.
+//
+// The writer decides what fits into a page by "weight": the size of the nodes,
+// plus table_entry_size() for each distinct chunk among their payloads.
+// The weight doesn't depend on the page, and is never smaller than the
+// space the nodes will take in the page, including the table growth.
 template <typename T>
 concept trie_writer_sink = requires(T& o, const T& co, const writer_node& x, sink_pos pos) {
     // Returns the serialized size of node x, if it was written starting at position `pos`.
@@ -411,11 +468,18 @@ concept trie_writer_sink = requires(T& o, const T& co, const writer_node& x, sin
     // (Which might be different than the start position. This is because the BTI format will
     // turns a node with a multi-character transition into many single-character nodes, and
     // the parent must point to the last one, not the first one).
+    // The node must fit before the table of the current page, including the table growth.
     { o.write(x, pos) } -> std::same_as<sink_pos>;
+    // Ends the current page and starts the next one.
     { o.pad_to_page_boundary() };
     { co.pos() } -> std::same_as<sink_pos>;
-    { co.page_size() } -> std::same_as<uint64_t>;
+    // The weight that fits into an empty page.
+    { co.page_capacity() } -> std::same_as<uint64_t>;
+    // The free space in the current page, before its table.
+    // In range [0; page_capacity()].
     { co.bytes_left_in_page() } -> std::same_as<uint64_t>;
+    // The weight of each distinct chunk. 0 if pages have no tables.
+    { co.table_entry_size() } -> std::same_as<uint64_t>;
 };
 
 // The trie writer holds a trie of these nodes while it's building the index pages.
@@ -503,6 +567,12 @@ struct writer_node {
     // Only valid for completed nodes.
     // Invalidated after _pos is set.
     sink_offset _branch_size;
+    // The distinct chunks among the unwritten payloads of the subtree, including
+    // this node's own payload. Exact.
+    //
+    // Only valid for completed nodes.
+    // Empty after _pos is set.
+    chunk_set _chunks;
     // The identifier (in practice: position) of the node in the output file/stream.
     //
     // Only set after the node is flushed.
@@ -556,6 +626,12 @@ struct writer_node {
     // get_children().empty() && _pos.valid() && !_has_out_of_page_children && !_has_out_of_page_descendants
     template <trie_writer_sink Output>
     static void write(ptr<writer_node> self, Output&, bool guaranteed_fit);
+    // The weight of the unwritten subtree (see trie_writer_sink),
+    // based on the current values of _branch_size, _node_size and _chunks.
+    template <trie_writer_sink Output>
+    uint64_t weight(const Output& out) const {
+        return (_branch_size + _node_size).value + out.table_entry_size() * _chunks.count;
+    }
 };
 
 } // namespace sstables::trie
