@@ -18,8 +18,9 @@
 
 namespace utils::http {
 
-// Adds the CAs the host trusts to the builder. For any credentials that
-// should trust what the host trusts.
+// Adds the CAs the host trusts to the builder: from the distribution's CA
+// bundle file when one reads in full, from the system trust store otherwise.
+// For any credentials that should trust what the host trusts.
 future<> add_system_trust(tls::credentials_builder& builder);
 
 future<shared_ptr<tls::certificate_credentials>> system_trust_credentials();
@@ -31,6 +32,11 @@ namespace internal {
 // marker stands outside them, as a certificate cut short leaves. Text
 // between the certificates is skipped. Exposed for tests.
 future<std::vector<sstring>> read_ca_bundle(const char* path);
+
+// Whether a file in p11-kit's trust sources may distrust a certificate, which
+// a PEM CA bundle cannot express: it holds a p11-kit object or an OpenSSL
+// TRUSTED CERTIFICATE. Exposed for tests.
+future<bool> may_record_distrust(const char* path);
 
 }
 

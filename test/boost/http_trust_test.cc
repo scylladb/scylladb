@@ -151,3 +151,25 @@ SEASTAR_THREAD_TEST_CASE(test_read_ca_bundle_reports_a_missing_file) {
         BOOST_REQUIRE(e.code() == std::errc::no_such_file_or_directory);
     }
 }
+
+SEASTAR_THREAD_TEST_CASE(test_may_record_distrust) {
+    tmpdir dir;
+    auto may_distrust = [&] (const std::string& name, const std::string& content) {
+        return utils::http::internal::may_record_distrust(write_bundle(dir, name, content).c_str()).get();
+    };
+    // Plain certificates, as a private CA is added to the anchors, cannot
+    // distrust anything; DER cannot either.
+    BOOST_REQUIRE(!may_distrust("anchor.pem", first_certificate + "\n" + second_certificate + "\n"));
+    BOOST_REQUIRE(!may_distrust("anchor.der", std::string("\x30\x82\x03\xe2\x30\x82\x02\xca\xa0\x03", 10)));
+    BOOST_REQUIRE(!may_distrust("empty", ""));
+    // What can: a p11-kit object, as Fedora's test case for distrusting an
+    // intermediate adds one, and an OpenSSL certificate with trust settings.
+    BOOST_REQUIRE(may_distrust("distrust.p11-kit", "[p11-kit-object-v1]\nclass: certificate\nx-distrusted: true\n" + first_certificate + "\n"));
+    auto trusted = first_certificate;
+    trusted.replace(0, std::string_view("-----BEGIN CERTIFICATE-----").size(), "-----BEGIN TRUSTED CERTIFICATE-----");
+    BOOST_REQUIRE(may_distrust("trusted.crt", trusted + "\n"));
+    // Found after a plain certificate, and when split between two of the
+    // 32 KiB reads.
+    BOOST_REQUIRE(may_distrust("after.p11-kit", first_certificate + "\n[p11-kit-object-v1]\nclass: certificate\nx-distrusted: true\n"));
+    BOOST_REQUIRE(may_distrust("split.p11-kit", "#" + std::string(32 * 1024 - 8, 'c') + "\n[p11-kit-object-v1]\n"));
+}
