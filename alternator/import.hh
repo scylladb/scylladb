@@ -129,7 +129,8 @@ public:
 //  - the import removes the import-in-progress tag of the table it created, and ends as
 //    COMPLETED, or as FAILED (ItemValidationError if only items, lines or objects were skipped,
 //    see count_error()). For any other failure it first writes FAILING with the failure code, so
-//    that the garbage collector can finish the cleanup if this node stops.
+//    that the garbage collector can finish the cleanup if this node stops;
+//  - if ImportTable fails after it inserted the client token row, it writes FAILED itself.
 class executor::s3_imports {
     executor& _e;
     // Holds the background fibers. stop() closes it.
@@ -150,6 +151,9 @@ class executor::s3_imports {
     future<> remove_import_in_progress_tag(::table_id table_id, sstring import_arn, bool wait_for_agreement);
 public:
     explicit s3_imports(executor& e);
+    // True once stop() aborted the imports: late in a clean shutdown, after the server stopped
+    // serving requests.
+    bool abort_requested() const noexcept { return _as.abort_requested(); }
     // A reserved slot of _reserved_import_slots. ImportTable holds it until it starts the import, then the
     // import fiber holds it, then finish_import_in_background() if needed. The destructor releases it.
     class slot {
@@ -166,7 +170,7 @@ public:
     std::optional<slot> try_reserve_import_slot();
     // Starts the background fiber which runs the import of `row`, which ImportTable has just
     // inserted as IN_PROGRESS and owned by this node.
-    void start_import(slot import_slot, import_row row);
+    void start_import(slot&& import_slot, import_row row);
     // Starts a background fiber which writes the terminal state of `row`, retrying until the write
     // succeeds or the node stops, and keeps `import_slot` until then. For a caller whose write of
     // that state failed and which cannot wait: the garbage collector does not collect the rows of
@@ -178,6 +182,9 @@ public:
     void set_source_factory(import_source_factory factory) { _source_factory = std::move(factory); }
     // Aborts the fibers above and waits for them to finish.
     future<> stop();
+private:
+    // The fiber which start_import() starts.
+    future<> run_import(std::unique_ptr<import_task> task, slot import_slot);
 };
 
 } // namespace alternator
