@@ -441,17 +441,34 @@ A segment the replay could not read in full refuses the boot too, once this shar
 a strongly consistent group. The index checks above catch a gap they can see, and a lost
 tail is the case they cannot: the batch declaring the higher `commit_idx` went down with
 the unread bytes, so raft gets a log shorter than the one the node acknowledged. Replay
-names the segments and stops. `strongly_consistent_tables_start_on_damaged_commitlog`
-starts the node without them, which is the way out while the commitlog still reports an
-intact segment as damaged (SCYLLADB-4853). The node that starts that way runs a log that
-may be short of entries the quorum committed.
+names the segment and stops as soon as it meets it (`on_unreadable_segment()`).
+`strongly_consistent_tables_start_on_damaged_commitlog` starts the node without it, which
+is the way out while the commitlog still reports an intact segment as damaged
+(SCYLLADB-4853). The node that starts that way runs a log that may be short of entries the
+quorum committed.
 
-A group this shard no longer hosts is discarded rather than recovered: its entries
-belong to whoever holds the tablet now. The test is `hosts_raft_group()`, the same one
-that decides whether the running group is torn down, and it is stage-aware - a leaving
-replica stops hosting the group at `cleanup`, while it is still listed in
-`tablet_info::replicas`. Deciding by the replica list instead would recover a log whose
-segments the teardown has already given up.
+The replayer decides for every raft batch whether it belongs to a group that runs on this
+shard now, and skips the batch otherwise:
+
+- **The shard does not host the group.** Its entries belong to whoever holds the tablet
+  now. The test is `hosts_raft_group()`, the same one that decides whether the running
+  group is torn down, and it is stage-aware - a leaving replica stops hosting the group at
+  `cleanup`, while it is still listed in `tablet_info::replicas`. Deciding by the replica
+  list instead would recover a log whose segments the teardown has already given up.
+- **The batch is at or below the tablet's commitlog cleanup record.** The tablet left this
+  shard and came back, so the shard hosts the group again, under the same group id and
+  with a new row. The batches of the earlier stay are still in the commitlog, and replaying
+  them would put entries of that stay into the log of the new one. The tablet's storage
+  cleanup records the last position written to the shard's commitlog
+  (`commitlog::last_written_position()`). The group writes no batch after its server is
+  stopped, which happens before the cleanup, so every batch of the earlier stay is at or
+  below that position, and every batch written after the return is above it. This is the
+  same record, and the same comparison, that keeps the mutations of a cleaned-up tablet
+  of an eventually consistent table from being replayed.
+
+A batch that passes both checks belongs to the group as it runs on this shard now, and
+that group has a row: the row is written before the group's first batch. A missing row
+is an internal error.
 
 ### Shutdown behavior
 

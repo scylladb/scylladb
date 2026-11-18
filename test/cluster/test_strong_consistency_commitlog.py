@@ -550,16 +550,28 @@ async def test_truncated_copies_are_dropped_on_replay(manager: ScyllaClusterMana
 
 
 @pytest.mark.asyncio
-async def test_migrated_group_is_not_resurrected_on_replay(manager: ScyllaClusterManager):
-    """A tablet that migrates away leaves its raft entries behind in the commitlog
-    of the node that lost it. On the way out the group gives up its segment
-    references, so the segments still holding those entries can be reclaimed, and
-    the tablet cleanup erases the group's row.
+@pytest.mark.parametrize("tablet_returns", [False, True])
+async def test_migrated_group_is_not_resurrected_on_replay(manager: ScyllaClusterManager, tablet_returns: bool):
+    """A tablet that migrates away leaves its raft batches behind in the commitlog
+    of the node that lost it. On the way out the group drops its segment
+    references, so the segments holding those batches can be reclaimed. The tablet
+    cleanup then erases the group's row and writes the tablet's commitlog cleanup
+    record, at the position of the newest entry in the shard's commitlog.
 
-    Replay on that node must notice it no longer hosts the tablet and discard the
-    entries. Replay checks ownership before it reads the row, and the test waits
-    for the ownership message. A crash while the row is still there is
-    test_replay_after_a_crash_before_the_cleanup_erased_the_row.
+    The node is killed and replays those batches. It must skip them:
+
+    - The tablet stays away: the shard does not host the group. Replay checks that
+      before it reads the row, and the test waits for its message. A crash while
+      the row is still there is
+      test_replay_after_a_crash_before_the_cleanup_erased_the_row.
+    - tablet_returns: the tablet migrates back to the same shard before the kill.
+      The shard hosts the group again, under the same group id and with a new row,
+      so the hosting check passes. The batches of the first stay are at or below
+      the position of the cleanup record, and that is how replay tells them from
+      the batches written after the return. Replaying them would put entries of
+      the first stay into the log of the second one. The rows written after the
+      return are only on this node, in its commitlog, so they also show that the
+      batches above the record are replayed.
 
     Between nodes, not between shards of one node: intra-node migration of a
     strongly consistent tablet is not implemented (SCYLLADB-2497), so a tablet
@@ -570,6 +582,8 @@ async def test_migrated_group_is_not_resurrected_on_replay(manager: ScyllaCluste
     }
     cmdline = [
         '--logger-log-level', 'raft_commitlog_replay=debug',
+        # The replayer logs every raft batch it skips, and why.
+        '--logger-log-level', 'commitlog_replayer=debug',
         '--logger-log-level', 'sc_groups_manager=debug',
     ]
     servers = await manager.servers_add(2, config=config, cmdline=cmdline)
@@ -600,8 +614,23 @@ async def test_migrated_group_is_not_resurrected_on_replay(manager: ScyllaCluste
         await manager.api.quiesce_topology(servers[0].ip_addr)
         logger.info(f"group {group_id}: moved tablet from {src_host_id}:{src_shard} to {dst_host_id}:0")
 
-        # Crash the node that lost the tablet, so those entries have to go through
-        # its replay.
+        num_rows = 5
+        if tablet_returns:
+            await manager.api.move_tablet(servers[0].ip_addr, ks, "test",
+                                          dst_host_id, 0, src_host_id, src_shard, tablet_token)
+            await manager.api.quiesce_topology(servers[0].ip_addr)
+            logger.info(f"group {group_id}: moved tablet back to {src_host_id}:{src_shard}")
+
+            # The group may still be electing its leader on the node it returned to.
+            async def insert(pk: int):
+                await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({pk}, {pk * 10})")
+                return True
+            num_rows = 10
+            for pk in range(5, num_rows):
+                await wait_for(lambda: insert(pk), time.time() + 60)
+
+        # Crash the node that the tablet left, so the batches the group wrote there
+        # before that have to go through its replay.
         log = await manager.server_open_log(src_server.server_id)
         mark = await log.mark()
         await manager.server_stop(src_server.server_id, convict=False)
@@ -610,13 +639,15 @@ async def test_migrated_group_is_not_resurrected_on_replay(manager: ScyllaCluste
         await reconnect_driver(manager)
         cql = manager.get_cql()
 
-        # The node that no longer hosts the tablet must have dropped the entries.
-        await log.wait_for(rf"group {group_id} is no longer hosted by this shard",
-                           from_mark=mark, timeout=120)
+        # Replay must have skipped the batches the group wrote before the tablet left.
+        skipped = (rf"group {group_id} wrote it before tablet .* was last cleaned up" if tablet_returns
+                   else rf"group {group_id} is not hosted by this shard")
+        await log.wait_for(rf"commitlog_replayer - raft batch at .*: {skipped}", from_mark=mark, timeout=120)
 
-        # And the data must be intact, served from the node that now owns it.
-        for pk in range(5):
-            rows = await cql.run_async(f"SELECT * FROM {ks}.test WHERE pk = {pk};")
+        # And the data must be intact, served from the node that now owns the tablet.
+        # That node may have just restarted, so a read is retried until it succeeds.
+        for pk in range(num_rows):
+            rows = await wait_for(lambda: cql.run_async(f"SELECT * FROM {ks}.test WHERE pk = {pk};"), time.time() + 60)
             assert len(rows) == 1, f"Expected 1 row for pk={pk}, got {len(rows)}"
             assert rows[0].c == pk * 10, f"pk={pk}: expected c={pk * 10}, got c={rows[0].c}"
 
@@ -625,15 +656,17 @@ async def test_migrated_group_is_not_resurrected_on_replay(manager: ScyllaCluste
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_replay_after_a_crash_before_the_cleanup_erased_the_row(manager: ScyllaClusterManager):
     """A migration stops the leaving replica from hosting the group when the cleanup
-    stage is published, and the teardown then gives up its segment references. The
-    tablet cleanup erases the group's row only after that teardown, so a crash in
-    between leaves the row behind with the segments reclaimable.
+    stage is published, and the teardown then drops its segment references. The
+    tablet cleanup erases the group's row, and writes the tablet's commitlog cleanup
+    record, only after that teardown. So a crash in between leaves the row behind,
+    no cleanup record, and segments that can be reclaimed.
 
-    Replay on that node must still decline the group. Tablet metadata alone says
-    yes, because the leaving replica stays in tablet_info::replicas until
-    end_migration. Replay then recovers a log whose segments are going away, and
-    aborts the boot when the recovered tail no longer starts one past the row's
-    floor."""
+    Replay on that node must still skip the group's batches. The only thing that
+    says so is the hosting rule: a leaving replica stops hosting the group at the
+    cleanup stage. The replica list alone would say that the shard hosts the group,
+    because the leaving replica stays in tablet_info::replicas until end_migration,
+    and replay would then recover a log whose segments the teardown has already
+    given up. After the boot the coordinator repeats the cleanup step."""
     config = {
         'commitlog_total_space_in_mb': 10000,
         # The coordinator sleeps while the cleanup below is held. The load stats
@@ -642,6 +675,8 @@ async def test_replay_after_a_crash_before_the_cleanup_erased_the_row(manager: S
     }
     cmdline = [
         '--logger-log-level', 'raft_commitlog_replay=debug',
+        # The replayer logs every raft batch it skips, and why.
+        '--logger-log-level', 'commitlog_replayer=debug',
         '--logger-log-level', 'sc_groups_manager=debug',
     ]
     servers = await manager.servers_add(2, config=config, cmdline=cmdline)
@@ -695,8 +730,9 @@ async def test_replay_after_a_crash_before_the_cleanup_erased_the_row(manager: S
         # exit before the restart.
         await manager.server_stop(src_server.server_id, convict=False)
         await manager.server_start(src_server.server_id)
-        # The row is still there, so only the ownership rule keeps replay off the group.
-        await log.wait_for(rf"group {group_id} is no longer hosted by this shard",
+        # The row is still there and no cleanup record was written, so only the hosting
+        # rule keeps replay off the group.
+        await log.wait_for(rf"commitlog_replayer - raft batch at .*: group {group_id} is not hosted by this shard",
                            from_mark=mark, timeout=120)
 
         await manager.api.quiesce_topology(dst_server.ip_addr)

@@ -105,7 +105,6 @@ raft_groups_storage::raft_groups_storage(cql3::query_processor& qp, replica::dat
     , _target_table_id(target_table_id)
     , _request_flush(std::move(request_flush))
     , _raft_commitlog(_group_id, commit_log, target_table_id, _raft_groups_table_id, std::move(replayed_data))
-    , _pending_op_fut(make_ready_future<>())
 {
     rgslog.trace("Creating raft_groups_storage for group_id={}, server_id={}, shard={}", _group_id, _server_id, shard);
     if (shard > std::numeric_limits<int16_t>::max()) {
@@ -117,13 +116,11 @@ raft_groups_storage::raft_groups_storage(cql3::query_processor& qp, replica::dat
 
 future<> raft_groups_storage::store_term_and_vote(raft::term_t term, raft::server_id vote) {
     rgslog.debug("Raft group {} on shard {} stores term {} and vote {}.", _group_id, _shard, term, vote);
-    return execute_with_linearization_point([this, term, vote] {
-        static const auto store_cql = format("INSERT INTO system.{} (shard, group_id, vote_term, vote) VALUES (?, ?, ?, ?)",
-            db::system_keyspace::RAFT_GROUPS);
-        return _qp.execute_internal(
-            store_cql,
-            {int16_t(_shard), _group_id.id, int64_t(term.value()), vote.id}, cql3::query_processor::cache_internal::yes).discard_result();
-    });
+    static const auto store_cql = format("INSERT INTO system.{} (shard, group_id, vote_term, vote) VALUES (?, ?, ?, ?)",
+        db::system_keyspace::RAFT_GROUPS);
+    return _qp.execute_internal(
+        store_cql,
+        {int16_t(_shard), _group_id.id, int64_t(term.value()), vote.id}, cql3::query_processor::cache_internal::yes).discard_result();
 }
 
 future<std::pair<raft::term_t, raft::server_id>> raft_groups_storage::load_term_and_vote() {
@@ -268,8 +265,7 @@ future<> raft_groups_storage::truncate_log(raft::index_t idx) {
 }
 
 future<> raft_groups_storage::abort() {
-    // wait for pending write requests to complete.
-    return std::move(_pending_op_fut);
+    return make_ready_future<>();
 }
 
 db::rp_handle raft_groups_storage::pin_target_table_for_apply(raft::index_t idx) {
@@ -490,19 +486,6 @@ future<> raft_groups_storage::store_descriptor(cql3::query_processor& qp, raft::
             {int16_t(shard), gid.id, int64_t(idx.value()), int64_t(term.value()),
              data_value(serialize_config(config)), serialize_truncations(truncations)},
             cql3::query_processor::cache_internal::yes);
-}
-
-future<> raft_groups_storage::execute_with_linearization_point(std::function<future<>()> f) {
-    promise<> task_promise;
-    auto pending_fut = std::exchange(_pending_op_fut, task_promise.get_future());
-    co_await std::move(pending_fut);
-    try {
-        co_await f();
-        task_promise.set_value();
-    } catch (...) {
-        task_promise.set_exception(std::current_exception());
-        throw;
-    }
 }
 
 future<> raft_groups_storage::bootstrap(raft::configuration initial_configuation, bool nontrivial_snapshot) {

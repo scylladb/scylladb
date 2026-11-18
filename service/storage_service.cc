@@ -5778,6 +5778,11 @@ future<> storage_service::cleanup_tablet(locator::global_tablet_id tablet) {
                 // so the delete is durable once it returns. Commitlog replay also discards
                 // the entries of a group that hosts_raft_group() says this shard no longer
                 // hosts.
+                //
+                // The storage cleanup below then records the position of the commitlog's
+                // newest entry. The group writes no raft batch after its server is gone, so
+                // all of its batches are at or below that position, and commitlog replay
+                // skips them if the tablet ever returns to this shard.
                 co_await gm.local().cleanup_group(tablet, *group_id);
             }
             auto& table = db.find_column_family(tablet.table);

@@ -572,7 +572,12 @@ future<> server_impl::start() {
     // start() returns, with the rest of the replay, rather than later by the
     // applier fiber on its own.
     if (const auto& cfg = log.get_configuration(); !cfg.is_joint() && raft::configuration::voter_count(cfg.current) == 1 && cfg.can_vote(_id)) {
-        commit_idx = std::max(commit_idx, log.last_idx());
+        if (const auto last_idx = log.last_idx(); last_idx > commit_idx) {
+            commit_idx = last_idx;
+            // As on a running server, where the io fiber stores a commit index
+            // before the entries it covers are handed to the applier.
+            co_await _persistence->store_commit_idx(commit_idx);
+        }
     }
     raft::configuration rpc_config = log.get_configuration();
     index_t stable_idx = log.stable_idx();
