@@ -83,6 +83,9 @@ public:
     // Returns the next object, in the order in which the import reads them, or nullopt after
     // the last one. To fail the import with a specific FailureCode, throw import_failure.
     virtual future<std::optional<import_source_object>> next_object() = 0;
+    // Creates the pipeline which reads `object`. See create_source_pipeline() for `on_item`.
+    virtual future<std::unique_ptr<import_pipeline_interface>> open(const import_source_object& object,
+            std::function<future<>(rjson::value)> on_item, compression_type compression) = 0;
     virtual future<> close() = 0;
 };
 
@@ -90,6 +93,10 @@ public:
 // aborted when the node shuts down, and must abort the reads of the source.
 using import_source_factory = std::function<future<std::unique_ptr<import_source>>(
         sstring s3_bucket, sstring s3_key_prefix, abort_source& as)>;
+
+// A source over in-memory objects, for tests. Returns the objects in the order given.
+std::unique_ptr<import_source> make_in_memory_import_source(
+        std::vector<std::pair<sstring, std::shared_ptr<in_memory_test_storage>>> objects);
 
 // Fails an import with the FailureCode `code` and the FailureMessage what().
 class import_failure : public std::runtime_error {
@@ -127,6 +134,9 @@ public:
     // wait: the garbage collector does not collect the rows of the current incarnation of this
     // node, so this node must finish them.
     void finish_import_in_background(import_row row);
+    // Replaces the source of the imports which start after the call. For tests: the default
+    // source does not read S3 yet.
+    void set_source_factory(import_source_factory factory) { _source_factory = std::move(factory); }
     // Aborts the fibers above and waits for them to finish.
     future<> stop();
 };

@@ -4547,7 +4547,8 @@ future<> executor::do_batch_write(
         std::vector<std::pair<schema_ptr, put_or_delete_item>> mutation_builders,
         service::client_state& client_state,
         tracing::trace_state_ptr trace_state,
-        service_permit permit) {
+        service_permit permit,
+        std::optional<api::timestamp_type> timestamp) {
     if (mutation_builders.empty()) {
         return make_ready_future<>();
     }
@@ -4563,7 +4564,7 @@ future<> executor::do_batch_write(
         // Do a normal write, without LWT:
         utils::chunked_vector<mutation> mutations;
         mutations.reserve(mutation_builders.size());
-        api::timestamp_type now = api::new_timestamp();
+        api::timestamp_type now = timestamp.value_or(api::new_timestamp());
         bool any_cdc_enabled = false;
         for (auto& b : mutation_builders) {
             mutations.push_back(b.second.build(b.first, now));

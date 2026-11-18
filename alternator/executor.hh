@@ -20,6 +20,7 @@
 #include "service/migration_manager.hh"
 #include "service/client_state.hh"
 #include "service_permit.hh"
+#include "mutation/timestamp.hh"
 #include "db/timeout_clock.hh"
 #include "db/config.hh"
 
@@ -239,11 +240,14 @@ private:
     future<executor::request_return_type> create_table_on_shard0(service::client_state&& client_state, tracing::trace_state_ptr trace_state, rjson::value request, bool enforce_authorization,
             bool warn_authorization, const db::tablets_mode_t::mode tablets_mode, std::unique_ptr<audit::audit_info_alternator>& audit_info);
 
+    // Writes the items with `timestamp`, if given, instead of a new one - except with LWT, where
+    // the timestamp of each write comes from Paxos.
     future<> do_batch_write(
         std::vector<std::pair<schema_ptr, put_or_delete_item>> mutation_builders,
         service::client_state& client_state,
         tracing::trace_state_ptr trace_state,
-        service_permit permit);
+        service_permit permit,
+        std::optional<api::timestamp_type> timestamp = std::nullopt);
 
     future<> cas_write(schema_ptr schema, service::cas_shard cas_shard, const dht::decorated_key& dk,
         const std::vector<put_or_delete_item>& mutation_builders, service::client_state& client_state,
@@ -251,6 +255,8 @@ private:
 
 public:
     void request_stop() noexcept { _stop_as.request_abort(); }
+    // For tests: see s3_imports::set_source_factory().
+    s3_imports& get_s3_imports() noexcept { return *_s3_imports; }
     static bool add_stream_options(const rjson::value& stream_spec, schema_builder&, const cdc::options& existing_cdc_opts = {});
     static void supplement_table_info(rjson::value& descr, const schema& schema, service::storage_proxy& sp);
     static void supplement_table_stream_info(rjson::value& descr, const schema& schema, const service::storage_proxy& sp);
