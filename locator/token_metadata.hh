@@ -281,7 +281,8 @@ public:
     void del_replacing_endpoint(host_id existing_node);
 
     /**
-     * Create a full copy of token_metadata using asynchronous continuations.
+     * Create a copy of token_metadata using asynchronous continuations.
+     * The topology change info is copied only when cloning on the token_metadata's own shard.
      * The caller must ensure that the cloned object will not change if
      * the function yields.
      */
