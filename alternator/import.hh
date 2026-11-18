@@ -11,10 +11,17 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <seastar/core/sstring.hh>
 #include "alternator/executor.hh"
+#include "alternator/export.hh"
 #include "utils/rjson.hh"
 
+namespace db { struct alternator_import_row; }
+
 namespace alternator {
+
+// A row of the imports table, as stored (see db/system_distributed_keyspace.hh).
+using import_row = db::alternator_import_row;
 
 // The InputFormat values ImportTable supports so far.
 enum class import_input_format {
@@ -44,9 +51,10 @@ struct import_table_request {
 // first problem. Only parses: looks up neither imports nor tables.
 import_table_request parse_import_table_request(const rjson::value& request, const gms::feature_service& feat, db::tablets_mode_t::mode tablets_mode);
 
-// The ImportTableDescription of an import which has just been accepted:
-// FAILED with NotImplemented for now, with zero counters and a fresh ImportArn.
-rjson::value make_import_table_description(const import_table_request& parsed);
+// The ImportTableDescription of an import, as ImportTable (and, in the future, DescribeImport)
+// reports it. Throws std::runtime_error if the stored request of the row cannot be parsed - a
+// corrupt row.
+rjson::value make_import_table_description(const import_row& row);
 
 // FIXME: stub. Imports are not persisted yet, so there is nothing to look the token up.
 // Once import state is stored, this needs to consult it and honour the 8-hour window and
