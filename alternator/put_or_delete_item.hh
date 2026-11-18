@@ -25,7 +25,7 @@
 namespace service { class storage_proxy; }
 
 // The item validation and mutation building of PutItem and DeleteItem, shared by the
-// operations which write items: PutItem, DeleteItem and BatchWriteItem.
+// operations which write items: PutItem, DeleteItem, BatchWriteItem and ImportTable.
 // The functions declared here are defined in executor.cc.
 
 namespace alternator {
@@ -40,7 +40,7 @@ struct search_schema_attribute_info {
 // and vector-index constraints (see si_key_attributes(),
 // vector_index_attributes() and search_schema_attributes() in executor.cc). It
 // depends only on the table's schema, not on the item being written, so a
-// caller writing multiple items to the same table (BatchWriteItem) should
+// caller writing multiple items to the same table (BatchWriteItem, ImportTable) should
 // compute it once and reuse it, instead of recomputing it - and re-parsing
 // the vector indexes' JSON-encoded options - for every item.
 struct write_item_index_info {
@@ -55,7 +55,7 @@ struct write_item_index_info {
 
 // The put_or_delete_item class builds the mutations needed by the PutItem and
 // DeleteItem operations - either as stand-alone commands or part of a list
-// of commands in BatchWriteItem.
+// of commands in BatchWriteItem or ImportTable.
 // put_or_delete_item splits each operation into two stages: Constructing the
 // object parses and validates the user input (throwing exceptions if there
 // are input errors). Later, build() generates the actual mutation, with a
@@ -78,6 +78,7 @@ private:
     // WCU calculation takes into account some length in bytes,
     // that length can have different meaning depends on the operation but the
     // the calculation of length in bytes to WCU is the same.
+    // ImportTable also bounds the size of its batches with it.
     uint64_t _length_in_bytes = 0;
 public:
     struct delete_item {};

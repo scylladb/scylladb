@@ -12,15 +12,19 @@
 #include <charconv>
 #include <chrono>
 #include <exception>
+#include <new>
 #include <random>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/sleep.hh>
+#include <seastar/coroutine/as_future.hh>
 #include <seastar/coroutine/switch_to.hh>
 #include "alternator/error.hh"
 #include "alternator/executor.hh"
 #include "alternator/executor_util.hh"
+#include "alternator/put_or_delete_item.hh"
 #include "audit/audit.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "db/config.hh"
@@ -50,7 +54,11 @@ static constexpr std::string_view import_status_failing = "FAILING";
 static constexpr std::string_view import_status_completed = "COMPLETED";
 static constexpr std::string_view import_status_failed = "FAILED";
 
-// The FailureCodes of an import. DynamoDB documents none of these.
+// The FailureCodes of an import. Of these, only ItemValidationError is a FailureCode which DynamoDB
+// documents.
+static constexpr std::string_view failure_item_validation_error = "ItemValidationError";
+static constexpr std::string_view failure_table_deleted = "TableDeleted";
+static constexpr std::string_view failure_write_failed = "WriteFailed";
 static constexpr std::string_view failure_import_interrupted = "ImportInterrupted";
 static constexpr std::string_view failure_internal_error = "InternalError";
 static constexpr std::string_view failure_not_implemented = "NotImplemented";
@@ -406,6 +414,38 @@ static future<> write_final_import_row(db::system_distributed_keyspace& sdks, co
 
 // --- The source of an import ---
 
+namespace {
+
+class in_memory_import_source : public import_source {
+    std::vector<std::pair<sstring, std::shared_ptr<in_memory_test_storage>>> _objects;
+    size_t _next = 0;
+public:
+    explicit in_memory_import_source(std::vector<std::pair<sstring, std::shared_ptr<in_memory_test_storage>>> objects)
+        : _objects(std::move(objects)) {}
+    future<std::optional<import_source_object>> next_object() override {
+        if (_next == _objects.size()) {
+            co_return std::nullopt;
+        }
+        const auto& [key, storage] = _objects[_next++];
+        co_return import_source_object{ .key = key, .size = storage->data().size() };
+    }
+    future<std::unique_ptr<import_pipeline_interface>> open(const import_source_object& object,
+            std::function<future<>(rjson::value)> on_item, compression_type compression) override {
+        auto it = std::ranges::find(_objects, object.key, [] (const auto& o) { return o.first; });
+        co_return co_await create_source_pipeline(in_memory_target_config{ it->second }, std::move(on_item), compression);
+    }
+    future<> close() override {
+        return make_ready_future<>();
+    }
+};
+
+} // anonymous namespace
+
+std::unique_ptr<import_source> make_in_memory_import_source(
+        std::vector<std::pair<sstring, std::shared_ptr<in_memory_test_storage>>> objects) {
+    return std::make_unique<in_memory_import_source>(std::move(objects));
+}
+
 // The source of the imports until reading S3 is implemented: it fails every import before it
 // creates the table.
 // FIXME: list the objects under the prefix with s3::client::bucket_lister and read them with
@@ -417,6 +457,14 @@ static future<std::unique_ptr<import_source>> make_s3_import_source(sstring, sst
 
 // --- The import itself ---
 
+// The number of items which the import writes with one do_batch_write(), at most.
+static constexpr size_t import_batch_size = 100;
+// A batch is written once its items have this size (put_or_delete_item::length_in_bytes()), so
+// that the memory which the batches of an import hold is bounded also for large items.
+static constexpr uint64_t import_batch_bytes = 1024 * 1024;
+// The number of attempts to write a batch, before the import fails with WriteFailed.
+static constexpr int import_write_attempts = 4;
+
 // Runs one import, see executor::s3_imports. A member of s3_imports, so that it can use the
 // write path and the table creation of the executor.
 class executor::s3_imports::import_task {
@@ -427,14 +475,213 @@ class executor::s3_imports::import_task {
     // Parsed by run(), not by the constructor, so that a stored request which cannot be parsed - a
     // corrupt row - fails the import.
     std::optional<stored_import_request> _request;
+    // The writes of the import do not belong to a user request.
+    service::client_state _client_state{service::client_state::internal_tag{}};
+    // The target table, see refresh_schema().
+    schema_ptr _schema;
+    std::optional<write_item_index_info> _index_info;
+
+    // Progress of reading the source: processed_size_bytes() of the objects already read, and the
+    // pipeline of the object being read, if any.
+    uint64_t _bytes_of_read_objects = 0;
+    import_pipeline_interface* _pipeline = nullptr;
+    // The number of the current line of the current object.
+    uint64_t _line = 0;
+
+    // The batch being collected. An item with the key of an earlier one replaces it in place (see
+    // _batch_positions, which maps the key of each item to its index): the last one wins.
+    using builders = std::vector<std::pair<schema_ptr, put_or_delete_item>>;
+    builders _batch;
+    // The number of items added to the batch, also those which a later item with the key replaced.
+    int64_t _batch_items = 0;
+    uint64_t _batch_bytes = 0;
+    // _batch_positions is engaged by the first refresh_schema(): its hash and equality need the
+    // schema of the target table, which may not exist before prepare_table().
+    std::optional<std::unordered_map<primary_key, size_t, primary_key_hash, primary_key_equal>> _batch_positions;
+
+    uint64_t processed_size_bytes() const noexcept {
+        return _bytes_of_read_objects + (_pipeline ? _pipeline->processed_size_bytes() : 0);
+    }
+
+    // Makes `_schema` the current schema of the target table: items are validated against it. Fails
+    // the import with TableDeleted if no table has the import's table id any more.
+    void refresh_schema() {
+        auto table = _e._proxy.data_dictionary().try_find_table(_row.table_id);
+        if (!table) {
+            throw import_failure(std::string(failure_table_deleted), fmt::format("The table {} was deleted during the import.", _request->table_name));
+        }
+        if (!_schema || table->schema()->version() != _schema->version()) {
+            auto schema = table->schema();
+            _index_info.emplace(_e._proxy, *schema);
+            _schema = std::move(schema);
+            // The key columns of a table do not change, so the hash and equality of its first schema
+            // serve for all its versions.
+            if (!_batch_positions) {
+                _batch_positions.emplace(1, primary_key_hash{_schema}, primary_key_equal{_schema});
+            }
+        }
+    }
+
+    future<> prepare_table() {
+        if (!_row.target_table_existed) {
+            // FIXME: create the table from the TableCreationParameters of the request.
+            co_await coroutine::return_exception(import_failure(std::string(failure_not_implemented),
+                    fmt::format("Creating the table {} of an import is not implemented yet.", _request->table_name)));
+        }
+        // refresh_schema() finds the target table by its id: a table which replaced the target under
+        // the same name after the import was accepted is not written, the import fails with TableDeleted.
+        refresh_schema();
+    }
+
+    // Writes one batch, and throws if that fails. Writes the batch at most import_write_attempts
+    // times, waiting 1, 2, 3... seconds between the attempts.
+    future<> write_batch(builders batch, int64_t items) {
+        for (int attempt = 1; ; ++attempt) {
+            std::exception_ptr ex;
+            try {
+                utils::get_local_injector().inject("alternator_import_from_s3_write",
+                        [] { throw std::runtime_error("injected failure alternator_import_from_s3_write"); });
+                // do_batch_write() takes the batch by value, so `batch` stays for a retry.
+                co_await _e.do_batch_write(batch, _client_state, tracing::trace_state_ptr(), empty_service_permit());
+                _row.imported_item_count += items;
+                co_return;
+            } catch (...) {
+                ex = std::current_exception();
+            }
+            _as.check();
+            if (attempt == import_write_attempts) {
+                throw import_failure(std::string(failure_write_failed),
+                        fmt::format("Writing items to the table {} failed {} times, the last time with: {}", _request->table_name, attempt, ex));
+            }
+            ilogger.warn("Import {}: writing {} items failed, retrying: {}", _row.import_arn, batch.size(), ex);
+            co_await seastar::sleep_abortable(std::chrono::seconds(attempt), _as);
+        }
+    }
+
+    // Writes the collected batch.
+    future<> flush_batch() {
+        if (_batch.empty()) {
+            co_return;
+        }
+        _batch_positions->clear();
+        auto batch = std::exchange(_batch, builders());
+        auto items = std::exchange(_batch_items, 0);
+        _batch_bytes = 0;
+        co_await write_batch(std::move(batch), items);
+    }
+
+    // Adds an item to the batch. An item with the key of one in the batch replaces it. Flushes the
+    // batch when it took import_batch_size items - replaced ones included, so that a source
+    // repeating a few keys is still written as it is read - or reached import_batch_bytes.
+    future<> add_to_batch(put_or_delete_item builder) {
+        primary_key key{builder.pk(), builder.ck()};
+        const auto bytes = builder.length_in_bytes();
+        if (auto it = _batch_positions->find(key); it != _batch_positions->end()) {
+            _batch_bytes -= _batch[it->second].second.length_in_bytes();
+            _batch[it->second].second = std::move(builder);
+        } else {
+            _batch_positions->emplace(std::move(key), _batch.size());
+            _batch.emplace_back(_schema, std::move(builder));
+        }
+        _batch_bytes += bytes;
+        // ImportedItemCount counts every item with a duplicate key, also one which a later item
+        // replaced in the batch and which is thus never written, so that ProcessedItemCount =
+        // ImportedItemCount + item errors, as in DynamoDB.
+        ++_batch_items;
+        if (_batch_items >= int64_t(import_batch_size) || _batch_bytes >= import_batch_bytes) {
+            co_await flush_batch();
+        }
+    }
+
+    future<> on_item(std::string_view object_key, rjson::value line) {
+        _as.check();
+        _line = _pipeline->processed_lines();
+        ++_row.processed_item_count;
+        // Pauses the import at each item, so that a test can act while it runs, e.g. check that its
+        // table is CREATING or drop the table. The wait ends on a message - each message lets one
+        // item go on - when the injection is disabled, or when the node stops.
+        co_await utils::get_local_injector().inject("alternator_import_from_s3_pause_in_item_handler",
+                [this] (auto& handler) -> future<> {
+                    co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{5}, &_as);
+                }, false);
+        const rjson::value* item = line.IsObject() ? rjson::find(line, "Item") : nullptr;
+        if (!item) {
+            // FIXME: DynamoDB counts such a line in ErrorCount, and skips the rest of its object.
+            throw import_failure(std::string(failure_item_validation_error),
+                    fmt::format("Object {}, line {}: the line has no Item member", object_key, _line));
+        }
+        std::optional<put_or_delete_item> builder;
+        std::string error;
+        try {
+            if (!item->IsObject()) {
+                throw api_error::validation("Item must be an object");
+            }
+            // The validation of PutItem.
+            builder.emplace(*item, _schema, put_or_delete_item::put_item{}, *_index_info);
+        } catch (const std::bad_alloc&) {
+            throw;
+        } catch (const api_error& e) {
+            error = e._msg;
+        } catch (const std::exception& e) {
+            // Other errors of the validation, e.g. a malformed number, are errors of the item too.
+            error = e.what();
+        }
+        // The parsed line is not needed any more, and add_to_batch() may wait for writes.
+        line.SetNull();
+        if (builder) {
+            co_await add_to_batch(std::move(*builder));
+        } else {
+            // FIXME: DynamoDB skips an invalid item, counts it in ErrorCount and goes on.
+            throw import_failure(std::string(failure_item_validation_error),
+                    fmt::format("Object {}, line {}: {}", object_key, _line, error));
+        }
+    }
+
+    future<> import_object(import_source& source, const import_source_object& object) {
+        if (object.size == 0) {
+            co_return;
+        }
+        std::unique_ptr<import_pipeline_interface> pipeline;
+        std::exception_ptr ex;
+        try {
+            pipeline = co_await source.open(object, [this, &object] (rjson::value line) {
+                return on_item(object.key, std::move(line));
+            }, _request->compression);
+        } catch (...) {
+            ex = std::current_exception();
+        }
+        if (pipeline) {
+            _pipeline = pipeline.get();
+            auto read = co_await coroutine::as_future(pipeline->read_all());
+            auto closed = co_await coroutine::as_future(pipeline->close());
+            _bytes_of_read_objects += pipeline->processed_size_bytes();
+            _pipeline = nullptr;
+            if (read.failed()) {
+                ex = read.get_exception();
+                closed.ignore_ready_future();
+            } else if (closed.failed()) {
+                ex = closed.get_exception();
+            }
+        }
+        if (ex) {
+            // FIXME: DynamoDB counts an object which cannot be read, or a line which is not JSON, in
+            // ErrorCount, and skips the rest of the object.
+            std::rethrow_exception(ex);
+        }
+    }
 
     // Reads the source and writes its items. Throws import_failure (or another exception) if the
     // import fails. Sets `source` as soon as it is made, so that run() closes it also when this
     // throws.
     future<> import_all(std::unique_ptr<import_source>& source) {
         source = co_await _source_factory(_request->s3_bucket, _request->s3_key_prefix, _as);
-        // FIXME: read the objects of the source, and write their items.
-        throw import_failure(std::string(failure_not_implemented), "Reading the objects of an import is not implemented yet.");
+        auto object = co_await source->next_object();
+        co_await prepare_table();
+        while (object) {
+            co_await import_object(*source, *object);
+            object = co_await source->next_object();
+        }
+        co_await flush_batch();
     }
 
 public:
@@ -469,6 +716,7 @@ public:
             }
         }
 
+        _row.processed_size_bytes = processed_size_bytes();
         if (failure) {
             ilogger.warn("Import {} failed with {}: {}", _row.import_arn, failure->first, failure->second);
             _row.failure_code = std::move(failure->first);

@@ -4489,11 +4489,10 @@ future<> executor::cas_write(schema_ptr schema, service::cas_shard cas_shard, co
             // of the two: after a CQL ALTER which added or dropped such a column, the current schema
             // would put the value, encoded for :attrs, into the column, or the other way around. The
             // non-LWT path of do_batch_write() sends the mutation built with this schema too, and the
-            // replicas upgrade it. A long ImportTable, whose execution engine a following commit adds,
-            // and which may wait to write a batch or retry it, widens the window for such an ALTER.
-            // The schema also keeps its table id: a table which replaced this one under the same name
-            // does not get the write - cas_shard fails with no_such_column_family if this table was
-            // dropped.
+            // replicas upgrade it. A long ImportTable, which may wait to write a batch or retry it,
+            // widens the window for such an ALTER. The schema also keeps its table id: a table which
+            // replaced this one under the same name does not get the write - cas_shard fails with
+            // no_such_column_family if this table was dropped.
             // (The work item of invoke_on() keeps this lambda, and so its captures, until its future
             // resolves.)
             return gs.get(executor::default_timeout()).then([&self, &mb, &dk, &cs, &gt] (schema_ptr schema) {
