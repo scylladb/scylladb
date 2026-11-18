@@ -81,7 +81,9 @@ class import_source {
 public:
     virtual ~import_source() = default;
     // Returns the next object, in the order in which the import reads them, or nullopt after
-    // the last one. To fail the import with a specific FailureCode, throw import_failure.
+    // the last one. The import calls it once before it creates the target table, so that a source
+    // which cannot be listed - e.g. a missing bucket - fails the import without leaving a table
+    // behind. To fail the import with a specific FailureCode, throw import_failure.
     virtual future<std::optional<import_source_object>> next_object() = 0;
     // Creates the pipeline which reads `object`. See create_source_pipeline() for `on_item`.
     virtual future<std::unique_ptr<import_pipeline_interface>> open(const import_source_object& object,
