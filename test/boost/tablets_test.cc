@@ -66,23 +66,17 @@
 #include "utils/assert.hh"
 #include "cql3/query_processor.hh"
 
-namespace service {
-// Test access to the private storage_service::state_change_hint
-// (friend declaration in storage_service.hh).
-struct topology_state_load_test_access {
-    // Applies a change without mutations through the schema applier, which
-    // reloads the topology state within the given scope.
-    static void reload(cql_test_env& e, topology_change_hint::scope scope) {
-        storage_service::state_change_hint hint;
-        hint.topology_hint = topology_change_hint{.reload_scope = scope};
-        db::schema_tables::schema_applier ap(e.get_storage_proxy(), e.get_storage_service(), e.get_system_keyspace(), std::move(hint));
-        utils::chunked_vector<mutation> muts;
-        ap.prepare(muts).get();
-        ap.apply_persisted().finally([&ap] {
-            return ap.destroy();
-        }).get();
-    }
-};
+// Applies a change without mutations through the schema applier, as a group 0
+// topology command which changes neither system.topology nor system.tablets. Only
+// the tablet-dependent part of the topology state is reloaded.
+static void reload_tablets_only(cql_test_env& e) {
+    db::schema_tables::schema_applier ap(e.get_storage_proxy(), e.get_storage_service(), e.get_system_keyspace(),
+            db::schema_tables::schema_applier::topology_reload::incremental);
+    utils::chunked_vector<mutation> muts;
+    ap.prepare(muts).get();
+    ap.apply_persisted().finally([&ap] {
+        return ap.destroy();
+    }).get();
 }
 
 BOOST_AUTO_TEST_SUITE(tablets_test)
@@ -1544,7 +1538,7 @@ SEASTAR_TEST_CASE(test_topology_state_load_tablets_only_reload_with_left_nodes_r
         topology.left_nodes_rs.emplace(h_leaving, replica_state{});
         topology.excluded_tablet_nodes.insert(h_leaving);
 
-        service::topology_state_load_test_access::reload(e, service::topology_change_hint::scope::tablets_only);
+        reload_tablets_only(e);
 
         BOOST_REQUIRE_EQUAL(topology.tablet_balancing_enabled, flipped);
         BOOST_REQUIRE(!topology.left_nodes_rs.contains(h_leaving));
@@ -1552,7 +1546,7 @@ SEASTAR_TEST_CASE(test_topology_state_load_tablets_only_reload_with_left_nodes_r
 
         // Restore state so token metadata is consistent for teardown.
         topology.tablet_balancing_enabled = !flipped;
-        service::topology_state_load_test_access::reload(e, service::topology_change_hint::scope::tablets_only);
+        reload_tablets_only(e);
     }, tablet_cql_test_config());
 }
 

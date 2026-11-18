@@ -865,6 +865,7 @@ future<> schema_applier::prepare(utils::chunked_vector<mutation>& muts) {
     schema_ptr s = keyspaces();
     for (auto& mutation : muts) {
         replica::update_tablet_metadata_change_hint(_tablet_hint, mutation);
+        update_topology_change_hint(_topology_hint, mutation);
         if (mutation.schema()->ks_name() != NAME) {
             // Mutations of tables outside system_schema, which group 0 commands carry
             // together with schema mutations, are not keyed by keyspace name.
@@ -993,7 +994,8 @@ future<> schema_applier::update_tablets() {
 future<> schema_applier::load_mutable_token_metadata() {
     if (_topology_change) {
         co_return co_await _pending_token_metadata.assign(
-                co_await _ss.local().prepare_topology_token_metadata(*_topology_change));
+                co_await _ss.local().prepare_topology_token_metadata(*_topology_change,
+                        _topology_reload == topology_reload::incremental ? &_tablet_hint : nullptr));
     }
     locator::mutable_token_metadata_ptr current_token_metadata = co_await _ss.local().get_mutable_token_metadata_ptr();
     if (_tablet_hint) {
@@ -1290,11 +1292,10 @@ future<> schema_applier::destroy() {
 
 future<> schema_applier::apply_persisted() {
     SCYLLA_ASSERT(this_shard_id() == 0);
-    if (_topology_reload) {
+    if (_topology_reload != topology_reload::none) {
         // Reading the topology state enables the cluster features it lists, which
         // runs feature listeners, so it is done without holding the merge_lock.
-        _topology_change = co_await _ss.local().load_topology_state(std::move(*_topology_reload));
-        _topology_reload.reset();
+        _topology_change = co_await _ss.local().load_topology_state(_topology_reload == topology_reload::incremental ? &_topology_hint : nullptr);
     }
     std::exception_ptr post_commit_ex;
     co_await with_merge_lock([this, &post_commit_ex] () -> future<> {

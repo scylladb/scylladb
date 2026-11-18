@@ -175,12 +175,26 @@ class schema_applier {
     // - allows to change tablets metadata without immediately committing it.
     locator::pending_token_metadata _pending_token_metadata;
     locator::tablet_metadata_change_hint _tablet_hint;
+    service::topology_change_hint _topology_hint{.reload_scope = service::topology_change_hint::scope::tablets_only};
     service::token_metadata_change _token_metadata_change;
 
-    // Set when the change also reloads the topology state machine state from
+public:
+    // Whether the change also reloads the topology state machine state from
     // system.topology. The token metadata is then built from the new topology,
     // and committed together with it and the schema.
-    std::optional<service::storage_service::state_change_hint> _topology_reload;
+    enum class topology_reload {
+        none,
+        // The mutations passed to prepare() carry all changes to the tablet metadata
+        // and to system.topology. The tablet metadata is updated from their hint, which
+        // is empty if nothing changed, and system.topology is read only if the hint for
+        // it says that more than the versions changed.
+        incremental,
+        // The tablet metadata is read from system.tablets, and the topology state from
+        // system.topology.
+        full,
+    };
+private:
+    topology_reload _topology_reload;
     std::unique_ptr<service::storage_service::topology_state_change> _topology_change;
 
     schema_persisted_state _before;
@@ -208,14 +222,14 @@ class schema_applier {
 
     friend pending_schema_getter;
 public:
-    // If topology_reload is set, the change also reloads the topology state
+    // Unless topology_reload is none, the change also reloads the topology state
     // machine state from system.topology (see apply_persisted()).
     schema_applier(
             sharded<service::storage_proxy>& proxy,
             sharded<service::storage_service>& ss,
             sharded<db::system_keyspace>& sys_ks,
-            std::optional<service::storage_service::state_change_hint> topology_reload = std::nullopt)
-            : _proxy(proxy), _ss(ss), _sys_ks(sys_ks), _topology_reload(std::move(topology_reload)) {};
+            topology_reload topology_reload = topology_reload::none)
+            : _proxy(proxy), _ss(ss), _sys_ks(sys_ks), _topology_reload(topology_reload) {};
 
     // Gets called before mutations are applied,
     // preferably no work should be done here but subsystem
@@ -223,7 +237,7 @@ public:
     future<> prepare(utils::chunked_vector<mutation>& muts);
 
     // Applies the persisted state to memory: the schema changed by the mutations
-    // passed to prepare() and, if topology_reload is set, the topology state from
+    // passed to prepare() and, unless topology_reload is none, the topology state from
     // system.topology. Call it after the mutations are persisted; prepare() may be
     // skipped when only the topology is reloaded. Runs update(), commit() and
     // post_commit() under the merge_lock. The topology state is read before taking

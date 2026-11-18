@@ -645,7 +645,7 @@ future<> storage_service::notify_nodes_after_sync(nodes_to_notify_after_sync&& n
     }
 }
 
-future<std::unique_ptr<storage_service::topology_state_change>> storage_service::load_topology_state(state_change_hint hint) {
+future<std::unique_ptr<storage_service::topology_state_change>> storage_service::load_topology_state(const topology_change_hint* topology_hint) {
     SCYLLA_ASSERT(this_shard_id() == 0);
     co_await utils::get_local_injector().inject("topology_state_load_error", [] {
         return std::make_exception_ptr(std::runtime_error("topology_state_load_error"));
@@ -653,7 +653,7 @@ future<std::unique_ptr<storage_service::topology_state_change>> storage_service:
 
     rtlogger.debug("reload raft topology state");
     using scope = topology_change_hint::scope;
-    scope reload_kind = hint.topology_hint ? hint.topology_hint->reload_scope : scope::full;
+    scope reload_kind = topology_hint ? topology_hint->reload_scope : scope::full;
 
     service::topology new_topology;
     if (reload_kind == scope::full) {
@@ -666,11 +666,11 @@ future<std::unique_ptr<storage_service::topology_state_change>> storage_service:
         new_topology = _topology_state_machine._topology;
         if (reload_kind == scope::versions_only) {
             // Versions are monotonic; a re-applied stale command must not move them back.
-            if (hint.topology_hint->version) {
-                new_topology.version = std::max(new_topology.version, *hint.topology_hint->version);
+            if (topology_hint->version) {
+                new_topology.version = std::max(new_topology.version, *topology_hint->version);
             }
-            if (hint.topology_hint->fence_version) {
-                new_topology.fence_version = std::max(new_topology.fence_version, *hint.topology_hint->fence_version);
+            if (topology_hint->fence_version) {
+                new_topology.fence_version = std::max(new_topology.fence_version, *topology_hint->fence_version);
             }
         }
         // scope::tablets_only: nothing to patch in `topology` itself; tablet-dependent
@@ -678,7 +678,6 @@ future<std::unique_ptr<storage_service::topology_state_change>> storage_service:
     }
     auto change = std::make_unique<topology_state_change>(topology_state_change{
         .new_topology = std::move(new_topology),
-        .hint = std::move(hint),
     });
     const auto& topology = change->new_topology;
 
@@ -694,7 +693,7 @@ future<std::unique_ptr<storage_service::topology_state_change>> storage_service:
     co_return change;
 }
 
-future<locator::mutable_token_metadata_ptr> storage_service::prepare_topology_token_metadata(topology_state_change& change) {
+future<locator::mutable_token_metadata_ptr> storage_service::prepare_topology_token_metadata(topology_state_change& change, const locator::tablet_metadata_change_hint* tablets_hint) {
     SCYLLA_ASSERT(this_shard_id() == 0);
     auto& topology = change.new_topology;
     const auto& prev_topology = _topology_state_machine._topology;
@@ -749,11 +748,11 @@ future<locator::mutable_token_metadata_ptr> storage_service::prepare_topology_to
     tmptr->set_read_new(read_new);
 
     std::optional<locator::tablet_metadata> tablets;
-    if (change.hint.tablets_hint) {
+    if (tablets_hint) {
         // We want to update the tablet metadata incrementally, so copy it
         // from the current token metadata and update only the changed parts.
         tablets = co_await get_token_metadata().tablets().copy();
-        co_await replica::update_tablet_metadata(_db.local(), _qp, *tablets, *change.hint.tablets_hint);
+        co_await replica::update_tablet_metadata(_db.local(), _qp, *tablets, *tablets_hint);
     } else {
         tablets = co_await replica::read_tablet_metadata(_qp);
     }
@@ -816,7 +815,7 @@ future<> storage_service::finish_topology_state_change(topology_state_change& ch
 
 future<> storage_service::topology_state_load() {
     SCYLLA_ASSERT(this_shard_id() == 0);
-    db::schema_tables::schema_applier ap(_qp.proxy().container(), container(), _sys_ks, state_change_hint{});
+    db::schema_tables::schema_applier ap(_qp.proxy().container(), container(), _sys_ks, db::schema_tables::schema_applier::topology_reload::full);
     co_await ap.apply_persisted().finally([&ap] {
         return ap.destroy();
     });
