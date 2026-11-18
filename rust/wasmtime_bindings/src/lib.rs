@@ -272,6 +272,15 @@ fn create_engine(max_size: u32) -> Result<Box<Engine>> {
     config.dynamic_memory_guard_size(0);
     config.max_wasm_stack(128 * 1024);
     config.async_stack_size(256 * 1024);
+    // Don't generate native unwind information (.eh_frame) for the compiled
+    // code. wasmtime would register it with libgcc's __register_frame() when
+    // loading the code, and deregister it when unloading - both on the shard.
+    // If the stall detector's signal interrupts these calls, its backtrace
+    // waits forever for a lock in libgcc held by the interrupted call, and the
+    // shard hangs. Without this information, wasmtime can still produce
+    // backtraces of Wasm code; only the system's unwinder can't walk through
+    // Wasm frames, so a stall report taken while running Wasm code stops there.
+    config.native_unwind_info(false);
 
     let engine =
         wasmtime::Engine::new(&config).map_err(|e| anyhow!("Failed to create engine: {:?}", e))?;
@@ -295,6 +304,15 @@ fn create_test_engine(max_size: u32, fail_after: usize) -> Result<Box<Engine>> {
     config.dynamic_memory_guard_size(0);
     config.max_wasm_stack(128 * 1024);
     config.async_stack_size(256 * 1024);
+    // Don't generate native unwind information (.eh_frame) for the compiled
+    // code. wasmtime would register it with libgcc's __register_frame() when
+    // loading the code, and deregister it when unloading - both on the shard.
+    // If the stall detector's signal interrupts these calls, its backtrace
+    // waits forever for a lock in libgcc held by the interrupted call, and the
+    // shard hangs. Without this information, wasmtime can still produce
+    // backtraces of Wasm code; only the system's unwinder can't walk through
+    // Wasm frames, so a stall report taken while running Wasm code stops there.
+    config.native_unwind_info(false);
 
     let engine =
         wasmtime::Engine::new(&config).map_err(|e| anyhow!("Failed to create engine: {:?}", e))?;

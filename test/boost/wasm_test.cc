@@ -14,6 +14,8 @@
 #include <seastar/core/lowres_clock.hh>
 #include "test/lib/scylla_test_case.hh"
 #include <seastar/core/coroutine.hh>
+#include <atomic>
+#include <dlfcn.h>
 
 SEASTAR_TEST_CASE(test_long_udf_yields) {
     auto wasm_engine = wasmtime::create_engine(1024 * 1024);
@@ -100,4 +102,49 @@ SEASTAR_TEST_CASE(test_long_udf_yields) {
     BOOST_REQUIRE(steps > 1);
     BOOST_CHECK_EQUAL(rets->pop_val()->i64(), 267914296);
     co_return;
+}
+
+// libgcc's __register_frame() and __deregister_frame() register and deregister
+// unwind information of generated code, for unwinders to use. We define them
+// here, to count their calls, and pass the calls on to libgcc's functions.
+// Because this executable defines them, its definitions are the ones that
+// wasmtime calls.
+static std::atomic<int> register_frame_calls = 0;
+
+extern "C" void __register_frame(void* begin) {
+    ++register_frame_calls;
+    static auto libgcc_register_frame = reinterpret_cast<void (*)(void*)>(dlsym(RTLD_NEXT, "__register_frame"));
+    libgcc_register_frame(begin);
+}
+
+extern "C" void __deregister_frame(void* begin) {
+    ++register_frame_calls;
+    static auto libgcc_deregister_frame = reinterpret_cast<void (*)(void*)>(dlsym(RTLD_NEXT, "__deregister_frame"));
+    libgcc_deregister_frame(begin);
+}
+
+// Test that loading and unloading the compiled code of a Wasm function doesn't
+// call __register_frame() or __deregister_frame(). Scylla does both on the
+// shard, and if the stall detector's signal interrupts one of these calls,
+// the signal handler's backtrace waits forever for a lock in libgcc which the
+// interrupted call holds, so the shard hangs.
+// Reproduces SCYLLADB-6435.
+SEASTAR_TEST_CASE(test_no_frame_registration) {
+    auto wasm_engine = wasmtime::create_engine(1024 * 1024);
+    wasm::alien_thread_runner alien_runner;
+    auto wasm_cache = std::make_unique<wasm::instance_cache>(100 * 1024 * 1024, 1024 * 1024, std::chrono::seconds(1));
+    auto wasm_ctx = wasm::context(*wasm_engine, "f", *wasm_cache, 100000, 100000000);
+    register_frame_calls = 0;
+    // precompile() also loads the compiled code, creates an instance to check
+    // it, and unloads the code
+    co_await wasm::precompile(alien_runner, wasm_ctx, {}, R"(
+(module
+  (func (param i32) (result i32) local.get 0)
+  (memory 1)
+  (global i32 (i32.const 0))
+  (export "memory" (memory 0))
+  (export "f" (func 0))
+  (export "_scylla_abi" (global 0)))
+)");
+    BOOST_REQUIRE_EQUAL(register_frame_calls, 0);
 }
