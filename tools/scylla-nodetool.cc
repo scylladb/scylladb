@@ -304,57 +304,25 @@ public:
     }
 };
 
-// Based on origin's org.apache.cassandra.tools.NodeProbe.BufferSamples
-class buffer_samples {
-    std::vector<uint64_t> _samples;
-
-public:
-    explicit buffer_samples(std::vector<uint64_t> samples) : _samples(std::move(samples)) {
-        std::sort(_samples.begin(), _samples.end());
+// Retrieves a latency histogram from one of the estimated_histogram endpoints
+utils::time_estimated_histogram get_latency_histogram(scylla_rest_client& client, sstring path) {
+    const auto res = client.get(path);
+    const auto& buckets = res["buckets"].GetArray();
+    utils::time_estimated_histogram hg;
+    if (buckets.Size() != hg.size()) {
+        throw std::runtime_error(fmt::format("invalid latency histogram {}, expected {} buckets, got {}", path, hg.size(), buckets.Size()));
     }
-
-    const std::vector<uint64_t>& values() const { return _samples; }
-
-    double min() const { return _samples.empty() ? 0.0 : double(_samples.front()); }
-
-    double max() const { return _samples.empty() ? 0.0 : double(_samples.back()); }
-
-    double value(double quantile) const {
-        if (quantile < 0.0 || quantile > 1.0) {
-            throw std::runtime_error(fmt::format("quantile {} is not in [0..1]", quantile));
-        }
-
-        if (_samples.empty()) {
-            return 0.0;
-        }
-
-        const double pos = quantile * (_samples.size() + 1);
-
-        if (pos < 1) {
-            return _samples.front();
-        }
-
-        if (pos >= _samples.size()) {
-            return _samples.back();
-        }
-
-        const double lower = _samples.at(size_t(pos) - 1);
-        const double upper = _samples.at(size_t(pos));
-        return lower + (pos - floor(pos)) * (upper - lower);
+    for (size_t i = 0; i < hg.size(); ++i) {
+        hg[i] = buckets[i].GetUint64();
     }
+    return hg;
+}
 
-    static buffer_samples retrieve_from_api(scylla_rest_client& client, sstring path) {
-        const auto res = client.get(std::move(path));
-        const auto histogram_object = res["hist"].GetObject();
-        std::vector<uint64_t> samples;
-        if (histogram_object.HasMember("sample")) {
-            for (const auto& sample : histogram_object["sample"].GetArray()) {
-                samples.push_back(sample.GetInt64());
-            }
-        }
-        return buffer_samples(std::move(samples));
-    }
-};
+// The largest latency a histogram can tell. Latencies above its range are
+// counted in the last bucket, which has no upper limit.
+double latency_max(const utils::time_estimated_histogram& hg) {
+    return std::min(hg.max(), utils::time_estimated_histogram::MAX);
+}
 
 // The values of the `consistency` filter of /storage_service/keyspaces.
 enum class keyspace_consistency {
@@ -1659,12 +1627,13 @@ void netstats_operation(scylla_rest_client& client, const bpo::variables_map& vm
 }
 
 void proxyhistograms_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
-    const auto read_hg = buffer_samples::retrieve_from_api(client, "/storage_proxy/metrics/read/moving_average_histogram");
-    const auto write_hg = buffer_samples::retrieve_from_api(client, "/storage_proxy/metrics/write/moving_average_histogram");
-    const auto range_hg = buffer_samples::retrieve_from_api(client, "/storage_proxy/metrics/range/moving_average_histogram");
-    const auto cas_read_hg = buffer_samples::retrieve_from_api(client, "/storage_proxy/metrics/cas_read/moving_average_histogram");
-    const auto cas_write_hg = buffer_samples::retrieve_from_api(client, "/storage_proxy/metrics/cas_write/moving_average_histogram");
-    const auto view_write_hg = buffer_samples::retrieve_from_api(client, "/storage_proxy/metrics/view_write/moving_average_histogram");
+    const auto read_hg = get_latency_histogram(client, "/storage_proxy/metrics/read/estimated_histogram");
+    const auto write_hg = get_latency_histogram(client, "/storage_proxy/metrics/write/estimated_histogram");
+    const auto range_hg = get_latency_histogram(client, "/storage_proxy/metrics/range/estimated_histogram");
+    const auto cas_read_hg = get_latency_histogram(client, "/storage_proxy/metrics/cas_read/estimated_histogram");
+    const auto cas_write_hg = get_latency_histogram(client, "/storage_proxy/metrics/cas_write/estimated_histogram");
+    // View write latency is not collected
+    const utils::time_estimated_histogram view_write_hg;
 
     fmt::print(std::cout, "proxy histograms\n");
     fmt::print(std::cout, "{:>10}{:>19}{:>19}{:>19}{:>19}{:>19}{:>19}\n", "Percentile", "Read Latency", "Write Latency", "Range Latency", "CAS Read Latency", "CAS Write Latency", "View Write Latency");
@@ -1674,17 +1643,17 @@ void proxyhistograms_operation(scylla_rest_client& client, const bpo::variables_
                 std::cout,
                 "{}%       {:>19.2f}{:>19.2f}{:>19.2f}{:>19.2f}{:>19.2f}{:>19.2f}\n",
                 int(percentile * 100),
-                read_hg.value(percentile),
-                write_hg.value(percentile),
-                range_hg.value(percentile),
-                cas_read_hg.value(percentile),
-                cas_write_hg.value(percentile),
-                view_write_hg.value(percentile));
+                double(read_hg.quantile(percentile)),
+                double(write_hg.quantile(percentile)),
+                double(range_hg.quantile(percentile)),
+                double(cas_read_hg.quantile(percentile)),
+                double(cas_write_hg.quantile(percentile)),
+                double(view_write_hg.quantile(percentile)));
     }
-    fmt::print(std::cout, "{:<10}{:>19.2f}{:>19.2f}{:>19.2f}{:>19.2f}{:>19.2f}{:>19.2f}\n", "Min", read_hg.min(), write_hg.min(), range_hg.min(),
-            cas_read_hg.min(), cas_write_hg.min(), view_write_hg.min());
-    fmt::print(std::cout, "{:<10}{:>19.2f}{:>19.2f}{:>19.2f}{:>19.2f}{:>19.2f}{:>19.2f}\n", "Max", read_hg.max(), write_hg.max(), range_hg.max(),
-            cas_read_hg.max(), cas_write_hg.max(), view_write_hg.max());
+    fmt::print(std::cout, "{:<10}{:>19.2f}{:>19.2f}{:>19.2f}{:>19.2f}{:>19.2f}{:>19.2f}\n", "Min", double(read_hg.min()), double(write_hg.min()), double(range_hg.min()),
+            double(cas_read_hg.min()), double(cas_write_hg.min()), double(view_write_hg.min()));
+    fmt::print(std::cout, "{:<10}{:>19.2f}{:>19.2f}{:>19.2f}{:>19.2f}{:>19.2f}{:>19.2f}\n", "Max", latency_max(read_hg), latency_max(write_hg), latency_max(range_hg),
+            latency_max(cas_read_hg), latency_max(cas_write_hg), latency_max(view_write_hg));
     fmt::print(std::cout, "\n");
 }
 
@@ -3022,10 +2991,10 @@ void tablehistograms_operation(scylla_rest_client& client, const bpo::variables_
 
     const auto row_size_hg = get_estimated_histogram("estimated_row_size_histogram");
     const auto column_count_hg = get_estimated_histogram("estimated_column_count_histogram");
-    const auto read_latency_hg = buffer_samples::retrieve_from_api(client,
-            format("/column_family/metrics/read_latency/moving_average_histogram/{}:{}", keyspace, table));
-    const auto write_latency_hg = buffer_samples::retrieve_from_api(client,
-            format("/column_family/metrics/write_latency/moving_average_histogram/{}:{}", keyspace, table));
+    const auto read_latency_hg = get_latency_histogram(client,
+            format("/column_family/metrics/read_latency/estimated_histogram/{}:{}", keyspace, table));
+    const auto write_latency_hg = get_latency_histogram(client,
+            format("/column_family/metrics/write_latency/estimated_histogram/{}:{}", keyspace, table));
     const auto sstables_per_read_hg = get_estimated_histogram("sstables_per_read_histogram");
 
     fmt::print(std::cout, "{}/{} histograms\n", keyspace, table);
@@ -3037,15 +3006,15 @@ void tablehistograms_operation(scylla_rest_client& client, const bpo::variables_
                 "{}%       {:>10.2f}{:>18.2f}{:>18.2f}{:>18}{:>18}\n",
                 int(percentile * 100),
                 double(sstables_per_read_hg.percentile(percentile)),
-                write_latency_hg.value(percentile),
-                read_latency_hg.value(percentile),
+                double(write_latency_hg.quantile(percentile)),
+                double(read_latency_hg.quantile(percentile)),
                 row_size_hg.percentile(percentile),
                 column_count_hg.percentile(percentile));
     }
-    fmt::print(std::cout, "{:<10}{:>10.2f}{:>18.2f}{:>18.2f}{:>18}{:>18}\n", "Min", double(sstables_per_read_hg.min()), write_latency_hg.min(),
-            read_latency_hg.min(), row_size_hg.min(), column_count_hg.min());
-    fmt::print(std::cout, "{:<10}{:>10.2f}{:>18.2f}{:>18.2f}{:>18}{:>18}\n", "Max", double(sstables_per_read_hg.max()), write_latency_hg.max(),
-            read_latency_hg.max(), row_size_hg.max(), column_count_hg.max());
+    fmt::print(std::cout, "{:<10}{:>10.2f}{:>18.2f}{:>18.2f}{:>18}{:>18}\n", "Min", double(sstables_per_read_hg.min()), double(write_latency_hg.min()),
+            double(read_latency_hg.min()), row_size_hg.min(), column_count_hg.min());
+    fmt::print(std::cout, "{:<10}{:>10.2f}{:>18.2f}{:>18.2f}{:>18}{:>18}\n", "Max", double(sstables_per_read_hg.max()), latency_max(write_latency_hg),
+            latency_max(read_latency_hg), row_size_hg.max(), column_count_hg.max());
     fmt::print(std::cout, "\n");
 }
 

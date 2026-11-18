@@ -419,7 +419,15 @@ void set_storage_proxy(http_context& ctx, routes& r, sharded<service::storage_pr
     });
 
     sp::get_range_estimated_histogram.set(r, [&proxy](std::unique_ptr<http::request> req) {
-        return sum_timer_stats_storage_proxy(proxy, &service::storage_proxy_stats::stats::range);
+        return sum_estimated_histogram(proxy, &service::storage_proxy_stats::stats::range);
+    });
+
+    sp::get_cas_read_estimated_histogram.set(r, [&proxy](std::unique_ptr<http::request> req) {
+        return sum_estimated_histogram(proxy, &service::storage_proxy_stats::stats::cas_read);
+    });
+
+    sp::get_cas_write_estimated_histogram.set(r, [&proxy](std::unique_ptr<http::request> req) {
+        return sum_estimated_histogram(proxy, &service::storage_proxy_stats::stats::cas_write);
     });
 
     sp::get_range_latency.set(r, [&proxy](std::unique_ptr<http::request> req) {
@@ -478,6 +486,8 @@ void unset_storage_proxy(http_context& ctx, routes& r) {
     sp::get_write_estimated_histogram.unset(r);
     sp::get_write_latency.unset(r);
     sp::get_range_estimated_histogram.unset(r);
+    sp::get_cas_read_estimated_histogram.unset(r);
+    sp::get_cas_write_estimated_histogram.unset(r);
     sp::get_range_latency.unset(r);
 }
 

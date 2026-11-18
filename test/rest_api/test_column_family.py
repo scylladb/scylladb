@@ -195,3 +195,11 @@ def test_sstables_total_disk_space_sanity(cql, this_dc, rest_api):
             live_size = int(resp.json())
             print(f'Reported live size : {live_size}')
             assert live_size <= total_real_size
+
+# nodetool proxyhistograms reads these
+@pytest.mark.parametrize("name", ["read", "write", "range", "cas_read", "cas_write"])
+def test_storage_proxy_estimated_histogram(rest_api, name):
+    resp = rest_api.send("GET", f"storage_proxy/metrics/{name}/estimated_histogram")
+    resp.raise_for_status()
+    res = resp.json()
+    assert len(res["buckets"]) == len(res["bucket_offsets"]) > 0
