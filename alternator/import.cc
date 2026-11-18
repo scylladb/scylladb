@@ -173,8 +173,6 @@ import_table_request parse_import_table_request(const rjson::value& request, con
 
     auto table_creation_parameters = get_table_creation_parameters(request);
     auto validated_table_params = validate_create_table_request(table_creation_parameters, feat, tablets_mode, "ImportTable");
-    // FIXME: commit_table_creation()'s checks of the table's keyspace (vector indexes need
-    // tablets, RF-rack validity, object storage) are deferred until the table is created.
 
     return import_table_request {
         std::move(client_token),
@@ -384,7 +382,8 @@ future<executor::request_return_type> executor::import_table(service::client_sta
 
     // As on DynamoDB, everything is validated before the ClientToken is
     // looked up: a replay with invalid parameters fails even if its token
-    // is known.
+    // is known. Refused only after the lookup, because a replay starts no
+    // import: the cluster-dependent checks of check_new_table().
     const auto tablets_mode = _proxy.data_dictionary().get_config().tablets_mode_for_new_keyspaces();
     import_table_request parsed = parse_import_table_request(request, _proxy.features(), tablets_mode);
     const auto& keyspace_name = parsed.validated_table_params.keyspace_name;
@@ -445,6 +444,11 @@ future<executor::request_return_type> executor::import_table(service::client_sta
         target_table_existed = true;
         table_id = table->schema()->id();
     } else {
+        // Refuse now what the creation of the table would refuse. The creation checks it again,
+        // because the cluster can change before the table is created.
+        if (auto error = check_new_table(parsed.validated_table_params, tablets_mode)) {
+            co_return std::move(*error);
+        }
         // The id of the table which the import will create: DynamoDB reports TableId from the start.
         table_id = parsed.validated_table_params.builder.uuid();
     }

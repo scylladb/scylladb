@@ -250,6 +250,30 @@ void check_import_row_ttl(cql_test_env& e, std::string_view import_arn, std::chr
 
 } // anonymous namespace
 
+// A request which CreateTable would refuse because of the keyspace of the new table - here a
+// vector index in a keyspace using vnodes - is refused when it is made, and writes no rows.
+SEASTAR_TEST_CASE(test_import_refuses_what_create_table_refuses) {
+    auto cfg = import_test_config();
+    cfg.db_config->tablets_mode_for_new_keyspaces.set(db::tablets_mode_t::mode::disabled);
+    return with_import_executor([] (cql_test_env& e, alternator_test_executor& exec) {
+        auto request = make_import_table_request("vnodes_vector", "token-vnodes-vector");
+        rjson::add(rjson::get(request, "TableCreationParameters"), "VectorIndexes", rjson::parse(R"([{
+            "IndexName": "vector_index",
+            "VectorAttribute": {"AttributeName": "x"},
+            "Dimensions": 4,
+            "DistanceFunction": "COSINE",
+            "Projection": {"ProjectionType": "KEYS_ONLY"}
+        }])"));
+        auto result = exec.import_table(std::move(request));
+        auto* err = std::get_if<alternator::api_error>(&result);
+        BOOST_REQUIRE(err);
+        BOOST_REQUIRE_EQUAL(err->_type, "ValidationException");
+        BOOST_REQUIRE(err->_msg.contains("vnodes"));
+        db::alternator_import_table_helper helper(e.qp().local());
+        BOOST_REQUIRE(!helper.get_client_token("token-vnodes-vector").get());
+    }, std::move(cfg));
+}
+
 // The garbage collector takes an import only if its row did not change since it was read: a
 // progress write of an import which still runs, which keeps its status and node, is not undone.
 SEASTAR_TEST_CASE(test_import_take_import_checks_counters) {
