@@ -207,6 +207,11 @@ void create_table_statement::validate_columns_for_keyspace(const data_dictionary
     if (ks_uses_tablets && has_counters && !db.features().counters_with_tablets) {
         throw exceptions::invalid_request_exception(format("Cannot use the 'counter' type for table {}.{}: Counters are not yet supported with tablets", keyspace(), column_family()));
     }
+
+    // Not supported yet: SCYLLADB-6584.
+    if (ks_strongly_consistent && _ttl_column) {
+        throw exceptions::configuration_exception("Per-row TTL is not supported in strongly consistent keyspaces");
+    }
 }
 
 std::unique_ptr<prepared_statement>

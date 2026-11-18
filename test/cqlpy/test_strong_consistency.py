@@ -327,11 +327,45 @@ def test_per_partition_rate_limit_on_sc_table(cql, sc_keyspace):
             cql.execute(f"ALTER TABLE {table} WITH per_partition_rate_limit = {{'max_reads_per_second': 100}}")
 
 
+def test_per_row_ttl_on_sc_table(cql, sc_keyspace):
+    """
+    Per-row TTL is rejected for tables in strongly consistent keyspaces,
+    at CREATE TABLE and with ALTER TABLE. This is a missing feature, not
+    the right behavior: the expiration service deletes expired rows with
+    ordinary writes, which do not go through raft. DESCRIBE prints a TTL
+    column also as a scylla_tags property, and that property alone
+    enables per-row TTL. When SCYLLADB-6584 adds the support, this test
+    should check that the rows expire.
+    """
+    error_msg = "Per-row TTL is not supported in strongly consistent keyspaces"
+    ttl_tag = "{'system:ttl_attribute': 'e'}"
+
+    with pytest.raises(ConfigurationException, match=error_msg):
+        cql.execute(f"CREATE TABLE {sc_keyspace}.{unique_name()} (pk int PRIMARY KEY, e bigint TTL)")
+    with pytest.raises(ConfigurationException, match=error_msg):
+        cql.execute(f"CREATE TABLE {sc_keyspace}.{unique_name()} (pk int PRIMARY KEY, e bigint) WITH scylla_tags = {ttl_tag}")
+
+    with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, e bigint") as table:
+        with pytest.raises(ConfigurationException, match=error_msg):
+            cql.execute(f"ALTER TABLE {table} TTL e")
+        with pytest.raises(ConfigurationException, match=error_msg):
+            cql.execute(f"ALTER TABLE {table} WITH scylla_tags = {ttl_tag}")
+
+        # TTL NULL turns per-row TTL off, so the keyspace is no reason to
+        # refuse it. It fails only because this table has no TTL column.
+        with pytest.raises(InvalidRequest, match=f"Cannot unset TTL column, table {table} does not have a TTL column set"):
+            cql.execute(f"ALTER TABLE {table} TTL NULL")
+
+
 @pytest.mark.parametrize("columns, options, error, message", [
     pytest.param("pk int PRIMARY KEY, c counter", "",
                  InvalidRequest, "counters are not supported in strongly consistent keyspaces", id="counter"),
     pytest.param("pk int PRIMARY KEY, v int", "WITH per_partition_rate_limit = {'max_writes_per_second': 100}",
                  ConfigurationException, "Per-partition rate limit is not supported in strongly consistent keyspaces", id="rate_limit"),
+    pytest.param("pk int PRIMARY KEY, e bigint TTL", "",
+                 ConfigurationException, "Per-row TTL is not supported in strongly consistent keyspaces", id="ttl_column"),
+    pytest.param("pk int PRIMARY KEY, e bigint", "WITH scylla_tags = {'system:ttl_attribute': 'e'}",
+                 ConfigurationException, "Per-row TTL is not supported in strongly consistent keyspaces", id="ttl_tag"),
 ])
 def test_prepared_create_table_after_keyspace_recreated(cql, sc_keyspace, columns, options, error, message):
     """
