@@ -94,9 +94,12 @@ future<row_index_header> read_row_index_header(
     reader_permit rp
 );
 
-void write_row_index_header(
+class bti_node_sink;
+
+// Writes a row index header, and returns its position.
+uint64_t write_row_index_header(
     sstable_version_types sst_ver,
-    sstables::file_writer& fw,
+    bti_node_sink& sink,
     const sstables::key& pk,
     sstable_position partition_data_start,
     const bti_position_encoding& encoding,

@@ -292,7 +292,7 @@ void row_index_writer_impl::add(
 // so we have a Scylla-specific encoding extension:
 // if the first byte is 0xc0, then the encoding is
 // `0xc0` followed by 8 bytes of the negative timestamp, followed by 4 bytes of local deletion time..
-void write_da_partition_tombstone(sstables::file_writer& fw, const sstables::deletion_time& dt) {
+static void write_da_partition_tombstone(bti_raw_writer& fw, const sstables::deletion_time& dt) {
     if (dt.live()) {
         trie_logger.trace("consume_end_of_partition: deletime: live");
         uint8_t flag = 0x80;
@@ -340,9 +340,9 @@ size_t nudge(lazy_comparable_bytes_from_clustering_position& _last_key, const si
     }
 }
 
-void write_row_index_header(
+uint64_t write_row_index_header(
     sstable_version_types sst_ver,
-    sstables::file_writer& fw,
+    bti_node_sink& sink,
     const sstables::key& pk,
     sstable_position partition_data_start,
     const bti_position_encoding& encoding,
@@ -350,11 +350,19 @@ void write_row_index_header(
     uint64_t root_pos,
     const sstables::deletion_time& partition_tombstone
 ) {
-    trie_logger.trace("consume_end_of_partition: key: offset={} pk={}", fw.offset(), fmt_hex(bytes_view(pk)));
-    write(sst_ver, fw, disk_string_view<uint16_t>(bytes_view(pk)));
+    auto fw = bti_raw_writer{sink};
+    auto pos_header = sink.raw_pos().value;
+    trie_logger.trace("consume_end_of_partition: key: offset={} pk={}", pos_header, fmt_hex(bytes_view(pk)));
+    {
+        uint16_t len;
+        check_truncate_and_assign(len, bytes_view(pk).size());
+        write(sst_ver, fw, len);
+        write(sst_ver, fw, bytes_view(pk));
+    }
 
-    auto pos_datapos = fw.offset();
-    trie_logger.trace("consume_end_of_partition: pos: {} {}", fw.offset(), partition_data_start);
+    // The base of the trie root delta is the first byte of the position field.
+    auto pos_datapos = sink.raw_pos().value;
+    trie_logger.trace("consume_end_of_partition: pos: {} {}", pos_datapos, partition_data_start);
     encoding.check_kind(partition_data_start);
     if (!encoding.is_physical()) {
         write_unsigned_vint(fw, partition_data_start.to_logical());
@@ -374,14 +382,15 @@ void write_row_index_header(
         fw.write(reinterpret_cast<const char*>(packed_bytes.data()), packed_width);
     }
 
-    trie_logger.trace("consume_end_of_partition: root_offset: {} {}", fw.offset(), pos_datapos - root_pos);
+    trie_logger.trace("consume_end_of_partition: root_offset: {} {}", sink.pos().value, pos_datapos - root_pos);
     write_signed_vint(fw, int64_t(uint64_t(root_pos) - uint64_t(pos_datapos)));
 
-    trie_logger.trace("consume_end_of_partition: added_blocks_for_header: {} {}", fw.offset(), added_blocks);
+    trie_logger.trace("consume_end_of_partition: added_blocks_for_header: {} {}", sink.pos().value, added_blocks);
     write_unsigned_vint(fw, added_blocks);
 
-    trie_logger.trace("consume_end_of_partition: deletime: {}", fw.offset());
+    trie_logger.trace("consume_end_of_partition: deletime: {}", sink.pos().value);
     write_da_partition_tombstone(fw, partition_tombstone);
+    return pos_header;
 }
 
 bti_partition_index_target row_index_writer_impl::finish(
@@ -439,14 +448,11 @@ bti_partition_index_target row_index_writer_impl::finish(
 
     // The header we write here is parsed during reads by `row_index_header_parser`.
     auto root = result.value;
-    auto& fw = _wr.sink().file_writer();
-
-    expensive_log("row_index_writer_impl::finish: writing header at {}", fw.offset());
-    int64_t pos_header = fw.offset();
-    write_row_index_header(_sst_ver, fw, pk, partition_data_start, _encoding, added_blocks_for_header, root, partition_tombstone);
+    auto pos_header = write_row_index_header(_sst_ver, _wr.sink(), pk, partition_data_start, _encoding, added_blocks_for_header, root, partition_tombstone);
+    expensive_log("row_index_writer_impl::finish: wrote header at {}", pos_header);
     // The partition index entry points into Rows.db, at the header we just wrote.
     // This is a plain offset into Rows.db, not a Data.db position.
-    return rows_db_position{static_cast<uint64_t>(pos_header)};
+    return rows_db_position{pos_header};
 }
 
 // Instantiation of row_index_writer_impl with `Output` == `bti_node_sink`.
