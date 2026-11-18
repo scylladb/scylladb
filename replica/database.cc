@@ -640,7 +640,7 @@ database::setup_metrics() {
 
         sm::make_gauge("logstor_bytes", [this] { return get_logstor_memory_usage(); },
                        sm::description("Bytes of memory that logstor holds and cannot evict: the primary indexes with their B+trees, "
-                                       "the segment descriptors, the write buffers and the queued writes. The logstor cache is not included.")),
+                                       "the segment descriptors and the write buffers. The logstor cache and the queued writes are not included.")),
 
         sm::make_gauge("logstor_index_entries_bytes", [this] { return get_logstor_index_entries_memory_usage(); },
                        sm::description("Bytes of memory that the logstor primary index entries take, without the nodes and buckets of the B+trees.")),

@@ -644,7 +644,9 @@ public:
     size_t queued_write_bytes() const noexcept { return _queued_write_bytes; }
     uint64_t total_queued_writes() const noexcept { return _total_queued_writes; }
 
-    size_t memory_usage() const noexcept { return _ring_size * _buffer_size + _queued_write_bytes; }
+    // Returns the memory of the ring buffers. The queued writes are not counted, because the limits
+    // on open requests already hold their memory, and their memory is freed when the flushes continue.
+    size_t memory_usage() const noexcept { return _ring_size * _buffer_size; }
 
 };
 
