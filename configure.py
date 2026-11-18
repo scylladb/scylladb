@@ -640,7 +640,6 @@ scylla_tests = set([
     'test/boost/observable_test',
     'test/boost/partitioner_test',
     'test/boost/pretty_printers_test',
-    'test/boost/radix_tree_test',
     'test/boost/range_tombstone_list_test',
     'test/boost/rate_limiter_test',
     'test/boost/recent_entries_map_test',
