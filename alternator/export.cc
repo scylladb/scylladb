@@ -1001,12 +1001,6 @@ future<std::unique_ptr<import_pipeline_interface>> create_source_pipeline(std::v
     std::rethrow_exception(exception);
 }
 
-// DynamoDB reports the timestamps of an export as seconds since the epoch, keeping the sub-second
-// part.
-static double to_epoch_seconds(db_clock::time_point tp) {
-    return std::chrono::duration<double>(tp.time_since_epoch()).count();
-}
-
 // For the export operations, DynamoDB reports a malformed ARN as ValidationException. parse_arn,
 // which other operations also use, reports some malformed ARNs as AccessDeniedException, so this
 // function changes that error to ValidationException.

@@ -8,7 +8,9 @@
 
 #include "alternator/import.hh"
 
+#include <algorithm>
 #include <chrono>
+#include <random>
 #include <string_view>
 #include <utility>
 #include <seastar/core/coroutine.hh>
@@ -16,6 +18,7 @@
 #include "alternator/executor.hh"
 #include "alternator/executor_util.hh"
 #include "audit/audit.hh"
+#include "db/system_distributed_keyspace.hh"
 #include "db_clock.hh"
 #include "service/client_state.hh"
 #include "service/storage_proxy.hh"
@@ -26,11 +29,16 @@
 
 namespace alternator {
 
-future<std::optional<executor::request_return_type>> get_in_progress_import_description(std::string_view client_token) {
-    // FIXME: there is no persistent import metadata yet.
-    // Cannot determine if the import with the same token is
-    // already running.
-    co_return std::nullopt;
+// The states of an import. An ImportTableDescription reports FAILING as IN_PROGRESS.
+static constexpr std::string_view import_status_in_progress = "IN_PROGRESS";
+static constexpr std::string_view import_status_completed = "COMPLETED";
+static constexpr std::string_view import_status_failed = "FAILED";
+
+// The FailureCodes of an import. DynamoDB documents none of these.
+static constexpr std::string_view failure_not_implemented = "NotImplemented";
+
+static bool is_terminal_status(std::string_view status) {
+    return status == import_status_completed || status == import_status_failed;
 }
 
 // ClientToken must match the pattern DynamoDB documents for it, ^[^$]+$:
@@ -166,45 +174,118 @@ static std::string_view input_compression_type_name(import_input_compression_typ
     std::unreachable();
 }
 
-rjson::value make_import_table_description(const import_table_request& parsed) {
-    const auto now = db_clock::now();
-    const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
-    // An import id looks like DynamoDB's: the start time in milliseconds and 8 random hex digits.
-    const auto import_id = fmt::format("{:014}-{:08x}", now_ms,
-            uint32_t(utils::make_random_uuid().get_least_significant_bits()));
-    rjson::value table_arn = generate_arn_for_table(parsed.validated_table_params.keyspace_name, parsed.validated_table_params.table_name);
-    // An import ARN is its table's ARN with the import id appended.
-    rjson::value import_arn = rjson::from_string(fmt::format("{}/import/{}", rjson::to_string_view(table_arn), import_id));
-
+// The request stored in the import row and the client token row: only the members which
+// ImportTable supports, validated and with the defaults filled in, so that the stored request is
+// small and the import can rely on it.
+static rjson::value make_stored_request(const import_table_request& parsed) {
     rjson::value s3_bucket_source = rjson::empty_object();
     rjson::add(s3_bucket_source, "S3Bucket", rjson::from_string(parsed.s3_bucket));
     if (!parsed.s3_key_prefix.empty()) {
         rjson::add(s3_bucket_source, "S3KeyPrefix", rjson::from_string(parsed.s3_key_prefix));
     }
+    rjson::value request = rjson::empty_object();
+    rjson::add(request, "S3BucketSource", std::move(s3_bucket_source));
+    rjson::add(request, "InputFormat", rjson::from_string(input_format_name(parsed.input_format)));
+    rjson::add(request, "InputCompressionType", rjson::from_string(input_compression_type_name(parsed.input_compression_type)));
+    rjson::add(request, "TableCreationParameters", rjson::copy(parsed.table_creation_parameters));
+    return request;
+}
+
+// The stored request of an import row or a client token row, parsed. The request was validated
+// when the import was accepted, so a request which cannot be read back is a corrupt row.
+struct stored_import_request {
+    rjson::value request;
+    sstring s3_bucket;
+    sstring s3_key_prefix;
+    compression_type compression;
+    sstring table_name;
+
+    explicit stored_import_request(std::string_view stored) {
+        try {
+            request = rjson::parse(stored);
+            const rjson::value& s3_bucket_source = rjson::get(request, "S3BucketSource");
+            s3_bucket = sstring(rjson::to_string_view(rjson::get(s3_bucket_source, "S3Bucket")));
+            if (const rjson::value* prefix = rjson::find(s3_bucket_source, "S3KeyPrefix")) {
+                s3_key_prefix = sstring(rjson::to_string_view(*prefix));
+            }
+            if (rjson::to_string_view(rjson::get(request, "InputCompressionType")) == "GZIP") {
+                compression = gzip_compression{};
+            } else {
+                compression = no_compression{};
+            }
+            table_name = sstring(rjson::to_string_view(rjson::get(rjson::get(request, "TableCreationParameters"), "TableName")));
+        } catch (const rjson::error& e) {
+            throw std::runtime_error(fmt::format("malformed stored ImportTable request: {}", e.what()));
+        }
+    }
+};
+
+// An import ARN is the ARN of its table, `/import/` and the import id.
+static constexpr std::string_view import_arn_infix = "/import/";
+
+// Generates an import id of DynamoDB's shape: the time in milliseconds since the epoch (14
+// digits), a dash and 8 random hex digits, e.g. `01658528578619-c4d4e311`.
+static sstring generate_import_id(db_clock::time_point accepted_at) {
+    static thread_local std::mt19937 rng(std::random_device{}());
+    auto epoch_millis = std::chrono::duration_cast<std::chrono::milliseconds>(accepted_at.time_since_epoch()).count();
+    return fmt::format("{:014d}-{:08x}", epoch_millis, std::uint32_t(rng()));
+}
+
+rjson::value make_import_table_description(const import_row& row) {
+    stored_import_request stored(row.request);
+    std::string_view import_arn = row.import_arn;
+    // The ARN without `/import/<id>`, or all of it if it has no `/import/` (rfind() returns npos).
+    auto table_arn = import_arn.substr(0, std::min(import_arn.size(), import_arn.rfind(import_arn_infix)));
+    const bool terminal = is_terminal_status(row.import_status);
 
     rjson::value description = rjson::empty_object();
-    rjson::add(description, "ImportArn", std::move(import_arn));
-    // FIXME: the import itself is not implemented yet, so every accepted
-    // import fails immediately, like ExportTableToPointInTime's placeholder.
-    rjson::add(description, "ImportStatus", "FAILED");
-    rjson::add(description, "FailureCode", "NotImplemented");
-    rjson::add(description, "FailureMessage", "Not yet implemented - this is a placeholder response for testing the import API.");
-    rjson::add(description, "TableArn", std::move(table_arn));
-    // The builder's id becomes the table's id once the table is created.
-    // FIXME: an import into an existing table must report that table's id,
-    // not a freshly allocated one.
-    rjson::add(description, "TableId", rjson::from_string(parsed.validated_table_params.builder.uuid().to_sstring()));
-    rjson::add(description, "ClientToken", rjson::from_string(parsed.client_token));
-    rjson::add(description, "S3BucketSource", std::move(s3_bucket_source));
-    rjson::add(description, "InputFormat", rjson::from_string(input_format_name(parsed.input_format)));
-    rjson::add(description, "InputCompressionType", rjson::from_string(input_compression_type_name(parsed.input_compression_type)));
-    rjson::add(description, "TableCreationParameters", rjson::copy(parsed.table_creation_parameters));
-    rjson::add(description, "StartTime", rjson::value(std::chrono::duration<double>(now.time_since_epoch()).count()));
-    rjson::add(description, "ProcessedItemCount", rjson::value(0));
-    rjson::add(description, "ImportedItemCount", rjson::value(0));
-    rjson::add(description, "ErrorCount", rjson::value(0));
+    rjson::add(description, "ImportArn", rjson::from_string(row.import_arn));
+    // FAILING is not one of DynamoDB's ImportStatus values: report it as IN_PROGRESS.
+    rjson::add(description, "ImportStatus", rjson::from_string(terminal ? std::string_view(row.import_status) : import_status_in_progress));
+    rjson::add(description, "TableArn", rjson::from_string(table_arn));
+    rjson::add(description, "TableId", rjson::from_string(row.table_id.to_sstring()));
+    rjson::add(description, "ClientToken", rjson::from_string(row.client_token));
+    for (std::string_view member : {"S3BucketSource", "InputFormat", "InputCompressionType", "TableCreationParameters"}) {
+        if (const rjson::value* value = rjson::find(stored.request, member)) {
+            rjson::add_with_string_name(description, member, rjson::copy(*value));
+        }
+    }
+    rjson::add(description, "StartTime", rjson::value(to_epoch_seconds(row.accepted_at)));
+    if (terminal && row.completed_at) {
+        rjson::add(description, "EndTime", rjson::value(to_epoch_seconds(*row.completed_at)));
+    }
+    // ProcessedSizeBytes appears once the import wrote it, as DynamoDB's does.
+    if (row.processed_size_bytes) {
+        rjson::add(description, "ProcessedSizeBytes", rjson::value(*row.processed_size_bytes));
+    }
+    rjson::add(description, "ProcessedItemCount", rjson::value(row.processed_item_count));
+    rjson::add(description, "ImportedItemCount", rjson::value(row.imported_item_count));
+    rjson::add(description, "ErrorCount", rjson::value(row.error_count));
+    if (row.import_status == import_status_failed) {
+        if (row.failure_code) {
+            rjson::add(description, "FailureCode", rjson::from_string(*row.failure_code));
+        }
+        if (row.failure_message) {
+            rjson::add(description, "FailureMessage", rjson::from_string(*row.failure_message));
+        }
+    }
     return description;
 }
+
+static sstring make_import_table_response(const import_row& row) {
+    rjson::value response = rjson::empty_object();
+    rjson::add(response, "ImportTableDescription", make_import_table_description(row));
+    return sstring(rjson::print(std::move(response)));
+}
+
+future<std::optional<executor::request_return_type>> get_in_progress_import_description(std::string_view client_token) {
+    // FIXME: there is no persistent import metadata yet.
+    // Cannot determine if the import with the same token is
+    // already running.
+    co_return std::nullopt;
+}
+
+// --- ImportTable ---
 
 future<executor::request_return_type> executor::import_table(service::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request, std::unique_ptr<audit::audit_info_alternator>& audit_info) {
     _stats.api_operations.import_table++;
@@ -247,11 +328,28 @@ future<executor::request_return_type> executor::import_table(service::client_sta
     // FIXME: consider api::error when table exists but request
     // has TableCreationParameters.
 
-    // FIXME: the description is not saved yet, so DescribeImport,
-    // ListImports and a ClientToken replay cannot find this import.
-    rjson::value response = rjson::empty_object();
-    rjson::add(response, "ImportTableDescription", make_import_table_description(parsed));
-    co_return rjson::print(std::move(response));
+    // FIXME: the import itself is not implemented yet, so every accepted
+    // import fails immediately, like ExportTableToPointInTime's placeholder.
+    // The import is not saved yet, so DescribeImport, ListImports and a
+    // ClientToken replay cannot find it.
+    const auto accepted_at = db_clock::now();
+    const auto import_id = generate_import_id(accepted_at);
+    rjson::value table_arn = generate_arn_for_table(parsed.validated_table_params.keyspace_name, parsed.validated_table_params.table_name);
+    import_row row{
+        .import_arn = fmt::format("{}{}{}", rjson::to_string_view(table_arn), import_arn_infix, import_id),
+        .client_token = sstring(parsed.client_token),
+        .request = sstring(rjson::print(make_stored_request(parsed))),
+        // The builder's id becomes the table's id once the table is created.
+        // FIXME: an import into an existing table must report that table's id,
+        // not a freshly allocated one.
+        .table_id = parsed.validated_table_params.builder.uuid(),
+        .import_status = sstring(import_status_failed),
+        .failure_code = sstring(failure_not_implemented),
+        .failure_message = "Not yet implemented - this is a placeholder response for testing the import API.",
+        .import_id_token = import_id,
+        .accepted_at = accepted_at,
+    };
+    co_return make_import_table_response(row);
 }
 
 } // namespace alternator
