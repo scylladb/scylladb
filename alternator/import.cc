@@ -373,7 +373,9 @@ rjson::value make_import_table_description(const import_row& row) {
     if (terminal && row.completed_at) {
         rjson::add(description, "EndTime", rjson::value(to_epoch_seconds(*row.completed_at)));
     }
-    // ProcessedSizeBytes appears once the import wrote it, as DynamoDB's does.
+    // Alternator reports the counters as the import runs, while DynamoDB reports zeros and no
+    // ProcessedSizeBytes until the import ends. ProcessedSizeBytes appears once the import first
+    // wrote its progress.
     if (row.processed_size_bytes) {
         rjson::add(description, "ProcessedSizeBytes", rjson::value(*row.processed_size_bytes));
     }
@@ -559,10 +561,25 @@ static std::chrono::seconds import_write_retry_budget() {
     }
     return std::chrono::minutes(10);
 }
+// The import writes its counters to its row after this many processed items, or after this much
+// time, whichever comes first, so that the progress of the import can be seen.
+static constexpr int64_t import_progress_items = 10000;
+static constexpr std::chrono::seconds import_progress_period{10};
+// An import whose writes of its progress keep failing for this long fails with ImportInterrupted,
+// as it cannot tell whether its row is still its own. A garbage collector of another node may take
+// the row once this node was unreachable for node_unreachable_timeout() (1 hour); with a timeout
+// well below that, an import cut off from its row stops writing items before its row is taken.
+static constexpr std::chrono::minutes import_progress_write_failure_timeout{15};
 
 // Thrown by the item callback when the rest of an object is not to be read: as DynamoDB does,
 // after a line which is not an item.
 struct abandon_object {};
+
+// Thrown when a write of the import row did not apply because the row is not ours any more: the
+// garbage collector took the import. The import stops: it starts no more writes of items and no
+// longer writes its row, but still removes the import-in-progress tag of the table it created (see
+// remove_tag_of_created_table()).
+struct import_row_taken {};
 
 // Runs one import, see executor::s3_imports. A member of s3_imports, so that it can use the
 // write path and the table creation of the executor.
@@ -612,11 +629,22 @@ class executor::s3_imports::import_task {
     seastar::gate _writes;
     // The first failure of a write, which fails the import.
     std::exception_ptr _write_failure;
-    // Set once the import is to write no more items: by run(), once import_all() ended. A batch
-    // whose write failed is then not written again, see stop_retrying().
+    // Set once the import is to write no more items: by run(), once import_all() ended, and by
+    // maybe_write_progress() as soon as it finds the import taken or interrupted. A batch whose
+    // write failed is then not written again, see stop_retrying().
     bool _ended = false;
     // The timestamp of the last batch, see next_timestamp().
     api::timestamp_type _last_timestamp = api::missing_timestamp;
+
+    // When maybe_write_progress() writes the counters next, unless import_progress_items items
+    // come first.
+    lowres_clock::time_point _next_progress_write = lowres_clock::now() + import_progress_period;
+    int64_t _processed_at_last_progress_write = 0;
+    // The time of the first failed write of the progress since the last one which applied, see
+    // import_progress_write_failure_timeout. Counted from the first failure, not from the last write
+    // which applied, so that one failure after a long time without a write (e.g. a slow object) does
+    // not fail the import.
+    std::optional<lowres_clock::time_point> _first_failed_progress_write;
 
     uint64_t processed_size_bytes() const noexcept {
         return _bytes_of_read_objects + (_pipeline ? _pipeline->processed_size_bytes() : 0);
@@ -951,7 +979,8 @@ class executor::s3_imports::import_task {
     // Adds an item to the batch. An item with the key of one in the batch replaces it; an item with
     // the key of a batch being written first waits for all the writes in flight. Flushes the batch
     // when it took import_batch_size items - replaced ones included, so that a source repeating a
-    // few keys is still written as it is read - or reached import_batch_bytes.
+    // few keys is still written (and its progress shown) as it is read - or reached
+    // import_batch_bytes.
     future<> add_to_batch(put_or_delete_item builder) {
         primary_key key{builder.pk(), builder.ck()};
         const auto bytes = builder.length_in_bytes();
@@ -973,6 +1002,51 @@ class executor::s3_imports::import_task {
         if (_batch_items >= int64_t(import_batch_size) || _batch_bytes >= import_batch_bytes) {
             co_await flush_batch();
         }
+    }
+
+    // Writes the counters to the import row, now and then: called after each item and after each
+    // object.
+    // The error injection alternator_import_from_s3_progress_at_each_item makes it write the progress
+    // at each item, so that a test sees it while the import runs.
+    // This write is also the only check that the import is still ours. Nothing fences the writes of
+    // items: an import which continues after the garbage collector took it - after a restart of
+    // gossip on this node, or after a stall or a partition longer than node_unreachable_timeout() -
+    // writes its batches into the table until this write finds the row taken, although the import
+    // is already reported FAILED. From then on, it writes no more items: a batch waiting to be
+    // written again gives up (see _ended). An import which cannot write its row at all stops after
+    // import_progress_write_failure_timeout.
+    future<> maybe_write_progress() {
+        if (lowres_clock::now() < _next_progress_write
+                && _row.processed_item_count - _processed_at_last_progress_write < import_progress_items
+                && !utils::get_local_injector().enter("alternator_import_from_s3_progress_at_each_item")) {
+            co_return;
+        }
+        _next_progress_write = lowres_clock::now() + import_progress_period;
+        _processed_at_last_progress_write = _row.processed_item_count;
+        auto row = _row;
+        row.processed_size_bytes = processed_size_bytes();
+        bool ours;
+        try {
+            ours = co_await update_import(_e._sdks, row, import_status_in_progress, row.node_id);
+        } catch (...) {
+            const auto now = lowres_clock::now();
+            if (!_first_failed_progress_write) {
+                _first_failed_progress_write = now;
+            } else if (now - *_first_failed_progress_write > import_progress_write_failure_timeout) {
+                _ended = true;
+                throw import_failure(std::string(failure_import_interrupted), fmt::format(
+                        "The import could not write its progress for {} minutes, the last time with: {}",
+                        import_progress_write_failure_timeout.count(), std::current_exception()));
+            }
+            // The next write of the progress may succeed.
+            ilogger.debug("Import {}: failed to write the progress: {}", _row.import_arn, std::current_exception());
+            co_return;
+        }
+        if (!ours) {
+            _ended = true;
+            throw import_row_taken();
+        }
+        _first_failed_progress_write.reset();
     }
 
     future<> on_item(std::string_view object_key, rjson::value line) {
@@ -1022,6 +1096,7 @@ class executor::s3_imports::import_task {
         } else {
             count_error(object_key, error);
         }
+        co_await maybe_write_progress();
     }
 
     // True for the failures which end the import, rather than only the reading of an object.
@@ -1032,6 +1107,8 @@ class executor::s3_imports::import_task {
         try {
             std::rethrow_exception(ex);
         } catch (const import_failure&) {
+            return true;
+        } catch (const import_row_taken&) {
             return true;
         } catch (const abort_requested_exception&) {
             return true;
@@ -1122,8 +1199,8 @@ class executor::s3_imports::import_task {
     }
 
     // Reads the source and writes its items. Throws import_failure (or another exception) if the
-    // import fails. Sets `source` as soon as it is made, so that run() closes it also when this
-    // throws.
+    // import fails, and import_row_taken if the row is not ours any more. Sets `source` as soon as
+    // it is made, so that run() closes it also when this throws.
     future<> import_all(std::unique_ptr<import_source>& source) {
         source = co_await _source_factory(_request->s3_bucket, _request->s3_key_prefix, _as);
         // The first object is listed before the table is created, so that a source which cannot
@@ -1132,6 +1209,9 @@ class executor::s3_imports::import_task {
         co_await prepare_table();
         while (object) {
             co_await import_object(*source, *object);
+            // Also for an object whose reading ended without reaching on_item(), e.g. at a first
+            // line which is not JSON.
+            co_await maybe_write_progress();
             object = co_await source->next_object();
         }
         co_await flush_batch();
@@ -1159,10 +1239,14 @@ public:
         co_await coroutine::switch_to(_e._proxy.local_db().get_export_import_scheduling_group());
         // The FailureCode and FailureMessage of a failed import.
         std::optional<std::pair<std::string, std::string>> failure;
+        // The garbage collector took the import: this import writes nothing more to its row.
+        bool taken = false;
         std::unique_ptr<import_source> source;
         try {
             _request.emplace(_row.request);
             co_await import_all(source);
+        } catch (const import_row_taken&) {
+            taken = true;
         } catch (const import_failure& e) {
             failure.emplace(e.code(), e.what());
         } catch (...) {
@@ -1186,6 +1270,11 @@ public:
         // A failed import still waits for the writes it started: they hold the batches, and the
         // final counters count them.
         co_await _writes.close();
+        if (taken) {
+            ilogger.warn("Import {}: the garbage collector took the import, stopping", _row.import_arn);
+            co_await remove_tag_of_created_table();
+            co_return std::nullopt;
+        }
 
         _row.processed_size_bytes = processed_size_bytes();
         if (failure) {
