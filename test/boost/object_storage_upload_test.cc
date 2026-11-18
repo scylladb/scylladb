@@ -12,6 +12,7 @@
 #include <fmt/format.h>
 
 #include <seastar/core/future.hh>
+#include <seastar/core/metrics_api.hh>
 #include <seastar/testing/test_case.hh>
 #include <seastar/core/sharded.hh>
 #include <seastar/core/sleep.hh>
@@ -187,3 +188,35 @@ SEASTAR_THREAD_TEST_CASE(test_dropped_s3_endpoint_with_inflight_credentials_refr
     seastar::sleep(std::chrono::seconds(1)).get();
 }
 #endif
+
+// A dropped endpoint's client is kept alive by the sstables referencing it; a client
+// created when the endpoint is added back must not collide with its metric series.
+SEASTAR_THREAD_TEST_CASE(test_readded_s3_endpoint_does_not_collide_with_dropped_client_metrics) {
+    // Static credentials keep the clients off the IMDS/STS provider chain, so nothing touches the network.
+    tests::tmp_set_env access_key("AWS_ACCESS_KEY_ID", "test");
+    tests::tmp_set_env secret_key("AWS_SECRET_ACCESS_KEY", "test");
+
+    db::config cfg;
+    const db::object_storage_endpoint_param ep(db::object_storage_endpoint_param::s3_storage{
+            .endpoint = "http://dropped-and-readded.s3.test:9000", .region = "us-east-1", .iam_role_arn = "", .legacy_format = false});
+    cfg.object_storage_endpoints({ep});
+
+    sharded<sstables::storage_manager> sstm;
+    sstm.start(std::ref(cfg), sstables::storage_manager::config{.skip_metrics_registration = true}).get();
+    auto stop_sstm = deferred_stop(sstm);
+
+    auto dropped = sstm.local().get_endpoint_client(ep.key());
+    auto close_dropped = defer([&dropped] () noexcept { dropped->close().get(); });
+    cfg.object_storage_endpoints({});
+    cfg.object_storage_endpoints({ep});
+
+    shared_ptr<sstables::object_storage_client> readded;
+    BOOST_REQUIRE_NO_THROW(readded = sstm.local().get_endpoint_client(ep.key()));
+    BOOST_REQUIRE(readded != dropped);
+
+    // The dropped client released its per-client series, so the one left is the new client's.
+    const auto& families = seastar::metrics::impl::get_value_map();
+    auto fam = families.find("s3_unclassified_groups");
+    BOOST_REQUIRE(fam != families.end());
+    BOOST_REQUIRE_EQUAL(fam->second.size(), 1);
+}
