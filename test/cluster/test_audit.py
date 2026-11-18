@@ -1429,6 +1429,26 @@ class CQLAuditTester(AuditTester):
                     ks="",
                 )
 
+            # A hashed password is a secret too: it is the role's Alternator
+            # secret access key. ALTER ROLE does not support HASHED PASSWORD
+            # yet (SCYLLADB-5229), so only CREATE ROLE is checked.
+            hashed_password = "$2a$04$PoiUnv/9OZ5nYjlN087uIe5KLMV6yJfDkgKAAHO0pRVTEvB3UQU/i"
+            self.execute_and_validate_new_audit_entry(
+                session,
+                f"CREATE ROLE role3 WITH HASHED PASSWORD = '{hashed_password}'",
+                category="DCL",
+                expected_operation="CREATE ROLE role3 WITH HASHED PASSWORD = '***'",
+                user="cassandra",
+                ks="",
+            )
+            self.execute_and_validate_new_audit_entry(
+                session,
+                "DROP ROLE role3",
+                category="DCL",
+                user="cassandra",
+                ks="",
+            )
+
     async def _test_login(self):
         """
         USER LOGIN

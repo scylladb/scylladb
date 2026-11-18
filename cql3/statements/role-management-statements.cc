@@ -153,14 +153,15 @@ static bool is_password_empty(const sstring& password) {
     return password.size() == 1 && password[0] == static_cast<char>(-1);
 }
 
-/// Removes single-quoted plaintext passwords.
+/// Removes single-quoted plaintext and hashed passwords. A hashed password
+/// is a secret as well: it is the Alternator secret access key of the role.
 static void sanitize_audit_info_password(audit::audit_info* ai, const sstring& raw_password) {
     sstring password;
     if (!is_password_empty(raw_password)) {
         // Password needs escaping to be searchable literally:
         password = escape_for_regex(raw_password);
     }
-    const std::regex re(R"(((WITH|AND)\s*PASSWORD\s*=?\s*)')" + std::string(password) + "'",
+    const std::regex re(R"(((WITH|AND)\s*(HASHED\s+)?PASSWORD\s*=?\s*)')" + std::string(password) + "'",
             std::regex_constants::ECMAScript | std::regex_constants::icase);
     const auto replace_result = std::regex_replace(ai->query().c_str(), re, "$1'***'");
     ai->set_query_string(static_cast<std::string_view>(replace_result));
@@ -191,6 +192,9 @@ void create_role_statement::sanitize_audit_info() {
     if (audit::audit_info* ai = get_audit_info(); ai != nullptr) {
         if (_options.password) {
             sanitize_audit_info_password(ai, *_options.password);
+        }
+        if (_options.hashed_password) {
+            sanitize_audit_info_password(ai, *_options.hashed_password);
         }
         if (_options.options) {
             sanitize_audit_info_options(ai, *_options.options);
@@ -277,6 +281,9 @@ void alter_role_statement::sanitize_audit_info() {
     if (audit::audit_info* ai = get_audit_info(); ai != nullptr) {
         if (_options.password) {
             sanitize_audit_info_password(ai, *_options.password);
+        }
+        if (_options.hashed_password) {
+            sanitize_audit_info_password(ai, *_options.hashed_password);
         }
         if (_options.options) {
             sanitize_audit_info_options(ai, *_options.options);
