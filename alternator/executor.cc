@@ -141,7 +141,6 @@ extern const sstring TTL_TAG_KEY("system:ttl_attribute");
 // table as CREATING, as DynamoDB does, although Alternator does not block
 // reads and writes to it. The import removes the tag when it ends; if it cannot
 // (e.g. its node stops), the garbage collector of imports does.
-// (A following commit makes the garbage collector remove such tags.)
 extern const sstring IMPORT_IN_PROGRESS_TAG_KEY("system:import_in_progress");
 // This tag is set for GSIs since scylla-2026.4.
 // GSI implementation in Alternator assumes that (currently up to 4)

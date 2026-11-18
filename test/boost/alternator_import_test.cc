@@ -1156,7 +1156,8 @@ SEASTAR_TEST_CASE(test_import_concurrency_limit) {
 }
 
 // Stopping the node during an import fails it with ImportInterrupted. The table keeps the
-// import-in-progress tag, because the shutdown aborts its removal (a schema change).
+// import-in-progress tag, because the shutdown aborts its removal (a schema change); the garbage
+// collector removes it later.
 SEASTAR_TEST_CASE(test_import_interrupted_by_shutdown) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         alternator_test_executor exec;
@@ -1556,6 +1557,58 @@ SEASTAR_TEST_CASE(test_import_final_write_is_retried) {
         BOOST_REQUIRE_EQUAL(row.imported_item_count, 1);
         // The one-shot injection is disabled once it failed the write. The import ran on this shard.
         BOOST_REQUIRE(!utils::get_local_injector().is_enabled(fail));
+    }, import_test_config());
+}
+
+// The garbage collector removes the import-in-progress tag of a table whose import ended - the
+// import fails to remove it e.g. when its node shuts down - and keeps the tag of a running import.
+SEASTAR_TEST_CASE(test_import_garbage_collector_removes_tags_of_ended_imports) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        constexpr auto wakeup = "alternator_import_from_s3_gc_wakeup";
+        constexpr auto finished = "alternator_import_from_s3_gc_finished";
+        utils::get_local_injector().enable_on_all(wakeup).get();
+        utils::get_local_injector().enable_on_all(finished).get();
+        auto disable = defer([&] noexcept {
+            utils::get_local_injector().disable_on_all(wakeup).get();
+            utils::get_local_injector().disable_on_all(finished).get();
+        });
+
+        alternator_test_executor exec;
+        exec.start(e);
+        auto stop_exec = defer([&] noexcept { try { exec.stop(); } catch (...) { std::terminate(); } });
+
+        auto self = alternator::get_self_node_id(e.gossiper().local());
+        BOOST_REQUIRE(self);
+        db::alternator_import_table_helper helper(e.qp().local());
+        abort_source as;
+        // Creates the table `name`, tagged by the import `import_arn` whose row has `status`.
+        auto make_tagged_table = [&] (std::string_view name, std::string_view status) {
+            exec.create_table(make_create_table_request(name));
+            const sstring import_arn = fmt::format("arn:scylla:alternator:alternator_{0}:scylla:table/{0}/import/01700000000000-00000001", name);
+            helper.insert_import(alternator::import_row{
+                .import_arn = import_arn,
+                .client_token = sstring(name),
+                .request = "{}",
+                .import_status = sstring(status),
+                .accepted_at = db_clock::now(),
+                .node_id = self->to_string(),
+            }, std::chrono::hours(1)).get();
+            db::modify_tags(e.migration_manager().local(), fmt::format("alternator_{}", name), sstring(name),
+                    [&] (std::map<sstring, sstring>& tags) { tags[alternator::IMPORT_IN_PROGRESS_TAG_KEY] = import_arn; }, as).get();
+            auto described = std::get<rjson::value>(exec.describe_table(name));
+            BOOST_REQUIRE_EQUAL(get_string(rjson::get(described, "Table"), "TableStatus"), "CREATING");
+        };
+        make_tagged_table("ended", "FAILED");
+        make_tagged_table("running", "IN_PROGRESS");
+
+        auto rounds = utils::error_injection<true>::enter_count_on_all(finished).get();
+        utils::error_injection<true>::receive_message_on_all(wakeup).get();
+        wait_until([&] { return utils::error_injection<true>::enter_count_on_all(finished).get() != rounds; }, "a garbage collection round");
+
+        auto ended = std::get<rjson::value>(exec.describe_table("ended"));
+        BOOST_REQUIRE_EQUAL(get_string(rjson::get(ended, "Table"), "TableStatus"), "ACTIVE");
+        auto running = std::get<rjson::value>(exec.describe_table("running"));
+        BOOST_REQUIRE_EQUAL(get_string(rjson::get(running, "Table"), "TableStatus"), "CREATING");
     }, import_test_config());
 }
 
