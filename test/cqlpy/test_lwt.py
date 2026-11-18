@@ -338,6 +338,36 @@ def test_lwt_counter_syntax_null_column(cql, table1, new_to_cassandra_6):
     assert len(rs) == 1 and rs[0].applied
     assert cql.execute(f'SELECT r FROM {table1} WHERE p={p} AND c=1').one().r == 1
 
+# In Scylla, any arithmetic on a null gives null - "x + NULL" is NULL, see
+# "Expressions / NULL" in docs/cql/cql-extensions.md. So "SET r = r + ?"
+# with a null bound value sets r to null, deleting its old value, and so
+# does "SET r = r - ?". This is a deliberate difference from Cassandra 6.0,
+# which leaves r unchanged when the added value is null - so this test is
+# scylla_only.
+def test_lwt_counter_syntax_null_value(cql, table1, scylla_only):
+    p = unique_key_int()
+    for op in ['+', '-']:
+        cql.execute(f'INSERT INTO {table1} (p, c, r) VALUES ({p}, 1, 10)')
+        stmt = cql.prepare(f'UPDATE {table1} SET r = r {op} ? WHERE p = ? AND c = ? IF EXISTS')
+        rs = list(cql.execute(stmt, [None, p, 1]))
+        assert len(rs) == 1 and rs[0].applied
+        assert cql.execute(f'SELECT r FROM {table1} WHERE p={p} AND c=1').one().r is None
+
+# As test_lwt_counter_syntax_null_column showed, when r is null, "r + 1" is
+# null, so "SET r = r + 1" leaves r null. Scylla does this by writing a
+# null to r - a tombstone, just like "SET r = null" does - so a write to r
+# with an older timestamp, which arrives later, is lost. Cassandra instead
+# writes nothing when r is null, so the older write survives. This is a
+# consequence of the same deliberate difference as in the previous test,
+# so this test is also scylla_only.
+def test_lwt_counter_syntax_null_column_older_write(cql, table1, scylla_only):
+    p = unique_key_int()
+    cql.execute(f'INSERT INTO {table1} (p, c) VALUES ({p}, 1)')
+    rs = list(cql.execute(f'UPDATE {table1} SET r = r + 1 WHERE p={p} AND c=1 IF EXISTS'))
+    assert len(rs) == 1 and rs[0].applied
+    cql.execute(f'UPDATE {table1} USING TIMESTAMP 1 SET r = 5 WHERE p={p} AND c=1')
+    assert cql.execute(f'SELECT r FROM {table1} WHERE p={p} AND c=1').one().r is None
+
 # Test that the LWT counter syntax is allowed for all numeric types, not just
 # integers.
 def test_lwt_counter_syntax_numeric_types(cql, test_keyspace, new_to_cassandra_6):
@@ -494,6 +524,17 @@ def test_lwt_string_concatenation_null_column(cql, table_strings):
     p = unique_key_int()
     cql.execute(f'INSERT INTO {table_strings} (p, i) VALUES ({p}, 1)')
     rs = list(cql.execute(f"UPDATE {table_strings} SET t = t + 'a' WHERE p = {p} IF EXISTS"))
+    assert len(rs) == 1 and rs[0].applied
+    assert list(cql.execute(f'SELECT t FROM {table_strings} WHERE p = {p}')) == [(None,)]
+
+# As with numbers (see test_lwt_counter_syntax_null_value), concatenating
+# a null bound value gives null, so "SET t = t + ?" with a null value sets
+# t to null. Cassandra 6.0 leaves t unchanged, so this test is scylla_only.
+def test_lwt_string_concatenation_null_value(cql, table_strings, scylla_only):
+    p = unique_key_int()
+    cql.execute(f"INSERT INTO {table_strings} (p, t) VALUES ({p}, 'x')")
+    stmt = cql.prepare(f'UPDATE {table_strings} SET t = t + ? WHERE p = ? IF EXISTS')
+    rs = list(cql.execute(stmt, [None, p]))
     assert len(rs) == 1 and rs[0].applied
     assert list(cql.execute(f'SELECT t FROM {table_strings} WHERE p = {p}')) == [(None,)]
 

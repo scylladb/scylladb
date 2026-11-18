@@ -378,10 +378,19 @@ also use the shorthand syntax ``SET col += value`` and ``SET col -= value``.
 .. note::
 
    Apache Cassandra also supports this syntax: ``col = col + value`` since
-   Cassandra 4.1, and ``col = col - value`` since Cassandra 6.0. One
-   difference is that when the result overflows an integer type, Cassandra
-   silently wraps around (e.g., incrementing the largest ``int`` yields the
-   smallest ``int``), while ScyllaDB rejects the update with an error.
+   Cassandra 4.1, and ``col = col - value`` since Cassandra 6.0. There are
+   some differences:
+
+   * When the result overflows an integer type, Cassandra silently wraps
+     around (e.g., incrementing the largest ``int`` yields the smallest
+     ``int``), while ScyllaDB rejects the update with an error.
+   * When ``value`` is null (e.g., a bind variable bound to null), ScyllaDB
+     sets the column to null, because in ScyllaDB arithmetic on a null always
+     gives null. Cassandra 6.0 leaves the column unchanged.
+   * When the column is null, both leave it null, but ScyllaDB does it by
+     writing a null (a tombstone), while Cassandra writes nothing. Reads see
+     no difference, but a write to this column with an older timestamp
+     (``USING TIMESTAMP``) that arrives later is lost in ScyllaDB.
 
 Update a table using a LWT
 --------------------------

@@ -12,7 +12,7 @@ How is it different?
 * For batch statement, ScyllaDB allows mixing `IF EXISTS`, `IF NOT EXISTS`, and other conditions for the same row.
 * Unlike Cassandra, ScyllaDB  uses per-core data partitioning, so the RPC  that is done to perform a transaction talks directly to the right core on a peer replica, avoiding the concurrency overhead. This is,  of course, true, if ScyllaDB’s own shard-aware driver is used - otherwise we  add an extra hop to the right core at the coordinator node.
 * ScyllaDB does not store  hints for lightweight transaction writes, since this is redundant as all such writes are already present in system.paxos table.
-* Both ScyllaDB and Cassandra support arithmetic ``SET`` operations (``col = col + value`` and ``col = col - value``) on non-counter columns inside LWT conditional updates, with two differences: Cassandra supports subtraction only since Cassandra 6.0, and when the result overflows an integer type, Cassandra silently wraps around while ScyllaDB rejects the update with an error.
+* Both ScyllaDB and Cassandra support arithmetic ``SET`` operations (``col = col + value`` and ``col = col - value``) on non-counter columns inside LWT conditional updates, with a few differences: Cassandra supports subtraction only since Cassandra 6.0; when the result overflows an integer type, Cassandra silently wraps around while ScyllaDB rejects the update with an error; and when the column is null, or (since Cassandra 6.0) when ``value`` is null, Cassandra writes nothing while ScyllaDB sets the column to null.
 
 
 More on :doc:`Lightweight Transactions (LWT) </features/lwt>`
