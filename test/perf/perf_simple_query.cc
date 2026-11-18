@@ -628,6 +628,9 @@ int scylla_simple_query_main(int argc, char** argv) {
             if (cfg.counters && cfg.logstor) {
                 throw std::invalid_argument("--counters and --logstor are mutually exclusive: logstor does not store counters");
             }
+            if (cfg.logstor && app.configuration().contains("strongly-consistent-tables")) {
+                throw std::invalid_argument("--strongly-consistent-tables and --logstor are mutually exclusive: logstor is not supported in strongly consistent keyspaces");
+            }
             if (app.configuration().contains("tablets") || cfg.logstor) {
                 cfg.initial_tablets = app.configuration()["initial-tablets"].as<unsigned>();
             }
