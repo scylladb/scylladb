@@ -22,6 +22,7 @@
 #include "alternator/rmw_operation.hh"
 #include "cdc/metadata.hh"
 #include "db/system_distributed_keyspace.hh"
+#include "db/tags/utils.hh"
 #include "gms/gossiper.hh"
 #include "replica/database.hh"
 #include "service/cas_shard.hh"
@@ -42,6 +43,7 @@
 #include <seastar/core/sleep.hh>
 #include <seastar/util/defer.hh>
 
+#include <atomic>
 #include <chrono>
 #include <map>
 #include <memory>
@@ -58,6 +60,9 @@ static seastar::logger dict_trainer_logger("alternator_import_test_dict_trainer"
 
 // The scheduling group in which the last import on this shard made its source, see set_source().
 thread_local sstring import_source_scheduling_group;
+// The shard on which the last import made its source, see set_source(). Not thread_local: a test
+// reads it on another shard.
+std::atomic<int> import_source_shard{-1};
 
 // Wraps a sharded<alternator::executor>, taking DynamoDB-style JSON requests.
 class alternator_test_executor {
@@ -144,6 +149,7 @@ public:
         _exec.invoke_on_all([objects] (alternator::executor& exec) {
             exec.get_s3_imports().set_source_factory([objects] (sstring, sstring, abort_source&) {
                 import_source_scheduling_group = current_scheduling_group().name();
+                import_source_shard = this_shard_id();
                 std::vector<std::pair<sstring, std::shared_ptr<alternator::in_memory_test_storage>>> storages;
                 for (const auto& [key, content] : objects) {
                     auto storage = std::make_shared<alternator::in_memory_test_storage>();
@@ -559,6 +565,29 @@ SEASTAR_TEST_CASE(test_import_into_existing_table_with_other_parameters) {
     }, import_test_config());
 }
 
+// An import accepted on a shard other than 0 runs on that shard, and creates its table and
+// removes its tag through shard 0.
+SEASTAR_TEST_CASE(test_import_on_another_shard) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        alternator_test_executor exec;
+        exec.start(e);
+        auto stop_exec = defer([&] noexcept { try { exec.stop(); } catch (...) { std::terminate(); } });
+
+        exec.set_source({{"0", item_line("a", 1, "x")}});
+        import_source_shard = -1;
+        const unsigned request_shard = smp::count - 1;
+        auto response = exec.import_table_successfully_on_shard(request_shard, make_import_table_request("other_shard", "token-other-shard"));
+        auto row = wait_for_import(e, sstring(get_string(rjson::get(response, "ImportTableDescription"), "ImportArn")));
+        BOOST_REQUIRE_EQUAL(row.import_status, "COMPLETED");
+        // set_source() gives every shard the source: only the shard which made it ran the import.
+        BOOST_REQUIRE_EQUAL(import_source_shard.load(), int(request_shard));
+        auto described = std::get<rjson::value>(exec.describe_table("other_shard"));
+        BOOST_REQUIRE_EQUAL(get_string(rjson::get(described, "Table"), "TableStatus"), "ACTIVE");
+        BOOST_REQUIRE_EQUAL(get_string(rjson::get(described, "Table"), "TableId"), row.table_id.to_sstring());
+        BOOST_REQUIRE_EQUAL(exec.get_item_v("other_shard", "a", "1"), "x");
+    }, import_test_config());
+}
+
 // An import into a table with a GSI fills its view. The import writes in the scheduling group of
 // exports and imports, which therefore has its own view update concurrency semaphore (see
 // replica::database::start()) - without it, the view updates would log an error and use another
@@ -952,7 +981,37 @@ SEASTAR_TEST_CASE(test_import_client_token_replay_before_import_row) {
 
 #ifdef SCYLLA_ENABLE_ERROR_INJECTION
 
-// Stopping the node during an import fails it with ImportInterrupted.
+// While an import fills the table it created, DescribeTable reports the table as CREATING.
+SEASTAR_TEST_CASE(test_import_table_is_creating_during_the_import) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        alternator_test_executor exec;
+        exec.start(e);
+        auto stop_exec = defer([&] noexcept { try { exec.stop(); } catch (...) { std::terminate(); } });
+
+        constexpr auto pause = "alternator_import_from_s3_pause_in_item_handler";
+        utils::get_local_injector().enable_on_all(pause).get();
+        auto disable = defer([&] noexcept { utils::get_local_injector().disable_on_all(pause).get(); });
+        exec.set_source({{"0", item_line("a", 1, "x") + item_line("a", 2, "y")}});
+
+        auto response = exec.import_table_successfully(make_import_table_request("creating", "token-creating"));
+        const sstring import_arn(get_string(rjson::get(response, "ImportTableDescription"), "ImportArn"));
+        // The import pauses at its first item, after it created the table.
+        wait_until([&] { return utils::error_injection<true>::enter_count_on_all(pause).get() != 0; }, "the import to pause");
+        auto described = std::get<rjson::value>(exec.describe_table("creating"));
+        BOOST_REQUIRE_EQUAL(get_string(rjson::get(described, "Table"), "TableStatus"), "CREATING");
+        auto updated = exec.update_table_successfully(rjson::parse(R"({"TableName": "creating", "BillingMode": "PAY_PER_REQUEST"})"));
+        BOOST_REQUIRE_EQUAL(get_string(rjson::get(updated, "TableDescription"), "TableStatus"), "CREATING");
+
+        utils::get_local_injector().disable_on_all(pause).get();
+        auto row = wait_for_import(e, import_arn);
+        BOOST_REQUIRE_EQUAL(row.import_status, "COMPLETED");
+        described = std::get<rjson::value>(exec.describe_table("creating"));
+        BOOST_REQUIRE_EQUAL(get_string(rjson::get(described, "Table"), "TableStatus"), "ACTIVE");
+    }, import_test_config());
+}
+
+// Stopping the node during an import fails it with ImportInterrupted. The table keeps the
+// import-in-progress tag, because the shutdown aborts its removal (a schema change).
 SEASTAR_TEST_CASE(test_import_interrupted_by_shutdown) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         alternator_test_executor exec;
@@ -974,6 +1033,8 @@ SEASTAR_TEST_CASE(test_import_interrupted_by_shutdown) {
         auto row = wait_for_import(e, import_arn);
         BOOST_REQUIRE_EQUAL(row.import_status, "FAILED");
         BOOST_REQUIRE_EQUAL(row.failure_code.value_or(""), "ImportInterrupted");
+        auto schema = e.local_db().find_schema("alternator_shutdown", "shutdown");
+        BOOST_REQUIRE(db::find_tag(*schema, alternator::IMPORT_IN_PROGRESS_TAG_KEY));
     }, import_test_config());
 }
 

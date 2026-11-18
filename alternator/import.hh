@@ -33,6 +33,9 @@ namespace alternator {
 // A row of the imports table, as stored (see db/system_distributed_keyspace.hh).
 using import_row = db::alternator_import_row;
 
+// The tag which marks a table created by an import while the import fills it, see executor.cc.
+extern const sstring IMPORT_IN_PROGRESS_TAG_KEY;
+
 // The InputFormat values ImportTable supports so far.
 enum class import_input_format {
     dynamodb_json,
@@ -122,9 +125,10 @@ public:
 // node_id), changed only with conditional writes:
 //  - ImportTable inserts the row as IN_PROGRESS, owned by the node which accepted the request,
 //    and that node runs the import, on the shard of the request;
-//  - the import ends as COMPLETED, or as FAILED (ItemValidationError if only items, lines or
-//    objects were skipped, see count_error()). For any other failure it first writes FAILING with
-//    the failure code, so that the garbage collector can finish the cleanup if this node stops.
+//  - the import removes the import-in-progress tag of the table it created, and ends as
+//    COMPLETED, or as FAILED (ItemValidationError if only items, lines or objects were skipped,
+//    see count_error()). For any other failure it first writes FAILING with the failure code, so
+//    that the garbage collector can finish the cleanup if this node stops.
 // (A following commit adds the garbage collector, to take the rows of nodes which stopped.)
 class executor::s3_imports {
     executor& _e;
@@ -136,6 +140,11 @@ class executor::s3_imports {
 
     // Runs one import. Defined in import.cc.
     class import_task;
+    // Removes the import-in-progress tag of the table which the import `import_arn` created, so
+    // that DescribeTable reports the table as ACTIVE. Does nothing if the table is gone, or if the
+    // tag is not this import's. Runs on shard 0, where the executor makes its schema changes; then
+    // waits for schema agreement.
+    future<> remove_import_in_progress_tag(::table_id table_id, sstring import_arn);
 public:
     explicit s3_imports(executor& e);
     // Starts the background fiber which runs the import of `row`, which ImportTable has just
