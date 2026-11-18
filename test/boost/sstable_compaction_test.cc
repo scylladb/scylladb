@@ -5207,6 +5207,7 @@ struct dummy_backlog_source : public compaction::compaction_backlog_source {
     const schema_ptr& schema() const noexcept override { return _s; }
     lw_shared_ptr<const sstables::sstable_set> sstables_for_backlog() const override { return nullptr; }
     compaction::compaction_group_stats stats() const override { return {}; }
+    bool compaction_enforce_min_threshold() const noexcept override { return false; }
 };
 }
 

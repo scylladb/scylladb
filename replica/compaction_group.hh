@@ -300,6 +300,8 @@ public:
     lw_shared_ptr<const sstables::sstable_set> sstables_for_backlog() const override;
     // compaction_backlog_source: what the group measures
     compaction::compaction_group_stats stats() const override;
+    // compaction_backlog_source: whether regular compaction waits for min_threshold runs
+    bool compaction_enforce_min_threshold() const noexcept override;
     sstables::sstable_set make_main_sstable_set() const;
     void set_main_sstables(lw_shared_ptr<sstables::sstable_set> new_main_sstables);
 

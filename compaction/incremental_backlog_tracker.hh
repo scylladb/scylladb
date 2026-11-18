@@ -30,6 +30,10 @@ class incremental_backlog_tracker final : public compaction_backlog_tracker::imp
     mutable int64_t _total_backlog_bytes = 0;
     mutable double _sstables_backlog_contribution = 0.0f;
     mutable std::unordered_set<sstables::run_id> _sstable_runs_contributing_backlog;
+    // The effective threshold the cached fields were calculated for. It can change while
+    // the sstables don't, e.g. with compaction_enforce_min_threshold or once bootstrap
+    // ends, so the fields are recalculated then too.
+    mutable unsigned _threshold = 0;
 
     struct inflight_component {
         int64_t total_bytes = 0;
@@ -43,9 +47,14 @@ class incremental_backlog_tracker final : public compaction_backlog_tracker::imp
         int64_t total_backlog_bytes;
         float sstables_backlog_contribution;
         std::unordered_set<sstables::run_id> sstable_runs_contributing_backlog;
+        // The effective threshold the tiers were found eligible by.
+        unsigned threshold;
     };
 
-    // Recalculates the cached fields if the sstables changed since.
+    // The runs a tier has to hold for ICS to compact it, as the strategy finds it now.
+    static unsigned effective_min_threshold(const compaction_backlog_source& src) noexcept;
+
+    // Recalculates the cached fields if the sstables, or the effective threshold, changed since.
     void refresh(const compaction_backlog_source& src) const;
 
 public:

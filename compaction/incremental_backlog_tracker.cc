@@ -28,9 +28,13 @@ incremental_backlog_tracker::inflight_component incremental_backlog_tracker::com
     return in;
 }
 
+unsigned incremental_backlog_tracker::effective_min_threshold(const compaction_backlog_source& src) noexcept {
+    return incremental_compaction_strategy_options::effective_min_threshold(src.schema()->min_compaction_threshold(), src.compaction_enforce_min_threshold());
+}
+
 incremental_backlog_tracker::backlog_calculation_result
 incremental_backlog_tracker::calculate_sstables_backlog_contribution(const compaction_backlog_source& src, const incremental_compaction_strategy_options& options) {
-    auto threshold = src.schema()->min_compaction_threshold();
+    auto threshold = effective_min_threshold(src);
     int64_t total_bytes = 0;
     int64_t total_backlog_bytes = 0;
     float sstables_backlog_contribution = 0.0f;
@@ -70,11 +74,12 @@ incremental_backlog_tracker::calculate_sstables_backlog_contribution(const compa
         .total_backlog_bytes = total_backlog_bytes,
         .sstables_backlog_contribution = sstables_backlog_contribution,
         .sstable_runs_contributing_backlog = std::move(sstable_runs_contributing_backlog),
+        .threshold = threshold,
     };
 }
 
 void incremental_backlog_tracker::refresh(const compaction_backlog_source& src) const {
-    if (!_backlog_dirty) {
+    if (!_backlog_dirty && _threshold == effective_min_threshold(src)) {
         return;
     }
     auto result = calculate_sstables_backlog_contribution(src, _options);
@@ -82,6 +87,7 @@ void incremental_backlog_tracker::refresh(const compaction_backlog_source& src) 
     _total_backlog_bytes = result.total_backlog_bytes;
     _sstables_backlog_contribution = result.sstables_backlog_contribution;
     _sstable_runs_contributing_backlog = std::move(result.sstable_runs_contributing_backlog);
+    _threshold = result.threshold;
     _backlog_dirty = false;
 }
 
