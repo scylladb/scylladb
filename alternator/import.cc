@@ -22,6 +22,7 @@
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/coroutine/as_future.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/switch_to.hh>
 #include "alternator/error.hh"
 #include "alternator/executor.hh"
@@ -400,10 +401,9 @@ static sstring make_import_table_response(const import_row& row) {
 }
 
 // --- The import metadata ---
-// All updates of the import rows are conditional on the pair (import_status, node_id), and the
-// inserts on the row not existing, so that
-// only the owner of an import - the node which runs it, or the garbage collector which took it -
-// changes its row.
+// All updates of the import rows are conditional on the pair (import_status, node_id) - a take
+// also on the progress counters - and the inserts on the row not existing, so that only the owner
+// of an import - the node which runs it, or the garbage collector which took it - changes its row.
 
 static future<std::optional<import_row>> insert_import(db::system_distributed_keyspace& sdks, const import_row& row) {
     db::alternator_import_table_helper helper(sdks.qp());
@@ -414,6 +414,11 @@ static future<bool> update_import(db::system_distributed_keyspace& sdks, const i
         const sstring& expected_node_id) {
     db::alternator_import_table_helper helper(sdks.qp());
     co_return co_await helper.update_import(row, sstring(expected_status), expected_node_id, import_row_ttl);
+}
+
+static future<bool> take_import(db::system_distributed_keyspace& sdks, const import_row& row, const import_row& expected) {
+    db::alternator_import_table_helper helper(sdks.qp());
+    co_return co_await helper.take_import(row, expected, import_row_ttl);
 }
 
 static future<std::optional<import_row>> get_import(db::system_distributed_keyspace& sdks, const sstring& import_arn) {
@@ -1391,7 +1396,7 @@ future<> executor::s3_imports::run_import(std::unique_ptr<import_task> task, slo
     }
 }
 
-void executor::s3_imports::finish_import_in_background(slot import_slot, import_row row) {
+void executor::s3_imports::finish_import_in_background(std::optional<slot> import_slot, import_row row) {
     if (_gate.is_closed()) {
         // The executor stops. A garbage collector collects the row once the node restarted, was
         // unreachable for an hour, or was removed.
@@ -1412,6 +1417,162 @@ void executor::s3_imports::finish_import_in_background(slot import_slot, import_
 future<> executor::s3_imports::stop() {
     _as.request_abort();
     co_await _gate.close();
+}
+
+// --- The garbage collector ---
+
+// The time a node must be unreachable before the garbage collector takes its imports. DOWN is not
+// sufficient: after a reactor stall or a network partition, the node may continue the import
+// after we marked it FAILED. A dead node does not come back with the same incarnation, so a long
+// timeout only delays the cleanup.
+static std::chrono::seconds node_unreachable_timeout() {
+    // Error injection can make the timeout short, to collect the imports of a node which stays down
+    // without waiting for an hour.
+    if (auto s = utils::get_local_injector().inject_parameter<std::uint32_t>("alternator_import_from_s3_node_unreachable_timeout_s")) {
+        return std::chrono::seconds(*s);
+    }
+    return std::chrono::hours(1);
+}
+
+// Takes the import of `row`, if its node cannot run it any more, and makes it FAILED: first
+// FAILING, owned by this node, then - after removing the import-in-progress tag of the table which
+// the import created - FAILED. An import which already failed (FAILING) keeps its failure.
+// Does nothing if the row changed since it was read: another collector took the import, or the
+// import ended.
+future<> executor::s3_imports::collect_import_row(const running_node_ids& running_nodes, const live_node_identifier& self_node_id,
+        const import_row& row) {
+    auto& sdks = _e._sdks;
+    if (running_nodes.may_be_running(live_node_identifier::from_string(row.node_id)) || is_terminal_status(row.import_status)) {
+        co_return;
+    }
+    auto taken = row;
+    taken.node_id = self_node_id.to_string();
+    taken.import_status = sstring(import_status_failing);
+    if (row.import_status != import_status_failing || !row.failure_code) {
+        taken.failure_code = sstring(failure_import_interrupted);
+        taken.failure_message = fmt::format("The node {} which ran the import stopped, or restarted gossip, before the import could finish.",
+                live_node_identifier::from_string(row.node_id).host_id);
+    }
+    bool took;
+    try {
+        took = co_await take_import(sdks, taken, row);
+    } catch (...) {
+        // The write may have applied although it failed, e.g. if it timed out after Paxos accepted
+        // it. The row is then FAILING and owned by this node, which no later round takes while this
+        // node runs. The background fiber writes FAILED only if the row is ours.
+        // FIXME: the import-in-progress tag of the table is not removed then.
+        auto ex = std::current_exception();
+        taken.import_status = sstring(import_status_failed);
+        taken.completed_at = db_clock::now();
+        finish_import_in_background(std::nullopt, std::move(taken));
+        std::rethrow_exception(ex);
+    }
+    if (!took) {
+        ilogger.debug("Import {} was not taken: its row changed (another node took it, or it still runs)", row.import_arn);
+        co_return;
+    }
+    if (!row.target_table_existed && row.table_id) {
+        try {
+            co_await remove_import_in_progress_tag(row.table_id, row.import_arn, false);
+        } catch (...) {
+            // FIXME: nothing removes the tag later, so DescribeTable reports the table as CREATING.
+            ilogger.warn("Import {}: failed to remove the {} tag of the table: {}", row.import_arn,
+                    IMPORT_IN_PROGRESS_TAG_KEY, std::current_exception());
+        }
+    }
+    taken.import_status = sstring(import_status_failed);
+    taken.completed_at = db_clock::now();
+    try {
+        co_await update_import(sdks, taken, import_status_failing, taken.node_id);
+    } catch (...) {
+        // The row is owned by this node now, so no later round takes it.
+        ilogger.warn("Import {}: failed to write the FAILED state, retrying in the background: {}", row.import_arn,
+                std::current_exception());
+        finish_import_in_background(std::nullopt, std::move(taken));
+        co_return;
+    }
+    ilogger.info("Import {} of node {} marked as FAILED with {}", row.import_arn, row.node_id, *taken.failure_code);
+}
+
+future<> executor::s3_imports::garbage_collect() {
+    auto& proxy = _e._proxy;
+    auto& sdks = _e._sdks;
+    auto& gossiper = _e._gossiper;
+    auto& as = _as;
+    co_await coroutine::switch_to(proxy.local_db().get_export_import_scheduling_group());
+    // Taking a row writes the identifier of this node, which needs gossip state. Without it, fail
+    // the round, so that it is retried soon.
+    auto self_node_id_opt = get_self_node_id(gossiper);
+    if (!self_node_id_opt) {
+        throw std::runtime_error("this node has no gossip state, so it can't take over the imports of dead nodes");
+    }
+    auto self_node_id = *self_node_id_opt;
+
+    db::alternator_import_table_helper helper(sdks.qp());
+    // Only the imports which have not ended can be collected. Keeping only those bounds the memory of
+    // a round by the imports which run, or ran on nodes which stopped, not by the 90 days of rows.
+    auto imports = co_await helper.scan_imports([] (const db::alternator_import_table_helper::import_summary_row& row) {
+        return !is_terminal_status(row.import_status.value_or(sstring()));
+    }, &as);
+    // Rows of earlier incarnations of this node are always taken: this incarnation has a higher
+    // gossip generation.
+    auto running_nodes = get_running_nodes(gossiper, *proxy.get_token_metadata_ptr(), node_unreachable_timeout());
+
+    // Errors are counted per row, so that one bad row does not stop every round at the same place.
+    size_t collection_failures = 0;
+
+    for (const auto& summary : imports) {
+        as.check();
+        co_await coroutine::maybe_yield();
+        if (running_nodes.may_be_running(live_node_identifier::from_string(summary.node_id.value_or(sstring())))
+                || is_terminal_status(summary.import_status.value_or(sstring()))) {
+            continue;
+        }
+        try {
+            // The scan read only some columns, and the conditional write sets all of them. The read
+            // is SERIAL because take_import() compares the progress counters with those read: a
+            // QUORUM read could miss a progress write which a node left accepted but uncommitted,
+            // which the take's Paxos round would then complete, so the take would not apply, and
+            // the import would wait for the next periodic round.
+            if (auto row = co_await helper.get_import(summary.import_arn, true)) {
+                co_await collect_import_row(running_nodes, self_node_id, *row);
+            }
+        } catch (...) {
+            ilogger.warn("Failed to collect import {}: {}", summary.import_arn, std::current_exception());
+            ++collection_failures;
+        }
+    }
+
+    as.check();
+    if (collection_failures) {
+        // Fail the round, so that it is retried sooner than the next periodic round.
+        throw std::runtime_error(fmt::format("{} import(s) could not be collected", collection_failures));
+    }
+}
+
+future<> executor::s3_imports::run_garbage_collector() {
+    auto holder = _gate.try_hold();
+    if (!holder) {
+        co_return;
+    }
+    // A round every 4 hours, as for exports (scylladb/scylladb#32045); node-down events ask for
+    // rounds in between.
+    _gc.emplace(_e._gossiper, gc_round_scheduler::config{
+        .name = "S3 imports",
+        .period = std::chrono::hours(4),
+        .retry_period = std::chrono::minutes(1),
+        .wakeup_injection = "alternator_import_from_s3_gc_wakeup",
+        .finished_injection = "alternator_import_from_s3_gc_finished",
+    }, ilogger);
+    try {
+        // A round after a node-down event can take its imports only once the node was unreachable
+        // for longer than node_unreachable_timeout() (get_running_nodes() compares with >).
+        co_await _gc->run(_as, node_unreachable_timeout() + std::chrono::seconds(1), [this] {
+            return garbage_collect();
+        });
+    } catch (...) {
+        ilogger.error("The garbage collector of S3 imports stopped: {}", std::current_exception());
+    }
 }
 
 // --- ImportTable ---
@@ -1636,7 +1797,7 @@ future<executor::request_return_type> executor::import_table(service::client_sta
         failed_row_written = co_await try_write_final_import_row(_sdks, row);
     } catch (...) {
         ilogger.warn("Import {}: failed to write the FAILED state, retrying in the background: {}", import_arn, std::current_exception());
-        _s3_imports->finish_import_in_background(std::move(*import_slot), row);
+        _s3_imports->finish_import_in_background(std::move(import_slot), row);
     }
     if (!token_row_is_ours || !failed_row_written) {
         // A replay may not find this import as FAILED - the token row may not be ours, or the

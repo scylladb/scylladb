@@ -28,16 +28,17 @@ namespace locator { class token_metadata; }
 
 // Helpers for the background jobs of Alternator which a single node runs and which have to be
 // taken over (marked as failed) when that node stops running them: S3 imports (SCYLLADB-4044) and,
-// in the future, S3 exports. A job row is to record the incarnation of the node which runs the job,
-// and a garbage collector, running periodically on every node, is to take the rows of incarnations
-// which cannot be running any more.
+// in the future, S3 exports. A job row records the incarnation of the node which runs the job, and a
+// garbage collector, running periodically on every node, takes the rows of incarnations which
+// cannot be running any more. So far only imports do this.
 
 namespace alternator {
 
 // Identifies one incarnation of a node: its host_id and gossip generation. The value changes
 // after a restart, and after a restart of gossip (`nodetool disablegossip` and `enablegossip`):
 // both increase the gossip generation.
-// The `node_id` columns of the job tables are to store it as "{host_id}:{gossip_generation}".
+// The `node_id` columns of the import tables store it as "{host_id}:{gossip_generation}" (the export
+// tables store only a host id, until exports use these helpers).
 // A default value (a null host_id) means "no node".
 struct live_node_identifier {
     locator::host_id host_id;
