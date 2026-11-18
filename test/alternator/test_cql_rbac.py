@@ -25,6 +25,7 @@ from test.pylib.skip_types import skip_env
 from .util import new_role, new_dynamodb, unique_table_name, random_string, new_test_table, get_cert, get_table_arn
 from .test_gsi_updatetable import wait_for_gsi, wait_for_gsi_gone
 from .test_gsi import assert_index_query
+from test.alternator.test_streams import wait_for_active_stream
 from test.alternator.test_vector import needs_vector_store, wait_for_vector_index_active, table_vs, vector_store_configured, VECTOR_STORE_TIMEOUT, need_vector_search_in_botocore
 from .test_export import unknown_export_id
 
@@ -1048,10 +1049,6 @@ def test_rbac_streams(dynamodb, cql):
         'KeySchema': [ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
         'AttributeDefinitions': [ { 'AttributeName': 'p', 'AttributeType': 'S' }],
         'StreamSpecification': {'StreamEnabled': True, 'StreamViewType': 'KEYS_ONLY'},
-        # Work around issue #16137 that Alternator Streams doesn't work with
-        # tablets. When that issue is solved, the following Tags should be
-        # removed.
-        'Tags': [{'Key': 'system:initial_tablets', 'Value': 'none'}]
     }
     with new_test_table(dynamodb, **schema) as table:
         with new_role(cql) as (role, key):
@@ -1074,6 +1071,20 @@ def test_rbac_streams(dynamodb, cql):
                 with temporary_grant(cql, 'SELECT', cql_cdclog_name(table), role):
                     authorized(lambda: ds.get_records(ShardIterator=iter))
 
+# Wait until the stream of the given table is enabled and has shards, and
+# return its ARN and the ID of its first shard. With tablets, a stream enabled
+# by UpdateTable becomes active asynchronously, and may briefly be reported as
+# ENABLED before it has any shards (SCYLLADB-6446).
+def wait_for_stream_shard(dynamodbstreams, table, timeout=60):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        arn, _ = wait_for_active_stream(dynamodbstreams, table, timeout)
+        shards = dynamodbstreams.describe_stream(StreamArn=arn)['StreamDescription']['Shards']
+        if shards:
+            return arn, shards[0]['ShardId']
+        time.sleep(0.05)
+    pytest.fail(f'Stream of table {table.name} has no shards after {timeout} seconds')
+
 # In the test above (test_rbac_streams), the superuser creates a table and
 # a stream, and grants a role the ability to read them. In this test, the role
 # itself creates the table and the stream, and we need to check that the
@@ -1089,10 +1100,6 @@ def test_rbac_streams_autogrant(dynamodb, cql, during_creation):
     schema = {
         'KeySchema': [ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
         'AttributeDefinitions': [ { 'AttributeName': 'p', 'AttributeType': 'S' }],
-        # Work around issue #16137 that Alternator Streams doesn't work with
-        # tablets. When that issue is solved, the following Tags should be
-        # removed.
-        'Tags': [{'Key': 'system:initial_tablets', 'Value': 'none'}]
     }
     enable_stream = {'StreamSpecification': {'StreamEnabled': True, 'StreamViewType': 'KEYS_ONLY'}}
     if during_creation:
@@ -1107,10 +1114,7 @@ def test_rbac_streams_autogrant(dynamodb, cql, during_creation):
                 with new_named_table(d, table_name, **schema) as table:
                     if not during_creation:
                         authorized(lambda: table.update(**enable_stream))
-                    streams = ds.list_streams(TableName=table.name)
-                    arn = streams['Streams'][0]['StreamArn']
-                    desc = ds.describe_stream(StreamArn=arn)
-                    shard_id = desc['StreamDescription']['Shards'][0]['ShardId']
+                    arn, shard_id = wait_for_stream_shard(ds, table)
                     iter = ds.get_shard_iterator(StreamArn=arn, ShardId=shard_id, ShardIteratorType='LATEST')['ShardIterator']
                     # Note: use low timeout to avoid slow xfail
                     authorized(lambda: ds.get_records(ShardIterator=iter), timeout=3*permissions_validity_in_ms(cql))
@@ -1125,10 +1129,6 @@ def test_rbac_streams_autorevoke(dynamodb, cql):
         'KeySchema': [ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
         'AttributeDefinitions': [ { 'AttributeName': 'p', 'AttributeType': 'S' }],
         'StreamSpecification': {'StreamEnabled': True, 'StreamViewType': 'KEYS_ONLY'},
-        # Work around issue #16137 that Alternator Streams doesn't work with
-        # tablets. When that issue is solved, the following Tags should be
-        # removed.
-        'Tags': [{'Key': 'system:initial_tablets', 'Value': 'none'}]
     }
     table_name = unique_table_name()
     with new_role(cql) as (role1, key1), new_role(cql) as (role2, key2):
