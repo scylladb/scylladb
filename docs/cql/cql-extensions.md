@@ -738,3 +738,6 @@ It's important to re-iterate that the per-cell TTL and per-row TTL features
 are separate and distinct, use a different CQL syntax, have a different
 implementation and provide different guarantees. It is possible to use
 both features in the same table, or even the same row.
+
+Per-row TTL cannot be enabled in keyspaces with
+{ref}`strong consistency <consistency-option>`.
