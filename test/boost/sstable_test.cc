@@ -40,6 +40,7 @@
 #include "sstables/binary_search.hh"
 #include "sstables/exceptions.hh"
 #include "sstables/decompressing_cursor.hh"
+#include "sstables/trie/bti_index.hh"
 #include "sstables/consumer.hh"
 
 #include <boost/range/combine.hpp>
@@ -1354,4 +1355,82 @@ SEASTAR_TEST_CASE(test_digest_validation_toc) {
 
 SEASTAR_TEST_CASE(test_digest_validation_scylla) {
     return test_component_digest_validation(component_type::Scylla, sstable::version_types::me, "Scylla digest mismatch");
+}
+
+// Changes one byte in each page of a file.
+static void corrupt_every_page(sstring path) {
+    auto f = open_file_dma(path, open_flags::rw).get();
+    auto close_f = deferred_close(f);
+    auto size = f.size().get();
+    for (uint64_t pos = 0; pos < size; pos += sstables::trie::BTI_PAGE_SIZE) {
+        auto page = f.dma_read_exactly<char>(pos, sstables::trie::BTI_PAGE_SIZE).get();
+        auto buf = temporary_buffer<char>::aligned(f.memory_dma_alignment(), page.size());
+        std::copy(page.begin(), page.end(), buf.get_write());
+        buf.get_write()[7] ^= 1;
+        f.dma_write(pos, buf.get(), buf.size()).get();
+    }
+    f.flush().get();
+}
+
+// The CRC32 of each page of the BTI index files of `mu` is checked on every
+// path that reads the pages from disk: when the sstable is loaded, and by index
+// readers with and without the index cache.
+SEASTAR_TEST_CASE(test_mu_index_page_checksums) {
+    return test_env::do_with_async([] (test_env& env) {
+        for (auto compression : {compression_parameters::no_compression(), compression_parameters(compression_parameters::algorithm::lz4)}) {
+            auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
+                .with_column("pk", int32_type, column_kind::partition_key)
+                .with_column("ck", int32_type, column_kind::clustering_key)
+                .with_column("v", bytes_type)
+                .set_compressor_params(compression)
+                .build();
+            utils::chunked_vector<mutation> muts;
+            for (int32_t i = 0; i < 10; ++i) {
+                mutation m(s, partition_key::from_single_value(*s, int32_type->decompose(i)));
+                // Partition 0 is large, so it has a row index.
+                for (int32_t ck = 0; ck < (i == 0 ? 2000 : 1); ++ck) {
+                    m.set_clustered_cell(clustering_key::from_single_value(*s, int32_type->decompose(ck)), "v",
+                        data_value(bytes(200, int8_t(0x5a))), api::new_timestamp());
+                }
+                muts.push_back(std::move(m));
+            }
+            auto sst = make_sstable_containing(env.make_sstable(s, sstable_version_types::mu), muts).get();
+            auto toc_path = fmt::to_string(sst->toc_filename());
+            auto entry_desc = sstables::parse_path(toc_path, s->ks_name(), s->cf_name()).value();
+            auto dir_path = std::filesystem::path(toc_path).parent_path().string();
+            BOOST_REQUIRE_GT(std::filesystem::file_size(sst->get_filename(component_type::Rows).format().c_str()), 0);
+
+            auto look_up_all = [&] (use_caching caching) {
+                auto ir = sst->make_index_reader(env.make_reader_permit(), {}, caching, false);
+                auto close_ir = deferred_close(*ir);
+                for (const auto& m : muts) {
+                    BOOST_REQUIRE(ir->advance_lower_and_check_if_present(dht::ring_position_view(m.decorated_key())).get());
+                    (void)ir->sstable_positions();
+                }
+            };
+            // Without the cache, so that Rows.db stays uncached.
+            look_up_all(use_caching::no);
+
+            // Each check matches the file named in the error, so that an error
+            // from the other corrupt file doesn't satisfy it.
+            const auto bad_rows_page = exception_predicate::message_contains("Rows.db: BTI index page at");
+            const auto bad_partitions_page = exception_predicate::message_contains("Partitions.db: BTI index page at");
+
+            // Rows.db isn't cached yet, so both paths read it from disk.
+            corrupt_every_page(sst->get_filename(component_type::Rows).format());
+            BOOST_REQUIRE_EXCEPTION(look_up_all(use_caching::no), sstables::malformed_sstable_exception, bad_rows_page);
+            BOOST_REQUIRE_EXCEPTION(look_up_all(use_caching::yes), sstables::malformed_sstable_exception, bad_rows_page);
+
+            // Loading the sstable read the Partitions.db trailer through the
+            // cache, so only the path without the cache reads it from disk.
+            // Rows.db is still corrupt, but the lookup reads Partitions.db first.
+            corrupt_every_page(sst->get_filename(component_type::Partitions).format());
+            BOOST_REQUIRE_EXCEPTION(look_up_all(use_caching::no), sstables::malformed_sstable_exception, bad_partitions_page);
+
+            // Loading the sstable again reads the trailer from disk.
+            sst = nullptr;
+            auto sst_reopened = env.make_sstable(s, dir_path, entry_desc.generation, entry_desc.version, entry_desc.format);
+            BOOST_REQUIRE_EXCEPTION(sst_reopened->load(s->get_sharder()).get(), sstables::malformed_sstable_exception, bad_partitions_page);
+        }
+    });
 }
