@@ -67,6 +67,9 @@ way as other options by using `WITH` clause:
     CREATE TABLE tbl ...
     WITH paxos_grace_seconds=1234
 
+The option cannot be set in keyspaces with
+{ref}`strong consistency <consistency-option>`, which do not support LWT.
+
 ## USING TIMEOUT
 
 TIMEOUT extension allows specifying per-query timeouts. This parameter accepts a single
