@@ -20,7 +20,7 @@ from functools import partial
 from test import DEBUG_MODES
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.internal_types import ServerInfo
-from test.cluster.util import wait_for_cql_and_get_hosts, get_replication, new_test_keyspace, new_test_table, reconnect_driver, get_topology_coordinator
+from test.cluster.util import wait_for_cql_and_get_hosts, get_replication, new_test_keyspace, new_test_table, reconnect_driver, get_topology_coordinator, truncate_auto_snapshot_dir
 from test.pylib.object_storage import keyspace_options
 from test.pylib.rest_client import read_barrier, HTTPError
 from test.pylib.util import unique_name, wait_all, wait_for_view
@@ -1037,6 +1037,57 @@ async def test_restore_tablets_without_any_manifests_refused_strongly_consistent
                                consistency_level=ConsistencyLevel.ONE)
         rows = list(cql.execute(stmt))
         assert not rows, f"a refused restore registered its location: {rows}"
+
+async def test_restore_strongly_consistent_table_from_truncate_auto_snapshot(build_mode: str, manager: ScyllaClusterManager, object_storage):
+    '''The auto snapshot of a strongly consistent table's TRUNCATE restores the table, through a
+    per-replica backup of it and the tablet-aware restore.
+
+    Before the truncate entries are committed, every replica takes the snapshot after a read
+    barrier per tablet, so every replica's snapshot holds the writes acked before the TRUNCATE,
+    flushed or not, and the backup of each carries a manifest listing all its tablets; the
+    restore then picks one copy per tablet, as for any backup of such a table.'''
+    topology = topo(rf = 3, nodes = 3, racks = 3, dcs = 1)
+    # The test servers run with auto_snapshot off.
+    servers, host_ids = await create_cluster(topology, manager, logger, object_storage, extra_config={'auto_snapshot': True})
+    cql = manager.get_cql()
+    num_keys = 50
+    tablet_count = 4
+    cf = 'test'
+    expected = {str(i): i for i in range(num_keys)}
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}} AND tablets = {{'initial': {tablet_count}}}{ks_consistency_opts(True)}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.{cf} ( pk text primary key, value int );")
+        insert_stmt = cql.prepare(f"INSERT INTO {ks}.{cf} (pk, value) VALUES (?, ?)")
+        insert_stmt.consistency_level = write_cl(True)
+        await asyncio.gather(*(cql.run_async(insert_stmt, (str(i), i)) for i in range(num_keys // 2)))
+        # Flushed on one replica only; the rest stays in the memtables, where the truncate finds it.
+        await manager.api.keyspace_flush(servers[0].ip_addr, ks, cf)
+        await asyncio.gather(*(cql.run_async(insert_stmt, (str(i), i)) for i in range(num_keys // 2, num_keys)))
+
+        await cql.run_async(f"TRUNCATE TABLE {ks}.{cf}")
+        assert not await read_rows(cql, ks, cf, expected.keys(), True, columns='pk'), f'{ks}.{cf} is not empty after the truncate'
+
+        # Every replica has the snapshot, under the name the request got, the same everywhere.
+        snapshot_dirs = await asyncio.gather(*(truncate_auto_snapshot_dir(manager, s, ks, cf, tablet_count) for s in servers))
+        snap_name = os.path.basename(snapshot_dirs[0])
+        assert all(os.path.basename(d) == snap_name for d in snapshot_dirs), f'the replicas named the snapshot differently: {snapshot_dirs}'
+
+        await asyncio.gather(*(do_backup(s, snap_name, f'{s.server_id}/{snap_name}', ks, cf, object_storage, manager, logger) for s in servers))
+        manifests = [f'{s.server_id}/{snap_name}/manifest.json' for s in servers]
+        tid = await manager.api.restore_tablets(servers[0].ip_addr, ks, cf, snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests)
+        status = await manager.api.wait_task(servers[0].ip_addr, tid)
+        assert (status is not None) and (status['state'] == 'done'), f'the restore failed: {status}'
+
+        rows = await read_rows(cql, ks, cf, expected.keys(), True)
+        assert {k: r.value for k, r in rows.items()} == expected
+        # Every replica got its copy, with every row.
+        for s in servers:
+            mutations = await collect_mutations(cql, s, manager, ks, cf)
+            assert set(mutations.keys()) == set(expected.keys()), f'{s.ip_addr} holds {sorted(mutations.keys())} after the restore'
+
+        # The table keeps taking writes.
+        await cql.run_async(insert_stmt, ('new', 1))
+        assert (await read_rows(cql, ks, cf, ['new'], True))['new'].value == 1
 
 @pytest.mark.parametrize("topology", [topo(rf = 2, nodes = 2, racks = 2, dcs = 1)])
 async def test_restore_tablets_completions_do_not_collide(build_mode: str, manager: ScyllaClusterManager,
