@@ -28,6 +28,7 @@
 #include "mutation/tombstone.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "utils/log.hh"
+#include "schema/schema_registry.hh"
 #include "schema/schema_builder.hh"
 #include "exceptions/exceptions.hh"
 #include "service/client_state.hh"
@@ -4476,21 +4477,34 @@ future<> executor::cas_write(schema_ptr schema, service::cas_shard cas_shard, co
                     [cs = client_state.move_to_other_shard(),
                     &mb = mutation_builders,
                     &dk,
-                    ks = schema->ks_name(),
-                    cf = schema->cf_name(),
+                    gs = global_schema_ptr(schema),
                     gt = tracing::global_trace_state_ptr(trace_state),
                     permit = std::move(permit)]
                     (executor& self) mutable {
-            return do_with(cs.get(), [&mb, &dk, ks = std::move(ks), cf = std::move(cf),
-                                    trace_state = tracing::trace_state_ptr(gt), &self]
-                                    (service::client_state& client_state) mutable {
-                auto schema = self._proxy.data_dictionary().find_schema(ks, cf);
-                service::cas_shard cas_shard(*schema, dk.token());
+            // The write is built with the schema the builders encoded their items with, not with the
+            // current schema of the table. build() puts each attribute in a column of its name or in
+            // :attrs, as the schema it gets says, and the builder encoded the attribute's value for one
+            // of the two: after a CQL ALTER which added or dropped such a column, the current schema
+            // would put the value, encoded for :attrs, into the column, or the other way around. The
+            // non-LWT path of do_batch_write() sends the mutation built with this schema too, and the
+            // replicas upgrade it. A long ImportTable, whose execution engine a following commit adds,
+            // and which may wait to write a batch or retry it, widens the window for such an ALTER.
+            // The schema also keeps its table id: a table which replaced this one under the same name
+            // does not get the write - cas_shard fails with no_such_column_family if this table was
+            // dropped.
+            // (The work item of invoke_on() keeps this lambda, and so its captures, until its future
+            // resolves.)
+            return gs.get(executor::default_timeout()).then([&self, &mb, &dk, &cs, &gt] (schema_ptr schema) {
+                return do_with(cs.get(), [&mb, &dk, schema = std::move(schema),
+                                        trace_state = tracing::trace_state_ptr(gt), &self]
+                                        (service::client_state& client_state) mutable {
+                    service::cas_shard cas_shard(*schema, dk.token());
 
-                //FIXME: Instead of passing empty_service_permit() to the background operation,
-                // the current permit's lifetime should be prolonged, so that it's destructed
-                // only after all background operations are finished as well.
-                return self.cas_write(schema, std::move(cas_shard), dk, mb, client_state, std::move(trace_state), empty_service_permit());
+                    //FIXME: Instead of passing empty_service_permit() to the background operation,
+                    // the current permit's lifetime should be prolonged, so that it's destructed
+                    // only after all background operations are finished as well.
+                    return self.cas_write(schema, std::move(cas_shard), dk, mb, client_state, std::move(trace_state), empty_service_permit());
+                });
             });
         });
     }
