@@ -172,7 +172,12 @@ def cleanup_all():
         try:
             os.killpg(pid, 9)
             os.waitpid(pid, 0) # don't leave an annoying zombie
-        except ProcessLookupError:
+        except (ProcessLookupError, ChildProcessError):
+            # ProcessLookupError: nothing is left in pytest's process group.
+            # ChildProcessError: run_pytest() already waited for pytest, but
+            # the group still had processes (e.g., a subprocess some test
+            # started and didn't wait for). We must not let this stop us
+            # from killing the servers below.
             pass
     for pid in run_with_temporary_dir_pids:
         f = abort_run_with_temporary_dir(pid)
