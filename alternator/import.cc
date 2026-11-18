@@ -146,21 +146,23 @@ import_table_request parse_import_table_request(const rjson::value& request, con
                 "or is longer than {} bytes", max_client_token_length));
     }
 
-    // FIXME: CSV and ION are not supported yet.
+    // FIXME: CSV and ION are not supported yet. A request using them is not
+    // refused here, see import_table_request::unsupported.
+    std::optional<std::string> unsupported;
     auto input_format = get_non_empty_string_attribute(request, "InputFormat");
     if (input_format == "CSV" || input_format == "ION") {
-        throw api_error::validation(fmt::format("InputFormat attribute: {} is not supported", input_format));
-    }
-    if (input_format != "DYNAMODB_JSON") {
+        unsupported = fmt::format("InputFormat attribute: {} is not supported", input_format);
+    } else if (input_format != "DYNAMODB_JSON") {
         throw api_error::validation(fmt::format("InputFormat attribute: must be CSV, DYNAMODB_JSON or ION, not `{}`", input_format));
     }
 
     // An absent InputCompressionType means NONE.
     auto input_compression_type = get_non_empty_string_attribute(request, "InputCompressionType", "NONE");
     if (input_compression_type == "ZSTD") {
-        throw api_error::validation("InputCompressionType attribute: ZSTD is not supported");
-    }
-    if (input_compression_type != "NONE" && input_compression_type != "GZIP") {
+        if (!unsupported) {
+            unsupported = "InputCompressionType attribute: ZSTD is not supported";
+        }
+    } else if (input_compression_type != "NONE" && input_compression_type != "GZIP") {
         throw api_error::validation(fmt::format("InputCompressionType attribute: must be GZIP, ZSTD or NONE, not `{}`", input_compression_type));
     }
 
@@ -169,7 +171,12 @@ import_table_request parse_import_table_request(const rjson::value& request, con
     // InputFormatOptions only carries CSV options, which DynamoDB refuses
     // with DYNAMODB_JSON anyway.
     if (rjson::find(request, "InputFormatOptions")) {
-        throw api_error::validation("InputFormatOptions attribute is not supported");
+        if (input_format == "DYNAMODB_JSON") {
+            throw api_error::validation("InputFormatOptions attribute is not supported");
+        }
+        if (!unsupported) {
+            unsupported = "InputFormatOptions attribute is not supported";
+        }
     }
 
     auto table_creation_parameters = get_table_creation_parameters(request);
@@ -183,6 +190,7 @@ import_table_request parse_import_table_request(const rjson::value& request, con
         input_compression_type == "GZIP" ? import_input_compression_type::gzip : import_input_compression_type::none,
         std::move(table_creation_parameters),
         std::move(validated_table_params),
+        std::move(unsupported),
     };
 }
 
@@ -885,8 +893,9 @@ future<executor::request_return_type> executor::import_table(service::client_sta
     // As on DynamoDB, everything is validated before the ClientToken is
     // looked up: a replay with invalid parameters fails even if its token
     // is known. Refused only after the lookup, because a replay starts no
-    // import: the cluster-dependent checks of check_new_table() and the
-    // shutdown refusal.
+    // import: what Alternator does not support yet (see
+    // import_table_request::unsupported), the cluster-dependent checks of
+    // check_new_table() and the shutdown refusal.
     const auto tablets_mode = _proxy.data_dictionary().get_config().tablets_mode_for_new_keyspaces();
     import_table_request parsed = parse_import_table_request(request, _proxy.features(), tablets_mode);
     const auto& keyspace_name = parsed.validated_table_params.keyspace_name;
@@ -928,6 +937,9 @@ future<executor::request_return_type> executor::import_table(service::client_sta
     // inserts the token row after this read, the insert below finds it.
     if (auto ct = co_await helper.get_client_token(client_token)) {
         co_return co_await describe_token_import(*ct);
+    }
+    if (parsed.unsupported) {
+        co_return api_error::validation(*parsed.unsupported);
     }
     // While the server drains its requests at shutdown, a new import would fail at once and use up
     // its ClientToken: refuse it with an error which the client retries, on another node.

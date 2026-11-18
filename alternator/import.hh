@@ -55,10 +55,18 @@ struct import_table_request {
     // here so there's no need to re-serialize for the response.
     rjson::value table_creation_parameters;
     create_table_params validated_table_params;
+    // Set, to the error to refuse it with, for a request DynamoDB would accept but Alternator cannot
+    // run yet (CSV, ION, ZSTD, InputFormatOptions). ImportTable refuses it only after the
+    // ClientToken lookup, because a replay returns the import of its token whatever its other
+    // parameters. When it is set, input_format and input_compression_type may not be the request's.
+    std::optional<std::string> unsupported;
 };
 
 // Validate an ImportTable request, throwing api_error::validation on the
-// first problem. Only parses: looks up neither imports nor tables.
+// first problem - except for the input formats and options which Alternator
+// does not support yet (CSV, ION, ZSTD, InputFormatOptions), which are
+// recorded in import_table_request::unsupported. Only parses: looks up
+// neither imports nor tables.
 import_table_request parse_import_table_request(const rjson::value& request, const gms::feature_service& feat, db::tablets_mode_t::mode tablets_mode);
 
 // The ImportTableDescription of an import, as ImportTable (and, in the future, DescribeImport)
