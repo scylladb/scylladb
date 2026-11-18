@@ -123,8 +123,9 @@ public:
 // node_id), changed only with conditional writes:
 //  - ImportTable inserts the row as IN_PROGRESS, owned by the node which accepted the request,
 //    and that node runs the import, on the shard of the request;
-//  - the import ends as COMPLETED, or as FAILED. On a failure it first writes FAILING with the
-//    failure code, so that the garbage collector can finish the cleanup if this node stops.
+//  - the import ends as COMPLETED, or as FAILED (ItemValidationError if only items, lines or
+//    objects were skipped, see count_error()). For any other failure it first writes FAILING with
+//    the failure code, so that the garbage collector can finish the cleanup if this node stops.
 class executor::s3_imports {
     executor& _e;
     // Holds the background fibers. stop() closes it.
