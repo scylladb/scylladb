@@ -1002,6 +1002,38 @@
       ]
     },
     {
+         "path":"/storage_proxy/metrics/cas_read/estimated_histogram/",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get CAS read estimated latency",
+               "$ref":"#/utils/estimated_histogram",
+               "nickname":"get_cas_read_estimated_histogram",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+    {
+         "path":"/storage_proxy/metrics/cas_write/estimated_histogram/",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get CAS write estimated latency",
+               "$ref":"#/utils/estimated_histogram",
+               "nickname":"get_cas_write_estimated_histogram",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+    {
          "path":"/storage_proxy/metrics/read/estimated_histogram/",
          "operations":[
             {
