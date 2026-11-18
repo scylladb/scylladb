@@ -37,6 +37,7 @@
 #include "utils/error_injection.hh"
 #include "transport/messages/result_message.hh"
 #include "utils/rjson.hh"
+#include "utils/UUID_gen.hh"
 
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/scheduling.hh>
@@ -1530,7 +1531,10 @@ SEASTAR_TEST_CASE(test_import_table_deleted_during_the_import) {
 }
 
 // The garbage collector fails the imports of node incarnations which cannot run them any more -
-// here, an earlier incarnation of this node, and a node which is not a member of the cluster.
+// here, an earlier incarnation of this node, and a node which is not a member of the cluster - and
+// writes the import row of a client token whose node stopped before it wrote that row, with the
+// TableId from the token row's request (none if that cannot be read). It leaves the import row of
+// such a token if the row exists, and the token of a node which runs.
 SEASTAR_TEST_CASE(test_import_garbage_collector) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         constexpr auto wakeup = "alternator_import_from_s3_gc_wakeup";
@@ -1573,6 +1577,25 @@ SEASTAR_TEST_CASE(test_import_garbage_collector) {
             .accepted_at = db_clock::now(),
             .node_id = earlier_incarnation.to_string(),
         }, std::chrono::hours(1)).get();
+        const sstring orphan_arn = table_arn + "/import/01700000000000-00000002";
+        const auto orphan_table_id = table_id(utils::UUID_gen::get_time_UUID());
+        auto orphan_request = rjson::parse(stored_request);
+        rjson::add(orphan_request, "TableId", rjson::from_string(orphan_table_id.to_sstring()));
+        helper.insert_client_token(db::alternator_import_table_helper::client_token_row{
+            .client_token = "gc-orphan",
+            .import_arn = orphan_arn,
+            .request = sstring(rjson::print(orphan_request)),
+            .node_id = earlier_incarnation.to_string(),
+        }).get();
+        const sstring corrupt_arn = table_arn + "/import/01700000000000-00000004";
+        auto corrupt_request = rjson::parse(stored_request);
+        rjson::add(corrupt_request, "TableId", rjson::from_string("not-a-uuid"));
+        helper.insert_client_token(db::alternator_import_table_helper::client_token_row{
+            .client_token = "gc-corrupt",
+            .import_arn = corrupt_arn,
+            .request = sstring(rjson::print(corrupt_request)),
+            .node_id = earlier_incarnation.to_string(),
+        }).get();
         // A row of a node which is not a member of the cluster (removed or replaced).
         const sstring removed_arn = table_arn + "/import/01700000000000-00000006";
         const alternator::live_node_identifier removed_node{
@@ -1597,6 +1620,32 @@ SEASTAR_TEST_CASE(test_import_garbage_collector) {
             .accepted_at = db_clock::now(),
             .node_id = self->to_string(),
         }, std::chrono::hours(1)).get();
+        // A client token of a stopped incarnation whose import ended keeps its import row.
+        const sstring ended_arn = table_arn + "/import/01700000000000-00000007";
+        helper.insert_client_token(db::alternator_import_table_helper::client_token_row{
+            .client_token = "gc-ended",
+            .import_arn = ended_arn,
+            .request = sstring(rjson::print(orphan_request)),
+            .node_id = earlier_incarnation.to_string(),
+        }).get();
+        helper.insert_import(alternator::import_row{
+            .import_arn = ended_arn,
+            .client_token = "gc-ended",
+            .request = stored_request,
+            .target_table_existed = true,
+            .import_status = "COMPLETED",
+            .accepted_at = db_clock::now(),
+            .completed_at = db_clock::now(),
+            .node_id = earlier_incarnation.to_string(),
+        }, std::chrono::hours(1)).get();
+        // A client token of this incarnation without an import row: the import row may still come.
+        const sstring own_token_arn = table_arn + "/import/01700000000000-00000008";
+        helper.insert_client_token(db::alternator_import_table_helper::client_token_row{
+            .client_token = "gc-own-token",
+            .import_arn = own_token_arn,
+            .request = sstring(rjson::print(orphan_request)),
+            .node_id = self->to_string(),
+        }).get();
 
         auto rounds = utils::error_injection<true>::enter_count_on_all(finished).get();
         utils::error_injection<true>::receive_message_on_all(wakeup).get();
@@ -1610,6 +1659,17 @@ SEASTAR_TEST_CASE(test_import_garbage_collector) {
         BOOST_REQUIRE(running->failure_message.value_or("").contains(fmt::format("{}", earlier_incarnation.host_id)));
         BOOST_REQUIRE_EQUAL(running->node_id, self->to_string());
         BOOST_REQUIRE(running->completed_at);
+        auto orphan = helper.get_import(orphan_arn).get();
+        BOOST_REQUIRE(orphan);
+        BOOST_REQUIRE_EQUAL(orphan->import_status, "FAILED");
+        BOOST_REQUIRE_EQUAL(orphan->failure_code.value_or(""), "ImportInterrupted");
+        BOOST_REQUIRE_EQUAL(orphan->client_token, "gc-orphan");
+        BOOST_REQUIRE_EQUAL(orphan->import_id_token, "01700000000000-00000002");
+        BOOST_REQUIRE_EQUAL(orphan->table_id, orphan_table_id);
+        auto corrupt = helper.get_import(corrupt_arn).get();
+        BOOST_REQUIRE(corrupt);
+        BOOST_REQUIRE_EQUAL(corrupt->import_status, "FAILED");
+        BOOST_REQUIRE(!corrupt->table_id);
         auto failing = helper.get_import(failing_arn).get();
         BOOST_REQUIRE(failing);
         BOOST_REQUIRE_EQUAL(failing->import_status, "FAILED");
@@ -1623,6 +1683,11 @@ SEASTAR_TEST_CASE(test_import_garbage_collector) {
         auto own = helper.get_import(own_arn).get();
         BOOST_REQUIRE(own);
         BOOST_REQUIRE_EQUAL(own->import_status, "IN_PROGRESS");
+        auto ended = helper.get_import(ended_arn).get();
+        BOOST_REQUIRE(ended);
+        BOOST_REQUIRE_EQUAL(ended->import_status, "COMPLETED");
+        BOOST_REQUIRE_EQUAL(ended->node_id, earlier_incarnation.to_string());
+        BOOST_REQUIRE(!helper.get_import(own_token_arn).get());
     }, import_test_config());
 }
 
