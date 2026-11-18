@@ -23,6 +23,10 @@
 #include "utils/error_injection.hh"
 #include "db/config.hh"
 #include "replica/database.hh"
+#include "schema/schema_builder.hh"
+#include "service/migration_manager.hh"
+#include "service/raft/raft_group0_client.hh"
+#include "index/secondary_index.hh"
 
 BOOST_AUTO_TEST_SUITE(secondary_index_test)
 
@@ -2217,5 +2221,40 @@ SEASTAR_TEST_CASE(test_large_allocations) {
     });
 }
 #endif
+
+// An index created before class names were stored in lowercase may keep
+// another spelling of its class name. Creating the same index again,
+// with either spelling, must still be detected as a duplicate.
+SEASTAR_TEST_CASE(test_duplicate_custom_index_with_legacy_class_name) {
+    cql_test_config cfg;
+    cfg.initial_tablets = 1;
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        const auto& class_option = db::index::secondary_index::custom_class_option_name;
+        e.execute_cql("CREATE TABLE ks.t (id int PRIMARY KEY, v text)").get();
+        e.execute_cql("CREATE CUSTOM INDEX t_v_idx ON ks.t(v) USING 'pattern_index'").get();
+
+        auto s = e.local_db().find_schema("ks", "t");
+        const auto& im = s->all_indices().at("t_v_idx");
+        auto options = im.options();
+        options.at(class_option) = "PATTERN_INDEX";
+        auto legacy = schema_builder(s)
+                .without_index(im.name())
+                .with_index(index_metadata{im.name(), options, im.kind(), index_metadata::is_local_index(im.local())})
+                .build();
+        auto& mm = e.migration_manager().local();
+        auto group0_guard = mm.start_group0_operation().get();
+        auto ts = group0_guard.write_timestamp();
+        mm.announce(service::prepare_column_family_update_announcement(mm.get_storage_proxy(),
+                legacy, std::vector<view_ptr>(), ts).get(), std::move(group0_guard), "").get();
+        BOOST_REQUIRE_EQUAL(e.local_db().find_schema("ks", "t")->all_indices().at("t_v_idx").options().at(class_option), "PATTERN_INDEX");
+
+        for (auto class_name : {"PATTERN_INDEX", "pattern_index"}) {
+            BOOST_REQUIRE_EXCEPTION(e.execute_cql(seastar::format("CREATE CUSTOM INDEX ON ks.t(v) USING '{}'", class_name)).get(),
+                    exceptions::invalid_request_exception, exception_predicate::message_contains("is a duplicate"));
+            e.execute_cql(seastar::format("CREATE CUSTOM INDEX IF NOT EXISTS ON ks.t(v) USING '{}'", class_name)).get();
+        }
+        BOOST_REQUIRE_EQUAL(e.local_db().find_schema("ks", "t")->all_indices().size(), 1);
+    }, cfg);
+}
 
 BOOST_AUTO_TEST_SUITE_END()
