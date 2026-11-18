@@ -20,9 +20,9 @@ from cassandra.connection import UnixSocketEndPoint
 from cassandra.murmur3 import murmur3
 from cassandra.policies import FallthroughRetryPolicy, WhiteListRoundRobinPolicy
 from cassandra.query import BatchStatement, SimpleStatement, BoundStatement
-from test.pylib.tablets import get_all_tablet_replicas, get_tablet_info, get_tablet_replicas
+from test.pylib.tablets import get_all_tablet_replicas, get_tablet_info, get_tablet_replica, get_tablet_replicas
 from test.pylib.driver_utils import safe_shutting_down
-from test.pylib.rest_client import read_barrier, ScyllaMetrics, ScyllaMetricsLine
+from test.pylib.rest_client import HTTPError, read_barrier, ScyllaMetrics, ScyllaMetricsLine
 
 import asyncio
 import pytest
@@ -1156,6 +1156,107 @@ async def test_drop_table_during_insert(manager: ScyllaClusterManager):
 
         # Verify the node is still alive.
         await manager.api.get_host_id(server.ip_addr)
+
+
+async def get_raft_groups_rows(cql, host, group_ids: set[str]) -> set[str]:
+    rows = await cql.run_async("SELECT group_id FROM system.raft_groups", host=host)
+    return {str(r.group_id) for r in rows} & group_ids
+
+
+async def create_sc_table_with_raft_groups_rows(manager: ScyllaClusterManager, cql, host, ks: str) -> set[str]:
+    """Creates `ks`.test with two tablets and returns its group ids, once each has a row."""
+    await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+    for pk in range(10):
+        await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({pk}, {pk})")
+    table_id = await manager.get_table_id(ks, "test")
+    rows = await cql.run_async(f"SELECT raft_group_id FROM system.tablets WHERE table_id = {table_id}")
+    group_ids = {str(r.raft_group_id) for r in rows}
+    assert len(group_ids) == 2
+    assert await get_raft_groups_rows(cql, host, group_ids) == group_ids
+    return group_ids
+
+
+async def test_drop_table_erases_raft_groups_rows(manager: ScyllaClusterManager):
+    """SCYLLADB-6261: DROP TABLE erases the rows of the table's raft groups in system.raft_groups."""
+    server = await manager.server_add(cmdline=DEFAULT_CMDLINE)
+    (cql, hosts) = await manager.get_ready_cql([server])
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2} AND consistency = 'global'") as ks:
+        group_ids = await create_sc_table_with_raft_groups_rows(manager, cql, hosts[0], ks)
+        await cql.run_async(f"DROP TABLE {ks}.test")
+
+        async def rows_erased():
+            return True if not await get_raft_groups_rows(cql, hosts[0], group_ids) else None
+        await wait_for(rows_erased, time.time() + 60, label="the rows of the dropped table's groups to be erased")
+
+
+@pytest.mark.skip_mode("release", "error injections aren't enabled in release mode")
+async def test_restart_erases_raft_groups_rows_of_dropped_table(manager: ScyllaClusterManager):
+    """SCYLLADB-6261: a crash between DROP TABLE and the erase of the groups' rows leaves the rows
+    behind; the next start erases them."""
+    server = await manager.server_add(cmdline=DEFAULT_CMDLINE)
+    (cql, hosts) = await manager.get_ready_cql([server])
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2} AND consistency = 'global'") as ks:
+        group_ids = await create_sc_table_with_raft_groups_rows(manager, cql, hosts[0], ks)
+
+        # Holds the teardown of the dropped table's groups before it erases their rows.
+        await manager.api.enable_injection(server.ip_addr, "sc_raft_group_deletion_pause", one_shot=False)
+        await cql.run_async(f"DROP TABLE {ks}.test")
+        await manager.api.wait_for_injection_enter(server.ip_addr, "sc_raft_group_deletion_pause")
+        assert await get_raft_groups_rows(cql, hosts[0], group_ids) == group_ids
+
+        await manager.server_stop(server.server_id, convict=False)
+        await manager.server_start(server.server_id)
+        (cql, hosts) = await manager.get_ready_cql([server])
+
+        assert not await get_raft_groups_rows(cql, hosts[0], group_ids)
+
+
+@pytest.mark.skip_mode("release", "error injections aren't enabled in release mode")
+async def test_drop_table_before_migration_cleanup_erases_raft_groups_row(manager: ScyllaClusterManager):
+    """SCYLLADB-6261: a table dropped while a migration waits at the cleanup stage never gets
+    the leaving replica's cleanup, so the leaving replica erases the group's row itself."""
+    servers = await manager.servers_add(2, cmdline=DEFAULT_CMDLINE)
+    (cql, hosts) = await manager.get_ready_cql(servers)
+    await manager.disable_tablet_balancing()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+        await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES (0, 0)")
+        table_id = await manager.get_table_id(ks, "test")
+        [tablet] = await cql.run_async(f"SELECT raft_group_id FROM system.tablets WHERE table_id = {table_id}")
+        group_id = str(tablet.raft_group_id)
+
+        src_host_id, src_shard = await get_tablet_replica(manager, servers[0], ks, "test", 0)
+        host_ids = [await manager.get_host_id(s.server_id) for s in servers]
+        src_server = servers[host_ids.index(src_host_id)]
+        dst_host_id = next(h for h in host_ids if h != src_host_id)
+        src_host = next(h for h in hosts if h.address == src_server.ip_addr)
+        assert await get_raft_groups_rows(cql, src_host, {group_id}) == {group_id}
+
+        # Holds the coordinator at the cleanup stage, before it sends the leaving replica the cleanup.
+        await asyncio.gather(*[manager.api.enable_injection(s.ip_addr, "cleanup_tablet_wait", one_shot=False)
+                               for s in servers])
+        log = await manager.server_open_log(src_server.server_id)
+        mark = await log.mark()
+        migration = asyncio.create_task(
+            manager.api.move_tablet(servers[0].ip_addr, ks, "test", src_host_id, src_shard, dst_host_id, 0, 0))
+        await log.wait_for(rf"raft server for group id {group_id} is destroyed", from_mark=mark, timeout=120)
+        # The teardown left the row to the cleanup.
+        assert await get_raft_groups_rows(cql, src_host, {group_id}) == {group_id}
+
+        await cql.run_async(f"DROP TABLE {ks}.test")
+
+        async def row_erased():
+            return True if not await get_raft_groups_rows(cql, src_host, {group_id}) else None
+        await wait_for(row_erased, time.time() + 60, label="the leaving replica's row to be erased")
+
+        await asyncio.gather(*[manager.api.disable_injection(s.ip_addr, "cleanup_tablet_wait") for s in servers])
+        try:
+            await migration
+        except HTTPError as e:
+            logger.info(f"the migration failed after the drop: {e}")
 
 
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
