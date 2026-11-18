@@ -513,6 +513,17 @@ SEASTAR_TEST_CASE(test_import_client_token_replay) {
         auto replay_of_other_source = exec.import_table_successfully(std::move(other_source));
         BOOST_REQUIRE_EQUAL(get_string(rjson::get(replay_of_other_source, "ImportTableDescription"), "ImportArn"), import_arn);
         BOOST_REQUIRE_EQUAL(get_string(rjson::get(rjson::get(replay_of_other_source, "ImportTableDescription"), "S3BucketSource"), "S3Bucket"), "bucket");
+        auto csv = rjson::copy(request);
+        rjson::replace_with_string_name(csv, "InputFormat", rjson::from_string("CSV"));
+        auto replay_of_csv = exec.import_table_successfully(rjson::copy(csv));
+        BOOST_REQUIRE_EQUAL(get_string(rjson::get(replay_of_csv, "ImportTableDescription"), "ImportArn"), import_arn);
+        BOOST_REQUIRE_EQUAL(get_string(rjson::get(replay_of_csv, "ImportTableDescription"), "InputFormat"), "DYNAMODB_JSON");
+        // A new import in a format Alternator does not support is refused.
+        rjson::replace_with_string_name(csv, "ClientToken", rjson::from_string("token-csv"));
+        auto csv_result = exec.import_table(std::move(csv));
+        auto* csv_err = std::get_if<alternator::api_error>(&csv_result);
+        BOOST_REQUIRE(csv_err);
+        BOOST_REQUIRE_EQUAL(csv_err->_type, "ValidationException");
 
         // Another table conflicts.
         auto result = exec.import_table(make_import_table_request("another_table", "token-replay"));
