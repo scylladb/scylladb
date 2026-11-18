@@ -293,6 +293,32 @@ BOOST_AUTO_TEST_CASE(test_histogram_min_1_statistics) {
     BOOST_CHECK_EQUAL(hist.mean(), 6);
 }
 
+BOOST_AUTO_TEST_CASE(test_histogram_quantile_in_last_bucket) {
+    // The bucket before the last one is the last one with an upper limit.
+    // A quantile in it is that bucket's lower limit, and only a quantile
+    // in the last bucket, of the values above the range, is the Max.
+    utils::approx_exponential_histogram<512, 33554432, 4> hist;
+    hist.add(30000000);
+    BOOST_CHECK_EQUAL(hist.quantile(0.5), 29360128);
+
+    utils::approx_exponential_histogram<512, 33554432, 4> above_range;
+    above_range.add(40000000);
+    BOOST_CHECK_EQUAL(above_range.quantile(0.5), 33554432);
+}
+
+BOOST_AUTO_TEST_CASE(test_histogram_quantile_rank) {
+    // The quantile is the value of the sample whose rank is the count times
+    // the quantile, rounded up. With two samples, the first covers the
+    // quantiles up to 0.5 and the second covers the rest.
+    utils::approx_exponential_histogram<512, 33554432, 4> hist;
+    hist.add(600);
+    hist.add(40000000);
+    BOOST_CHECK_EQUAL(hist.quantile(0), 512);
+    BOOST_CHECK_EQUAL(hist.quantile(0.5), 512);
+    BOOST_CHECK_EQUAL(hist.quantile(0.51), 33554432);
+    BOOST_CHECK_EQUAL(hist.quantile(0.99), 33554432);
+}
+
 BOOST_AUTO_TEST_CASE(test_estimated_histogram_get_histogram_small_range) {
     // Regression test for a heap-buffer-overflow: get_histogram() doubles
     // last_bound up to max_buckets times, which can exceed the largest

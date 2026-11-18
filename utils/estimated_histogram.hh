@@ -276,9 +276,9 @@ public:
             return 0; // no data
         }
 
-        auto pcount = uint64_t(std::floor(c * quantile));
+        auto pcount = uint64_t(std::ceil(c * quantile));
         uint64_t elements = 0;
-        for (size_t i = 0; i < NUM_BUCKETS - 2; i++) {
+        for (size_t i = 0; i < NUM_BUCKETS - 1; i++) {
             if (_buckets[i]) {
                 elements += _buckets[i];
                 if (elements >= pcount) {
