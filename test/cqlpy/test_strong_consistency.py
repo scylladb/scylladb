@@ -20,7 +20,7 @@ from cassandra.query import BatchStatement, BatchType, SimpleStatement
 
 from . import nodetool
 from .test_service_levels import new_service_level
-from .util import ScyllaMetrics, config_value_context, new_materialized_view, new_session, new_test_table, new_user, unique_name
+from .util import ScyllaMetrics, config_value_context, new_materialized_view, new_session, new_test_keyspace, new_test_table, new_user, unique_name
 
 
 def test_reject_user_provided_timestamps(cql, sc_keyspace):
@@ -325,6 +325,35 @@ def test_per_partition_rate_limit_on_sc_table(cql, sc_keyspace):
     with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, v int") as table:
         with pytest.raises(ConfigurationException, match=rate_limit_msg):
             cql.execute(f"ALTER TABLE {table} WITH per_partition_rate_limit = {{'max_reads_per_second': 100}}")
+
+
+@pytest.mark.parametrize("columns, options, error, message", [
+    pytest.param("pk int PRIMARY KEY, c counter", "",
+                 InvalidRequest, "counters are not supported in strongly consistent keyspaces", id="counter"),
+    pytest.param("pk int PRIMARY KEY, v int", "WITH per_partition_rate_limit = {'max_writes_per_second': 100}",
+                 ConfigurationException, "Per-partition rate limit is not supported in strongly consistent keyspaces", id="rate_limit"),
+])
+def test_prepared_create_table_after_keyspace_recreated(cql, sc_keyspace, columns, options, error, message):
+    """
+    A prepared CREATE TABLE must be checked against its keyspace when it is
+    executed, not only when it is prepared. The statement is prepared while
+    the keyspace is eventually consistent, and executed after the keyspace
+    is dropped and created again as strongly consistent. Each statement asks
+    for something that a strongly consistent keyspace rejects.
+    Reproduces SCYLLADB-2579.
+    """
+    # The sc_keyspace fixture only skips the test where strongly consistent
+    # keyspaces can't be created.
+    keyspace_options = "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}"
+    with new_test_keyspace(cql, keyspace_options) as keyspace:
+        create_table = cql.prepare(f"CREATE TABLE {keyspace}.t ({columns}) {options}")
+
+        # The prepared statement stays cached when its keyspace is dropped.
+        cql.execute(f"DROP KEYSPACE {keyspace}")
+        cql.execute(f"CREATE KEYSPACE {keyspace} {keyspace_options} AND consistency = 'global'")
+
+        with pytest.raises(error, match=message):
+            cql.execute(create_table)
 
 
 def test_views_and_indexes_on_sc_table(cql, sc_keyspace):

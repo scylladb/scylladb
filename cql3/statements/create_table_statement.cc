@@ -85,6 +85,12 @@ create_table_statement::prepare_schema_mutations(query_processor& qp, const quer
     bool created = true;
     cql3::cql_warnings_vec warnings;
 
+    // The checks ran when the statement was prepared, but the keyspace may
+    // have been dropped and created again with other options since then.
+    auto db = qp.db();
+    _properties->validate(db, keyspace(), _properties->make_schema_extensions(db.extensions()));
+    validate_columns_for_keyspace(db);
+
     if (auto warning = check_deprecated_compaction_strategy(_properties->get_compaction_strategy_class(),
                 qp.db().get_config().allow_deprecated_size_tiered_compaction_strategy())) {
         warnings.emplace_back(std::move(*warning));
