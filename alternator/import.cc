@@ -1221,13 +1221,13 @@ auto executor::s3_imports::try_reserve_import_slot() -> std::optional<slot> {
     return slot(_reserved_import_slots);
 }
 
-void executor::s3_imports::start_import(slot import_slot, import_row row) {
+void executor::s3_imports::start_import(slot&& import_slot, import_row row) {
     auto import_arn = row.import_arn;
     // run() writes failures to the import row, so an exception from it is unexpected (e.g.
     // bad_alloc). The continuation holds the slot until run() ends, and passes it to
     // finish_import_in_background() if the final write is still to be done.
     // The task is allocated before the fiber, so that a failure to allocate it throws to the
-    // caller.
+    // caller, which writes the import as FAILED, rather than leaving it IN_PROGRESS with no fiber.
     auto task = std::make_unique<import_task>(_e, _as, std::move(row), _source_factory);
     (void)with_gate(_gate, [&] {
         auto& task_ref = *task;
@@ -1406,33 +1406,99 @@ future<executor::request_return_type> executor::import_table(service::client_sta
         .node_id = node_id,
     };
 
-    // FIXME: if the request fails after its insert of the client token row applied, no import
-    // row is written, and a replay of the token reports the import as IN_PROGRESS until the
-    // token row expires.
-    auto existing_client_token = co_await helper.insert_client_token(db::alternator_import_table_helper::client_token_row{
-        .client_token = client_token,
-        .import_arn = import_arn,
-        .request = sstring(rjson::print(client_token_request)),
-        .node_id = node_id,
-    });
-    // A concurrent CAS can commit our value and report it as not applied, so a token row with
-    // our ARN - which only this request knows - is ours.
-    if (existing_client_token && existing_client_token->import_arn != import_arn) {
-        co_return co_await describe_token_import(*existing_client_token);
+    // Only the request which inserts the client token row runs the import. From that insert on
+    // (it can apply even if it throws), a failure must write the FAILED import row: the garbage
+    // collector does that only for dead nodes. `import_is_ours` is false once the token row turns
+    // out to be another request's - then there is no import of ours to fail.
+    // (A following commit adds the garbage collector.)
+    bool import_is_ours = true;
+    bool client_token_insert_returned = false;
+    std::exception_ptr failure;
+    try {
+        // Lets a test make the insert of the token row fail.
+        utils::get_local_injector().inject("alternator_import_from_s3_before_client_token_insertion",
+                [] { throw std::runtime_error("injected failure alternator_import_from_s3_before_client_token_insertion"); });
+        auto existing_client_token = co_await helper.insert_client_token(db::alternator_import_table_helper::client_token_row{
+            .client_token = client_token,
+            .import_arn = import_arn,
+            .request = sstring(rjson::print(client_token_request)),
+            .node_id = node_id,
+        });
+        client_token_insert_returned = true;
+        utils::get_local_injector().inject("alternator_import_from_s3_after_client_token_insertion",
+                [] { throw std::runtime_error("injected failure alternator_import_from_s3_after_client_token_insertion"); });
+        // A concurrent CAS can commit our value and report it as not applied, so a token row with
+        // our ARN - which only this request knows - is ours.
+        if (existing_client_token && existing_client_token->import_arn != import_arn) {
+            import_is_ours = false;
+            co_return co_await describe_token_import(*existing_client_token);
+        }
+        auto existing_import = co_await insert_import(_sdks, row);
+        utils::get_local_injector().inject("alternator_import_from_s3_after_import_row_insertion",
+                [] { throw std::runtime_error("injected failure alternator_import_from_s3_after_import_row_insertion"); });
+        if (existing_import && (existing_import->client_token != client_token || existing_import->import_status != import_status_in_progress
+                || existing_import->node_id != node_id)) {
+            // Not our row: the garbage collector took the import (if this node was unreachable for
+            // long), or another import got the same id. Report it, without running anything.
+            // (A following commit adds the garbage collector.)
+            co_return make_import_table_response(*existing_import);
+        }
+        // Build the response before the fiber starts: a failure after that must not fail the
+        // import which the fiber runs.
+        auto response = make_import_table_response(row);
+        _s3_imports->start_import(std::move(*import_slot), row);
+        co_return response;
+    } catch (...) {
+        if (!import_is_ours) {
+            throw;
+        }
+        failure = std::current_exception();
     }
-    auto existing_import = co_await insert_import(_sdks, row);
-    if (existing_import && (existing_import->client_token != client_token || existing_import->import_status != import_status_in_progress
-            || existing_import->node_id != node_id)) {
-        // Not our row: the garbage collector took the import (if this node was unreachable for
-        // long), or another import got the same id. Report it, without running anything.
-        // (A following commit adds the garbage collector.)
-        co_return make_import_table_response(*existing_import);
+    // True if the token row is known to be ours. If not - our insert may not have applied, or the
+    // read below failed - a retry with the token may not find this import.
+    bool token_row_is_ours = client_token_insert_returned;
+    if (!client_token_insert_returned) {
+        // Our insert threw, so it may or may not have applied. The read is SERIAL: it either
+        // completes our insert (always if a quorum accepted it) or fences it, so that it never
+        // applies later.
+        // If the read finds no token row, or one with another ARN, there is no import of ours. If
+        // the read fails, we cannot tell, and the FAILED row is written anyway.
+        std::optional<db::alternator_import_table_helper::client_token_row> token_row;
+        bool token_row_read = false;
+        try {
+            token_row = co_await helper.get_client_token(client_token, true);
+            token_row_read = true;
+        } catch (...) {
+            ilogger.debug("Import {}: failed to read the client token row after a failed insert: {}", import_arn, std::current_exception());
+        }
+        if ((token_row_read && !token_row) || (token_row && token_row->import_arn != import_arn)) {
+            std::rethrow_exception(failure);
+        }
+        token_row_is_ours = bool(token_row);
     }
-    // Build the response before the fiber starts: a failure after that must not fail the
-    // import which the fiber runs.
-    auto response = make_import_table_response(row);
-    _s3_imports->start_import(std::move(*import_slot), row);
-    co_return response;
+    row.import_status = sstring(import_status_failed);
+    if (_s3_imports->abort_requested()) {
+        row.failure_code = sstring(failure_import_interrupted);
+        row.failure_message = "The node which accepted the import was shut down before the import could start.";
+    } else {
+        row.failure_code = sstring(failure_internal_error);
+        row.failure_message = fmt::format("{}", failure);
+    }
+    row.completed_at = db_clock::now();
+    bool failed_row_written = false;
+    try {
+        failed_row_written = co_await try_write_final_import_row(_sdks, row);
+    } catch (...) {
+        ilogger.warn("Import {}: failed to write the FAILED state, retrying in the background: {}", import_arn, std::current_exception());
+        _s3_imports->finish_import_in_background(std::move(*import_slot), row);
+    }
+    if (!token_row_is_ours || !failed_row_written) {
+        // A replay may not find this import as FAILED - the token row may not be ours, or the
+        // FAILED row is not written yet - so return the error, and let the client retry.
+        std::rethrow_exception(failure);
+    }
+    // Answer with the FAILED import: a retry with the same ClientToken finds it too.
+    co_return make_import_table_response(row);
 }
 
 } // namespace alternator
