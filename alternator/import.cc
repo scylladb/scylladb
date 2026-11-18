@@ -254,7 +254,8 @@ static bool have_same_regular_columns(const schema& a, const schema& b) {
 
 // The client token table has no table_id column, so the request stored in a client token row
 // also holds the TableId of its import, for the answer to a replay before the import row is
-// written. Returns the nil id if the request has no TableId which can be read - a corrupt row.
+// written, and for the FAILED row which the garbage collector writes for such a token. Returns
+// the nil id if the request has no TableId which can be read - a corrupt row.
 static ::table_id table_id_of_client_token_request(std::string_view request) {
     auto parsed = rjson::try_parse(request);
     const rjson::value* id = parsed ? rjson::find(*parsed, "TableId") : nullptr;
@@ -342,8 +343,8 @@ rjson::value make_import_table_description(const import_row& row) {
     rjson::add(description, "ImportStatus", rjson::from_string(terminal ? std::string_view(row.import_status) : import_status_in_progress));
     rjson::add(description, "TableArn", rjson::from_string(table_arn));
     // The id is nil only when it comes from a client token row whose request has no TableId which
-    // can be read (see table_id_of_client_token_request()): in the IN_PROGRESS answer to a replay
-    // before the import row exists.
+    // can be read (see table_id_of_client_token_request()): in the row which the garbage collector
+    // writes for it, and in the IN_PROGRESS answer to a replay before the import row exists.
     if (row.table_id) {
         rjson::add(description, "TableId", rjson::from_string(row.table_id.to_sstring()));
     }
@@ -1355,13 +1356,59 @@ future<> executor::s3_imports::garbage_collect() {
     auto self_node_id = *self_node_id_opt;
 
     db::alternator_import_table_helper helper(sdks.qp());
+    // The client tokens are read before the imports: ImportTable inserts the token row before the
+    // import row, so the second scan sees the import row of every token row which the first one
+    // saw, if that import row exists.
+    auto client_tokens = co_await helper.get_all_client_tokens(&as);
     auto imports = co_await helper.get_all_imports(&as);
     // Rows of earlier incarnations of this node are always taken: this incarnation has a higher
     // gossip generation.
     auto running_nodes = get_running_nodes(gossiper, *proxy.get_token_metadata_ptr(), node_unreachable_timeout());
 
+    std::unordered_set<std::string_view> existing_import_arns;
+    for (const auto& i : imports) {
+        existing_import_arns.insert(i.import_arn);
+        co_await coroutine::maybe_yield();
+    }
+
     // Errors are counted per row, so that one bad row does not stop every round at the same place.
     size_t collection_failures = 0;
+
+    for (const auto& ct : client_tokens) {
+        as.check();
+        co_await coroutine::maybe_yield();
+        if (running_nodes.may_be_running(live_node_identifier::from_string(ct.node_id)) || existing_import_arns.contains(ct.import_arn)) {
+            continue;
+        }
+        // The node stopped between its writes of the client token row and of the import row. The
+        // import never started, so it created no table.
+        try {
+            auto now = db_clock::now();
+            import_row failed{
+                .import_arn = ct.import_arn,
+                .client_token = ct.client_token,
+                .request = ct.request,
+                .table_id = table_id_of_client_token_request(ct.request),
+                .import_status = sstring(import_status_failed),
+                .failure_code = sstring(failure_import_interrupted),
+                .failure_message = fmt::format("The node {} which accepted the import stopped before the import could start.",
+                        live_node_identifier::from_string(ct.node_id).host_id),
+                .import_id_token = sstring(import_id_of_arn(ct.import_arn)),
+                .accepted_at = accept_time_of_import_arn(ct.import_arn, now),
+                .completed_at = now,
+                .node_id = self_node_id.to_string(),
+            };
+            if (auto existing = co_await insert_import(sdks, failed)) {
+                // The scan did not see the row, but the insert did: the garbage collector of
+                // another node inserted it meanwhile, or the insert completed a Paxos round which
+                // the dead node left uncommitted.
+                co_await collect_import_row(running_nodes, self_node_id, *existing);
+            }
+        } catch (...) {
+            ilogger.warn("Failed to write the FAILED import row {} of client token {}: {}", ct.import_arn, ct.client_token, std::current_exception());
+            ++collection_failures;
+        }
+    }
 
     for (const auto& summary : imports) {
         as.check();
@@ -1463,10 +1510,8 @@ future<executor::request_return_type> executor::import_table(service::client_sta
         }
         auto row = co_await get_import(_sdks, ct.import_arn);
         if (!row) {
-            // The node which accepted the import did not write its row yet, or it stopped before it
-            // did. Report the import as IN_PROGRESS.
-            // FIXME: the import of a node which stopped before it wrote the import row stays
-            // IN_PROGRESS, until the client token row expires.
+            // The node which accepted the import did not write its row yet, or it stopped and the
+            // garbage collector will write it. Report the import as IN_PROGRESS.
             row = import_row{
                 .import_arn = ct.import_arn,
                 .client_token = ct.client_token,

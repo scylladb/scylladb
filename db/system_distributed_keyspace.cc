@@ -377,6 +377,8 @@ schema_ptr alternator_import_from_s3_imports() {
                 .with_column("requester_role", utf8_type)
                 // Id of the target table (ImportTableDescription.TableId): the id allocated for the new
                 // table when the request was accepted, or the current id of an existing target table.
+                // The nil UUID (all zeros) in a row which the garbage collector wrote for a corrupt client
+                // token row.
                 .with_column("table_id", uuid_type)
                 // True if the target table existed when the request was accepted (an Alternator
                 // extension). The import then writes into that table and does not create it.

@@ -132,7 +132,8 @@ public:
 //    that the garbage collector can finish the cleanup if this node stops;
 //  - if ImportTable fails after it inserted the client token row, it writes FAILED itself;
 //  - the garbage collector takes the IN_PROGRESS and FAILING rows of node incarnations which can
-//    no longer run them, and makes them FAILED the same way.
+//    no longer run them, and makes them FAILED the same way. It also writes FAILED rows for client
+//    tokens whose node stopped before it inserted the import row.
 class executor::s3_imports {
     executor& _e;
     // Holds the background fibers. stop() closes it.
