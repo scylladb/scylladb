@@ -12,6 +12,7 @@
 #include "cql3/statements/property_definitions.hh"
 #include "cql3/statements/request_validations.hh"
 #include "cql3/statements/strong_consistency/statement_helpers.hh"
+#include "alternator/ttl_tag.hh"
 #include "compaction/compaction_strategy_impl.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "db/extensions.hh"
@@ -171,6 +172,11 @@ void cf_prop_defs::validate(const data_dictionary::database db, sstring ks_name,
     }
     if (per_partition_rate_limit_options && strong_consistency::is_strongly_consistent(db, ks_name)) {
         throw exceptions::configuration_exception("Per-partition rate limit is not supported in strongly consistent keyspaces");
+    }
+
+    auto tags_ext = get_schema_extension<db::tags_extension>(schema_extensions, db::tags_extension::NAME);
+    if (tags_ext && tags_ext->tags().contains(TTL_TAG_KEY) && strong_consistency::is_strongly_consistent(db, ks_name)) {
+        throw exceptions::configuration_exception("Per-row TTL is not supported in strongly consistent keyspaces");
     }
 
     auto tombstone_gc_options = get_tombstone_gc_options(schema_extensions);
