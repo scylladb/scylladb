@@ -360,7 +360,7 @@ private:
 public:
     ~row_cache();
     row_cache(schema_ptr, snapshot_source, cache_tracker&, is_continuous = is_continuous::no);
-    row_cache(row_cache&&) = default;
+    row_cache(row_cache&&) = delete;
     row_cache(const row_cache&) = delete;
 public:
     // Implements mutation_source for this cache, see mutation_reader.hh
