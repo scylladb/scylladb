@@ -371,13 +371,17 @@ schema_ptr alternator_import_from_s3_imports() {
                 // The ImportTable request which created this import, as JSON: only the members which
                 // ImportTable supports, with the defaults filled in. DescribeImport and ListImports echo
                 // its parameters back to the user, and when the target table did not exist, the import
-                // creates it from its TableCreationParameters.
+                // creates it from its TableCreationParameters. A row which the garbage collector
+                // wrote for a client token whose node stopped holds the request of the token row,
+                // with its TableId.
                 .with_column("request", utf8_type)
                 // The role which called ImportTable. It is to get the permissions on the table which the
                 // import creates, as with CreateTable (SCYLLADB-4045); the import does not grant them yet.
                 .with_column("requester_role", utf8_type)
                 // Id of the target table (ImportTableDescription.TableId): the id allocated for the new
                 // table when the request was accepted, or the current id of an existing target table.
+                // The nil UUID (all zeros) in a row which the garbage collector wrote for a corrupt client
+                // token row.
                 .with_column("table_id", uuid_type)
                 // True if the target table existed when the request was accepted (an Alternator
                 // extension). The import then writes into that table and does not create it.
