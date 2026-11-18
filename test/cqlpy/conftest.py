@@ -15,6 +15,7 @@ from cassandra.connection import DRIVER_NAME, DRIVER_VERSION
 from cassandra.protocol import ConfigurationException
 import json
 import os
+import shlex
 import subprocess
 import tempfile
 import time
@@ -231,22 +232,43 @@ def random_seed():
 # executable's path. If we can't find the Scylla executable we use
 # skip_env() to skip tests relying on this executable.
 @pytest.fixture(scope=dynamic_scope())
-def scylla_path(cql):
+def scylla_path(cql, tmp_path_factory):
     pid = local_process_id(cql)
     if not pid:
         skip_env("Can't find local Scylla process")
     # Now that we know the process id, use /proc to find the executable.
     try:
         path = os.readlink(f'/proc/{pid}/exe')
-    except:
+    except OSError:
         skip_env("Can't find local Scylla executable")
     # Confirm that this executable is a real tool-providing Scylla by trying
     # to run it with the "--list-tools" option
+    if runs_scylla_tools(path):
+        return path
+    # If Scylla runs with dbuild's libraries (see tools/toolchain/run-scylla),
+    # the executable is the dynamic linker, and argv[0] is Scylla's. Scylla's
+    # tools need these libraries too, so run them through run-scylla as well,
+    # with a small script. The script is named "scylla", because the tools
+    # print Scylla's name, which they take from argv[0].
+    try:
+        with open(f'/proc/{pid}/cmdline', 'rb') as f:
+            argv0 = os.fsdecode(f.read().split(b'\0')[0])
+    except OSError:
+        skip_env("Local server isn't Scylla")
+    script = tmp_path_factory.mktemp('scylla_path') / 'scylla'
+    run_scylla = os.path.join(os.path.dirname(__file__), '../../tools/toolchain/run-scylla')
+    script.write_text(f'#!/bin/sh\nexec {shlex.quote(run_scylla)} --argv0 "$0" {shlex.quote(argv0)} "$@"\n')
+    script.chmod(0o755)
+    if runs_scylla_tools(str(script)):
+        return str(script)
+    skip_env("Local server isn't Scylla")
+
+def runs_scylla_tools(path):
     try:
         subprocess.check_output([path, '--list-tools'])
-    except:
-        skip_env("Local server isn't Scylla")
-    return path
+        return True
+    except (OSError, subprocess.CalledProcessError):
+        return False
 
 # A fixture for finding Scylla's data directory. We get it using the CQL
 # interface to Scylla's configuration. Note that if the server is remote,
