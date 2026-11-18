@@ -277,13 +277,21 @@ std::optional<bti_partitions_db_footer> bti_partition_index_writer_impl::finish(
     }
     // Footer of Partitions.db.
     auto root = _wr.finish().value;
-    auto& fw = _wr.sink().file_writer();
-    auto keys_pos = fw.offset();
-    write(_sst_ver, fw, disk_string_view<uint16_t>(bytes_view(first_key)));
-    write(_sst_ver, fw, disk_string_view<uint16_t>(bytes_view(last_key)));
-    write(_sst_ver, fw, static_cast<uint64_t>(keys_pos));
-    write(_sst_ver, fw, static_cast<uint64_t>(_added_keys));
-    write(_sst_ver, fw, static_cast<uint64_t>(root));
+    auto& sink = _wr.sink();
+    auto out = bti_raw_writer{sink};
+    auto keys_pos = sink.raw_pos().value;
+    for (const auto& k : {bytes_view(first_key), bytes_view(last_key)}) {
+        uint16_t len;
+        check_truncate_and_assign(len, k.size());
+        write(_sst_ver, out, len);
+        write(_sst_ver, out, k);
+    }
+    // The fixed-size tail of the trailer. A reader finds it from the end of the file.
+    std::array<char, 3 * sizeof(uint64_t)> tail;
+    seastar::write_be<uint64_t>(tail.data(), keys_pos);
+    seastar::write_be<uint64_t>(tail.data() + 8, _added_keys);
+    seastar::write_be<uint64_t>(tail.data() + 16, root);
+    sink.write_raw(tail.data(), tail.size());
     return bti_partitions_db_footer{
         .first_key = first_key,
         .last_key = last_key,

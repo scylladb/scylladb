@@ -529,8 +529,12 @@ sink_pos bti_node_sink::pos() const {
     return sink_pos(_w.offset());
 }
 
-sstables::file_writer& bti_node_sink::file_writer() {
-    return _w;
+void bti_node_sink::write_raw(const char* data, size_t n) {
+    _w.write(data, n);
+}
+
+sink_pos bti_node_sink::raw_pos() {
+    return pos();
 }
 
 } // namespace sstables::trie
