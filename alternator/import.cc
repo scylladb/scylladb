@@ -817,9 +817,11 @@ class executor::s3_imports::import_task {
             throw table_deleted();
         }
         if (ex) {
-            // FIXME: the schema change of the creation may still be applied later, e.g. after a
-            // timeout or an abort at shutdown, leaving a table with the import-in-progress tag which
-            // this import does not know of, and which nothing removes.
+            // The schema change of the creation may still be applied later, e.g. after a timeout
+            // or an abort at shutdown, leaving a table with the import-in-progress tag which this
+            // import does not know of. A round of the garbage collector removes the tag once the
+            // import is FAILED.
+            co_await request_garbage_collection_on_shard0();
             std::rethrow_exception(ex);
         }
         if (error && error->first == "ResourceInUseException") {
@@ -1195,12 +1197,27 @@ class executor::s3_imports::import_task {
             co_await _e.container().invoke_on(0, [table_id = _row.table_id, import_arn = _row.import_arn] (executor& e) {
                 return e._s3_imports->remove_import_in_progress_tag(table_id, import_arn, true);
             });
+            co_return;
         } catch (...) {
-            // The table stays CREATING for DescribeTable, but it is usable. A failure must not keep
-            // run() from writing the final state of the import.
-            // FIXME: nothing removes the tag then.
+            // The table stays CREATING for DescribeTable until the garbage collector removes the
+            // tag, but it is usable.
             ilogger.warn("Import {}: failed to remove the {} tag of the table: {}", _row.import_arn,
                     IMPORT_IN_PROGRESS_TAG_KEY, std::current_exception());
+        }
+        // Best effort: a failure must not keep run() from writing the final state of the import.
+        // Ask for a round of the garbage collector, which removes the tag once that state is written.
+        co_await request_garbage_collection_on_shard0();
+    }
+
+    // Asks shard 0's garbage collector for a round soon. Best effort: a failure is only logged.
+    future<> request_garbage_collection_on_shard0() {
+        try {
+            co_await _e.container().invoke_on(0, [] (executor& e) {
+                e._s3_imports->request_garbage_collection();
+            });
+        } catch (...) {
+            ilogger.warn("Import {}: failed to request a garbage collection round: {}", _row.import_arn,
+                    std::current_exception());
         }
     }
 
@@ -1404,15 +1421,31 @@ void executor::s3_imports::finish_import_in_background(std::optional<slot> impor
         return;
     }
     (void)with_gate(_gate, [&] {
-        auto row_ptr = std::make_unique<import_row>(std::move(row));
-        auto& row_ref = *row_ptr;
-        // The caller may run in the scheduling group of a request.
-        return with_scheduling_group(_e._proxy.local_db().get_export_import_scheduling_group(), [this, &row_ref] {
-            return write_final_import_row(_e._sdks, row_ref, _as);
-        }).handle_exception([&row_ref] (std::exception_ptr ep) {
-            ilogger.warn("Background fiber finishing import {} gave up: {}", row_ref.import_arn, ep);
-        }).finally([row_ptr = std::move(row_ptr), import_slot = std::move(import_slot)] {});
+        return finish_import(std::move(import_slot), std::move(row));
     });
+}
+
+future<> executor::s3_imports::finish_import(std::optional<slot> import_slot, import_row row) {
+    // The caller may run in the scheduling group of a request.
+    co_await coroutine::switch_to(_e._proxy.local_db().get_export_import_scheduling_group());
+    try {
+        co_await write_final_import_row(_e._sdks, row, _as);
+        // Once the row is terminal, a round of the garbage collector removes the tag of the
+        // import's table, if it is still there: its removal may have failed before (e.g. at
+        // shutdown), or a take of the import whose outcome was unknown may have skipped it.
+        co_await _e.container().invoke_on(0, [] (executor& e) {
+            e._s3_imports->request_garbage_collection();
+        });
+    } catch (...) {
+        ilogger.warn("Background fiber finishing import {} gave up: {}", row.import_arn, std::current_exception());
+    }
+}
+
+void executor::s3_imports::request_garbage_collection() {
+    if (_gc) {
+        // Leaves time for the import which asks for the round to write its final state.
+        _gc->request_round(std::chrono::minutes(1));
+    }
 }
 
 future<> executor::s3_imports::stop() {
@@ -1460,8 +1493,8 @@ future<> executor::s3_imports::collect_import_row(const running_node_ids& runnin
     } catch (...) {
         // The write may have applied although it failed, e.g. if it timed out after Paxos accepted
         // it. The row is then FAILING and owned by this node, which no later round takes while this
-        // node runs. The background fiber writes FAILED only if the row is ours.
-        // FIXME: the import-in-progress tag of the table is not removed then.
+        // node runs. The background fiber writes FAILED only if the row is ours, and a later round
+        // removes the import-in-progress tag of the table once the row is FAILED.
         auto ex = std::current_exception();
         taken.import_status = sstring(import_status_failed);
         taken.completed_at = db_clock::now();
@@ -1472,13 +1505,13 @@ future<> executor::s3_imports::collect_import_row(const running_node_ids& runnin
         ilogger.debug("Import {} was not taken: its row changed (another node took it, or it still runs)", row.import_arn);
         co_return;
     }
+    std::exception_ptr tag_removal_failure;
     if (!row.target_table_existed && row.table_id) {
         try {
             co_await remove_import_in_progress_tag(row.table_id, row.import_arn, false);
         } catch (...) {
-            // FIXME: nothing removes the tag later, so DescribeTable reports the table as CREATING.
-            ilogger.warn("Import {}: failed to remove the {} tag of the table: {}", row.import_arn,
-                    IMPORT_IN_PROGRESS_TAG_KEY, std::current_exception());
+            // A later round removes the tag, once the row is FAILED.
+            tag_removal_failure = std::current_exception();
         }
     }
     taken.import_status = sstring(import_status_failed);
@@ -1493,6 +1526,11 @@ future<> executor::s3_imports::collect_import_row(const running_node_ids& runnin
         co_return;
     }
     ilogger.info("Import {} of node {} marked as FAILED with {}", row.import_arn, row.node_id, *taken.failure_code);
+    if (tag_removal_failure) {
+        // Fails the round, so that it is retried soon.
+        throw std::runtime_error(fmt::format("failed to remove the {} tag of the table of import {}: {}",
+                IMPORT_IN_PROGRESS_TAG_KEY, row.import_arn, tag_removal_failure));
+    }
 }
 
 future<> executor::s3_imports::garbage_collect() {
@@ -1527,7 +1565,8 @@ future<> executor::s3_imports::garbage_collect() {
     // gossip generation.
     auto running_nodes = get_running_nodes(gossiper, *proxy.get_token_metadata_ptr(), node_unreachable_timeout());
 
-    // Errors are counted per row, so that one bad row does not stop every round at the same place.
+    // Errors are counted per row and per tagged table, so that one bad row does not stop every round
+    // at the same place.
     size_t collection_failures = 0;
 
     for (const auto& ct : client_tokens) {
@@ -1593,10 +1632,38 @@ future<> executor::s3_imports::garbage_collect() {
         }
     }
 
+    // A table keeps the import-in-progress tag of an import which ended if the removal of the tag
+    // failed - always when the node shut down during the import - if its creation applied only after
+    // the import failed (see create_table()), or if a take of the import whose outcome was unknown
+    // skipped the removal (see collect_import_row()). Nothing else removes it then.
+    std::vector<std::pair<::table_id, sstring>> tagged_tables;
+    for (const auto& table : proxy.data_dictionary().get_tables()) {
+        if (auto import_arn = db::find_tag(*table.schema(), IMPORT_IN_PROGRESS_TAG_KEY)) {
+            tagged_tables.emplace_back(table.schema()->id(), sstring(*import_arn));
+        }
+    }
+    for (const auto& [table_id, import_arn] : tagged_tables) {
+        as.check();
+        try {
+            // The row is read here, not taken from the scan: the scan keeps only the imports which
+            // have not ended, and one which it saw may have ended since, e.g. by a final write which
+            // this round's SERIAL read completed. A row which expired (TTL) is gone, and its import
+            // ended long ago. The tagged tables are few: those of running imports, and those whose
+            // tag removal failed.
+            auto row = co_await get_import(sdks, import_arn);
+            if (!row || is_terminal_status(row->import_status)) {
+                co_await remove_import_in_progress_tag(table_id, import_arn, false);
+            }
+        } catch (...) {
+            ilogger.warn("Failed to remove the {} tag of import {}: {}", IMPORT_IN_PROGRESS_TAG_KEY, import_arn, std::current_exception());
+            ++collection_failures;
+        }
+    }
+
     as.check();
     if (collection_failures) {
         // Fail the round, so that it is retried sooner than the next periodic round.
-        throw std::runtime_error(fmt::format("{} import(s) could not be collected", collection_failures));
+        throw std::runtime_error(fmt::format("{} import(s) or tag(s) could not be collected", collection_failures));
     }
 }
 
@@ -1605,8 +1672,9 @@ future<> executor::s3_imports::run_garbage_collector() {
     if (!holder) {
         co_return;
     }
-    // A round every 4 hours, as for exports (scylladb/scylladb#32045); node-down events ask for
-    // rounds in between.
+    // A round every 4 hours: the rows of stopped nodes need no fast cleanup. Node-down events ask
+    // for rounds in between, and so do imports which failed to remove their tag, whose creation of
+    // the table threw, or whose final write was retried in the background.
     _gc.emplace(_e._gossiper, gc_round_scheduler::config{
         .name = "S3 imports",
         .period = std::chrono::hours(4),

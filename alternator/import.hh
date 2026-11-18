@@ -134,7 +134,8 @@ public:
 //  - if ImportTable fails after it inserted the client token row, it writes FAILED itself;
 //  - the garbage collector takes the IN_PROGRESS and FAILING rows of node incarnations which can
 //    no longer run them, and makes them FAILED the same way. It also writes FAILED rows for client
-//    tokens whose node stopped before it inserted the import row.
+//    tokens whose node stopped before it inserted the import row, and removes the tags of ended
+//    imports.
 class executor::s3_imports {
     executor& _e;
     // Holds the background fibers. stop() closes it.
@@ -158,6 +159,8 @@ class executor::s3_imports {
     future<> remove_import_in_progress_tag(::table_id table_id, sstring import_arn, bool wait_for_agreement);
     // One round of the garbage collector. Runs on shard 0.
     future<> garbage_collect();
+    // Asks the garbage collector for a round soon. Runs on shard 0.
+    void request_garbage_collection();
     // Takes `row` and makes it FAILED, if its node can no longer run it.
     future<> collect_import_row(const running_node_ids& running_nodes, const live_node_identifier& self_node_id, const import_row& row);
 public:
@@ -188,9 +191,9 @@ public:
     // the current incarnation of this node, so this node must finish them. The import fiber and
     // ImportTable pass their slot; the garbage collector, whose rows hold none, passes nullopt.
     void finish_import_in_background(std::optional<slot> import_slot, import_row row);
-    // Fails the imports which no node runs any more, as described above. Runs one round at start,
-    // then periodically and after node-down events, until stop(). executor::start() starts it on
-    // shard 0 of each node.
+    // Fails the imports which no node runs any more, and removes the import-in-progress tags of ended
+    // imports, as described above. Runs one round at start, then periodically and after node-down
+    // events, until stop(). executor::start() starts it on shard 0 of each node.
     future<> run_garbage_collector();
     // Replaces the source of the imports which start after the call. For tests: the default
     // source does not read S3 yet.
@@ -200,6 +203,8 @@ public:
 private:
     // The fiber which start_import() starts.
     future<> run_import(std::unique_ptr<import_task> task, slot import_slot);
+    // The fiber which finish_import_in_background() starts. Keeps `import_slot` until it ends.
+    future<> finish_import(std::optional<slot> import_slot, import_row row);
 };
 
 } // namespace alternator

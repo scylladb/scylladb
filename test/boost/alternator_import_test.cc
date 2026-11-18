@@ -1311,7 +1311,8 @@ SEASTAR_TEST_CASE(test_import_concurrency_limit) {
 }
 
 // Stopping the node during an import fails it with ImportInterrupted. The table keeps the
-// import-in-progress tag, because the shutdown aborts its removal (a schema change).
+// import-in-progress tag, because the shutdown aborts its removal (a schema change); the garbage
+// collector removes it later.
 SEASTAR_TEST_CASE(test_import_interrupted_by_shutdown) {
     return with_import_executor([] (cql_test_env& e, alternator_test_executor& exec) {
         constexpr auto pause = "alternator_import_from_s3_pause_in_item_handler";
@@ -1845,6 +1846,75 @@ SEASTAR_TEST_CASE(test_import_final_write_is_retried) {
         // The one-shot injection is disabled once it failed the write. The import ran on this shard.
         BOOST_REQUIRE(!utils::get_local_injector().is_enabled(fail));
     });
+}
+
+// The garbage collector removes the import-in-progress tag of a table whose import ended - the
+// import fails to remove it e.g. when its node shuts down - also of one whose import the round
+// collects, and of one whose import row expired, and keeps the tag of a running import.
+SEASTAR_TEST_CASE(test_import_garbage_collector_removes_tags_of_ended_imports) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        constexpr auto wakeup = "alternator_import_from_s3_gc_wakeup";
+        constexpr auto finished = "alternator_import_from_s3_gc_finished";
+        scoped_error_injection wakeup_injection(wakeup);
+        scoped_error_injection finished_injection(finished);
+
+        alternator_test_executor exec;
+        exec.start(e);
+        auto stop_exec = defer([&] noexcept { try { exec.stop(); } catch (...) { std::terminate(); } });
+
+        auto self = alternator::get_self_node_id(e.gossiper().local());
+        BOOST_REQUIRE(self);
+        db::alternator_import_table_helper helper(e.qp().local());
+        abort_source as;
+        auto earlier_incarnation = *self;
+        --earlier_incarnation.gossip_generation;
+        // Creates the table `name`, tagged by the import `import_arn`, which created the table, and
+        // which has a row with `status` and `node` - or no row, if `status` is nullopt.
+        auto make_tagged_table = [&] (std::string_view name, std::optional<std::string_view> status, const alternator::live_node_identifier& node) {
+            exec.create_table(make_create_table_request(name));
+            const sstring import_arn = fmt::format("arn:scylla:alternator:alternator_{0}:scylla:table/{0}/import/01700000000000-00000001", name);
+            if (status) {
+                helper.insert_import(alternator::import_row{
+                    .import_arn = import_arn,
+                    .client_token = sstring(name),
+                    .request = "{}",
+                    .table_id = e.local_db().find_schema(fmt::format("alternator_{}", name), sstring(name))->id(),
+                    .import_status = sstring(*status),
+                    .accepted_at = db_clock::now(),
+                    .node_id = node.to_string(),
+                }, std::chrono::hours(1)).get();
+            }
+            db::modify_tags(e.migration_manager().local(), fmt::format("alternator_{}", name), sstring(name),
+                    [&] (std::map<sstring, sstring>& tags) { tags[alternator::IMPORT_IN_PROGRESS_TAG_KEY] = import_arn; }, as).get();
+            auto described = std::get<rjson::value>(exec.describe_table(name));
+            BOOST_REQUIRE_EQUAL(get_string(rjson::get(described, "Table"), "TableStatus"), "CREATING");
+        };
+        make_tagged_table("ended", "FAILED", *self);
+        make_tagged_table("running", "IN_PROGRESS", *self);
+        // The import of an earlier incarnation of this node: the round takes it, and removes the tag
+        // of its table. (The removal of the tags of ended imports, later in the round, would remove
+        // it too.)
+        make_tagged_table("collected", "IN_PROGRESS", earlier_incarnation);
+        // A tag whose import row expired.
+        make_tagged_table("expired", std::nullopt, *self);
+
+        auto rounds = utils::error_injection<true>::enter_count_on_all(finished).get();
+        utils::error_injection<true>::receive_message_on_all(wakeup).get();
+        wait_until([&] { return utils::error_injection<true>::enter_count_on_all(finished).get() != rounds; }, "a garbage collection round");
+
+        auto ended = std::get<rjson::value>(exec.describe_table("ended"));
+        BOOST_REQUIRE_EQUAL(get_string(rjson::get(ended, "Table"), "TableStatus"), "ACTIVE");
+        auto running = std::get<rjson::value>(exec.describe_table("running"));
+        BOOST_REQUIRE_EQUAL(get_string(rjson::get(running, "Table"), "TableStatus"), "CREATING");
+        for (auto name : {"collected", "expired"}) {
+            auto described = std::get<rjson::value>(exec.describe_table(name));
+            BOOST_REQUIRE_EQUAL(get_string(rjson::get(described, "Table"), "TableStatus"), "ACTIVE");
+        }
+        auto collected = helper.get_import("arn:scylla:alternator:alternator_collected:scylla:table/collected/import/01700000000000-00000001").get();
+        BOOST_REQUIRE(collected);
+        BOOST_REQUIRE_EQUAL(collected->import_status, "FAILED");
+        BOOST_REQUIRE_EQUAL(collected->failure_code.value_or(""), "ImportInterrupted");
+    }, import_test_config());
 }
 
 #endif // SCYLLA_ENABLE_ERROR_INJECTION
