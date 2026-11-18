@@ -82,13 +82,14 @@ future<json::json_return_type>  sum_stats_storage_proxy(sharded<proxy>& d, V F::
 }
 
 
-static future<utils::rate_moving_average>  sum_timed_rate(sharded<proxy>& d, utils::timed_rate_moving_average service::storage_proxy_stats::stats::*f) {
-    return two_dimensional_map_reduce(d, [f] (service::storage_proxy_stats::stats& stats) {
-        return (stats.*f).rate();
-    }, std::plus<utils::rate_moving_average>(), utils::rate_moving_average());
+// These are plain counters, so only the count of the returned object is set.
+static future<utils::rate_moving_average>  sum_timed_rate(sharded<proxy>& d, uint64_t service::storage_proxy_stats::stats::*f) {
+    return two_dimensional_map_reduce(d, f, std::plus<uint64_t>(), uint64_t(0)).then([] (uint64_t count) {
+        return utils::rate_moving_average{.count = count};
+    });
 }
 
-static future<json::json_return_type>  sum_timed_rate_as_obj(sharded<proxy>& d, utils::timed_rate_moving_average service::storage_proxy_stats::stats::*f) {
+static future<json::json_return_type>  sum_timed_rate_as_obj(sharded<proxy>& d, uint64_t service::storage_proxy_stats::stats::*f) {
     return sum_timed_rate(d, f).then([](const utils::rate_moving_average& val) {
         httpd::utils_json::rate_moving_average m;
         m = val;
@@ -100,7 +101,7 @@ httpd::utils_json::rate_moving_average_and_histogram get_empty_moving_average() 
     return timer_to_json(utils::rate_moving_average_and_histogram());
 }
 
-static future<json::json_return_type>  sum_timed_rate_as_long(sharded<proxy>& d, utils::timed_rate_moving_average service::storage_proxy_stats::stats::*f) {
+static future<json::json_return_type>  sum_timed_rate_as_long(sharded<proxy>& d, uint64_t service::storage_proxy_stats::stats::*f) {
     return sum_timed_rate(d, f).then([](const utils::rate_moving_average& val) {
         return make_ready_future<json::json_return_type>(val.count);
     });

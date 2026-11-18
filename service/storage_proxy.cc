@@ -3075,19 +3075,19 @@ void storage_proxy_stats::write_stats::register_stats() {
                                       sm::description("number of throttled write requests"),
                                       {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
 
-            sm::make_total_operations("write_timeouts", [this]{return write_timeouts.count();},
+            sm::make_total_operations("write_timeouts", [this]{return write_timeouts;},
                            sm::description("number of write request failed due to a timeout"),
                            {storage_proxy_stats::current_scheduling_group_label(), basic_level}).set_skip_when_empty(),
 
-            sm::make_total_operations("write_unavailable", [this]{return write_unavailables.count();},
+            sm::make_total_operations("write_unavailable", [this]{return write_unavailables;},
                            sm::description("number write requests failed due to an \"unavailable\" error"),
                            {storage_proxy_stats::current_scheduling_group_label(), basic_level}).set_skip_when_empty(),
 
-            sm::make_total_operations("write_rate_limited", [this]{return write_rate_limited_by_replicas.count();},
+            sm::make_total_operations("write_rate_limited", [this]{return write_rate_limited_by_replicas;},
                            sm::description("number of write requests which were rejected because rate limit for the partition was reached. rejected_by_coordinator indicates if it was rejected by the coordinator or the replica"),
                            {storage_proxy_stats::current_scheduling_group_label(), storage_proxy_stats::rejected_by_coordinator_label(false)}).set_skip_when_empty(),
 
-            sm::make_total_operations("write_rate_limited", [this]{return write_rate_limited_by_coordinator.count();},
+            sm::make_total_operations("write_rate_limited", [this]{return write_rate_limited_by_coordinator;},
                            sm::description("number of write requests which were rejected because rate limit for the partition was reached. rejected_by_coordinator indicates if it was rejected by the coordinator or the replica"),
                            {storage_proxy_stats::current_scheduling_group_label(),storage_proxy_stats::rejected_by_coordinator_label(true)}).set_skip_when_empty(),
 
@@ -3178,27 +3178,27 @@ void storage_proxy_stats::stats::register_stats() {
                        sm::description("number of read repairs in which the full-data reconciliation found actual differences between replicas and repair mutations were sent"),
                        {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
 
-        sm::make_total_operations("read_timeouts", [this]{return read_timeouts.count(); },
+        sm::make_total_operations("read_timeouts", [this]{return read_timeouts; },
                        sm::description("number of read request failed due to a timeout"),
                        {storage_proxy_stats::current_scheduling_group_label(), basic_level}).set_skip_when_empty(),
 
-        sm::make_total_operations("read_unavailable", [this]{return read_unavailables.count(); },
+        sm::make_total_operations("read_unavailable", [this]{return read_unavailables; },
                        sm::description("number read requests failed due to an \"unavailable\" error"),
                        {storage_proxy_stats::current_scheduling_group_label(), basic_level}).set_skip_when_empty(),
 
-        sm::make_total_operations("read_rate_limited", [this]{return read_rate_limited_by_replicas.count(); },
+        sm::make_total_operations("read_rate_limited", [this]{return read_rate_limited_by_replicas; },
                        sm::description("number of read requests which were rejected because rate limit for the partition was reached. rejected_by_coordinator indicates if it was rejected by the coordinator or the replica"),
                        {storage_proxy_stats::current_scheduling_group_label(), storage_proxy_stats::rejected_by_coordinator_label(false)}).set_skip_when_empty(),
 
-        sm::make_total_operations("read_rate_limited", [this]{return read_rate_limited_by_coordinator.count(); },
+        sm::make_total_operations("read_rate_limited", [this]{return read_rate_limited_by_coordinator; },
                        sm::description("number of read requests which were rejected because rate limit for the partition was reached. rejected_by_coordinator indicates if it was rejected by the coordinator or the replica"),
                        {storage_proxy_stats::current_scheduling_group_label(), storage_proxy_stats::rejected_by_coordinator_label(true)}).set_skip_when_empty(),
 
-        sm::make_total_operations("range_timeouts", [this]{return range_slice_timeouts.count(); },
+        sm::make_total_operations("range_timeouts", [this]{return range_slice_timeouts; },
                        sm::description("number of range read operations failed due to a timeout"),
                        {storage_proxy_stats::current_scheduling_group_label(), basic_level}).set_skip_when_empty(),
 
-        sm::make_total_operations("range_unavailable", [this]{return range_slice_unavailables.count(); },
+        sm::make_total_operations("range_unavailable", [this]{return range_slice_unavailables; },
                        sm::description("number of range read operations failed due to an \"unavailable\" error"),
                        {storage_proxy_stats::current_scheduling_group_label(), basic_level}).set_skip_when_empty(),
 
@@ -3221,19 +3221,19 @@ void storage_proxy_stats::stats::register_stats() {
                 {storage_proxy_stats::current_scheduling_group_label(), cas_label},
                 [this]{return to_metrics_histogram(cas_write.histogram());}).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
 
-        sm::make_total_operations("cas_write_timeouts", [this]{return cas_write_timeouts.count(); },
+        sm::make_total_operations("cas_write_timeouts", [this]{return cas_write_timeouts; },
                        sm::description("number of transactional write request failed due to a timeout"),
                        {storage_proxy_stats::current_scheduling_group_label(), basic_level, cas_label}).set_skip_when_empty(),
 
-        sm::make_total_operations("cas_write_unavailable", [this]{return cas_write_unavailables.count(); },
+        sm::make_total_operations("cas_write_unavailable", [this]{return cas_write_unavailables; },
                        sm::description("number of transactional write requests failed due to an \"unavailable\" error"),
                        {storage_proxy_stats::current_scheduling_group_label(), basic_level, cas_label}).set_skip_when_empty(),
 
-        sm::make_total_operations("cas_read_timeouts", [this]{return cas_read_timeouts.count(); },
+        sm::make_total_operations("cas_read_timeouts", [this]{return cas_read_timeouts; },
                        sm::description("number of transactional read request failed due to a timeout"),
                        {storage_proxy_stats::current_scheduling_group_label(), basic_level, cas_label}).set_skip_when_empty(),
 
-        sm::make_total_operations("cas_read_unavailable", [this]{return cas_read_unavailables.count(); },
+        sm::make_total_operations("cas_read_unavailable", [this]{return cas_read_unavailables; },
                        sm::description("number of transactional read requests failed due to an \"unavailable\" error"),
                        {storage_proxy_stats::current_scheduling_group_label(), basic_level, cas_label}).set_skip_when_empty(),
 
@@ -4160,25 +4160,25 @@ future<result<>> storage_proxy::mutate_end(future<result<>> mutate_result, utils
     }), utils::result_catch<mutation_write_timeout_exception>([&] (const auto& ex, auto&& handle) {
         tracing::trace(trace_state, "Mutation failed: write timeout; received {:d} of {:d} required replies", ex.received, ex.block_for);
         slogger.debug("Write timeout; received {} of {} required replies", ex.received, ex.block_for);
-        stats.write_timeouts.mark();
+        ++stats.write_timeouts;
         return handle.into_future();
     }), utils::result_catch<exceptions::unavailable_exception>([&] (const auto& ex, auto&& handle) {
         tracing::trace(trace_state, "Mutation failed: unavailable");
-        stats.write_unavailables.mark();
+        ++stats.write_unavailables;
         slogger.trace("Unavailable");
         return handle.into_future();
     }), utils::result_catch<exceptions::rate_limit_exception>([&] (const auto& ex, auto&& handle) {
         tracing::trace(trace_state, "Mutation failed: rate limit exceeded");
         if (ex.rejected_by_coordinator) {
-            stats.write_rate_limited_by_coordinator.mark();
+            ++stats.write_rate_limited_by_coordinator;
         } else {
-            stats.write_rate_limited_by_replicas.mark();
+            ++stats.write_rate_limited_by_replicas;
         }
         slogger.trace("Rate limit exceeded");
         return handle.into_future();
     }), utils::result_catch<overloaded_exception>([&] (const auto& ex, auto&& handle) {
         tracing::trace(trace_state, "Mutation failed: overloaded");
-        stats.write_unavailables.mark();
+        ++stats.write_unavailables;
         slogger.trace("Overloaded");
         return handle.into_future();
     }), utils::result_catch_dots([&] (auto&& handle) {
@@ -4285,10 +4285,10 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
             try {
                 std::rethrow_exception(std::move(exp));
             } catch (rpc::timeout_error&) {
-                get_stats().write_timeouts.mark();
+                ++get_stats().write_timeouts;
                 throw mutation_write_timeout_exception(s->ks_name(), s->cf_name(), cl, 0, db::block_for(*erm, cl), db::write_type::COUNTER);
             } catch (timed_out_error&) {
-                get_stats().write_timeouts.mark();
+                ++get_stats().write_timeouts;
                 throw mutation_write_timeout_exception(s->ks_name(), s->cf_name(), cl, 0, db::block_for(*erm, cl), db::write_type::COUNTER);
             } catch (rpc::closed_error&) {
                 exceptions::replica_failure_map failed_replicas;
@@ -6308,7 +6308,7 @@ result<::shared_ptr<abstract_read_executor>> storage_proxy::get_read_executor(lw
         db::assure_sufficient_live_nodes(cl, *erm, target_replicas, host_id_vector_topology_change{});
     } catch (exceptions::unavailable_exception& ex) {
         slogger.debug("Read unavailable: cl={} required {} alive {}", ex.consistency, ex.required, ex.alive);
-        get_stats().read_unavailables.mark();
+        ++get_stats().read_unavailables;
         throw;
     }
 
@@ -6319,7 +6319,7 @@ result<::shared_ptr<abstract_read_executor>> storage_proxy::get_read_executor(lw
         auto r_rate_limit_info = choose_rate_limit_info(erm, _db.local(), !is_read_non_local, db::operation_type::read, schema, token, trace_state);
         if (!r_rate_limit_info) {
             slogger.debug("Read was rate limited");
-            get_stats().read_rate_limited_by_coordinator.mark();
+            ++get_stats().read_rate_limited_by_coordinator;
             return std::move(r_rate_limit_info).as_failure();
         }
         rate_limit_info = r_rate_limit_info.value();
@@ -6398,17 +6398,17 @@ void storage_proxy::handle_read_error(std::variant<exceptions::coordinator_excep
     },  utils::result_catch<read_timeout_exception>([&] (const auto& ex) {
         slogger.debug("Read timeout: received {} of {} required replies, data {}present", ex.received, ex.block_for, ex.data_present ? "" : "not ");
         if (range) {
-            get_stats().range_slice_timeouts.mark();
+            ++get_stats().range_slice_timeouts;
         } else {
-            get_stats().read_timeouts.mark();
+            ++get_stats().read_timeouts;
         }
         return bo::success();
     }), utils::result_catch<exceptions::rate_limit_exception>([&] (const auto& ex) {
         slogger.debug("Read was rate limited");
         if (ex.rejected_by_coordinator) {
-            get_stats().read_rate_limited_by_coordinator.mark();
+            ++get_stats().read_rate_limited_by_coordinator;
         } else {
-            get_stats().read_rate_limited_by_replicas.mark();
+            ++get_stats().read_rate_limited_by_replicas;
         }
         return bo::success();
     }), utils::result_catch_dots([&] (auto&& handle) {
@@ -6706,7 +6706,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
                 db::assure_sufficient_live_nodes(cl, *erm, filtered_endpoints, host_id_vector_topology_change{});
             } catch(exceptions::unavailable_exception& ex) {
                 slogger.debug("Read unavailable: cl={} required {} alive {}", ex.consistency, ex.required, ex.alive);
-                get_stats().range_slice_unavailables.mark();
+                ++get_stats().range_slice_unavailables;
                 throw;
             }
 
@@ -7107,10 +7107,10 @@ future<storage_proxy::cas_result> storage_proxy::cas(schema_ptr schema, cas_shar
                     schema->ks_name(), schema->cf_name(), e.what());
             const auto block_for = db::block_for(*cas_shard.get_erm(), cl_for_paxos);
             if (write) {
-                get_stats().cas_write_timeouts.mark();
+                ++get_stats().cas_write_timeouts;
                 throw mutation_write_timeout_exception(std::move(msg), cl_for_paxos, 0, block_for, db::write_type::CAS);
             }
-            get_stats().cas_read_timeouts.mark();
+            ++get_stats().cas_read_timeouts;
             throw read_timeout_exception(std::move(msg), cl_for_paxos, 0, block_for, false);
         }
     }
@@ -7144,7 +7144,7 @@ future<storage_proxy::cas_result> storage_proxy::cas(schema_ptr schema, cas_shar
                 std::move(key),
                 schema, cmd, cl_for_paxos, cl_for_learn, write_timeout, cas_timeout);
     } catch (exceptions::unavailable_exception& ex) {
-        write ?  get_stats().cas_write_unavailables.mark() : get_stats().cas_read_unavailables.mark();
+        write ?  ++get_stats().cas_write_unavailables : ++get_stats().cas_read_unavailables;
         throw;
     }
 
@@ -7271,32 +7271,32 @@ future<storage_proxy::cas_result> storage_proxy::cas(schema_ptr schema, cas_shar
         write ? throw read_failure_to_write(ex) : throw;
     } catch (read_timeout_exception& ex) {
         if (write) {
-            get_stats().cas_write_timeouts.mark();
+            ++get_stats().cas_write_timeouts;
             throw read_timeout_to_write(ex);
         } else {
-            get_stats().cas_read_timeouts.mark();
+            ++get_stats().cas_read_timeouts;
             throw;
         }
     } catch (mutation_write_failure_exception& ex) {
         write ? throw : throw write_failure_to_read(ex);
     } catch (mutation_write_timeout_exception& ex) {
         if (write) {
-            get_stats().cas_write_timeouts.mark();
+            ++get_stats().cas_write_timeouts;
             throw;
         } else {
-            get_stats().cas_read_timeouts.mark();
+            ++get_stats().cas_read_timeouts;
             throw write_timeout_to_read(ex);
         }
     } catch (exceptions::unavailable_exception& ex) {
-        write ? get_stats().cas_write_unavailables.mark() :  get_stats().cas_read_unavailables.mark();
+        write ? ++get_stats().cas_write_unavailables :  ++get_stats().cas_read_unavailables;
         throw;
     } catch (seastar::semaphore_timed_out& ex) {
         paxos::paxos_state::logger.trace("CAS[{}]: timeout while waiting for row lock {}", handler->id(), ex.what());
         if (write) {
-            get_stats().cas_write_timeouts.mark();
+            ++get_stats().cas_write_timeouts;
             throw mutation_write_timeout_exception(schema->ks_name(), schema->cf_name(), cl_for_paxos, 0,  handler->block_for(), db::write_type::CAS);
         } else {
-            get_stats().cas_read_timeouts.mark();
+            ++get_stats().cas_read_timeouts;
             throw read_timeout_exception(schema->ks_name(), schema->cf_name(), cl_for_paxos, 0,  handler->block_for(), 0);
         }
     }
