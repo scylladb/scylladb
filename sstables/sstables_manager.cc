@@ -341,8 +341,16 @@ storage_manager::config_updater_sync::config_updater_sync(const db::config& cfg,
                 it->second.cfg = e;
             }
         }
+        // Sstables can keep a dropped endpoint's client alive, so release its series
+        // for a client created when the endpoint is added back.
         std::erase_if(sstm._object_storage_endpoints, [&updates](const auto& e) {
-            return !updates.contains(e.first);
+            if (updates.contains(e.first)) {
+                return false;
+            }
+            if (e.second.client) {
+                e.second.client->unregister_metrics();
+            }
+            return true;
         });
     }))
 {}
