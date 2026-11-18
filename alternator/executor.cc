@@ -5867,8 +5867,15 @@ static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_vie
 }
 
 future<> executor::start() {
-    // Currently, nothing to do on initialization. We delay the keyspace
-    // creation (create_keyspace()) until a table is actually created.
+    // We delay the keyspace creation (create_keyspace()) until a table is
+    // actually created.
+
+    // The garbage collector of ImportTable fails the imports whose node no
+    // longer runs them. One per node is enough, so it runs on shard 0. It holds
+    // the gate of s3_imports, so stop() waits for it.
+    if (this_shard_id() == 0) {
+        (void)_s3_imports->run_garbage_collector();
+    }
     return make_ready_future<>();
 }
 

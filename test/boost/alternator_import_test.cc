@@ -126,7 +126,7 @@ public:
             _exec.invoke_on_all(&alternator::executor::request_stop).get();
             _exec.stop().get();
         });
-        // As alternator::server::init() does.
+        // Starts the garbage collector of imports on shard 0.
         _exec.invoke_on_all(&alternator::executor::start).get();
         stop_exec.cancel();
         stop_dicts.cancel();
@@ -1016,7 +1016,6 @@ SEASTAR_TEST_CASE(test_import_table_is_creating_during_the_import) {
 // each item, so the import stops at the item after the takeover and writes none of the items
 // which follow. Without that, nothing fences the writes of items: an import writes the batches
 // which it fills until its next write of the progress, see maybe_write_progress().
-// (A following commit adds the garbage collector.)
 SEASTAR_TEST_CASE(test_import_progress_and_takeover) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         alternator_test_executor exec;
@@ -1344,6 +1343,90 @@ SEASTAR_TEST_CASE(test_import_table_deleted_during_the_import) {
         BOOST_REQUIRE_EQUAL(row.failure_code.value_or(""), "TableDeleted");
         BOOST_REQUIRE(!exec.get_item("deleted", "a", "1"));
         BOOST_REQUIRE(!exec.get_item("deleted", "a", "2"));
+    }, import_test_config());
+}
+
+// The garbage collector fails the imports of node incarnations which cannot run them any more -
+// here, an earlier incarnation of this node.
+SEASTAR_TEST_CASE(test_import_garbage_collector) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        constexpr auto wakeup = "alternator_import_from_s3_gc_wakeup";
+        constexpr auto finished = "alternator_import_from_s3_gc_finished";
+        utils::get_local_injector().enable_on_all(wakeup).get();
+        utils::get_local_injector().enable_on_all(finished).get();
+        auto disable = defer([&] noexcept {
+            utils::get_local_injector().disable_on_all(wakeup).get();
+            utils::get_local_injector().disable_on_all(finished).get();
+        });
+
+        alternator_test_executor exec;
+        exec.start(e);
+        auto stop_exec = defer([&] noexcept { try { exec.stop(); } catch (...) { std::terminate(); } });
+
+        auto self = alternator::get_self_node_id(e.gossiper().local());
+        BOOST_REQUIRE(self && self->gossip_generation > 0);
+        auto earlier_incarnation = *self;
+        --earlier_incarnation.gossip_generation;
+
+        db::alternator_import_table_helper helper(e.qp().local());
+        const sstring table_arn = "arn:scylla:alternator:alternator_gc:scylla:table/gc";
+        const sstring stored_request = R"({"S3BucketSource": {"S3Bucket": "bucket"}, "InputFormat": "DYNAMODB_JSON",
+                "InputCompressionType": "NONE", "TableCreationParameters": {"TableName": "gc"}})";
+        const sstring running_arn = table_arn + "/import/01700000000000-00000001";
+        helper.insert_import(alternator::import_row{
+            .import_arn = running_arn,
+            .client_token = "gc-running",
+            .request = stored_request,
+            .target_table_existed = true,
+            .import_status = "IN_PROGRESS",
+            .accepted_at = db_clock::now(),
+            .node_id = earlier_incarnation.to_string(),
+        }, std::chrono::hours(1)).get();
+        const sstring failing_arn = table_arn + "/import/01700000000000-00000005";
+        helper.insert_import(alternator::import_row{
+            .import_arn = failing_arn,
+            .client_token = "gc-failing",
+            .request = stored_request,
+            .target_table_existed = true,
+            .import_status = "FAILING",
+            .failure_code = "WriteFailed",
+            .failure_message = "Writing items failed",
+            .accepted_at = db_clock::now(),
+            .node_id = earlier_incarnation.to_string(),
+        }, std::chrono::hours(1)).get();
+        // An import of this incarnation is not collected.
+        const sstring own_arn = table_arn + "/import/01700000000000-00000003";
+        helper.insert_import(alternator::import_row{
+            .import_arn = own_arn,
+            .client_token = "gc-own",
+            .request = stored_request,
+            .target_table_existed = true,
+            .import_status = "IN_PROGRESS",
+            .accepted_at = db_clock::now(),
+            .node_id = self->to_string(),
+        }, std::chrono::hours(1)).get();
+
+        auto rounds = utils::error_injection<true>::enter_count_on_all(finished).get();
+        utils::error_injection<true>::receive_message_on_all(wakeup).get();
+        wait_until([&] { return utils::error_injection<true>::enter_count_on_all(finished).get() != rounds; }, "a garbage collection round");
+
+        auto running = helper.get_import(running_arn).get();
+        BOOST_REQUIRE(running);
+        BOOST_REQUIRE_EQUAL(running->import_status, "FAILED");
+        BOOST_REQUIRE_EQUAL(running->failure_code.value_or(""), "ImportInterrupted");
+        // The message names the node which stopped.
+        BOOST_REQUIRE(running->failure_message.value_or("").contains(fmt::format("{}", earlier_incarnation.host_id)));
+        BOOST_REQUIRE_EQUAL(running->node_id, self->to_string());
+        BOOST_REQUIRE(running->completed_at);
+        auto failing = helper.get_import(failing_arn).get();
+        BOOST_REQUIRE(failing);
+        BOOST_REQUIRE_EQUAL(failing->import_status, "FAILED");
+        BOOST_REQUIRE_EQUAL(failing->failure_code.value_or(""), "WriteFailed");
+        BOOST_REQUIRE_EQUAL(failing->failure_message.value_or(""), "Writing items failed");
+        BOOST_REQUIRE_EQUAL(failing->node_id, self->to_string());
+        auto own = helper.get_import(own_arn).get();
+        BOOST_REQUIRE(own);
+        BOOST_REQUIRE_EQUAL(own->import_status, "IN_PROGRESS");
     }, import_test_config());
 }
 
