@@ -874,7 +874,8 @@ private:
     void do_isolate_on_error(disk_error type);
     future<> isolate();
 
-    future<> notify_down(inet_address endpoint, locator::host_id hid);
+    future<> notify_down(inet_address endpoint, locator::host_id hid, bool announced_shutdown);
+    future<> remove_rpc_client_after_shutdown_announce(inet_address endpoint, locator::host_id hid);
     future<> notify_left(inet_address endpoint, locator::host_id hid);
     future<> notify_released(locator::host_id hid);
     future<> notify_up(inet_address endpoint, locator::host_id hid);
