@@ -608,9 +608,16 @@ future<> distributed_loader::init_non_system_keyspaces(sharded<replica::database
         auto node = topology.normal_nodes.find(raft::server_id{host_id.uuid()});
         std::optional<service::storage_mode> storage_mode = node != topology.normal_nodes.end() ? node->second.intended_storage_mode : std::nullopt;
 
-        db.invoke_on_all([&proxy, &sys_ks, &storage_mode] (replica::database& db) {
+        // Shard 0 first, under the token_metadata lock that every ring version change takes: the other shards
+        // must find and clone its maps, since only shard 0's token_metadata has the topology change info.
+        SCYLLA_ASSERT(this_shard_id() == 0);
+        auto tmlock = db.local().get_shared_token_metadata().get_lock().get();
+        auto parse = [&proxy, &sys_ks, &storage_mode] (replica::database& db) {
             return db.parse_system_tables(proxy, sys_ks, storage_mode);
-        }).get();
+        };
+        parse(db.local()).get();
+        db.invoke_on_others(parse).get();
+        tmlock.return_all();
 
         const auto& cfg = db.local().get_config();
 
