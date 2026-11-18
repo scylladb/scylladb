@@ -377,6 +377,24 @@ def test_large_data_guardrails_on_sc_table(cql, sc_keyspace):
         cql.execute(f"ALTER TABLE {table} WITH large_data_guardrails_enabled = false")
 
 
+def test_paxos_grace_seconds_on_sc_table(cql, sc_keyspace):
+    """
+    paxos_grace_seconds must be rejected for tables in strongly consistent
+    keyspaces, at CREATE TABLE and with ALTER TABLE. It only matters for
+    lightweight transactions, which these tables reject.
+    Reproduces SCYLLADB-2579.
+    """
+    error_msg = "paxos_grace_seconds is not supported in strongly consistent keyspaces"
+
+    with pytest.raises(ConfigurationException, match=error_msg):
+        cql.execute(f"CREATE TABLE {sc_keyspace}.{unique_name()} (pk int PRIMARY KEY, v int)"
+                    " WITH paxos_grace_seconds = 100")
+
+    with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, v int") as table:
+        with pytest.raises(ConfigurationException, match=error_msg):
+            cql.execute(f"ALTER TABLE {table} WITH paxos_grace_seconds = 100")
+
+
 @pytest.mark.parametrize("columns, options, error, message", [
     pytest.param("pk int PRIMARY KEY, c counter", "",
                  InvalidRequest, "counters are not supported in strongly consistent keyspaces", id="counter"),
@@ -388,6 +406,8 @@ def test_large_data_guardrails_on_sc_table(cql, sc_keyspace):
                  ConfigurationException, "Per-row TTL is not supported in strongly consistent keyspaces", id="ttl_tag"),
     pytest.param("pk int PRIMARY KEY, v int", "WITH large_data_guardrails_enabled = true",
                  ConfigurationException, "Large data guardrails are not supported in strongly consistent keyspaces", id="guardrails"),
+    pytest.param("pk int PRIMARY KEY, v int", "WITH paxos_grace_seconds = 100",
+                 ConfigurationException, "paxos_grace_seconds is not supported in strongly consistent keyspaces", id="paxos_grace_seconds"),
 ])
 def test_prepared_create_table_after_keyspace_recreated(cql, sc_keyspace, columns, options, error, message):
     """
