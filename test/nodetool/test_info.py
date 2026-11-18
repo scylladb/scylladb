@@ -4,7 +4,6 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 
-import random
 from typing import NamedTuple
 
 import pytest
@@ -14,23 +13,15 @@ from test.nodetool.utils import format_size
 
 
 class moving_average(NamedTuple):
-    rates: list[float]
-    mean_rate: float
     count: int
 
     def to_json(self):
         return {
-            'rates': self.rates,
-            'mean_rate': self.mean_rate,
             'count': self.count
         }
     @staticmethod
     def make(count=0):
-        # 1, 5, 15 minutes rates
-        rates = [random.random() for _ in (1, 5, 15)]
-        # the mean rate from startup
-        mean_rate = random.random()
-        return moving_average(rates, mean_rate, count)
+        return moving_average(count)
 
 
 class cache_metrics(NamedTuple):

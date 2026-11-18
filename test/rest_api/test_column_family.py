@@ -196,6 +196,49 @@ def test_sstables_total_disk_space_sanity(cql, this_dc, rest_api):
             print(f'Reported live size : {live_size}')
             assert live_size <= total_real_size
 
+# The latency histograms of the REST API are derived from the table's latency
+# histogram. Check that they count the writes and describe their distribution.
+def test_column_family_write_latency_histogram(cql, this_dc, rest_api):
+    ksdef = f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : '1' }}"
+    with new_test_keyspace(cql, ksdef) as test_keyspace:
+        with new_test_table(cql, test_keyspace, "a int, PRIMARY KEY (a)") as t:
+            test_table = t.split('.')[1]
+            writes = 50
+            for i in range(writes):
+                cql.execute(f"INSERT INTO {t} (a) VALUES ({i})")
+
+            resp = rest_api.send("GET", f"column_family/metrics/write/{test_keyspace}:{test_table}")
+            resp.raise_for_status()
+            assert resp.json() == writes
+
+            resp = rest_api.send("GET", f"column_family/metrics/write_latency/moving_average_histogram/{test_keyspace}:{test_table}")
+            resp.raise_for_status()
+            res = resp.json()
+            assert res["meter"] == {"count": writes}
+            hist = res["hist"]
+            assert hist["count"] == writes
+            assert hist["mean"] == pytest.approx(hist["sum"] / writes)
+            assert 0 < hist["min"] <= hist["max"]
+            assert set(hist) == {"count", "sum", "min", "max", "mean"}
+
+            # The total latency is in microseconds, like the histogram's sum
+            resp = rest_api.send("GET", f"column_family/metrics/write_latency/{test_keyspace}:{test_table}")
+            resp.raise_for_status()
+            assert resp.json() == hist["sum"]
+
+            # nodetool takes the latency percentiles from the estimated histogram
+            resp = rest_api.send("GET", f"column_family/metrics/write_latency/estimated_histogram/{test_keyspace}:{test_table}")
+            resp.raise_for_status()
+            res = resp.json()
+            assert sum(res["buckets"]) == writes
+            assert len(res["buckets"]) == len(res["bucket_offsets"])
+
+            for name in ["tombstone_scanned_histogram", "live_scanned_histogram"]:
+                resp = rest_api.send("GET", f"column_family/metrics/{name}/{test_keyspace}:{test_table}")
+                resp.raise_for_status()
+                assert resp.json()["count"] == 0
+
+
 # nodetool proxyhistograms reads these
 @pytest.mark.parametrize("name", ["read", "write", "range", "cas_read", "cas_write"])
 def test_storage_proxy_estimated_histogram(rest_api, name):

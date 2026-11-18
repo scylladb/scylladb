@@ -732,8 +732,8 @@ public:
                     auto& cache_stats = t->get_row_cache().stats();
                     res.hits += cache_stats.hits;
                     res.misses += cache_stats.misses;
-                    res.recent_reads_with_no_misses += cache_stats.reads_with_no_misses.rate().rates[0];
-                    res.recent_reads_with_misses += cache_stats.reads_with_misses.rate().rates[0];
+                    res.recent_reads_with_no_misses += cache_stats.reads_with_no_misses.rate().rate;
+                    res.recent_reads_with_misses += cache_stats.reads_with_misses.rate().rate;
                 });
                 return res;
             }, stats{}, stats::reduce).then([] (stats s) {

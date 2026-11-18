@@ -767,7 +767,7 @@ SEASTAR_TEST_CASE(test_local_secondary_index) {
 
         auto get_local_index_read_count = [&] {
             return e.db().map_reduce0([] (replica::database& local_db) {
-                return local_db.find_column_family("ks", "local_t_v1_index").get_stats().reads.hist.count;
+                return local_db.find_column_family("ks", "local_t_v1_index").get_stats().reads.histogram().count();
             }, 0, std::plus<int64_t>()).get();
         };
 
@@ -806,12 +806,12 @@ SEASTAR_TEST_CASE(test_local_and_global_secondary_index) {
 
         auto get_local_index_read_count = [&] {
             return e.db().map_reduce0([] (replica::database& local_db) {
-                return local_db.find_column_family("ks", "local_t_v1_index").get_stats().reads.hist.count;
+                return local_db.find_column_family("ks", "local_t_v1_index").get_stats().reads.histogram().count();
             }, 0, std::plus<int64_t>()).get();
         };
         auto get_global_index_read_count = [&] {
             return e.db().map_reduce0([] (replica::database& local_db) {
-                return local_db.find_column_family("ks", "global_t_v1_index").get_stats().reads.hist.count;
+                return local_db.find_column_family("ks", "global_t_v1_index").get_stats().reads.histogram().count();
             }, 0, std::plus<int64_t>()).get();
         };
 
