@@ -233,6 +233,7 @@ Unlike schema-only guardrails, large data guardrails are enabled per table:
 If ``large_data_guardrails_enabled`` is ``false`` or omitted, writes to that
 table are not checked by the large data guardrails. The option can be used only
 after all nodes in the cluster support the ``LARGE_DATA_GUARDRAILS`` feature.
+It cannot be enabled in keyspaces with :ref:`strong consistency <consistency-option>`.
 
 The global thresholds are live-updateable configuration parameters. A value of
 ``0`` disables a hard-limit threshold. Soft-limit thresholds use the existing
