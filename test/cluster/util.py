@@ -9,6 +9,7 @@ Test consistency of schema changes with topology changes.
 import asyncio
 import logging
 import functools
+import json
 import math
 import operator
 import os
@@ -931,3 +932,26 @@ async def set_cluster_config(manager: ScyllaClusterManager, cql, servers: list[S
     await wait_for_config_map_value_on_hosts(cql, hosts, CLUSTER_CONFIGS_QUERY, [], name, value)
     for log, mark in zip(logs, marks):
         await log.wait_for(rf"Refreshed cluster config cache.*\b{name}={value}\b", from_mark=mark, timeout=60)
+
+
+async def truncate_auto_snapshot_dir(manager: ScyllaClusterManager, server: ServerInfo, ks: str, cf: str, tablet_count: int) -> str:
+    """Returns the directory of the auto snapshot the TRUNCATE of the strongly consistent table
+    `ks.cf` left on `server`, checking that its manifest lists all `tablet_count` tablets.
+
+    The topology coordinator has every replica take the snapshot before it commits the
+    truncate entries, so it is complete once TRUNCATE returns. It is named like an eventually
+    consistent table's, '<time>-<table>'."""
+    workdir = await manager.server_get_workdir(server.server_id)
+    ks_dir = os.path.join(workdir, "data", ks)
+    cf_dirs = [e for e in os.listdir(ks_dir) if e.startswith(f"{cf}-")]
+    assert len(cf_dirs) == 1, f"expected exactly one data directory of {ks}.{cf}, got {cf_dirs}"
+    snapshots_dir = os.path.join(ks_dir, cf_dirs[0], "snapshots")
+    names = [n for n in os.listdir(snapshots_dir) if n.endswith(f"-{cf}")] if os.path.isdir(snapshots_dir) else []
+    assert len(names) == 1, f"expected one auto snapshot of the truncate of {ks}.{cf} on {server.ip_addr}, got {names}"
+    snapshot_dir = os.path.join(snapshots_dir, names[0])
+    with open(os.path.join(snapshot_dir, "manifest.json")) as f:
+        manifest = json.load(f)
+    tablets = sorted(t["id"] for t in manifest["tablets"])
+    logger.debug("snapshot %s of %s.%s on %s lists tablets %s, files %s", names[0], ks, cf, server.ip_addr, tablets, sorted(os.listdir(snapshot_dir)))
+    assert len(tablets) == tablet_count, f"the snapshot {snapshot_dir} lists tablets {tablets}, expected {tablet_count} of them"
+    return snapshot_dir

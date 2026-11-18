@@ -4184,6 +4184,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
 
     future<> handle_truncate_table(group0_guard guard) {
         std::string ks_name, cf_name;
+        lw_shared_ptr<replica::table> table;
+        db_clock::time_point start_time;
         auto desc = [&] {
             return fmt::format("TRUNCATE on table {}.{}", ks_name, cf_name);
         };
@@ -4191,11 +4193,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         co_await handle_topology_ordered_op(std::move(guard)
             , [&](const db::system_keyspace::topology_requests_entry& topology_requests_entry) {
                 const table_id& id = topology_requests_entry.truncate_table_id;
-                lw_shared_ptr<replica::table> table = _db.get_tables_metadata().get_table_if_exists(id);
+                table = _db.get_tables_metadata().get_table_if_exists(id);
 
                 if (table) {
                     ks_name = table->schema()->ks_name();
                     cf_name = table->schema()->cf_name();
+                    start_time = topology_requests_entry.start_time;
 
                     rtlogger.info("Performing TRUNCATE TABLE for {}.{}", ks_name, cf_name);
 
@@ -4208,7 +4211,31 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 const table_id id = *tables.begin();
                 if (tm->tablets().get_tablet_map(id).has_raft_info()) {
                     // A strongly consistent table: the truncate is an entry in the raft log of each
-                    // tablet, where its position decides which writes survive it.
+                    // tablet, where its position decides which writes survive it. The auto snapshot
+                    // comes first, taken on every replica like any other table's truncate takes its
+                    // own, and no entry is committed until every replica has it: a replica that
+                    // can't take it fails the request, which is retried, and nothing is dropped
+                    // meanwhile. The writes committed between the snapshot and a tablet's entry
+                    // are dropped without being in the snapshot, as the writes concurrent with any
+                    // other table's truncate are. The snapshot is named after the request's start
+                    // time, so a retry, or a re-driven request after a coordinator crash, finds the
+                    // snapshot of the earlier run and keeps it.
+                    if (_db.get_config().auto_snapshot() && table->get_storage_options().is_local_type()) {
+                        const auto snapshot_name = format("{:d}-{}", start_time.time_since_epoch().count(), cf_name);
+                        const auto created_at = gc_clock::from_time_t(db_clock::to_time_t(start_time));
+                        std::optional<gc_clock::time_point> expiry;
+                        if (const auto ttl = _db.get_config().auto_snapshot_ttl()) {
+                            // One second for the resolution of created_at, as in truncate_table_on_all_shards().
+                            expiry = created_at + (ttl + 1) * 1s;
+                        }
+                        rtlogger.info("Taking the auto snapshot {} of {}.{} on every replica before its truncate", snapshot_name, ks_name, cf_name);
+                        co_await send_to_tablet_replica_hosts(tables, desc, [&] (locator::host_id host) {
+                            return ser::groups_manager_rpc_verbs::send_snapshot_before_truncate(&_messaging, host, _as,
+                                    raft::server_id(host.uuid()), id, snapshot_name, created_at, expiry, frozen_guard);
+                        });
+                    } else {
+                        rtlogger.info("Truncating {}.{} without auto-snapshot", ks_name, cf_name);
+                    }
                     co_await truncate_strongly_consistent_table(id, std::move(tm), frozen_guard, request_id);
                     co_return;
                 }

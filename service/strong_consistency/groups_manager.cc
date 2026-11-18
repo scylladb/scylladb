@@ -572,6 +572,16 @@ void groups_manager::init_messaging_service() {
             });
         }
     );
+    ser::groups_manager_rpc_verbs::register_snapshot_before_truncate(&_ms,
+        [this] (raft::server_id dst_id, table_id table, sstring snapshot_name, gc_clock::time_point created_at,
+                std::optional<gc_clock::time_point> expiry, service::frozen_topology_guard frozen_guard) -> future<> {
+            if (_raft_gr.get_my_raft_id() != dst_id) {
+                throw raft_destination_id_not_correct{_raft_gr.get_my_raft_id(), dst_id};
+            }
+            topology_guard guard(frozen_guard);
+            co_await snapshot_before_truncate(table, std::move(snapshot_name), created_at, expiry, guard.abort_source());
+        }
+    );
 }
 
 future<> groups_manager::uninit_messaging_service() {
@@ -1335,6 +1345,72 @@ future<> groups_manager::wait_for_committed_writes_on_shard(table_id table, std:
                     "a snapshot taken now may miss writes acked right before it", tablet, gid, std::current_exception());
         }
     });
+}
+
+future<> groups_manager::read_barrier(table_id table, lowres_clock::duration timeout) {
+    const auto deadline = lowres_clock::now() + timeout;
+    co_await container().invoke_on_all([table, deadline] (groups_manager& gm) {
+        return gm.read_barrier_on_shard(table, deadline);
+    });
+}
+
+future<> groups_manager::read_barrier_on_shard(table_id table, lowres_clock::time_point deadline) {
+    if (!_features.strongly_consistent_tables || !_started) {
+        co_return;
+    }
+    const auto tm = _db.get_token_metadata_ptr();
+    const auto& tablets = tm->tablets();
+    if (!tablets.has_tablet_map(table) || !tablets.get_tablet_map(table).has_raft_info()) {
+        co_return;
+    }
+    const auto& tmap = tablets.get_tablet_map(table);
+    const locator::tablet_replica this_replica{.host = tm->get_my_id(), .shard = this_shard_id()};
+
+    std::vector<std::pair<global_tablet_id, raft::group_id>> groups;
+    for (const auto tid : tmap.tablet_ids()) {
+        if (hosts_raft_group(tmap.get_tablet_info(tid), tmap.get_tablet_transition_info(tid), this_replica)) {
+            groups.emplace_back(global_tablet_id{table, tid}, tmap.get_tablet_raft_info(tid).group_id);
+        }
+        co_await coroutine::maybe_yield();
+    }
+    logger.debug("read_barrier({}): {} groups", table, groups.size());
+
+    co_await coroutine::parallel_for_each(groups, [&] (const auto& entry) -> future<> {
+        const auto [tablet, gid] = entry;
+        // As in wait_for_committed_writes_on_shard(): a group not started here yet, or going
+        // away with its tablet, has nothing of the tablet to apply here.
+        const auto git = _raft_groups.find(gid);
+        if (git == _raft_groups.end() || git->second.gate->is_closed()) {
+            logger.debug("read_barrier({}): group {} of tablet {} not started or stopping, skipping", table, gid, tablet);
+            co_return;
+        }
+        abort_on_expiry aoe(deadline);
+        try {
+            const auto server = co_await acquire_server(table, gid, aoe.abort_source());
+            co_await server.server().read_barrier(&aoe.abort_source());
+        } catch (const raft::stopped_error&) {
+            logger.debug("read_barrier({}): group {} of tablet {} stopped, skipping", table, gid, tablet);
+        } catch (...) {
+            std::throw_with_nested(std::runtime_error(fmt::format("read barrier of tablet {} (raft group {}) failed", tablet, gid)));
+        }
+    });
+}
+
+future<> groups_manager::snapshot_before_truncate(table_id table, sstring snapshot_name, gc_clock::time_point created_at,
+        std::optional<gc_clock::time_point> expiry, abort_source& as) {
+    const auto s = _db.find_schema(table);
+    if (const auto dir = co_await _db.find_snapshot_dir(s->ks_name(), s->cf_name(), snapshot_name);
+            dir && co_await file_exists((*dir / "manifest.json").native())) {
+        logger.info("snapshot {} of {}.{} exists, taken by an earlier run of the truncate request; keeping it",
+                snapshot_name, s->ks_name(), s->cf_name());
+        co_return;
+    }
+    logger.info("Taking the auto snapshot {} of {}.{} before its truncate", snapshot_name, s->ks_name(), s->cf_name());
+    co_await read_barrier(table);
+    // Flushes, after making the replicas apply what they know is committed, which the
+    // barrier above just made everything committed so far.
+    const db::snapshot_options opts{.skip_flush = false, .created_at = created_at, .expires_at = expiry};
+    co_await replica::database::snapshot_table_on_all_shards(_db.container(), table, std::move(snapshot_name), opts);
 }
 
 future<> groups_manager::refresh_leader_timestamp(global_tablet_id tablet) {

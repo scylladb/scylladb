@@ -268,6 +268,9 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     // The shard's part of wait_for_committed_writes().
     future<> wait_for_committed_writes_on_shard(table_id table, std::optional<locator::tablet_id> tablet, lowres_clock::duration timeout);
 
+    // The shard's part of read_barrier().
+    future<> read_barrier_on_shard(table_id table, lowres_clock::time_point deadline);
+
     // The shard's part of refresh_leader_timestamp().
     void refresh_leader_timestamp_on_shard(locator::global_tablet_id tablet);
 
@@ -394,6 +397,22 @@ public:
     // shard: a restore of one tablet needs no other tablet's writes applied.
     future<> wait_for_committed_writes(table_id table, std::optional<locator::tablet_id> tablet = std::nullopt,
             lowres_clock::duration timeout = committed_writes_wait_timeout);
+
+    // Makes this node's replicas of the table's strongly consistent tablets apply every write
+    // their raft groups have committed, on every shard: a read barrier per group, which learns
+    // the commit index from the leader, unlike wait_for_committed_writes(). Fails if a group
+    // can't complete it (no leader, no quorum) by the deadline. Runs on any shard.
+    future<> read_barrier(table_id table, lowres_clock::duration timeout = committed_writes_wait_timeout);
+
+    // The auto snapshot of a TRUNCATE of the strongly consistent table, taken on this node by
+    // the topology coordinator's request before it commits the truncate entries, see
+    // topology_coordinator::handle_truncate_table(). A read barrier first, so that every copy
+    // holds the writes acked before the TRUNCATE; then the same snapshot any table's truncate
+    // takes, flush included. A snapshot of that name with a manifest is left alone: an earlier
+    // run of the request, before a coordinator crash, took it, maybe before some entries were
+    // committed, and this run would list the truncated tablets as empty.
+    future<> snapshot_before_truncate(table_id table, sstring snapshot_name, gc_clock::time_point created_at,
+            std::optional<gc_clock::time_point> expiry, abort_source& as);
 
     // Moves the clock of this node's leader of the tablet's raft group, if any, past the
     // data the tablet holds, after a tablet-aware restore attached sstables to it outside
