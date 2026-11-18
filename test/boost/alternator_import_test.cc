@@ -331,6 +331,85 @@ SEASTAR_TEST_CASE(test_import_into_new_table) {
     }, import_test_config());
 }
 
+// Items which fail the validation of PutItem are counted and skipped. A line which is not JSON, or
+// is JSON without an Item member, also ends the reading of its object, as in DynamoDB. The import
+// ends as FAILED with ItemValidationError, and keeps the valid items.
+SEASTAR_TEST_CASE(test_import_counts_invalid_items) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        alternator_test_executor exec;
+        exec.start(e);
+        auto stop_exec = defer([&] noexcept { try { exec.stop(); } catch (...) { std::terminate(); } });
+
+        exec.set_source({
+            // Invalid items do not end the reading of their object.
+            {"0", item_line("good", 1, "v")
+                    + R"({"Item": {"c": {"N": "1"}}})" "\n"                           // missing hash key
+                    + R"({"Item": {"p": {"S": "x"}, "c": {"S": "1"}}})" "\n"          // sort key of a wrong type
+                    + R"({"Item": {"p": {"S": "x"}, "c": {"N": "1"}, "": {"S": "v"}}})" "\n" // empty attribute name
+                    + item_line("good", 2, "v")},
+            // Not JSON: the rest of the object is skipped.
+            {"1", R"({"Item": )" "\n" + item_line("skipped", 1, "v")},
+            // No Item member: the rest of the object is skipped.
+            {"2", R"({"NotAnItem": {}})" "\n" + item_line("skipped", 2, "v")},
+            {"3", item_line("good", 3, "v")},
+        });
+
+        auto response = exec.import_table_successfully(make_import_table_request("invalid_items", "token-invalid-items"));
+        auto row = wait_for_import(e, sstring(get_string(rjson::get(response, "ImportTableDescription"), "ImportArn")));
+        BOOST_REQUIRE_EQUAL(row.import_status, "FAILED");
+        BOOST_REQUIRE_EQUAL(row.failure_code.value_or(""), "ItemValidationError");
+        BOOST_REQUIRE_EQUAL(row.error_count, 5);
+        BOOST_REQUIRE_EQUAL(row.imported_item_count, 3);
+        BOOST_REQUIRE_EQUAL(row.processed_item_count, row.imported_item_count + row.error_count);
+
+        for (auto c : {"1", "2", "3"}) {
+            BOOST_REQUIRE(exec.get_item("invalid_items", "good", c));
+        }
+        BOOST_REQUIRE(!exec.get_item("invalid_items", "skipped", "1"));
+        BOOST_REQUIRE(!exec.get_item("invalid_items", "skipped", "2"));
+        // A failed import leaves its table usable, and ACTIVE.
+        auto described = std::get<rjson::value>(exec.describe_table("invalid_items"));
+        BOOST_REQUIRE_EQUAL(get_string(rjson::get(described, "Table"), "TableStatus"), "ACTIVE");
+    }, import_test_config());
+}
+
+// Compresses `content` into a gzip stream (windowBits 16 + MAX_WBITS selects the gzip format).
+static std::string gzip_compress(std::string_view content) {
+    z_stream zs = {};
+    BOOST_REQUIRE_EQUAL(deflateInit2(&zs, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 16 + MAX_WBITS, 8, Z_DEFAULT_STRATEGY), Z_OK);
+    std::string compressed(deflateBound(&zs, content.size()), '\0');
+    zs.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(content.data()));
+    zs.avail_in = content.size();
+    zs.next_out = reinterpret_cast<Bytef*>(compressed.data());
+    zs.avail_out = compressed.size();
+    BOOST_REQUIRE_EQUAL(deflate(&zs, Z_FINISH), Z_STREAM_END);
+    compressed.resize(compressed.size() - zs.avail_out);
+    deflateEnd(&zs);
+    return compressed;
+}
+
+// An object which is not a gzip stream counts as one error, and the other objects are still
+// imported.
+SEASTAR_TEST_CASE(test_import_corrupt_gzip_object) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        alternator_test_executor exec;
+        exec.start(e);
+        auto stop_exec = defer([&] noexcept { try { exec.stop(); } catch (...) { std::terminate(); } });
+
+        exec.set_source({{"0", "this is not a gzip stream\n"}, {"1", gzip_compress(item_line("g", 1, "x"))}});
+        auto request = make_import_table_request("corrupt_gzip", "token-corrupt-gzip");
+        rjson::add(request, "InputCompressionType", rjson::from_string("GZIP"));
+        auto response = exec.import_table_successfully(std::move(request));
+        auto row = wait_for_import(e, sstring(get_string(rjson::get(response, "ImportTableDescription"), "ImportArn")));
+        BOOST_REQUIRE_EQUAL(row.import_status, "FAILED");
+        BOOST_REQUIRE_EQUAL(row.failure_code.value_or(""), "ItemValidationError");
+        BOOST_REQUIRE_EQUAL(row.error_count, 1);
+        BOOST_REQUIRE_EQUAL(row.processed_item_count, 1);
+        BOOST_REQUIRE_EQUAL(row.imported_item_count, 1);
+        BOOST_REQUIRE(exec.get_item("corrupt_gzip", "g", "1"));
+    }, import_test_config());
+}
+
 // An import of a GZIP source: ProcessedSizeBytes counts the decompressed bytes.
 SEASTAR_TEST_CASE(test_import_gzip) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
