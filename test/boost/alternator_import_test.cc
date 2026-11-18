@@ -142,6 +142,11 @@ public:
         alternator::rmw_operation::default_write_isolation = _saved_write_isolation;
     }
 
+    // Makes the executor refuse new work, as the server does when it starts to shut down.
+    void request_stop() {
+        _exec.invoke_on_all(&alternator::executor::request_stop).get();
+    }
+
     std::variant<rjson::value, alternator::api_error> import_table(rjson::value request) {
         return call(&alternator::executor::import_table, std::move(request));
     }
@@ -250,6 +255,35 @@ void check_import_row_ttl(cql_test_env& e, std::string_view import_arn, std::chr
 
 } // anonymous namespace
 
+// Reading S3 is not implemented yet, so the default source fails as soon as it is made, and the
+// import fails with NotImplemented without creating a table.
+SEASTAR_TEST_CASE(test_import_source_failure_creates_no_table) {
+    return with_import_executor([] (cql_test_env& e, alternator_test_executor& exec) {
+        auto response = exec.import_table_successfully(make_import_table_request("no_source", "token-no-source"));
+        auto row = wait_for_import(e, response);
+        BOOST_REQUIRE_EQUAL(row.import_status, "FAILED");
+        BOOST_REQUIRE_EQUAL(row.failure_code.value_or(""), "NotImplemented");
+        BOOST_REQUIRE_EQUAL(row.processed_item_count, 0);
+        auto description = alternator::make_import_table_description(row);
+        BOOST_REQUIRE(rjson::find(description, "FailureMessage"));
+        BOOST_REQUIRE(std::holds_alternative<alternator::api_error>(exec.describe_table("no_source")));
+    });
+}
+
+// While the node shuts down, ImportTable refuses a new import with an error which the client
+// retries, and writes no rows, so that the ClientToken stays free for the retry.
+SEASTAR_TEST_CASE(test_import_refused_at_shutdown) {
+    return with_import_executor([] (cql_test_env& e, alternator_test_executor& exec) {
+        exec.request_stop();
+        auto result = exec.import_table(make_import_table_request("at_shutdown", "token-at-shutdown"));
+        auto* err = std::get_if<alternator::api_error>(&result);
+        BOOST_REQUIRE(err);
+        BOOST_REQUIRE_EQUAL(err->_type, "InternalServerError");
+        db::alternator_import_table_helper helper(e.qp().local());
+        BOOST_REQUIRE(!helper.get_client_token("token-at-shutdown").get());
+    });
+}
+
 // A request which CreateTable would refuse because of the keyspace of the new table - here a
 // vector index in a keyspace using vnodes - is refused when it is made, and writes no rows.
 SEASTAR_TEST_CASE(test_import_refuses_what_create_table_refuses) {
@@ -317,7 +351,7 @@ SEASTAR_TEST_CASE(test_import_take_import_checks_counters) {
 // allocated when the import was accepted, also when no table of that name exists.
 SEASTAR_TEST_CASE(test_import_client_token_replay_before_import_row) {
     return with_import_executor([] (cql_test_env& e, alternator_test_executor& exec) {
-        // The import fails without creating the table.
+        // The default source fails the import before it creates the table.
         auto request = make_import_table_request("no_import_row", "token-no-import-row");
         auto response = exec.import_table_successfully(rjson::copy(request));
         const auto& description = rjson::get(response, "ImportTableDescription");
