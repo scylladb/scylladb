@@ -1565,6 +1565,38 @@ static double s3_delete_requests() {
     return sum_s3_metric("s3_total_delete_requests").value_or(0);
 }
 
+// 150 objects fill no page exactly, so the count can't depend on how the server flags an exact fit.
+static void client_list_objects_round_trips(const client_maker_function& client_maker) {
+    s3_test_fixture guard(client_maker);
+    auto client = guard.client();
+    const sstring& bucket = guard.bucket();
+    const sstring prefix("roundtrips/");
+    const auto names = populate_bucket(client, bucket, prefix, 150);
+    auto gets = [] { return sum_s3_metric("s3_total_get_requests").value_or(0); };
+    auto drain = [&] (s3::client::bucket_lister& lister) {
+        auto close_lister = deferred_close(lister);
+        auto left = names;
+        while (auto de = lister.get().get()) {
+            BOOST_REQUIRE(left.erase(de->name));
+        }
+        BOOST_REQUIRE(left.empty());
+    };
+
+    auto before = gets();
+    s3::client::bucket_lister by_default(client, bucket, prefix);
+    drain(by_default);
+    BOOST_REQUIRE_EQUAL(gets() - before, 3); // ceil(150 / 64), the default page size
+
+    before = gets();
+    s3::client::bucket_lister max_page(client, bucket, prefix, 1000);
+    drain(max_page);
+    BOOST_REQUIRE_EQUAL(gets() - before, 1);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_client_list_objects_round_trips_s3) {
+    client_list_objects_round_trips(make_s3_client);
+}
+
 // The jumbo sink starts its own multipart upload only when it hands the first
 // piece over. If the abort comes before that, the start fails, and the piece,
 // which already has a multipart upload of its own, must still be closed: close()
