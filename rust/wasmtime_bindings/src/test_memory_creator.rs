@@ -8,8 +8,6 @@
 
 use crate::memory_creator::ScyllaMemoryCreator;
 use anyhow::{anyhow, Result};
-use std::ops::Range;
-use std::ptr;
 use wasmtime::LinearMemory;
 
 // The implementation below adds a conditional failure of an allocation
@@ -29,8 +27,8 @@ unsafe impl LinearMemory for TestScyllaLinearMemory {
     fn byte_size(&self) -> usize {
         self.memory.byte_size()
     }
-    fn maximum_byte_size(&self) -> Option<usize> {
-        self.memory.maximum_byte_size()
+    fn byte_capacity(&self) -> usize {
+        self.memory.byte_capacity()
     }
     fn grow_to(&mut self, new_size: usize) -> Result<()> {
         let old_ptr = self.memory.as_ptr();
@@ -40,7 +38,7 @@ unsafe impl LinearMemory for TestScyllaLinearMemory {
         // in a test case where we finish the test immediately after the failure
         self.memory.grow_to(new_size)?;
         let new_ptr = self.memory.as_ptr();
-        if old_ptr != new_ptr && new_ptr != ptr::null_mut() {
+        if old_ptr != new_ptr && self.memory.byte_size() != 0 {
             // We needed to actually perform an allocation, so we could have failed
             let failed = self.allocs == self.fail_after;
             self.allocs += 1;
@@ -52,9 +50,6 @@ unsafe impl LinearMemory for TestScyllaLinearMemory {
     }
     fn as_ptr(&self) -> *mut u8 {
         self.memory.as_ptr()
-    }
-    fn wasm_accessible(&self) -> Range<usize> {
-        self.memory.wasm_accessible()
     }
 }
 

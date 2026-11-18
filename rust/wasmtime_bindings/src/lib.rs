@@ -233,9 +233,9 @@ impl wasmtime::ResourceLimiter for Limiter {
         self.memories_size -= self.last_memory_growth;
         Ok(())
     }
-    fn table_growing(&mut self, current: u32, desired: u32, _maximum: Option<u32>) -> Result<bool> {
+    fn table_growing(&mut self, current: usize, desired: usize, _maximum: Option<usize>) -> Result<bool> {
         Ok(Limiter::grow(self.max_size, &mut self.tables_size, &mut self.last_table_growth,
-                (current as usize).saturating_mul(TABLE_ELEMENT_SIZE), (desired as usize).saturating_mul(TABLE_ELEMENT_SIZE)))
+                current.saturating_mul(TABLE_ELEMENT_SIZE), desired.saturating_mul(TABLE_ELEMENT_SIZE)))
     }
     fn table_grow_failed(&mut self, _error: anyhow::Error) -> Result<()> {
         self.tables_size -= self.last_table_growth;
@@ -327,6 +327,9 @@ fn create_engine(max_size: u32) -> Result<Box<Engine>> {
     let mut config = wasmtime::Config::new();
     config.async_support(true);
     config.consume_fuel(true);
+    // Our UDF ABI and ScyllaMemoryCreator support only 32-bit memories, so
+    // reject modules with 64-bit memories (memory64 is enabled by default)
+    config.wasm_memory64(false);
     config.wasm_reference_types(true);
     config.allocation_strategy(wasmtime::InstanceAllocationStrategy::OnDemand);
     // ScyllaMemoryCreator uses malloc (from seastar) to allocate linear memory
@@ -334,9 +337,12 @@ fn create_engine(max_size: u32) -> Result<Box<Engine>> {
         max_size as usize,
     )));
     // The following configuration settings make wasmtime allocate only as much memory as it needs
-    config.static_memory_maximum_size(0);
-    config.dynamic_memory_reserved_for_growth(0);
-    config.dynamic_memory_guard_size(0);
+    config.memory_reservation(0);
+    config.memory_reservation_for_growth(0);
+    config.memory_guard_size(0);
+    // Copy-on-write memory initialization requires mmap-based memories,
+    // but ScyllaMemoryCreator allocates memory with malloc
+    config.memory_init_cow(false);
     config.max_wasm_stack(128 * 1024);
     config.async_stack_size(256 * 1024);
 
@@ -352,15 +358,21 @@ fn create_test_engine(max_size: u32, fail_after: usize) -> Result<Box<Engine>> {
     let mut config = wasmtime::Config::new();
     config.async_support(true);
     config.consume_fuel(true);
+    // Our UDF ABI and ScyllaMemoryCreator support only 32-bit memories, so
+    // reject modules with 64-bit memories (memory64 is enabled by default)
+    config.wasm_memory64(false);
     // ScyllaMemoryCreator uses malloc (from seastar) to allocate linear memory
     config.with_host_memory(std::sync::Arc::new(TestScyllaMemoryCreator::new(
         max_size as usize,
         fail_after,
     )));
     // The following configuration settings make wasmtime allocate only as much memory as it needs
-    config.static_memory_maximum_size(0);
-    config.dynamic_memory_reserved_for_growth(0);
-    config.dynamic_memory_guard_size(0);
+    config.memory_reservation(0);
+    config.memory_reservation_for_growth(0);
+    config.memory_guard_size(0);
+    // Copy-on-write memory initialization requires mmap-based memories,
+    // but ScyllaMemoryCreator allocates memory with malloc
+    config.memory_init_cow(false);
     config.max_wasm_stack(128 * 1024);
     config.async_stack_size(256 * 1024);
 
@@ -404,6 +416,8 @@ impl Val {
             wasmtime::Val::FuncRef(_) => Ok(ffi::ValKind::FuncRef),
             wasmtime::Val::ExternRef(_) => Ok(ffi::ValKind::ExternRef),
             wasmtime::Val::AnyRef(_) => Ok(ffi::ValKind::AnyRef),
+            // Exception references require the exceptions proposal, which we don't enable
+            wasmtime::Val::ExnRef(_) => Err(anyhow!("Unsupported value kind: exnref")),
         }
     }
     fn i32(&self) -> Result<i32> {
