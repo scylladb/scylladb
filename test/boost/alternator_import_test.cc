@@ -377,21 +377,83 @@ SEASTAR_TEST_CASE(test_import_into_new_table) {
     });
 }
 
+// Items which fail the validation of PutItem are counted and skipped. A line which is not JSON, or
+// is JSON without an Item member, also ends the reading of its object, as in DynamoDB. The import
+// ends as FAILED with ItemValidationError, and keeps the valid items.
+SEASTAR_TEST_CASE(test_import_counts_invalid_items) {
+    return with_import_executor([] (cql_test_env& e, alternator_test_executor& exec) {
+        exec.set_source({
+            // Invalid items do not end the reading of their object.
+            {"0", item_line("good", 1, "v")
+                    + R"({"Item": {"c": {"N": "1"}}})" "\n"                           // missing hash key
+                    + R"({"Item": {"p": {"S": "x"}, "c": {"S": "1"}}})" "\n"          // sort key of a wrong type
+                    + R"({"Item": {"p": {"S": "x"}, "c": {"N": "1"}, "": {"S": "v"}}})" "\n" // empty attribute name
+                    + R"({"Item": 5})" "\n"                                           // Item is not an object
+                    + item_line("good", 2, "v")},
+            // Not JSON: the rest of the object is skipped.
+            {"1", R"({"Item": )" "\n" + item_line("skipped", 1, "v")},
+            // No Item member: the rest of the object is skipped.
+            {"2", R"({"NotAnItem": {}})" "\n" + item_line("skipped", 2, "v")},
+            {"3", item_line("good", 3, "v")},
+        });
+
+        auto response = exec.import_table_successfully(make_import_table_request("invalid_items", "token-invalid-items"));
+        auto row = wait_for_import(e, response);
+        BOOST_REQUIRE_EQUAL(row.import_status, "FAILED");
+        BOOST_REQUIRE_EQUAL(row.failure_code.value_or(""), "ItemValidationError");
+        BOOST_REQUIRE_EQUAL(row.error_count, 6);
+        BOOST_REQUIRE_EQUAL(row.imported_item_count, 3);
+        BOOST_REQUIRE_EQUAL(row.processed_item_count, row.imported_item_count + row.error_count);
+
+        for (auto c : {"1", "2", "3"}) {
+            BOOST_REQUIRE(exec.get_item("invalid_items", "good", c));
+        }
+        BOOST_REQUIRE(!exec.get_item("invalid_items", "skipped", "1"));
+        BOOST_REQUIRE(!exec.get_item("invalid_items", "skipped", "2"));
+        // A failed import leaves its table usable, and ACTIVE.
+        auto described = std::get<rjson::value>(exec.describe_table("invalid_items"));
+        BOOST_REQUIRE_EQUAL(get_string(rjson::get(described, "Table"), "TableStatus"), "ACTIVE");
+    });
+}
+
+// Compresses `content` into a gzip stream (windowBits 16 + MAX_WBITS selects the gzip format).
+static std::string gzip_compress(std::string_view content) {
+    z_stream zs = {};
+    BOOST_REQUIRE_EQUAL(deflateInit2(&zs, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 16 + MAX_WBITS, 8, Z_DEFAULT_STRATEGY), Z_OK);
+    std::string compressed(deflateBound(&zs, content.size()), '\0');
+    zs.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(content.data()));
+    zs.avail_in = content.size();
+    zs.next_out = reinterpret_cast<Bytef*>(compressed.data());
+    zs.avail_out = compressed.size();
+    BOOST_REQUIRE_EQUAL(deflate(&zs, Z_FINISH), Z_STREAM_END);
+    compressed.resize(compressed.size() - zs.avail_out);
+    deflateEnd(&zs);
+    return compressed;
+}
+
+// An object which is not a gzip stream counts as one error, and the other objects are still
+// imported.
+SEASTAR_TEST_CASE(test_import_corrupt_gzip_object) {
+    return with_import_executor([] (cql_test_env& e, alternator_test_executor& exec) {
+        exec.set_source({{"0", "this is not a gzip stream\n"}, {"1", gzip_compress(item_line("g", 1, "x"))}});
+        auto request = make_import_table_request("corrupt_gzip", "token-corrupt-gzip");
+        rjson::add(request, "InputCompressionType", rjson::from_string("GZIP"));
+        auto response = exec.import_table_successfully(std::move(request));
+        auto row = wait_for_import(e, response);
+        BOOST_REQUIRE_EQUAL(row.import_status, "FAILED");
+        BOOST_REQUIRE_EQUAL(row.failure_code.value_or(""), "ItemValidationError");
+        BOOST_REQUIRE_EQUAL(row.error_count, 1);
+        BOOST_REQUIRE_EQUAL(row.processed_item_count, 1);
+        BOOST_REQUIRE_EQUAL(row.imported_item_count, 1);
+        BOOST_REQUIRE(exec.get_item("corrupt_gzip", "g", "1"));
+    });
+}
+
 // An import of a GZIP source: ProcessedSizeBytes counts the decompressed bytes.
 SEASTAR_TEST_CASE(test_import_gzip) {
     return with_import_executor([] (cql_test_env& e, alternator_test_executor& exec) {
         const std::string content = item_line("g", 1, "x") + "\n" + item_line("g", 2, "y");
-        z_stream zs = {};
-        BOOST_REQUIRE_EQUAL(deflateInit2(&zs, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 16 + MAX_WBITS, 8, Z_DEFAULT_STRATEGY), Z_OK);
-        std::string compressed(deflateBound(&zs, content.size()), '\0');
-        zs.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(content.data()));
-        zs.avail_in = content.size();
-        zs.next_out = reinterpret_cast<Bytef*>(compressed.data());
-        zs.avail_out = compressed.size();
-        BOOST_REQUIRE_EQUAL(deflate(&zs, Z_FINISH), Z_STREAM_END);
-        compressed.resize(compressed.size() - zs.avail_out);
-        deflateEnd(&zs);
-        exec.set_source({{"0", compressed}});
+        exec.set_source({{"0", gzip_compress(content)}});
 
         auto request = make_import_table_request("gzipped", "token-gzip");
         rjson::add(request, "InputCompressionType", rjson::from_string("GZIP"));
@@ -454,6 +516,24 @@ SEASTAR_TEST_CASE(test_import_into_existing_table_with_other_parameters) {
         BOOST_REQUIRE_EQUAL(row.imported_item_count, 2);
         BOOST_REQUIRE_EQUAL(exec.get_item_v("existing_other", "a", "1"), "x");
         BOOST_REQUIRE_EQUAL(exec.get_item_v("existing_other", "a", "2"), "y");
+    });
+}
+
+// The live table's schema governs an import into an existing table: an item with the key of the
+// request's TableCreationParameters, but without the key of the live table, is an item error.
+SEASTAR_TEST_CASE(test_import_into_existing_table_with_another_key) {
+    return with_import_executor([] (cql_test_env& e, alternator_test_executor& exec) {
+        exec.create_table(rjson::parse(R"({"TableName": "other_key", "BillingMode": "PAY_PER_REQUEST",
+                "AttributeDefinitions": [{"AttributeName": "id", "AttributeType": "S"}],
+                "KeySchema": [{"AttributeName": "id", "KeyType": "HASH"}]})"));
+        exec.set_source({{"0", item_line("a", 1, "x") + R"({"Item": {"id": {"S": "b"}}})" "\n"}});
+        auto response = exec.import_table_successfully(make_import_table_request("other_key", "token-other-key"));
+        auto row = wait_for_import(e, response);
+        BOOST_REQUIRE_EQUAL(row.import_status, "FAILED");
+        BOOST_REQUIRE_EQUAL(row.failure_code.value_or(""), "ItemValidationError");
+        BOOST_REQUIRE_EQUAL(row.processed_item_count, 2);
+        BOOST_REQUIRE_EQUAL(row.imported_item_count, 1);
+        BOOST_REQUIRE_EQUAL(row.error_count, 1);
     });
 }
 

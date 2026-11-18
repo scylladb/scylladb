@@ -497,6 +497,10 @@ static std::chrono::seconds import_write_retry_budget() {
     return std::chrono::minutes(10);
 }
 
+// Thrown by the item callback when the rest of an object is not to be read: as DynamoDB does,
+// after a line which is not an item.
+struct abandon_object {};
+
 // Runs one import, see executor::s3_imports. A member of s3_imports, so that it can use the
 // write path and the table creation of the executor.
 class executor::s3_imports::import_task {
@@ -519,6 +523,7 @@ class executor::s3_imports::import_task {
     import_pipeline_interface* _pipeline = nullptr;
     // The number of the current line of the current object.
     uint64_t _line = 0;
+    uint32_t _logged_errors = 0;
 
     // The batch being collected. An item with the key of an earlier one replaces it in place (see
     // _batch_positions, which maps the key of each item to its index): the last one wins.
@@ -533,6 +538,61 @@ class executor::s3_imports::import_task {
 
     uint64_t processed_size_bytes() const noexcept {
         return _bytes_of_read_objects + (_pipeline ? _pipeline->processed_size_bytes() : 0);
+    }
+
+    // A logged reason is cut at this length, so that a long value which it quotes - e.g. a
+    // malformed number, which can be as long as its line - does not flood the log.
+    static constexpr size_t max_logged_reason_length = 512;
+    // Returns the longest prefix of `s` of at most `max_length` bytes which does not end inside a
+    // UTF-8 sequence, so that the cut does not make a valid string invalid UTF-8.
+    static std::string_view truncate_at_utf8_boundary(std::string_view s, size_t max_length) {
+        if (s.size() <= max_length) {
+            return s;
+        }
+        size_t cut = max_length;
+        // A byte 0b10xxxxxx continues a UTF-8 sequence.
+        while (cut > 0 && (static_cast<unsigned char>(s[cut]) & 0xc0) == 0x80) {
+            --cut;
+        }
+        return s.substr(0, cut);
+    }
+    // Escapes as \xNN what could garble or forge a line of the log, as the object key and the
+    // reason come from the user's data: control characters, DEL, the backslash (so that the escaped
+    // form is unambiguous), and - if `s` is not valid UTF-8 - every non-ASCII byte.
+    static std::string escape_for_log(std::string_view s) {
+        const bool valid_utf8 = utils::utf8::validate(reinterpret_cast<const uint8_t*>(s.data()), s.size());
+        std::string escaped;
+        escaped.reserve(s.size());
+        for (char c : s) {
+            const auto u = static_cast<unsigned char>(c);
+            if (u < 0x20 || u == 0x7f || c == '\\' || (u >= 0x80 && !valid_utf8)) {
+                fmt::format_to(std::back_inserter(escaped), "\\x{:02x}", u);
+            } else {
+                escaped.push_back(c);
+            }
+        }
+        return escaped;
+    }
+    // Counts an error of the import (ErrorCount) - an item which fails the validation, a line which
+    // is not an item, or an object which cannot be read - and logs it with the object key and the
+    // line. The reason may quote a value of the item (e.g. a malformed number); it is logged anyway,
+    // cut at max_logged_reason_length and escaped by escape_for_log(). This is on purpose: the log
+    // is the only place where the user finds why an item was skipped - DynamoDB writes these errors
+    // to CloudWatch - and the object and line alone do not tell it.
+    // alternator_import_max_logged_item_errors limits how many are logged.
+    void count_error(std::string_view object_key, std::string_view reason) {
+        ++_row.error_count;
+        const auto max_logged = _e._proxy.data_dictionary().get_config().alternator_import_max_logged_item_errors();
+        if (_logged_errors < max_logged) {
+            ++_logged_errors;
+            ilogger.warn("Import {}: object {}, line {}: {}{}", _row.import_arn, escape_for_log(object_key), _line,
+                    escape_for_log(truncate_at_utf8_boundary(reason, max_logged_reason_length)),
+                    reason.size() > max_logged_reason_length ? "..." : "");
+            if (_logged_errors == max_logged) {
+                ilogger.warn("Import {}: {} errors were logged, the following ones are only counted "
+                        "(configuration variable alternator_import_max_logged_item_errors)", _row.import_arn, _logged_errors);
+            }
+        }
     }
 
     // The failure of an import whose table was dropped.
@@ -706,9 +766,9 @@ class executor::s3_imports::import_task {
                 }, false);
         const rjson::value* item = line.IsObject() ? rjson::find(line, "Item") : nullptr;
         if (!item) {
-            // FIXME: DynamoDB counts such a line in ErrorCount, and skips the rest of its object.
-            throw import_failure(std::string(failure_item_validation_error),
-                    fmt::format("Object {}, line {}: the line has no Item member", object_key, _line));
+            // As in DynamoDB, a line without an item ends the reading of its object.
+            count_error(object_key, "the line has no Item member, the rest of the object is skipped");
+            throw abandon_object();
         }
         std::optional<put_or_delete_item> builder;
         std::string error;
@@ -724,7 +784,7 @@ class executor::s3_imports::import_task {
         } catch (const api_error& e) {
             error = e._msg;
         } catch (const std::exception& e) {
-            // Other errors of the validation, e.g. a malformed number, are errors of the item too.
+            // Other errors of the validation, e.g. a malformed number, also skip only this item.
             error = e.what();
         }
         // The parsed line is not needed any more, and add_to_batch() may wait for writes.
@@ -732,9 +792,25 @@ class executor::s3_imports::import_task {
         if (builder) {
             co_await add_to_batch(std::move(*builder));
         } else {
-            // FIXME: DynamoDB skips an invalid item, counts it in ErrorCount and goes on.
-            throw import_failure(std::string(failure_item_validation_error),
-                    fmt::format("Object {}, line {}: {}", object_key, _line, error));
+            count_error(object_key, error);
+        }
+    }
+
+    // True for the failures which end the import, rather than only the reading of an object.
+    bool fails_the_import(std::exception_ptr ex) const {
+        if (_as.abort_requested()) {
+            return true;
+        }
+        try {
+            std::rethrow_exception(ex);
+        } catch (const import_failure&) {
+            return true;
+        } catch (const abort_requested_exception&) {
+            return true;
+        } catch (const std::bad_alloc&) {
+            return true;
+        } catch (...) {
+            return false;
         }
     }
 
@@ -742,6 +818,7 @@ class executor::s3_imports::import_task {
         if (object.size == 0) {
             co_return;
         }
+        _line = 0;
         std::unique_ptr<import_pipeline_interface> pipeline;
         std::exception_ptr ex;
         try {
@@ -756,6 +833,8 @@ class executor::s3_imports::import_task {
             auto read = co_await coroutine::as_future(pipeline->read_all());
             auto closed = co_await coroutine::as_future(pipeline->close());
             _bytes_of_read_objects += pipeline->processed_size_bytes();
+            // close() parses a last line without a newline: its number, for count_error().
+            _line = pipeline->processed_lines();
             _pipeline = nullptr;
             if (read.failed()) {
                 ex = read.get_exception();
@@ -764,10 +843,33 @@ class executor::s3_imports::import_task {
                 ex = closed.get_exception();
             }
         }
-        if (ex) {
-            // FIXME: DynamoDB counts an object which cannot be read, or a line which is not JSON, in
-            // ErrorCount, and skips the rest of the object.
+        if (!ex) {
+            co_return;
+        }
+        if (fails_the_import(ex)) {
             std::rethrow_exception(ex);
+        }
+        try {
+            std::rethrow_exception(ex);
+        } catch (const abandon_object&) {
+            // Already counted.
+        } catch (const rjson::error& e) {
+            // As in DynamoDB, a line which is not JSON counts as processed and as an error, and
+            // ends the reading of its object.
+            ++_row.processed_item_count;
+            count_error(object.key, fmt::format("the line is not valid JSON, the rest of the object is skipped: {}", e.what()));
+        } catch (const api_error& e) {
+            if (e._type == "PayloadTooLarge") {
+                // A line too long to be parsed is not an item either.
+                ++_row.processed_item_count;
+                count_error(object.key, fmt::format("the line is too long, the rest of the object is skipped: {}", e._msg));
+            } else {
+                // E.g. a corrupt gzip stream. The rest of the object cannot be read.
+                count_error(object.key, fmt::format("the object cannot be read, the rest of it is skipped: {}", e._msg));
+            }
+        } catch (...) {
+            // E.g. a failure to read the object. The rest of it cannot be read.
+            count_error(object.key, fmt::format("the object cannot be read, the rest of it is skipped: {}", std::current_exception()));
         }
     }
 
@@ -840,6 +942,13 @@ public:
                 ilogger.debug("Import {}: failed to write FAILING: {}", _row.import_arn, std::current_exception());
             }
             _row.import_status = sstring(import_status_failed);
+        } else if (_row.error_count) {
+            // Not through FAILING, which keeps a failure for the garbage collector: if this node stops
+            // before the final write, the import ends as ImportInterrupted.
+            _row.import_status = sstring(import_status_failed);
+            _row.failure_code = sstring(failure_item_validation_error);
+            _row.failure_message = "Some of the items failed validation checks and were not imported. "
+                    "Please check the ScyllaDB log for more details.";
         } else {
             _row.import_status = sstring(import_status_completed);
         }
