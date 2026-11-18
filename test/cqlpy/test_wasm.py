@@ -657,10 +657,17 @@ def get_metric(metrics, name, requested_labels=None, the_metrics=None):
         total += float(val)
     return total
 
+# A table for test_UDA. It checks aggregates over the whole table, so it can't
+# use the shared table1, which other tests write to.
+@pytest.fixture(scope="function")
+def uda_table(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p bigint PRIMARY KEY, i int, i2 int') as table:
+        yield table
+
 # Test that calling a wasm-based aggregate works.
 # The aggregate calculates the average of integers.
-def test_UDA(cql, test_keyspace, table1, scylla_with_wasm_only, metrics):
-    table = table1
+def test_UDA(cql, test_keyspace, uda_table, scylla_with_wasm_only, metrics):
+    table = uda_table
     sum_name = unique_name()
     sum_source = read_function_from_file('test_UDA_scalar', 'sum', sum_name)
     sum_src = f"(acc tuple<int, int>, input int) CALLED ON NULL INPUT RETURNS tuple<int,int> LANGUAGE wasm AS '{sum_source}'"
