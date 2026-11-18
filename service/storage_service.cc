@@ -7601,7 +7601,9 @@ future<> storage_service::notify_cql_change(inet_address endpoint, locator::host
     if (ready) {
         co_await notify_up(endpoint, hid);
     } else {
-        co_await notify_down(endpoint, hid, false);
+        co_await container().invoke_on_all([endpoint, hid] (auto&& ss) {
+            return ss._lifecycle_notifier.notify_down(endpoint, hid);
+        });
     }
 }
 
