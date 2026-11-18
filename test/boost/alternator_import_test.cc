@@ -1065,6 +1065,54 @@ SEASTAR_TEST_CASE(test_import_progress_and_takeover) {
     }, import_test_config());
 }
 
+// alternator_max_concurrent_imports_per_shard refuses a new import with LimitExceededException,
+// but a replay is still answered, and the slots are released when the imports end.
+SEASTAR_TEST_CASE(test_import_concurrency_limit) {
+    auto cfg = import_test_config();
+    cfg.db_config->alternator_max_concurrent_imports_per_shard.set(1);
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        alternator_test_executor exec;
+        exec.start(e);
+        auto stop_exec = defer([&] noexcept { try { exec.stop(); } catch (...) { std::terminate(); } });
+
+        constexpr auto pause = "alternator_import_from_s3_pause_in_item_handler";
+        utils::get_local_injector().enable_on_all(pause).get();
+        auto disable = defer([&] noexcept { utils::get_local_injector().disable_on_all(pause).get(); });
+        exec.set_source({{"0", item_line("a", 1, "x")}});
+
+        auto request = make_import_table_request("limited", "token-limited");
+        auto response = exec.import_table_successfully(rjson::copy(request));
+        const sstring import_arn(get_string(rjson::get(response, "ImportTableDescription"), "ImportArn"));
+        wait_until([&] { return utils::error_injection<true>::enter_count_on_all(pause).get() > 0; }, "the import to pause");
+
+        auto result = exec.import_table(make_import_table_request("limited_too", "token-limited-too"));
+        auto* err = std::get_if<alternator::api_error>(&result);
+        BOOST_REQUIRE(err);
+        BOOST_REQUIRE_EQUAL(err->_type, "LimitExceededException");
+        // A replay is answered at the limit too.
+        auto replay = exec.import_table_successfully(std::move(request));
+        BOOST_REQUIRE_EQUAL(get_string(rjson::get(replay, "ImportTableDescription"), "ImportArn"), import_arn);
+
+        utils::get_local_injector().disable_on_all(pause).get();
+        BOOST_REQUIRE_EQUAL(wait_for_import(e, import_arn).import_status, "COMPLETED");
+        // The import released its slot. The refused request held none and wrote no rows, so its
+        // ClientToken starts a new import now. The import writes its COMPLETED row before it
+        // releases the slot, so a request may still be refused for a moment.
+        std::optional<rjson::value> next;
+        wait_until([&] {
+            auto result = exec.import_table(make_import_table_request("limited_too", "token-limited-too"));
+            if (auto* err = std::get_if<alternator::api_error>(&result)) {
+                BOOST_REQUIRE_EQUAL(err->_type, "LimitExceededException");
+                return false;
+            }
+            next = std::move(std::get<rjson::value>(result));
+            return true;
+        }, "the slot of the import to be released");
+        BOOST_REQUIRE_EQUAL(wait_for_import(e, sstring(get_string(rjson::get(*next, "ImportTableDescription"), "ImportArn"))).import_status,
+                "COMPLETED");
+    }, std::move(cfg));
+}
+
 // Stopping the node during an import fails it with ImportInterrupted. The table keeps the
 // import-in-progress tag, because the shutdown aborts its removal (a schema change).
 SEASTAR_TEST_CASE(test_import_interrupted_by_shutdown) {
