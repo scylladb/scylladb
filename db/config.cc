@@ -1717,6 +1717,11 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     // alternator_max_items_in_batch_write matches DynamoDB behaviour of size limit, but with different value - for DynamoDB it's 25
     // (see DynamoDB's documentation for BatchWriteItem command)
     , alternator_max_items_in_batch_write(this, "alternator_max_items_in_batch_write", value_status::Used, 100, "Maximum amount of items in single BatchItemWrite call.")
+    , alternator_max_concurrent_imports_per_shard(this, "alternator_max_concurrent_imports_per_shard", liveness::LiveUpdate, value_status::Used, 10,
+        "Maximum number of ImportTable imports running at the same time on a single shard. "
+        "Every running import keeps writes in flight for as long as it runs, so their number has to be bounded - "
+        "DynamoDB limits the number of concurrent imports too. "
+        "A request which would exceed the limit is rejected with LimitExceededException and can be retried later.")
     , alternator_import_max_logged_item_errors(this, "alternator_import_max_logged_item_errors", liveness::LiveUpdate, value_status::Used, 10000,
         "Maximum number of item errors (items which fail validation, unparsable lines, unreadable objects) which one ImportTable import "
         "logs, with the object key, the line number and the reason. The errors above the limit are only counted in the ErrorCount of the import. "
