@@ -718,4 +718,9 @@ api_error create_api_error_from_coordinators_exception(const exceptions::coordin
         }
     });
 }
+
+double to_epoch_seconds(db_clock::time_point tp) {
+    return std::chrono::duration<double>(tp.time_since_epoch()).count();
+}
+
 } // namespace alternator
