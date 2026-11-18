@@ -495,9 +495,11 @@ void groups_manager::schedule_raft_groups_deletion(bool all, log_disposition dis
                         all ? "the node is shutting down" : "its tablet left this shard, a resize replaced it, or its table was dropped");
             }
             // A resizing parent which the tablet map dropped is gone for good: its resize replaced
-            // it, or its table was dropped. A shutdown keeps what it persisted, which a restart in
-            // the middle of the resize needs.
-            schedule_raft_group_deletion(group_id, group_state, disposition, !all && _resize_tracker.is_resizing(group_id));
+            // it, or its table was dropped. So is any group of a dropped table, which has no
+            // cleanup stage either. A shutdown keeps what it persisted, which a restart in the
+            // middle of the resize needs.
+            const bool gone = _resize_tracker.is_resizing(group_id) || !_db.column_family_exists(group_state.table);
+            schedule_raft_group_deletion(group_id, group_state, disposition, !all && gone);
         }
         it = next;
     }
@@ -1248,6 +1250,7 @@ void groups_manager::update(token_metadata_ptr new_tm) {
 
             auto& state = _raft_groups[id];
             state.has_tablet = true;
+            state.table = table_id;
             // Start the server, unless it is started or starting already and not being
             // deleted.
             if (!state.gate || state.gate->is_closed()) {
