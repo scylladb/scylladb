@@ -129,8 +129,9 @@ private:
     std::unique_ptr<s3_imports> _s3_imports;
 
     // Requested by request_stop(), on every shard, before the server stops. It ends the group0
-    // waits of DDL requests (these run on shard 0), and makes ImportTable refuse new imports.
-    // stop() fails the running imports (s3_imports::stop()).
+    // waits of DDL requests (these run on shard 0) - also of an import's creation of its table,
+    // which then fails with ImportInterrupted - and makes ImportTable refuse new imports. stop()
+    // fails the running imports (s3_imports::stop()).
     abort_source _stop_as;
     // Runs db::modify_tags() on shard 0, with the _stop_as of shard 0's executor.
     future<> modify_tags(sstring ks, sstring cf, std::function<void(std::map<sstring, sstring>&)> modify);

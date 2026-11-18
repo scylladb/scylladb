@@ -59,6 +59,8 @@ static constexpr std::string_view import_status_failed = "FAILED";
 // The FailureCodes of an import. Of these, only ItemValidationError is a FailureCode which DynamoDB
 // documents.
 static constexpr std::string_view failure_item_validation_error = "ItemValidationError";
+static constexpr std::string_view failure_table_already_exists = "TableAlreadyExists";
+static constexpr std::string_view failure_table_creation_failed = "TableCreationFailed";
 static constexpr std::string_view failure_table_deleted = "TableDeleted";
 static constexpr std::string_view failure_write_failed = "WriteFailed";
 static constexpr std::string_view failure_import_interrupted = "ImportInterrupted";
@@ -549,11 +551,63 @@ class executor::s3_imports::import_task {
         }
     }
 
+    // Creates the target table from the TableCreationParameters of the request, with the id
+    // allocated when the import was accepted.
+    future<> create_table() {
+        const auto tablets_mode = _e._proxy.data_dictionary().get_config().tablets_mode_for_new_keyspaces();
+        auto parameters = sstring(rjson::print(rjson::get(_request->request, "TableCreationParameters")));
+        // The type and message of the api_error with which commit_table_creation() refused the table.
+        std::optional<std::pair<sstring, sstring>> error;
+        std::exception_ptr ex;
+        try {
+            // FIXME: the table is created by an internal client, so the role which called
+            // ImportTable (requester_role) is not given the permissions on it which CreateTable gives
+            // to the role which creates a table (SCYLLADB-4045).
+            error = co_await _e.container().invoke_on(0, [parameters = std::move(parameters), table_id = _row.table_id,
+                    tablets_mode] (executor& e) -> future<std::optional<std::pair<sstring, sstring>>> {
+                rjson::value request = rjson::parse(parameters);
+                std::optional<std::pair<sstring, sstring>> error;
+                try {
+                    auto validated = validate_create_table_request(request, e._proxy.features(), tablets_mode, "ImportTable");
+                    validated.builder.set_uuid(table_id);
+                    auto result = co_await e.commit_table_creation(std::move(request), std::move(validated),
+                            service::client_state(service::client_state::internal_tag{}), tablets_mode);
+                    if (auto* err = std::get_if<api_error>(&result)) {
+                        error.emplace(err->_type, err->_msg);
+                    }
+                } catch (const api_error& err) {
+                    // The cluster changed since the request was validated, e.g. its tablets mode.
+                    error.emplace(err._type, err._msg);
+                }
+                co_return error;
+            });
+        } catch (...) {
+            ex = std::current_exception();
+        }
+        // A creation which failed late, e.g. waiting for schema agreement, may have created the
+        // table. The id was allocated for this import, so a table with it is ours.
+        if (_e._proxy.data_dictionary().try_find_table(_row.table_id)) {
+            co_return;
+        }
+        // The creation succeeded, but there is no table with our id any more: it was dropped right
+        // after it was created (DeleteTable is not blocked during an import).
+        if (!ex && !error) {
+            throw table_deleted();
+        }
+        if (ex) {
+            std::rethrow_exception(ex);
+        }
+        if (error && error->first == "ResourceInUseException") {
+            throw import_failure(std::string(failure_table_already_exists), fmt::format(
+                    "The table {} was created by someone else after the import was accepted.", _request->table_name));
+        }
+        throw import_failure(std::string(failure_table_creation_failed), fmt::format("The table {} could not be created: {}",
+                _request->table_name, error ? std::string_view(error->second) : std::string_view("unknown error")));
+    }
+
     future<> prepare_table() {
         if (!_row.target_table_existed) {
-            // FIXME: create the table from the TableCreationParameters of the request.
-            co_await coroutine::return_exception(import_failure(std::string(failure_not_implemented),
-                    fmt::format("Creating the table {} of an import is not implemented yet.", _request->table_name)));
+            co_await create_table();
         }
         // refresh_schema() finds the target table by its id: a table which replaced the target under
         // the same name after the import was accepted is not written, the import fails with TableDeleted.
@@ -714,6 +768,8 @@ class executor::s3_imports::import_task {
     // throws.
     future<> import_all(std::unique_ptr<import_source>& source) {
         source = co_await _source_factory(_request->s3_bucket, _request->s3_key_prefix, _as);
+        // The first object is listed before the table is created, so that a source which cannot
+        // be listed leaves no table behind, as in DynamoDB.
         auto object = co_await source->next_object();
         co_await prepare_table();
         while (object) {
@@ -742,7 +798,9 @@ public:
         } catch (const import_failure& e) {
             failure.emplace(e.code(), e.what());
         } catch (...) {
-            if (_as.abort_requested()) {
+            // request_stop() aborts _stop_as, and with it the creation of the table, before stop()
+            // aborts _as.
+            if (_as.abort_requested() || _e._stop_as.abort_requested()) {
                 failure.emplace(failure_import_interrupted, "The node which ran the import was shut down before the import could finish.");
             } else {
                 failure.emplace(failure_internal_error, fmt::format("{}", std::current_exception()));
