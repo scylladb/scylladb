@@ -351,7 +351,7 @@ future<coordinator_result<foreign_ptr<lw_shared_ptr<query::result>>>> external_i
 
     coordinator_result<service::storage_proxy::coordinator_query_result> rqr = co_await qp.proxy()
             .query_result(_query_schema, command, std::move(partition_ranges), options.get_consistency(),
-                    {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state(), {}, {}, options.get_specific_options().node_local_only},
+                    {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state(), {}, options.get_specific_options().node_local_only},
                     std::nullopt);
     if (!rqr) {
         co_return std::move(rqr).as_failure();

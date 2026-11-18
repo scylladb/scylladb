@@ -274,7 +274,6 @@ async def test_incremental_read_repair(data_class: DataClass, manager: ScyllaClu
             for node in nodes:
                 metrics = await manager.metrics.query(node.ip_addr)
                 digest_mismatches += metrics.get("scylla_storage_proxy_coordinator_foreground_read_repairs") or 0
-                digest_mismatches += metrics.get("scylla_storage_proxy_coordinator_background_read_repairs") or 0
                 diff_found += metrics.get("scylla_storage_proxy_coordinator_read_repairs_diff_found_total") or 0
             return int(digest_mismatches), int(diff_found)
 

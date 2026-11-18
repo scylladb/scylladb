@@ -18,7 +18,6 @@
 #include <seastar/core/sharded.hh>
 #include <seastar/core/execution_stage.hh>
 #include <seastar/core/scheduling_specific.hh>
-#include "db/read_repair_decision.hh"
 #include "db/write_type.hh"
 #include "db/hints/manager.hh"
 #include "db/view/node_view_update_backlog.hh"
@@ -137,7 +136,6 @@ public:
     client_state& cstate;
     tracing::trace_state_ptr trace_state = nullptr;
     replicas_per_token_range preferred_replicas;
-    std::optional<db::read_repair_decision> read_repair_decision;
     node_local_only node_local_only;
 
     storage_proxy_coordinator_query_options(storage_proxy_clock_type::time_point timeout,
@@ -145,14 +143,12 @@ public:
             client_state& client_state_,
             tracing::trace_state_ptr trace_state = nullptr,
             replicas_per_token_range preferred_replicas = { },
-            std::optional<db::read_repair_decision> read_repair_decision = { },
             service::node_local_only node_local_only_ = service::node_local_only::no)
         : _timeout(timeout)
         , permit(std::move(permit_))
         , cstate(client_state_)
         , trace_state(std::move(trace_state))
         , preferred_replicas(std::move(preferred_replicas))
-        , read_repair_decision(read_repair_decision)
         , node_local_only(node_local_only_) {
     }
 
@@ -164,14 +160,11 @@ public:
 struct storage_proxy_coordinator_query_result {
     foreign_ptr<lw_shared_ptr<query::result>> query_result;
     replicas_per_token_range last_replicas;
-    db::read_repair_decision read_repair_decision;
 
     storage_proxy_coordinator_query_result(foreign_ptr<lw_shared_ptr<query::result>> query_result,
-            replicas_per_token_range last_replicas = {},
-            db::read_repair_decision read_repair_decision = db::read_repair_decision::NONE)
+            replicas_per_token_range last_replicas = {})
         : query_result(std::move(query_result))
-        , last_replicas(std::move(last_replicas))
-        , read_repair_decision(std::move(read_repair_decision)) {
+        , last_replicas(std::move(last_replicas)) {
     }
 };
 
@@ -426,15 +419,14 @@ private:
     db::hints::manager& hints_manager_for(db::write_type type);
     void sort_endpoints_by_proximity(const locator::effective_replication_map& erm, host_id_vector_replica_set& eps) const;
     host_id_vector_replica_set get_endpoints_for_reading(const schema& s,  const locator::effective_replication_map& erm, const dht::token& token, node_local_only node_local_only) const;
-    host_id_vector_replica_set filter_replicas_for_read(db::consistency_level, const locator::effective_replication_map&, host_id_vector_replica_set live_endpoints, const host_id_vector_replica_set& preferred_endpoints, db::read_repair_decision, std::optional<locator::host_id>* extra, replica::column_family*) const;
-    // As above with read_repair_decision=NONE, extra=nullptr.
+    host_id_vector_replica_set filter_replicas_for_read(db::consistency_level, const locator::effective_replication_map&, host_id_vector_replica_set live_endpoints, const host_id_vector_replica_set& preferred_endpoints, std::optional<locator::host_id>* extra, replica::column_family*) const;
+    // As above with extra=nullptr.
     host_id_vector_replica_set filter_replicas_for_read(db::consistency_level, const locator::effective_replication_map&, const host_id_vector_replica_set& live_endpoints, const host_id_vector_replica_set& preferred_endpoints, replica::column_family*) const;
     result<::shared_ptr<abstract_read_executor>> get_read_executor(lw_shared_ptr<query::read_command> cmd,
             locator::effective_replication_map_ptr ermp,
             schema_ptr schema,
             dht::partition_range pr,
             db::consistency_level cl,
-            db::read_repair_decision repair_decision,
             tracing::trace_state_ptr trace_state,
             const host_id_vector_replica_set& preferred_endpoints,
             bool& is_bounced_read,

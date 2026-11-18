@@ -221,8 +221,7 @@ Output:
 	Processing a statement [shard 3]                                         | 2017-09-20 18:44:10.926538 | 172.17.0.4 | 97
 	Creating read executor for token -4069959284402364209                    | 2017-09-20 18:44:10.926606 | 172.17.0.4 | 165
           with all: {172.17.0.4, 172.17.0.2, 172.17.0.3}                         |                            |            |
-          targets: {172.17.0.4, 172.17.0.2, 172.17.0.3}                          |                            |            |
-          repair decision: DC_LOCAL [shard 3]                                    |                            |            |
+          targets: {172.17.0.4, 172.17.0.2, 172.17.0.3} [shard 3]                |                            |            |
 	read_digest: sending a message to /172.17.0.3 [shard 3]                  | 2017-09-20 18:44:10.926634 | 172.17.0.4 | 193
 	read_data: querying locally [shard 3]                                    | 2017-09-20 18:44:10.926664 | 172.17.0.4 | 223
 	read_data: sending a message to /172.17.0.2 [shard 3]                    | 2017-09-20 18:44:10.926711 | 172.17.0.4 | 270

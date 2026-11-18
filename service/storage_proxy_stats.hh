@@ -139,9 +139,9 @@ struct stats : public write_stats {
 
     cas_contention_histogram cas_read_contention;
 
-    uint64_t read_repair_attempts = 0;
+    uint64_t read_repair_attempts = 0; // deprecated, always 0
     uint64_t read_repair_repaired_blocking = 0;
-    uint64_t read_repair_repaired_background = 0;
+    uint64_t read_repair_repaired_background = 0; // deprecated, always 0
     uint64_t read_repair_diff_found = 0;
     uint64_t global_read_repairs_canceled_due_to_concurrent_write = 0;
 

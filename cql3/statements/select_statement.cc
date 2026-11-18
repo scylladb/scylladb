@@ -952,7 +952,7 @@ select_statement::execute_without_checking_exception_message_non_aggregate_unpag
                         command,
                         std::move(prange),
                         options.get_consistency(),
-                        {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state(), {}, {}, options.get_specific_options().node_local_only},
+                        {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state(), {}, options.get_specific_options().node_local_only},
                         cas_shard).then(utils::result_wrap([] (service::storage_proxy::coordinator_query_result qr) {
                     return make_ready_future<coordinator_result<foreign_ptr<lw_shared_ptr<query::result>>>>(std::move(qr.query_result));
                 }));
@@ -961,7 +961,7 @@ select_statement::execute_without_checking_exception_message_non_aggregate_unpag
             return this->process_results(std::move(result), cmd, options, now);
         }));
     } else {
-        return qp.proxy().query_result(_query_schema, cmd, std::move(partition_ranges), options.get_consistency(), {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state(), {}, {}, options.get_specific_options().node_local_only}, std::move(cas_shard))
+        return qp.proxy().query_result(_query_schema, cmd, std::move(partition_ranges), options.get_consistency(), {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state(), {}, options.get_specific_options().node_local_only}, std::move(cas_shard))
             .then(wrap_result_to_error_message([this, &options, now, cmd] (service::storage_proxy::coordinator_query_result qr) {
                 return this->process_results(std::move(qr.query_result), cmd, options, now);
             }));
@@ -1866,7 +1866,7 @@ mutation_fragments_select_statement::do_query(
     if (this_node) {
         last_replicas.emplace(dht::token_range::make_open_ended_both_sides(), std::vector<locator::host_id>{this_node});
     }
-    co_return service::storage_proxy_coordinator_query_result{std::move(res), std::move(last_replicas), {}};
+    co_return service::storage_proxy_coordinator_query_result{std::move(res), std::move(last_replicas)};
 }
 
 future<::shared_ptr<cql_transport::messages::result_message>>
@@ -1941,7 +1941,7 @@ mutation_fragments_select_statement::do_execute(query_processor& qp, service::qu
             || !service::pager::query_pagers::may_need_paging(*_schema, page_size,
                     *command, key_ranges))) {
         return do_query(erm_keepalive, {}, qp.proxy(), _schema, command, std::move(key_ranges), cl,
-                {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state(), {}, {}})
+                {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state()})
         .then(wrap_result_to_error_message([this, erm_keepalive, now, &options, slice = command->slice] (service::storage_proxy_coordinator_query_result&& qr) mutable {
             cql3::selection::result_set_builder builder(*_selection, now, &options);
             query::result_view::consume(*qr.query_result, std::move(slice),

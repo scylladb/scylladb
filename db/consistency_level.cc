@@ -17,7 +17,6 @@
 #include "locator/host_id.hh"
 #include "schema/schema.hh"
 #include "replica/database.hh"
-#include "db/read_repair_decision.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "locator/network_topology_strategy.hh"
 #include "heat_load_balance.hh"
@@ -246,32 +245,18 @@ filter_for_query(consistency_level cl,
                  const locator::effective_replication_map& erm,
                  host_id_vector_replica_set live_endpoints,
                  const host_id_vector_replica_set& preferred_endpoints,
-                 read_repair_decision read_repair,
                  const gms::gossiper& g,
                  std::optional<locator::host_id>* extra,
                  replica::column_family* cf) {
-    size_t local_count;
-
-    if (read_repair == read_repair_decision::GLOBAL) { // take RRD.GLOBAL out of the way
-        return live_endpoints;
-    }
-
-    if (read_repair == read_repair_decision::DC_LOCAL || is_datacenter_local(cl)) {
+    if (is_datacenter_local(cl)) {
         const auto& topo = erm.get_topology();
         auto non_local_endpoints = std::ranges::stable_partition(live_endpoints, topo.get_local_dc_filter());
-        local_count = std::distance(live_endpoints.begin(), non_local_endpoints.begin());
-        if (is_datacenter_local(cl)) {
-            live_endpoints.erase(non_local_endpoints.begin(), non_local_endpoints.end());
-        }
+        live_endpoints.erase(non_local_endpoints.begin(), non_local_endpoints.end());
     }
 
-    size_t bf = block_for(erm, cl);
+    const size_t bf = block_for(erm, cl);
 
-    if (read_repair == read_repair_decision::DC_LOCAL) {
-        bf = std::max(bf, local_count);
-    }
-
-    if (bf >= live_endpoints.size()) { // RRD.DC_LOCAL + CL.LOCAL or CL.ALL
+    if (bf >= live_endpoints.size()) { // all live endpoints are needed, e.g. CL.ALL
         return live_endpoints;
     }
 

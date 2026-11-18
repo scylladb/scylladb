@@ -3,15 +3,13 @@ ScyllaDB Read Repair
 
 Read repair serves as an anti-entropy mechanism during read path.
 
-On read operations, ScyllaDB runs a process called :term:`read repair<Read Repair>`, to ensure that replicas are updated with most recently updated data. Such repairs during read path run automatically, asynchronously, and in the background.  
-
-Note however, that if digest mismatch is detected before consistency level is reached, that repair will run in the foreground.
+On read operations, ScyllaDB runs a process called :term:`read repair<Read Repair>`, to ensure that replicas are updated with most recently updated data. Such repairs run automatically, as part of the read, when the digests of the replies that satisfied the consistency level do not match.
 
 A normal read operation works according to the scenarios described in our :doc:`Fault Tolerance documentation </architecture/architecture-fault-tolerance>`.
 
 Read Request
 ^^^^^^^^^^^^
-This image illustrates the flow of a read request, when data is out of sync, and a background read repair process is triggered.
+This image illustrates the flow of a read request, when data is out of sync, and a read repair is triggered.
 
 .. image:: 1_read_repair.png
 
