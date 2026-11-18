@@ -48,6 +48,11 @@ public:
         bool is_collection;
         bool is_counter;
         bool schema_mismatch;
+        // The current schema has a column with this name, but it is static
+        // and the sstable's column is regular, or vice versa, or it is part
+        // of the primary key. The sstable's column is then considered
+        // missing from the current schema.
+        bool kind_mismatch = false;
     };
 
 private:
