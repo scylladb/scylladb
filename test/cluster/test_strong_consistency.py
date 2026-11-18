@@ -898,7 +898,7 @@ async def test_forward_cql_prepare_exception_passthrough(manager: ScyllaClusterM
             metrics = await manager.metrics.query(forwarder.ip_addr)
             prepared_not_found_before = metrics.get('scylla_transport_requests_forwarded_prepared_not_found') or 0
 
-            with pytest.raises(InvalidRequest, match="unconfigured table"):
+            with pytest.raises(InvalidRequest, match=f"Table '{table}' does not exist"):
                 await cql.run_async(stmt, [0, 0], host=forwarder_host)
 
             metrics = await manager.metrics.query(forwarder.ip_addr)
@@ -1266,7 +1266,7 @@ async def test_queries_while_dropping_table(manager: ScyllaClusterManager):
     immediately (no in-flight ops). On the leader, the raft server is aborted
     as part of group deletion (SCYLLADB-2080 fix), causing the paused
     operations to fail with raft::stopped_error which the coordinator converts
-    to "unconfigured table".
+    to "Table '<ks>.tbl' does not exist".
 
     We also verify that new reads/writes after the drop are rejected
     immediately.
@@ -1329,9 +1329,9 @@ async def test_queries_while_dropping_table(manager: ScyllaClusterManager):
         await cql.run_async(f"DROP TABLE {table}")
 
         # Sanity check: new queries are rejected immediately.
-        with pytest.raises(InvalidRequest, match="unconfigured table"):
+        with pytest.raises(InvalidRequest, match=f"Table '{table}' does not exist"):
             await cql.run_async(f"SELECT * FROM {table} WHERE pk = 0")
-        with pytest.raises(InvalidRequest, match="unconfigured table"):
+        with pytest.raises(InvalidRequest, match=f"Table '{table}' does not exist"):
             await cql.run_async(f"INSERT INTO {table} (pk, v) VALUES (13, 11)")
 
         # Confirm the follower destroyed its raft group.
@@ -1349,7 +1349,7 @@ async def test_queries_while_dropping_table(manager: ScyllaClusterManager):
         # FallthroughRetryPolicy prevents a driver retry from replacing ServerError
         # with InvalidRequest from a new request.
         # Use a timeout to detect the old buggy behavior (write stuck forever).
-        missing_table_error = f"unconfigured table {table_name}"
+        missing_table_error = f"Table '{table}' does not exist"
         try:
             with pytest.raises(InvalidRequest, match=missing_table_error):
                 await asyncio.wait_for(asyncio.shield(write_fut), timeout=15)
@@ -2201,9 +2201,9 @@ async def test_dropped_table_errors_metrics(manager: ScyllaClusterManager):
         await drop_table_and_release(f"{ks}.tbl1", [injection])
 
         # Both fail, and each is counted once as table_dropped.
-        with pytest.raises(InvalidRequest, match="unconfigured table tbl1"):
+        with pytest.raises(InvalidRequest, match=f"Table '{ks}.tbl1' does not exist"):
             await write
-        with pytest.raises(InvalidRequest, match="unconfigured table tbl1"):
+        with pytest.raises(InvalidRequest, match=f"Table '{ks}.tbl1' does not exist"):
             await read
         assert await write_errors() - write_errors_before == 1
         assert await read_errors() - read_errors_before == 1
@@ -2227,9 +2227,9 @@ async def test_dropped_table_errors_metrics(manager: ScyllaClusterManager):
         await drop_table_and_release(f"{ks}.tbl2", [write_injection, read_injection])
 
         # Both fail, and each is counted once as table_dropped.
-        with pytest.raises(InvalidRequest, match="unconfigured table tbl2"):
+        with pytest.raises(InvalidRequest, match=f"Table '{ks}.tbl2' does not exist"):
             await write
-        with pytest.raises(InvalidRequest, match="unconfigured table tbl2"):
+        with pytest.raises(InvalidRequest, match=f"Table '{ks}.tbl2' does not exist"):
             await read
         assert await write_errors() - write_errors_before == 1
         assert await read_errors() - read_errors_before == 1
@@ -2262,7 +2262,7 @@ async def test_prepared_write_across_table_recreation(manager: ScyllaClusterMana
         await cql.run_async(create_table)
         await manager.api.message_injection(server.ip_addr, injection)
         await manager.api.disable_injection(server.ip_addr, injection)
-        with pytest.raises(InvalidRequest, match="unconfigured table tbl"):
+        with pytest.raises(InvalidRequest, match=f"Table '{ks}.tbl' does not exist"):
             await write
 
         logger.info("Executing the same prepared write again")

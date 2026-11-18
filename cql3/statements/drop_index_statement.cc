@@ -100,7 +100,7 @@ schema_ptr drop_index_statement::lookup_indexed_table(query_processor& qp) const
 {
     auto db = qp.db();
     if (!db.has_keyspace(keyspace())) {
-        throw exceptions::keyspace_not_defined_exception(format("Keyspace {} does not exist", keyspace()));
+        throw exceptions::keyspace_not_defined_exception(keyspace());
     }
     auto cfm = db.find_indexed_table(keyspace(), _index_name);
     if (cfm) {

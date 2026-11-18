@@ -411,8 +411,7 @@ struct coordinator::operation_ctx {
 };
 
 static std::exception_ptr make_table_dropped_error(const schema& s) {
-    return std::make_exception_ptr(exceptions::invalid_request_exception(
-            fmt::format("unconfigured table {}", s.cf_name())));
+    return std::make_exception_ptr(exceptions::table_not_defined_exception(s.ks_name(), s.cf_name()));
 }
 
 static need_redirect redirect_to_leader(locator::tablet_replica target, groups_manager& gm, raft::group_id group_id) {

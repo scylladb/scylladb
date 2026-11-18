@@ -766,7 +766,7 @@ OK
 > create table lwt (a int, b int, setint set<int>, setsetint set<frozen<set<int>>>, primary key (a, b));
 OK
 > insert into test (a, b) values (1,1);
-Error from server: code=2200 [Invalid query] message="unconfigured table test"
+Error from server: code=2200 [Invalid query] message="Table 'ks.test' does not exist"
 > update lwt set setint={1, 2, 3}, setsetint = {{1,2,3}, {2,3,4}, {5,6,7}} where a = 1 and b = 1 if exists;
 +-------------+------+------+----------+-------------+
 | [applied]   | a    | b    | setint   | setsetint   |
