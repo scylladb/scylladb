@@ -237,6 +237,10 @@ class groups_manager : public peering_sharded_service<groups_manager> {
 
     void schedule_raft_groups_deletion(bool all, log_disposition disposition);
 
+    // Erases this shard's rows of the groups gone from tablet metadata, which a crash
+    // between their teardown and its erase leaves behind.
+    future<> erase_rows_of_gone_groups();
+
     // Queues a start or deletion of the group's raft::server behind the
     // previous one; at most one control operation runs per group. `op` is
     // kept alive until it completes.
@@ -336,7 +340,7 @@ public:
 
     // Called during node boot. Starts all raft::server instances corresponding
     // to the latest group0 state in the background.
-    void start();
+    future<> start();
 
     // Stops the groups of every shard, from any shard: unregisters the RPC handlers
     // on every shard, waiting for those still running, and then stops every shard.
