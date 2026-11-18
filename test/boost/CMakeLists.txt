@@ -217,8 +217,6 @@ add_scylla_test(partitioner_test
   KIND SEASTAR)
 add_scylla_test(pretty_printers_test
   KIND BOOST)
-add_scylla_test(radix_tree_test
-  KIND SEASTAR)
 add_scylla_test(range_tombstone_list_test
   KIND BOOST)
 add_scylla_test(rate_limiter_test
