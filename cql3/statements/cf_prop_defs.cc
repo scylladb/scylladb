@@ -193,6 +193,9 @@ void cf_prop_defs::validate(const data_dictionary::database db, sstring ks_name,
     }
 
     validate_minimum_int(KW_DEFAULT_TIME_TO_LIVE, 0, DEFAULT_DEFAULT_TIME_TO_LIVE);
+    if (has_property(KW_PAXOSGRACESECONDS) && strong_consistency::is_strongly_consistent(db, ks_name)) {
+        throw exceptions::configuration_exception("paxos_grace_seconds is not supported in strongly consistent keyspaces");
+    }
     validate_minimum_int(KW_PAXOSGRACESECONDS, 0, DEFAULT_GC_GRACE_SECONDS);
     // Both end up as the TTL of cells, which the sstable reader rejects above
     // max_ttl, like USING TTL does (see attributes::get_time_to_live()).
