@@ -7,6 +7,8 @@
  */
 #include "replica/logstor/logstor.hh"
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/try_future.hh>
+#include <seastar/util/defer.hh>
 #include <seastar/util/log.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/metrics.hh>
@@ -153,42 +155,28 @@ future<> logstor::write(const frozen_mutation& m, const schema& s, write_target 
 
 future<> logstor::do_write(const schema& s, dht::decorated_key dk, api::timestamp_type ts, record_value value,
         write_target target, db::timeout_clock::time_point timeout) {
+    auto count_failure = defer([this] noexcept { ++_stats.write_failures; });
     auto gate_holder = _async_gate.hold();
 
     auto& cg = *target.cg;
     primary_index_key key(dk);
-    auto& index = cg.logstor_index();
-
-    log_record record {
+    auto writer = log_record_writer(log_record{
         .header = {
             .key = std::move(dk),
             .timestamp = ts,
             .table = s.id(),
         },
         .value = std::move(value),
-    };
+    });
 
-    auto writer = log_record_writer(std::move(record));
+    auto [location, op] = co_await coroutine::try_future(
+            _write_buffer.write(std::move(writer), timeout, std::move(target)));
 
-    // Two waits, not one: first for the record to be taken into a buffer, then for that buffer to
-    // reach a segment. They are awaited here rather than behind a call of their own, which would
-    // cost a coroutine frame per write to do nothing else.
-    auto accepted_f = co_await coroutine::as_future(_write_buffer.write_to_buffer(std::move(writer), timeout, std::move(target)));
-    if (accepted_f.failed()) {
-        _stats.write_failures++;
-        co_await coroutine::return_exception_ptr(accepted_f.get_exception());
-    }
-    auto persisted_f = co_await coroutine::as_future(std::move(accepted_f.get().persisted));
-    if (persisted_f.failed()) {
-        _stats.write_failures++;
-        co_await coroutine::return_exception_ptr(persisted_f.get_exception());
-    }
-    auto [location, op] = persisted_f.get();
-    index_entry new_entry {
+    cg.logstor_index().insert(key, index_entry{
         .location = location,
         .timestamp = ts,
-    };
-    index.insert(key, std::move(new_entry));
+    });
+    count_failure.cancel();
 }
 
 }

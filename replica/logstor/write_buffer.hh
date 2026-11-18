@@ -640,6 +640,13 @@ public:
     // location comes from.
     future<buffered_write_result> write_to_buffer(log_record_writer, db::timeout_clock::time_point timeout, write_target target = {}) noexcept;
 
+    // Returns a future that resolves with the location of the record once the record is persisted.
+    future<record_location_with_holder> write(log_record_writer writer, db::timeout_clock::time_point timeout, write_target target = {}) noexcept {
+        return write_to_buffer(std::move(writer), timeout, std::move(target)).then([] (buffered_write_result r) {
+            return std::move(r.persisted);
+        });
+    }
+
     size_t queued_write_count() const noexcept { return _queued_writes.size(); }
     size_t queued_write_bytes() const noexcept { return _queued_write_bytes; }
     uint64_t total_queued_writes() const noexcept { return _total_queued_writes; }
