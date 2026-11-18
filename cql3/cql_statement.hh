@@ -170,7 +170,10 @@ public:
     // PREPARED metadata.
     bool may_use_token_aware_routing() const { return _may_use_token_aware_routing; }
 
-    virtual void sanitize_audit_info() {}
+    // Returns the statement's CQL text with its credentials, if any, replaced
+    // by '***'. The audit log records the result, and so does every log
+    // message which quotes the statement.
+    virtual sstring mask_secrets(sstring text) const { return text; }
 };
 
 }
