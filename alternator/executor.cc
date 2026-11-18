@@ -136,6 +136,12 @@ const sstring TABLE_CREATION_TIME_TAG_KEY("system:table_creation_time");
 // configured by UpdateTimeToLive to be the expiration-time attribute for
 // this table.
 extern const sstring TTL_TAG_KEY("system:ttl_attribute");
+// This tag is present on a table which ImportTable created while the import
+// fills it, and stores the ARN of that import. DescribeTable reports such a
+// table as CREATING, as DynamoDB does, although Alternator does not block
+// reads and writes to it. The import removes the tag when it ends; if it cannot
+// (e.g. its node stops), the garbage collector of imports does.
+extern const sstring IMPORT_IN_PROGRESS_TAG_KEY("system:import_in_progress");
 // This tag is set for GSIs since scylla-2026.4.
 // GSI implementation in Alternator assumes that (currently up to 4)
 // user-specified RANGE keys come first in the underlying materialized view's
@@ -380,8 +386,10 @@ static void check_gsi_warm_throughput_units(const rjson::value& gsi, std::string
 // which the request gave to the table or to a GSI. It appears in the response
 // only when the request configured one, which echoing the request back already
 // achieves - but the request carries only the units, and DynamoDB reports a
-// Status with them. Alternator's CreateTable is synchronous and the response
-// already says TableStatus ACTIVE, so the warm throughput is active with it.
+// Status with them. Alternator's CreateTable is synchronous and its response
+// already says TableStatus ACTIVE, so the warm throughput is active with it -
+// also in an UpdateTable response which says CREATING, while an import fills
+// the table, which is usable meanwhile.
 static void complete_warm_throughput(rjson::value& parent) {
     rjson::value* warm = rjson::find(parent, "WarmThroughput");
     if (!warm || !warm->IsObject()) {
@@ -400,7 +408,9 @@ void executor::supplement_table_info(rjson::value& descr, const schema& schema, 
     auto creation_time = get_table_creation_time(schema);
 
     rjson::add(descr, "CreationDateTime", rjson::value(creation_time));
-    rjson::add(descr, "TableStatus", "ACTIVE");
+    // As DescribeTable reports it: CREATING while the table carries the import-in-progress tag of
+    // the import which created it.
+    rjson::add(descr, "TableStatus", rjson::from_string(db::find_tag(schema, IMPORT_IN_PROGRESS_TAG_KEY) ? "CREATING" : "ACTIVE"));
     rjson::add(descr, "TableId", rjson::from_string(schema.id().to_sstring()));
 
     complete_warm_throughput(descr);
@@ -652,9 +662,11 @@ future<std::variant<rjson::value, api_error>> executor::fill_table_description(s
     // FIXME: In DynamoDB the CreateTable implementation is asynchronous, and
     // the table may be in "Creating" state until creating is finished.
     // We don't currently do this in Alternator - instead CreateTable waits
-    // until the table is really available. So/ DescribeTable returns either
-    // ACTIVE or doesn't exist at all (and DescribeTable returns an error).
-    // The states CREATING and UPDATING are not currently returned.
+    // until the table is really available. So DescribeTable returns either
+    // ACTIVE or doesn't exist at all (and DescribeTable returns an error) -
+    // or CREATING for a table which ImportTable created, until the tag of its
+    // import is removed (see IMPORT_IN_PROGRESS_TAG_KEY). UPDATING is not
+    // currently returned.
     rjson::add(table_description, "TableStatus", rjson::from_string(table_status_to_sstring(tbl_status)));
     rjson::add(table_description, "TableArn", generate_arn_for_table(*schema));
     rjson::add(table_description, "TableId", rjson::from_string(schema->id().to_sstring()));
@@ -881,7 +893,8 @@ future<executor::request_return_type> executor::describe_table(client_state& cli
     get_stats_from_schema(_proxy, *schema)->api_operations.describe_table++;
     tracing::add_alternator_table_name(trace_state, schema->cf_name());
 
-    std::variant<rjson::value, api_error> table_description_result = co_await fill_table_description(schema, table_status::active, client_state, trace_state, permit);
+    const auto status = db::find_tag(*schema, IMPORT_IN_PROGRESS_TAG_KEY) ? table_status::creating : table_status::active;
+    std::variant<rjson::value, api_error> table_description_result = co_await fill_table_description(schema, status, client_state, trace_state, permit);
     if (auto error = std::get_if<api_error>(&table_description_result)) {
         co_return std::move(*error);
     }
