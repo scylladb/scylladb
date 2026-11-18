@@ -49,6 +49,7 @@
 #include <string_view>
 #include <utility>
 #include <vector>
+#include <zlib.h>
 
 namespace {
 
@@ -152,6 +153,12 @@ public:
                         alternator::make_in_memory_import_source(std::move(storages)));
             });
         }).get();
+    }
+
+    // Makes the imports run on this shard - the shard of the requests of import_table() - read the
+    // sources which `factory` makes.
+    void set_source_factory_on_this_shard(alternator::import_source_factory factory) {
+        _exec.local().get_s3_imports().set_source_factory(std::move(factory));
     }
 
     std::variant<rjson::value, alternator::api_error> import_table(rjson::value request) {
@@ -273,6 +280,91 @@ cql_test_config import_test_config() {
 
 } // anonymous namespace
 
+// An import into a new table: ImportTable answers IN_PROGRESS at once, and the import creates
+// the table with the TableId it reported, and fills it with the items of all the objects, blank
+// lines and empty objects being skipped.
+SEASTAR_TEST_CASE(test_import_into_new_table) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        alternator_test_executor exec;
+        exec.start(e);
+        auto stop_exec = defer([&] noexcept { try { exec.stop(); } catch (...) { std::terminate(); } });
+
+        const std::string first = item_line("a", 1, "x") + "\n  \n" + item_line("a", 2, "y");
+        const std::string second = item_line("b", 1, "z");
+        exec.set_source({{"prefix/00000.json", first}, {"prefix/empty.json", ""}, {"prefix/00001.json", second}});
+
+        auto response = exec.import_table_successfully(make_import_table_request("new_table", "token-new-table"));
+        const rjson::value& initial = rjson::get(response, "ImportTableDescription");
+        BOOST_REQUIRE_EQUAL(get_string(initial, "ImportStatus"), "IN_PROGRESS");
+        BOOST_REQUIRE_EQUAL(get_string(initial, "ClientToken"), "token-new-table");
+        BOOST_REQUIRE_EQUAL(rjson::get(initial, "ProcessedItemCount").GetInt64(), 0);
+        BOOST_REQUIRE(!rjson::find(initial, "ProcessedSizeBytes"));
+        BOOST_REQUIRE(!rjson::find(initial, "EndTime"));
+        const auto import_arn = get_string(initial, "ImportArn");
+        BOOST_REQUIRE_EQUAL(import_arn.substr(0, import_arn.rfind("/import/")), get_string(initial, "TableArn"));
+
+        auto row = wait_for_import(e, sstring(import_arn));
+        BOOST_REQUIRE_EQUAL(row.import_status, "COMPLETED");
+        // The import ran in the scheduling group of exports and imports, not in the request's.
+        BOOST_REQUIRE_EQUAL(import_source_scheduling_group, "export_import");
+        BOOST_REQUIRE(!row.failure_code);
+        BOOST_REQUIRE(!row.target_table_existed);
+        BOOST_REQUIRE_EQUAL(row.processed_item_count, 3);
+        BOOST_REQUIRE_EQUAL(row.imported_item_count, 3);
+        BOOST_REQUIRE_EQUAL(row.error_count, 0);
+        // The uncompressed size of the objects, blank lines included.
+        BOOST_REQUIRE_EQUAL(row.processed_size_bytes.value_or(-1), int64_t(first.size() + second.size()));
+        BOOST_REQUIRE(row.completed_at);
+
+        auto final_description = alternator::make_import_table_description(row);
+        BOOST_REQUIRE_EQUAL(get_string(final_description, "ImportStatus"), "COMPLETED");
+        BOOST_REQUIRE(rjson::find(final_description, "EndTime"));
+        BOOST_REQUIRE_EQUAL(get_string(final_description, "TableId"), get_string(initial, "TableId"));
+
+        auto described = std::get<rjson::value>(exec.describe_table("new_table"));
+        BOOST_REQUIRE_EQUAL(get_string(rjson::get(described, "Table"), "TableStatus"), "ACTIVE");
+        BOOST_REQUIRE_EQUAL(get_string(rjson::get(described, "Table"), "TableId"), get_string(initial, "TableId"));
+
+        BOOST_REQUIRE_EQUAL(exec.get_item_v("new_table", "a", "1"), "x");
+        BOOST_REQUIRE_EQUAL(exec.get_item_v("new_table", "a", "2"), "y");
+        BOOST_REQUIRE_EQUAL(exec.get_item_v("new_table", "b", "1"), "z");
+    }, import_test_config());
+}
+
+// An import of a GZIP source: ProcessedSizeBytes counts the decompressed bytes.
+SEASTAR_TEST_CASE(test_import_gzip) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        alternator_test_executor exec;
+        exec.start(e);
+        auto stop_exec = defer([&] noexcept { try { exec.stop(); } catch (...) { std::terminate(); } });
+
+        const std::string content = item_line("g", 1, "x") + "\n" + item_line("g", 2, "y");
+        z_stream zs = {};
+        BOOST_REQUIRE_EQUAL(deflateInit2(&zs, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 16 + MAX_WBITS, 8, Z_DEFAULT_STRATEGY), Z_OK);
+        std::string compressed(deflateBound(&zs, content.size()), '\0');
+        zs.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(content.data()));
+        zs.avail_in = content.size();
+        zs.next_out = reinterpret_cast<Bytef*>(compressed.data());
+        zs.avail_out = compressed.size();
+        BOOST_REQUIRE_EQUAL(deflate(&zs, Z_FINISH), Z_STREAM_END);
+        compressed.resize(compressed.size() - zs.avail_out);
+        deflateEnd(&zs);
+        exec.set_source({{"0", compressed}});
+
+        auto request = make_import_table_request("gzipped", "token-gzip");
+        rjson::add(request, "InputCompressionType", rjson::from_string("GZIP"));
+        auto response = exec.import_table_successfully(std::move(request));
+        auto row = wait_for_import(e, sstring(get_string(rjson::get(response, "ImportTableDescription"), "ImportArn")));
+        BOOST_REQUIRE_EQUAL(row.import_status, "COMPLETED");
+        BOOST_REQUIRE_EQUAL(row.processed_item_count, 2);
+        BOOST_REQUIRE_EQUAL(row.imported_item_count, 2);
+        BOOST_REQUIRE_EQUAL(row.processed_size_bytes.value_or(-1), int64_t(content.size()));
+        auto item = exec.get_item("gzipped", "g", "2");
+        BOOST_REQUIRE(item);
+        BOOST_REQUIRE_EQUAL(get_string(rjson::get(*item, "v"), "S"), "y");
+    }, import_test_config());
+}
+
 // An Alternator extension: an import into an existing table writes into it, and keeps its items and
 // its id.
 SEASTAR_TEST_CASE(test_import_into_existing_table) {
@@ -370,8 +462,42 @@ SEASTAR_TEST_CASE(test_import_into_table_with_gsi) {
     }, import_test_config());
 }
 
-// Reading S3 is not implemented yet, so the default source fails as soon as it is made, and the
-// import fails with NotImplemented without creating a table.
+// A ClientToken makes ImportTable idempotent: a replay returns the import of the token, also with
+// other parameters, unless it names another table - then it is ImportConflictException.
+SEASTAR_TEST_CASE(test_import_client_token_replay) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        alternator_test_executor exec;
+        exec.start(e);
+        auto stop_exec = defer([&] noexcept { try { exec.stop(); } catch (...) { std::terminate(); } });
+
+        exec.set_source({{"0", item_line("a", 1, "x")}});
+        auto request = make_import_table_request("replayed", "token-replay");
+        auto first = exec.import_table_successfully(rjson::copy(request));
+        const auto import_arn = get_string(rjson::get(first, "ImportTableDescription"), "ImportArn");
+        wait_for_import(e, sstring(import_arn));
+
+        // The same request, and one with another source, return the same import.
+        auto replay = exec.import_table_successfully(rjson::copy(request));
+        BOOST_REQUIRE_EQUAL(get_string(rjson::get(replay, "ImportTableDescription"), "ImportArn"), import_arn);
+        BOOST_REQUIRE_EQUAL(get_string(rjson::get(replay, "ImportTableDescription"), "ImportStatus"), "COMPLETED");
+        auto other_source = rjson::copy(request);
+        rjson::replace_with_string_name(rjson::get(other_source, "S3BucketSource"), "S3Bucket", rjson::from_string("other-bucket"));
+        auto replay_of_other_source = exec.import_table_successfully(std::move(other_source));
+        BOOST_REQUIRE_EQUAL(get_string(rjson::get(replay_of_other_source, "ImportTableDescription"), "ImportArn"), import_arn);
+        BOOST_REQUIRE_EQUAL(get_string(rjson::get(rjson::get(replay_of_other_source, "ImportTableDescription"), "S3BucketSource"), "S3Bucket"), "bucket");
+
+        // Another table conflicts.
+        auto result = exec.import_table(make_import_table_request("another_table", "token-replay"));
+        auto* err = std::get_if<alternator::api_error>(&result);
+        BOOST_REQUIRE(err);
+        BOOST_REQUIRE_EQUAL(err->_type, "ImportConflictException");
+        BOOST_REQUIRE(std::holds_alternative<alternator::api_error>(exec.describe_table("another_table")));
+    }, import_test_config());
+}
+
+// A source which fails before its first object is listed fails the import before the table is
+// created, so no table is left behind - as DynamoDB does for a missing bucket. Reading S3 is not
+// implemented yet, so the default source fails as soon as it is made.
 SEASTAR_TEST_CASE(test_import_source_failure_creates_no_table) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         alternator_test_executor exec;
@@ -386,6 +512,114 @@ SEASTAR_TEST_CASE(test_import_source_failure_creates_no_table) {
         auto description = alternator::make_import_table_description(row);
         BOOST_REQUIRE(rjson::find(description, "FailureMessage"));
         BOOST_REQUIRE(std::holds_alternative<alternator::api_error>(exec.describe_table("no_source")));
+    }, import_test_config());
+}
+
+// A source whose listing fails with import_failure fails the import with its FailureCode. The source
+// is listed before the table is created, so no table is left behind.
+SEASTAR_TEST_CASE(test_import_listing_failure_creates_no_table) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        alternator_test_executor exec;
+        exec.start(e);
+        auto stop_exec = defer([&] noexcept { try { exec.stop(); } catch (...) { std::terminate(); } });
+
+        class unlistable_source : public alternator::import_source {
+        public:
+            future<std::optional<alternator::import_source_object>> next_object() override {
+                return make_exception_future<std::optional<alternator::import_source_object>>(
+                        alternator::import_failure("S3NoSuchBucket", "The bucket does not exist"));
+            }
+            future<std::unique_ptr<alternator::import_pipeline_interface>> open(const alternator::import_source_object&,
+                    std::function<future<>(rjson::value)>, alternator::compression_type) override {
+                BOOST_FAIL("nothing was listed");
+                return make_ready_future<std::unique_ptr<alternator::import_pipeline_interface>>();
+            }
+            future<> close() override {
+                return make_ready_future<>();
+            }
+        };
+        exec.set_source_factory_on_this_shard([] (sstring, sstring, abort_source&) {
+            return make_ready_future<std::unique_ptr<alternator::import_source>>(std::make_unique<unlistable_source>());
+        });
+
+        auto response = exec.import_table_successfully(make_import_table_request("unlistable", "token-unlistable"));
+        auto row = wait_for_import(e, sstring(get_string(rjson::get(response, "ImportTableDescription"), "ImportArn")));
+        BOOST_REQUIRE_EQUAL(row.import_status, "FAILED");
+        BOOST_REQUIRE_EQUAL(row.failure_code.value_or(""), "S3NoSuchBucket");
+        BOOST_REQUIRE(std::holds_alternative<alternator::api_error>(exec.describe_table("unlistable")));
+    }, import_test_config());
+}
+
+// An import of a prefix with no objects completes with zero counters and ProcessedSizeBytes 0, and
+// leaves an ACTIVE table with the TableId it reported, as DynamoDB does.
+SEASTAR_TEST_CASE(test_import_of_no_objects) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        alternator_test_executor exec;
+        exec.start(e);
+        auto stop_exec = defer([&] noexcept { try { exec.stop(); } catch (...) { std::terminate(); } });
+
+        exec.set_source({});
+        auto response = exec.import_table_successfully(make_import_table_request("no_objects", "token-no-objects"));
+        auto row = wait_for_import(e, sstring(get_string(rjson::get(response, "ImportTableDescription"), "ImportArn")));
+        BOOST_REQUIRE_EQUAL(row.import_status, "COMPLETED");
+        BOOST_REQUIRE_EQUAL(row.processed_item_count, 0);
+        BOOST_REQUIRE_EQUAL(row.imported_item_count, 0);
+        BOOST_REQUIRE_EQUAL(row.error_count, 0);
+        BOOST_REQUIRE_EQUAL(row.processed_size_bytes.value_or(-1), 0);
+        auto described = std::get<rjson::value>(exec.describe_table("no_objects"));
+        BOOST_REQUIRE_EQUAL(get_string(rjson::get(described, "Table"), "TableStatus"), "ACTIVE");
+        BOOST_REQUIRE_EQUAL(get_string(rjson::get(described, "Table"), "TableId"),
+                get_string(rjson::get(response, "ImportTableDescription"), "TableId"));
+    }, import_test_config());
+}
+
+// A table with the name of the target created after the import was accepted, and before the import
+// creates its table (after listing the source, which the test holds), fails the import with
+// TableAlreadyExists. That table is left as it is: ACTIVE, with its own id and items.
+SEASTAR_TEST_CASE(test_import_table_created_meanwhile) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        alternator_test_executor exec;
+        exec.start(e);
+        auto stop_exec = defer([&] noexcept { try { exec.stop(); } catch (...) { std::terminate(); } });
+
+        auto table_created = make_lw_shared<promise<>>();
+        bool table_created_set = false;
+        // Releases the source before the executor stops, so that the import ends also if the test
+        // fails before it releases the source itself.
+        auto release_source = defer([&] () noexcept {
+            if (!table_created_set) {
+                table_created->set_value();
+            }
+        });
+        exec.set_source_factory_on_this_shard([table_created] (sstring, sstring, abort_source&) {
+            return table_created->get_future().then([] {
+                std::vector<std::pair<sstring, std::shared_ptr<alternator::in_memory_test_storage>>> storages;
+                auto storage = std::make_shared<alternator::in_memory_test_storage>();
+                const std::string content = item_line("a", 1, "imported");
+                storage->append(std::as_bytes(std::span(content)));
+                storages.emplace_back("prefix/0", std::move(storage));
+                return alternator::make_in_memory_import_source(std::move(storages));
+            });
+        });
+
+        auto response = exec.import_table_successfully(make_import_table_request("created_meanwhile", "token-created-meanwhile"));
+        exec.create_table(make_create_table_request("created_meanwhile"));
+        exec.put_item(rjson::parse(R"({"TableName": "created_meanwhile",
+                "Item": {"p": {"S": "a"}, "c": {"N": "1"}, "v": {"S": "user"}}})"));
+        table_created->set_value();
+        table_created_set = true;
+
+        auto row = wait_for_import(e, sstring(get_string(rjson::get(response, "ImportTableDescription"), "ImportArn")));
+        BOOST_REQUIRE_EQUAL(row.import_status, "FAILED");
+        BOOST_REQUIRE_EQUAL(row.failure_code.value_or(""), "TableAlreadyExists");
+        BOOST_REQUIRE(!row.target_table_existed);
+        BOOST_REQUIRE_EQUAL(row.processed_item_count, 0);
+        BOOST_REQUIRE_EQUAL(row.imported_item_count, 0);
+        auto described = std::get<rjson::value>(exec.describe_table("created_meanwhile"));
+        BOOST_REQUIRE_EQUAL(get_string(rjson::get(described, "Table"), "TableStatus"), "ACTIVE");
+        BOOST_REQUIRE_NE(get_string(rjson::get(described, "Table"), "TableId"),
+                get_string(rjson::get(response, "ImportTableDescription"), "TableId"));
+        BOOST_REQUIRE_EQUAL(exec.get_item_v("created_meanwhile", "a", "1"), "user");
     }, import_test_config());
 }
 
@@ -480,3 +714,77 @@ SEASTAR_TEST_CASE(test_import_client_token_replay_before_import_row) {
         BOOST_REQUIRE_EQUAL(get_string(replay_description, "TableId"), table_id);
     }, import_test_config());
 }
+
+#ifdef SCYLLA_ENABLE_ERROR_INJECTION
+
+// Stopping the node during an import fails it with ImportInterrupted.
+SEASTAR_TEST_CASE(test_import_interrupted_by_shutdown) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        alternator_test_executor exec;
+        exec.start(e);
+        bool stopped = false;
+        auto stop_exec = defer([&] noexcept { if (!stopped) { try { exec.stop(); } catch (...) { std::terminate(); } } });
+
+        constexpr auto pause = "alternator_import_from_s3_pause_in_item_handler";
+        utils::get_local_injector().enable_on_all(pause).get();
+        auto disable = defer([&] noexcept { utils::get_local_injector().disable_on_all(pause).get(); });
+        exec.set_source({{"0", item_line("a", 1, "x")}});
+
+        auto response = exec.import_table_successfully(make_import_table_request("shutdown", "token-shutdown"));
+        const sstring import_arn(get_string(rjson::get(response, "ImportTableDescription"), "ImportArn"));
+        wait_until([&] { return utils::error_injection<true>::enter_count_on_all(pause).get() > 0; }, "the import to pause");
+
+        stopped = true;
+        exec.stop();
+        auto row = wait_for_import(e, import_arn);
+        BOOST_REQUIRE_EQUAL(row.import_status, "FAILED");
+        BOOST_REQUIRE_EQUAL(row.failure_code.value_or(""), "ImportInterrupted");
+    }, import_test_config());
+}
+
+// A write which keeps failing, after its retries, fails the import with WriteFailed.
+SEASTAR_TEST_CASE(test_import_write_failure) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        alternator_test_executor exec;
+        exec.start(e);
+        auto stop_exec = defer([&] noexcept { try { exec.stop(); } catch (...) { std::terminate(); } });
+
+        constexpr auto fail_writes = "alternator_import_from_s3_write";
+        utils::get_local_injector().enable_on_all(fail_writes).get();
+        auto disable = defer([&] noexcept { utils::get_local_injector().disable_on_all(fail_writes).get(); });
+        exec.set_source({{"0", item_line("a", 1, "x")}});
+
+        auto response = exec.import_table_successfully(make_import_table_request("write_failure", "token-write-failure"));
+        auto row = wait_for_import(e, sstring(get_string(rjson::get(response, "ImportTableDescription"), "ImportArn")));
+        BOOST_REQUIRE_EQUAL(row.import_status, "FAILED");
+        BOOST_REQUIRE_EQUAL(row.failure_code.value_or(""), "WriteFailed");
+        BOOST_REQUIRE_EQUAL(row.processed_item_count, 1);
+        BOOST_REQUIRE_EQUAL(row.imported_item_count, 0);
+        // The table is kept, and the import does not leave it CREATING.
+        auto described = std::get<rjson::value>(exec.describe_table("write_failure"));
+        BOOST_REQUIRE_EQUAL(get_string(rjson::get(described, "Table"), "TableStatus"), "ACTIVE");
+    }, import_test_config());
+}
+
+// A write of the final state of an import which fails is retried in the background.
+SEASTAR_TEST_CASE(test_import_final_write_is_retried) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        alternator_test_executor exec;
+        exec.start(e);
+        auto stop_exec = defer([&] noexcept { try { exec.stop(); } catch (...) { std::terminate(); } });
+
+        constexpr auto fail = "alternator_import_from_s3_final_write";
+        utils::get_local_injector().enable_on_all(fail, true).get();
+        auto disable = defer([&] noexcept { utils::get_local_injector().disable_on_all(fail).get(); });
+        exec.set_source({{"0", item_line("a", 1, "x")}});
+
+        auto response = exec.import_table_successfully(make_import_table_request("final_write", "token-final-write"));
+        auto row = wait_for_import(e, sstring(get_string(rjson::get(response, "ImportTableDescription"), "ImportArn")));
+        BOOST_REQUIRE_EQUAL(row.import_status, "COMPLETED");
+        BOOST_REQUIRE_EQUAL(row.imported_item_count, 1);
+        // The one-shot injection is disabled once it failed the write. The import ran on this shard.
+        BOOST_REQUIRE(!utils::get_local_injector().is_enabled(fail));
+    }, import_test_config());
+}
+
+#endif // SCYLLA_ENABLE_ERROR_INJECTION
