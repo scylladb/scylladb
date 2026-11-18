@@ -136,6 +136,9 @@ class executor::s3_imports {
     seastar::gate _gate;
     // stop() aborts it before it closes _gate, to stop the imports early.
     seastar::abort_source _as;
+    // The number of reserved import slots on this shard: of ImportTable requests being accepted, of
+    // running imports and of final writes being retried. See try_reserve_import_slot().
+    size_t _reserved_import_slots = 0;
     import_source_factory _source_factory;
 
     // Runs one import. Defined in import.cc.
@@ -147,14 +150,29 @@ class executor::s3_imports {
     future<> remove_import_in_progress_tag(::table_id table_id, sstring import_arn, bool wait_for_agreement);
 public:
     explicit s3_imports(executor& e);
+    // A reserved slot of _reserved_import_slots. ImportTable holds it until it starts the import, then the
+    // import fiber holds it, then finish_import_in_background() if needed. The destructor releases it.
+    class slot {
+        size_t* _counter;
+        friend class s3_imports;
+        explicit slot(size_t& counter) noexcept : _counter(&counter) { ++*_counter; }
+    public:
+        slot(slot&& other) noexcept : _counter(std::exchange(other._counter, nullptr)) {}
+        slot& operator=(slot&&) = delete;
+        ~slot() { if (_counter) { --*_counter; } }
+    };
+    // Reserves an import slot on this shard. Returns nullopt if
+    // alternator_max_concurrent_imports_per_shard slots are already reserved.
+    std::optional<slot> try_reserve_import_slot();
     // Starts the background fiber which runs the import of `row`, which ImportTable has just
     // inserted as IN_PROGRESS and owned by this node.
-    void start_import(import_row row);
+    void start_import(slot import_slot, import_row row);
     // Starts a background fiber which writes the terminal state of `row`, retrying until the write
-    // succeeds or the node stops. For a caller whose write of that state failed and which cannot
-    // wait: the garbage collector does not collect the rows of the current incarnation of this
-    // node, so this node must finish them.
-    void finish_import_in_background(import_row row);
+    // succeeds or the node stops, and keeps `import_slot` until then. For a caller whose write of
+    // that state failed and which cannot wait: the garbage collector does not collect the rows of
+    // the current incarnation of this node, so this node must finish them. The import fiber and
+    // ImportTable pass their slot.
+    void finish_import_in_background(slot import_slot, import_row row);
     // Replaces the source of the imports which start after the call. For tests: the default
     // source does not read S3 yet.
     void set_source_factory(import_source_factory factory) { _source_factory = std::move(factory); }

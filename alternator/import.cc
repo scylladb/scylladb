@@ -1329,19 +1329,28 @@ executor::s3_imports::s3_imports(executor& e)
     , _source_factory(make_s3_import_source)
 {}
 
-void executor::s3_imports::start_import(import_row row) {
+// Reads the live configuration on each call. If the limit decreases below the number of running
+// imports, they continue.
+auto executor::s3_imports::try_reserve_import_slot() -> std::optional<slot> {
+    if (_reserved_import_slots >= _e._proxy.data_dictionary().get_config().alternator_max_concurrent_imports_per_shard()) {
+        return std::nullopt;
+    }
+    return slot(_reserved_import_slots);
+}
+
+void executor::s3_imports::start_import(slot import_slot, import_row row) {
     auto import_arn = row.import_arn;
     // run() writes failures to the import row, so an exception from it is unexpected (e.g.
-    // bad_alloc). The continuation passes the row to finish_import_in_background() if the final
-    // write is still to be done.
+    // bad_alloc). The continuation holds the slot until run() ends, and passes it to
+    // finish_import_in_background() if the final write is still to be done.
     // The task is allocated before the fiber, so that a failure to allocate it throws to the
     // caller.
     auto task = std::make_unique<import_task>(_e, _as, std::move(row), _source_factory);
     (void)with_gate(_gate, [&] {
         auto& task_ref = *task;
-        return task_ref.run().then([this] (std::optional<import_row> unwritten) mutable {
+        return task_ref.run().then([this, import_slot = std::move(import_slot)] (std::optional<import_row> unwritten) mutable {
             if (unwritten) {
-                finish_import_in_background(std::move(*unwritten));
+                finish_import_in_background(std::move(import_slot), std::move(*unwritten));
             }
         }).handle_exception([import_arn = std::move(import_arn)] (std::exception_ptr ep) {
             ilogger.error("Background fiber of import {} failed unexpectedly: {}", import_arn, ep);
@@ -1353,7 +1362,7 @@ void executor::s3_imports::start_import(import_row row) {
     });
 }
 
-void executor::s3_imports::finish_import_in_background(import_row row) {
+void executor::s3_imports::finish_import_in_background(slot import_slot, import_row row) {
     if (_gate.is_closed()) {
         // The executor stops. A garbage collector collects the row once the node restarted, was
         // unreachable for an hour, or was removed.
@@ -1367,7 +1376,7 @@ void executor::s3_imports::finish_import_in_background(import_row row) {
             return write_final_import_row(_e._sdks, row_ref, _as);
         }).handle_exception([&row_ref] (std::exception_ptr ep) {
             ilogger.warn("Background fiber finishing import {} gave up: {}", row_ref.import_arn, ep);
-        }).finally([row_ptr = std::move(row_ptr)] {});
+        }).finally([row_ptr = std::move(row_ptr), import_slot = std::move(import_slot)] {});
     });
 }
 
@@ -1402,7 +1411,8 @@ future<executor::request_return_type> executor::import_table(service::client_sta
     // is known. Refused only after the lookup, because a replay starts no
     // import: what Alternator does not support yet (see
     // import_table_request::unsupported), the cluster-dependent checks of
-    // check_new_table() and the shutdown refusal.
+    // check_new_table(), the refusals of a node which shuts down or does
+    // not gossip, and the concurrency limit.
     const auto tablets_mode = _proxy.data_dictionary().get_config().tablets_mode_for_new_keyspaces();
     import_table_request parsed = parse_import_table_request(request, _proxy.features(), tablets_mode);
     const auto& keyspace_name = parsed.validated_table_params.keyspace_name;
@@ -1480,6 +1490,17 @@ future<executor::request_return_type> executor::import_table(service::client_sta
         table_id = parsed.validated_table_params.builder.uuid();
     }
 
+    // Reserve the slot before the first write, so that a refused request writes no rows. If the
+    // slot is given neither to start_import() nor to finish_import_in_background(), it is released
+    // when this function returns.
+    auto import_slot = _s3_imports->try_reserve_import_slot();
+    if (!import_slot) {
+        co_return api_error::limit_exceeded(fmt::format(
+                "Too many imports are already running - at most {} of them may run at once on one shard "
+                "(configuration variable alternator_max_concurrent_imports_per_shard). Please retry the operation later.",
+                _proxy.data_dictionary().get_config().alternator_max_concurrent_imports_per_shard()));
+    }
+
     const auto accepted_at = db_clock::now();
     const auto import_id = generate_import_id(accepted_at);
     rjson::value table_arn = generate_arn_for_table(keyspace_name, table_name);
@@ -1528,7 +1549,7 @@ future<executor::request_return_type> executor::import_table(service::client_sta
     // Build the response before the fiber starts: a failure after that must not fail the
     // import which the fiber runs.
     auto response = make_import_table_response(row);
-    _s3_imports->start_import(row);
+    _s3_imports->start_import(std::move(*import_slot), row);
     co_return response;
 }
 
