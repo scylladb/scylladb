@@ -102,6 +102,10 @@ public:
     node_size serialized_size(const writer_node& x, sink_pos pos) const;
     // Page size, same as the one passed via the constructor.
     uint64_t page_size() const;
+    // The usable size of an empty page. Equal to page_size().
+    uint64_t page_capacity() const;
+    // The size of a chunk table entry. 0, because pages have no chunk tables.
+    uint64_t table_entry_size() const;
     // Returns the number of bytes between current file position
     // and the start of the next page.
     // In range [0; page_size).

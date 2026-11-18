@@ -508,6 +508,14 @@ uint64_t bti_node_sink::page_size() const {
     return _page_size;
 }
 
+uint64_t bti_node_sink::page_capacity() const {
+    return _page_size;
+}
+
+uint64_t bti_node_sink::table_entry_size() const {
+    return 0;
+}
+
 uint64_t bti_node_sink::bytes_left_in_page() const {
     return round_up(pos().value + 1, page_size()) - pos().value;
 };
