@@ -30,6 +30,7 @@
 #include "tracing/trace_state.hh"
 #include "utils/UUID.hh"
 #include "utils/rjson.hh"
+#include "utils/utf8.hh"
 
 namespace alternator {
 
@@ -50,13 +51,21 @@ static bool is_terminal_status(std::string_view status) {
 
 // ClientToken must match the pattern DynamoDB documents for it, ^[^$]+$:
 // at least one character, none of which is '$'. The caller already
-// refuses an empty one.
+// refuses an empty one. The token is also the partition key of the client
+// token table, where a long key makes the insert fail, so its length (in
+// bytes) is kept well below the limit of a key.
+static constexpr size_t max_client_token_length = 1024;
 static bool is_valid_client_token(std::string_view client_token) {
-    return !client_token.contains('$');
+    return !client_token.contains('$') && client_token.size() <= max_client_token_length;
 }
 
-// Like ExportTableToPointInTime, only check that S3Bucket is a non-empty
-// string, and leave validating the bucket name and the prefix to S3.
+// The lengths of S3Bucket and S3KeyPrefix are limited as DynamoDB limits
+// them, because the import row (kept for 90 days) and the client token row
+// store them. Otherwise, like ExportTableToPointInTime, only check that
+// S3Bucket is a non-empty string, and leave validating the bucket name and
+// the prefix to S3.
+static constexpr size_t max_s3_bucket_length = 255;
+static constexpr size_t max_s3_key_prefix_length = 1024;
 static std::pair<std::string, std::string> get_bucket_and_prefix(const rjson::value& request) {
     const rjson::value* s3_bucket_source = rjson::find(request, "S3BucketSource");
     if (!s3_bucket_source) {
@@ -70,6 +79,12 @@ static std::pair<std::string, std::string> get_bucket_and_prefix(const rjson::va
     }
     std::string s3_bucket = get_non_empty_string_attribute(*s3_bucket_source, "S3Bucket");
     std::string s3_key_prefix = get_string_attribute(*s3_bucket_source, "S3KeyPrefix", "");
+    if (s3_bucket.size() > max_s3_bucket_length) {
+        throw api_error::validation(fmt::format("S3Bucket attribute: must be at most {} bytes long", max_s3_bucket_length));
+    }
+    if (s3_key_prefix.size() > max_s3_key_prefix_length) {
+        throw api_error::validation(fmt::format("S3KeyPrefix attribute: must be at most {} bytes long", max_s3_key_prefix_length));
+    }
     return {std::move(s3_bucket), std::move(s3_key_prefix)};
 }
 
@@ -118,7 +133,16 @@ import_table_request parse_import_table_request(const rjson::value& request, con
     // Documented as optional, but DynamoDB requires it.
     auto client_token = get_non_empty_string_attribute(request, "ClientToken");
     if (!is_valid_client_token(client_token)) {
-        throw api_error::validation("ClientToken attribute: value does not match the required pattern ^[^$]+$");
+        throw api_error::validation(fmt::format("ClientToken attribute: value does not match the required pattern ^[^$]+$, "
+                "or is longer than {} bytes", max_client_token_length));
+    }
+    // The parser of requests does not check that strings are valid UTF-8, but the text columns of
+    // the import tables do: such a ClientToken (the key of the client token row) or stored request
+    // would fail with an internal error. rjson::print() copies the bytes of strings, so checking the
+    // printed request checks all its strings.
+    const std::string printed_request = rjson::print(request);
+    if (!utils::utf8::validate(reinterpret_cast<const uint8_t*>(printed_request.data()), printed_request.size())) {
+        throw api_error::validation("ImportTable request: the strings must be valid UTF-8");
     }
 
     // FIXME: CSV and ION are not supported yet.

@@ -311,3 +311,25 @@ SEASTAR_TEST_CASE(test_import_client_token_replay_before_import_row) {
         BOOST_REQUIRE_EQUAL(get_string(replay_description, "TableId"), table_id);
     });
 }
+
+// A string which is not valid UTF-8, which the parser of requests lets through, is refused with
+// ValidationException before any row is written: the text columns of the import tables could not
+// store it. Here in the ClientToken (the key of the client token row), and in S3Bucket.
+SEASTAR_TEST_CASE(test_import_refuses_invalid_utf8) {
+    return with_import_executor([] (cql_test_env& e, alternator_test_executor& exec) {
+        auto require_refused = [&] (rjson::value request) {
+            auto result = exec.import_table(std::move(request));
+            auto* err = std::get_if<alternator::api_error>(&result);
+            BOOST_REQUIRE(err);
+            BOOST_REQUIRE_EQUAL(err->_type, "ValidationException");
+        };
+        auto invalid_token = make_import_table_request("invalid_utf8", "token");
+        rjson::replace_with_string_name(invalid_token, "ClientToken", rjson::from_string("token-\xff"));
+        require_refused(std::move(invalid_token));
+        auto invalid_bucket = make_import_table_request("invalid_utf8", "token-invalid-bucket");
+        rjson::replace_with_string_name(rjson::get(invalid_bucket, "S3BucketSource"), "S3Bucket", rjson::from_string("bucket-\xff"));
+        require_refused(std::move(invalid_bucket));
+        BOOST_REQUIRE(!db::alternator_import_table_helper(e.qp().local()).get_client_token("token-invalid-bucket").get());
+    });
+}
+

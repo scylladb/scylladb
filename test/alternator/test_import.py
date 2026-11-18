@@ -579,6 +579,22 @@ def test_client_token_invalid(dynamodb):
         with pytest.raises(ClientError, match='ValidationException.*[Cc]lientToken'):
             dynamodb.meta.client.import_table(**kwargs)
 
+# Alternator refuses a ClientToken longer than 1024 bytes - the token is the
+# partition key of an internal table - while DynamoDB documents no maximum.
+# The limit is in bytes: 342 three-byte characters are 1026 bytes. A token of
+# exactly 1024 bytes is accepted.
+def test_client_token_too_long(dynamodb, scylla_only):
+    for token in ['x' * 1025, '\u65e5' * 342]:
+        kwargs = import_kwargs(unique_bucket_name(), unique_prefix('unused'),
+                               ClientToken=token)
+        with pytest.raises(ClientError, match='ValidationException.*[Cc]lientToken.*1024 bytes'):
+            dynamodb.meta.client.import_table(**kwargs)
+    # A random token: an accepted one is kept for 8 hours, and a run of the
+    # test on the same server within them would replay it with another table.
+    kwargs = import_kwargs(unique_bucket_name(), unique_prefix('unused'),
+                           ClientToken=random_string(1024))
+    dynamodb.meta.client.import_table(**kwargs)
+
 # A well-formed ARN of an import which does not exist.
 def unknown_import_arn(table):
     return f'{get_table_arn(table)}/import/{int(time.time() * 1000):014}-0badf00d'
@@ -1073,12 +1089,10 @@ def test_csv_options_with_dynamodb_json_rejected(dynamodb):
     pytest.param({'InputCompressionType': 'BZIP2'}, '[Ii]nputCompressionType', id='bad_compression'),
     pytest.param({'S3BucketSource': None}, '[Ss]3BucketSource', id='missing_bucket_source'),
     pytest.param({'S3BucketSource': {'S3Bucket': None}}, '[Ss]3Bucket', id='missing_bucket'),
-    pytest.param({'S3BucketSource': {'S3Bucket': 'x' * 256}}, '[Ss]3Bucket', id='bucket_too_long',
-                 marks=pytest.mark.xfail(reason="Alternator leaves validating the S3 bucket name and key prefix to S3")),
+    pytest.param({'S3BucketSource': {'S3Bucket': 'x' * 256}}, '[Ss]3Bucket', id='bucket_too_long'),
     pytest.param({'S3BucketSource': {'S3Bucket': '-nope!'}}, '[Ss]3Bucket', id='bucket_bad_chars',
-                 marks=pytest.mark.xfail(reason="Alternator leaves validating the S3 bucket name and key prefix to S3")),
-    pytest.param({'S3BucketSource': {'S3KeyPrefix': 'p' * 1025}}, '[Ss]3KeyPrefix', id='prefix_too_long',
-                 marks=pytest.mark.xfail(reason="Alternator leaves validating the S3 bucket name and key prefix to S3")),
+                 marks=pytest.mark.xfail(reason="Alternator leaves validating the characters of the S3 bucket name to S3")),
+    pytest.param({'S3BucketSource': {'S3KeyPrefix': 'p' * 1025}}, '[Ss]3KeyPrefix', id='prefix_too_long'),
     pytest.param({'TableCreationParameters': {'TableName': 'n' * 256}}, '[Tt]ableName', id='name_too_long'),
     pytest.param({'TableCreationParameters': {'TableName': 'not a table name!'}},
                  '[Tt]ableName', id='name_bad_chars'),
