@@ -43,6 +43,8 @@
 #include <seastar/core/abort_source.hh>
 #include <seastar/util/defer.hh>
 
+#include <algorithm>
+
 namespace service::strong_consistency {
 
 using namespace locator;
@@ -776,6 +778,8 @@ future<> groups_manager::leader_info_updater(raft_group_state& state, table_id t
             logger.trace("The raft group of tablet {}, group id {}, is in term {} with leader {}.",
                 tablet, gid, current_term, current_leader);
 
+            notify_leader_change(gid, state);
+
             const bool leading = current_leader == server_id;
             const bool up_to_date = leading
                     ? state.leader_info && state.leader_info->term == current_term
@@ -1340,13 +1344,25 @@ void groups_manager::update(token_metadata_ptr new_tm) {
             state.has_tablet = true;
             // During a migration within the rack, both the leaving and the pending replica may
             // be listed; Raft takes whichever is a voter.
-            auto priority_members = preferred_leaders(preferred_rack,
+            state.preferred_leaders = preferred_leaders(preferred_rack,
                     serving_replicas(tablet_map.get_tablet_info(tid), tablet_map.get_tablet_transition_info(tid)),
                     new_tm->get_topology());
             if (const auto host = utils::get_local_injector().inject_parameter<std::string_view>("sc_preferred_leader_override")) {
-                priority_members = {raft::server_id(utils::UUID(*host))};
+                state.preferred_leaders = {raft::server_id(utils::UUID(*host))};
             }
-            set_priority_members(state, id, std::move(priority_members));
+            if (parent_id) {
+                // We set the child's priority members ahead of its start below, because a new
+                // child elects its first leader on the first of them.
+                if (!colocate_leader(id)) {
+                    _colocation_pending.insert(id);
+                    _colocation_cond.signal();
+                }
+            } else {
+                state.replacement_groups = tablet_map.has_raft_resize_info(tid)
+                        ? tablet_map.get_raft_resize_info(tid).new_gids
+                        : locator::raft_group_id_list{};
+                set_priority_members(state, id, state.preferred_leaders);
+            }
             // Start the server, unless it is started or starting already and not being
             // deleted. A new server gets the list on its start.
             if (!state.gate || state.gate->is_closed()) {
@@ -1423,8 +1439,92 @@ void groups_manager::set_priority_members(raft_group_state& state, raft::group_i
     }
 }
 
+bool groups_manager::colocate_leader(raft::group_id child_gid) {
+    const auto parent_gid = _resize_tracker.get_parent_group(child_gid);
+    const auto child_it = _raft_groups.find(child_gid);
+    if (!parent_gid || child_it == _raft_groups.end()) {
+        // The resize is over on this replica, or the child is gone.
+        return true;
+    }
+    const auto parent_it = _raft_groups.find(*parent_gid);
+    if (parent_it == _raft_groups.end()) {
+        // The parent is gone, so the resize is over as well.
+        return true;
+    }
+    auto& child_state = child_it->second;
+    auto& parent_state = parent_it->second;
+
+    const auto parent = parent_state.gate ? try_acquire_server(parent_state) : std::nullopt;
+    const auto parent_leader = parent ? parent->server().current_leader() : raft::server_id{};
+
+    auto members = child_state.preferred_leaders;
+    if (parent_leader && !std::ranges::contains(members, parent_leader)) {
+        members.push_back(parent_leader);
+    }
+    if (members != child_state.priority_members) {
+        logger.debug("colocate_leader: group {} prefers {}, its parent {} is led by {}",
+            child_gid, members, *parent_gid, parent_leader);
+        set_priority_members(child_state, child_gid, std::move(members));
+    }
+    if (!parent_leader) {
+        return false;
+    }
+
+    const auto child = child_state.gate ? try_acquire_server(child_state) : std::nullopt;
+    if (!child) {
+        return false;
+    }
+    return !child->server().is_leader() || parent_leader == child->server().id();
+}
+
+void groups_manager::notify_leader_change(raft::group_id gid, const raft_group_state& state) {
+    const bool is_child = _resize_tracker.get_parent_group(gid).has_value();
+    if (!is_child && state.replacement_groups.empty()) {
+        return;
+    }
+    if (is_child) {
+        _colocation_pending.insert(gid);
+    }
+    _colocation_pending.insert(state.replacement_groups.begin(), state.replacement_groups.end());
+    _colocation_cond.signal();
+}
+
+future<> groups_manager::leader_colocator() {
+    // The children we have to look at again in the next round.
+    std::vector<raft::group_id> unsettled;
+    try {
+        while (true) {
+            if (_colocation_pending.empty()) {
+                if (unsettled.empty()) {
+                    co_await _colocation_cond.wait();
+                } else {
+                    // Raft re-checks the priority members once per tick, so we look no more often.
+                    co_await _colocation_cond.wait(get_tick_interval())
+                            .handle_exception_type([] (const condition_variable_timed_out&) {});
+                }
+            }
+
+            // _colocation_pending gains groups while we yield below, so we take what it holds now.
+            auto children = std::exchange(_colocation_pending, {});
+            children.insert(unsettled.begin(), unsettled.end());
+            unsettled.clear();
+            for (const auto child_gid : children) {
+                if (!colocate_leader(child_gid)) {
+                    unsettled.push_back(child_gid);
+                }
+                co_await coroutine::maybe_yield();
+            }
+        }
+    } catch (const broken_condition_variable&) {
+        logger.debug("leader_colocator(): stopping");
+    } catch (...) {
+        on_internal_error_noexcept(logger, ::format("leader_colocator(): unexpected exception: {}", std::current_exception()));
+    }
+}
+
 void groups_manager::start() {
     _started = true;
+    _leader_colocator = leader_colocator();
 
     // Register the commitlog's flush handler, which tells every group how far the
     // commitlog has closed segments. Gated on the configuration flag: the cluster
@@ -1544,6 +1644,9 @@ future<> groups_manager::stop_shard() {
         co_return;
     }
     logger.info("stop_shard() enter");
+
+    _colocation_cond.broken();
+    co_await std::exchange(_leader_colocator, make_ready_future<>());
 
     // The segments must survive so replay can recover the log.
     schedule_raft_groups_deletion(true, log_disposition::keep);

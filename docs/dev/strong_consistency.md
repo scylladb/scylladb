@@ -608,8 +608,10 @@ both are listed if they are in the rack. Raft takes the first of them which can 
 
 `groups_manager::update()` recomputes the list on every token metadata change and passes
 it to the group's server when it changes, so migrations, topology changes and an altered
-`preferred_rack` are picked up without restarting the group. Keyspaces without a preferred
-rack have empty lists, and Raft spreads the leadership over all replicas as usual.
+`preferred_rack` are picked up without restarting the group. A child of a resize gets the
+same list, followed by the leader of its parent, until the resize is finalized. Keyspaces
+without a preferred rack have empty lists, and Raft spreads the leadership over all replicas as
+usual.
 
 ## Bootstrapping a fresh group
 
@@ -667,3 +669,51 @@ first, then the one the list ranks best.
 
 If `stepdown()` is called while a handover is in progress, for example on shutdown, the
 stepdown replaces the handover and uses its own target and timeout.
+
+## The children of a tablet resize
+
+While a resize is in progress, the leaders of the children are kept on the node which leads
+their parent. Requests will be handed off from the parent to its children, and a handed-off
+write will be timestamped by the leader of the child. Its timestamp has to come from the clock
+which timestamped the writes already in the parent's log.
+
+For as long as the resize is in progress, the list of a child therefore has one more server at
+its end, which is the leader of its parent as this replica knows it.
+`groups_manager::colocate_leader()` builds the list.
+
+No tablet migration runs during a resize, so a child has the replicas of its parent, and the
+parent's leader can always lead the child.
+
+- Without a preferred rack, the parent's leader is the only server on the list, and the child's
+  leader moves to it.
+- With a preferred rack whose replica is up, the leaders of the parent and of the child both
+  move to that replica. The parent's leader normally is that replica, and the list holds it
+  once.
+- With a preferred rack whose replica is down, Raft skips that replica, and the child's leader
+  moves to the parent's leader. Raft's failure detector reports a stopped server as down only
+  after about two seconds. Until then the parent's leader does not get the reserved election
+  slot of the child.
+
+While the parent is led away from a live replica in the preferred rack, the child can get to
+that replica before the parent does. The hand-off of requests to the child will wait until the
+parent joins it there.
+
+`groups_manager::update()` sets the list before it starts a child, because a fresh child starts
+its preferred leader as a candidate right away. That choice does not consider which servers are
+alive, so a child started while the replica in the preferred rack is down waits out an election
+timeout first. From then on a fiber per shard, `groups_manager::leader_colocator()`, updates
+the list whenever the Raft state of the child or of its parent changes on this replica, and
+sleeps otherwise.
+
+The fiber also updates the list on every tick while one of the following holds, because no
+change of the Raft state is certain to follow:
+
+- This replica knows no leader of the parent, so the list lacks its last server.
+- This replica leads the child without leading the parent. It is the one which hands the child
+  over, and Raft does not tell a follower that its leader changed, so the list has to be kept
+  at the parent's current leader.
+- The Raft server of the child or of the parent is still starting on this replica.
+
+A replica which only follows both groups gets no update until the token metadata changes, so
+its list can hold an earlier leader of the parent. That list only decides which election slot
+the replica itself takes, never where the leadership goes.

@@ -25,6 +25,7 @@
 
 #include <deque>
 #include <source_location>
+#include <unordered_set>
 
 namespace db {
 class system_keyspace;
@@ -159,8 +160,12 @@ class groups_manager : public peering_sharded_service<groups_manager> {
 
         shared_future<> server_control_op = make_ready_future<>();
 
-        // The priority members of the raft server; refreshed by update().
+        // The priority members of the raft server; refreshed by update(), and for a child of
+        // a resize by colocate_leader().
         std::vector<raft::server_id> priority_members;
+        // The preferred leaders of the group. They are its priority members, except that a
+        // child of a resize follows them with the leader of its parent.
+        std::vector<raft::server_id> preferred_leaders;
         // While armed, the raft server gets no priority members; see maybe_reset_priority_members().
         timer<lowres_clock> priority_members_hold;
         // When this replica gained the leadership lately, oldest first.
@@ -169,6 +174,9 @@ class groups_manager : public peering_sharded_service<groups_manager> {
         std::vector<raft::server_id> effective_priority_members() const {
             return priority_members_hold.armed() ? std::vector<raft::server_id>{} : priority_members;
         }
+
+        // The children replacing this group in a resize in progress, if any.
+        locator::raft_group_id_list replacement_groups;
 
         // Populated only when this node thinks it's a tablet raft group leader.
         std::optional<leader_info> leader_info = std::nullopt;
@@ -211,6 +219,12 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     // Ask table `id` to flush, in the background. `pos` only decides whether the
     // table skips the request.
     void request_flush(db::cf_id_type id, db::replay_position pos);
+
+    // The children of a resize whose priority members have to be brought up to date.
+    std::unordered_set<raft::group_id> _colocation_pending;
+    // Signalled when _colocation_pending gains a group, and broken when the shard stops.
+    condition_variable _colocation_cond;
+    future<> _leader_colocator = make_ready_future<>();
 
     // Should be called on the shard that hosts the Raft group
     future<> start_raft_group(locator::global_tablet_id tablet,
@@ -288,6 +302,27 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     // Replaces the priority members of the group's raft server. A started or starting server
     // gets them after the control operation in flight, if any.
     static void set_priority_members(raft_group_state& state, raft::group_id gid, std::vector<raft::server_id> members);
+
+    // Sets the priority members of `child_gid`, a child of a resize, to its preferred leaders
+    // followed by the parent's leader, if this replica knows one and it is not among them.
+    // Changes nothing if the resize is over on this replica.
+    //
+    // Returns false while one of the following holds. The caller must then call it again
+    // later, because no change of the raft state is certain to follow:
+    //  - this replica knows no leader of the parent,
+    //  - this replica leads the child but not the parent,
+    //  - the raft server of the child or of the parent is still starting.
+    bool colocate_leader(raft::group_id child_gid);
+
+    // Queues the children whose priority members a change of the raft state of `gid` may affect,
+    // namely `gid` if it is a child of a resize, and the children of `gid` if it has any.
+    void notify_leader_change(raft::group_id gid, const raft_group_state& state);
+
+    // Keeps the leader of every child of a resize co-located with the leader of its parent.
+    // Runs as one fiber per shard until the shard stops. Brings the priority members of the
+    // queued children up to date, looks at a child again once per raft tick for as long as its
+    // leader may still have to move, and sleeps when there are none.
+    future<> leader_colocator();
 
     void init_messaging_service();
 
