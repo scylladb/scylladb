@@ -232,6 +232,22 @@ static rjson::value make_stored_request(const import_table_request& parsed) {
     return request;
 }
 
+// True if a and b have the same regular columns. A put_or_delete_item stores an attribute as a
+// regular column's value if the schema it was built with has that column, and in the :attrs map
+// otherwise, so it can be built into a mutation of another schema only if they agree on these.
+static bool have_same_regular_columns(const schema& a, const schema& b) {
+    if (a.regular_columns_count() != b.regular_columns_count()) {
+        return false;
+    }
+    for (const auto& column : a.regular_columns()) {
+        const column_definition* other = b.get_column_definition(column.name());
+        if (!other || !other->is_regular() || other->type != column.type) {
+            return false;
+        }
+    }
+    return true;
+}
+
 // The client token table has no table_id column, so the request stored in a client token row
 // also holds the TableId of its import, for the answer to a replay before the import row is
 // written. Returns the nil id if the request has no TableId which can be read - a corrupt row.
@@ -499,7 +515,7 @@ class executor::s3_imports::import_task {
     std::optional<stored_import_request> _request;
     // The writes of the import do not belong to a user request.
     service::client_state _client_state{service::client_state::internal_tag{}};
-    // The target table, see refresh_schema().
+    // The target table. Refreshed when its schema changes, see refresh_schema().
     schema_ptr _schema;
     std::optional<write_item_index_info> _index_info;
 
@@ -602,6 +618,8 @@ class executor::s3_imports::import_task {
             throw import_failure(std::string(failure_table_deleted), fmt::format("The table {} was deleted during the import.", _request->table_name));
         }
         if (!_schema || table->schema()->version() != _schema->version()) {
+            // _schema changes only once _index_info is built: if building it throws, the next call
+            // tries again instead of leaving _index_info empty for the new version.
             auto schema = table->schema();
             _index_info.emplace(_e._proxy, *schema);
             _schema = std::move(schema);
@@ -686,6 +704,23 @@ class executor::s3_imports::import_task {
             try {
                 utils::get_local_injector().inject("alternator_import_from_s3_write",
                         [] { throw std::runtime_error("injected failure alternator_import_from_s3_write"); });
+                // The batch may have waited long, for a write slot or between attempts: write it
+                // with the current schema, which decides its write isolation and whether it goes
+                // to CDC, unless the regular columns changed (a CQL ALTER of the table) - then the
+                // mutation is built with the old schema, with which its items were encoded, and the
+                // replica upgrades it. This holds also for an LWT write which moves to the shard of
+                // its partition, see cas_write().
+                // The items stay validated against the schema they were built with, as in
+                // BatchWriteItem: an item which an index added meanwhile (UpdateTable) would refuse
+                // is written, as if the import wrote it just before the index was added.
+                if (auto table = _e._proxy.data_dictionary().try_find_table(_row.table_id)) {
+                    auto current = table->schema();
+                    for (auto& [schema, _] : batch) {
+                        if (have_same_regular_columns(*schema, *current)) {
+                            schema = current;
+                        }
+                    }
+                }
                 // do_batch_write() takes the batch by value, so `batch` stays for a retry.
                 co_await _e.do_batch_write(batch, _client_state, tracing::trace_state_ptr(), empty_service_permit());
                 _row.imported_item_count += items;
@@ -695,6 +730,11 @@ class executor::s3_imports::import_task {
             }
             if (_as.abort_requested()) {
                 _write_failure = _write_failure ? _write_failure : _as.abort_requested_exception_ptr();
+                co_return;
+            }
+            if (!_e._proxy.data_dictionary().try_find_table(_row.table_id)) {
+                _write_failure = _write_failure ? _write_failure : std::make_exception_ptr(import_failure(std::string(failure_table_deleted),
+                        fmt::format("The table {} was deleted during the import.", _request->table_name)));
                 co_return;
             }
             if (attempt == import_write_attempts) {
@@ -799,6 +839,11 @@ class executor::s3_imports::import_task {
             // As in DynamoDB, a line without an item ends the reading of its object.
             count_error(object_key, "the line has no Item member, the rest of the object is skipped");
             throw abandon_object();
+        }
+        // Once per batch, not per item: a new schema rebuilds _index_info. So the items of a batch
+        // are built with one schema, which add_to_batch() relies on when an item replaces another.
+        if (_batch.empty()) {
+            refresh_schema();
         }
         std::optional<put_or_delete_item> builder;
         std::string error;
