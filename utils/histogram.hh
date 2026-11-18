@@ -132,6 +132,8 @@ public:
     timed_rate_moving_average() : _timer([this]{_rates.update();}) {
 
     }
+    // The timer's callback captures this, so the object must stay where it is.
+    timed_rate_moving_average(timed_rate_moving_average&&) = delete;
     void mark(uint64_t n = 1) noexcept {
         _rates.mark(n);
     }
@@ -259,7 +261,8 @@ public:
         _summary.update();}, d) {
     }
 
-    summary_and_histogram(summary_and_histogram&&) = default;
+    // The timer's callback captures this, so the object must stay where it is.
+    summary_and_histogram(summary_and_histogram&&) = delete;
 
     template <typename Rep, typename Ratio>
     void mark(std::chrono::duration<Rep, Ratio> dur) noexcept {
