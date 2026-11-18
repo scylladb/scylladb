@@ -254,7 +254,7 @@ def check_pages_many_partitions(results, expected):
 
 @pytest.mark.parametrize("test_keyspace", ["tablets", "vnodes"], indirect=True)
 def test_partition_tombstone_prefix(cql, test_keyspace, lowered_tombstone_limit, driver_bug_1):
-    with new_test_table(cql, test_keyspace, 'pk int, ck int, v int, PRIMARY KEY (pk, ck)') as table:
+    with new_test_table(cql, test_keyspace, 'pk int, ck int, v int, PRIMARY KEY (pk, ck)', extra=" WITH tombstone_gc = {'mode': 'disabled'}") as table:
         insert_row_id = cql.prepare(f"INSERT INTO {table} (pk, ck, v) VALUES (?, ?, ?)")
         delete_partition_id = cql.prepare(f"DELETE FROM {table} WHERE pk = ?")
 
@@ -275,7 +275,7 @@ def test_partition_tombstone_prefix(cql, test_keyspace, lowered_tombstone_limit,
 
 @pytest.mark.parametrize("test_keyspace", ["tablets", "vnodes"], indirect=True)
 def test_partition_tombstone_span(cql, test_keyspace, lowered_tombstone_limit, driver_bug_1):
-    with new_test_table(cql, test_keyspace, 'pk int, ck int, v int, PRIMARY KEY (pk, ck)') as table:
+    with new_test_table(cql, test_keyspace, 'pk int, ck int, v int, PRIMARY KEY (pk, ck)', extra=" WITH tombstone_gc = {'mode': 'disabled'}") as table:
         insert_row_id = cql.prepare(f"INSERT INTO {table} (pk, ck, v) VALUES (?, ?, ?)")
         delete_partition_id = cql.prepare(f"DELETE FROM {table} WHERE pk = ?")
 
@@ -296,7 +296,7 @@ def test_partition_tombstone_span(cql, test_keyspace, lowered_tombstone_limit, d
 
 @pytest.mark.parametrize("test_keyspace", ["tablets", "vnodes"], indirect=True)
 def test_static_row_tombstone_prefix(cql, test_keyspace, lowered_tombstone_limit, driver_bug_1):
-    with new_test_table(cql, test_keyspace, 'pk int, ck int, v int, s int static, PRIMARY KEY (pk, ck)') as table:
+    with new_test_table(cql, test_keyspace, 'pk int, ck int, v int, s int static, PRIMARY KEY (pk, ck)', extra=" WITH tombstone_gc = {'mode': 'disabled'}") as table:
         upsert_row_id = cql.prepare(f"UPDATE {table} SET s = ? WHERE pk = ?")
         delete_partition_id = cql.prepare(f"DELETE FROM {table} WHERE pk = ?")
 
@@ -317,7 +317,7 @@ def test_static_row_tombstone_prefix(cql, test_keyspace, lowered_tombstone_limit
 
 @pytest.mark.parametrize("test_keyspace", ["tablets", "vnodes"], indirect=True)
 def test_static_row_tombstone_span(cql, test_keyspace, lowered_tombstone_limit, driver_bug_1):
-    with new_test_table(cql, test_keyspace, 'pk int, ck int, v int, s int static, PRIMARY KEY (pk, ck)') as table:
+    with new_test_table(cql, test_keyspace, 'pk int, ck int, v int, s int static, PRIMARY KEY (pk, ck)', extra=" WITH tombstone_gc = {'mode': 'disabled'}") as table:
         upsert_row_id = cql.prepare(f"UPDATE {table} SET s = ? WHERE pk = ?")
         delete_partition_id = cql.prepare(f"DELETE FROM {table} WHERE pk = ?")
 
@@ -369,7 +369,7 @@ def test_filtering_query_tombstone_suffix_last_position(cql, test_keyspace, lowe
     Check that when filtering drops rows in a short page due to tombstone suffix,
     the tombstone-suffix is not re-requested on the next page.
     """
-    with new_test_table(cql, test_keyspace, 'pk int, ck int, v int, PRIMARY KEY (pk, ck)') as table:
+    with new_test_table(cql, test_keyspace, 'pk int, ck int, v int, PRIMARY KEY (pk, ck)', extra=" WITH tombstone_gc = {'mode': 'disabled'}") as table:
         insert_row_id = cql.prepare(f"INSERT INTO {table} (pk, ck, v) VALUES (?, ?, ?)")
         delete_row_id = cql.prepare(f"DELETE FROM {table} WHERE pk = ? AND ck = ?")
 
