@@ -33,6 +33,15 @@ PAYLOAD_KEY = "tablets-routing-v2"
 PROTOCOL_ERROR = 0x000A
 
 
+# The extension is about tablets, so without them (e.g. with --vnodes), a test
+# checking that a response carries no routing information would pass whatever
+# the server does.
+@pytest.fixture(scope="module", autouse=True)
+def tablets_only(has_tablets):
+    if not has_tablets:
+        skip_env("Routing information is about tablets")
+
+
 # Opens a connection to the server. It negotiates the protocol extension unless
 # told otherwise.
 @pytest.fixture(scope="module")
@@ -205,8 +214,6 @@ def test_no_routing_information_for_literal_partition_key_strongly_consistent(cq
 # with the plan of the first page. It's still the statement the driver
 # prepared, so the server still checks the tablet version block.
 def test_routing_information_after_query_plan_change(cql, connect, test_keyspace_tablets):
-    if not test_keyspace_tablets:
-        skip_env("The test needs a keyspace with tablets")
     with new_test_table(cql, test_keyspace_tablets, "pk int, ck int, v int, PRIMARY KEY (pk, ck)") as table, connect() as sock:
         for ck in range(2):
             cql.execute(f"INSERT INTO {table} (pk, ck, v) VALUES (1, {ck}, 1)")
