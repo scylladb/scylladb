@@ -11,6 +11,7 @@
 import collections
 import re
 import time
+import uuid
 
 import pytest
 from cassandra.cluster import ConsistencyLevel, NoHostAvailable
@@ -20,7 +21,7 @@ from cassandra.query import BatchStatement, BatchType, SimpleStatement
 
 from . import nodetool
 from .test_service_levels import new_service_level
-from .util import ScyllaMetrics, config_value_context, new_materialized_view, new_session, new_test_keyspace, new_test_table, new_user, unique_name
+from .util import ScyllaMetrics, config_value_context, new_materialized_view, new_session, new_test_keyspace, new_test_table, new_type, new_user, unique_name
 
 
 def test_reject_user_provided_timestamps(cql, sc_keyspace):
@@ -1124,3 +1125,180 @@ def test_reject_mixed_batch_native_protocol(cql, sc_keyspace, test_keyspace):
         # Neither half of a rejected batch may be applied.
         assert list(cql.execute(f"SELECT pk, v FROM {sc_table} WHERE pk = 1")) == []
         assert list(cql.execute(f"SELECT pk, v FROM {ec_table} WHERE pk = 1")) == []
+
+
+#############################################################################
+# Tests for the CREATE TABLE options which a strongly consistent keyspace
+# accepts for its tables. A table created with such an option keeps it and
+# serves writes and reads.
+#############################################################################
+
+# DESCRIBE TABLE prints the option with this exact value, and not with a
+# longer one that starts the same, as 1000 starts like 100.
+def describes(cql, table, option):
+    described = cql.execute(f"DESCRIBE TABLE {table}").one().create_statement
+    return re.search(re.escape(option) + r"(;|\s|$)", described) is not None
+
+
+# DESCRIBE prints each of these options exactly as it is written here.
+# speculative_retry is kept but has no effect on a strongly consistent
+# table, whose reads query a single replica.
+# crc_check_chance and the obsolete options, such as read_repair_chance,
+# are accepted and ignored for every table, so they are not here.
+@pytest.mark.parametrize("option", [
+    "auto_scrub_period_seconds = 3600",
+    "bloom_filter_fp_chance = 0.5",
+    "caching = {'keys': 'NONE', 'rows_per_partition': 'NONE'}",
+    "comment = 'c'",
+    "compaction = {'class': 'LeveledCompactionStrategy'}",
+    "compression = {'sstable_compression': 'org.apache.cassandra.io.compress.ZstdCompressor'}",
+    "default_time_to_live = 100",
+    "gc_grace_seconds = 100",
+    "max_index_interval = 4096",
+    "memtable_flush_period_in_ms = 60000",
+    "min_index_interval = 256",
+    "scylla_tags = {'mytag': 'v'}",
+    "speculative_retry = 'ALWAYS'",
+    "tombstone_gc = {'mode': 'repair', 'propagation_delay_in_seconds': '60'}",
+])
+def test_option_on_sc_table(cql, sc_keyspace, option):
+    """
+    CREATE TABLE and ALTER TABLE accept the option for a table in a
+    strongly consistent keyspace. DESCRIBE shows it, and the table serves
+    a write and a read.
+    """
+    with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, v int", f"WITH {option}") as table:
+        assert describes(cql, table, option)
+        cql.execute(f"INSERT INTO {table} (pk, v) VALUES (1, 2)")
+        rows = list(cql.execute(f"SELECT pk, v FROM {table} WHERE pk = 1"))
+        assert rows == [(1, 2)]
+
+    with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, v int") as table:
+        cql.execute(f"ALTER TABLE {table} WITH {option}")
+        assert describes(cql, table, option)
+        cql.execute(f"INSERT INTO {table} (pk, v) VALUES (1, 2)")
+        rows = list(cql.execute(f"SELECT pk, v FROM {table} WHERE pk = 1"))
+        assert rows == [(1, 2)]
+
+
+def test_describe_recreates_sc_table(cql, sc_keyspace):
+    """
+    The statement which DESCRIBE prints for a table in a strongly
+    consistent keyspace creates the same table again. It lists every
+    option with its default, so none of these may be an option that such
+    a keyspace rejects.
+    """
+    schema = "pk int, ck int, s int static, v int, PRIMARY KEY (pk, ck)"
+    with new_test_table(cql, sc_keyspace, schema, "WITH CLUSTERING ORDER BY (ck DESC)") as table:
+        described = cql.execute(f"DESCRIBE TABLE {table}").one().create_statement
+
+        copy = f"{sc_keyspace}.{unique_name()}"
+        create_copy = described.replace(table, copy)
+        cql.execute(create_copy)
+        try:
+            copy_described = cql.execute(f"DESCRIBE TABLE {copy}").one().create_statement
+            assert copy_described == create_copy
+        finally:
+            cql.execute(f"DROP TABLE {copy}")
+
+
+def test_default_time_to_live_on_sc_table(cql, sc_keyspace):
+    """
+    A write without USING TTL to a table in a strongly consistent keyspace
+    gets the table's default_time_to_live.
+    """
+    with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, v int", "WITH default_time_to_live = 1000") as table:
+        cql.execute(f"INSERT INTO {table} (pk, v) VALUES (1, 2)")
+        row = cql.execute(f"SELECT ttl(v) FROM {table} WHERE pk = 1").one()
+        # The remaining TTL counts down from 1000 seconds.
+        assert 900 < row.ttl_v <= 1000
+
+
+def test_min_tablet_count_on_sc_table(cql, sc_keyspace):
+    """
+    The tablets option sizes a table in a strongly consistent keyspace
+    when the table is created: min_tablet_count = 4 gives 4 tablets, and
+    rows are written to and read from all of them.
+    """
+    with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, v int", "WITH tablets = {'min_tablet_count': 4}") as table:
+        keyspace_name, table_name = table.split('.')
+        # Read all pages: a page of this filtering scan can come back empty.
+        tablets = list(cql.execute("SELECT tablet_count FROM system.tablets"
+                                   f" WHERE keyspace_name = '{keyspace_name}' AND table_name = '{table_name}' ALLOW FILTERING"))
+        assert tablets[0].tablet_count == 4
+
+        # The tokens of the keys 0 to 7 fall into all 4 tablets.
+        for pk in range(8):
+            cql.execute(f"INSERT INTO {table} (pk, v) VALUES ({pk}, {pk})")
+        for pk in range(8):
+            rows = list(cql.execute(f"SELECT pk, v FROM {table} WHERE pk = {pk}"))
+            assert rows == [(pk, pk)]
+
+
+def test_table_id_on_sc_table(cql, sc_keyspace):
+    """
+    CREATE TABLE WITH id gives a table in a strongly consistent keyspace
+    the requested id.
+    """
+    table_id = uuid.uuid1()
+    with new_test_table(cql, sc_keyspace, "pk int PRIMARY KEY, v int", f"WITH id = {table_id}") as table:
+        keyspace_name, table_name = table.split('.')
+        row = cql.execute("SELECT id FROM system_schema.tables"
+                          f" WHERE keyspace_name = '{keyspace_name}' AND table_name = '{table_name}'").one()
+        assert row.id == table_id
+
+        cql.execute(f"INSERT INTO {table} (pk, v) VALUES (1, 2)")
+        rows = list(cql.execute(f"SELECT pk, v FROM {table} WHERE pk = 1"))
+        assert rows == [(1, 2)]
+
+
+def test_clustering_order_on_sc_table(cql, sc_keyspace):
+    """
+    A table in a strongly consistent keyspace returns its rows in the
+    order declared with CLUSTERING ORDER BY.
+    """
+    schema = "pk int, ck int, v int, PRIMARY KEY (pk, ck)"
+    with new_test_table(cql, sc_keyspace, schema, "WITH CLUSTERING ORDER BY (ck DESC)") as table:
+        cql.execute(f"INSERT INTO {table} (pk, ck, v) VALUES (0, 1, 10)")
+        cql.execute(f"INSERT INTO {table} (pk, ck, v) VALUES (0, 3, 30)")
+        cql.execute(f"INSERT INTO {table} (pk, ck, v) VALUES (0, 2, 20)")
+        rows = list(cql.execute(f"SELECT ck, v FROM {table} WHERE pk = 0"))
+        assert rows == [(3, 30), (2, 20), (1, 10)]
+
+
+def test_compact_storage_on_sc_table(cql, sc_keyspace, compact_storage):
+    """
+    A COMPACT STORAGE table in a strongly consistent keyspace serves
+    writes and reads. An UPDATE creates a row in such a table, as an
+    INSERT does.
+    """
+    schema = "pk int, ck int, v int, PRIMARY KEY (pk, ck)"
+    with new_test_table(cql, sc_keyspace, schema, "WITH COMPACT STORAGE") as table:
+        cql.execute(f"INSERT INTO {table} (pk, ck, v) VALUES (0, 1, 10)")
+        cql.execute(f"UPDATE {table} SET v = 20 WHERE pk = 0 AND ck = 2")
+        rows = list(cql.execute(f"SELECT ck, v FROM {table} WHERE pk = 0"))
+        assert rows == [(1, 10), (2, 20)]
+
+
+def test_column_kinds_on_sc_table(cql, sc_keyspace):
+    """
+    A table in a strongly consistent keyspace can have a static column,
+    collections, a user-defined type, a tuple and a vector. A row with a
+    value in each of them is written and read back.
+    """
+    with new_type(cql, sc_keyspace, "(a int, b text)") as udt:
+        schema = (f"pk int, ck int, s int static, l list<int>, st set<int>, m map<int, text>, fl frozen<list<int>>,"
+                  f" u {udt}, t tuple<int, text>, vec vector<float, 3>, PRIMARY KEY (pk, ck)")
+        with new_test_table(cql, sc_keyspace, schema) as table:
+            cql.execute(f"INSERT INTO {table} (pk, ck, s, l, st, m, fl, u, t, vec) VALUES"
+                        " (0, 1, 7, [1, 2], {3, 4}, {5: 'five'}, [6], {a: 8, b: 'eight'}, (9, 'nine'), [1.0, 2.0, 3.0])")
+            row = cql.execute(f"SELECT s, l, st, m, fl, u, t, vec FROM {table} WHERE pk = 0 AND ck = 1").one()
+            assert row.s == 7
+            assert row.l == [1, 2]
+            assert row.st == {3, 4}
+            assert row.m == {5: 'five'}
+            assert row.fl == [6]
+            assert row.u.a == 8
+            assert row.u.b == 'eight'
+            assert row.t == (9, 'nine')
+            assert row.vec == [1.0, 2.0, 3.0]
