@@ -1137,6 +1137,43 @@ SEASTAR_TEST_CASE(test_import_progress_and_takeover) {
     });
 }
 
+// A failure before the client token row is inserted fails the request, writes no row, and
+// releases the import slot. Every token is used on every shard, so that the SERIAL read of the
+// token row after the failure is also issued from a shard which does not own the row, and has to
+// move to the owner.
+SEASTAR_TEST_CASE(test_import_client_token_insertion_failure) {
+    auto cfg = import_test_config();
+    cfg.db_config->alternator_max_concurrent_imports_per_shard.set(1);
+    return with_import_executor([] (cql_test_env& e, alternator_test_executor& exec) {
+        constexpr auto injection = "alternator_import_from_s3_before_client_token_insertion";
+        scoped_error_injection enabled_injection(injection);
+        db::alternator_import_table_helper helper(e.qp().local());
+        for (int i = 0; i < 4; ++i) {
+            const auto token = fmt::format("token-insertion-failure-{}", i);
+            for (unsigned shard = 0; shard < smp::count; ++shard) {
+                BOOST_REQUIRE_THROW(exec.import_table_successfully_on_shard(shard, make_import_table_request("insertion_failure", token)),
+                        std::runtime_error);
+            }
+            BOOST_REQUIRE(!helper.get_client_token(sstring(token)).get());
+        }
+        auto res = e.execute_cql(fmt::format("SELECT * FROM {}.{}", db::system_distributed_keyspace::NAME,
+                db::system_distributed_keyspace::ALTERNATOR_IMPORT_FROM_S3_IMPORTS)).get();
+        auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(res);
+        BOOST_REQUIRE(rows);
+        BOOST_REQUIRE_EQUAL(rows->rs().result_set().size(), 0u);
+
+        // No slot was leaked: with one import per shard allowed, an import still starts on every shard.
+        utils::get_local_injector().disable_on_all(injection).get();
+        exec.set_source({{"0", item_line("a", 1, "x")}});
+        for (unsigned shard = 0; shard < smp::count; ++shard) {
+            auto response = exec.import_table_successfully_on_shard(shard, make_import_table_request(
+                    fmt::format("after_insertion_failure_{}", shard), fmt::format("token-after-insertion-failure-{}", shard)));
+            BOOST_REQUIRE_EQUAL(wait_for_import(e, response).import_status,
+                    "COMPLETED");
+        }
+    }, std::move(cfg));
+}
+
 // alternator_max_concurrent_imports_per_shard refuses a new import with LimitExceededException,
 // but a replay is still answered, and the slots are released when the imports end.
 SEASTAR_TEST_CASE(test_import_concurrency_limit) {
@@ -1433,6 +1470,35 @@ SEASTAR_TEST_CASE(test_import_write_failure) {
         // The table is kept, and the import does not leave it CREATING.
         auto described = std::get<rjson::value>(exec.describe_table("write_failure"));
         BOOST_REQUIRE_EQUAL(get_string(rjson::get(described, "Table"), "TableStatus"), "ACTIVE");
+    });
+}
+
+// A failure of ImportTable after it inserted the client token row - before or after it inserted
+// the import row - makes the import FAILED, so that a replay of the token finds the import too.
+SEASTAR_TEST_CASE(test_import_request_failure_after_client_token_insertion) {
+    return with_import_executor([] (cql_test_env& e, alternator_test_executor& exec) {
+        exec.set_source({{"0", item_line("a", 1, "x")}});
+
+        for (std::string_view table_name : {"request_failure", "request_failure_after_import_row"}) {
+            const auto fail = table_name == "request_failure"
+                    ? "alternator_import_from_s3_after_client_token_insertion"
+                    : "alternator_import_from_s3_after_import_row_insertion";
+            scoped_error_injection fail_injection(fail, true, {});
+
+            auto request = make_import_table_request(table_name, fmt::format("token-{}", table_name));
+            auto response = exec.import_table_successfully(rjson::copy(request));
+            const rjson::value& description = rjson::get(response, "ImportTableDescription");
+            BOOST_REQUIRE_EQUAL(get_string(description, "ImportStatus"), "FAILED");
+            BOOST_REQUIRE_EQUAL(get_string(description, "FailureCode"), "InternalError");
+            const auto import_arn = get_string(description, "ImportArn");
+
+            auto row = wait_for_import(e, sstring(import_arn));
+            BOOST_REQUIRE_EQUAL(row.failure_code.value_or(""), "InternalError");
+            auto replay = exec.import_table_successfully(std::move(request));
+            BOOST_REQUIRE_EQUAL(get_string(rjson::get(replay, "ImportTableDescription"), "ImportArn"), import_arn);
+            BOOST_REQUIRE_EQUAL(get_string(rjson::get(replay, "ImportTableDescription"), "ImportStatus"), "FAILED");
+            BOOST_REQUIRE(std::holds_alternative<alternator::api_error>(exec.describe_table(table_name)));
+        }
     });
 }
 
