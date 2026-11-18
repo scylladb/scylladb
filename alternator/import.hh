@@ -121,7 +121,8 @@ public:
     const std::string& code() const noexcept { return _code; }
 };
 
-// Owns the background fibers of ImportTable - the imports themselves - and their state.
+// Owns the background fibers of ImportTable - the imports themselves, and the garbage collector
+// which fails the imports of nodes which stopped - and their state.
 // An import is a state machine of its row in the imports table, the pair (import_status,
 // node_id), changed only with conditional writes:
 //  - ImportTable inserts the row as IN_PROGRESS, owned by the node which accepted the request,
@@ -130,7 +131,9 @@ public:
 //    COMPLETED, or as FAILED (ItemValidationError if only items, lines or objects were skipped,
 //    see count_error()). For any other failure it first writes FAILING with the failure code, so
 //    that the garbage collector can finish the cleanup if this node stops;
-//  - if ImportTable fails after it inserted the client token row, it writes FAILED itself.
+//  - if ImportTable fails after it inserted the client token row, it writes FAILED itself;
+//  - the garbage collector takes the IN_PROGRESS and FAILING rows of node incarnations which can
+//    no longer run them, and makes them FAILED the same way.
 class executor::s3_imports {
     executor& _e;
     // Holds the background fibers. stop() closes it.
@@ -141,6 +144,9 @@ class executor::s3_imports {
     // running imports and of final writes being retried. See try_reserve_import_slot().
     size_t _reserved_import_slots = 0;
     import_source_factory _source_factory;
+    // The scheduler of the rounds of the garbage collector. Engaged by run_garbage_collector(), so on
+    // shard 0 only.
+    std::optional<gc_round_scheduler> _gc;
 
     // Runs one import. Defined in import.cc.
     class import_task;
@@ -149,6 +155,10 @@ class executor::s3_imports {
     // tag is not this import's. Runs on shard 0, where the executor makes its schema changes; then
     // waits for schema agreement.
     future<> remove_import_in_progress_tag(::table_id table_id, sstring import_arn);
+    // One round of the garbage collector. Runs on shard 0.
+    future<> garbage_collect();
+    // Takes `row` and makes it FAILED, if its node can no longer run it.
+    future<> collect_import_row(const running_node_ids& running_nodes, const live_node_identifier& self_node_id, const import_row& row);
 public:
     explicit s3_imports(executor& e);
     // True once stop() aborted the imports: late in a clean shutdown, after the server stopped
@@ -175,8 +185,12 @@ public:
     // succeeds or the node stops, and keeps `import_slot` until then. For a caller whose write of
     // that state failed and which cannot wait: the garbage collector does not collect the rows of
     // the current incarnation of this node, so this node must finish them. The import fiber and
-    // ImportTable pass their slot.
-    void finish_import_in_background(slot import_slot, import_row row);
+    // ImportTable pass their slot; the garbage collector, whose rows hold none, passes nullopt.
+    void finish_import_in_background(std::optional<slot> import_slot, import_row row);
+    // Fails the imports which no node runs any more, as described above. Runs one round at start,
+    // then periodically and after node-down events, until stop(). executor::start() starts it on
+    // shard 0 of each node.
+    future<> run_garbage_collector();
     // Replaces the source of the imports which start after the call. For tests: the default
     // source does not read S3 yet.
     void set_source_factory(import_source_factory factory) { _source_factory = std::move(factory); }

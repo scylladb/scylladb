@@ -129,7 +129,7 @@ public:
             _exec.invoke_on_all(&alternator::executor::request_stop).get();
             _exec.stop().get();
         });
-        // As alternator::server::init() does.
+        // Starts the garbage collector of imports on shard 0.
         _exec.invoke_on_all(&alternator::executor::start).get();
         stop_exec.cancel();
         stop_dicts.cancel();
@@ -1437,6 +1437,103 @@ SEASTAR_TEST_CASE(test_import_table_deleted_during_the_import) {
             BOOST_REQUIRE(!exec.get_item(name, "a", "2"));
         }
     });
+}
+
+// The garbage collector fails the imports of node incarnations which cannot run them any more -
+// here, an earlier incarnation of this node, and a node which is not a member of the cluster.
+SEASTAR_TEST_CASE(test_import_garbage_collector) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        constexpr auto wakeup = "alternator_import_from_s3_gc_wakeup";
+        constexpr auto finished = "alternator_import_from_s3_gc_finished";
+        scoped_error_injection wakeup_injection(wakeup);
+        scoped_error_injection finished_injection(finished);
+
+        alternator_test_executor exec;
+        exec.start(e);
+        auto stop_exec = defer([&] noexcept { try { exec.stop(); } catch (...) { std::terminate(); } });
+
+        auto self = alternator::get_self_node_id(e.gossiper().local());
+        BOOST_REQUIRE(self && self->gossip_generation > 0);
+        auto earlier_incarnation = *self;
+        --earlier_incarnation.gossip_generation;
+
+        db::alternator_import_table_helper helper(e.qp().local());
+        const sstring table_arn = "arn:scylla:alternator:alternator_gc:scylla:table/gc";
+        const sstring stored_request = R"({"S3BucketSource": {"S3Bucket": "bucket"}, "InputFormat": "DYNAMODB_JSON",
+                "InputCompressionType": "NONE", "TableCreationParameters": {"TableName": "gc"}})";
+        const sstring running_arn = table_arn + "/import/01700000000000-00000001";
+        helper.insert_import(alternator::import_row{
+            .import_arn = running_arn,
+            .client_token = "gc-running",
+            .request = stored_request,
+            .target_table_existed = true,
+            .import_status = "IN_PROGRESS",
+            .accepted_at = db_clock::now(),
+            .node_id = earlier_incarnation.to_string(),
+        }, std::chrono::hours(1)).get();
+        const sstring failing_arn = table_arn + "/import/01700000000000-00000005";
+        helper.insert_import(alternator::import_row{
+            .import_arn = failing_arn,
+            .client_token = "gc-failing",
+            .request = stored_request,
+            .target_table_existed = true,
+            .import_status = "FAILING",
+            .failure_code = "WriteFailed",
+            .failure_message = "Writing items failed",
+            .accepted_at = db_clock::now(),
+            .node_id = earlier_incarnation.to_string(),
+        }, std::chrono::hours(1)).get();
+        // A row of a node which is not a member of the cluster (removed or replaced).
+        const sstring removed_arn = table_arn + "/import/01700000000000-00000006";
+        const alternator::live_node_identifier removed_node{
+            .host_id = locator::host_id::create_random_id(), .gossip_generation = 1 };
+        helper.insert_import(alternator::import_row{
+            .import_arn = removed_arn,
+            .client_token = "gc-removed",
+            .request = stored_request,
+            .target_table_existed = true,
+            .import_status = "IN_PROGRESS",
+            .accepted_at = db_clock::now(),
+            .node_id = removed_node.to_string(),
+        }, std::chrono::hours(1)).get();
+        // An import of this incarnation is not collected.
+        const sstring own_arn = table_arn + "/import/01700000000000-00000003";
+        helper.insert_import(alternator::import_row{
+            .import_arn = own_arn,
+            .client_token = "gc-own",
+            .request = stored_request,
+            .target_table_existed = true,
+            .import_status = "IN_PROGRESS",
+            .accepted_at = db_clock::now(),
+            .node_id = self->to_string(),
+        }, std::chrono::hours(1)).get();
+
+        auto rounds = utils::error_injection<true>::enter_count_on_all(finished).get();
+        utils::error_injection<true>::receive_message_on_all(wakeup).get();
+        wait_until([&] { return utils::error_injection<true>::enter_count_on_all(finished).get() != rounds; }, "a garbage collection round");
+
+        auto running = helper.get_import(running_arn).get();
+        BOOST_REQUIRE(running);
+        BOOST_REQUIRE_EQUAL(running->import_status, "FAILED");
+        BOOST_REQUIRE_EQUAL(running->failure_code.value_or(""), "ImportInterrupted");
+        // The message names the node which stopped.
+        BOOST_REQUIRE(running->failure_message.value_or("").contains(fmt::format("{}", earlier_incarnation.host_id)));
+        BOOST_REQUIRE_EQUAL(running->node_id, self->to_string());
+        BOOST_REQUIRE(running->completed_at);
+        auto failing = helper.get_import(failing_arn).get();
+        BOOST_REQUIRE(failing);
+        BOOST_REQUIRE_EQUAL(failing->import_status, "FAILED");
+        BOOST_REQUIRE_EQUAL(failing->failure_code.value_or(""), "WriteFailed");
+        BOOST_REQUIRE_EQUAL(failing->failure_message.value_or(""), "Writing items failed");
+        BOOST_REQUIRE_EQUAL(failing->node_id, self->to_string());
+        auto removed = helper.get_import(removed_arn).get();
+        BOOST_REQUIRE(removed);
+        BOOST_REQUIRE_EQUAL(removed->import_status, "FAILED");
+        BOOST_REQUIRE_EQUAL(removed->failure_code.value_or(""), "ImportInterrupted");
+        auto own = helper.get_import(own_arn).get();
+        BOOST_REQUIRE(own);
+        BOOST_REQUIRE_EQUAL(own->import_status, "IN_PROGRESS");
+    }, import_test_config());
 }
 
 // The last item with a key wins also when the write of a batch with an earlier item with the key
