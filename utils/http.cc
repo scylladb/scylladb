@@ -377,12 +377,16 @@ future<shared_ptr<tls::certificate_credentials>> utils::http::system_trust_crede
 
 future<> utils::http::dns_connection_factory::init_credentials() {
     if (_use_https && !_creds) {
-        _creds = co_await system_trust_credentials();
+        // Only to have a failing first load fail here. The credentials are
+        // taken afresh for every connection, see get_creds(), so none are
+        // kept, which would pin an outdated trust list.
+        co_await system_trust_credentials();
+        _system_trust = true;
     }
     if (!_use_https) {
         _creds = {};
     }
-    _logger.debug("Initialized credentials, tls={}", _creds == nullptr ? "no" : "yes");
+    _logger.debug("Initialized credentials, tls={}", _use_https ? "yes" : "no");
 }
 
 future<net::inet_address> utils::http::dns_connection_factory::get_address() {
@@ -417,6 +421,11 @@ future<shared_ptr<tls::certificate_credentials>> utils::http::dns_connection_fac
             co_await init_credentials();
             _creds_init = true;
         }
+    }
+    if (_system_trust) {
+        // The host's trust can change while this factory lives; take the
+        // current credentials for every new connection.
+        co_return co_await system_trust_credentials();
     }
     co_return _creds;
 }

@@ -47,6 +47,9 @@ protected:
     logging::logger& _logger;
     semaphore _init_semaphore{1};
     bool _creds_init = false;
+    // The credentials came from system_trust_credentials(), which follows
+    // changes of the host's trust.
+    bool _system_trust = false;
     std::optional<std::vector<net::inet_address>> _addr_list;
     shared_ptr<tls::certificate_credentials> _creds;
     uint16_t _addr_pos{0};
