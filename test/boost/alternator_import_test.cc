@@ -26,6 +26,7 @@
 #include "db/system_distributed_keyspace.hh"
 #include "gms/gossiper.hh"
 #include "replica/database.hh"
+#include "service/cas_shard.hh"
 #include "service/client_state.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
@@ -197,6 +198,20 @@ public:
     }
     void create_table(rjson::value request) {
         call_successfully(&alternator::executor::create_table, "CreateTable", std::move(request));
+    }
+    // Starts BatchWriteItem on this shard and returns its future, failed with the error of the
+    // request, so that a test can act while the write waits.
+    future<> batch_write_item_in_background(rjson::value request) {
+        return do_with(service::client_state(service::client_state::internal_tag{}), std::unique_ptr<audit::audit_info_alternator>(),
+                [this, request = std::move(request)] (service::client_state& cs, std::unique_ptr<audit::audit_info_alternator>& ai) mutable {
+            return _exec.local().batch_write_item(cs, tracing::trace_state_ptr(), empty_service_permit(), std::move(request), ai).then(
+                    [] (alternator::executor::request_return_type result) {
+                if (auto* err = std::get_if<alternator::api_error>(&result)) {
+                    return make_exception_future<>(*err);
+                }
+                return make_ready_future<>();
+            });
+        });
     }
     void put_item(rjson::value request) {
         call_successfully(&alternator::executor::put_item, "PutItem", std::move(request));
@@ -1063,6 +1078,165 @@ SEASTAR_TEST_CASE(test_import_interrupted_by_shutdown) {
         auto row = wait_for_import(e, import_arn);
         BOOST_REQUIRE_EQUAL(row.import_status, "FAILED");
         BOOST_REQUIRE_EQUAL(row.failure_code.value_or(""), "ImportInterrupted");
+    });
+}
+
+// Items are validated against the schema current when their batch started: an item whose attribute
+// does not match the key type of a GSI added during the import is counted as an error.
+SEASTAR_TEST_CASE(test_import_validates_against_gsi_added_during_the_import) {
+    return with_import_executor([] (cql_test_env& e, alternator_test_executor& exec) {
+        exec.create_table(make_create_table_request("gsi_added"));
+        constexpr auto pause = "alternator_import_from_s3_pause_in_item_handler";
+        scoped_error_injection pause_injection(pause);
+        exec.set_source({{"0", std::string(R"({"Item": {"p": {"S": "a"}, "c": {"N": "1"}, "v": {"N": "5"}}})") + "\n"}});
+
+        auto response = exec.import_table_successfully(make_import_table_request("gsi_added", "token-gsi-added"));
+        const sstring import_arn(get_string(rjson::get(response, "ImportTableDescription"), "ImportArn"));
+        wait_until([&] { return utils::error_injection<true>::enter_count_on_all(pause).get() > 0; }, "the import to pause");
+        exec.update_table_successfully(rjson::parse(R"({
+            "TableName": "gsi_added",
+            "AttributeDefinitions": [{"AttributeName": "v", "AttributeType": "S"}],
+            "GlobalSecondaryIndexUpdates": [{"Create": {
+                "IndexName": "by_v",
+                "KeySchema": [{"AttributeName": "v", "KeyType": "HASH"}],
+                "Projection": {"ProjectionType": "ALL"}
+            }}]
+        })"));
+        utils::get_local_injector().disable_on_all(pause).get();
+
+        auto row = wait_for_import(e, import_arn);
+        BOOST_REQUIRE_EQUAL(row.import_status, "FAILED");
+        BOOST_REQUIRE_EQUAL(row.failure_code.value_or(""), "ItemValidationError");
+        BOOST_REQUIRE_EQUAL(row.error_count, 1);
+        BOOST_REQUIRE_EQUAL(row.imported_item_count, 0);
+    });
+}
+
+// An item keeps its value when a CQL ALTER adds a column with the name of one of its attributes
+// after the import read the item, and the item's LWT write moves to the shard of its partition.
+// Alternator keeps the attribute in :attrs or in a column of its name, encoded differently in each,
+// so the moved write must be built with the schema the item was encoded with, not with the
+// current one - which would write the value encoded for :attrs into the new column.
+SEASTAR_TEST_CASE(test_import_lwt_write_on_another_shard_after_alter) {
+    return with_import_executor([] (cql_test_env& e, alternator_test_executor& exec) {
+        if (smp::count < 2) {
+            BOOST_TEST_MESSAGE("Skipping: an LWT write moves to another shard only with 2 shards or more");
+            return;
+        }
+        alternator::rmw_operation::set_default_write_isolation("always_use_lwt");
+
+        exec.create_table(make_create_table_request("altered"));
+        // The import runs on this shard: find a partition whose LWT writes run on another one.
+        auto schema = e.local_db().find_schema("alternator_altered", "altered");
+        std::string moved_p;
+        for (int i = 0; moved_p.empty(); ++i) {
+            auto p = fmt::format("p{}", i);
+            auto dk = dht::decorate_key(*schema, partition_key::from_singular(*schema, data_value(sstring(p))));
+            if (service::cas_shard(*schema, dk.token()).shard() != this_shard_id()) {
+                moved_p = p;
+            }
+        }
+
+        constexpr auto pause = "alternator_import_from_s3_pause_in_item_handler";
+        scoped_error_injection pause_injection(pause);
+        exec.set_source({{"0", item_line(moved_p, 1, "x") + item_line("last", 2, "y")}});
+        auto response = exec.import_table_successfully(make_import_table_request("altered", "token-altered"));
+        const sstring import_arn(get_string(rjson::get(response, "ImportTableDescription"), "ImportArn"));
+        // Let the first item go on - it is encoded and added to the batch - and pause at the second.
+        wait_until([&] { return utils::error_injection<true>::enter_count_on_all(pause).get() != 0; }, "the import to pause");
+        utils::error_injection<true>::receive_message_on_all(pause).get();
+        wait_until([&] { return utils::error_injection<true>::enter_count_on_all(pause).get() >= 2; }, "the import to pause at its second item");
+
+        e.execute_cql(R"(ALTER TABLE alternator_altered.altered ADD v text)").get();
+        utils::get_local_injector().disable_on_all(pause).get();
+
+        auto row = wait_for_import(e, import_arn);
+        BOOST_REQUIRE_EQUAL(row.import_status, "COMPLETED");
+        BOOST_REQUIRE_EQUAL(exec.get_item_v("altered", moved_p, "1"), "x");
+        BOOST_REQUIRE_EQUAL(exec.get_item_v("altered", "last", "2"), "y");
+    });
+}
+
+// Like test_import_lwt_write_on_another_shard_after_alter, for a plain BatchWriteItem: its LWT write
+// which moves to the shard of its partition is built with the schema which encoded the item, so a
+// CQL ALTER which adds a column with the name of an attribute while the write waits to move does not
+// change the value read back. The write waits in the injection alternator_executor_batch_write_wait.
+SEASTAR_TEST_CASE(test_batch_write_lwt_write_on_another_shard_after_alter) {
+    return with_import_executor([] (cql_test_env& e, alternator_test_executor& exec) {
+        if (smp::count < 2) {
+            BOOST_TEST_MESSAGE("Skipping: an LWT write moves to another shard only with 2 shards or more");
+            return;
+        }
+        alternator::rmw_operation::set_default_write_isolation("always_use_lwt");
+
+        exec.create_table(make_create_table_request("batch_altered"));
+        // Find a partition whose LWT writes run on another shard than this one, which coordinates
+        // the BatchWriteItem.
+        auto schema = e.local_db().find_schema("alternator_batch_altered", "batch_altered");
+        std::string moved_p;
+        for (int i = 0; moved_p.empty(); ++i) {
+            auto p = fmt::format("p{}", i);
+            auto dk = dht::decorate_key(*schema, partition_key::from_singular(*schema, data_value(sstring(p))));
+            if (service::cas_shard(*schema, dk.token()).shard() != this_shard_id()) {
+                moved_p = p;
+            }
+        }
+
+        // If the test fails before it gets the result of the write, waits for the write, which uses
+        // the executor. Declared before wait_injection, whose destructor releases the write first.
+        std::optional<future<>> write;
+        auto join_write = defer([&] () noexcept {
+            if (write) {
+                write->wait();
+                write->ignore_ready_future();
+            }
+        });
+        constexpr auto wait = "alternator_executor_batch_write_wait";
+        scoped_error_injection wait_injection(wait, {{"keyspace", "alternator_batch_altered"}, {"table", "batch_altered"},
+                {"shard", fmt::to_string(this_shard_id())}});
+        write = exec.batch_write_item_in_background(rjson::parse(fmt::format(R"({{"RequestItems": {{"batch_altered": [
+                {{"PutRequest": {{"Item": {{"p": {{"S": "{}"}}, "c": {{"N": "1"}}, "v": {{"S": "x"}}}}}}}}]}}}})", moved_p)));
+        wait_until([&] { return utils::get_local_injector().enter_count(wait) != 0; }, "the write to wait");
+        e.execute_cql("ALTER TABLE alternator_batch_altered.batch_altered ADD v text").get();
+        utils::error_injection<true>::receive_message_on_all(wait).get();
+        std::exchange(write, std::nullopt)->get();
+        BOOST_REQUIRE_EQUAL(exec.get_item_v("batch_altered", moved_p, "1"), "x");
+    });
+}
+
+// A table deleted during the import fails it with TableDeleted, and a new table with the same name
+// gets none of its items: when the table is dropped while the import waits at its first item - the
+// next lookup of the schema finds the drop - and while that item waits in its batch - the write of
+// the batch finds it.
+SEASTAR_TEST_CASE(test_import_table_deleted_during_the_import) {
+    return with_import_executor([] (cql_test_env& e, alternator_test_executor& exec) {
+        constexpr auto pause = "alternator_import_from_s3_pause_in_item_handler";
+        exec.set_source({{"0", item_line("a", 1, "x") + item_line("a", 2, "y")}});
+        for (bool item_in_batch : {false, true}) {
+            const std::string name = item_in_batch ? "deleted_at_write" : "deleted";
+            // Enabled anew in each round, so that its enter count starts at 0.
+            scoped_error_injection pause_injection(pause);
+            auto response = exec.import_table_successfully(make_import_table_request(name, "token-" + name));
+            const sstring import_arn(get_string(rjson::get(response, "ImportTableDescription"), "ImportArn"));
+            wait_until([&] { return utils::error_injection<true>::enter_count_on_all(pause).get() != 0; }, "the import to pause");
+            if (item_in_batch) {
+                // The first item goes into the batch, and the import pauses at the second one.
+                utils::error_injection<true>::receive_message_on_all(pause).get();
+                wait_until([&] { return utils::error_injection<true>::enter_count_on_all(pause).get() >= 2; }, "the import to pause at its second item");
+            }
+            // DeleteTable revokes the permissions on the table, which needs the auth service which an
+            // internal client does not have, so drop the table with CQL - which an import has to handle
+            // as well.
+            e.execute_cql(fmt::format("DROP TABLE alternator_{0}.{0}", name)).get();
+            // A new table with the same name is not the import's table.
+            exec.create_table(make_create_table_request(name));
+            utils::get_local_injector().disable_on_all(pause).get();
+            auto row = wait_for_import(e, import_arn);
+            BOOST_REQUIRE_EQUAL(row.import_status, "FAILED");
+            BOOST_REQUIRE_EQUAL(row.failure_code.value_or(""), "TableDeleted");
+            BOOST_REQUIRE(!exec.get_item(name, "a", "1"));
+            BOOST_REQUIRE(!exec.get_item(name, "a", "2"));
+        }
     });
 }
 
