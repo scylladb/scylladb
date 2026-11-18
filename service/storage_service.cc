@@ -2034,19 +2034,25 @@ future<> storage_service::stop_transport() {
         _transport_stopped = stopped.get_future();
 
         seastar::async([this] {
-            slogger.info("Stop transport: starts");
+            // Logs a step of the shutdown and lets tests pause the node after it.
+            auto step = [] (std::string_view what) {
+                slogger.info("Stop transport: {}", what);
+                utils::get_local_injector().inject("stop_transport_pause", utils::wait_for_message(5min), false).get();
+            };
+
+            step("starts");
 
             shutdown_protocol_servers().get();
-            slogger.info("Stop transport: shutdown rpc and cql server done");
+            step("shutdown rpc and cql server done");
 
             _gossiper.container().invoke_on_all(&gms::gossiper::shutdown).get();
-            slogger.info("Stop transport: stop_gossiping done");
+            step("stop_gossiping done");
 
             _messaging.invoke_on_all(&netw::messaging_service::shutdown).get();
-            slogger.info("Stop transport: shutdown messaging_service done");
+            step("shutdown messaging_service done");
 
             _stream_manager.invoke_on_all(&streaming::stream_manager::shutdown).get();
-            slogger.info("Stop transport: shutdown stream_manager done");
+            step("shutdown stream_manager done");
 
             slogger.info("Stop transport: done");
         }).forward_to(std::move(stopped));
