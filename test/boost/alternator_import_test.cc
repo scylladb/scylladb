@@ -416,6 +416,56 @@ SEASTAR_TEST_CASE(test_import_counts_invalid_items) {
     });
 }
 
+// Imports items with duplicate keys, and checks that of the items with one key, the last one in
+// the source wins. ImportedItemCount counts all of them, as DynamoDB's does.
+static void check_duplicate_keys_last_wins(cql_test_env& e, alternator_test_executor& exec, std::string_view table_name) {
+    // More keys than one batch has, so that a key comes again while an earlier batch with it may
+    // still be written. Without LWT, a later batch wins by its timestamp also then: the wait for
+    // the keys in flight, which orders the writes with LWT, is tested by
+    // test_import_duplicate_keys_last_wins_after_retried_write.
+    // In the last round, each key also comes twice in a row, and both items fall into one batch,
+    // where the later one replaces the earlier.
+    constexpr int keys = 150;
+    constexpr int rounds = 3;
+    std::string object = std::string(R"({"Item": {"p": {"S": "merge"}, "c": {"N": "0"}, "v": {"S": "first"}, "x": {"S": "extra"}}})") + "\n"
+            + item_line("merge", 0, "second");
+    for (int round = 0; round < rounds; ++round) {
+        for (int k = 0; k < keys; ++k) {
+            if (round == rounds - 1) {
+                object += item_line("dup", k, "before-last");
+            }
+            object += item_line("dup", k, fmt::format("{}", round));
+        }
+    }
+    exec.set_source({{"0", object}});
+
+    auto response = exec.import_table_successfully(make_import_table_request(table_name, fmt::format("token-{}", table_name)));
+    auto row = wait_for_import(e, response);
+    BOOST_REQUIRE_EQUAL(row.import_status, "COMPLETED");
+    BOOST_REQUIRE_EQUAL(row.processed_item_count, (rounds + 1) * keys + 2);
+    BOOST_REQUIRE_EQUAL(row.imported_item_count, (rounds + 1) * keys + 2);
+    auto merged = exec.get_item(table_name, "merge", "0");
+    BOOST_REQUIRE(merged);
+    BOOST_REQUIRE_EQUAL(get_string(rjson::get(*merged, "v"), "S"), "second");
+    BOOST_REQUIRE(!rjson::find(*merged, "x"));
+    for (int k = 0; k < keys; ++k) {
+        auto item = exec.get_item(table_name, "dup", fmt::format("{}", k));
+        BOOST_REQUIRE(item);
+        BOOST_REQUIRE_EQUAL(get_string(rjson::get(*item, "v"), "S"), fmt::format("{}", rounds - 1));
+    }
+}
+
+// The last item with a key wins, without LWT (FORBID_RMW, the default of these tests) and with LWT
+// (do_batch_write() then writes each partition of a batch with cas_write()).
+SEASTAR_TEST_CASE(test_import_duplicate_keys_last_wins) {
+    return with_import_executor([] (cql_test_env& e, alternator_test_executor& exec) {
+        for (auto [isolation, table] : {std::pair{"forbid_rmw", "duplicates"}, std::pair{"always_use_lwt", "duplicates_lwt"}}) {
+            alternator::rmw_operation::set_default_write_isolation(isolation);
+            check_duplicate_keys_last_wins(e, exec, table);
+        }
+    });
+}
+
 // Compresses `content` into a gzip stream (windowBits 16 + MAX_WBITS selects the gzip format).
 static std::string gzip_compress(std::string_view content) {
     z_stream zs = {};
@@ -809,6 +859,86 @@ SEASTAR_TEST_CASE(test_import_stopped_before_table_creation) {
     });
 }
 
+// Items larger than a batch may be (import_batch_bytes) are imported, also one larger than all the
+// batches being written may be together (import_bytes_in_flight): its batch takes the whole budget.
+SEASTAR_TEST_CASE(test_import_large_items) {
+    return with_import_executor([] (cql_test_env& e, alternator_test_executor& exec) {
+        const std::string big(2 * 1024 * 1024, 'b');
+        const std::string huge(5 * 1024 * 1024, 'h');
+        std::string content;
+        for (int c = 1; c <= 6; ++c) {
+            content += item_line("a", c, big);
+        }
+        content += item_line("a", 7, huge) + item_line("a", 8, "small");
+        exec.set_source({{"0", content}});
+
+        auto response = exec.import_table_successfully(make_import_table_request("large_items", "token-large-items"));
+        auto row = wait_for_import(e, response);
+        BOOST_REQUIRE_EQUAL(row.import_status, "COMPLETED");
+        BOOST_REQUIRE_EQUAL(row.processed_item_count, 8);
+        BOOST_REQUIRE_EQUAL(row.imported_item_count, 8);
+        BOOST_REQUIRE_EQUAL(row.processed_size_bytes.value_or(-1), int64_t(content.size()));
+        for (int c = 1; c <= 6; ++c) {
+            BOOST_REQUIRE(exec.get_item_v("large_items", "a", fmt::to_string(c)) == big);
+        }
+        BOOST_REQUIRE(exec.get_item_v("large_items", "a", "7") == huge);
+        BOOST_REQUIRE_EQUAL(exec.get_item_v("large_items", "a", "8"), "small");
+    });
+}
+
+// A table dropped after the import's last write - here there is none, its only object is empty -
+// and before the import ends still fails it with TableDeleted. The source waits at its end until
+// the test dropped the table.
+SEASTAR_TEST_CASE(test_import_table_deleted_after_the_last_write) {
+    return with_import_executor([] (cql_test_env& e, alternator_test_executor& exec) {
+        class source_waiting_at_its_end : public alternator::import_source {
+            future<> _end;
+            bool _listed_empty_object = false;
+        public:
+            explicit source_waiting_at_its_end(future<> end) : _end(std::move(end)) {}
+            future<std::optional<alternator::import_source_object>> next_object() override {
+                if (!_listed_empty_object) {
+                    _listed_empty_object = true;
+                    co_return alternator::import_source_object{ .key = "prefix/empty", .size = 0 };
+                }
+                co_await std::move(_end);
+                co_return std::nullopt;
+            }
+            future<std::unique_ptr<alternator::import_pipeline_interface>> open(const alternator::import_source_object&,
+                    std::function<future<>(rjson::value)>, alternator::compression_type) override {
+                BOOST_FAIL("an object of size 0 is not read");
+                co_return nullptr;
+            }
+            future<> close() override {
+                return make_ready_future<>();
+            }
+        };
+        auto table_dropped = make_lw_shared<promise<>>();
+        bool table_dropped_set = false;
+        // Releases the source before the executor stops, so that the import ends also if the test
+        // fails before it releases the source itself.
+        auto release_source = defer([&] () noexcept {
+            if (!table_dropped_set) {
+                table_dropped->set_value();
+            }
+        });
+        exec.set_source_factory_on_this_shard([table_dropped] (sstring, sstring, abort_source&) {
+            return make_ready_future<std::unique_ptr<alternator::import_source>>(
+                    std::make_unique<source_waiting_at_its_end>(table_dropped->get_future()));
+        });
+
+        auto response = exec.import_table_successfully(make_import_table_request("deleted_at_end", "token-deleted-at-end"));
+        wait_until([&] { return std::holds_alternative<rjson::value>(exec.describe_table("deleted_at_end")); }, "the import to create its table");
+        e.execute_cql("DROP TABLE alternator_deleted_at_end.deleted_at_end").get();
+        table_dropped->set_value();
+        table_dropped_set = true;
+
+        auto row = wait_for_import(e, response);
+        BOOST_REQUIRE_EQUAL(row.import_status, "FAILED");
+        BOOST_REQUIRE_EQUAL(row.failure_code.value_or(""), "TableDeleted");
+    });
+}
+
 // A request which CreateTable would refuse because of the keyspace of the new table - here a
 // vector index in a keyspace using vnodes - is refused when it is made, and writes no rows.
 SEASTAR_TEST_CASE(test_import_refuses_what_create_table_refuses) {
@@ -936,6 +1066,21 @@ SEASTAR_TEST_CASE(test_import_interrupted_by_shutdown) {
     });
 }
 
+// The last item with a key wins also when the write of a batch with an earlier item with the key
+// fails and is retried: a later item with that key waits for the writes in flight, the retry
+// included. With LWT, where each write - also the retry - takes its timestamp from Paxos, this
+// wait alone orders the writes of a key.
+SEASTAR_TEST_CASE(test_import_duplicate_keys_last_wins_after_retried_write) {
+    return with_import_executor([] (cql_test_env& e, alternator_test_executor& exec) {
+        constexpr auto fail_write = "alternator_import_from_s3_write";
+        scoped_error_injection fail_write_injection(fail_write, true, {});
+        alternator::rmw_operation::set_default_write_isolation("always_use_lwt");
+        check_duplicate_keys_last_wins(e, exec, "duplicates_retried");
+        // The one-shot injection is disabled once it failed the write. The import ran on this shard.
+        BOOST_REQUIRE(!utils::get_local_injector().is_enabled(fail_write));
+    });
+}
+
 // A write which keeps failing for longer than the retry budget - shortened here to 2 seconds - fails
 // the import with WriteFailed.
 SEASTAR_TEST_CASE(test_import_write_failure) {
@@ -954,6 +1099,65 @@ SEASTAR_TEST_CASE(test_import_write_failure) {
         // The table is kept, and the import does not leave it CREATING.
         auto described = std::get<rjson::value>(exec.describe_table("write_failure"));
         BOOST_REQUIRE_EQUAL(get_string(rjson::get(described, "Table"), "TableStatus"), "ACTIVE");
+    });
+}
+
+// A batch whose write failed is not written again once the import ended - here because its source
+// failed while the batch waited for its next attempt - so that the import does not wait for its
+// retries, and writes nothing more into the table.
+SEASTAR_TEST_CASE(test_import_ended_during_write_retry_writes_nothing_more) {
+    return with_import_executor([] (cql_test_env& e, alternator_test_executor& exec) {
+        constexpr auto fail_write = "alternator_import_from_s3_write";
+        // The retry of the batch waits until the import ended.
+        constexpr auto retry_once_ended = "alternator_import_from_s3_retry_once_ended";
+        scoped_error_injection fail_write_injection(fail_write, true, {});
+        scoped_error_injection retry_once_ended_injection(retry_once_ended);
+        // A source whose listing fails after its first object.
+        class source_failing_after_one_object : public alternator::import_source {
+            std::unique_ptr<alternator::import_source> _source;
+            bool _listed = false;
+        public:
+            explicit source_failing_after_one_object(std::unique_ptr<alternator::import_source> source)
+                : _source(std::move(source)) {}
+            future<std::optional<alternator::import_source_object>> next_object() override {
+                if (std::exchange(_listed, true)) {
+                    return make_exception_future<std::optional<alternator::import_source_object>>(
+                            alternator::import_failure("S3AccessError", "The listing failed"));
+                }
+                return _source->next_object();
+            }
+            future<std::unique_ptr<alternator::import_pipeline_interface>> open(const alternator::import_source_object& object,
+                    std::function<future<>(rjson::value)> on_item, alternator::compression_type compression) override {
+                return _source->open(object, std::move(on_item), compression);
+            }
+            future<> close() override {
+                return _source->close();
+            }
+        };
+        // One batch: the 100th item flushes it.
+        constexpr size_t items = 100;
+        std::string object;
+        for (size_t i = 0; i < items; ++i) {
+            object += item_line("a", int(i), "x");
+        }
+        exec.set_source_factory_on_this_shard([object] (sstring, sstring, abort_source&) {
+            auto storage = std::make_shared<alternator::in_memory_test_storage>();
+            storage->append(std::as_bytes(std::span(object)));
+            std::vector<std::pair<sstring, std::shared_ptr<alternator::in_memory_test_storage>>> objects;
+            objects.emplace_back("0", std::move(storage));
+            return make_ready_future<std::unique_ptr<alternator::import_source>>(std::make_unique<source_failing_after_one_object>(
+                    alternator::make_in_memory_import_source(std::move(objects))));
+        });
+
+        auto response = exec.import_table_successfully(make_import_table_request("ended_retry", "token-ended-retry"));
+        auto row = wait_for_import(e, response);
+        BOOST_REQUIRE_EQUAL(row.import_status, "FAILED");
+        BOOST_REQUIRE_EQUAL(row.failure_code.value_or(""), "S3AccessError");
+        BOOST_REQUIRE_EQUAL(row.processed_item_count, items);
+        BOOST_REQUIRE_EQUAL(row.imported_item_count, 0);
+        for (size_t i = 0; i < items; ++i) {
+            BOOST_REQUIRE_MESSAGE(!exec.get_item("ended_retry", "a", fmt::format("{}", i)), fmt::format("item {} was written", i));
+        }
     });
 }
 
