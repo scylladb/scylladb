@@ -16,8 +16,10 @@
 #include <random>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/semaphore.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/coroutine/as_future.hh>
 #include <seastar/coroutine/switch_to.hh>
@@ -473,6 +475,11 @@ static constexpr size_t import_batch_size = 100;
 // A batch is written once its items have this size (put_or_delete_item::length_in_bytes()), so
 // that the memory which the batches of an import hold is bounded also for large items.
 static constexpr uint64_t import_batch_bytes = 1024 * 1024;
+// The number of batches which an import writes at the same time.
+static constexpr size_t import_batches_in_flight = 4;
+// The size (length_in_bytes() of their items) of the batches which an import writes at the same
+// time, at most. A batch larger than this takes the whole budget, see flush_batch().
+static constexpr uint64_t import_bytes_in_flight = import_batches_in_flight * import_batch_bytes;
 // The number of attempts to write a batch, before the import fails with WriteFailed.
 static constexpr int import_write_attempts = 4;
 
@@ -511,9 +518,17 @@ class executor::s3_imports::import_task {
     // The number of items added to the batch, also those which a later item with the key replaced.
     int64_t _batch_items = 0;
     uint64_t _batch_bytes = 0;
-    // _batch_positions is engaged by the first refresh_schema(): its hash and equality need the
-    // schema of the target table, which may not exist before prepare_table().
+    // _batch_positions and _keys_in_flight are engaged by the first refresh_schema(): their hash
+    // and equality need the schema of the target table, which may not exist before prepare_table().
     std::optional<std::unordered_map<primary_key, size_t, primary_key_hash, primary_key_equal>> _batch_positions;
+    // The keys of the batches being written. An item with such a key waits for these writes, so
+    // that the writes of one key are ordered as the items in the source.
+    std::optional<std::unordered_set<primary_key, primary_key_hash, primary_key_equal>> _keys_in_flight;
+    seastar::semaphore _write_slots{import_batches_in_flight};
+    seastar::semaphore _write_byte_budget{import_bytes_in_flight};
+    seastar::gate _writes;
+    // The first failure of a write, which fails the import.
+    std::exception_ptr _write_failure;
 
     uint64_t processed_size_bytes() const noexcept {
         return _bytes_of_read_objects + (_pipeline ? _pipeline->processed_size_bytes() : 0);
@@ -573,6 +588,12 @@ class executor::s3_imports::import_task {
         }
     }
 
+    void rethrow_write_failure() const {
+        if (_write_failure) {
+            std::rethrow_exception(_write_failure);
+        }
+    }
+
     // Makes `_schema` the current schema of the target table: items are validated against it. Fails
     // the import with TableDeleted if no table has the import's table id any more.
     void refresh_schema() {
@@ -588,6 +609,7 @@ class executor::s3_imports::import_task {
             // serve for all its versions.
             if (!_batch_positions) {
                 _batch_positions.emplace(1, primary_key_hash{_schema}, primary_key_equal{_schema});
+                _keys_in_flight.emplace(1, primary_key_hash{_schema}, primary_key_equal{_schema});
             }
         }
     }
@@ -655,8 +677,9 @@ class executor::s3_imports::import_task {
         refresh_schema();
     }
 
-    // Writes one batch, and throws if that fails. Writes the batch at most import_write_attempts
-    // times, waiting 1, 2, 3... seconds between the attempts.
+    // Writes one batch. Does not throw: a failure is kept in _write_failure - only the first one,
+    // which the import reports - and fails the import. Writes the batch at most
+    // import_write_attempts times, waiting 1, 2, 3... seconds between the attempts.
     future<> write_batch(builders batch, int64_t items) {
         for (int attempt = 1; ; ++attempt) {
             std::exception_ptr ex;
@@ -670,31 +693,72 @@ class executor::s3_imports::import_task {
             } catch (...) {
                 ex = std::current_exception();
             }
-            _as.check();
+            if (_as.abort_requested()) {
+                _write_failure = _write_failure ? _write_failure : _as.abort_requested_exception_ptr();
+                co_return;
+            }
             if (attempt == import_write_attempts) {
-                throw import_failure(std::string(failure_write_failed),
-                        fmt::format("Writing items to the table {} failed {} times, the last time with: {}", _request->table_name, attempt, ex));
+                _write_failure = _write_failure ? _write_failure : std::make_exception_ptr(import_failure(std::string(failure_write_failed),
+                        fmt::format("Writing items to the table {} failed {} times, the last time with: {}", _request->table_name, attempt, ex)));
+                co_return;
             }
             ilogger.warn("Import {}: writing {} items failed, retrying: {}", _row.import_arn, batch.size(), ex);
-            co_await seastar::sleep_abortable(std::chrono::seconds(attempt), _as);
+            try {
+                co_await seastar::sleep_abortable(std::chrono::seconds(attempt), _as);
+            } catch (...) {
+                _write_failure = _write_failure ? _write_failure : std::current_exception();
+                co_return;
+            }
         }
     }
 
-    // Writes the collected batch.
+    // Starts writing the collected batch. Waits while `import_batches_in_flight` batches are
+    // being written, or while the batches being written hold too much of import_bytes_in_flight
+    // for this one. A batch larger than the whole budget waits for all of it, not for ever.
     future<> flush_batch() {
         if (_batch.empty()) {
             co_return;
+        }
+        auto units = co_await seastar::get_units(_write_slots, 1, _as);
+        auto byte_units = co_await seastar::get_units(_write_byte_budget, std::min(_batch_bytes, import_bytes_in_flight), _as);
+        rethrow_write_failure();
+        std::vector<primary_key> keys;
+        keys.reserve(_batch_positions->size());
+        for (auto& [key, _] : *_batch_positions) {
+            _keys_in_flight->insert(key);
+            keys.push_back(key);
         }
         _batch_positions->clear();
         auto batch = std::exchange(_batch, builders());
         auto items = std::exchange(_batch_items, 0);
         _batch_bytes = 0;
-        co_await write_batch(std::move(batch), items);
+        (void)with_gate(_writes, [this, batch = std::move(batch), items, keys = std::move(keys), units = std::move(units),
+                byte_units = std::move(byte_units)] () mutable {
+            // write_batch() keeps its failures in _write_failure itself; this catches what could
+            // still escape it, e.g. bad_alloc, so that no batch is lost silently.
+            return write_batch(std::move(batch), items).handle_exception([this] (std::exception_ptr ex) {
+                if (!_write_failure) {
+                    _write_failure = std::move(ex);
+                }
+            }).finally([this, keys = std::move(keys), units = std::move(units), byte_units = std::move(byte_units)] {
+                for (const auto& key : keys) {
+                    _keys_in_flight->erase(key);
+                }
+            });
+        });
     }
 
-    // Adds an item to the batch. An item with the key of one in the batch replaces it. Flushes the
-    // batch when it took import_batch_size items - replaced ones included, so that a source
-    // repeating a few keys is still written as it is read - or reached import_batch_bytes.
+    // Waits for the batches being written.
+    future<> wait_for_writes() {
+        // Taking all the slots waits until no batch is being written.
+        auto units = co_await seastar::get_units(_write_slots, import_batches_in_flight, _as);
+        rethrow_write_failure();
+    }
+
+    // Adds an item to the batch. An item with the key of one in the batch replaces it; an item with
+    // the key of a batch being written first waits for all the writes in flight. Flushes the batch
+    // when it took import_batch_size items - replaced ones included, so that a source repeating a
+    // few keys is still written as it is read - or reached import_batch_bytes.
     future<> add_to_batch(put_or_delete_item builder) {
         primary_key key{builder.pk(), builder.ck()};
         const auto bytes = builder.length_in_bytes();
@@ -702,6 +766,9 @@ class executor::s3_imports::import_task {
             _batch_bytes -= _batch[it->second].second.length_in_bytes();
             _batch[it->second].second = std::move(builder);
         } else {
+            if (_keys_in_flight->contains(key)) {
+                co_await wait_for_writes();
+            }
             _batch_positions->emplace(std::move(key), _batch.size());
             _batch.emplace_back(_schema, std::move(builder));
         }
@@ -717,6 +784,7 @@ class executor::s3_imports::import_task {
 
     future<> on_item(std::string_view object_key, rjson::value line) {
         _as.check();
+        rethrow_write_failure();
         _line = _pipeline->processed_lines();
         ++_row.processed_item_count;
         // Pauses the import at each item, so that a test can act while it runs, e.g. check that its
@@ -848,9 +916,19 @@ class executor::s3_imports::import_task {
             object = co_await source->next_object();
         }
         co_await flush_batch();
+        co_await wait_for_writes();
+        // Fails the import with TableDeleted if its table was dropped after the last write, which
+        // no write saw.
+        refresh_schema();
     }
 
 public:
+    // Closes _writes unless run() did, e.g. because it threw: the gate must be closed - its write
+    // fibers ended - before the task is destroyed. Called by start_import().
+    future<> close_writes() noexcept {
+        return _writes.is_closed() ? make_ready_future<>() : _writes.close();
+    }
+
     import_task(executor& e, abort_source& as, import_row row, import_source_factory source_factory)
         : _e(e), _as(as), _row(std::move(row)), _source_factory(std::move(source_factory)) {}
 
@@ -883,6 +961,9 @@ public:
                 ilogger.warn("Import {}: failed to close the source: {}", _row.import_arn, std::current_exception());
             }
         }
+        // A failed import still waits for the writes it started: they hold the batches, and the
+        // final counters count them.
+        co_await _writes.close();
 
         _row.processed_size_bytes = processed_size_bytes();
         if (failure) {
@@ -951,7 +1032,11 @@ void executor::s3_imports::start_import(import_row row) {
             }
         }).handle_exception([import_arn = std::move(import_arn)] (std::exception_ptr ep) {
             ilogger.error("Background fiber of import {} failed unexpectedly: {}", import_arn, ep);
-        }).finally([task = std::move(task)] {});
+        }).finally([task = std::move(task)] () mutable {
+            // run() closed the task's gate already, unless it threw.
+            auto& task_ref = *task;
+            return task_ref.close_writes().finally([task = std::move(task)] {});
+        });
     });
 }
 
