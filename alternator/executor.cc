@@ -11,6 +11,7 @@
 #include <seastar/core/on_internal_error.hh>
 #include "alternator/executor.hh"
 #include "alternator/executor_util.hh"
+#include "alternator/import.hh"
 #include "alternator/put_or_delete_item.hh"
 #include "alternator/consumed_capacity.hh"
 #include "auth/permission.hh"
@@ -335,6 +336,7 @@ executor::executor(gms::gossiper& gossiper,
 {
     s_default_timeout_in_ms = std::move(default_timeout_in_ms);
     _describe_table_info_manager = std::make_unique<describe_table_info_manager>(*this);
+    _s3_imports = std::make_unique<s3_imports>(*this);
     register_metrics(_metrics, _stats);
 }
 
@@ -5864,6 +5866,7 @@ future<> executor::modify_tags(sstring ks, sstring cf, std::function<void(std::m
 }
 
 future<> executor::stop() {
+    co_await _s3_imports->stop();
     co_await _describe_table_info_manager->stop();
     // disconnect from the value source, but keep the value unchanged.
     s_default_timeout_in_ms = utils::updateable_value<uint32_t>{s_default_timeout_in_ms()};

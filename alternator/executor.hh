@@ -122,8 +122,15 @@ class executor : public peering_sharded_service<executor> {
     struct describe_table_info_manager;
     std::unique_ptr<describe_table_info_manager> _describe_table_info_manager;
 
-    // Requested by request_stop() before the server stops. It ends the group0 waits of
-    // DDL requests. These waits run on shard 0, so only shard 0's instance is used.
+public:
+    // Owns the background fibers of ImportTable. Defined in alternator/import.hh.
+    class s3_imports;
+private:
+    std::unique_ptr<s3_imports> _s3_imports;
+
+    // Requested by request_stop(), on every shard, before the server stops. It ends the group0
+    // waits of DDL requests (these run on shard 0), and makes ImportTable refuse new imports.
+    // stop() fails the running imports (s3_imports::stop()).
     abort_source _stop_as;
     // Runs db::modify_tags() on shard 0, with the _stop_as of shard 0's executor.
     future<> modify_tags(sstring ks, sstring cf, std::function<void(std::map<sstring, sstring>&)> modify);

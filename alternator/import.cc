@@ -11,10 +11,13 @@
 #include <algorithm>
 #include <charconv>
 #include <chrono>
+#include <exception>
 #include <random>
 #include <string_view>
 #include <utility>
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/sleep.hh>
+#include <seastar/coroutine/switch_to.hh>
 #include "alternator/error.hh"
 #include "alternator/executor.hh"
 #include "alternator/executor_util.hh"
@@ -24,24 +27,32 @@
 #include "db/system_distributed_keyspace.hh"
 #include "db_clock.hh"
 #include "gms/gossiper.hh"
+#include "replica/database.hh"
 #include "service/client_state.hh"
 #include "service/storage_proxy.hh"
 #include "service_permit.hh"
 #include "tracing/trace_state.hh"
 #include "utils/UUID.hh"
+#include "utils/error_injection.hh"
 #include "utils/rjson.hh"
 
 namespace alternator {
 
+static logging::logger ilogger("alternator-import");
+
 // Each write of an import row sets this TTL: DynamoDB keeps the history of imports for 90 days.
 static constexpr std::chrono::seconds import_row_ttl = std::chrono::days(90);
 
-// The states of an import. An ImportTableDescription reports FAILING as IN_PROGRESS.
+// The states of an import, see executor::s3_imports. An ImportTableDescription reports FAILING as
+// IN_PROGRESS.
 static constexpr std::string_view import_status_in_progress = "IN_PROGRESS";
+static constexpr std::string_view import_status_failing = "FAILING";
 static constexpr std::string_view import_status_completed = "COMPLETED";
 static constexpr std::string_view import_status_failed = "FAILED";
 
 // The FailureCodes of an import. DynamoDB documents none of these.
+static constexpr std::string_view failure_import_interrupted = "ImportInterrupted";
+static constexpr std::string_view failure_internal_error = "InternalError";
 static constexpr std::string_view failure_not_implemented = "NotImplemented";
 
 static bool is_terminal_status(std::string_view status) {
@@ -330,16 +341,218 @@ static sstring make_import_table_response(const import_row& row) {
 }
 
 // --- The import metadata ---
-// The inserts of the import rows are conditional on the row not existing.
+// All updates of the import rows are conditional on the pair (import_status, node_id), and the
+// inserts on the row not existing, so that
+// only the owner of an import - the node which runs it, or the garbage collector which took it -
+// changes its row.
+// (A following commit adds the garbage collector.)
 
 static future<std::optional<import_row>> insert_import(db::system_distributed_keyspace& sdks, const import_row& row) {
     db::alternator_import_table_helper helper(sdks.qp());
     co_return co_await helper.insert_import(row, import_row_ttl);
 }
 
+static future<bool> update_import(db::system_distributed_keyspace& sdks, const import_row& row, std::string_view expected_status,
+        const sstring& expected_node_id) {
+    db::alternator_import_table_helper helper(sdks.qp());
+    co_return co_await helper.update_import(row, sstring(expected_status), expected_node_id, import_row_ttl);
+}
+
 static future<std::optional<import_row>> get_import(db::system_distributed_keyspace& sdks, const sstring& import_arn) {
     db::alternator_import_table_helper helper(sdks.qp());
     co_return co_await helper.get_import(import_arn);
+}
+
+// One attempt of writing the terminal state (COMPLETED or FAILED) of an import of this node: the
+// row must be IN_PROGRESS, or FAILING for a FAILED row. If there is no row - the request path can
+// fail before it inserts the row - inserts it. Returns false if the row exists but is not ours:
+// the garbage collector took it, or an earlier attempt which timed out applied.
+// (A following commit adds the garbage collector.)
+static future<bool> try_write_final_import_row(db::system_distributed_keyspace& sdks, const import_row& row) {
+    // Tests fail this write, to reach finish_import_in_background().
+    utils::get_local_injector().inject("alternator_import_from_s3_final_write",
+            [] { throw std::runtime_error("injected failure alternator_import_from_s3_final_write"); });
+    if (co_await update_import(sdks, row, import_status_in_progress, row.node_id)) {
+        co_return true;
+    }
+    if (row.import_status == import_status_failed && co_await update_import(sdks, row, import_status_failing, row.node_id)) {
+        co_return true;
+    }
+    co_return !co_await insert_import(sdks, row);
+}
+
+// Writes the terminal state of an import of this node, retrying while the write throws: the
+// garbage collector does not collect the rows of a node which can still run them, so without this
+// write the row would stay IN_PROGRESS (or FAILING) while this incarnation of the node lives.
+// Throws only if `as` is aborted (the node stops), and then a garbage collector collects the row
+// once the node restarted, was unreachable for an hour, or was removed.
+// (A following commit adds the garbage collector.)
+static future<> write_final_import_row(db::system_distributed_keyspace& sdks, const import_row& row, abort_source& as) {
+    constexpr std::chrono::seconds first_retry_delay{1};
+    constexpr std::chrono::seconds max_retry_delay{60};
+    for (auto delay = first_retry_delay; ; delay = std::min(delay * 2, max_retry_delay)) {
+        try {
+            if (!co_await try_write_final_import_row(sdks, row)) {
+                ilogger.debug("Import {}: the write of the final state {} did not apply", row.import_arn, row.import_status);
+            }
+            co_return;
+        } catch (...) {
+            ilogger.warn("Import {}: failed to write the final state {}, retrying in {}s: {}",
+                    row.import_arn, row.import_status, delay.count(), std::current_exception());
+        }
+        co_await seastar::sleep_abortable(delay, as);
+    }
+}
+
+// --- The source of an import ---
+
+// The source of the imports until reading S3 is implemented: it fails every import before it
+// creates the table.
+// FIXME: list the objects under the prefix with s3::client::bucket_lister and read them with
+// create_source_pipeline() (SCYLLADB-4046, SCYLLADB-4047).
+static future<std::unique_ptr<import_source>> make_s3_import_source(sstring, sstring, abort_source&) {
+    return make_exception_future<std::unique_ptr<import_source>>(import_failure(std::string(failure_not_implemented),
+            "Reading the source of an import from S3 is not implemented yet."));
+}
+
+// --- The import itself ---
+
+// Runs one import, see executor::s3_imports. A member of s3_imports, so that it can use the
+// write path and the table creation of the executor.
+class executor::s3_imports::import_task {
+    executor& _e;
+    abort_source& _as;
+    import_row _row;
+    import_source_factory _source_factory;
+    // Parsed by run(), not by the constructor, so that a stored request which cannot be parsed - a
+    // corrupt row - fails the import.
+    std::optional<stored_import_request> _request;
+
+    // Reads the source and writes its items. Throws import_failure (or another exception) if the
+    // import fails. Sets `source` as soon as it is made, so that run() closes it also when this
+    // throws.
+    future<> import_all(std::unique_ptr<import_source>& source) {
+        source = co_await _source_factory(_request->s3_bucket, _request->s3_key_prefix, _as);
+        // FIXME: read the objects of the source, and write their items.
+        throw import_failure(std::string(failure_not_implemented), "Reading the objects of an import is not implemented yet.");
+    }
+
+public:
+    import_task(executor& e, abort_source& as, import_row row, import_source_factory source_factory)
+        : _e(e), _as(as), _row(std::move(row)), _source_factory(std::move(source_factory)) {}
+
+    // Runs the import. Returns the row whose terminal state still has to be written, if that write
+    // failed: the caller retries it in a background fiber (see finish_import_in_background()).
+    future<std::optional<import_row>> run() {
+        // An import is maintenance work, as an export is. The fiber starts in the scheduling
+        // group of the request, so change it.
+        co_await coroutine::switch_to(_e._proxy.local_db().get_export_import_scheduling_group());
+        std::optional<std::pair<std::string, std::string>> failure;
+        std::unique_ptr<import_source> source;
+        try {
+            _request.emplace(_row.request);
+            co_await import_all(source);
+        } catch (const import_failure& e) {
+            failure.emplace(e.code(), e.what());
+        } catch (...) {
+            if (_as.abort_requested()) {
+                failure.emplace(failure_import_interrupted, "The node which ran the import was shut down before the import could finish.");
+            } else {
+                failure.emplace(failure_internal_error, fmt::format("{}", std::current_exception()));
+            }
+        }
+        if (source) {
+            try {
+                co_await source->close();
+            } catch (...) {
+                ilogger.warn("Import {}: failed to close the source: {}", _row.import_arn, std::current_exception());
+            }
+        }
+
+        if (failure) {
+            ilogger.warn("Import {} failed with {}: {}", _row.import_arn, failure->first, failure->second);
+            _row.failure_code = std::move(failure->first);
+            _row.failure_message = std::move(failure->second);
+            // FAILING keeps the failure in the row while the import cleans up, in case this node
+            // stops meanwhile: the garbage collector then finishes the cleanup.
+            // (A following commit adds the garbage collector.)
+            _row.import_status = sstring(import_status_failing);
+            try {
+                if (!co_await update_import(_e._sdks, _row, import_status_in_progress, _row.node_id)) {
+                    ilogger.warn("Import {}: the garbage collector took the import, stopping", _row.import_arn);
+                    co_return std::nullopt;
+                }
+            } catch (...) {
+                // The final write below tries both IN_PROGRESS and FAILING.
+                ilogger.debug("Import {}: failed to write FAILING: {}", _row.import_arn, std::current_exception());
+            }
+            _row.import_status = sstring(import_status_failed);
+        } else {
+            _row.import_status = sstring(import_status_completed);
+        }
+        _row.completed_at = db_clock::now();
+        try {
+            if (!co_await try_write_final_import_row(_e._sdks, _row)) {
+                ilogger.warn("Import {} ended as {}, but the garbage collector took the import before", _row.import_arn, _row.import_status);
+            }
+        } catch (...) {
+            ilogger.warn("Import {}: failed to write the final state {}, retrying in the background: {}",
+                    _row.import_arn, _row.import_status, std::current_exception());
+            co_return std::move(_row);
+        }
+        ilogger.info("Import {} ended as {}: {} items processed, {} imported, {} errors", _row.import_arn, _row.import_status,
+                _row.processed_item_count, _row.imported_item_count, _row.error_count);
+        co_return std::nullopt;
+    }
+};
+
+executor::s3_imports::s3_imports(executor& e)
+    : _e(e)
+    , _source_factory(make_s3_import_source)
+{}
+
+void executor::s3_imports::start_import(import_row row) {
+    auto import_arn = row.import_arn;
+    // run() writes failures to the import row, so an exception from it is unexpected (e.g.
+    // bad_alloc). The continuation passes the row to finish_import_in_background() if the final
+    // write is still to be done.
+    // The task is allocated before the fiber, so that a failure to allocate it throws to the
+    // caller.
+    auto task = std::make_unique<import_task>(_e, _as, std::move(row), _source_factory);
+    (void)with_gate(_gate, [&] {
+        auto& task_ref = *task;
+        return task_ref.run().then([this] (std::optional<import_row> unwritten) mutable {
+            if (unwritten) {
+                finish_import_in_background(std::move(*unwritten));
+            }
+        }).handle_exception([import_arn = std::move(import_arn)] (std::exception_ptr ep) {
+            ilogger.error("Background fiber of import {} failed unexpectedly: {}", import_arn, ep);
+        }).finally([task = std::move(task)] {});
+    });
+}
+
+void executor::s3_imports::finish_import_in_background(import_row row) {
+    if (_gate.is_closed()) {
+        // The executor stops. A garbage collector collects the row once the node restarted, was
+        // unreachable for an hour, or was removed.
+        // (A following commit adds the garbage collector.)
+        return;
+    }
+    (void)with_gate(_gate, [&] {
+        auto row_ptr = std::make_unique<import_row>(std::move(row));
+        auto& row_ref = *row_ptr;
+        // The caller may run in the scheduling group of a request.
+        return with_scheduling_group(_e._proxy.local_db().get_export_import_scheduling_group(), [this, &row_ref] {
+            return write_final_import_row(_e._sdks, row_ref, _as);
+        }).handle_exception([&row_ref] (std::exception_ptr ep) {
+            ilogger.warn("Background fiber finishing import {} gave up: {}", row_ref.import_arn, ep);
+        }).finally([row_ptr = std::move(row_ptr)] {});
+    });
+}
+
+future<> executor::s3_imports::stop() {
+    _as.request_abort();
+    co_await _gate.close();
 }
 
 // --- ImportTable ---
@@ -366,7 +579,8 @@ future<executor::request_return_type> executor::import_table(service::client_sta
     // As on DynamoDB, everything is validated before the ClientToken is
     // looked up: a replay with invalid parameters fails even if its token
     // is known. Refused only after the lookup, because a replay starts no
-    // import: the cluster-dependent checks of check_new_table().
+    // import: the cluster-dependent checks of check_new_table() and the
+    // shutdown refusal.
     const auto tablets_mode = _proxy.data_dictionary().get_config().tablets_mode_for_new_keyspaces();
     import_table_request parsed = parse_import_table_request(request, _proxy.features(), tablets_mode);
     const auto& keyspace_name = parsed.validated_table_params.keyspace_name;
@@ -409,6 +623,11 @@ future<executor::request_return_type> executor::import_table(service::client_sta
     if (auto ct = co_await helper.get_client_token(client_token)) {
         co_return co_await describe_token_import(*ct);
     }
+    // While the server drains its requests at shutdown, a new import would fail at once and use up
+    // its ClientToken: refuse it with an error which the client retries, on another node.
+    if (_stop_as.abort_requested()) {
+        co_return api_error::internal("This node is shutting down, so it can't start an import. Please retry the operation.");
+    }
     // Checked after the replay, which the node answers without owning an import.
     auto node_id_opt = get_self_node_id(_gossiper);
     if (!node_id_opt) {
@@ -445,7 +664,6 @@ future<executor::request_return_type> executor::import_table(service::client_sta
     rjson::value client_token_request = make_stored_request(parsed);
     rjson::add(client_token_request, "TableId", rjson::from_string(table_id.to_sstring()));
     const auto& user = client_state.user();
-    // FIXME: the import is not run yet, so it is stored as FAILED, as the placeholder answered.
     import_row row{
         .import_arn = import_arn,
         .client_token = client_token,
@@ -453,9 +671,7 @@ future<executor::request_return_type> executor::import_table(service::client_sta
         .requester_role = user && user->name ? *user->name : sstring(),
         .table_id = table_id,
         .target_table_existed = target_table_existed,
-        .import_status = sstring(import_status_failed),
-        .failure_code = sstring(failure_not_implemented),
-        .failure_message = "Not yet implemented - this is a placeholder response for testing the import API.",
+        .import_status = sstring(import_status_in_progress),
         .import_id_token = import_id,
         .accepted_at = accepted_at,
         .node_id = node_id,
@@ -476,12 +692,18 @@ future<executor::request_return_type> executor::import_table(service::client_sta
         co_return co_await describe_token_import(*existing_client_token);
     }
     auto existing_import = co_await insert_import(_sdks, row);
-    if (existing_import && (existing_import->client_token != client_token || existing_import->import_status != import_status_failed
+    if (existing_import && (existing_import->client_token != client_token || existing_import->import_status != import_status_in_progress
             || existing_import->node_id != node_id)) {
-        // Not our row: another import got the same id. Report it.
+        // Not our row: the garbage collector took the import (if this node was unreachable for
+        // long), or another import got the same id. Report it, without running anything.
+        // (A following commit adds the garbage collector.)
         co_return make_import_table_response(*existing_import);
     }
-    co_return make_import_table_response(row);
+    // Build the response before the fiber starts: a failure after that must not fail the
+    // import which the fiber runs.
+    auto response = make_import_table_response(row);
+    _s3_imports->start_import(row);
+    co_return response;
 }
 
 } // namespace alternator

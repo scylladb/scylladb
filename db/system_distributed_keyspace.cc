@@ -381,8 +381,8 @@ schema_ptr alternator_import_from_s3_imports() {
                 // True if the target table existed when the request was accepted (an Alternator
                 // extension). The import then writes into that table and does not create it.
                 .with_column("target_table_existed", boolean_type)
-                // Name of the state of the import state machine: NOT_STARTED, IN_PROGRESS, COMPLETED,
-                // FAILING or FAILED. NOT_STARTED and FAILING are reported to the user as IN_PROGRESS.
+                // Name of the state of the import state machine: IN_PROGRESS, COMPLETED, FAILING or
+                // FAILED. FAILING is reported to the user as IN_PROGRESS.
                 .with_column("import_status", utf8_type)
                 // Why the import failed; set only when import_status is FAILING or FAILED
                 .with_column("failure_code", utf8_type)

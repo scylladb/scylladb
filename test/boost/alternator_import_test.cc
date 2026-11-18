@@ -208,6 +208,25 @@ cql_test_config import_test_config() {
 
 } // anonymous namespace
 
+// Reading S3 is not implemented yet, so the default source fails as soon as it is made, and the
+// import fails with NotImplemented without creating a table.
+SEASTAR_TEST_CASE(test_import_source_failure_creates_no_table) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        alternator_test_executor exec;
+        exec.start(e);
+        auto stop_exec = defer([&] noexcept { try { exec.stop(); } catch (...) { std::terminate(); } });
+
+        auto response = exec.import_table_successfully(make_import_table_request("no_source", "token-no-source"));
+        auto row = wait_for_import(e, sstring(get_string(rjson::get(response, "ImportTableDescription"), "ImportArn")));
+        BOOST_REQUIRE_EQUAL(row.import_status, "FAILED");
+        BOOST_REQUIRE_EQUAL(row.failure_code.value_or(""), "NotImplemented");
+        BOOST_REQUIRE_EQUAL(row.processed_item_count, 0);
+        auto description = alternator::make_import_table_description(row);
+        BOOST_REQUIRE(rjson::find(description, "FailureMessage"));
+        BOOST_REQUIRE(std::holds_alternative<alternator::api_error>(exec.describe_table("no_source")));
+    }, import_test_config());
+}
+
 // A request which CreateTable would refuse because of the keyspace of the new table - here a
 // vector index in a keyspace using vnodes - is refused when it is made, and writes no rows.
 SEASTAR_TEST_CASE(test_import_refuses_what_create_table_refuses) {
@@ -281,7 +300,7 @@ SEASTAR_TEST_CASE(test_import_client_token_replay_before_import_row) {
         exec.start(e);
         auto stop_exec = defer([&] noexcept { try { exec.stop(); } catch (...) { std::terminate(); } });
 
-        // The import fails without creating the table.
+        // The default source fails the import before it creates the table.
         auto request = make_import_table_request("no_import_row", "token-no-import-row");
         auto response = exec.import_table_successfully(rjson::copy(request));
         const auto& description = rjson::get(response, "ImportTableDescription");
