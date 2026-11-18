@@ -72,6 +72,8 @@ public:
     virtual void clone() = 0;
     virtual void show_stats() = 0;
     virtual void insert_and_erase(per_key_t k) = 0;
+    // Whether erase(), drain() and insert_and_erase() are supported.
+    virtual bool supports_erase() const { return true; }
     virtual ~collection_tester() {};
 };
 
@@ -137,54 +139,54 @@ public:
     virtual ~bptree_tester() { clear(); }
 };
 
-#include "utils/compact-radix-tree.hh"
+#include "mutation/mutation_partition.hh"
+#include "schema/schema_builder.hh"
+#include "types/types.hh"
 
-class radix_tester : public collection_tester {
-public:
-    using test_tree = compact_radix_tree::tree<unsigned long>;
+// Exercises the cell storage of a row (atomic_cell_or_collection_block_tree),
+// with the keys as column ids, and small atomic cells as the values.
+class row_tester : public collection_tester {
+    schema_ptr _schema = schema_builder(smp::count, "ks", "cf")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .build();
+    bytes _value = long_type->decompose(int64_t(0));
+    row _r;
 
-private:
-    test_tree _t;
+    atomic_cell_or_collection make_cell() const {
+        return atomic_cell_or_collection(atomic_cell::make_live(*long_type, api::timestamp_type(0), _value));
+    }
+    static column_id to_column_id(per_key_t k) {
+        return column_id(k);
+    }
+    static void unsupported(std::string_view what) {
+        throw std::runtime_error(fmt::format("row does not support {}", what));
+    }
 public:
-    radix_tester() : _t() {}
-    virtual void insert(per_key_t k) override { _t.emplace(k, 0); }
+    virtual void insert(per_key_t k) override { _r.append_cell(to_column_id(k), make_cell()); }
     virtual void lower_bound(per_key_t k) override {
-        auto i = _t.get(k);
-        SCYLLA_ASSERT(i != nullptr);
+        auto cell = _r.find_cell(to_column_id(k));
+        SCYLLA_ASSERT(cell);
     }
     virtual void scan(int batch) override {
-        scan_collection(_t, batch);
-    }
-    virtual void erase(per_key_t k) override { _t.erase(k); }
-    virtual void drain(int batch) override {
         int x = 0;
-        while (!_t.empty()) {
-            _t.erase(_t.begin().key());
+        _r.for_each_cell([&] (column_id, atomic_cell_or_collection_view) {
             if (++x % batch == 0) {
                 seastar::thread::yield();
             }
-        }
+        });
     }
-    virtual void clear() override { _t.clear(); }
+    virtual void erase(per_key_t) override { unsupported("erasing a single cell"); }
+    virtual void drain(int) override { unsupported("draining"); }
+    virtual void clear() override { _r = row(); }
     virtual void clone() override {
-        test_tree ct;
-        ct.clone_from(_t, [] (unsigned, const unsigned long& data) { return data; });
+        row cr(*_schema, column_kind::regular_column, _r);
     }
-    virtual void insert_and_erase(per_key_t k) override {
-        _t.emplace(k, 0);
-        _t.erase(k);
-    }
-    void show_node_stats(std::string typ, typename test_tree::stats::node_stats& st) {
-        fmt::print("{}: indirect: {}/{}/{}/{}  direct: static {} dynamic {}\n", typ,
-                st.indirect_tiny, st.indirect_small, st.indirect_medium, st.indirect_large,
-                st.direct_static, st.direct_dynamic);
-    }
+    virtual void insert_and_erase(per_key_t) override { unsupported("erasing a single cell"); }
+    virtual bool supports_erase() const override { return false; }
     virtual void show_stats() override {
-        test_tree::stats st = _t.get_stats();
-        show_node_stats("inner", st.inners);
-        show_node_stats(" leaf", st.leaves);
+        fmt::print("cells: {}  external memory: {}\n", _r.size(), _r.external_memory_usage(*_schema, column_kind::regular_column));
     }
-    virtual ~radix_tester() override { clear(); }
+    virtual ~row_tester() override { clear(); }
 };
 
 class btree_tester : public collection_tester {
@@ -335,10 +337,15 @@ int main(int argc, char **argv) {
                 c = std::make_unique<set_tester>();
             } else if (col == "map") {
                 c = std::make_unique<map_tester>();
-            } else if (col == "radix") {
-                c = std::make_unique<radix_tester>();
+            } else if (col == "row") {
+                c = std::make_unique<row_tester>();
             } else {
                 fmt::print("Unknown collection\n");
+                return;
+            }
+
+            if (!c->supports_erase() && (tst == "erase" || tst == "drain" || tst == "oneshot")) {
+                fmt::print("{} does not support the {} test\n", col, tst);
                 return;
             }
 
