@@ -71,8 +71,8 @@ public:
         return std::chrono::seconds(10);
     }
 
-    meter_timer(noncopyable_function<void()>&& fun) : _timer(std::move(fun)) {
-        _timer.arm_periodic(tick_interval());
+    meter_timer(noncopyable_function<void()>&& fun, latency_counter::duration period = tick_interval()) : _timer(std::move(fun)) {
+        _timer.arm_periodic(period);
     }
 };
 
@@ -150,7 +150,7 @@ public:
  *
  * A summary is a histogram where each bucket holds some quantile.
  * While a histogram typically holds values from the system start,
- * a summary is defined over some duration (i.e., latencies in the last 10 seconds).
+ * a summary is defined over some duration (i.e., latencies in the last 30 seconds).
  * To calculate a summary, we use two estimated-histograms, calculate their delta, and get the
  * summary from that delta histogram.
  *
@@ -164,7 +164,7 @@ public:
     /*!
      * \brief update the summary and histograms
      *
-     * The update method is called every time tick.
+     * The update method is called once in every summary interval.
      * When done, _previous_histogram would equal _current_histogram
      * and the _summary would contain the current _summary calculation
      *
@@ -246,12 +246,17 @@ public:
  * summary from the last time tick.
  *
  * The API uses the same histogram, which also serves as its counter.
+ *
+ * The summary calculation is per some interval, that interval should be reasonable, by default
+ * it is set to 30s, but can be set to something else.
+ *
  */
 class summary_and_histogram {
     meter_timer _timer;
     summary_calculator _summary;
 public:
-    summary_and_histogram() : _timer([this]{ _summary.update(); }) {
+    summary_and_histogram(latency_counter::duration d = std::chrono::seconds(30)) : _timer([this]{
+        _summary.update();}, d) {
     }
 
     summary_and_histogram(summary_and_histogram&&) = default;
