@@ -12,6 +12,7 @@
 #include <seastar/util/alloc_failure_injector.hh>
 #include <cassert>
 #include <fmt/core.h>
+#include <type_traits>
 #include "utils/assert.hh"
 #include "utils/collection-concepts.hh"
 #include "utils/neat-object-id.hh"
@@ -1577,10 +1578,11 @@ private:
     }
 
     /*
-     * This is the only throwing part of the insertion. It
-     * pre-allocates the nodes (if needed), then grabs the
-     * key from the pointer and dives into the non-failing
-     * continuation
+     * This is the only throwing part of the insertion. A full
+     * leaf first tries to push a key to a sibling, which needs
+     * no new node. Otherwise it pre-allocates the nodes, then
+     * grabs the key from the pointer and dives into the
+     * non-failing continuation
      */
     template <typename KeyPointer>
     void insert(kid_index idx, KeyPointer kptr) {
@@ -1600,9 +1602,24 @@ private:
             return;
         }
 
+        /*
+         * The push must take the key from `kptr` before it links the key,
+         * because release() can unlink the key from another tree, as the
+         * release() of key_grabber does.
+         */
+        if (try_push_to_sibling(idx, [&kptr] () noexcept -> member_hook& { return kptr.release()->*Hook; }, nullptr)) {
+            return;
+        }
+
+        /*
+         * maybe_allocate_nodes() also allocates a node for each full node
+         * above the leaf, and the tree frees that node when the full node
+         * pushes a key to a sibling instead. This waste is small, because
+         * only an insert that splits the leaf comes to this point.
+         */
         prealloc nodes;
         maybe_allocate_nodes(nodes);
-        insert_into_full(idx, kptr.release()->*Hook, nullptr, nodes);
+        split_and_insert(idx, kptr.release()->*Hook, nullptr, nodes);
     }
 
     void insert(kid_index idx, member_hook& key, node* kid, prealloc& nodes) noexcept {
@@ -1614,6 +1631,25 @@ private:
     }
 
     void insert_into_full(kid_index idx, member_hook& key, node* kid, prealloc& nodes) noexcept {
+        if (!try_push_to_sibling(idx, [&key] () noexcept -> member_hook& { return key; }, kid)) {
+            split_and_insert(idx, key, kid, nodes);
+        }
+    }
+
+    /*
+     * Tries to insert a key into a full node by pushing an existing key to a
+     * sibling that has room. Returns true when the function inserts the key,
+     * and returns false when the function moves no key, which leaves the tree
+     * unchanged. For an inner node, the function can return false although a
+     * sibling has room, because an inner node does not push a key when the
+     * new key goes to the end of the node that is next to that sibling.
+     *
+     * The function calls get_key() to get the hook of the new key only when
+     * the insert succeeds, at most once, and before it links the key.
+     */
+    template <typename GetKey>
+    requires std::is_nothrow_invocable_r_v<member_hook&, GetKey&>
+    bool try_push_to_sibling(kid_index idx, GetKey get_key, node* kid) noexcept {
         if (!is_root()) {
             /*
              * An exception from classical B-tree split-balancing -- an
@@ -1663,8 +1699,8 @@ private:
                         SCYLLA_ASSERT(kid == nullptr);
                         p->move_key(i - 1, *left, left->_base.num_keys);
                         left->_base.num_keys++;
-                        p->set_key(i - 1, &key);
-                        return;
+                        p->set_key(i - 1, &get_key());
+                        return true;
                     }
                 }
             }
@@ -1678,19 +1714,19 @@ private:
                         SCYLLA_ASSERT(kid == nullptr);
                         right->shift_right(0);
                         p->move_key(i, *right, 0);
-                        p->set_key(i, &key);
-                        return;
+                        p->set_key(i, &get_key());
+                        return true;
                     }
                 }
             }
 
             if (_base.num_keys < NodeSize) {
-                do_insert(idx, key, kid);
-                return;
+                do_insert(idx, get_key(), kid);
+                return true;
             }
         }
 
-        split_and_insert(idx, key, kid, nodes);
+        return false;
     }
 
     void split_and_insert(kid_index idx, member_hook& key, node* kid, prealloc& nodes) noexcept {
