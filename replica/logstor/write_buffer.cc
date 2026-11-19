@@ -18,7 +18,6 @@
 #include <seastar/coroutine/as_future.hh>
 
 #include "dht/token.hh"
-#include "replica/exceptions.hh"
 #include "replica/logstor/logstor.hh"
 
 namespace replica::logstor {
@@ -404,7 +403,6 @@ buffered_writer::buffered_writer(buffered_writer_config cfg, seastar::noncopyabl
         , _ring()
         , _in_flight(cfg.ring_size)
         , _queued_writes(on_queued_write_expiry{this})
-        , _max_queued_write_bytes(cfg.max_queued_write_bytes)
         , _head_flush_timer([this] { on_head_flush_timer(); }) {
 
     if (_ring_size < 2) {
@@ -459,8 +457,7 @@ void buffered_writer::on_queued_write_removed(const queued_write& w) noexcept {
 }
 
 void buffered_writer::fail_queued_write(queued_write& request, std::exception_ptr ep) noexcept {
-    request.accepted_pr.set_exception(ep);
-    request.persisted_pr.set_exception(std::move(ep));
+    request.accepted_pr.set_exception(std::move(ep));
 }
 
 bool buffered_writer::maybe_advance_head() noexcept {
@@ -708,16 +705,13 @@ future<buffered_write_result> buffered_writer::write_to_buffer(log_record_writer
 // write, which is what has to outlive the wait.
 future<buffered_write_result> buffered_writer::queue_write(log_record_writer writer, db::timeout_clock::time_point timeout,
         write_target target, seastar::gate::holder holder) {
-    if (_max_queued_write_bytes != 0 && _queued_write_bytes + writer.record_size() > _max_queued_write_bytes) {
-        return make_exception_future<buffered_write_result>(replica::rate_limit_exception());
-    }
-
     const bool queue_was_empty = _queued_writes.empty();
     const auto write_size = writer.record_size();
     queued_write request(std::move(writer), std::move(target), std::move(holder), timeout, _next_queued_write_id++, write_size);
     auto accepted = request.accepted_pr.get_future();
-    _queued_write_bytes += write_size;
     _queued_writes.push_back(std::move(request), timeout);
+    _queued_write_bytes += write_size;
+    ++_total_queued_writes;
     if (queue_was_empty) {
         _consumer_progress_cv.signal();
     }

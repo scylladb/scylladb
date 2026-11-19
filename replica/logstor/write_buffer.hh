@@ -466,7 +466,6 @@ struct buffered_writer_config {
     size_t buffer_size;
     size_t ring_size;
     seastar::scheduling_group flush_sg;
-    size_t max_queued_write_bytes{0};
     std::chrono::milliseconds sync_period{0};
 };
 
@@ -545,12 +544,6 @@ class buffered_writer {
             , id(id)
             , write_size(write_size) {
         }
-
-        void fail_timeout() noexcept {
-            auto ep = std::make_exception_ptr(seastar::timed_out_error{});
-            accepted_pr.set_exception(ep);
-            persisted_pr.set_exception(ep);
-        }
     };
 
     struct on_queued_write_expiry {
@@ -558,7 +551,7 @@ class buffered_writer {
 
         void operator()(queued_write& w) noexcept {
             owner->on_queued_write_removed(w);
-            w.fail_timeout();
+            owner->fail_queued_write(w, std::make_exception_ptr(seastar::timed_out_error{}));
             owner->on_queued_writes_changed();
         }
     };
@@ -577,7 +570,7 @@ class buffered_writer {
 
     seastar::expiring_fifo<queued_write, on_queued_write_expiry, db::timeout_clock> _queued_writes;
     size_t _queued_write_bytes{0};
-    size_t _max_queued_write_bytes{0};
+    uint64_t _total_queued_writes{0};
 
     seastar::timer<db::timeout_clock> _head_flush_timer;
     bool _head_deadline_expired = false;
@@ -608,7 +601,8 @@ class buffered_writer {
     std::optional<future<record_location_with_holder>> append_to_head_buffer(log_record_writer&, write_target&);
 
     // Puts a record that found no room in the ring on the queue of writes waiting for some, and
-    // waits there for it to be taken into a buffer.
+    // waits there for it to be taken into a buffer. The queue has no size limit, so a write waits
+    // until its timeout, as a memtable write waits for dirty memory.
     future<buffered_write_result> queue_write(log_record_writer, db::timeout_clock::time_point timeout, write_target,
             seastar::gate::holder);
 
@@ -644,9 +638,20 @@ public:
     // location comes from.
     future<buffered_write_result> write_to_buffer(log_record_writer, db::timeout_clock::time_point timeout, write_target target = {}) noexcept;
 
-    size_t queued_write_count() const noexcept { return _queued_writes.size(); }
+    // Returns a future that resolves with the location of the record once the record is persisted.
+    future<record_location_with_holder> write(log_record_writer writer, db::timeout_clock::time_point timeout, write_target target = {}) noexcept {
+        return write_to_buffer(std::move(writer), timeout, std::move(target)).then([] (buffered_write_result r) {
+            return std::move(r.persisted);
+        });
+    }
 
-    size_t memory_usage() const noexcept { return _ring_size * _buffer_size + _queued_write_bytes; }
+    size_t queued_write_count() const noexcept { return _queued_writes.size(); }
+    size_t queued_write_bytes() const noexcept { return _queued_write_bytes; }
+    uint64_t total_queued_writes() const noexcept { return _total_queued_writes; }
+
+    // Returns the memory of the ring buffers. The queued writes are not counted, because the limits
+    // on open requests already hold their memory, and their memory is freed when the flushes continue.
+    size_t memory_usage() const noexcept { return _ring_size * _buffer_size; }
 
 };
 
