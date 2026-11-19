@@ -1164,6 +1164,19 @@ future<> storage_service::sstable_vnodes_cleanup_fiber(raft::server& server, gat
 future<> storage_service::raft_state_monitor_fiber(raft::server& raft, gate::holder group0_holder) {
     std::optional<abort_source> as;
 
+    // Abort the coordinator as soon as group 0 is aborted. The group 0 abort
+    // fails the coordinator's group 0 operations and the topology command
+    // handlers it waits for, and the coordinator may handle such a failure
+    // before this fiber resumes from its aborted wait and aborts `as` below,
+    // in which case it reports the shutdown as an error. Subscriptions run
+    // inline in request_abort(), so `as` is aborted by the time the
+    // coordinator sees the failure.
+    auto group0_sub = _group0_as.subscribe([&as] () noexcept {
+        if (as) {
+            as->request_abort();
+        }
+    });
+
     try {
         while (!_group0_as.abort_requested()) {
             // Wait for a state change in case we are not a leader yet, or we are are the leader
