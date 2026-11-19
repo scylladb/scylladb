@@ -1565,6 +1565,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                             rtlogger.info("keyspace_rf_change for keyspace {} will use multi-rf change procedure", ks_name);
                             ks_md->set_next_strategy_options(ks_md->strategy_options());
                             ks_md->set_strategy_options(ks.metadata()->strategy_options()); // start from the old strategy
+                            // The new preferred_rack may need the new replication; it is applied on completion.
+                            ks_md->set_preferred_rack(ks.metadata()->preferred_rack());
                             auto schema_muts = prepare_keyspace_update_announcement(_db, ks_md, guard.write_timestamp());
                             for (auto& m: schema_muts) {
                                 updates.add_large(std::move(m));
@@ -4442,6 +4444,31 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     group0_command g0_cmd = _group0.client().prepare_command(std::move(change), guard,
                         "Finalize deferred Alternator stream enablement");
                     co_await _group0.client().add_entry(std::move(g0_cmd), std::move(guard), _as);
+                    co_return true;
+                }
+            }
+
+            // Test-only: records a split of the strongly consistent table named by the injection's parameter
+            // the way the resize finalization will - a split decision and the ids of the two groups replacing
+            // each tablet's group. Nothing carries the split further, because the load balancer plans no resize
+            // of these tables, so it stays recorded until the table is dropped.
+            if (auto table = utils::get_local_injector().inject_parameter<std::string_view>("sc_record_raft_split")) {
+                const auto id = table_id(utils::UUID(*table));
+                const auto& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(id);
+                // We record it only once, because the injection stays enabled until the test sees the ids.
+                if (!tmap.has_raft_resizes()) {
+                    group0_update_collector updates;
+                    locator::resize_decision decision;
+                    decision.way = locator::resize_decision::split{};
+                    generate_resize_update(updates, guard, id, std::move(decision));
+                    replica::tablet_mutation_builder builder(guard.write_timestamp(), id);
+                    for (auto tid : tmap.tablet_ids()) {
+                        builder.set_raft_resize_info(tmap.get_last_token(tid), locator::tablet_raft_resize_info{
+                            .new_gids = {raft::group_id(utils::UUID_gen::get_time_UUID()), raft::group_id(utils::UUID_gen::get_time_UUID())},
+                        });
+                    }
+                    updates.add_large(builder.build());
+                    co_await update_topology_state(std::move(guard), std::move(updates), "Recording an injected split");
                     co_return true;
                 }
             }

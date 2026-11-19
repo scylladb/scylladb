@@ -3156,13 +3156,9 @@ bool sent_timeout_now(const raft::fsm_output& o) {
     });
 }
 
-// The wait is 2*delta plus a per-group jitter of at most delta, and the jitter is
-// drawn randomly, so tests assert either side of that range rather than an exact
-// boundary. Both bounds hold for every possible jitter.
-const auto lease_below_stepdown_wait =
+// How long a leader's clock must stay unusable before it hands the leadership away.
+const auto lease_stepdown_wait =
         std::chrono::duration_cast<raft::mono_clock::duration>(lease_delta) * 2;
-const auto lease_above_stepdown_wait =
-        std::chrono::duration_cast<raft::mono_clock::duration>(lease_delta) * 3;
 
 } // anonymous namespace
 
@@ -3183,7 +3179,7 @@ BOOST_AUTO_TEST_CASE(test_leaseguard_transfers_leadership_on_clock_loss) {
     // Short of the wait, leadership must not move however many ticks pass: a
     // clock that recovers quickly is not worth a transfer, which costs the
     // successor a delta of deferred commits.
-    clock.advance_monotonic(lease_below_stepdown_wait - 1ms);
+    clock.advance_monotonic(lease_stepdown_wait - 1ms);
     for (int i = 0; i < 5; i++) {
         f.fsm.tick();
         BOOST_CHECK(!sent_timeout_now(f.fsm.get_output()));
@@ -3191,9 +3187,38 @@ BOOST_AUTO_TEST_CASE(test_leaseguard_transfers_leadership_on_clock_loss) {
     BOOST_REQUIRE(f.fsm.is_leader());
 
     // Past it, leadership is handed to the follower.
-    clock.advance_monotonic(lease_above_stepdown_wait);
+    clock.advance_monotonic(1ms);
     f.fsm.tick();
     BOOST_CHECK(sent_timeout_now(f.fsm.get_output()));
+}
+
+// A transfer started on clock loss is not visible to the server's "stepdown already
+// in progress" check, so an operator stepdown may come while it is in flight. The
+// log limiter is given back once when the stepdown is cancelled, so it must be
+// consumed once too, or the group never accepts writes again.
+BOOST_AUTO_TEST_CASE(test_leaseguard_stepdown_during_clock_loss_transfer_keeps_writes) {
+    raft::bounded_clock_mock clock;
+    clock.set(lease_t0, lease_err);
+    clock_loss_fixture f(clock, true);
+    const auto limit = f.fsm.log_limiter_available();
+
+    clock.set_unsynchronized();
+    f.fsm.tick();
+    clock.advance_monotonic(lease_stepdown_wait);
+    f.fsm.tick();
+    BOOST_REQUIRE(sent_timeout_now(f.fsm.get_output()));
+    BOOST_REQUIRE(f.fsm.leadership_transfer_active());
+
+    f.fsm.transfer_leadership(ELECTION_TIMEOUT);
+    (void)f.fsm.get_output();
+
+    // The follower never campaigns, so the stepdown times out and is cancelled.
+    while (f.fsm.leadership_transfer_active()) {
+        f.fsm.tick();
+        (void)f.fsm.get_output();
+    }
+    BOOST_CHECK(f.fsm.is_leader());
+    BOOST_CHECK_EQUAL(f.fsm.log_limiter_available(), limit);
 }
 
 // ... but only if the target can actually do what we cannot. A follower whose
@@ -3210,7 +3235,7 @@ BOOST_AUTO_TEST_CASE(test_leaseguard_no_transfer_when_follower_clock_also_broken
     f.fsm.tick();
     BOOST_CHECK(!sent_timeout_now(f.fsm.get_output()));
 
-    clock.advance_monotonic(lease_above_stepdown_wait * 2);
+    clock.advance_monotonic(lease_stepdown_wait * 2);
     for (int i = 0; i < 5; i++) {
         f.fsm.tick();
         BOOST_CHECK(!sent_timeout_now(f.fsm.get_output()));
@@ -3231,11 +3256,11 @@ BOOST_AUTO_TEST_CASE(test_leaseguard_clock_recovery_cancels_transfer) {
         f.fsm.tick();
         BOOST_CHECK(!sent_timeout_now(f.fsm.get_output()));
         // Nearly long enough, but the clock comes back before the wait elapses.
-        clock.advance_monotonic(lease_below_stepdown_wait - 1ms);
+        clock.advance_monotonic(lease_stepdown_wait - 1ms);
         clock.set(lease_t0, lease_err);
         f.fsm.tick();
         BOOST_CHECK(!sent_timeout_now(f.fsm.get_output()));
-        clock.advance_monotonic(lease_above_stepdown_wait);
+        clock.advance_monotonic(lease_stepdown_wait);
     }
     BOOST_CHECK(f.fsm.is_leader());
 }
@@ -4167,5 +4192,643 @@ BOOST_AUTO_TEST_CASE(test_follower_notifies_leader_when_log_shrinks) {
     output = fsm.get_output();
     for (auto& [to, msg] : output.messages) {
         BOOST_CHECK(!std::holds_alternative<raft::append_reply>(msg));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Election priority tests.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// The number of ticks it takes the fsm to call an election, i.e. the randomized
+// election timeout drawn for this countdown. Since a fresh fsm and a fsm which has
+// just called an election both start counting from the current tick, this can be
+// called repeatedly to sample consecutive timeouts. Returns 0 if no election was
+// called within `limit` ticks.
+logical_clock::rep ticks_until_election(fsm_debug& fsm, logical_clock::rep limit = 2 * ELECTION_TIMEOUT.count()) {
+    const auto term = fsm.get_current_term();
+    for (logical_clock::rep i = 1; i <= limit; i++) {
+        fsm.tick();
+        if (fsm.get_current_term() > term) {
+            return i;
+        }
+    }
+    return 0;
+}
+
+} // anonymous namespace
+
+BOOST_AUTO_TEST_CASE(test_election_priority_slots) {
+    const auto ET = ELECTION_TIMEOUT.count();
+    server_id A_id = id(), B_id = id(), C_id = id();
+
+    raft::configuration cfg = config_from_ids({A_id, B_id, C_id});
+    raft::log log(raft::snapshot_descriptor{.idx = index_t{0}, .config = cfg});
+
+    // A is the preferred leader, B the runner-up, C is an ordinary member.
+    const std::vector<server_id> priority_members{A_id, B_id};
+    auto A = create_follower(A_id, raft::log(log), priority_members);
+
+    // The slot is deterministic, so the preferred member always calls an election
+    // first. Slot 0 is never handed out: nobody may call an election before
+    // ELECTION_TIMEOUT + 1.
+    BOOST_CHECK_EQUAL(ticks_until_election(A), ET + 1);
+
+    // Only the head of the list holds a slot. B and C randomize strictly after it,
+    // so they can neither precede nor tie A no matter how the draw comes out.
+    for (int i = 0; i < 100; i++) {
+        auto B = create_follower(B_id, raft::log(log), priority_members);
+        const auto b_ticks = ticks_until_election(B);
+        BOOST_CHECK_GT(b_ticks, ET + 1);
+        BOOST_CHECK_LE(b_ticks, 2 * ET);
+
+        auto C = create_follower(C_id, raft::log(log), priority_members);
+        const auto c_ticks = ticks_until_election(C);
+        BOOST_CHECK_GT(c_ticks, ET + 1);
+        BOOST_CHECK_LE(c_ticks, 2 * ET);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(test_election_priority_absent_means_ordinary_raft) {
+    const auto ET = ELECTION_TIMEOUT.count();
+    server_id A_id = id(), B_id = id(), C_id = id();
+
+    raft::configuration cfg = config_from_ids({A_id, B_id, C_id});
+    raft::log log(raft::snapshot_descriptor{.idx = index_t{0}, .config = cfg});
+
+    // Without priority members the timeout is randomized over the whole range, as in
+    // ordinary Raft: the first slot is not reserved for anybody.
+    auto shortest = 2 * ET;
+    for (int i = 0; i < 300; i++) {
+        auto A = create_follower(A_id, raft::log(log));
+        const auto ticks = ticks_until_election(A);
+        BOOST_CHECK_GE(ticks, ET + 1);
+        BOOST_CHECK_LE(ticks, 2 * ET);
+        shortest = std::min(shortest, ticks);
+    }
+    BOOST_CHECK_EQUAL(shortest, ET + 1);
+}
+
+BOOST_AUTO_TEST_CASE(test_election_priority_member_wins_election) {
+    server_id A_id = id(), B_id = id(), C_id = id();
+
+    raft::configuration cfg = config_from_ids({A_id, B_id, C_id});
+    raft::log log(raft::snapshot_descriptor{.idx = index_t{0}, .config = cfg});
+
+    // Only B is preferred; A and C are ordinary members.
+    const std::vector<server_id> priority_members{B_id};
+    auto A = create_follower(A_id, raft::log(log), priority_members);
+    auto B = create_follower(B_id, raft::log(log), priority_members);
+    auto C = create_follower(C_id, raft::log(log), priority_members);
+
+    // Tick all the members at the same rate: B's reserved slot is the only one
+    // which can expire this early, so it is the only candidate.
+    for (int i = 0; i < ELECTION_TIMEOUT.count() + 1; i++) {
+        A.tick();
+        B.tick();
+        C.tick();
+    }
+    BOOST_CHECK(B.is_candidate());
+    BOOST_CHECK(A.is_follower());
+    BOOST_CHECK(C.is_follower());
+
+    // Nobody is campaigning against B, so it collects both votes.
+    communicate(A, B, C);
+    BOOST_CHECK(B.is_leader());
+}
+
+BOOST_AUTO_TEST_CASE(test_election_priority_list_can_be_replaced) {
+    const auto ET = ELECTION_TIMEOUT.count();
+    server_id A_id = id(), B_id = id(), C_id = id();
+
+    raft::configuration cfg = config_from_ids({A_id, B_id, C_id});
+    raft::log log(raft::snapshot_descriptor{.idx = index_t{0}, .config = cfg});
+
+    // The list is read whenever the slot is drawn, so topology changes take effect
+    // without recreating the fsm.
+    auto A = create_follower(A_id, raft::log(log), {A_id});
+
+    BOOST_CHECK_EQUAL(ticks_until_election(A), ET + 1);
+
+    // Demote A behind B. The next countdown draws a slot after B's.
+    A.set_priority_members({B_id, A_id});
+    const auto ticks = ticks_until_election(A);
+    BOOST_CHECK_GT(ticks, ET + 1);
+    BOOST_CHECK_LE(ticks, 2 * ET);
+}
+
+BOOST_AUTO_TEST_CASE(test_election_priority_skips_non_voters) {
+    const auto ET = ELECTION_TIMEOUT.count();
+    server_id A_id = id(), B_id = id(), C_id = id(), removed_id = id();
+
+    // C is a member of the group but is not allowed to vote.
+    raft::configuration cfg(config_set({A_id, B_id}));
+    cfg.current.emplace(server_addr_from_id(C_id), raft::is_voter::no);
+    raft::log log(raft::snapshot_descriptor{.idx = index_t{0}, .config = cfg});
+
+    // The list names whole racks, so it may contain a server which is not a member of
+    // this group (removed_id) or one which cannot win an election (C); neither may
+    // take the slot.
+    const std::vector<server_id> priority_members{removed_id, C_id, A_id, B_id};
+    auto A = create_follower(A_id, raft::log(log), priority_members);
+
+    // A holds the slot, as if the list started with it.
+    BOOST_CHECK_EQUAL(ticks_until_election(A), ET + 1);
+}
+
+BOOST_AUTO_TEST_CASE(test_election_priority_skips_dead_members) {
+    const auto ET = ELECTION_TIMEOUT.count();
+    server_id A_id = id(), B_id = id(), C_id = id();
+
+    raft::configuration cfg = config_from_ids({A_id, B_id, C_id});
+    raft::log log(raft::snapshot_descriptor{.idx = index_t{0}, .config = cfg});
+
+    // A heads the list but is down, so the slot passes to B.
+    const std::vector<server_id> priority_members{A_id, B_id};
+    discrete_failure_detector fd;
+    fd.mark_dead(A_id);
+
+    auto B = create_follower(B_id, raft::log(log), priority_members, fd);
+    BOOST_CHECK_EQUAL(ticks_until_election(B), ET + 1);
+
+    for (int i = 0; i < 100; i++) {
+        auto C = create_follower(C_id, raft::log(log), priority_members, fd);
+        BOOST_CHECK_GT(ticks_until_election(C), ET + 1);
+    }
+
+    // Once A is back, it takes the slot again.
+    fd.mark_alive(A_id);
+    auto A = create_follower(A_id, raft::log(log), priority_members, fd);
+    BOOST_CHECK_EQUAL(ticks_until_election(A), ET + 1);
+    for (int i = 0; i < 100; i++) {
+        auto B = create_follower(B_id, raft::log(log), priority_members, fd);
+        BOOST_CHECK_GT(ticks_until_election(B), ET + 1);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(test_election_priority_declines_the_slot_on_a_broken_clock) {
+    const auto ET = ELECTION_TIMEOUT.count();
+    server_id A_id = id(), B_id = id(), C_id = id();
+
+    raft::configuration cfg = config_from_ids({A_id, B_id, C_id});
+    raft::log log(raft::snapshot_descriptor{.idx = index_t{0}, .config = cfg});
+
+    // A is preferred, but could hold no lease: it could only win the election to have
+    // LeaseGuard hand the leadership away again, so it randomizes with everybody else.
+    raft::bounded_clock_mock clock;
+    clock.set_unsynchronized();
+    auto cfg_a = make_lease_cfg(clock);
+    cfg_a.priority_members = {A_id};
+    for (int i = 0; i < 100; i++) {
+        fsm_debug A(A_id, term_t{}, server_id{}, raft::log(log), trivial_failure_detector, cfg_a);
+        const auto ticks = ticks_until_election(A);
+        BOOST_CHECK_GT(ticks, ET + 1);
+        BOOST_CHECK_LE(ticks, 2 * ET);
+    }
+
+    // With a working clock it takes the slot.
+    fsm_debug A(A_id, term_t{}, server_id{}, raft::log(log), trivial_failure_detector, cfg_a);
+    clock.set(lease_t0, lease_err);
+    BOOST_CHECK_EQUAL(ticks_until_election(A), ET + 1);
+}
+
+BOOST_AUTO_TEST_CASE(test_election_timeout_range_counts_voters_only) {
+    const auto ET = ELECTION_TIMEOUT.count();
+    server_id A_id = id();
+
+    // A group with many members, of which only three can vote - group 0 looks like
+    // this: its configuration holds every node of the cluster. The timeout range is
+    // spread over the servers which can call an election, so the non-voters must not
+    // widen it.
+    raft::configuration cfg(config_set({A_id, id(), id()}));
+    for (int i = 0; i < 3 * ET; i++) {
+        cfg.current.emplace(server_addr_from_id(id()), raft::is_voter::no);
+    }
+    raft::log log(raft::snapshot_descriptor{.idx = index_t{0}, .config = cfg});
+
+    for (int i = 0; i < 100; i++) {
+        auto A = create_follower(A_id, raft::log(log));
+        const auto ticks = ticks_until_election(A, 4 * ET);
+        BOOST_CHECK_GE(ticks, ET + 1);
+        BOOST_CHECK_LE(ticks, 2 * ET);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(test_fast_bootstrap_prefers_priority_member) {
+    server_id A_id = id(), B_id = id(), C_id = id();
+    BOOST_CHECK(A_id < B_id);
+    BOOST_CHECK(B_id < C_id);
+
+    raft::configuration cfg = config_from_ids({A_id, B_id, C_id});
+    raft::log log(raft::snapshot_descriptor{.config = cfg});
+
+    // The seed alone would bootstrap A, the smallest-id voter. C is the priority
+    // member, so it wins the election anyway - bootstrap it instead of handing the
+    // leadership over afterwards.
+    raft::fsm_config fcfg{.append_request_threshold = 1, .enable_prevoting = true,
+                          .fast_bootstrap_seed = 0,
+                          .priority_members = {C_id}};
+
+    fsm_debug C(C_id, term_t{}, server_id{}, raft::log(log), trivial_failure_detector, fcfg);
+    BOOST_CHECK(C.is_candidate());
+
+    fsm_debug A(A_id, term_t{}, server_id{}, raft::log(log), trivial_failure_detector, fcfg);
+    BOOST_CHECK(A.is_follower());
+}
+
+BOOST_AUTO_TEST_CASE(test_fast_bootstrap_declines_on_a_broken_clock) {
+    server_id A_id = id(), B_id = id(), C_id = id();
+
+    raft::configuration cfg = config_from_ids({A_id, B_id, C_id});
+    raft::log log(raft::snapshot_descriptor{.config = cfg});
+
+    // A is preferred but could hold no lease, so it doesn't bootstrap - and neither does
+    // anybody else, since A is the one they expect to.
+    raft::bounded_clock_mock clock;
+    clock.set_unsynchronized();
+    auto fcfg = make_lease_cfg(clock);
+    fcfg.fast_bootstrap_seed = 0;
+    fcfg.priority_members = {A_id};
+
+    fsm_debug A(A_id, term_t{}, server_id{}, raft::log(log), trivial_failure_detector, fcfg);
+    BOOST_CHECK(A.is_follower());
+    fsm_debug B(B_id, term_t{}, server_id{}, raft::log(log), trivial_failure_detector, fcfg);
+    BOOST_CHECK(B.is_follower());
+
+    clock.set(lease_t0, lease_err);
+    fsm_debug A2(A_id, term_t{}, server_id{}, raft::log(log), trivial_failure_detector, fcfg);
+    BOOST_CHECK(A2.is_candidate());
+}
+
+BOOST_AUTO_TEST_CASE(test_fast_bootstrap_falls_back_to_the_seed) {
+    server_id A_id = id(), B_id = id(), C_id = id(), removed_id = id();
+
+    raft::configuration cfg = config_from_ids({A_id, B_id, C_id});
+    raft::log log(raft::snapshot_descriptor{.config = cfg});
+
+    // No priority member can vote here, so the seed picks the leader as before.
+    raft::fsm_config fcfg{.append_request_threshold = 1, .enable_prevoting = true,
+                          .fast_bootstrap_seed = 0,
+                          .priority_members = {removed_id}};
+
+    fsm_debug A(A_id, term_t{}, server_id{}, raft::log(log), trivial_failure_detector, fcfg);
+    BOOST_CHECK(A.is_candidate());
+
+    fsm_debug C(C_id, term_t{}, server_id{}, raft::log(log), trivial_failure_detector, fcfg);
+    BOOST_CHECK(C.is_follower());
+}
+
+
+// ---------------------------------------------------------------------------
+// Leader handover tests.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// The server timeout_now was sent to, or an empty id if it was sent to nobody.
+server_id timeout_now_target(const raft::fsm_output& output) {
+    for (const auto& [to, msg] : output.messages) {
+        if (std::holds_alternative<raft::timeout_now>(msg)) {
+            return to;
+        }
+    }
+    return server_id{};
+}
+
+// Ticks the leader up to `limit` times, until it sends timeout_now. Returns the server
+// it was sent to, or an empty id if it sent none.
+server_id ticks_until_handover(fsm_debug& leader, logical_clock::rep limit) {
+    for (logical_clock::rep i = 0; i < limit; i++) {
+        leader.tick();
+        if (const auto to = timeout_now_target(leader.get_output())) {
+            return to;
+        }
+    }
+    return server_id{};
+}
+
+// Long enough to sit out the back-off which follows a transfer.
+constexpr logical_clock::rep handover_limit = 10 * ELECTION_TIMEOUT.count();
+
+} // anonymous namespace
+
+BOOST_AUTO_TEST_CASE(test_leader_hands_over_to_a_preferred_server) {
+    server_id A_id = id(), B_id = id(), C_id = id();
+
+    raft::configuration cfg = config_from_ids({A_id, B_id, C_id});
+    raft::log log(raft::snapshot_descriptor{.idx = index_t{0}, .config = cfg});
+
+    auto A = create_follower(A_id, raft::log(log), {B_id});
+    auto B = create_follower(B_id, raft::log(log), {B_id});
+    auto C = create_follower(C_id, raft::log(log), {B_id});
+
+    // The slot only biases the election, so A can win it although B is preferred.
+    election_timeout(A);
+    communicate(A, B, C);
+    BOOST_CHECK(A.is_leader());
+
+    // B has acked everything, so A hands the leadership to it on its first tick.
+    BOOST_CHECK(ticks_until_handover(A, 1) == B_id);
+    BOOST_CHECK(A.is_leader());
+
+    // timeout_now is resent on tick.
+    A.tick();
+    communicate(A, B, C);
+    BOOST_CHECK(B.is_leader());
+    BOOST_CHECK(A.is_follower());
+}
+
+BOOST_AUTO_TEST_CASE(test_leader_waits_for_a_preferred_server_to_catch_up) {
+    server_id A_id = id(), B_id = id(), C_id = id();
+
+    raft::configuration cfg = config_from_ids({A_id, B_id, C_id});
+    raft::log log(raft::snapshot_descriptor{.idx = index_t{0}, .config = cfg});
+
+    auto A = create_follower(A_id, raft::log(log), {B_id});
+    auto B = create_follower(B_id, raft::log(log), {B_id});
+    auto C = create_follower(C_id, raft::log(log), {B_id});
+
+    // B hears nothing of the election, so it misses the entry A and C commit. A transfer
+    // would block the writes until B caught up, so A doesn't start one.
+    election_timeout(A);
+    communicate(A, C);
+    BOOST_CHECK(A.is_leader());
+    BOOST_CHECK(!ticks_until_handover(A, handover_limit));
+    BOOST_CHECK(!A.leadership_transfer_active());
+
+    // Once B has caught up, A hands the leadership over.
+    A.tick();
+    communicate(A, B, C);
+    BOOST_CHECK(ticks_until_handover(A, 1) == B_id);
+}
+
+// A preferred server which lags by less than a tick of writes still gets the
+// leadership: once the transfer freezes the log it acks the rest within a tick.
+BOOST_AUTO_TEST_CASE(test_leader_hands_over_to_a_preferred_server_which_keeps_up) {
+    server_id A_id = id(), B_id = id(), C_id = id();
+
+    raft::configuration cfg = config_from_ids({A_id, B_id, C_id});
+    raft::log log(raft::snapshot_descriptor{.idx = index_t{0}, .config = cfg});
+
+    auto A = create_follower(A_id, raft::log(log), {B_id});
+    auto B = create_follower(B_id, raft::log(log), {B_id});
+    auto C = create_follower(C_id, raft::log(log), {B_id});
+
+    election_timeout(A);
+    communicate(A, B, C);
+    BOOST_CHECK(A.is_leader());
+
+    // B has everything A had a tick ago, but not the entry appended since. The transfer
+    // starts, and timeout_now follows once B has acked that entry.
+    A.add_entry(create_command(1));
+    communicate(A, C);
+    A.tick();
+    BOOST_CHECK(A.leadership_transfer_active());
+    communicate(A, B, C);
+    BOOST_CHECK(B.is_leader());
+}
+
+BOOST_AUTO_TEST_CASE(test_leader_does_not_hand_over_to_a_dead_server) {
+    server_id A_id = id(), B_id = id(), C_id = id();
+
+    raft::configuration cfg = config_from_ids({A_id, B_id, C_id});
+    raft::log log(raft::snapshot_descriptor{.idx = index_t{0}, .config = cfg});
+
+    discrete_failure_detector fd;
+    auto A = create_follower(A_id, raft::log(log), {B_id}, fd);
+    auto B = create_follower(B_id, raft::log(log), {B_id}, fd);
+    auto C = create_follower(C_id, raft::log(log), {B_id}, fd);
+
+    election_timeout(A);
+    communicate(A, B, C);
+    BOOST_CHECK(A.is_leader());
+
+    // B is preferred but gone. Asking it would only hold the writes of the group back
+    // for nothing.
+    fd.mark_dead(B_id);
+    BOOST_CHECK(!ticks_until_handover(A, handover_limit));
+
+    // Once it is back, it gets the leadership.
+    fd.mark_alive(B_id);
+    BOOST_CHECK(ticks_until_handover(A, 1) == B_id);
+}
+
+BOOST_AUTO_TEST_CASE(test_leader_hands_over_to_the_first_alive_preferred_server) {
+    server_id A_id = id(), B_id = id(), C_id = id(), removed_id = id();
+
+    raft::configuration cfg = config_from_ids({A_id, B_id, C_id});
+    raft::log log(raft::snapshot_descriptor{.idx = index_t{0}, .config = cfg});
+
+    // Somebody who is not a member of the group is named ahead of everybody.
+    discrete_failure_detector fd;
+    const std::vector<server_id> prefer{removed_id, B_id, C_id};
+    auto A = create_follower(A_id, raft::log(log), prefer, fd);
+    auto B = create_follower(B_id, raft::log(log), prefer, fd);
+    auto C = create_follower(C_id, raft::log(log), prefer, fd);
+
+    election_timeout(A);
+    communicate(A, B, C);
+    BOOST_CHECK(A.is_leader());
+
+    // B is gone, so it is C - which outranks A too, and is there to take over.
+    fd.mark_dead(B_id);
+    BOOST_CHECK(ticks_until_handover(A, 1) == C_id);
+}
+
+BOOST_AUTO_TEST_CASE(test_leader_keeps_the_leadership_if_nobody_better_can_take_it) {
+    server_id A_id = id(), B_id = id(), C_id = id();
+
+    raft::configuration cfg = config_from_ids({A_id, B_id, C_id});
+    raft::log log(raft::snapshot_descriptor{.idx = index_t{0}, .config = cfg});
+
+    discrete_failure_detector fd;
+    const std::vector<server_id> prefer{B_id, A_id, C_id};
+    auto A = create_follower(A_id, raft::log(log), prefer, fd);
+    auto B = create_follower(B_id, raft::log(log), prefer, fd);
+    auto C = create_follower(C_id, raft::log(log), prefer, fd);
+
+    election_timeout(A);
+    communicate(A, B, C);
+    BOOST_CHECK(A.is_leader());
+
+    // C is on the list, but behind A: with B gone, A is the best leader there is.
+    fd.mark_dead(B_id);
+    BOOST_CHECK(!ticks_until_handover(A, handover_limit));
+
+    // Nor is there anybody better when A heads the list itself.
+    fd.mark_alive(B_id);
+    A.set_priority_members({A_id, B_id});
+    BOOST_CHECK(!ticks_until_handover(A, handover_limit));
+
+    // A new list is acted on at once.
+    A.set_priority_members({C_id, A_id});
+    BOOST_CHECK(timeout_now_target(A.get_output()) == C_id);
+}
+
+BOOST_AUTO_TEST_CASE(test_leader_does_not_retry_a_failed_handover_at_once) {
+    const auto ET = ELECTION_TIMEOUT.count();
+    server_id A_id = id(), B_id = id(), C_id = id();
+
+    raft::configuration cfg = config_from_ids({A_id, B_id, C_id});
+    raft::log log(raft::snapshot_descriptor{.idx = index_t{0}, .config = cfg});
+
+    auto A = create_follower(A_id, raft::log(log), {B_id});
+    auto B = create_follower(B_id, raft::log(log), {B_id});
+    auto C = create_follower(C_id, raft::log(log), {B_id});
+
+    election_timeout(A);
+    communicate(A, B, C);
+    BOOST_CHECK(A.is_leader());
+    BOOST_CHECK(ticks_until_handover(A, 1) == B_id);
+
+    // B never campaigns, so the transfer times out. Each attempt blocks the writes of the
+    // group, so the next one comes only after a while: five transfer timeouts.
+    for (int i = 0; i < ET; i++) {
+        A.tick();
+        (void)A.get_output();
+    }
+    BOOST_CHECK(A.is_leader());
+    BOOST_CHECK(!A.leadership_transfer_active());
+    BOOST_CHECK(!ticks_until_handover(A, 5 * ET - 1));
+    BOOST_CHECK(ticks_until_handover(A, 1) == B_id);
+}
+
+
+namespace {
+
+// A lease-enabled leader of a three-server group with a priority list, driven by hand so
+// that each follower's clock health can be set independently of the leader's.
+struct handover_lease_fixture {
+    std::vector<server_id> members;
+    fsm_debug fsm;
+
+    // The first of `group` is the fsm under test.
+    handover_lease_fixture(raft::bounded_clock_mock& clock, std::vector<server_id> group,
+            std::vector<server_id> prefer)
+        : members(std::move(group))
+        , fsm(members.front(), term_t{}, server_id{},
+                raft::log{raft::snapshot_descriptor{.config = config_from_ids(members)}},
+                trivial_failure_detector, lease_cfg(clock, std::move(prefer))) {
+        election_timeout(fsm);
+        (void)fsm.get_output();
+        fsm.step(members[1], raft::vote_reply{fsm.get_current_term(), true});
+        BOOST_REQUIRE(fsm.is_leader());
+        (void)fsm.get_output();
+    }
+
+    static raft::fsm_config lease_cfg(raft::bounded_clock& clock, std::vector<server_id> prefer) {
+        auto cfg = make_lease_cfg(clock);
+        cfg.priority_members = std::move(prefer);
+        return cfg;
+    }
+
+    // Tell the leader that `id` has replicated the whole log, and whether its clock works.
+    void ack(server_id id, bool clock_ok) {
+        const auto idx = fsm.get_log().last_idx();
+        fsm.step(id, raft::append_reply{fsm.get_current_term(), idx,
+                raft::append_reply::accepted{idx}, clock_ok});
+        (void)fsm.get_output();
+    }
+
+    // Break the leader's clock for long enough that it gives the leadership away.
+    void lose_clock(raft::bounded_clock_mock& clock) {
+        clock.set_unsynchronized();
+        fsm.tick();
+        (void)fsm.get_output();
+        clock.advance_monotonic(lease_stepdown_wait);
+    }
+};
+
+} // anonymous namespace
+
+// A preferred server whose clock does not work must not be given the leadership: it could
+// hold no lease, so the group would serve no local read - and LeaseGuard would hand the
+// leadership straight back to us, leaving the two of us passing it back and forth for as
+// long as the outage lasted.
+BOOST_AUTO_TEST_CASE(test_leader_does_not_hand_over_to_a_clockless_server) {
+    raft::bounded_clock_mock clock;
+    clock.set(lease_t0, lease_err);
+    server_id A_id = id(), B_id = id(), C_id = id();
+    handover_lease_fixture f(clock, {A_id, B_id, C_id}, {B_id});
+
+    // B is preferred and caught up, but its clock is broken.
+    f.ack(B_id, false);
+    f.ack(C_id, true);
+    BOOST_CHECK(!ticks_until_handover(f.fsm, handover_limit));
+
+    // Once B's clock works it gets the leadership.
+    f.ack(B_id, true);
+    BOOST_CHECK(ticks_until_handover(f.fsm, 1) == B_id);
+}
+
+// A leader whose own clock is lost doesn't wait for the best server: it hands the
+// leadership to the first one on the list which keeps up, even one behind itself,
+// and to any other server if no list member does.
+BOOST_AUTO_TEST_CASE(test_leader_with_a_lost_clock_prefers_a_list_member_which_keeps_up) {
+    server_id A_id = id(), B_id = id(), C_id = id();
+    {
+        raft::bounded_clock_mock clock;
+        clock.set(lease_t0, lease_err);
+        handover_lease_fixture f(clock, {A_id, B_id, C_id}, {A_id, B_id});
+        f.ack(B_id, true);
+        f.ack(C_id, true);
+        f.lose_clock(clock);
+        BOOST_CHECK(ticks_until_handover(f.fsm, 1) == B_id);
+    }
+    {
+        raft::bounded_clock_mock clock;
+        clock.set(lease_t0, lease_err);
+        handover_lease_fixture f(clock, {A_id, B_id, C_id}, {A_id, B_id});
+        // B lags behind, so C gets the leadership rather than wait for B.
+        f.ack(C_id, true);
+        f.lose_clock(clock);
+        BOOST_CHECK(ticks_until_handover(f.fsm, 1) == C_id);
+    }
+}
+
+// If nobody keeps up, a leader with a lost clock starts no transfer: one would block the
+// writes for a whole transfer timeout and likely find nobody to hand over to.
+BOOST_AUTO_TEST_CASE(test_leader_with_a_lost_clock_keeps_the_writes_flowing_if_nobody_keeps_up) {
+    raft::bounded_clock_mock clock;
+    clock.set(lease_t0, lease_err);
+    server_id A_id = id(), B_id = id(), C_id = id();
+    handover_lease_fixture f(clock, {A_id, B_id, C_id}, {B_id});
+    const auto limit = f.fsm.log_limiter_available();
+
+    f.lose_clock(clock);
+    BOOST_CHECK(!ticks_until_handover(f.fsm, handover_limit));
+    BOOST_CHECK(f.fsm.is_leader());
+    BOOST_CHECK(!f.fsm.leadership_transfer_active());
+    BOOST_CHECK_EQUAL(f.fsm.log_limiter_available(), limit);
+
+    // Once somebody does, it gets the leadership.
+    f.ack(C_id, true);
+    BOOST_CHECK(ticks_until_handover(f.fsm, 1) == C_id);
+}
+
+// A stepdown without a target, such as the one on shutdown, waits for nobody: timeout_now
+// goes to the first voter which has acked the whole log. But when several have when the
+// stepdown starts, the one the list ranks best gets it.
+BOOST_AUTO_TEST_CASE(test_stepdown_prefers_a_priority_member_among_caught_up_servers) {
+    for (int preferred = 1; preferred <= 2; preferred++) {
+        server_id A_id = id(), B_id = id(), C_id = id();
+        const std::vector<server_id> ids{A_id, B_id, C_id};
+
+        raft::configuration cfg = config_from_ids(ids);
+        raft::log log(raft::snapshot_descriptor{.idx = index_t{0}, .config = cfg});
+
+        // A leads the list, so it keeps the leadership until it steps down.
+        const std::vector<server_id> prefer{A_id, ids[preferred]};
+        auto A = create_follower(A_id, raft::log(log), prefer);
+        auto B = create_follower(B_id, raft::log(log), prefer);
+        auto C = create_follower(C_id, raft::log(log), prefer);
+
+        election_timeout(A);
+        communicate(A, B, C);
+        BOOST_CHECK(A.is_leader());
+
+        A.transfer_leadership(ELECTION_TIMEOUT);
+        BOOST_CHECK(timeout_now_target(A.get_output()) == ids[preferred]);
     }
 }

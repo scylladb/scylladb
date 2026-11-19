@@ -19,9 +19,13 @@
 #include "db/commitlog/raft_commitlog_replay_buffer.hh"
 #include "utils/hash.hh"
 
+#include <seastar/core/lowres_clock.hh>
+#include <seastar/core/timer.hh>
 #include <seastar/util/noncopyable_function.hh>
 
+#include <deque>
 #include <source_location>
+#include <unordered_set>
 
 namespace db {
 class system_keyspace;
@@ -137,9 +141,10 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     //  - `server` is the last started server until its deletion resets it.
     //    Once a restart is queued behind a pending deletion, `gate` is already
     //    the new incarnation's while `server` is still the old one's.
-    //  - `server_control_op` chains starts and deletions (chain_control_op()).
-    //    If it is available, the last operation was a start: a finished
-    //    deletion either erased the entry or has a start queued behind it.
+    //  - `server_control_op` chains starts, deletions and priority list pushes
+    //    (chain_control_op()). If it is available, the last operation was a
+    //    start or a push behind one: a finished deletion either erased the
+    //    entry or has a start queued behind it.
     // So `server` is the live server of the current `gate` iff
     // `server_control_op` is available. Dereference it only via
     // try_acquire_server(), acquire_server(), or from a control operation.
@@ -154,6 +159,24 @@ class groups_manager : public peering_sharded_service<groups_manager> {
         raft_groups_storage* storage = nullptr;
 
         shared_future<> server_control_op = make_ready_future<>();
+
+        // The priority members of the raft server; refreshed by update(), and for a child of
+        // a resize by colocate_leader().
+        std::vector<raft::server_id> priority_members;
+        // The preferred leaders of the group. They are its priority members, except that a
+        // child of a resize follows them with the leader of its parent.
+        std::vector<raft::server_id> preferred_leaders;
+        // While armed, the raft server gets no priority members; see maybe_reset_priority_members().
+        timer<lowres_clock> priority_members_hold;
+        // When this replica gained the leadership lately, oldest first.
+        std::deque<lowres_clock::time_point> leadership_gains;
+
+        std::vector<raft::server_id> effective_priority_members() const {
+            return priority_members_hold.armed() ? std::vector<raft::server_id>{} : priority_members;
+        }
+
+        // The children replacing this group in a resize in progress, if any.
+        locator::raft_group_id_list replacement_groups;
 
         // Populated only when this node thinks it's a tablet raft group leader.
         std::optional<leader_info> leader_info = std::nullopt;
@@ -197,13 +220,20 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     // table skips the request.
     void request_flush(db::cf_id_type id, db::replay_position pos);
 
+    // The children of a resize whose priority members have to be brought up to date.
+    std::unordered_set<raft::group_id> _colocation_pending;
+    // Signalled when _colocation_pending gains a group, and broken when the shard stops.
+    condition_variable _colocation_cond;
+    future<> _leader_colocator = make_ready_future<>();
+
     // Should be called on the shard that hosts the Raft group
     future<> start_raft_group(locator::global_tablet_id tablet,
         raft::group_id group_id,
         locator::token_metadata_ptr tm,
         lw_shared_ptr<raft::server_stats> server_stats,
         lw_shared_ptr<raft_rpc::stats> rpc_stats,
-        lw_shared_ptr<state_machine_stats> apply_stats);
+        lw_shared_ptr<state_machine_stats> apply_stats,
+        std::vector<raft::server_id> priority_members);
 
     // Creates them if the table does not have any yet.
     table_metrics& get_table_metrics(const schema& s);
@@ -264,6 +294,37 @@ class groups_manager : public peering_sharded_service<groups_manager> {
 
     future<> leader_info_updater(raft_group_state& state, table_id table, raft::group_id gid,
         dht::token_range range);
+
+    // Guards against a ping-pong of the leadership: withdraws the priority members of a
+    // group for a while once this replica has gained its leadership too often.
+    static void maybe_reset_priority_members(raft_group_state& state, raft::group_id gid);
+
+    // Replaces the priority members of the group's raft server. A started or starting server
+    // gets them after the control operation in flight, if any.
+    static void set_priority_members(raft_group_state& state, raft::group_id gid, std::vector<raft::server_id> members);
+
+    // Sets the priority members of `child_gid`, a child of a resize, to its preferred leaders
+    // followed by the parent's leader, if this replica knows one and it is not among them.
+    // While the guard against a ping-pong of the leadership withholds the child's priority
+    // members, its raft server gets the parent's leader alone.
+    // Changes nothing if the resize is over on this replica.
+    //
+    // Returns false while one of the following holds. The caller must then call it again
+    // later, because no change of the raft state is certain to follow:
+    //  - this replica knows no leader of the parent,
+    //  - this replica leads the child but not the parent,
+    //  - the raft server of the child or of the parent is still starting.
+    bool colocate_leader(raft::group_id child_gid);
+
+    // Queues the children whose priority members a change of the raft state of `gid` may affect,
+    // namely `gid` if it is a child of a resize, and the children of `gid` if it has any.
+    void notify_leader_change(raft::group_id gid, const raft_group_state& state);
+
+    // Keeps the leader of every child of a resize co-located with the leader of its parent.
+    // Runs as one fiber per shard until the shard stops. Brings the priority members of the
+    // queued children up to date, looks at a child again once per raft tick for as long as its
+    // leader may still have to move, and sleeps when there are none.
+    future<> leader_colocator();
 
     void init_messaging_service();
 
