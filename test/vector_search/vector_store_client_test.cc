@@ -23,6 +23,7 @@
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/log.hh"
+#include "cql3/query_processor.hh"
 #include <cstdio>
 #include <functional>
 #include <chrono>
