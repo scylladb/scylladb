@@ -1141,6 +1141,13 @@ protected:
     future<> finalize_upload();
     future<> upload_part(memory_data_sink_buffers bufs);
     future<> upload_part(std::unique_ptr<upload_sink> source);
+    // Copies source_object, the whole of it or only source_range, into part
+    // part_number (0-based) of this upload with an UploadPartCopy request, and
+    // stores the ETag of that part in _part_etags[part_number].
+    // The returned future does not fail when the copy does: as with the parts
+    // upload_part() sends in the background, the failure is only logged and the
+    // ETag stays empty, so finalize_upload() fails the whole upload.
+    future<> copy_part(sstring source_object, std::optional<s3::range> source_range, unsigned part_number);
     future<> abort_upload();
 
     bool upload_started() const noexcept {
@@ -1226,7 +1233,7 @@ private:
                                              [part_size, source_size, this](auto part_num) -> future<> {
                                                  auto part_offset = part_num * part_size;
                                                  auto actual_part_size = std::min(source_size - part_offset, part_size);
-                                                 co_await copy_part(part_offset, actual_part_size, part_num);
+                                                 co_await copy_part(_source_object, s3::range(part_offset, actual_part_size), part_num);
                                              });
             // Here we are going to finalize the upload and close the _bg_flushes, in case an exception is thrown the
             // gate will be closed and the upload will be aborted. See below.
@@ -1242,36 +1249,6 @@ private:
             co_await abort_upload();
             std::rethrow_exception(ex);
         }
-    }
-
-    future<> copy_part(size_t offset, size_t part_size, size_t part_number) {
-        auto req = http::request::make("PUT", _client->_host, _object_name);
-        req._headers["x-amz-copy-source"] = uri_encode_path(_source_object);
-        auto range = format("bytes={}-{}", offset, offset + part_size - 1);
-        s3l.trace("PUT part {}, Upload range: {}, Upload ID: {}", part_number, range, _upload_id);
-
-        req._headers["x-amz-copy-source-range"] = range;
-        req.set_query_param("partNumber", to_sstring(part_number + 1));
-        req.set_query_param("uploadId", _upload_id);
-
-        co_await _client->make_request(std::move(req),[this, part_number](group_client& gc, const http::reply& reply, input_stream<char>&& in) -> future<> {
-            auto _in = std::move(in);
-            auto body = co_await util::read_entire_stream_contiguous(_in);
-            if (auto possible_error = aws::aws_error::parse(sstring(body))) {
-                throw aws::aws_exception(std::move(possible_error.value()));
-            }
-            auto etag = parse_multipart_copy_upload_etag(body);
-            if (etag.empty()) {
-                throw std::runtime_error("Cannot parse ETag");
-            }
-            s3l.trace("Part {} data -> etag = {} (upload id {})", part_number, etag, _upload_id);
-            _part_etags[part_number] = std::move(etag);
-        },http::reply::status_type::ok, _as)
-        .handle_exception([this, part_number](auto ex) {
-            s3l.warn("Failed to upload part {}, upload id {}. Reason: {}", part_number, _upload_id, ex);
-        });
-
-        co_return;
     }
 
     static constexpr size_t _default_copy_part_size = 5_GiB;
@@ -1453,6 +1430,38 @@ future<> client::multipart_upload::upload_part(memory_data_sink_buffers bufs) {
         // ... the exact exception only remains in logs
         s3l.warn("couldn't upload part {}: {} (upload id {})", part_number, ex, _upload_id);
     }).finally([gh = std::move(gh), mpu = std::move(mpu)] {});
+}
+
+future<> client::multipart_upload::copy_part(sstring source_object, std::optional<s3::range> source_range, unsigned part_number) {
+    auto req = http::request::make("PUT", _client->_host, _object_name);
+    req.set_query_param("partNumber", seastar::format("{}", part_number + 1));
+    req.set_query_param("uploadId", _upload_id);
+    req._headers["x-amz-copy-source"] = uri_encode_path(source_object);
+    if (source_range) {
+        req._headers["x-amz-copy-source-range"] = source_range->to_header_string();
+    }
+    s3l.trace("PUT part {} from {} {} (upload id {})", part_number, source_object,
+            source_range ? source_range->to_header_string() : sstring("whole"), _upload_id);
+
+    co_await _client->make_request(std::move(req), [this, part_number] (const http::reply& rep, input_stream<char>&& in_) -> future<> {
+        auto in = std::move(in_);
+        auto body = co_await util::read_entire_stream_contiguous(in);
+        // S3 can report a failed UploadPartCopy in a 200 OK reply, with an <Error>
+        // in the body, which make_request() passes here unparsed. The aws_exception
+        // carries the error type and message parsed from it.
+        if (auto possible_error = aws::aws_error::parse(sstring(body))) {
+            throw aws::aws_exception(std::move(possible_error.value()));
+        }
+        auto etag = parse_multipart_copy_upload_etag(body);
+        if (etag.empty()) {
+            throw std::runtime_error("cannot parse the ETag of a copied part");
+        }
+        s3l.trace("copy-uploaded part {} -> etag = {} (upload id {})", part_number, etag, _upload_id);
+        _part_etags[part_number] = std::move(etag);
+    }, http::reply::status_type::ok, _as).handle_exception([this, part_number] (auto ex) {
+        // ... the exact exception only remains in logs
+        s3l.warn("couldn't copy-upload part {}: {} (upload id {})", part_number, ex, _upload_id);
+    });
 }
 
 future<> client::multipart_upload::abort_upload() {
@@ -1652,11 +1661,6 @@ future<> client::multipart_upload::upload_part(std::unique_ptr<upload_sink> piec
     auto& piece = *piece_ptr;
     unsigned part_number = _part_etags.size();
     _part_etags.emplace_back();
-    s3l.trace("PUT part {} from {} (upload id {})", part_number, piece._object_name, _upload_id);
-    auto req = http::request::make("PUT", _client->_host, _object_name);
-    req.set_query_param("partNumber", format("{}", part_number + 1));
-    req.set_query_param("uploadId", _upload_id);
-    req._headers["x-amz-copy-source"] = uri_encode_path(piece._object_name);
 
     // See comment in upload_part(memory_data_sink_buffers) overload regarding the
     // _bg_flushes usage and _part_etags assignments
@@ -1670,26 +1674,8 @@ future<> client::multipart_upload::upload_part(std::unique_ptr<upload_sink> piec
         // unfinished, and drains its background part uploads before the
         // piece is destroyed below.
         return piece.close();
-    }).then([this, part_number, req = std::move(req)] () mutable {
-        return _client->make_request(std::move(req), [this, part_number] (const http::reply& rep, input_stream<char>&& in_) mutable -> future<> {
-            return do_with(std::move(in_), [this, part_number] (auto& in) mutable {
-                return util::read_entire_stream_contiguous(in).then([this, part_number] (auto body) mutable {
-                    if (auto possible_error = aws::aws_error::parse(sstring(body))) {
-                        return make_exception_future<>(aws::aws_exception(std::move(possible_error.value())));
-                    }
-                    auto etag = parse_multipart_copy_upload_etag(body);
-                    if (etag.empty()) {
-                        return make_exception_future<>(std::runtime_error("cannot copy part upload"));
-                    }
-                    s3l.trace("copy-uploaded {} part data -> etag = {} (upload id {})", part_number, etag, _upload_id);
-                    _part_etags[part_number] = std::move(etag);
-                    return make_ready_future<>();
-                });
-            });
-        }, http::reply::status_type::ok, _as).handle_exception([this, part_number] (auto ex) {
-            // ... the exact exception only remains in logs
-            s3l.warn("couldn't copy-upload part {}: {} (upload id {})", part_number, ex, _upload_id);
-        });
+    }).then([this, part_number, &piece] {
+        return copy_part(piece._object_name, std::nullopt, part_number);
     }).then_wrapped([this, &piece] (auto f) {
         if (f.failed()) {
             s3l.warn("couldn't flush piece {}: {} (upload id {})", piece._object_name, f.get_exception(), _upload_id);
