@@ -363,10 +363,11 @@ class ScyllaCluster:
             future.add_done_callback(
                 lambda f: None if ready.done() else ready.set_exception(
                     f.exception() or RuntimeError("ScyllaCluster thread exited before signaling readiness")))
-            # ready.result() blocks, so hand it to a thread rather than
-            # stalling the caller's loop.
-            await asyncio.get_running_loop().run_in_executor(None, ready.result)
             try:
+                # ready.result() blocks, so hand it to a thread rather than
+                # stalling the caller's loop.  Waiting inside the try lets a
+                # cancelled entry still tell the thread to finish.
+                await asyncio.get_running_loop().run_in_executor(None, ready.result)
                 yield self
             finally:
                 stop_event.set()

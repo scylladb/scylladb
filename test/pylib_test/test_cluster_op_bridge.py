@@ -17,6 +17,7 @@ decorator and the bridge under test are the production ones.
 import asyncio
 import pathlib
 import threading
+import time
 from collections.abc import AsyncIterator
 from types import SimpleNamespace
 
@@ -259,3 +260,55 @@ async def test_operation_arriving_during_shutdown_ends_before_the_final_stop(tmp
 
     assert late.entered.is_set(), "the late operation never started"
     assert running_at_stop[0] == [], "an operation was still running at the final stop()"
+
+
+def test_cancelled_entry_lets_the_cluster_thread_finish(tmp_path: pathlib.Path) -> None:
+    """A run_in_thread() cancelled while its thread starts still tells the thread to finish.
+
+    Otherwise leaving the context waits for a thread that is itself waiting to
+    be told to finish, and the pytest worker hangs.
+    """
+    cluster = make_cluster(tmp_path)
+    setting_up = threading.Event()
+    logger = cluster.logger
+
+    class SlowStart:
+        """The cluster's logger, holding the cluster thread just before it signals readiness."""
+
+        def __getattr__(self, name: str) -> object:
+            return getattr(logger, name)
+
+        def info(self, msg: str, *args: object) -> None:
+            if msg == "Setting up %s":
+                setting_up.set()
+                time.sleep(0.5)
+            logger.info(msg, *args)
+
+    cluster.logger = SlowStart()
+    errors: list[BaseException] = []
+
+    async def scenario() -> None:
+        async def enter() -> None:
+            async with cluster.run_in_thread():
+                pass
+
+        entering = asyncio.ensure_future(enter())
+        assert await asyncio.to_thread(setting_up.wait, TIMEOUT), "cluster thread never started"
+        entering.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await entering
+        await cluster.recycle()
+
+    def run() -> None:
+        try:
+            asyncio.run(scenario())
+        except BaseException as exc:  # pylint: disable=broad-except
+            errors.append(exc)
+
+    # On a thread of its own, so that a hang fails the test instead of stalling the run.
+    runner = threading.Thread(target=run, daemon=True)
+    runner.start()
+    runner.join(TIMEOUT)
+
+    assert not runner.is_alive(), "leaving a cancelled run_in_thread() hung"
+    assert not errors, f"the scenario failed: {errors[0]!r}"
