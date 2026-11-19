@@ -1762,3 +1762,21 @@ def test_filter_granted_permissions_by_resource_type(cql):
         for grant in [f'GRANT CREATE ON {table} TO {mike}', f'GRANT SELECT ON ALL ROLES TO {mike}', f'GRANT CREATE ON ROLE {role1} TO {mike}']:
             with pytest.raises((InvalidRequest, SyntaxException), match='support.*permissions'):
                 cql.execute(grant)
+
+# A repeated role option is a syntax error, as in Cassandra, with the
+# message of a repeated table property. The CREATE ROLE which follows the
+# rejected ones shows that they created nothing.
+def test_create_and_alter_role_with_repeated_option(cql):
+    role = unique_name()
+    try:
+        with pytest.raises(SyntaxException, match="Multiple definition for property 'PASSWORD'"):
+            cql.execute(f"CREATE ROLE {role} WITH PASSWORD = 'a' AND PASSWORD = 'b'")
+        with pytest.raises(SyntaxException, match="Multiple definition for property 'LOGIN'"):
+            cql.execute(f"CREATE ROLE {role} WITH LOGIN = true AND PASSWORD = 'a' AND LOGIN = false")
+        with pytest.raises(SyntaxException, match="Multiple definition for property 'HASHED_PASSWORD'"):
+            cql.execute(f"CREATE ROLE {role} WITH HASHED PASSWORD = '{hashed_password}' AND HASHED PASSWORD = '{hashed_password}'")
+        cql.execute(f"CREATE ROLE {role} WITH PASSWORD = 'a'")
+        with pytest.raises(SyntaxException, match="Multiple definition for property 'PASSWORD'"):
+            cql.execute(f"ALTER ROLE {role} WITH PASSWORD = 'b' AND PASSWORD = 'c'")
+    finally:
+        cql.execute(f"DROP ROLE IF EXISTS {role}")
