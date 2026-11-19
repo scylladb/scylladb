@@ -152,3 +152,153 @@ def test_create_function_in_missing_keyspace(cql, has_java_udf):
                  f'CREATE OR REPLACE AGGREGATE {ks}.a(mytype) SFUNC f STYPE int']:
         with pytest.raises((InvalidRequest, ConfigurationException), match=f"Keyspace '?{ks}'? doesn't exist"):
             cql.execute(stmt)
+
+# Test that after ALTER TYPE adds a field to a UDT used by a function, the
+# function can still be called, and sees the new field (here, in the UDT it
+# returns). Also check that the function can then be dropped and re-created.
+# Reproduces #12787 (the function kept the old version of the UDT, so it
+# couldn't be called, and DROP FUNCTION left it behind in memory).
+def test_udf_after_alter_type(cql, test_keyspace, has_java_udf):
+    body = "LANGUAGE java AS 'return x;'" if has_java_udf else "LANGUAGE lua AS 'return x'"
+    with new_type(cql, test_keyspace, '(a int)') as udt:
+        with new_test_table(cql, test_keyspace, f'p int PRIMARY KEY, u frozen<{udt}>') as table:
+            fun = f'{test_keyspace}.{unique_name()}'
+            create = f'CREATE FUNCTION {fun}(x {udt}) CALLED ON NULL INPUT RETURNS {udt} {body}'
+            cql.execute(create)
+            try:
+                cql.execute(f'INSERT INTO {table} (p, u) VALUES (1, {{a: 1}})')
+                assert [tuple(r[0]) for r in cql.execute(f'SELECT {fun}(u) FROM {table}')] == [(1,)]
+                cql.execute(f'ALTER TYPE {udt} ADD b text')
+                cql.execute(f"INSERT INTO {table} (p, u) VALUES (1, {{a: 2, b: 'x'}})")
+                assert [tuple(r[0]) for r in cql.execute(f'SELECT {fun}(u) FROM {table}')] == [(2, 'x')]
+                cql.execute(f'DROP FUNCTION {fun}')
+                with pytest.raises(InvalidRequest, match='nknown function'):
+                    cql.execute(f'SELECT {fun}(u) FROM {table}')
+                cql.execute(create)
+                assert [tuple(r[0]) for r in cql.execute(f'SELECT {fun}(u) FROM {table}')] == [(2, 'x')]
+            finally:
+                cql.execute(f'DROP FUNCTION IF EXISTS {fun}')
+
+# Like test_udf_after_alter_type, but the function's parameter is a UDT
+# which has a field of the altered UDT.
+# Reproduces #12787.
+def test_udf_after_alter_nested_type(cql, test_keyspace, has_java_udf):
+    body = "LANGUAGE java AS 'return x;'" if has_java_udf else "LANGUAGE lua AS 'return x'"
+    with new_type(cql, test_keyspace, '(a int)') as inner:
+        with new_type(cql, test_keyspace, f'(n frozen<{inner}>)') as outer:
+            with new_test_table(cql, test_keyspace, f'p int PRIMARY KEY, u frozen<{outer}>') as table:
+                with new_function(cql, test_keyspace, f'(x {outer}) CALLED ON NULL INPUT RETURNS {outer} {body}') as f:
+                    cql.execute(f'ALTER TYPE {inner} ADD b text')
+                    cql.execute(f"INSERT INTO {table} (p, u) VALUES (1, {{n: {{a: 2, b: 'x'}}}})")
+                    [result] = [r[0] for r in cql.execute(f'SELECT {test_keyspace}.{f}(u) FROM {table}')]
+                    assert tuple(result.n) == (2, 'x')
+
+# Test that after ALTER TYPE renames a field of a UDT which a function returns,
+# but doesn't take as an argument, the function returns the new version of the
+# type.
+# Reproduces #12787.
+def test_udf_returning_udt_after_alter_type(cql, test_keyspace, has_java_udf):
+    if has_java_udf:
+        body = "LANGUAGE java AS 'UDTValue v = udfContext.newReturnUDTValue(); v.setInt(0, x); return v;'"
+    else:
+        # Creating the function doesn't check the field name c, and the
+        # function is only called after the field is renamed to c.
+        body = "LANGUAGE lua AS 'return {c = x}'"
+    with new_type(cql, test_keyspace, '(a int)') as udt:
+        with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY') as table:
+            cql.execute(f'INSERT INTO {table} (p) VALUES (7)')
+            with new_function(cql, test_keyspace, f'(x int) CALLED ON NULL INPUT RETURNS {udt} {body}') as f:
+                cql.execute(f'ALTER TYPE {udt} RENAME a TO c')
+                [result] = [r[0] for r in cql.execute(f'SELECT {test_keyspace}.{f}(p) FROM {table}')]
+                assert tuple(result) == (7,)
+                assert result._fields == ('c',)
+
+# Test that a prepared statement calling a function uses the new version of
+# the function after CREATE OR REPLACE FUNCTION replaced it.
+# Reproduces SCYLLADB-5272 (the prepared statement kept using the old version).
+def test_udf_prepared_after_replace(cql, test_keyspace, has_java_udf):
+    def body(n):
+        return f"LANGUAGE java AS 'return {n};'" if has_java_udf else f"LANGUAGE lua AS 'return {n}'"
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY') as table:
+        cql.execute(f'INSERT INTO {table} (p) VALUES (1)')
+        with new_function(cql, test_keyspace, f'(x int) CALLED ON NULL INPUT RETURNS int {body(10)}') as f:
+            stmt = cql.prepare(f'SELECT {test_keyspace}.{f}(p) FROM {table}')
+            assert [r[0] for r in cql.execute(stmt)] == [10]
+            cql.execute(f'CREATE OR REPLACE FUNCTION {test_keyspace}.{f}(x int) CALLED ON NULL INPUT RETURNS int {body(20)}')
+            assert [r[0] for r in cql.execute(stmt)] == [20]
+
+# Test that a prepared statement calling a function fails after the function
+# was dropped.
+# Reproduces SCYLLADB-5272 (the prepared statement kept using the dropped
+# function).
+def test_udf_prepared_after_drop(cql, test_keyspace, has_java_udf):
+    body = "LANGUAGE java AS 'return 10;'" if has_java_udf else "LANGUAGE lua AS 'return 10'"
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY') as table:
+        cql.execute(f'INSERT INTO {table} (p) VALUES (1)')
+        fun = f'{test_keyspace}.{unique_name()}'
+        cql.execute(f'CREATE FUNCTION {fun}(x int) CALLED ON NULL INPUT RETURNS int {body}')
+        try:
+            stmt = cql.prepare(f'SELECT {fun}(p) FROM {table}')
+            assert [r[0] for r in cql.execute(stmt)] == [10]
+            cql.execute(f'DROP FUNCTION {fun}')
+            with pytest.raises(InvalidRequest, match='nknown function'):
+                cql.execute(stmt)
+        finally:
+            cql.execute(f'DROP FUNCTION IF EXISTS {fun}')
+
+# Test that after ALTER TYPE renames a field of a UDT which a function
+# returns, a prepared statement calling the function uses the new version of
+# the type. The statement's table has no column of this type, so altering the
+# type doesn't invalidate the statement because of the table.
+# Reproduces SCYLLADB-5272 (the prepared statement kept using the old
+# version of the function, with the old version of the type).
+def test_udf_prepared_after_alter_type(cql, test_keyspace, has_java_udf):
+    if has_java_udf:
+        body = "LANGUAGE java AS 'UDTValue v = udfContext.newReturnUDTValue(); v.setInt(0, x); return v;'"
+    else:
+        # The function is only called after the field is renamed to c.
+        body = "LANGUAGE lua AS 'return {c = x}'"
+    with new_type(cql, test_keyspace, '(a int)') as udt:
+        with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY') as table:
+            cql.execute(f'INSERT INTO {table} (p) VALUES (7)')
+            with new_function(cql, test_keyspace, f'(x int) CALLED ON NULL INPUT RETURNS {udt} {body}') as f:
+                stmt = cql.prepare(f'SELECT {test_keyspace}.{f}(p) FROM {table}')
+                cql.execute(f'ALTER TYPE {udt} RENAME a TO c')
+                [result] = [r[0] for r in cql.execute(stmt)]
+                assert tuple(result) == (7,)
+                assert result._fields == ('c',)
+
+# Returns the warnings which an ALTER TYPE statement returned.
+def alter_type_warnings(cql, udt, alteration):
+    return cql.execute(f'ALTER TYPE {udt} {alteration}').response_future.warnings or []
+
+# Test that ALTER TYPE of a user type which a function uses warns that the
+# function's code, written for the previous version of the type, may need to
+# be updated: e.g., a Lua function which reads a field by its name no longer
+# sees a renamed field, and a WebAssembly function decodes the serialized
+# value, which changes when a field is added. So any ALTER TYPE warns -
+# whether the function uses the type as an argument, as its return type, or
+# inside another type. This test is scylla_only because Cassandra doesn't
+# warn here.
+def test_alter_type_used_by_function_warns(cql, test_keyspace, scylla_only):
+    with new_type(cql, test_keyspace, '(a int)') as udt:
+        with new_type(cql, test_keyspace, f'(n frozen<{udt}>)') as outer:
+            for signature in [f'(x {udt}) CALLED ON NULL INPUT RETURNS int',
+                              f'(x int) CALLED ON NULL INPUT RETURNS {udt}',
+                              f'(x list<frozen<{outer}>>) CALLED ON NULL INPUT RETURNS int']:
+                # The functions are never called, so they just return null.
+                with new_function(cql, test_keyspace, f"{signature} LANGUAGE lua AS 'return nil'") as f:
+                    for alteration in [f'ADD {unique_name()} int', 'RENAME a TO c', 'RENAME c TO a']:
+                        warnings = alter_type_warnings(cql, udt, alteration)
+                        assert len(warnings) == 1
+                        assert f'{test_keyspace}.{f}' in warnings[0]
+                        assert 'may need to be updated' in warnings[0]
+
+# Test that ALTER TYPE of a user type which no function uses doesn't warn,
+# even if a function uses another user type in the same keyspace.
+def test_alter_type_unused_by_functions_no_warning(cql, test_keyspace, has_java_udf):
+    body = "LANGUAGE java AS 'return x;'" if has_java_udf else "LANGUAGE lua AS 'return x'"
+    with new_type(cql, test_keyspace, '(a int)') as used, new_type(cql, test_keyspace, '(a int)') as unused:
+        with new_function(cql, test_keyspace, f'(x {used}) CALLED ON NULL INPUT RETURNS {used} {body}'):
+            assert alter_type_warnings(cql, unused, 'ADD b int') == []
+            assert alter_type_warnings(cql, unused, 'RENAME a TO c') == []

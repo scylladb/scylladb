@@ -41,6 +41,8 @@ public:
     class renames;
 protected:
     virtual user_type make_updated_type(data_dictionary::database db, user_type to_update) const = 0;
+    void check_not_used_in_initcond(const user_type& type) const;
+    cql3::cql_warnings_vec warn_about_dependent_functions() const;
 private:
     future<utils::chunked_vector<mutation>> prepare_announcement_mutations(service::storage_proxy& sp, api::timestamp_type) const;
 };

@@ -767,6 +767,36 @@ const functions& instance() {
     return f;
 }
 
+static thread_local used_functions_recorder* current_used_functions_recorder = nullptr;
+
+used_functions_recorder::used_functions_recorder(std::vector<function_name>& names)
+    : _previous(std::exchange(current_used_functions_recorder, this))
+    , _names(names) {
+}
+
+used_functions_recorder::~used_functions_recorder() {
+    current_used_functions_recorder = _previous;
+}
+
+void used_functions_recorder::record_used_function(const function& func) {
+    if (!current_used_functions_recorder) {
+        return;
+    }
+    auto& names = current_used_functions_recorder->_names;
+    // Check for a user-defined aggregate before is_native(): an aggregate
+    // is "native" when all the functions it uses are native.
+    if (auto aggregate = dynamic_cast<const user_aggregate*>(&func)) {
+        names.push_back(func.name());
+        for (const auto& f : {aggregate->sfunc(), aggregate->reducefunc(), aggregate->finalfunc()}) {
+            if (f) {
+                names.push_back(f->name());
+            }
+        }
+    } else if (!func.is_native()) {
+        names.push_back(func.name());
+    }
+}
+
 void change_batch::commit() {
     if (_declared.empty()) {
         return;

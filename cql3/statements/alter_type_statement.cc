@@ -19,6 +19,9 @@
 #include "data_dictionary/data_dictionary.hh"
 #include "data_dictionary/keyspace_metadata.hh"
 #include "data_dictionary/user_types_metadata.hh"
+#include "cql3/functions/functions.hh"
+#include "cql3/functions/user_aggregate.hh"
+#include "cql3/functions/user_function.hh"
 
 namespace cql3 {
 
@@ -44,6 +47,56 @@ future<> alter_type_statement::check_access(query_processor& qp, const service::
 const sstring& alter_type_statement::keyspace() const
 {
     return _name.get_keyspace();
+}
+
+// An aggregate's initial condition is saved in the schema as a CQL literal,
+// which names the fields of a user type in the aggregate's state type, and
+// is parsed according to the types of these fields. So the fields of such a
+// user type can't be renamed, nor can their types be changed. Cassandra has
+// the same restriction on renaming, with the same error message
+// (CASSANDRA-10721), and doesn't allow changing a field's type at all.
+void alter_type_statement::check_not_used_in_initcond(const user_type& type) const
+{
+    std::vector<sstring> dependent_aggregates;
+    for (auto&& aggregate : functions::instance().get_user_aggregates(type->_keyspace)) {
+        if (aggregate->initcond() && aggregate->sfunc()->arg_types()[0]->references_user_type(type->_keyspace, type->_name)) {
+            dependent_aggregates.push_back(fmt::to_string(aggregate->name()));
+        }
+    }
+    if (!dependent_aggregates.empty()) {
+        throw exceptions::invalid_request_exception(fmt::format("Cannot alter user type {} as it is still used in INITCOND by aggregates {}",
+                _name.to_cql_string(), fmt::join(dependent_aggregates, ", ")));
+    }
+}
+
+// A user-defined function using the type - as an argument or return type,
+// or inside one - is re-created with the new version of the type, but its
+// code was written for the previous version, and any change may break it: a
+// Lua function uses the fields' names, so it no longer sees a renamed field,
+// while a WebAssembly function decodes the serialized value, which changes
+// when a field is added or its type is changed. So warn about such functions.
+// Aggregates have no code of their own, so it's enough to warn about the
+// functions they use.
+cql3::cql_warnings_vec alter_type_statement::warn_about_dependent_functions() const
+{
+    auto uses_type = [this] (const data_type& t) {
+        return t->references_user_type(_name.get_keyspace(), _name.get_user_type_name());
+    };
+    std::vector<sstring> dependent_functions;
+    for (auto&& function : functions::instance().get_user_functions(keyspace())) {
+        if (uses_type(function->return_type()) || std::ranges::any_of(function->arg_types(), uses_type)) {
+            dependent_functions.push_back(fmt::to_string(function->name()));
+        }
+    }
+    if (dependent_functions.empty()) {
+        return {};
+    }
+    // An overloaded function is listed once.
+    std::ranges::sort(dependent_functions);
+    auto [first, last] = std::ranges::unique(dependent_functions);
+    dependent_functions.erase(first, last);
+    return {fmt::format("User type {} is used by functions {}, whose code was written for its previous version "
+            "and may need to be updated", _name.to_cql_string(), fmt::join(dependent_functions, ", "))};
 }
 
 future<utils::chunked_vector<mutation>> alter_type_statement::prepare_announcement_mutations(service::storage_proxy& sp, api::timestamp_type ts) const {
@@ -99,7 +152,7 @@ alter_type_statement::prepare_schema_mutations(query_processor& qp, const query_
                 keyspace(),
                 _name.get_string_type_name());
 
-        co_return std::make_tuple(std::move(ret), std::move(m), std::vector<sstring>());
+        co_return std::make_tuple(std::move(ret), std::move(m), warn_about_dependent_functions());
     } catch(data_dictionary::no_such_keyspace& e) {
         auto&& ex = std::make_exception_ptr(exceptions::invalid_request_exception(format("Cannot alter type in unknown keyspace {}", keyspace())));
         co_return coroutine::exception(std::move(ex));
@@ -163,6 +216,7 @@ user_type alter_type_statement::add_or_alter::do_alter(data_dictionary::database
         throw exceptions::invalid_request_exception(format("Unknown field {} in type {}", _field_name->to_string(), _name.to_cql_string()));
     }
 
+    check_not_used_in_initcond(to_update);
     auto previous = to_update->field_types()[*idx];
     auto new_type = _field_type->prepare(db, keyspace()).get_type();
     if (!new_type->is_compatible_with(*previous)) {
@@ -202,6 +256,7 @@ void alter_type_statement::renames::add_rename(shared_ptr<column_identifier> pre
 
 user_type alter_type_statement::renames::make_updated_type(data_dictionary::database db, user_type to_update) const
 {
+    check_not_used_in_initcond(to_update);
     std::vector<bytes> new_names(to_update->field_names());
     for (auto&& rename : _renames) {
         auto&& from = rename.first;

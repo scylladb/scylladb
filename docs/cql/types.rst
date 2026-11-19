@@ -589,6 +589,14 @@ You can:
   of the type created before the addition.
 - Rename the fields of the type (``ALTER TYPE address RENAME zip TO zipcode``).
 
+Fields can't be renamed, nor can their types be changed, while the type is used in the state type of a user-defined
+aggregate with an ``INITCOND``, because the initial condition is saved as a CQL literal which names the fields.
+
+User-defined functions using the type - as an argument or return type, or inside one - use its new version, but their
+code was written for the previous version, and may need to be updated: e.g., a Lua function reading a renamed field
+by its old name no longer sees it. So ``ALTER TYPE`` of a type which user-defined functions use returns a warning
+which lists them.
+
 Dropping a UDT
 ~~~~~~~~~~~~~~
 

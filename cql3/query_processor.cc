@@ -25,6 +25,7 @@
 #include "service/storage_service.hh"
 #include "service/strong_consistency/coordinator.hh"
 #include "cql3/CqlParser.hpp"
+#include "cql3/functions/functions.hh"
 #include "cql3/statements/batch_statement.hh"
 #include "cql3/statements/modification_statement.hh"
 #include "cql3/statements/eventual_consistency/modification_executor.hh"
@@ -818,7 +819,8 @@ std::unique_ptr<prepared_statement>
 query_processor::get_statement(utils::chunked_string_view query, const service::client_state& client_state, dialect d, prepared_for_driver for_driver, std::optional<service::pager::query_plan> pinned_plan, std::optional<std::string_view> forced_keyspace) {
     // Measuring allocation cost requires that no yield points exist
     // between bytes_before and bytes_after. It needs fixing if this
-    // function is ever futurized.
+    // function is ever futurized - and so does used_functions_recorder
+    // below, which relies on prepare() not yielding either.
     auto bytes_before = seastar::memory::stats().total_bytes_allocated();
     std::unique_ptr<raw::parsed_statement> statement = parse_statement(query, d);
 
@@ -837,10 +839,16 @@ query_processor::get_statement(utils::chunked_string_view query, const service::
         }
     }
     ++_stats.prepare_invocations;
-    auto p = statement->prepare(_db, _cql_stats, _cql_config);
+    std::vector<functions::function_name> used_user_functions;
+    std::unique_ptr<prepared_statement> p;
+    {
+        functions::used_functions_recorder recorder(used_user_functions);
+        p = statement->prepare(_db, _cql_stats, _cql_config);
+    }
     // The driver gets the partition key bind indices in the PREPARED metadata.
     p->statement->_may_use_token_aware_routing = for_driver && !p->partition_key_bind_indices.empty();
     p->statement->raw_cql_statement = utils::chunked_string(query);
+    p->statement->used_user_functions = std::move(used_user_functions);
     auto audit_info = p->statement->get_audit_info();
     if (audit_info) {
         audit_info->set_query_string(query.linearize()); // Audit system may need linearized form
@@ -1307,9 +1315,11 @@ void query_processor::migration_subscriber::on_update_user_type(const sstring& k
 }
 
 void query_processor::migration_subscriber::on_update_function(const sstring& ks_name, const sstring& function_name) {
+    remove_prepared_statements_using_function(ks_name, function_name);
 }
 
 void query_processor::migration_subscriber::on_update_aggregate(const sstring& ks_name, const sstring& aggregate_name) {
+    remove_prepared_statements_using_function(ks_name, aggregate_name);
 }
 
 void query_processor::migration_subscriber::on_update_view(
@@ -1332,11 +1342,11 @@ void query_processor::migration_subscriber::on_drop_user_type(const sstring& ks_
 }
 
 void query_processor::migration_subscriber::on_drop_function(const sstring& ks_name, const sstring& function_name) {
-    log.warn("{} event ignored", __func__);
+    remove_prepared_statements_using_function(ks_name, function_name);
 }
 
 void query_processor::migration_subscriber::on_drop_aggregate(const sstring& ks_name, const sstring& aggregate_name) {
-    log.warn("{} event ignored", __func__);
+    remove_prepared_statements_using_function(ks_name, aggregate_name);
 }
 
 void query_processor::migration_subscriber::on_drop_view(const sstring& ks_name, const sstring& view_name) {
@@ -1348,6 +1358,19 @@ void query_processor::migration_subscriber::remove_invalid_prepared_statements(
         std::optional<sstring> cf_name) {
     _qp->_prepared_cache.remove_if([&] (::shared_ptr<cql_statement> stmt) {
         return this->should_invalidate(ks_name, cf_name, stmt);
+    });
+}
+
+// The function's signature, as sent in function events, is its name followed
+// by its argument types in brackets (see auth::encode_signature()). Statements
+// only record function names, so this also removes statements using other
+// overloads of the same name, which is harmless.
+void query_processor::migration_subscriber::remove_prepared_statements_using_function(
+        const sstring& ks_name,
+        const sstring& signature) {
+    auto name = functions::function_name(ks_name, signature.substr(0, signature.find_last_of('[')));
+    _qp->_prepared_cache.remove_if([&] (::shared_ptr<cql_statement> stmt) {
+        return std::ranges::contains(stmt->used_user_functions, name);
     });
 }
 
