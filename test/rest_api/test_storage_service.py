@@ -353,6 +353,7 @@ def test_storage_service_flush(cql, this_dc, rest_api):
                 assert resp.status_code == requests.codes.bad_request
 
 def verify_snapshot_details(rest_api, expected):
+    now = time.time()
     resp = rest_api.send("GET", "storage_service/snapshots")
     found = False
     for data in resp.json():
@@ -369,6 +370,12 @@ def verify_snapshot_details(rest_api, expected):
                 # since we care only if they are zero or not
                 v['total'] = 1 if v['total'] else 0
                 v['live'] = 1 if v['live'] else 0
+                # The snapshot was taken by this version, so its creation time
+                # must be reported, and it was taken with no ttl, so it must
+                # have no expiration time.
+                assert 'expires_at' not in v, f"unexpected expiration time in {v}"
+                created_at = v.pop('created_at')
+                assert now - 3600 <= created_at <= time.time() + 1, f"unexpected creation time in {v}: {created_at}"
                 ev = expected_value[i]
                 assert v == ev
     assert found, f"key='{expected['key']}' not found in {resp.json()}"
