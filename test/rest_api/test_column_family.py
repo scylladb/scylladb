@@ -195,3 +195,13 @@ def test_sstables_total_disk_space_sanity(cql, this_dc, rest_api):
             live_size = int(resp.json())
             print(f'Reported live size : {live_size}')
             assert live_size <= total_real_size
+
+# capacity=0 would trip space_saving_top_k's assertion, so both toppartitions endpoints reject it.
+@pytest.mark.parametrize("path", ["column_family/toppartitions/{ks}:{cf}", "storage_service/toppartitions"])
+def test_toppartitions_rejects_zero_capacity(cql, this_dc, rest_api, path):
+    ksdef = f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : '1' }}"
+    with new_test_keyspace(cql, ksdef) as ks:
+        with new_test_table(cql, ks, "pk int PRIMARY KEY") as t:
+            cf = t.split('.')[1]
+            resp = rest_api.send("GET", path.format(ks=ks, cf=cf), {"duration": "100", "capacity": "0", "table_filters": f"{ks}:{cf}"})
+            assert resp.status_code == 400 and "capacity must be positive" in resp.text
