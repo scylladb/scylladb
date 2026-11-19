@@ -15,12 +15,14 @@
 #include "repair/row_level.hh"
 #include "test/lib/mutation_source_test.hh"
 #include "test/lib/random_utils.hh"
+#include "test/lib/simple_schema.hh"
 #include "test/lib/cql_test_env.hh"
 #include "service/storage_proxy.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
 #include <boost/lexical_cast.hpp>
 #undef SEASTAR_TESTING_MAIN
 #include <seastar/testing/test_case.hh>
+#include <seastar/testing/thread_test_case.hh>
 #include <seastar/util/short_streams.hh>
 #include "test/lib/sstable_utils.hh"
 #include "readers/mutation_fragment_v1_stream.hh"
@@ -350,6 +352,29 @@ SEASTAR_TEST_CASE(repair_rows_size_considers_external_memory) {
         repair_row row_with_boundary{frozen_mf, pos, dk_ptr, std::nullopt, is_dirty_on_master::no, nullptr};
         BOOST_REQUIRE_EQUAL(row_with_boundary.size(), fmf_size + dk_ptr->dk.external_memory_usage() + pos.external_memory_usage() + sizeof(repair_row));
     });
+}
+
+// Fixed sizes of rows read from disk: they set round boundaries, which peers
+// of different versions must agree on.
+SEASTAR_THREAD_TEST_CASE(repair_row_size_from_disk_is_stable) {
+    tests::reader_concurrency_semaphore_wrapper semaphore;
+    reader_permit permit = semaphore.make_permit();
+    simple_schema ss;
+    schema_ptr s = ss.schema();
+    const uint64_t seed = 42;
+    repair_hasher hasher(seed, s);
+    auto dk = make_lw_shared<const decorated_key_with_hash>(*s, ss.make_pkey(0), seed);
+
+    std::vector<std::pair<mutation_fragment, size_t>> cases;
+    cases.emplace_back(mutation_fragment(*s, permit, partition_start(ss.make_pkey(0), ss.new_tombstone())), 140);
+    cases.emplace_back(ss.make_static_row(permit, "static"), 150);
+    cases.emplace_back(ss.make_row(permit, ss.make_ckey(0), "value"), 225);
+    cases.emplace_back(ss.make_row(permit, ss.make_ckey(sstring(100, 'k')), sstring(1000, 'v')), 1418);
+    cases.emplace_back(mutation_fragment(*s, permit, ss.make_range_tombstone(ss.make_ckey_range(1, 3))), 166);
+    for (auto& [mf, expected] : cases) {
+        auto row = make_repair_row_from_disk(dk, hasher, *s, mutation_fragment(*s, permit, mf));
+        BOOST_CHECK_EQUAL(row.size(), expected);
+    }
 }
 
 SEASTAR_TEST_CASE(test_tablet_token_range_count) {
