@@ -14,7 +14,7 @@ namespace compaction {
 incremental_backlog_tracker::inflight_component incremental_backlog_tracker::compacted_backlog(const compaction_backlog_tracker::ongoing_compactions& ongoing_compactions) const {
     inflight_component in;
     for (auto& crp : ongoing_compactions) {
-        if (!_sstable_runs_contributing_backlog.contains(crp.first->run_identifier())) {
+        if (!_last_result.sstable_runs_contributing_backlog.contains(crp.first->run_identifier())) {
             continue;
         }
         // Ci is left untaxed on purpose: the fixed cost belongs to the sstable existing,
@@ -79,15 +79,10 @@ incremental_backlog_tracker::calculate_sstables_backlog_contribution(const compa
 }
 
 void incremental_backlog_tracker::refresh(const compaction_backlog_source& src) const {
-    if (!_backlog_dirty && _threshold == effective_min_threshold(src)) {
+    if (!_backlog_dirty && _last_result.threshold == effective_min_threshold(src)) {
         return;
     }
-    auto result = calculate_sstables_backlog_contribution(src, _options);
-    _total_bytes = result.total_bytes;
-    _total_backlog_bytes = result.total_backlog_bytes;
-    _sstables_backlog_contribution = result.sstables_backlog_contribution;
-    _sstable_runs_contributing_backlog = std::move(result.sstable_runs_contributing_backlog);
-    _threshold = result.threshold;
+    _last_result = calculate_sstables_backlog_contribution(src, _options);
     _backlog_dirty = false;
 }
 
@@ -99,7 +94,7 @@ double incremental_backlog_tracker::backlog(const compaction_backlog_source& src
     inflight_component compacted = compacted_backlog(oc);
 
     // Bail out if effective backlog is zero
-    if (_total_backlog_bytes <= compacted.total_bytes) {
+    if (_last_result.total_backlog_bytes <= compacted.total_bytes) {
         return 0;
     }
 
@@ -109,12 +104,12 @@ double incremental_backlog_tracker::backlog(const compaction_backlog_source& src
     // For the meaning of each variable, please refer to the doc in size_tiered_backlog_tracker.hh
 
     // Sum of (Si - Ci) for all SSTables contributing backlog
-    auto effective_backlog_bytes = _total_backlog_bytes - compacted.total_bytes;
+    auto effective_backlog_bytes = _last_result.total_backlog_bytes - compacted.total_bytes;
 
     // Sum of (Si - Ci) * log (Si) for all SSTables contributing backlog
-    auto sstables_contribution = _sstables_backlog_contribution - compacted.contribution;
+    auto sstables_contribution = _last_result.sstables_backlog_contribution - compacted.contribution;
     // This is subtracting ((Si - Ci) * log (Si)) from ((Si - Ci) * log(T)), yielding the final backlog
-    auto b = (effective_backlog_bytes * log4(_total_bytes)) - sstables_contribution;
+    auto b = (effective_backlog_bytes * log4(_last_result.total_bytes)) - sstables_contribution;
     return b > 0 ? b : 0;
 }
 
