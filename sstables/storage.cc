@@ -95,7 +95,7 @@ public:
     virtual future<> seal(const sstable& sst) override;
     virtual future<> snapshot(const sstable& sst, sstring name) const override;
     virtual future<entry_descriptor> clone(sstable& sst, generation_type gen, bool leave_unsealed, bool may_use_reference_sharing = false) const override;
-    virtual future<entry_descriptor> clone_from(sstable& src, generation_type gen, bool may_use_reference_sharing, std::string_view snapshot_tag) const override;
+    virtual future<entry_descriptor> clone_from(sstable& remote, generation_type gen, clone_from_cfg cfg) const override;
     virtual future<> change_state(const sstable& sst, sstable_state state, generation_type generation, delayed_commit_changes* delay) override;
     // runs in async context
     virtual void open(sstable& sst) override;
@@ -474,10 +474,91 @@ future<entry_descriptor> filesystem_storage::clone(sstable& sst, generation_type
     co_return desc;
 }
 
-future<entry_descriptor> filesystem_storage::clone_from(sstable& src, generation_type, bool, std::string_view) const {
+future<entry_descriptor> filesystem_storage::clone_from(sstable& remote, generation_type gen, clone_from_cfg cfg) const {
     // A backup sstable is never on the filesystem of the restored table, so there is
-    // nothing to clone. For a table on filesystem, restore downloads the components.
-    on_internal_error(sstlog, fmt::format("Cannot clone {} into filesystem storage {}", src.get_filename(), _dir.path().native()));
+    // nothing to clone inside this storage. Stream the components down instead.
+    constexpr auto foptions = file_open_options{.extent_allocation_size_hint = 32_MiB, .sloppy_size = true};
+    constexpr auto stream_options = file_output_stream_options{.buffer_size = 128_KiB, .write_behind = 10};
+    auto components = remote.all_components();
+
+    utils::get_local_injector().inject("fail_download_sstable", [] { throw std::runtime_error("Failing sstable download"); });
+    co_await utils::get_local_injector().inject("pause_download_sstable", utils::wait_for_message(std::chrono::seconds(60)));
+
+    // Move the TOC to the front to be processed first since `sstables::create_stream_sink` takes care
+    // of creating behind the scene TemporaryTOC instead of usual one. This assures that in case of failure
+    // this partially created SSTable will be cleaned up properly at some point.
+    auto toc_it = std::ranges::find_if(components, [](const auto& component) { return component.first == component_type::TOC; });
+    if (toc_it != components.begin()) {
+        swap(*toc_it, components.front());
+    }
+
+    // Ensure the Scylla component is processed second.
+    //
+    // The sstable_sink->output() call for each component may invoke load_metadata()
+    // and save_metadata(), but these functions only operate correctly if the Scylla
+    // component file already exists on disk. If the Scylla component is written first,
+    // load_metadata()/save_metadata() become no-ops, leaving the original Scylla
+    // component (with outdated metadata) untouched.
+    //
+    // By placing the Scylla component second, we guarantee that:
+    //   1) The first component (TOC) is written and the Scylla component file already
+    //      exists on disk when subsequent output() calls happen.
+    //   2) Later output() calls will overwrite the Scylla component with the correct,
+    //      updated metadata.
+    //
+    // In short: Scylla must be written second so that all following output() calls
+    // can properly update its metadata instead of silently skipping it.
+    auto scylla_it = std::ranges::find_if(components, [](const auto& component) { return component.first == component_type::Scylla; });
+    if (scylla_it != std::next(components.begin())) {
+        swap(*scylla_it, *std::next(components.begin()));
+    }
+
+    auto dst_opts = data_dictionary::make_local_options(_base_dir.path());
+    auto files = co_await remote.readable_file_for_all_components();
+    for (auto it = components.cbegin(); it != components.cend(); ++it) {
+        try {
+            auto descriptor = remote.get_descriptor(it->first);
+            descriptor.generation = gen;
+            auto sstable_sink =
+                sstables::create_stream_sink(cfg.schema,
+                                             remote.manager(),
+                                             dst_opts,
+                                             sstables::sstable_state::normal,
+                                             descriptor,
+                                             sstables::sstable_stream_sink_cfg{.last_component = std::next(it) == components.cend(), .leave_unsealed = true});
+            auto out = co_await sstable_sink->output(foptions, stream_options);
+
+            // The components are copied as-is, including the Data component: a
+            // compressed Data.db must stay compressed, so no decompressing or
+            // checksumming stream is wanted, and make_source() gives the raw bytes.
+            const auto fis_options = file_input_stream_options{.buffer_size = 128_KiB, .read_ahead = 2};
+            input_stream<char> src(co_await remote.get_storage().make_source(remote, it->first, files.at(it->first), 0, std::numeric_limits<size_t>::max(), fis_options));
+
+            std::exception_ptr eptr;
+            try {
+                co_await seastar::copy(src, out);
+            } catch (...) {
+                eptr = std::current_exception();
+                sstlog.info("Error downloading SSTable component {}. Reason: {}", it->first, eptr);
+            }
+            co_await src.close();
+            co_await out.close();
+            if (eptr) {
+                co_await sstable_sink->abort();
+                std::rethrow_exception(eptr);
+            }
+            if (co_await sstable_sink->close()) {
+                // The new sstable takes its sstable_id from the streamed Scylla.db, so
+                // leave the descriptor's one unset.
+                co_return sstables::entry_descriptor(gen, {}, descriptor.version, descriptor.format,
+                        sstables::component_type::TOC, sstables::sstable_state::normal);
+            }
+        } catch (...) {
+            sstlog.info("Error downloading SSTable component {}. Reason: {:t}", it->first, std::current_exception());
+            throw;
+        }
+    }
+    throw std::logic_error("SSTable must have at least one component");
 }
 
 future<> filesystem_storage::move(const sstable& sst, sstring new_dir, generation_type new_generation, delayed_commit_changes* delay_commit) {
@@ -739,7 +820,7 @@ public:
     future<> seal(const sstable& sst) override;
     future<> snapshot(const sstable& sst, sstring name) const override;
     future<entry_descriptor> clone(sstable& sst, generation_type gen, bool leave_unsealed, bool may_use_reference_sharing = false) const override;
-    future<entry_descriptor> clone_from(sstable& src, generation_type gen, bool may_use_reference_sharing, std::string_view snapshot_tag) const override;
+    future<entry_descriptor> clone_from(sstable& src, generation_type gen, clone_from_cfg cfg) const override;
     future<> change_state(const sstable& sst, sstable_state state, generation_type generation, delayed_commit_changes* delay) override;
     // runs in async context
     void open(sstable& sst) override;
@@ -1266,7 +1347,7 @@ future<entry_descriptor> object_storage_base::clone(sstable& sst, generation_typ
     co_return desc;
 }
 
-future<entry_descriptor> object_storage_base::clone_from(sstable& src, generation_type gen, bool may_use_reference_sharing, std::string_view snapshot_tag) const {
+future<entry_descriptor> object_storage_base::clone_from(sstable& src, generation_type gen, clone_from_cfg cfg) const {
     auto* src_storage = dynamic_cast<const object_storage_base*>(&src.get_storage());
     if (!src_storage) {
         on_internal_error(sstlog, fmt::format("Cannot clone {} into {} storage: the source is not on object storage", src.get_filename(), _type));
@@ -1286,7 +1367,7 @@ future<entry_descriptor> object_storage_base::clone_from(sstable& src, generatio
     // this storage uses for `src_sid`, in the same bucket. This is true only for a
     // backup in the unified layout, in the location of this table.
     const auto& toc = sstable_version_constants::TOC_SUFFIX;
-    auto share_components = may_use_reference_sharing
+    auto share_components = cfg.may_use_reference_sharing
             && src_storage->_bucket == _bucket
             && src_storage->make_object_name(src, toc, src.generation()).str()
                     == object_name(_bucket, prefix(), src_sid, toc).str();
@@ -1316,11 +1397,11 @@ future<entry_descriptor> object_storage_base::clone_from(sstable& src, generatio
         // So check that the snapshot still has its reference. If not, undo the clone:
         // remove the node reference with remove_by_registry_entry(), which deletes the
         // components when no reference is left, remove the registry entry, and fail.
-        if (!co_await _client->object_exists(make_snapshot_ref_object_name(sid, src.generation(), snapshot_tag), as)) {
+        if (!co_await _client->object_exists(make_snapshot_ref_object_name(sid, src.generation(), cfg.snapshot_tag), as)) {
             co_await remove_by_registry_entry(desc, node_owner);
             co_await src.manager().sstables_registry().delete_entry(owner(), node_owner, gen);
             co_await coroutine::return_exception(std::runtime_error(fmt::format("Cannot restore {}: snapshot {} does not hold the components of sstable_id={}",
-                    src.get_filename(), snapshot_tag, sid)));
+                    src.get_filename(), cfg.snapshot_tag, sid)));
         }
     } else {
         utils::get_local_injector().inject("fail_clone_from_before_copy", [] { throw std::runtime_error("Failing sstable clone"); });
