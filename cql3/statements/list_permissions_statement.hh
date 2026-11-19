@@ -28,9 +28,12 @@ private:
     mutable std::optional<auth::resource> _resource;
     std::optional<sstring> _role_name;
     bool _recursive;
+    // With LIST CONFIGURE (option, ...): only the grants that cover one of these options.
+    std::vector<sstring> _config_options;
 
 public:
-    list_permissions_statement(auth::permission_set, std::optional<auth::resource>, std::optional<sstring>, bool);
+    list_permissions_statement(auth::permission_set, std::optional<auth::resource>, std::optional<sstring>, bool,
+            std::vector<sstring> config_options = {});
 
     std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats, const cql_config& cfg) override;
 

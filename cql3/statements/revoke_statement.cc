@@ -24,7 +24,22 @@ cql3::statements::revoke_statement::execute(query_processor& qp, service::query_
     auto& auth_service = *state.get_client_state().get_auth_service();
     try {
         service::group0_batch mc{std::move(guard)};
-        co_await auth::revoke_permissions(auth_service, _role_name, _permissions, _resource, mc);
+        co_await for_each_resource([&] (const auth::resource& r) {
+            return auth::revoke_permissions(auth_service, _role_name, _permissions, r, mc);
+        });
+        const auto configure = auth::permission_set::of<auth::permission::CONFIGURE>();
+        // GRANT ALL does not grant CONFIGURE, but REVOKE ALL leaves nothing behind when the
+        // revoking role holds CONFIGURE itself. A role without it (the creator of a table,
+        // for one) cannot take away what an operator was granted there.
+        const bool all_with_configure = _all_permissions && _resource.applicable_permissions().contains(auth::permission::CONFIGURE)
+                && co_await state.get_client_state().check_has_config_permission(auth::permission::CONFIGURE, _resource, std::nullopt);
+        if (all_with_configure) {
+            co_await auth::revoke_permissions(auth_service, _role_name, configure, _resource, mc);
+        }
+        if (all_with_configure || (_config_options.empty() && _permissions.contains(auth::permission::CONFIGURE))) {
+            // Revoking CONFIGURE on a resource leaves no per-option grant on it behind.
+            co_await auth::revoke_config_option_permissions(auth_service, _role_name, _resource, mc);
+        }
         co_await auth::commit_mutations(auth_service, std::move(mc));
     } catch (const auth::nonexistant_role& e) {
         throw exceptions::invalid_request_exception(e.what());
