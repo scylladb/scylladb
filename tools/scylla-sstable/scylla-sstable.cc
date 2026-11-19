@@ -1742,6 +1742,7 @@ public:
                 {sstables::sstable_feature::CorrectEmptyCounters, "CorrectEmptyCounters"},
                 {sstables::sstable_feature::CorrectUDTsInCollections, "CorrectUDTsInCollections"},
                 {sstables::sstable_feature::CorrectLastPiBlockWidth, "CorrectLastPiBlockWidth"},
+                {sstables::sstable_feature::CorrectNaNAndVarintIndexKeys, "CorrectNaNAndVarintIndexKeys"},
         };
         _writer.StartObject();
         _writer.Key("mask");
