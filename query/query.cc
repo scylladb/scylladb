@@ -111,6 +111,23 @@ std::ostream& operator<<(std::ostream& out, const specific_ranges& s) {
     return out;
 }
 
+void trim_clustering_row_ranges_from(const schema& s, clustering_row_ranges& ranges, position_in_partition pos) {
+    auto cmp = position_in_partition::composite_tri_compare(s);
+
+    auto it = ranges.begin();
+    while (it != ranges.end()) {
+        auto start_bound = position_in_partition_view::for_range_start(*it);
+        if (cmp(start_bound, pos) > 0) {
+            it = ranges.erase(it);
+            continue;
+        } else if (auto end_bound = position_in_partition_view::for_range_end(*it); cmp(end_bound, pos) > 0) {
+            SCYLLA_ASSERT(cmp(start_bound, pos) <= 0);
+            *it = clustering_range(it->start(), clustering_range::bound(pos.key(), pos.get_bound_weight() != bound_weight::before_all_prefixed));
+        }
+        ++it;
+    }
+}
+
 void trim_clustering_row_ranges_to(const schema& s, clustering_row_ranges& ranges, position_in_partition pos) {
     auto cmp = position_in_partition::composite_tri_compare(s);
 
@@ -345,8 +362,12 @@ static void write_partial_partition(ser::writer_of_qr_partition<bytes_ostream>&&
 }
 
 foreign_ptr<lw_shared_ptr<query::result>> result_merger::get() {
+    // Return a lone result as is only if it is within the limits.
     if (_partial.size() == 1) {
-        return std::move(_partial[0]);
+        _partial[0]->ensure_counts();
+        if (*_partial[0]->row_count() <= _max_rows && *_partial[0]->partition_count() <= _max_partitions) {
+            return std::move(_partial[0]);
+        }
     }
 
     bytes_ostream w;

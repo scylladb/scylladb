@@ -1280,7 +1280,6 @@ def test_index_paging_pk_only(cql, test_keyspace):
 # one component), the restriction can match the entire partition, but paging
 # still needs to page through it - and not return the entire partition as one
 # page! Reproduces #7432.
-@pytest.mark.xfail(reason="issue #7432")
 def test_index_paging_match_partition(cql, test_keyspace):
     schema = 'p1 int, p2 int, c int, primary key (p1,p2,c)'
     with new_test_table(cql, test_keyspace, schema) as table:
@@ -2586,8 +2585,8 @@ def test_index_in_API(cql, test_keyspace):
 # from the index view (where the LIMIT is correctly applied). A mismatch is
 # always interpreted as more pages being available, which in this case is incorrect.
 # See `generate_view_paging_state_from_base_query_results()` for more details.
-@pytest.mark.xfail(reason="issue #22158")
-def test_limit_partition(cql, test_keyspace):
+@pytest.mark.parametrize("use_paging", [False, True])
+def test_limit_partition(cql, test_keyspace, use_paging):
     with new_test_table(cql, test_keyspace, 'pk1 int, pk2 int, ck int, primary key ((pk1, pk2), ck)') as table:
         cql.execute(f'CREATE INDEX ON {table}(pk2)')
         stmt = cql.prepare(f'INSERT INTO {table} (pk1, pk2, ck) VALUES (?, ?, ?)')
@@ -2595,21 +2594,29 @@ def test_limit_partition(cql, test_keyspace):
         cql.execute(stmt, [1, 1, 2])
         cql.execute(stmt, [2, 1, 1])
         cql.execute(stmt, [2, 1, 2])
+        fetch_size = 100 if use_paging else None  # 100 is arbitrary; just large enough to exercise the paging path without splitting pages
         # Test LIMIT within a single partition - succeeds.
-        rs = cql.execute(f'SELECT pk1, ck FROM {table} WHERE pk2 = 1 LIMIT 1')
-        assert sorted(list(rs)) == [(2,1)]
-        assert rs.has_more_pages == False
+        stmt = SimpleStatement(f'SELECT pk1, ck FROM {table} WHERE pk2 = 1 LIMIT 1', fetch_size=fetch_size)
+        rs = cql.execute(stmt)
+        if use_paging:
+            assert sorted(rs.current_rows) == [(2,1)]
+            assert rs.has_more_pages == False
+        else:
+            assert sorted(list(rs)) == [(2,1)]
         # Test LIMIT across partitions - reproduces #22158.
-        rs = cql.execute(f'SELECT pk1, ck FROM {table} WHERE pk2 = 1 LIMIT 3')
-        assert sorted(list(rs)) == [(1,1), (2,1), (2,2)]
-        assert rs.has_more_pages == False
-
+        stmt = SimpleStatement(f'SELECT pk1, ck FROM {table} WHERE pk2 = 1 LIMIT 3', fetch_size=fetch_size)
+        rs = cql.execute(stmt)
+        if use_paging:
+            assert sorted(rs.current_rows) == [(1,1), (2,1), (2,2)]
+            assert rs.has_more_pages == False
+        else:
+            assert sorted(list(rs)) == [(1,1), (2,1), (2,2)]
 
 # Same as test_limit_partition above, except that it uses partition slices
 # instead of whole partitions. This is achieved by indexing the first clustering
 # key column.
-@pytest.mark.xfail(reason="issue #22158")
-def test_limit_partition_slice(cql, test_keyspace):
+@pytest.mark.parametrize("use_paging", [False, True])
+def test_limit_partition_slice(cql, test_keyspace, use_paging):
     with new_test_table(cql, test_keyspace, 'pk int, ck1 int, ck2 int, primary key (pk, ck1, ck2)') as table:
         cql.execute(f'CREATE INDEX ON {table}(ck1)')
         stmt = cql.prepare(f'INSERT INTO {table} (pk, ck1, ck2) VALUES (?, ?, ?)')
@@ -2617,17 +2624,148 @@ def test_limit_partition_slice(cql, test_keyspace):
         cql.execute(stmt, [1, 1, 2])
         cql.execute(stmt, [2, 1, 1])
         cql.execute(stmt, [2, 1, 2])
+        fetch_size = 100 if use_paging else None  # 100 is arbitrary; just large enough to exercise the paging path without splitting pages
         # Test LIMIT within a single partition slice - succeeds.
-        rs = cql.execute(f'SELECT pk, ck2 FROM {table} WHERE ck1 = 1 LIMIT 1')
-        assert sorted(list(rs)) == [(1,1)]
-        assert rs.has_more_pages == False
+        stmt = SimpleStatement(f'SELECT pk, ck2 FROM {table} WHERE ck1 = 1 LIMIT 1', fetch_size=fetch_size)
+        rs = cql.execute(stmt)
+        if use_paging:
+            assert sorted(rs.current_rows) == [(1,1)]
+            assert rs.has_more_pages == False
+        else:
+            assert sorted(list(rs)) == [(1,1)]
         # Test LIMIT across partition slices - reproduces #22158.
-        rs = cql.execute(f'SELECT pk, ck2 FROM {table} WHERE ck1 = 1 LIMIT 3')
+        stmt = SimpleStatement(f'SELECT pk, ck2 FROM {table} WHERE ck1 = 1 LIMIT 3', fetch_size=fetch_size)
+        rs = cql.execute(stmt)
+        if use_paging:
+            assert sorted(rs.current_rows) == [(1,1), (1,2), (2,1)]
+            assert rs.has_more_pages == False
+        else:
+            assert sorted(list(rs)) == [(1,1), (1,2), (2,1)]
+
+
+# Same as test_limit_partition above, except that the selection includes a
+# function, so the query needs more than the rows of the base table read.
+# Reproduces #22158.
+@pytest.mark.parametrize("use_paging", [False, True])
+def test_limit_partition_nontrivial_selection(cql, test_keyspace, use_paging):
+    with new_test_table(cql, test_keyspace, 'pk1 int, pk2 int, ck int, v int, primary key ((pk1, pk2), ck)') as table:
+        cql.execute(f'CREATE INDEX ON {table}(pk2)')
+        stmt = cql.prepare(f'INSERT INTO {table} (pk1, pk2, ck, v) VALUES (?, ?, ?, ?)')
+        cql.execute(stmt, [1, 1, 1, 0])
+        cql.execute(stmt, [1, 1, 2, 0])
+        cql.execute(stmt, [2, 1, 1, 0])
+        cql.execute(stmt, [2, 1, 2, 0])
+        fetch_size = 100 if use_paging else None
+        stmt = SimpleStatement(f'SELECT pk1, ck, writetime(v) FROM {table} WHERE pk2 = 1 LIMIT 1', fetch_size=fetch_size)
+        assert len(list(cql.execute(stmt))) == 1
+        stmt = SimpleStatement(f'SELECT pk1, ck, writetime(v) FROM {table} WHERE pk2 = 1 LIMIT 3', fetch_size=fetch_size)
+        assert len(list(cql.execute(stmt))) == 3
+
+
+# Same as test_limit_partition_slice above, except that the indexed column is static.
+# Reproduces #22158.
+@pytest.mark.parametrize("use_paging", [False, True])
+def test_static_column_index_with_limit(cql, test_keyspace, use_paging):
+    with new_test_table(cql, test_keyspace, 'pk int, ck int, s int STATIC, primary key (pk, ck)') as table:
+        cql.execute(f'CREATE INDEX ON {table}(s)')
+        stmt = cql.prepare(f'INSERT INTO {table} (pk, ck, s) VALUES (?, ?, ?)')
+        cql.execute(stmt, [1, 1, 1])
+        cql.execute(stmt, [1, 2, 1])
+        cql.execute(stmt, [2, 1, 1])
+        cql.execute(stmt, [2, 2, 1])
+        fetch_size = 100 if use_paging else None
+        # Test LIMIT within a single partition slice - succeeds.
+        stmt = SimpleStatement(f'SELECT pk, ck FROM {table} WHERE s = 1 LIMIT 1', fetch_size=fetch_size)
+        rs = cql.execute(stmt)
+        assert sorted(list(rs)) == [(1,1)]
+        # Test LIMIT across partition slices - reproduces #22158.
+        stmt = SimpleStatement(f'SELECT pk, ck FROM {table} WHERE s = 1 LIMIT 3', fetch_size=fetch_size)
+        rs = cql.execute(stmt)
         assert sorted(list(rs)) == [(1,1), (1,2), (2,1)]
-        assert rs.has_more_pages == False
+
+# Same as test_static_column_index_with_limit above, except that the index has
+# a stale entry: the static column of one partition changes, but the update of
+# the index is lost (injected failure). The post-filter drops the rows of that
+# partition, so they must not count against the LIMIT.
+@pytest.mark.parametrize("fetch_size", [None, 1, 100])
+def test_static_column_index_with_limit_and_stale_entry(cql, test_keyspace, scylla_only, fetch_size):
+    injection = 'view_update_generation_failure'
+    with new_test_table(cql, test_keyspace, 'pk int, ck int, s int STATIC, primary key (pk, ck)') as table:
+        cql.execute(f'CREATE INDEX ON {table}(s)')
+        stmt = cql.prepare(f'INSERT INTO {table} (pk, ck, s) VALUES (?, ?, ?)')
+        cql.execute(stmt, [1, 1, 1])
+        cql.execute(stmt, [1, 2, 1])
+        cql.execute(stmt, [2, 1, 1])
+        cql.execute(stmt, [2, 2, 1])
+        cql.execute(stmt, [3, 1, 1])
+        cql.execute(stmt, [3, 2, 1])
+        # Make the first partition in token order stale, so that its rows are
+        # read first.
+        stale_pk = min(cql.execute(f'SELECT DISTINCT pk, token(pk) FROM {table}'), key=lambda r: r[1])[0]
+        rest_api.post_request(cql, f'v2/error_injection/injection/{injection}?one_shot=True')
+        try:
+            if injection not in rest_api.get_request(cql, 'v2/error_injection/injection'):
+                skip_env("error injection not enabled in this build")
+            cql.execute(f'UPDATE {table} SET s = 2 WHERE pk = {stale_pk}')
+        finally:
+            rest_api.delete_request(cql, f'v2/error_injection/injection/{injection}')
+        # The index still lists the partition under s = 1.
+        assert stale_pk in [r[0] for r in cql.execute(f'SELECT pk FROM {table}_s_idx_index WHERE s = 1')]
+        stmt = SimpleStatement(f'SELECT pk, ck FROM {table} WHERE s = 1 LIMIT 4', fetch_size=fetch_size)
+        rows = list(cql.execute(stmt))
+        assert len(rows) == 4
+        assert stale_pk not in [r[0] for r in rows]
 
 
-# Test that a query using a secondary index can handle "short reads".
+
+# Same as test_limit_partition_slice above, except that it uses a page size
+# smaller than the limit to check if the limit is correctly enforced across pages.
+#
+# Reproduces #22158 - The test fails for all values of LIMIT because the limit
+# is always exceeded.
+#
+# Root cause:
+#
+# When `generate_view_paging_state_from_base_query_results()` re-adjusts the
+# paging state after detecting a drift between the base table read and the
+# index view read, it completely discards the current value of the "remaining"
+# field of the paging state (to be precise, it sets it to 10000), so the limit
+# can no longer be tracked across pages. This drift may happen in two scenarios:
+#
+# * {rows from base table read} > {rows from index view read}
+#
+#     Can happen when the index view read hits the page size (like in this test).
+#     Recall that paging applies only to index view reads, i.e., base table
+#     reads are unpaged and therefore not limited by the page size.
+#
+# * {rows from base table read} < {rows from index view read}
+#
+#     Can happen in case of a short read from a replica (e.g., base table has
+#     large regular columns).
+#     Can also happen if the coordinator's accumulated result exceeds 1MiB
+#     (enforced in `do_execute_base_query()`).
+#
+def test_limit_partition_slice_across_pages(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'pk int, ck1 int, ck2 int, primary key (pk, ck1, ck2)') as table:
+        cql.execute(f'CREATE INDEX ON {table}(ck1)')
+        stmt = cql.prepare(f'INSERT INTO {table} (pk, ck1, ck2) VALUES (?, ?, ?)')
+        cql.execute(stmt, [1, 1, 1])
+        cql.execute(stmt, [1, 1, 2])
+        cql.execute(stmt, [1, 1, 3])
+        cql.execute(stmt, [2, 1, 1])
+        cql.execute(stmt, [2, 1, 2])
+        cql.execute(stmt, [2, 1, 3])
+        num_rows = 6
+        for page_size in range(1, num_rows - 1):  # {1..4}
+            for limit in range(page_size + 1, num_rows):  # {[page_size+1]..5}
+                print(f"page_size={page_size}, limit={limit}")
+                stmt = SimpleStatement(f'SELECT pk, ck2 FROM {table} WHERE ck1 = 1 LIMIT {limit}', fetch_size=page_size)
+                result = list(cql.execute(stmt))
+                expected_all = [(1,1), (1,2), (1,3), (2,1), (2,2), (2,3)]
+                assert sorted(result) == sorted(expected_all[:limit])
+
+
+# Test that a query using a secondary index can handle "short reads" from base table.
 #
 # A read is short when the query is paged and the page size (in bytes) hits an
 # internal memory limit (`query_page_size_in_bytes` cfg option; default is 1MiB).
@@ -2639,8 +2777,8 @@ def test_limit_partition_slice(cql, test_keyspace):
 # the first page is cut short (2 rows suffice to hit the limit), but the code
 # assumes that the last partition of the previous page was fully read, so it
 # completely ignores it when preparing the second page. This logic is
-# implemented in `find_index_partition_ranges()`.
-@pytest.mark.xfail(reason="issue #25839")
+# implemented in `find_index_partition_ranges()` during the construction of the
+# partition range vector.
 def test_short_read(cql, test_keyspace):
     page_memory_limit = 1024 if is_scylla(cql) else 1024 * 1024  # 1MiB in Cassandra, 1KiB in Scylla (for faster execution)
     row_size = page_memory_limit // 2  # will cause short read after 2 rows
@@ -2661,7 +2799,6 @@ def test_short_read(cql, test_keyspace):
 # Another reproducer for issue #25839, this time asking for a count() as
 # a user tried in #28026 and noticing that adding an additional column
 # to the selection causes the count to become smaller.
-@pytest.mark.xfail(reason="issue #25839")
 def test_short_count(cql, test_keyspace):
     # Newer Scylla have configurable query_page_size_in_bytes so we can set
     # it low to have a faster test. Older Scylla and Cassandra have hard-coded
@@ -2749,6 +2886,39 @@ def test_index_paging_reconstructs_after_empty_page(cql, test_keyspace, scylla_o
         with config_value_context(cql, 'query_tombstone_page_limit', '1'):
             stmt = SimpleStatement(f'SELECT pk, ck1, ck2 FROM {table} WHERE v = 7 AND w = 1 ALLOW FILTERING')
             assert list(cql.execute(stmt)) == [(0, 1, 0), (0, 2, 0), (0, 3, 0)]
+
+# Test that a LIMIT works correctly when the query is paged and the base table
+# reads are short.
+#
+# Basically the same as test_short_read above, but with a LIMIT.
+#
+# Reproduces #22158 - The test triggers the second scenario listed in the comment for
+# test_limit_partition_slice_across_pages, that is a short read from the base table.
+# This causes the limit to be exceeded.
+#
+# The first partition has a row past the limit, so the base table read of the
+# page after the short read must also stop at the limit.
+#
+# The test is also affected by #25839, which causes the rest of the first
+# partition to be missing from the result, but this is not the main point of
+# this test.
+def test_limit_partition_slice_short_read(cql, test_keyspace):
+    page_memory_limit = 1024 * 1024  # 1MiB
+    row_size = page_memory_limit // 2  # will cause short read after 2 rows
+    with new_test_table(cql, test_keyspace, 'pk int, ck1 int, ck2 int, data text, primary key (pk, ck1, ck2)') as table:
+        cql.execute(f'CREATE INDEX ON {table}(ck1)')
+        stmt = cql.prepare(f'INSERT INTO {table} (pk, ck1, ck2, data) VALUES (?, ?, ?, ?)')
+        cql.execute(stmt, [1, 1, 1, 'A' * row_size])
+        cql.execute(stmt, [1, 1, 2, 'B' * row_size])
+        cql.execute(stmt, [1, 1, 3, 'C' * row_size])
+        cql.execute(stmt, [1, 1, 4, 'X' * row_size])
+        cql.execute(stmt, [2, 1, 1, 'D' * row_size])
+        cql.execute(stmt, [2, 1, 2, 'E' * row_size])
+        stmt = SimpleStatement(f'SELECT pk, ck2, data FROM {table} WHERE ck1 = 1 LIMIT 3')
+        rs = list(cql.execute(stmt))
+        rows = [(col[0], col[1]) for col in rs]
+        assert rows == [(1,1), (1,2), (1,3)]
+
 
 def test_index_metrics(cql, test_keyspace, scylla_only):
     with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, v int") as table:
