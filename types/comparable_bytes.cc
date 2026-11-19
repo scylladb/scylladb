@@ -318,7 +318,7 @@ uint64_t decode_varint_length(managed_bytes_view& src, int64_t sign_mask) {
 //    2^32          as F900000000
 //    2^56-1        as FEFFFFFFFFFFFFFF
 //    2^56          as FF000100000000000000
-static void encode_varint_type(managed_bytes_view& serialized_bytes_view, bytes_ostream& out) {
+static void encode_varint_type(managed_bytes_view& serialized_bytes_view, bytes_ostream& out, canonical_nans_and_varints canonical) {
     if (serialized_bytes_view.empty()) {
         throw_with_backtrace<marshal_exception>("encode_varint_type - empty varint");
     }
@@ -329,9 +329,13 @@ static void encode_varint_type(managed_bytes_view& serialized_bytes_view, bytes_
     // one of them, but a varint sent by a client or made by blobAsVarint() can have any number
     // of them. They don't change the number, so they must not change its encoding, and in
     // particular its length.
+    // The old encoding (canonical_nans_and_varints::no) discards only the first of them.
     const auto sign_only_byte = uint8_t(sign_mask & 0xFF);
     while (!serialized_bytes_view.empty() && static_cast<uint8_t>(serialized_bytes_view[0]) == sign_only_byte) {
         serialized_bytes_view.remove_prefix(1);
+        if (!canonical) {
+            break;
+        }
     }
 
     const size_t serialized_bytes_size = serialized_bytes_view.size_bytes();
@@ -391,12 +395,14 @@ static void decode_varint_type(managed_bytes_view& comparable_bytes_view, bytes_
 // Fixed length signed floating point number encode/decode.
 // To encode :
 //   If NaN : replace it by the positive quiet NaN first, as all NaNs are equal
+//            (the old encoding, canonical_nans_and_varints::no, doesn't)
 //   If positive : invert first bit to make it greater than all negatives
 //   If negative : invert all bytes to make negatives with bigger magnitude smaller
 // Decoding is identical except the logic to identify positive/negative values,
 // and that it has no NaN to replace
 template <std::floating_point T, bool src_is_byte_comparable>
-static void convert_fixed_length_float(managed_bytes_view& src, bytes_ostream& out) {
+static void convert_fixed_length_float(managed_bytes_view& src, bytes_ostream& out,
+        canonical_nans_and_varints canonical = canonical_nans_and_varints::yes) {
     // Read and write float as uint32_t; double as uint64_t;
     using uint_t = std::conditional_t<std::is_same_v<T, float>, uint32_t, uint64_t>;
     static_assert(sizeof(uint_t) == sizeof(T), "cannot read floating point type as unsigned int as their sizes are not equal");
@@ -410,7 +416,8 @@ static void convert_fixed_length_float(managed_bytes_view& src, bytes_ostream& o
         // with the sign bit set, which is what arithmetic gives on x86, would be ordered before
         // all the other values, even -infinity, instead of after them.
         // This deviates from Cassandra, which encodes the bits of a NaN like any other bits.
-        if (std::isnan(std::bit_cast<T>(seastar::be_to_cpu(value_be)))) {
+        // The old encoding (canonical_nans_and_varints::no) does what Cassandra does.
+        if (canonical && std::isnan(std::bit_cast<T>(seastar::be_to_cpu(value_be)))) {
             value_be = seastar::cpu_to_be(std::bit_cast<uint_t>(std::numeric_limits<T>::quiet_NaN()));
         }
     }
@@ -914,7 +921,7 @@ static void unescape_zeros(managed_bytes_view& comparable_bytes_view, bytes_ostr
 }
 
 // Functions are defined later in the file as they depend on to_comparable_bytes_visitor and from_comparable_bytes_visitor.
-void to_comparable_bytes(const abstract_type& type, managed_bytes_view& serialized_bytes_view, bytes_ostream& out);
+void to_comparable_bytes(const abstract_type& type, managed_bytes_view& serialized_bytes_view, bytes_ostream& out, canonical_nans_and_varints canonical);
 static void from_comparable_bytes(const abstract_type& type, managed_bytes_view& comparable_bytes_view, bytes_ostream& out);
 static bool has_encoding_for_zero_sized_value(const abstract_type& type);
 static void encode_null_component(bytes_ostream& out);
@@ -924,7 +931,7 @@ static void encode_empty_component(bytes_ostream& out);
 // The element can be an item from a list, set, vector, a key or value from a map, or a field from a tuple.
 // The serialized bytes of the element are transformed into a byte-comparable representation,
 // prefixed with a `NEXT_COMPONENT` marker to delimit it from other elements, and written to the output stream.
-void encode_component(const abstract_type& type, managed_bytes_view serialized_bytes_view, bytes_ostream& out) {
+void encode_component(const abstract_type& type, managed_bytes_view serialized_bytes_view, bytes_ostream& out, canonical_nans_and_varints canonical) {
     if (serialized_bytes_view.empty() && !has_encoding_for_zero_sized_value(type)) {
         // An "empty" value -- a zero-sized value of a type which normally has a fixed size --
         // is encoded via a special separator, 0x3f. (Like is already done for empty values
@@ -937,7 +944,7 @@ void encode_component(const abstract_type& type, managed_bytes_view serialized_b
         return;
     }
     write_native_int(out, NEXT_COMPONENT);
-    to_comparable_bytes(type, serialized_bytes_view, out);
+    to_comparable_bytes(type, serialized_bytes_view, out, canonical);
 }
 
 // Decodes a single non-null element of a multi-component type from its byte-comparable representation
@@ -1020,13 +1027,14 @@ static stop_iteration decode_marker_and_component(const abstract_type& type, man
 // The component header is NEXT_COMPONENT_NULL for a null element, NEXT_COMPONENT_EMPTY for an "empty" one,
 // and NEXT_COMPONENT otherwise.
 // The collection is terminated with a TERMINATOR byte.
-static void encode_set_or_list_type(const listlike_collection_type_impl& type, managed_bytes_view& serialized_bytes_view, bytes_ostream& out) {
+static void encode_set_or_list_type(const listlike_collection_type_impl& type, managed_bytes_view& serialized_bytes_view, bytes_ostream& out,
+        canonical_nans_and_varints canonical) {
     const auto& elements_type = *type.get_elements_type();
     using llpdi = listlike_partial_deserializing_iterator;
     for (auto it = llpdi::begin(serialized_bytes_view); it != llpdi::end(serialized_bytes_view); it++) {
         // Read the serialized bytes from the collection value and write it in byte comparable format.
         if ((*it).has_value()) {
-            encode_component(elements_type, (*it).value(), out);
+            encode_component(elements_type, (*it).value(), out, canonical);
         } else {
             encode_null_component(out);
         }
@@ -1050,13 +1058,13 @@ static void decode_set_or_list_type(const listlike_collection_type_impl& type, m
 
 // Encode a map type into byte comparable format.
 // The map is encoded as a sequence of key-value pairs, each preceded by a component header similar to sets and lists.
-static void encode_map(const map_type_impl& type, managed_bytes_view& serialized_bytes_view, bytes_ostream& out) {
+static void encode_map(const map_type_impl& type, managed_bytes_view& serialized_bytes_view, bytes_ostream& out, canonical_nans_and_varints canonical) {
     const auto& key_type = *type.get_keys_type();
     const auto& value_type = *type.get_values_type();
     auto map_size = read_collection_size(serialized_bytes_view);
     while (map_size--) {
-        encode_component(key_type, read_collection_key(serialized_bytes_view), out);
-        encode_component(value_type, read_collection_value_nonnull(serialized_bytes_view), out);
+        encode_component(key_type, read_collection_key(serialized_bytes_view), out, canonical);
+        encode_component(value_type, read_collection_value_nonnull(serialized_bytes_view), out, canonical);
     }
     write_native_int(out, TERMINATOR);
 }
@@ -1090,7 +1098,7 @@ static void decode_map(const map_type_impl& type, managed_bytes_view& comparable
 // The tuple is encoded as a sequence of components, each preceded by a component header similar to sets and lists.
 // If an element is null, it is encoded with a NEXT_COMPONENT_NULL marker and any trailing nulls are skipped.
 // The tuple is terminated with a TERMINATOR byte.
-static void encode_tuple(const tuple_type_impl& type, managed_bytes_view& serialized_bytes_view, bytes_ostream& out) {
+static void encode_tuple(const tuple_type_impl& type, managed_bytes_view& serialized_bytes_view, bytes_ostream& out, canonical_nans_and_varints canonical) {
     int pending_null_writes = 0;
     for (const auto& element_type : type.all_types()) {
         if (serialized_bytes_view.empty()) {
@@ -1104,7 +1112,7 @@ static void encode_tuple(const tuple_type_impl& type, managed_bytes_view& serial
                 encode_null_component(out);
                 pending_null_writes--;
             }
-            encode_component(*element_type.get(), element.value(), out);
+            encode_component(*element_type.get(), element.value(), out, canonical);
         } else {
             // Null tuple element. Track it but do not write it yet as it maybe a trailing null.
             pending_null_writes++;
@@ -1126,11 +1134,11 @@ static void decode_tuple(const tuple_type_impl& type, managed_bytes_view& compar
 // Encodes a vector type into byte comparable format.
 // The collection is encoded as a sequence of components, each preceded by NEXT_COMPONENT header.
 // The collection is terminated with a TERMINATOR byte.
-static void encode_vector(const vector_type_impl& type, managed_bytes_view& serialized_bytes_view, bytes_ostream& out) {
+static void encode_vector(const vector_type_impl& type, managed_bytes_view& serialized_bytes_view, bytes_ostream& out, canonical_nans_and_varints canonical) {
     const auto& element_type = *type.get_elements_type();
     auto value_length = element_type.value_length_if_fixed();
     for (size_t i = 0; i < type.get_dimension(); i++) {
-        encode_component(element_type, read_vector_element(serialized_bytes_view, value_length), out);
+        encode_component(element_type, read_vector_element(serialized_bytes_view, value_length), out, canonical);
     }
     write_native_int(out, TERMINATOR);
 }
@@ -1200,9 +1208,10 @@ static void flip_all_bits(const bytes_view& input, bytes_ostream& flipped) {
 // Encodes a serialized value into its reversed type, byte comparable format.
 // The serialized bytes of the underlying type is transformed into its standard byte comparable representation.
 // Then, all the bits are flipped to ensure that the lexicographical sort order is reversed.
-static void encode_reversed(const reversed_type_impl& type, managed_bytes_view& serialized_bytes_view, bytes_ostream& out) {
+static void encode_reversed(const reversed_type_impl& type, managed_bytes_view& serialized_bytes_view, bytes_ostream& out,
+        canonical_nans_and_varints canonical) {
     bytes_ostream encoded_bytes_bo;
-    to_comparable_bytes(*type.underlying_type(), serialized_bytes_view, encoded_bytes_bo);
+    to_comparable_bytes(*type.underlying_type(), serialized_bytes_view, encoded_bytes_bo, canonical);
     for (const auto& fragment : encoded_bytes_bo.fragments()) {
         flip_all_bits(fragment, out);
     }
@@ -1225,6 +1234,7 @@ static void decode_reversed(const reversed_type_impl& type, managed_bytes_view& 
 struct to_comparable_bytes_visitor {
     managed_bytes_view& serialized_bytes_view;
     bytes_ostream& out;
+    canonical_nans_and_varints canonical;
 
     void operator()(const boolean_type_impl&) {
         // Any non zero byte value is encoded as 1 else 0
@@ -1244,13 +1254,13 @@ struct to_comparable_bytes_visitor {
 
     // Encode variable length integers
     void operator()(const varint_type_impl&) {
-        encode_varint_type(serialized_bytes_view, out);
+        encode_varint_type(serialized_bytes_view, out, canonical);
     }
 
     // Encoding for float and double
     template <std::floating_point T>
     void operator()(const floating_type_impl<T>&) {
-        convert_fixed_length_float<T, false>(serialized_bytes_view, out);
+        convert_fixed_length_float<T, false>(serialized_bytes_view, out, canonical);
     }
 
     // Encoding for simple_date_type_impl and time_type_impl
@@ -1297,24 +1307,24 @@ struct to_comparable_bytes_visitor {
 
     // encode sets and lists
     void operator()(const listlike_collection_type_impl& type) {
-        encode_set_or_list_type(type, serialized_bytes_view, out);
+        encode_set_or_list_type(type, serialized_bytes_view, out, canonical);
     }
 
     void operator()(const map_type_impl& type) {
-        encode_map(type, serialized_bytes_view, out);
+        encode_map(type, serialized_bytes_view, out, canonical);
     }
 
     // encode tuples and UDTs
     void operator()(const tuple_type_impl& type) {
-        encode_tuple(type, serialized_bytes_view, out);
+        encode_tuple(type, serialized_bytes_view, out, canonical);
     }
 
     void operator()(const vector_type_impl& type) {
-        encode_vector(type, serialized_bytes_view, out);
+        encode_vector(type, serialized_bytes_view, out, canonical);
     }
 
     void operator()(const reversed_type_impl& type) {
-        encode_reversed(type, serialized_bytes_view, out);
+        encode_reversed(type, serialized_bytes_view, out, canonical);
     }
 
     void operator()(const empty_type_impl&) {}
@@ -1328,13 +1338,13 @@ struct to_comparable_bytes_visitor {
     }
 };
 
-void to_comparable_bytes(const abstract_type& type, managed_bytes_view& serialized_bytes_view, bytes_ostream& out) {
-    visit(type, to_comparable_bytes_visitor{serialized_bytes_view, out});
+void to_comparable_bytes(const abstract_type& type, managed_bytes_view& serialized_bytes_view, bytes_ostream& out, canonical_nans_and_varints canonical) {
+    visit(type, to_comparable_bytes_visitor{serialized_bytes_view, out, canonical});
 }
 
-comparable_bytes::comparable_bytes(const abstract_type& type, managed_bytes_view serialized_bytes_view) {
+comparable_bytes::comparable_bytes(const abstract_type& type, managed_bytes_view serialized_bytes_view, canonical_nans_and_varints canonical) {
     bytes_ostream encoded_bytes_ostream;
-    to_comparable_bytes(type, serialized_bytes_view, encoded_bytes_ostream);
+    to_comparable_bytes(type, serialized_bytes_view, encoded_bytes_ostream, canonical);
     _encoded_bytes = std::move(encoded_bytes_ostream).to_managed_bytes();
 }
 
@@ -1559,7 +1569,8 @@ static bool has_encoding_for_zero_sized_value(const abstract_type& type) {
 }
 
 template <allow_prefixes AllowPrefixes>
-comparable_bytes comparable_bytes_from_compound(const compound_type<AllowPrefixes>& p, managed_bytes_view representation, std::byte terminator) {
+comparable_bytes comparable_bytes_from_compound(const compound_type<AllowPrefixes>& p, managed_bytes_view representation, std::byte terminator,
+        canonical_nans_and_varints canonical) {
     bytes_ostream out;
     auto t_it = p.types().begin();
     const auto t_end = p.types().end();
@@ -1593,7 +1604,7 @@ comparable_bytes comparable_bytes_from_compound(const compound_type<AllowPrefixe
         } else {
             constexpr std::byte col_separator = std::byte(0x40);
             out.write(bytespan_to_bytesview(object_representation(col_separator)));
-            to_comparable_bytes(type, mbv, out);
+            to_comparable_bytes(type, mbv, out, canonical);
         }
         ++c_it;
         ++t_it;
@@ -1601,8 +1612,10 @@ comparable_bytes comparable_bytes_from_compound(const compound_type<AllowPrefixe
     out.write(bytespan_to_bytesview(object_representation(terminator)));
     return std::move(out).to_managed_bytes();
 }
-template comparable_bytes comparable_bytes_from_compound<allow_prefixes::yes>(const compound_type<allow_prefixes::yes>&, managed_bytes_view, std::byte);
-template comparable_bytes comparable_bytes_from_compound<allow_prefixes::no>(const compound_type<allow_prefixes::no>&, managed_bytes_view, std::byte);
+template comparable_bytes comparable_bytes_from_compound<allow_prefixes::yes>(const compound_type<allow_prefixes::yes>&, managed_bytes_view, std::byte,
+        canonical_nans_and_varints);
+template comparable_bytes comparable_bytes_from_compound<allow_prefixes::no>(const compound_type<allow_prefixes::no>&, managed_bytes_view, std::byte,
+        canonical_nans_and_varints);
 
 comparable_bytes comparable_bytes_from_legacy_partition_key(const compound_type<allow_prefixes::no>& t, managed_bytes_view v, std::byte terminator) {
     bytes_ostream out;
@@ -1612,7 +1625,8 @@ comparable_bytes comparable_bytes_from_legacy_partition_key(const compound_type<
 
     auto legacy_form = to_legacy(t, v);
     auto legacy_form_view = managed_bytes_view(legacy_form);
-    to_comparable_bytes(*bytes_type, legacy_form_view, out);
+    // The encoding of a blob has always been canonical.
+    to_comparable_bytes(*bytes_type, legacy_form_view, out, canonical_nans_and_varints::yes);
 
     out.write(bytespan_to_bytesview(object_representation(terminator)));
 
