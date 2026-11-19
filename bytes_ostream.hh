@@ -139,7 +139,7 @@ private:
     // The region is accounted for as already written.
     // size must not be zero. Throws std::length_error past 4 GiB.
     [[gnu::always_inline]]
-    value_type* alloc(size_type size) {
+    value_type* alloc(size_t size) {
         if (size <= current_space_left()) [[likely]] {
             auto ret = _current->data + _current->frag_size;
             _current->frag_size += size;
@@ -150,7 +150,7 @@ private:
         }
     }
     [[gnu::noinline]]
-    value_type* alloc_new(size_type size) {
+    value_type* alloc_new(size_t size) {
             // Cap chunk capacity at the 32-bit headroom so fast-path writes can't wrap _size.
             size_type headroom = std::numeric_limits<size_type>::max() - _size;
             if (size > headroom) {
@@ -246,7 +246,7 @@ public:
     }
 
     [[gnu::always_inline]]
-    value_type* write_place_holder(size_type size) {
+    value_type* write_place_holder(size_t size) {
         return alloc(size);
     }
 
