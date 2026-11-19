@@ -24,5 +24,13 @@ Migrate to ScyllaDB
   :class: my-panel
 
   * :doc:`Migration tools overview <mig-tool-review>` - Overview of all tools available.
-  * `Spark Migrator <https://github.com/scylladb/scylla-migrator>`_ - for  migrating from CQL to CQL
+  * `ScyllaDB Migrator <https://migrator.docs.scylladb.com/>`_ - for migrating from CQL to CQL and from DynamoDB to ScyllaDB Alternator
   * :doc:`SSTable Loader </operating-scylla/admin-tools/sstableloader/>` - for migrating SSTables to CQL
+
+.. panel-box::
+  :title: Migrate from DynamoDB
+  :id: "getting-started"
+  :class: my-panel
+
+  * `Migrate from DynamoDB to ScyllaDB <https://developers.scylladb.com/stable/getting-started/dynamodb/guides/migration/index.html>`_ - Migration guide for moving DynamoDB applications to ScyllaDB Alternator
+  * `Migrate from DynamoDB with ScyllaDB Migrator <https://migrator.docs.scylladb.com/stable/migrate-from-dynamodb.html>`_ - How to migrate DynamoDB tables to ScyllaDB Alternator with ScyllaDB Migrator
