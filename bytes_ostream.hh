@@ -16,6 +16,8 @@
 #include <algorithm>
 #include <bit>
 #include <concepts>
+#include <limits>
+#include <stdexcept>
 #include <ranges>
 
 
@@ -127,15 +129,15 @@ private:
     //   - try to double each time to prevent too many allocations
     //   - should not exceed max_alloc_size, unless data_size requires so
     //   - will be power-of-two so the allocated memory can be fully utilized.
-    size_type next_alloc_size(size_t data_size) const {
+    size_t next_alloc_size(size_t data_size) const {
         auto next_size = std::max<size_type>(_current ? _current->size * 2 : 0, _initial_chunk_size);
         next_size = std::min(next_size, max_alloc_size());
-        auto r = std::max<size_type>(next_size, data_size + sizeof(chunk));
+        auto r = std::max<size_t>(next_size, data_size + sizeof(chunk));
         return std::bit_ceil(r);
     }
     // Makes room for a contiguous region of given size.
     // The region is accounted for as already written.
-    // size must not be zero.
+    // size must not be zero. Throws std::length_error past 4 GiB.
     [[gnu::always_inline]]
     value_type* alloc(size_type size) {
         if (size <= current_space_left()) [[likely]] {
@@ -149,7 +151,12 @@ private:
     }
     [[gnu::noinline]]
     value_type* alloc_new(size_type size) {
-            auto alloc_size = next_alloc_size(size);
+            // Cap chunk capacity at the 32-bit headroom so fast-path writes can't wrap _size.
+            size_type headroom = std::numeric_limits<size_type>::max() - _size;
+            if (size > headroom) {
+                throw std::length_error("bytes_ostream: size exceeds 4 GiB");
+            }
+            auto alloc_size = std::min(next_alloc_size(size), headroom + sizeof(chunk));
             auto space = malloc(alloc_size);
             if (!space) {
                 throw std::bad_alloc();
