@@ -2806,12 +2806,18 @@ SEASTAR_TEST_CASE(test_dropped_table_has_no_keyspace) {
         const auto token = dht::token::from_int64(0);
         const auto foreign_shard = this_smp_shard_count();
         BOOST_REQUIRE(table->tablet_routing_info_for(token, foreign_shard));
+        const auto forced = table->tablet_routing_info_v2_for(token, std::nullopt);
+        BOOST_REQUIRE(forced);
+        const auto mismatching = locator::tablet_version_block{(forced->hash.value() & 0x0f) ^ 0x0f};
+        BOOST_REQUIRE(table->tablet_routing_info_v2_for(token, mismatching));
 
         e.execute_cql("drop table ks.cf;").get();
 
         BOOST_REQUIRE(!table->get_keyspace());
         BOOST_REQUIRE(!table->as_data_dictionary().keyspace());
         BOOST_REQUIRE(!table->tablet_routing_info_for(token, foreign_shard));
+        BOOST_REQUIRE(!table->tablet_routing_info_v2_for(token, std::nullopt));
+        BOOST_REQUIRE(!table->tablet_routing_info_v2_for(token, mismatching));
     }, cfg);
 }
 

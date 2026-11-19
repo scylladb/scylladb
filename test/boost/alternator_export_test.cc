@@ -1014,6 +1014,7 @@ public:
         _exec.start(
             std::ref(e.gossiper()),
             std::ref(e.get_storage_proxy()),
+            std::ref(e.get_storage_service()),
             std::ref(_dicts),
             std::ref(e.migration_manager()),
             std::ref(e.get_system_distributed_keyspace()),
@@ -1038,7 +1039,7 @@ public:
         std::unique_ptr<audit::audit_info_alternator> ai;
         auto result = _exec.local().create_table(cs, ts, empty_service_permit(),
             std::move(request), ai).get();
-        if (auto* err = std::get_if<alternator::api_error>(&result)) {
+        if (auto* err = std::get_if<alternator::api_error>(&result.response)) {
             BOOST_FAIL(fmt::format("CreateTable failed: {}", err->what()));
         }
     }
@@ -1053,8 +1054,8 @@ public:
         tracing::trace_state_ptr ts;
         std::unique_ptr<audit::audit_info_alternator> ai;
         auto result = co_await _exec.local().put_item(cs, ts, empty_service_permit(),
-            std::move(request), ai);
-        if (auto* err = std::get_if<alternator::api_error>(&result)) {
+            std::move(request), ai, std::nullopt);
+        if (auto* err = std::get_if<alternator::api_error>(&result.response)) {
             BOOST_FAIL(fmt::format("PutItem failed: {}", err->what()));
         }
     }
@@ -1064,8 +1065,8 @@ public:
         tracing::trace_state_ptr ts;
         std::unique_ptr<audit::audit_info_alternator> ai;
         auto result = co_await _exec.local().delete_item(cs, ts, empty_service_permit(),
-            std::move(request), ai);
-        if (auto* err = std::get_if<alternator::api_error>(&result)) {
+            std::move(request), ai, std::nullopt);
+        if (auto* err = std::get_if<alternator::api_error>(&result.response)) {
             BOOST_FAIL(fmt::format("DeleteItem failed: {}", err->what()));
         }
     }

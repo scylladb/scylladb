@@ -213,12 +213,17 @@ const locator::tablet_replica* replica_set_view::find_replica(const locator::tab
 
 locator::tablet_replica_set replica_set_view::materialize() const {
     locator::tablet_replica_set replicas;
+    materialize_into(replicas);
+    return replicas;
+}
+
+void replica_set_view::materialize_into(locator::tablet_replica_set& replicas) const {
     replicas.reserve(_base.size() + (_extra ? 1 : 0));
+    replicas.clear();
     replicas.insert(replicas.end(), _base.begin(), _base.end());
     if (_extra) {
         replicas.push_back(*_extra);
     }
-    return replicas;
 }
 
 static replica_set_view current_set(const locator::tablet_info& tinfo) {
@@ -291,6 +296,37 @@ replica_set_view serving_replicas(const locator::tablet_info& tinfo, const locat
     }
     on_internal_error(logger, format("serving_replicas: unexpected transition stage {} "
             "of a strongly consistent tablet", trinfo->stage));
+}
+
+std::optional<locator::tablet_routing_info_v2> make_tablet_routing_info_v2(
+        const locator::tablet_map& map, locator::tablet_id tablet, replica_set_view serving,
+        locator::host_id leader, std::optional<locator::tablet_version_block> block) {
+    // Preparation is synchronous and never yields. Reuse storage across matching
+    // checks, including RF>3 and transitions exceeding the inline capacity.
+    // A refresh transfers the buffer to its response; no placement or leader
+    // state is cached, so each check still reflects its caller's snapshot.
+    static thread_local locator::tablet_replica_set replicas;
+    serving.materialize_into(replicas);
+    std::ranges::sort(replicas);
+    const auto leader_it = std::ranges::find(replicas, leader, &locator::tablet_replica::host);
+    if (leader_it == replicas.end()) [[unlikely]] {
+        const auto* transition = map.get_tablet_transition_info(tablet);
+        on_internal_error(logger, fmt::format("make_tablet_routing_info_v2: leader {} is not among the serving "
+                "replicas {} of tablet {}{}", leader, replicas, tablet,
+                transition ? fmt::format(" at stage {}", transition->stage) : ""));
+    }
+    std::ranges::rotate(replicas, leader_it);
+    const auto hash = locator::internal::hash_replica_list(replicas);
+    if (block && locator::compare_tablet_version_block(hash, *block)) [[likely]] {
+        return std::nullopt;
+    }
+    const auto first = tablet == map.first_tablet() ? dht::minimum_token()
+            : map.get_last_token(locator::tablet_id(size_t(tablet) - 1));
+    return locator::tablet_routing_info_v2 {
+        .tablet_replicas = std::move(replicas),
+        .token_range = {first, map.get_last_token(tablet)},
+        .hash = hash,
+    };
 }
 
 // Answers, for one request to a strongly consistent tablet, which replicas the request
@@ -378,30 +414,7 @@ public:
     // serving set; callers check that.
     std::optional<locator::tablet_routing_info_v2> routing_info(locator::host_id leader,
             locator::tablet_version_block block) const {
-        auto replicas = _serving.materialize();
-        std::ranges::sort(replicas);
-        const auto leader_it = std::ranges::find(replicas, leader, &locator::tablet_replica::host);
-        if (leader_it == replicas.end()) [[unlikely]] {
-            on_internal_error(logger, fmt::format("replica_selector::routing_info: leader {} is not among the serving "
-                    "replicas {} of tablet {}{}", leader, replicas, _tablet_id, stage_suffix()));
-        }
-        std::ranges::rotate(replicas, leader_it);
-
-        const auto hash = locator::internal::hash_replica_list(replicas);
-        if (locator::compare_tablet_version_block(hash, block)) [[likely]] {
-            return std::nullopt;
-        }
-
-        const dht::token first_token = (_tablet_id == _tablet_map.first_tablet())
-                ? dht::minimum_token()
-                : _tablet_map.get_last_token(locator::tablet_id(size_t(_tablet_id) - 1));
-        const dht::token last_token = _tablet_map.get_last_token(_tablet_id);
-
-        return locator::tablet_routing_info_v2{
-            .tablet_replicas = std::move(replicas),
-            .token_range = std::make_pair(first_token, last_token),
-            .hash = hash,
-        };
+        return make_tablet_routing_info_v2(_tablet_map, _tablet_id, _serving, leader, block);
     }
 };
 

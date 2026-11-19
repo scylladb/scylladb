@@ -49,6 +49,8 @@ public:
     }
 
     locator::tablet_replica_set materialize() const;
+    // Reuse the output's allocation, preserving it if reserving fails.
+    void materialize_into(locator::tablet_replica_set& replicas) const;
 };
 
 // The serving set of a strongly consistent tablet at the stage its migration is in:
@@ -63,5 +65,12 @@ public:
 // that can be live at once are nested, so a request is served within two routing hops.
 // See "Strongly-consistent tablets" in docs/dev/topology-over-raft.md.
 replica_set_view serving_replicas(const locator::tablet_info& tinfo, const locator::tablet_transition_info* trinfo);
+
+/// Prepare SC V2 information from the serving set, with its known leader first.
+/// The leader must belong to the serving set. An empty block forces refresh;
+/// a matching block returns nullopt.
+std::optional<locator::tablet_routing_info_v2> make_tablet_routing_info_v2(
+        const locator::tablet_map& map, locator::tablet_id tablet, replica_set_view serving,
+        locator::host_id leader, std::optional<locator::tablet_version_block> block);
 
 } // namespace service::strong_consistency

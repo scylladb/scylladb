@@ -218,3 +218,215 @@ in the CreateTable operation. The value of this tag can be:
 The `system:initial_tablets` tag only has any effect while creating
 a new table with CreateTable - changing it later has no effect.
 
+
+## Tablet routing hints (HTTP protocol 2)
+
+Clients may opt in to tablet-routing V2 metadata on `GetItem`, `PutItem`,
+`UpdateItem`, `DeleteItem`, and base-table `Query`. Ordinary tablet-backed
+Alternator tables, including LWT writes, return regular placement metadata
+without enabling experimental strongly consistent tables. Global Raft-backed
+strongly consistent (SC) tables return leader-first SC routing metadata when
+their current serving group and leader are available. Such tables require
+the existing `strongly-consistent-tables` experimental feature. Local SC
+mode is not currently supported by ScyllaDB.
+
+This extension reports routing metadata only. It preserves Alternator's
+existing data execution and consistency behavior; it does not dispatch data
+operations through the Raft SC coordinator or add SC conditional or
+read-modify-write support. `mode=strong` identifies the table's routing
+metadata, not a new execution guarantee. `ConsistentRead=True` and LWT on an
+ordinary table still use regular routing. Index queries, vnode tables,
+scans, and batches are outside this extension's scope.
+
+### Request grammar
+
+`X-Scylla-T-V` is a short alias for `X-Scylla-Tablet-Version`. Both names
+accept the same values and are case-insensitive:
+
+```text
+X-Scylla-T-V: 2:-
+```
+
+```text
+X-Scylla-Tablet-Version: 2:-
+```
+
+`2:-` requests current routing information without a cached version. A client
+with a cached version sends `2:` followed by exactly two hexadecimal digits:
+
+```text
+X-Scylla-Tablet-Version: 2:dc
+```
+
+The high nibble (`d`, decimal 13) selects one of the 16 four-bit blocks of the
+cached 64-bit version. The low nibble (`c`, decimal 12) is that block's expected
+value. Blocks are numbered from the least significant nibble (index 0) to the
+most significant nibble (index 15). The server returns information only when
+the requested block differs from its current version. Uppercase hex is also
+accepted.
+
+The prefix is an unsigned decimal protocol number followed by `:`. Leading
+zeroes are accepted. Unsupported numeric protocol versions are ignored, and
+their suffixes are left uninterpreted. For version 2, the suffix must be `-`
+or two hex digits. Surrounding HTTP whitespace (space and tab) is trimmed;
+internal whitespace and trailing data are invalid. If neither header name is
+present, the extension is disabled; a present empty value is invalid.
+Malformed syntax on one of the five operations produces `ValidationException`
+before executing it. Other operations ignore the extension, including
+malformed values. Header names are case-insensitive. The setting applies to
+one request, never to its HTTP connection.
+
+If both names are present, they must specify the same request after parsing.
+Equivalent whitespace, hexadecimal case and leading protocol zeroes are
+accepted; malformed or conflicting values produce `ValidationException`
+before executing the operation. If both values use unsupported protocols,
+both are ignored as usual.
+
+Valid requests on unsupported table types or index queries execute normally
+and return no routing header. Older servers can ignore the request header.
+
+### Response grammar
+
+A successful eligible operation can include:
+
+```text
+X-Scylla-Tablet-Info: 2;start=-1000;end=2000;version=9f32a761bc0051de;mode=regular;replicas="11111111-1111-4111-8111-111111111111/3 22222222-2222-4222-8222-222222222222/1"
+```
+
+Fields always appear in this order:
+
+- `2` is the HTTP hint protocol version.
+- `start` and `end` are signed decimal token bounds for `(start, end]`, using
+  the same conventions as CQL routing V2. The first range starts at
+  `-9223372036854775808`.
+- `version` is the complete unsigned 64-bit tablet version, exactly 16
+  lowercase hexadecimal digits, including leading zeroes.
+- `mode=regular` describes ordinary tablet replication, including LWT and
+  `ConsistentRead=True` on ordinary tables. `mode=strong` describes global
+  Raft SC routing metadata.
+- `replicas` is a quoted, space-separated list of canonical node UUIDs and
+  unsigned decimal shard numbers, separated by `/`. It preserves the exact
+  order of the shared routing V2 implementation. Regular metadata contains
+  the complete placement set. SC metadata contains the current serving set,
+  including the replicas eligible to serve during tablet transitions, with
+  the current Raft leader first. Both retain replicas across data centers.
+  There is no separate `leader` field. No addresses or ports are included.
+
+Only successful responses carry this header, including missing-item reads
+and empty queries. Authentication, authorization, validation, conditional
+check, and backend errors carry none. Buffered, streamed, gzip, and deflate
+responses use the same header. CORS exposes it to browser clients.
+
+Hints are advisory: topology can change after metadata is collected, and a
+late streaming failure cannot retract headers already sent. Absence of the
+header must never cause the data operation to fail.
+
+SC metadata comes only from the receiving node's own state; it never
+contacts another node. A serving replica uses its group's current Raft
+leader, possibly from another local shard. A node that is not a serving
+replica returns a hint only if it already knows the group's leader from an
+earlier CQL redirect handled on the same shard; otherwise it omits the hint.
+Collection overlaps authorized
+data execution; metadata is attached only after that operation succeeds and
+the table is checked again. It performs no extra data read,
+Raft read barrier, or wait for group startup. An unavailable or restarting
+group, unknown leader, stale forwarding destination, or lookup
+deadline suppresses the hint while preserving the data operation's result.
+The backend lookup deadline is one second, or `alternator_timeout_in_ms` if
+that is shorter. Once data execution succeeds,
+the response waits by default at most another 50 milliseconds for unfinished metadata;
+then it omits the hint. Metadata that is already available adds no wait.
+The live configuration option `alternator_tablet_routing_wait_timeout_in_ms`
+controls that additional wait (default: `50`). Set it to `0` to include only
+metadata already available when data execution completes. This can improve
+latency when metadata is slow, at the cost of omitting more routing hints.
+Each requesting shard admits at most 32 concurrent SC metadata lookups. When this
+advisory capacity is occupied, another operation omits its hint immediately
+rather than queueing its completed response. Capacity stays occupied until
+the underlying lookup finishes, even if the HTTP caller's wait times out.
+The ordinary-table metadata path remains local and synchronous.
+
+### Discovering UUIDs and addresses
+
+Use the existing authenticated Alternator `Scan` API on both:
+
+```text
+.scylla.alternator.system.local
+.scylla.alternator.system.peers
+```
+
+Read `host_id`, `rpc_address`, `data_center`, and `rack`, following
+`LastEvaluatedKey` pagination until exhausted. Combine the local row and peer
+rows into a map from UUID (`host_id`) to connection information. Use the
+client's configured Alternator scheme and port, together with its address
+translation policy. CQL discovery metadata does not specify an Alternator
+port. Refresh discovery when a hinted UUID is unknown or its connection
+fails. For regular metadata, clients can choose replicas in their own data
+center while retaining the complete replica list in the routing cache.
+For strong metadata, leader-first selection can name a replica in another
+data center.
+
+Shard numbers identify tablet placement; this extension does not establish
+shard-specific HTTP connections. For `mode=strong`, the first replica names
+the current Raft leader without a separate leader field. This routing hint
+does not change how Alternator executes a data operation.
+
+### Client algorithm
+
+Token calculation must use Alternator's partition-key encoding followed by
+ScyllaDB's partitioner. String keys use UTF-8; binary keys use their decoded
+bytes, not their base64 JSON representation. Numeric keys use Alternator's
+serialized decimal representation, not their JSON text. Reuse a compatible
+Alternator token-calculation implementation; hashing JSON or CQL's textual
+representation is incorrect. Sort keys do not affect the partition token.
+This HTTP extension does not define a second token-calculation algorithm.
+Keep routing caches separate for each cluster and base table.
+
+```text
+identities = scan_all_pages(system.local) + scan_all_pages(system.peers)
+
+for each supported data request:
+    routing_cache = caches[(cluster_identity, base_table_name)]
+    token = alternator_partition_token(partition_key)
+    entry = routing_cache.find(token)
+    if entry is absent:
+        request_header = "2:-"
+    else:
+        i = entry.next_block_index
+        block = (i << 4) | ((entry.version >> (4 * i)) & 15)
+        request_header = "2:" + two_hex_digits(block)
+        entry.next_block_index = (i + 1) % 16
+
+    if entry exists and entry.mode == "strong":
+        endpoint = resolve(entry.replicas[0], identities)
+    else:
+        endpoint = choose_replica(entry, identities, configured_dc)
+    if endpoint is unavailable:
+        endpoint = existing_endpoint_selection_policy()
+    response = execute(endpoint, request_header)
+
+    if response succeeded and has a valid tablet-info header:
+        hint = parse_header(response)
+        remove every cached range overlapping (hint.start, hint.end]
+        insert hint, with next_block_index = 0
+    if a hinted UUID is unknown or its connection failed:
+        refresh identities through the system-table scans
+```
+
+Discard uncovered fragments of removed cache entries and rediscover them on
+demand. Do not retain fragments with the removed entry's version and replica
+list. If discovery or direct routing is unavailable, keep the client's
+existing endpoint-selection policy.
+
+A matching four-bit block can temporarily conceal stale routing: different
+versions can have the same nibble at a particular index. Cycling through all
+16 indices checks the full version over successive requests. The version
+hash for regular metadata describes replica identities and shards; split
+and merge operations can preserve it when replicas remain unchanged even
+though bounds change.
+Clients may request `2:-` to refresh bounds unconditionally. For SC metadata,
+the leader-first order participates in the hash: a leadership change can
+change the version even when replica identities, shards, and bounds remain
+unchanged. Clients must preserve this order when caching or comparing
+entries. A forced refresh can still have no SC hint while no usable leader
+is known.
