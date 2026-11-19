@@ -14,6 +14,7 @@
 #include <seastar/core/shared_ptr.hh>
 
 #include "cql3/CqlParser.hpp"
+#include "cql3/cql_statement.hh"
 #include "cql3/role_options.hh"
 #include "cql3/statements/raw/parsed_statement.hh"
 #include "cql3/util.hh"
@@ -355,4 +356,54 @@ BOOST_AUTO_TEST_CASE(create_role_with_hashed_no_quotation_marks) {
     BOOST_REQUIRE_THROW(
         cql3::util::do_with_parser("CREATE ROLE jane WITH HASHED = something;", cql3::dialect{}, std::mem_fn(&cql3_parser::CqlParser::query)),
         exceptions::syntax_exception);
+}
+
+/// Returns `cql_query` with the credentials of the role statement it holds masked.
+static sstring mask_secrets(std::string_view cql_query) {
+    auto stmt = test_valid(cql_query);
+    return dynamic_cast<cql3::cql_statement&>(*stmt).mask_secrets(sstring(cql_query));
+}
+
+// A password is masked wherever it is in the statement and however it is
+// written, since the statement's text goes to the audit log and to log
+// messages.
+BOOST_AUTO_TEST_CASE(mask_role_secrets) {
+    BOOST_REQUIRE_EQUAL(mask_secrets("CREATE ROLE r WITH PASSWORD = 'secret' AND LOGIN = true;"),
+            "CREATE ROLE r WITH PASSWORD = '***' AND LOGIN = true;");
+    BOOST_REQUIRE_EQUAL(mask_secrets("ALTER ROLE r WITH LOGIN = true AND PASSWORD = 'secret';"),
+            "ALTER ROLE r WITH LOGIN = true AND PASSWORD = '***';");
+    BOOST_REQUIRE_EQUAL(mask_secrets("CREATE USER u WITH PASSWORD 'secret' SUPERUSER;"),
+            "CREATE USER u WITH PASSWORD '***' SUPERUSER;");
+    BOOST_REQUIRE_EQUAL(mask_secrets("ALTER USER u WITH PASSWORD 'secret';"),
+            "ALTER USER u WITH PASSWORD '***';");
+    BOOST_REQUIRE_EQUAL(mask_secrets("CREATE ROLE r WITH HASHED PASSWORD = '$2a$05$ae4qyC7lYe47n8K2f/fgKuW/TCRCCpEvcYrA4Dl14VYJAjAEz3tli';"),
+            "CREATE ROLE r WITH HASHED PASSWORD = '***';");
+
+    // An empty password, a quote in a password, and pg-style quotes.
+    BOOST_REQUIRE_EQUAL(mask_secrets("CREATE ROLE r WITH PASSWORD = '';"), "CREATE ROLE r WITH PASSWORD = '***';");
+    BOOST_REQUIRE_EQUAL(mask_secrets("CREATE ROLE r WITH PASSWORD = 'it''s';"), "CREATE ROLE r WITH PASSWORD = '***';");
+    BOOST_REQUIRE_EQUAL(mask_secrets("CREATE ROLE r WITH PASSWORD = $$se$cret$$;"), "CREATE ROLE r WITH PASSWORD = '***';");
+    BOOST_REQUIRE_EQUAL(mask_secrets("CREATE ROLE r WITH PASSWORD = $$$$;"), "CREATE ROLE r WITH PASSWORD = '***';");
+
+    // Spelling, spacing and comments around the password do not matter, and
+    // a quote in a comment or in an identifier does not start a literal.
+    BOOST_REQUIRE_EQUAL(mask_secrets("create role r with password='secret';"), "create role r with password='***';");
+    BOOST_REQUIRE_EQUAL(mask_secrets("CREATE ROLE r WITH /* c */ PASSWORD /* c */ = /* c */ 'secret';"),
+            "CREATE ROLE r WITH /* c */ PASSWORD /* c */ = /* c */ '***';");
+    BOOST_REQUIRE_EQUAL(mask_secrets("CREATE ROLE \"it's\" WITH PASSWORD = 'secret' -- don't\n;"),
+            "CREATE ROLE \"it's\" WITH PASSWORD = '***' -- don't\n;");
+    BOOST_REQUIRE_EQUAL(mask_secrets("CREATE ROLE r -- don't\rWITH PASSWORD = 'secret';"),
+            "CREATE ROLE r -- don't\rWITH PASSWORD = '***';");
+
+    // The OPTIONS map: only the values of PASSWORD keys are secrets.
+    BOOST_REQUIRE_EQUAL(mask_secrets("CREATE ROLE r WITH OPTIONS = {'password': 'secret', 'x': 'y'};"),
+            "CREATE ROLE r WITH OPTIONS = {'password': '***', 'x': 'y'};");
+    BOOST_REQUIRE_EQUAL(mask_secrets("ALTER ROLE r WITH OPTIONS = {$$PASSWORD$$: $$secret$$};"),
+            "ALTER ROLE r WITH OPTIONS = {$$PASSWORD$$: '***'};");
+    BOOST_REQUIRE_EQUAL(mask_secrets("ALTER ROLE r WITH PASSWORD = 'secret' AND OPTIONS = {'x': 'other'};"),
+            "ALTER ROLE r WITH PASSWORD = '***' AND OPTIONS = {'x': 'other'};");
+
+    // Statements without credentials are returned as they are.
+    BOOST_REQUIRE_EQUAL(mask_secrets("CREATE ROLE r WITH LOGIN = true;"), "CREATE ROLE r WITH LOGIN = true;");
+    BOOST_REQUIRE_EQUAL(mask_secrets("DROP ROLE r;"), "DROP ROLE r;");
 }

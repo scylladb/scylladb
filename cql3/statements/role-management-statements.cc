@@ -9,7 +9,6 @@
  */
 
 #include <algorithm>
-#include <regex>
 
 #include <seastar/core/when_all.hh>
 
@@ -135,12 +134,6 @@ create_role_statement::execute(query_processor&,
     co_return nullptr;
 }
 
-/// Prepends '\' to special characters in ECMAScript regex syntax.
-static sstring escape_for_regex(const sstring& text) {
-    static const std::regex escape_re(R"([.^$|()\[\]{}*+?\\])", std::regex_constants::ECMAScript);
-    return std::regex_replace(text.c_str(), escape_re, R"(\$&)");
-}
-
 static bool is_password_empty(const sstring& password) {
     // Empty passwords are stored as single char(-1) (&nbsp), NOT as empty strings.
     //
@@ -153,47 +146,89 @@ static bool is_password_empty(const sstring& password) {
     return password.size() == 1 && password[0] == static_cast<char>(-1);
 }
 
-/// Returns `text` with the single-quoted plaintext or hashed password
-/// `raw_password` replaced by '***'. A hashed password is a secret as well:
-/// it is the Alternator secret access key of the role.
-static sstring mask_password(const sstring& text, const sstring& raw_password) {
-    sstring password;
-    if (!is_password_empty(raw_password)) {
-        // Password needs escaping to be searchable literally:
-        password = escape_for_regex(raw_password);
+/// Returns `text` with every CQL string literal whose value is `value`
+/// replaced by '***', wherever it is and however it is written: in single
+/// quotes, with each quote in the value doubled, or in pg-style $$ quotes.
+/// Comments and quoted identifiers are copied as they are, so a quote in
+/// them does not start a literal. Masking by the literal's value, and not
+/// by the syntax around it, does not depend on how the statement is spelled.
+static sstring mask_literal(const sstring& text, const sstring& value) {
+    const std::string_view secret = is_password_empty(value) ? std::string_view() : std::string_view(value);
+    const std::string_view in(text);
+    std::string out;
+    out.reserve(in.size());
+    size_t i = 0;
+    // Returns the position after the `delim` which follows `from`, or the end of the text.
+    auto after = [&in] (std::string_view delim, size_t from) {
+        const auto pos = in.find(delim, from);
+        return pos == std::string_view::npos ? in.size() : pos + delim.size();
+    };
+    // Returns the position after the end of the line which starts at `from`,
+    // which the lexer ends at either a line feed or a carriage return.
+    auto after_line = [&in] (size_t from) {
+        const auto pos = in.find_first_of("\r\n", from);
+        return pos == std::string_view::npos ? in.size() : pos + 1;
+    };
+    // Returns the position after the quoted token which starts at `i`, where
+    // a doubled quote inside the token stands for a quote.
+    auto after_quoted = [&in, &i] (char quote) {
+        size_t j = i + 1;
+        while (j < in.size()) {
+            if (in[j] != quote) {
+                ++j;
+            } else if (j + 1 < in.size() && in[j + 1] == quote) {
+                j += 2;
+            } else {
+                return j + 1;
+            }
+        }
+        return in.size();
+    };
+    while (i < in.size()) {
+        const auto rest = in.substr(i);
+        size_t end;
+        std::optional<std::string> literal;
+        if (rest.starts_with("--") || rest.starts_with("//")) {
+            end = after_line(i);
+        } else if (rest.starts_with("/*")) {
+            end = after("*/", i + 2);
+        } else if (rest.starts_with("$$")) {
+            end = after("$$", i + 2);
+            literal = std::string(in.substr(i + 2, end - i - 4));
+        } else if (in[i] == '\'') {
+            end = after_quoted('\'');
+            literal = boost::replace_all_copy(std::string(in.substr(i + 1, end - i - 2)), "''", "'");
+        } else if (in[i] == '"') {
+            end = after_quoted('"');
+        } else {
+            end = i + 1;
+        }
+        if (literal && *literal == secret) {
+            out.append("'***'");
+        } else {
+            out.append(in.substr(i, end - i));
+        }
+        i = end;
     }
-    const std::regex re(R"(((WITH|AND)\s*(HASHED\s+)?PASSWORD\s*=?\s*)')" + std::string(password) + "'",
-            std::regex_constants::ECMAScript | std::regex_constants::icase);
-    return std::regex_replace(text.c_str(), re, "$1'***'");
+    return sstring(out);
 }
 
-/// A heuristic to mask the values of `OPTIONS' map in `text` when key is like "PASSWORD".
+/// Masks the values of the `OPTIONS` map whose key is like "PASSWORD".
 static sstring mask_password_options(sstring text, const std::map<sstring,sstring>& options) {
     for (const auto& [k, v] : options) {
-        const auto key_trimmed = boost::trim_copy(k);
-        if (!boost::iequals(key_trimmed, "PASSWORD")) { // Case-insensitive comp.
-            continue;
+        if (boost::iequals(boost::trim_copy(k), "PASSWORD")) { // Case-insensitive comp.
+            text = mask_literal(text, v);
         }
-        sstring password;
-        if (!is_password_empty(v)) {
-            // Password needs escaping to be searchable literally:
-            password = escape_for_regex(v);
-        }
-        // Now find the pattern of map element, like: "' PassWord ' : '1234vcxz!@#$'",
-        //   capture "' PassWord ' : " and match "'1234vcxz!@#$'"
-        const std::regex re(R"(('\s*)" + std::string(key_trimmed) + R"(\s*'\s*:\s*)')"
-                + std::string(password) + "'", std::regex_constants::ECMAScript);
-        text = std::regex_replace(text.c_str(), re, "$1'***'");
     }
     return text;
 }
 
 sstring create_role_statement::mask_secrets(sstring text) const {
     if (_options.password) {
-        text = mask_password(text, *_options.password);
+        text = mask_literal(text, *_options.password);
     }
     if (_options.hashed_password) {
-        text = mask_password(text, *_options.hashed_password);
+        text = mask_literal(text, *_options.hashed_password);
     }
     if (_options.options) {
         text = mask_password_options(std::move(text), *_options.options);
@@ -278,10 +313,10 @@ alter_role_statement::execute(query_processor&, service::query_state& state, con
 
 sstring alter_role_statement::mask_secrets(sstring text) const {
     if (_options.password) {
-        text = mask_password(text, *_options.password);
+        text = mask_literal(text, *_options.password);
     }
     if (_options.hashed_password) {
-        text = mask_password(text, *_options.hashed_password);
+        text = mask_literal(text, *_options.hashed_password);
     }
     if (_options.options) {
         text = mask_password_options(std::move(text), *_options.options);
