@@ -44,7 +44,6 @@ namespace sstables::trie {
 // Note: the trie-serialization format of partition keys is prefix-free,
 // which guarantees that only leaf nodes carry a payload.
 class bti_partition_index_writer_impl {
-    void write_last_key(size_t needed_prefix);
 public:
     bti_partition_index_writer_impl(sstable_version_types, bti_node_sink&, bti_position_encoding);
     bti_partition_index_writer_impl(bti_partition_index_writer_impl&&) = delete;
@@ -57,6 +56,8 @@ public:
         const sstables::key& first_key,
         const sstables::key& last_key);
 private:
+    void write_last_key(size_t needed_prefix, bool shares_chunk);
+
     // The lower trie-writing layer, oblivious to the semantics of the partition index.
     trie_writer<bti_node_sink> _wr;
     sstable_version_types _sst_ver;
@@ -67,6 +68,10 @@ private:
     // we want to trim the key to the shortest prefix which is still enough
     // to differentiate the key from its neighbours. For that, we need to see
     // the *next* entry first.
+    //
+    // In `mu`, the form of the payload also depends on the next entry: a key
+    // can refer to its Data.db chunk through the page's chunk table only if
+    // its partition shares the chunk with the previous or the next key.
     //
     // The first position in _last_key where it differs from its predecessor.
     // After we see the next entry, we will also know the first position where it differs
@@ -94,6 +99,9 @@ private:
     // determined how much `_last_key` can be trimmed.
     std::optional<bti_partition_index_target> _last_pos_payload;
     uint8_t _last_hash_bits;
+    // Whether the partition of _last_key starts in the same Data.db chunk as the
+    // partition of its predecessor (see same_data_chunk()).
+    bool _last_shares_chunk_with_prev = false;
     // Selects the payload format: physical (full chunk coordinates) or legacy
     // (variable-width pre-compression position). This is a per-sstable property,
     // so it is fixed at construction rather than derived from each payload.
@@ -151,9 +159,9 @@ static trie_payload make_physical_partition_payload_from_packed(uint8_t hash_bit
     return trie_payload(payload_size, {payload_bytes.data(), it});
 }
 
-// Builds the `mu` Data.db partition index payload: a hash byte followed by the
-// tag bits `10`, the chunk position, then the packed block count of the extent
-// and offset-within-chunk.
+// Builds the inline form of the `mu` Data.db partition index payload: a hash
+// byte followed by the tag bits `10`, the chunk position, then the packed block
+// count of the extent and offset-within-chunk.
 static trie_payload make_physical_data_partition_payload(
     uint8_t hash_bits,
     uint64_t chunk_position,
@@ -170,6 +178,28 @@ static trie_payload make_physical_data_partition_payload(
     return make_physical_partition_payload_from_packed(hash_bits, packed, packed_bytes);
 }
 
+// Builds the slot form of the `mu` Data.db partition index payload: a hash byte
+// followed by the tag bits `11`, the offset within the chunk, then a slot of the
+// page's chunk table in the low bti_slot_bits bits. The node sink fills in
+// the slot when it writes the node, so the slot is left zero here.
+static trie_payload make_physical_slot_partition_payload(
+    uint8_t hash_bits,
+    uint64_t chunk_position,
+    uint64_t block_count,
+    uint64_t offset_within_chunk,
+    const bti_physical_layout& layout
+) {
+    SCYLLA_ASSERT(offset_within_chunk < layout.uncompressed_chunk_length());
+    // Note 2 extra bits needed for the tag.
+    const auto packed_bytes = div_ceil(2 + layout.offset_within_chunk_bits() + bti_slot_bits, 8u);
+    unsigned __int128 packed = static_cast<unsigned __int128>(0b11) << (packed_bytes * 8 - 2);
+    packed |= static_cast<unsigned __int128>(offset_within_chunk) << bti_slot_bits;
+
+    auto payload = make_physical_partition_payload_from_packed(hash_bits, packed, packed_bytes);
+    payload._chunk = encode_bti_chunk_table_entry(chunk_position, block_count, layout.block_count_bits());
+    return payload;
+}
+
 // Builds the `mu` Rows.db partition index payload: a hash byte followed by a
 // clear flag bit and the Rows.db position.
 static trie_payload make_physical_rows_partition_payload(uint8_t hash_bits, uint64_t rows_position) {
@@ -179,12 +209,46 @@ static trie_payload make_physical_rows_partition_payload(uint8_t hash_bits, uint
     return make_physical_partition_payload_from_packed(hash_bits, rows_position, packed_bytes);
 }
 
+// Whether the partitions of two adjacent keys start in the same Data.db chunk.
+// Only with physical positions. A partition with a row index has no Data.db
+// position in the partition index, so it shares no chunk.
+static bool same_data_chunk(const bti_position_encoding& encoding, const bti_partition_index_target& a, const bti_partition_index_target& b) {
+    if (!encoding.is_physical()) {
+        return false;
+    }
+    const auto* a_pos = a.data_db();
+    const auto* b_pos = b.data_db();
+    return a_pos && b_pos && a_pos->as_physical().chunk_position == b_pos->as_physical().chunk_position;
+}
+
+// Whether keys in the given chunk, which share it with an adjacent key, should
+// refer to it through the page's chunk table.
+//
+// The chunk must fit in a table entry. Then the slot form pays off if the slot
+// payloads of two keys, together with one table entry, are smaller than their
+// inline payloads. It then pays off for any longer run of keys in the chunk too.
+// (A longer run can pay off where two keys don't. We don't look further ahead
+// to find out, because that only happens for chunks in the first 1-64 MiB of
+// Data.db, depending on the chunk length).
+static bool slot_pays_off(uint64_t chunk_position, const bti_physical_layout& layout) {
+    if (chunk_position > bti_max_table_chunk_position(layout.block_count_bits())) {
+        return false;
+    }
+    const auto inline_bytes = div_ceil(std::bit_width(chunk_position) + 2 + layout.packed_bits(), 8u);
+    const auto slot_bytes = div_ceil(2 + layout.offset_within_chunk_bits() + bti_slot_bits, 8u);
+    return 2 * inline_bytes > 2 * slot_bytes + bti_chunk_table_entry_size;
+}
+
 // Builds the partition index payload of either position encoding.
 // In `ms`/`mt`, Data.db positions are bit-negated, which is how the reader tells
 // them apart from Rows.db positions, which are serialized verbatim. In `mu`, the
 // top bits of the position field tell them apart.
 // See bti_partition_index_target.
-static trie_payload make_partition_payload(const bti_position_encoding& encoding, uint8_t hash_bits, const bti_partition_index_target& target) {
+//
+// `shares_chunk` says that the target is in the same Data.db chunk as the target
+// of an adjacent key. Then a `mu` payload can refer to the chunk through the
+// page's chunk table (see slot_pays_off()).
+static trie_payload make_partition_payload(const bti_position_encoding& encoding, uint8_t hash_bits, const bti_partition_index_target& target, bool shares_chunk) {
     const auto rows_pos = target.rows_db();
     if (!encoding.is_physical()) {
         const auto pos_payload = rows_pos
@@ -197,16 +261,17 @@ static trie_payload make_partition_payload(const bti_position_encoding& encoding
     }
     const auto pc = target.data_db()->as_physical();
     // extent_hint is a byte length; the index stores it as a block count.
+    const auto block_count = bti_extent_to_block_count(pc.chunk_position, pc.extent_hint);
+    if (shares_chunk && slot_pays_off(pc.chunk_position, encoding.layout())) {
+        return make_physical_slot_partition_payload(
+            hash_bits, pc.chunk_position, block_count, pc.offset_within_chunk, encoding.layout());
+    }
     return make_physical_data_partition_payload(
-        hash_bits,
-        pc.chunk_position,
-        bti_extent_to_block_count(pc.chunk_position, pc.extent_hint),
-        pc.offset_within_chunk,
-        encoding.layout());
+        hash_bits, pc.chunk_position, block_count, pc.offset_within_chunk, encoding.layout());
 }
 
-void bti_partition_index_writer_impl::write_last_key(size_t needed_prefix) {
-    trie_payload payload = make_partition_payload(_encoding, _last_hash_bits, *_last_pos_payload);
+void bti_partition_index_writer_impl::write_last_key(size_t needed_prefix, bool shares_chunk) {
+    trie_payload payload = make_partition_payload(_encoding, _last_hash_bits, *_last_pos_payload, shares_chunk);
 
     size_t i = 0;
     for (auto frag : **_last_key) {
@@ -255,9 +320,11 @@ void bti_partition_index_writer_impl::add(const schema& s, dht::decorated_key dk
         // and `mismatch` (mismatch position between `_last_key` and its successor),
         // compute the minimal needed prefix of `_last_key`.
         size_t needed_prefix = std::max(_last_key_mismatch, mismatch) + 1;
-        write_last_key(needed_prefix);
+        const bool shares_chunk_with_next = same_data_chunk(_encoding, *_last_pos_payload, pos_payload);
+        write_last_key(needed_prefix, _last_shares_chunk_with_prev || shares_chunk_with_next);
         // Update _last_* variables with the new key.
         _last_key_mismatch = mismatch;
+        _last_shares_chunk_with_prev = shares_chunk_with_next;
     }
     _added_keys += 1;
     // Update _last_* variables with the new entry.
@@ -272,7 +339,7 @@ std::optional<bti_partitions_db_footer> bti_partition_index_writer_impl::finish(
 ) {
     if (_added_keys > 0) {
         size_t needed_prefix = _last_key_mismatch + 1;
-        write_last_key(needed_prefix);
+        write_last_key(needed_prefix, _last_shares_chunk_with_prev);
     } else {
         return std::nullopt;
     }

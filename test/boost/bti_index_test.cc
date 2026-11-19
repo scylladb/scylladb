@@ -224,7 +224,7 @@ static std::vector<std::byte> linearize(const memory_data_sink_buffers& bufs) {
 // Describes the pages of an index file with page footers, for comparison in tests.
 // Checks the CRC32 of each page. For each page, lists the usable area in hex,
 // with each run of 16 or more zero bytes replaced by "<N zeros>", then the chunk
-// table, which is empty.
+// table entries by slot.
 static std::string describe_pages(std::span<const std::byte> file) {
     using namespace sstables::trie;
     BOOST_REQUIRE_EQUAL(file.size() % BTI_PAGE_SIZE, 0);
@@ -248,9 +248,11 @@ static std::string describe_pages(std::span<const std::byte> file) {
                 ++i;
             }
         }
-        // The chunk tables are empty for now.
-        BOOST_REQUIRE_EQUAL(view.table_size(), 0);
-        result += " [table] ";
+        result += " [table]";
+        for (unsigned slot = 0; slot < view.table_size(); ++slot) {
+            result += fmt::format(" {:010x}", view.table_entry(slot));
+        }
+        result += " ";
     }
     return result;
 }
@@ -404,13 +406,22 @@ SEASTAR_THREAD_TEST_CASE(test_mu_index_payload_encoding) {
             {.first_ck = 3, .last_ck = 4, .start = pos(1700, 600, 10), .range_tombstone_before_first_ck = {123, 456}},
         }},
         {.token = 3, .start = pos(0x123456789a, 1500, 4095), .end = pos(0x123456789a + 1500, 1000, 50), .partition_tombstone = live},
+        // Partitions 4, 5 and 6 share a chunk. For this chunk, 2 slot payloads
+        // (3 bytes each) and a table entry (5 bytes) are smaller than 2 inline
+        // payloads (7 bytes each), so they refer to the chunk through the chunk
+        // table. The chunk position must fit in a table entry, so it is below
+        // 2^36, and thus below the chunk position of partition 3. The writer
+        // doesn't check that positions grow.
+        {.token = 4, .start = pos(0x123457000, 1000, 100), .end = pos(0x123457000, 1000, 1999), .partition_tombstone = live},
+        {.token = 5, .start = pos(0x123457000, 1000, 2000), .end = pos(0x123457000, 1000, 2999), .partition_tombstone = live},
+        {.token = 6, .start = pos(0x123457000, 1000, 3000), .end = pos(0x123457000, 1000, 3999), .partition_tombstone = live},
     };
     // With L = 4096, LO has W_N = 4 bits of N - 1 and W_O = 12 bits of O.
     auto files = write_index_for_payload_test(
         sstables::sstable_version_types::mu,
         sstables::trie::bti_position_encoding::physical(sstables::framed_chunk_codec::for_framed_chunks(4096)),
         partitions);
-    // Each page is described as its usable area, then its (empty) chunk table.
+    // Each page is described as its usable area, then its chunk table.
     // The CRC32 of each page is checked by describe_pages().
     // The payload field of a partition payload is the payload size.
     BOOST_CHECK_EQUAL(files.partitions_db,
@@ -422,16 +433,24 @@ SEASTAR_THREAD_TEST_CASE(test_mu_index_payload_encoding) {
         "02" "c1" "24"
         // Partition 3: (C, N, O) = (0x123456789a, 4, 4095).
         "08" "9f" "923456789a3fff"
+        // Partition 4: (C, N, O) = (0x123457000, 2, 100). It shares its chunk with
+        // partitions 5 and 6. V is the tag bits 11, O, and slot 0 in the low 9 bits.
+        "04" "21" "c0c800"
+        // Partition 5: (C, N, O) = (0x123457000, 2, 2000), also in slot 0.
+        "04" "03" "cfa000"
+        // Partition 6: (C, N, O) = (0x123457000, 2, 3000), also in slot 0.
+        "04" "16" "d77000"
         // The trie nodes for the token bytes, from the leaves to the root.
-        "50" "03" "010203" "110c09"
-        "1800" "1200" "1200" "1200" "1200" "1200" "1280" "1240"
+        "50" "06" "010203040506" "201b180f0a05"
+        "1e00" "1200" "1200" "1200" "1200" "1200" "1280" "1240"
         // The trailer: the first and last keys, then padding, then the fixed tail,
-        // which ends at the chunk table: the key position (0x29), the partition
+        // which ends at the chunk table: the key position (0x3e), the partition
         // count and the root position. The leading zero bytes of the key position
         // are counted with the padding.
-        "0002" "0001" "0002" "0003"
-        " <4024 zeros> " "29" "0000000000000003" "0000000000000027"
-        " [table] ");
+        "0002" "0001" "0002" "0006"
+        " <3998 zeros> " "3e" "0000000000000006" "000000000000003c"
+        // Slot 0, in 5 bytes: C << W_N | (N - 1).
+        " [table] 1234570001 ");
     // The payload field of a row payload is P.
     BOOST_CHECK_EQUAL(files.rows_db,
         "[page 0] "
