@@ -19,6 +19,7 @@
 #include <fmt/chrono.h>
 #include <fmt/ranges.h>
 
+#include "cdc/log.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
 #include "db/cluster_config_registry.hh"
@@ -26,7 +27,9 @@
 #include "db/schema_tables.hh"
 #include "locator/topology.hh"
 #include "replica/database.hh"
+#include "sstables/sstables_manager.hh"
 #include "utils/on_internal_error.hh"
+#include "view_info.hh"
 
 namespace db {
 
@@ -690,6 +693,39 @@ double cluster_config_manager::resolve_floating_point_config(const cluster_confi
 sstring cluster_config_manager::resolve_text_config(const cluster_config_registry::option& opt, const lookup_context& ctx) const {
     check_not_db_config(opt);
     return cluster_config_registry::to_text(opt, resolve_config(opt.name, ctx));
+}
+
+future<> plug_min_compression_saving_percent(sharded<replica::database>& db, sharded<cluster_config_manager>& ccm) {
+    return db.invoke_on_all([&ccm] (replica::database& db) {
+        const auto* opt = cluster_config_registry::find(cluster_config_registry::option_name::min_compression_saving_percent);
+        db.get_user_sstables_manager().plug_min_compression_saving_percent([&ccm = ccm.local(), &db, opt] (const schema& s) {
+            if (!opt) {
+                return 0;
+            }
+            // Views, index tables and CDC logs can't set the option, so they follow their base table.
+            // Resolved by name: a table being created isn't in the database's table list yet.
+            sstring table = s.cf_name();
+            if (s.is_view()) {
+                table = s.view_info()->base_name();
+            } else if (cdc::is_log_schema(s) && db.has_schema(s.ks_name(), cdc::base_name(s.cf_name()))) {
+                table = cdc::base_name(s.cf_name());
+            }
+            const auto v = ccm.resolve_integer_config(*opt, {.keyspace_name = s.ks_name(), .table_name = table});
+            if (opt->valid_range && (v < opt->valid_range->min || v > opt->valid_range->max)) {
+                // Resolved per sstable writer, so an out-of-band value would otherwise flood the log.
+                static thread_local logging::logger::rate_limit rate_limit(std::chrono::seconds(30));
+                cluster_config_logger.log(logging::log_level::warn, rate_limit, "Ignoring out-of-range stored value {} for '{}', using 0", v, opt->name);
+                return 0;
+            }
+            return int(v);
+        });
+    });
+}
+
+future<> unplug_min_compression_saving_percent(sharded<replica::database>& db) {
+    return db.invoke_on_all([] (replica::database& db) {
+        db.get_user_sstables_manager().unplug_min_compression_saving_percent();
+    });
 }
 
 }
