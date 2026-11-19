@@ -369,6 +369,47 @@ def test_toppartitions_internal_tables_are_superuser_only(scylla_only, cql):
                                      f"keyspace_name = '{ks}' AND table_name = '{cf}' AND duration = 1")
 
 
+def test_describe_commands(scylla_only, cql):
+    rows = {(r.name, r.parameter): (r.type, r.mandatory) for r in cql.execute("DESCRIBE COMMANDS")}
+    assert rows[('toppartitions', 'local')] == ('boolean', True)
+    assert rows[('toppartitions', 'keyspace_name')] == ('text', False)
+    assert rows[('toppartitions', 'duration')] == ('int', False)
+    # cqlsh prints create_statement for a DESCRIBE it does not know.
+    usage = {r.create_statement for r in cql.execute("DESCRIBE COMMANDS")}
+    assert "EXECUTE COMMAND toppartitions WITH local = <boolean> -- mandatory" in usage
+    assert "EXECUTE COMMAND toppartitions WITH duration = <int>" in usage
+
+
+# COMMANDS is a keyword only as the whole DESCRIBE target, and even then an existing object
+# named commands is described as before.
+def test_describe_commands_named_objects(scylla_only, cql, test_keyspace):
+    def lists_commands(session, stmt):
+        return ("toppartitions", "local") in {(r.name, r.parameter) for r in session.execute(stmt)}
+    stmts = ("DESC commands", "DESC COMMANDS;", "DESC commands WITH INTERNALS")
+    cql.execute(f"CREATE TABLE {test_keyspace}.commands (pk int PRIMARY KEY)")
+    cql.execute("DROP KEYSPACE IF EXISTS commands")
+    try:
+        cql.execute("CREATE KEYSPACE commands WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}")
+        try:
+            cql.execute("CREATE TABLE commands.t (pk int PRIMARY KEY)")
+            assert "CREATE TABLE commands.t " in cql.execute("DESC commands.t").one().create_statement
+            assert f"CREATE TABLE {test_keyspace}.commands " in cql.execute(f"DESC {test_keyspace}.commands").one().create_statement
+            for stmt in stmts:
+                assert "CREATE KEYSPACE commands " in cql.execute(stmt).one().create_statement
+            # Prepared execution reuses the prepared metadata, so the columns must match it.
+            assert "CREATE KEYSPACE commands " in cql.execute(cql.prepare("DESC commands")).one().create_statement
+        finally:
+            cql.execute("DROP KEYSPACE commands")
+        for stmt in stmts:
+            assert lists_commands(cql, stmt)
+        with util.new_cql(cql) as session:
+            session.execute(f"USE {test_keyspace}")
+            for stmt in stmts:
+                assert f"CREATE TABLE {test_keyspace}.commands " in session.execute(stmt).one().create_statement
+    finally:
+        cql.execute(f"DROP TABLE {test_keyspace}.commands")
+
+
 # The audit log names the table only when both names are literals; with a bind marker
 # neither is named, so table-scoped auditing still logs the statement.
 def test_toppartitions_audit_names_table(scylla_only, cql, test_keyspace):

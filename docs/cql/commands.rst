@@ -32,6 +32,14 @@ and gets ``Unauthorized``.
 A running command ends early, with an error, when the client closes its connection or the node
 shuts down.
 
+``DESCRIBE COMMANDS``
+---------------------
+
+``DESCRIBE COMMANDS`` lists every command parameter, one row per parameter, with its CQL type,
+whether it is mandatory, and a usage line (``create_statement``), which is what cqlsh prints.
+If a keyspace named ``commands`` exists, or an object named ``commands`` exists in the current
+keyspace, ``DESCRIBE COMMANDS`` describes that object instead, as it did before.
+
 Commands
 --------
 
