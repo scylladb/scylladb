@@ -37,6 +37,11 @@ db::object_storage_endpoint_param::object_storage_endpoint_param() = default;
 db::object_storage_endpoint_param::object_storage_endpoint_param(const object_storage_endpoint_param&) = default;
 
 std::string db::object_storage_endpoint_param::s3_storage::to_json_string() const {
+    if (!name.empty()) {
+        return fmt::format("{{ \"type\": \"s3\", \"uri\": \"{}\", \"aws_region\": \"{}\", \"iam_role_arn\": \"{}\" }}",
+            endpoint, region, iam_role_arn
+        );
+    }
     if (!legacy_format) {
         return fmt::format("{{ \"type\": \"s3\", \"aws_region\": \"{}\", \"iam_role_arn\": \"{}\" }}",
             region, iam_role_arn
@@ -54,6 +59,9 @@ std::string db::object_storage_endpoint_param::s3_storage::key() const {
     // if it wasn't configured "the old way". In the latter case, split the
     // URL and return its host part to mimic the old behavior.
 
+    if (!name.empty()) {
+        return name;
+    }
     if (!legacy_format) {
         return endpoint;
     }
@@ -63,13 +71,18 @@ std::string db::object_storage_endpoint_param::s3_storage::key() const {
 }
 
 std::string db::object_storage_endpoint_param::gs_storage::to_json_string() const {
+    if (!name.empty()) {
+        return fmt::format("{{ \"type\": \"gs\", \"uri\": \"{}\", \"credentials_file\": \"{}\" }}",
+            endpoint, credentials_file
+        );
+    }
     return fmt::format("{{ \"type\": \"gs\", \"credentials_file\": \"{}\" }}",
         credentials_file
     );
 }
 
 std::string db::object_storage_endpoint_param::gs_storage::key() const {
-    return endpoint;
+    return name.empty() ? endpoint : name;
 }
 
 bool db::object_storage_endpoint_param::is_s3_storage() const {
@@ -121,16 +134,31 @@ const std::string& db::object_storage_endpoint_param::type() const {
 db::object_storage_endpoint_param db::object_storage_endpoint_param::decode(const YAML::Node& node) {
     auto name = node["name"];
     auto type = node["type"];
+    auto uri = node["uri"];
 
     auto get_opt = [](auto& node, const std::string& key, auto def) {
         auto tmp = node[key];
         return tmp ? tmp.template as<std::decay_t<decltype(def)>>() : def;
     };
+    if (uri && uri.as<std::string>().empty()) {
+        throw std::invalid_argument(fmt::format("Endpoint {} has an empty uri", name.as<std::string>()));
+    }
     // aws s3 endpoint. 
     if (!type || type.as<std::string>() == s3_type) {
         s3_storage ep;
         auto endpoint = name.as<std::string>();
+        if (uri) {
+            ep.name = std::move(endpoint);
+            endpoint = uri.as<std::string>();
+        }
         ep.legacy_format = (!endpoint.starts_with("http://") && !endpoint.starts_with("https://"));
+        if (uri && ep.legacy_format) {
+            throw std::invalid_argument(fmt::format("Endpoint {} has uri {}, expected an http:// or https:// URL", ep.name, endpoint));
+        }
+        if (uri) {
+            // The parser the client uses, so that what is accepted here can be connected to.
+            utils::http::parse_simple_url(endpoint);
+        }
 
         if (!ep.legacy_format) {
             ep.endpoint = std::move(endpoint);
@@ -155,6 +183,13 @@ db::object_storage_endpoint_param db::object_storage_endpoint_param::decode(cons
     if (type.as<std::string>() == gs_type) {
         gs_storage ep;
         ep.endpoint = name.as<std::string>();
+        if (uri) {
+            ep.name = std::move(ep.endpoint);
+            ep.endpoint = uri.as<std::string>();
+            if (ep.endpoint != "default") {
+                utils::http::parse_simple_url(ep.endpoint);
+            }
+        }
         ep.credentials_file = get_opt(node, "credentials_file", ""s);
 
         return object_storage_endpoint_param(std::move(ep));
