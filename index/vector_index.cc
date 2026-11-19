@@ -20,6 +20,7 @@
 #include "index/target_parser.hh"
 #include "types/concrete_types.hh"
 #include "types/types.hh"
+#include "utils/rjson.hh"
 #include <ranges>
 #include <seastar/core/sstring.hh>
 #include <boost/algorithm/string.hpp>
