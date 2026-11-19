@@ -306,7 +306,10 @@ The "stage" serves two major purposes:
    Replica selectors are stored in tablet_transition_info::writes and tablet_transition_info::reads,
    which are directly derived from the stage stored in system tables.
 
-The invariants of stages, which hold as soon as the stage is committed to group0:
+The invariants of stages of an eventually-consistent tablet, which hold as soon as the stage is committed
+to group0, are listed below. A strongly-consistent tablet reuses some of these stages under other names,
+but these invariants don't apply to it; its own are in
+[Strongly-consistent tablets](#strongly-consistent-tablets).
 
 1. allow_write_both_read_old
 
@@ -598,7 +601,7 @@ C is the current replica set and next the new one; L is the leaving replica and 
 | use_new | next / none | next | C+P | barrier, sync removing L |
 | cleanup | next / none | next | next | cleanup RPC |
 | end_migration | unchanged | next | next | barrier |
-| sc_rollback, only from sc_become_voter | C / P | C+P | C+P | barrier, sync |
+| sc_rollback, only from sc_become_voter | C / P | C+P | C+P | sync |
 | sc_remove_pending | C / none | C | C+P | barrier, sync removing P |
 | cleanup_target | C / none | C | C | cleanup RPC |
 | revert_migration | unchanged | C | C | barrier |
@@ -621,7 +624,9 @@ C is the current replica set and next the new one; L is the leaving replica and 
 A request's *view* is the stage in the effective replication map it pinned. A request is *inside* m's raft
 server from its call to acquire_server() on m until it drops the returned handle.
 
-Correctness is argued with two facts, never with "the barrier ran":
+These facts and invariants take the place of the stage invariants of eventually-consistent tablets in
+[Tablet transitions](#tablet-transitions). Correctness is argued with two facts, never with "the barrier
+ran":
 
 - **drained(h, K, S)**: on host h, nothing of kind K with a view older than S runs, and nothing can start
   with one. K is either requests (inside the group's server, or holding a map and about to enter it) or
@@ -638,6 +643,15 @@ Invariants:
 - **I3, storage.** Nothing reads or applies to m's tablet storage after its cleanup.
 - **I4, nesting.** Of any two live views, one's serving set contains the other's, so a request is served
   within two routing hops.
+- **I5, storage under the server.** A replica runs the group's raft server only while it has the tablet's
+  storage. It holds on each replica by itself, with no barrier, because the replica derives both from
+  its current tablet map, as described below.
+
+A replica derives its local state for a tablet, such as its storage and its raft server, from its current
+tablet map, on every update and at boot, never from having seen a particular stage. A replica that lags
+in group0 applies several stage changes at once and sees only the newest. Code that reacts to seeing a
+stage works only if every replica sees that stage, which only a barrier at the stage guarantees, and that
+barrier then does a job no precondition states.
 
 A stage S may be published only if every voter the group has, or is being changed to, and every leader a
 node of serving(S) may name, is in serving(S), and serving(S) nests with every live serving set.
@@ -651,14 +665,23 @@ Only these steps put an invariant at risk:
 | cleanup of m | I3 | m's server is gone, and m is drained as for its removal | m |
 | deleting the transition | a stale cleanup RPC erases a later copy of the tablet | drained(m, RPCs, S), S the stage after the cleanup | m |
 
-A sync handler starts only if its host sees the stage and migration it was sent for, and proposes nothing
-once that stage moves on there. Hosts see a new stage at slightly different times, though: a follower may judge convergence
-while a leader that hasn't applied the stage yet lands an older stage's change. So a sync whose older sync
-could still propose something runs a barrier first, which waits for every older handler. The only such
-sync is sc_rollback's, after sc_become_voter: sc_add_nonvoter's sync is the first one, and without a pending
-replica it targets the configuration the group already has.
+A sync handler starts only if its host sees the stage and migration it was sent for. An older sync of the
+migration that is still running, such as sc_become_voter's when sc_rollback's starts, needs no barrier. The
+newer sync reaches every replica that can lead, and succeeds only once each of them reports. On each
+replica, before the newer handler first reads the configuration, the older handler's abort source is
+cancelled: by the guard, when the replica applies the newer stage, and by the newer handler superseding it.
+The older handler checks its abort source and appends its change with no suspension in between. So either
+it saw the cancellation and proposes nothing more, or its change is already in the replica's log, where the
+newer handler sees it and reverts it before reporting.
 
 Every barrier in the table serves one of these needs; the others were dropped.
+
+For example, start_migration runs no barrier. For an eventually-consistent tablet, that barrier satisfies
+the precondition of write_both_read_old that P is prepared for writes: coordinators send writes to P as
+soon as they see that stage. A strongly-consistent tablet takes writes only through raft, which reaches P
+only through P's raft server, and by I5 P has the storage whenever it runs that server. Until P starts
+the server, the leader's appends to P fail and are retried. No request is routed to P before
+sc_become_voter, so P needn't see the transition info either.
 
 Consequences:
 
