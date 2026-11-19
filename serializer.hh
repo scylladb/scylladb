@@ -249,6 +249,10 @@ template<> struct serializer<uint64_t> : public integral_serializer<uint64_t> {}
 template<typename Output>
 void safe_serialize_as_uint32(Output& output, uint64_t data);
 
+// A value already narrowed to 32 bits would make the size check dead code.
+template<typename Output>
+void safe_serialize_as_uint32(Output& output, uint32_t data) = delete;
+
 template<typename T, typename Output>
 inline void serialize(Output& out, const T& v) {
     serializer<T>::write(out, v);
