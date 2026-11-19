@@ -22,6 +22,12 @@ It involves the following high-level steps:
 
    steps 2 and 5 are required for Live migration only (meaning with ongoing traffic and no downtime).
 
+.. tip::
+
+   Instead of loading SSTable files (step 4), you can use `ScyllaDB Migrator <https://migrator.docs.scylladb.com/>`_
+   to migrate the data. ScyllaDB Migrator is a Spark-based tool that reads the data from Apache Cassandra over CQL
+   and writes it to ScyllaDB. See also :doc:`ScyllaDB Migration Tools </using-scylla/mig-tool-review>`.
+
 
 .. image:: cassandra-to-scylla-1.png
 
