@@ -7,7 +7,7 @@ from cassandra.query import SimpleStatement
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.random_tables import RandomTables, Column, IntType
 from test.pylib.rest_client import inject_error_one_shot
-from test.pylib.util import wait_for_first_completed
+from test.pylib.util import wait_for, wait_for_first_completed
 
 import asyncio
 from datetime import datetime, timedelta
@@ -194,10 +194,12 @@ async def test_read_with_failed_extra_target_releases_erm(manager: ScyllaCluster
     of its targets failed doesn't block ERM until its timeout.
 
     With speculative_retry = 'ALWAYS', a QUORUM read with RF=3 sends requests
-    to all three replicas, so it succeeds when one of them fails. The read
-    executor used to wait until the read's timeout for a response from the
-    failed replica, holding its ERM and so blocking topology changes, which
-    wait for all older token metadata versions to be released.
+    to all three replicas, so it succeeds when one of them fails (or when the
+    request to it is cancelled after the read reaches its consistency level,
+    before the replica could fail it). The read executor used to wait until
+    the read's timeout for a response from the failed replica, holding its ERM
+    and so blocking topology changes, which wait for all older token metadata
+    versions to be released.
     Reproduces SCYLLADB-6015.
     """
     servers = await manager.servers_add(3, config={"rf_rack_valid_keyspaces": False})
@@ -205,6 +207,8 @@ async def test_read_with_failed_extra_target_releases_erm(manager: ScyllaCluster
     await cql.run_async("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}")
     await cql.run_async("CREATE TABLE ks.t (pk int PRIMARY KEY, v int) WITH speculative_retry = 'ALWAYS'")
     await cql.run_async(SimpleStatement("INSERT INTO ks.t (pk, v) VALUES (0, 0)", consistency_level=ConsistencyLevel.ALL))
+
+    read_errors, cancelled_reads, _ = await get_read_failures(manager, servers[0])
 
     logger.info("Make one replica fail the read")
     # Not one-shot: a one-shot injection is removed when it fires, together with
@@ -216,7 +220,23 @@ async def test_read_with_failed_extra_target_releases_erm(manager: ScyllaCluster
         rows = await cql.run_async(SimpleStatement(f"SELECT * FROM ks.t WHERE pk = 0 USING TIMEOUT {query_timeout}s",
                                                    consistency_level=ConsistencyLevel.QUORUM), timeout=2*query_timeout)
         assert [(r.pk, r.v) for r in rows] == [(0, 0)]
-        await manager.api.wait_for_injection_enter(servers[1].ip_addr, 'storage_proxy::handle_read')
+
+        # The coordinator cancels the requests which haven't replied as soon as
+        # the read reaches its consistency level, so the request to the failing
+        # replica may be cancelled before it is even sent, and the replica never
+        # enters handle_read. So wait until the replica entered handle_read, or
+        # the coordinator counted the request as a failed or a cancelled read.
+        async def failed_target_outcome():
+            if await manager.api.get_injection_enter_count(servers[1].ip_addr, 'storage_proxy::handle_read') > 0:
+                return "failed by the replica"
+            new_read_errors, new_cancelled_reads, _ = await get_read_failures(manager, servers[0])
+            if new_read_errors > read_errors:
+                return "failed by the replica"
+            if new_cancelled_reads > cancelled_reads:
+                return "cancelled by the coordinator"
+            return None
+        outcome = await wait_for(failed_target_outcome, time.time() + 60, label="failed target read done")
+        logger.info(f"The request to the failing replica was {outcome}")
 
         logger.info("Add a new node - ERM should not be blocked")
         await asyncio.wait_for(manager.server_add(config={"rf_rack_valid_keyspaces": False}), timeout=query_timeout/4)
