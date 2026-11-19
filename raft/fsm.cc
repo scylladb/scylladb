@@ -366,6 +366,9 @@ void fsm::become_candidate(bool is_prevote, bool is_leadership_transfer) {
         become_follower(server_id{});
         return;
     }
+    if (_declines_leadership) {
+        return;
+    }
 
     if (!std::holds_alternative<candidate>(_state)) {
         _output.state_changed = true;
@@ -892,6 +895,13 @@ void fsm::set_priority_members(std::vector<server_id> members) {
     // Act on the new list now rather than on the next tick.
     if (is_leader() && !leader_state().stepdown) {
         maybe_transfer_leadership();
+    }
+}
+
+void fsm::decline_leadership() {
+    _declines_leadership = true;
+    if (is_candidate()) {
+        become_follower(server_id{});
     }
 }
 

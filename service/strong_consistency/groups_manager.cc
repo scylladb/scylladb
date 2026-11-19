@@ -1399,7 +1399,13 @@ future<> groups_manager::stepdown_leaders() {
 
         // The handle also pins the entry: its erase waits for the gate.
         const auto srv = try_acquire_server(state);
-        if (!srv || !srv->server().is_leader()) {
+        if (!srv) {
+            co_return;
+        }
+        // The other replicas see this node as alive until its transport stops, and one
+        // of them would hand the leadership back to a preferred leader.
+        srv->server().decline_leadership();
+        if (!srv->server().is_leader()) {
             co_return;
         }
 
