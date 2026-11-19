@@ -43,6 +43,8 @@ future releases.
    The performance will return to normal after the migration finishes and the
    tablet load balancer rebalances the data.
 
+.. _vnodes-migration-prerequisites:
+
 Prerequisites
 -------------
 
