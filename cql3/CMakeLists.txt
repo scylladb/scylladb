@@ -120,6 +120,7 @@ target_sources(cql3
     statements/list_service_level_attachments_statement.cc
     statements/list_effective_service_level_statement.cc
     statements/describe_statement.cc
+    statements/cluster_config_read.cc
     statements/view_prop_defs.cc
     update_parameters.cc
     util.cc
