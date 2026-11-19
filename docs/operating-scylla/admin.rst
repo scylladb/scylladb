@@ -183,6 +183,36 @@ is ignored when connecting, but it still forms part of the endpoint identifier,
 so ``https://s3.us-east-1.amazonaws.com/`` and
 ``https://s3.us-east-1.amazonaws.com`` are two different endpoints.
 
+To give an endpoint a name that is not its address, add ``uri``. ScyllaDB then
+connects to ``uri``, and ``name`` is only the identifier:
+
+.. code-block:: yaml
+
+   object_storage_endpoints:
+     - name: primary
+       uri: https://s3.us-east-1.amazonaws.com
+       type: s3
+       aws_region: us-east-1
+
+A keyspace created with ``'endpoint': 'primary'`` uses the address that the
+node configures for that name. The rules above for writing a URL apply to
+``uri``; an S3 ``uri`` must start with ``http://`` or ``https://``.
+
+Add entries with ``uri`` only after every node is upgraded to a version that
+supports it. An older node ignores such an entry, and a keyspace that uses the
+name does not work on that node.
+
+Several names can have the same ``uri``. They share the connections to that
+address, so they must have the same values in the other options of the entry
+(``aws_region``, ``iam_role_arn``, ``credentials_file``). If the values are
+different, ScyllaDB uses the first entry and logs an error.
+
+If you change the ``uri`` of a name, the sstables that ScyllaDB writes or opens
+after the change use the new address. An sstable that is already open keeps
+the address it was opened with until it is opened again, and some operations
+on it can fail because the node no longer knows the old address. Restart the
+node after you change a ``uri``. ScyllaDB does not move the data.
+
 S3 credentials
 ==============
 
