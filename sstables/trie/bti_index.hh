@@ -8,7 +8,9 @@
 
 #pragma once
 
+#include <functional>
 #include <memory>
+#include <span>
 #include <optional>
 #include <seastar/core/shared_ptr.hh>
 #include "sstables/abstract_index_reader.hh"
@@ -237,9 +239,22 @@ public:
     // If add() was never called, returns -1.
     // The writer mustn't be used again after this.
     std::optional<bti_partitions_db_footer> finish(const sstables::key& first_key, const sstables::key& last_key) &&;
+    // Call this instead of finish() if the file won't be finished, e.g. because
+    // the write failed. With page footers, destroying a writer whose file isn't
+    // finished is an internal error otherwise.
+    // The writer mustn't be used again after this.
+    void abandon() noexcept;
 };
 
+// Reads the trailer at the end of Partitions.db.
+// With page footers, it checks the CRC32 of each page it reads.
 future<bti_partitions_db_footer> read_bti_partitions_db_footer(const schema& s, sstable_version_types v, const seastar::file& f, uint64_t file_size);
+
+// Returns a function that checks the page footer of each page that a cached_file
+// reads from Partitions.db or Rows.db (see cached_file::page_verifier).
+// Returns an empty function if the format has no page footers.
+// `file_name` is for error messages.
+std::function<void(uint64_t, std::span<const char>)> make_bti_page_verifier(sstable_version_types, seastar::sstring file_name);
 
 // Transforms a stream of clustering index block entries
 // into a stream of trie nodes fed into bti_trie_sink.
@@ -297,6 +312,15 @@ public:
         sstable_position partition_data_end,
         const sstables::key&,
         const sstables::deletion_time& partition_tombstone);
+    // Ends the last page of the file, if the format has page footers.
+    // Must be called after the last finish(), before the file is closed.
+    // The writer mustn't be used again after this.
+    void finish_file();
+    // Call this instead of finish_file() if the file won't be finished, e.g.
+    // because the write failed. With page footers, destroying a writer whose file
+    // isn't finished is an internal error otherwise.
+    // The writer mustn't be used again after this.
+    void abandon() noexcept;
 };
 
 // Creates a BTI index reader over the Partitions.db file and the matching Rows.db file.

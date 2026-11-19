@@ -90,6 +90,7 @@
 #include "readers/reversing.hh"
 #include "readers/forwardable.hh"
 #include "sstables/trie/bti_index.hh"
+#include "sstables/trie/bti_page_footer.hh"
 #include "partition_slice_builder.hh"
 
 #include "release.hh"
@@ -2069,7 +2070,8 @@ future<> sstable::update_info_for_opened_data(sstable_open_config cfg) {
             _manager.get_cache_tracker().get_lru(),
             _manager.get_cache_tracker().region(),
             size,
-            component_name(*this, component_type::Partitions).format()
+            component_name(*this, component_type::Partitions).format(),
+            trie::make_bti_page_verifier(_version, component_name(*this, component_type::Partitions).format())
         );
         _partitions_file = make_cached_seastar_file(*_cached_partitions_file);
         co_await read_partitions_db_footer();
@@ -2083,7 +2085,8 @@ future<> sstable::update_info_for_opened_data(sstable_open_config cfg) {
             _manager.get_cache_tracker().get_lru(),
             _manager.get_cache_tracker().region(),
             size,
-            component_name(*this, component_type::Rows).format()
+            component_name(*this, component_type::Rows).format(),
+            trie::make_bti_page_verifier(_version, component_name(*this, component_type::Rows).format())
         );
         _rows_file = make_cached_seastar_file(*_cached_rows_file);
     }
@@ -4767,6 +4770,14 @@ std::unique_ptr<abstract_index_reader> sstable::make_index_reader(
         if (!_partitions_db_footer) [[unlikely]] {
             on_internal_error(sstlog, fmt::format("_partitions_db_footer is empty for sstable {}", get_filename()));
         }
+        // Formats the component name only if the format has page footers,
+        // so that reads of other formats don't pay for it.
+        auto page_verifier = [&] (component_type c) -> cached_file::page_verifier {
+            if (!trie::bti_index_has_page_footers(_version)) {
+                return {};
+            }
+            return trie::make_bti_page_verifier(_version, component_name(*this, c).format());
+        };
         auto cached_partitions_file = caching == use_caching::yes
             ? _cached_partitions_file
             :  seastar::make_shared<cached_file>(
@@ -4775,7 +4786,8 @@ std::unique_ptr<abstract_index_reader> sstable::make_index_reader(
                 _manager.get_cache_tracker().get_lru(),
                 _manager.get_cache_tracker().region(),
                 _cached_partitions_file->size(),
-                trace_state ? component_name(*this, component_type::Partitions).format() : sstring()
+                trace_state ? component_name(*this, component_type::Partitions).format() : sstring(),
+                page_verifier(component_type::Partitions)
             );
             auto cached_rows_file = caching == use_caching::yes
             ? _cached_rows_file
@@ -4785,7 +4797,8 @@ std::unique_ptr<abstract_index_reader> sstable::make_index_reader(
                 _manager.get_cache_tracker().get_lru(),
                 _manager.get_cache_tracker().region(),
                 _cached_rows_file->size(),
-                trace_state ? component_name(*this, component_type::Rows).format() : sstring()
+                trace_state ? component_name(*this, component_type::Rows).format() : sstring(),
+                page_verifier(component_type::Rows)
             );
         return trie::make_bti_index_reader(
             cached_partitions_file,
@@ -5197,9 +5210,101 @@ future<data_source> file_io_extension::wrap_source(const sstable& sst, component
 
 namespace trie {
 
+// Reads the trailer of a Partitions.db file with page footers.
+//
+// The fixed-size tail of the trailer ends at the chunk table of the last page.
+// The keys can span pages, so they are read around the page footers.
+// Each page read is verified.
+static future<bti_partitions_db_footer> read_paged_bti_partitions_db_footer(const seastar::file& f, uint64_t file_size) {
+    constexpr uint64_t page_size = BTI_PAGE_SIZE;
+    if (file_size == 0 || file_size % page_size != 0) {
+        throw_malformed_sstable_exception(fmt::format("Partitions.db size {} isn't a multiple of the page size {}", file_size, page_size));
+    }
+    // seastar::file is a handle, so the copy reads the same file.
+    auto file = f;
+    auto read_page = [&] (uint64_t page_pos) -> future<temporary_buffer<char>> {
+        auto buf = co_await file.dma_read_exactly<char>(page_pos, page_size);
+        verify_bti_page(std::as_bytes(std::span(buf.get(), buf.size())), page_pos, page_size, "Partitions.db");
+        co_return buf;
+    };
+    auto usable_size = [] (const temporary_buffer<char>& page, uint64_t page_pos) {
+        return bti_page_view(std::as_bytes(std::span(page.get(), page.size())), page_pos).usable_size();
+    };
+
+    constexpr size_t tail_size = 3 * sizeof(uint64_t);
+    uint64_t last_page_pos = file_size - page_size;
+    auto last_page = co_await read_page(last_page_pos);
+    auto last_usable = usable_size(last_page, last_page_pos);
+    if (last_usable < tail_size) {
+        throw_malformed_sstable_exception(fmt::format("Partitions.db malformed: the last page has only {} usable bytes", last_usable));
+    }
+    // The tail is contiguous, so it can be read from this one page.
+    // Unlike the keys, the writer never splits the tail across pages: it writes
+    // the whole tail with bti_node_sink::write_page_tail(). If the current page
+    // has too little room, write_page_tail() starts a new page. It then pads the
+    // page with zeros, so that the tail ends exactly at the chunk table.
+    const char* tail = last_page.get() + last_usable - tail_size;
+    uint64_t keys_position = seastar::read_be<uint64_t>(tail);
+    uint64_t partition_count = seastar::read_be<uint64_t>(tail + 8);
+    uint64_t trie_root = seastar::read_be<uint64_t>(tail + 16);
+    if (trie_root >= file_size) {
+        throw_malformed_sstable_exception(fmt::format("Partitions.db malformed: trie_root={}, file_size={}", trie_root, file_size));
+    }
+    if (keys_position >= file_size) {
+        throw_malformed_sstable_exception(fmt::format("Partitions.db malformed: keys_position={}, file_size={}", keys_position, file_size));
+    }
+
+    // Reads raw bytes from `pos`, skipping the chunk table and the footer of each page.
+    // A position at the start of a page's chunk table means the start of the next page,
+    // the same as for bti_node_sink::write_raw().
+    uint64_t pos = keys_position;
+    uint64_t page_pos = round_down(pos, page_size);
+    auto page = page_pos == last_page_pos ? last_page.share() : co_await read_page(page_pos);
+    auto read_bytes = [&] (size_t n) -> future<bytes> {
+        bytes result(bytes::initialized_later(), n);
+        size_t done = 0;
+        while (done < n) {
+            auto usable = usable_size(page, page_pos);
+            auto in_page = pos - page_pos;
+            if (in_page > usable) {
+                throw_malformed_sstable_exception(fmt::format("Partitions.db malformed: keys_position={} points into a chunk table", keys_position));
+            }
+            if (in_page == usable) {
+                page_pos += page_size;
+                if (page_pos >= file_size) {
+                    throw_malformed_sstable_exception(fmt::format("Partitions.db malformed: the keys at {} extend past the end of the file", keys_position));
+                }
+                pos = page_pos;
+                page = page_pos == last_page_pos ? last_page.share() : co_await read_page(page_pos);
+                continue;
+            }
+            auto k = std::min<size_t>(n - done, usable - in_page);
+            std::memcpy(result.data() + done, page.get() + in_page, k);
+            done += k;
+            pos += k;
+        }
+        co_return result;
+    };
+    auto read_key = [&] () -> future<bytes> {
+        auto len = co_await read_bytes(sizeof(uint16_t));
+        co_return co_await read_bytes(seastar::read_be<uint16_t>(reinterpret_cast<const char*>(len.data())));
+    };
+    auto first_key = co_await read_key();
+    auto last_key = co_await read_key();
+    co_return trie::bti_partitions_db_footer{
+        .first_key = sstables::key::from_bytes(std::move(first_key)),
+        .last_key = sstables::key::from_bytes(std::move(last_key)),
+        .partition_count = partition_count,
+        .trie_root_position = trie_root,
+    };
+}
+
 // This implementation would belong better in sstables/trie/bti_partition_index_writer.cc,
 // but we put it here to have access to the `parse(...)` helpers.
 future<bti_partitions_db_footer> read_bti_partitions_db_footer(const schema& s, sstable_version_types v, const seastar::file& f, uint64_t file_size) {
+    if (bti_index_has_page_footers(v)) {
+        co_return co_await read_paged_bti_partitions_db_footer(f, file_size);
+    }
     file_random_access_reader reader(f, file_size, default_sstable_buffer_size);
     if (file_size < 24) {
         throw_malformed_sstable_exception(fmt::format("Partitions.db file is too small: file_size={}", file_size));

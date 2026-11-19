@@ -6,7 +6,9 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
+#include <seastar/core/on_internal_error.hh>
 #include "bti_node_sink.hh"
+#include "bti_page_footer.hh"
 #include "utils/div_ceil.hh"
 
 namespace sstables::trie {
@@ -133,19 +135,70 @@ static node_type choose_node_type(const writer_node& x, sink_pos xpos) {
     return res;
 }
 
-bti_node_sink::bti_node_sink(sstables::file_writer& w, size_t page_size) : _w(w), _page_size(page_size) {
-    expensive_assert(_page_size <= max_page_size);
+bti_node_sink::bti_node_sink(sstables::file_writer& w, size_t page_size, bool page_footers)
+    : _w(w)
+    , _page_size(page_size)
+    , _page_footers(page_footers)
+{
+    SCYLLA_ASSERT(_page_size <= max_page_size);
+    if (_page_footers) {
+        SCYLLA_ASSERT(_page_size > bti_page_footer_size);
+        _page.resize(_page_size);
+    }
+}
+
+bti_node_sink::~bti_node_sink() {
+    // Don't use _w here: the file_writer can be destroyed already.
+    if (_page_footers && _page_fill > 0 && !_abandoned) {
+        on_internal_error_noexcept(trie_logger, fmt::format(
+            "BTI index writer destroyed with an unended page of {} bytes, which is missing from the file",
+            _page_fill));
+    }
+}
+
+void bti_node_sink::abandon() noexcept {
+    _abandoned = true;
+}
+
+[[gnu::always_inline]]
+void bti_node_sink::put(const char* data, size_t n) {
+    if (!_page_footers) {
+        _w.write(data, n);
+        return;
+    }
+    // An overlap with the chunk table would be silent corruption.
+    SCYLLA_ASSERT(n <= table_start_in_page() - _page_fill);
+    std::memcpy(_page.data() + _page_fill, data, n);
+    _page_fill += n;
+}
+
+size_t bti_node_sink::table_start_in_page() const {
+    // The chunk table is empty for now.
+    return _page_size - bti_page_footer_size;
+}
+
+void bti_node_sink::end_page() {
+    expensive_assert(_page_footers);
+    auto table_start = table_start_in_page();
+    SCYLLA_ASSERT(_page_fill <= table_start);
+    std::memset(_page.data() + _page_fill, 0, table_start - _page_fill);
+    char* footer = _page.data() + _page_size - bti_page_footer_size;
+    // The slot count. The chunk table is empty for now.
+    seastar::write_be<uint16_t>(footer, 0);
+    seastar::write_be<uint32_t>(footer + 2, compute_bti_page_crc(std::as_bytes(std::span(_page))));
+    _w.write(_page.data(), _page_size);
+    _page_fill = 0;
 }
 
 void bti_node_sink::write_int(uint64_t x, size_t bytes) {
     uint64_t be = cpu_to_be(x);
     expensive_log("write_int: {}", fmt_hex({reinterpret_cast<const signed char*>(&be) + sizeof(be) - bytes, bytes}));
-    _w.write(reinterpret_cast<const char*>(&be) + sizeof(be) - bytes, bytes);
+    put(reinterpret_cast<const char*>(&be) + sizeof(be) - bytes, bytes);
 }
 
 void bti_node_sink::write_bytes(const_bytes x) {
     expensive_log("write_bytes: {}", fmt_hex({reinterpret_cast<const signed char*>(x.data()), x.size()}));
-    _w.write(reinterpret_cast<const char*>(x.data()), x.size());
+    put(reinterpret_cast<const char*>(x.data()), x.size());
 }
 
 [[gnu::always_inline]]
@@ -509,7 +562,7 @@ uint64_t bti_node_sink::page_size() const {
 }
 
 uint64_t bti_node_sink::page_capacity() const {
-    return _page_size;
+    return _page_footers ? _page_size - bti_page_footer_size : _page_size;
 }
 
 uint64_t bti_node_sink::table_entry_size() const {
@@ -517,24 +570,65 @@ uint64_t bti_node_sink::table_entry_size() const {
 }
 
 uint64_t bti_node_sink::bytes_left_in_page() const {
+    if (_page_footers) {
+        return table_start_in_page() - _page_fill;
+    }
     return round_up(pos().value + 1, page_size()) - pos().value;
 };
 
 void bti_node_sink::pad_to_page_boundary() {
+    if (_page_footers) {
+        end_page();
+        return;
+    }
     const static std::array<std::byte, max_page_size> zero_page = {};
     _w.write(reinterpret_cast<const char*>(zero_page.data()), bytes_left_in_page());
 }
 
 sink_pos bti_node_sink::pos() const {
-    return sink_pos(_w.offset());
+    return sink_pos(_w.offset() + _page_fill);
 }
 
 void bti_node_sink::write_raw(const char* data, size_t n) {
-    _w.write(data, n);
+    if (!_page_footers) {
+        _w.write(data, n);
+        return;
+    }
+    while (n) {
+        if (bytes_left_in_page() == 0) {
+            end_page();
+        }
+        auto k = std::min<size_t>(n, bytes_left_in_page());
+        put(data, k);
+        data += k;
+        n -= k;
+    }
 }
 
 sink_pos bti_node_sink::raw_pos() {
+    if (_page_footers && bytes_left_in_page() == 0) {
+        end_page();
+    }
     return pos();
+}
+
+void bti_node_sink::write_page_tail(const char* data, size_t n) {
+    SCYLLA_ASSERT(_page_footers);
+    SCYLLA_ASSERT(n <= page_capacity());
+    if (bytes_left_in_page() < n) {
+        end_page();
+    }
+    static const std::array<char, max_page_size> zeros = {};
+    put(zeros.data(), bytes_left_in_page() - n);
+    put(data, n);
+    SCYLLA_ASSERT(bytes_left_in_page() == 0);
+    end_page();
+}
+
+void bti_node_sink::end_last_page() {
+    if (_page_footers && _page_fill > 0) {
+        end_page();
+    }
 }
 
 } // namespace sstables::trie

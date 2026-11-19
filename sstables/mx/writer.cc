@@ -1030,6 +1030,15 @@ public:
 };
 
 writer::~writer() {
+    // An index file that is still open wasn't finished, because the write failed.
+    // (On success, close_partitions_writer() and close_rows_writer() take the
+    // file writers out when they close them).
+    if (_partitions_writer && _bti_partition_index_writer) {
+        _bti_partition_index_writer->abandon();
+    }
+    if (_rows_writer && _bti_row_index_writer) {
+        _bti_row_index_writer->abandon();
+    }
     auto close_writer = [](auto& writer) {
         if (writer) {
             try {
@@ -1262,6 +1271,7 @@ void writer::close_partitions_writer() {
 
 void writer::close_rows_writer() {
     if (_rows_writer) {
+        _bti_row_index_writer->finish_file();
         _sst.get_components_digests().map[component_type::Rows] = close_digest_writer(_rows_writer);
     }
 }
