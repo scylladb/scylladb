@@ -56,7 +56,6 @@
 #include "schema/schema_registry.hh"
 #include "system_keyspace.hh"
 #include "system_distributed_keyspace.hh"
-#include "cql3/query_processor.hh"
 #include "cql3/functions/functions.hh"
 #include "cql3/functions/functions.hh"
 #include "cql3/functions/user_aggregate.hh"
