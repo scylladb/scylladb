@@ -14,11 +14,13 @@
 #include "cdc/cdc_options.hh"
 #include "cdc/log.hh"
 #include "cql3/column_specification.hh"
+#include "cql3/commands/command.hh"
 #include "cql3/functions/function_name.hh"
 #include "cql3/statements/prepared_statement.hh"
 #include "exceptions/exceptions.hh"
 #include <ranges>
 #include <seastar/core/on_internal_error.hh>
+#include <seastar/coroutine/as_future.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/exception.hh>
 #include "index/vector_index.hh"
@@ -44,6 +46,7 @@
 #include "types/list.hh"
 #include "cql3/functions/functions.hh"
 #include "types/user.hh"
+#include "utils/exceptions.hh"
 #include "utils/managed_string.hh"
 #include "view_info.hh"
 #include "validation.hh"
@@ -1283,6 +1286,52 @@ future<std::vector<std::vector<managed_bytes_opt>>> element_describe_statement::
 }
 
 //GENERIC DESCRIBE STATEMENT
+commands_describe_statement::commands_describe_statement(bool with_internals)
+    : describe_statement()
+    , _object(std::nullopt, "commands", with_internals) {
+}
+
+std::vector<lw_shared_ptr<column_specification>> commands_describe_statement::get_column_specifications() const {
+    auto column = [] (sstring name, data_type type) {
+        return make_lw_shared<column_specification>("system", "describe", ::make_shared<column_identifier>(std::move(name), true), std::move(type));
+    };
+    return {column("name", utf8_type), column("parameter", utf8_type), column("type", utf8_type), column("mandatory", boolean_type),
+            // cqlsh prints this column for any DESCRIBE it does not know.
+            column("create_statement", utf8_type)};
+}
+
+future<std::vector<std::vector<managed_bytes_opt>>> commands_describe_statement::describe(cql3::query_processor& qp, const service::client_state& client_state) const {
+    // The generic path throws invalid_request_exception only when there is no such object.
+    auto f = co_await coroutine::as_future(_object.describe(qp, client_state));
+    if (!f.failed()) {
+        auto rows = f.get();
+        // Keep the prepared (name, parameter, type, mandatory, create_statement) shape.
+        for (auto& r : rows) {
+            r = {std::move(r[2]), std::nullopt, std::move(r[1]), std::nullopt, std::move(r[3])};
+        }
+        co_return rows;
+    }
+    auto ex = f.get_exception();
+    if (!try_catch<exceptions::invalid_request_exception>(ex)) {
+        co_await coroutine::return_exception_ptr(std::move(ex));
+    }
+    std::vector<std::vector<managed_bytes_opt>> rows;
+    for (auto* cmd : commands::all_commands()) {
+        auto name = managed_bytes(utf8_type->decompose(sstring(cmd->name())));
+        auto usage = [&] (sstring s) { return managed_bytes(utf8_type->decompose(fmt::format("EXECUTE COMMAND {}{}", cmd->name(), s))); };
+        if (cmd->params().empty()) {
+            rows.push_back({name, std::nullopt, std::nullopt, std::nullopt, usage("")});
+        }
+        for (auto& p : cmd->params()) {
+            auto type = p.type->cql3_type_name();
+            rows.push_back({name, managed_bytes(utf8_type->decompose(sstring(p.name))), managed_bytes(utf8_type->decompose(type)),
+                    managed_bytes(boolean_type->decompose(p.mandatory)),
+                    usage(fmt::format(" WITH {} = <{}>{}", p.name, type, p.mandatory ? " -- mandatory" : ""))});
+        }
+    }
+    co_return rows;
+}
+
 generic_describe_statement::generic_describe_statement(std::optional<sstring> keyspace, sstring name, bool with_internals)
     : describe_statement()
     , _keyspace(std::move(keyspace))
@@ -1419,6 +1468,9 @@ std::unique_ptr<prepared_statement> describe_statement::prepare(data_dictionary:
         },
         [&] (const describe_generic& cfg) -> ::shared_ptr<statements::describe_statement> {
             return ::make_shared<generic_describe_statement>(std::move(cfg.keyspace), std::move(cfg.name), internals);
+        },
+        [&] (const describe_commands&) -> ::shared_ptr<statements::describe_statement> {
+            return ::make_shared<commands_describe_statement>(internals);
         }
     }, _config);
     return std::make_unique<prepared_statement>(audit_info(), desc_stmt);
@@ -1475,6 +1527,10 @@ std::unique_ptr<describe_statement> describe_statement::functions() {
 std::unique_ptr<describe_statement> describe_statement::function(const functions::function_name& fn_name) {
     auto ks = (fn_name.has_keyspace()) ? std::optional<sstring>(fn_name.keyspace) : std::nullopt;
     return std::make_unique<describe_statement>(ds::describe_element{.element_type = ds::element_type::function, .keyspace = ks, .name = fn_name.name});
+}
+
+std::unique_ptr<describe_statement> describe_statement::commands() {
+    return std::make_unique<describe_statement>(ds::describe_commands{});
 }
 
 std::unique_ptr<describe_statement> describe_statement::aggregates() {

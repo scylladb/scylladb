@@ -1625,6 +1625,11 @@ describeStatement returns [std::unique_ptr<cql3::statements::raw::describe_state
     | (K_FUNCTIONS) => K_FUNCTIONS                  { $stmt = cql3::statements::raw::describe_statement::functions();              }
     | K_FUNCTION fn=functionName                    { $stmt = cql3::statements::raw::describe_statement::function(fn);             }
     | (K_AGGREGATES) => K_AGGREGATES                { $stmt = cql3::statements::raw::describe_statement::aggregates();             }
+    // Only as the whole target, so a keyspace or table named commands stays reachable as commands.t / ks.commands.
+    // EOF is checked semantically: in a syntactic predicate it compiles to a signed/unsigned comparison.
+    | (K_COMMANDS (K_WITH | ';')) => K_COMMANDS     { $stmt = cql3::statements::raw::describe_statement::commands();               }
+    | { this->LA(2) == CommonTokenType::TOKEN_EOF }? => K_COMMANDS
+                                                    { $stmt = cql3::statements::raw::describe_statement::commands();               }
     | K_AGGREGATE ag=functionName                   { $stmt = cql3::statements::raw::describe_statement::aggregate(ag);            }
     | ( ( ksT=IDENT                                 { keyspace = sstring{$ksT.text}; }
         | ksT=QUOTED_NAME                           { keyspace = sstring{$ksT.text}; }
@@ -2327,6 +2332,7 @@ basic_unreserved_keyword returns [sstring str]
         | K_DESC
         | K_EXECUTE
         | K_COMMAND
+        | K_COMMANDS
         | K_MUTATION_FRAGMENTS
         | K_EFFECTIVE
         | K_OBJECT
@@ -2549,6 +2555,7 @@ K_CONCURRENCY: C O N C U R R E N C Y;
 
 K_EXECUTE:     E X E C U T E;
 K_COMMAND:     C O M M A N D;
+K_COMMANDS:    C O M M A N D S;
 
 K_MUTATION_FRAGMENTS:    M U T A T I O N '_' F R A G M E N T S;
 
