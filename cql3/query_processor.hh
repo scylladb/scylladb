@@ -22,6 +22,7 @@
 #include "cql3/statements/prepared_statement.hh"
 #include "cql3/cql_statement.hh"
 #include "cql3/dialect.hh"
+#include "cql3/query_processor_memory_config.hh"
 #include "exceptions/exceptions.hh"
 #include "service/migration_listener.hh"
 #include "mutation/timestamp.hh"
@@ -112,10 +113,7 @@ class cql_statement;
 class query_processor : public seastar::peering_sharded_service<query_processor> {
 public:
     class migration_subscriber;
-    struct memory_config {
-        size_t prepared_statment_cache_size = 0;
-        size_t authorized_prepared_cache_size = 0;
-    };
+    using memory_config = query_processor_memory_config;
 
 private:
     std::unique_ptr<migration_subscriber> _migration_subscriber;
