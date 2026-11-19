@@ -76,6 +76,13 @@ class ReplaceConfig(NamedTuple):
     wait_dead: bool = True
 
 
+class Servers(ChainMap[ServerNum, ScyllaServer]):
+    """Servers by ID: looking up an unknown ID fails with "Server <id> unknown"."""
+
+    def __missing__(self, server_id: ServerNum) -> ScyllaServer:
+        raise AssertionError(f"Server {server_id} unknown")
+
+
 conn_logger = logging.getLogger("conn_messages")
 conn_logger.setLevel(logging.INFO)
 
@@ -241,7 +248,7 @@ class ScyllaCluster:
         # A server ID present in self.removed may be either in self.running or in self.stopped.
         self.running: dict[ServerNum, ScyllaServer] = {}        # started servers
         self.stopped: dict[ServerNum, ScyllaServer] = {}        # servers no longer running but present
-        self.servers = ChainMap(self.running, self.stopped)
+        self.servers = Servers(self.running, self.stopped)
         self.removed: set[ServerNum] = set()                    # removed servers (might be running)
         self.starting: dict[ServerNum, ScyllaServer] = {}       # servers starting right now, not yet running (and not included in "servers").
         # The first IP assigned to a server added to the cluster.
@@ -543,12 +550,6 @@ class ScyllaCluster:
         running = ", ".join(str(server) for server in self.running.values())
         stopped = ", ".join(str(server) for server in self.stopped.values())
         return f"ScyllaCluster(name: {self.name}, running: {running}, stopped: {stopped})"
-
-    def server(self, server_id: ServerNum) -> ScyllaServer:
-        """Get the given server, running or stopped.
-           Fails if the server cannot be found."""
-        assert server_id in self.servers, f"Server {server_id} unknown"
-        return self.servers[server_id]
 
     def _running_server_infos(self) -> list[ServerInfo]:
         return [server.server_info() for server in self.running.values()
@@ -960,7 +961,6 @@ class ScyllaCluster:
     async def server_get_config(self, server_id: ServerNum) -> dict[str, object]:
         """Get conf/scylla.yaml of the given server as a dictionary.
            Fails if the server cannot be found."""
-        assert server_id in self.servers, f"Server {server_id} unknown"
         return self.servers[server_id].get_config()
 
     @cluster_op
@@ -985,7 +985,6 @@ class ScyllaCluster:
             config_options = {key: value}
         elif not isinstance(config_options, dict):
             raise RuntimeError(f"`config_options` is expected to be a dict, not {type(config_options)}")
-        assert server_id in self.servers, f"Server {server_id} unknown"
         self.servers[server_id].update_config(config_options=config_options)
 
     @cluster_op
@@ -995,7 +994,6 @@ class ScyllaCluster:
         If the server is running, reload the config with a SIGHUP.
         Fail if the server cannot be found.
         """
-        assert server_id in self.servers, f"Server {server_id} unknown"
         self.servers[server_id].remove_config_option(key=key)
 
     @cluster_op
@@ -1003,7 +1001,6 @@ class ScyllaCluster:
         """Update the command-line options of the given server by merging the new options into the existing ones.
            The update only takes effect after restart.
            Fails if the server cannot be found."""
-        assert server_id in self.servers, f"Server {server_id} unknown"
         self.servers[server_id].update_cmdline(cmdline_options)
 
     @cluster_op
@@ -1049,7 +1046,6 @@ class ScyllaCluster:
 
     async def _lease_address(self, server_id: ServerNum) -> tuple[ScyllaServer, IPAddress]:
         """Lease a new address for a stopped server; recycle() releases it."""
-        assert server_id in self.servers, f"Server {server_id} unknown"
         server = self.servers[server_id]
         assert not server.is_running, f"Server {server_id} is running: stop it first and then change its ip"
         address = IPAddress(await self.host_registry.lease_host())
@@ -1058,19 +1054,19 @@ class ScyllaCluster:
 
     @cluster_op
     async def server_get_log_filename(self, server_id: ServerNum) -> str:
-        return str(self.server(server_id).log_filename)
+        return str(self.servers[server_id].log_filename)
 
     @cluster_op
     async def server_get_workdir(self, server_id: ServerNum) -> str:
-        return str(self.server(server_id).workdir)
+        return str(self.servers[server_id].workdir)
 
     @cluster_op
     async def server_get_maintenance_socket_path(self, server_id: ServerNum) -> str:
-        return self.server(server_id).maintenance_socket_path
+        return self.servers[server_id].maintenance_socket_path
 
     @cluster_op
     async def server_get_exe(self, server_id: ServerNum) -> str:
-        return str(self.server(server_id).exe)
+        return str(self.servers[server_id].exe)
 
     @cluster_op
     async def server_is_alive(self, server_id: ServerNum) -> bool:
@@ -1079,13 +1075,12 @@ class ScyllaCluster:
         Unlike ScyllaServer.is_running, which only tells a started server from
         a stopped one, this notices a server whose process died on its own.
         """
-        cmd = self.server(server_id).cmd
+        cmd = self.servers[server_id].cmd
         return cmd is not None and cmd.returncode is None
 
     @cluster_op
     async def server_wipe_sstables(self, server_id: ServerNum, keyspace: str, table: str) -> None:
         """Delete all sstable files for the given <node, keyspace, table>."""
-        assert server_id in self.servers, f"Server {server_id} unknown"
         server = self.servers[server_id]
         assert not server.is_running, f"Server {server_id} is running: stop it first and then delete its files"
         server.wipe_sstables(keyspace, table)
@@ -1093,7 +1088,6 @@ class ScyllaCluster:
     @cluster_op
     async def server_get_sstables_disk_usage(self, server_id: ServerNum, keyspace: str, table: str) -> int:
         """Measure the disk usage of sstables for the given <node, keyspace, table>."""
-        assert server_id in self.servers, f"Server {server_id} unknown"
         server = self.servers[server_id]
         return server.get_sstables_disk_usage(keyspace, table)
 
