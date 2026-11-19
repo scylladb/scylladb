@@ -155,7 +155,7 @@ static const auto alteration_permissions = auth::permission_set::of<
         auth::permission::CREATE, auth::permission::ALTER, auth::permission::DROP>();
 
 future<> service::client_state::check_access_rules(const sstring& ks, auth::permission permission,
-                const auth::resource& resource, auth::command_desc::type type, auth::permission_set additional_permissions) const {
+                const auth::resource& resource, auth::command_desc::type type, auth::permission_set additional_permissions, bool rules_only) const {
     const bool alter_system_with_allowed_opts = (type == auth::command_desc::type::ALTER_SYSTEM_WITH_ALLOWED_OPTS);
 
     // we only care about schema modification.
@@ -219,6 +219,10 @@ future<> service::client_state::check_access_rules(const sstring& ks, auth::perm
             && !co_await _auth_service->underlying_role_manager().is_superuser(*_user->name)) [[unlikely]] {
         throw exceptions::unauthorized_exception(
                 ks + " can be granted only SELECT or DESCRIBE permissions to a non-superuser.");
+    }
+
+    if (rules_only) {
+        co_return;
     }
 
     if (additional_permissions.mask() == 0) {
@@ -324,6 +328,47 @@ future<> service::client_state::ensure_has_permission(Cmd cmd) const {
 }
 template future<> service::client_state::ensure_has_permission(auth::command_desc) const;
 template future<> service::client_state::ensure_has_permission<auth::command_desc_with_permission_set>(auth::command_desc_with_permission_set) const;
+
+future<> service::client_state::check_alter_rules(const sstring& ks, const auth::resource& resource, auth::command_desc::type type) const {
+    if (ks.empty()) {
+        throw exceptions::invalid_request_exception("You have not set a keyspace for this session");
+    }
+    if (_bypass_auth_checks) {
+        co_return;
+    }
+    validate_login();
+    co_await check_access_rules(ks, auth::permission::ALTER, resource, type, {}, true);
+}
+
+future<bool> service::client_state::check_has_config_permission(auth::permission p, const auth::resource& target, std::optional<std::string_view> option) const {
+    if (_bypass_auth_checks) {
+        co_return true;
+    }
+    validate_login();
+
+    for (std::optional<auth::resource> r = target.without_config_option(); r; r = auth::config_scope_parent(*r)) {
+        if ((co_await auth::get_permissions(*_auth_service, *_user, *r)).contains(p)) {
+            co_return true;
+        }
+        if (option && (co_await auth::get_permissions(*_auth_service, *_user, r->with_config_option(*option))).contains(p)) {
+            co_return true;
+        }
+    }
+    co_return false;
+}
+
+future<> service::client_state::ensure_has_config_permission(auth::permission p, const auth::resource& target, std::optional<std::string_view> option) const {
+    if (co_await check_has_config_permission(p, target, option)) {
+        co_return;
+    }
+    const auto unqualified = target.without_config_option();
+    if (option) {
+        throw exceptions::unauthorized_exception(seastar::format("User {} has no {} permission for cluster config option {} on {} or any broader scope",
+                *_user, auth::permissions::to_string(p), *option, unqualified));
+    }
+    throw exceptions::unauthorized_exception(seastar::format("User {} has no {} permission on {} or any broader scope",
+            *_user, auth::permissions::to_string(p), unqualified));
+}
 
 void service::client_state::set_keyspace(replica::database& db, std::string_view keyspace) {
     // Skip keyspace validation for non-authenticated users. Apparently, some client libraries
