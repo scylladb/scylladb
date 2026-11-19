@@ -72,6 +72,9 @@ parse(const sstring& json_string, const schema::columns_type& expected_receivers
     }
     auto prepared_map = handle_case_sensitivity(std::move(parsed));
     for (const auto& def : expected_receivers) {
+        if (def.is_hidden_from_cql()) {
+            continue;
+        }
         sstring cql_name = def.name_as_text();
         auto value_it = prepared_map.find(cql_name);
         if (value_it == prepared_map.end()) {
@@ -330,6 +333,12 @@ query::clustering_row_ranges insert_prepared_json_statement::create_clustering_r
 
 void insert_prepared_json_statement::execute_operations_for_key(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params, const json_cache_opt& json_cache) const {
     for (const auto& def : s->regular_columns()) {
+        // A hidden column isn't set by the JSON value. In particular, setting
+        // the hidden column of a COMPACT STORAGE table to null would delete
+        // the row which open_row() created.
+        if (def.is_hidden_from_cql()) {
+            continue;
+        }
         if (def.type->is_counter()) {
             throw exceptions::invalid_request_exception(format("Cannot set the value of counter column {} in JSON", def.name_as_text()));
         }
@@ -380,7 +389,7 @@ insert_statement::prepare_internal(data_dictionary::database db, schema_ptr sche
         auto&& col = _column_names[i];
         auto id = col->prepare_column_identifier(*schema);
         auto def = get_column_definition(*schema, *id);
-        if (!def) {
+        if (!def || def->is_hidden_from_cql()) {
             throw exceptions::invalid_request_exception(format("Unknown identifier {}", *id));
         }
         if (column_ids.contains(id->name())) {
