@@ -129,7 +129,8 @@ struct sstable_writer_config {
     sstring origin;
     bool correct_pi_block_width = true;
     // Whether the keys of the trie-based indexes are encoded with canonical_nans_and_varints::yes.
-    // Only tests clear it, to write an sstable like the versions which didn't have this encoding.
+    // Otherwise the sstable is written like the versions which didn't have this encoding wrote it,
+    // which is what has to be done as long as such a version may have to read it.
     bool correct_nan_and_varint_index_keys = true;
     uint32_t large_data_records_per_sstable = 10;
 

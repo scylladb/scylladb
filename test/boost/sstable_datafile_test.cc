@@ -4031,3 +4031,26 @@ SEASTAR_TEST_CASE(test_writer_clamps_too_big_ttl) {
         BOOST_REQUIRE(!read_mutation_from_mutation_reader(rd).get());
     });
 }
+
+// A node which doesn't know the sstable feature CorrectNaNAndVarintIndexKeys searches the
+// trie-based indexes of all the sstables with the old encoding of their keys. So the writer
+// is only told to use the canonical encoding, which comes with that feature, when the
+// cluster feature CANONICAL_NANS_AND_VARINTS_IN_SSTABLE_INDEX_KEYS is enabled.
+static future<> test_index_key_encoding_follows_cluster_feature(bool enabled) {
+    cql_test_config cfg;
+    if (!enabled) {
+        cfg.disabled_features.insert("CANONICAL_NANS_AND_VARINTS_IN_SSTABLE_INDEX_KEYS");
+    }
+    return do_with_cql_env_thread([enabled] (cql_test_env& env) {
+        const auto writer_cfg = env.local_db().get_user_sstables_manager().configure_writer("test");
+        BOOST_REQUIRE_EQUAL(writer_cfg.correct_nan_and_varint_index_keys, enabled);
+    }, cfg);
+}
+
+SEASTAR_TEST_CASE(test_index_keys_are_canonical_with_cluster_feature) {
+    return test_index_key_encoding_follows_cluster_feature(true);
+}
+
+SEASTAR_TEST_CASE(test_index_keys_are_not_canonical_without_cluster_feature) {
+    return test_index_key_encoding_follows_cluster_feature(false);
+}

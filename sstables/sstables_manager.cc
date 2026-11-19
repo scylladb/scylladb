@@ -456,6 +456,7 @@ sstable_writer_config sstables_manager::configure_writer(sstring origin) const {
 
     cfg.origin = std::move(origin);
     cfg.large_data_records_per_sstable = _config.large_data_records_per_sstable();
+    cfg.correct_nan_and_varint_index_keys = bool(_features.canonical_nans_and_varints_in_sstable_index_keys);
 
     return cfg;
 }
