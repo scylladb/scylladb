@@ -1042,6 +1042,7 @@ CREATE TABLE system.topology (
     enabled_features set<text> static,
     session uuid static,
     tablet_balancing_enabled boolean static,
+    tablets_shard0_skew_host uuid static,
     upgrade_state text static,
     new_cdc_generation_data_uuid timeuuid static,
     new_keyspace_rf_change_ks_name text static,
@@ -1094,6 +1095,7 @@ There are also a few static columns for cluster-global properties:
 - `enabled_features` - the list of cluster features enabled by the cluster
 - `session` - if set contains the ID of the current session
 - `tablet_balancing_enabled` - if false, the tablet balancing has been disabled
+- `tablets_shard0_skew_host` - the host whose shard 0 gets fewer tablets, see `tablets_group0_leader_shard_ratio`. The topology coordinator moves it to itself once it has been coordinator for a while (or at once if the current one is not a normal node). Written only when the `TABLETS_SHARD0_SKEW` feature is enabled.
 
 # Join procedure
 
