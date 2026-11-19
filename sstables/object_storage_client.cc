@@ -161,7 +161,7 @@ public:
         _client->report_object_storage_metrics({.type = ep.type(), .endpoint = endpoint_label(ep)});
     }
     shared_ptr<s3::client> shard_client(std::string host) const {
-        auto lc = _cf(host);
+        auto lc = _cf();
         return lc ? dynamic_pointer_cast<s3_client_wrapper>(lc)->_client : shared_ptr<s3::client>{};
     }
 
@@ -244,7 +244,7 @@ public:
         : _client(make_gcs_client(ep, memory))
         , _memory(memory)
         , _shard_client([cf = std::move(cf), endpoint = ep.key()] {
-            auto lc = cf(endpoint);
+            auto lc = cf();
             if (!lc) {
                 throw std::runtime_error(fmt::format("Could not retrieve shard client for {}", endpoint));
             }

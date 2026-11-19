@@ -8,6 +8,7 @@
  */
  
 #include <string>
+#include <tuple>
 #include <variant>
 #include <yaml-cpp/yaml.h>
 
@@ -120,6 +121,24 @@ std::string db::object_storage_endpoint_param::to_json_string() const {
 
 std::string db::object_storage_endpoint_param::key() const {
     return std::visit([](auto& o) { return o.key(); }, _data);
+}
+
+const std::string& db::object_storage_endpoint_param::endpoint() const {
+    return std::visit([] (auto& o) -> const std::string& { return o.endpoint; }, _data);
+}
+
+bool db::object_storage_endpoint_param::s3_storage::same_client_settings(const s3_storage& o) const {
+    return std::tie(region, iam_role_arn) == std::tie(o.region, o.iam_role_arn);
+}
+
+bool db::object_storage_endpoint_param::gs_storage::same_client_settings(const gs_storage& o) const {
+    return credentials_file == o.credentials_file;
+}
+
+bool db::object_storage_endpoint_param::same_client_settings(const object_storage_endpoint_param& o) const {
+    return _data.index() == o._data.index() && std::visit([&o] (auto& s) {
+        return s.same_client_settings(std::get<std::decay_t<decltype(s)>>(o._data));
+    }, _data);
 }
 
 const std::string& db::object_storage_endpoint_param::type() const {

@@ -140,6 +140,10 @@ storage_manager::object_storage_endpoint::object_storage_endpoint(db::object_sto
     : cfg(ep)
 {}
 
+static sstring client_address(const osp& ep) {
+    return format("{}:{}", ep.type(), ep.endpoint());
+}
+
 // Every scheduling group that sends S3 requests of its own. A request from any other
 // group shares the general pool below, unless object_storage_connections names it.
 static const s3::group_connections default_group_connections = {
@@ -261,11 +265,13 @@ static s3::group_connections make_group_connections(const db::config& cfg, std::
 storage_manager::storage_manager(const db::config& cfg, config stm_cfg)
     : _object_storage_clients_memory(stm_cfg.object_storage_clients_memory)
     , _group_connections(make_group_connections(cfg))
+    , _dropped_clients_gate("storage_manager::dropped_clients")
     , _config_updater(std::make_unique<config_updater_sync>(cfg, *this))
     , _connections_updater(std::make_unique<connections_updater_sync>(cfg, *this))
 {
     for (auto& e : cfg.object_storage_endpoints()) {
         _object_storage_endpoints.emplace(std::make_pair(e.key(), e));
+        add_address(e);
     }
 
     if (!stm_cfg.skip_metrics_registration) {
@@ -278,15 +284,51 @@ storage_manager::storage_manager(const db::config& cfg, config stm_cfg)
 }
 
 future<> storage_manager::stop() {
-    for (auto ep : _object_storage_endpoints) {
+    // No configuration update changes the client map from here on.
+    _config_updater.reset();
+    _connections_updater.reset();
+    co_await _dropped_clients_gate.close();
+    for (auto& ep : _address_clients) {
         if (ep.second.client != nullptr) {
             co_await ep.second.client->close();
         }
     }
 }
 
+void storage_manager::add_address(const db::object_storage_endpoint_param& ep) {
+    _address_clients.try_emplace(client_address(ep), ep);
+}
 
-auto storage_manager::get_endpoint(const sstring& endpoint) -> object_storage_endpoint& {
+// A client must not be destroyed before close() resolves, so the close holds it, and it
+// holds the gate that stop() waits for: the client is in no map any more.
+// Sstables that are still open through this client fail their requests from now on.
+void storage_manager::close_dropped_client(shared_ptr<object_storage_client> client) {
+    auto holder = _dropped_clients_gate.try_hold();
+    if (!holder) {
+        // stop() has closed every client already
+        return;
+    }
+    (void)client->close().handle_exception([] (std::exception_ptr ex) {
+        smlogger.warn("Failed to close a dropped object storage client: {}", ex);
+    }).finally([client, holder = std::move(*holder)] {});
+}
+
+shared_ptr<sstables::object_storage_client> storage_manager::get_address_client(const sstring& address) {
+    auto found = _address_clients.find(address);
+    if (found == _address_clients.end()) {
+        throw std::invalid_argument(format("no object-storage endpoint has the address {}", address));
+    }
+    auto& ac = found->second;
+    if (ac.client == nullptr) {
+        ac.client = make_object_storage_client(ac.cfg, _object_storage_clients_memory, [&ct = container(), address] {
+            return ct.local().get_address_client(address);
+        }, _group_connections);
+    }
+    return ac.client;
+}
+
+
+const db::object_storage_endpoint_param& storage_manager::get_endpoint(const sstring& endpoint) const {
     auto found = _object_storage_endpoints.find(endpoint);
     if (found == _object_storage_endpoints.end()) {
         smlogger.error("unable to find {} in configured object-storage endpoints", endpoint);
@@ -296,27 +338,21 @@ auto storage_manager::get_endpoint(const sstring& endpoint) -> object_storage_en
 }
 
 shared_ptr<sstables::object_storage_client> storage_manager::get_endpoint_client(sstring endpoint) {
-    auto& ep = get_endpoint(endpoint);
-    if (ep.client == nullptr) {
-        ep.client = make_object_storage_client(ep.cfg, _object_storage_clients_memory, [&ct = container()] (std::string ep) {
-            return ct.local().get_endpoint_client(ep);
-        }, _group_connections);
-    }
-    return ep.client;
+    return get_address_client(client_address(get_endpoint(endpoint)));
 }
 
 sstring storage_manager::get_endpoint_type(sstring endpoint) {
-    return get_endpoint(endpoint).cfg.type();
+    return get_endpoint(endpoint).type();
 }
 
 bool storage_manager::is_known_endpoint(sstring endpoint, sstring type) const {
     auto it = _object_storage_endpoints.find(endpoint);
-    return it != _object_storage_endpoints.end() && (type == "" || it->second.cfg.is_storage_of_type(type));
+    return it != _object_storage_endpoints.end() && (type == "" || it->second.is_storage_of_type(type));
 }
 
 std::vector<sstring> storage_manager::endpoints(sstring type) const noexcept {
     return _object_storage_endpoints | std::views::filter([&type] (auto& ep) {
-        return type == "" || ep.second.cfg.is_storage_of_type(type);
+        return type == "" || ep.second.is_storage_of_type(type);
     }) | std::views::keys | std::ranges::to<std::vector>();
 }
 
@@ -329,20 +365,34 @@ storage_manager::config_updater_sync::config_updater_sync(const db::config& cfg,
         // work (credential refresh for S3, old client close for GCS) into a
         // client-local gated fiber.
         std::unordered_set<sstring> updates;
+        std::unordered_set<sstring> addresses;
         for (auto& e : cfg.object_storage_endpoints()) {
             auto endpoint = e.key();
             smlogger.info("config_updater: endpoint={}, config={}", endpoint, e);
             updates.insert(endpoint);
-            auto [it, added] = sstm._object_storage_endpoints.try_emplace(endpoint, e);
-            if (!added) {
-                if (it->second.client) {
-                    it->second.client->update_config_sync(e);
+            auto address = client_address(e);
+            auto known = sstm._address_clients.find(address);
+            if (addresses.insert(address).second && known != sstm._address_clients.end()) {
+                if (known->second.client) {
+                    known->second.client->update_config_sync(e);
                 }
-                it->second.cfg = e;
+                known->second.cfg = e;
+            } else {
+                sstm.add_address(e);
             }
+            sstm._object_storage_endpoints.insert_or_assign(endpoint, e);
         }
         std::erase_if(sstm._object_storage_endpoints, [&updates](const auto& e) {
             return !updates.contains(e.first);
+        });
+        std::erase_if(sstm._address_clients, [&addresses, &sstm](auto& e) {
+            if (addresses.contains(e.first)) {
+                return false;
+            }
+            if (e.second.client) {
+                sstm.close_dropped_client(std::move(e.second.client));
+            }
+            return true;
         });
     }))
 {}
@@ -359,7 +409,7 @@ void storage_manager::reload_group_connections(const db::config& cfg, std::optio
     }
     smlogger.info("connections_updater: updating connection limits to {}", connections);
     _group_connections = std::move(connections);
-    for (auto& [endpoint, ep] : _object_storage_endpoints) {
+    for (auto& [address, ep] : _address_clients) {
         if (ep.client) {
             ep.client->update_group_connections(_group_connections);
         }

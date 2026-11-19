@@ -34,6 +34,7 @@ public:
         std::strong_ordering operator<=>(const s3_storage&) const = default;
         std::string to_json_string() const;
         std::string key() const;
+        bool same_client_settings(const s3_storage&) const;
     };
     struct gs_storage {
         std::string endpoint; // "default"/empty or an URI
@@ -44,6 +45,7 @@ public:
         std::strong_ordering operator<=>(const gs_storage&) const = default;
         std::string to_json_string() const;
         std::string key() const;
+        bool same_client_settings(const gs_storage&) const;
     };
 
     object_storage_endpoint_param();
@@ -58,6 +60,10 @@ public:
     std::string to_json_string() const;
     std::string key() const;
     const std::string& type() const;
+    // The address a client of this entry connects to.
+    const std::string& endpoint() const;
+    // Entries with one address share a client; true when both would build it the same way.
+    bool same_client_settings(const object_storage_endpoint_param&) const;
 
     bool is_s3_storage() const;
     bool is_gs_storage() const;

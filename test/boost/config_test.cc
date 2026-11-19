@@ -1068,6 +1068,37 @@ SEASTAR_THREAD_TEST_CASE(test_object_storage_endpoint_uri) {
         std::invalid_argument);
 }
 
+SEASTAR_THREAD_TEST_CASE(test_object_storage_endpoints_conflicting_settings_on_one_address) {
+    // Entries with one address share a client. An entry that would build it differently is
+    // skipped, as an entry that does not decode is, so its name does not exist.
+    auto cfg_ptr = std::make_unique<config>();
+    config& cfg = *cfg_ptr;
+    cfg.read_from_yaml(R"yaml(
+object_storage_endpoints:
+  - name: first
+    uri: https://s3.us-east-1.amazonaws.com
+    aws_region: us-east-1
+  - name: same
+    uri: https://s3.us-east-1.amazonaws.com
+    aws_region: us-east-1
+  - name: other_region
+    uri: https://s3.us-east-1.amazonaws.com
+    aws_region: eu-west-1
+  - name: https://s3.eu-west-1.amazonaws.com
+    aws_region: eu-west-1
+  - name: alias
+    uri: https://s3.eu-west-1.amazonaws.com
+    aws_region: eu-west-1
+  - name: alias_other_region
+    uri: https://s3.eu-west-1.amazonaws.com
+    aws_region: us-east-1
+)yaml", throw_on_error);
+    auto names = cfg.object_storage_endpoints() | std::views::transform(&object_storage_endpoint_param::key) | std::ranges::to<std::vector>();
+    // The address of an entry with no uri is its name, so it shares a client with its alias.
+    const std::vector<std::string> expected{"first", "same", "https://s3.eu-west-1.amazonaws.com", "alias"};
+    BOOST_CHECK_EQUAL_COLLECTIONS(names.begin(), names.end(), expected.begin(), expected.end());
+}
+
 SEASTAR_THREAD_TEST_CASE(test_parse_object_storage_endpoints_one_entry_broken) {
     tests::tmp_unset_env no_region_env("AWS_DEFAULT_REGION");
     auto cfg_ptr = std::make_unique<config>();
