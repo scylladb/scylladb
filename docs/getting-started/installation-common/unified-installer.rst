@@ -15,6 +15,8 @@ Ensure your platform is supported by the ScyllaDB version you want to install.
 See `OS Support <https://docs.scylladb.com/stable/versioning/os-support-per-version.html>`_
 for information about supported Linux distributions and versions.
 
+.. _unified-installer-download:
+
 Download and Install
 -----------------------
 
@@ -97,19 +99,80 @@ Upgrade/ Downgrade/ Uninstall
 Upgrade
 =========
 
-The unified package is based on a binary package; it’s not a RPM / DEB packages, so it doesn’t upgrade or downgrade by yum / apt. To upgrade ScyllaDB, run the ``install.sh`` script.
+The unified package is based on a binary package; it's not an RPM or DEB package, so you can't upgrade or downgrade
+it with yum or apt. To upgrade ScyllaDB, run the ``install.sh`` script from the package of the new version.
 
-Root install:
+Before you upgrade, see :doc:`Upgrade ScyllaDB </upgrade/index>` for the supported upgrade paths and the
+recommendations to follow during the upgrade.
 
-.. code:: sh
+Upgrade the nodes one at a time (rolling upgrade). Perform the following steps on **each** node in the cluster,
+and move on to the next node only after the upgraded node is up and running.
+
+#. Drain the node and back up the data:
+
+   .. code:: sh
+
+    nodetool drain
+    nodetool snapshot
+
+   For a nonroot install, run ``~/scylladb/bin/nodetool`` instead of ``nodetool``.
+
+   Take note of the directory name that nodetool gives you, and copy all the directories with this name
+   to a backup device. The directories are located under ``/var/lib/scylla/data`` (root install) or
+   ``~/scylladb/data`` (nonroot install).
+
+#. Back up the ``scylla.yaml`` configuration file, located in ``/etc/scylla/`` (root install) or
+   ``~/scylladb/etc/scylla/`` (nonroot install).
+
+#. Stop the node:
+
+   Root install:
+
+   .. code:: sh
+
+    sudo systemctl stop scylla-server
+
+   Nonroot install:
+
+   .. code:: sh
+
+    systemctl --user stop scylla-server
+
+#. Download and extract the unified package of the new version, as described in
+   :ref:`Download and Install <unified-installer-download>`. Then, run the ``install.sh`` script from
+   the extracted directory:
+
+   Root install:
+
+   .. code:: sh
 
     ./install.sh --upgrade
 
-Nonroot install
+   Nonroot install:
 
-.. code:: sh
+   .. code:: sh
 
     ./install.sh --upgrade --nonroot
+
+#. Start the node:
+
+   Root install:
+
+   .. code:: sh
+
+    sudo systemctl start scylla-server
+
+   Nonroot install:
+
+   .. code:: sh
+
+    systemctl --user start scylla-server
+
+#. Validate the upgrade. Run ``nodetool status`` to verify that the node is up (``UN``), and check
+   the ScyllaDB logs for errors.
+
+When the upgrade is completed on all nodes, remove the snapshot with the
+``nodetool clearsnapshot -t <snapshot>`` command to prevent running out of space.
 
 .. note:: The installation script does not upgrade scylla-tools. You will have to upgrade them separately. 
 
