@@ -908,6 +908,14 @@ A table supports the following options:
      - simple
      - inherited
      - Time in seconds since the start of the last successful repair of a tablet of the table after which it is eligible for automatic repair. A repair restricted to some hosts or datacenters does not count, and a tablet that was never repaired is eligible immediately. ``0`` disables time-based automatic repair. When not set for the table, the keyspace or cluster value applies. Set to ``NULL`` to remove the table setting. See :doc:`configuring a cluster with CQL </cql/cluster-config>`.
+   * - ``auto_repair_threshold_size_fraction``
+     - simple
+     - inherited
+     - Repair a tablet of the table once the average unrepaired size of its replicas reaches this fraction of their average SSTable size, without waiting for ``auto_repair_threshold_in_seconds``. Accepts a number from ``0`` to ``1``; ``0`` disables the size-based trigger. When not set for the table, the keyspace or cluster value applies. Set to ``NULL`` to remove the table setting. See :doc:`configuring a cluster with CQL </cql/cluster-config>`.
+   * - ``auto_repair_threshold_min_size_in_bytes``
+     - simple
+     - inherited
+     - Floor below which ``auto_repair_threshold_size_fraction`` is not consulted for a tablet of the table, so that a nearly empty tablet is not repaired over and over for a handful of bytes. Accepts ``0`` or more. When not set for the table, the keyspace or cluster value applies. Set to ``NULL`` to remove the table setting. See :doc:`configuring a cluster with CQL </cql/cluster-config>`.
    * - ``compaction``
      - map
      - see below
