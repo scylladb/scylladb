@@ -1118,6 +1118,7 @@ class ScyllaServer:
             return
 
         self.shutdown_control_connection()
+        cancelled = False
         try:
             self.cmd.terminate()
         except ProcessLookupError:
@@ -1133,10 +1134,16 @@ class ScyllaServer:
                 await self.cmd.wait()
                 raise RuntimeError(
                     f"Stopping server {self} gracefully took longer than {timeout}s")
+            except asyncio.CancelledError:
+                # The process may still be up, e.g. paused and not acting on
+                # SIGTERM: keep it, so that stop() can still kill it.
+                cancelled = True
+                raise
         finally:
-            if self.cmd:
-                self.logger.info("gracefully stopped %s", self)
-            self.cmd = None
+            if not cancelled:
+                if self.cmd:
+                    self.logger.info("gracefully stopped %s", self)
+                self.cmd = None
 
     def process_status(self) -> str:
         """Return the status of the server's process, as reported by psutil.

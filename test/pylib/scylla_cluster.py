@@ -645,13 +645,9 @@ class ScyllaCluster:
         assert current is not None  # ops always run as a task (see cluster_op)
         self.tasks_history.pop(current, None)
         # Wait for the operations the test left running.  The budget has to
-        # outlast the longest of them, because asyncio.wait_for() cancels the
-        # task when it expires -- and the task here is the operation itself,
-        # not the shield the caller awaited.  The longest is a graceful stop,
-        # and cancelling one mid-flight is not merely a lost result: the
-        # CancelledError skips stop_gracefully()'s SIGKILL path while its
-        # finally clause still clears self.cmd, disowning a process that is
-        # still shutting down, after which stop() finds nothing left to kill.
+        # outlast the longest of them, a graceful stop, because
+        # asyncio.wait_for() cancels the task when it expires -- and the task
+        # here is the operation itself, not the shield the caller awaited.
         drain_timeout = graceful_stop_timeout(self.mode) + 60
         for task, descr in list(self.tasks_history.items()):
             if not task.done():
