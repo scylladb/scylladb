@@ -22,7 +22,12 @@ Updating a row is done using an ``UPDATE`` statement:
    simple_selection: `column_name`
                    : | `column_name` '[' `term` ']'
                    : | `column_name` '.' `field_name`
-   condition: `simple_selection` `operator` `term`
+   condition: `simple_selection` `condition_operator` `term`
+            : | `simple_selection` [ NOT ] IN ( '(' [ `term` ( ',' `term` )* ] ')' | `bind_marker` )
+            : | `column_name` ( CONTAINS | CONTAINS KEY ) `term`
+            : | `column_name` IS [ NOT ] NULL
+            : | '(' `condition` ')'
+   condition_operator: '=' | '<' | '>' | '<=' | '>=' | '!=' | LIKE
 
 For instance:
 
@@ -80,6 +85,11 @@ It is, however, possible to use the conditions on some columns through ``IF``, i
 unless the conditions are met. Each such ``UPDATE`` gets a globally unique timestamp.
 But, please note that using ``IF`` conditions will incur a non-negligible performance
 cost (internally, Paxos will be used), so this should be used sparingly.
+
+A condition tests a column, a collection element or a field of a user-defined type. ``CONTAINS`` and
+``CONTAINS KEY`` test a whole collection column, and their operand cannot be null. In a condition, ``IS NULL`` behaves
+like ``= NULL``, and ``IS NOT NULL`` like ``!= NULL``. A condition on ``token()``, on several columns at once, or on a
+function call is not allowed.
 
 
 :doc:`Apache Cassandra Query Language (CQL) Reference </cql/index>`

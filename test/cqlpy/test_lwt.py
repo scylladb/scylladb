@@ -203,6 +203,95 @@ def test_lwt_not_in(cql, table1, cassandra_bug):
     for r in rs:
         assert r.applied == False
 
+# Like the WHERE clause, an LWT IF clause accepts IS NULL and IS NOT NULL
+# (SCYLLADB-447). In a condition they behave like "= NULL" and "!= NULL".
+# Cassandra doesn't accept them in IF.
+def test_lwt_is_null(cql, table1, scylla_only):
+    p = unique_key_int()
+    print("Conditions on a regular column of a row that doesn't exist yet")
+    rs = list(cql.execute(f'UPDATE {table1} SET r=1 WHERE p={p} AND c=1 IF r IS NOT NULL'))
+    assert not rs[0].applied
+    rs = list(cql.execute(f'UPDATE {table1} SET r=1 WHERE p={p} AND c=1 IF r IS NULL'))
+    assert rs[0].applied
+    assert list(cql.execute(f'SELECT r FROM {table1} WHERE p={p} AND c=1')) == [(1,)]
+    print("Conditions on a regular column that is set")
+    rs = list(cql.execute(f'UPDATE {table1} SET r=2 WHERE p={p} AND c=1 IF r IS NULL'))
+    assert not rs[0].applied
+    rs = list(cql.execute(f'UPDATE {table1} SET r=2 WHERE p={p} AND c=1 IF r IS NOT NULL'))
+    assert rs[0].applied
+    assert list(cql.execute(f'SELECT r FROM {table1} WHERE p={p} AND c=1')) == [(2,)]
+    print("Conditions on the static column")
+    rs = list(cql.execute(f'UPDATE {table1} SET s=3 WHERE p={p} IF s IS NULL'))
+    assert rs[0].applied
+    rs = list(cql.execute(f'DELETE FROM {table1} WHERE p={p} AND c=1 IF r IS NOT NULL AND s IS NOT NULL'))
+    assert rs[0].applied
+    assert list(cql.execute(f'SELECT c, r, s FROM {table1} WHERE p={p}')) == [(None, None, 3)]
+
+# Like a WHERE relation, an IF condition can be parenthesized (SCYLLADB-447).
+# Cassandra doesn't accept that.
+def test_lwt_parenthesized_condition(cql, table1, scylla_only):
+    p = unique_key_int()
+    cql.execute(f'INSERT INTO {table1}(p, c, r) VALUES ({p}, 1, 1)')
+    rs = list(cql.execute(f'UPDATE {table1} SET r=2 WHERE p={p} AND c=1 IF (r = 1) AND ((r IN (1, 3)))'))
+    assert rs[0].applied
+    rs = list(cql.execute(f'UPDATE {table1} SET r=3 WHERE p={p} AND c=1 IF (r = 1)'))
+    assert not rs[0].applied
+    assert list(cql.execute(f'SELECT r FROM {table1} WHERE p={p} AND c=1')) == [(2,)]
+
+# The IF clause shares its grammar with WHERE (SCYLLADB-447), but the WHERE
+# relations that select keys - on token() or on several columns at once - and
+# those on a function call mean nothing for one row, so IF rejects them.
+# Cassandra rejects them as syntax errors.
+def test_lwt_condition_unsupported_lhs(cql, table1, scylla_only):
+    p = unique_key_int()
+    cql.execute(f'INSERT INTO {table1}(p, c, r) VALUES ({p}, 1, 1)')
+    for condition in ['token(p) = 1', 'token(r) = 1', '(c) = (1)', '(r, s) = (1, 2)',
+                      'intasblob(r) = 0x00000001', 'system.intasblob(r) = 0x00000001']:
+        with pytest.raises(InvalidRequest, match='is not supported'):
+            cql.execute(f'UPDATE {table1} SET r=2 WHERE p={p} AND c=1 IF {condition}')
+    assert list(cql.execute(f'SELECT r FROM {table1} WHERE p={p} AND c=1')) == [(1,)]
+
+# CONTAINS and CONTAINS KEY conditions work in a conditional batch, and on a
+# static column, where the WHERE needs only the partition key.
+# Reproduces #13586.
+def test_lwt_contains_batch_and_static(cql, test_keyspace):
+    schema = 'p int, c int, l list<int>, m map<int, int>, st set<int> static, PRIMARY KEY (p, c)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        p = unique_key_int()
+        cql.execute(f'INSERT INTO {table}(p, c, l, m, st) VALUES ({p}, 1, [1, 2], {{3: 4}}, {{5}})')
+        print("Conditions on the static column alone")
+        rs = list(cql.execute(f'UPDATE {table} SET st = st + {{6}} WHERE p={p} IF st CONTAINS 5'))
+        assert rs[0].applied
+        rs = list(cql.execute(f'UPDATE {table} SET st = st + {{7}} WHERE p={p} IF st CONTAINS 7'))
+        assert not rs[0].applied
+        assert list(cql.execute(f'SELECT st FROM {table} WHERE p={p}')) == [({5, 6},)]
+
+        def batch(row_condition, static_condition):
+            return list(cql.execute(f'''BEGIN BATCH
+                UPDATE {table} SET l = l + [3] WHERE p={p} AND c=1 IF {row_condition}
+                UPDATE {table} SET st = st + {{8}} WHERE p={p} IF {static_condition}
+                APPLY BATCH'''))
+        print("Batches with one false condition")
+        assert not batch('l CONTAINS 2 AND m CONTAINS KEY 3', 'st CONTAINS 7')[0].applied
+        assert not batch('l CONTAINS 3 AND m CONTAINS KEY 3', 'st CONTAINS 6')[0].applied
+        assert not batch('l CONTAINS 2 AND m CONTAINS KEY 4', 'st CONTAINS 6')[0].applied
+        assert list(cql.execute(f'SELECT l, st FROM {table} WHERE p={p} AND c=1')) == [([1, 2], {5, 6})]
+        print("A batch with all conditions true")
+        assert batch('l CONTAINS 2 AND m CONTAINS KEY 3 AND m CONTAINS 4', 'st CONTAINS 6')[0].applied
+        assert list(cql.execute(f'SELECT l, st FROM {table} WHERE p={p} AND c=1')) == [([1, 2, 3], {5, 6, 8})]
+
+# ScyllaDB allows an IF condition on a set element, as it allows selecting
+# one: s[x] is x if the set contains x, and null otherwise. Cassandra rejects
+# such a condition.
+def test_lwt_set_element_condition(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY, s set<text>, r int') as table:
+        p = unique_key_int()
+        cql.execute(f"INSERT INTO {table}(p, s) VALUES ({p}, {{'foo'}})")
+        assert list(cql.execute(f"UPDATE {table} SET r=1 WHERE p={p} IF s['foo'] = 'foo'"))[0].applied
+        assert not list(cql.execute(f"UPDATE {table} SET r=2 WHERE p={p} IF s['bar'] = 'bar'"))[0].applied
+        assert list(cql.execute(f"UPDATE {table} SET r=3 WHERE p={p} IF s['bar'] = null"))[0].applied
+        assert list(cql.execute(f'SELECT r FROM {table} WHERE p={p}')) == [(3,)]
+
 # Currently in Cassandra and in Scylla (see discussion in #24229), the full
 # LWT "IF" syntax is allowed on UPDATE and DELETE, but only the IF NOT EXISTS
 # condition is allowed for INSERT. This test confirms that INSERT with
