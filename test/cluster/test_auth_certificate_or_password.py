@@ -32,7 +32,7 @@ import pytest
 
 from contextlib import asynccontextmanager
 
-from cassandra import ConsistencyLevel, InvalidRequest        # type: ignore
+from cassandra import ConsistencyLevel, InvalidRequest, Unauthorized  # type: ignore
 from cassandra.cluster import Cluster, NoHostAvailable       # type: ignore
 from cassandra.auth import PlainTextAuthProvider             # type: ignore
 from cassandra.cluster import ExecutionProfile, EXEC_PROFILE_DEFAULT  # type: ignore
@@ -678,3 +678,113 @@ async def test_audit_repeated_refused_startup(manager: ScyllaClusterManager, tmp
         wait_for(both_appeared, timeout=60, text='an audit record for each rejected STARTUP')
         assert len(_refused_login_records(admin)) == 2, \
             'two rejected STARTUPs produced more than two audit records'
+
+
+def _gen_signed_cert(tmp_path, name, subject, email=None):
+    """A client certificate signed by the CA _gen_certs creates.
+
+    With email, the certificate's subjectAltName holds that address alone.
+    """
+    system(f'openssl ecparam -name prime256v1 -genkey -noout > "{tmp_path}/{name}.key" 2>/dev/null')
+    system(f'openssl req -new -sha256 -subj "{subject}" '
+           f'-key "{tmp_path}/{name}.key" -out "{tmp_path}/{name}.csr" 2>/dev/null')
+    extfile = ''
+    if email:
+        with open(f'{tmp_path}/{name}.ext', 'w') as f:
+            f.write(f'subjectAltName=email:{email}\n')
+        extfile = f'-extfile "{tmp_path}/{name}.ext"'
+    system(f'openssl x509 -req -sha256 -days 365 {extfile} '
+           f'-in "{tmp_path}/{name}.csr" '
+           f'-CA "{tmp_path}/ca.crt" -CAkey "{tmp_path}/ca.key" -CAcreateserial '
+           f'-out "{tmp_path}/{name}.crt" 2>/dev/null')
+
+
+async def test_certificate_authenticator_altname_role(manager: ScyllaClusterManager, tmp_path):
+    """CertificateAuthenticator takes the role from the first role query that
+    matches, here an ALTNAME query on the e-mail address in the certificate's
+    subjectAltName before a SUBJECT query on its CN. Only a role that exists
+    may log in, and only with the permissions granted to it.
+
+    Ported from dtest's auth_test.py::TestAuth::test_certificate_auth.
+    """
+    _gen_certs(tmp_path)
+    # admin is the superuser, named by auth_superuser_name.
+    _gen_signed_cert(tmp_path, 'admin', '/CN=admin')
+    _gen_signed_cert(tmp_path, 'certclient1', '/CN=certclient1')
+    _gen_signed_cert(tmp_path, 'certclient2', '/CN=certclient2')
+    # No CN: only the ALTNAME query can find a role name in this one.
+    _gen_signed_cert(tmp_path, 'certclient3', '/O=TestOrg', email='certclient3@scylladb.com')
+
+    config = _server_config(tmp_path, extra_config={
+        'authenticator': 'com.scylladb.auth.CertificateAuthenticator',
+        'authorizer': 'org.apache.cassandra.auth.CassandraAuthorizer',
+        'auth_superuser_name': 'admin',
+        'auth_certificate_role_queries': [
+            {'source': 'ALTNAME', 'query': 'EMAIL=(\\w+)@scylladb.com'},
+            {'source': 'SUBJECT', 'query': 'CN=([^,]+)'},
+        ],
+    })
+    config['client_encryption_options']['require_client_auth'] = True
+    # The manager's driver cannot log in without a certificate, so leave the
+    # plain ports closed and connect over TLS only.
+    del config['native_transport_port']
+    del config['native_shard_aware_transport_port']
+    server = await manager.server_add(config=config, connect_driver=False)
+    host = server.ip_addr
+
+    def connect(cert=None):
+        cluster = _make_tls_cluster(host, _TLS_PORT,
+                                    certfile=f'{tmp_path}/{cert}.crt' if cert else None,
+                                    keyfile=f'{tmp_path}/{cert}.key' if cert else None)
+        try:
+            return cluster, cluster.connect()
+        except NoHostAvailable:
+            safe_driver_shutdown(cluster)
+            raise
+
+    def connect_admin():
+        try:
+            return connect('admin')
+        except NoHostAvailable:
+            return None
+
+    admin_cluster, admin = wait_for(connect_admin, timeout=60,
+                                    text='the TLS port to accept the superuser certificate')
+    try:
+        # A certificate is required at all: without one the TLS handshake fails.
+        with pytest.raises(NoHostAvailable):
+            connect()
+        # None of the client roles exists yet.
+        for cert in ['certclient1', 'certclient2', 'certclient3']:
+            _attempt_cert_login(host, tmp_path, cert, refused=True)
+
+        admin.execute('CREATE USER certclient2 NOSUPERUSER')
+        admin.execute("CREATE KEYSPACE ks WITH replication = "
+                      "{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}")
+        admin.execute('CREATE TABLE ks.cf (id int PRIMARY KEY)')
+
+        # The role found by the SUBJECT query logs in, with no permissions.
+        client2_cluster, client2 = connect('certclient2')
+        try:
+            with pytest.raises(Unauthorized, match='User certclient2 has no SELECT permission on <table ks.cf>'):
+                client2.execute('SELECT * FROM ks.cf')
+            with pytest.raises(Unauthorized, match='User certclient2 has no AUTHORIZE permission on <table ks.cf>'):
+                client2.execute('REVOKE SELECT ON ks.cf FROM certclient2')
+        finally:
+            safe_driver_shutdown(client2_cluster)
+        for cert in ['certclient1', 'certclient3']:
+            _attempt_cert_login(host, tmp_path, cert, refused=True)
+
+        # The role found by the ALTNAME query logs in once it exists.
+        admin.execute('CREATE USER certclient3 NOSUPERUSER')
+        client3_cluster, client3 = connect('certclient3')
+        try:
+            assert [row.name for row in client3.execute('LIST USERS')] == ['certclient3']
+        finally:
+            safe_driver_shutdown(client3_cluster)
+        _attempt_cert_login(host, tmp_path, 'certclient1', refused=True)
+    finally:
+        safe_driver_shutdown(admin_cluster)
+
+    # Run the authenticator's stop(), which test.py's SIGKILL at teardown never does.
+    await manager.server_stop_gracefully(server.server_id)
