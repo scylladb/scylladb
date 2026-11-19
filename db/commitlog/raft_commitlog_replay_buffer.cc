@@ -12,7 +12,6 @@
 #include "db/commitlog/commitlog_entry.hh"
 #include "db/config.hh"
 #include "db/timeout_clock.hh"
-#include "cql3/query_processor.hh"
 #include "service/strong_consistency/raft_groups_storage.hh"
 #include "mutation/frozen_mutation.hh"
 #include "schema/schema_registry.hh"

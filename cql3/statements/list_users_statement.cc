@@ -10,7 +10,6 @@
 
 #include <seastar/core/when_all.hh>
 #include "list_users_statement.hh"
-#include "cql3/query_processor.hh"
 #include "cql3/query_options.hh"
 #include "auth/common.hh"
 #include "db/system_keyspace.hh"

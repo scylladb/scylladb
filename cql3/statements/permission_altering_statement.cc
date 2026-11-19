@@ -13,7 +13,6 @@
 #include "auth/service.hh"
 #include "db/system_keyspace.hh"
 #include "permission_altering_statement.hh"
-#include "cql3/query_processor.hh"
 #include "cql3/role_name.hh"
 #include "gms/feature_service.hh"
 
