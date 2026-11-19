@@ -17,7 +17,13 @@ from time import time
 import logging
 from test.pylib.log_browsing import ScyllaLogFile
 from test.pylib.rest_client import UnixRESTClient, ScyllaRESTAPIClient, ScyllaMetricsClient
+<<<<<<< HEAD
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, Host
+||||||| parent of 5f1f3e2018 (test: pylib: let server start and stop wait for other servers' view)
+from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, universalasync_typed_wrap, Host
+=======
+from test.pylib.util import gather_safely, wait_for, wait_for_cql_and_get_hosts, universalasync_typed_wrap, Host
+>>>>>>> 5f1f3e2018 (test: pylib: let server start and stop wait for other servers' view)
 from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo, ServerUpState
 from test.pylib.scylla_cluster import ReplaceConfig, ScyllaServer
 from cassandra.cluster import Session as CassandraSession, \
@@ -212,27 +218,169 @@ class ManagerClient():
            To be used when a current cluster wants to be reused."""
         await self.client.put_json("/cluster/mark-clean")
 
-    async def server_stop(self, server_id: ServerNum) -> None:
-        """Stop specified server"""
+    async def server_stop(self, server_id: ServerNum, seen_by: list[ServerInfo] | None = None) -> None:
+        """Stop specified server.
+
+        Optionally waits for the servers in seen_by to see it as dead.
+        """
         logger.debug("ManagerClient stopping %s", server_id)
         await self.client.put_json(f"/cluster/server/{server_id}/stop")
+        await self._server_seen_dead_by(server_id, seen_by)
 
+<<<<<<< HEAD
     async def server_stop_gracefully(self, server_id: ServerNum, timeout: float = 60) -> None:
         """Stop specified server gracefully"""
+||||||| parent of 5f1f3e2018 (test: pylib: let server start and stop wait for other servers' view)
+    async def server_stop_gracefully(self, server_id: ServerNum, timeout: float = 180) -> None:
+        """Stop specified server gracefully"""
+=======
+    async def _server_seen_dead_by(self, server_id: ServerNum, seen_by: list[ServerInfo] | None, interval: float = 45.) -> None:
+        """Wait till the given servers see a stopped server as dead."""
+        if seen_by:
+            server_ip = await self.get_host_ip(server_id)
+            await gather_safely(*(self.server_not_sees_other_server(s.ip_addr, server_ip, interval=interval) for s in seen_by))
+
+    async def _server_seen_live_by(self, server_id: ServerNum, seen_by: list[ServerInfo] | None, interval: float = 45.) -> None:
+        """Wait till the given servers see a started server as alive."""
+        if seen_by:
+            server_ip = await self.get_host_ip(server_id)
+            await gather_safely(*(self.server_sees_other_server(s.ip_addr, server_ip, interval=interval) for s in seen_by))
+
+    async def server_stop_gracefully(self, server_id: ServerNum, timeout: float = 180,
+                                     seen_by: list[ServerInfo] | None = None) -> None:
+        """Stop specified server gracefully.
+
+        Optionally waits for the servers in seen_by to see it as dead.
+        """
+>>>>>>> 5f1f3e2018 (test: pylib: let server start and stop wait for other servers' view)
         logger.debug("ManagerClient stopping gracefully %s", server_id)
         await self.client.put_json(f"/cluster/server/{server_id}/stop_gracefully", timeout=timeout)
+        await self._server_seen_dead_by(server_id, seen_by)
 
+<<<<<<< HEAD
     async def server_start(self, server_id: ServerNum, expected_error: Optional[str] = None,
                            wait_others: int = 0, wait_interval: float = 45, seeds: Optional[List[IPAddress]] = None,
                            timeout: Optional[float] = None, connect_driver: bool = True,
                            auth_provider: Optional[dict] = None) -> None:
         """Start specified server and optionally wait for it to learn of other servers"""
+||||||| parent of 5f1f3e2018 (test: pylib: let server start and stop wait for other servers' view)
+    async def disable_tablet_balancing(self):
+        """
+        Disables background tablet load-balancing.
+        If there are already active migrations, it waits for them to finish before returning.
+        Doesn't block migrations on behalf of node operations like decommission, removenode or replace.
+        :return:
+        """
+        servers = await self.running_servers()
+        if not servers:
+            raise Exception("No running servers")
+        # Any server will do, it's a group0 operation
+        await self.api.disable_tablet_balancing(servers[0].ip_addr)
+
+    async def enable_tablet_balancing(self):
+        """
+        Enables background tablet load-balancing.
+        """
+        servers = await self.running_servers()
+        if not servers:
+            raise Exception("No running servers")
+        # Any server will do, it's a group0 operation
+        await self.api.enable_tablet_balancing(servers[0].ip_addr)
+
+    async def server_start(self,
+                           server_id: ServerNum,
+                           expected_error: str | None = None,
+                           expected_crash: bool = False,
+                           wait_others: int = 0,
+                           wait_interval: float = 45,
+                           seeds: list[IPAddress] | None = None,
+                           timeout: float | None = None,
+                           connect_driver: bool = True,
+                           expected_server_up_state: ServerUpState = ServerUpState.CQL_QUERIED,
+                           cmdline_options_override: list[str] | None = None,
+                           append_env_override: dict[str, str] | None = None,
+                           auth_provider: dict[str, str] | None = None) -> None:
+        """Start specified server and optionally wait for it to learn of other servers.
+
+        Replace CLI options and environment variables with `cmdline_options_override` and `append_env_override`
+        if provided.
+
+        If `expected_crash` is True, ignore cores and backtraces related to `expected_error`.
+        """
+        if expected_error is not None:
+            self.ignore_log_patterns.append(re.escape(expected_error))
+            if expected_crash:
+                self.ignore_cores_log_patterns.append(re.escape(expected_error))
+
+=======
+    async def disable_tablet_balancing(self):
+        """
+        Disables background tablet load-balancing.
+        If there are already active migrations, it waits for them to finish before returning.
+        Doesn't block migrations on behalf of node operations like decommission, removenode or replace.
+        :return:
+        """
+        servers = await self.running_servers()
+        if not servers:
+            raise Exception("No running servers")
+        # Any server will do, it's a group0 operation
+        await self.api.disable_tablet_balancing(servers[0].ip_addr)
+
+    async def enable_tablet_balancing(self):
+        """
+        Enables background tablet load-balancing.
+        """
+        servers = await self.running_servers()
+        if not servers:
+            raise Exception("No running servers")
+        # Any server will do, it's a group0 operation
+        await self.api.enable_tablet_balancing(servers[0].ip_addr)
+
+    async def server_start(self,
+                           server_id: ServerNum,
+                           expected_error: str | None = None,
+                           expected_crash: bool = False,
+                           wait_others: int = 0,
+                           wait_interval: float = 45,
+                           seen_by: list[ServerInfo] | None = None,
+                           seeds: list[IPAddress] | None = None,
+                           timeout: float | None = None,
+                           connect_driver: bool = True,
+                           expected_server_up_state: ServerUpState = ServerUpState.CQL_QUERIED,
+                           cmdline_options_override: list[str] | None = None,
+                           append_env_override: dict[str, str] | None = None,
+                           auth_provider: dict[str, str] | None = None) -> None:
+        """Start specified server and optionally wait for it to learn of other servers.
+
+        Optionally waits also for the servers in seen_by to see it as alive,
+        e.g. the one that coordinates the requests which follow. When
+        restarting a server, pass them as seen_by when stopping it too, or they
+        may still see it as alive from before it was stopped.
+
+        Replace CLI options and environment variables with `cmdline_options_override` and `append_env_override`
+        if provided.
+
+        If `expected_crash` is True, ignore cores and backtraces related to `expected_error`.
+        """
+        if expected_error is not None:
+            self.ignore_log_patterns.append(re.escape(expected_error))
+            if expected_crash:
+                self.ignore_cores_log_patterns.append(re.escape(expected_error))
+
+>>>>>>> 5f1f3e2018 (test: pylib: let server start and stop wait for other servers' view)
         logger.debug("ManagerClient starting %s", server_id)
         data = {"expected_error": expected_error, "seeds": seeds, "connect_driver": connect_driver, "auth_provider": auth_provider}
 
         await self.client.put_json(f"/cluster/server/{server_id}/start", data, timeout=timeout)
         await self.server_sees_others(server_id, wait_others, interval = wait_interval)
+<<<<<<< HEAD
         if expected_error is None:
+||||||| parent of 5f1f3e2018 (test: pylib: let server start and stop wait for other servers' view)
+        if expected_error is None and connect_driver:
+=======
+        await self._server_seen_live_by(server_id, seen_by, interval=wait_interval)
+        if expected_error is None and connect_driver:
+>>>>>>> 5f1f3e2018 (test: pylib: let server start and stop wait for other servers' view)
             if self.cql:
                 self._driver_update()
             else:
