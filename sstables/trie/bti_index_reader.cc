@@ -376,6 +376,9 @@ struct payload_result {
     // The caller is supposed to know the actual size based on `bits`
     // and the context where this is used.
     const_bytes bytes;
+    // The whole page that holds the payload. Needed for its chunk table.
+    const_bytes page;
+    uint64_t page_pos;
 };
 
 // Note: the cursor can be uninitialized, or it can be pointing at:
@@ -682,6 +685,8 @@ payload_result trie_cursor::payload() const {
     return payload_result{
         .bits = _trail.back().payload_bits,
         .bytes = _in.get_payload(_trail.back().pos),
+        .page = _in.get_page(_trail.back().pos),
+        .page_pos = round_down(_trail.back().pos, BTI_PAGE_SIZE),
     };
 }
 
@@ -785,7 +790,8 @@ static row_payload row_payload_to_logical(const payload_result& p) {
 // - `0`: the rest of V is a Rows.db offset.
 // - `10`: the rest of V is a Data.db chunk position, followed by the packed
 //   block count and offset fields.
-// - `11`: reserved. Rejected as malformed.
+// - `11`: the rest of V is an offset within the chunk, followed by a slot
+//   of the page's chunk table, which holds the chunk position and the block count.
 static bti_partition_index_target partition_payload_to_physical_target(const payload_result& p, const bti_physical_layout& layout) {
     const auto payload_size = p.bits;
     if (payload_size < 2) {
@@ -804,9 +810,29 @@ static bti_partition_index_target partition_payload_to_physical_target(const pay
         return rows_db_position{static_cast<uint64_t>(packed)};
     }
     packed &= ~flag;
-    const auto second_flag = static_cast<unsigned __int128>(1) << (packed_bits - 2);
-    if (packed & second_flag) {
-        throw_malformed_sstable_exception("Invalid partition payload in BTI index: reserved tag 11");
+    const auto slot_flag = static_cast<unsigned __int128>(1) << (packed_bits - 2);
+    const bool slot_form = packed & slot_flag;
+    packed &= ~slot_flag;
+
+    if (slot_form) {
+        if (packed_bits < 2 + bti_slot_bits) {
+            throw_malformed_sstable_exception(fmt::format("Invalid partition payload size {} in BTI index", payload_size));
+        }
+        const auto slot = static_cast<uint64_t>(packed & ((1u << bti_slot_bits) - 1));
+        const auto offset_within_chunk = packed >> bti_slot_bits;
+        if (offset_within_chunk >= layout.uncompressed_chunk_length()) {
+            throw_malformed_sstable_exception(fmt::format(
+                "Invalid physical position in BTI index: offset within chunk {} (chunk length {})",
+                static_cast<uint64_t>(offset_within_chunk), layout.uncompressed_chunk_length()));
+        }
+        auto entry = decode_bti_chunk_table_entry(bti_page_view(p.page, p.page_pos).table_entry(slot), layout.block_count_bits());
+        if (entry.block_count > layout.max_block_count()) {
+            throw_malformed_sstable_exception(fmt::format(
+                "Invalid physical position in BTI index: block count {} (max {})", entry.block_count, layout.max_block_count()));
+        }
+        check_chunk_position(entry.chunk_position, layout);
+        const auto extent_hint = bti_extent_hint_from_block_count(entry.chunk_position, entry.block_count);
+        return sstables::sstable_position::from_physical(entry.chunk_position, extent_hint, static_cast<uint64_t>(offset_within_chunk));
     }
 
     const auto component_bits = layout.packed_bits();
