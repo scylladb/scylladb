@@ -541,6 +541,7 @@ future<tablet_metadata> tablet_metadata::copy() const {
     copy._base_table = _base_table;
 
     copy._balancing_enabled = _balancing_enabled;
+    copy._shard0_skew_host = _shard0_skew_host;
 
     co_return copy;
 }

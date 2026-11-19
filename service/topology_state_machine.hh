@@ -212,6 +212,13 @@ struct topology {
     // When false, tablet load balancer will not try to rebalance tablets.
     bool tablet_balancing_enabled = true;
 
+    // The host whose shard 0 gets fewer tablets (tablets_group0_leader_shard_ratio).
+    std::optional<raft::server_id> tablets_shard0_skew_host;
+
+    std::optional<locator::host_id> shard0_skew_host_id() const {
+        return tablets_shard0_skew_host.transform([] (raft::server_id id) { return locator::host_id(id.uuid()); });
+    }
+
     // The set of nodes that should be considered dead during topology operations
     std::unordered_set<raft::server_id> ignored_nodes;
 
