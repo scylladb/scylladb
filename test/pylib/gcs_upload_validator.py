@@ -651,6 +651,16 @@ class validating_server(ThreadingHTTPServer):
     # stalls is enough to push the tests' cleanup budgets over.
     request_queue_size = 128
 
+    def server_bind(self):
+        # HTTPServer sets SO_REUSEADDR. On Linux, that lets another socket
+        # which also sets SO_REUSEADDR bind our port in the window between our
+        # bind() and listen() - and if it listens first, our listen() fails
+        # with EADDRINUSE. SO_REUSEADDR is only useful for binding a fixed
+        # port that still has connections in TIME_WAIT, never for a port the
+        # kernel picks (port 0), so don't set it then.
+        self.allow_reuse_address = self.server_address[1] != 0
+        super().server_bind()
+
     def handle_error(self, request, client_address):
         exc = sys.exc_info()[1]
         if isinstance(exc, (ConnectionResetError, BrokenPipeError, ConnectionAbortedError)):

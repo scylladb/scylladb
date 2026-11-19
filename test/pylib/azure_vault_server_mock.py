@@ -598,6 +598,18 @@ class RequestHandler(BaseHTTPRequestHandler):
             self._send_response(404, 'text/plain', '')
 
 
+class PortZeroSafeHTTPServer(ThreadingHTTPServer):
+    def server_bind(self):
+        # HTTPServer sets SO_REUSEADDR. On Linux, that lets another socket
+        # which also sets SO_REUSEADDR bind our port in the window between our
+        # bind() and listen() - and if it listens first, our listen() fails
+        # with EADDRINUSE. SO_REUSEADDR is only useful for binding a fixed
+        # port that still has connections in TIME_WAIT, never for a port the
+        # kernel picks (port 0), so don't set it then.
+        self.allow_reuse_address = self.server_address[1] != 0
+        super().server_bind()
+
+
 class MockAzureVaultServer:
     def __init__(self, host, port, logger):
         self.logger = logger
@@ -605,7 +617,7 @@ class MockAzureVaultServer:
         self.imds = AzureIMDS()
         self.entra = AzureEntraSTS()
         handler = partial(RequestHandler, self.vault, self.imds, self.entra, self.logger)
-        self.server = ThreadingHTTPServer((host, port), handler)
+        self.server = PortZeroSafeHTTPServer((host, port), handler)
         self.server_thread = None
         self.server.request_queue_size = 10
         self.is_stopped = asyncio.Event()
