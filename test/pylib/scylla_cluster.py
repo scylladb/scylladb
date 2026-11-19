@@ -275,10 +275,7 @@ class ScyllaCluster:
         self.logger.info("Created new cluster %s", self.name)
 
     def repr_tasks_history(self) -> str:
-        out = "Cluster_history"
-        for key, val in self.tasks_history.items():
-            out += f"\n{val}:\t\t{repr(key)}"
-        return out
+        return "".join(["Cluster_history", *(f"\n{val}:\t\t{key!r}" for key, val in self.tasks_history.items())])
 
     async def recycle(self) -> None:
         """Dispose of the cluster once it's no longer needed: stop it, close
@@ -385,7 +382,7 @@ class ScyllaCluster:
         """Add a new server to the cluster"""
 
         assert start or not expected_error, \
-            f"add_server: cannot add a stopped server and expect an error"
+            "add_server: cannot add a stopped server and expect an error"
 
         # Deep copy: the test keeps the dict (and _servers_add() shares it between
         # servers), while ScyllaServer.__init__ writes to it and the server keeps
@@ -1017,8 +1014,8 @@ class ScyllaCluster:
         immediate recycle within the same cluster. The server must be
         stopped before its ip is changed."""
         server, ip_addr = await self._lease_address(server_id)
-        logging.info("Cluster %s changed server %s IP from %s to %s", self.name,
-                     server_id, server.ip_addr, ip_addr)
+        self.logger.info("Cluster %s changed server %s IP from %s to %s", self.name,
+                         server_id, server.ip_addr, ip_addr)
         server.change_ip(ip_addr)
         return ip_addr
 
@@ -1026,8 +1023,8 @@ class ScyllaCluster:
     async def server_change_rpc_address(self, server_id: ServerNum) -> IPAddress:
         """Like server_change_ip(), for the server's RPC address."""
         server, rpc_address = await self._lease_address(server_id)
-        logging.info("Cluster %s changed server %s RPC IP from %s to %s", self.name,
-                     server_id, server.config["rpc_address"], rpc_address)
+        self.logger.info("Cluster %s changed server %s RPC IP from %s to %s", self.name,
+                         server_id, server.config["rpc_address"], rpc_address)
         server.change_rpc_address(rpc_address)
         return rpc_address
 
