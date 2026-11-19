@@ -19,6 +19,14 @@ Install ScyllaDB |CURRENT_VERSION|
 Keep your versions up-to-date. The two latest versions are supported. Also, always install the latest patches for your version.
 
 .. panel-box::
+  :title: Managed Deployment
+  :id: "getting-started"
+  :class: my-panel
+
+  To run ScyllaDB as a fully managed service without installing it yourself, use ScyllaDB Cloud.
+  See the `ScyllaDB Cloud documentation <https://cloud.docs.scylladb.com/stable/>`_.
+
+.. panel-box::
   :title: Cloud Deployment
   :id: "getting-started"
   :class: my-panel
