@@ -4832,3 +4832,34 @@ BOOST_AUTO_TEST_CASE(test_stepdown_prefers_a_priority_member_among_caught_up_ser
         BOOST_CHECK(timeout_now_target(A.get_output()) == ids[preferred]);
     }
 }
+
+BOOST_AUTO_TEST_CASE(test_server_which_declines_leadership_starts_no_election) {
+    server_id A_id = id(), B_id = id(), C_id = id();
+
+    raft::configuration cfg = config_from_ids({A_id, B_id, C_id});
+    raft::log log(raft::snapshot_descriptor{.idx = index_t{0}, .config = cfg});
+
+    discrete_failure_detector fd;
+    auto A = create_follower(A_id, raft::log(log), fd);
+    auto B = create_follower(B_id, raft::log(log));
+    auto C = create_follower(C_id, raft::log(log));
+    election_timeout(B);
+    communicate(A, B, C);
+    BOOST_REQUIRE(B.is_leader());
+
+    A.decline_leadership();
+    const auto term = A.get_current_term();
+
+    // A leader hands the leadership over to it.
+    A.step(B_id, raft::timeout_now{term});
+    BOOST_CHECK(A.is_follower());
+    BOOST_CHECK(A.current_leader() == B_id);
+    BOOST_CHECK_EQUAL(A.get_current_term(), term);
+
+    fd.mark_all_dead();
+    for (int i = 0; i < 3 * ELECTION_TIMEOUT.count(); i++) {
+        A.tick();
+    }
+    BOOST_CHECK(A.is_follower());
+    BOOST_CHECK_EQUAL(A.get_current_term(), term);
+}

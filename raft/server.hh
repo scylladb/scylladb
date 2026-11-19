@@ -313,6 +313,11 @@ public:
     // Replaces configuration::priority_members, e.g. when the topology changes.
     virtual void set_priority_members(std::vector<server_id> members) = 0;
 
+    // Makes this server start no more elections, not even when a leader hands the
+    // leadership over to it. To be called before stepdown() on a server about to stop,
+    // so that the leadership it gives away doesn't come back. Irreversible.
+    virtual void decline_leadership() = 0;
+
     // The function should be called periodically to advance logical clock.
     virtual void tick() = 0;
 

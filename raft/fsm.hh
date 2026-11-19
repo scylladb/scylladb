@@ -332,6 +332,8 @@ class fsm {
     // Set if we want to actively search for a leader.
     // Can be true only if the leader is not known
     bool _ping_leader = false;
+    // See decline_leadership().
+    bool _declines_leadership = false;
     // LeaseGuard: whether our bounded clock was usable at the last tick, i.e.
     // whether we could hold a lease. Reported to the leader in
     // append_reply::clock_ok so it can hand leadership to a node that still can.
@@ -770,6 +772,9 @@ public:
     void transfer_leadership(logical_clock::duration timeout = logical_clock::duration(0), server_id target = {});
     // Replaces fsm_config::priority_members. A leader acts on the new list at once.
     void set_priority_members(std::vector<server_id> members);
+    // From now on this server starts no election, not even when a leader asks it to
+    // with timeout_now.
+    void decline_leadership();
 
     void stop();
 
