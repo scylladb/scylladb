@@ -16,6 +16,7 @@ from .util import new_test_table
 import pytest
 from . import nodetool
 from cassandra.protocol import Unauthorized
+from cassandra.query import SimpleStatement
 
 #############################################################################
 # system.size_estimates.partitions_count
@@ -64,6 +65,7 @@ def write_table_and_estimate_partitions(cql, test_keyspace, N):
 # up to 14%. So just to be generous let's allow a 25% inaccuracy for this
 # small test. In issue #9083 we noted that Scylla had much larger errors -
 # reporting as much as 10880 (!) partitions when we have just 1000.
+@pytest.mark.parametrize("test_keyspace", ["tablets", "vnodes"], indirect=True)
 def test_partitions_estimate_simple_small(cql, test_keyspace):
     N = 1000
     count = write_table_and_estimate_partitions(cql, test_keyspace, N)
@@ -76,6 +78,7 @@ def test_partitions_estimate_simple_small(cql, test_keyspace):
 # needed to reproduce #9083 (the previous shorter test does it too),
 # so we skip this test.
 @pytest.mark.tier2
+@pytest.mark.parametrize("test_keyspace", ["tablets", "vnodes"], indirect=True)
 def test_partitions_estimate_simple_large(cql, test_keyspace):
     N = 10000
     count = write_table_and_estimate_partitions(cql, test_keyspace, N)
@@ -112,6 +115,53 @@ def test_partitions_estimate_full_overlap(cassandra_bug, cql, test_keyspace):
             print(counts)
             print(count)
             assert count > N/1.5 and count < N*1.5
+
+# A tablet table reports one row per tablet, and clustering restrictions on
+# table_name and range_start select the same rows as filtering the full list.
+@pytest.mark.parametrize("test_keyspace", ["tablets"], indirect=True)
+def test_size_estimates_tablets_clustering_restrictions(cql, test_keyspace):
+    def ranges(where='', limit=''):
+        return [(r.table_name, r.range_start, r.range_end) for r in cql.execute(
+            f"SELECT table_name, range_start, range_end FROM system.size_estimates WHERE keyspace_name = '{test_keyspace}' {where} {limit}")]
+    tablets = " WITH tablets = {'min_tablet_count': 100}"
+    with new_test_table(cql, test_keyspace, 'k int PRIMARY KEY', tablets) as t1, \
+         new_test_table(cql, test_keyspace, 'k int PRIMARY KEY', tablets) as t2:
+        n1, n2 = sorted([t1.split('.')[1], t2.split('.')[1]])
+        rows = ranges()
+        assert rows == sorted(rows)
+        r1 = [r for r in rows if r[0] == n1]
+        assert len(r1) >= 100 and len(rows) == 2 * len(r1)
+        assert ranges(f"AND table_name = '{n1}'") == r1
+        assert ranges(f"AND table_name > '{n1}'") == rows[len(r1):]
+        assert ranges(limit='LIMIT 7') == rows[:7]
+        x, y = r1[10][1], r1[20][1]
+        assert ranges(f"AND table_name = '{n1}' AND range_start > '{x}'") == r1[11:]
+        assert ranges(f"AND table_name = '{n1}' AND range_start >= '{x}' AND range_start < '{y}'") == r1[10:20]
+        assert ranges(f"AND table_name = '{n2}' AND range_start <= '{x}'") == [r for r in rows if r[0] == n2 and r[1] <= x]
+
+# Reversed reads return the same rows as a forward read, in reverse order.
+@pytest.mark.parametrize("test_keyspace", ["tablets", "vnodes"], indirect=True)
+def test_size_estimates_reversed(scylla_only, request, cql, test_keyspace):
+    def ranges(where='', order='', limit=''):
+        return [(r.table_name, r.range_start, r.range_end) for r in cql.execute(
+            f"SELECT table_name, range_start, range_end FROM system.size_estimates WHERE keyspace_name = '{test_keyspace}' {where} {order} {limit}")]
+    tablets = " WITH tablets = {'min_tablet_count': 16}" if request.node.callspec.params['test_keyspace'] == 'tablets' else ''
+    desc = 'ORDER BY table_name DESC'
+    with new_test_table(cql, test_keyspace, 'k int PRIMARY KEY', tablets) as t1, \
+         new_test_table(cql, test_keyspace, 'k int PRIMARY KEY', tablets) as t2:
+        n1, n2 = sorted([t1.split('.')[1], t2.split('.')[1]])
+        rows = ranges()
+        r1 = [r for r in rows if r[0] == n1]
+        assert len(r1) > 12 and len(rows) >= 2 * len(r1)
+        assert ranges(order=desc) == rows[::-1]
+        assert ranges(f"AND table_name = '{n1}'", desc) == r1[::-1]
+        assert ranges(order=desc, limit='LIMIT 5') == rows[-5:][::-1]
+        assert ranges(order=desc, limit='PER PARTITION LIMIT 3') == rows[-3:][::-1]
+        assert ranges(f"AND table_name = '{n1}'", desc, 'PER PARTITION LIMIT 3') == r1[-3:][::-1]
+        stmt = SimpleStatement(f"SELECT table_name, range_start, range_end FROM system.size_estimates WHERE keyspace_name = '{test_keyspace}' {desc}", fetch_size=7)
+        assert [(r.table_name, r.range_start, r.range_end) for r in cql.execute(stmt)] == rows[::-1]
+        x = r1[5][1]
+        assert ranges(f"AND table_name = '{n1}' AND range_start > '{x}'", desc) == [r for r in r1 if r[1] > x][::-1]
 
 # Test that deleted partitions should not be counted by the estimated
 # partitions count. Unfortunately, the current state of both Cassandra
