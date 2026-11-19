@@ -54,9 +54,31 @@ std::string db::snapshot::sstables_location(std::string_view prefix) {
     return fmt::format("{}{}{}",  prefix, pp, "sstables");
 }
 
-std::string db::snapshot::snapshot_meta_location(std::string_view prefix, const replica::table& t, std::string_view snapshot_name) {
+std::string db::snapshot::snapshot_meta_location(std::string_view prefix, std::string_view ks_name, std::string_view cf_name, std::string_view snapshot_name) {
     auto pp = prefix.empty() ? "" : "/";
-    return fmt::format("{}{}{}/{}/{}/{}",  prefix, pp, "snapshots", t.schema()->ks_name(), t.schema()->cf_name(), snapshot_name);
+    return fmt::format("{}{}{}/{}/{}/{}",  prefix, pp, "snapshots", ks_name, cf_name, snapshot_name);
+}
+
+std::string db::snapshot::snapshot_meta_location(std::string_view prefix, const replica::table& t, std::string_view snapshot_name) {
+    return snapshot_meta_location(prefix, t.schema()->ks_name(), t.schema()->cf_name(), snapshot_name);
+}
+
+// Where a table's backup lands for a requested location. A table on object
+// storage is backed up in place, so its manifest goes under the table's own
+// location.
+static db::snapshot_dc_location backup_destination(const replica::table& t, const db::snapshot_dc_location& requested) {
+    return std::visit(overloaded_functor{
+        [&] (const data_dictionary::storage_options::local&) {
+            return requested;
+        },
+        [] (const data_dictionary::storage_options::object_storage& os) {
+            return db::snapshot_dc_location {
+                .endpoint = os.endpoint,
+                .bucket = os.bucket,
+                .prefix = os.location ? std::string(*os.location) : std::string(sstables::object_storage_default_prefix),
+            };
+        },
+    }, t.get_storage_options().value);
 }
 
 std::string db::snapshot::snapshot_prefix_from_manifest(std::string_view manifest_path) {
@@ -244,19 +266,8 @@ static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string&
         // Recording the unified layout prefix as the destination makes the manifest land correctly at
         // {prefix}/snapshots/{ks}/{cf}/{tag}/manifest.json, which is where restore reads it from.
         const bool remote_table = t.get_storage_options().is_object_storage_type();
-        auto effective_dst = [&] (const db::snapshot_dc_location& requested) -> db::snapshot_dc_location {
-            return std::visit(overloaded_functor{
-                [&] (const data_dictionary::storage_options::local&) {
-                    return requested;
-                },
-                [] (const data_dictionary::storage_options::object_storage& os) {
-                    return db::snapshot_dc_location {
-                        .endpoint = os.endpoint,
-                        .bucket = os.bucket,
-                        .prefix = os.location ? std::string(*os.location) : std::string(sstables::object_storage_default_prefix),
-                    };
-                },
-            }, t.get_storage_options().value);
+        auto effective_dst = [&] (const db::snapshot_dc_location& requested) {
+            return backup_destination(t, requested);
         };
 
         struct dst_data {
@@ -486,6 +497,7 @@ db::snapshot::start_global_backup(db::snapshot_ctl& ctl, tasks::task_manager::mo
     task_builder.set_scope("datacenter")
                 .set_keyspace(ks_tables.begin()->first)
                 .set_table(ks_tables.begin()->second)
+                .set_entity(snapshot_name)
                 .set_is_abortable(tasks::is_abortable::yes)
                 .set_is_internal(tasks::is_internal::no)
                 .set_is_user_task(tasks::is_user_task::yes)
