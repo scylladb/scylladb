@@ -16,6 +16,7 @@
 #include "cql3/prepared_statements_cache.hh"
 #include "cql3/statements/prepared_statement.hh"
 #include "cql3/query_options.hh"
+#include "db/consistency_level_type.hh"
 
 #include "transport/messages/result_message_base.hh"
 #include "transport/event.hh"
@@ -100,17 +101,20 @@ class result_message::bounce : public result_message {
     cql3::computed_function_values _cached_fn_calls;
     std::optional<seastar::lowres_clock::time_point> _timeout;
     std::optional<bool> _is_write;
+    std::optional<db::consistency_level> _cl;
     locator::host_id_or_exception_callback _on_forwarding_finished;
 
 public:
     bounce(locator::host_id host, unsigned shard, cql3::computed_function_values cached_fn_calls,
            std::optional<seastar::lowres_clock::time_point> timeout = std::nullopt, std::optional<bool> is_write = std::nullopt,
+           std::optional<db::consistency_level> cl = std::nullopt,
            locator::host_id_or_exception_callback on_forwarding_finished = {})
         : _host(host)
         , _shard(shard)
         , _cached_fn_calls(std::move(cached_fn_calls))
         , _timeout(std::move(timeout))
         , _is_write(std::move(is_write))
+        , _cl(cl)
         , _on_forwarding_finished(std::move(on_forwarding_finished))
     {}
     virtual void accept(result_message::visitor& v) const override {
@@ -134,6 +138,10 @@ public:
 
     std::optional<bool> is_write() const {
         return _is_write;
+    }
+
+    std::optional<db::consistency_level> consistency() const {
+        return _cl;
     }
 
     cql3::computed_function_values&& take_cached_pk_function_calls() {

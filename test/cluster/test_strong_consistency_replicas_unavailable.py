@@ -252,8 +252,6 @@ async def test_no_quorum_counts_leader_waits(manager: ScyllaClusterManager, scal
 
 
 @pytest.mark.asyncio
-@pytest.mark.skip_bug(link="https://scylladb.atlassian.net/browse/SCYLLADB-4756",
-                      reason="a QUORUM read is silently downgraded to CL=ONE after a forwarded request times out")
 async def test_forwarded_read_timeout_does_not_downgrade_quorum_read(manager: ScyllaClusterManager):
     """
     Verify that a QUORUM (linearizable) read which a non-replica forwards to the only live
@@ -269,11 +267,11 @@ async def test_forwarded_read_timeout_does_not_downgrade_quorum_read(manager: Sc
     The survivor is the former leader: it times out a request instead of forwarding it
     elsewhere from the moment the other replicas die, so no settling wait is needed.
 
-    Reproduces SCYLLADB-4756: a forwarded request that times out is answered with
+    Regression test for SCYLLADB-4756: a forwarded request that timed out was answered with
     ReadTimeout(consistency=ONE, required_responses=0, received_responses=0,
     data_retrieved=False) (transport/server.cc), so the driver's default
-    RetryPolicy.on_read_timeout re-sends the QUORUM read at CL=ONE and the only live
-    replica serves it as a relaxed read.
+    RetryPolicy.on_read_timeout re-sent the QUORUM read at CL=ONE and the only live
+    replica served it as a relaxed read.
     """
     async with sc_table(manager) as (cql, host_of, table, (_, leader, followers, non_replica)):
         query = f"SELECT c FROM {table} WHERE pk = 0"

@@ -465,6 +465,27 @@ tablet migrated away or its table dropped, will never be replayed. `release_all(
 destroys the handles instead of detaching them, so the use counts drop and the
 segments can be reclaimed (SCYLLADB-3827).
 
+# Failed writes and driver retries
+
+A strongly consistent write that fails with a timeout, a server error or
+a connection error has an unknown outcome: it may have been committed, or may
+be committed later, even after the application's later writes. Timeouts are
+only the most frequent case.
+
+The driver must not retry such a write on its own: a second attempt can apply
+the write twice. Run strongly consistent writes with a retry policy that never
+retries (for example `FallthroughRetryPolicy`) and mark as idempotent only
+writes that are safe to apply twice, at any later time: drivers may send
+idempotent statements twice through speculative execution.
+
+The application can retry a write that is safe to apply twice. A plain
+overwrite is safe to apply twice only if nothing, not even the same client,
+later overwrites or deletes what it wrote.
+
+Timeouts report the consistency level of the original request, so a retry
+policy that retries at the reported level keeps it. Do not use a retry policy
+that lowers the consistency level.
+
 # Metrics
 
 The coordinator exports its metrics per scheduling group, under the

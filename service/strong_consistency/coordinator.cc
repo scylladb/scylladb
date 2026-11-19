@@ -35,26 +35,27 @@ namespace service::strong_consistency {
 
 static logging::logger logger("sc_coordinator");
 
-// FIXME: Once the drivers support new error codes corresponding
-// to timeouts of queries to strongly consistent tables, use
-// a new, dedicated exception type instead of this.
+// Timeouts carry the request's consistency level: drivers read it back from the
+// error and hand it to their retry policy.
+//
+// FIXME: a write timeout is safe to retry only if it happened before the Raft
+// append, which the driver can't tell from this error. Once drivers support a
+// dedicated error code for strongly consistent writes (SCYLLADB-5717), use it
+// instead of mutation_write_timeout_exception.
 struct write_timeout : public exceptions::mutation_write_timeout_exception {
-    write_timeout(std::string_view ks, std::string_view cf)
+    write_timeout(std::string_view ks, std::string_view cf, db::consistency_level cl)
         : exceptions::mutation_write_timeout_exception(
             seastar::format("Query timed out for {}.{}", ks, cf),
-            db::consistency_level::ONE, 0, 1, db::write_type::SIMPLE
+            cl, 0, 1, db::write_type::SIMPLE
         )
     {}
 };
 
-// FIXME: Once the drivers support new error codes corresponding
-// to timeouts of queries to strongly consistent tables, use
-// a new, dedicated exception type instead of this.
 struct read_timeout : public exceptions::read_timeout_exception {
-    read_timeout(std::string_view ks, std::string_view cf)
+    read_timeout(std::string_view ks, std::string_view cf, db::consistency_level cl)
         : exceptions::read_timeout_exception(
             seastar::format("Query timed out for {}.{}", ks, cf),
-            db::consistency_level::ONE, 0, 1, false
+            cl, 0, 1, false
         )
     {}
 };
@@ -531,6 +532,7 @@ coordinator::coordinator(groups_manager& groups_manager, replica::database& db, 
 
 auto coordinator::mutate(schema_ptr schema,
         const dht::token& token,
+        db::consistency_level cl,
         mutation_gen&& mutation_gen,
         tracing::trace_state_ptr trace_state,
         timeout_clock::time_point timeout,
@@ -605,7 +607,7 @@ auto coordinator::mutate(schema_ptr schema,
             logger.debug("mutate(): request timed out with error {}, table {}.{}, token {}, {}",
                 ex, schema->ks_name(), schema->cf_name(), token, state_fmt);
             count_error([] (auto& s) { ++s.write_errors_timeout; });
-            return std::make_exception_ptr(write_timeout(schema->ks_name(), schema->cf_name()));
+            return std::make_exception_ptr(write_timeout(schema->ks_name(), schema->cf_name(), cl));
         } else if (try_catch<raft::commit_status_unknown>(ex)) {
             logger.debug("mutate(): add_entry, got commit_status_unknown {}, table {}.{}, {}",
                 ex, schema->ks_name(), schema->cf_name(), state_fmt);
@@ -792,13 +794,17 @@ auto coordinator::mutate(schema_ptr schema,
 auto coordinator::query(schema_ptr schema,
         const query::read_command& cmd,
         const dht::partition_range_vector& ranges,
-        read_type rtype,
+        db::consistency_level cl,
         tracing::trace_state_ptr trace_state,
         timeout_clock::time_point timeout,
         abort_source& as,
         std::optional<locator::tablet_version_block> tablet_version_block
     ) -> future<query_result_type>
 {
+    // The statement accepts only QUORUM/LOCAL_QUORUM and ONE/LOCAL_ONE.
+    const auto rtype = cl == db::consistency_level::ONE || cl == db::consistency_level::LOCAL_ONE
+            ? read_type::non_linearizable : read_type::linearizable;
+
     auto aoe = abort_on_expiry<timeout_clock>(timeout);
     [[maybe_unused]] const auto sub = utils::chain_abort_source(aoe.abort_source(), as);
 
@@ -850,7 +856,7 @@ auto coordinator::query(schema_ptr schema,
             logger.debug("query(): request timed out with error {}, table {}.{}, read cmd {}",
                 ex, schema->ks_name(), schema->cf_name(), cmd);
             count_error([] (auto& s) { ++s.read_errors_timeout; });
-            return std::make_exception_ptr(read_timeout(schema->ks_name(), schema->cf_name()));
+            return std::make_exception_ptr(read_timeout(schema->ks_name(), schema->cf_name(), cl));
         } else if (try_catch<exceptions::unavailable_exception>(ex)) {
             logger.trace("query(): no live replica, table {}.{}, read cmd {}", schema->ks_name(), schema->cf_name(), cmd);
             ++get_stats().read_errors_unavailable;
