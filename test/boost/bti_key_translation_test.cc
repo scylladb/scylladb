@@ -622,7 +622,7 @@ BOOST_AUTO_TEST_CASE(test_lcb_mismatch) {
 // Cassandra's own test data generators and encodes the resulting clustering positions
 // with Cassandra's ClusteringComparator::asByteComparable.
 //
-// They are Cassandra's output verbatim, except for the samples covering the two places
+// They are Cassandra's output verbatim, except for the samples covering two of the places
 // where we deliberately deviate from Cassandra, whose expected encoding was corrected
 // by hand:
 // * an "empty" value nested inside a multi-component type, which Cassandra encodes
@@ -630,6 +630,10 @@ BOOST_AUTO_TEST_CASE(test_lcb_mismatch) {
 // * a zero-sized value of a tuple (or UDT) type, which Cassandra encodes as an "empty"
 //   value rather than as the all-null tuple it is (see
 //   has_encoding_for_zero_sized_value_visitor).
+//
+// A third such place needed no correction, because the samples have no NaN: we encode
+// every NaN of a float or a double in the same way, while Cassandra encodes the bits of
+// each one (see convert_fixed_length_float()).
 //
 // Two things aren't covered at all, because Cassandra has no valid encoding of them to
 // compare against: a null *component* of the clustering key itself (a Cassandra-only

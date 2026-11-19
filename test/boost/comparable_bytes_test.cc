@@ -260,6 +260,58 @@ BOOST_AUTO_TEST_CASE(test_double) {
     byte_comparable_test(generate_floating_point_test_data<double>());
 }
 
+// A floating point value is stored with the exact bits the client sent, so a
+// NaN can reach the encoder with any sign bit and payload. In particular, the
+// NaN that x86 arithmetic produces (for example, for 0.0 / 0.0) has its sign
+// bit set, unlike the one data_value serializes. abstract_type::compare()
+// considers all NaNs to be equal to each other and greater than any other
+// value, so all of them must have the same encoding, which sorts after the
+// encoding of +infinity. byte_comparable_test() cannot test this, as it gets
+// its serialized values from data_value.
+template <std::floating_point fp_type>
+static void test_nan_bit_patterns(const data_type& type) {
+    using uint_type = std::conditional_t<std::is_same_v<fp_type, float>, uint32_t, uint64_t>;
+    auto serialize_bits = [] (uint_type bits) {
+        bits = seastar::cpu_to_be(bits);
+        return managed_bytes(bytes_view(reinterpret_cast<const bytes::value_type*>(&bits), sizeof(bits)));
+    };
+    const uint_type sign_bit = uint_type(1) << (sizeof(uint_type) * 8 - 1);
+    // A NaN has all the exponent bits set, like infinity, and a non-zero mantissa.
+    const auto infinity_bits = std::bit_cast<uint_type>(std::numeric_limits<fp_type>::infinity());
+    const uint_type mantissa_mask = ~(sign_bit | infinity_bits);
+    const uint_type quiet_bit = (mantissa_mask >> 1) + 1;
+
+    for (const auto& tested_type : {type, reversed(type)}) {
+        const auto infinity = serialize_bits(infinity_bits);
+        const comparable_bytes infinity_cb(*tested_type, infinity);
+        const comparable_bytes quiet_nan_cb(*tested_type,
+                serialize_bits(std::bit_cast<uint_type>(std::numeric_limits<fp_type>::quiet_NaN())));
+        for (uint_type sign : {uint_type(0), sign_bit}) {
+            for (uint_type mantissa : {uint_type(1), quiet_bit, uint_type(quiet_bit | 1), mantissa_mask}) {
+                const auto nan = serialize_bits(sign | infinity_bits | mantissa);
+                const comparable_bytes nan_cb(*tested_type, nan);
+                BOOST_REQUIRE_MESSAGE(nan_cb == quiet_nan_cb, seastar::value_of([&] () {
+                    return fmt::format("type {}: the NaN {} is encoded as {}, unlike the quiet NaN, which is encoded as {}",
+                            tested_type->name(), managed_bytes_view(nan), nan_cb, quiet_nan_cb);
+                }));
+                const auto expected_order = tested_type->compare(managed_bytes_view(nan), managed_bytes_view(infinity));
+                BOOST_REQUIRE_MESSAGE((nan_cb <=> infinity_cb) == expected_order, seastar::value_of([&] () {
+                    return fmt::format("type {}: the encoding of the NaN {} ({}) and the one of infinity ({}) are not ordered like the values",
+                            tested_type->name(), managed_bytes_view(nan), nan_cb, infinity_cb);
+                }));
+            }
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(test_float_nan_bit_patterns) {
+    test_nan_bit_patterns<float>(float_type);
+}
+
+BOOST_AUTO_TEST_CASE(test_double_nan_bit_patterns) {
+    test_nan_bit_patterns<double>(double_type);
+}
+
 void encode_varint_length(uint64_t length, int64_t sign_mask, bytes_ostream& out);
 uint64_t decode_varint_length(managed_bytes_view& src, int64_t sign_only_byte);
 BOOST_AUTO_TEST_CASE(test_varint_length_encoding) {
