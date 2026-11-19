@@ -33,6 +33,8 @@
 
 namespace service::strong_consistency {
 
+using namespace std::chrono_literals;
+
 static logging::logger logger("sc_coordinator");
 
 // FIXME: Once the drivers support new error codes corresponding

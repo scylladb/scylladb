@@ -38,11 +38,14 @@
 #include <seastar/coroutine/as_future.hh>
 #include "utils/chain_abort_source.hh"
 #include "utils/exponential_backoff_retry.hh"
+#include "cql3/query_processor.hh"
 
 #include <seastar/core/abort_source.hh>
 #include <seastar/util/defer.hh>
 
 namespace service::strong_consistency {
+
+using namespace std::chrono_literals;
 
 using namespace locator;
 
