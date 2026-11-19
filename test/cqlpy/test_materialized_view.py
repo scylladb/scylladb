@@ -1955,3 +1955,21 @@ def test_mv_where_case_sensitive_function_name(cql, test_keyspace):
                 ks, view = mv.split('.')
                 [where_clause] = [r[0] for r in cql.execute(f"SELECT where_clause FROM system_schema.views WHERE keyspace_name = '{ks}' AND view_name = '{view}'")]
                 assert f'{name}()' in where_clause
+
+# Test that a partition deletion timestamped between two writes of an
+# unselected column doesn't remove the view row while the base row survives on
+# the newer write. The view keeps the liveness of each unselected column in a
+# view-virtual cell. The write at 3000 changes v's value but not its liveness,
+# and the view's copy of v must still move to 3000 - otherwise the deletion at
+# 2000 kills the copy as well. The view partition key is the base partition
+# key, so the deletion is applied to the view partition as a whole and
+# reaches the view row although it kills no base cell.
+# Reproduces SCYLLADB-4073.
+def test_view_virtual_cell_survives_partition_deletion_between_writes(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int, c int, v int, PRIMARY KEY (p, c)') as table:
+        with new_materialized_view(cql, table, 'p, c', 'p, c', 'p IS NOT NULL AND c IS NOT NULL') as mv:
+            cql.execute(f'UPDATE {table} USING TIMESTAMP 1000 SET v = 3 WHERE p = 1 AND c = 7')
+            cql.execute(f'UPDATE {table} USING TIMESTAMP 3000 SET v = 0 WHERE p = 1 AND c = 7')
+            cql.execute(f'DELETE FROM {table} USING TIMESTAMP 2000 WHERE p = 1')
+            assert [(1, 7, 0)] == list(cql.execute(f'SELECT p, c, v FROM {table}'))
+            assert [(1, 7)] == list(cql.execute(f'SELECT p, c FROM {mv}'))

@@ -3057,3 +3057,19 @@ def test_index_query_with_stale_index_entry(cql, test_keyspace, scylla_only):
                     inj_disable(err)
                 except Exception:
                     pass
+
+# Test that a row deletion timestamped between two writes of a regular column
+# doesn't remove the index entry of a row indexed on a clustering key column.
+# The index keeps the liveness of v in a view-virtual cell, which must move to
+# 3000 although that write doesn't change v's liveness - otherwise the deletion
+# at 2000, which reaches the index row because it kills w, kills it as well.
+# Reproduces SCYLLADB-4073.
+def test_index_on_clustering_key_survives_deletion_between_writes(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int, c int, v int, w int, PRIMARY KEY (p, c)') as table:
+        cql.execute(f'CREATE INDEX ON {table}(c)')
+        cql.execute(f'UPDATE {table} USING TIMESTAMP 1000 SET v = 3 WHERE p = 1 AND c = 7')
+        cql.execute(f'UPDATE {table} USING TIMESTAMP 1100 SET w = 9 WHERE p = 1 AND c = 7')
+        cql.execute(f'UPDATE {table} USING TIMESTAMP 3000 SET v = 0 WHERE p = 1 AND c = 7')
+        cql.execute(f'DELETE FROM {table} USING TIMESTAMP 2000 WHERE p = 1 AND c = 7')
+        assert [(1, 7, 0, None)] == list(cql.execute(f'SELECT p, c, v, w FROM {table} WHERE p = 1'))
+        assert [(1, 7, 0, None)] == list(cql.execute(f'SELECT p, c, v, w FROM {table} WHERE c = 7'))

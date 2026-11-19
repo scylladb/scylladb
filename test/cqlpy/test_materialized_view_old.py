@@ -1960,10 +1960,11 @@ def test_view_update_generating_writetime(cql, test_keyspace, scylla_only):
 
             # The row still doesn't have a complete PK for mv2.
             #
-            # Updating an unselected column will NOT produce a view update, so
-            # no update for mv1 either.
+            # A view update is generated for mv1 because the corresponding
+            # virtual column needs the new timestamp of `e`, even though its
+            # liveness doesn't change.
             cql.execute(f"UPDATE {table} USING TIMESTAMP 2 SET e=1 WHERE k=1 AND c=1")
-            check('e', 2, 1, 0, 1)
+            check('e', 2, 2, 0, 2)
 
             # A view update is generated for mv1 because the `b` column is part
             # of the view.
@@ -1971,7 +1972,7 @@ def test_view_update_generating_writetime(cql, test_keyspace, scylla_only):
             # A view update is NOT generated for mv2 because the row still has
             # an incomplete primary key in that view.
             cql.execute(f"UPDATE {table} USING TIMESTAMP 3 SET b=1 WHERE k=1 AND c=1")
-            check('b', 3, 2, 0, 2)
+            check('b', 3, 3, 0, 3)
 
             # A view update is generated for mv1 because `a` is part of the
             # view.
@@ -1982,28 +1983,30 @@ def test_view_update_generating_writetime(cql, test_keyspace, scylla_only):
             # The timestamp from the previous CQL statement is preserved for
             # `b`.
             cql.execute(f"UPDATE {table} USING TIMESTAMP 4 SET a=1 WHERE k=1 AND c=1")
-            check('b', 3, 3, 1, 4)
+            check('b', 3, 4, 1, 5)
 
             # `f` is an unselected column for both MVs, so a view update will
             # only be generated to mv1 (to the corresponding virtual column)
             # because the value in the cell is only created now.
             cql.execute(f"UPDATE {table} USING TIMESTAMP 5 SET f=40 WHERE k=1 AND c=1")
-            check('f', 5, 4, 1, 5)
+            check('f', 5, 5, 1, 6)
 
-            # Updating an unselected column will not produce view updates.
+            # Updating an unselected column produces a view update to mv1, whose
+            # virtual column needs the new timestamp, and none to mv2, which has
+            # no virtual columns because `a` is in its primary key.
             cql.execute(f"UPDATE {table} USING TIMESTAMP 6 SET f=40 WHERE k=1 AND c=1")
-            check('f', 6, 4, 1, 5)
+            check('f', 6, 6, 1, 7)
 
             # `g` is an unselected column for both MVs, so a view update will
             # only be generated to mv1 (to the corresponding virtual column)
             # because the value in the cell is only created now.
             cql.execute(f"UPDATE {table} USING TIMESTAMP 7 SET g=40 WHERE k=1 AND c=1")
-            check('g', 7, 5, 1, 6)
+            check('g', 7, 7, 1, 8)
 
             # Updating the TTL of an unselected column will produce a view
             # update to the virtual column.
             cql.execute(f"UPDATE {table} USING TTL 300 AND TIMESTAMP 8 SET g=40 WHERE k=1 AND c=1")
-            check('g', 8, 6, 1, 7)
+            check('g', 8, 8, 1, 9)
 
 # Usually if only an unselected column in the base table is modified, we expect
 # an optimization that a view update is not done, but we had an
@@ -2049,11 +2052,12 @@ def test_view_update_unmodified_collection(cql, test_keyspace, scylla_only):
             check(3, 2, 5)
 
             # We update an unselected column again with a non-NULL selected
-            # collection. Because the liveness of the updated column is
-            # unchanged and no other selected column is updated (in particular,
-            # the collection column), we should generate no view updates.
+            # collection. No selected column is updated (in particular, the
+            # collection column), so we should generate no update to mv2. We
+            # still generate one to mv1, whose virtual column needs the new
+            # timestamp of the updated column.
             cql.execute(f"UPDATE {table} SET g=2 WHERE k=1 AND c=1")
-            check(3, 2, 5)
+            check(4, 2, 6)
 
 # A batch which deletes a base row and also writes a different one must leave
 # the view consistent with the base table - here everything the batch touches
