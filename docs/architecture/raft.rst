@@ -48,7 +48,7 @@ of nodes in the cluster is available. The following examples illustrate how Raft
 
 * A network partition may lead to a split-brain case, where each subset of nodes has a different version of the schema.
 
-     With Raft, after a network split, the majority of the cluster can continue performing schema changes, while the minority needs to wait until it can rejoin the majority. Data manipulation statements on the minority can continue unaffected, provided the :ref:`quorum requirement <raft-quorum-requirement>` is satisfied.
+     With Raft, after a network split, the majority of the cluster can continue performing schema changes, while the minority needs to wait until it can rejoin the majority. Raft does not affect data manipulation statements, so they can continue on the minority, subject to the consistency level of each request.
 
 * Two or more conflicting schema updates are happening at the same time. For example, two different columns with the same definition are simultaneously added to the cluster. There is no effective way to resolve the conflict - the cluster will employ the schema with the most recent timestamp, but changes related to the shadowed table will be lost.
 
