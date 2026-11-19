@@ -602,3 +602,61 @@ SEASTAR_THREAD_TEST_CASE(test_reverse_range_tombstones) {
     reconcilable_result result = mutation_query(query_schema, semaphore.make_permit(), src, query::full_partition_range, slice, query::max_rows, query::max_partitions, now);
     assert_that(result.partitions().at(0).mut().unfreeze(query_schema)).is_equal_to(reverse(m));
 }
+
+// Does not fit into 32 bits, so both halves of the stored partition row limit are checked.
+static constexpr uint64_t large_partition_row_limit = (uint64_t(1) << 32) + 3;
+
+SEASTAR_THREAD_TEST_CASE(test_slice_builder_from_slice_keeps_all_properties) {
+    const auto s = make_schema();
+    const auto pk = partition_key::from_single_value(*s, "key1");
+    auto make_ck_range = [&s] (bytes start, bytes end) {
+        return query::clustering_range::make(
+                {clustering_key::from_single_value(*s, std::move(start)), true},
+                {clustering_key::from_single_value(*s, std::move(end)), false});
+    };
+
+    // Each property is set to a value which differs from the default one.
+    const auto slice = partition_slice_builder(*s)
+            .with_ranges({make_ck_range("ck1", "ck3"), make_ck_range("ck5", "ck7")})
+            .with_static_column("s2")
+            .with_regular_column("v2")
+            .without_partition_key_columns()
+            .with_option<query::partition_slice::option::bypass_cache>()
+            .set_specific_ranges(query::specific_ranges(pk, {make_ck_range("ck2", "ck4")}))
+            .with_partition_row_limit(large_partition_row_limit)
+            .build();
+    BOOST_REQUIRE_EQUAL(slice.partition_row_limit(), large_partition_row_limit);
+
+    const auto rebuilt = partition_slice_builder(*s, slice).build();
+
+    BOOST_REQUIRE_EQUAL(fmt::to_string(rebuilt.default_row_ranges()), fmt::to_string(slice.default_row_ranges()));
+    BOOST_REQUIRE(std::ranges::equal(rebuilt.static_columns, slice.static_columns));
+    BOOST_REQUIRE(std::ranges::equal(rebuilt.regular_columns, slice.regular_columns));
+    BOOST_REQUIRE_EQUAL(rebuilt.options.mask(), slice.options.mask());
+    BOOST_REQUIRE(rebuilt.get_specific_ranges());
+    BOOST_REQUIRE(rebuilt.get_specific_ranges()->pk().equal(*s, pk));
+    BOOST_REQUIRE_EQUAL(fmt::to_string(rebuilt.get_specific_ranges()->ranges()), fmt::to_string(slice.get_specific_ranges()->ranges()));
+    BOOST_REQUIRE_EQUAL(rebuilt.partition_row_limit(), large_partition_row_limit);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_slice_builder_from_slice_can_override_partition_row_limit) {
+    const auto s = make_schema();
+    const auto slice = partition_slice_builder(*s).with_partition_row_limit(large_partition_row_limit).build();
+
+    BOOST_REQUIRE_EQUAL(partition_slice_builder(*s, slice).with_partition_row_limit(5).build().partition_row_limit(), 5);
+}
+
+// The slice reversing helpers rebuild the slice with the builder.
+SEASTAR_THREAD_TEST_CASE(test_reversing_slice_keeps_partition_row_limit) {
+    const auto s = make_schema();
+    const auto reversed_schema = s->make_reversed();
+    const auto slice = partition_slice_builder(*s).with_partition_row_limit(large_partition_row_limit).build();
+
+    const auto reversed_slice = query::reverse_slice(*s, slice);
+    BOOST_REQUIRE(reversed_slice.is_reversed());
+    BOOST_REQUIRE_EQUAL(reversed_slice.partition_row_limit(), large_partition_row_limit);
+
+    BOOST_REQUIRE_EQUAL(query::reverse_slice(*reversed_schema, reversed_slice).partition_row_limit(), large_partition_row_limit);
+    BOOST_REQUIRE_EQUAL(query::legacy_reverse_slice_to_native_reverse_slice(*reversed_schema, reversed_slice).partition_row_limit(), large_partition_row_limit);
+    BOOST_REQUIRE_EQUAL(query::native_reverse_slice_to_legacy_reverse_slice(*s, reversed_slice).partition_row_limit(), large_partition_row_limit);
+}
