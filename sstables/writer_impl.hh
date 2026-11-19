@@ -38,6 +38,9 @@ struct sstable_writer::writer_impl {
         if (!cfg.correct_pi_block_width) {
             _features.disable(CorrectLastPiBlockWidth);
         }
+        if (!cfg.correct_nan_and_varint_index_keys) {
+            _features.disable(CorrectNaNAndVarintIndexKeys);
+        }
         sst.set_features(_features);
     }
 

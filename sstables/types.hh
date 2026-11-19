@@ -514,7 +514,9 @@ enum sstable_feature : uint8_t {
     CorrectEmptyCounters = 4, // See #4363
     CorrectUDTsInCollections = 5, // See #6130
     CorrectLastPiBlockWidth = 6,
-    End = 7,
+    // The keys of the trie-based indexes are encoded with canonical_nans_and_varints::yes.
+    CorrectNaNAndVarintIndexKeys = 7,
+    End = 8,
 };
 
 // Scylla-specific features enabled for a particular sstable.

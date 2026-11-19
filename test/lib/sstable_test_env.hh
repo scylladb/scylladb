@@ -38,6 +38,7 @@ class test_env_sstables_manager : public sstables_manager {
     using sstables_manager::sstables_manager;
     std::optional<size_t> _promoted_index_block_size;
     bool _correct_pi_block_width = true;
+    bool _correct_nan_and_varint_index_keys = true;
 public:
     virtual sstable_writer_config configure_writer(sstring origin = "test") const override {
         auto ret = sstables_manager::configure_writer(std::move(origin));
@@ -45,6 +46,7 @@ public:
             ret.promoted_index_block_size = *_promoted_index_block_size;
         }
         ret.correct_pi_block_width = _correct_pi_block_width;
+        ret.correct_nan_and_varint_index_keys = _correct_nan_and_varint_index_keys;
         return ret;
     }
 
@@ -54,6 +56,10 @@ public:
 
     void set_correct_pi_block_width(bool value) {
         _correct_pi_block_width = value;
+    }
+
+    void set_correct_nan_and_varint_index_keys(bool value) {
+        _correct_nan_and_varint_index_keys = value;
     }
 
     void increment_total_reclaimable_memory_and_maybe_reclaim(sstable *sst) {

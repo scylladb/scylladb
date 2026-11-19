@@ -145,6 +145,13 @@ by Scylla with issue #6130 fixed)
 bit 6: CorrectLastPiBlockWidth (if set, indicates that the width of the last promoted index block never includes
 the partition end marker)
 
+bit 7: CorrectNaNAndVarintIndexKeys (if set, indicates that the keys of the trie-based indexes encode every NaN of
+a float or a double in the same way, and a varint in the same way whether or not it has redundant leading sign bytes.
+If not set, a NaN is encoded from the bits it has, like any other value, and only the first leading sign-only byte
+of a varint is dropped, so the indexes have to be searched with keys which are encoded in that way. This concerns
+the keys which are encoded column by column: the clustering keys, and in the `ms` version the partition keys too.
+The `mt` version encodes a partition key as a blob, in the same way whether or not the bit is set)
+
 ## extension_attributes subcomponent
 
     extension_attributes = extension_attribute_count extension_attribute*

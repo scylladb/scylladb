@@ -1056,12 +1056,13 @@ void writer::init_file_writers() {
         _index_writer = std::make_unique<crc32_digest_file_writer>(std::move(out), _sst.sstable_buffer_size, _sst.index_filename());
     }
     if (_sst.has_component(component_type::Partitions) && _sst.has_component(component_type::Rows)) {
+        const auto canonical = _sst.index_keys_have_canonical_nans_and_varints();
         out = _sst._storage->make_data_or_index_sink(_sst, component_type::Rows).get();
         _rows_writer = std::make_unique<crc32_digest_file_writer>(std::move(out), _sst.sstable_buffer_size, component_name(_sst, component_type::Rows));
-        _bti_row_index_writer = trie::bti_row_index_writer(canonical_nans_and_varints::yes, *_rows_writer);
+        _bti_row_index_writer = trie::bti_row_index_writer(canonical, *_rows_writer);
         out = _sst._storage->make_data_or_index_sink(_sst, component_type::Partitions).get();
         _partitions_writer = std::make_unique<crc32_digest_file_writer>(std::move(out), _sst.sstable_buffer_size, component_name(_sst, component_type::Partitions));
-        _bti_partition_index_writer = trie::bti_partition_index_writer(_sst.get_version(), canonical_nans_and_varints::yes, *_partitions_writer);
+        _bti_partition_index_writer = trie::bti_partition_index_writer(_sst.get_version(), canonical, *_partitions_writer);
     }
     if (_delayed_filter) {
         file_output_stream_options options;
