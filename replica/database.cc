@@ -4328,7 +4328,7 @@ database::on_effective_service_levels_cache_reloaded() {
 }
 
 bool database::enforce_rf_rack_validity_for_keyspace(const db::config& cfg, const keyspace_metadata& ksm) {
-    return cfg.rf_rack_valid_keyspaces() || ksm.views().size() > 0;
+    return cfg.rf_rack_valid_keyspaces() || ksm.views().size() > 0 || locator::uses_rack_list_exclusively(ksm.strategy_options());
 }
 
 void database::check_rf_rack_validity(const locator::token_metadata_ptr tmptr) const {

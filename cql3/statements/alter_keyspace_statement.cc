@@ -296,7 +296,9 @@ cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_proce
             //    disturb it (see scylladb/scylladb#23345), but we ignore that.
             locator::assert_rf_rack_valid_keyspace(_name, tmptr, *rs);
         } catch (const std::invalid_argument& e) {
-            if (replica::database::enforce_rf_rack_validity_for_keyspace(qp.db().get_config(), *ks_md)) {
+            // The new metadata doesn't contain the tables, so the views are known only to the old one.
+            if (replica::database::enforce_rf_rack_validity_for_keyspace(qp.db().get_config(), *ks_md_update)
+                    || !ks_md->views().empty()) {
                 // wrap the exception manually here in a type that can be passed to the user.
                 throw exceptions::invalid_request_exception(e.what());
             } else {

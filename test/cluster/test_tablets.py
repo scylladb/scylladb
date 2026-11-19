@@ -643,6 +643,7 @@ async def test_enforce_rack_list_option(request: pytest.FixtureRequest, manager:
     injection = "create_with_numeric"
     config = {
         "tablets_mode_for_new_keyspaces": "enabled",
+        "rf_rack_valid_keyspaces": "false",
         "error_injections_at_startup": [injection],
         # The RF change waits until every node has complete tablet load stats; the default 60s refresh dominates the runtime.
         "tablet_load_stats_refresh_interval_in_seconds": 1,
