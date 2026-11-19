@@ -31,6 +31,8 @@
 #include "gms/feature_service.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
+#include "cql3/statements/cluster_config_props.hh"
+#include "auth/resource.hh"
 #include "compaction/time_window_compaction_strategy.hh"
 #include "db/tags/extension.hh"
 #include "db/tags/utils.hh"
@@ -61,7 +63,11 @@ create_table_statement::create_table_statement(cf_name name,
 }
 
 future<> create_table_statement::check_access(query_processor& qp, const service::client_state& state) const {
-    return state.has_keyspace_access(keyspace(), auth::permission::CREATE);
+    co_await state.has_keyspace_access(keyspace(), auth::permission::CREATE);
+    if (_properties) {
+        co_await cluster_config_props::ensure_config_access(state, qp.proxy().features(), auth::make_data_resource(keyspace(), column_family()),
+                _properties->get_config_names(qp.proxy().features()), [] { return make_ready_future<>(); });
+    }
 }
 
 // Column definitions

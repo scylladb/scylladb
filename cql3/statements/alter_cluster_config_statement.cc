@@ -19,6 +19,10 @@
 #include "data_dictionary/data_dictionary.hh"
 #include "data_dictionary/keyspace_metadata.hh"
 #include "exceptions/exceptions.hh"
+#include "auth/authenticator.hh"
+#include "auth/resource.hh"
+#include "auth/service.hh"
+#include "locator/token_metadata.hh"
 #include "locator/topology.hh"
 #include "schema/schema_builder.hh"
 #include "service/migration_manager.hh"
@@ -46,16 +50,39 @@ db::cluster_config_registry::scope registry_scope(alter_cluster_config_statement
     __builtin_unreachable();
 }
 
-future<> ensure_superuser(const service::client_state& state) {
-    if (auto* auth_service = state.get_auth_service(); auth_service && !auth_service->underlying_authenticator().require_authentication()) {
-        co_return;
+// The resource of the scope target the statement names. A target that is not in the topology
+// maps to the cluster: validate() rejects the statement, but only for a role that could
+// have configured the target had it existed, and the name does not reach the permissions cache.
+auth::resource scope_target_resource(query_processor& qp,
+        alter_cluster_config_statement::scope scope,
+        const std::optional<sstring>& dc_name,
+        const std::optional<sstring>& rack_name,
+        const std::optional<utils::UUID>& node_uuid) {
+    const auto tmptr = qp.proxy().get_token_metadata_ptr();
+    const auto& topology = tmptr->get_topology();
+    switch (scope) {
+    case alter_cluster_config_statement::scope::cluster:
+        return auth::root_cluster_resource();
+    case alter_cluster_config_statement::scope::datacenter:
+        if (topology.get_datacenters().contains(*dc_name)) {
+            return auth::make_cluster_resource(*dc_name);
+        }
+        return auth::root_cluster_resource();
+    case alter_cluster_config_statement::scope::rack: {
+        const auto dc_it = topology.get_datacenter_racks().find(*dc_name);
+        if (dc_it != topology.get_datacenter_racks().end() && dc_it->second.contains(*rack_name)) {
+            return auth::make_cluster_resource(*dc_name, *rack_name);
+        }
+        return auth::root_cluster_resource();
     }
-    // Must be co_awaited, not blocked on with future::get(): has_superuser() reads the role
-    // cache and returns a non-ready future on a cache miss. check_access() runs as a plain
-    // coroutine (not a seastar::thread), so a blocking get() there would abort the node.
-    if (!co_await state.has_superuser()) {
-        throw exceptions::unauthorized_exception("Only superusers can alter cluster configuration.");
+    case alter_cluster_config_statement::scope::node: {
+        if (const auto* node = topology.find_node(locator::host_id(*node_uuid))) {
+            return auth::make_cluster_resource(node->dc_rack().dc, node->dc_rack().rack, fmt::to_string(*node_uuid));
+        }
+        return auth::root_cluster_resource();
     }
+    }
+    __builtin_unreachable();
 }
 
 // Returns the resolved registry option so callers can canonicalize the value before persisting it.
@@ -140,14 +167,29 @@ std::unique_ptr<alter_cluster_config_statement> alter_cluster_config_statement::
     return std::make_unique<alter_cluster_config_statement>(scope::node, std::nullopt, std::nullopt, utils::UUID(node_uuid), std::move(config_name), std::move(value));
 }
 
-future<> alter_cluster_config_statement::check_access(query_processor&, const service::client_state& state) const {
-    return ensure_superuser(state);
+future<> alter_cluster_config_statement::check_access(query_processor& qp, const service::client_state& state) const {
+    // CONFIGURE cannot be granted before every node knows it. Until then these statements
+    // require a superuser, as they did before the permission existed.
+    if (!qp.proxy().features().cluster_config_rbac) {
+        if (auto* auth_service = state.get_auth_service(); auth_service && !auth_service->underlying_authenticator().require_authentication()) {
+            co_return;
+        }
+        if (!co_await state.has_superuser()) {
+            throw exceptions::unauthorized_exception("Only superusers can alter cluster configuration.");
+        }
+        co_return;
+    }
+    // An unknown option has no grants; do not let its name reach the permissions cache.
+    const std::optional<std::string_view> option = db::cluster_config_registry::find(_config_name)
+            ? std::optional<std::string_view>(_config_name) : std::nullopt;
+    const auto target = scope_target_resource(qp, _scope, _dc_name, _rack_name, _node_uuid);
+    co_await state.ensure_has_config_permission(auth::permission::CONFIGURE, target, option);
 }
 
 void alter_cluster_config_statement::validate(query_processor& qp, const service::client_state& state) const {
-    // Authorization (superuser) is enforced asynchronously in check_access(); do not repeat it
-    // here, because validate() is called synchronously from a coroutine (not a seastar::thread)
-    // and the superuser check may block on a non-ready future.
+    // Authorization is enforced asynchronously in check_access(); do not repeat it here,
+    // because validate() is called synchronously from a coroutine (not a seastar::thread)
+    // and the permission check may block on a non-ready future.
     validate_cluster_option(qp, _scope, _config_name, _value);
     validate_scope_target_exists(qp, _scope, _dc_name, _rack_name, _node_uuid);
 }

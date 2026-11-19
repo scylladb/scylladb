@@ -118,6 +118,7 @@ public:
     bool has_table_config_properties(const gms::feature_service&) const;
     bool has_non_table_config_properties(const gms::feature_service&) const;
     std::map<sstring, std::optional<sstring>> get_config_updates(const gms::feature_service&) const;
+    std::vector<sstring> get_config_names(const gms::feature_service&) const;
 
     void apply_to_builder(schema_builder& builder, schema::extensions_map schema_extensions, const data_dictionary::database& db, sstring ks_name, bool supports_repair) const;
     void validate_minimum_int(const sstring& field, int32_t minimum_value, int32_t default_value) const;
