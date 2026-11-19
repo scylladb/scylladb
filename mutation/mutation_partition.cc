@@ -728,8 +728,9 @@ void write_counter_cell(RowWriter& w, const query::partition_slice& slice, ::ato
             .end_qr_cell();
 }
 
+// Collection elements feed many tiny fields, so buffer them. Same digest as xx_hasher.
 static uint64_t collection_cell_digest(collection_mutation_view cm, const column_definition& def) {
-    xx_hasher h;
+    buffered_xx_hasher h;
     feed_hash(h, cm, def);
     return h.finalize_uint64();
 }
@@ -783,7 +784,7 @@ void appending_hash<row>::operator()(Hasher& h, const row& cells, const schema& 
         }
     }
 }
-// Instantiations for mutation_test.cc and perf_mutation_fragment.cc (xx_hasher), and perf_mutation_fragment.cc (buffered_xx_hasher)
+// Instantiations for mutation_test.cc and perf_mutation_fragment.cc
 template void appending_hash<row>::operator()<xx_hasher>(xx_hasher& h, const row& cells, const schema& s, column_kind kind, const query::column_id_vector& columns, max_timestamp& max_ts) const;
 template void appending_hash<row>::operator()<buffered_xx_hasher>(
         buffered_xx_hasher& h, const row& cells, const schema& s, column_kind kind, const query::column_id_vector& columns, max_timestamp& max_ts) const;
