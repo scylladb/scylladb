@@ -69,6 +69,12 @@ over the limits of certain file systems). By default, keyspace and table names a
 equivalent to ``mytable``), but case sensitivity can be forced by using double-quotes (``"myTable"`` is different from
 ``mytable``).
 
+.. note::
+
+   We recommend using lowercase keyspace and table names. If you create a keyspace or table with a quoted name
+   that contains uppercase letters (for example, ``"MyKeyspace"``), you need to use double quotes and the exact
+   case every time you refer to it, and some tools and drivers may not handle such names correctly.
+
 Further, a table is always part of a keyspace, and a table name can be provided fully-qualified by the keyspace it is
 part of. If it is not fully-qualified, the table is assumed to be in the *current* keyspace (see :ref:`USE statement
 <use-statement>`).
@@ -103,7 +109,7 @@ For example:
 
 .. code-block:: cql
 
-   CREATE KEYSPACE Excalibur
+   CREATE KEYSPACE excalibur
    WITH replication = {'class': 'NetworkTopologyStrategy', 'DC1' : ['RAC1', 'RAC2', 'RAC3'], 'DC2' : 3}
    AND durable_writes = true;
 
