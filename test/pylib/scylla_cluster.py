@@ -852,37 +852,22 @@ class ScyllaCluster:
         initiator = self.servers[initiator_id]
         self.logger.info("remove_node %s with initiator %s", to_remove, initiator)
 
-        # initiate remove
+        details = f"initiator: {initiator}, to_remove: {to_remove}, ignore_dead: {ignore_dead}"
         try:
             await self.api.remove_node(initiator.ip_addr,
                                        await to_remove.get_host_id(self.api),
                                        ignore_dead,
                                        timeout=ScyllaServer.TOPOLOGY_TIMEOUT)
         except (RuntimeError, HTTPError) as exc:
-            if expected_error:
-                if expected_error not in str(exc):
-                    raise RuntimeError(
-                        f"removenode failed (initiator: {initiator}, to_remove: {to_remove},"
-                        f" ignore_dead: {ignore_dead}) but did not contain expected error (\"{expected_error}\"),"
-                        f"check log file at {initiator.log_filename}, error: \"{exc}\"")
-                else:
-                    self.logger.info("removenode (initiator: %s, to_remove: %s, ignore_dead: %s) failed as expected: %s",
-                                     initiator, to_remove, ignore_dead, exc)
-            else:
-                raise RuntimeError(
-                    f"removenode failed (initiator: {initiator}, to_remove: {to_remove},"
-                    f" ignore_dead: {ignore_dead}), check log file at {initiator.log_filename},"
-                    f" error: \"{exc}\"")
-        else:
-            self.logger.debug("Cluster %s marking server %s as removed", self, server_id)
-            self.removed.add(server_id)
-            if expected_error:
-                raise RuntimeError(
-                    f"removenode succeeded when it should have failed (initiator: {initiator},"
-                    f"to_remove: {to_remove}, ignore_dead: {ignore_dead}, expected error: \"{expected_error}\"),"
-                    f" check log file at {initiator.log_filename}")
-            self.logger.info("removenode (initiator: %s, to_remove: %s, ignore_dead: %s) succeeded",
-                             initiator, to_remove, ignore_dead)
+            if error := self._unexpected_failure("removenode", details, initiator.log_filename, exc, expected_error):
+                raise error
+            self.logger.info("removenode (%s) failed as expected: %s", details, exc)
+            return
+        self.logger.debug("Cluster %s marking server %s as removed", self, server_id)
+        self.removed.add(server_id)
+        if expected_error:
+            raise self._unexpected_success("removenode", details, initiator.log_filename, expected_error)
+        self.logger.info("removenode (%s) succeeded", details)
 
     @cluster_op(timeout=None)
     async def _decommission_node(self, server_id: ServerNum, expected_error: str | None) -> None:
@@ -896,25 +881,18 @@ class ScyllaCluster:
         try:
             await self.api.decommission_node(server.ip_addr, timeout=ScyllaServer.TOPOLOGY_TIMEOUT)
         except (RuntimeError, HTTPError) as exc:
-            if expected_error:
-                if expected_error not in str(exc):
-                    raise RuntimeError(
-                        f"decommission failed (server: {server}) but did not contain expected error"
-                        f"(\"{expected_error}\", check log file at {server.log_filename}, error: \"{exc}\"")
-                else:
-                    return
-            else:
-                raise RuntimeError(
-                    f"decommission failed (server: {server}), check log at {server.log_filename},"
-                    f" error: \"{exc}\"")
-        else:
-            if expected_error:
-                await self._stop_server(server_id, gracefully=True)
-                raise RuntimeError(
-                    f"decommission succeeded when it should have failed (server: {server},"
-                    f" expected_error: \"{expected_error}\"), check log file at {server.log_filename}")
-
+            if error := self._unexpected_failure(
+                "decommission",
+                f"server: {server}",
+                server.log_filename,
+                exc,
+                expected_error,
+            ):
+                raise error
+            return
         await self._stop_server(server_id, gracefully=True)
+        if expected_error:
+            raise self._unexpected_success("decommission", f"server: {server}", server.log_filename, expected_error)
 
     @cluster_op(timeout=None)
     async def _rebuild_node(self, server_id: ServerNum, expected_error: str | None) -> None:
@@ -926,24 +904,50 @@ class ScyllaCluster:
         try:
             await self.api.rebuild_node(server.ip_addr, timeout=ScyllaServer.TOPOLOGY_TIMEOUT)
         except (RuntimeError, HTTPError) as exc:
-            if expected_error:
-                if expected_error not in str(exc):
-                    raise RuntimeError(
-                            f"rebuild failed (server: {server}) but did not contain expected error"
-                            f"(\"{expected_error}\", check log file at {server.log_filename}, error: \"{exc}\"")
-                else:
-                    return
-            else:
-                raise RuntimeError(
-                    f"rebuild failed (server: {server}), check log at {server.log_filename},"
-                    f" error: \"{exc}\"")
-        else:
-            if expected_error:
-                raise RuntimeError(
-                    f"rebuild succeeded when it should have failed (server: {server},"
-                    f" expected_error: \"{expected_error}\"), check log file at {server.log_filename}")
-
+            if error := self._unexpected_failure(
+                "rebuild",
+                f"server: {server}",
+                server.log_filename,
+                exc,
+                expected_error,
+            ):
+                raise error
+            return
+        if expected_error:
+            raise self._unexpected_success("rebuild", f"server: {server}", server.log_filename, expected_error)
         await self._stop_server(server_id, gracefully=True)
+
+    @staticmethod
+    def _unexpected_failure(request: str,
+                            details: str,
+                            log_filename: pathlib.Path,
+                            exc: Exception,
+                            expected_error: str | None) -> RuntimeError | None:
+        """The error for a failed topology request, or None if it failed with the expected error."""
+
+        if not expected_error:
+            return RuntimeError(
+                f"{request} failed ({details}), check log file at {log_filename},"
+                f" error: \"{exc}\""
+            )
+        if expected_error not in str(exc):
+            return RuntimeError(
+                f"{request} failed ({details}) but did not contain expected error"
+                f" (\"{expected_error}\"), check log file at {log_filename}, error: \"{exc}\""
+            )
+        return None
+
+    @staticmethod
+    def _unexpected_success(request: str,
+                            details: str,
+                            log_filename: pathlib.Path,
+                            expected_error: str) -> RuntimeError:
+        """The error for a topology request that succeeded although it was expected to fail."""
+
+        return RuntimeError(
+            f"{request} succeeded when it should have failed ({details},"
+            f" expected error: \"{expected_error}\"), check log file at {log_filename}"
+        )
 
     @cluster_op
     async def server_get_config(self, server_id: ServerNum) -> dict[str, object]:
@@ -1021,11 +1025,7 @@ class ScyllaCluster:
         original IP is released at the end of the test to avoid an
         immediate recycle within the same cluster. The server must be
         stopped before its ip is changed."""
-        assert server_id in self.servers, f"Server {server_id} unknown"
-        server = self.servers[server_id]
-        assert not server.is_running, f"Server {server_id} is running: stop it first and then change its ip"
-        ip_addr = IPAddress(await self.host_registry.lease_host())
-        self.leased_ips.add(ip_addr)
+        server, ip_addr = await self._lease_address(server_id)
         logging.info("Cluster %s changed server %s IP from %s to %s", self.name,
                      server_id, server.ip_addr, ip_addr)
         server.change_ip(ip_addr)
@@ -1033,19 +1033,21 @@ class ScyllaCluster:
 
     @cluster_op
     async def server_change_rpc_address(self, server_id: ServerNum) -> IPAddress:
-        """Lease a new IP address and update conf/scylla.yaml with it. The
-        original IP is released at the end of the test to avoid an
-        immediate recycle within the same cluster. The server must be
-        stopped before its ip is changed."""
-        assert server_id in self.servers, f"Server {server_id} unknown"
-        server = self.servers[server_id]
-        assert not server.is_running, f"Server {server_id} is running: stop it first and then change its ip"
-        rpc_address = IPAddress(await self.host_registry.lease_host())
-        self.leased_ips.add(rpc_address)
+        """Like server_change_ip(), for the server's RPC address."""
+        server, rpc_address = await self._lease_address(server_id)
         logging.info("Cluster %s changed server %s RPC IP from %s to %s", self.name,
                      server_id, server.config["rpc_address"], rpc_address)
         server.change_rpc_address(rpc_address)
         return rpc_address
+
+    async def _lease_address(self, server_id: ServerNum) -> tuple[ScyllaServer, IPAddress]:
+        """Lease a new address for a stopped server; recycle() releases it."""
+        assert server_id in self.servers, f"Server {server_id} unknown"
+        server = self.servers[server_id]
+        assert not server.is_running, f"Server {server_id} is running: stop it first and then change its ip"
+        address = IPAddress(await self.host_registry.lease_host())
+        self.leased_ips.add(address)
+        return server, address
 
     @cluster_op
     async def server_get_log_filename(self, server_id: ServerNum) -> str:
@@ -1428,20 +1430,19 @@ class ScyllaCluster:
         If there are already active migrations, it waits for them to finish before returning.
         Doesn't block migrations on behalf of node operations like decommission, removenode or replace.
         """
-        servers = await self.running_servers()
-        if not servers:
-            raise RuntimeError("No running servers")
-        # Any server will do, it's a group0 operation
-        await self.api.disable_tablet_balancing(servers[0].ip_addr)
+        await self.api.disable_tablet_balancing(await self._group0_server_ip())
 
     async def enable_tablet_balancing(self) -> None:
         """Enables background tablet load-balancing."""
 
+        await self.api.enable_tablet_balancing(await self._group0_server_ip())
+
+    async def _group0_server_ip(self) -> IPAddress:
+        """Any running server will do for a group0 operation."""
         servers = await self.running_servers()
         if not servers:
             raise RuntimeError("No running servers")
-        # Any server will do, it's a group0 operation
-        await self.api.enable_tablet_balancing(servers[0].ip_addr)
+        return servers[0].ip_addr
 
     async def convict_on_all(self, host: HostID) -> None:
         """Convicts a given host on all live servers.
@@ -1787,26 +1788,20 @@ class ScyllaCluster:
         return await wait_for(process_status_is_as_expected, deadline or (time() + 30))
 
     async def get_table_id(self, keyspace: str, table: str) -> uuid.UUID:
-        rows = await self.get_cql().run_async(
-            f"select id from system_schema.tables where keyspace_name = '{keyspace}' and table_name = '{table}'"
-        )
-        return rows[0].id
+        return (await self._schema_rows("table", keyspace, table))[0].id
 
     async def get_view_id(self, keyspace: str, view: str) -> uuid.UUID:
-        rows = await self.get_cql().run_async(
-            f"select id from system_schema.views where keyspace_name = '{keyspace}' and view_name = '{view}'"
-        )
-        return rows[0].id
+        return (await self._schema_rows("view", keyspace, view))[0].id
 
     async def get_table_or_view_id(self, keyspace: str, table: str) -> uuid.UUID:
-        rows = await self.get_cql().run_async(
-            f"select id from system_schema.tables where keyspace_name = '{keyspace}' and table_name = '{table}'"
-        )
-        if not rows:
-            rows = await self.get_cql().run_async(
-                f"select id from system_schema.views where keyspace_name = '{keyspace}' and view_name = '{table}'"
-            )
+        rows = await self._schema_rows("table", keyspace, table) or await self._schema_rows("view", keyspace, table)
         return rows[0].id
+
+    async def _schema_rows(self, kind: str, keyspace: str, name: str) -> Any:
+        """The ID rows of the keyspace's table or view (kind) of that name."""
+        return await self.get_cql().run_async(
+            f"select id from system_schema.{kind}s where keyspace_name = '{keyspace}' and {kind}_name = '{name}'"
+        )
 
     async def server_sees_others(self, server_id: ServerNum, count: int, interval: float = 45.) -> None:
         """Wait till a server sees a minimum given count of other servers."""
@@ -1814,14 +1809,7 @@ class ScyllaCluster:
         if count < 1:
             return
         server_ip = await self.get_host_ip(server_id)
-
-        async def _sees_min_others() -> bool | None:
-            alive_nodes = await self.api.get_alive_endpoints(server_ip)
-            if len(alive_nodes) > count:
-                return True
-            return None
-
-        await wait_for(_sees_min_others, time() + interval, period=.5)
+        await self._wait_for_alive_endpoints(server_ip, lambda alive: len(alive) > count, interval, "_sees_min_others")
 
     async def server_sees_other_server(self,
                                        server_ip: IPAddress,
@@ -1829,13 +1817,12 @@ class ScyllaCluster:
                                        interval: float = 45.) -> None:
         """Wait till a server sees another specific server IP as alive."""
 
-        async def _sees_another_server() -> bool | None:
-            alive_nodes = await self.api.get_alive_endpoints(server_ip)
-            if other_ip in alive_nodes:
-                return True
-            return None
-
-        await wait_for(_sees_another_server, time() + interval, period=.5)
+        await self._wait_for_alive_endpoints(
+            server_ip,
+            lambda alive: other_ip in alive,
+            interval,
+            "_sees_another_server",
+        )
 
     async def servers_see_each_other(self, servers: list[ServerInfo], interval: float = 45.) -> None:
         """Wait till all servers see all other servers in the list."""
@@ -1849,13 +1836,24 @@ class ScyllaCluster:
                                            interval: float = 45.) -> None:
         """Wait till a server sees another specific server IP as dead."""
 
-        async def _not_sees_another_server() -> bool | None:
-            alive_nodes = await self.api.get_alive_endpoints(server_ip)
-            if other_ip not in alive_nodes:
-                return True
-            return None
+        await self._wait_for_alive_endpoints(
+            server_ip,
+            lambda alive: other_ip not in alive,
+            interval,
+            "_not_sees_another_server",
+        )
 
-        await wait_for(_not_sees_another_server, time() + interval, period=.5)
+    async def _wait_for_alive_endpoints(self,
+                                        server_ip: IPAddress,
+                                        condition: Callable[[list], bool],
+                                        interval: float,
+                                        label: str) -> None:
+        """Wait till the server's list of alive endpoints satisfies the condition."""
+
+        async def check() -> bool | None:
+            return True if condition(await self.api.get_alive_endpoints(server_ip)) else None
+
+        await wait_for(check, time() + interval, period=.5, label=label)
 
     async def others_not_see_server(self, server_ip: IPAddress, interval: float = 45.) -> None:
         """Wait till a server is seen as dead by all other running servers in the cluster."""
