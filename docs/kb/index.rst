@@ -18,6 +18,7 @@ Knowledge Base
   * :doc:`Increase ScyllaDB resource limits over systemd </kb/scylla-limits-systemd>` - How to override the resource limits ScyllaDB runs with under systemd.
   * :doc:`Run ScyllaDB as a custom user:group </kb/custom-user>` - Configure the ScyllaDB and supporting services to run as a custom user:group.
   * :doc:`How to Set up a Swap Space Using a File </kb/set-up-swap>` - Outlines the steps you need to take to set up a swap space.
+  * :doc:`Set Up an NVMe/TCP Block Device for ScyllaDB </kb/nvme-tcp>` - How to attach NVMe/TCP network storage with multipath, RAID-0, and deep queues.
 
 
 .. panel-box::
