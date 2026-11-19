@@ -12,6 +12,7 @@
 #include "bti_key_translation.hh"
 #include "utils/div_ceil.hh"
 #include "bti_node_sink.hh"
+#include "bti_page_footer.hh"
 #include "sstables/compress.hh"
 #include "sstables/exceptions.hh"
 #include "sstables/writer.hh"
@@ -276,9 +277,11 @@ std::optional<bti_partitions_db_footer> bti_partition_index_writer_impl::finish(
         return std::nullopt;
     }
     // Footer of Partitions.db.
+    // (Called "trailer" in the documentation, so that it isn't mistaken for a page footer).
     auto root = _wr.finish().value;
     auto& sink = _wr.sink();
     auto out = bti_raw_writer{sink};
+    // The keys can span pages.
     auto keys_pos = sink.raw_pos().value;
     for (const auto& k : {bytes_view(first_key), bytes_view(last_key)}) {
         uint16_t len;
@@ -291,7 +294,13 @@ std::optional<bti_partitions_db_footer> bti_partition_index_writer_impl::finish(
     seastar::write_be<uint64_t>(tail.data(), keys_pos);
     seastar::write_be<uint64_t>(tail.data() + 8, _added_keys);
     seastar::write_be<uint64_t>(tail.data() + 16, root);
-    sink.write_raw(tail.data(), tail.size());
+    if (bti_index_has_page_footers(_sst_ver)) {
+        // The tail ends at the chunk table of the last page.
+        sink.write_page_tail(tail.data(), tail.size());
+    } else {
+        sink.write_raw(tail.data(), tail.size());
+    }
+    sink.end_last_page();
     return bti_partitions_db_footer{
         .first_key = first_key,
         .last_key = last_key,
@@ -305,7 +314,7 @@ struct bti_partition_index_writer::impl
     , bti_partition_index_writer_impl
 {
     impl(sstable_version_types sst_ver, sstables::file_writer& fw, bti_position_encoding encoding)
-        : bti_node_sink(fw, BTI_PAGE_SIZE)
+        : bti_node_sink(fw, BTI_PAGE_SIZE, bti_index_has_page_footers(sst_ver))
         , bti_partition_index_writer_impl(sst_ver, static_cast<bti_node_sink&>(*this), std::move(encoding))
     {}
     impl(impl&&) = delete;
@@ -326,6 +335,11 @@ std::optional<bti_partitions_db_footer> bti_partition_index_writer::finish(
     const sstables::key& last_key
 ) && {
     return _impl->finish(first_key, last_key);
+}
+void bti_partition_index_writer::abandon() noexcept {
+    if (_impl) {
+        _impl->abandon();
+    }
 }
 bti_partition_index_writer::bti_partition_index_writer(bti_partition_index_writer&&) noexcept = default;
 bti_partition_index_writer& bti_partition_index_writer::operator=(bti_partition_index_writer&&) noexcept = default;

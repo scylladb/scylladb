@@ -11,6 +11,7 @@
 #include "sstables/consumer.hh"
 #include "sstables/processing_result_generator.hh"
 #include "bti_node_reader.hh"
+#include "bti_page_footer.hh"
 #include "trie_traversal.hh"
 #include "bti_key_translation.hh"
 #include "utils/i_filter.hh"
@@ -29,9 +30,55 @@ struct fmt::formatter<sstables::trie::trail_entry> : fmt::formatter<string_view>
 
 namespace sstables::trie {
 
-// Index files have no checksum, so the decoders of physical positions check
-// each field before they use it. A corrupt field then gives a malformed
+// The decoders of physical positions check each field before they use it.
+// Before `mu`, index files had no checksum. In `mu`, each page has a CRC32,
+// but the checks still turn a bug or an undetected corruption into a malformed
 // sstable error, not undefined behaviour or a read at a wild position.
+
+std::function<void(uint64_t, std::span<const char>)> make_bti_page_verifier(sstable_version_types v, seastar::sstring file_name) {
+    if (!bti_index_has_page_footers(v)) {
+        return {};
+    }
+    // A cached_file page is a BTI page.
+    static_assert(cached_file::page_size == BTI_PAGE_SIZE);
+    return [file_name = std::move(file_name)] (uint64_t page_pos, std::span<const char> page) {
+        verify_bti_page(std::as_bytes(page), page_pos, BTI_PAGE_SIZE, file_name);
+    };
+}
+
+// Maps positions in a stream of raw bytes, read around page footers, to
+// positions in the file.
+//
+// The stream is made of segments. Each segment is a part of the usable area of
+// a page, and ends at the page's chunk table. A position at the end of a segment
+// maps to the start of the next page, like in bti_node_sink::raw_pos().
+class bti_raw_stream_map {
+    struct segment {
+        uint64_t stream_pos;
+        uint64_t file_pos;
+        uint64_t size;
+    };
+    std::vector<segment> _segments;
+public:
+    void add(uint64_t stream_pos, uint64_t file_pos, uint64_t size) {
+        _segments.push_back({stream_pos, file_pos, size});
+    }
+    uint64_t to_file_pos(uint64_t stream_pos) const {
+        auto it = std::ranges::upper_bound(_segments, stream_pos, std::less<>(), &segment::stream_pos);
+        if (it == _segments.begin()) {
+            on_internal_error(trie_logger, fmt::format("bti_raw_stream_map: position {} is before the stream", stream_pos));
+        }
+        --it;
+        auto offset = stream_pos - it->stream_pos;
+        if (offset < it->size) {
+            return it->file_pos + offset;
+        }
+        if (offset == it->size) {
+            return round_down(it->file_pos, BTI_PAGE_SIZE) + BTI_PAGE_SIZE;
+        }
+        on_internal_error(trie_logger, fmt::format("bti_raw_stream_map: position {} is past the read part of the stream", stream_pos));
+    }
+};
 
 // Like bti_physical_layout::unpack(), but rejects values that pack() never
 // produces.
@@ -72,11 +119,15 @@ struct row_index_header_parser : public data_consumer::continuous_data_consumer<
     // Whether the data file position in the header is physical (full chunk
     // coordinates) or logical. Chosen by the caller, not derived from the version.
     bti_position_encoding _encoding;
+    // Maps stream positions to file positions. Identity if empty.
+    std::function<uint64_t(uint64_t)> _to_file_pos;
     processing_result_generator _gen;
 
-    row_index_header_parser(const bti_position_encoding& encoding, reader_permit rp, input_stream<char>&& input, uint64_t start, uint64_t maxlen)
+    row_index_header_parser(const bti_position_encoding& encoding, reader_permit rp, input_stream<char>&& input, uint64_t start, uint64_t maxlen,
+            std::function<uint64_t(uint64_t)> to_file_pos)
         : continuous_data_consumer(std::move(rp), std::move(input), sstable_position::from_logical(start), sstable_position::from_logical(start + maxlen))
         , _encoding(encoding)
+        , _to_file_pos(std::move(to_file_pos))
         , _gen(do_process_state())
     {}
     void verify_end_state() {
@@ -100,6 +151,9 @@ struct row_index_header_parser : public data_consumer::continuous_data_consumer<
         // The start of of this vint is used as a reference point
         // for the delta encoded in the next vint.
         uint64_t trie_root_delta_base = this->position().to_logical() - (*_processing_data).size();
+        if (_to_file_pos) {
+            trie_root_delta_base = _to_file_pos(trie_root_delta_base);
+        }
         if (!_encoding.is_physical()) {
             expensive_log("row_index_header_parser: reading unsigned vint for data file offset, delta_base={}", trie_root_delta_base);
             co_yield this->read_unsigned_vint(*_processing_data);
@@ -187,7 +241,8 @@ struct row_index_header_parser : public data_consumer::continuous_data_consumer<
     }
 };
 
-future<row_index_header> read_row_index_header(const bti_position_encoding& encoding, input_stream<char>&& input, uint64_t start, uint64_t maxlen, reader_permit rp) {
+future<row_index_header> read_row_index_header(const bti_position_encoding& encoding, input_stream<char>&& input, uint64_t start, uint64_t maxlen, reader_permit rp,
+        std::function<uint64_t(uint64_t)> to_file_pos) {
     // TODO: Should there be a fast path for the case where the entire
     // parse fits into the current page?
     // We're involving so much code in parsing something that's usually just several bytes long...
@@ -196,7 +251,8 @@ future<row_index_header> read_row_index_header(const bti_position_encoding& enco
         std::move(rp),
         std::move(input),
         start,
-        maxlen);
+        maxlen,
+        std::move(to_file_pos));
     std::exception_ptr ex;
     try {
         co_await ctx.consume_input();
@@ -210,7 +266,78 @@ future<row_index_header> read_row_index_header(const bti_position_encoding& enco
     std::rethrow_exception(ex);
 }
 
-static future<row_index_header> read_row_index_header(const bti_position_encoding& encoding, cached_file& file, uint64_t pos, reader_permit rp, tracing::trace_state_ptr trace_state) {
+// A source of the raw bytes of a file with page footers, starting at `pos`.
+// It skips the chunk table and the footer of each page, and records the
+// segments it returns, so that to_file_pos() can map stream positions back
+// to file positions.
+// The pages were verified when cached_file read them.
+class bti_raw_bytes_data_source_impl : public data_source_impl {
+    cached_file::stream _stream;
+    uint64_t _file_pos;
+    uint64_t _stream_pos;
+    bti_raw_stream_map _map;
+public:
+    bti_raw_bytes_data_source_impl(cached_file& file, uint64_t pos, reader_permit permit, tracing::trace_state_ptr trace_state)
+        : _stream(file.read(pos, std::move(permit), std::move(trace_state)))
+        , _file_pos(pos)
+        , _stream_pos(pos)
+    {}
+    uint64_t to_file_pos(uint64_t stream_pos) const {
+        return _map.to_file_pos(stream_pos);
+    }
+    future<temporary_buffer<char>> get() override {
+        while (true) {
+            // Each buffer of the stream ends at the end of a page.
+            auto buf = co_await _stream.next();
+            if (buf.empty()) {
+                co_return buf;
+            }
+            auto page_pos = round_down(_file_pos, BTI_PAGE_SIZE);
+            auto in_page = _file_pos - page_pos;
+            if (in_page + buf.size() != BTI_PAGE_SIZE) {
+                throw_malformed_sstable_exception(fmt::format("Rows.db: the page at {} is incomplete", page_pos));
+            }
+            if (buf.size() < bti_page_footer_size) {
+                throw_malformed_sstable_exception(fmt::format("Rows.db: position {} points into a page footer", _file_pos));
+            }
+            auto table_size = seastar::read_be<uint16_t>(buf.get() + buf.size() - bti_page_footer_size);
+            auto usable = BTI_PAGE_SIZE - bti_page_footer_size - uint64_t(table_size) * bti_chunk_table_entry_size;
+            if (in_page > usable) {
+                throw_malformed_sstable_exception(fmt::format("Rows.db: position {} points into a chunk table", _file_pos));
+            }
+            buf.trim(usable - in_page);
+            auto file_pos = _file_pos;
+            _file_pos = page_pos + BTI_PAGE_SIZE;
+            if (buf.empty()) {
+                // The position is at the start of the chunk table.
+                // The bytes continue on the next page.
+                continue;
+            }
+            _map.add(_stream_pos, file_pos, buf.size());
+            _stream_pos += buf.size();
+            co_return buf;
+        }
+    }
+};
+
+static future<row_index_header> read_row_index_header(const bti_position_encoding& encoding, cached_file& file, uint64_t pos, bool page_footers, reader_permit rp, tracing::trace_state_ptr trace_state) {
+    if (page_footers) {
+        auto source = std::make_unique<bti_raw_bytes_data_source_impl>(file, pos, rp, std::move(trace_state));
+        // The parser owns both the stream, which owns the source, and the
+        // lambda. It calls the lambda only while it consumes the stream,
+        // so the source outlives every call.
+        // A lambda that captures only a pointer fits in the inline storage
+        // of std::function, so this doesn't allocate.
+        auto* source_ptr = source.get();
+        auto is = input_stream<char>(data_source(std::move(source)));
+        return read_row_index_header(
+            encoding,
+            std::move(is),
+            pos,
+            file.size() - pos,
+            std::move(rp),
+            [source_ptr] (uint64_t stream_pos) { return source_ptr->to_file_pos(stream_pos); });
+    }
     struct cached_file_data_source_impl : data_source_impl {
         cached_file& _file;
         cached_file::stream _stream;
@@ -366,13 +493,15 @@ class index_cursor {
     // logical. Chosen by the caller, not derived from the version. Selects the
     // payload/header decoding.
     bti_position_encoding _encoding;
+    // Whether the index files have page footers.
+    bool _page_footers;
 private:
     // If the current partition has a row index, reads its header.
     future<> maybe_read_metadata();
     // The colder part of set_after_row, just to hint at inlining the hotter part.
     future<> set_after_row_cold(lazy_comparable_bytes_from_clustering_position&);
 public:
-    index_cursor(uint64_t par_root, bti_node_reader par, bti_node_reader row, const bti_position_encoding&, reader_permit, tracing::trace_state_ptr);
+    index_cursor(uint64_t par_root, bti_node_reader par, bti_node_reader row, const bti_position_encoding&, bool page_footers, reader_permit, tracing::trace_state_ptr);
     index_cursor& operator=(const index_cursor&) = default;
     // Returns the data file position of the cursor. Can only be called after the cursor is set.
     //
@@ -584,7 +713,7 @@ const ancestor_trail& trie_cursor::trail() const {
     return _trail;
 }
 
-index_cursor::index_cursor(uint64_t par_root, bti_node_reader par, bti_node_reader row, const bti_position_encoding& encoding, reader_permit permit, tracing::trace_state_ptr trace_state)
+index_cursor::index_cursor(uint64_t par_root, bti_node_reader par, bti_node_reader row, const bti_position_encoding& encoding, bool page_footers, reader_permit permit, tracing::trace_state_ptr trace_state)
     : _partition_cursor(par)
     , _row_cursor(row)
     , _in_row(row)
@@ -592,6 +721,7 @@ index_cursor::index_cursor(uint64_t par_root, bti_node_reader par, bti_node_read
     , _trace_state(std::move(trace_state))
     , _par_root(par_root)
     , _encoding(encoding)
+    , _page_footers(page_footers)
 {}
 
 bool index_cursor::row_cursor_set() const {
@@ -872,7 +1002,7 @@ future<> index_cursor::maybe_read_metadata() {
     // here), or directly into Data.db.
     const auto target = partition_payload_to_target(_partition_cursor.payload(), _encoding);
     if (const auto rows_pos = target.rows_db()) {
-        return read_row_index_header(_encoding, _in_row._file.get(), rows_pos->value, _permit, _trace_state).then([this] (auto result) {
+        return read_row_index_header(_encoding, _in_row._file.get(), rows_pos->value, _page_footers, _permit, _trace_state).then([this] (auto result) {
             _partition_metadata = result;
         });
     }
@@ -1007,8 +1137,8 @@ bti_index_reader::bti_index_reader(
     // not a reference to some shared one, because `bti_node_reader`
     // holds the currently-active page, and each bound might be in a different page.
     // (And both are needed to read lower and upper Data.db bounds).
-    , _lower(root_offset, partitions_db, rows_db, encoding, _permit, _trace_state)
-    , _upper(root_offset, partitions_db, rows_db, encoding, _permit, _trace_state)
+    , _lower(root_offset, partitions_db, rows_db, encoding, bti_index_has_page_footers(sst_ver), _permit, _trace_state)
+    , _upper(root_offset, partitions_db, rows_db, encoding, bti_index_has_page_footers(sst_ver), _permit, _trace_state)
     , _start_position(start_position)
     , _end_position(end_position)
 {

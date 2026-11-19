@@ -28,6 +28,7 @@
 #include "sstables/trie/bti_index.hh"
 #include "sstables/trie/bti_index_internal.hh"
 #include "sstables/trie/bti_node_sink.hh"
+#include "sstables/trie/bti_page_footer.hh"
 #include "schema/schema_builder.hh"
 #include "test/lib/log.hh"
 #include "test/lib/nondeterministic_choice_stack.hh"
@@ -203,11 +204,55 @@ static index_files write_index_files(
             auto target = row_index_writer.finish(s, p.start, p.end, key, p.partition_tombstone);
             partition_index_writer.add(s, p.dk, utils::make_hashed_key(bytes_view(key)), target);
         }
+        row_index_writer.finish_file();
         std::move(partition_index_writer).finish(
             sstables::key::from_partition_key(s, partitions.front().dk.key()),
             sstables::key::from_partition_key(s, partitions.back().dk.key()));
     }
     return files;
+}
+
+static std::vector<std::byte> linearize(const memory_data_sink_buffers& bufs) {
+    std::vector<std::byte> retval;
+    for (const auto& frag : bufs.buffers()) {
+        auto v = std::as_bytes(std::span(frag));
+        retval.insert(retval.end(), v.begin(), v.end());
+    }
+    return retval;
+}
+
+// Describes the pages of an index file with page footers, for comparison in tests.
+// Checks the CRC32 of each page. For each page, lists the usable area in hex,
+// with each run of 16 or more zero bytes replaced by "<N zeros>", then the chunk
+// table, which is empty.
+static std::string describe_pages(std::span<const std::byte> file) {
+    using namespace sstables::trie;
+    BOOST_REQUIRE_EQUAL(file.size() % BTI_PAGE_SIZE, 0);
+    std::string result;
+    for (size_t page_pos = 0; page_pos < file.size(); page_pos += BTI_PAGE_SIZE) {
+        auto page = file.subspan(page_pos, BTI_PAGE_SIZE);
+        verify_bti_page(page, page_pos, BTI_PAGE_SIZE, "test");
+        auto view = bti_page_view(page, page_pos);
+        result += fmt::format("[page {}] ", page_pos / BTI_PAGE_SIZE);
+        auto usable = page.subspan(0, view.usable_size());
+        for (size_t i = 0; i < usable.size();) {
+            size_t zeros = 0;
+            while (i + zeros < usable.size() && usable[i + zeros] == std::byte(0)) {
+                ++zeros;
+            }
+            if (zeros >= 16) {
+                result += fmt::format(" <{} zeros> ", zeros);
+                i += zeros;
+            } else {
+                result += fmt::format("{:02x}", uint8_t(usable[i]));
+                ++i;
+            }
+        }
+        // The chunk tables are empty for now.
+        BOOST_REQUIRE_EQUAL(view.table_size(), 0);
+        result += " [table] ";
+    }
+    return result;
 }
 
 // A partition for the payload characterization tests below.
@@ -277,6 +322,12 @@ static index_files_hex write_index_for_payload_test(
         });
     }
     auto files = write_index_files(*s, sst_ver, encoding, input);
+    if (sstables::trie::bti_index_has_page_footers(sst_ver)) {
+        return index_files_hex{
+            .partitions_db = describe_pages(linearize(files.partitions_db)),
+            .rows_db = describe_pages(linearize(files.rows_db)),
+        };
+    }
     return index_files_hex{
         .partitions_db = to_hex(files.partitions_db),
         .rows_db = to_hex(files.rows_db),
@@ -359,8 +410,11 @@ SEASTAR_THREAD_TEST_CASE(test_mu_index_payload_encoding) {
         sstables::sstable_version_types::mu,
         sstables::trie::bti_position_encoding::physical(sstables::framed_chunk_codec::for_framed_chunks(4096)),
         partitions);
+    // Each page is described as its usable area, then its (empty) chunk table.
+    // The CRC32 of each page is checked by describe_pages().
     // The payload field of a partition payload is the payload size.
     BOOST_CHECK_EQUAL(files.partitions_db,
+        "[page 0] "
         // Partition 1: (C, N, O) = (0, 1, 0).
         // The payload is the hash byte, then V: the tag bits 10, C and LO, in 3 bytes.
         "04" "44" "800000"
@@ -371,11 +425,16 @@ SEASTAR_THREAD_TEST_CASE(test_mu_index_payload_encoding) {
         // The trie nodes for the token bytes, from the leaves to the root.
         "50" "03" "010203" "110c09"
         "1800" "1200" "1200" "1200" "1200" "1200" "1280" "1240"
-        // The footer: the first and last keys, the footer position,
-        // the partition count, and the root position.
-        "0002" "0001" "0002" "0003" "0000000000000029" "0000000000000003" "0000000000000027");
+        // The trailer: the first and last keys, then padding, then the fixed tail,
+        // which ends at the chunk table: the key position (0x29), the partition
+        // count and the root position. The leading zero bytes of the key position
+        // are counted with the padding.
+        "0002" "0001" "0002" "0003"
+        " <4024 zeros> " "29" "0000000000000003" "0000000000000027"
+        " [table] ");
     // The payload field of a row payload is P.
     BOOST_CHECK_EQUAL(files.rows_db,
+        "[page 0] "
         // Partition 2, block 2: (C, N, O) = (1700, 2, 10), so delta_C = 700, and T = 1.
         // Then the range tombstone: marked_for_delete_at and local_deletion_time.
         "04" "05782015" "00000000000001c8" "0000007b"
@@ -393,7 +452,9 @@ SEASTAR_THREAD_TEST_CASE(test_mu_index_payload_encoding) {
         // C = 1000 as a vint, LO for (N, O) = (3, 50) in 2 bytes, the root
         // position relative to the C field (-10) as a signed vint, the block
         // count, and the partition tombstone.
-        "0002" "0002" "83e8" "2032" "13" "02" "00000000000003f3" "00000315");
+        "0002" "0002" "83e8" "2032" "13" "02" "00000000000003f3" "00000315"
+        // The rest of the last page is padding. Rows.db has no chunk tables.
+        " <4032 zeros> " " [table] ");
 }
 
 // The CRC32 and the size of an index file.
@@ -1409,13 +1470,15 @@ void test_index(const index_entry_dataset& dataset, std::function<std::unique_pt
     testlog.info("Number of run method sequences: {}", n_cases);
 };
 
-SEASTAR_THREAD_TEST_CASE(test_exhaustive) {
+// Runs test_index() on a random dataset written in the given format.
+// The positions are logical, so `mu` stands for an uncompressed `mu` sstable,
+// whose index files have page footers.
+static void test_exhaustive_for_version(sstables::sstable_version_types sst_ver) {
     auto the_schema = schema_builder(this_smp_shard_count(), "ks", "t")
         .with_column("pk", short_type, column_kind::partition_key)
         .with_column("ck1", short_type, column_kind::clustering_key)
         .with_column("ck2", short_type, column_kind::clustering_key)
         .build();
-    auto sst_ver = sstables::sstable_version_types::mt;
 
     random_dataset_config cfg;
     const int max_ops = 3;
@@ -1472,13 +1535,13 @@ SEASTAR_THREAD_TEST_CASE(test_exhaustive) {
         auto close_partitions_db = defer([&] noexcept { partitions_db_writer.close(); });
         auto close_rows_db = defer([&] noexcept { rows_db_writer.close(); });
 
-        // This test uses the `mt` (logical) format, so the payloads use the legacy
+        // This test uses logical positions, so the payloads use the legacy
         // (non-physical) serialization.
         auto partition_index_writer = sstables::trie::bti_partition_index_writer(sst_ver, partitions_db_writer, sstables::trie::bti_position_encoding::logical());
         auto row_index_writer = sstables::trie::bti_row_index_writer(sst_ver, rows_db_writer, sstables::trie::bti_position_encoding::logical());
 
-        // This test uses the `mt` (logical) format, so the positions are logical;
-        // the post-compression (physical) position isn't exercised here.
+        // The positions are logical; the post-compression (physical) position
+        // isn't exercised here.
         auto pos = [] (int64_t uncompressed) {
             return sstables::sstable_position::from_logical(uncompressed);
         };
@@ -1524,6 +1587,7 @@ SEASTAR_THREAD_TEST_CASE(test_exhaustive) {
                 },
             }, entry);
         }
+        row_index_writer.finish_file();
         std::move(partition_index_writer).finish(sstables::key::from_bytes({}), sstables::key::from_bytes({}));
     }
 
@@ -1540,8 +1604,10 @@ SEASTAR_THREAD_TEST_CASE(test_exhaustive) {
         auto region = logalloc::region();
         auto partitions_db_size = partitions_db.size().get();
         auto rows_db_size = rows_db.size().get();
-        auto partitions_db_cached = seastar::make_shared<cached_file>(partitions_db, stats, cached_file_lru, region, partitions_db_size, "Partitions.db");
-        auto rows_db_cached = seastar::make_shared<cached_file>(rows_db, stats, cached_file_lru, region, rows_db_size, "Rows.db");
+        auto partitions_db_cached = seastar::make_shared<cached_file>(partitions_db, stats, cached_file_lru, region, partitions_db_size, "Partitions.db",
+            sstables::trie::make_bti_page_verifier(sst_ver, "Partitions.db"));
+        auto rows_db_cached = seastar::make_shared<cached_file>(rows_db, stats, cached_file_lru, region, rows_db_size, "Rows.db",
+            sstables::trie::make_bti_page_verifier(sst_ver, "Rows.db"));
 
         auto partitions_db_footer = sstables::trie::read_bti_partitions_db_footer(*the_schema, sst_ver, partitions_db, partitions_db_size).get();
         auto partitions_db_root_pos = partitions_db_footer.trie_root_position;
@@ -1567,13 +1633,12 @@ SEASTAR_THREAD_TEST_CASE(test_exhaustive) {
     }
 }
 
-static std::vector<std::byte> linearize(const memory_data_sink_buffers& bufs) {
-    std::vector<std::byte> retval;
-    for (const auto& frag : bufs.buffers()) {
-        auto v = std::as_bytes(std::span(frag));
-        retval.insert(retval.end(), v.begin(), v.end());
-    }
-    return retval;
+SEASTAR_THREAD_TEST_CASE(test_exhaustive) {
+    test_exhaustive_for_version(sstables::sstable_version_types::mt);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_exhaustive_uncompressed_mu) {
+    test_exhaustive_for_version(sstables::sstable_version_types::mu);
 }
 
 static temporary_buffer<char> make_temporary_buffer(const std::span<const std::byte> data) {
@@ -1668,6 +1733,7 @@ SEASTAR_THREAD_TEST_CASE(test_read_row_index_header) {
         {
             sstables::file_writer fw(data_sink(std::make_unique<memory_data_sink>(bufs)));
             auto close_fw = defer([&] noexcept { fw.close(); });
+            // Without page footers, so that the header can be parsed from a plain stream.
             sstables::trie::bti_node_sink sink(fw, sstables::trie::BTI_PAGE_SIZE);
             sstables::trie::write_row_index_header(
                 sst_ver,
@@ -1785,6 +1851,7 @@ SEASTAR_THREAD_TEST_CASE(test_physical_partition_payload_encoding) {
             key_rows,
             partition_tomb);
         partition_index_writer.add(*the_schema, dk_rows, hash_rows, rows_payload);
+        row_index_writer.finish_file();
         std::move(partition_index_writer).finish(key_direct, key_rows);
     }
 
@@ -1798,8 +1865,10 @@ SEASTAR_THREAD_TEST_CASE(test_physical_partition_payload_encoding) {
     auto region = logalloc::region();
     auto partitions_db_size = partitions_db.size().get();
     auto rows_db_size = rows_db.size().get();
-    auto partitions_db_cached = seastar::make_shared<cached_file>(partitions_db, stats, cached_file_lru, region, partitions_db_size, "Partitions.db");
-    auto rows_db_cached = seastar::make_shared<cached_file>(rows_db, stats, cached_file_lru, region, rows_db_size, "Rows.db");
+    auto partitions_db_cached = seastar::make_shared<cached_file>(partitions_db, stats, cached_file_lru, region, partitions_db_size, "Partitions.db",
+        sstables::trie::make_bti_page_verifier(sstables::sstable_version_types::mu, "Partitions.db"));
+    auto rows_db_cached = seastar::make_shared<cached_file>(rows_db, stats, cached_file_lru, region, rows_db_size, "Rows.db",
+        sstables::trie::make_bti_page_verifier(sstables::sstable_version_types::mu, "Rows.db"));
 
     auto partitions_db_footer = sstables::trie::read_bti_partitions_db_footer(
         *the_schema,

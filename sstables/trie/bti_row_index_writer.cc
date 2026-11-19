@@ -12,6 +12,7 @@
 #include "bti_key_translation.hh"
 #include "utils/div_ceil.hh"
 #include "bti_node_sink.hh"
+#include "bti_page_footer.hh"
 #include "sstables/mx/types.hh"
 #include "sstables/writer.hh"
 #include "utils/assert.hh"
@@ -47,6 +48,7 @@ public:
         sstable_position partition_data_end,
         const sstables::key& pk,
         const sstables::deletion_time& partition_tombstone);
+    void finish_file();
     using buf = std::vector<std::byte>;
 
 private:
@@ -350,6 +352,8 @@ uint64_t write_row_index_header(
     uint64_t root_pos,
     const sstables::deletion_time& partition_tombstone
 ) {
+    // With page footers, the header can span pages. Positions of its bytes
+    // are taken from raw_pos(), so that they never point at a chunk table.
     auto fw = bti_raw_writer{sink};
     auto pos_header = sink.raw_pos().value;
     trie_logger.trace("consume_end_of_partition: key: offset={} pk={}", pos_header, fmt_hex(bytes_view(pk)));
@@ -455,6 +459,10 @@ bti_partition_index_target row_index_writer_impl::finish(
     return rows_db_position{pos_header};
 }
 
+void row_index_writer_impl::finish_file() {
+    _wr.sink().end_last_page();
+}
+
 // Instantiation of row_index_writer_impl with `Output` == `bti_node_sink`.
 //
 // This is the instantiation `row_index_writer_impl` actually used in practice.
@@ -464,7 +472,7 @@ struct bti_row_index_writer::impl
     , row_index_writer_impl
 {
     impl(sstable_version_types sst_ver, sstables::file_writer& fw, bti_position_encoding encoding)
-        : bti_node_sink(fw, BTI_PAGE_SIZE)
+        : bti_node_sink(fw, BTI_PAGE_SIZE, bti_index_has_page_footers(sst_ver))
         , row_index_writer_impl(sst_ver, static_cast<bti_node_sink&>(*this), std::move(encoding))
     {}
     impl(impl&&) = delete;
@@ -487,6 +495,16 @@ bti_partition_index_target bti_row_index_writer::finish(
     const sstables::key& pk,
     const sstables::deletion_time& partition_tombstone) {
     return _impl->finish(s, partition_data_start, partition_data_end, pk, partition_tombstone);
+}
+
+void bti_row_index_writer::finish_file() {
+    _impl->finish_file();
+}
+
+void bti_row_index_writer::abandon() noexcept {
+    if (_impl) {
+        _impl->abandon();
+    }
 }
 
 void bti_row_index_writer::add(

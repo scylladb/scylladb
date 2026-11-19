@@ -86,12 +86,16 @@ struct row_index_header {
     uint64_t number_of_blocks = 0;
 };
 
+// Parses a row index header from `input`, which starts at position `start`.
+// `to_file_pos` maps positions in `input` to positions in the file, if they
+// differ (because the stream skips page footers).
 future<row_index_header> read_row_index_header(
     const bti_position_encoding& encoding,
     input_stream<char>&& input,
     uint64_t start,
     uint64_t maxlen,
-    reader_permit rp
+    reader_permit rp,
+    std::function<uint64_t(uint64_t)> to_file_pos = {}
 );
 
 class bti_node_sink;
