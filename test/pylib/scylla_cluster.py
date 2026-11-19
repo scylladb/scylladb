@@ -349,6 +349,14 @@ class ScyllaCluster:
             try:
                 await asyncio.get_running_loop().run_in_executor(None, stop_event.wait)
             finally:
+                # after_test() drains what the test left running, but not when
+                # the fixture never got that far or the drain ran out of time.
+                # End those operations first, so that stop() sees every server
+                # they started.
+                leftovers = list(self.tasks_history)
+                for op in leftovers:
+                    op.cancel()
+                await asyncio.gather(*leftovers, return_exceptions=True)
                 await self.stop()
 
         with ThreadPoolExecutor(max_workers=1, thread_name_prefix="scylla-cluster") as executor:

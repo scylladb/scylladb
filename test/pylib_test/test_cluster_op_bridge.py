@@ -226,3 +226,43 @@ async def test_without_a_thread_cancelling_the_caller_cancels_the_operation(tmp_
         assert not cluster.tasks_history
     finally:
         await cluster.recycle()
+
+
+async def test_leftover_operation_ends_before_the_final_stop(tmp_path: pathlib.Path) -> None:
+    """An operation still running when run_in_thread() exits ends before stop() looks at the servers.
+
+    after_test() normally drains such operations, but not when the fixture
+    never got that far, or the drain ran out of time.  An add left running
+    across the final stop() could put a server in `running` after stop()
+    took its list, and the server would be marked stopped while it runs.
+    """
+    cluster = make_cluster(tmp_path)
+    events = []
+    entered = threading.Event()
+
+    async def stop_server(server_id: ServerNum, gracefully: bool) -> None:
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            events.append("operation cancelled")
+            raise
+
+    real_stop = cluster.stop
+
+    async def stop() -> None:
+        events.append("stop")
+        await real_stop()
+
+    cluster._stop_server = stop_server
+    cluster.stop = stop
+    try:
+        async with cluster.run_in_thread():
+            with pytest.raises(TimeoutError):
+                async with asyncio.timeout(0.5):
+                    await cluster.server_stop(SERVER_ID, convict=False)
+            assert entered.is_set(), "operation never started"
+    finally:
+        await cluster.recycle()
+
+    assert events[:2] == ["operation cancelled", "stop"]
