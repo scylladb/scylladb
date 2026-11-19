@@ -319,10 +319,16 @@ public:
     // to consume the future even if the upload fails, or seastar reports it as an ignored
     // exceptional future.
     std::pair<data_sink, future<sstring>> make_upload_sink_and_get_etag(sstring object_name, object_metadata = {}, seastar::abort_source* = nullptr);
-    data_sink make_upload_jumbo_sink(sstring object_name, object_metadata = {}, std::optional<unsigned> max_parts_per_piece = {}, seastar::abort_source* = nullptr);
+    // Uploads the data into temporary "piece" objects of max_parts_per_piece parts
+    // (maximum_parts_in_piece if not given), then copies each of them into the target
+    // object, in several parts if it is larger than max_copy_part_size, the most a
+    // single UploadPartCopy copies (maximum_part_size if not given; tests lower it,
+    // but not below 2 * minimum_part_size).
+    data_sink make_upload_jumbo_sink(sstring object_name, object_metadata = {}, std::optional<unsigned> max_parts_per_piece = {},
+                                     std::optional<size_t> max_copy_part_size = {}, seastar::abort_source* = nullptr);
     // Same etag contract as make_upload_sink_and_get_etag() above.
     std::pair<data_sink, future<sstring>> make_upload_jumbo_sink_and_get_etag(sstring object_name, object_metadata = {}, std::optional<unsigned> max_parts_per_piece = {},
-                                                                              seastar::abort_source* = nullptr);
+                                                                              std::optional<size_t> max_copy_part_size = {}, seastar::abort_source* = nullptr);
     data_source make_download_source(sstring object_name, range download_range = s3::full_range, seastar::abort_source* = nullptr);
     data_source make_chunked_download_source(sstring object_name, range range = s3::full_range, seastar::abort_source* = nullptr);
     /// upload a file with specified path to s3

@@ -178,7 +178,7 @@ public:
         return _client->make_readable_file(name.str(), as);
     }
     data_sink make_data_upload_sink(object_name name, object_storage_attributes attributes, std::optional<unsigned> max_parts_per_piece, abort_source* as) override {
-        return _client->make_upload_jumbo_sink(name.str(), std::move(attributes), max_parts_per_piece, as);
+        return _client->make_upload_jumbo_sink(name.str(), std::move(attributes), max_parts_per_piece, std::nullopt, as);
     }
     data_sink make_upload_sink(object_name name, object_storage_attributes attributes, abort_source* as) override {
         return _client->make_upload_sink(name.str(), std::move(attributes), as);

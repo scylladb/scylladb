@@ -50,6 +50,7 @@
 #include "utils/s3/credentials_providers/instance_profile_credentials_provider.hh"
 #include "utils/s3/credentials_providers/sts_assume_role_credentials_provider.hh"
 #include "utils/div_ceil.hh"
+#include "utils/error_injection.hh"
 #include "utils/http.hh"
 #include "utils/memory_data_sink.hh"
 #include "utils/chunked_vector.hh"
@@ -1128,7 +1129,7 @@ protected:
     future<> start_upload();
     future<> finalize_upload();
     future<> upload_part(memory_data_sink_buffers bufs);
-    future<> upload_part(std::unique_ptr<upload_sink> source);
+    future<> upload_part(std::unique_ptr<upload_sink> source, uint64_t max_copy_part_size);
     // Copies source_object, the whole of it or only source_range, into part
     // part_number (0-based) of this upload with an UploadPartCopy request, and
     // stores the ETag of that part in _part_etags[part_number].
@@ -1440,6 +1441,11 @@ future<> client::multipart_upload::copy_part(sstring source_object, std::optiona
         if (auto possible_error = aws::aws_error::parse(sstring(body))) {
             throw aws::aws_exception(std::move(possible_error.value()));
         }
+        // Fails the copy of one part the way an error reply of S3 would. It is keyed
+        // by the part number because the ranges of a piece are copied concurrently.
+        if (utils::get_local_injector().inject_parameter<unsigned>("s3_copy_part_fail") == part_number) {
+            co_await coroutine::return_exception(std::runtime_error(seastar::format("injected failure of the copy of part {}", part_number)));
+        }
         auto etag = parse_multipart_copy_upload_etag(body);
         if (etag.empty()) {
             throw std::runtime_error("cannot parse the ETag of a copied part");
@@ -1577,6 +1583,7 @@ future<> client::upload_sink_base::close() {
 
 class client::upload_sink final : public client::upload_sink_base {
     memory_data_sink_buffers _bufs;
+    uint64_t _size = 0;
     future<> maybe_flush() {
         if (_bufs.size() >= minimum_part_size) {
             co_await upload_part(std::move(_bufs));
@@ -1594,7 +1601,15 @@ public:
         return _bufs.size() == 0 && !upload_started();
     }
 
+    // The number of bytes put into the sink, i.e. the size of the object it produces.
+    uint64_t size() const noexcept {
+        return _size;
+    }
+
     virtual future<> put(std::span<temporary_buffer<char>> data) override {
+        for (const auto& buf : data) {
+            _size += buf.size();
+        }
         append_buffers(_bufs, std::move(data));
         return maybe_flush();
     }
@@ -1630,7 +1645,7 @@ public:
     }
 };
 
-future<> client::multipart_upload::upload_part(std::unique_ptr<upload_sink> piece_ptr) {
+future<> client::multipart_upload::upload_part(std::unique_ptr<upload_sink> piece_ptr, uint64_t max_copy_part_size) {
     if (!upload_started()) {
         std::exception_ptr ex;
         try {
@@ -1647,8 +1662,17 @@ future<> client::multipart_upload::upload_part(std::unique_ptr<upload_sink> piec
     }
 
     auto& piece = *piece_ptr;
-    unsigned part_number = _part_etags.size();
-    _part_etags.emplace_back();
+    // UploadPartCopy copies at most maximum_part_size, but a piece can hold
+    // maximum_parts_in_piece parts of minimum_part_size, about 50 GiB, so a larger
+    // piece takes several parts of this upload, each copied from a range of it.
+    // The parts are of equal size, not max_copy_part_size and a remainder, because
+    // the parts of the next piece follow them, so each of them has to reach
+    // minimum_part_size. Their numbers are taken here, before the piece is copied
+    // in the background, because the next piece takes the numbers that follow.
+    const uint64_t piece_size = piece.size();
+    const unsigned parts = static_cast<unsigned>(std::max<uint64_t>(1, div_ceil(piece_size, max_copy_part_size)));
+    const unsigned first_part = _part_etags.size();
+    _part_etags.resize(first_part + parts);
 
     // See comment in upload_part(memory_data_sink_buffers) overload regarding the
     // _bg_flushes usage and _part_etags assignments
@@ -1662,8 +1686,17 @@ future<> client::multipart_upload::upload_part(std::unique_ptr<upload_sink> piec
         // unfinished, and drains its background part uploads before the
         // piece is destroyed below.
         return piece.close();
-    }).then([this, part_number, &piece] {
-        return copy_part(piece._object_name, std::nullopt, part_number);
+    }).then([this, first_part, parts, piece_size, &piece] {
+        if (parts == 1) {
+            // S3 accepts a range only on a source larger than 5 MB, and the last
+            // piece can be smaller.
+            return copy_part(piece._object_name, std::nullopt, first_part);
+        }
+        const uint64_t part_size = div_ceil(piece_size, parts);
+        return max_concurrent_for_each(std::views::iota(0u, parts), max_client_mpu_in_flight, [this, first_part, part_size, piece_size, &piece] (unsigned i) {
+            const uint64_t offset = i * part_size;
+            return copy_part(piece._object_name, s3::range(offset, std::min(part_size, piece_size - offset)), first_part + i);
+        });
     }).then_wrapped([this, &piece] (auto f) {
         if (f.failed()) {
             s3l.warn("couldn't flush piece {}: {} (upload id {})", piece._object_name, f.get_exception(), _upload_id);
@@ -1678,22 +1711,29 @@ class client::upload_jumbo_sink final : public upload_sink_base {
     static constexpr tag piece_tag = { .key = "kind", .value = "piece" };
 
     const unsigned _maximum_parts_in_piece;
+    const uint64_t _max_copy_part_size;
     std::unique_ptr<upload_sink> _current;
 
     future<> maybe_flush() {
         if (_current->parts_count() >= _maximum_parts_in_piece) {
-            auto next = std::make_unique<upload_sink>(_client, format("{}_{}", _object_name, parts_count() + 1), object_metadata{}, piece_tag, _as);
-            co_await upload_part(std::exchange(_current, std::move(next)));
-            s3l.trace("Initiated {} piece (upload_id {})", parts_count(), _upload_id);
+            auto next_name = format("{}_{}", _object_name, parts_count() + 1);
+            auto next = std::make_unique<upload_sink>(_client, next_name, object_metadata{}, piece_tag, _as);
+            co_await upload_part(std::exchange(_current, std::move(next)), _max_copy_part_size);
+            s3l.trace("Initiated piece {} (upload_id {})", next_name, _upload_id);
         }
     }
 
 public:
-    upload_jumbo_sink(shared_ptr<client> cln, sstring object_name, object_metadata metadata, std::optional<unsigned> max_parts_per_piece, seastar::abort_source* as)
+    upload_jumbo_sink(shared_ptr<client> cln, sstring object_name, object_metadata metadata, std::optional<unsigned> max_parts_per_piece,
+                      std::optional<size_t> max_copy_part_size, seastar::abort_source* as)
         : upload_sink_base(std::move(cln), std::move(object_name), std::move(metadata), std::nullopt, as)
         , _maximum_parts_in_piece(max_parts_per_piece.value_or(maximum_parts_in_piece))
+        , _max_copy_part_size(max_copy_part_size.value_or(maximum_part_size))
         , _current(std::make_unique<upload_sink>(_client, format("{}_{}", _object_name, parts_count()), object_metadata{}, piece_tag, _as))
-    {}
+    {
+        // Below 2 * minimum_part_size, the equal parts of a piece could not all reach minimum_part_size.
+        SCYLLA_ASSERT(_max_copy_part_size >= 2 * minimum_part_size && _max_copy_part_size <= maximum_part_size);
+    }
 
     virtual future<> put(std::span<temporary_buffer<char>> data) override {
         co_await _current->put(std::move(data));
@@ -1709,7 +1749,7 @@ public:
                 // fail with NoSuchKey, leaving the ETag list short. Drop it.
                 co_await piece->close();
             } else {
-                co_await upload_part(std::move(piece));
+                co_await upload_part(std::move(piece), _max_copy_part_size);
             }
         }
         if (upload_started()) {
@@ -1769,13 +1809,14 @@ std::pair<data_sink, future<sstring>> client::make_upload_sink_and_get_etag(sstr
     return {data_sink(std::move(sink)), std::move(etag)};
 }
 
-data_sink client::make_upload_jumbo_sink(sstring object_name, object_metadata metadata, std::optional<unsigned> max_parts_per_piece, seastar::abort_source* as) {
-    return data_sink(std::make_unique<upload_jumbo_sink>(shared_from_this(), std::move(object_name), std::move(metadata), max_parts_per_piece, as));
+data_sink client::make_upload_jumbo_sink(sstring object_name, object_metadata metadata, std::optional<unsigned> max_parts_per_piece,
+                                         std::optional<size_t> max_copy_part_size, seastar::abort_source* as) {
+    return data_sink(std::make_unique<upload_jumbo_sink>(shared_from_this(), std::move(object_name), std::move(metadata), max_parts_per_piece, max_copy_part_size, as));
 }
 
 std::pair<data_sink, future<sstring>> client::make_upload_jumbo_sink_and_get_etag(sstring object_name, object_metadata metadata, std::optional<unsigned> max_parts_per_piece,
-                                                                                   seastar::abort_source* as) {
-    auto sink = std::make_unique<upload_jumbo_sink>(shared_from_this(), std::move(object_name), std::move(metadata), max_parts_per_piece, as);
+                                                                                   std::optional<size_t> max_copy_part_size, seastar::abort_source* as) {
+    auto sink = std::make_unique<upload_jumbo_sink>(shared_from_this(), std::move(object_name), std::move(metadata), max_parts_per_piece, max_copy_part_size, as);
     auto etag = sink->get_etag();
     return {data_sink(std::move(sink)), std::move(etag)};
 }
