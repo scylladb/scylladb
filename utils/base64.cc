@@ -8,6 +8,9 @@
 
 #include "base64.hh"
 
+#include <array>
+#include <cstring>
+
 #include <seastar/core/format.hh>
 
 // Arrays for quickly converting to and from an integer between 0 and 63,
@@ -29,34 +32,39 @@ public:
     }
 } base64_chars;
 
+// The base64 encoding of every 12-bit value, as two characters. Fast base64
+// encoders use such a table to encode 3 bytes with two lookups.
+static constexpr auto base64_pairs = [] {
+    std::array<std::array<char, 2>, 4096> pairs{};
+    for (unsigned i = 0; i < pairs.size(); ++i) {
+        pairs[i] = {base64_chars::to[i >> 6], base64_chars::to[i & 0x3f]};
+    }
+    return pairs;
+}();
+
 std::string base64_encode(bytes_view in) {
     std::string ret;
-    ret.reserve(((4 * in.size() / 3) + 3) & ~3);
-    int i = 0;
-    unsigned char chunk3[3]; // chunk of input
-    for (auto byte : in) {
-        chunk3[i++] = byte;
-        if (i == 3) {
-            ret += base64_chars.to[ (chunk3[0] & 0xfc) >> 2 ];
-            ret += base64_chars.to[ ((chunk3[0] & 0x03) << 4) + ((chunk3[1] & 0xf0) >> 4) ];
-            ret += base64_chars.to[ ((chunk3[1] & 0x0f) << 2) + ((chunk3[2] & 0xc0) >> 6) ];
-            ret += base64_chars.to[ chunk3[2] & 0x3f ];
-            i = 0;
+    const size_t out_size = (in.size() + 2) / 3 * 4;
+    ret.resize_and_overwrite(out_size, [&] (char* out, size_t) {
+        const auto* p = reinterpret_cast<const uint8_t*>(in.data());
+        const auto* end = p + in.size() / 3 * 3;
+        for (; p != end; p += 3) {
+            uint32_t v = uint32_t(p[0]) << 16 | uint32_t(p[1]) << 8 | p[2];
+            std::memcpy(out, base64_pairs[v >> 12].data(), 2);
+            std::memcpy(out + 2, base64_pairs[v & 0xfff].data(), 2);
+            out += 4;
         }
-    }
-    if (i) {
-        // i can be 1 or 2.
-        for(int j = i; j < 3; j++)
-            chunk3[j] = '\0';
-        ret += base64_chars.to[ ( chunk3[0] & 0xfc) >> 2 ];
-        ret += base64_chars.to[ ((chunk3[0] & 0x03) << 4) + ((chunk3[1] & 0xf0) >> 4) ];
-        if (i == 2) {
-            ret += base64_chars.to[ ((chunk3[1] & 0x0f) << 2) + ((chunk3[2] & 0xc0) >> 6) ];
-        } else {
-            ret += '=';
+        // The last 1 or 2 bytes, padded with '='.
+        size_t rest = in.size() % 3;
+        if (rest) {
+            uint32_t v = uint32_t(p[0]) << 16 | (rest == 2 ? uint32_t(p[1]) << 8 : 0);
+            out[0] = base64_chars::to[v >> 18];
+            out[1] = base64_chars::to[(v >> 12) & 0x3f];
+            out[2] = rest == 2 ? base64_chars::to[(v >> 6) & 0x3f] : '=';
+            out[3] = '=';
         }
-        ret += '=';
-    }
+        return out_size;
+    });
     return ret;
 }
 

@@ -17,63 +17,47 @@
 namespace tools {
 namespace {
 
-using reader = rapidjson::GenericReader<rjson::encoding, rjson::encoding, rjson::allocator>;
-class stream {
+// Reads the input for the parser, remembering the last two buffers, so
+// that an error offset can be translated to a line and a column.
+class input_source {
+    struct buffer {
+        temporary_buffer<char> data;
+        size_t start = 0;
+        size_t lines_before = 0;
+        // Offset just past the last line feed before this buffer.
+        size_t line_start_before = 0;
+    };
+    input_stream<char> _is;
+    buffer _previous;
+    buffer _current;
 public:
-    using Ch = char;
-private:
-    input_stream<Ch> _is;
-    temporary_buffer<Ch> _current;
-    size_t _pos = 0;
-    size_t _line = 1;
-    size_t _last_lf_pos = 0;
-private:
-    void maybe_read_some() {
-        if (!_current.empty()) {
-            return;
-        }
-        _current = _is.read().get();
-        // EOS is encoded as null char
-        if (_current.empty()) {
-            _current = temporary_buffer<Ch>("\0", 1);
-        }
-    }
-public:
-    stream(input_stream<Ch> is) : _is(std::move(is)) {
-        maybe_read_some();
-    }
-    stream(stream&&) = default;
-    ~stream() {
+    explicit input_source(input_stream<char> is) : _is(std::move(is)) {}
+    input_source(input_source&&) = default;
+    ~input_source() {
         _is.close().get();
     }
-    Ch Peek() const {
-        return *_current.get();
+    temporary_buffer<char> next() {
+        auto data = _is.read().get();
+        std::string_view current(_current.data.get(), _current.data.size());
+        auto last_lf = current.rfind('\n');
+        buffer next{
+            .data = data.share(),
+            .start = _current.start + current.size(),
+            .lines_before = _current.lines_before + std::ranges::count(current, '\n'),
+            .line_start_before = last_lf == std::string_view::npos ? _current.line_start_before : _current.start + last_lf + 1,
+        };
+        _previous = std::exchange(_current, std::move(next));
+        return data;
     }
-    Ch Take() {
-        auto c = Peek();
-        if (c == '\n') {
-            ++_line;
-            ++_last_lf_pos = _pos;
-        }
-        ++_pos;
-        _current.trim_front(1);
-        maybe_read_some();
-        return c;
-    }
-    size_t Tell() {
-        return _pos;
-    }
-    // ostream methods, unused but need a definition
-    Ch* PutBegin() { return nullptr; }
-    void Put(Ch c) { }
-    void Flush() { }
-    size_t PutEnd(Ch* begin) { return 0; }
-    // own methods
-    size_t line() const {
-        return _line;
-    }
-    size_t last_line_feed_pos() const {
-        return _last_lf_pos;
+    // Returns the 1-based line and the 0-based column of the given offset,
+    // which should lie in one of the last two buffers.
+    std::pair<size_t, size_t> position(size_t offset) const {
+        const buffer& b = offset >= _current.start ? _current : _previous;
+        offset = std::max(offset, b.start);
+        std::string_view before(b.data.get(), std::min(offset - b.start, b.data.size()));
+        auto last_lf = before.rfind('\n');
+        size_t line_start = last_lf == std::string_view::npos ? b.line_start_before : b.start + last_lf + 1;
+        return {b.lines_before + std::ranges::count(before, '\n') + 1, offset - line_start};
     }
 };
 class handler {
@@ -123,6 +107,7 @@ private:
     reader_permit _permit;
     queue<mutation_fragment_v2_opt>& _queue;
     logger& _logger;
+    std::exception_ptr _failure; // why the handler stopped the parsing
     circular_buffer<state> _state_stack;
     std::string _key; // last seen key
     bool _partition_start_emited = false;
@@ -178,7 +163,7 @@ private:
     bool error(fmt::format_string<Args...> fmt, Args&&... args) {
         auto parse_error = fmt::format(fmt, std::forward<Args>(args)...);
         _logger.trace("{}", parse_error);
-        _queue.abort(std::make_exception_ptr(std::runtime_error(parse_error)));
+        _failure = std::make_exception_ptr(std::runtime_error(parse_error));
         return false;
     }
 
@@ -572,6 +557,9 @@ public:
         push(state::start);
     }
     handler(handler&&) = default;
+    std::exception_ptr failure() const {
+        return _failure;
+    }
     bool Null() {
         _logger.trace("Null()");
         switch (top()) {
@@ -655,11 +643,11 @@ public:
         }
         return true;
     }
-    bool RawNumber(const Ch* str, rapidjson::SizeType length, bool copy) {
+    bool RawNumber(const Ch* str, rjson::size_type length, bool copy) {
         _logger.trace("RawNumber({})", std::string_view(str, length));
         return unexpected();
     }
-    bool String(const Ch* str, rapidjson::SizeType length, bool copy) {
+    bool String(const Ch* str, rjson::size_type length, bool copy) {
         _logger.trace("String({})", std::string_view(str, length));
         switch (top()) {
             case state::before_ignored_value:
@@ -698,7 +686,7 @@ public:
                 return unexpected();
         }
     }
-    bool Key(const Ch* str, rapidjson::SizeType length, bool copy) {
+    bool Key(const Ch* str, rjson::size_type length, bool copy) {
         _key = std::string(str, length);
         _logger.trace("Key({})", _key);
         switch (top()) {
@@ -808,7 +796,7 @@ public:
                 return unexpected(_key);
         }
     }
-    bool EndObject(rapidjson::SizeType memberCount) {
+    bool EndObject(rjson::size_type memberCount) {
         _logger.trace("EndObject()");
         switch (top()) {
             case state::in_partition:
@@ -835,7 +823,7 @@ public:
                 return unexpected();
         }
     }
-    bool EndArray(rapidjson::SizeType elementCount) {
+    bool EndArray(rjson::size_type elementCount) {
         _logger.trace("EndArray({})", elementCount);
         switch (top()) {
             case state::before_clustering_element:
@@ -853,19 +841,30 @@ struct parsing_aborted : public std::exception { };
 
 class json_mutation_stream_parser::impl {
     queue<mutation_fragment_v2_opt> _queue;
-    stream _stream;
+    input_source _source;
     logger& _logger;
     handler _handler;
-    reader _reader;
     thread _thread;
+
+    void parse() {
+        try {
+            rjson::parse_sax([this] { return _source.next(); }, _handler);
+        } catch (const rjson::parse_error& e) {
+            auto [line, column] = _source.position(e.offset());
+            auto error = _handler.failure() ? _handler.failure() : std::current_exception();
+            _queue.abort(std::make_exception_ptr(std::runtime_error(fmt::format("parsing input failed at line {}, offset {}: {}", line, column, error))));
+        } catch (...) {
+            _queue.abort(std::current_exception());
+        }
+    }
 
 public:
     impl(schema_ptr schema, reader_permit permit, input_stream<char> istream, logger& logger)
         : _queue(1)
-        , _stream(std::move(istream))
+        , _source(std::move(istream))
         , _logger(logger)
         , _handler(std::move(schema), std::move(permit), _queue, _logger)
-        , _thread([this] { _reader.Parse(_stream, _handler); })
+        , _thread([this] { parse(); })
     { }
     ~impl() {
         _queue.abort(std::make_exception_ptr(parsing_aborted{}));
@@ -876,10 +875,7 @@ public:
         }
     }
     future<mutation_fragment_v2_opt> operator()() {
-        return _queue.pop_eventually().handle_exception([this] (std::exception_ptr e) -> mutation_fragment_v2_opt {
-            auto err_off = _reader.GetErrorOffset();
-            throw std::runtime_error(fmt::format("parsing input failed at line {}, offset {}: {}", _stream.line(), err_off - _stream.last_line_feed_pos(), e));
-        });
+        return _queue.pop_eventually();
     }
 };
 

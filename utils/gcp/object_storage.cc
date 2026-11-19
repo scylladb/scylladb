@@ -1407,7 +1407,7 @@ static utils::gcp::storage::object_info create_info(const rjson::value& item) {
             throw utils::gcp::storage::failed_operation("Malformed object metadata");
         }
         for (const auto& member : metadata->GetObject()) {
-            info.metadata.emplace(member.name.GetString(), rjson::to_string(member.value));
+            info.metadata.emplace(rjson::to_string(member.name), rjson::to_string(member.value));
         }
     }
 

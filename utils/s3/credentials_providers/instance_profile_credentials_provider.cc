@@ -11,8 +11,6 @@
 #include "utils/s3/client.hh"
 #include "utils/s3/default_aws_retry_strategy.hh"
 #include "utils/rjson.hh"
-#include <rapidjson/document.h>
-#include <rapidjson/error/en.h>
 #include <seastar/http/client.hh>
 #include <seastar/http/request.hh>
 #include <seastar/util/short_streams.hh>
@@ -79,12 +77,11 @@ future<> instance_profile_credentials_provider::update_credentials() {
 }
 
 s3::aws_credentials instance_profile_credentials_provider::parse_creds(const sstring& creds_response) {
-    rjson::document document;
-    document.Parse(creds_response.data());
-
-    if (document.HasParseError()) {
-        throw std::runtime_error(
-            format("Failed to parse EC2 Metadata credentials. Reason: {} (offset: {})", GetParseError_En(document.GetParseError()), document.GetErrorOffset()));
+    rjson::value document;
+    try {
+        document = rjson::parse(creds_response);
+    } catch (const rjson::error& e) {
+        throw std::runtime_error(format("Failed to parse EC2 Metadata credentials. Reason: {}", e.what()));
     }
 
     // Retrieve credentials

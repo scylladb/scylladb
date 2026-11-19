@@ -8,6 +8,7 @@
 
 #include <functional>
 #include <algorithm>
+#include <charconv>
 #include <vector>
 #include <seastar/core/abort_source.hh>
 #include <signal.h>
@@ -21,6 +22,9 @@
 #include <seastar/util/defer.hh>
 #include <seastar/util/short_streams.hh>
 #include <seastar/core/smp.hh>
+#include <seastar/core/gate.hh>
+#include <seastar/core/timer.hh>
+#include <seastar/util/file.hh>
 #include <tuple>
 #include <boost/program_options.hpp>
 
@@ -48,6 +52,8 @@ struct test_config {
     std::string remote_host;
     bool continue_after_error;
     std::string json_result_file;
+    unsigned rate;
+    std::string rate_file;
 };
 
 std::ostream& operator<<(std::ostream& os, const test_config& cfg) {
@@ -512,11 +518,63 @@ void workload_main(const test_config& c, sharded<abort_source>* as) {
         }).get();
     });
 
+    // With --rate, every shard starts its share of the requests at evenly
+    // spaced times, as long as enough of them are in flight. --rate-file
+    // changes the rate at run time.
+    // Each worker books its start time before sleeping, so a rate below one
+    // request per worker per second would stretch every one-second iteration
+    // until all workers got their turn; such rates are rejected.
+    using clock = std::chrono::steady_clock;
+    static thread_local clock::duration interval;
+    auto set_rate = [&c] (unsigned rate) {
+        if (rate && rate < uint64_t(c.concurrency) * this_smp_shard_count()) {
+            throw std::invalid_argument(fmt::format("--rate {} is below --concurrency {} times {} shards; lower --concurrency", rate, c.concurrency, this_smp_shard_count()));
+        }
+        return smp::invoke_on_all([rate] {
+            interval = rate ? std::chrono::duration_cast<clock::duration>(std::chrono::duration<double>(double(this_smp_shard_count()) / rate)) : clock::duration(0);
+        });
+    };
+    set_rate(c.rate).get();
+    gate rate_gate;
+    timer<lowres_clock> rate_timer([&] {
+        (void)with_gate(rate_gate, [&] {
+            return util::read_entire_file_contiguous(c.rate_file).then([&] (sstring text) {
+                unsigned rate;
+                if (std::from_chars(text.begin(), text.end(), rate).ec != std::errc()) {
+                    throw std::invalid_argument(fmt::format("invalid rate: {}", text));
+                }
+                return set_rate(rate);
+            }).handle_exception([] (std::exception_ptr) {
+                // A missing, partly written, invalid or too low rate keeps the
+                // current one.
+            });
+        });
+    });
+    if (!c.rate_file.empty()) {
+        rate_timer.arm_periodic(std::chrono::seconds(1));
+    }
+    auto stop_rate_timer = defer([&] noexcept {
+        rate_timer.cancel();
+        rate_gate.close().get();
+    });
+    auto pace = [as] () -> future<> {
+        static thread_local clock::time_point next_start = clock::now();
+        if (interval == clock::duration(0)) {
+            return make_ready_future<>();
+        }
+        // Don't make up for time lost to a stall with a burst.
+        auto now = clock::now();
+        auto start = std::max(next_start, now - interval);
+        next_start = start + interval;
+        return start > now ? sleep_abortable(start - now, as->local()) : make_ready_future<>();
+    };
     auto results = time_parallel([&] {
         as->local().check();
-        static thread_local auto cli_iter = -1;
-        auto seq = tests::random::get_int<uint64_t>(c.partitions - 1);
-        return fun(c, cli_pool[++cli_iter % c.concurrency], seq);
+        return pace().then([&] {
+            static thread_local auto cli_iter = -1;
+            auto seq = tests::random::get_int<uint64_t>(c.partitions - 1);
+            return fun(c, cli_pool[++cli_iter % c.concurrency], seq);
+        });
     }, c.concurrency, c.duration_in_seconds, c.operations_per_shard, !c.continue_after_error);
 
     aggregated_perf_results agg(results);
@@ -533,6 +591,8 @@ void workload_main(const test_config& c, sharded<abort_source>* as) {
         params["flush"] = c.flush;
         params["scan_total_segments"] = c.scan_total_segments;
         params["batch_size"] = c.batch_size;
+        params["rate"] = c.rate;
+        params["rate_file"] = c.rate_file;
         params["cpus"] = this_smp_shard_count();
 
         perf::write_json_result(c.json_result_file, agg, params, c.workload);
@@ -561,6 +621,8 @@ std::function<int(int, char**)> alternator(std::function<int(int, char**)> scyll
             ("batch-size", bpo::value<unsigned>()->default_value(32), "number of items in a single request in the batch_read and batch_write_gsi workloads")
             ("continue-after-error", bpo::value<bool>()->default_value(false), "continue test after failed request")
             ("json-result", bpo::value<std::string>()->default_value(""), "file to write json results to")
+            ("rate", bpo::value<unsigned>()->default_value(0), "requests per second in total, split evenly among the shards; 0 sends them as fast as possible")
+            ("rate-file", bpo::value<std::string>()->default_value(""), "file to read --rate from every second, to change it at run time")
         ;
         bpo::variables_map opts;
         bpo::store(bpo::command_line_parser(ac, av).options(opts_desc).allow_unregistered().run(), opts);
@@ -577,6 +639,8 @@ std::function<int(int, char**)> alternator(std::function<int(int, char**)> scyll
         c.batch_size = opts["batch-size"].as<unsigned>();
         c.continue_after_error = opts["continue-after-error"].as<bool>();
         c.json_result_file = opts["json-result"].as<std::string>();
+        c.rate = opts["rate"].as<unsigned>();
+        c.rate_file = opts["rate-file"].as<std::string>();
 
         if (c.scan_total_segments < 1 || c.scan_total_segments > 1'000'000) {
             throw std::invalid_argument("scan-total-segments must be between 1 and 1'000'000");

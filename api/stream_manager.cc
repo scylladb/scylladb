@@ -13,7 +13,6 @@
 #include "api/api-doc/stream_manager.json.hh"
 #include "api/api-doc/storage_service.json.hh"
 #include <vector>
-#include <rapidjson/document.h>
 #include "gms/gossiper.hh"
 
 namespace api {

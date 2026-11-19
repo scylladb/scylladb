@@ -83,7 +83,7 @@ private:
 
 public:
     future<std::unique_ptr<http::reply>> generate_reply(std::unique_ptr<http::reply> rep,
-         sstring accept_encoding, std::optional<std::string_view> content_type, std::string&& response_body);
+         sstring accept_encoding, std::optional<std::string_view> content_type, sstring&& response_body);
     future<std::unique_ptr<http::reply>> generate_reply(std::unique_ptr<http::reply> rep,
          sstring accept_encoding, std::optional<std::string_view> content_type, body_writer&& body_writer);
 };

@@ -35,6 +35,9 @@ class server : public peering_sharded_service<server> {
     // running out of memory when a client sends a very large request.
     // DynamoDB also has the same limit set to 16 MB.
     static constexpr size_t request_content_length_limit = 16*MB;
+
+// The memory reserved for parsing a request, on top of its size.
+static constexpr size_t parsed_request_overhead = 8000;
     // The maximum combined size of a request's request line (the URL) and its
     // headers, in bytes. Like request_content_length_limit above, this is a
     // safety measure to prevent Alternator from running out of memory - the
@@ -85,22 +88,17 @@ class server : public peering_sharded_service<server> {
     ::shared_ptr<seastar::tls::server_credentials> _credentials;
 
     class json_parser {
+        // Documents smaller than this are parsed without yielding.
         static constexpr size_t yieldable_parsing_threshold = 16*KB;
-        chunked_content _raw_document;
-        rjson::value _parsed_document;
-        std::exception_ptr _current_exception;
+        // Larger documents are parsed one at a time, so their parsing,
+        // even if it yields, doesn't crowd out other requests.
         semaphore _parsing_sem{1};
-        condition_variable _document_waiting;
-        condition_variable _document_parsed;
-        abort_source _as;
-        future<> _run_parse_json_thread;
     public:
-        json_parser();
         // Moving a chunked_content into parse() allows parse() to free each
         // chunk as soon as it is parsed, so when chunks are relatively small,
         // we don't need to store the sum of unparsed and parsed sizes.
-        future<rjson::value> parse(chunked_content&& content);
-        future<> stop();
+        // The observer is told how much memory the parsed document takes.
+        future<rjson::value> parse(chunked_content&& content, rjson::memory_observer observer);
     };
     json_parser _json_parser;
 

@@ -42,7 +42,6 @@ debian_base_packages=(
     python3-pip
     libsnappy-dev
     libjsoncpp-dev
-    rapidjson-dev
     scylla-antlr35-c++-dev
     git
     pigz
@@ -75,7 +74,6 @@ fedora_packages=(
     lua-devel
     yaml-cpp-devel
     jsoncpp-devel
-    rapidjson-devel
     snappy-devel
     libdeflate-devel
     systemd-devel
@@ -195,7 +193,6 @@ centos_packages=(
     scylla-antlr35-tool
     scylla-antlr35-C++-devel
     jsoncpp-devel snappy-devel
-    rapidjson-devel
     scylla-boost163-static
     scylla-python34-pyparsing20
     systemd-devel
@@ -226,7 +223,6 @@ arch_packages=(
     python-pip
     python-pyparsing
     python3
-    rapidjson
     snappy
     uv
 )

@@ -54,26 +54,26 @@ namespace {
 
 struct size_check {
     // True iff size passes this check.
-    virtual bool operator()(rapidjson::SizeType size) const = 0;
+    virtual bool operator()(rjson::size_type size) const = 0;
     // Check description, such that format("expected array {}", check.what()) is human-readable.
     virtual sstring what() const = 0;
 };
 
 class exact_size : public size_check {
-    rapidjson::SizeType _expected;
+    rjson::size_type _expected;
   public:
-    explicit exact_size(rapidjson::SizeType expected) : _expected(expected) {}
-    bool operator()(rapidjson::SizeType size) const override { return size == _expected; }
+    explicit exact_size(rjson::size_type expected) : _expected(expected) {}
+    bool operator()(rjson::size_type size) const override { return size == _expected; }
     sstring what() const override { return format("of size {}", _expected); }
 };
 
 struct empty : public size_check {
-    bool operator()(rapidjson::SizeType size) const override { return size < 1; }
+    bool operator()(rjson::size_type size) const override { return size < 1; }
     sstring what() const override { return "to be empty"; }
 };
 
 struct nonempty : public size_check {
-    bool operator()(rapidjson::SizeType size) const override { return size > 0; }
+    bool operator()(rjson::size_type size) const override { return size > 0; }
     sstring what() const override { return "to be non-empty"; }
 };
 
