@@ -115,3 +115,51 @@ def test_nan_with_sign_bit_clustering_key(cql, test_keyspace, scylla_only, ck_ty
             if order == "DESC":
                 cks.reverse()
             assert len(cks) == 2 and cks[0] == float('inf') and math.isnan(cks[1])
+
+# Like the NaN in the previous test, a varint with redundant leading sign
+# bytes is a value whose byte-comparable form used to be ordered differently
+# from the value itself: if it took 8 bytes or more and began with two or more
+# sign-only bytes (0x00, or 0xFF if negative), it was ordered as if it were a
+# longer, and therefore larger (or, if negative, smaller) number. The
+# serializer never produces redundant sign bytes, but they are valid, and can
+# be sent by a client or made by blobAsVarint(). As above, clustering keys
+# like that in a partition large enough to have a row index could abort the
+# writing of the sstable, as the ones of this test did, and a read by another
+# representation of a key than the stored one could miss its row.
+# This is a Scylla-only test because it uses BYPASS CACHE, which does not
+# exist on Cassandra.
+@pytest.mark.parametrize("order", ["DESC", "ASC"])
+def test_varint_with_redundant_sign_bytes_clustering_key(cql, test_keyspace, scylla_only, order):
+    with new_test_table(cql, test_keyspace, "pk int, ck varint, v text, PRIMARY KEY (pk, ck)",
+            f"WITH CLUSTERING ORDER BY (ck {order})") as table:
+        # A row index entry is written for every column_index_size_in_kb
+        # (64 KB by default) of rows, so each of the following rows gets one.
+        v = 'x' * 70000
+        insert = cql.prepare(f"INSERT INTO {table} (pk, ck, v) VALUES (0, ?, ?)")
+        insert_blob = cql.prepare(f"INSERT INTO {table} (pk, ck, v) VALUES (0, blobAsVarint(?), ?)")
+        for ck in [-3, 0, 2, 3]:
+            cql.execute(insert, [ck, v])
+        # -2 and 1, each in 8 bytes instead of the one byte they need. Fewer
+        # bytes would not do: up to 7, the encoding was right before the fix.
+        cql.execute(insert_blob, [bytes.fromhex('fffffffffffffffe'), v])
+        cql.execute(insert_blob, [bytes.fromhex('0000000000000001'), v])
+        nodetool.flush(cql, table)
+        numbers = [-3, -2, 0, 1, 2, 3]
+        cks = [row.ck for row in cql.execute(f"SELECT ck FROM {table} WHERE pk = 0 BYPASS CACHE")]
+        if order == "DESC":
+            cks.reverse()
+        assert cks == numbers
+        # Each row can be found through the index, also by the usual, short,
+        # representation of its key, which is the one that the driver sends.
+        select = cql.prepare(f"SELECT ck FROM {table} WHERE pk = 0 AND ck = ? BYPASS CACHE")
+        for ck in numbers:
+            assert [row.ck for row in cql.execute(select, [ck])] == [ck]
+        # A key with redundant sign bytes finds the row of its number too,
+        # whether the row was written with such bytes (-2, 1) or not (-3, 2).
+        select_blob = cql.prepare(f"SELECT ck FROM {table} WHERE pk = 0 AND ck = blobAsVarint(?) BYPASS CACHE")
+        for blob, ck in [('fffffffffffffffffe', -2), ('000000000000000001', 1), ('fffffffffffffffd', -3), ('0000000000000002', 2)]:
+            assert [row.ck for row in cql.execute(select_blob, [bytes.fromhex(blob)])] == [ck]
+        cks = [row.ck for row in cql.execute(f"SELECT ck FROM {table} WHERE pk = 0 AND ck >= 1 AND ck <= 2 BYPASS CACHE")]
+        if order == "DESC":
+            cks.reverse()
+        assert cks == [1, 2]

@@ -325,8 +325,12 @@ static void encode_varint_type(managed_bytes_view& serialized_bytes_view, bytes_
     // Peek first byte
     uint8_t first_byte = static_cast<uint8_t>(serialized_bytes_view[0]);
     const int64_t sign_mask = first_byte < 0x80 ? 0 : -1;
-    // Discard first byte if it is a sign only byte
-    if (first_byte == uint8_t(sign_mask & 0xFF)) {
+    // Discard the leading sign only bytes, like Cassandra does. The serializer writes at most
+    // one of them, but a varint sent by a client or made by blobAsVarint() can have any number
+    // of them. They don't change the number, so they must not change its encoding, and in
+    // particular its length.
+    const auto sign_only_byte = uint8_t(sign_mask & 0xFF);
+    while (!serialized_bytes_view.empty() && static_cast<uint8_t>(serialized_bytes_view[0]) == sign_only_byte) {
         serialized_bytes_view.remove_prefix(1);
     }
 
