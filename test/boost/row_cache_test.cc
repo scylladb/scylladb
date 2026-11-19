@@ -2643,8 +2643,12 @@ SEASTAR_TEST_CASE(test_exception_safety_of_update_from_memtable) {
 
             auto make_reader = [&] (const dht::partition_range& pr) {
                 auto rd = cache.make_reader(s.schema(), semaphore.make_permit(), pr);
+                // fill_buffer() may fail with an injected bad_alloc. The reader
+                // must then be closed before it's destroyed.
+                auto close_rd = deferred_close(rd);
                 rd.set_max_buffer_size(1);
                 rd.fill_buffer().get();
+                close_rd.cancel();
                 return rd;
             };
 
