@@ -363,6 +363,8 @@ is modelled hierarchically:
 
 - The hierarchy of Data resources, Keyspaces, and Tables has the structure ``ALL KEYSPACES`` -> ``KEYSPACE`` ->
   ``TABLE``.
+- The hierarchy of Cluster resources has the structure ``ALL SCOPES`` (the whole cluster) -> ``DATACENTER`` -> ``RACK`` -> ``NODE``. It is
+  used only by the ``CONFIGURE`` permission; see :ref:`cluster configuration permissions <cql-cluster-config-permissions>`.
 
 ..
    - Function resources have the structure ``ALL FUNCTIONS`` -> ``KEYSPACE`` -> ``FUNCTION``
@@ -397,6 +399,7 @@ The full set of available permissions is:
 - ``VECTOR_SEARCH_INDEXING``
 - ``TEXT_SEARCH_INDEXING``
 - ``PATTERN_SEARCH_INDEXING``
+- ``CONFIGURE``
 
 .. 
    - ``EXECUTE``
@@ -486,6 +489,18 @@ permissions can be granted on which types of resources, and which statements are
    * - ``AUTHORIZE``
      - ``ALL OBJECT STORAGE``
      - ``GRANT PERMISSION`` and ``REVOKE PERMISSION`` on ``ALL OBJECT STORAGE``
+   * - ``CONFIGURE``
+     - ``ALL SCOPES``
+     - Setting :doc:`cluster configuration options </cql/cluster-config>` at any scope
+   * - ``CONFIGURE``
+     - ``DATACENTER dc``, ``RACK dc rack``, ``NODE host_id``
+     - Setting cluster configuration options on the datacenter, rack or node and below it
+   * - ``CONFIGURE``
+     - ``ALL KEYSPACES``, ``KEYSPACE keyspace_name``, ``TABLE table_name``
+     - Setting cluster configuration options on the keyspaces or tables it covers
+   * - ``AUTHORIZE``
+     - ``ALL SCOPES``, ``DATACENTER dc``, ``RACK dc rack``, ``NODE host_id``
+     - ``GRANT`` and ``REVOKE`` of ``CONFIGURE`` on the resource and below it
 
 .. _external-index-system-tables:
 
@@ -511,12 +526,17 @@ Granting permission uses the ``GRANT PERMISSION`` statement:
    grant_permission_statement: GRANT `permissions` ON `resource` TO `user_name`
    permissions: ALL [ PERMISSIONS ] | `permission` [ PERMISSION ]
    permission: CREATE | ALTER | DROP | SELECT | MODIFY | AUTHORIZE | DESCRIBE | VECTOR_SEARCH_INDEXING | TEXT_SEARCH_INDEXING | PATTERN_SEARCH_INDEXING
+             :| CONFIGURE [ '(' `option` ( ',' `option` )* ')' ]
    resource: ALL KEYSPACES
            :| KEYSPACE `keyspace_name`
            :| [ TABLE ] `table_name`
            :| ALL USERS
            :| USER `user_name`
            :| ALL OBJECT STORAGE
+           :| ALL SCOPES
+           :| DATACENTER `datacenter_name`
+           :| RACK `datacenter_name` `rack_name`
+           :| NODE `host_id`
 
 For instance::
 
@@ -548,13 +568,13 @@ GRANT ALL
 `````````
 
 When the ``GRANT ALL`` form is used, the appropriate set of permissions is determined automatically based on the target
-resource.
+resource. ``CONFIGURE`` is never part of that set; it is granted only by name. ``REVOKE ALL`` revokes it.
 
 Automatic Granting
 ``````````````````
 
 When a resource is created, via a ``CREATE KEYSPACE``, ``CREATE TABLE`` or ``CREATE USER`` statement, the creator (the role the database user who issues the statement is identified as) is
-automatically granted all applicable permissions on the new resource.
+automatically granted all applicable permissions on the new resource, except ``CONFIGURE``.
 
 .. _revoke-permission-statement:
 

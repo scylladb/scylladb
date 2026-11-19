@@ -405,22 +405,75 @@ Join and restart follow the same sequencing: receive authoritative topology/sche
 
 ### Permissions and Authorization
 
-The permission check is per-scope: the required authority comes from the target scope of the statement, not from the option key.
+Authorization is per option and per scope target, through the standard RBAC statements. Reads stay open: `DESCRIBE` and the config tables need no permission beyond login, so a dump never omits config state depending on who runs it.
 
-The rules are:
+#### Model
 
-- table-oriented scopes use the existing `ALTER` permission model:
-  - `ALTER TABLE ... WITH ...` requires `ALTER` permission on the table
-  - `ALTER KEYSPACE ... WITH ...` requires `ALTER` permission on the keyspace
-- `CLUSTER` and the node-oriented scopes are superuser-only in the minimum implementation:
-  - `ALTER CLUSTER ... WITH ...`
-  - `ALTER DATACENTER ... WITH ...`
-  - `ALTER RACK ... WITH ...`
-  - `ALTER NODE ... WITH ...`
+One permission, `CONFIGURE`, allows setting or removing (`= NULL`) an option. It is granted on the scope target itself, optionally narrowed to named options:
 
-Because the check is on the target scope, the same key can carry different permissions at different scopes: a key set at table scope requires only `ALTER` on the table, but at cluster scope requires superuser.
+```cql
+GRANT CONFIGURE ON ALL SCOPES TO config_admin;
+GRANT CONFIGURE (auto_repair_enabled, auto_repair_threshold_in_seconds) ON ALL SCOPES TO repair_admin;
+GRANT CONFIGURE (auto_repair_enabled) ON KEYSPACE tenant_a_ks TO tenant_a;
+GRANT CONFIGURE ON DATACENTER dc1 TO dc1_ops;
+```
 
-Finer-grained authorization for the node-oriented scopes can be designed later, but it is out of scope for the minimum implementation.
+The option is to a scope target what a column is to a table in an SQL column privilege (`GRANT UPDATE (col) ON t`).
+
+Scope targets map to auth resources:
+
+- `KEYSPACE` and `TABLE` targets are the existing data resources.
+- `CLUSTER`, `DATACENTER`, `RACK` and `NODE` are a new resource kind, `cluster`, whose tree is the topology. Its root, the cluster, is above every scope of both chains and is written `ALL SCOPES` in `GRANT`, `REVOKE` and `LIST PERMISSIONS`: `CLUSTER` is an unreserved keyword that can name a table, so `ON cluster` already means that table, while `ALL` is reserved.
+
+Each statement checks the resource it names. A grant on a resource covers that scope target and every narrower one, so the lookup walks the cluster config scope chain:
+
+```
+TABLE ks.t    ->  KEYSPACE ks   ->  ALL KEYSPACES  ->  CLUSTER
+NODE host_id  ->  RACK dc rack  ->  DATACENTER dc  ->  CLUSTER
+```
+
+Setting option `o` at target `T` is allowed when the role holds `CONFIGURE`, for all options or for `o`, on any resource of `T`'s chain. `ALL KEYSPACES` covers every keyspace and table scope but not `ALTER CLUSTER`.
+
+Reusing the data resources for the table-oriented targets is what makes the grants follow the object's lifecycle: `DROP KEYSPACE` and `DROP TABLE` already revoke everything granted on the resource, so a re-created object does not inherit a stale grant. It also makes both wildcards expressible: every option in a subtree (`CONFIGURE ON KEYSPACE ks`) and one option everywhere (`CONFIGURE (o) ON ALL SCOPES`). A tree keyed by option first, with the target below it, can express only the second, and needs its own cleanup for every option when a keyspace or a table is dropped.
+
+#### Restricted And Owner-Settable Options
+
+A registry entry declares `access`:
+
+- `option_access::restricted` (the default): `CONFIGURE` is required at every scope. `ALTER` on the data resource is neither needed nor sufficient, so an operator role can manage an option on tenant tables without schema rights, and a table owner cannot override the operator's setting.
+- `option_access::owner_settable`: at `KEYSPACE` and `TABLE` scope the statement's own data permission (`ALTER`) also suffices. This is where a legacy schema property lands when it migrates, so that its released semantics hold.
+
+The default is the safe direction: changing an option from restricted to owner-settable only adds access, while the reverse takes access away from existing owners. All current options are restricted.
+
+A statement that only sets config options needs no `ALTER`, but still goes through the rules that refuse an `ALTER` of system and internal keyspaces and tables (`client_state::check_alter_rules()`). A statement that also changes other properties needs `ALTER` for those, `CREATE TABLE ... WITH <option>` needs `CREATE` as before, and the statement fails as a whole if any check fails.
+
+#### Rules
+
+- `CONFIGURE` is not part of `GRANT ALL` (like the `*_SEARCH_INDEXING` permissions) and is left out of the automatic grant to the creator of a keyspace or a table. An existing `GRANT ALL ON KEYSPACE ks TO tenant` therefore does not hand out restricted options. `REVOKE ALL` revokes it, with the per-option grants on the resource, when the revoking role holds `CONFIGURE` on the resource itself. A role that only has `AUTHORIZE`, such as the creator of a table, cannot take away what an operator was granted there.
+- Superusers hold it everywhere. `AllowAllAuthorizer` and the maintenance socket authorizer hand it out, as they do every other permission. `AllowAllAuthorizer` does not hand it out on cluster resources to a role that logged in, so with authentication enabled `ALTER CLUSTER/DATACENTER/RACK/NODE` still require a superuser, as they did before this model. `TransitionalAuthorizer` hands it out on data resources only, next to `ALTER`.
+- `GRANT` and `REVOKE` of `CONFIGURE` need `AUTHORIZE` on the resource or on a resource of its scope chain, and the role must itself hold what it grants. A table creator has `AUTHORIZE` on its table but holds no `CONFIGURE`, so it cannot grant itself anything.
+- `REVOKE CONFIGURE ON <resource>` without an option list also revokes the per-option grants on that resource.
+- `GRANT` validates that the resource exists (a datacenter, rack or node against the topology), that the option is registered, and that the option supports a scope at or below the resource. It does not depend on the option's own feature, so grants can be prepared during an upgrade. `REVOKE` checks none of these for a cluster resource or an option, so a grant can be removed after its datacenter, rack, node or option is gone. For a node that left, the datacenter and rack in the resource name are taken from the role's grants that still name it.
+- A host ID is stored in its canonical spelling, whatever case it was typed in.
+- `LIST PERMISSIONS` shows a per-option grant as `CONFIGURE (option)` on the resource; a recursive listing on a data resource includes the cluster. `LIST CONFIGURE (option)` shows the grants that cover the option. `DESCRIBE SCHEMA WITH INTERNALS` emits the grants in replayable form, except those on a node: a host ID exists in one cluster only, and the node's config overrides are not in the dump either.
+- A non-superuser role that replays a schema dump needs `CONFIGURE ON ALL SCOPES` besides its data permissions.
+
+#### Implementation
+
+- `auth::permission::CONFIGURE`, and `auth::resource_kind::cluster` with up to three parts: datacenter, rack, host ID. A node is named by its place in the topology (`cluster/<dc>/<rack>/<host_id>`), so its parents are its rack and its datacenter and nothing after the statement needs the topology. `GRANT ... ON NODE` and `ALTER NODE` look the node's datacenter and rack up once. Datacenter and rack names are free-form, so every character outside `[A-Za-z0-9_.-]` is percent-encoded in the stored name.
+- A per-option grant is a grant of `CONFIGURE` on a sub-resource of the target: `auth::resource` carries an optional config option, stored as a last name part `@config:<option>` (`data/ks/@config:auto_repair_enabled`, `cluster/dc1/@config:<option>`). Only data and cluster resource names are parsed this way. No keyspace or table name contains `@` (CQL names are word characters; Alternator adds `.`, `-`, and `:` and `!` in view names) and datacenter and rack names are encoded, so the part is unambiguous, and parsing needs no registry lookup: the rows of a removed option stay listable and revocable.
+- Because a grant is still a (role, resource) row with a permission set, the authorizer interface, `system.role_permissions`, the permissions cache and role inheritance are unchanged.
+- `auth::config_scope_parent()` gives the next resource of the scope chain; it is `resource::parent()` plus the step from `ALL KEYSPACES` to `CLUSTER`. `service::client_state::check_has_config_permission()` walks it, looking at the resource and at its sub-resource for the option at each step: at most eight lookups in the permissions cache, on DDL only.
+- The statements call it from `check_access()`, which runs before `validate()`. The check therefore uses the option names only and must not canonicalize values. The permissions cache has no size limit, so `ALTER CLUSTER/DATACENTER/RACK/NODE` does not look up a sub-resource for an unregistered option, and checks an unknown datacenter, rack or node against the cluster resource.
+- `default_authorizer::revoke_all()` deletes by name prefix for a keyspace, a table, a datacenter, a rack and a node, which covers the per-option sub-resources.
+
+#### Upgrade
+
+`GRANT` and `REVOKE` of `CONFIGURE`, and of anything on a cluster resource, are rejected until the `CLUSTER_CONFIG_RBAC` feature is enabled: a node without it fails to read a row that names an unknown permission or resource. Releases before this model authorize `ALTER KEYSPACE` and `ALTER TABLE` with `ALTER` and the other scopes with superuser. Until the feature is enabled the statements keep those rules, so that every node of a cluster under upgrade answers the same way and no role loses access before it can be granted `CONFIGURE`. From the moment the feature is enabled `CONFIGURE` is required: a role that relied on `ALTER` to set an option on its own table needs a grant then.
+
+#### Not Implemented Yet
+
+Grants on a datacenter, a rack or a node are not revoked when the target leaves the topology. This belongs with [Orphaned Override Cleanup](#orphaned-override-cleanup), which has to remove the grants together with the overrides. Until then a grant on a removed node is inert, since a host ID is never reused, and a grant on a removed datacenter or rack applies again if one with the same name is added, as its stored overrides do. Such a grant can be revoked by hand. A grant on a node does not carry over to the node that replaces it.
 
 ## Tests
 
@@ -450,6 +503,13 @@ Primary areas common to all categories:
 Main file:
 
 - `test/cluster/test_cluster_config.py`
+
+### Authorization Tests
+
+- `test/boost/auth_resource_test.cc`: naming, parsing and encoding of the cluster resources and the per-option sub-resources, and the scope chain
+- `test/boost/cql_auth_query_test.cc`: grants on a datacenter, rack and node, and an owner-settable option, with test-only options
+- `test/cluster/auth_cluster/test_cluster_config_permissions.py`: `AllowAllAuthorizer` with authentication, `TransitionalAuthorizer`, revoking grants on departed topology targets, and a rolling upgrade (needs a binary without the permission next to the built one, `scylla.no.cluster.config.rbac`)
+- `test/cqlpy/test_cluster_config_permissions.py`: the checks of each statement, per-option and all-option grants at every resource, delegation with `AUTHORIZE`, role inheritance, revocation on drop, `LIST` and `DESCRIBE` output
 
 Each category section lists the additional, category-specific test areas.
 
