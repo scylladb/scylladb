@@ -169,6 +169,11 @@ void memtable::clear() noexcept {
 }
 
 future<> memtable::clear_gently() noexcept {
+    // The partitions are moved out below and released while yielding, yet readers
+    // may still hold snapshots of their data. Lookups in this memtable are unreliable
+    // from now on, so it must keep being accounted for in tombstone gc decisions
+    // regardless of its contents, same as when merging it into the cache.
+    _merging_into_cache = true;
     return futurize_invoke([this] {
         auto t = std::make_unique<seastar::thread>([this] {
             auto& alloc = allocator();
