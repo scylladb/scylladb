@@ -11,6 +11,7 @@
 #include <memory>
 #include <seastar/core/shared_ptr.hh>
 #include "sstables/abstract_index_reader.hh"
+#include "types/comparable_bytes.hh"
 
 namespace sstables {
     class file_writer;
@@ -73,7 +74,10 @@ public:
     // but it mustn't be extended after `finish()`,
     // because `finish()` writes a footer which is used by the reader
     // to find the root of the trie.
-    explicit bti_partition_index_writer(sstable_version_types, sstables::file_writer&);
+    //
+    // `canonical_nans_and_varints` selects the encoding of the keys.
+    // The reader of the index has to be told which one was used.
+    explicit bti_partition_index_writer(sstable_version_types, canonical_nans_and_varints, sstables::file_writer&);
     bti_partition_index_writer(bti_partition_index_writer&&) noexcept;
     bti_partition_index_writer& operator=(bti_partition_index_writer&&) noexcept;
     ~bti_partition_index_writer() noexcept;
@@ -103,7 +107,10 @@ public:
     // The trie will be written to the given file writer.
     // Note: the file doesn't have to be empty,
     // and it can be extended later.
-    explicit bti_row_index_writer(sstables::file_writer&);
+    //
+    // `canonical_nans_and_varints` selects the encoding of the keys.
+    // The reader of the index has to be told which one was used.
+    explicit bti_row_index_writer(canonical_nans_and_varints, sstables::file_writer&);
     bti_row_index_writer(bti_row_index_writer&&) noexcept;
     bti_row_index_writer& operator=(bti_row_index_writer&&) noexcept;
     explicit operator bool() const noexcept { return bool(_impl); }
@@ -142,12 +149,14 @@ public:
 // Creates a BTI index reader over the Partitions.db file and the matching Rows.db file.
 // `partitions_db_root_pos` should have been read from the Partitions.db footer beforehand.
 // (As we don't want to repeat that for every query).
+// `canonical_nans_and_varints` must be the one which the writers of the two files were given.
 std::unique_ptr<sstables::abstract_index_reader> make_bti_index_reader(
     seastar::shared_ptr<cached_file> partitions_db,
     seastar::shared_ptr<cached_file> rows_db,
     uint64_t partitions_db_root_pos,
     uint64_t total_data_db_file_size,
     sstable_version_types,
+    canonical_nans_and_varints,
     schema_ptr,
     reader_permit,
     tracing::trace_state_ptr);

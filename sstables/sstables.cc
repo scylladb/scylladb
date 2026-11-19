@@ -4537,6 +4537,7 @@ std::unique_ptr<abstract_index_reader> sstable::make_index_reader(
             _partitions_db_footer.value().trie_root_position,
             data_size(),
             _version,
+            canonical_nans_and_varints::yes,
             _schema,
             std::move(permit),
             std::move(trace_state)

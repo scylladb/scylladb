@@ -44,8 +44,8 @@ struct lcb_mismatch_test {
 
 PERF_TEST_F(lcb_mismatch_test, lcb_mismatch) {
     for (size_t i = 1; i < keys.size(); ++i) {
-        auto a = sstables::trie::lazy_comparable_bytes_from_clustering_position(*_s, keys[i - 1]);
-        auto b = sstables::trie::lazy_comparable_bytes_from_clustering_position(*_s, keys[i]);
+        auto a = sstables::trie::lazy_comparable_bytes_from_clustering_position(*_s, keys[i - 1], canonical_nans_and_varints::yes);
+        auto b = sstables::trie::lazy_comparable_bytes_from_clustering_position(*_s, keys[i], canonical_nans_and_varints::yes);
         auto [offset, ptr] = sstables::trie::lcb_mismatch(a.begin(), b.begin());
         perf_tests::do_not_optimize(offset);
         perf_tests::do_not_optimize(ptr);

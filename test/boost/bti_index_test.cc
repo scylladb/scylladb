@@ -954,8 +954,8 @@ SEASTAR_THREAD_TEST_CASE(test_exhaustive) {
         auto close_partitions_db = defer([&] noexcept { partitions_db_writer.close(); });
         auto close_rows_db = defer([&] noexcept { rows_db_writer.close(); });
 
-        auto partition_index_writer = sstables::trie::bti_partition_index_writer(sst_ver, partitions_db_writer);
-        auto row_index_writer = sstables::trie::bti_row_index_writer(rows_db_writer);
+        auto partition_index_writer = sstables::trie::bti_partition_index_writer(sst_ver, canonical_nans_and_varints::yes, partitions_db_writer);
+        auto row_index_writer = sstables::trie::bti_row_index_writer(canonical_nans_and_varints::yes, rows_db_writer);
 
         std::optional<partition_index_entry> last_partition_entry;
         std::optional<partition_end_entry> last_partition_end_entry;
@@ -1031,6 +1031,7 @@ SEASTAR_THREAD_TEST_CASE(test_exhaustive) {
                 partitions_db_root_pos,
                 std::get<eof_index_entry>(dataset.entries.back()).data_file_offset,
                 sst_ver,
+                canonical_nans_and_varints::yes,
                 the_schema,
                 semaphore.make_permit(),
                 trace_state
