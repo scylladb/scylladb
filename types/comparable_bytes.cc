@@ -386,15 +386,30 @@ static void decode_varint_type(managed_bytes_view& comparable_bytes_view, bytes_
 
 // Fixed length signed floating point number encode/decode.
 // To encode :
+//   If NaN : replace it by the positive quiet NaN first, as all NaNs are equal
 //   If positive : invert first bit to make it greater than all negatives
 //   If negative : invert all bytes to make negatives with bigger magnitude smaller
-// Decoding is identical except the logic to identify positive/negative values
+// Decoding is identical except the logic to identify positive/negative values,
+// and that it has no NaN to replace
 template <std::floating_point T, bool src_is_byte_comparable>
 static void convert_fixed_length_float(managed_bytes_view& src, bytes_ostream& out) {
     // Read and write float as uint32_t; double as uint64_t;
     using uint_t = std::conditional_t<std::is_same_v<T, float>, uint32_t, uint64_t>;
     static_assert(sizeof(uint_t) == sizeof(T), "cannot read floating point type as unsigned int as their sizes are not equal");
     uint_t value_be = read_simple_native<uint_t>(src);
+
+    if constexpr (!src_is_byte_comparable) {
+        // The comparator of the type considers all NaNs to be equal to each other and greater
+        // than any other value, whatever their sign bit and payload are, and a NaN is stored
+        // with the bits that the client sent. So encode every NaN as the same one - the positive
+        // quiet NaN, which the transformation below orders after +infinity. Otherwise a NaN
+        // with the sign bit set, which is what arithmetic gives on x86, would be ordered before
+        // all the other values, even -infinity, instead of after them.
+        // This deviates from Cassandra, which encodes the bits of a NaN like any other bits.
+        if (std::isnan(std::bit_cast<T>(seastar::be_to_cpu(value_be)))) {
+            value_be = seastar::cpu_to_be(std::bit_cast<uint_t>(std::numeric_limits<T>::quiet_NaN()));
+        }
+    }
 
     // Deduce sign - the values have their sign bit flipped in byte comparable format.
     // Since value_be is in big endian, use a big endian sign mask to check sign
