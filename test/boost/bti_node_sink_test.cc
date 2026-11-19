@@ -81,7 +81,7 @@ std::vector<std::byte> serialize_body(const writer_node& node, sink_pos pos, nod
 
     bti_node_sink serializer(fw, page_size);
     auto sz = serializer.serialized_size_body_type(node, type);
-    serializer.write_body(node, pos, type);
+    serializer.write_body(node, pos, type, node._payload);
     fw.close();
     REQUIRE(fw.offset() <= page_size);
     REQUIRE(fw.offset() == uint64_t(sz.value));
