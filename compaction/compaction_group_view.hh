@@ -9,10 +9,13 @@
 
 #pragma once
 
+#include <array>
 #include <chrono>
+#include <functional>
 #include <optional>
 
 #include <seastar/core/condition-variable.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 
 #include "schema/schema_fwd.hh"
 #include "sstables/open_info.hh"
@@ -42,6 +45,22 @@ public:
     virtual bool compaction_enforce_min_threshold() const noexcept = 0;
     virtual future<lw_shared_ptr<const sstables::sstable_set>> main_sstable_set() const = 0;
     virtual future<lw_shared_ptr<const sstables::sstable_set>> maintenance_sstable_set() const = 0;
+    // True iff any sstable of this view (main or maintenance) satisfies `pred`; need not materialize the view's sets.
+    virtual future<bool> has_sstable(std::function<bool(const sstables::shared_sstable&)> pred) const {
+        // Maintenance first: offstrategy moves sstables to main, so a concurrent move can't hide one from both captures.
+        auto maintenance_set = co_await maintenance_sstable_set();
+        auto main_set = co_await main_sstable_set();
+        std::array lists{maintenance_set->all(), main_set->all()};
+        for (auto& list : lists) {
+            for (auto& sst : *list) {
+                if (pred(sst)) {
+                    co_return true;
+                }
+                co_await coroutine::maybe_yield();
+            }
+        }
+        co_return false;
+    }
     // The sstable set tombstone gc consults, and whether it has to consult the memtables at
     // all: not when it considers only the repaired sstable set, whose data is always newer
     // than any GC-eligible tombstone. Both depend on the tombstone_gc mode, hence the schema

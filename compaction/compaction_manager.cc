@@ -2676,18 +2676,8 @@ compaction_manager::rewrite_sstables_component(compaction_group_view& t,
     }
 
     // Skip the stop on views with no candidate; filters must be side-effect free as they run twice.
-    {
-        bool has_candidate = false;
-        for (auto& sst : co_await get_all_sstables(t)) {
-            if (filter(sst)) {
-                has_candidate = true;
-                break;
-            }
-            co_await coroutine::maybe_yield();
-        }
-        if (!has_candidate) {
-            co_return std::nullopt;
-        }
+    if (!co_await t.has_sstable(filter)) {
+        co_return std::nullopt;
     }
 
     // Capture candidates from view `t` and register them as compacting while

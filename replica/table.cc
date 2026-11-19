@@ -6,6 +6,8 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
+#include <array>
+
 #include <seastar/core/seastar.hh>
 #include <seastar/core/shard_id.hh>
 #include <seastar/core/coroutine.hh>
@@ -3414,6 +3416,19 @@ public:
     }
     future<lw_shared_ptr<const sstables::sstable_set>> maintenance_sstable_set() const override {
         return make_sstable_set_for_this_view(_cg.maintenance_sstables(), [this] { return *_cg.make_maintenance_sstable_set(); });
+    }
+    future<bool> has_sstable(std::function<bool(const sstables::shared_sstable&)> pred) const override {
+        // Both snapshots taken before the first yield, so the scan doesn't depend on move direction.
+        std::array lists{_cg.maintenance_sstables()->all(), _cg.main_sstables()->all()};
+        for (auto& list : lists) {
+            for (auto& sst : *list) {
+                if (belongs_to_this_view(sst) && pred(sst)) {
+                    co_return true;
+                }
+                co_await coroutine::maybe_yield();
+            }
+        }
+        co_return false;
     }
 private:
     // Returns true when tombstone GC is restricted to the repaired set:
