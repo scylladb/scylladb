@@ -1,0 +1,448 @@
+# Copyright 2026-present ScyllaDB
+#
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
+
+# Tests for EXECUTE COMMAND toppartitions, comparing its results against the
+# older REST API toppartitions endpoint (same underlying sampler).
+
+import concurrent.futures
+import threading
+import time
+
+import pytest
+import requests
+from cassandra import ConsistencyLevel
+from cassandra.protocol import InvalidRequest, SyntaxException, Unauthorized
+from cassandra.query import SimpleStatement
+
+from . import nodetool
+from . import util
+from test.pylib.skip_types import skip_env
+
+
+# The sampler only counts traffic inside the window, which the statement itself holds
+# open, so send it async and keep hitting the tables until it returns.
+def sample(cql, tables, query, params=None, traffic=None):
+    f = cql.execute_async(query, params)
+    done = threading.Event()
+    f.add_callbacks(lambda _: done.set(), lambda _: done.set())
+    (traffic or hot_traffic)(cql, tables, done.is_set)
+    return list(f.result())
+
+
+# pk 0 gets 5x the hits of all other keys combined, so it tops both samplers.
+def hot_traffic(cql, tables, done):
+    stmts = [(cql.prepare(f"INSERT INTO {t} (pk, v) VALUES (?, ?)"),
+              cql.prepare(f"SELECT v FROM {t} WHERE pk = ?")) for t in tables]
+    i = 0
+    while not done():
+        for insert, select in stmts:
+            cql.execute(insert, [0, i])
+            cql.execute(select, [0])
+            if i % 5 == 0:
+                cql.execute(insert, [(i % 9) + 1, i])
+                cql.execute(select, [(i % 9) + 1])
+        i += 1
+
+
+def execute_args(**kwargs):
+    return " AND ".join(f"{k} = {v!r}" if isinstance(v, str) else f"{k} = {str(v).lower()}" for k, v in kwargs.items())
+
+
+def cql_toppartitions(cql, keyspace, table, duration=500, traffic=None, **kwargs):
+    rows = sample(cql, [f"{keyspace}.{table}"],
+                  f"EXECUTE COMMAND toppartitions WITH {execute_args(local=True, keyspace_name=keyspace, table_name=table, duration=duration, **kwargs)}",
+                  traffic=traffic)
+    reads = sorted((r for r in rows if r.kind == 'read'), key=lambda r: r.rank)
+    writes = sorted((r for r in rows if r.kind == 'write'), key=lambda r: r.rank)
+    return reads, writes
+
+
+def rest_toppartitions(cql, keyspace, table, duration_ms, capacity, list_size):
+    if not nodetool.has_rest_api(cql):
+        skip_env("REST API not available")
+    url = f"{nodetool.rest_api_url(cql)}/column_family/toppartitions/{keyspace}:{table}"
+    params = {"duration": duration_ms, "capacity": capacity, "list_size": list_size}
+    # The endpoint blocks for the whole sampling window, so the read timeout must outlast it.
+    res = requests.get(url, params=params, timeout=(5, duration_ms / 1000 + 5))
+    res.raise_for_status()
+    return res.json()
+
+
+def assert_ranked(rows):
+    assert rows, "expected at least one sample"
+    assert [r.rank for r in rows] == list(range(len(rows)))
+    assert all(a.count >= b.count for a, b in zip(rows, rows[1:]))
+
+
+# Both EXECUTE COMMAND toppartitions and the REST endpoint must agree on the hottest
+# partition; counts differ as the sampling windows differ.
+def test_toppartitions_matches_rest(scylla_only, cql, test_keyspace):
+    if not nodetool.has_rest_api(cql):
+        skip_env("REST API not available")
+    with util.new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int") as table:
+        keyspace, cf = table.split('.')
+        with concurrent.futures.ThreadPoolExecutor(1) as ex:
+            # The REST call blocks for its window; only it needs a thread.
+            rest = ex.submit(rest_toppartitions, cql, keyspace, cf, duration_ms=500, capacity=64, list_size=5)
+            cql_reads, cql_writes = cql_toppartitions(cql, keyspace, cf, capacity=64, list_size=5)
+            hot_traffic(cql, [table], rest.done)
+            rest_result = rest.result()
+        assert_ranked(cql_reads)
+        assert_ranked(cql_writes)
+        assert len(cql_reads) <= 5 and len(cql_writes) <= 5
+        assert rest_result['write'] and rest_result['read']
+        assert cql_writes[0].partition_key == rest_result['write'][0]['partition']
+        assert cql_reads[0].partition_key == rest_result['read'][0]['partition']
+
+
+# With only the table given, nodetool's defaults (capacity 256, list_size 10) apply.
+def test_toppartitions_default_capacity_and_list_size(scylla_only, cql, test_keyspace):
+    with util.new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int") as table:
+        keyspace, cf = table.split('.')
+        # 20 distinct hot keys, so the default list_size (10) is what caps the result.
+        def traffic(cql, tables, done):
+            insert = cql.prepare(f"INSERT INTO {table} (pk, v) VALUES (?, ?)")
+            while not done():
+                for pk in range(20):
+                    cql.execute(insert, [pk, 0])
+        _, writes = cql_toppartitions(cql, keyspace, cf, traffic=traffic)
+        assert_ranked(writes)
+        assert len(writes) == 10
+
+
+# capacity sizes each shard's sampler: with room for one key, evicted keys show up as error.
+def test_toppartitions_capacity_sizes_sampler(scylla_only, cql, test_keyspace):
+    with util.new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int") as table:
+        keyspace, cf = table.split('.')
+        _, writes = cql_toppartitions(cql, keyspace, cf, capacity=1, list_size=1, kind='write')
+        assert len(writes) == 1 and writes[0].error > 0
+
+
+@pytest.mark.parametrize("args", [
+    "capacity = 20 AND list_size = 512",  # list_size must be <= capacity
+    "capacity = 20 AND list_size = 0",    # list_size must be positive
+    "capacity = -1 AND list_size = -2",   # capacity must be positive
+    "capacity = 10001",                   # capacity is capped
+    "kind = 'bogus'",                     # only 'read' or 'write'
+    "duration = 0",                       # no sampling window
+    "duration = 3600001",                 # window is capped at an hour
+    "local = false",                      # cluster-wide is not supported yet
+    "local = 1",                          # type-checked at prepare
+    "capacity = 'x'",                     # type-checked at prepare
+    "duration = blobasint(0x)",           # empty, not null
+    "bogus = 1",                          # unknown argument
+    "capacity = 64 AND capacity = 64",    # duplicate argument
+])
+def test_toppartitions_rejects_invalid_args(scylla_only, cql, test_keyspace, args):
+    with util.new_test_table(cql, test_keyspace, "pk int PRIMARY KEY") as table:
+        keyspace, cf = table.split('.')
+        with pytest.raises(InvalidRequest):
+            cql.execute(f"EXECUTE COMMAND toppartitions WITH local = true AND keyspace_name = '{keyspace}' AND table_name = '{cf}' AND {args}")
+
+
+def test_toppartitions_unknown_command(scylla_only, cql):
+    with pytest.raises(InvalidRequest, match="Unknown command"):
+        cql.execute("EXECUTE COMMAND no_such_command")
+
+
+def test_toppartitions_table_requires_keyspace(scylla_only, cql):
+    with pytest.raises(InvalidRequest, match="requires keyspace_name"):
+        cql.execute("EXECUTE COMMAND toppartitions WITH local = true AND table_name = 't'")
+
+
+# Execution is cluster-wide by default, which is not supported yet, so local = true is mandatory.
+def test_toppartitions_local_is_mandatory(scylla_only, cql):
+    with pytest.raises(InvalidRequest, match="'local' is mandatory"):
+        cql.execute("EXECUTE COMMAND toppartitions WITH duration = 1")
+    stmt = cql.prepare("EXECUTE COMMAND toppartitions WITH local = ? AND duration = 1")
+    with pytest.raises(InvalidRequest, match="must not be null"):
+        cql.execute(stmt, [None])
+    with pytest.raises(InvalidRequest, match="not supported yet"):
+        cql.execute(stmt, [False])
+    with pytest.raises(InvalidRequest, match="must not be empty"):
+        cql.execute("EXECUTE COMMAND toppartitions WITH local = blobasboolean(0x) AND duration = 1")
+
+
+def test_toppartitions_host_not_supported(scylla_only, cql):
+    with pytest.raises(InvalidRequest, match="'host_id' is not supported"):
+        cql.execute("EXECUTE COMMAND toppartitions WITH local = true AND host_id = 00000000-0000-0000-0000-000000000000")
+
+
+# Every parameter is named; positional or call-style arguments are a syntax error.
+@pytest.mark.parametrize("query", [
+    "EXECUTE COMMAND toppartitions WITH 'ks'",
+    "EXECUTE COMMAND toppartitions('ks', 't')",
+    "EXECUTE toppartitions WITH keyspace_name = 'ks'",
+    "EXECUTE COMMAND toppartitions WITH = 1",
+    "EXECUTE COMMAND toppartitions WITH local = true AND = 1",
+])
+def test_toppartitions_malformed_is_a_syntax_error(scylla_only, cql, query):
+    with pytest.raises(SyntaxException):
+        cql.execute(query)
+
+
+# capacity sizes every shard's sampler, so it is capped.
+@pytest.mark.parametrize("capacity,list_size", [(2, 1), (10000, 10)])
+def test_toppartitions_capacity_boundaries(scylla_only, cql, test_keyspace, capacity, list_size):
+    with util.new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int") as table:
+        keyspace, cf = table.split('.')
+        reads, writes = cql_toppartitions(cql, keyspace, cf, capacity=capacity, list_size=list_size)
+        assert_ranked(reads)
+        assert_ranked(writes)
+        assert len(reads) <= list_size and len(writes) <= list_size
+
+
+# capacity below the default list_size (10) is legal; list_size then defaults to capacity.
+def test_toppartitions_small_capacity_alone(scylla_only, cql, test_keyspace):
+    with util.new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int") as table:
+        keyspace, cf = table.split('.')
+        reads, writes = cql_toppartitions(cql, keyspace, cf, duration=500, capacity=8)
+        assert_ranked(writes)
+        assert len(reads) <= 8 and len(writes) <= 8
+
+
+# kind selects a single sampler (nodetool's -a).
+def test_toppartitions_kind_selects_one_sampler(scylla_only, cql, test_keyspace):
+    with util.new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int") as table:
+        keyspace, cf = table.split('.')
+        reads, writes = cql_toppartitions(cql, keyspace, cf, capacity=64, list_size=5, kind='write')
+        assert reads == []
+        assert_ranked(writes)
+
+        reads, writes = cql_toppartitions(cql, keyspace, cf, capacity=64, list_size=5, kind='read')
+        assert writes == []
+        assert_ranked(reads)
+
+
+# No filter samples every table in one window, and capacity/list_size still apply.
+def test_toppartitions_all_tables(scylla_only, cql, test_keyspace):
+    with util.new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int") as table:
+        keyspace, cf = table.split('.')
+        rows = sample(cql, [table], "EXECUTE COMMAND toppartitions WITH local = true AND duration = 500 AND capacity = 64 AND list_size = 5")
+        assert any(r.keyspace_name == keyspace and r.table_name == cf for r in rows)
+        assert len([r for r in rows if r.kind == 'read']) <= 5
+
+
+# A nonexistent table is an error, raised before any sampling window opens.
+def test_toppartitions_nonexistent_table(scylla_only, cql, test_keyspace):
+    with pytest.raises(InvalidRequest, match="Unknown table"):
+        cql.execute(f"EXECUTE COMMAND toppartitions WITH local = true AND keyspace_name = '{test_keyspace}' AND "
+                    f"table_name = 'no_such_table' AND duration = 20000")
+    with pytest.raises(InvalidRequest, match="Unknown keyspace"):
+        cql.execute("EXECUTE COMMAND toppartitions WITH local = true AND keyspace_name = 'no_such_keyspace' AND duration = 20000")
+
+
+# A keyspace-only filter samples all its tables in a single window.
+def test_toppartitions_keyspace_filter(scylla_only, cql, test_keyspace):
+    with util.new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int") as t1, \
+         util.new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int") as t2:
+        cf1, cf2 = t1.split('.')[1], t2.split('.')[1]
+        rows = sample(cql, [t1, t2],
+                      f"EXECUTE COMMAND toppartitions WITH local = true AND keyspace_name = '{test_keyspace}' AND duration = 500")
+        assert {r.table_name for r in rows} == {cf1, cf2}
+        assert {r.keyspace_name for r in rows} == {test_keyspace}
+
+
+# The statement blocks for exactly its sampling window, not the request timeout.
+def test_toppartitions_duration_is_the_window(scylla_only, cql, test_keyspace):
+    with util.new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int") as table:
+        keyspace, cf = table.split('.')
+        start = time.monotonic()
+        cql_toppartitions(cql, keyspace, cf, duration=500)
+        assert time.monotonic() - start >= 0.5
+
+
+# Parameters are ordinary terms, so they can be bind markers (positional or named),
+# and a null binding falls back to the default.
+@pytest.mark.parametrize("query,params", [
+    ("EXECUTE COMMAND toppartitions WITH local = true AND keyspace_name = ? AND table_name = ? AND duration = ? AND capacity = ? AND list_size = ?",
+     lambda ks, cf: [ks, cf, 500, 64, 5]),
+    ("EXECUTE COMMAND toppartitions WITH local = true AND keyspace_name = :ks AND table_name = :cf AND duration = :d AND capacity = :c AND list_size = :n",
+     lambda ks, cf: {"ks": ks, "cf": cf, "d": 500, "c": None, "n": 5}),
+])
+def test_toppartitions_prepared(scylla_only, cql, test_keyspace, query, params):
+    with util.new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int") as table:
+        keyspace, cf = table.split('.')
+        stmt = cql.prepare(query)
+        rows = sample(cql, [table], stmt, params(keyspace, cf))
+        reads = sorted((r for r in rows if r.kind == 'read'), key=lambda r: r.rank)
+        assert_ranked(reads)
+        assert len(reads) <= 5
+
+
+# A mistyped bind value is rejected as InvalidRequest, not a server error.
+def test_toppartitions_prepared_rejects_invalid_value(scylla_only, cql, test_keyspace):
+    with util.new_test_table(cql, test_keyspace, "pk int PRIMARY KEY") as table:
+        keyspace, cf = table.split('.')
+        stmt = cql.prepare("EXECUTE COMMAND toppartitions WITH local = true AND keyspace_name = ? AND table_name = ? AND capacity = ?")
+        with pytest.raises(InvalidRequest):
+            cql.execute(stmt, [keyspace, cf, 0])
+
+
+# Arguments may call functions; a Lua UDF is evaluated in a Seastar thread.
+def test_toppartitions_function_call_argument(scylla_only, cql, test_keyspace):
+    with util.new_test_table(cql, test_keyspace, "pk int PRIMARY KEY") as table, \
+            util.new_function(cql, test_keyspace, "(x int) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return 1'") as one:
+        keyspace, cf = table.split('.')
+        cql.execute(f"EXECUTE COMMAND toppartitions WITH local = true AND keyspace_name = '{keyspace}' AND "
+                    f"table_name = blobastext(textasblob('{cf}')) AND duration = {test_keyspace}.{one}(0)")
+
+
+# Without SELECT on the named table, a non-superuser is rejected.
+def test_toppartitions_requires_superuser(scylla_only, cql, test_keyspace):
+    with util.new_test_table(cql, test_keyspace, "pk int PRIMARY KEY") as table:
+        keyspace, cf = table.split('.')
+        with util.new_user(cql) as user:
+            with util.new_session(cql, user) as user_cql:
+                with pytest.raises(Unauthorized):
+                    user_cql.execute(f"EXECUTE COMMAND toppartitions WITH local = true AND keyspace_name = '{keyspace}' AND table_name = '{cf}'")
+
+
+# SELECT on the named table is enough; sampling all tables or another table is not.
+def test_toppartitions_select_permission(scylla_only, cql, test_keyspace):
+    with util.new_test_table(cql, test_keyspace, "pk int PRIMARY KEY") as table, \
+            util.new_test_table(cql, test_keyspace, "pk int PRIMARY KEY") as other:
+        keyspace, cf = table.split('.')
+        other_cf = other.split('.')[1]
+        with util.new_user(cql) as user:
+            with util.new_session(cql, user) as user_cql:
+                cql.execute(f"GRANT SELECT ON {table} TO {user}")
+                user_cql.execute(f"EXECUTE COMMAND toppartitions WITH local = true AND keyspace_name = '{keyspace}' AND table_name = '{cf}' AND duration = 1")
+                for where in ("keyspace_name = 'system_schema' AND table_name = 'keyspaces'", f"table_name = '{other_cf}' AND keyspace_name = '{keyspace}'", f"keyspace_name = '{keyspace}'", "duration = 1",
+                              f"keyspace_name = '{keyspace}' AND table_name = '{cf}' AND duration = 60001"):
+                    with pytest.raises(Unauthorized):
+                        user_cql.execute(f"EXECUTE COMMAND toppartitions WITH local = true AND {where}")
+
+
+# Prepared statements: bind markers are authorized by value, null is rejected, and revoking takes effect.
+def test_toppartitions_select_permission_prepared(scylla_only, cql, test_keyspace):
+    with util.new_test_table(cql, test_keyspace, "pk int PRIMARY KEY") as table, \
+            util.new_test_table(cql, test_keyspace, "pk int PRIMARY KEY") as other:
+        keyspace, cf = table.split('.')
+        other_cf = other.split('.')[1]
+        with util.new_user(cql) as user:
+            with util.new_session(cql, user) as user_cql:
+                cql.execute(f"GRANT SELECT ON {table} TO {user}")
+                stmt = user_cql.prepare("EXECUTE COMMAND toppartitions WITH local = true AND keyspace_name = ? AND table_name = ? AND duration = 1")
+                user_cql.execute(stmt, [keyspace, cf])
+                with pytest.raises(Unauthorized):
+                    user_cql.execute(stmt, [keyspace, other_cf])
+                with pytest.raises(Unauthorized):
+                    user_cql.execute(stmt, [keyspace, None])
+                cql.execute(f"REVOKE SELECT ON {table} FROM {user}")
+                with pytest.raises(Unauthorized):
+                    user_cql.execute(stmt, [keyspace, cf])
+
+
+# A UDF argument needs EXECUTE on the function, even when SELECT on the table is enough.
+def test_toppartitions_function_argument_requires_execute(scylla_only, cql, test_keyspace):
+    with util.new_test_table(cql, test_keyspace, "pk int PRIMARY KEY") as table, \
+            util.new_function(cql, test_keyspace, "(x int) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return 1'") as one:
+        keyspace, cf = table.split('.')
+        query = (f"EXECUTE COMMAND toppartitions WITH local = true AND keyspace_name = '{keyspace}' AND "
+                 f"table_name = '{cf}' AND duration = {test_keyspace}.{one}(0)")
+        with util.new_user(cql) as user:
+            with util.new_session(cql, user) as user_cql:
+                cql.execute(f"GRANT SELECT ON {table} TO {user}")
+                with pytest.raises(Unauthorized):
+                    user_cql.execute(query)
+                cql.execute(f"GRANT EXECUTE ON FUNCTION {test_keyspace}.{one}(int) TO {user}")
+                user_cql.execute(query)
+
+
+# SELECT on internal tables (here via ALL KEYSPACES) is not enough to sample them.
+def test_toppartitions_internal_tables_are_superuser_only(scylla_only, cql):
+    with util.new_user(cql) as user:
+        with util.new_session(cql, user) as user_cql:
+            cql.execute(f"GRANT SELECT ON ALL KEYSPACES TO {user}")
+            for ks, cf in [("system_distributed", "service_levels"), ("audit", "audit_log"),
+                           ("system_distributed_everywhere", "cdc_generation_descriptions_v2")]:
+                with pytest.raises(Unauthorized):
+                    user_cql.execute("EXECUTE COMMAND toppartitions WITH local = true AND "
+                                     f"keyspace_name = '{ks}' AND table_name = '{cf}' AND duration = 1")
+
+
+# A long run in the background, holding a slot; done is set once it ends.
+def start_holder(session, query):
+    done = threading.Event()
+    f = session.execute_async(query, timeout=None)
+    f.add_callbacks(lambda _: done.set(), lambda _: done.set())
+    return f, done
+
+
+# Retries a 1 ms run until it is admitted (or, with holders, rejected for lack of slots).
+# A probe can take a slot before a holder starts, so a holder turned away is restarted.
+def wait_for_slots(session, query, admitted, holders=(), restart=None):
+    deadline = time.time() + 60
+    while True:
+        for i, (f, done) in enumerate(holders):
+            if done.is_set():
+                with pytest.raises(InvalidRequest, match="Too many concurrent toppartitions queries"):
+                    f.result()
+                holders[i] = restart()
+        try:
+            session.execute(query + "1")
+            if admitted:
+                return
+        except InvalidRequest as e:
+            assert "Too many concurrent toppartitions queries" in str(e)
+            if not admitted:
+                return
+        assert time.time() < deadline
+        time.sleep(0.1)
+
+
+# Each run is walked by every read and write on every shard, so a node admits at most 4 at
+# once; closing the connection ends its runs and frees their slots.
+def test_toppartitions_concurrency_limit_and_disconnect(scylla_only, cql, test_keyspace):
+    with util.new_test_table(cql, test_keyspace, "pk int PRIMARY KEY") as table:
+        keyspace, cf = table.split('.')
+        query = f"EXECUTE COMMAND toppartitions WITH local = true AND keyspace_name = '{keyspace}' AND table_name = '{cf}' AND duration = "
+        with util.new_cql(cql) as holder:
+            restart = lambda: start_holder(holder, query + "600000")
+            wait_for_slots(cql, query, admitted=False, holders=[restart() for _ in range(4)], restart=restart)
+        wait_for_slots(cql, query, admitted=True)
+
+
+# Roles that are not superusers hold at most 2 of the 4 slots, leaving the rest to superusers and nodetool.
+def test_toppartitions_non_superuser_slots(scylla_only, cql, test_keyspace):
+    with util.new_test_table(cql, test_keyspace, "pk int PRIMARY KEY") as table:
+        keyspace, cf = table.split('.')
+        query = f"EXECUTE COMMAND toppartitions WITH local = true AND keyspace_name = '{keyspace}' AND table_name = '{cf}' AND duration = "
+        with util.new_user(cql) as user:
+            cql.execute(f"GRANT SELECT ON {table} TO {user}")
+            with util.new_session(cql, user) as user_cql:
+                restart = lambda: start_holder(user_cql, query + "60000")
+                holders = [restart() for _ in range(2)]
+                wait_for_slots(user_cql, query, admitted=False, holders=holders, restart=restart)
+                cql.execute(query + "1")
+                assert not any(done.is_set() for _, done in holders)
+
+
+# The audit log names the table only when both names are literals; with a bind marker
+# neither is named, so table-scoped auditing still logs the statement.
+def test_toppartitions_audit_names_table(scylla_only, cql, test_keyspace):
+    config = lambda name: cql.execute(f"SELECT value FROM system.config WHERE name = '{name}'").one().value
+    if "table" not in config("audit") or "ADMIN" not in config("audit_categories"):
+        skip_env("ADMIN auditing to the audit table is not enabled")
+    with util.new_test_table(cql, test_keyspace, "pk int PRIMARY KEY") as table:
+        keyspace, cf = table.split('.')
+        literal = f"EXECUTE COMMAND toppartitions WITH local = true AND keyspace_name = '{keyspace}' AND table_name = '{cf}' AND duration = 1"
+        bound = f"EXECUTE COMMAND toppartitions WITH local = true AND keyspace_name = '{keyspace}' AND table_name = ? AND duration = 1"
+        cql.execute(literal)
+        cql.execute(cql.prepare(bound), [cf])
+        # The audit keyspace's replication may exceed this single node.
+        query = SimpleStatement("SELECT operation, keyspace_name, table_name FROM audit.audit_log WHERE category = 'ADMIN' ALLOW FILTERING",
+                                consistency_level=ConsistencyLevel.ONE)
+        expected = {(literal, keyspace, cf), (bound, "", "")}
+        deadline = time.time() + 30
+        while True:
+            try:
+                logged = {(r.operation, r.keyspace_name or "", r.table_name or "") for r in cql.execute(query)}
+            except InvalidRequest:
+                skip_env("audit table not configured")
+            if expected <= logged:
+                break
+            assert time.time() < deadline, f"missing audit entries: {expected - logged}"
+            time.sleep(0.1)

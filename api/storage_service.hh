@@ -90,6 +90,7 @@ future<> get_snapshot_details(std::unordered_map<sstring, db::snapshot_ctl::db_s
 void unset_snapshot(http_context& ctx, httpd::routes& r);
 void set_load_meter(http_context& ctx, httpd::routes& r, service::load_meter& lm);
 void unset_load_meter(http_context& ctx, httpd::routes& r);
-seastar::future<json::json_return_type> run_toppartitions_query(db::toppartitions_query& q, bool legacy_request = false);
+// `as` ends the sampling window early.
+seastar::future<json::json_return_type> run_toppartitions_query(db::toppartitions_query& q, abort_source& as, bool legacy_request = false);
 
 } // namespace api

@@ -10,6 +10,9 @@
 #include "replica/database.hh"
 #include "readers/filtering.hh"
 
+#include <seastar/core/semaphore.hh>
+#include <seastar/core/sleep.hh>
+#include <seastar/coroutine/as_future.hh>
 #include <seastar/coroutine/exception.hh>
 
 #include <tuple>
@@ -17,6 +20,19 @@
 extern logging::logger dblog;
 
 namespace db {
+
+namespace {
+
+// Node-wide toppartitions slots, used on shard 0 only.
+thread_local semaphore toppartitions_slots(toppartitions_query::max_concurrent);
+thread_local semaphore restricted_toppartitions_slots(toppartitions_query::max_concurrent_restricted);
+
+struct toppartitions_slot {
+    semaphore_units<> all;
+    semaphore_units<> restricted;
+};
+
+} // anonymous namespace
 
 void data_listeners::install(data_listener* listener) {
     _listeners.emplace(listener);
@@ -50,8 +66,13 @@ toppartitions_item_key::operator sstring() const {
     return fmt::to_string(key.key().with_schema(*schema));
 }
 
-toppartitions_data_listener::toppartitions_data_listener(replica::database& db, std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash> table_filters,
-        std::unordered_set<sstring> keyspace_filters) : _db(db), _table_filters(std::move(table_filters)), _keyspace_filters(std::move(keyspace_filters)) {
+toppartitions_data_listener::toppartitions_data_listener(replica::database& db,
+        std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash> table_filters, std::unordered_set<sstring> keyspace_filters, size_t capacity)
+    : _db(db)
+    , _table_filters(std::move(table_filters))
+    , _keyspace_filters(std::move(keyspace_filters))
+    , _top_k_read(capacity)
+    , _top_k_write(capacity) {
     dblog.debug("toppartitions_data_listener: installing {}", fmt::ptr(this));
     _db.data_listeners().install(this);
 }
@@ -122,8 +143,31 @@ toppartitions_query::toppartitions_query(sharded<replica::database>& xdb, std::u
                 !_keyspace_filters.empty() ? std::to_string(_keyspace_filters.size()) : "all");
 }
 
+future<toppartitions_query::results> toppartitions_query::run(abort_source* as, bool restricted) {
+    // Fail fast rather than queue: a queued caller would still be holding its client.
+    // The slot goes back to shard 0 when `slot` is destroyed, however run() ends.
+    auto slot = co_await smp::submit_to(0, [restricted] () -> foreign_ptr<std::unique_ptr<toppartitions_slot>> {
+        auto all = try_get_units(toppartitions_slots, 1);
+        auto own = restricted ? try_get_units(restricted_toppartitions_slots, 1) : std::optional(semaphore_units<>());
+        if (!all || !own) {
+            return nullptr;
+        }
+        return make_foreign(std::make_unique<toppartitions_slot>(std::move(*all), std::move(*own)));
+    });
+    if (!slot) {
+        throw toppartitions_busy_exception(format("Too many concurrent toppartitions queries on this node (at most {}, {} of them for roles that "
+                                                  "are not superusers), try again later",
+                max_concurrent, max_concurrent_restricted));
+    }
+    co_await scatter();
+    // An abort only ends the window early: gather() must still run to remove the listeners.
+    auto slept = co_await coroutine::as_future(as ? sleep_abortable(_duration, *as) : sleep(_duration));
+    slept.ignore_ready_future();
+    co_return co_await gather(_capacity);
+}
+
 future<> toppartitions_query::scatter() {
-    return _query->start(std::ref(_xdb), _table_filters, _keyspace_filters);
+    return _query->start(std::ref(_xdb), _table_filters, _keyspace_filters, _capacity);
 }
 
 using top_t = toppartitions_data_listener::global_top_k_results;

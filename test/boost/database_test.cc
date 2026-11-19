@@ -1263,15 +1263,30 @@ SEASTAR_TEST_CASE(test_snapshot_ctl_details_exception_handling) {
 SEASTAR_TEST_CASE(toppartitions_cross_shard_schema_ptr) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("CREATE TABLE ks.tab (id int PRIMARY KEY)").get();
-        db::toppartitions_query tq(e.db(), {{"ks", "tab"}}, {}, 1s, 100, 100);
-        tq.scatter().get();
+        db::toppartitions_query tq(e.db(), {{"ks", "tab"}}, {}, 1h, 100, 100);
+        abort_source as;
+        auto f = tq.run(&as);
+        bool consumed = false;
+        // run() must not outlive `as` and `tq` if an insert throws.
+        auto stop = defer([&] () noexcept {
+            if (!consumed) {
+                as.request_abort();
+                f.wait();
+                f.ignore_ready_future();
+            }
+        });
+        while (e.local_db().data_listeners().empty() && !f.available()) {
+            seastar::thread::yield();
+        }
         auto q = e.prepare("INSERT INTO ks.tab(id) VALUES(?)").get();
         // Generate many values to ensure crossing shards
         for (auto i = 0; i != 100; ++i) {
             e.execute_prepared(q, {cql3::raw_value::make_value(int32_type->decompose(i))}).get();
         }
-        // This should trigger the bug in debug mode
-        tq.gather().get();
+        // Ends the window; this should trigger the bug in debug mode
+        as.request_abort();
+        consumed = true;
+        f.get();
     });
 }
 

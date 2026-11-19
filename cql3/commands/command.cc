@@ -17,6 +17,8 @@
 
 namespace cql3::commands {
 
+const command& toppartitions_command();
+
 // Commands can expose data the session has no other access to, so by default they are
 // superuser-only, including anonymous sessions (CQL auth can be disabled entirely).
 future<> command::check_access(query_processor&, const service::client_state& state, const command_args&) const {
@@ -39,7 +41,9 @@ static std::vector<const command*> validated(std::vector<const command*> command
 }
 
 std::span<const command* const> all_commands() {
-    static const std::vector<const command*> commands = validated({});
+    static const std::vector<const command*> commands = validated({
+            &toppartitions_command(),
+    });
     return commands;
 }
 
