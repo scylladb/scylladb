@@ -60,11 +60,13 @@ class lazy_comparable_bytes_from_ring_position {
     // later if it turns out that the token isn't enough.
     std::variant<partition_key, comparable_bytes> _pk;
     sstable_version_types _format_version;
+    canonical_nans_and_varints _canonical;
 private:
     void init_first_fragment(dht::token);
 public:
-    lazy_comparable_bytes_from_ring_position(sstable_version_types, const schema& s, dht::ring_position_view);
-    lazy_comparable_bytes_from_ring_position(sstable_version_types, const schema& s, dht::decorated_key);
+    // `canonical_nans_and_varints` selects the encoding of the keys of the index which is written or searched.
+    lazy_comparable_bytes_from_ring_position(sstable_version_types, const schema& s, dht::ring_position_view, canonical_nans_and_varints);
+    lazy_comparable_bytes_from_ring_position(sstable_version_types, const schema& s, dht::decorated_key, canonical_nans_and_varints);
     lazy_comparable_bytes_from_ring_position(lazy_comparable_bytes_from_ring_position&&) noexcept = delete;
     lazy_comparable_bytes_from_ring_position& operator=(lazy_comparable_bytes_from_ring_position&&) noexcept = delete;
     struct iterator {
@@ -105,7 +107,7 @@ public:
                         _owner._pk = comparable_bytes_from_legacy_partition_key(*_owner._s.partition_key_type(), raw_pk->representation(), bound_weight_to_terminator(_owner._weight));
                     } else {
                         _owner._pk = comparable_bytes_from_compound(*_owner._s.partition_key_type(), raw_pk->representation(),
-                                bound_weight_to_terminator(_owner._weight), canonical_nans_and_varints::yes);
+                                bound_weight_to_terminator(_owner._weight), _owner._canonical);
                     }
                     _owner._size = std::get<comparable_bytes>(_owner._pk).size() + _owner._token_buf.size();
                 }
@@ -140,8 +142,9 @@ struct lazy_comparable_bytes_from_clustering_position {
     // Initially equal to _encoded.size(),
     // but might be reduced by trim().
     unsigned _size;
-    lazy_comparable_bytes_from_clustering_position(const schema& s, position_in_partition_view pipv);
-    lazy_comparable_bytes_from_clustering_position(const schema& s, const sstables::clustering_info&);
+    // `canonical_nans_and_varints` selects the encoding of the keys of the index which is written or searched.
+    lazy_comparable_bytes_from_clustering_position(const schema& s, position_in_partition_view pipv, canonical_nans_and_varints);
+    lazy_comparable_bytes_from_clustering_position(const schema& s, const sstables::clustering_info&, canonical_nans_and_varints);
     lazy_comparable_bytes_from_clustering_position(lazy_comparable_bytes_from_clustering_position&&) = delete;
     struct iterator {
         using difference_type = std::ptrdiff_t;

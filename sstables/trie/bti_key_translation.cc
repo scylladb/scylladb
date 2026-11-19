@@ -11,7 +11,8 @@
 
 namespace sstables::trie {
 
-lazy_comparable_bytes_from_ring_position::lazy_comparable_bytes_from_ring_position(sstable_version_types sst_ver, const schema& s, dht::ring_position_view rpv)
+lazy_comparable_bytes_from_ring_position::lazy_comparable_bytes_from_ring_position(sstable_version_types sst_ver, const schema& s, dht::ring_position_view rpv,
+        canonical_nans_and_varints canonical)
     : _s(s)
     // Note about `dht::maximum_token()`: this isn't a real token.
     // It's just a fake element greater than any real token.
@@ -28,6 +29,7 @@ lazy_comparable_bytes_from_ring_position::lazy_comparable_bytes_from_ring_positi
         ? decltype(_pk)(*rpv.key())
         : decltype(_pk)(comparable_bytes(managed_bytes{bytes::value_type(bound_weight_to_terminator(_weight))})))
     , _format_version(sst_ver)
+    , _canonical(canonical)
 {
     if (std::holds_alternative<comparable_bytes>(_pk)) {
         // If we initialized `_pk` to a `comparable_bytes`, we must initialize `_size` accordingly.
@@ -39,11 +41,13 @@ lazy_comparable_bytes_from_ring_position::lazy_comparable_bytes_from_ring_positi
     init_first_fragment(rpv.token().is_maximum() ? dht::token::last() : rpv.token());
 }
 
-lazy_comparable_bytes_from_ring_position::lazy_comparable_bytes_from_ring_position(sstable_version_types sst_ver, const schema& s, dht::decorated_key dk)
+lazy_comparable_bytes_from_ring_position::lazy_comparable_bytes_from_ring_position(sstable_version_types sst_ver, const schema& s, dht::decorated_key dk,
+        canonical_nans_and_varints canonical)
     : _s(s)
     , _weight(bound_weight::equal)
     , _pk(std::move(dk._key))
     , _format_version(sst_ver)
+    , _canonical(canonical)
 {
     init_first_fragment(dk._token);
 }
@@ -110,22 +114,24 @@ static std::byte pip_to_terminator(const position_in_partition_view& pipv) {
     }
 }
 
-lazy_comparable_bytes_from_clustering_position::lazy_comparable_bytes_from_clustering_position(const schema& s, position_in_partition_view pipv)
+lazy_comparable_bytes_from_clustering_position::lazy_comparable_bytes_from_clustering_position(const schema& s, position_in_partition_view pipv,
+        canonical_nans_and_varints canonical)
     : _encoded(comparable_bytes_from_compound(
         *s.clustering_key_prefix_type(),
         pipv.has_key() ? pipv.key().representation() : managed_bytes_view(),
         pip_to_terminator(pipv),
-        canonical_nans_and_varints::yes
+        canonical
     ))
     , _size(_encoded.size())
 {}
 
-lazy_comparable_bytes_from_clustering_position::lazy_comparable_bytes_from_clustering_position(const schema& s, const sstables::clustering_info& ci)
+lazy_comparable_bytes_from_clustering_position::lazy_comparable_bytes_from_clustering_position(const schema& s, const sstables::clustering_info& ci,
+        canonical_nans_and_varints canonical)
     : _encoded(comparable_bytes_from_compound(
         *s.clustering_key_prefix_type(),
         ci.clustering.representation(),
         bound_weight_to_terminator(convert_bound_to_bound_weight(ci.kind)),
-        canonical_nans_and_varints::yes
+        canonical
     ))
     , _size(_encoded.size())
 {}
