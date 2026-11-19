@@ -7,8 +7,8 @@
 import re
 import pytest
 
-from cassandra.protocol import ConfigurationException
-from .util import is_scylla, new_test_table, unique_name
+from cassandra.protocol import ConfigurationException, InvalidRequest
+from .util import config_value_context, is_scylla, new_test_table, new_type, unique_name
 from .nodetool import flush
 
 # Test checks only case of preparing `ALTER TABLE ... DROP ... USING TIMESTAMP ?` statement.
@@ -168,3 +168,116 @@ def test_prepared_alter_table_options_validated_on_every_execute(cql, test_keysp
         for _ in range(2):
             with pytest.raises(ConfigurationException, match="min_index_interval"):
                 cql.execute(alter)
+
+# The following tests check re-adding a dropped column with a different type
+# (issues #24305 and #24290). A client may still hold a statement prepared
+# before the DROP, and send values serialized for the dropped column's type.
+# So the new type must be able to interpret the old type's values - the same
+# rule as for altering the type of an existing column.
+
+# Re-adding a dropped column with an incompatible type must be rejected,
+# because a stale prepared statement could store nonsense in it. For example,
+# if a bigint column is re-added as text, the bigint 1094861636, serialized
+# as the bytes 00 00 00 00 41 42 43 44, is valid UTF-8 and would be stored as
+# the string '\x00\x00\x00\x00ABCD'. Similarly, if a text column is re-added
+# as int, the string 'abcd' would be stored as the int 1633837924.
+# Reproduces #24290.
+def test_readd_column_with_incompatible_type(cql, test_keyspace):
+    for old_type, new_type in [('bigint', 'text'), ('text', 'int')]:
+        with new_test_table(cql, test_keyspace, f'p int PRIMARY KEY, x {old_type}') as table:
+            cql.execute(f'ALTER TABLE {table} DROP x')
+            with pytest.raises(InvalidRequest, match='incompatible with previously dropped column'):
+                cql.execute(f'ALTER TABLE {table} ADD x {new_type}')
+
+# The configuration option allow_readd_column_with_incompatible_type is an
+# emergency override, allowing to re-add a dropped column with an
+# incompatible type anyway - e.g., when restoring a backup of a table in which
+# an older version allowed this. The error message without it mentions it.
+# The test also demonstrates why this is normally refused: a statement
+# prepared before the DROP stores nonsense in the re-added column - the bigint
+# 1094861636, serialized as the bytes 00 00 00 00 41 42 43 44, is stored as
+# the string '\x00\x00\x00\x00ABCD'.
+def test_readd_column_with_incompatible_type_override(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY, x bigint') as table:
+        bound = cql.prepare(f'INSERT INTO {table} (p, x) VALUES (?, ?)').bind([1, 1094861636])
+        cql.execute(f'ALTER TABLE {table} DROP x')
+        with pytest.raises(InvalidRequest, match='allow_readd_column_with_incompatible_type'):
+            cql.execute(f'ALTER TABLE {table} ADD x text')
+        with config_value_context(cql, 'allow_readd_column_with_incompatible_type', 'true'):
+            cql.execute(f'ALTER TABLE {table} ADD x text')
+        cql.execute(bound)
+        assert list(cql.execute(f'SELECT p, x FROM {table}')) == [(1, '\x00\x00\x00\x00ABCD')]
+
+# Re-adding a dropped non-frozen collection column as a non-frozen collection
+# of an incompatible type is refused by an older check (#6276), which the
+# configuration option allow_readd_column_with_incompatible_type doesn't
+# override. So the error message shouldn't suggest this option, and setting
+# it doesn't allow this.
+def test_readd_nonfrozen_collection_with_incompatible_type(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY, x list<int>') as table:
+        cql.execute(f'ALTER TABLE {table} DROP x')
+        with pytest.raises(InvalidRequest) as e:
+            cql.execute(f'ALTER TABLE {table} ADD x list<text>')
+        assert 'allow_readd_column_with_incompatible_type' not in str(e.value)
+        with config_value_context(cql, 'allow_readd_column_with_incompatible_type', 'true'):
+            with pytest.raises(InvalidRequest):
+                cql.execute(f'ALTER TABLE {table} ADD x list<text>')
+
+# Re-adding a dropped column with a different type is allowed if the new type
+# can interpret the old type's values. Then a statement prepared before the
+# DROP keeps working correctly: here, its ascii value is a valid text value
+# with the same meaning.
+def test_readd_column_with_compatible_type(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY, x ascii') as table:
+        bound = cql.prepare(f'INSERT INTO {table} (p, x) VALUES (?, ?)').bind([1, 'hello'])
+        cql.execute(f'ALTER TABLE {table} DROP x')
+        cql.execute(f'ALTER TABLE {table} ADD x text')
+        cql.execute(bound)
+        assert list(cql.execute(f'SELECT p, x FROM {table}')) == [(1, 'hello')]
+
+# Re-adding a dropped column with the same frozen user type must be allowed.
+# The type of a dropped column is stored with its user types replaced by
+# tuples, so this checks that the new type is compared to it correctly.
+# Cassandra has exactly this bug: it rejects this ALTER because it compares
+# the user type to the tuple type that replaced it (CASSANDRA-21761).
+def test_readd_column_with_same_frozen_udt(cql, test_keyspace, cassandra_bug):
+    with new_type(cql, test_keyspace, '(a int, b text)') as udt:
+        with new_test_table(cql, test_keyspace, f'p int PRIMARY KEY, x frozen<{udt}>') as table:
+            cql.execute(f'ALTER TABLE {table} DROP x')
+            cql.execute(f'ALTER TABLE {table} ADD x frozen<{udt}>')
+
+# Like test_readd_column_with_same_frozen_udt, with a non-frozen user type.
+# It is scylla_only because Cassandra doesn't allow dropping a column of a
+# non-frozen user type.
+def test_readd_column_with_same_nonfrozen_udt(cql, test_keyspace, scylla_only):
+    with new_type(cql, test_keyspace, '(a int, b text)') as udt:
+        with new_test_table(cql, test_keyspace, f'p int PRIMARY KEY, x {udt}') as table:
+            cql.execute(f'ALTER TABLE {table} DROP x')
+            cql.execute(f'ALTER TABLE {table} ADD x {udt}')
+
+# Re-adding a dropped non-frozen collection column with the same type must be
+# allowed also when the collection contains a user type. Reproduces #7936,
+# where this was refused with "Cannot add a collection with the name ...
+# because a collection with the same name and a different type has already
+# been used in the past": the check compared the collection type with the
+# type recorded for the dropped column, in which the user type is replaced
+# by a tuple. Cassandra has a similar bug (CASSANDRA-21761).
+def test_readd_collection_column_with_same_udt(cql, test_keyspace, cassandra_bug):
+    with new_type(cql, test_keyspace, '(a int, b text)') as udt:
+        for t in [f'map<text, frozen<{udt}>>', f'list<frozen<{udt}>>', f'set<frozen<{udt}>>']:
+            with new_test_table(cql, test_keyspace, f'p int PRIMARY KEY, x {t}') as table:
+                cql.execute(f'ALTER TABLE {table} DROP x')
+                cql.execute(f'ALTER TABLE {table} ADD x {t}')
+
+# Re-adding a dropped int column as blob, which can hold any value, is
+# allowed. The value written to the int column before the DROP belongs to the
+# dropped column, so it must not reappear as a blob. The test reads with
+# BYPASS CACHE, to read the value from the sstable. It is scylla_only
+# because Cassandra doesn't allow re-adding an int column as blob.
+def test_readd_int_column_as_blob(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY, x int, y int') as table:
+        cql.execute(f'INSERT INTO {table} (p, x, y) VALUES (1, 5, 6)')
+        flush(cql, table)
+        cql.execute(f'ALTER TABLE {table} DROP x')
+        cql.execute(f'ALTER TABLE {table} ADD x blob')
+        assert list(cql.execute(f'SELECT p, x, y FROM {table} BYPASS CACHE')) == [(1, None, 6)]
