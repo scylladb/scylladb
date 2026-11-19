@@ -54,9 +54,13 @@ std::string db::snapshot::sstables_location(std::string_view prefix) {
     return fmt::format("{}{}{}",  prefix, pp, "sstables");
 }
 
-std::string db::snapshot::snapshot_meta_location(std::string_view prefix, const replica::table& t, std::string_view snapshot_name) {
+std::string db::snapshot::snapshot_meta_location(std::string_view prefix, std::string_view ks_name, std::string_view cf_name, std::string_view snapshot_name) {
     auto pp = prefix.empty() ? "" : "/";
-    return fmt::format("{}{}{}/{}/{}/{}",  prefix, pp, "snapshots", t.schema()->ks_name(), t.schema()->cf_name(), snapshot_name);
+    return fmt::format("{}{}{}/{}/{}/{}",  prefix, pp, "snapshots", ks_name, cf_name, snapshot_name);
+}
+
+std::string db::snapshot::snapshot_meta_location(std::string_view prefix, const replica::table& t, std::string_view snapshot_name) {
+    return snapshot_meta_location(prefix, t.schema()->ks_name(), t.schema()->cf_name(), snapshot_name);
 }
 
 std::string db::snapshot::snapshot_prefix_from_manifest(std::string_view manifest_path) {
@@ -500,6 +504,7 @@ db::snapshot::start_global_backup(db::snapshot_ctl& ctl, tasks::task_manager::mo
     task_builder.set_scope("datacenter")
                 .set_keyspace(ks_tables.begin()->first)
                 .set_table(ks_tables.begin()->second)
+                .set_entity(snapshot_name)
                 .set_is_abortable(tasks::is_abortable::yes)
                 .set_is_internal(tasks::is_internal::no)
                 .set_is_user_task(tasks::is_user_task::yes)
