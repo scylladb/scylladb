@@ -610,7 +610,7 @@ atomic_deletion sstables_manager::make_atomic_deletion(std::vector<shared_sstabl
     return atomic_deletion(std::move(ssts));
 }
 
-future<utils::chunked_vector<sstable_snapshot_metadata>> sstables_manager::take_snapshot(std::vector<shared_sstable> ssts, sstring name) {
+future<utils::chunked_vector<sstable_snapshot_metadata>> sstables_manager::take_snapshot(const std::vector<shared_sstable>& ssts, sstring name) {
     utils::chunked_vector<sstable_snapshot_metadata> sstables_metadata;
 
     co_await _dir_semaphore.parallel_for_each(ssts, [&] (sstables::shared_sstable sstable) {
@@ -631,6 +631,14 @@ future<utils::chunked_vector<sstable_snapshot_metadata>> sstables_manager::take_
     });
 
     co_return sstables_metadata;
+}
+
+future<> sstables_manager::finalize_snapshot(const std::vector<shared_sstable>& ssts, sstring name) {
+    co_await _dir_semaphore.parallel_for_each(ssts, [&name] (sstables::shared_sstable sstable) {
+        return io_check([sstable = std::move(sstable), &name] {
+            return sstable->finalize_snapshot(name);
+        });
+    });
 }
 
 future<> sstables_manager::close() noexcept {

@@ -2817,7 +2817,7 @@ future<> sstable::seal_sstable(bool backup)
         _marked_for_deletion = mark_for_deletion::none;
     }
     if (backup) {
-        co_await _storage->snapshot(*this, "backups");
+        co_await _storage->snapshot(*this, {}, incremental_backup::yes);
     }
 }
 
@@ -3196,7 +3196,12 @@ std::vector<std::pair<component_type, sstring>> sstable::all_components() const 
 
 future<> sstable::snapshot(const sstring& name) const {
     auto lock = co_await get_units(_mutate_sem, 1);
-    co_await _storage->snapshot(*this, format("{}/{}", sstables::snapshots_dir, name));
+    co_await _storage->snapshot(*this, name, incremental_backup::no);
+}
+
+future<> sstable::finalize_snapshot(const sstring& name) const {
+    auto lock = co_await get_units(_mutate_sem, 1);
+    co_await _storage->finalize_snapshot(*this, name);
 }
 
 future<> sstable::change_state(sstable_state to, delayed_commit_changes* delay_commit) {

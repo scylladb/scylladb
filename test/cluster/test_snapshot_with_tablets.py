@@ -48,6 +48,12 @@ async def test_snapshot_on_all_nodes(manager: ScyllaClusterManager):
     """
     async def check(manager: ScyllaClusterManager, snapshot_name: str, ks: str, cf:str, servers: list[ServerInfo]):
         cql = manager.get_cql()
+        # A cluster snapshot writes its catalog rows under the committed
+        # attempt's name, "{tag}/{attempt}"; the marker keeps the tag.
+        committed = [r.attempt for r in cql.execute(
+            f"SELECT attempt, committed FROM system_distributed.snapshot_attempts WHERE tag = '{snapshot_name}'") if r.committed]
+        assert len(committed) == 1, f'expected one committed attempt for {snapshot_name}, got {committed}'
+        rows_name = f'{snapshot_name}/{committed[0]}'
         # Collect snapshot files from each server
         for s in servers:
             files = await get_snapshot_files(manager, s, ks, cf, snapshot_name)
@@ -63,7 +69,7 @@ async def test_snapshot_on_all_nodes(manager: ScyllaClusterManager):
             # check sstables were added to sys_dist
             sstables = list(cql.execute(f"""
                         SELECT * FROM system_distributed.snapshot_sstables WHERE 
-                        snapshot_name = '{snapshot_name}' AND \"keyspace\" = '{ks}' AND
+                        snapshot_name = '{rows_name}' AND \"keyspace\" = '{ks}' AND
                         \"table\" = '{cf}' AND datacenter = '{s.datacenter}' AND
                         rack = '{s.rack}'
                         """))
@@ -80,13 +86,13 @@ async def test_snapshot_on_all_nodes(manager: ScyllaClusterManager):
         assert len(snap) == 1
         snap_ks = list(cql.execute(f"""
                                 SELECT * FROM system_distributed.snapshot_keyspaces WHERE 
-                                snapshot_name = '{snapshot_name}' AND keyspace_name = '{ks}'
+                                snapshot_name = '{rows_name}' AND keyspace_name = '{ks}'
                                 """))
         assert len(snap_ks) == 1
 
         snap_cf = list(cql.execute(f"""
                                 SELECT * FROM system_distributed.snapshot_tables WHERE 
-                                snapshot_name = '{snapshot_name}' AND keyspace_name = '{ks}' AND
+                                snapshot_name = '{rows_name}' AND keyspace_name = '{ks}' AND
                                 table_name = '{cf}'
                                 """))
         assert len(snap_cf) == 1
