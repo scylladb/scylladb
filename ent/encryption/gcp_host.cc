@@ -48,6 +48,7 @@
 #include "utils/rjson.hh"
 #include "utils/gcp/gcp_credentials.hh"
 #include "utils/http.hh"
+#include "utils/http_client_error_processing.hh"
 #include "marshal_exception.hh"
 #include "db/config.hh"
 #include "utils/assert.hh"
@@ -92,17 +93,15 @@ public:
     static inline constexpr std::chrono::milliseconds default_refresh = 1200s;
 
     impl(encryption_context& ctxt, const std::string& name, const host_options& options)
+        : impl(ctxt, name, options, make_key_cache_config(options.key_cache_expiry.value_or(default_expiry), options.key_cache_refresh.value_or(default_refresh)))
+    {}
+
+    impl(encryption_context& ctxt, const std::string& name, const host_options& options, utils::loading_cache_config lccfg)
         : _ctxt(ctxt)
         , _name(name)
         , _options(options)
-        , _attr_cache(utils::loading_cache_config{
-            .max_size = std::numeric_limits<size_t>::max(),
-            .expiry = options.key_cache_expiry.value_or(default_expiry),
-            .refresh = options.key_cache_refresh.value_or(default_refresh)}, gcp_log, std::bind_front(&impl::create_key, this))
-        , _id_cache(utils::loading_cache_config{
-            .max_size = std::numeric_limits<size_t>::max(),
-            .expiry = options.key_cache_expiry.value_or(default_expiry),
-            .refresh = options.key_cache_refresh.value_or(default_refresh)}, gcp_log, std::bind_front(&impl::find_key, this))
+        , _attr_cache(ctxt, lccfg, gcp_log, std::bind_front(&impl::create_key, this))
+        , _id_cache(ctxt, lccfg, gcp_log, std::bind_front(&impl::find_key, this))
     {
         if (_options.endpoint.empty()) {
             _options.endpoint = GCP_KMS_DEFAULT_ENDPOINT;
@@ -269,7 +268,7 @@ future<rjson::value> encryption::gcp_host::impl::gcp_auth_post_with_retry(std::s
 
     auto& creds = i->second;
 
-    static constexpr auto max_retries = 10;
+    auto max_retries = adjust_service_call_retries(_ctxt, 10);
 
     exponential_backoff_retry exr(10ms, 10000ms);
     bool do_backoff = false;
@@ -286,18 +285,24 @@ future<rjson::value> encryption::gcp_host::impl::gcp_auth_post_with_retry(std::s
         bool refreshing = true;
 
         try {
-            // Fails like a metadata token fetch while the network is down.
-            utils::get_local_injector().inject("gcp_host_network_unreachable", [] {
-                try {
-                    throw std::system_error(ENETUNREACH, std::system_category(), "connect");
-                } catch (...) {
-                    std::throw_with_nested(utils::gcp::bad_configuration("Injected token fetch failure"));
+            try {
+                // Fails like a metadata token fetch while the network is down.
+                utils::get_local_injector().inject("gcp_host_network_unreachable", [] {
+                    try {
+                        throw std::system_error(ENETUNREACH, std::system_category(), "connect");
+                    } catch (...) {
+                        std::throw_with_nested(utils::gcp::bad_configuration("Injected token fetch failure"));
+                    }
+                });
+                if (creds) {
+                    bearer.clear();
+                    co_await creds->refresh(KMS_SCOPE, _certs);
+                    bearer = utils::gcp::format_bearer(creds->token);
                 }
-            });
-            if (creds) {
-                bearer.clear();
-                co_await creds->refresh(KMS_SCOPE, _certs);
-                bearer = utils::gcp::format_bearer(creds->token);
+            } catch (utils::gcp::bad_configuration& e) {
+                std::rethrow_if_nested(e);
+                // if not nested, just wrap it some more I guess...
+                std::throw_with_nested(permission_error(fmt::format("Error refreshing credentials ({})", uri)));
             }
             refreshing = false;
             if (!bearer.empty()) {
@@ -321,19 +326,23 @@ future<rjson::value> encryption::gcp_host::impl::gcp_auth_post_with_retry(std::s
                     do_backoff = true;
                     did_auth_retry = false; // reset this, since we might cause expiration due to backoff (not really, but...)
                     continue;
-                } 
+                }
                 break;
-            }
-            if (refreshing) {
-                std::throw_with_nested(permission_error("Error refreshing credentials"));
             }
             if (e.status() == http::reply::status_type::unauthorized && retry < max_retries && !did_auth_retry) {
                 // refresh access token and retry. no backoff
                 did_auth_retry = true;
                 continue;
             }
+            auto retryable = utils::http::from_http_code(e.status());
+            if (refreshing && !retryable) {
+                std::throw_with_nested(permission_error("Error refreshing credentials"));
+            }
             if (e.status() == http::reply::status_type::unauthorized) {
                 std::throw_with_nested(permission_error(std::string(uri)));
+            }
+            if (!retryable) {
+                std::throw_with_nested(missing_resource_error(std::string(uri)));
             }
             std::throw_with_nested(service_error(std::string(uri)));
         } catch (...) {

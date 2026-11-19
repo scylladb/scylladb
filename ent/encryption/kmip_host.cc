@@ -149,22 +149,15 @@ public:
     inline static constexpr size_t def_max_pooled_connections_per_host = 8;
 
     impl(encryption_context& ctxt, const sstring& name, const host_options& options)
-                    : _ctxt(ctxt), _name(name), _options(options), _attr_cache(
-                                    utils::loading_cache_config{
-                                        .max_size = std::numeric_limits<size_t>::max(),
-                                        .expiry = options.key_cache_expiry.value_or(
-                                                    default_expiry),
-                                        .refresh = options.key_cache_refresh.value_or(default_refresh)},
+        : impl(ctxt, name, options, make_key_cache_config(options.key_cache_expiry.value_or(default_expiry), options.key_cache_refresh.value_or(default_refresh)))
+    {}
+
+    impl(encryption_context& ctxt, const sstring& name, const host_options& options, utils::loading_cache_config lccfg)
+                    : _ctxt(ctxt), _name(name), _options(options), _attr_cache(ctxt, lccfg,
                                     kmip_log,
                                     std::bind(&impl::create_key, this,
                                                     std::placeholders::_1)),
-                      _id_cache(
-                                utils::loading_cache_config{
-                                    .max_size = std::numeric_limits<size_t>::max(),
-                                    .expiry = options.key_cache_expiry.value_or(
-                                                    default_expiry),
-                                    .refresh = options.key_cache_refresh.value_or(default_refresh),
-                                    },
+                      _id_cache(ctxt, lccfg,
                                 kmip_log,
                                     std::bind(&impl::find_key, this,
                                                     std::placeholders::_1)),
@@ -703,7 +696,7 @@ future<kmip_host::impl::con_ptr> kmip_host::impl::get_connection(KMIP_CMD* cmd) 
 
     return repeat_until_value([this, i = size_t(0)]() mutable {
         if (i++ == _options.hosts.size()) {
-            throw missing_resource_error("Could not connect to any server");
+            throw network_error("Could not connect to any server");
         }
         auto& host = _options.hosts[_index % _options.hosts.size()];
         return get_connection(host).then([](con_ptr cp) {
@@ -815,15 +808,32 @@ sstring kmip_host::impl::id_to_kmip_string(const id_type& id) const {
     return sstring(id.begin(), id.begin() + len);
 }
 
+[[noreturn]]
+static void translate_kmip_error(const kmip_error& e) {
+    switch (e.code().value()) {
+    case KMIP_ERROR_BAD_CONNECT: case KMIP_ERROR_IO: 
+        std::throw_with_nested(network_error(e.what()));
+    case KMIP_ERROR_BAD_PROTOCOL:
+        std::throw_with_nested(configuration_error(e.what()));
+    case KMIP_ERROR_NOT_FOUND:
+        std::throw_with_nested(missing_resource_error(e.what()));
+    case KMIP_ERROR_AUTH_FAILED: case KMIP_ERROR_CERT_AUTH_FAILED:
+        std::throw_with_nested(permission_error(e.what()));
+    default:
+        std::throw_with_nested(service_error(e.what()));
+    }
+}
+
 future<kmip_host::impl::key_and_id_type> kmip_host::impl::create_key(const kmip_key_info& info) {
     if (this_shard_id() == 0) {
-        // #1039 First try looking for existing keys on server
-        return find_matching_keys(info, 1).then([this, info](std::vector<id_type> ids) {
+        try {
+            // #1039 First try looking for existing keys on server
+            auto ids = co_await find_matching_keys(info, 1);
             if (!ids.empty()) {
                 // got it
-                return get_key_by_id(ids.front(), info.info).then([id = ids.front()](shared_ptr<symmetric_key> k) {
-                    return key_and_id_type(std::move(k), id);
-                });
+                auto id = ids.front();
+                auto k = co_await get_key_by_id(id, info.info);
+                co_return key_and_id_type(std::move(k), id);
             }
 
             kmip_log.debug("{}: Creating key {}", _name, info);
@@ -836,14 +846,15 @@ future<kmip_host::impl::key_and_id_type> kmip_host::impl::create_key(const kmip_
             kmip_cmd cmd;
             KMIP_CMD_set_ctx(cmd, const_cast<char *>("Create key"));
 
-            return do_cmd(std::move(cmd), [info, kdl_attrs = std::move(kdl_attrs), crypt_alg](KMIP_CMD* cmd) {
+            cmd = co_await do_cmd(std::move(cmd), [info, kdl_attrs = std::move(kdl_attrs), crypt_alg](KMIP_CMD* cmd) {
                 return KMIP_CMD_create_smpl(cmd, KMIP_OBJECT_TYPE_SYMMETRIC_KEY,
                     crypt_alg,
                     KMIP_CRYPTOGRAPHIC_USAGE_ENCRYPT|KMIP_CRYPTOGRAPHIC_USAGE_DECRYPT,
                     int(info.info.len),
                     KMIP_DATA_LIST_attrs(kdl_attrs), KMIP_DATA_LIST_n_attrs(kdl_attrs)
                 );
-            }).then([this, info](kmip_cmd cmd) {
+            });
+            {
                 /* now get the details (the value of the key) */
                 char* new_id;
                 kmip_chk(KMIP_CMD_get_uuid(cmd, 0, &new_id), cmd);
@@ -853,20 +864,27 @@ future<kmip_host::impl::key_and_id_type> kmip_host::impl::create_key(const kmip_
 
                 KMIP_CMD_set_ctx(cmd, const_cast<char *>("activate"));
 
-                return do_cmd(std::move(cmd), [new_id](KMIP_CMD* cmd) {
+                co_await do_cmd(std::move(cmd), [new_id](KMIP_CMD* cmd) {
                     return KMIP_CMD_activate(cmd, new_id);
-                }).then([this, info, uuid](kmip_cmd cmd) {
-                    auto id = kmip_id_to_id(uuid);
-                    kmip_log.debug("{}: Activated {}", _name, uuid);
-                    return get_key_by_id(id, info.info).then([id](auto k) {
-                        return key_and_id_type(k, id);
-                    });
                 });
-            });
-        });
+                auto id = kmip_id_to_id(uuid);
+                kmip_log.debug("{}: Activated {}", _name, uuid);
+
+                auto k = co_await get_key_by_id(id, info.info);
+                co_return key_and_id_type(k, id);
+            }
+        } catch (kmip_error& e) {
+            translate_kmip_error(e);
+        } catch (base_error&) {
+            throw;
+        } catch (std::invalid_argument& e) {
+            std::throw_with_nested(configuration_error(fmt::format("create_key: {}", e.what())));
+        } catch (...) {
+            std::throw_with_nested(service_error(fmt::format("create_key: {:t}", std::current_exception())));
+        }
     }
 
-    return smp::submit_to(0, [this, info] {
+    co_return co_await smp::submit_to(0, [this, info] {
         return _ctxt.get_kmip_host(_name)->get_or_create_key(info.info, info.options).then([](std::tuple<shared_ptr<symmetric_key>, id_type> k_id) {
             auto&& [k, id] = k_id;
             return make_ready_future<std::tuple<key_info, bytes, id_type>>(std::tuple(k->info(), k->key(), id));
@@ -943,24 +961,25 @@ future<std::vector<kmip_host::id_type>> kmip_host::impl::find_matching_keys(cons
 
 future<shared_ptr<symmetric_key>> kmip_host::impl::find_key(const id_type& id) {
     if (this_shard_id() == 0) {
-        kmip_cmd cmd;
-        KMIP_CMD_set_ctx(cmd, const_cast<char *>("Find key"));
+        try {
+            kmip_cmd cmd;
+            KMIP_CMD_set_ctx(cmd, const_cast<char *>("Find key"));
 
-        auto uuid = id_to_kmip_string(id);
-        kmip_log.debug("{}: Finding {}", _name, uuid);
+            auto uuid = id_to_kmip_string(id);
+            kmip_log.debug("{}: Finding {}", _name, uuid);
 
-        // Batch operation. Nothing is sent/received until xmit below
-        kmip_chk(KMIP_CMD_batch_start(cmd));
-        kmip_chk(KMIP_CMD_set_batch_order(cmd, 1));
-        {
-            int key_format_type = KMIP_KEY_FORMAT_TYPE_RAW;
-            kmip_chk(KMIP_CMD_get(cmd, const_cast<char *>(uuid.c_str()), &key_format_type, nullptr, nullptr));
-        }
-        kmip_chk(KMIP_CMD_get_attributes(cmd, const_cast<char *>(uuid.c_str()), nullptr, 0));
+            // Batch operation. Nothing is sent/received until xmit below
+            kmip_chk(KMIP_CMD_batch_start(cmd));
+            kmip_chk(KMIP_CMD_set_batch_order(cmd, 1));
+            {
+                int key_format_type = KMIP_KEY_FORMAT_TYPE_RAW;
+                kmip_chk(KMIP_CMD_get(cmd, const_cast<char *>(uuid.c_str()), &key_format_type, nullptr, nullptr));
+            }
+            kmip_chk(KMIP_CMD_get_attributes(cmd, const_cast<char *>(uuid.c_str()), nullptr, 0));
 
-        return do_cmd(std::move(cmd), [](KMIP_CMD* cmd) {
-            return KMIP_CMD_batch_xmit(cmd);
-        }).then([this, uuid](kmip_cmd cmd) {
+            cmd = co_await do_cmd(std::move(cmd), [](KMIP_CMD* cmd) {
+                return KMIP_CMD_batch_xmit(cmd);
+            });
             auto nb = KMIP_CMD_get_batch_count(cmd);
             if (nb != 2) {
                 throw malformed_response_error("Invalid batch count in response: " + std::to_string(nb));
@@ -1036,18 +1055,24 @@ future<shared_ptr<symmetric_key>> kmip_host::impl::find_key(const id_type& id) {
 
             kmip_log.trace("{}: Found {}:{} {}", _name, uuid, derived_info.alg, derived_info.len);
 
-            return make_shared<symmetric_key>(derived_info, bytes(key, key + keylen));
-        });
+            co_return make_shared<symmetric_key>(derived_info, bytes(key, key + keylen));
+        } catch (kmip_error& e) {
+            translate_kmip_error(e);
+        } catch (base_error&) {
+            throw;
+        } catch (std::invalid_argument& e) {
+            std::throw_with_nested(configuration_error(fmt::format("find_key: {}", e.what())));
+        } catch (...) {
+            std::throw_with_nested(service_error(fmt::format("find_key: {:t}", std::current_exception())));
+        }
     }
 
-    return smp::submit_to(0, [this, id] {
+    auto&& [info, b] = co_await smp::submit_to(0, [this, id] {
         return _ctxt.get_kmip_host(_name)->get_key_by_id(id).then([](shared_ptr<symmetric_key> k) {
             return make_ready_future<std::tuple<key_info, bytes>>(std::tuple(k->info(), k->key()));
         });
-    }).then([](std::tuple<key_info, bytes> info_b) {
-        auto&& [info, b] = info_b;
-        return make_shared<symmetric_key>(info, b);
     });
+    co_return make_shared<symmetric_key>(info, b);
 }
 
 shared_ptr<symmetric_key> kmip_host::impl::ensure_compatible_key(shared_ptr<symmetric_key> k, const key_info& info) {
@@ -1065,56 +1090,20 @@ shared_ptr<symmetric_key> kmip_host::impl::ensure_compatible_key(shared_ptr<symm
     return k;
 }
 
-[[noreturn]]
-static void translate_kmip_error(const kmip_error& e) {
-    switch (e.code().value()) {
-    case KMIP_ERROR_BAD_CONNECT: case KMIP_ERROR_IO: 
-        std::throw_with_nested(network_error(e.what()));
-    case KMIP_ERROR_BAD_PROTOCOL:
-        std::throw_with_nested(configuration_error(e.what()));
-    case KMIP_ERROR_NOT_FOUND:
-        std::throw_with_nested(missing_resource_error(e.what()));
-    case KMIP_ERROR_AUTH_FAILED: case KMIP_ERROR_CERT_AUTH_FAILED:
-        std::throw_with_nested(permission_error(e.what()));
-    default:
-        std::throw_with_nested(service_error(e.what()));
-    }
-}
-
 future<std::tuple<shared_ptr<symmetric_key>, kmip_host::id_type>> kmip_host::impl::get_or_create_key(const key_info& info, const key_options& opts) {
     kmip_log.debug("{}: Lookup key {}:{}", _name, info, opts);
-    try {
-        auto linfo = info;
-        auto kinfo = co_await _attr_cache.get(kmip_key_info{info, opts});
-        co_return std::tuple(ensure_compatible_key(std::get<0>(kinfo), linfo), std::get<1>(kinfo));
-    } catch (kmip_error& e) {
-        translate_kmip_error(e);
-    } catch (base_error&) {
-        throw;
-    } catch (std::invalid_argument& e) {
-        std::throw_with_nested(configuration_error(fmt::format("get_or_create_key: {}", e.what())));
-    } catch (...) {
-        std::throw_with_nested(service_error(fmt::format("get_or_create_key: {:t}", std::current_exception())));
-    }
+    auto linfo = info;
+    auto kinfo = co_await _attr_cache.get(kmip_key_info{info, opts});
+    co_return std::tuple(ensure_compatible_key(std::get<0>(kinfo), linfo), std::get<1>(kinfo));
 }
 
 future<shared_ptr<symmetric_key>> kmip_host::impl::get_key_by_id(const id_type& id, const std::optional<key_info>& info) {
-    try {
-        auto linfo = info; // maintain on stack
-        auto k = co_await _id_cache.get(id);
-        if (linfo) {
-            k = ensure_compatible_key(k, *linfo);
-        }
-        co_return k;
-    } catch (kmip_error& e) {
-        translate_kmip_error(e);
-    } catch (base_error&) {
-        throw;
-    } catch (std::invalid_argument& e) {
-        std::throw_with_nested(configuration_error(fmt::format("get_key_by_id: {}", e.what())));
-    } catch (...) {
-        std::throw_with_nested(service_error(fmt::format("get_key_by_id: {:t}", std::current_exception())));
+    auto linfo = info; // maintain on stack
+    auto k = co_await _id_cache.get(id);
+    if (linfo) {
+        k = ensure_compatible_key(k, *linfo);
     }
+    co_return k;
 }
 
 kmip_host::kmip_host(encryption_context& ctxt, const sstring& name, const std::unordered_map<sstring, sstring>& map)
