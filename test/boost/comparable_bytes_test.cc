@@ -397,6 +397,103 @@ BOOST_AUTO_TEST_CASE(test_varint_redundant_sign_bytes) {
     }
 }
 
+// The old encoding of the NaNs and of the varints with redundant sign bytes is kept
+// for the sstable indexes which were, or still have to be, written with it (see
+// canonical_nans_and_varints), so it must stay exactly as it was. And the encoding
+// of any other value must not depend on which of the two encodings is asked for.
+BOOST_AUTO_TEST_CASE(test_old_encoding_of_nans_and_varints) {
+    const auto old = canonical_nans_and_varints::no;
+    const auto canonical = canonical_nans_and_varints::yes;
+    auto encode = [] (const data_type& type, const bytes& serialized, canonical_nans_and_varints canonical) {
+        return to_bytes(comparable_bytes(*type, managed_bytes_view(bytes_view(serialized)), canonical).as_managed_bytes_view());
+    };
+
+    struct sample {
+        data_type type;
+        std::string_view serialized;
+        std::string_view old_encoding;
+        std::string_view canonical_encoding;
+    };
+    for (const sample& s : std::initializer_list<sample>{
+            // NaNs with the sign bit set, and with a payload.
+            {float_type, "ffc00000", "003fffff", "ffc00000"},
+            {float_type, "7fc00001", "ffc00001", "ffc00000"},
+            {double_type, "fff8000000000000", "0007ffffffffffff", "fff8000000000000"},
+            {double_type, "7ff8000000000001", "fff8000000000001", "fff8000000000000"},
+            // 1 and -2 in 8 bytes. The old encoding took them for numbers of 7 bytes.
+            {varint_type, "0000000000000001", "ff0000000000000001", "81"},
+            {varint_type, "fffffffffffffffe", "00fffffffffffffffe", "7e"},
+            // The encoding of these didn't change: the NaN which the serializer writes,
+            // and varints in less than 8 bytes or with a single leading sign-only byte,
+            // whether the number needs that byte (2^55) or not (2^56).
+            {float_type, "7fc00000", "ffc00000", "ffc00000"},
+            {double_type, "7ff8000000000000", "fff8000000000000", "fff8000000000000"},
+            {varint_type, "00000000000001", "81", "81"},
+            {varint_type, "fffffffffffffe", "7e", "7e"},
+            {varint_type, "0080000000000000", "ff0080000000000000", "ff0080000000000000"},
+            {varint_type, "000100000000000000", "ff010100000000000000", "ff010100000000000000"},
+    }) {
+        const auto serialized = from_hex(s.serialized);
+        BOOST_REQUIRE_EQUAL(to_hex(encode(s.type, serialized, old)), s.old_encoding);
+        BOOST_REQUIRE_EQUAL(to_hex(encode(s.type, serialized, canonical)), s.canonical_encoding);
+    }
+
+    // What the serializer writes is encoded in the same way by both.
+    auto varints = generate_integer_test_data<int64_t>([] (int64_t n) {
+        return data_value(utils::multiprecision_int(n));
+    });
+    for (int shift : {56, 64, 100, 512}) {
+        const auto power_of_two = utils::multiprecision_int(1) << shift;
+        for (auto number : std::initializer_list<utils::multiprecision_int>{power_of_two, power_of_two - 1, -power_of_two, -(power_of_two - 1)}) {
+            varints.emplace_back(number);
+        }
+    }
+    for (const auto& values : {generate_floating_point_test_data<float>(), generate_floating_point_test_data<double>(), varints}) {
+        for (const data_value& value : values) {
+            const auto serialized = value.serialize_nonnull();
+            BOOST_REQUIRE_EQUAL(to_hex(encode(value.type(), serialized, old)), to_hex(encode(value.type(), serialized, canonical)));
+        }
+    }
+
+    // The choice applies to the values nested in other values as well.
+    const auto nan = from_hex("ffc00000");
+    const auto varint = from_hex("0000000000000001");
+    auto int32_be = [] (int32_t n) {
+        n = seastar::cpu_to_be(n);
+        return bytes(reinterpret_cast<const bytes::value_type*>(&n), sizeof(n));
+    };
+    // A nested value is serialized after its length, and encoded after the marker 0x40.
+    auto element = [&] (const bytes& serialized) {
+        return int32_be(serialized.size()) + serialized;
+    };
+    const auto terminator = from_hex("38");
+    for (const auto chosen : {old, canonical}) {
+        auto component = [&] (const data_type& type, const bytes& serialized) {
+            return from_hex("40") + encode(type, serialized, chosen);
+        };
+        const auto encoded_nan = component(float_type, nan);
+        const auto encoded_varint = component(varint_type, varint);
+        BOOST_REQUIRE_EQUAL(to_hex(encode(tuple_type_impl::get_instance({varint_type, float_type}), element(varint) + element(nan), chosen)),
+                to_hex(encoded_varint + encoded_nan + terminator));
+        BOOST_REQUIRE_EQUAL(to_hex(encode(list_type_impl::get_instance(float_type, false), int32_be(2) + element(nan) + element(nan), chosen)),
+                to_hex(encoded_nan + encoded_nan + terminator));
+        BOOST_REQUIRE_EQUAL(to_hex(encode(set_type_impl::get_instance(varint_type, false), int32_be(1) + element(varint), chosen)),
+                to_hex(encoded_varint + terminator));
+        BOOST_REQUIRE_EQUAL(to_hex(encode(map_type_impl::get_instance(varint_type, float_type, false), int32_be(1) + element(varint) + element(nan), chosen)),
+                to_hex(encoded_varint + encoded_nan + terminator));
+        BOOST_REQUIRE_EQUAL(to_hex(encode(vector_type_impl::get_instance(float_type, 2), nan + nan, chosen)),
+                to_hex(encoded_nan + encoded_nan + terminator));
+        // The encoding of a reversed type has all the bits flipped.
+        for (const auto& [type, serialized] : {std::pair(float_type, nan), std::pair(varint_type, varint)}) {
+            auto flipped = encode(type, serialized, chosen);
+            for (auto& byte : flipped) {
+                byte = ~byte;
+            }
+            BOOST_REQUIRE_EQUAL(to_hex(encode(reversed(type), serialized, chosen)), to_hex(flipped));
+        }
+    }
+}
+
 static int64_t msb_with_version(int64_t msb, int version) {
     // Set the version bits in the msb of the UUID
     return (msb & ~(0xF << 12)) | (version << 12);
@@ -674,7 +771,7 @@ static data_value maybe_make_null_or_empty(data_value&& value) {
     return std::move(value);
 }
 
-extern void encode_component(const abstract_type& type, managed_bytes_view serialized_bytes_view, bytes_ostream& out);
+extern void encode_component(const abstract_type& type, managed_bytes_view serialized_bytes_view, bytes_ostream& out, canonical_nans_and_varints canonical);
 extern void decode_component(const abstract_type& type, managed_bytes_view& comparable_bytes_view, bytes_ostream& out);
 extern void decode_empty_component(bytes_ostream& out);
 BOOST_AUTO_TEST_CASE(test_encode_decode_component) {
@@ -689,7 +786,7 @@ BOOST_AUTO_TEST_CASE(test_encode_decode_component) {
         const auto& type = *test_value.type();
         out.clear();
         auto serialized_bytes = test_value.serialize_nonnull();
-        encode_component(type, managed_bytes_view(serialized_bytes), out);
+        encode_component(type, managed_bytes_view(serialized_bytes), out, canonical_nans_and_varints::yes);
         auto comparable_bytes = std::move(out).to_managed_bytes();
         auto comparable_bytes_view = managed_bytes_view(comparable_bytes);
         out.clear();

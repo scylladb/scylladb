@@ -8,6 +8,8 @@
 
 #pragma once
 
+#include <seastar/util/bool_class.hh>
+
 #include "keys/compound.hh"
 #include "mutation/position_in_partition.hh"
 #include "utils/managed_bytes.hh"
@@ -16,6 +18,17 @@ class data_value;
 class abstract_type;
 class comparable_bytes;
 using comparable_bytes_opt = std::optional<comparable_bytes>;
+
+// Whether every NaN of a float or a double gets the same encoding, and so does every
+// serialized form of the same varint - with or without redundant leading sign bytes.
+// They have to, because the comparators of these types consider them equal.
+//
+// It wasn't always so: the encoding of such a value used to depend on its bits, which
+// ordered it differently than the comparator does. Sstable indexes were written with
+// those encodings, and an index can only be searched with the encoding which its keys
+// were written with. So `no` selects the old encoding. It is only meant for the sstable
+// indexes which were written with it, or still have to be for the nodes which only know it.
+using canonical_nans_and_varints = seastar::bool_class<struct canonical_nans_and_varints_tag>;
 
 class comparable_bytes {
     // encoded data in byte comparable format
@@ -29,7 +42,8 @@ public:
     }
 
     // Methods to convert serialized bytes to comparable bytes
-    comparable_bytes(const abstract_type& type, managed_bytes_view serialized_bytes_view);
+    comparable_bytes(const abstract_type& type, managed_bytes_view serialized_bytes_view,
+            canonical_nans_and_varints canonical = canonical_nans_and_varints::yes);
     static comparable_bytes_opt from_serialized_bytes(const abstract_type& type, managed_bytes_opt serialized_bytes) {
         if (!serialized_bytes) {
             return comparable_bytes_opt();
@@ -81,6 +95,7 @@ struct fmt::formatter<comparable_bytes_opt> : fmt::formatter<managed_bytes_view>
 };
 
 template <allow_prefixes AllowPrefixes>
-comparable_bytes comparable_bytes_from_compound(const compound_type<AllowPrefixes>& p, managed_bytes_view representation, std::byte terminator);
+comparable_bytes comparable_bytes_from_compound(const compound_type<AllowPrefixes>& p, managed_bytes_view representation, std::byte terminator,
+        canonical_nans_and_varints canonical);
 
 comparable_bytes comparable_bytes_from_legacy_partition_key(const compound_type<allow_prefixes::no>& p, managed_bytes_view representation, std::byte terminator);

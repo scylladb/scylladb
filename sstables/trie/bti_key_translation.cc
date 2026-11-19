@@ -114,7 +114,8 @@ lazy_comparable_bytes_from_clustering_position::lazy_comparable_bytes_from_clust
     : _encoded(comparable_bytes_from_compound(
         *s.clustering_key_prefix_type(),
         pipv.has_key() ? pipv.key().representation() : managed_bytes_view(),
-        pip_to_terminator(pipv)
+        pip_to_terminator(pipv),
+        canonical_nans_and_varints::yes
     ))
     , _size(_encoded.size())
 {}
@@ -123,7 +124,8 @@ lazy_comparable_bytes_from_clustering_position::lazy_comparable_bytes_from_clust
     : _encoded(comparable_bytes_from_compound(
         *s.clustering_key_prefix_type(),
         ci.clustering.representation(),
-        bound_weight_to_terminator(convert_bound_to_bound_weight(ci.kind))
+        bound_weight_to_terminator(convert_bound_to_bound_weight(ci.kind)),
+        canonical_nans_and_varints::yes
     ))
     , _size(_encoded.size())
 {}
