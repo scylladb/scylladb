@@ -28,11 +28,13 @@ struct table_request_stats {
     utils::time_estimated_histogram write_latency;
     uint64_t write_errors_timeout = 0;
     uint64_t write_errors_status_unknown = 0;
+    uint64_t write_errors_unavailable = 0;
     uint64_t write_errors_other = 0;
 
     utils::time_estimated_histogram linearizable_read_latency;
     utils::time_estimated_histogram non_linearizable_read_latency;
     uint64_t read_errors_timeout = 0;
+    uint64_t read_errors_unavailable = 0;
     uint64_t read_errors_other = 0;
 };
 
