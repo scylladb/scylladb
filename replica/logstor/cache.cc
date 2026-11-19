@@ -54,7 +54,7 @@ cache_tracker::cache_tracker(::cache_tracker& shared_tracker)
     })) {
 }
 
-void cache_tracker::evict(const primary_index_entry& pie) {
+void cache_tracker::evict(const primary_index_entry& pie) noexcept {
     if (!pie._cached_entry) {
         return;
     }

@@ -26,6 +26,23 @@
 
 namespace replica::logstor {
 
+static std::string format_key_mismatch(const partition_key& expected, const partition_key& actual,
+        const key_mismatch_error::location_variant& location) {
+    return std::visit([&](auto&& loc) {
+        using T = std::decay_t<decltype(loc)>;
+        if constexpr (std::is_same_v<T, record_location>) {
+            return format("logstor: key mismatch reading log entry at {}: expected {}, got {}",
+                loc, expected, actual);
+        } else {
+            return format("logstor: key mismatch reading from cache: expected {}, got {}", expected, actual);
+        }
+    }, location);
+}
+
+key_mismatch_error::key_mismatch_error(const partition_key& expected, const partition_key& actual, const location_variant& location)
+    : std::runtime_error(format_key_mismatch(expected, actual, location))
+{ }
+
 namespace {
 
 // What the readers share: a single_row_partition going into the buffer as a partition start, its
@@ -174,7 +191,7 @@ class logstor_single_key_reader : public logstor_reader_base {
         }
         auto partition = decode_record_value(record.value, *_table_schema, record.header);
         if (_use_cache) {
-            _index.populate_cache(key, where.location, _table_schema, _dk.key(), partition);
+            _index.populate_cache(where.guard, key, where.location, _table_schema, _dk.key(), partition);
         }
         tracing::trace(_trace_state, "logstor_single_key_reader: fetched key {}", _dk);
         begin(std::move(partition));
@@ -391,28 +408,30 @@ class logstor_range_reader : public logstor_reader_base {
         partitions.erase(partitions.begin(), first_in_range);
     }
 
-    // Must not yield: the entries the scan returns are only valid until the next yield, and a
-    // cache lookup needs the entry itself, since that is what the cached partition hangs off.
+    // An entry is valid only inside the visit of the scan. So the visit builds the slot of each
+    // entry and reads the cached partition there, because the entry holds the link to the partition.
     std::optional<partition_batch> collect_batch(size_t max_entries) {
-        auto index_batch = _scan.next_batch(max_entries);
+        std::vector<batch_slot> slots;
+        slots.reserve(max_entries);
+        auto index_batch = _scan.next_batch(max_entries, [&] (const primary_index::scanned_entry& entry) {
+            batch_slot slot{.location = entry.entry().location};
+            if (_use_cache) {
+                if (auto cached = entry.read_cached(*_table_schema)) {
+                    slot.partition = make_pending(std::move(cached->key), std::move(cached->partition));
+                }
+            }
+            slots.push_back(std::move(slot));
+        });
         if (!index_batch) {
             return std::nullopt;
         }
 
-        partition_batch batch{
+        return partition_batch{
+            .slots = std::move(slots),
             .guard = std::move(index_batch->guard),
             .first_token = index_batch->first_token,
             .last_token = index_batch->last_token,
         };
-        batch.slots.reserve(index_batch->entry_count);
-        for (const auto& entry : index_batch->entries) {
-            batch_slot slot{.location = entry.get().entry().location};
-            if (auto cached = _index.lookup_cached(entry.get(), *_table_schema, _use_cache)) {
-                slot.partition = make_pending(std::move(cached->key), std::move(cached->partition));
-            }
-            batch.slots.push_back(std::move(slot));
-        }
-        return batch;
     }
 
     // Takes the next batch of entries from the scan, which may span many tokens, and queues their
@@ -421,10 +440,6 @@ class logstor_range_reader : public logstor_reader_base {
         // The entries one batch takes from the scan, and so the records read from their segments
         // concurrently: a scan holds at most this many partitions ahead of its buffer.
         static constexpr size_t read_ahead_entries = 10;
-
-        if (_scan.exhausted()) {
-            co_return false;
-        }
 
         auto batch = collect_batch(read_ahead_entries);
         if (!batch) {
