@@ -90,7 +90,7 @@ considered present:
 		| True        |   1 | null | null | null |
 		+-------------+-----+------+------+------+
 
-It is OK to us a comparison with ``NULL`` in a condition.
+It is OK to use a comparison with ``NULL`` in a condition.
 But since ``NULL`` value and missing value in ScyllaDB are
 indistinguishable, conditions which compare with ``NULL``
 will return the same result when applied to both
