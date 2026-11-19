@@ -46,7 +46,7 @@ static void init_abstract_arg(const abstract_type& t, const bytes_opt& param, wa
         if (param) {
             switch (uint32_t abi_ver = wasmtime::get_abi(instance, store, *memory)) {
                 case 1: {
-                    auto pre_grow = memory->grow(store, 1 + (serialized_size - 1) / WASM_PAGE_SIZE);
+                    auto pre_grow = memory->grow(store, (serialized_size + WASM_PAGE_SIZE - 1) / WASM_PAGE_SIZE);
                     mem_size = pre_grow * WASM_PAGE_SIZE;
                     break;
                 }
@@ -178,12 +178,24 @@ struct from_val_visitor {
         if (ret_size == -1) {
             return bytes_opt{};
         }
+        bytes_view value(reinterpret_cast<int8_t*>(data), ret_size);
+        // Validate the result, like values from clients are validated. An
+        // invalid value (e.g., text which isn't valid UTF-8) must not be
+        // returned or stored, and deserialize() assumes a valid value - e.g.,
+        // it reserves room for as many elements as a collection claims to have.
+        // If the result is invalid, the module is broken (and, e.g., with ABI
+        // version 2 the result's memory isn't freed), so don't reuse this instance.
+        try {
+            t.validate(value);
+        } catch (const marshal_exception& e) {
+            throw wasm::instance_corrupting_exception(fmt::format("Function returned an invalid value: {}", e.what()));
+        }
         bytes_opt ret;
         const counter_type_impl* counter = dynamic_cast<const counter_type_impl*>(&t);
         if (counter) {
-            ret = long_type->decompose(t.deserialize(bytes_view(reinterpret_cast<int8_t*>(data), ret_size)));
+            ret = long_type->decompose(t.deserialize(value));
         } else {
-            ret = t.decompose(t.deserialize(bytes_view(reinterpret_cast<int8_t*>(data), ret_size)));
+            ret = t.decompose(t.deserialize(value));
         }
 
         if (wasmtime::get_abi(instance, store, *memory) == 2) {
