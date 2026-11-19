@@ -183,6 +183,46 @@ is ignored when connecting, but it still forms part of the endpoint identifier,
 so ``https://s3.us-east-1.amazonaws.com/`` and
 ``https://s3.us-east-1.amazonaws.com`` are two different endpoints.
 
+To give an endpoint a name that is not its address, add ``uri``. ScyllaDB then
+connects to ``uri``, and ``name`` is only the identifier:
+
+.. code-block:: yaml
+
+   object_storage_endpoints:
+     - name: primary
+       uri: https://s3.us-east-1.amazonaws.com
+       type: s3
+       aws_region: us-east-1
+
+A keyspace created with ``'endpoint': 'primary'`` uses the address that the
+node configures for that name. An S3 ``uri`` must be an ``http://`` or
+``https://`` URL. A GCS ``uri`` must be a URL or ``default``. ScyllaDB rejects
+an entry whose ``uri`` is anything else.
+
+Add entries with ``uri`` only after every node is upgraded to a version that
+supports it. An older node does not know ``uri``: it skips the entry or takes
+the name for the address, and a keyspace that uses the name does not work on
+that node.
+
+Several names can have the same ``uri``, and an entry with no ``uri`` whose
+name is that address counts as one of them. They share the connections to that
+address, so they must have the same values in the other options of the entry
+(``aws_region``, ``iam_role_arn``, ``credentials_file``). If the values are
+different, ScyllaDB ignores the later entry and logs an error, and a keyspace
+cannot use the name of that entry.
+
+Do not change the ``uri`` of a name that a keyspace uses. ScyllaDB does not
+move the data: the sstables that it writes after the change go to the new
+address, and the sstables that are at the old address stay there.
+
+.. _object-storage-endpoints-live-update:
+
+A change of ``object_storage_endpoints`` on a running node, including one that
+only adds an endpoint, replaces the connections to every endpoint. Reads from
+the sstables that the node has open at that moment fail until the node opens
+them again. Restart the node after you change the list while it has keyspaces
+on object storage.
+
 S3 credentials
 ==============
 
@@ -235,8 +275,9 @@ Tuning options
      - Description
    * - ``object_storage_endpoints``
      - empty
-     - The list of endpoints described above. Live-updateable: endpoints can be
-       added without restarting the node.
+     - The list of endpoints described above. Live-updateable, but see
+       :ref:`the effect of a change <object-storage-endpoints-live-update>` on
+       a node that has keyspaces on object storage.
    * - ``object_storage_connections``
      - empty
      - Maximum number of connections per shard for **S3** endpoints, per connection
