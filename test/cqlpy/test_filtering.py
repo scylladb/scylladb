@@ -169,7 +169,9 @@ def test_filtering_with_in_relation(cql, test_keyspace, cassandra_bug):
 
 # Test that NOT IN restrictions are supported with filtering and return the
 # correct results.
-def test_filtering_with_not_in_relation(cql, test_keyspace):
+# Cassandra added support for NOT IN in WHERE in Cassandra 6.0
+# (CASSANDRA-18584), so we skip this test on older Cassandra.
+def test_filtering_with_not_in_relation(cql, test_keyspace, new_to_cassandra_6):
     schema = 'p1 int, p2 int, c int, v int, primary key ((p1, p2),c)'
     with new_test_table(cql, test_keyspace, schema) as table:
         cql.execute(f"INSERT INTO {table} (p1, p2, c, v) VALUES (1, 2, 3, 4)")
@@ -187,7 +189,17 @@ def test_filtering_with_not_in_relation(cql, test_keyspace):
         assert set(res) == set([(1,2,3,4), (3,4,5,6)])
         with pytest.raises(InvalidRequest, match='ALLOW FILTERING'):
             cql.execute(f"select * from {table} where p1 NOT IN (2,4)")
-        # Since NULL is unknown, it could have matched p1, so NOT IN returns NULL too.
+
+# Scylla allows a NULL in a NOT IN list, while Cassandra rejects it ("Invalid
+# null value for column v"), as it does for IN (see test_null.py), so this
+# test is Scylla-only.
+def test_filtering_with_not_in_relation_null(cql, test_keyspace, scylla_only):
+    schema = 'p1 int, p2 int, c int, v int, primary key ((p1, p2),c)'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"INSERT INTO {table} (p1, p2, c, v) VALUES (1, 2, 3, 4)")
+        cql.execute(f"INSERT INTO {table} (p1, p2, c, v) VALUES (2, 3, 4, 5)")
+        cql.execute(f"INSERT INTO {table} (p1, p2, c, v) VALUES (5, 6, 7, NULL)")
+        # Since NULL is unknown, it could have matched v, so NOT IN returns NULL too.
         res = cql.execute(f"select * from {table} where v NOT IN (5,NULL) ALLOW FILTERING")
         assert set(res) == set()
 
@@ -490,7 +502,12 @@ def test_filter_token(cql, test_keyspace):
 # In a query with a token restriction the name assigned to the bind marker should be "partition key token".
 # Java driver relies on this assumption, having a different name there breaks it.
 # Reproduces #13769
-def test_token_bind_marker_name(cql, test_keyspace):
+# Cassandra 6 names this bind marker "token(p1, p2)" instead, since its
+# refactoring of restrictions (CASSANDRA-19341). So a client can no longer
+# bind it by the name "partition key token", as the Apache Cassandra Java
+# driver's TokenITBase test still does, with setToken("partition key token",
+# token) (CASSANDRA-21900).
+def test_token_bind_marker_name(cql, test_keyspace, cassandra_6_bug):
     with new_test_table(cql, test_keyspace, 'p1 int, p2 int, c1 int, c2 int, r int, PRIMARY KEY ((p1, p2), c1, c2)') as table:
         stmt = cql.prepare(f'SELECT * FROM {table} WHERE token(p1, p2) = ?')
         assert stmt.column_metadata[0].name == 'partition key token'
@@ -498,21 +515,27 @@ def test_token_bind_marker_name(cql, test_keyspace):
 
 # In the following test we check what error message appears if multi-column relation contains null values.    
 # Reproduces #13217
+# Scylla and Cassandra 5 say "Invalid null value in condition for column b",
+# Cassandra 6 says "Invalid null value for b in tuple (b, c, d)".
 def test_multi_column_relation_tuples_null_check(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, 'a int, b int, c int, d int, primary key (a, b, c, d)') as table:
-         with pytest.raises(InvalidRequest, match='Invalid null value in condition for column'): 
+         with pytest.raises(InvalidRequest, match='Invalid null value (in condition for column|for b in tuple)'):
                 cql.execute(f'SELECT * FROM {table} WHERE a = 0 AND (b, c, d) IN ((null, 2, 3), (2, 1, 4))')
-         with pytest.raises(InvalidRequest, match='Invalid null value in condition for column'): 
+         with pytest.raises(InvalidRequest, match='Invalid null value (in condition for column|for d in tuple)'):
                 cql.execute(f'SELECT * FROM {table} WHERE a = 0 AND (b, c, d) IN ((1, 2, 3), (2, 1, null))')      
 
 # This test shows how Scylla handles invalid number of items in one of the tuples of multi-column relation.
 # Reproduces #13217
 # Reproduces #13241
+# Scylla and Cassandra 5 say "Expected 3 elements in value tuple, but got 2",
+# Cassandra 6 says "Expected 3 elements in value for tuple (b, c, d), but got 2"
+# for too few elements, and "... too many elements. Type frozen<tuple<int, int,
+# int>> expects 3 but got 5" for too many.
 def test_multi_column_relation_wrong_number_of_items_in_tuple(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, 'a int, b int, c int, d int, primary key (a, b, c, d)') as table:
-        with pytest.raises(InvalidRequest, match='Expected 3 elements in value tuple, but got 2'):
+        with pytest.raises(InvalidRequest, match=r'Expected 3 elements in value (for )?tuple( \(b, c, d\))?, but got 2'):
             cql.execute(f'SELECT * FROM {table} WHERE a = 0 AND (b, c, d) IN ((1, 2), (2, 1, 4))')
-        with pytest.raises(InvalidRequest, match='Expected 3 elements in value tuple, but got 5'):
+        with pytest.raises(InvalidRequest, match=r'Expected 3 elements in value (for )?tuple( \(b, c, d\))?, but got 5|expects 3 but got 5'):
             cql.execute(f'SELECT * FROM {table} WHERE a = 0 AND (b, c, d) IN ((1, 2, 3, 4, 5), (2, 1, 4))')
 
 # Test for a bug found while developing the fix for #10357. The bug was that if a regular column was selected
