@@ -27,20 +27,14 @@ def response_from_list(keys, values):
     return [dict(zip(keys, value)) for value in values]
 
 
-def histogram(count=0, sum_=0, min_=0, max_=0, variance=0, mean=0, sample=[]):
-    assert count == len(sample)
-    result = {
+def histogram(count=0, sum_=0, min_=0, max_=0, mean=0):
+    return {
         'count': count,
         'sum': sum_,
         'min': min_,
         'max': max_,
-        'variance': variance,
         'mean': mean
     }
-    if count == 0:
-        return result
-    result['sample'] = sample
-    return result
 
 
 def make_random_histogram(count):
@@ -52,21 +46,13 @@ def make_random_histogram(count):
                      sum(samples),
                      min(samples),
                      max(samples),
-                     statistics.variance(samples),
-                     statistics.mean(samples),
-                     samples)
+                     statistics.mean(samples))
 
 
 def make_moving_avg_and_histogram(count):
-    # 1, 5, 15 minutes rates
-    rates = [random.random() for _ in (1, 5, 15)]
-    # the mean rate from startup
-    mean_rate = random.random()
     hist = make_random_histogram(count)
     return {
         'meter': {
-            'rates': rates,
-            'mean_rate': mean_rate,
             'count': count,
         },
         'hist': hist,

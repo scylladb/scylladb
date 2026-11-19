@@ -76,15 +76,15 @@ struct write_stats {
     // write attempts due to Read Repair logic
     split_stats read_repair_write_attempts;
 
-    utils::timed_rate_moving_average write_unavailables;
-    utils::timed_rate_moving_average write_timeouts;
-    utils::timed_rate_moving_average write_rate_limited_by_replicas;
-    utils::timed_rate_moving_average write_rate_limited_by_coordinator;
+    uint64_t write_unavailables = 0;
+    uint64_t write_timeouts = 0;
+    uint64_t write_rate_limited_by_replicas = 0;
+    uint64_t write_rate_limited_by_coordinator = 0;
 
     utils::timed_rate_moving_average_summary_and_histogram write;
 
-    utils::timed_rate_moving_average cas_write_unavailables;
-    utils::timed_rate_moving_average cas_write_timeouts;
+    uint64_t cas_write_unavailables = 0;
+    uint64_t cas_write_timeouts = 0;
 
     utils::timed_rate_moving_average_summary_and_histogram cas_write;
 
@@ -127,15 +127,15 @@ public:
 
 struct stats : public write_stats {
     seastar::metrics::metric_groups _metrics;
-    utils::timed_rate_moving_average read_timeouts;
-    utils::timed_rate_moving_average read_unavailables;
-    utils::timed_rate_moving_average read_rate_limited_by_replicas;
-    utils::timed_rate_moving_average read_rate_limited_by_coordinator;
-    utils::timed_rate_moving_average range_slice_timeouts;
-    utils::timed_rate_moving_average range_slice_unavailables;
+    uint64_t read_timeouts = 0;
+    uint64_t read_unavailables = 0;
+    uint64_t read_rate_limited_by_replicas = 0;
+    uint64_t read_rate_limited_by_coordinator = 0;
+    uint64_t range_slice_timeouts = 0;
+    uint64_t range_slice_unavailables = 0;
 
-    utils::timed_rate_moving_average cas_read_timeouts;
-    utils::timed_rate_moving_average cas_read_unavailables;
+    uint64_t cas_read_timeouts = 0;
+    uint64_t cas_read_unavailables = 0;
 
     cas_contention_histogram cas_read_contention;
 

@@ -139,7 +139,7 @@ future<lowres_clock::duration> cache_hitrate_calculator::recalculate_hitrates() 
         return std::ranges::to<std::unordered_map<table_id, stat>>(db.get_tables_metadata().filter(non_system_filter) |
                 std::views::transform([]  (const std::pair<table_id, lw_shared_ptr<replica::column_family>>& cf) {
             auto& stats = cf.second->get_row_cache().stats();
-            return std::make_pair(cf.first, stat{float(stats.reads_with_no_misses.rate().rates[0]), float(stats.reads_with_misses.rate().rates[0])});
+            return std::make_pair(cf.first, stat{float(stats.reads_with_no_misses.rate().rate), float(stats.reads_with_misses.rate().rate)});
         }));
     };
 

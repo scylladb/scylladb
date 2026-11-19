@@ -133,7 +133,7 @@ static future<json::json_return_type> set_tables_tombstone_gc(sharded<replica::d
 static future<json::json_return_type>  get_cf_stats_count(sharded<replica::database>& db, const sstring& name,
         utils::timed_rate_moving_average_summary_and_histogram replica::column_family_stats::*f) {
     return map_reduce_cf(db, name, int64_t(0), [f](const replica::column_family& cf) {
-        return (cf.get_stats().*f).hist.count;
+        return (cf.get_stats().*f).histogram().count();
     }, std::plus<int64_t>());
 }
 
@@ -141,12 +141,8 @@ static future<json::json_return_type> get_cf_stats_sum(sharded<replica::database
         utils::timed_rate_moving_average_summary_and_histogram replica::column_family_stats::*f) {
     auto uuid = parse_table_info(name, db.local()).id;
     return db.map_reduce0([uuid, f](replica::database& db) {
-        // Histograms information is sample of the actual load
-        // so to get an estimation of sum, we multiply the mean
-        // with count. The information is gather in nano second,
-        // but reported in micro
         replica::column_family& cf = db.find_column_family(uuid);
-        return ((cf.get_stats().*f).hist.count/1000.0) * (cf.get_stats().*f).hist.mean;
+        return double((cf.get_stats().*f).histogram().sum());
     }, 0.0, std::plus<double>()).then([](double res) {
         return make_ready_future<json::json_return_type>((int64_t)res);
     });
@@ -156,43 +152,31 @@ static future<json::json_return_type> get_cf_stats_sum(sharded<replica::database
 static future<json::json_return_type>  get_cf_stats_count(sharded<replica::database>& db,
         utils::timed_rate_moving_average_summary_and_histogram replica::column_family_stats::*f) {
     return map_reduce_cf(db, int64_t(0), [f](const replica::column_family& cf) {
-        return (cf.get_stats().*f).hist.count;
+        return (cf.get_stats().*f).histogram().count();
     }, std::plus<int64_t>());
-}
-
-static future<json::json_return_type>  get_cf_histogram(sharded<replica::database>& db, const sstring& name,
-        utils::timed_rate_moving_average_and_histogram replica::column_family_stats::*f) {
-    auto uuid = parse_table_info(name, db.local()).id;
-    return db.map_reduce0([f, uuid](const replica::database& p) {
-        return (p.find_column_family(uuid).get_stats().*f).hist;},
-            utils::ihistogram(),
-            std::plus<utils::ihistogram>())
-            .then([](const utils::ihistogram& val) {
-                return make_ready_future<json::json_return_type>(to_json(val));
-    });
 }
 
 static future<json::json_return_type>  get_cf_histogram(sharded<replica::database>& db, const sstring& name,
         utils::timed_rate_moving_average_summary_and_histogram replica::column_family_stats::*f) {
     auto uuid = parse_table_info(name, db.local()).id;
     return db.map_reduce0([f, uuid](const replica::database& p) {
-        return (p.find_column_family(uuid).get_stats().*f).hist;},
-            utils::ihistogram(),
-            std::plus<utils::ihistogram>())
-            .then([](const utils::ihistogram& val) {
+        return (p.find_column_family(uuid).get_stats().*f).histogram();},
+            utils::time_estimated_histogram(),
+            utils::time_estimated_histogram_merge)
+            .then([](const utils::time_estimated_histogram& val) {
                 return make_ready_future<json::json_return_type>(to_json(val));
     });
 }
 
 static future<json::json_return_type> get_cf_histogram(sharded<replica::database>& db, utils::timed_rate_moving_average_summary_and_histogram replica::column_family_stats::*f) {
-    std::function<utils::ihistogram(const replica::database&)> fun = [f] (const replica::database& db)  {
-        utils::ihistogram res;
+    std::function<utils::time_estimated_histogram(const replica::database&)> fun = [f] (const replica::database& db)  {
+        utils::time_estimated_histogram res;
         db.get_tables_metadata().for_each_table([&] (table_id, lw_shared_ptr<replica::table> table) mutable {
-            res += (table->get_stats().*f).hist;
+            res.merge((table->get_stats().*f).histogram());
         });
         return res;
     };
-    return db.map(fun).then([](const std::vector<utils::ihistogram> &res) {
+    return db.map(fun).then([](const std::vector<utils::time_estimated_histogram> &res) {
         std::vector<httpd::utils_json::histogram> r;
         std::ranges::copy(res | std::views::transform(to_json), std::back_inserter(r));
         return make_ready_future<json::json_return_type>(std::move(r));
@@ -203,23 +187,23 @@ static future<json::json_return_type>  get_cf_rate_and_histogram(sharded<replica
         utils::timed_rate_moving_average_summary_and_histogram replica::column_family_stats::*f) {
     auto uuid = parse_table_info(name, db.local()).id;
     return db.map_reduce0([f, uuid](const replica::database& p) {
-        return (p.find_column_family(uuid).get_stats().*f).rate();},
-            utils::rate_moving_average_and_histogram(),
-            std::plus<utils::rate_moving_average_and_histogram>())
-            .then([](const utils::rate_moving_average_and_histogram& val) {
+        return (p.find_column_family(uuid).get_stats().*f).histogram();},
+            utils::time_estimated_histogram(),
+            utils::time_estimated_histogram_merge)
+            .then([](const utils::time_estimated_histogram& val) {
                 return make_ready_future<json::json_return_type>(timer_to_json(val));
     });
 }
 
 static future<json::json_return_type> get_cf_rate_and_histogram(sharded<replica::database>& db, utils::timed_rate_moving_average_summary_and_histogram replica::column_family_stats::*f) {
-    std::function<utils::rate_moving_average_and_histogram(const replica::database&)> fun = [f] (const replica::database& db)  {
-        utils::rate_moving_average_and_histogram res;
+    std::function<utils::time_estimated_histogram(const replica::database&)> fun = [f] (const replica::database& db)  {
+        utils::time_estimated_histogram res;
         db.get_tables_metadata().for_each_table([&] (table_id, lw_shared_ptr<replica::table> table) {
-            res += (table->get_stats().*f).rate();
+            res.merge((table->get_stats().*f).histogram());
         });
         return res;
     };
-    return db.map(fun).then([](const std::vector<utils::rate_moving_average_and_histogram> &res) {
+    return db.map(fun).then([](const std::vector<utils::time_estimated_histogram> &res) {
         std::vector<httpd::utils_json::rate_moving_average_and_histogram> r;
         std::ranges::copy(res | std::views::transform(timer_to_json), std::back_inserter(r));
         return make_ready_future<json::json_return_type>(r);
@@ -1046,7 +1030,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
 
     cf::get_row_cache_hit.set(r, [&db] (std::unique_ptr<http::request> req) {
         return map_reduce_cf_raw(db, req->get_path_param("name"), utils::rate_moving_average(), [](const replica::column_family& cf) {
-            return cf.get_row_cache().stats().hits.rate();
+            return utils::rate_moving_average{.count = cf.get_row_cache().stats().hits};
         }, std::plus<utils::rate_moving_average>()).then([](const utils::rate_moving_average& m) {
             return make_ready_future<json::json_return_type>(meter_to_json(m));
         });
@@ -1054,7 +1038,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
 
     cf::get_all_row_cache_hit.set(r, [&db] (std::unique_ptr<http::request> req) {
         return map_reduce_cf_raw(db, utils::rate_moving_average(), [](const replica::column_family& cf) {
-            return cf.get_row_cache().stats().hits.rate();
+            return utils::rate_moving_average{.count = cf.get_row_cache().stats().hits};
         }, std::plus<utils::rate_moving_average>()).then([](const utils::rate_moving_average& m) {
             return make_ready_future<json::json_return_type>(meter_to_json(m));
         });
@@ -1062,7 +1046,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
 
     cf::get_row_cache_miss.set(r, [&db] (std::unique_ptr<http::request> req) {
         return map_reduce_cf_raw(db, req->get_path_param("name"), utils::rate_moving_average(), [](const replica::column_family& cf) {
-            return cf.get_row_cache().stats().misses.rate();
+            return utils::rate_moving_average{.count = cf.get_row_cache().stats().misses};
         }, std::plus<utils::rate_moving_average>()).then([](const utils::rate_moving_average& m) {
             return make_ready_future<json::json_return_type>(meter_to_json(m));
         });
@@ -1070,7 +1054,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
 
     cf::get_all_row_cache_miss.set(r, [&db] (std::unique_ptr<http::request> req) {
         return map_reduce_cf_raw(db, utils::rate_moving_average(), [](const replica::column_family& cf) {
-            return cf.get_row_cache().stats().misses.rate();
+            return utils::rate_moving_average{.count = cf.get_row_cache().stats().misses};
         }, std::plus<utils::rate_moving_average>()).then([](const utils::rate_moving_average& m) {
             return make_ready_future<json::json_return_type>(meter_to_json(m));
         });
@@ -1102,12 +1086,14 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
         utils::estimated_histogram_merge, utils_json::estimated_histogram());
     });
 
-    cf::get_tombstone_scanned_histogram.set(r, [&db] (std::unique_ptr<http::request> req) {
-        return get_cf_histogram(db, req->get_path_param("name"), &replica::column_family_stats::tombstone_scanned);
+    cf::get_tombstone_scanned_histogram.set(r, [] (std::unique_ptr<http::request> req) {
+        // Not collected; kept so that clients get an empty histogram.
+        return make_ready_future<json::json_return_type>(to_json(utils::time_estimated_histogram()));
     });
 
-    cf::get_live_scanned_histogram.set(r, [&db] (std::unique_ptr<http::request> req) {
-        return get_cf_histogram(db, req->get_path_param("name"), &replica::column_family_stats::live_scanned);
+    cf::get_live_scanned_histogram.set(r, [] (std::unique_ptr<http::request> req) {
+        // Not collected; kept so that clients get an empty histogram.
+        return make_ready_future<json::json_return_type>(to_json(utils::time_estimated_histogram()));
     });
 
     cf::get_col_update_time_delta_histogram.set(r, [] (std::unique_ptr<http::request> req) {

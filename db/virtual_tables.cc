@@ -707,8 +707,10 @@ public:
                 uint64_t entries = 0;
                 uint64_t hits = 0;
                 uint64_t misses = 0;
-                utils::rate_moving_average hits_moving_average;
-                utils::rate_moving_average requests_moving_average;
+                // Reads per second in the last minute, by whether they were
+                // served from the cache alone.
+                double recent_reads_with_no_misses = 0;
+                double recent_reads_with_misses = 0;
                 static stats reduce(stats a, stats b) {
                     return stats{
                         a.total + b.total,
@@ -716,8 +718,8 @@ public:
                         a.entries + b.entries,
                         a.hits + b.hits,
                         a.misses + b.misses,
-                        a.hits_moving_average + b.hits_moving_average,
-                        a.requests_moving_average + b.requests_moving_average};
+                        a.recent_reads_with_no_misses + b.recent_reads_with_no_misses,
+                        a.recent_reads_with_misses + b.recent_reads_with_misses};
                 }
             };
             return _db.map_reduce0([] (replica::database& db) {
@@ -728,13 +730,14 @@ public:
                 res.entries = db.row_cache_tracker().partitions();
                 db.get_tables_metadata().for_each_table([&] (table_id id, lw_shared_ptr<replica::table> t) {
                     auto& cache_stats = t->get_row_cache().stats();
-                    res.hits += cache_stats.hits.count();
-                    res.misses += cache_stats.misses.count();
-                    res.hits_moving_average += cache_stats.hits.rate();
-                    res.requests_moving_average += (cache_stats.hits.rate() + cache_stats.misses.rate());
+                    res.hits += cache_stats.hits;
+                    res.misses += cache_stats.misses;
+                    res.recent_reads_with_no_misses += cache_stats.reads_with_no_misses.rate().rate;
+                    res.recent_reads_with_misses += cache_stats.reads_with_misses.rate().rate;
                 });
                 return res;
             }, stats{}, stats::reduce).then([] (stats s) {
+                auto recent_reads = s.recent_reads_with_no_misses + s.recent_reads_with_misses;
                 return std::vector<std::pair<sstring, sstring>>{
                         {"memory_total", format("{}", s.total)},
                         {"memory_used", format("{}", s.total - s.free)},
@@ -743,9 +746,9 @@ public:
                         {"hits", format("{}", s.hits)},
                         {"misses", format("{}", s.misses)},
                         {"hit_rate_total", format("{:.2}", static_cast<double>(s.hits) / static_cast<double>(s.hits + s.misses))},
-                        {"hit_rate_recent", format("{:.2}", s.hits_moving_average.mean_rate)},
+                        {"hit_rate_recent", format("{:.2}", recent_reads ? s.recent_reads_with_no_misses / recent_reads : 0.0)},
                         {"requests_total", format("{}", s.hits + s.misses)},
-                        {"requests_recent", format("{}", static_cast<uint64_t>(s.requests_moving_average.mean_rate))}};
+                        {"requests_recent", format("{}", static_cast<uint64_t>(recent_reads))}};
             });
         });
         // FIXME: incremental backups are deprecated; remove support for them in a future release (SCYLLADB-5498).
