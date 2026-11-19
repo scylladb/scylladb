@@ -347,6 +347,56 @@ BOOST_AUTO_TEST_CASE(test_varint) {
     byte_comparable_test(std::move(test_data));
 }
 
+// The serialized form of a varint may start with redundant sign bytes (0x00
+// for a non-negative number, 0xFF for a negative one). The serializer never
+// emits them, but they are valid, so they can be found in a value sent by
+// a client or made with blobAsVarint(). abstract_type::compare() compares
+// the numbers, so it does not care about these bytes, and the encoding must
+// not depend on them either. byte_comparable_test() cannot test this, as it
+// gets its serialized values from data_value.
+BOOST_AUTO_TEST_CASE(test_varint_redundant_sign_bytes) {
+    std::vector<utils::multiprecision_int> numbers;
+    for (int n : {0, 1, 2, 127, 128, 129, 255, 256, 65535, 65536}) {
+        numbers.emplace_back(n);
+        numbers.emplace_back(-n);
+    }
+    // Numbers around the size where the encoding switches to its full form,
+    // and some larger ones.
+    const auto multiprecision_one = utils::multiprecision_int(1);
+    for (int shift : {47, 48, 55, 56, 63, 64, 71, 72, 500}) {
+        const auto power_of_two = multiprecision_one << shift;
+        for (auto number : std::initializer_list<utils::multiprecision_int>{
+                power_of_two - 1, power_of_two, power_of_two + 1, -(power_of_two - 1), -power_of_two, -(power_of_two + 1)}) {
+            numbers.push_back(std::move(number));
+        }
+    }
+
+    auto check = [] (const data_type& type, const utils::multiprecision_int& number, size_t redundant_bytes) {
+        const managed_bytes minimal(data_value(number).serialize_nonnull());
+        const comparable_bytes minimal_cb(*type, minimal);
+        const auto sign_byte = static_cast<bytes::value_type>(number < utils::multiprecision_int(0) ? 0xFF : 0x00);
+        const managed_bytes padded(bytes(redundant_bytes, sign_byte) + to_bytes(minimal));
+        // Check that the test builds another representation of the same number.
+        BOOST_REQUIRE(type->compare(managed_bytes_view(padded), managed_bytes_view(minimal)) == std::strong_ordering::equal);
+        const comparable_bytes padded_cb(*type, padded);
+        BOOST_REQUIRE_MESSAGE(padded_cb == minimal_cb, seastar::value_of([&] () {
+            return fmt::format("type {}: {} is encoded as {}, but with {} redundant sign bytes it is encoded as {}",
+                    type->name(), number.str(), minimal_cb, redundant_bytes, padded_cb.size() <= 32 ? fmt::to_string(padded_cb) : "something longer");
+        }));
+    };
+    for (const auto& type : {varint_type, reversed(varint_type)}) {
+        for (const auto& number : numbers) {
+            for (size_t redundant_bytes : {1, 2, 6, 7, 8, 9, 300}) {
+                check(type, number, redundant_bytes);
+            }
+        }
+        // Enough redundant bytes to span multiple fragments.
+        for (int number : {1, -2}) {
+            check(type, utils::multiprecision_int(number), 300 * 1024);
+        }
+    }
+}
+
 static int64_t msb_with_version(int64_t msb, int version) {
     // Set the version bits in the msb of the UUID
     return (msb & ~(0xF << 12)) | (version << 12);
