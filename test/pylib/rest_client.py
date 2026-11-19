@@ -456,7 +456,8 @@ class ScyllaRESTAPIClient:
             params['scope'] = scope
         return await self.client.post_json(f"/storage_service/restore", host=node_ip, params=params, json=sstables)
 
-    async def restore_tablets(self, node_ip: str, ks: str, cf: str, snap: str, datacenter: str, endpoint: str, bucket: str, manifests, prefix: str = '') -> str:
+    async def restore_tablets(self, node_ip: str, ks: str, cf: str, snap: str, datacenter: str, endpoint: str, bucket: str, manifests, prefix: str = '',
+                              repair: Optional[str] = None) -> str:
         """Restore tablets from a single backup location"""
         backup_location = [
             {
@@ -467,15 +468,18 @@ class ScyllaRESTAPIClient:
                 "manifests": manifests
             }
         ]
-        return await self.restore_tablets_multidc(node_ip, ks, cf, snap, backup_location)
+        return await self.restore_tablets_multidc(node_ip, ks, cf, snap, backup_location, repair=repair)
 
-    async def restore_tablets_multidc(self, node_ip: str, ks: str, cf: str, snap: str, locations: list[dict]) -> str:
+    async def restore_tablets_multidc(self, node_ip: str, ks: str, cf: str, snap: str, locations: list[dict],
+                                      repair: Optional[str] = None) -> str:
         """Restore tablets from a list of per-datacenter backup locations"""
         params = {
             "keyspace": ks,
             "table": cf,
             "snapshot": snap
         }
+        if repair is not None:
+            params["repair"] = repair
         return await self.client.post_json(f"/storage_service/tablets/restore", host=node_ip, params=params, json=locations)
 
     async def take_snapshot(self, node_ip: str, ks: str, tag: str, tables: list[str] = None, ttl: Optional[str] = None) -> None:

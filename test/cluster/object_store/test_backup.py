@@ -32,6 +32,7 @@ from test.pylib.util import wait_for
 from test.pylib.rest_client import HTTPError
 from test.cluster.tasks.task_manager_client import TaskManagerClient
 from test.cluster.util import wait_for_token_ring_and_group0_consistency
+from test.pylib.repair import load_tablet_repair_task_infos
 from test.cqlpy import nodetool
 import statistics
 
@@ -906,7 +907,8 @@ async def test_restore_tablets_completions_do_not_collide(build_mode: str, manag
         f"restore finished, so their removal did not stick: {leftover}")
 
 
-async def do_test_restore_tablets(build_mode: str, manager: ScyllaClusterManager, object_storage, topology, num_tables, num_restore_nodes, with_views=False):
+async def do_test_restore_tablets(build_mode: str, manager: ScyllaClusterManager, object_storage, topology, num_tables, num_restore_nodes, with_views=False,
+                                  repair=None):
     servers, host_ids = await create_cluster(topology, manager, logger, object_storage)
 
     cql = manager.get_cql()
@@ -992,7 +994,7 @@ async def do_test_restore_tablets(build_mode: str, manager: ScyllaClusterManager
                     # The locations must cover all the DCs the keyspace replicates to
                     with pytest.raises(HTTPError, match="don't match the datacenters"):
                         await manager.api.restore_tablets_multidc(node.ip_addr, dst_ks, f'{cf}_restored', snap_name, locations[:1])
-                tid = await manager.api.restore_tablets_multidc(node.ip_addr, dst_ks, f'{cf}_restored', snap_name, locations)
+                tid = await manager.api.restore_tablets_multidc(node.ip_addr, dst_ks, f'{cf}_restored', snap_name, locations, repair=repair)
                 status = await manager.api.wait_task(node.ip_addr, tid)
                 assert (status is not None) and (status['state'] == 'done'), f"Restore of {cf} via {node.ip_addr} failed: {status}"
                 assert status['progress_total'] > 0
@@ -1006,6 +1008,17 @@ async def do_test_restore_tablets(build_mode: str, manager: ScyllaClusterManager
             await manager.api.quiesce_topology(servers[0].ip_addr)
 
             await asyncio.gather(*(check_mutation_replicas(cql, manager, servers, range(num_keys), topology, logger, dst_ks, f'{cf}_restored') for cf in tables))
+
+            for cf in tables:
+                restored, repaired, failed = await restore_repair_log(manager, servers, dst_ks, f'{cf}_restored')
+                assert restored, f'No tablet of {cf}_restored was restored'
+                assert not failed, f'The repair of a tablet of {cf}_restored failed: {failed}'
+                if repair == 'disabled':
+                    assert not repaired, f'{cf}_restored was repaired despite repair=disabled: {repaired}'
+                else:
+                    assert repaired == restored, f'Not every tablet of {cf}_restored was repaired: restored {restored}, repaired {repaired}'
+                assert not await repair_requests(manager, cql, servers[0], dst_ks, f'{cf}_restored'), \
+                    f'The restore left repair requests on {cf}_restored'
 
             res = await cql.run_async(f"SELECT extra FROM {dst_ks}.{tables[0]}_restored;")
             assert res and all(x.extra is None for x in res), f'{dst_ks}.{tables[0]}_restored has {len(res)} rows and a non-null extra after restore'
@@ -1198,18 +1211,22 @@ async def test_restore_tablets_download_failure(build_mode: str, manager: Scylla
         assert status['progress_completed'] < status['progress_total']
 
 
+@pytest.mark.parametrize("stage", ['download', 'repair'])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_restore_tablets_abort(build_mode: str, manager: ScyllaClusterManager, object_storage):
-    '''Verify that aborting a tablet restore task interrupts in-flight downloads
-    without crashing the node.
+async def test_restore_tablets_abort(build_mode: str, manager: ScyllaClusterManager, object_storage, stage):
+    '''Verify that aborting a tablet restore task interrupts it without crashing the node.
 
-    Pause the restore inside download_sstable (after the sstables are opened, so
-    the abort exercises the per-shard download abort sources), abort the restore
-    task and wait (via a read barrier) for the session removal to reach every node,
-    then release the pause. The task must fail with an abort error and no download
-    must have completed.'''
+    download: pause the restore inside download_sstable (after the sstables are opened, so the
+    abort exercises the per-shard download abort sources), abort the restore task and wait (via a
+    read barrier) for the session removal to reach every node, then release the pause. No download
+    must have completed.
 
-    topology = topo(rf = 1, nodes = 2, racks = 1, dcs = 1)
+    repair: hold the tablets in the repair that follows their restore, and abort then. Every
+    tablet must leave its transition. While the tablets are held, a second restore of the table
+    asking for a different repair choice must be rejected rather than join this one.'''
+
+    # A repair needs a second replica.
+    topology = topo(rf = 1, nodes = 2, racks = 1, dcs = 1) if stage == 'download' else topo(rf = 2, nodes = 2, racks = 2, dcs = 1)
     servers, host_ids = await create_cluster(topology, manager, logger, object_storage)
 
     await manager.disable_tablet_balancing()
@@ -1229,20 +1246,31 @@ async def test_restore_tablets_abort(build_mode: str, manager: ScyllaClusterMana
     async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test ( pk text primary key, value int ) WITH tablets = {{'min_tablet_count': {tablet_count}, 'max_tablet_count': {tablet_count}}};")
 
-        # Park every download inside download_sstable (after the sstables are opened),
-        # so the abort below has to interrupt the object store reads themselves.
-        await asyncio.gather(*(manager.api.enable_injection(s.ip_addr, "pause_download_sstable", one_shot=False) for s in servers))
+        if stage == 'download':
+            # Park every download inside download_sstable (after the sstables are opened),
+            # so the abort below has to interrupt the object store reads themselves.
+            pause = "pause_download_sstable"
+        else:
+            pause = "repair_shard_repair_task_impl_do_repair_ranges"
+        await asyncio.gather(*(manager.api.enable_injection(s.ip_addr, pause, one_shot=False) for s in servers))
 
         logger.info(f'Restore cluster via {servers[0].ip_addr}')
         manifests = [ f'{s.server_id}/{snap_name}/manifest.json' for s in servers ]
         tid = await manager.api.restore_tablets(servers[0].ip_addr, ks, 'test', snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests)
 
-        # Wait until a download is parked on at least one node.
-        enter_waiters = [asyncio.create_task(manager.api.wait_for_injection_enter(s.ip_addr, "pause_download_sstable")) for s in servers]
-        done, pending = await asyncio.wait(enter_waiters, timeout=30, return_when=asyncio.FIRST_COMPLETED)
+        # Wait until the restore is parked on at least one node.
+        enter_waiters = [asyncio.create_task(manager.api.wait_for_injection_enter(s.ip_addr, pause)) for s in servers]
+        done, pending = await asyncio.wait(enter_waiters, timeout=60, return_when=asyncio.FIRST_COMPLETED)
         for t in pending:
             t.cancel()
-        assert done, "Restore did not reach the download pause on any node"
+        assert done, f"Restore did not reach {pause} on any node"
+
+        if stage == 'repair':
+            other = await manager.api.restore_tablets(servers[1].ip_addr, ks, 'test', snap_name, servers[0].datacenter,
+                                                      object_storage.address, object_storage.bucket_name, manifests, repair='disabled')
+            status = await manager.api.wait_task(servers[1].ip_addr, other)
+            assert status is not None and status['state'] == 'failed', f'A restore with a different repair choice joined: {status}'
+            assert 'already being restored with repair=full' in status['error'], f'Unexpected error: {status["error"]}'
 
         coordinator_log = await manager.server_open_log(servers[0].server_id)
         log_mark = await coordinator_log.mark()
@@ -1260,29 +1288,358 @@ async def test_restore_tablets_abort(build_mode: str, manager: ScyllaClusterMana
         await asyncio.gather(*(read_barrier(manager.api, s.ip_addr) for s in servers[1:]))
 
         # Release the parked downloads; disabling also prevents any retry from re-parking.
-        await asyncio.gather(*(manager.api.disable_injection(s.ip_addr, "pause_download_sstable") for s in servers))
+        await asyncio.gather(*(manager.api.disable_injection(s.ip_addr, pause) for s in servers))
 
         status = await asyncio.wait_for(manager.api.wait_task(servers[0].ip_addr, tid), timeout=60)
         assert status is not None and status['state'] == 'failed', f"Expected task to fail after abort, got: {status}"
         assert 'abort' in status['error'].lower(), f"Expected abort error, got: {status['error']}"
         logger.info(f'Restore task aborted as expected: {status["error"]}')
 
-        # Every node had its session closed before the pause was released, so no download could
-        # complete: none of the sstables must be marked as downloaded.
-        dc = servers[0].datacenter
-        rack = 'rack0'
-        rows = list(await cql.run_async(f"SELECT downloaded FROM system_distributed.snapshot_sstables "
-                                        f"WHERE snapshot_name = '{snap_name}' AND \"keyspace\" = '{ks}' AND \"table\" = 'test' "
-                                        f"AND datacenter = '{dc}' AND rack = '{rack}'"))
-        total = len(rows)
-        downloaded = sum(1 for row in rows if row.downloaded)
-        assert total > 0, "No sstables were recorded for the snapshot"
-        assert downloaded == 0, f"Expected no downloads to complete after abort, but {downloaded} of {total} sstables were downloaded"
+        if stage == 'download':
+            # Every node had its session closed before the pause was released, so no download could
+            # complete: none of the sstables must be marked as downloaded.
+            dc = servers[0].datacenter
+            rack = 'rack0'
+            rows = list(await cql.run_async(f"SELECT downloaded FROM system_distributed.snapshot_sstables "
+                                            f"WHERE snapshot_name = '{snap_name}' AND \"keyspace\" = '{ks}' AND \"table\" = 'test' "
+                                            f"AND datacenter = '{dc}' AND rack = '{rack}'"))
+            total = len(rows)
+            downloaded = sum(1 for row in rows if row.downloaded)
+            assert total > 0, "No sstables were recorded for the snapshot"
+            assert downloaded == 0, f"Expected no downloads to complete after abort, but {downloaded} of {total} sstables were downloaded"
+            return
+
+        await wait_for_no_transitions(manager, cql, ks)
+        assert not await repair_requests(manager, cql, servers[0], ks), 'The restore left repair requests behind'
 
 
+# The tests below cover repairing each tablet after it is restored (SCYLLADB-1997).
+# rf=2 across two racks: a repair needs a second replica to compare against.
+restore_repair_topology = topo(rf = 2, nodes = 2, racks = 2, dcs = 1)
+restore_repair_num_keys = 12
+restore_repair_tablet_count = 4
+
+
+async def backup_for_restore_repair(manager: ScyllaClusterManager, object_storage, topology=restore_repair_topology, extra_config=None):
+    servers, _ = await create_cluster(topology, manager, logger, object_storage, extra_config)
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test ( pk text primary key, value int ) WITH tablets = {{'min_tablet_count': {restore_repair_tablet_count}}};")
+        insert_stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, value) VALUES (?, ?)")
+        insert_stmt.consistency_level = ConsistencyLevel.ALL
+        await asyncio.gather(*(cql.run_async(insert_stmt, (str(i), i)) for i in range(restore_repair_num_keys)))
+        snap_name, _ = await take_snapshot(ks, servers, manager, logger)
+        await asyncio.gather(*(do_backup(s, snap_name, f'{s.server_id}/{snap_name}', ks, 'test', object_storage, manager, logger) for s in servers))
+    manifests = [f'{s.server_id}/{snap_name}/manifest.json' for s in servers]
+    return servers, cql, snap_name, manifests
+
+
+async def start_restore_for_repair(manager: ScyllaClusterManager, object_storage, servers, cql, ks, snap_name, manifests, repair=None):
+    await cql.run_async(f"CREATE TABLE {ks}.test ( pk text primary key, value int );")
+    return await manager.api.restore_tablets(servers[0].ip_addr, ks, 'test', snap_name, servers[0].datacenter,
+                                             object_storage.address, object_storage.bucket_name, manifests, repair=repair)
+
+
+async def repair_requests(manager: ScyllaClusterManager, cql, server, ks, cf='test'):
+    """The repair requests on the tablets of ks.cf, as seen by `server`."""
+    table_id = await manager.get_table_id(ks, cf)
+    host = (await wait_for_cql_and_get_hosts(cql, [server], time.time() + 30))[0]
+    # A tablet merge can store an empty task info, with request_type 'none'; it is no request.
+    return {k: v for k, v in (await load_tablet_repair_task_infos(cql, host, table_id)).items() if v.request_type != 'none'}
+
+
+async def grep_logs(manager: ScyllaClusterManager, servers, pattern):
+    logs = await asyncio.gather(*(manager.server_open_log(s.server_id) for s in servers))
+    matches = await asyncio.gather(*(log.grep(pattern) for log in logs))
+    return [m for ms in matches for m in ms]
+
+
+async def restore_repair_log(manager: ScyllaClusterManager, servers, ks, cf='test'):
+    """The tablets of ks.cf the topology coordinator restored, repaired after restoring them, and
+    failed to repair, from the coordinator's log; any node may have been the coordinator."""
+    table_id = await manager.get_table_id(ks, cf)
+    async def tablets(pattern):
+        return {m[1].group(1) for m in await grep_logs(manager, servers, pattern)}
+    restored = await tablets(rf'Restoring tablet={table_id}:(\d+) on')
+    repaired = await tablets(rf'Repaired tablet {table_id}:(\d+) after restoring it')
+    failed = await tablets(rf'Repair of tablet {table_id}:(\d+) after restoring it failed')
+    return restored, repaired, failed
+
+
+async def check_restored_data(cql, ks):
+    restored = {x.pk: x.value for x in await cql.run_async(f"SELECT pk, value FROM {ks}.test;")}
+    assert restored == {str(i): i for i in range(restore_repair_num_keys)}, f'Unexpected contents of {ks}.test after restore: {len(restored)} rows'
+
+
+async def wait_for_all_tablets_downloaded(manager: ScyllaClusterManager, servers, cql, ks):
+    """Wait until every tablet of ks.test has finished downloading: it is either in restore_repair,
+    or waits in restore for room to repair. The coordinator logs the latter at debug level, so the
+    caller sets raft_topology to debug before the restore."""
+    table_id = await manager.get_table_id(ks, 'test')
+    async def all_downloaded():
+        # system.tablets lists a table's tablets in token order, so a row's index is its tablet id.
+        rows = await tablet_stages(manager, cql, ks)
+        repairing = {str(i) for i, r in enumerate(rows) if r.stage == 'restore_repair'}
+        waiting = {m[1].group(1) for m in await grep_logs(manager, servers,
+                   rf"Tablet {table_id}:(\d+) waits for its replicas' shards to have room")}
+        return len(repairing | waiting) == len(rows) or None
+    await wait_for(all_downloaded, time.time() + 60)
+
+
+async def tablet_stages(manager: ScyllaClusterManager, cql, ks):
+    """The stage and replicas of each tablet of ks.test."""
+    table_id = await manager.get_table_id(ks, 'test')
+    return await cql.run_async(f"SELECT last_token, stage, replicas FROM system.tablets WHERE table_id = {table_id}")
+
+
+async def wait_for_no_transitions(manager: ScyllaClusterManager, cql, ks):
+    table_id = await manager.get_table_id(ks, 'test')
+    async def no_transitions():
+        rows = await cql.run_async(f"SELECT transition FROM system.tablets WHERE table_id = {table_id}")
+        return all(r.transition is None for r in rows) or None
+    await wait_for(no_transitions, time.time() + 60)
+
+
+async def test_restore_tablets_repair_disabled(build_mode: str, manager: ScyllaClusterManager, object_storage):
+    """repair=disabled restores without repairing the tablets."""
+    await do_test_restore_tablets(build_mode, manager, object_storage, restore_repair_topology, 1, 1, repair='disabled')
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_restore_tablets_repair_needs_feature(manager: ScyllaClusterManager, object_storage):
+    """While the cluster does not support TABLET_RESTORE_REPAIR, the restore restores the data
+    without repairing it, and then fails, saying that the table was not repaired."""
+    suppress = {'error_injections_at_startup': [{'name': 'suppress_features', 'value': 'TABLET_RESTORE_REPAIR'}]}
+    servers, cql, snap_name, manifests = await backup_for_restore_repair(manager, object_storage, extra_config=suppress)
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {restore_repair_topology.rf}}}") as ks:
+        tid = await start_restore_for_repair(manager, object_storage, servers, cql, ks, snap_name, manifests)
+        status = await manager.api.wait_task(servers[0].ip_addr, tid)
+        assert status is not None and status['state'] == 'failed', f'A restore that could not repair did not fail: {status}'
+        assert 'was restored, but not repaired: feature TABLET_RESTORE_REPAIR is not enabled' in status['error'], f'Unexpected error: {status["error"]}'
+
+        restored, repaired, _ = await restore_repair_log(manager, servers, ks)
+        assert restored, 'No tablet was restored'
+        assert not repaired, f'A tablet was repaired: {repaired}'
+        await check_restored_data(cql, ks)
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_restore_tablets_repair_failure(manager: ScyllaClusterManager, object_storage):
+    """A failed repair leaves the tablet restored and fails the restore: the coordinator records
+    the failure on the restore request, clears the transition, and leaves no repair request on
+    the tablet."""
+    servers, cql, snap_name, manifests = await backup_for_restore_repair(manager, object_storage)
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {restore_repair_topology.rf}}}") as ks:
+        # The coordinator sends the repair to one of the tablet's replicas, so arm it everywhere.
+        fail = "repair_tablet_fail_on_rpc_call"
+        await asyncio.gather(*(manager.api.enable_injection(s.ip_addr, fail, one_shot=False) for s in servers))
+        tid = await start_restore_for_repair(manager, object_storage, servers, cql, ks, snap_name, manifests)
+        status = await manager.api.wait_task(servers[0].ip_addr, tid)
+        assert status is not None and status['state'] == 'failed', f'A failed repair did not fail the restore: {status}'
+        assert 'was restored, but its repair failed' in status['error'], f'Unexpected error: {status["error"]}'
+
+        restored, repaired, failed = await restore_repair_log(manager, servers, ks)
+        assert restored and failed == restored, f'Not every repair failed: restored {restored}, failed {failed}'
+        assert not repaired, f'A tablet was repaired although every repair failed: {repaired}'
+        await wait_for_no_transitions(manager, cql, ks)
+        assert not await repair_requests(manager, cql, servers[0], ks), 'A failed repair left a repair request'
+        await check_restored_data(cql, ks)
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_restore_tablets_user_repair_during_restore(manager: ScyllaClusterManager, object_storage):
+    """A user repair requested while the tablets are still downloading is accepted. It runs once
+    the restore, with its own repair, is done, and its task completes."""
+    servers, cql, snap_name, manifests = await backup_for_restore_repair(manager, object_storage)
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {restore_repair_topology.rf}}}") as ks:
+        hold = "pause_tablet_restore"
+        await asyncio.gather(*(manager.api.enable_injection(s.ip_addr, hold, one_shot=False) for s in servers))
+        tid = await start_restore_for_repair(manager, object_storage, servers, cql, ks, snap_name, manifests)
+        await asyncio.gather(*(manager.api.wait_for_injection_enter(s.ip_addr, hold) for s in servers))
+
+        res = await manager.api.tablet_repair(servers[0].ip_addr, ks, 'test', 'all', await_completion=False)
+        user_task = res['tablet_task_id']
+        # Disabling the injection releases the parked downloads.
+        await asyncio.gather(*(manager.api.disable_injection(s.ip_addr, hold) for s in servers))
+
+        status = await manager.api.wait_task(servers[0].ip_addr, tid)
+        assert status is not None and status['state'] == 'done', f'Restore failed: {status}'
+        restored, repaired, _ = await restore_repair_log(manager, servers, ks)
+        assert restored and repaired == restored, f'Not every tablet was repaired: restored {restored}, repaired {repaired}'
+
+        user = await asyncio.wait_for(manager.api.wait_task(servers[0].ip_addr, user_task), timeout=60)
+        assert user is not None and user['state'] == 'done', f'The user repair task did not complete: {user}'
+        # The task's progress can lag behind its last tablet, so ask the coordinator instead.
+        table_id = await manager.get_table_id(ks, 'test')
+        user_repaired = {m[1].group(1) for m in await grep_logs(manager, servers,
+                         rf'Finished tablet repair host=\S+ tablet={table_id}:(\d+) .* request_type=user_repair')}
+        assert user_repaired == restored, f'Not every tablet was repaired by the user repair: restored {restored}, repaired {user_repaired}'
+        assert not await repair_requests(manager, cql, servers[0], ks), 'Repair requests left behind'
+        await check_restored_data(cql, ks)
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_restore_tablets_user_repair_during_restore_repair(manager: ScyllaClusterManager, object_storage):
+    """A user repair requested while the restored tablets are being repaired is accepted, waits
+    for the restore, and completes. The restore's repair task on the replica is internal, so the
+    repair module does not list it as a user task, which is what Scylla Manager checks."""
+    servers, cql, snap_name, manifests = await backup_for_restore_repair(manager, object_storage)
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {restore_repair_topology.rf}}}") as ks:
+        hold = "repair_shard_repair_task_impl_do_repair_ranges"
+        await asyncio.gather(*(manager.api.enable_injection(s.ip_addr, hold, one_shot=False) for s in servers))
+        tid = await start_restore_for_repair(manager, object_storage, servers, cql, ks, snap_name, manifests)
+
+        enter_waiters = [asyncio.create_task(manager.api.wait_for_injection_enter(s.ip_addr, hold)) for s in servers]
+        done, pending = await asyncio.wait(enter_waiters, timeout=60, return_when=asyncio.FIRST_COMPLETED)
+        for t in pending:
+            t.cancel()
+        assert done, 'No tablet repair reached the hold point'
+
+        tm = TaskManagerClient(manager.api)
+        # The tablet repair task names its keyspace, not its table.
+        async def repair_tasks(internal):
+            tasks = await asyncio.gather(*(tm.list_tasks(s.ip_addr, "repair", internal=internal, keyspace=ks) for s in servers))
+            return [t for ts in tasks for t in ts]
+        # The internal listing is the control: it shows that the held repair has a task to look for.
+        assert await repair_tasks(internal=True), 'The held repair has no task in the repair module'
+        user_tasks = await repair_tasks(internal=False)
+        assert not user_tasks, f"The restore's repair is listed as a user task: {user_tasks}"
+
+        res = await manager.api.tablet_repair(servers[0].ip_addr, ks, 'test', 'all', await_completion=False)
+        user_task = res['tablet_task_id']
+        await asyncio.gather(*(manager.api.disable_injection(s.ip_addr, hold) for s in servers))
+
+        status = await manager.api.wait_task(servers[0].ip_addr, tid)
+        assert status is not None and status['state'] == 'done', f'Restore failed: {status}'
+        restored, repaired, _ = await restore_repair_log(manager, servers, ks)
+        assert restored and repaired == restored, f'Not every tablet was repaired: restored {restored}, repaired {repaired}'
+
+        user = await asyncio.wait_for(manager.api.wait_task(servers[0].ip_addr, user_task), timeout=60)
+        assert user is not None and user['state'] == 'done', f'The user repair task did not complete: {user}'
+        assert not await repair_requests(manager, cql, servers[0], ks), 'Repair requests left behind'
+        await check_restored_data(cql, ks)
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_restore_tablets_repair_concurrency(manager: ScyllaClusterManager, object_storage):
+    """A restored tablet enters restore_repair only while its replicas' shards have room under the
+    per-shard streaming limits, so a restore does not repair every tablet at once. With the
+    default limits, one tablet repair fits on a shard. Two nodes with two shards each can hold
+    at most two of the four tablets in restore_repair."""
+    servers, cql, snap_name, manifests = await backup_for_restore_repair(manager, object_storage)
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {restore_repair_topology.rf}}}") as ks:
+        hold = "repair_shard_repair_task_impl_do_repair_ranges"
+        await asyncio.gather(*(manager.api.enable_injection(s.ip_addr, hold, one_shot=False) for s in servers))
+        # The coordinator logs a restored tablet that waits for room at debug level.
+        await asyncio.gather(*(manager.api.set_logger_level(s.ip_addr, 'raft_topology', 'debug') for s in servers))
+        tid = await start_restore_for_repair(manager, object_storage, servers, cql, ks, snap_name, manifests)
+
+        enter_waiters = [asyncio.create_task(manager.api.wait_for_injection_enter(s.ip_addr, hold)) for s in servers]
+        done, pending = await asyncio.wait(enter_waiters, timeout=60, return_when=asyncio.FIRST_COMPLETED)
+        for t in pending:
+            t.cancel()
+        assert done, 'No tablet repair reached the hold point'
+
+        # While the repairs are held, a tablet whose download finished waits for room.
+        async def tablet_waiting():
+            return await grep_logs(manager, servers, "waits for its replicas' shards to have room for its repair") or None
+        await wait_for(tablet_waiting, time.time() + 60)
+        rows = await tablet_stages(manager, cql, ks)
+        repairing = [r for r in rows if r.stage == 'restore_repair']
+        per_shard = Counter((h, shard) for r in repairing for h, shard in r.replicas)
+        assert all(n == 1 for n in per_shard.values()), f'More than one restore repair on a shard: {per_shard}'
+        assert len(repairing) < restore_repair_tablet_count, f'Every tablet entered restore_repair at once: {rows}'
+
+        await asyncio.gather(*(manager.api.disable_injection(s.ip_addr, hold) for s in servers))
+        status = await manager.api.wait_task(servers[0].ip_addr, tid)
+        assert status is not None and status['state'] == 'done', f'Restore failed: {status}'
+        restored, repaired, _ = await restore_repair_log(manager, servers, ks)
+        assert restored and repaired == restored, f'Not every tablet was repaired: restored {restored}, repaired {repaired}'
+
+
+@pytest.mark.parametrize("repair", ['full', 'disabled'])
+async def test_restore_tablets_repair_fixes_replicas(manager: ScyllaClusterManager, object_storage, repair):
+    """The repair makes the restored replicas consistent. Each replica downloads only the
+    sstables backed up in its own rack, so rows that one node missed before the backup are
+    missing from its restored replica until the repair. repair=disabled is the control: the
+    restored replica still misses them."""
+    servers, _ = await create_cluster(restore_repair_topology, manager, logger, object_storage,
+                                      extra_config={'hinted_handoff_enabled': False})
+    cql = manager.get_cql()
+    missed = [str(i) for i in range(restore_repair_num_keys, restore_repair_num_keys + 4)]
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {restore_repair_topology.rf}}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test ( pk text primary key, value int ) WITH tablets = {{'min_tablet_count': {restore_repair_tablet_count}}};")
+        insert_stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, value) VALUES (?, ?)")
+        insert_stmt.consistency_level = ConsistencyLevel.ALL
+        await asyncio.gather(*(cql.run_async(insert_stmt, (str(i), i)) for i in range(restore_repair_num_keys)))
+
+        # servers[1] misses these writes, and with hinted handoff off nothing brings them to it.
+        await manager.server_stop_gracefully(servers[1].server_id)
+        insert_stmt.consistency_level = ConsistencyLevel.ONE
+        await asyncio.gather(*(cql.run_async(insert_stmt, (pk, int(pk))) for pk in missed))
+        await manager.server_start(servers[1].server_id)
+        cql = await reconnect_driver(manager)
+        await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
+        snap_name, _ = await take_snapshot(ks, servers, manager, logger)
+        await asyncio.gather(*(do_backup(s, snap_name, f'{s.server_id}/{snap_name}', ks, 'test', object_storage, manager, logger) for s in servers))
+    manifests = [f'{s.server_id}/{snap_name}/manifest.json' for s in servers]
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {restore_repair_topology.rf}}}") as ks:
+        tid = await start_restore_for_repair(manager, object_storage, servers, cql, ks, snap_name, manifests, repair=repair)
+        status = await manager.api.wait_task(servers[0].ip_addr, tid)
+        assert status is not None and status['state'] == 'done', f'Restore failed: {status}'
+
+        # MUTATION_FRAGMENTS reads only the data of the node that coordinates the query.
+        host = (await wait_for_cql_and_get_hosts(cql, [servers[1]], time.time() + 60))[0]
+        rows = await cql.run_async(f"SELECT pk FROM MUTATION_FRAGMENTS({ks}.test)", host=host)
+        local = {r.pk for r in rows}
+        if repair == 'full':
+            assert set(missed) <= local, f'The repair did not bring the missed rows to {servers[1].ip_addr}: missing {set(missed) - local}'
+        else:
+            assert not set(missed) & local, f'{servers[1].ip_addr} has rows it never received: {set(missed) & local}'
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_restore_tablets_repair_with_dead_node(manager: ScyllaClusterManager, object_storage):
+    """A node that dies while the restored tablets are being repaired fails the repair of its
+    tablets, and the restore fails rather than waiting for the node."""
+    # Three nodes, so that group0 keeps its majority with one of them down.
+    topology = topo(rf = 2, nodes = 3, racks = 2, dcs = 1)
+    servers, cql, snap_name, manifests = await backup_for_restore_repair(manager, object_storage, topology=topology)
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}") as ks:
+        hold = "repair_shard_repair_task_impl_do_repair_ranges"
+        await asyncio.gather(*(manager.api.enable_injection(s.ip_addr, hold, one_shot=False) for s in servers))
+        await asyncio.gather(*(manager.api.set_logger_level(s.ip_addr, 'raft_topology', 'debug') for s in servers))
+        tid = await start_restore_for_repair(manager, object_storage, servers, cql, ks, snap_name, manifests)
+
+        enter_waiters = [asyncio.create_task(manager.api.wait_for_injection_enter(s.ip_addr, hold)) for s in servers]
+        done, pending = await asyncio.wait(enter_waiters, timeout=60, return_when=asyncio.FIRST_COMPLETED)
+        for t in pending:
+            t.cancel()
+        assert done, 'No tablet repair reached the hold point'
+
+        # Every tablet must have finished downloading, or losing the node fails its download
+        # rather than its repair.
+        await wait_for_all_tablets_downloaded(manager, servers, cql, ks)
+
+        alive = servers[:2]
+        await manager.server_stop(servers[2].server_id, convict=True)
+        await asyncio.gather(*(manager.api.disable_injection(s.ip_addr, hold) for s in alive))
+
+        status = await asyncio.wait_for(manager.api.wait_task(servers[0].ip_addr, tid), timeout=300)
+        assert status is not None and status['state'] == 'failed', f'The restore did not fail without the dead node: {status}'
+
+        restored, repaired, failed = await restore_repair_log(manager, servers, ks)
+        assert failed, 'No repair failed although a replica died'
+        assert repaired | failed <= restored, f'A tablet was repaired without being restored: restored {restored}, repaired {repaired}, failed {failed}'
+        assert not await repair_requests(manager, cql, servers[0], ks), 'Repair requests left behind'
+
+
+@pytest.mark.parametrize("repair", [False, True])
 @pytest.mark.parametrize("target", ['coordinator', 'replica', 'api'])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
-async def test_restore_tablets_node_loss_resiliency(build_mode: str, manager: ScyllaClusterManager, object_storage, target):
+async def test_restore_tablets_node_loss_resiliency(build_mode: str, manager: ScyllaClusterManager, object_storage, target, repair):
     '''Check how restore handler node loss in the middle of operation'''
 
     topology = topo(rf = 2, nodes = 4, racks = 2, dcs = 1)
@@ -1310,8 +1667,9 @@ async def test_restore_tablets_node_loss_resiliency(build_mode: str, manager: Sc
         await manager.api.enable_injection(servers[2].ip_addr, "pause_tablet_restore", one_shot=True)
 
         manifests = [ f'{s.server_id}/{snap_name}/manifest.json' for s in servers ]
-        tid = await manager.api.restore_tablets(servers[1].ip_addr, ks, 'test', snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests)
+        tid = await manager.api.restore_tablets(servers[1].ip_addr, ks, 'test', snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests, repair='full' if repair else 'disabled')
         await manager.api.wait_for_injection_enter(servers[2].ip_addr, "pause_tablet_restore")
+        timeout = 300 if repair else 60
 
         if target == 'api':
             await manager.server_stop(servers[1].server_id, convict=True)
@@ -1320,9 +1678,9 @@ async def test_restore_tablets_node_loss_resiliency(build_mode: str, manager: Sc
             # The restore is still in flight on the coordinator. Re-issue it from
             # another node, which should join the in-flight restore rather than
             # fail or duplicate it. Release the pause and just make sure it finishes.
-            tid = await manager.api.restore_tablets(servers[3].ip_addr, ks, 'test', snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests)
+            tid = await manager.api.restore_tablets(servers[3].ip_addr, ks, 'test', snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests, repair='full' if repair else 'disabled')
             await manager.api.message_injection(servers[2].ip_addr, "pause_tablet_restore")
-            await asyncio.wait_for(manager.api.wait_task(servers[3].ip_addr, tid), timeout=60)
+            await asyncio.wait_for(manager.api.wait_task(servers[3].ip_addr, tid), timeout=timeout)
         else:
             if target == 'coordinator':
                 await manager.server_stop(servers[0].server_id, convict=True)
@@ -1332,7 +1690,7 @@ async def test_restore_tablets_node_loss_resiliency(build_mode: str, manager: Sc
 
             # Sometimes killing nodes manage to restore tablets before being killed
             # So the best thing to do is to make sure restore task finishes at all
-            await asyncio.wait_for(manager.api.wait_task(servers[1].ip_addr, tid), timeout=60)
+            await asyncio.wait_for(manager.api.wait_task(servers[1].ip_addr, tid), timeout=timeout)
 
 
 @pytest.mark.parametrize("target", ['replica', 'coordinator'])
@@ -1369,7 +1727,8 @@ async def test_restore_tablets_unresponsive_replica(build_mode: str, manager: Sc
         await cql.run_async(f"CREATE TABLE {ks}.test ( pk text primary key, value int ) WITH tablets = {{'min_tablet_count': {tablet_count}, 'max_tablet_count': {tablet_count}}};")
 
         await manager.api.enable_injection(victim.ip_addr, "pause_tablet_restore", one_shot=True)
-        tid = await manager.api.restore_tablets(api.ip_addr, ks, 'test', snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests)
+        # This test is about the restore itself losing a node, so leave the repair out.
+        tid = await manager.api.restore_tablets(api.ip_addr, ks, 'test', snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests, repair='disabled')
         await manager.api.wait_for_injection_enter(victim.ip_addr, "pause_tablet_restore")
 
         await manager.server_pause(victim.server_id)
@@ -1381,7 +1740,7 @@ async def test_restore_tablets_unresponsive_replica(build_mode: str, manager: Sc
 
         # The tablets of the paused node still have it as their only replica, so this restore
         # fails too. What matters is that it fails rather than waiting for an answer forever.
-        tid = await manager.api.restore_tablets(api.ip_addr, ks, 'test', snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests)
+        tid = await manager.api.restore_tablets(api.ip_addr, ks, 'test', snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests, repair='disabled')
         status = await asyncio.wait_for(manager.api.wait_task(api.ip_addr, tid), timeout=60)
         assert status['state'] == 'failed', f"restore of a tablet whose only replica is down should have failed: {status}"
 
@@ -1419,7 +1778,8 @@ async def test_restore_tablets_duplicate_after_failed_api_node(build_mode: str, 
         await manager.api.enable_injection(servers[1].ip_addr, "pause_tablet_restore", one_shot=True)
 
         manifests = [ f'{s.server_id}/{snap_name}/manifest.json' for s in servers ]
-        tid = await manager.api.restore_tablets(servers[1].ip_addr, ks, 'test', snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests)
+        # This test is about the restore itself losing a node, so leave the repair out.
+        tid = await manager.api.restore_tablets(servers[1].ip_addr, ks, 'test', snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests, repair='disabled')
         await manager.api.wait_for_injection_enter(servers[1].ip_addr, "pause_tablet_restore")
 
         await manager.server_stop(servers[1].server_id, convict=True)
@@ -1439,7 +1799,7 @@ async def test_restore_tablets_duplicate_after_failed_api_node(build_mode: str, 
         requests = await wait_for(failed_restore_done, deadline=time.time() + 60)
         assert len(requests) == 1 and requests[0].error, f"the restore should have failed after the loss of servers[1]: {requests}"
 
-        tid = await manager.api.restore_tablets(servers[3].ip_addr, ks, 'test', snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests)
+        tid = await manager.api.restore_tablets(servers[3].ip_addr, ks, 'test', snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests, repair='disabled')
         await asyncio.wait_for(manager.api.wait_task(servers[3].ip_addr, tid), timeout=60)
 
         # The previous restore succeeded. Issue one more restore of the same table/tablets (same gid) and make
@@ -1448,7 +1808,7 @@ async def test_restore_tablets_duplicate_after_failed_api_node(build_mode: str, 
         # the log of every live server now and look in the coordinator's log afterwards.
         logs = {s.server_id: await manager.server_open_log(s.server_id) for s in (servers[0], servers[2], servers[3])}
         marks = {server_id: await server_log.mark() for server_id, server_log in logs.items()}
-        tid = await manager.api.restore_tablets(servers[2].ip_addr, ks, 'test', snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests)
+        tid = await manager.api.restore_tablets(servers[2].ip_addr, ks, 'test', snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests, repair='disabled')
         await asyncio.wait_for(manager.api.wait_task(servers[2].ip_addr, tid), timeout=60)
         coordinator = await manager.find_server_by_host_id(servers, await get_topology_coordinator(manager))
         restored = await logs[coordinator.server_id].grep("Restoring tablet=", from_mark=marks[coordinator.server_id])
@@ -1546,14 +1906,15 @@ async def test_restore_tablets_hints_survive_node_loss(build_mode: str, manager:
         await manager.api.enable_injection(servers[2].ip_addr, "pause_tablet_restore", one_shot=True)
 
         manifests = [ f'{s.server_id}/{snap_name}/manifest.json' for s in servers ]
-        tid = await manager.api.restore_tablets(servers[1].ip_addr, ks, 'test', snap_name, servers[1].datacenter, object_storage.address, object_storage.bucket_name, manifests)
+        # This test is about the restore itself losing a node, so leave the repair out.
+        tid = await manager.api.restore_tablets(servers[1].ip_addr, ks, 'test', snap_name, servers[1].datacenter, object_storage.address, object_storage.bucket_name, manifests, repair='disabled')
         await manager.api.wait_for_injection_enter(servers[2].ip_addr, "pause_tablet_restore", deadline=time.time() + 120)
 
         await manager.server_stop(servers[1].server_id, convict=True)
         with pytest.raises(aiohttp.client_exceptions.ClientConnectorError):
             await manager.api.wait_task(servers[1].ip_addr, tid)
 
-        tid = await manager.api.restore_tablets(servers[3].ip_addr, ks, 'test', snap_name, servers[3].datacenter, object_storage.address, object_storage.bucket_name, manifests)
+        tid = await manager.api.restore_tablets(servers[3].ip_addr, ks, 'test', snap_name, servers[3].datacenter, object_storage.address, object_storage.bucket_name, manifests, repair='disabled')
         await manager.api.message_injection(servers[2].ip_addr, "pause_tablet_restore")
         status = await asyncio.wait_for(manager.api.wait_task(servers[3].ip_addr, tid), timeout=120)
         logger.info(f'Re-issued restore finished with: {status}')

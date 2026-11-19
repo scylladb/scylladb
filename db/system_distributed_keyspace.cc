@@ -833,28 +833,28 @@ snapshot_table_helper::get_snapshot_sstables(sstring snapshot_name, sstring ks, 
             cl,
             { snapshot_name, ks, table, dc, rack, dht::token::to_int64(*start_token), dht::token::to_int64(*end_token) },
             1000,
-            read_row);
+            read_row, internal_distributed_query_state());
     } else if (start_token) {
         co_await _qp.query_internal(
             base_query + " AND first_token >= ?",
             cl,
             { snapshot_name, ks, table, dc, rack, dht::token::to_int64(*start_token) },
             1000,
-            read_row);
+            read_row, internal_distributed_query_state());
     } else if (end_token) {
         co_await _qp.query_internal(
             base_query + " AND first_token <= ?",
             cl,
             { snapshot_name, ks, table, dc, rack, dht::token::to_int64(*end_token) },
             1000,
-            read_row);
+            read_row, internal_distributed_query_state());
     } else {
         co_await _qp.query_internal(
             base_query,
             cl,
             { snapshot_name, ks, table, dc, rack },
             1000,
-            read_row);
+            read_row, internal_distributed_query_state());
     }
 
     co_return sstables;
@@ -952,7 +952,7 @@ future<std::optional<snapshot_entry>> snapshot_table_helper::get_snapshot(std::s
                 .manifest_version = row.get_as<sstring>("manifest_version"), 
             };
             return make_ready_future<stop_iteration>(stop_iteration::yes);
-        }
+        }, internal_distributed_query_state()
     );
     co_return res;
 }
@@ -1005,7 +1005,7 @@ snapshot_table_helper::get_snapshot_remote_locations(std::string_view snapshot_n
                 , snapshot_state(row.get_as<int32_t>("state")) 
             );
             return make_ready_future<stop_iteration>(stop_iteration::no);
-        }
+        }, internal_distributed_query_state()
     );
 
     co_return entries;
@@ -1054,7 +1054,7 @@ snapshot_table_helper::get_snapshot_keyspaces(std::string_view snapshot_name, db
                 , row.get_as<sstring>("keyspace_schema")
             );
             return make_ready_future<stop_iteration>(stop_iteration::no);
-        }
+        }, internal_distributed_query_state()
     );
 
     co_return entries;
@@ -1125,7 +1125,7 @@ snapshot_table_helper::get_snapshot_tables(std::string_view snapshot_name, std::
         query += " AND table_name = ?";
         params.emplace_back(table);
     }
-    co_await _qp.query_internal(query, cl, params, 1000, read_row);
+    co_await _qp.query_internal(query, cl, params, 1000, read_row, internal_distributed_query_state());
     co_return entries;
 }
 
@@ -1188,7 +1188,7 @@ future<utils::chunked_vector<snapshot_tablet_entry>> snapshot_table_helper::get_
                 , row.get_as<int64_t>("repaired_at")
             );
             return make_ready_future<stop_iteration>(stop_iteration::no);
-        }
+        }, internal_distributed_query_state()
     );
 
     co_return entries;
@@ -1263,7 +1263,7 @@ future<utils::chunked_vector<snapshot_node_entry>> snapshot_table_helper::get_sn
                 , locator::host_id(row.get_as<utils::UUID>("node"))
             );
             return make_ready_future<stop_iteration>(stop_iteration::no);
-        }
+        }, internal_distributed_query_state()
     );
 
     co_return entries;

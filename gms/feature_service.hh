@@ -207,6 +207,9 @@ public:
     gms::feature cluster_config { *this, "CLUSTER_CONFIG"sv };
     // Restore persists tablet transitions and a topology request that older nodes fail to parse.
     gms::feature tablet_aware_restore { *this, "TABLET_AWARE_RESTORE"sv };
+    // Gates repairing each tablet after a tablet-aware restore: the restore_repair transition stage and
+    // the restore_repair column of system.topology_requests, which nodes without this feature cannot parse.
+    gms::feature tablet_restore_repair { *this, "TABLET_RESTORE_REPAIR"sv };
 
     // Features created at run time rather than declared above: one per cluster config
     // option, from the registry at construction, plus any a test adds. Node-based, so a
