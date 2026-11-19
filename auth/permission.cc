@@ -24,6 +24,9 @@ const auth::permission_set auth::permissions::ALL = auth::permission_set::of<
         auth::permission::DESCRIBE,
         auth::permission::EXECUTE>();
 
+const auth::permission_set auth::permissions::ALL_AND_CONFIGURE = auth::permission_set::from_mask(
+        auth::permissions::ALL.mask() | auth::permission_set::mask_for(auth::permission::CONFIGURE));
+
 const auth::permission_set auth::permissions::NONE;
 
 static const std::unordered_map<sstring, auth::permission> permission_names({
@@ -39,7 +42,8 @@ static const std::unordered_map<sstring, auth::permission> permission_names({
         {"EXECUTE", auth::permission::EXECUTE},
         {"VECTOR_SEARCH_INDEXING", auth::permission::VECTOR_SEARCH_INDEXING},
         {"TEXT_SEARCH_INDEXING", auth::permission::TEXT_SEARCH_INDEXING},
-        {"PATTERN_SEARCH_INDEXING", auth::permission::PATTERN_SEARCH_INDEXING}});
+        {"PATTERN_SEARCH_INDEXING", auth::permission::PATTERN_SEARCH_INDEXING},
+        {"CONFIGURE", auth::permission::CONFIGURE}});
 
 const sstring& auth::permissions::to_string(permission p) {
     for (auto& v : permission_names) {

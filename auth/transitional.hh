@@ -75,6 +75,7 @@ public:
     virtual future<> grant(std::string_view s, permission_set ps, const resource& r, ::service::group0_batch& mc) override;
     virtual future<> revoke(std::string_view s, permission_set ps, const resource& r, ::service::group0_batch& mc) override;
     virtual future<std::vector<permission_details>> list_all() const override;
+    virtual future<std::vector<permission_details>> list_granted_to(std::string_view role_name) const override;
     virtual future<> revoke_all(std::string_view s, ::service::group0_batch& mc) override;
     virtual future<> revoke_all(const resource& r, ::service::group0_batch& mc) override;
     virtual const resource_set& protected_resources() const override;

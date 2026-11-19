@@ -37,7 +37,7 @@ public:
 };
 
 enum class resource_kind {
-    data, role, service_level, functions, object_storage
+    data, role, service_level, functions, object_storage, cluster
 };
 
 }
@@ -58,6 +58,8 @@ struct fmt::formatter<auth::resource_kind> : fmt::formatter<string_view> {
             return formatter<string_view>::format("functions", ctx);
         case object_storage:
             return formatter<string_view>::format("object_storage", ctx);
+        case cluster:
+            return formatter<string_view>::format("cluster", ctx);
         }
         std::abort();
     }
@@ -85,6 +87,11 @@ struct service_level_resource_t final {};
 struct functions_resource_t final {};
 
 ///
+/// Type tag for constructing cluster resources.
+///
+struct cluster_resource_t final {};
+
+///
 /// Resources are entities that users can be granted permissions on.
 ///
 /// There are data (keyspaces and tables), role and function resources. There may be other kinds of resources in the future.
@@ -102,6 +109,10 @@ class resource final {
 
     utils::small_vector<sstring, 3> _parts;
 
+    // Set for the sub-resource "cluster config option X of this resource". Only CONFIGURE
+    // can be granted on it. Valid for data and cluster resources.
+    std::optional<sstring> _config_option;
+
 public:
     ///
     /// A root resource of a particular kind.
@@ -116,6 +127,10 @@ public:
     resource(functions_resource_t, std::string_view keyspace, std::string_view function_signature);
     resource(functions_resource_t, std::string_view keyspace, std::string_view function_name,
             std::vector<::shared_ptr<cql3::cql3_type::raw>> function_args);
+    explicit resource(cluster_resource_t);
+    resource(cluster_resource_t, std::string_view dc);
+    resource(cluster_resource_t, std::string_view dc, std::string_view rack);
+    resource(cluster_resource_t, std::string_view dc, std::string_view rack, std::string_view host_id);
 
     resource_kind kind() const noexcept {
         return _kind;
@@ -126,9 +141,17 @@ public:
     ///
     sstring name() const;
 
+    // The parent of a config option sub-resource is the resource it belongs to.
     std::optional<resource> parent() const;
 
     permission_set applicable_permissions() const;
+
+    const std::optional<sstring>& config_option() const noexcept {
+        return _config_option;
+    }
+    // The sub-resource for cluster config option `option` of this resource.
+    resource with_config_option(std::string_view option) const;
+    resource without_config_option() const;
 
 private:
     resource(resource_kind, utils::small_vector<sstring, 3> parts);
@@ -139,6 +162,7 @@ private:
     friend class service_level_resource_view;
     friend class functions_resource_view;
     friend class object_storage_resource_view;
+    friend class cluster_resource_view;
 
     friend bool operator<(const resource&, const resource&);
     friend bool operator==(const resource&, const resource&) = default;
@@ -231,6 +255,26 @@ public:
 };
 
 ///
+/// A "cluster" view of \ref resource: the cluster, a datacenter, a rack or a node.
+///
+/// A node is named by its place in the topology, so that its parents are its rack and
+/// its datacenter.
+///
+class cluster_resource_view final {
+    const resource& _resource;
+
+public:
+    ///
+    /// \throws \ref resource_kind_mismatch if the argument is not a "cluster" resource.
+    ///
+    explicit cluster_resource_view(const resource&);
+
+    std::optional<std::string_view> datacenter() const;
+    std::optional<std::string_view> rack() const;
+    std::optional<std::string_view> host_id() const;
+};
+
+///
 /// Parse a resource from its name.
 ///
 /// \throws \ref invalid_resource_name when the name is malformed.
@@ -280,6 +324,24 @@ resource make_functions_resource(const cql3::functions::function& f);
 
 const resource& root_object_storage_resource();
 
+const resource& root_cluster_resource();
+
+inline resource make_cluster_resource(std::string_view dc) {
+    return resource(cluster_resource_t{}, dc);
+}
+inline resource make_cluster_resource(std::string_view dc, std::string_view rack) {
+    return resource(cluster_resource_t{}, dc, rack);
+}
+inline resource make_cluster_resource(std::string_view dc, std::string_view rack, std::string_view host_id) {
+    return resource(cluster_resource_t{}, dc, rack, host_id);
+}
+
+///
+/// The next broader cluster config scope target, for a resource without a config option:
+/// TABLE -> KEYSPACE -> ALL KEYSPACES -> CLUSTER and NODE -> RACK -> DATACENTER -> CLUSTER.
+///
+std::optional<resource> config_scope_parent(const resource&);
+
 sstring encode_signature(std::string_view name, std::vector<data_type> args);
 
 std::pair<sstring, std::vector<data_type>> decode_signature(std::string_view encoded_signature);
@@ -310,6 +372,10 @@ struct hash<auth::resource> {
         return utils::tuple_hash()(std::make_tuple(auth::resource_kind::object_storage));
     }
 
+    static size_t hash_cluster(const auth::cluster_resource_view& cv) {
+        return utils::tuple_hash()(std::make_tuple(auth::resource_kind::cluster, cv.datacenter(), cv.rack(), cv.host_id()));
+    }
+
     size_t operator()(const auth::resource& r) const {
         std::size_t value;
 
@@ -319,8 +385,12 @@ struct hash<auth::resource> {
         case auth::resource_kind::service_level: value = hash_service_level(auth::service_level_resource_view(r)); break;
         case auth::resource_kind::functions: value = hash_function(auth::functions_resource_view(r)); break;
         case auth::resource_kind::object_storage: value = hash_object_storage(auth::object_storage_resource_view(r)); break;
+        case auth::resource_kind::cluster: value = hash_cluster(auth::cluster_resource_view(r)); break;
         }
 
+        if (r._config_option) {
+            value = utils::tuple_hash()(std::make_tuple(value, std::string_view(*r._config_option)));
+        }
         return value;
     }
 };
