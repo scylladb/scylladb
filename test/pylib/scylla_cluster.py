@@ -20,25 +20,12 @@ import threading
 import traceback
 import uuid
 from collections import ChainMap, defaultdict
+from collections.abc import AsyncIterator, Awaitable, Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from functools import reduce, wraps
 from time import time
-from typing import (
-    Any,
-    AsyncIterator,
-    Awaitable,
-    Callable,
-    Concatenate,
-    Dict,
-    List,
-    NamedTuple,
-    Optional,
-    Set,
-    Union,
-    cast,
-    overload,
-)
+from typing import Any, Concatenate, NamedTuple, cast, overload
 
 import allure
 import psutil
@@ -227,7 +214,7 @@ class ScyllaCluster:
 
     def __init__(self,
                  test_name: str,
-                 logger: Union[logging.Logger, logging.LoggerAdapter],
+                 logger: logging.Logger | logging.LoggerAdapter,
                  vardir: pathlib.Path,
                  mode: str,
                  cmdline_options: str | list[str],
@@ -252,13 +239,13 @@ class ScyllaCluster:
         # Every ScyllaServer is in one of self.running, self.stopped.
         # These dicts are disjoint.
         # A server ID present in self.removed may be either in self.running or in self.stopped.
-        self.running: Dict[ServerNum, ScyllaServer] = {}        # started servers
-        self.stopped: Dict[ServerNum, ScyllaServer] = {}        # servers no longer running but present
+        self.running: dict[ServerNum, ScyllaServer] = {}        # started servers
+        self.stopped: dict[ServerNum, ScyllaServer] = {}        # servers no longer running but present
         self.servers = ChainMap(self.running, self.stopped)
-        self.removed: Set[ServerNum] = set()                    # removed servers (might be running)
-        self.starting: Dict[ServerNum, ScyllaServer] = {}       # servers starting right now, not yet running (and not included in "servers").
+        self.removed: set[ServerNum] = set()                    # removed servers (might be running)
+        self.starting: dict[ServerNum, ScyllaServer] = {}       # servers starting right now, not yet running (and not included in "servers").
         # The first IP assigned to a server added to the cluster.
-        self.initial_seed: Optional[IPAddress] = None
+        self.initial_seed: IPAddress | None = None
         # cluster is started (but it might not have running servers);
         # cleared by stop(), which is a no-op when it is False
         self.is_running: bool = True
@@ -377,21 +364,22 @@ class ScyllaCluster:
                     # cryptic "Event loop is closed".
                     self._loop = None
 
-    def _seeds(self) -> List[IPAddress]:
+    def _seeds(self) -> list[IPAddress]:
         # If the cluster is empty, all servers must use self.initial_seed to not start separate clusters.
         if not self.running:
             return [self.initial_seed] if self.initial_seed else []
         return [server.ip_addr for server in self.running.values()]
 
-    async def add_server(self, replace_cfg: Optional[ReplaceConfig] = None,
-                         cmdline: Optional[List[str]] = None,
-                         config: Optional[dict[str, Any]] = None,
-                         version: Optional[ScyllaVersionDescription] = None,
-                         property_file: Optional[dict[str, Any]] = None,
+    async def add_server(self,
+                         replace_cfg: ReplaceConfig | None = None,
+                         cmdline: list[str] | None = None,
+                         config: dict[str, Any] | None = None,
+                         version: ScyllaVersionDescription | None = None,
+                         property_file: dict[str, Any] | None = None,
                          start: bool = True,
-                         seeds: Optional[List[IPAddress]] = None,
+                         seeds: list[IPAddress] | None = None,
                          server_encryption: str = "none",
-                         expected_error: Optional[str] = None,
+                         expected_error: str | None = None,
                          expected_server_up_state: ServerUpState = ServerUpState.SERVING) -> ServerInfo:
         """Add a new server to the cluster"""
 
@@ -835,7 +823,7 @@ class ScyllaCluster:
         """Add new servers concurrently."""
         assert servers_num > 0, f"_servers_add: cannot add {servers_num} servers"
 
-        def get_property_file(i) -> Optional[dict[str, Any]]:
+        def get_property_file(i) -> dict[str, Any] | None:
             if property_file is None:
                 return None
             elif type(property_file) is dict:
