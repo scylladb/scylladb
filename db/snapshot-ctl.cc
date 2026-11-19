@@ -11,6 +11,7 @@
  */
 
 #include <algorithm>
+#include <set>
 #include <stdexcept>
 #include <unordered_set>
 
@@ -159,43 +160,37 @@ future<> snapshot_ctl::take_column_family_snapshot(sstring ks_name, std::vector<
     });
 }
 
-future<> snapshot_ctl::take_cluster_column_family_snapshot(std::vector<sstring> ks_names, std::vector<sstring> tables, sstring tag, snapshot_options opts) {
+future<> snapshot_ctl::take_cluster_column_family_snapshot(std::unordered_multimap<sstring, sstring> ks_tables, sstring tag, snapshot_options opts) {
     if (tag.empty()) {
         throw std::invalid_argument("You must supply a snapshot name.");
     }
-    if (ks_names.size() != 1 && !tables.empty()) {
-        throw std::invalid_argument("Cannot name tables when doing multiple keyspaces snapshot");
-    }
-    if (ks_names.empty()) {
-        std::ranges::copy(_db.local().get_keyspaces() | std::views::keys, std::back_inserter(ks_names));
+    if (ks_tables.empty()) {
+        for (const auto& ks_name : _db.local().get_keyspaces() | std::views::keys) {
+            ks_tables.emplace(ks_name, sstring{});
+        }
     }
 
-    return run_snapshot_modify_operation([this, ks_names = std::move(ks_names), tables = std::move(tables), tag = std::move(tag), opts] () mutable {
-        return do_take_cluster_column_family_snapshot(std::move(ks_names), std::move(tables), std::move(tag), opts);
+    return run_snapshot_modify_operation([this, ks_tables = std::move(ks_tables), tag = std::move(tag), opts] () mutable {
+        return do_take_cluster_column_family_snapshot(std::move(ks_tables), std::move(tag), opts);
     });
 }
 
-future<> snapshot_ctl::do_take_cluster_column_family_snapshot(std::vector<sstring> ks_names, std::vector<sstring> tables, sstring tag, snapshot_options opts) {
-    if (tables.empty()) {
-        co_await coroutine::parallel_for_each(ks_names, [tag, this] (const auto& ks_name) {
-            return check_snapshot_not_exist(ks_name, tag);
-        });
-        co_await _sp.local().snapshot_keyspace(
-            ks_names | std::views::transform([&](auto& ks) { return std::make_pair(ks, sstring{}); }) 
-                | std::ranges::to<std::unordered_multimap>(),
-                tag, opts
-        );
-        co_return;
-    };
+future<> snapshot_ctl::do_take_cluster_column_family_snapshot(std::unordered_multimap<sstring, sstring> ks_tables, sstring tag, snapshot_options opts) {
+    // The tables to check per keyspace. No list means the whole keyspace was asked for.
+    std::unordered_map<sstring, std::optional<std::vector<sstring>>> filters;
+    for (const auto& [ks_name, table] : ks_tables) {
+        auto& filter = filters.try_emplace(ks_name, std::vector<sstring>{}).first->second;
+        if (table.empty()) {
+            filter.reset();
+        } else if (filter) {
+            filter->push_back(table);
+        }
+    }
+    co_await coroutine::parallel_for_each(filters, [&] (const auto& ks_filter) {
+        return check_snapshot_not_exist(ks_filter.first, tag, ks_filter.second);
+    });
 
-    auto ks = ks_names[0];
-    co_await check_snapshot_not_exist(ks, tag, tables);
-
-    co_await _sp.local().snapshot_keyspace(
-        tables | std::views::transform([&](auto& cf) { return std::make_pair(ks, cf); }) 
-            | std::ranges::to<std::unordered_multimap>(),
-            tag, opts
-    );
+    co_await _sp.local().snapshot_keyspace(std::move(ks_tables), tag, opts);
 }
 
 sstring snapshot_ctl::resolve_table_name(const sstring& ks_name, const sstring& name) const {
@@ -352,38 +347,56 @@ future<tasks::task_id> snapshot_ctl::start_backup(sstring endpoint, sstring buck
     co_return task->id();
 }
 
-future<tasks::task_id> snapshot_ctl::start_global_backup(std::unordered_map<sstring, snapshot_dc_location> locations, std::vector<sstring> ks_names, std::vector<sstring> tables, sstring tag, bool move_files) {
+future<tasks::task_id> snapshot_ctl::start_global_backup(std::unordered_map<sstring, snapshot_dc_location> locations, std::unordered_multimap<sstring, sstring> requested, sstring tag, bool move_files) {
     if (this_shard_id() != 0) {
         co_return co_await container().invoke_on(0, [&](auto& local) {
-            return local.start_global_backup(locations, ks_names, tables, tag, move_files);
+            return local.start_global_backup(locations, requested, tag, move_files);
         });
     }
 
     if (tag.empty()) {
         throw std::invalid_argument("You must supply a snapshot name.");
     }
-    if (ks_names.size() != 1 && !tables.empty()) {
-        throw std::invalid_argument("Cannot name tables when doing multiple keyspaces snapshot backup");
-    }
-    if (ks_names.empty()) {
-        std::ranges::copy(_db.local().get_keyspaces() | std::views::keys, std::back_inserter(ks_names));
+    if (requested.empty()) {
+        for (const auto& ks_name : _db.local().get_keyspaces() | std::views::keys) {
+            requested.emplace(ks_name, sstring{});
+        }
     }
 
-    std::unordered_multimap<sstring, sstring> ks_tables;
-
-    if (tables.empty()) {
-        for (auto& ks_name : ks_names) {
-            auto& ks = _db.local().find_keyspace(ks_name);
-            for (auto& cf_name : ks.metadata()->cf_meta_data() | std::views::keys) {
-                ks_tables.emplace(ks_name, cf_name);
+    // An existing snapshot is backed up as it is, so it must hold every table named here.
+    // Tables that come from a whole keyspace are not checked: some may be newer than the snapshot.
+    snapshot_table_helper sth(_qp.local());
+    if (std::ranges::any_of(requested | std::views::values, std::not_fn(&sstring::empty)) && co_await sth.get_snapshot(tag)) {
+        std::set<std::pair<sstring, sstring>> in_snapshot;
+        for (const auto& t : co_await sth.get_snapshot_tables(tag)) {
+            in_snapshot.emplace(t.keyspace_name, t.table_name);
+        }
+        std::vector<sstring> missing;
+        for (const auto& [ks_name, table] : requested) {
+            if (!table.empty() && !in_snapshot.contains({ks_name, table})) {
+                missing.push_back(format("{}.{}", ks_name, table));
             }
         }
-    } else {
-        auto ks_name = ks_names[0];
-        for (auto& cf_name : tables) {
-            ks_tables.emplace(ks_name, cf_name);
+        if (!missing.empty()) {
+            throw std::invalid_argument(fmt::format("Snapshot {} does not contain {}", tag, fmt::join(missing, ", ")));
         }
     }
+
+    // A set, as a table can be named both on its own and through its keyspace.
+    std::set<std::pair<sstring, sstring>> tables;
+
+    for (const auto& [ks_name, table] : requested) {
+        if (!table.empty()) {
+            tables.emplace(ks_name, table);
+            continue;
+        }
+        auto& ks = _db.local().find_keyspace(ks_name);
+        for (auto& cf_name : ks.metadata()->cf_meta_data() | std::views::keys) {
+            tables.emplace(ks_name, cf_name);
+        }
+    }
+
+    std::unordered_multimap<sstring, sstring> ks_tables(tables.begin(), tables.end());
 
     co_await coroutine::switch_to(_config.backup_sched_group);
     snap_log.info("Backup sstables from {}(cluster snapshot {}) to {}", ks_tables, tag, locations);
