@@ -125,13 +125,18 @@ def cluster_op[**P, R](entry_point: ClusterAsyncFn[P, R] | None = None,
 
     The cluster's state -- subprocess transports, per-server locks -- belongs to
     its loop, so an operation always runs there, whichever loop or thread calls
-    it.  The caller waits across the bridge under `timeout`; None means no cap,
-    for operations whose caller applies its own asyncio.timeout().
+    it.  The caller waits across the bridge under `timeout`; None means no
+    cap, for operations whose caller applies its own asyncio.timeout().
 
     A waiter that times out or is cancelled abandons the operation instead of
     killing it: the operation is shielded, stays in tasks_history and
     after_test() drains it from there.  Failures are logged with their
     traceback through the cluster's logger.
+
+    A cluster that never starts its thread, like a module-scoped one, belongs
+    to its caller's loop, and nothing would drain an abandoned operation
+    before recycle().  So there an operation is simply part of the caller's
+    task: not shielded, not tracked, and cancelled with its caller.
 
     No entry point works on a stopped cluster, so that is asserted here.
     """
@@ -145,7 +150,7 @@ def cluster_op[**P, R](entry_point: ClusterAsyncFn[P, R] | None = None,
                             f" the timeout on the caller's side")
 
         async def run_op(self: ScyllaCluster, *args: P.args, **kwargs: P.kwargs) -> R:
-            """The operation itself; always runs on the cluster's loop."""
+            """The operation itself; runs on the loop the cluster belongs to."""
             assert self.is_running, "ScyllaCluster is stopped"
             descr = f"{fn.__name__}{args}"
             op = asyncio.ensure_future(fn(self, *args, **kwargs))
@@ -171,7 +176,11 @@ def cluster_op[**P, R](entry_point: ClusterAsyncFn[P, R] | None = None,
 
         @wraps(fn)
         async def wrapper(self: ScyllaCluster, *args: P.args, **kwargs: P.kwargs) -> R:
-            assert self._loop is not None, "ScyllaCluster is not running on its thread"
+            if self._loop is None:
+                # No thread: the cluster belongs to the caller's loop, or its
+                # run_in_thread() is over, which the assert rejects.
+                assert self.is_running, "ScyllaCluster is stopped"
+                return await fn(self, *args, **kwargs)
             if asyncio.get_running_loop() is self._loop:
                 # Already on the cluster's loop, i.e. one operation calling
                 # another, as server_pause() does through its process-status
@@ -198,17 +207,16 @@ class ScyllaCluster:
     disposes of the cluster.  after_test() drains what the test left running
     and reports what it leaked.  The module-scoped cluster of the
     single-server suites (cqlpy, alternator, scylla_gdb, ...) never starts
-    the thread: its fixture adds the one server with add_server() on its own
-    loop.
+    the thread, so its operations, such as the add_server() that adds its one
+    server, run as part of its fixture's task.
 
     A method that awaits cluster or server internals must be a @cluster_op --
     those objects belong to the cluster's loop -- and the CQL driver, the REST
     helpers and anything composing operations must not be.  The exceptions are
-    add_server() and _stop_server(), which operations call; the module-scoped
-    fixtures also call add_server(), on their own loop.  stop() is one as
-    well: it runs on the cluster's thread as run_in_thread() exits, or inside
-    recycle() for a module-scoped cluster, and the rest of recycle() awaits no
-    cluster internals.  An operation body runs entirely on the cluster's loop,
+    _stop_server(), which operations call, and stop(): it runs on the
+    cluster's thread as run_in_thread() exits, or inside recycle() for a
+    module-scoped cluster, and the rest of recycle() awaits no cluster
+    internals.  An operation body runs entirely on the cluster's loop,
     so an entry point needing caller-side work too (the caller's timeout, a
     driver refresh, a gossip wait) is a private _x operation behind a public
     wrapper holding that work.
@@ -363,8 +371,8 @@ class ScyllaCluster:
                 try:
                     await asyncio.get_running_loop().run_in_executor(None, future.result)
                 finally:
-                    # The loop is gone with the thread; let cluster_op's
-                    # not-running assert catch a leaked caller instead of a
+                    # The loop is gone with the thread: a leaked caller now
+                    # fails cluster_op's is_running assert instead of a
                     # cryptic "Event loop is closed".
                     self._loop = None
 
@@ -374,6 +382,7 @@ class ScyllaCluster:
             return [self.initial_seed] if self.initial_seed else []
         return [server.ip_addr for server in self.running.values()]
 
+    @cluster_op(timeout=None)
     async def add_server(self,
                          replace_cfg: ReplaceConfig | None = None,
                          cmdline: list[str] | None = None,
@@ -390,7 +399,7 @@ class ScyllaCluster:
         assert start or not expected_error, \
             "add_server: cannot add a stopped server and expect an error"
 
-        # Deep copy: the test keeps the dict (and _servers_add() shares it between
+        # Deep copy: the test keeps the dict (and servers_add() shares it between
         # servers), while ScyllaServer.__init__ writes to it and the server keeps
         # mutating nested values (e.g. change_seeds()).
         extra_config: dict[str, Any] = copy.deepcopy(config) if config else {}
@@ -789,48 +798,6 @@ class ScyllaCluster:
             return True if status != psutil.STATUS_STOPPED else None
 
         await wait_for(process_is_not_stopped, time() + 30)
-
-    @cluster_op(timeout=None)
-    async def _servers_add(self,
-                           servers_num: int = 1,
-                           cmdline: list[str] | None = None,
-                           config: dict[str, Any] | None = None,
-                           version: ScyllaVersionDescription | None = None,
-                           property_file: list[dict[str, Any]] | dict[str, Any] | None = None,
-                           start: bool = True,
-                           seeds: list[IPAddress] | None = None,
-                           server_encryption: str = "none",
-                           expected_error: str | None = None,
-                           replace_cfg: ReplaceConfig | None = None,
-                           expected_server_up_state: ServerUpState = ServerUpState.SERVING) -> list[ServerInfo]:
-        """Add new servers concurrently."""
-        assert servers_num > 0, f"_servers_add: cannot add {servers_num} servers"
-
-        def get_property_file(i) -> dict[str, Any] | None:
-            if property_file is None:
-                return None
-            elif type(property_file) is dict:
-                return property_file
-            else:
-                assert type(property_file) is list and len(property_file) == servers_num
-                return property_file[i]
-
-        adds = [
-            self.add_server(
-                replace_cfg=replace_cfg,
-                cmdline=cmdline,
-                config=config,
-                version=version,
-                property_file=get_property_file(i),
-                start=start,
-                seeds=seeds,
-                server_encryption=server_encryption,
-                expected_error=expected_error,
-                expected_server_up_state=expected_server_up_state,
-            )
-            for i in range(servers_num)
-        ]
-        return await gather_safely(*adds)
 
     @cluster_op(timeout=None)
     async def _remove_node(self,
@@ -1665,6 +1632,15 @@ class ScyllaCluster:
         if auto_rack_dc:
             property_file = [{"dc":auto_rack_dc, "rack":f"rack{i+1}"} for i in range(servers_num)]
 
+        def get_property_file(i) -> dict[str, Any] | None:
+            if property_file is None:
+                return None
+            elif type(property_file) is dict:
+                return property_file
+            else:
+                assert type(property_file) is list and len(property_file) == servers_num
+                return property_file[i]
+
         try:
             # We should wait until all running nodes see the node being replaced
             # and all ignored nodes as dead. Replace could be rejected otherwise.
@@ -1677,19 +1653,22 @@ class ScyllaCluster:
                 await gather_safely(*(self.others_not_see_server(ip) for ip in dead_ips))
 
             async with asyncio.timeout(None if timeout is None else timeout * servers_num):
-                s_infos = await self._servers_add(
-                    servers_num=servers_num,
-                    cmdline=cmdline,
-                    config=config,
-                    version=version,
-                    property_file=property_file,
-                    start=start,
-                    seeds=seeds,
-                    server_encryption=server_encryption,
-                    expected_error=expected_error,
-                    replace_cfg=replace_cfg,
-                    expected_server_up_state=expected_server_up_state,
-                )
+                adds = [
+                    self.add_server(
+                        replace_cfg=replace_cfg,
+                        cmdline=cmdline,
+                        config=config,
+                        version=version,
+                        property_file=get_property_file(i),
+                        start=start,
+                        seeds=seeds,
+                        server_encryption=server_encryption,
+                        expected_error=expected_error,
+                        expected_server_up_state=expected_server_up_state,
+                    )
+                    for i in range(servers_num)
+                ]
+                s_infos = await gather_safely(*adds)
         except Exception as exc:
             raise RuntimeError("Failed to add server" if servers_num == 1 else "Failed to add servers") from exc
 

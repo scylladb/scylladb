@@ -169,3 +169,60 @@ async def test_exception_keeps_its_type(cluster) -> None:
 
     with pytest.raises(ValueError, match="stop failed"):
         await cluster.server_stop(SERVER_ID, convict=False)
+
+
+async def test_without_a_thread_an_operation_runs_on_the_callers_loop(tmp_path: pathlib.Path) -> None:
+    """A cluster that never starts its thread, like a module-scoped one, belongs to its caller's loop."""
+    cluster = make_cluster(tmp_path)
+    loops = []
+
+    async def stop_server(server_id: ServerNum, gracefully: bool) -> None:
+        loops.append(asyncio.get_running_loop())
+
+    cluster._stop_server = stop_server
+    try:
+        await cluster.server_stop(SERVER_ID, convict=False)
+    finally:
+        await cluster.recycle()
+
+    assert loops == [asyncio.get_running_loop()]
+
+
+async def test_operation_after_the_thread_is_gone_fails(tmp_path: pathlib.Path) -> None:
+    """A caller that outlives run_in_thread() is told that the cluster is stopped."""
+    cluster = make_cluster(tmp_path)
+    try:
+        async with cluster.run_in_thread():
+            pass
+        with pytest.raises(AssertionError, match="ScyllaCluster is stopped"):
+            await cluster.running_servers()
+    finally:
+        await cluster.recycle()
+
+
+async def test_without_a_thread_cancelling_the_caller_cancels_the_operation(tmp_path: pathlib.Path) -> None:
+    """Without a thread, nothing would drain an orphaned operation before recycle(), so none is left."""
+    cluster = make_cluster(tmp_path)
+    entered = asyncio.Event()
+    cancelled = []
+
+    async def stop_server(server_id: ServerNum, gracefully: bool) -> None:
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.append(server_id)
+            raise
+
+    cluster._stop_server = stop_server
+    try:
+        stopping = asyncio.ensure_future(cluster.server_stop(SERVER_ID, convict=False))
+        await asyncio.wait_for(entered.wait(), TIMEOUT)
+        stopping.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await stopping
+
+        assert cancelled == [SERVER_ID], "the operation outlived its cancelled caller"
+        assert not cluster.tasks_history
+    finally:
+        await cluster.recycle()
