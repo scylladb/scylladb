@@ -247,6 +247,15 @@ inline int max_expression_nesting = 12;
         return to_lower(s) == "true";
     }
 
+    // A role option is given at most once, as in Cassandra.
+    template <typename T, typename U>
+    void set_role_option(std::optional<T>& option, U&& value, const char* name) {
+        if (option) {
+            add_recognition_error(format("Multiple definition for property '{}'", name));
+        }
+        option = std::forward<U>(value);
+    }
+
     TokenType* getMissingSymbol(IntStreamType* istream, ExceptionBaseType* e,
                                 ANTLR_UINT32 expectedTokenType, BitsetListType* follow) {
         auto token = BaseType::getMissingSymbol(istream, e, expectedTokenType, follow);
@@ -1411,13 +1420,15 @@ listUsersStatement returns [std::unique_ptr<list_users_statement> stmt]
 createRoleStatement returns [std::unique_ptr<create_role_statement> stmt]
     @init {
         cql3::role_options opts;
-        opts.is_superuser = false;
-        opts.can_login = false;
         bool if_not_exists = false;
     }
     : K_CREATE K_ROLE (K_IF K_NOT K_EXISTS { if_not_exists = true; })? name=userOrRoleName
       (K_WITH roleOptions[opts])?
-      { $stmt = std::make_unique<create_role_statement>(std::move(name), std::move(opts), if_not_exists); }
+      {
+        opts.is_superuser = opts.is_superuser.value_or(false);
+        opts.can_login = opts.can_login.value_or(false);
+        $stmt = std::make_unique<create_role_statement>(std::move(name), std::move(opts), if_not_exists);
+      }
     ;
 
 /**
@@ -1462,11 +1473,11 @@ roleOptions[cql3::role_options& opts]
     ;
 
 roleOption[cql3::role_options& opts]
-    : K_PASSWORD '=' v=STRING_LITERAL { opts.password = $v.text; }
-    | K_HASHED K_PASSWORD '=' v=STRING_LITERAL { opts.hashed_password = $v.text; }
-    | K_OPTIONS '=' m=mapLiteral { opts.options = convert_property_map(m); }
-    | K_SUPERUSER '=' b=BOOLEAN { opts.is_superuser = convert_boolean_literal($b.text); }
-    | K_LOGIN '=' b=BOOLEAN { opts.can_login = convert_boolean_literal($b.text); }
+    : K_PASSWORD '=' v=STRING_LITERAL { set_role_option(opts.password, $v.text, "PASSWORD"); }
+    | K_HASHED K_PASSWORD '=' v=STRING_LITERAL { set_role_option(opts.hashed_password, $v.text, "HASHED_PASSWORD"); }
+    | K_OPTIONS '=' m=mapLiteral { set_role_option(opts.options, convert_property_map(m), "OPTIONS"); }
+    | K_SUPERUSER '=' b=BOOLEAN { set_role_option(opts.is_superuser, convert_boolean_literal($b.text), "SUPERUSER"); }
+    | K_LOGIN '=' b=BOOLEAN { set_role_option(opts.can_login, convert_boolean_literal($b.text), "LOGIN"); }
     ;
 
 // Introduce a more natural syntax (SERVICE LEVEL), but still allow

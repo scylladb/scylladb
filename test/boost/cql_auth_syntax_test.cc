@@ -159,12 +159,6 @@ static auto make_tester(producer_rule_ptr<T> rule) {
         return test_valid(cql_fragment, rule);
     };
 }
-template <typename T>
-static auto make_tester(modifier_rule_ptr<T> rule) {
-    return [rule](std::string_view cql_fragment, T& v) {
-        test_valid(cql_fragment, rule, v);
-    };
-}
 
 ///
 /// Assert that the semicolon-terminated CQL query is valid syntax, and return the parsed statement.
@@ -274,15 +268,37 @@ BOOST_AUTO_TEST_CASE(user_or_role_name) {
 }
 
 BOOST_AUTO_TEST_CASE(role_options) {
-    const auto test = make_tester(&cql3_parser::CqlParser::roleOptions);
-    cql3::role_options v;
+    // Each fragment is parsed into fresh options, since a repeated option is rejected.
+    const auto test = [] (std::string_view cql_fragment) {
+        cql3::role_options v;
+        test_valid(cql_fragment, &cql3_parser::CqlParser::roleOptions, v);
+    };
 
-    test("PASSWORD = 'shire'", v);
-    test("OPTIONS = { 'foo': 10, 'bar': 20 }", v);
-    test("LOGIN = false", v);
-    test("SUPERUSER = true", v);
-    test("PASSWORD = 'shire' AND OPTIONS = { 'foo': 10, 'bar': 20 }", v);
-    test("PASSWORD = 'shire' AND LOGIN = true AND SUPERUSER = false", v);
+    test("PASSWORD = 'shire'");
+    test("OPTIONS = { 'foo': 10, 'bar': 20 }");
+    test("LOGIN = false");
+    test("SUPERUSER = true");
+    test("PASSWORD = 'shire' AND OPTIONS = { 'foo': 10, 'bar': 20 }");
+    test("PASSWORD = 'shire' AND LOGIN = true AND SUPERUSER = false");
+}
+
+// A repeated role option is a syntax error, as in Cassandra.
+BOOST_AUTO_TEST_CASE(repeated_role_option) {
+    for (const auto* query : {
+            "CREATE ROLE r WITH PASSWORD = 'a' AND PASSWORD = 'b';",
+            "CREATE ROLE r WITH HASHED PASSWORD = 'a' AND HASHED PASSWORD = 'b';",
+            "CREATE ROLE r WITH OPTIONS = {'k': 'a'} AND OPTIONS = {'k': 'b'};",
+            "CREATE ROLE r WITH SUPERUSER = true AND SUPERUSER = false;",
+            "CREATE ROLE r WITH LOGIN = true AND LOGIN = false;",
+            "ALTER ROLE r WITH PASSWORD = 'a' AND LOGIN = true AND PASSWORD = 'b';",
+    }) {
+        BOOST_REQUIRE_EXCEPTION(
+                cql3::util::do_with_parser(query, cql3::dialect{}, std::mem_fn(&cql3_parser::CqlParser::query)),
+                exceptions::syntax_exception,
+                [] (const exceptions::syntax_exception& e) {
+                    return std::string_view(e.what()).starts_with("Multiple definition for property '");
+                });
+    }
 }
 
 BOOST_AUTO_TEST_CASE(create_role) {
