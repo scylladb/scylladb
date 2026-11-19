@@ -20,8 +20,10 @@ from test.pylib.util import gather_safely, unique_name, wait_for_cql_and_get_hos
 from test.cluster.util import check_system_topology_and_cdc_generations_v3_consistency, \
         check_token_ring_and_group0_consistency, delete_discovery_state_and_group0_id, delete_raft_group_data, \
         find_recovery_leader_after_apply_committed, reconnect_driver, start_writes, wait_for_cdc_generations_publishing
+from test.cluster.util import alter_auto_rf_keyspaces
 
 
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.parametrize("remove_dead_nodes_with", ["remove", "replace"])
 async def test_raft_recovery_user_data(manager: ScyllaClusterManager, remove_dead_nodes_with: str):
     """
@@ -45,6 +47,8 @@ async def test_raft_recovery_user_data(manager: ScyllaClusterManager, remove_dea
     """
     # Workaround for flakiness from https://github.com/scylladb/scylladb/issues/23565.
     cfg = {'hinted_handoff_enabled': False}
+    # The system keyspaces are moved to dc1 below; on vnodes auto-RF cannot race that ALTER.
+    cfg['error_injections_at_startup'] = ['auto_rf_keyspaces_use_vnodes']
 
     # Add servers to dc2 first, so 3 out of 5 voters will be there.
     logging.info('Adding servers that will be killed to dc2')
@@ -58,14 +62,9 @@ async def test_raft_recovery_user_data(manager: ScyllaClusterManager, remove_dea
     dead_hosts = await wait_for_cql_and_get_hosts(cql, dead_servers, time.time() + 60)
     dead_host_ids = await gather_safely(*(manager.get_host_id(srv.server_id) for srv in dead_servers))
 
-    # When table audit is enabled, Scylla creates the "audit" keyspace with
-    # NetworkTopologyStrategy. During remove_node, streaming fails for the audit keyspace
-    # with "zero replica after the removal" when all nodes from dc2 are removed.
-    # By setting RF=3 only in dc1, we ensure the audit data stays on the surviving nodes.
-    # Only alter if the audit keyspace exists (it might not exist if audit is disabled).
-    result = await cql.run_async("SELECT * FROM system_schema.keyspaces WHERE keyspace_name = 'audit'")
-    if result:
-        await cql.run_async("ALTER KEYSPACE audit WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': 3}")
+    # Keep the system keyspaces on the surviving dc1 nodes: removing all of dc2 would
+    # otherwise fail with "zero replica after the removal".
+    await alter_auto_rf_keyspaces(cql, lambda ks: f"{{'class': 'NetworkTopologyStrategy', 'dc1': {3 if ks == 'audit' else 2}, 'dc2': 0}}")
 
     first_group0_id = (await cql.run_async(
             "SELECT value FROM system.scylla_local WHERE key = 'raft_group0_id'"))[0].value
@@ -209,6 +208,7 @@ async def test_raft_recovery_user_data(manager: ScyllaClusterManager, remove_dea
 
 
 
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_raft_recovery_user_data_sc(manager: ScyllaClusterManager):
     """
     Test that the Raft-based recovery procedure works correctly with a strongly consistent keyspace.
@@ -228,21 +228,22 @@ async def test_raft_recovery_user_data_sc(manager: ScyllaClusterManager):
     test_minority_dc_loss in test_strong_consistency_multidc.py covers a raft group of a strongly consistent tablet
     losing its replicas in a dc.
     """
+    # The system keyspaces are moved to dc1 below; on vnodes auto-RF cannot race that ALTER.
+    cfg = {'error_injections_at_startup': ['auto_rf_keyspaces_use_vnodes']}
+
     # Add servers to dc2 first, so 3 out of 5 group 0 voters will be there.
     logging.info('Adding servers that will be killed to dc2')
-    dead_servers = await manager.servers_add(3, auto_rack_dc='dc2')
+    dead_servers = await manager.servers_add(3, config=cfg, auto_rack_dc='dc2')
     logging.info('Adding servers that will survive majority loss to dc1')
-    live_servers = await manager.servers_add(3, auto_rack_dc='dc1')
+    live_servers = await manager.servers_add(3, config=cfg, auto_rack_dc='dc1')
     logging.info(f'Servers to survive majority loss: {live_servers}, servers to be killed: {dead_servers}')
 
     cql, _ = await manager.get_ready_cql(live_servers + dead_servers)
     hosts = await wait_for_cql_and_get_hosts(cql, live_servers, time.time() + 60)
     dead_host_ids = await gather_safely(*(manager.get_host_id(srv.server_id) for srv in dead_servers))
 
-    # See test_raft_recovery_user_data for the explanation on why this is needed.
-    result = await cql.run_async("SELECT * FROM system_schema.keyspaces WHERE keyspace_name = 'audit'")
-    if result:
-        await cql.run_async("ALTER KEYSPACE audit WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': 3}")
+    # Keep the system keyspaces on the surviving dc1 nodes, as in test_raft_recovery_user_data.
+    await alter_auto_rf_keyspaces(cql, lambda ks: f"{{'class': 'NetworkTopologyStrategy', 'dc1': {3 if ks == 'audit' else 2}, 'dc2': 0}}")
 
     first_group0_id = (await cql.run_async(
             "SELECT value FROM system.scylla_local WHERE key = 'raft_group0_id'"))[0].value
@@ -329,7 +330,7 @@ async def test_raft_recovery_user_data_sc(manager: ScyllaClusterManager):
 
     async def replace_server(i, being_replaced):
         replace_cfg = ReplaceConfig(replaced_id=being_replaced.server_id, reuse_ip_addr=False, use_host_id=True)
-        return await manager.server_add(replace_cfg=replace_cfg,
+        return await manager.server_add(replace_cfg=replace_cfg, config=cfg,
                                         property_file={'dc': 'dc2', 'rack': f'rack{i + 1}'})
 
     logging.info(f'Replacing {dead_servers} concurrently')

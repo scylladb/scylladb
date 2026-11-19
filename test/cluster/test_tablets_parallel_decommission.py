@@ -50,6 +50,11 @@ async def test_tablets_are_drained_in_parallel(manager: ScyllaClusterManager):
                                           " 'dc1': ['rack1', 'rack2']} AND tablets = {'initial': 32};") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.tab (pk int PRIMARY KEY);")
 
+        # The system keyspaces' migrations which this keyspace triggers would take one
+        # rack's streaming budget and serialize the drains this test expects in parallel.
+        # Let them finish; balancing stays on, the drains need it.
+        await manager.api.quiesce_topology(servers[0].ip_addr)
+
         coord_srv = await get_coordinator_host(manager)
         log = await manager.server_open_log(coord_srv.server_id) # group0 leader
         mark = await log.mark()
@@ -118,6 +123,11 @@ async def test_tablets_are_rebuilt_in_parallel(manager: ScyllaClusterManager, sa
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy',"
                                           " 'dc1': ['rack1', 'rack2']} AND tablets = {'initial': 32};") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.tab (pk int PRIMARY KEY);")
+
+        # The system keyspaces' migrations which this keyspace triggers would take one
+        # rack's streaming budget and serialize the drains this test expects in parallel.
+        # Let them finish; balancing stays on, the drains need it.
+        await manager.api.quiesce_topology(servers[0].ip_addr)
 
         servers_to_remove = [servers[3], servers[4]]
         host_ids_to_remove = await gather_safely(*(manager.get_host_id(s.server_id) for s in servers_to_remove))
@@ -447,6 +457,11 @@ async def test_decommission_fails_if_capacity_is_gone_during_draining(manager: S
 
         coord_serv = servers[0]
         coord_log = await manager.server_open_log(coord_serv.server_id) # group0 leader
+
+        # The keyspace makes rack2 eligible for auto-RF. Let it and the migrations of the
+        # system tablets which follow finish, so that the one-shot injection below is taken
+        # by a cleanup of the drain rather than by one of those migrations.
+        await manager.api.quiesce_topology(coord_serv.ip_addr)
 
         mark = await coord_log.mark()
         await manager.api.enable_injection(coord_serv.ip_addr, "wait_after_tablet_cleanup", one_shot=True)

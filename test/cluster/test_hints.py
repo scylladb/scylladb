@@ -28,7 +28,8 @@ from test.pylib.encryption_provider import LocalFileSystemKeyProviderFactory
 from test.cluster.util import (check_token_ring_and_group0_consistency,
                                commitlog_sector_has_data, corrupt_commitlog_segment,
                                create_new_test_keyspace, get_commitlog_segment_id,
-                               get_topology_coordinator, keyspace_has_tablets)
+                               get_topology_coordinator, keyspace_has_tablets,
+                               quiesce_and_disable_tablet_balancing, wait_for_auto_rf_settled)
 
 
 logger = logging.getLogger(__name__)
@@ -625,6 +626,10 @@ async def test_hints_consistency_during_decommission(manager: ScyllaClusterManag
     })
     # All writes go through node 1, so all hints are stored there.
     cql = await manager.get_cql_exclusive(server1)
+    # The coordinator splits the system keyspaces' tablets and balances them onto the
+    # new nodes; its commits can make the DDL below lose every attempt if node 1 is a
+    # group0 follower.
+    await manager.api.quiesce_topology(server1.ip_addr)
 
     logger.info("Creatting a keyspace with RF=1 and a table")
     ks = await create_new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = { 'enabled': false }")
@@ -775,7 +780,10 @@ async def test_failed_hint_draining_does_not_block_decommission(manager: ScyllaC
     """
     This test verifies that a decommission finishes even if draining hints fails.
     """
-    s1, _, _ = await manager.servers_add(3, auto_rack_dc="dc")
+    # Keep audit and system_traces on vnodes: on tablets they replicate to s1's rack alone,
+    # which s1 is the last node of, so its decommission would be rejected.
+    config = {"error_injections_at_startup": ["auto_rf_keyspaces_use_vnodes"]}
+    s1, _, _ = await manager.servers_add(3, config=config, auto_rack_dc="dc")
 
     await manager.api.enable_injection(s1.ip_addr, "hinted_handoff_drain_fail", one_shot=False)
 
@@ -809,6 +817,11 @@ async def test_canceling_hint_draining(manager: ScyllaClusterManager):
     # A row is hinted towards s2 only if s2 is its rack2 replica. With enough
     # tablets, the load balancer places some of rack2's replicas on s2.
     await cql.run_async("CREATE TABLE ks.t (pk int PRIMARY KEY, v int) WITH tablets = {'min_tablet_count': 8}")
+    # The keyspace makes rack2 eligible, so auto-RF extends the system keyspaces into it.
+    # Let that finish while every node is up, or the removal of s2 below queues behind
+    # a rebuild which may be streaming to the stopped node.
+    await wait_for_auto_rf_settled(manager, time.time() + 120)
+    await manager.api.quiesce_topology(s1.ip_addr)
 
     await manager.server_stop_gracefully(s2.server_id)
     await manager.others_not_see_server(s2.ip_addr)
@@ -1087,15 +1100,18 @@ async def test_hints_encrypted_segments_after_rebalancing(manager: ScyllaCluster
     # The shard that disappears after decreasing the shard count.
     highest_shard = shard_count - 1
     cmdline = ["--smp", str(shard_count)]
+    # Keep audit and system_traces on vnodes too: their tablets would block the shard decrease.
+    vnodes_system_keyspaces = "auto_rf_keyspaces_use_vnodes"
     config = {
-        "error_injections_at_startup": ["decrease_hints_flush_period"],
+        "error_injections_at_startup": ["decrease_hints_flush_period", vnodes_system_keyspaces],
         "system_info_encryption": {
             "enabled": True,
             "key_provider": "LocalFileSystemKeyProviderFactory",
         }
     } | LocalFileSystemKeyProviderFactory(tmpdir).configuration_parameters()
     s1 = await manager.server_add(cmdline=cmdline, config=config, property_file={"dc": "dc1", "rack": "r1"})
-    s2 = await manager.server_add(property_file={"dc": "dc1", "rack": "r2"})
+    s2 = await manager.server_add(config={"error_injections_at_startup": [vnodes_system_keyspaces]},
+                                  property_file={"dc": "dc1", "rack": "r2"})
 
     s1_hints_dir = await get_hints_dir(manager, s1)
     s2_host_id = await manager.get_host_id(s2.server_id)
@@ -1493,6 +1509,10 @@ async def test_support_max_hh_concurrency_param(manager: ScyllaClusterManager,
 
     cql = await manager.get_cql_exclusive(s2)
     await cql.run_async("CREATE KEYSPACE ks WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}")
+    # Auto-RF's commits for the new rack can fail the DDL below, issued on a group0
+    # follower (s2 may be one); let them finish first.
+    await wait_for_auto_rf_settled(manager, time.time() + 120)
+    await manager.api.quiesce_topology(s1.ip_addr)
     await cql.run_async("CREATE TABLE ks.t (pk int PRIMARY KEY, v int)")
 
     await pause_servers(manager, [s1], [s2])
@@ -1566,6 +1586,11 @@ async def test_hints_switch_config_in_runtime_via_http_api(manager: ScyllaCluste
     await cql.run_async("CREATE KEYSPACE ks WITH REPLICATION = "
                         "{'class': 'NetworkTopologyStrategy', 'dc1': 1, 'dc2': 1, 'dc3': 1}")
     await cql.run_async("CREATE TABLE ks.t (pk int PRIMARY KEY, v int)")
+    # Let auto-RF extend the system keyspaces while all nodes are up, then keep the
+    # balancer still: a migration of a ks.t tablet during the hint replay makes the
+    # sender write the hint to every replica, dc2's included.
+    await wait_for_auto_rf_settled(manager, time.time() + 120)
+    await quiesce_and_disable_tablet_balancing(manager, s1.ip_addr)
 
     await pause_servers(manager, [s2, s3], [s1])
 

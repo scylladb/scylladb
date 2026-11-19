@@ -52,7 +52,11 @@ async def test_kill_coordinator_during_decommission(manager: ScyllaClusterManage
     await manager.api.enable_injection(coordinator_host.ip_addr, "crash_coordinator_before_stream", one_shot=True)
     await manager.decommission_node(server_id=other_nodes[-1].server_id, expected_error="Decommission failed. See earlier errors")
     await wait_new_coordinator_elected(manager, previous_coordinator_id, time.time() + scale_timeout(60))
-    await wait_for_no_pending_topology_transition(manager, time.time() + scale_timeout(60))
+    # Only the node operation has to have finished here. The tablet balancer keeps
+    # migrating the tablets of the auto-RF system keyspaces, so transition_state is
+    # almost never null and waiting for that would time out.
+    await wait_for_no_pending_topology_transition(manager, time.time() + scale_timeout(60),
+                                                 ignore_tablet_transitions=True)
     await manager.server_restart(coordinator_host.server_id, wait_others=1)
     await manager.servers_see_each_other(await manager.running_servers())
     await check_token_ring_and_group0_consistency(manager)
@@ -76,7 +80,8 @@ async def test_kill_coordinator_during_removenode(manager: ScyllaClusterManager,
                               expected_error="Removenode failed. See earlier errors")
 
     await wait_new_coordinator_elected(manager, previous_coordinator_id, time.time() + scale_timeout(60))
-    await wait_for_no_pending_topology_transition(manager, time.time() + scale_timeout(60))
+    await wait_for_no_pending_topology_transition(manager, time.time() + scale_timeout(60),
+                                                 ignore_tablet_transitions=True)
 
     await manager.others_not_see_server(server_ip=coordinator_host.ip_addr)
     logger.debug("Start old coordinator node with srv_id %s", coordinator_host.server_id)
@@ -84,7 +89,8 @@ async def test_kill_coordinator_during_removenode(manager: ScyllaClusterManager,
     await manager.servers_see_each_other(await manager.running_servers())
     logger.debug("Remove node with srv_id %s from node with srv_id %s because it was banned in a previous attempt", node_to_remove_srv_id, working_srv_id)
     await manager.remove_node(working_srv_id, node_to_remove_srv_id)
-    await wait_for_no_pending_topology_transition(manager, time.time() + scale_timeout(60))
+    await wait_for_no_pending_topology_transition(manager, time.time() + scale_timeout(60),
+                                                 ignore_tablet_transitions=True)
     await manager.servers_see_each_other(await manager.running_servers())
     await check_token_ring_and_group0_consistency(manager)
 
@@ -99,7 +105,8 @@ async def test_kill_coordinator_during_bootstrap(manager: ScyllaClusterManager, 
     await manager.api.enable_injection(coordinator_host.ip_addr, "crash_coordinator_before_stream", one_shot=True)
     await manager.server_start(new_node.server_id, expected_error=f"Startup failed: std::runtime_error|{BANNED_NOTIFICATION}")
     await wait_new_coordinator_elected(manager, previous_coordinator_id, time.time() + scale_timeout(60))
-    await wait_for_no_pending_topology_transition(manager, time.time() + scale_timeout(60))
+    await wait_for_no_pending_topology_transition(manager, time.time() + scale_timeout(60),
+                                                 ignore_tablet_transitions=True)
     await manager.server_restart(coordinator_host.server_id, wait_others=1)
     await manager.servers_see_each_other(await manager.running_servers())
     await check_token_ring_and_group0_consistency(manager)
@@ -119,7 +126,8 @@ async def test_kill_coordinator_during_replace(manager: ScyllaClusterManager, fa
     new_node = await manager.server_add(start=False, config=config, replace_cfg=replace_cfg, cmdline=cmdline)
     await manager.server_start(new_node.server_id, expected_error=f"Replace failed. See earlier errors|{BANNED_NOTIFICATION}")
     await wait_new_coordinator_elected(manager, previous_coordinator_id, time.time() + scale_timeout(60))
-    await wait_for_no_pending_topology_transition(manager, time.time() + scale_timeout(60))
+    await wait_for_no_pending_topology_transition(manager, time.time() + scale_timeout(60),
+                                                 ignore_tablet_transitions=True)
     logger.debug("Start old coordinator node")
     await manager.others_not_see_server(server_ip=coordinator_host.ip_addr)
     await manager.server_restart(coordinator_host.server_id, wait_others=1)

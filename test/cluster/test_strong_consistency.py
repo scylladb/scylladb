@@ -10,7 +10,7 @@ from typing import Tuple
 
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import gather_safely, unique_name, wait_for, Host
-from test.cluster.util import ensure_raft_group_leader_on, get_topology_coordinator, create_new_test_keyspace, new_test_keyspace, new_test_table
+from test.cluster.util import ensure_raft_group_leader_on, get_topology_coordinator, create_new_test_keyspace, new_test_keyspace, new_test_table, quiesce_and_disable_tablet_balancing
 from test.pylib.internal_types import HostID, ServerInfo
 from cassandra import InvalidRequest, ReadTimeout, Unavailable, WriteTimeout, WriteFailure
 from cassandra.cluster import ConsistencyLevel
@@ -2407,7 +2407,7 @@ async def test_tablet_migration(manager: ScyllaClusterManager):
                 return host
         raise RuntimeError(f"Can't find host for host_id {host_id}")
 
-    await manager.disable_tablet_balancing()
+    await quiesce_and_disable_tablet_balancing(manager, servers[0].ip_addr)
 
     logger.info("Creating a strongly-consistent keyspace")
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
@@ -2511,7 +2511,7 @@ async def test_tablet_migration_rf1(manager: ScyllaClusterManager):
                 return server
         raise RuntimeError(f"Can't find server for host_id {host_id}")
 
-    await manager.disable_tablet_balancing()
+    await quiesce_and_disable_tablet_balancing(manager, servers[0].ip_addr)
 
     logger.info("Creating a strongly-consistent keyspace")
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
@@ -2622,7 +2622,7 @@ async def test_tablet_migration_rollback(manager: ScyllaClusterManager):
                 return server
         raise RuntimeError(f"Can't find server for host_id {host_id}")
 
-    await manager.disable_tablet_balancing()
+    await quiesce_and_disable_tablet_balancing(manager, servers[0].ip_addr)
 
     logger.info("Creating a strongly-consistent keyspace")
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
@@ -2736,7 +2736,7 @@ async def test_rf_change(manager: ScyllaClusterManager):
                 return host
         raise RuntimeError(f"Can't find host for host_id {host_id}")
 
-    await manager.disable_tablet_balancing()
+    await quiesce_and_disable_tablet_balancing(manager, servers[0].ip_addr)
 
     logger.info("Creating a strongly-consistent keyspace with RF=2")
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1', 'rack2']} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
@@ -2811,7 +2811,7 @@ async def test_tablet_migration_config_change_retried(manager: ScyllaClusterMana
     cql, _ = await manager.get_ready_cql(servers)
     host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
 
-    await manager.disable_tablet_balancing()
+    await quiesce_and_disable_tablet_balancing(manager, servers[0].ip_addr)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} "
                                          "AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
@@ -2906,7 +2906,7 @@ async def test_tablet_migration_rollback_from_sc_become_voter(manager: ScyllaClu
                 return server
         raise RuntimeError(f"Can't find server for host_id {host_id}")
 
-    await manager.disable_tablet_balancing()
+    await quiesce_and_disable_tablet_balancing(manager, servers[0].ip_addr)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} "
                                          "AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
@@ -3073,7 +3073,7 @@ async def boot_cluster_led_from_rack3(manager: ScyllaClusterManager):
     cql, hosts = await manager.get_ready_cql(servers)
     host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
 
-    await manager.disable_tablet_balancing()
+    await quiesce_and_disable_tablet_balancing(manager, servers[0].ip_addr)
     return servers, cql, hosts, host_ids
 
 
@@ -3276,7 +3276,7 @@ async def test_tablet_migration_during_insert(manager: ScyllaClusterManager):
     cql, hosts = await manager.get_ready_cql(servers)
     host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
 
-    await manager.disable_tablet_balancing()
+    await quiesce_and_disable_tablet_balancing(manager, servers[0].ip_addr)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} "
                                           "AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
@@ -3464,7 +3464,7 @@ async def test_raft_group_torn_down_before_tablet_cleanup(manager: ScyllaCluster
     cql, _ = await manager.get_ready_cql(servers)
     host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
 
-    await manager.disable_tablet_balancing()
+    await quiesce_and_disable_tablet_balancing(manager, servers[0].ip_addr)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} "
                                          "AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
@@ -3532,7 +3532,7 @@ async def test_late_raft_apply_after_tablet_cleanup(manager: ScyllaClusterManage
     cql, hosts = await manager.get_ready_cql(servers)
     host_ids = await gather_safely(*[manager.get_host_id(s.server_id) for s in servers])
 
-    await manager.disable_tablet_balancing()
+    await quiesce_and_disable_tablet_balancing(manager, servers[0].ip_addr)
 
     wait_before_apply_injection = "strong_consistency_state_machine_wait_before_apply"
 
@@ -3650,7 +3650,7 @@ async def test_no_raft_replay_into_a_tablet_that_moved_away(manager: ScyllaClust
                 return server
         raise RuntimeError(f"Can't find server for host_id {host_id}")
 
-    await manager.disable_tablet_balancing()
+    await quiesce_and_disable_tablet_balancing(manager, servers[0].ip_addr)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} "
                                          "AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
@@ -3939,7 +3939,7 @@ async def test_sc_raft_metrics_per_shard(manager: ScyllaClusterManager):
     servers = await manager.servers_add(3, config=config, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
     cql = manager.get_cql()
     host_ids = await get_host_ids(manager, servers)
-    await manager.disable_tablet_balancing()
+    await quiesce_and_disable_tablet_balancing(manager, servers[0].ip_addr)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 4} AND consistency = 'global'") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int, v blob)")
@@ -4020,7 +4020,7 @@ async def test_sc_raft_metrics_survive_tablet_migration(manager: ScyllaClusterMa
     servers = await manager.servers_add(3, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
     cql = manager.get_cql()
     host_ids = await get_host_ids(manager, servers)
-    await manager.disable_tablet_balancing()
+    await quiesce_and_disable_tablet_balancing(manager, servers[0].ip_addr)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
@@ -4417,6 +4417,10 @@ async def test_truncate_in_one_batch_with_writes_survives_replay(manager: Scylla
     going back to raft and being applied again."""
     servers = await manager.servers_add(3, cmdline=DEFAULT_CMDLINE, auto_rack_dc='my_dc')
     (cql, hosts) = await manager.get_ready_cql(servers)
+    # The keyspace below makes the three racks eligible for auto-RF; keep the balancer off so no
+    # migration of audit or system_traces runs while the writes are stalled: its barrier would
+    # wait on them and queue the TRUNCATE behind it.
+    await quiesce_and_disable_tablet_balancing(manager, servers[0].ip_addr)
     host_ids = {await manager.get_host_id(s.server_id): s for s in servers}
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:

@@ -8,7 +8,7 @@ from cassandra.cluster import Session, ConsistencyLevel
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for_cql_and_get_hosts, start_writes
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas
-from test.cluster.util import new_test_keyspace, FeatureConfig
+from test.cluster.util import new_test_keyspace, FeatureConfig, quiesce_and_disable_tablet_balancing
 
 
 import pytest
@@ -71,7 +71,7 @@ async def test_crash_during_intranode_migration(manager: ScyllaClusterManager, s
     cfg = storage_config.get_cluster_cfg()
     servers = [await manager.server_add(config=cfg, cmdline=cmdline)]
 
-    await manager.disable_tablet_balancing()
+    await quiesce_and_disable_tablet_balancing(manager, servers[0].ip_addr)
 
     cql = manager.get_cql()
 

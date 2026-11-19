@@ -85,6 +85,10 @@ async def test_alter_tablets_keyspace_concurrent_modification(manager: ScyllaClu
                                           "} and tablets = {'initial': 2}") as ks:
         await manager.get_cql().run_async(f"create table {ks}.t (pk int primary key)")
 
+        # The one-shot injection below fires for any RF change, auto-RF's of the system
+        # keyspaces included. Let the topology settle so that the ALTER below takes it.
+        await manager.api.quiesce_topology(servers[0].ip_addr)
+
         logger.info(f"injecting wait-before-committing-rf-change-event into the leader node {servers[0]}")
         injection_handler = await inject_error_one_shot(manager.api, servers[0].ip_addr,
                                                         'wait-before-committing-rf-change-event')

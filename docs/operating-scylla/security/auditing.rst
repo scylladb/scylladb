@@ -333,7 +333,8 @@ For example:
 
 .. note:: The schema of ``audit.audit_log`` has been migrated in the 2024.2 version from ``SimpleStrategy RF=1`` to ``NetworkTopologyStrategy RF=3``:
 
-   * By default every DC will contain 3 audit replicas. If a new DC is added, in order for it to also contain audit replicas, audit's schema has to be manually altered.
+   * On vnodes, by default every DC will contain 3 audit replicas. If a new DC is added, in order for it to also contain audit replicas, audit's schema has to be manually altered.
+     On clusters where new keyspaces use tablets, the replication is managed automatically, see :ref:`audit-table-replication`.
    * CL for writes is still equal to ``1``, which implies that reading audit rows with CL=Quorum may fail, which is especially true for clusters with less than 3 nodes.
 
 **Procedure**
@@ -392,6 +393,131 @@ Storing Audit Messages in a Table and Syslog Simultaneously
 
       audit: "syslog,table"
 
+
+.. _audit-table-replication:
+
+Replication of the Audit Table
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The ``audit`` keyspace is created by ScyllaDB when a node starts with table auditing enabled
+(``audit: table``, the default), if it does not exist yet. How it is replicated depends on whether
+new keyspaces use tablets by default (``tablets_mode_for_new_keyspaces``, enabled in the shipped
+``scylla.yaml``).
+
+Clusters where new keyspaces use vnodes
+"""""""""""""""""""""""""""""""""""""""
+
+The keyspace uses vnodes with ``NetworkTopologyStrategy`` and a replication factor of 3 in every
+data center, including a data center of zero-token nodes only. Its replication is yours to change.
+
+The same applies to a cluster upgraded from a release where the ``audit`` keyspace already existed
+on vnodes, and to an ``audit`` keyspace created while the cluster was being upgraded from a release
+without automatic replication: the keyspace stays on vnodes, with the replication it has.
+
+Clusters where new keyspaces use tablets
+""""""""""""""""""""""""""""""""""""""""
+
+The keyspace uses tablets and ScyllaDB manages its replication. It follows the other tablets
+keyspaces of the cluster, which are called the *application keyspaces* below. The keyspace starts
+with a single replica in each data center that has token-owning nodes; a data center of zero-token
+nodes only, such as an arbiter data center, is skipped. From then on, in each data center:
+
+* **Where the application keyspaces use rack lists**, or where ``rf_rack_valid_keyspaces`` or
+  ``enforce_rack_list`` is enabled, the audit table uses a rack list. A rack becomes *eligible* once
+  an application keyspace replicates to it (a numeric replication factor makes every rack of the
+  data center eligible). The audit table is extended into eligible racks, one rack at a time, up to
+  three racks, and a rack that is no longer eligible is given up again, one rack at a time.
+* **Where the application keyspaces all use numeric replication factors** and neither option is
+  enabled (the defaults), the audit table keeps a numeric replication factor too: the largest one of
+  the application keyspaces in the data center, at most three, and at most the number of racks.
+  It follows that replication factor up and down, one step at a time. A numeric replication factor
+  names no rack, so the audit table can always leave a rack the application keyspaces can leave.
+* The audit table is extended into eligible data centers it does not replicate to yet. A data
+  center is never given up: once no application keyspace uses it, the audit table keeps a single
+  replica there. Nothing is given up while no application keyspace exists at all.
+
+Use ``DESCRIBE KEYSPACE audit`` to see the current replication. Every step is an ordinary
+replication factor change: its tablets are rebuilt on the new replica (a repair followed by
+streaming), which the tablet load balancer carries out along with its other migrations. The
+steps appear in the task manager's ``global_topology_requests`` module as ``keyspace_rf_change``
+tasks for the ``audit`` keyspace. With a large audit table (for example, with the ``DML`` or
+``QUERY`` categories audited) a step takes correspondingly longer.
+
+The automatic management pauses:
+
+* while tablet load balancing is disabled (the ``storage_service/tablets/balancing`` REST API), and
+* while a node of the cluster is down, unless that node has been excluded.
+
+Whether rack lists are required is read from the configuration of the node that coordinates
+topology changes, so set ``rf_rack_valid_keyspaces`` and ``enforce_rack_list`` on every node.
+
+Changing the replication by hand
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Manual changes are kept as long as they agree with the rules above, and undone where they do not:
+
+* A rack that no application keyspace uses is removed again.
+* While the audit table is below its goal in an eligible data center, it is extended again (with a
+  rack list, not necessarily onto the rack you removed).
+* Racks above the goal, within the eligible racks, are kept. A numeric replication factor above the
+  goal is kept as long as it is not above the largest one of the application keyspaces in the
+  data center, nor above the number of racks.
+* A data center you remove (``'<dc>': 0``, or ``'<dc>': []`` for a rack list) stays removed as long
+  as no application keyspace replicates to it; while one does, it is added back.
+
+A manual ``ALTER KEYSPACE audit`` is rejected while one of the automatic steps is in progress
+(``Another RF change for this keyspace ... ongoing``); retry it once the step has finished. As for
+any tablets keyspace, list every data center in the statement and change one rack, or the numeric
+replication factor by one, at a time, for example:
+
+.. code-block:: cql
+
+   ALTER KEYSPACE audit WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1', 'rack2'], 'dc2': ['rack4']};
+
+Things to keep in mind
+~~~~~~~~~~~~~~~~~~~~~~
+
+* Until the application keyspaces use more than one replica, or make more than one rack eligible,
+  in a data center, the audit table has a single replica there. An audit record whose replica node
+  is down at that moment is dropped, and the node reports it, for example: ``audit - Unexpected
+  exception when writing login log ... Cannot achieve consistency level for cl ONE``. Create the
+  application keyspaces before relying on the audit table's durability.
+* The replication of the audit table is only ever as wide as the application keyspaces make it. A
+  cluster whose application keyspaces are all on vnodes leaves the audit table at a single replica.
+* While a step that adds a replica runs, reads of ``audit.audit_log`` at ``QUORUM`` or ``ALL`` can
+  fail with ``Unavailable``: the consistency level already counts the new replica, which cannot
+  serve reads yet. Retry such reads, or read at ``ONE``.
+* To remove the nodes of a lost rack, exclude them first, then drop the rack from the application
+  keyspaces, then remove the nodes. With a rack list, the audit table gives the rack up in between.
+* Dropping a rack from the application keyspaces and decommissioning its last node right away
+  works with ``rf_rack_valid_keyspaces`` enabled: the decommission waits, up to two minutes, for the
+  audit table to give the rack up. Without that option the decommission is accepted and then fails
+  while draining the node if the audit table still replicates there; retry it once the rack has
+  been given up.
+* Enabling ``rf_rack_valid_keyspaces`` or ``enforce_rack_list`` later converts the audit table to
+  rack lists of the same size. Nodes started with either option let the audit and ``system_traces``
+  keyspaces through the startup checks, with a warning, until that has happened.
+* Adding or removing a data center: see
+  :doc:`Add a Data Center </operating-scylla/procedures/cluster-management/add-dc-to-existing-dc>`
+  and :doc:`Remove a Data Center </operating-scylla/procedures/cluster-management/decommissioning-data-center>`.
+
+.. _audit-table-replication-limitation:
+
+Known limitation: mixed numeric and rack-list replication
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+In a data center where the application keyspaces mix numeric replication factors and rack lists,
+every rack is eligible and the audit table uses a rack list, so it never gives a rack up on its
+own. Decommissioning or removing all nodes of a rack it lists is then blocked: the operation is
+rejected as RF-rack-invalid, or fails while draining the last node. To remove such a rack:
+
+#. Disable tablet load balancing, which pauses the automatic management.
+#. Remove the rack from the rack lists of the ``audit`` and ``system_traces`` keyspaces with
+   ``ALTER KEYSPACE``, one rack per statement.
+#. Remove the nodes.
+#. Enable tablet load balancing again.
+
+Alternatively, leave one node of the rack in the cluster.
 
 
 Handling Audit Failures
