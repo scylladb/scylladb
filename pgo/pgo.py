@@ -664,6 +664,22 @@ populators["basic_dataset"] = populate_basic
 
 # ALTERNATOR ==================================================
 
+# populate_alternator() fills the keys 0..ALTERNATOR_PARTITIONS-1, and the
+# training workloads use keys from the same range.
+ALTERNATOR_PARTITIONS = 100_000
+
+async def perf_alternator(executable: PathLike, addr: str, workload: str, *opts: str) -> None:
+    await run_checked([executable,
+        "perf-alternator",
+        "--smp", "1",
+        "--workload", workload,
+        "--partitions", str(ALTERNATOR_PARTITIONS),
+        # Without a cpuset, overprovision like the nodes do.
+        *(["--cpuset", CS_CPUSET.get()] if CS_CPUSET.get() else ["--overprovisioned"]),
+        "--remote-host", addr,
+        *opts,
+    ])
+
 async def train_alternator(executable: PathLike, workdir: PathLike) -> None:
     os.makedirs(workdir, exist_ok=True)
     async with with_cluster(executable=executable, workdir=workdir) as (addrs, procs):
@@ -674,36 +690,32 @@ async def train_alternator(executable: PathLike, workdir: PathLike) -> None:
             ["write",     250_000, 100],
             ["read",      250_000, 100],
             ["batch_read", 20_000, 100],   # 32 items/request, so fewer ops for a comparable item count
-            ["scan",        1_000, 100],
+            # Each Scan returns a full page of 2,500-5,000 items, so 100 Scans
+            # read about as many items as the read workload. 100 in flight
+            # hit the 10 s Alternator request timeout.
+            ["scan",          100,  10],
             ["write_gsi", 250_000, 100],
             ["batch_write_gsi", 20_000, 32],
             ["write_rmw", 250_000,  32],   # LWT/Paxos: keep in-flight LSA state bounded
         ]
-        for workload in workloads:
+        for workload, ops_per_shard, concurrency in workloads:
             # The tool doesn't yet support load balancing, so we run one
-            # process per node. We run them one after another, because each
-            # process deletes and recreates the same table, so concurrent
-            # processes would delete each other's table.
+            # process per node. Only write_rmw needs them one after another:
+            # LWT updates of the same key through different nodes conflict,
+            # and some fail. The other workloads use the same loop.
             for addr in addrs:
-                await run_checked([executable,
-                    "perf-alternator",
-                    "--smp", "1",
-                    "--workload", f"{workload[0]}",
-                    "--partitions", "100000",
-                    # we reuse cluster data so don't need to pre-populate
+                await perf_alternator(executable, addr, workload,
+                    # use the tables and data of populate_alternator()
                     "--prepopulate-partitions", "0",
-                    "--operations-per-shard", f"{workload[1]}",
-                    "--concurrency", f"{workload[2]}",
-                    # Without a cpuset, overprovision like the nodes do.
-                    *(["--cpuset", CS_CPUSET.get()] if CS_CPUSET.get() else ["--overprovisioned"]),
-                    "--remote-host", addr,
-                ])
+                    "--operations-per-shard", str(ops_per_shard),
+                    "--concurrency", str(concurrency))
 
     await merge_profraw(workdir)
 
 async def populate_alternator(executable: PathLike, workdir: PathLike) -> None:
     async with with_cs_populate(executable=executable, workdir=workdir) as server:
-        pass # this avoids profiling cluster bootstrap code
+        # this also avoids profiling cluster bootstrap code
+        await perf_alternator(executable, server, "populate")
 
 trainers["alternator"] = ("alternator_dataset", train_alternator)
 populators["alternator_dataset"] = populate_alternator
