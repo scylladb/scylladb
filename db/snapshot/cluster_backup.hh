@@ -58,4 +58,13 @@ start_global_backup(db::snapshot_ctl&, tasks::task_manager::module_ptr, std::str
 future<>
 backup_sstables(db::snapshot_ctl&, table_id table_id, std::string tag, std::string endpoint, std::string bucket, std::string prefix, dht::token first_token, dht::token last_token, utils::chunked_vector<sstables::sstable_id> sstable_ids, bool use_move);
 
+// Clears a cluster snapshot. It deletes the snapshot directories of its local tables, the
+// references of its object-storage tables, its backups and its catalog rows.
+// Rejects the request with std::invalid_argument before starting the task when
+// the tag is unknown, when its marker names no attempt, when it is backed up
+// or left by a failed attempt and `force` is not set, or when a backup of it
+// is in progress.
+future<tasks::task_id>
+start_cluster_clear_snapshot(db::snapshot_ctl&, tasks::task_manager::module_ptr, std::string snapshot_name, bool force);
+
 }
