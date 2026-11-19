@@ -318,6 +318,11 @@ def test_scylla_sstable_dump_component(cql, test_keyspace, scylla_path, scylla_d
             assert sst_metadata["sharding"] != [], f"Expected non-empty sharding metadata in sstable scylla-metadata: sstable={sst_name}: {sst_metadata}"
             assert "scrub_time" in sst_metadata, f"Expected 'scrub_time' in json output: {json_out}"
             assert sst_metadata["scrub_time"] > 0, f"Expected non-zero 'scrub_time'"
+            # The features which are listed by name are the ones whose bit is set in the mask.
+            # Any sstable which Scylla writes has the first of them.
+            features = sst_metadata["features"]
+            assert len(features["features"]) == bin(features["mask"]).count("1"), f"Expected a name for each bit of the mask of features: {features}"
+            assert "NonCompoundPIEntries" in features["features"], f"Expected 'NonCompoundPIEntries' in the features: {features}"
 
 @pytest.mark.parametrize("components_spec", [
     None,                           # None -> --all-components

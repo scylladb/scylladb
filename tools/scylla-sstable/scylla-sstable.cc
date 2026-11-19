@@ -1748,8 +1748,8 @@ public:
         _writer.Uint64(val.enabled_features);
         _writer.Key("features");
         _writer.StartArray();
-        for (const auto& [mask, name] : all_features) {
-            if (mask & val.enabled_features) {
+        for (const auto& [feature, name] : all_features) {
+            if (val.is_enabled(feature)) {
                 _writer.String(name);
             }
         }
