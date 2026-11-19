@@ -672,3 +672,11 @@ def test_udf_filtering(cql, test_keyspace, scylla_only):
             # See #5607
             with pytest.raises(InvalidRequest, match="Only the token function and scoring functions are supported in function-call restrictions"):
                 cql.execute(f"SELECT val FROM {table} WHERE {test_keyspace}.{f}(val) > 10")
+
+# COMMAND and COMMANDS are unreserved keywords; they must still work as unquoted function names.
+@pytest.mark.parametrize("name", ["command", "Commands"])
+def test_function_named_like_command_keyword(cql, test_keyspace, scylla_only, name):
+    with new_test_table(cql, test_keyspace, "k int PRIMARY KEY") as table:
+        cql.execute(f"INSERT INTO {table} (k) VALUES (7)")
+        with new_function(cql, test_keyspace, "(k int) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return k'", name=name):
+            assert cql.execute(f"SELECT {test_keyspace}.{name.upper()}(k) FROM {table}").one()[0] == 7
