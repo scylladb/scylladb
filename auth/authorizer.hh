@@ -98,6 +98,19 @@ public:
     virtual future<std::vector<permission_details>> list_all() const = 0;
 
     ///
+    /// Query for the permissions granted directly to a particular role.
+    ///
+    /// \throws \ref unsupported_authorization_operation if listing permissions is not supported.
+    ///
+    virtual future<std::vector<permission_details>> list_granted_to(std::string_view role_name) const {
+        auto all_details = co_await list_all();
+        std::erase_if(all_details, [role_name] (const permission_details& pd) {
+            return pd.role_name != role_name;
+        });
+        co_return all_details;
+    }
+
+    ///
     /// Revoke all permissions granted directly to a particular role.
     ///
     /// \throws \ref unsupported_authorization_operation if revoking permissions is not supported.

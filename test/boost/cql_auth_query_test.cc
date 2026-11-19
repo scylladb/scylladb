@@ -285,9 +285,12 @@ static void verify_default_permissions(
             auth::authenticated_user(user),
             r).get();
 
+    // The creator gets every applicable permission except CONFIGURE, which is granted only by name.
+    auto expected_permissions = r.applicable_permissions();
+    expected_permissions.remove(auth::permission::CONFIGURE);
     BOOST_REQUIRE_EQUAL(
             auth::permissions::to_strings(default_permissions),
-            auth::permissions::to_strings(r.applicable_permissions()));
+            auth::permissions::to_strings(expected_permissions));
 }
 
 SEASTAR_TEST_CASE(create_role_default_permissions) {
