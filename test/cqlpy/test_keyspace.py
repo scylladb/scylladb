@@ -11,18 +11,54 @@ import pytest
 from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException
 from threading import Thread
 
-from test.cluster.util import get_replication, get_replica_count
-
 
 # A basic tests for successful CREATE KEYSPACE and DROP KEYSPACE
 def test_create_and_drop_keyspace(cql, this_dc):
     cql.execute("CREATE KEYSPACE test_create_and_drop_keyspace WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 }")
     cql.execute("DROP KEYSPACE test_create_and_drop_keyspace")
 
+# Helper function for getting the replication options of the given keyspace,
+# for example {"class": "...", "dc1": "2", "dc2": ["rack1", "rack2"]}
+# The "replication_v2" (or "replication") column in system_schema.keyspaces
+# holds a flattened version of this map, where a list like the one in "dc2"
+# is stored as {"dc2:0": "rack1", "dc2:1": "rack2"}, so we need to expand it.
+# See docs/dev/system_schema_keyspace.md
+def get_replication(cql, keyspace):
+    row = cql.execute(f"SELECT * FROM system_schema.keyspaces WHERE keyspace_name='{keyspace}'").one()
+    result = {}
+    # The "replication_v2" column is Scylla-only, and on Cassandra there
+    # is only "replication".
+    for key, value in (getattr(row, 'replication_v2', None) or row.replication).items():
+        if ':' in key:
+            sub_key, index_str = key.split(':', 1)
+            if sub_key not in result:
+                result[sub_key] = []
+            index = int(index_str)
+            while len(result[sub_key]) <= index:
+                result[sub_key].append(None)
+            if index >= 0:
+                result[sub_key][index] = value
+        else:
+            result[key] = value
+    return result
+
+# Helper function for checking that the given keyspace's replication strategy
+# class is expected_class (the full Java-style name, e.g.,
+# "org.apache.cassandra.locator.NetworkTopologyStrategy"), and that its
+# replication option rf_key - typically a DC name - sets a replication factor
+# of exactly 1. The RF of 1 is hard-coded because that's what all the tests
+# below expect (most of them check the default RF when CREATE KEYSPACE doesn't
+# specify one).
+# The replication option may be either a number or, in ScyllaDB's rack-list
+# syntax, a list of racks. In the latter case, the RF is the number of racks.
 def assert_keyspace(cql, keyspace, expected_class, rf_key):
     rep = get_replication(cql, keyspace)
     assert rep["class"] == expected_class
-    assert get_replica_count(rep[rf_key]) == 1
+    rf = rep[rf_key]
+    if type(rf) is list:
+        assert len(rf) == 1
+    else:
+        assert int(rf) == 1
 
 # Trying to create a keyspace specifying replication options without replication strategy
 # should result in NetworkTopologyStrategy being set by default.
