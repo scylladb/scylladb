@@ -1704,6 +1704,7 @@ CREATE TABLE system.topology (
     paused_rf_change_requests frozen<set<timeuuid>> STATIC,
     session uuid STATIC,
     tablet_balancing_enabled boolean STATIC,
+    tablets_shard0_skew_host uuid STATIC,
     transition_state text STATIC,
     unpublished_cdc_generations frozen<set<tuple<bigint, timeuuid>>> STATIC,
     upgrade_state text STATIC,
@@ -1752,6 +1753,7 @@ CREATE TABLE system.topology (
 - `enabled_features`: Features enabled across the cluster
 - `session`: Current topology session ID
 - `tablet_balancing_enabled`: Whether tablet load balancing is enabled
+- `tablets_shard0_skew_host`: Host whose shard 0 gets fewer tablets (`tablets_group0_leader_shard_ratio`); set by the topology coordinator
 - `upgrade_state`: State of cluster upgrade process
 - `global_requests`: Set of global request IDs
 - `paused_rf_change_requests`: Set of paused replication factor change requests

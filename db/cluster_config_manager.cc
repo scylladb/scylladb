@@ -471,7 +471,7 @@ future<cluster_config_manager::scope_caches> cluster_config_manager::load_caches
     // Scan one config table and hand each non-empty row's configs map to `store`,
     // which keys it into the right scope map. `query` and `store` are taken by
     // value so they outlive the internal query across the co_await.
-    auto load_scope = [this] (sstring query, auto store) -> future<> {
+    auto load_scope = [this] (std::string_view scope, sstring query, auto store) -> future<> {
         auto rows = co_await _qp.execute_internal(query, cql3::query_processor::cache_internal::no);
         for (const auto& row : *rows) {
             // The keyspace and table scans can return thousands of rows.
@@ -480,10 +480,17 @@ future<cluster_config_manager::scope_caches> cluster_config_manager::load_caches
                 continue;
             }
             auto configs = row.template get_map<sstring, sstring>("configs");
-            if (configs.empty()) {
+            config_map map;
+            while (!configs.empty()) {
+                auto node = configs.extract(configs.begin());
+                if (cluster_config_registry::is_usable_stored_value(scope, node.key(), node.mapped())) {
+                    map.emplace(std::move(node.key()), std::move(node.mapped()));
+                }
+            }
+            if (map.empty()) {
                 continue;
             }
-            store(row, config_map(configs.begin(), configs.end()));
+            store(row, std::move(map));
         }
     };
 
@@ -491,27 +498,27 @@ future<cluster_config_manager::scope_caches> cluster_config_manager::load_caches
     // concurrently rather than back to back. Each store callback fills a distinct member
     // of `caches`, so they never step on one another.
     co_await when_all_succeed(
-            load_scope(
+            load_scope("cluster",
                     format("SELECT cluster_name, configs FROM {}.{} WHERE cluster_name = '{}'",
                             schema_tables::v3::NAME, schema_tables::v3::SCYLLA_CLUSTERS, schema_tables::CLUSTER_CONFIG_SINGLETON_KEY),
                     [&caches] (const auto&, config_map m) { caches.cluster_configs.insert(m.begin(), m.end()); }),
-            load_scope(
+            load_scope("datacenter",
                     format("SELECT dc_name, configs FROM {}.{}", schema_tables::v3::NAME, schema_tables::v3::SCYLLA_DATACENTERS),
                     [&caches] (const auto& row, config_map m) { caches.dc_configs.emplace(row.template get_as<sstring>("dc_name"), std::move(m)); }),
-            load_scope(
+            load_scope("rack",
                     format("SELECT dc_name, rack_name, configs FROM {}.{}", schema_tables::v3::NAME, schema_tables::v3::SCYLLA_RACKS),
                     [&caches] (const auto& row, config_map m) {
                         caches.rack_configs.emplace(
                                 std::make_tuple(row.template get_as<sstring>("dc_name"), row.template get_as<sstring>("rack_name")),
                                 std::move(m));
                     }),
-            load_scope(
+            load_scope("node",
                     format("SELECT host_id, configs FROM {}.{}", schema_tables::v3::NAME, schema_tables::v3::SCYLLA_NODES),
                     [&caches] (const auto& row, config_map m) { caches.node_configs.emplace(row.template get_as<utils::UUID>("host_id"), std::move(m)); }),
-            load_scope(
+            load_scope("keyspace",
                     format("SELECT keyspace_name, configs FROM {}.{}", schema_tables::v3::NAME, schema_tables::v3::SCYLLA_KEYSPACES),
                     [&caches] (const auto& row, config_map m) { caches.keyspace_configs.emplace(row.template get_as<sstring>("keyspace_name"), std::move(m)); }),
-            load_scope(
+            load_scope("table",
                     format("SELECT keyspace_name, table_name, configs FROM {}.{}", schema_tables::v3::NAME, schema_tables::v3::SCYLLA_TABLES),
                     [&caches] (const auto& row, config_map m) {
                         caches.table_configs.emplace(
@@ -680,6 +687,10 @@ bool cluster_config_manager::resolve_boolean_config(const cluster_config_registr
 int64_t cluster_config_manager::resolve_integer_config(const cluster_config_registry::option& opt, const lookup_context& ctx) const {
     check_not_db_config(opt);
     return cluster_config_registry::to_integer(opt, resolve_config(opt.name, ctx));
+}
+
+int64_t cluster_config_manager::resolve_integer_config(std::string_view config_name, const lookup_context& ctx) const {
+    return resolve_integer_config(find_registered_option(config_name), ctx);
 }
 
 double cluster_config_manager::resolve_floating_point_config(const cluster_config_registry::option& opt, const lookup_context& ctx) const {

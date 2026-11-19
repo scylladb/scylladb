@@ -31,6 +31,8 @@
 #include "cdc/generation.hh"
 #include "cdc/generation_service.hh"
 #include "cql3/statements/ks_prop_defs.hh"
+#include "db/cluster_config_manager.hh"
+#include "db/cluster_config_registry.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "db/system_keyspace.hh"
 #include "dht/boot_strapper.hh"
@@ -171,6 +173,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
     raft_topology_cmd_handler_type _raft_topology_cmd_handler;
 
     tablet_allocator& _tablet_allocator;
+    const db::cluster_config_manager& _cluster_config;
     std::unique_ptr<db::view::view_building_coordinator> _vb_coordinator;
 
     cdc::generation_service& _cdc_gens;
@@ -1302,6 +1305,66 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         }
     }
 
+    // Persists this node as the host whose shard 0 gets fewer tablets. A stale target (none, or not
+    // a normal node) is replaced at once, a live one only after this node has been the coordinator
+    // for a while, so leadership hops (e.g. a rolling restart) don't each move the skew.
+    future<> tablets_shard0_skew_fiber() {
+        rtlogger.debug("start tablets shard0 skew fiber");
+        const auto me = _raft.id();
+        const auto start = lowres_clock::now();
+        bool logged_wait = false;
+        auto should_move = [&] {
+            const auto& target = _topo_sm._topology.tablets_shard0_skew_host;
+            // The ratio is looked up per call, see tablet_allocator_impl::group0_leader_shard_ratio().
+            // A coordinator that is not a normal node (e.g. being decommissioned) must not take the skew.
+            if (target == me || !_topo_sm._topology.normal_nodes.contains(me) || !_feature_service.tablets_shard0_skew ||
+                    _cluster_config.resolve_integer_config(db::cluster_config_registry::option_name::tablets_group0_leader_shard_ratio, {}) >= 100) {
+                return false;
+            }
+            const auto dwell = std::chrono::seconds(
+                    utils::get_local_injector().inject_parameter<int64_t>("tablets_shard0_skew_dwell", "seconds").value_or(600));
+            if (!target || !_topo_sm._topology.normal_nodes.contains(*target) || lowres_clock::now() - start >= dwell) {
+                return true;
+            }
+            if (!std::exchange(logged_wait, true)) {
+                rtlogger.info("tablets shard0 skew: waiting {}s before taking it over from {}", dwell.count(), *target);
+            }
+            return false;
+        };
+        while (!_as.abort_requested()) {
+            try {
+                if (_topo_sm._topology.tablets_shard0_skew_host == me) {
+                    co_return;
+                }
+                if (should_move()) {
+                    auto guard = co_await start_operation();
+                    if (should_move()) {
+                        topology_mutation_builder builder(guard.write_timestamp());
+                        builder.set_tablets_shard0_skew_host(me);
+                        utils::chunked_vector<canonical_mutation> updates;
+                        updates.push_back({builder.build()});
+                        co_await update_topology_state(std::move(guard), std::move(updates), "Move tablets shard 0 skew to the coordinator");
+                        co_return;
+                    }
+                }
+            } catch (raft::request_aborted&) {
+                rtlogger.debug("tablets shard0 skew fiber aborted");
+            } catch (seastar::abort_requested_exception&) {
+                rtlogger.debug("tablets shard0 skew fiber aborted");
+            } catch (group0_concurrent_modification&) {
+            } catch (term_changed_error&) {
+                rtlogger.debug("tablets shard0 skew fiber notices term change {} -> {}", _term, _raft.get_current_term());
+            } catch (...) {
+                rtlogger.error("tablets shard0 skew fiber got error {:t}", std::current_exception());
+            }
+            try {
+                co_await seastar::sleep_abortable(std::chrono::seconds(1), _as);
+            } catch (...) {
+                rtlogger.debug("tablets shard0 skew: sleep failed: {:t}", std::current_exception());
+            }
+        }
+    }
+
     future<> group0_voter_refresher_fiber() {
         rtlogger.debug("start group0 members refresh fiber");
 
@@ -1503,6 +1566,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                                 locator::replication_strategy_params params{ks_md->strategy_options(), tablet_count, ks.metadata()->consistency_option()};
                                 auto new_strategy = locator::abstract_replication_strategy::create_replication_strategy("NetworkTopologyStrategy", params, tmptr->get_topology());
 
+                                const auto skew = _tablet_allocator.group0_leader_shard_skew(*tmptr);
                                 for (const auto& table_or_mv : tables_with_mvs) {
                                     if (!tmptr->tablets().is_base_table(table_or_mv->id())) {
                                         // Apply the transition only on base tables.
@@ -1511,7 +1575,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                                         continue;
                                     }
                                     auto old_tablets = co_await tmptr->tablets().get_tablet_map(table_or_mv->id()).clone_gently();
-                                    new_tablet_map = co_await new_strategy->maybe_as_tablet_aware()->reallocate_tablets(table_or_mv, tmptr, co_await old_tablets.clone_gently());
+                                    new_tablet_map = co_await new_strategy->maybe_as_tablet_aware()->reallocate_tablets(table_or_mv, tmptr, co_await old_tablets.clone_gently(), skew);
 
                                     replica::tablet_mutation_builder tablet_mutation_builder(guard.write_timestamp(), table_or_mv->id());
                                     co_await new_tablet_map.for_each_tablet([&](locator::tablet_id tablet_id, const locator::tablet_info& tablet_info) -> future<> {
@@ -5827,6 +5891,7 @@ public:
         , _raft(raft_server), _term(raft_server.get_current_term())
         , _raft_topology_cmd_handler(std::move(raft_topology_cmd_handler))
         , _tablet_allocator(tablet_allocator)
+        , _cluster_config(cluster_config)
         , _vb_coordinator(std::make_unique<db::view::view_building_coordinator>(_db, _raft, _group0, _sys_ks, _gossiper, _messaging, _vb_sm, _topo_sm, _term, _as))
         , _cdc_gens(cdc_gens)
         , _tablet_load_stats_refresh([this] {
@@ -5962,6 +6027,7 @@ future<bool> topology_coordinator::maybe_retry_failed_rf_change_tablet_rebuilds(
     }
 
     group0_update_collector updates;
+    const auto skew = _tablet_allocator.group0_leader_shard_skew(*tmptr);
     for (auto& ks_name : _db.get_tablets_keyspaces()) {
         auto& ks = _db.find_keyspace(ks_name);
         auto& strategy = ks.get_replication_strategy();
@@ -5974,7 +6040,7 @@ future<bool> topology_coordinator::maybe_retry_failed_rf_change_tablet_rebuilds(
             }
 
             auto& tablet_map = tmptr->tablets().get_tablet_map(table_or_mv->id());
-            auto new_tablet_map = co_await strategy.maybe_as_tablet_aware()->reallocate_tablets(table_or_mv, tmptr, co_await tablet_map.clone_gently());
+            auto new_tablet_map = co_await strategy.maybe_as_tablet_aware()->reallocate_tablets(table_or_mv, tmptr, co_await tablet_map.clone_gently(), skew);
 
             replica::tablet_mutation_builder tablet_mutation_builder(guard.write_timestamp(), table_or_mv->id());
             co_await new_tablet_map.for_each_tablet([&](locator::tablet_id tablet_id, const locator::tablet_info& tablet_info) -> future<> {
@@ -6320,6 +6386,7 @@ future<> topology_coordinator::run() {
     auto cdc_streams_gc = cdc_streams_gc_fiber();
     auto tablet_load_stats_refresher = start_tablet_load_stats_refresher();
     auto gossiper_orphan_remover = gossiper_orphan_remover_fiber();
+    auto tablets_shard0_skew = tablets_shard0_skew_fiber();
     auto group0_voter_refresher = group0_voter_refresher_fiber();
     auto vb_coordinator_fiber = run_view_building_coordinator();
 
@@ -6382,6 +6449,7 @@ future<> topology_coordinator::run() {
     co_await std::move(cdc_generation_publisher);
     co_await std::move(cdc_streams_gc);
     co_await std::move(gossiper_orphan_remover);
+    co_await std::move(tablets_shard0_skew);
     co_await std::move(group0_voter_refresher);
     co_await std::move(vb_coordinator_fiber);
     co_await _vb_coordinator->stop();
