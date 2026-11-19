@@ -3604,6 +3604,7 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
 
         feature_service.ms_sstable.enable();
         feature_service.mt_sstable.enable();
+        feature_service.canonical_nans_and_varints_in_sstable_index_keys.enable();
         sstables::sstables_manager sst_man(
             "scylla_sstable",
             large_data_handler,

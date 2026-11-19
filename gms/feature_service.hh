@@ -207,6 +207,9 @@ public:
     gms::feature cluster_config { *this, "CLUSTER_CONFIG"sv };
     // Restore persists tablet transitions and a topology request that older nodes fail to parse.
     gms::feature tablet_aware_restore { *this, "TABLET_AWARE_RESTORE"sv };
+    // Sstables are written with the feature CorrectNaNAndVarintIndexKeys. Older nodes search
+    // the trie-based indexes of all the sstables with the old encoding of their keys.
+    gms::feature canonical_nans_and_varints_in_sstable_index_keys { *this, "CANONICAL_NANS_AND_VARINTS_IN_SSTABLE_INDEX_KEYS"sv };
 
     // Features created at run time rather than declared above: one per cluster config
     // option, from the registry at construction, plus any a test adds. Node-based, so a
