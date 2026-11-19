@@ -171,8 +171,9 @@ public:
         , _row_500(make_row(*_def, 500))
         , _row_50k(make_row(*_def, 50000)) {
         for (auto* r : {&_row_10, &_row_500, &_row_50k}) {
-            if (hash<xx_hasher>(*r) != hash<buffered_xx_hasher>(*r)) {
-                throw std::runtime_error("buffered_xx_hasher digest differs from xx_hasher");
+            const auto ref = hash_reference(*r);
+            if (hash<xx_hasher>(*r) != ref || hash<buffered_xx_hasher>(*r) != ref) {
+                throw std::runtime_error("collection digest differs from per-cell xx_hasher");
             }
         }
     }
@@ -195,6 +196,22 @@ public:
         return h.finalize_uint64();
     }
 
+    // The digest with an unbuffered per-cell xx_hasher, as before buffering.
+    uint64_t hash_reference(const row& r) const {
+        xx_hasher cellh;
+        feed_hash(cellh, *r.find_cell(_def->id), *_def);
+        xx_hasher h;
+        feed_hash(h, cellh.finalize_uint64());
+        return h.finalize_uint64();
+    }
+
+    void prepare_hash(const row& r) const {
+        r.prepare_hash(*_s, column_kind::regular_column);
+        perf_tests::stop_measuring_time();
+        r.clear_hash();
+        perf_tests::start_measuring_time();
+    }
+
     // Reference, not a bound: one XXH64 pass over the serialized cell, the cost
     // of a bulk hash of the cell bytes.
     uint64_t hash_raw(const row& r) const {
@@ -206,6 +223,8 @@ public:
     }
 };
 
+// appending_hash<row> buffers collection cells whatever the outer hasher, so xx_ and buffered_
+// differ only in hashing the cell digest; compare xx_ across builds for the per-cell cost.
 PERF_TEST_F(collection_hash, xx_10) {
     perf_tests::do_not_optimize(hash<xx_hasher>(row_10()));
 }
@@ -234,5 +253,48 @@ PERF_TEST_F(collection_hash, buffered_50k) {
 }
 PERF_TEST_F(collection_hash, raw_50k) {
     perf_tests::do_not_optimize(hash_raw(row_50k()));
+}
+
+// The cached-hash path: cache reads fill it with row::prepare_hash().
+PERF_TEST_F(collection_hash, prepare_500) {
+    prepare_hash(row_500());
+}
+PERF_TEST_F(collection_hash, prepare_50k) {
+    prepare_hash(row_50k());
+}
+
+// appending_hash<row> over five small int cells, each hashed by its own xx_hasher;
+// compare across builds for the per-cell cost.
+class narrow_row_hash {
+    schema_ptr _s;
+    query::column_id_vector _columns;
+    row _row;
+
+public:
+    narrow_row_hash()
+        : _s(schema_builder(this_smp_shard_count(), "ks", "cf")
+                          .with_column("pk", int32_type, column_kind::partition_key)
+                          .with_column("v1", int32_type)
+                          .with_column("v2", int32_type)
+                          .with_column("v3", int32_type)
+                          .with_column("v4", int32_type)
+                          .with_column("v5", int32_type)
+                          .build()) {
+        for (auto& def : _s->regular_columns()) {
+            _columns.push_back(def.id);
+            _row.apply(def, atomic_cell_or_collection(atomic_cell::make_live(*int32_type, api::new_timestamp(), int32_type->decompose(int32_t(def.id)))));
+        }
+    }
+
+    uint64_t hash() const {
+        xx_hasher h;
+        max_timestamp ts;
+        appending_hash<row>()(h, _row, *_s, column_kind::regular_column, _columns, ts);
+        return h.finalize_uint64();
+    }
+};
+
+PERF_TEST_F(narrow_row_hash, xx) {
+    perf_tests::do_not_optimize(hash());
 }
 }
