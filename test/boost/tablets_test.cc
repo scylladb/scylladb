@@ -62,6 +62,7 @@
 #include <boost/regex.hpp>
 #include <atomic>
 #include "utils/assert.hh"
+#include "cql3/query_processor.hh"
 
 namespace service {
 // Test access to the private storage_service::topology_state_load()

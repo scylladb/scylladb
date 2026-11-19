@@ -64,6 +64,7 @@
 #include "utils/azure/identity/service_principal_credentials.hh"
 #include "replica/database.hh"
 #include "service/client_state.hh"
+#include "cql3/query_processor.hh"
 
 using namespace encryption;
 namespace fs = std::filesystem;

@@ -35,6 +35,7 @@
 #include "utils/estimated_histogram.hh"
 #include "backlog_controller.hh"
 #include "types/map.hh"
+#include "transport/messages/result_message.hh"
 
 namespace {
 

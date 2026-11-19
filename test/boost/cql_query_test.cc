@@ -70,6 +70,7 @@
 #include <seastar/core/smp.hh>
 #include "replica/database.hh"
 #include "service/raft/raft_group0_client.hh"
+#include "cql3/query_processor.hh"
 
 
 BOOST_AUTO_TEST_SUITE(cql_query_test)
