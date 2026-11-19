@@ -2466,6 +2466,9 @@ public:
 // into name and uuid of the table (see init_table_storage())
 std::pair<sstring, table_id> parse_table_directory_name(const sstring&);
 
+// Whether Scylla itself creates keyspace `name`; "audit" counts only while the audit table sink is configured.
+bool is_always_local_keyspace(std::string_view name, bool audit_table_configured);
+
 } // namespace replica
 
 future<> start_large_data_handler(sharded<replica::database>& db);

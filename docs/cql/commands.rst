@@ -2,6 +2,12 @@
 CQL Commands
 ============
 
+.. toctree::
+   :maxdepth: 1
+   :hidden:
+
+   commands/toppartitions
+
 ScyllaDB runs built-in administrative commands over CQL with the ``EXECUTE COMMAND``
 statement. The syntax follows Cassandra's CEP-38 (CQL Management API).
 
@@ -29,4 +35,4 @@ shuts down.
 Commands
 --------
 
-No command is available yet.
+* :doc:`toppartitions </cql/commands/toppartitions>`: samples the hottest partitions, like ``nodetool toppartitions``.

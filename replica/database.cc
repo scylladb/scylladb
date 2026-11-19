@@ -1583,7 +1583,7 @@ std::vector<sstring> database::get_user_keyspaces() const {
 // is_internal_keyspace() misses two keyspaces Scylla also creates itself:
 // "audit", which the table-based audit backend creates on demand, and
 // "system_distributed_everywhere", present only on an upgraded cluster.
-static bool is_always_local_keyspace(std::string_view name, bool audit_table_configured) {
+bool is_always_local_keyspace(std::string_view name, bool audit_table_configured) {
     return is_internal_keyspace(name) || (audit_table_configured && name == "audit") || name == "system_distributed_everywhere";
 }
 

@@ -105,6 +105,11 @@ Example output:
 
    10.0.0.72
 
+Running over CQL
+----------------
+
+This command can also be run over CQL, see :doc:`EXECUTE COMMAND toppartitions </cql/commands/toppartitions>`.
+
 Additional Information
 ----------------------
 
