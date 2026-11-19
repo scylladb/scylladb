@@ -753,7 +753,7 @@ future<uint64_t> estimate_partitions(seastar::sharded<replica::database>& db, co
             // not trivial sum). We shouldn't have this ugly code here...
             // FIXME: If sstables are shared, they will be accounted more than
             // once. However, shared sstables should exist for a short-time only.
-            const auto& table = db.find_column_family(keyspace, cf);
+            auto& table = db.find_column_family(keyspace, cf);
             return table.estimated_partitions_in_range(range);
         },
         uint64_t(0),
