@@ -14,6 +14,7 @@
 #include <seastar/core/future-util.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/thread.hh>
+#include <seastar/util/defer.hh>
 
 #include "cql3/CqlParser.hpp"
 #include "exceptions/exceptions.hh"
@@ -33,6 +34,7 @@
 
 #include "db/config.hh"
 #include "utils/chunked_string.hh"
+#include "utils/error_injection.hh"
 #include "replica/database.hh"
 
 BOOST_AUTO_TEST_SUITE(auth_test)
@@ -414,5 +416,56 @@ SEASTAR_TEST_CASE(test_try_describe_schema_with_internals_and_passwords_as_anony
                 exception_predicate::message_equals("DESCRIBE SCHEMA WITH INTERNALS AND PASSWORDS can only be issued by a superuser"));
     }, auth_on(true));
 }
+
+#ifdef SCYLLA_ENABLE_ERROR_INJECTION
+
+// Reproduces https://scylladb.atlassian.net/browse/SCYLLADB-6439: the warning
+// about a group0 guard conflict quoted the statement as is, so a role
+// statement put its password, or hashed password, in the log.
+SEASTAR_TEST_CASE(test_guard_conflict_warning_masks_passwords) {
+    co_await do_with_cql_env_thread([] (cql_test_env& env) {
+        std::ostringstream captured;
+        seastar::logger::set_ostream(captured);
+        auto restore_ostream = defer([] noexcept {
+            seastar::logger::set_ostream(std::cerr);
+        });
+
+        // Runs `query` so that its first attempt hits a guard conflict and its
+        // retry succeeds, and returns what was logged meanwhile.
+        auto execute_with_guard_conflict = [&] (const sstring& query) {
+            captured.str("");
+            utils::get_local_injector().enable("execute_with_guard_concurrent_modification", true /*one_shot*/);
+            env.execute_cql(query).get();
+            auto log_output = captured.str();
+            BOOST_REQUIRE(log_output.find("due to guard conflict") != std::string::npos);
+            return log_output;
+        };
+
+        auto log_output = execute_with_guard_conflict("CREATE ROLE r WITH PASSWORD = 'Secret!@#$' AND LOGIN = true");
+        BOOST_REQUIRE(log_output.find("Secret!@#$") == std::string::npos);
+        BOOST_REQUIRE(log_output.find("\"CREATE ROLE r WITH PASSWORD = '***' AND LOGIN = true\"") != std::string::npos);
+
+        log_output = execute_with_guard_conflict("ALTER ROLE r WITH PASSWORD = 'Secret^%$#@!'");
+        BOOST_REQUIRE(log_output.find("Secret^%$#@!") == std::string::npos);
+        BOOST_REQUIRE(log_output.find("\"ALTER ROLE r WITH PASSWORD = '***'\"") != std::string::npos);
+
+        const sstring hash = "$2a$05$ae4qyC7lYe47n8K2f/fgKuW/TCRCCpEvcYrA4Dl14VYJAjAEz3tli";
+        log_output = execute_with_guard_conflict(format("CREATE ROLE h WITH HASHED PASSWORD = '{}'", hash));
+        BOOST_REQUIRE(log_output.find(hash) == std::string::npos);
+        BOOST_REQUIRE(log_output.find("\"CREATE ROLE h WITH HASHED PASSWORD = '***'\"") != std::string::npos);
+
+        // A quote in a password is doubled in the statement, and pg-style $$
+        // quotes hold a password as is.
+        log_output = execute_with_guard_conflict("CREATE ROLE q WITH PASSWORD = 'it''s'");
+        BOOST_REQUIRE(log_output.find("it'") == std::string::npos);
+        BOOST_REQUIRE(log_output.find("\"CREATE ROLE q WITH PASSWORD = '***'\"") != std::string::npos);
+
+        log_output = execute_with_guard_conflict("ALTER ROLE q WITH PASSWORD = $$se$cret$$");
+        BOOST_REQUIRE(log_output.find("se$cret") == std::string::npos);
+        BOOST_REQUIRE(log_output.find("\"ALTER ROLE q WITH PASSWORD = '***'\"") != std::string::npos);
+    }, auth_on(true));
+}
+
+#endif // SCYLLA_ENABLE_ERROR_INJECTION
 
 BOOST_AUTO_TEST_SUITE_END()
