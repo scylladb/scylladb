@@ -9,6 +9,7 @@
 #include "lang/wasm.hh"
 #include "lang/wasm_instance_cache.hh"
 #include "rust/wasmtime_bindings.hh"
+#include "db/functions/function_name.hh"
 #include <seastar/coroutine/maybe_yield.hh>
 #include <chrono>
 #include <seastar/core/lowres_clock.hh>
@@ -63,7 +64,7 @@ SEASTAR_TEST_CASE(test_long_udf_yields) {
   (export "_scylla_abi" (global 0))
   (data (;0;) (i32.const 1024) "01"))
 )");
-    wasm_ctx.module.value()->compile(*wasm_engine);
+    (*wasm_ctx.module)->compile(*wasm_engine);
     auto argv = wasmtime::get_val_vec();
     argv->push_i64(42);
     auto rets = wasmtime::get_val_vec();
@@ -100,4 +101,46 @@ SEASTAR_TEST_CASE(test_long_udf_yields) {
     BOOST_REQUIRE(steps > 1);
     BOOST_CHECK_EQUAL(rets->pop_val()->i64(), 267914296);
     co_return;
+}
+
+// Test that a function can be removed from the instance cache (as happens on
+// DROP FUNCTION or CREATE OR REPLACE FUNCTION) while a call of the function
+// waits for the function's instance, which another call is using. The waiting
+// call must still be able to continue safely after the function is removed.
+// This test can only find the bug in a build with AddressSanitizer (e.g., the
+// debug build), which detects the use of freed memory.
+// Reproduces SCYLLADB-6425.
+SEASTAR_TEST_CASE(test_remove_while_waiting_for_instance) {
+    auto wasm_engine = wasmtime::create_engine(1024 * 1024);
+    wasm::alien_thread_runner alien_runner;
+    auto wasm_cache = std::make_unique<wasm::instance_cache>(100 * 1024 * 1024, 1024 * 1024, std::chrono::seconds(1));
+    auto wasm_ctx = wasm::context(*wasm_engine, "f", *wasm_cache, 100000, 100000000);
+    co_await wasm::precompile(alien_runner, wasm_ctx, {}, R"(
+(module
+  (func (param i32) (result i32) local.get 0)
+  (memory 1)
+  (global i32 (i32.const 0))
+  (export "memory" (memory 0))
+  (export "f" (func 0))
+  (export "_scylla_abi" (global 0)))
+)");
+    db::functions::function_name name("ks", "f");
+    std::vector<data_type> arg_types{int32_type};
+
+    // One call gets the function's instance, so another call waits for it
+    auto first = co_await wasm_cache->get(name, arg_types, wasm_ctx);
+    auto second_fut = wasm_cache->get(name, arg_types, wasm_ctx);
+    BOOST_REQUIRE(!second_fut.available());
+    // The first call finishes, returning the instance to the cache and
+    // allowing the second call to continue - but before it does, the
+    // function is removed from the cache
+    wasm_cache->recycle(first);
+    wasm_cache->remove(name, arg_types);
+    // The second call continues, and gets the instance
+    auto second = co_await std::move(second_fut);
+    BOOST_REQUIRE(second->instance);
+    // The second call finishes. The function was removed from the cache, so
+    // the cache must not keep its instance.
+    wasm_cache->recycle(second);
+    BOOST_REQUIRE(!second->instance);
 }

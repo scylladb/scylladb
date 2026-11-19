@@ -84,10 +84,17 @@ private:
         seastar::scheduling_group scheduling_group;
         std::vector<data_type> arg_types;
         seastar::shared_mutex mutex;
+        // The module of the function version this entry belongs to (a function
+        // may be replaced while its old version still runs). The entry shares
+        // its ownership, because it may outlive the function. It's declared
+        // before the instance, which refers to it, so it's destroyed after it.
+        lw_shared_ptr<rust::Box<wasmtime::Module>> module;
         std::optional<wasm_instance> instance;
         // iterator points to _lru.end() when the entry is being used (at that point, it is not in lru)
         std::list<lru_entry_type>::iterator it;
-        wasmtime::Module& module;
+        // Set when the entry was removed from the cache (by remove()) while being used,
+        // so recycle() mustn't put it back
+        bool removed = false;
     };
 
 public:
@@ -125,6 +132,8 @@ private:
     void evict_lru() noexcept;
 
     void on_timer() noexcept;
+
+    void remove_orphaned_entries() noexcept;
 
 public:
     seastar::future<value_type> get(const db::functions::function_name& name, const std::vector<data_type>& arg_types, wasm::context& ctx);

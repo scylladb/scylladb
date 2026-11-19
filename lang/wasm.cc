@@ -222,16 +222,16 @@ seastar::future<> precompile(alien_thread_runner& alien_runner, context& ctx, co
         return wasmtime::create_module(engine_ptr, rust::Str(script.data(), script.size()));
     });
 
-    ctx.module = co_await done.get_future();
+    ctx.module = make_lw_shared(co_await done.get_future());
     std::exception_ptr ex;
     try {
         // After precompiling the module, we try creating a store, an instance and a function with it to make sure it's valid.
         // If we succeed, we drop them and keep the module, knowing that we will be able to create them again for UDF execution.
-        ctx.module.value()->compile(ctx.engine_ptr);
+        (*ctx.module)->compile(ctx.engine_ptr);
         auto store = wasmtime::create_store(ctx.engine_ptr, ctx.total_fuel, ctx.yield_fuel);
         auto inst = create_instance(ctx.engine_ptr, **ctx.module, *store);
         create_func(*inst, *store, ctx.function_name);
-        ctx.module.value()->release();
+        (*ctx.module)->release();
     } catch (const rust::Error& e) {
         ex = std::make_exception_ptr(wasm::exception(format("Compilation failed: {}", e.what())));
     }
@@ -241,6 +241,9 @@ seastar::future<> precompile(alien_thread_runner& alien_runner, context& ctx, co
 }
 seastar::future<bytes_opt> run_script(context& ctx, wasmtime::Store& store, wasmtime::Instance& instance, wasmtime::Func& func, const std::vector<data_type>& arg_types, std::span<const bytes_opt> params, data_type return_type, bool allow_null_input) {
     wasm_logger.debug("Running function {}", ctx.function_name);
+    // The fuel limit applies to each call, but the store (with the instance)
+    // is reused for many calls, so refill its fuel before each call.
+    store.set_fuel(ctx.total_fuel);
 
     rust::Box<wasmtime::ValVec> argv = wasmtime::get_val_vec();
     for (size_t i = 0; i < arg_types.size(); ++i) {

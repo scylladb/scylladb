@@ -11,6 +11,7 @@
 #include <span>
 #include "types/types.hh"
 #include <seastar/core/future.hh>
+#include <seastar/core/shared_ptr.hh>
 #include "db/functions/function_name.hh"
 #include "rust/wasmtime_bindings.hh"
 #include "lang/wasm_instance_cache.hh"
@@ -35,7 +36,10 @@ struct instance_corrupting_exception : public exception {
 
 struct context {
     wasmtime::Engine& engine_ptr;
-    std::optional<rust::Box<wasmtime::Module>> module;
+    // Shared with the instance cache's entries for this function, which may
+    // outlive the function - e.g., when it's dropped or replaced while a query
+    // is running it.
+    lw_shared_ptr<rust::Box<wasmtime::Module>> module;
     std::string function_name;
     instance_cache& cache;
     uint64_t yield_fuel;

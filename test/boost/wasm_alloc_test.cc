@@ -68,7 +68,7 @@ SEASTAR_TEST_CASE(test_allocation_failures) {
         try {
             // Function that ignores the input, grows its memory by 1 page, and returns 10
             co_await wasm::precompile(alien_runner, wasm_ctx, {}, grow_return);
-            wasm_ctx.module.value()->compile(*wasm_engine);
+            (*wasm_ctx.module)->compile(*wasm_engine);
         } catch (const wasm::exception& e) {
             errors_during_compilation++;
             continue;
