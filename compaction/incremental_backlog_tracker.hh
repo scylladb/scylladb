@@ -23,13 +23,9 @@ namespace compaction {
 class incremental_backlog_tracker final : public compaction_backlog_tracker::impl {
     incremental_compaction_strategy_options _options;
 
-    // Cached backlog contribution fields, recalculated lazily when _backlog_dirty is set.
-    // Marked mutable because they are caches updated on first backlog() call after a change.
+    // Whether the sstables changed since _last_result was calculated. Marked mutable, as
+    // the cache is updated on the first backlog() call after a change.
     mutable bool _backlog_dirty = true;
-    mutable int64_t _total_bytes = 0;
-    mutable int64_t _total_backlog_bytes = 0;
-    mutable double _sstables_backlog_contribution = 0.0f;
-    mutable std::unordered_set<sstables::run_id> _sstable_runs_contributing_backlog;
 
     struct inflight_component {
         int64_t total_bytes = 0;
@@ -39,11 +35,14 @@ class incremental_backlog_tracker final : public compaction_backlog_tracker::imp
     inflight_component compacted_backlog(const compaction_backlog_tracker::ongoing_compactions& ongoing_compactions) const;
 
     struct backlog_calculation_result {
-        int64_t total_bytes;
-        int64_t total_backlog_bytes;
-        float sstables_backlog_contribution;
+        int64_t total_bytes = 0;
+        int64_t total_backlog_bytes = 0;
+        float sstables_backlog_contribution = 0.0f;
         std::unordered_set<sstables::run_id> sstable_runs_contributing_backlog;
     };
+    // The backlog contribution of the sstables, as last calculated, recalculated lazily
+    // when _backlog_dirty is set.
+    mutable backlog_calculation_result _last_result;
 
     // Recalculates the cached fields if the sstables changed since.
     void refresh(const compaction_backlog_source& src) const;
