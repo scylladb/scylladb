@@ -3662,7 +3662,7 @@ void validate_view_keyspace(const data_dictionary::database& db, std::string_vie
     }
 
     const auto* tablet_rs = rs.maybe_as_tablet_aware();
-    if (tablet_rs && tablet_rs->get_consistency() != data_dictionary::consistency_config_option::eventual) {
+    if (tablet_rs && data_dictionary::is_strongly_consistent(tablet_rs->get_consistency())) {
         throw exceptions::invalid_request_exception(
                 "Materialized views and secondary indexes are not supported on tables in strongly consistent keyspaces");
     }

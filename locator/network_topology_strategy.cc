@@ -308,7 +308,7 @@ effective_replication_map_ptr network_topology_strategy::make_replication_map(ta
 }
 
 future<tablet_map> network_topology_strategy::allocate_tablets_for_new_table(schema_ptr s, token_metadata_ptr tm, size_t tablet_count) const {
-    co_return co_await reallocate_tablets(std::move(s), std::move(tm), tablet_map(tablet_count, get_consistency() != data_dictionary::consistency_config_option::eventual));
+    co_return co_await reallocate_tablets(std::move(s), std::move(tm), tablet_map(tablet_count, data_dictionary::is_strongly_consistent(get_consistency())));
 }
 
 future<tablet_map> network_topology_strategy::reallocate_tablets(schema_ptr s, token_metadata_ptr tm, tablet_map tablets) const {

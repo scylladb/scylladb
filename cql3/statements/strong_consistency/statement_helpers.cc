@@ -45,7 +45,7 @@ db::timeout_clock::time_point request_deadline(const query_options& options, db:
 
 bool is_strongly_consistent(data_dictionary::database db, std::string_view ks_name) {
     const auto* tablet_aware_rs = db.find_keyspace(ks_name).get_replication_strategy().maybe_as_tablet_aware();
-    return tablet_aware_rs && tablet_aware_rs->get_consistency() != data_dictionary::consistency_config_option::eventual;
+    return tablet_aware_rs && data_dictionary::is_strongly_consistent(tablet_aware_rs->get_consistency());
 }
 
 void validate_write_consistency_level(const db::consistency_level& cl) {
