@@ -50,6 +50,7 @@
 #include "db/schema_tables.hh"
 #include "gms/feature_service.hh"
 #include "init.hh"
+#include <seastar/core/metrics_api.hh>
 #include <seastar/core/simple-stream.hh>
 #include "partition_slice_builder.hh"
 #include "serializer_impl.hh"
@@ -2666,6 +2667,26 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_segment_write_io_error_signals_disk_error)
     BOOST_REQUIRE_EQUAL(signalled, 1u);
 }
 
+// Returns the value of the counter or gauge `name` in the metric group `group` of this shard.
+static double read_metric(std::string_view group, std::string_view name) {
+    const auto& family = seastar::metrics::impl::get_value_map().at(sstring(fmt::format("{}_{}", group, name)));
+    std::optional<double> value;
+    for (const auto& [labels, metric] : family) {
+        // The unregistration of a metric has two stages, so the family can hold a null metric.
+        if (metric) {
+            BOOST_REQUIRE(!value);
+            value = (*metric)().d();
+        }
+    }
+    BOOST_REQUIRE(value);
+    return *value;
+}
+
+// Returns the value of the counter or gauge `name` of the segment manager of this shard.
+static double read_segment_manager_metric(std::string_view name) {
+    return read_metric("logstor_sm", name);
+}
+
 SEASTAR_THREAD_TEST_CASE(test_logstor_write_and_separator_flush) {
     auto schema = make_kv_schema();
     tmpdir dir;
@@ -2699,6 +2720,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_write_and_separator_flush) {
     // pool: a group with nothing to separate holds no buffer.
     BOOST_REQUIRE_EQUAL(cg.separator_held_segment_count(), 0u);
     BOOST_REQUIRE_EQUAL(cg.logstor_segments().segment_count(), 1u);
+    BOOST_REQUIRE_EQUAL(read_segment_manager_metric("kept_segments"), 0);
 
     auto snapshot = ls.get_segment_manager().make_snapshot(cg).get();
     BOOST_REQUIRE_EQUAL(snapshot.size(), 1u);
@@ -2763,6 +2785,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_discarded_group_does_not_free_its_unflushe
     // Nothing of the buffer is left held, which is also what gives it back to the pool.
     BOOST_REQUIRE(!cg.separator_has_data());
     BOOST_REQUIRE_EQUAL(cg.separator_held_segment_count(), 0u);
+    BOOST_REQUIRE_EQUAL(read_segment_manager_metric("kept_segments"), 1);
 
     // The records were never written out, so the index still points at them where they were, and the
     // segment that holds them was not freed and reused underneath it.
@@ -2806,6 +2829,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_closed_group_takes_no_separator_writes) {
     BOOST_REQUIRE(!cg.separator_has_data());
     BOOST_REQUIRE_EQUAL(cg.separator_held_segment_count(), 0u);
     BOOST_REQUIRE_EQUAL(cg.logstor_segments().segment_count(), 0u);
+    // The segment of the record is kept, because the index still points at the record there.
+    BOOST_REQUIRE_EQUAL(read_segment_manager_metric("kept_segments"), 1);
 
     // The write itself succeeded and the record is readable where it was written.
     BOOST_REQUIRE(lookup_location(cg.logstor_index(), make_index_key(*schema, key), *schema));

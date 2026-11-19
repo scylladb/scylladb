@@ -21,20 +21,18 @@ namespace replica::logstor {
 
 extern seastar::logger logstor_logger;
 
-// A shared reference to a segment. The last copy that goes frees the segment, unless a copy called
-// keep_on_release() because records in the segment can still be needed.
+// A shared reference to a segment. The last copy that goes releases the segment, and the release
+// frees the segment unless a copy kept it with keep_on_release() because records in the segment
+// can still be needed.
+// The state calls `on_kept` at each keep_on_release(), and `on_last_release` when the last copy
+// goes, also for a kept segment.
 class segment_ref {
     struct state {
         log_segment_id id;
         std::function<void()> on_last_release;
         std::function<void()> on_kept;
-        bool keep{false};
         ~state() {
-            if (!keep) {
-                if (on_last_release) on_last_release();
-            } else {
-                if (on_kept) on_kept();
-            }
+            if (on_last_release) on_last_release();
         }
     };
     lw_shared_ptr<state> _state;
@@ -50,7 +48,11 @@ public:
     log_segment_id id() const noexcept { return _state->id; }
     bool empty() const noexcept { return !_state; }
 
-    void keep_on_release() noexcept { if (_state) _state->keep = true; }
+    void keep_on_release() noexcept {
+        if (_state && _state->on_kept) {
+            _state->on_kept();
+        }
+    }
 
 private:
     friend class segment_manager_impl;

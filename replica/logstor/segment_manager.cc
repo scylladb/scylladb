@@ -395,6 +395,9 @@ struct separator_task {
 // (segment_descriptor_hist_options), so a scan reads a segment in one buffer.
 static constexpr size_t max_scan_buffer_size = 128 * 1024;
 
+// One lasting cause can keep many segments, so the warning of a kept segment has a rate limit.
+static thread_local logger::rate_limit kept_segment_rate_limit{std::chrono::seconds(10)};
+
 class segment_manager_impl {
 
     class recovery;
@@ -415,7 +418,7 @@ class segment_manager_impl {
         uint64_t live_record_bytes{0};
         uint64_t live_record_count{0};
         uint64_t separator_task_failures{0};
-        uint64_t segment_free_failures{0};
+        uint64_t kept_segments{0};
     };
 
     segment_geometry _geometry;
@@ -716,13 +719,23 @@ private:
         return segment_ref(seg_id,
             [this, seg_id] {
                 auto& desc = get_segment_descriptor(seg_id);
-                if (--desc.ref_count == 0) {
-                    return free_segment(seg_id);
+                if (--desc.ref_count == 0 && !desc.kept) {
+                    free_segment(seg_id);
                 }
             },
             [this, seg_id] {
-                ++_stats.segment_free_failures;
-                logstor_logger.warn("Cannot free {}, because records in it can still be needed", seg_id);
+                auto& desc = get_segment_descriptor(seg_id);
+                // Compaction and split free the segments of a group without a check of the mark.
+                if (desc.owner) {
+                    on_fatal_internal_error(logstor_logger, fmt::format("Keeping {}, which a compaction group owns", seg_id));
+                }
+                if (desc.kept) {
+                    return;
+                }
+                desc.kept = true;
+                ++_stats.kept_segments;
+                logstor_logger.log(log_level::warn, kept_segment_rate_limit,
+                        "Cannot free {} until the node restarts, because records in it can still be needed", seg_id);
             }
         );
     }
@@ -963,8 +976,8 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
                        sm::description("Counts number of times the separator had to wait for a write buffer to become available.")),
         sm::make_counter("separator_buffers_dropped", _separator_buffer_pool.get_stats().buffers_dropped,
                        sm::description("Counts number of separator write buffers permanently removed from the pool after they could not be reclaimed.")),
-        sm::make_counter("segment_free_failures", _stats.segment_free_failures,
-                       sm::description("Counts number of logstor segment references that failed to free the segment.")),
+        sm::make_gauge("kept_segments", _stats.kept_segments,
+                       sm::description("Number of segments that are not freed until the node restarts, because the index can still point into them.")),
         sm::make_gauge("separator_task_queue_size", [this]() { return _separator_task_queue.size(); },
                        sm::description("Current number of pending tasks in the separator task queue.")),
     });
@@ -1413,6 +1426,9 @@ void segment_manager_impl::free_segment(log_segment_id segment_id) noexcept {
     }
     if (desc.ref_count != 0) {
         on_fatal_internal_error(logstor_logger, format("Freeing segment {} with non-zero reference count", segment_id));
+    }
+    if (desc.kept) {
+        on_fatal_internal_error(logstor_logger, fmt::format("Freeing kept {}", segment_id));
     }
     if (segment_id.value < _geometry.segment_count()) {
         // _free_segments is pre-reserved to fit every configured segment (see the constructor), so
