@@ -1073,6 +1073,23 @@ SEASTAR_THREAD_TEST_CASE(test_object_storage_endpoint_list_is_strict) {
     }
 }
 
+SEASTAR_THREAD_TEST_CASE(test_object_storage_endpoint_bucket) {
+    auto s3 = object_storage_endpoint_param::decode(
+            YAML::Load("name: primary\nuri: https://s3.us-east-1.amazonaws.com\naws_region: us-east-1\nbucket: ks-data-us\n"));
+    BOOST_CHECK_EQUAL(s3.get_s3_storage().bucket, "ks-data-us");
+    BOOST_CHECK_NE(s3.to_json_string().find("\"bucket\": \"ks-data-us\""), std::string::npos);
+
+    auto gs = object_storage_endpoint_param::decode(YAML::Load("name: default\ntype: gs\nbucket: ks-data-eu\n"));
+    BOOST_CHECK_EQUAL(gs.get_gs_storage().bucket, "ks-data-eu");
+    BOOST_CHECK_NE(gs.to_json_string().find("\"bucket\": \"ks-data-eu\""), std::string::npos);
+
+    // An entry with no bucket is printed as it was before the field existed.
+    auto none = object_storage_endpoint_param::decode(
+            YAML::Load("name: https://s3.us-east-1.amazonaws.com\naws_region: us-east-1\n"));
+    BOOST_CHECK(none.get_s3_storage().bucket.empty());
+    BOOST_CHECK_EQUAL(none.to_json_string(), "{ \"type\": \"s3\", \"aws_region\": \"us-east-1\", \"iam_role_arn\": \"\" }");
+}
+
 SEASTAR_THREAD_TEST_CASE(test_parse_object_storage_endpoints_one_entry_broken) {
     tests::tmp_unset_env no_region_env("AWS_DEFAULT_REGION");
     auto cfg_ptr = std::make_unique<config>();
