@@ -76,6 +76,17 @@ Where:
 * ``service_level_name`` - Specifies the name of the service you're creating. This can be any string without spaces. The name should be meaningful, such as class names (silver, gold, diamond, platinum), or categories (OLAP or OLTP), etc.
 * ``shares_number`` - The number of shares of the resources you're granting to the service level name.  You can use any number within the range from 1 to 1000. **Default : 1000**
 
+.. note::
+
+   Service levels compete for resources not only with each other, but also with ScyllaDB's internal
+   processes. Background operations, such as streaming (for example, when you add a node) or
+   maintenance compaction, run with 200 shares. Regular compaction adjusts its shares dynamically,
+   and they may grow higher.
+
+   A service level with fewer than 200 shares may get fewer resources than these background
+   operations while they are running. We recommend assigning at least 300 shares to service levels
+   for user workloads, and at least 400 shares to service levels for high-priority workloads.
+
 Example
 .......
 
