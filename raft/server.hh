@@ -294,6 +294,12 @@ public:
 
     virtual server_status get_status() const = 0;
 
+    // Drop the log entries the last snapshot covers, which were left in the
+    // log for members that are behind. A member that still needs one is
+    // brought up to date by a snapshot transfer instead. For a caller that
+    // has to free memory.
+    virtual void drop_trailing_log() = 0;
+
     // Returns true if this servers thinks that it is the leader.
     // The information is only relevant for the current_term() only
     virtual bool is_leader() = 0;
