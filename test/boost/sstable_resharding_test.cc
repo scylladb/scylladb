@@ -16,6 +16,7 @@
 #include "compaction/compaction_manager.hh"
 #include "test/boost/sstable_test.hh"
 #include "test/lib/mutation_reader_assertions.hh"
+#include "readers/combined.hh"
 #include "test/lib/key_utils.hh"
 #include "test/lib/sstable_utils.hh"
 #include "test/lib/test_services.hh"
@@ -47,7 +48,8 @@ static future<> assert_sstable_computes_correct_owners(test_env& env, const ssta
 }
 
 // Must be called in a seastar thread.
-void run_sstable_resharding_test(sstables::test_env& env) {
+// The output sstables are limited in size, so that each shard gets about the given number of them.
+void run_sstable_resharding_test(sstables::test_env& env, unsigned sstables_per_shard = 1) {
   for (const auto version : writable_sstable_versions) {
     auto s = get_schema();
     auto cf = env.make_table_for_tests(s);
@@ -98,7 +100,10 @@ void run_sstable_resharding_test(sstables::test_env& env) {
 
     auto erm = cf->get_effective_replication_map();
 
-    auto descriptor = compaction::compaction_descriptor({sst}, 0, std::numeric_limits<uint64_t>::max());
+    auto max_sstable_bytes = sstables_per_shard > 1
+            ? sst->data_size() / this_smp_shard_count() / sstables_per_shard
+            : std::numeric_limits<uint64_t>::max();
+    auto descriptor = compaction::compaction_descriptor({sst}, 0, max_sstable_bytes);
     descriptor.options = compaction::compaction_type_options::make_reshard();
     descriptor.sharder = &cf->schema()->get_sharder();
     descriptor.creator = [&env, &cf, version] (shard_id shard) mutable {
@@ -117,35 +122,65 @@ void run_sstable_resharding_test(sstables::test_env& env) {
     sst->destroy().get();
 
     auto new_sstables = std::move(res.new_sstables);
-    BOOST_REQUIRE(new_sstables.size() == this_smp_shard_count());
 
     uint64_t bloom_filter_size_after = 0;
-    std::unordered_set<shard_id> processed_shards;
+    std::unordered_map<shard_id, std::vector<shared_sstable>> sstables_of_shard;
 
     for (auto& sstable : new_sstables) {
         auto new_sst = env.reusable_sst(s, sstable->generation(), version).get();
         bloom_filter_size_after += filter_size(new_sst);
         auto shards = new_sst->get_shards_for_this_sstable();
         BOOST_REQUIRE(shards.size() == 1); // check sstable is unshared.
-        auto shard = shards.front();
-        BOOST_REQUIRE(processed_shards.insert(shard).second == true); // check resharding created one sstable per shard.
         assert_sstable_computes_correct_owners(env, new_sst).get();
+        sstables_of_shard[shards.front()].push_back(std::move(new_sst));
+    }
+    BOOST_REQUIRE_EQUAL(sstables_of_shard.size(), this_smp_shard_count());
 
-        auto rd = assert_that(new_sst->as_mutation_source().make_mutation_reader(s, env.make_reader_permit()));
+    for (auto& [shard, ssts] : sstables_of_shard) {
+        if (sstables_per_shard > 1) {
+            BOOST_REQUIRE_GT(ssts.size(), 1);
+        } else {
+            BOOST_REQUIRE_EQUAL(ssts.size(), 1); // check resharding created one sstable per shard.
+        }
+        // The output of a shard is a single run, so its sstables don't overlap, and read
+        // together they produce all of the shard's data, exactly once.
+        std::ranges::sort(ssts, [] (const shared_sstable& a, const shared_sstable& b) { return a->compare_by_first_key(*b) < 0; });
+        for (size_t i = 0; i < ssts.size(); ++i) {
+            BOOST_REQUIRE_EQUAL(ssts[i]->run_identifier(), ssts.front()->run_identifier());
+            if (i > 0) {
+                BOOST_REQUIRE(ssts[i - 1]->get_last_decorated_key().less_compare(*s, ssts[i]->get_first_decorated_key()));
+            }
+        }
+        auto readers = ssts | std::views::transform([&] (const shared_sstable& sst) {
+            return sst->as_mutation_source().make_mutation_reader(s, env.make_reader_permit());
+        }) | std::ranges::to<std::vector<mutation_reader>>();
+        auto rd = assert_that(make_combined_reader(s, env.make_reader_permit(), std::move(readers)));
         BOOST_REQUIRE(muts[shard].size() == keys_per_shard);
         for (auto k : std::views::iota(0u, keys_per_shard)) {
             rd.produces(muts[shard][k]);
         }
         rd.produces_end_of_stream();
-        new_sst->destroy().get();
+        for (auto& sst : ssts) {
+            sst->destroy().get();
+        }
     }
-    BOOST_REQUIRE_CLOSE_FRACTION(float(bloom_filter_size_before), float(bloom_filter_size_after), 0.1);
+    if (sstables_per_shard == 1) {
+        BOOST_REQUIRE_CLOSE_FRACTION(float(bloom_filter_size_before), float(bloom_filter_size_after), 0.1);
+    }
   }
 }
 
 SEASTAR_TEST_CASE(sstable_resharding_test) {
     return sstables::test_env::do_with_async([] (auto& env) {
         run_sstable_resharding_test(env);
+    });
+}
+
+// Resharding with a limit on the size of output sstables writes the data of every shard
+// to multiple sstables, without losing any of it.
+SEASTAR_TEST_CASE(sstable_resharding_with_size_limit_test) {
+    return sstables::test_env::do_with_async([] (auto& env) {
+        run_sstable_resharding_test(env, 4);
     });
 }
 

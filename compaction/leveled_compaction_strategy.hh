@@ -79,6 +79,10 @@ public:
     virtual std::unique_ptr<compaction_backlog_tracker::impl> make_backlog_tracker() const override;
 
     virtual compaction_descriptor get_reshaping_job(std::vector<sstables::shared_sstable> input, schema_ptr schema, reshape_config cfg) const override;
+
+    virtual uint64_t get_resharding_max_sstable_bytes() const override {
+        return uint64_t(_max_sstable_size_in_mb) * 1024 * 1024;
+    }
 };
 
 }

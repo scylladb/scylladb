@@ -21,6 +21,9 @@
 #include "sstables/sstable_directory.hh"
 #include "replica/distributed_loader.hh"
 #include "replica/global_table_ptr.hh"
+#include "compaction/task_manager_module.hh"
+#include "compaction/time_window_compaction_strategy.hh"
+#include "test/lib/random_utils.hh"
 #include "test/lib/sstable_utils.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/tmpdir.hh"
@@ -69,22 +72,26 @@ make_sstable_for_this_shard(std::function<sstables::shared_sstable()> sst_factor
     return make_sstable_containing(sst_factory, {m}).get();
 }
 
-/// Create a shared SSTable belonging to all shards for the following schema: "create table cf (p text PRIMARY KEY, c int)"
+/// Create a shared SSTable belonging to all shards for the following schema: "create table cf (p text PRIMARY KEY, c int)",
+/// or for one where c has the type of value. The SSTable has partitions_per_shard partitions of each shard, whose cells
+/// are written with the given timestamp.
 ///
 /// Arguments passed to the function are passed to table::make_sstable
 template <typename... Args>
 sstables::shared_sstable
-make_sstable_for_all_shards(replica::table& table, sstables::sstable_state state, sstables::generation_type generation, unsigned num_shards = this_smp_shard_count()) {
+make_sstable_for_all_shards(replica::table& table, sstables::sstable_state state, sstables::generation_type generation, unsigned num_shards = this_smp_shard_count(),
+        unsigned partitions_per_shard = 1, api::timestamp_type timestamp = 0, data_value value = data_value(int32_t(0))) {
     // Unlike the previous helper, we'll assume we're in a thread here. It's less flexible
     // but the users are usually in a thread, and rewrite_toc_without_component requires
     // a thread. We could fix that, but deferring that for now.
     auto s = table.schema();
     auto mt = make_lw_shared<replica::memtable>(s);
     for (shard_id shard = 0; shard < num_shards; ++shard) {
-        auto key = tests::generate_partition_key(s, shard);
-        mutation m(s, key);
-        m.set_clustered_cell(clustering_key::make_empty(), bytes("c"), data_value(int32_t(0)), api::timestamp_type(0));
-        mt->apply(std::move(m));
+        for (auto& key : tests::generate_partition_keys(partitions_per_shard, s, shard)) {
+            mutation m(s, key);
+            m.set_clustered_cell(clustering_key::make_empty(), bytes("c"), value, timestamp);
+            mt->apply(std::move(m));
+        }
     }
     auto sst = table.get_sstables_manager().make_sstable(s, table.get_storage_options(), generation, state);
     write_memtable_to_sstable(*mt, sst).get();
@@ -790,9 +797,240 @@ SEASTAR_TEST_CASE(sstable_directory_shared_sstables_reshard_respect_max_threshol
             return cf.get_sstables_manager().make_sstable(cf.schema(), cf.get_storage_options(), generation, sstables::sstable_state::upload);
         };
         distributed_loader_for_tests::reshard(sstdir, e.db(), "ks", "cf", std::move(make_sstable)).get();
-        verify_that_all_sstables_are_local(sstdir, 2 * this_smp_shard_count() * this_smp_shard_count()).get();
+        // Every job writes an sstable to every shard, and jobs are packed up to max_threshold sstables.
+        auto max_threshold = cf.schema()->max_compaction_threshold();
+        auto jobs = (num_sstables + max_threshold - 1) / max_threshold;
+        verify_that_all_sstables_are_local(sstdir, jobs * this_smp_shard_count()).get();
       });
     });
+}
+
+// Reshards num_sstables shared sstables of table ks.cf, made by make_shared_sstable, and calls verify on every
+// shard, with the resharded sstables the shard owns.
+static void reshard_shared_sstables(cql_test_env& e, unsigned num_sstables,
+        std::function<void (replica::table&, sstables::generation_type, unsigned)> make_shared_sstable,
+        std::function<void (std::vector<sstables::shared_sstable>)> verify) {
+    e.db().invoke_on_all([] (replica::database& db) {
+        return db.find_column_family("ks", "cf").disable_auto_compaction();
+    }).get();
+    auto& cf = e.local_db().find_column_family("ks", "cf");
+
+    sharded<sstables::sstable_generation_generator> sharded_gen;
+    sharded_gen.start().get();
+    auto stop_generator = deferred_stop(sharded_gen);
+
+    for (unsigned nr = 0; nr < num_sstables; ++nr) {
+        auto generation = sharded_gen.invoke_on(nr % this_smp_shard_count(), [] (auto& gen) {
+            return gen();
+        }).get();
+        make_shared_sstable(cf, generation, nr);
+    }
+
+    with_sstable_directory(e.db(), "ks", "cf", sstables::sstable_state::upload, [&] (sharded<sstables::sstable_directory>& sstdir) {
+        distributed_loader_for_tests::process_sstable_dir(sstdir, { .throw_on_missing_toc = true }).get();
+        verify_that_all_sstables_are_local(sstdir, 0).get();
+
+        auto make_sstable = [&e, &sharded_gen] (shard_id shard) {
+            auto generation = sharded_gen.invoke_on(shard, [] (auto& gen) {
+                return gen();
+            }).get();
+            auto& cf = e.local_db().find_column_family("ks", "cf");
+            return cf.get_sstables_manager().make_sstable(cf.schema(), cf.get_storage_options(), generation, sstables::sstable_state::upload);
+        };
+        distributed_loader_for_tests::reshard(sstdir, e.db(), "ks", "cf", std::move(make_sstable)).get();
+
+        sstdir.invoke_on_all([&] (sstables::sstable_directory& d) -> future<> {
+            std::vector<sstables::shared_sstable> sstables;
+            co_await d.do_for_each_sstable([&] (sstables::shared_sstable sst) {
+                sstables.push_back(std::move(sst));
+                return make_ready_future<>();
+            });
+            verify(std::move(sstables));
+        }).get();
+    });
+}
+
+// Resharding limits each job by space, by max_threshold, and to sstables with a common owner shard,
+// while producing as few jobs as possible, but no fewer than the fair share of work requires.
+SEASTAR_TEST_CASE(sstable_directory_reshard_jobs_respect_limits) {
+    return sstables::test_env::do_with_async([] (test_env& env) {
+        auto sst = make_sstable_for_this_shard(std::bind(new_env_sstable, std::ref(env)));
+
+        constexpr uint64_t MB = 1024 * 1024;
+        constexpr unsigned num_shards = 8;
+        constexpr size_t max_sstables_per_job = 32;
+
+        // Open infos of the shared sstables, with the given sizes and owners.
+        auto make_infos = [&] (const std::vector<std::pair<uint64_t, std::vector<shard_id>>>& sstables) {
+            utils::chunked_vector<sstables::foreign_sstable_open_info> infos;
+            for (const auto& [size, owners] : sstables) {
+                auto info = sst->get_open_info().get();
+                info.bytes_on_disk = size;
+                info.uncompressed_data_size = size;
+                info.owners = owners;
+                infos.push_back(std::move(info));
+            }
+            return infos;
+        };
+        auto total_size = [] (const auto& sstables) {
+            return std::ranges::fold_left(sstables | std::views::keys, uint64_t(0), std::plus{});
+        };
+
+        auto verify_jobs = [&] (const std::vector<std::pair<uint64_t, std::vector<shard_id>>>& sstables, uint64_t max_job_size, uint64_t fair_share) {
+            auto jobs = compaction::make_reshard_jobs(make_infos(sstables), max_job_size, max_sstables_per_job, fair_share).get();
+
+            size_t sstables_in_jobs = 0;
+            uint64_t size_of_jobs = 0;
+            for (const auto& job : jobs) {
+                BOOST_REQUIRE(!job.info_vec.empty());
+                BOOST_REQUIRE_LE(job.info_vec.size(), max_sstables_per_job);
+                auto size = std::ranges::fold_left(job.info_vec | std::views::transform(&sstables::foreign_sstable_open_info::bytes_on_disk), uint64_t(0), std::plus{});
+                BOOST_REQUIRE_EQUAL(job.bytes_on_disk, size);
+                // Only an sstable bigger than the budget may exceed it, and then it's resharded alone.
+                BOOST_REQUIRE(size <= max_job_size || job.info_vec.size() == 1);
+                BOOST_REQUIRE(!job.owners.empty());
+                for (const auto& info : job.info_vec) {
+                    for (auto owner : job.owners) {
+                        BOOST_REQUIRE(std::ranges::contains(info.owners, owner));
+                    }
+                }
+                sstables_in_jobs += job.info_vec.size();
+                size_of_jobs += size;
+            }
+            BOOST_REQUIRE_EQUAL(sstables_in_jobs, sstables.size());
+            BOOST_REQUIRE_EQUAL(size_of_jobs, total_size(sstables));
+            BOOST_REQUIRE_GE(jobs.size(), (total_size(sstables) + fair_share - 1) / fair_share);
+            return jobs;
+        };
+
+        std::vector<shard_id> all_shards = std::views::iota(0u, num_shards) | std::ranges::to<std::vector>();
+
+        // Plenty of space: sstables are packed up to max_threshold, into no more jobs than that, or than the fair share requires.
+        {
+            std::vector<std::pair<uint64_t, std::vector<shard_id>>> sstables(100, {10 * MB, all_shards});
+            for (unsigned shards : {1u, num_shards}) {
+                auto fair_share = (total_size(sstables) + shards - 1) / shards;
+                auto jobs = verify_jobs(sstables, std::numeric_limits<uint64_t>::max(), fair_share);
+                BOOST_REQUIRE_EQUAL(jobs.size(), std::max<size_t>((sstables.size() + max_sstables_per_job - 1) / max_sstables_per_job, shards));
+            }
+        }
+
+        // Little space: jobs are limited by it, and sstables bigger than it are resharded alone.
+        {
+            std::vector<std::pair<uint64_t, std::vector<shard_id>>> sstables;
+            for (unsigned i = 0; i < 200; ++i) {
+                sstables.emplace_back(tests::random::get_int<uint64_t>(1, 100 * MB), all_shards);
+            }
+            sstables.emplace_back(300 * MB, all_shards);
+            auto max_job_size = 200 * MB;
+            auto jobs = verify_jobs(sstables, max_job_size, total_size(sstables));
+            // Packing leaves no job that could be merged into another without exceeding the budget,
+            // so there are no more than twice as many jobs as the budget strictly requires.
+            BOOST_REQUIRE_LE(jobs.size(), 2 * (total_size(sstables) + max_job_size - 1) / max_job_size + 1);
+        }
+
+        // Sstables only go together with others they have a common owner with.
+        {
+            std::vector<std::pair<uint64_t, std::vector<shard_id>>> sstables;
+            for (unsigned i = 0; i < 200; ++i) {
+                auto first = tests::random::get_int<shard_id>(0, num_shards - 1);
+                auto count = tests::random::get_int<shard_id>(1, num_shards - first);
+                sstables.emplace_back(tests::random::get_int<uint64_t>(1, 100 * MB),
+                        std::views::iota(first, first + count) | std::ranges::to<std::vector>());
+            }
+            verify_jobs(sstables, 500 * MB, (total_size(sstables) + num_shards - 1) / num_shards);
+        }
+    });
+}
+
+// Resharding a TWCS table writes each time window to sstables of its own.
+SEASTAR_TEST_CASE(sstable_directory_reshard_twcs_keeps_windows_apart) {
+    if (this_smp_shard_count() == 1) {
+        fmt::print("Skipping sstable_directory_reshard_twcs_keeps_windows_apart, smp == 1\n");
+        return make_ready_future<>();
+    }
+
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        e.execute_cql("create table cf (p text PRIMARY KEY, c int) with compaction = "
+                "{'class': 'TimeWindowCompactionStrategy', 'compaction_window_unit': 'HOURS', 'compaction_window_size': '1'}").get();
+
+        constexpr unsigned windows = 3;
+        constexpr api::timestamp_type window_size = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::hours(1)).count();
+        auto window_of = [] (api::timestamp_type ts) {
+            return ts / window_size;
+        };
+
+        // Windows found in the resharded sstables of every shard.
+        std::vector<std::array<bool, windows>> windows_per_shard(this_smp_shard_count());
+        reshard_shared_sstables(e, windows * 2 * this_smp_shard_count(), [] (replica::table& cf, sstables::generation_type generation, unsigned nr) {
+            auto timestamp = (nr % windows) * window_size + nr;
+            make_sstable_for_all_shards(cf, sstables::sstable_state::upload, generation, this_smp_shard_count(), 1, timestamp);
+        }, [&] (std::vector<sstables::shared_sstable> sstables) {
+            for (const auto& sst : sstables) {
+                const auto& stats = sst->get_stats_metadata();
+                THREADSAFE_BOOST_REQUIRE_EQUAL(window_of(stats.min_timestamp), window_of(stats.max_timestamp));
+                THREADSAFE_BOOST_REQUIRE(window_of(stats.min_timestamp) < windows);
+                windows_per_shard[this_shard_id()][window_of(stats.min_timestamp)] = true;
+            }
+        });
+
+        for (const auto& shard_windows : windows_per_shard) {
+            BOOST_REQUIRE(std::ranges::all_of(shard_windows, std::identity{}));
+        }
+    });
+}
+
+// Resharding writes the output of each job on a shard as a run of sstables no bigger than
+// the strategy's maximum sstable size.
+static void test_reshard_respects_max_sstable_size(sstring compaction_class) {
+    if (this_smp_shard_count() == 1) {
+        fmt::print("Skipping test_reshard_respects_max_sstable_size, smp == 1\n");
+        return;
+    }
+
+    do_with_cql_env_thread([&] (cql_test_env& e) {
+        e.execute_cql(seastar::format("create table cf (p text PRIMARY KEY, c blob) with compaction = "
+                "{{'class': '{}', 'sstable_size_in_mb': '1'}}", compaction_class)).get();
+        constexpr uint64_t max_sstable_size = 1024 * 1024;
+        constexpr size_t value_size = 8 * 1024;
+        // Every shard gets about 3MB from every input sstable.
+        constexpr unsigned partitions_per_shard = 3 * max_sstable_size / value_size;
+
+        // Whether every shard has a run of more than one resharded sstable.
+        std::vector<char> found_multi_sstable_run(this_smp_shard_count(), false);
+        reshard_shared_sstables(e, 2 * this_smp_shard_count(), [] (replica::table& cf, sstables::generation_type generation, unsigned) {
+            make_sstable_for_all_shards(cf, sstables::sstable_state::upload, generation, this_smp_shard_count(), partitions_per_shard, 0,
+                    data_value(tests::random::get_bytes(value_size)));
+        }, [&] (std::vector<sstables::shared_sstable> sstables) {
+            std::map<sstables::run_id, std::vector<sstables::shared_sstable>> runs;
+            for (auto& sst : sstables) {
+                // The writer stops at the first partition boundary past the limit.
+                THREADSAFE_BOOST_REQUIRE(sst->data_size() <= max_sstable_size + 2 * value_size);
+                runs[sst->run_identifier()].push_back(std::move(sst));
+            }
+            for (auto& [_, run] : runs) {
+                // The sstables of a run must not overlap.
+                const auto& s = *run.front()->get_schema();
+                std::ranges::sort(run, [&] (const auto& a, const auto& b) {
+                    return a->get_first_decorated_key().tri_compare(s, b->get_first_decorated_key()) < 0;
+                });
+                for (size_t i = 1; i < run.size(); ++i) {
+                    THREADSAFE_BOOST_REQUIRE(run[i - 1]->get_last_decorated_key().tri_compare(s, run[i]->get_first_decorated_key()) < 0);
+                }
+                found_multi_sstable_run[this_shard_id()] |= run.size() > 1;
+            }
+        });
+
+        BOOST_REQUIRE(std::ranges::all_of(found_multi_sstable_run, std::identity{}));
+    }).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(sstable_directory_reshard_ics_respects_fragment_size) {
+    test_reshard_respects_max_sstable_size("IncrementalCompactionStrategy");
+}
+
+SEASTAR_THREAD_TEST_CASE(sstable_directory_reshard_lcs_respects_sstable_size) {
+    test_reshard_respects_max_sstable_size("LeveledCompactionStrategy");
 }
 
 SEASTAR_THREAD_TEST_CASE(test_multiple_data_dirs) {

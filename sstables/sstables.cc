@@ -2408,7 +2408,8 @@ future<foreign_sstable_open_info> sstable::get_open_info() & {
             .version = _version,
             .format = _format,
             .uncompressed_data_size = data_size(),
-            .metadata_size_on_disk = _metadata_size_on_disk
+            .metadata_size_on_disk = _metadata_size_on_disk,
+            .bytes_on_disk = bytes_on_disk(),
         };
     });
 }

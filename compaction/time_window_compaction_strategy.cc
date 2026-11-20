@@ -343,6 +343,15 @@ time_window_compaction_strategy::get_reshaping_job(std::vector<sstables::shared_
     return compaction_descriptor();
 }
 
+int64_t
+time_window_compaction_strategy::get_resharding_group(const sstables::stats_metadata& stats) const {
+    // Groups sstables by time window, so that resharding writes each window to sstables of its own.
+    // An sstable spanning multiple windows is resharded together with the other ones like it, so as
+    // not to mix data of other windows into windows of the single-window sstables.
+    auto window = get_window_for(_options, stats.max_timestamp);
+    return get_window_for(_options, stats.min_timestamp) == window ? window : api::min_timestamp;
+}
+
 future<compaction_descriptor>
 time_window_compaction_strategy::get_sstables_for_compaction(compaction_group_view& table_s, strategy_control& control) {
     auto state = get_state(table_s);
