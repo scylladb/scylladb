@@ -411,11 +411,12 @@ static constexpr double dirty_memory_threshold_fraction = 0.50;
 static constexpr double min_dirty_memory_threshold_fraction = 0.10;
 
 database::database(const db::config& cfg, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, locator::shared_token_metadata& stm,
-        compaction::compaction_manager& cm, sstables::storage_manager& sstm, lang::manager& langm, sstables::directory_semaphore& sst_dir_sem, sstable_compressor_factory& scf, const abort_source& abort, utils::cross_shard_barrier barrier)
+        compaction::compaction_manager& cm, sstables::storage_manager& sstm, lang::manager& langm, sstables::directory_semaphore& sst_dir_sem, sstable_compressor_factory& scf, abort_source& abort, utils::cross_shard_barrier barrier)
     : _stats(make_lw_shared<db_stats>())
     , _user_types(std::make_shared<db_user_types_storage>(*this))
     , _cl_stats(std::make_unique<cell_locker_stats>())
     , _cfg(cfg)
+    , _abort_source(abort)
     // Allow system tables a pool of 10 MB memory to write, but never block on other regions.
     , _system_dirty_memory_manager(*this, 10 << 20, cfg.unspooled_dirty_soft_limit(), default_scheduling_group())
     , _dirty_memory_manager(*this, dbcfg.available_memory * dirty_memory_threshold_fraction, cfg.unspooled_dirty_soft_limit(), dbcfg.statement_scheduling_group)
@@ -1514,6 +1515,14 @@ future<> database::cleanup_drop_table_on_all_shards(sharded<database>& sharded_d
     });
     f.get(); // re-throw exception from truncate() if any
     co_await sys_ks.local().remove_truncation_records(table_shards->schema()->id());
+    // The sstables of the table can still be referenced outside of it, for
+    // example by a reader, and stay alive until the last reference is gone.
+    // Wait for them, so that a table created later with the same ID, which
+    // uses the same storage, never overlaps with sstables of this one.
+    // A later schema change waits for this one to finish.
+    co_await sharded_db.invoke_on_all([&] (database& db) {
+        return table_shards->get_sstables_manager().await_table_sstables_destroyed(table_shards->schema()->id(), db._abort_source);
+    });
     co_await table_shards->destroy_storage();
 }
 

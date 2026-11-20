@@ -9,6 +9,8 @@
 
 #pragma once
 
+#include <unordered_map>
+
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/sharded.hh>
 #include <seastar/core/gate.hh>
@@ -179,6 +181,12 @@ private:
     set_type _reclaimed;
     // Condition variable that needs to be notified when an sstable is created or deleted
     seastar::condition_variable _components_memory_change_event;
+    // The sstables of each table that are not destroyed yet, from their
+    // construction until their files are closed (and deleted, if they were
+    // unlinked). Tables without such sstables have no entry.
+    std::unordered_map<table_id, size_t> _live_sstables_per_table;
+    // Broadcast when the last live sstable of a table is destroyed.
+    seastar::condition_variable _table_sstables_destroyed;
     future<> _components_reloader_status = make_ready_future<>();
 
     bool _closing = false;
@@ -325,6 +333,15 @@ public:
 
     // To be called by the sstable to signal its unlinking
     void on_unlink(sstable* sst);
+
+    // Waits until every sstable of the table on this shard is destroyed, that
+    // is, until its files are closed, and deleted if the sstable was unlinked.
+    // This covers every sstable with the table's ID, not only those in the
+    // table's sstable set. Used when a table is dropped, so that a table that
+    // is later created with the same ID doesn't share its storage with
+    // sstables of the dropped one. Logs a warning while the wait takes long,
+    // since an sstable can be kept alive by any holder of a reference to it.
+    future<> await_table_sstables_destroyed(table_id id, abort_source& as);
 
     std::vector<std::filesystem::path> get_local_directories(const data_dictionary::storage_options::local& so) const;
 
