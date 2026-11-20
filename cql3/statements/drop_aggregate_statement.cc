@@ -38,7 +38,7 @@ future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, cql3::cql_w
         const auto& as = *state.get_client_state().get_auth_service();
         co_await auth::revoke_all(as, auth::make_functions_resource(*user_aggr), mc);
 
-        ret = create_schema_change(*func, false);
+        ret = create_schema_change(*func, cql_transport::event::schema_change::change_type::DROPPED);
     }
 
     co_return std::make_tuple(std::move(ret), std::vector<sstring>());
