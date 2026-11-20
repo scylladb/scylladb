@@ -747,14 +747,18 @@ SEASTAR_THREAD_TEST_CASE(test_resources_based_cache_eviction) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_immediate_evict_on_insert) {
-    test_querier_cache t;
+    test_querier_cache t([] (size_t i) {
+        return format("value{:010d}", i);
+    }, 24h, 1 << 20);
 
     auto& sem = t.get_semaphore();
     auto permit1 = sem.obtain_permit(t.get_schema(), get_name(), 0, db::no_timeout, {}).get();
 
-    auto resources = permit1.consume_resources(reader_resources(sem.available_resources().count, 0));
+    // Exhaust the memory, so the next permit is queued on memory, which the
+    // inserted querier holds.
+    auto resources = permit1.consume_resources(reader_resources(0, sem.available_resources().memory));
 
-    BOOST_CHECK_EQUAL(sem.available_resources().count, 0);
+    BOOST_CHECK_EQUAL(sem.available_resources().memory, 0);
 
     auto fut = sem.obtain_permit(t.get_schema(), get_name(), 1, db::no_timeout, {});
 
