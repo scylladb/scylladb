@@ -62,7 +62,7 @@ If you are using a time range in the query, refer to the solution in the trouble
 Using the Java driver SimpleStatements are slow. Why does this happen?
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-The Java driver's `SimpleStatement <https://java-driver.docs.scylladb.com/stable/manual/statements/simple/>`_ is token unaware by default. This means that requests sent out will reach the Controller node before it is known which shard it's supposed to access. We suggest using `PreparedStatements <https://java-driver.docs.scylladb.com/stable/manual/statements/prepared/>`_ instead.
+The Java driver's `SimpleStatement <https://java-driver.docs.scylladb.com/stable/manual/core/statements/simple/>`_ is token unaware by default. This means that requests sent out will reach the Controller node before it is known which shard it's supposed to access. We suggest using `PreparedStatements <https://java-driver.docs.scylladb.com/stable/manual/core/statements/prepared/>`_ instead.
 
 Disk Space
 -----------
