@@ -108,6 +108,11 @@ The conversions rely strictly on Java's semantics. For example, the double value
 
     SELECT avg(cast(count as double)) FROM myTable
 
+A cast can also be written as a call to a native function named ``cast_as_`` followed by the target type, or by
+its older name, ``castAs`` followed by the target type with its first letter capitalized - which must be quoted
+because it isn't lowercase. For example, ``cast_as_int(v)`` and ``"castAsInt"(v)`` are the same as
+``cast(v as int)``.
+
 Token
 `````
 
