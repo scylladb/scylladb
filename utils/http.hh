@@ -18,7 +18,27 @@
 
 namespace utils::http {
 
+// Adds the CAs the host trusts to the builder: from the distribution's CA
+// bundle file when one reads in full, from the system trust store otherwise.
+// For any credentials that should trust what the host trusts.
+future<> add_system_trust(tls::credentials_builder& builder);
+
 future<shared_ptr<tls::certificate_credentials>> system_trust_credentials();
+
+namespace internal {
+
+// Reads a PEM CA bundle into one blob per certificate. It throws unless the
+// file holds at least one certificate, gnutls accepts every one, and no PEM
+// marker stands outside them, as a certificate cut short leaves. Text
+// between the certificates is skipped. Exposed for tests.
+future<std::vector<sstring>> read_ca_bundle(const char* path);
+
+// Whether a file in p11-kit's trust sources may distrust a certificate, which
+// a PEM CA bundle cannot express: it holds a p11-kit object or an OpenSSL
+// TRUSTED CERTIFICATE. Exposed for tests.
+future<bool> may_record_distrust(const char* path);
+
+}
 
 class dns_connection_factory : public seastar::http::connection_factory {
 protected:
@@ -27,6 +47,9 @@ protected:
     logging::logger& _logger;
     semaphore _init_semaphore{1};
     bool _creds_init = false;
+    // The credentials came from system_trust_credentials(), which follows
+    // changes of the host's trust.
+    bool _system_trust = false;
     std::optional<std::vector<net::inet_address>> _addr_list;
     shared_ptr<tls::certificate_credentials> _creds;
     uint16_t _addr_pos{0};
