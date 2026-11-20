@@ -915,9 +915,7 @@ def prepare_dirs(tempdir_base: pathlib.Path,
     for mode in modes:
         prepare_dir(tempdir_base / mode, "*.log", save_log_on_success)
         prepare_dir(tempdir_base / mode, "*.reject", save_log_on_success)
-        prepare_dir(tempdir_base / mode / "xml", "*.xml", save_log_on_success)
         prepare_dir(tempdir_base / mode / FAILED_TEST_DIR, "*", save_log_on_success)
-        prepare_dir(tempdir_base / mode / "allure", "*.xml", save_log_on_success)
 
 
 def _make_service_logger(logger_name: str, log_file: pathlib.Path) -> logging.Logger:
