@@ -1648,14 +1648,15 @@ async def test_tombstone_gc_no_resurrection_hints_flush_failure(manager: ScyllaC
 
     With propagation_delay=0, gc_before = repair_time.  When the topology
     coordinator cannot flush hints on a node, the replica repairs the tablet
-    but fails at the end, so repair_time stays at epoch.  Therefore
+    but returns no new repair time, so repair_time stays at epoch.  Therefore
     gc_before = epoch, T.deletion_time ≈ now >> epoch, T is never GC-eligible, and
     compaction cannot purge T regardless of what is in the repaired set.
 
     Scenario:
       - D and T written to all replicas and flushed.
       - Repair runs with injection that makes the hints flush fail on servers[2].
-      - repair_time must stay at epoch (guard: the repair fails at the end).
+      - repair_time must stay at epoch, although the repair finishes and the
+        sstables it covered join the repaired set.
       - Compaction on the repaired set: T not GC-eligible → key stays deleted.
     """
     servers, cql, hosts, ks, table_id, logs = await _setup_tombstone_gc_cluster(manager)
@@ -1675,13 +1676,9 @@ async def test_tombstone_gc_no_resurrection_hints_flush_failure(manager: ScyllaC
     await manager.api.enable_injection(servers[2].ip_addr, "repair_flush_hints_batchlog_handler_bm_uninitialized", one_shot=False)
 
     try:
-        # The coordinator cannot flush servers[2], so the tablet repair fails
-        # at the end and repair_time stays at epoch in system.tablets.
-        # Use a short timeout: the call may never return because the topology coordinator
-        # keeps retrying the repair while the flush fails.
-        await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", "all", incremental_mode='incremental', timeout=30)
-    except Exception:
-        pass  # repair may report failure or time out; we care about side-effects only
+        # The coordinator cannot flush servers[2], so the tablet repair syncs
+        # the tablet but repair_time stays at epoch in system.tablets.
+        await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", "all", incremental_mode='incremental')
     finally:
         await manager.api.disable_injection(servers[2].ip_addr, "repair_flush_hints_batchlog_handler_bm_uninitialized")
 
