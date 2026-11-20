@@ -897,6 +897,8 @@ private:
         auto cmd = make_lw_shared<query::read_command>(std::move(cmd1));
         auto timeout = t ? *t : db::no_timeout;
 
+        co_await utils::get_local_injector().inject("storage_proxy_replica_read_pause", utils::wait_for_message(5min));
+
         // Pull a schema from the coordinator. There are two cases:
         // 1. A mixed nodes cluster, cmd->schema_version is a table schema, a table schema is pulled
         // 2. All new nodes cluster, cmd->schema_version is a reversed table schema, a reversed table schema is pulled.
