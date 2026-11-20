@@ -21,7 +21,6 @@ from ccmlib.scylla_node import NodetoolError, ScyllaNode
 from deepdiff import DeepDiff
 
 from test import DEBUG_MODES
-from alternator.utils import schemas
 from alternator_utils import (
     ALTERNATOR_SECURE_PORT,
     ALTERNATOR_SNAPSHOT_FOLDER,
@@ -40,6 +39,7 @@ from alternator_utils import (
     set_write_isolation,
 )
 from dtest_class import get_ip_from_node, read_barrier, wait_for
+from test.cluster.dtest.alternator_support.utils import schemas
 from tools.cluster import new_node
 from tools.retrying import retrying
 
