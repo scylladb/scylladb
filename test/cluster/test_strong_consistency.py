@@ -4565,6 +4565,13 @@ async def test_raft_log_kept_for_a_down_replica_is_dropped_over_the_budget(manag
         rows = await cql.run_async(f"SELECT c FROM {ks}.test WHERE pk = {writes}")
         assert rows[0].c == writes
 
+        # Over the budget, the writes wait for the entries in flight to be applied
+        # and dropped, and none waits for good.
+        keys = range(writes + 1, 3 * writes + 1)
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({i}, {i})") for i in keys])
+        rows = await cql.run_async(f"SELECT c FROM {ks}.test WHERE pk = {3 * writes}")
+        assert rows[0].c == 3 * writes
+
 
 @pytest.mark.asyncio
 async def test_raft_log_kept_for_a_down_replica_is_dropped_when_idle(manager: ScyllaClusterManager):

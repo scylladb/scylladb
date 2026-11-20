@@ -1451,6 +1451,7 @@ void groups_manager::forget_raft_log(raft_group_state& state) {
     _raft_log_memory -= state.log_memory;
     state.log_memory = 0;
     state.raft_log_hook.unlink();
+    notify_raft_log_room();
 }
 
 bool groups_manager::drop_raft_log(raft_group_state& state) {
@@ -1502,6 +1503,7 @@ future<> groups_manager::snapshot_raft_log(raft_server srv) {
     state.log_drop_running = false;
     _raft_log_memory_being_dropped -= std::exchange(state.log_memory_being_dropped, 0);
     account_raft_log(state);
+    notify_raft_log_room();
 }
 
 void groups_manager::on_raft_log_applied(raft::group_id id) {
@@ -1520,6 +1522,42 @@ void groups_manager::on_raft_log_applied(raft::group_id id) {
     }
     if (_raft_log_memory > raft_log_memory_budget()) {
         reclaim_raft_log_memory();
+    }
+    notify_raft_log_room();
+}
+
+void groups_manager::notify_raft_log_room() {
+    if (_raft_log_memory <= raft_log_memory_budget()) {
+        _raft_log_room.broadcast();
+    }
+}
+
+future<> groups_manager::wait_for_raft_log_room(db::timeout_clock::time_point timeout, abort_source& as,
+        noncopyable_function<bool()> still_leader) {
+    // Neither an abort nor a lost leadership signals the condition variable,
+    // so look at them at least this often.
+    static constexpr auto recheck = std::chrono::milliseconds(100);
+    while (_raft_log_memory > raft_log_memory_budget()) {
+        if (as.abort_requested() || !still_leader() || db::timeout_clock::now() >= timeout) {
+            // The caller reports the abort or the timeout, or redirects.
+            co_return;
+        }
+        // Nothing may be applied while the writes wait, e.g. when every log
+        // holds only applied entries, so start dropping them here rather
+        // than wait for a batch to do it. The wait then ends once the drops
+        // finish, or once the entries not applied yet are.
+        reclaim_raft_log_memory();
+        if (_raft_log_memory <= raft_log_memory_budget()) {
+            break;
+        }
+        try {
+            co_await _raft_log_room.wait(std::min(timeout, db::timeout_clock::now() + recheck));
+        } catch (const condition_variable_timed_out&) {
+            // Look at the abort, the leadership and the deadline again.
+        } catch (const broken_condition_variable&) {
+            // The groups manager is stopping, and with it the raft servers.
+            throw raft::stopped_error("the strongly consistent groups manager is stopping");
+        }
     }
 }
 
@@ -1583,6 +1621,7 @@ future<> groups_manager::drop_idle_raft_logs() {
         logger.debug("Dropping the applied raft log entries of {} groups not written to for {}s",
                 dropped_logs, raft_log_idle_time.count());
     }
+    notify_raft_log_room();
 }
 
 void groups_manager::request_flush(db::cf_id_type id, db::replay_position pos) {
@@ -1618,6 +1657,7 @@ future<> groups_manager::stop_shard() {
     logger.info("stop_shard() enter");
 
     _idle_raft_log_timer.cancel();
+    _raft_log_room.broken();
     co_await _idle_raft_log_gate.close();
     // _as is aborted, which ends the drops waiting for a snapshot.
     co_await _raft_log_drop_gate.close();

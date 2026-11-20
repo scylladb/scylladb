@@ -18,6 +18,7 @@
 #include "cql3/query_processor.hh"
 #include "db/commitlog/raft_commitlog_replay_buffer.hh"
 #include "utils/hash.hh"
+#include "db/timeout_clock.hh"
 
 #include <seastar/util/noncopyable_function.hh>
 
@@ -237,6 +238,9 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     size_t _raft_log_memory_being_dropped = 0;
     // Holds the drops running in the background.
     seastar::gate _raft_log_drop_gate;
+    // Signalled whenever the logs of the shard are within the budget, for
+    // wait_for_raft_log_room().
+    condition_variable _raft_log_room;
     // Runs drop_idle_raft_logs() periodically, in the background under
     // _idle_raft_log_gate, one run at a time.
     timer<lowres_clock> _idle_raft_log_timer;
@@ -266,6 +270,8 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     // Drop logs, from the group written to the longest ago, until the shard
     // is within the budget once the drops running in the background finish.
     void reclaim_raft_log_memory();
+    // Wake wait_for_raft_log_room() if the logs are within the budget.
+    void notify_raft_log_room();
     // Drop the logs of the groups not written to for raft_log_idle_time,
     // yielding between groups: many of them go idle at once when a load
     // stops, and their logs may add up to the whole budget.
@@ -444,6 +450,15 @@ public:
     future<> wait_for_table_raft_groups_on_all_hosts(table_id table, lowres_clock::time_point timeout);
 
     tablet_group_leader_cache& leader_cache() { return _leader_cache; }
+
+    // Wait, before a leader adds a write, until the raft logs of the shard
+    // are within their memory budget, or until `timeout`, an abort of `as`,
+    // or `still_leader` returning false. It drops the applied entries first,
+    // so it waits only for the entries which are not applied yet. Those are
+    // applied without taking more memory, so the wait ends once they are,
+    // unless their group has lost its majority.
+    future<> wait_for_raft_log_room(db::timeout_clock::time_point timeout, abort_source& as,
+            noncopyable_function<bool()> still_leader);
 };
 
 /// A temporary, RAII-style handle to an active Raft group server instance,

@@ -671,6 +671,20 @@ auto coordinator::mutate(schema_ptr schema,
             co_await coroutine::return_exception_ptr(filter_error(std::move(ex)));
         }
 
+        // A leader adds the entry only once the raft logs of the shard are
+        // within their memory budget. This must happen before begin_mutate(),
+        // see below.
+        if (op->raft_server.server().is_leader()) {
+            auto f = co_await coroutine::as_future(_groups_manager.wait_for_raft_log_room(timeout,
+                    aoe.abort_source(), [op] { return op->raft_server.server().is_leader(); }));
+            if (f.failed()) {
+                co_await coroutine::return_exception_ptr(filter_error(std::move(f).get_exception()));
+            }
+            if (auto ex = check_aborted(aoe, timeout)) {
+                co_await coroutine::return_exception_ptr(filter_error(std::move(ex)));
+            }
+        }
+
         auto disposition = op->raft_server.begin_mutate(aoe.abort_source());
         if (const auto* not_a_leader = get_if<raft::not_a_leader>(&disposition)) {
             const auto leader_host_id = locator::host_id{not_a_leader->leader.uuid()};
