@@ -170,6 +170,7 @@ ln -sfT /etc/scylla /var/lib/scylla/conf
 %attr(0755,scylla,scylla) %dir %{_sharedstatedir}/scylla/coredump
 %ghost /etc/systemd/system/scylla-helper.slice.d/
 %ghost /etc/systemd/system/scylla-helper.slice.d/memory.conf
+%ghost /etc/systemd/system/scylla-helper.slice.d/cpuset.conf
 %ghost /etc/systemd/system/scylla-server.service.d/capabilities.conf
 %ghost /etc/systemd/system/scylla-server.service.d/mounts.conf
 %ghost /etc/systemd/system/scylla-server.service.d/limitnofile.conf
