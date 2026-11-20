@@ -374,8 +374,11 @@ future<> list_roles_statement::check_access(query_processor& qp, const service::
         const auto user_has_grantee = [this, &state] {
             try {
                 return auth::has_role(*state.get_auth_service(), *state.user(), *_grantee).get();
-            } catch (const auth::nonexistant_role& e) {
-                throw exceptions::invalid_request_exception(e.what());
+            } catch (const auth::nonexistant_role&) {
+                // Refuse a role which doesn't exist like a role which the user
+                // may not view, so the error doesn't tell the user whether the
+                // role exists.
+                return false;
             }
         };
 

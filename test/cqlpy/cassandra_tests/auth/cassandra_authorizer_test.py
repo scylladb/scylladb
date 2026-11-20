@@ -14,6 +14,7 @@
 import re
 from ..porting import *
 from ...util import unique_name
+from cassandra.protocol import Unauthorized
 from .create_and_alter_role_test import use_user, dropped_roles
 
 PASSWORD = "secret"
@@ -29,10 +30,9 @@ def role_names():
     suffix = unique_name()
     return ("parent_" + suffix, "child_" + suffix, "other_" + suffix)
 
-# Reproduces SCYLLADB-5232: Scylla doesn't have the DESCRIBE permission on a
+# Reproduces SCYLLADB-5232: Scylla didn't have the DESCRIBE permission on a
 # specific role (added in Cassandra 4.1, CASSANDRA-16902), so the creator of
-# a role doesn't get it, and can't list the role's permissions.
-@pytest.mark.xfail(reason="SCYLLADB-5232")
+# a role didn't get it, and couldn't list the role's permissions.
 def testListPermissionsOfChildByParent(cql):
     PARENT, CHILD, OTHER = role_names()
     with dropped_roles(cql, PARENT, CHILD, OTHER):
@@ -73,19 +73,26 @@ def testListPermissionsOfChildByParent(cql):
                                     "LIST ALL PERMISSIONS OF %s" % OTHER)
 
             # try to create role by child
-            assertInvalidMessageNet(session, "User %s does not have sufficient privileges to perform the requested operation" % CHILD,
-                                    "CREATE ROLE %s WITH login=true AND password='%s'" % ("nope", PASSWORD))
+            # Cassandra's error message is "User ... does not have sufficient
+            # privileges to perform the requested operation", Scylla's is
+            # the more informative "User ... has no CREATE permission on
+            # <all roles> or any of its parents". Both are fine.
+            #assertInvalidMessageNet(session, "User %s does not have sufficient privileges to perform the requested operation" % CHILD,
+            #                        "CREATE ROLE %s WITH login=true AND password='%s'" % ("nope", PASSWORD))
+            with pytest.raises(Unauthorized, match="User %s (does not have sufficient privileges|has no CREATE permission)" % CHILD):
+                session.execute("CREATE ROLE %s WITH login=true AND password='%s'" % ("nope", PASSWORD))
 
         with use_user(cql, PARENT, PASSWORD) as session:
             # alter child's role by parent
             session.execute("ALTER ROLE %s WITH login = false" % CHILD)
             session.execute("DROP ROLE %s" % CHILD)
 
-# Reproduces SCYLLADB-5233: LIST ROLES OF and LIST ALL PERMISSIONS OF tell a
-# user who isn't authorized to view a role whether it exists. Cassandra fixed
-# this only recently (CASSANDRA-21560), after the releases we test, so the
-# test is also marked cassandra_bug.
-@pytest.mark.xfail(reason="SCYLLADB-5233")
+# Reproduces SCYLLADB-5233: LIST ROLES OF and LIST ALL PERMISSIONS OF told a
+# user who isn't authorized to view a role whether it exists.
+# Cassandra had the same bug, CASSANDRA-21560, which is already fixed (this
+# test was added with the fix), but the Cassandra releases we test against
+# (5.0.9, 6.0-alpha2) don't have the fix yet and fail this test, so it is
+# marked cassandra_bug. Future Cassandra releases will pass it.
 def testListDoesNotLeakRoleExistenceToUnauthorizedUsers(cql, cassandra_bug):
     _, CHILD, OTHER = role_names()
     nonexistent_role = "nonexistent_role_" + unique_name()
@@ -102,10 +109,16 @@ def testListDoesNotLeakRoleExistenceToUnauthorizedUsers(cql, cassandra_bug):
         with use_user(cql, CHILD, PASSWORD) as session:
             # Unauthorized caller: a non-existent role and an existing-but-unviewable role must be
             # indistinguishable - both "not authorized", never "doesn't exist".
-            assertInvalidMessageNet(session, "You are not authorized to view roles granted to " + nonexistent_role,
-                                    "LIST ROLES OF " + nonexistent_role)
-            assertInvalidMessageNet(session, "You are not authorized to view roles granted to %s" % OTHER,
-                                    "LIST ROLES OF %s" % OTHER)
+            # Cassandra's error message is "You are not authorized to view
+            # roles granted to X", Scylla's is "You are not authorized to view
+            # the roles granted to role 'X'.". Both are fine.
+            #assertInvalidMessageNet(session, "You are not authorized to view roles granted to " + nonexistent_role,
+            #                        "LIST ROLES OF " + nonexistent_role)
+            #assertInvalidMessageNet(session, "You are not authorized to view roles granted to %s" % OTHER,
+            #                        "LIST ROLES OF %s" % OTHER)
+            for role in [nonexistent_role, OTHER]:
+                with pytest.raises(Unauthorized, match="You are not authorized to view (the )?roles granted to (role ')?%s" % role):
+                    session.execute("LIST ROLES OF %s" % role)
 
             assertInvalidMessageNet(session, "You are not authorized to view %s's permissions" % nonexistent_role,
                                     "LIST ALL PERMISSIONS OF " + nonexistent_role)
