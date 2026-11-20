@@ -164,6 +164,20 @@ class groups_manager : public peering_sharded_service<groups_manager> {
         // coordinator retries a failed attempt on every replica, and the retry supersedes
         // the calls of the previous attempt that are still running.
         lw_shared_ptr<abort_source> migration_rpc_as;
+
+        // The bytes of the group's in-memory raft log as last read, which
+        // _raft_log_memory includes, and when the group last applied a batch.
+        // Linked into _raft_logs_by_last_apply while the log holds anything.
+        size_t log_memory = 0;
+        lowres_clock::time_point last_apply;
+        // The group's id, for drop_idle_raft_logs() to find it again after
+        // yielding.
+        raft::group_id log_group_id;
+        // A drop of the log runs in the background (see drop_raft_log()),
+        // started when the log held log_memory_being_dropped bytes.
+        bool log_drop_running = false;
+        size_t log_memory_being_dropped = 0;
+        boost::intrusive::list_member_hook<boost::intrusive::link_mode<boost::intrusive::auto_unlink>> raft_log_hook;
     };
 
     netw::messaging_service& _ms;
@@ -196,6 +210,66 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     // Ask table `id` to flush, in the background. `pos` only decides whether the
     // table skips the request.
     void request_flush(db::cf_id_type id, db::replay_position pos);
+
+    // A group keeps its applied log entries in memory, up to
+    // snapshot_threshold_log_size, so that a replica which is slow or down
+    // catches up from the log. That is worth their memory while the group is
+    // written to and the shard has room. Otherwise they are dropped, by a
+    // snapshot that keeps none of them, and a replica which still needs them
+    // is caught up by a snapshot transfer:
+    // - once the logs of the shard exceed the budget, right after the batch
+    //   which made them, from the group written to the longest ago;
+    // - once a group has not been written to for raft_log_idle_time.
+
+    // The groups whose log holds anything, the one which applied a batch the
+    // longest ago first. A log which empties without a batch, as replicas
+    // acknowledge, stays linked until the next walk finds it empty.
+    using raft_log_list = boost::intrusive::list<raft_group_state,
+        boost::intrusive::member_hook<raft_group_state,
+            boost::intrusive::list_member_hook<boost::intrusive::link_mode<boost::intrusive::auto_unlink>>,
+            &raft_group_state::raft_log_hook>,
+        boost::intrusive::constant_time_size<false>>;
+    raft_log_list _raft_logs_by_last_apply;
+    // The sum of raft_group_state::log_memory over all groups.
+    size_t _raft_log_memory = 0;
+    // The sum of raft_group_state::log_memory_being_dropped: what the drops
+    // running in the background are about to free.
+    size_t _raft_log_memory_being_dropped = 0;
+    // Holds the drops running in the background.
+    seastar::gate _raft_log_drop_gate;
+    // Runs drop_idle_raft_logs() periodically, in the background under
+    // _idle_raft_log_gate, one run at a time.
+    timer<lowres_clock> _idle_raft_log_timer;
+    seastar::gate _idle_raft_log_gate;
+    bool _idle_raft_log_sweep_running = false;
+
+    static constexpr std::chrono::seconds raft_log_idle_time{10};
+
+    // What the raft logs of all groups of this shard may hold in memory.
+    size_t raft_log_memory_budget() const;
+
+    // Called by the raft server of group `id` after every batch it applies.
+    void on_raft_log_applied(raft::group_id id);
+    // Re-read the memory of the group's log into the accounting above.
+    // Returns whether the log holds any entries.
+    bool account_raft_log(raft_group_state& state);
+    // Remove a group whose server is going away from the accounting.
+    void forget_raft_log(raft_group_state& state);
+    // Drop the group's applied log entries, if its server can be used now
+    // and it holds any. Those the last snapshot covers are dropped right
+    // away; the others by a snapshot which keeps none of them, which the
+    // group's applier fiber takes, in the background. Returns whether
+    // anything is or will be dropped.
+    bool drop_raft_log(raft_group_state& state);
+    // The background part of drop_raft_log().
+    future<> snapshot_raft_log(raft_server srv);
+    // Drop logs, from the group written to the longest ago, until the shard
+    // is within the budget once the drops running in the background finish.
+    void reclaim_raft_log_memory();
+    // Drop the logs of the groups not written to for raft_log_idle_time,
+    // yielding between groups: many of them go idle at once when a load
+    // stops, and their logs may add up to the whole budget.
+    future<> drop_idle_raft_logs();
 
     // Should be called on the shard that hosts the Raft group
     future<> start_raft_group(locator::global_tablet_id tablet,
