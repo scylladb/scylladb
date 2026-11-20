@@ -97,6 +97,20 @@ constexpr std::array registry_options = {
         .custom_parser = parse_auto_scrub_period_seconds,
         .custom_expected_description = "0 or an integer from 3600 to 4294967295",
     },
+    // A limit on I/O is a property of the node's hardware, so this is a candidate for the
+    // node-oriented scopes. Only CLUSTER for now.
+    option{
+        .name = option_name::auto_scrub_io_throughput_mb_per_sec_per_shard,
+        .description = "Limits the average rate at which automatic scrub goes over sstables, in MiB/s, on each shard. "
+                "After scrubbing an sstable, the shard does not start scrubbing another one until the average rate is back under the limit. "
+                "Set to 0 to disable the limit",
+        .scopes = scope_set::of<scope::cluster>(),
+        .default_value = int64_t(10),
+        // The consumer multiplies it by the bytes in a MiB and by the seconds in its
+        // submission interval. 1 TiB/s is far above what a shard can do and far from
+        // the overflow.
+        .valid_range = integer_range{.min = 0, .max = 1024 * 1024},
+    },
     // Migrated from the db::config option of the same name. The tablet load balancer reads
     // it on the group0 leader and applies it to the whole cluster, so only the CLUSTER scope
     // makes sense. The range matches the unsigned entry; 0 would scale every table's tablet
