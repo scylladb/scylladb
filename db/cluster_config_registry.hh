@@ -67,6 +67,7 @@ inline constexpr std::string_view auto_repair_threshold_in_seconds = "auto_repai
 inline constexpr std::string_view repair_hints_batchlog_flush_discard_unreplayed_hints = "repair_hints_batchlog_flush_discard_unreplayed_hints";
 inline constexpr std::string_view auto_scrub_period_seconds = "auto_scrub_period_seconds";
 inline constexpr std::string_view repair_hints_batchlog_flush_timeout_in_seconds = "repair_hints_batchlog_flush_timeout_in_seconds";
+inline constexpr std::string_view cql_response_compression_threshold_in_bytes = "cql_response_compression_threshold_in_bytes";
 
 }
 

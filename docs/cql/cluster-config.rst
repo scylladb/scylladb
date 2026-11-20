@@ -228,6 +228,15 @@ Available options
        the default, for example after a node stayed down for a long time. Must be between ``1``
        and ``315360000`` (ten years). Default: ``300``, in effect once every node runs a version
        that knows the option.
+   * - ``cql_response_compression_threshold_in_bytes``
+     - integer
+     - ``CLUSTER``
+     - CQL responses with a body smaller than this are sent uncompressed, even on connections that
+       negotiated compression; compressing small bodies costs CPU and saves few or no bytes. ``0``
+       compresses every response of 32 bytes or more; shorter ones only grow. On links where
+       packet count matters more than bytes, set it near the MTU payload (for example ``1400``, or
+       ``8900`` with jumbo frames) so only responses spanning several packets are compressed. Must
+       be between ``0`` and ``1048576`` (1 MiB). Default: ``256``.
 
 .. _cql-cluster-config-yaml-options:
 
