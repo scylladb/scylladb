@@ -271,7 +271,9 @@ def run_scylla_cmd(pid, dir):
         'UBSAN_OPTIONS': ubsan_options(),
         'ASAN_OPTIONS': asan_options(),
     }
-    return ([scylla_link,
+    # tools/toolchain/run-scylla runs Scylla with dbuild's libraries if it
+    # can't run with this host's.
+    return ([os.path.join(source_path, 'tools/toolchain/run-scylla'), scylla_link,
         '--options-file',  source_path + '/conf/scylla.yaml',
         # api_doc_dir defaults to a path relative to the current directory,
         # which is wherever this script happened to be started from, so spell
