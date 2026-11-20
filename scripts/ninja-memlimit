@@ -1,0 +1,625 @@
+#!/usr/bin/env python3
+#
+# Copyright (C) 2026-present ScyllaDB
+#
+
+#
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
+#
+
+# ninja-memlimit: run ninja, but don't start new jobs while the jobs that
+# are already running are estimated to use too much memory.
+#
+# Usage: ninja-memlimit [--mem-limit SIZE] [--reserve SIZE] [--young SECS]
+#                       [--log FILE] [ninja arguments...]
+#
+# Example: ninja-memlimit --mem-limit 16G -j8 build/dev/scylla
+#
+# Without -j, it runs as many jobs as there are CPUs (ninja's own default
+# is the number of CPUs + 2).
+#
+# How it works, without changing ninja: before every decision to start a
+# job, ninja calls libc's getloadavg() to enforce its "-l" option. We run
+# ninja with a huge "-l" and an LD_PRELOAD shim whose getloadavg() asks
+# this script (over a Unix socket) how many more jobs may start now, and
+# reports a load average leaving exactly that many free slots. ninja asks
+# again after each job it starts, so every single job start is checked.
+# If this script stops answering, the shim reports the real load average
+# and ninja just runs with its usual -j limit.
+#
+# Memory estimate: a "job" is a direct child of ninja together with all
+# its descendants. Compilations run by sccache are not ninja's
+# descendants but the sccache server's, so they are matched to the ninja
+# job whose sccache client has the same working directory and source
+# file. A compilation's memory grows for many seconds after it starts, so
+# a job is counted as using at least the peak memory its output (its
+# "-o" argument) needed the last time it was built. These peaks are kept
+# in .ninja_memlimit in ninja's builddir, next to its .ninja_log. A job
+# whose output has no remembered peak is counted, while it is younger
+# than --young seconds, as using at least --reserve bytes; after that, by
+# its actual RSS. The number of jobs allowed to start is
+# (limit - estimate) / reserve. When nothing is running, ninja always
+# starts one job, so the build can't get stuck. Compilations under the
+# sccache server that don't match any of our jobs (e.g., another build
+# sharing the server) are counted too, as if they were our jobs. An
+# sccache cache hit doesn't replace an output's remembered peak.
+
+import argparse, hashlib, os, re, shlex, shutil, signal, socket, subprocess
+import sys, tempfile, threading, time
+
+SHIM_SOURCE = r'''
+#define _GNU_SOURCE
+#include <dlfcn.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <sys/un.h>
+#include <unistd.h>
+
+static char sock_path[sizeof(((struct sockaddr_un*)0)->sun_path)];
+static double max_load;
+
+__attribute__((constructor)) static void init(void) {
+    const char *p = getenv("NINJA_MEMLIMIT_SOCKET");
+    const char *l = getenv("NINJA_MEMLIMIT_MAX_LOAD");
+    if (p && l && strlen(p) < sizeof(sock_path)) {
+        strcpy(sock_path, p);
+        max_load = atof(l);
+    }
+    /* Don't pass the shim on to ninja's children. */
+    const char *orig = getenv("NINJA_MEMLIMIT_ORIG_LD_PRELOAD");
+    if (orig && *orig) {
+        setenv("LD_PRELOAD", orig, 1);
+    } else {
+        unsetenv("LD_PRELOAD");
+    }
+    unsetenv("NINJA_MEMLIMIT_ORIG_LD_PRELOAD");
+    unsetenv("NINJA_MEMLIMIT_SOCKET");
+    unsetenv("NINJA_MEMLIMIT_MAX_LOAD");
+}
+
+/* Ask the controller how many more jobs may start; -1 on failure. */
+static long ask(void) {
+    int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    if (fd < 0) return -1;
+    struct timeval tv = { 10, 0 };
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    struct sockaddr_un addr = { .sun_family = AF_UNIX };
+    strcpy(addr.sun_path, sock_path);
+    char buf[32];
+    size_t len = 0;
+    if (connect(fd, (struct sockaddr*)&addr, sizeof(addr)) == 0 &&
+            write(fd, "?\n", 2) == 2) {
+        ssize_t n;
+        while (len < sizeof(buf) - 1 && (n = read(fd, buf + len, sizeof(buf) - 1 - len)) > 0) {
+            len += n;
+        }
+    }
+    close(fd);
+    buf[len] = 0;
+    char *end;
+    long allowed = strtol(buf, &end, 10);
+    return (len && end != buf && allowed >= 0) ? allowed : -1;
+}
+
+int getloadavg(double loadavg[], int nelem) {
+    static int (*real)(double[], int);
+    if (!real) real = (int (*)(double[], int))dlsym(RTLD_NEXT, "getloadavg");
+    int ret = real(loadavg, nelem);
+    if (sock_path[0] && nelem > 0) {
+        long allowed = ask();
+        if (allowed >= 0) {
+            /* ninja computes its free slots as (int)(max_load - load). */
+            loadavg[0] = max_load - (double)allowed;
+            if (ret < 1) ret = 1;
+        }
+    }
+    return ret;
+}
+'''
+
+# ninja's "-l" value; the shim reports (MAX_LOAD - allowed jobs).
+MAX_LOAD = 100000
+PAGE = os.sysconf('SC_PAGE_SIZE')
+CLK_TCK = os.sysconf('SC_CLK_TCK')
+GB = 1024**3
+SOURCE_SUFFIXES = (b'.cc', b'.cpp', b'.cxx', b'.c++', b'.c', b'.C', b'.S', b'.s')
+
+
+def parse_size(s):
+    m = re.fullmatch(r'\s*([\d.]+)\s*([KMGT]?)i?B?\s*', s, re.I)
+    if not m:
+        raise argparse.ArgumentTypeError(f'bad size {s!r}, expected e.g. 16G or 1500M')
+    return int(float(m.group(1)) * 1024**' KMGT'.index(m.group(2).upper() or ' '))
+
+
+def build_shim():
+    digest = hashlib.sha1(SHIM_SOURCE.encode()).hexdigest()[:16]
+    cache = os.path.join(os.environ.get('XDG_CACHE_HOME') or os.path.expanduser('~/.cache'), 'ninja-memlimit')
+    so = os.path.join(cache, f'shim-{digest}.so')
+    if not os.path.exists(so):
+        os.makedirs(cache, exist_ok=True)
+        cc = shutil.which('cc') or shutil.which('gcc') or shutil.which('clang')
+        if not cc:
+            sys.exit('ninja-memlimit: need a C compiler (cc) to build the LD_PRELOAD shim')
+        src = so[:-3] + '.c'
+        with open(src, 'w') as f:
+            f.write(SHIM_SOURCE)
+        tmp = f'{so}.{os.getpid()}.tmp'
+        subprocess.run([cc, '-O2', '-shared', '-fPIC', '-o', tmp, src, '-ldl'], check=True)
+        os.rename(tmp, so)
+    return so
+
+
+class Proc:
+    __slots__ = ('pid', 'comm', 'start', 'rss')
+
+    def __init__(self, pid):
+        with open(f'/proc/{pid}/stat', 'rb') as f:
+            s = f.read()
+        r = s.rindex(b')')
+        fields = s[r + 2:].split()
+        self.pid = pid
+        self.comm = s[s.index(b'(') + 1:r].decode(errors='replace')
+        self.start = int(fields[19]) / CLK_TCK  # seconds since boot
+        self.rss = int(fields[21]) * PAGE
+
+
+def proc(pid):
+    try:
+        return Proc(pid)
+    except (OSError, ValueError, IndexError):
+        return None  # the process exited
+
+
+def children(pid):
+    # Children may be forked by any of a process's threads (e.g., the
+    # multithreaded sccache server), so read every thread's list.
+    out = []
+    try:
+        tasks = os.listdir(f'/proc/{pid}/task')
+    except OSError:
+        return out
+    for t in tasks:
+        try:
+            with open(f'/proc/{pid}/task/{t}/children') as f:
+                out.extend(int(c) for c in f.read().split())
+        except OSError:
+            pass
+    return out
+
+
+def cmdline(pid):
+    try:
+        with open(f'/proc/{pid}/cmdline', 'rb') as f:
+            return [a for a in f.read().split(b'\0') if a]
+    except OSError:
+        return []
+
+
+def cwd(pid):
+    try:
+        return os.readlink(f'/proc/{pid}/cwd').encode()
+    except OSError:
+        return None
+
+
+def hwm(pid):
+    # The kernel's high-water mark of the process's resident memory.
+    try:
+        with open(f'/proc/{pid}/status', 'rb') as f:
+            for line in f:
+                if line.startswith(b'VmHWM:'):
+                    return int(line.split()[1]) * 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    return 0
+
+
+def is_sccache_server(p):
+    # The server runs as a bare "sccache"; a client has the compiler
+    # command line as its arguments.
+    return p.comm == 'sccache' and len(cmdline(p.pid)) <= 1
+
+
+def source_keys(pid, args):
+    # (cwd, source file) pairs identifying the compilation a process runs.
+    d = cwd(pid)
+    if d is None:
+        return []
+    return [(d, a) for a in args if a.endswith(SOURCE_SUFFIXES) and not a.startswith(b'-')]
+
+
+def uptime():
+    with open('/proc/uptime') as f:
+        return float(f.read().split()[0])
+
+
+class Job:
+    __slots__ = ('root', 'rss', 'hwm', 'driver', 'output', 'via_sccache', 'compiled')
+
+    def __init__(self, root):
+        self.root = root
+        self.rss = 0               # current RSS of all its processes
+        self.hwm = 0               # largest peak RSS of any one of them
+        self.driver = False        # runs a nested ninja
+        self.output = None         # its "-o" output, relative to ninja's directory
+        self.via_sccache = False   # run through an sccache client
+        self.compiled = False      # really compiled (not an sccache cache hit)
+
+
+class Peaks:
+    """The peak memory use of each output the last time it was built, kept
+    in .ninja_memlimit next to ninja's own .ninja_log."""
+
+    HEADER = '# ninja-memlimit: peak memory (MB) of each output the last time it was built\n'
+
+    def __init__(self, path):
+        self.path = path
+        self.peaks = self.read()
+        self.observed = {}  # output -> peak seen in this run
+
+    def read(self):
+        peaks = {}
+        try:
+            with open(self.path) as f:
+                for line in f:
+                    if not line.startswith('#'):
+                        mb, out = line.rstrip('\n').split('\t', 1)
+                        peaks[out] = int(mb) * 1024**2
+        except (OSError, ValueError):
+            pass
+        return peaks
+
+    def observe(self, output, peak):
+        self.observed[output] = max(self.observed.get(output, 0), peak)
+
+    def save(self, running):
+        # Re-read the file, in case another build in this directory updated
+        # it. An output still being built has only a partial peak so far,
+        # which mustn't replace a full one from its previous build.
+        merged = self.read()
+        for out, peak in self.observed.items():
+            merged[out] = max(merged.get(out, 0), peak) if out in running else peak
+        os.makedirs(os.path.dirname(self.path), exist_ok=True)
+        tmp = f'{self.path}.{os.getpid()}.tmp'
+        with open(tmp, 'w') as f:
+            f.write(self.HEADER)
+            for out in sorted(merged):
+                f.write(f'{-(-merged[out] // 1024**2)}\t{out}\n')
+        os.replace(tmp, self.path)
+
+
+class Controller:
+    def __init__(self, ninja_pid, ninja_dir, peaks, limit, reserve, young, user_load,
+                 parallelism, log):
+        self.ninja_pid = ninja_pid
+        self.parallelism = parallelism  # ninja's -j, or None if unlimited
+        self.ninja_dir = ninja_dir.encode()
+        self.peaks = peaks
+        self.limit, self.reserve, self.young = limit, reserve, young
+        self.user_load = user_load
+        self.log = log
+        self.lock = threading.Lock()
+        self.servers, self.servers_time = set(), 0
+        self.running = set()  # outputs being built at the last estimate
+        self.peak_actual = 0
+        # Once-a-second samples for the summary: count, and the sums of the
+        # number of running jobs and of their memory, and how many samples
+        # found the memory limit holding back jobs that -j would allow.
+        self.samples = self.sum_running = self.sum_actual = self.throttled = 0
+        self.t0 = time.time()
+
+    def sccache_servers(self):
+        # Finding the servers needs a scan of all processes; do it rarely.
+        # A server started by one of our sccache clients is also found (and
+        # added) when we walk ninja's process tree.
+        now = time.time()
+        if now - self.servers_time > 5:
+            servers = set()
+            for d in os.listdir('/proc'):
+                if d.isdigit():
+                    p = proc(int(d))
+                    if p and is_sccache_server(p):
+                        servers.add(p.pid)
+            self.servers, self.servers_time = servers, now
+        return self.servers
+
+    def output_of(self, pid, args):
+        # The "-o" argument, relative to ninja's directory like ninja's own
+        # output names. Right after ninja starts a job, the job may still be
+        # the "sh -c COMMAND" running it, so look inside COMMAND too.
+        if len(args) == 3 and args[1] == b'-c' and b'-o' in args[2]:
+            try:
+                args = [os.fsencode(a) for a in shlex.split(os.fsdecode(args[2]))]
+            except ValueError:
+                return None
+            if b'cd' in args:
+                return None  # we don't know which directory "-o" is relative to
+        try:
+            out = args[args.index(b'-o') + 1]
+        except (ValueError, IndexError):
+            return None
+        d = cwd(pid)
+        if d is None:
+            return None
+        path = os.path.normpath(os.path.join(d, out))
+        return os.fsdecode(os.path.relpath(path, self.ninja_dir))
+
+    def jobs(self):
+        jobs = []
+        by_source = {}  # (cwd, source file) of sccache clients -> job
+        for c in children(self.ninja_pid):
+            self._add_job(c, by_source, jobs)
+        # Our sccache clients were all seen above, so the server's
+        # compilations can now be matched to them.
+        for server in list(self.sccache_servers()):
+            for c in children(server):
+                args = cmdline(c)
+                job = next((by_source[k] for k in source_keys(c, args) if k in by_source), None)
+                if job is None:
+                    self._add_job(c, by_source, jobs)
+                else:
+                    self._add_subtree(c, job, by_source, jobs)
+        return jobs
+
+    def _add_job(self, pid, by_source, jobs):
+        root = proc(pid)
+        if root:
+            job = Job(root)
+            jobs.append(job)
+            self._add_subtree(pid, job, by_source, jobs)
+
+    def _add_subtree(self, pid, job, by_source, jobs):
+        stack = [pid]
+        while stack:
+            pid = stack.pop()
+            p = proc(pid)
+            if not p:
+                continue
+            if is_sccache_server(p):
+                # Its compilations are matched to their jobs separately,
+                # and its own memory isn't a job's.
+                self.servers.add(pid)
+                continue
+            args = cmdline(pid)
+            job.rss += p.rss
+            job.hwm = max(job.hwm, hwm(pid))
+            if job.output is None:
+                job.output = self.output_of(pid, args)
+            if p.comm == 'sccache':
+                job.via_sccache = True
+                for k in source_keys(pid, args):
+                    by_source[k] = job
+            elif b'-o' in args and b'-E' not in args:
+                # On an sccache cache hit, the server only runs the
+                # preprocessor (-E), so this is a real compilation.
+                job.compiled = True
+            if p.comm == 'ninja':
+                # A nested ninja: it is just a driver, its children are
+                # separate jobs.
+                job.driver = True
+                for c in children(pid):
+                    self._add_job(c, by_source, jobs)
+            else:
+                stack.extend(children(pid))
+
+    def estimate(self):
+        now = uptime()
+        actual = estimate = young = known = 0
+        jobs = self.jobs()
+        for job in jobs:
+            actual += job.rss
+            peak = self.peaks.peaks.get(job.output) if job.output and not job.driver else None
+            if peak is not None:
+                # Expect it to grow to its peak from its previous build.
+                known += 1
+                estimate += max(job.rss, peak)
+            elif not job.driver and now - job.root.start < self.young:
+                young += 1
+                estimate += max(job.rss, self.reserve)
+            else:
+                estimate += job.rss
+            if job.output and not job.driver and (job.compiled or not job.via_sccache):
+                self.peaks.observe(job.output, max(job.rss, job.hwm))
+        self.running = {job.output for job in jobs if job.output}
+        return actual, estimate, len(jobs), young, known
+
+    def mem_allowed(self, estimate):
+        # ninja asks again after starting each job, when the new job is
+        # already part of the estimate.
+        return max(0, (self.limit - estimate) // self.reserve)
+
+    def allowed(self):
+        with self.lock:
+            actual, estimate, njobs, young, known = self.estimate()
+            allowed = self.mem_allowed(estimate)
+            if self.user_load is not None:
+                allowed = min(allowed, max(0, int(self.user_load - os.getloadavg()[0])))
+            self.peak_actual = max(self.peak_actual, actual)
+            if self.log:
+                self.log.write(f'{time.time() - self.t0:8.1f}s query: actual {actual / GB:5.1f}G '
+                               f'estimate {estimate / GB:5.1f}G jobs {njobs} known {known} '
+                               f'young {young} -> allow {allowed}\n')
+                self.log.flush()
+            return allowed
+
+    def sample(self):
+        # Between queries, keep track of peaks for the summary and the
+        # .ninja_memlimit file, and collect the summary's statistics.
+        with self.lock:
+            actual, estimate, njobs, young, known = self.estimate()
+            running = len(children(self.ninja_pid))
+            self.peak_actual = max(self.peak_actual, actual)
+            self.samples += 1
+            self.sum_running += running
+            self.sum_actual += actual
+            if self.parallelism and running < self.parallelism and self.mem_allowed(estimate) == 0:
+                self.throttled += 1
+            if self.log:
+                self.log.write(f'{time.time() - self.t0:8.1f}s sample: actual {actual / GB:5.1f}G '
+                               f'estimate {estimate / GB:5.1f}G jobs {njobs} known {known} '
+                               f'young {young}\n')
+                self.log.flush()
+
+    def save(self):
+        with self.lock:
+            self.peaks.save(self.running)
+
+
+def find_builddir(ninja_args):
+    """Return ninja's working directory and its builddir (where .ninja_log is)."""
+    ninja_dir, build_file = os.getcwd(), 'build.ninja'
+    for i, a in enumerate(ninja_args):
+        for flag in ('-C', '-f'):
+            if a.startswith(flag):
+                value = a[2:] or (ninja_args[i + 1] if i + 1 < len(ninja_args) else '')
+                if flag == '-C':
+                    ninja_dir = os.path.join(ninja_dir, value)
+                else:
+                    build_file = value
+    ninja_dir = os.path.abspath(ninja_dir)
+    try:
+        with open(os.path.join(ninja_dir, build_file), errors='replace') as f:
+            for line in f:
+                m = re.match(r'builddir\s*=\s*(\S.*?)\s*$', line)
+                if m and '$' not in m.group(1):
+                    return ninja_dir, os.path.join(ninja_dir, m.group(1))
+    except OSError:
+        pass
+    return ninja_dir, ninja_dir
+
+
+def split_args(argv):
+    """Separate our own options from ninja's, and pull out ninja's -l."""
+    ours, ninja, user_load = [], [], None
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a.startswith(('--mem-limit', '--reserve', '--young', '--log')):
+            ours.append(a)
+            if '=' not in a:
+                i += 1
+                ours.append(argv[i])
+        elif a == '-l':
+            i += 1
+            user_load = float(argv[i])
+        elif a.startswith('-l'):
+            user_load = float(a[2:])
+        else:
+            ninja.append(a)
+        i += 1
+    return ours, ninja, user_load
+
+
+def main():
+    with open('/proc/meminfo') as f:
+        mem_total = int(re.search(r'MemTotal:\s+(\d+)', f.read()).group(1)) * 1024
+    ours, ninja_args, user_load = split_args(sys.argv[1:])
+    ap = argparse.ArgumentParser(prog='ninja-memlimit', allow_abbrev=False,
+                                 description='Run ninja, but limit the estimated memory use of its jobs.')
+    ap.add_argument('--mem-limit', type=parse_size, default=mem_total // 2,
+                    help='memory limit for all running jobs together (default: half of RAM)')
+    ap.add_argument('--reserve', type=parse_size, default=parse_size('2G'),
+                    help='memory to assume for a young job whose peak is not remembered, '
+                         'and needed to start a new job (default: 2G)')
+    ap.add_argument('--young', type=float, default=30,
+                    help='a job younger than this many seconds, whose peak is not remembered, '
+                         'counts as using at least --reserve (default: 30)')
+    ap.add_argument('--log', help='write the controller decisions to this file')
+    opts = ap.parse_args(ours)
+
+    # Tools, dry runs and help don't run jobs; just run ninja.
+    if any(a in ('-t', '-n', '-h', '--help', '--version') or a.startswith('-t') for a in ninja_args):
+        os.execvp('ninja', ['ninja'] + ninja_args)
+
+    shim = build_shim()
+    sockdir = tempfile.mkdtemp(prefix='ninja-memlimit-')
+    if len(sockdir) > 90:
+        sockdir = tempfile.mkdtemp(prefix='ninja-memlimit-', dir='/tmp')
+    sockpath = os.path.join(sockdir, 'sock')
+    srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    srv.bind(sockpath)
+    srv.listen(16)
+
+    env = dict(os.environ)
+    env['NINJA_MEMLIMIT_ORIG_LD_PRELOAD'] = env.get('LD_PRELOAD', '')
+    env['LD_PRELOAD'] = shim + (' ' + env['LD_PRELOAD'] if env.get('LD_PRELOAD') else '')
+    env['NINJA_MEMLIMIT_SOCKET'] = sockpath
+    env['NINJA_MEMLIMIT_MAX_LOAD'] = str(MAX_LOAD)
+    log = open(opts.log, 'a') if opts.log else None
+    ninja_dir, builddir = find_builddir(ninja_args)
+    peaks = Peaks(os.path.join(builddir, '.ninja_memlimit'))
+    print(f'ninja-memlimit: limit {opts.mem_limit / GB:.1f}G; {len(peaks.peaks)} remembered '
+          f'peaks in {os.path.relpath(peaks.path)}; other jobs younger than {opts.young:g}s '
+          f'count as {opts.reserve / GB:.1f}G', file=sys.stderr)
+
+    # ninja's own default is the number of CPUs + 2; overcommitting
+    # doesn't help compilation, so default to exactly the number of CPUs.
+    if not any(a.startswith('-j') for a in ninja_args):
+        ninja_args = [f'-j{len(os.sched_getaffinity(0))}'] + ninja_args
+    parallelism = None
+    for i, a in enumerate(ninja_args):
+        if a.startswith('-j'):
+            j = a[2:] or (ninja_args[i + 1] if i + 1 < len(ninja_args) else '0')
+            parallelism = int(j) if j.isdigit() and int(j) > 0 else None
+    ninja = subprocess.Popen(['ninja', '-l', str(MAX_LOAD)] + ninja_args, env=env)
+    # Ctrl-C reaches ninja directly (same process group); keep answering it
+    # until it exits. Forward SIGTERM.
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    signal.signal(signal.SIGTERM, lambda *_: ninja.terminate())
+    ctl = Controller(ninja.pid, ninja_dir, peaks, opts.mem_limit, opts.reserve, opts.young,
+                     user_load, parallelism, log)
+
+    def serve():
+        while True:
+            conn, _ = srv.accept()
+            with conn:
+                try:
+                    conn.recv(16)
+                    allowed = ctl.allowed()
+                except Exception as e:
+                    # Fail open: let ninja use its -j limit.
+                    print(f'ninja-memlimit: internal error: {e!r}', file=sys.stderr)
+                    allowed = MAX_LOAD
+                try:
+                    conn.sendall(f'{allowed}\n'.encode())
+                except OSError:
+                    pass
+
+    def sampler():
+        last_save = time.time()
+        while ninja.poll() is None:
+            try:
+                ctl.sample()
+                if time.time() - last_save > 30:
+                    ctl.save()
+                    last_save = time.time()
+            except Exception as e:
+                print(f'ninja-memlimit: internal error: {e!r}', file=sys.stderr)
+            time.sleep(1)
+
+    threading.Thread(target=serve, daemon=True).start()
+    threading.Thread(target=sampler, daemon=True).start()
+    rc = ninja.wait()
+    shutil.rmtree(sockdir, ignore_errors=True)
+    try:
+        ctl.save()
+    except OSError as e:
+        print(f'ninja-memlimit: could not save {peaks.path}: {e}', file=sys.stderr)
+    elapsed = int(time.time() - ctl.t0)
+    n = max(ctl.samples, 1)
+    jobs = f'{ctl.sum_running / n:.1f}' + (f' of {parallelism}' if parallelism else '')
+    # "Held back" is an upper bound on the time lost to the limit: ninja
+    # may also have had nothing ready to start then.
+    held = f', held back by the memory limit {100 * ctl.throttled // n}% of the time' if parallelism else ''
+    print(f'ninja-memlimit: {elapsed // 60}m{elapsed % 60:02d}s; jobs running: average {jobs}{held}; '
+          f'memory of running jobs: average {ctl.sum_actual / n / GB:.1f}G, peak '
+          f'{ctl.peak_actual / GB:.1f}G (limit {opts.mem_limit / GB:.1f}G); remembered the peaks '
+          f'of {len(peaks.observed)} outputs', file=sys.stderr)
+    sys.exit(rc)
+
+
+if __name__ == '__main__':
+    main()
