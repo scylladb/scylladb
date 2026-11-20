@@ -664,6 +664,13 @@ future<std::variant<rjson::value, api_error>> executor::fill_table_description(s
     } else {
         rjson::add(table_description["BillingModeSummary"], "BillingMode", "PROVISIONED");
     }
+    auto compression_algorithm = schema->get_compressor_params().get_algorithm();
+    if (compression_algorithm == compression_parameters::algorithm::zstd_with_dicts ||
+            compression_algorithm == compression_parameters::algorithm::zstd) {
+        rjson::value table_class_summary = rjson::empty_object();
+        rjson::add(table_class_summary, "TableClass", "STANDARD_INFREQUENT_ACCESS");
+        rjson::add(table_description, "TableClassSummary", std::move(table_class_summary));
+    }
     rjson::add(table_description, "ProvisionedThroughput", rjson::empty_object());
     rjson::add(table_description["ProvisionedThroughput"], "ReadCapacityUnits", rcu);
     rjson::add(table_description["ProvisionedThroughput"], "WriteCapacityUnits", wcu);
@@ -2209,6 +2216,40 @@ static void validate_and_store_gsi_provisioned_throughput(std::map<sstring, sstr
     tags[WCU_TAG_KEY] = std::to_string(*wcu);
 }
 
+// Parse the optional TableClass parameter from a CreateTable or UpdateTable
+// request and, if present, set the appropriate compressor on the builder.
+// STANDARD uses the compression configured for user tables (the
+// sstable_compression_user_table_options option), which is also what a table
+// created without TableClass gets. STANDARD_INFREQUENT_ACCESS uses the same
+// configured options - e.g., the chunk length - but with the zstd algorithm.
+// Returns true if TableClass was present, false if absent.
+// Throws a ValidationException for unsupported or malformed values.
+static bool handle_table_class(const rjson::value& request, schema_builder& builder, service::storage_proxy& proxy) {
+    const rjson::value* table_class_value = rjson::find(request, "TableClass");
+    if (!table_class_value) {
+        return false;
+    }
+    if (!table_class_value->IsString()) {
+        throw api_error::validation("Invalid table-class parameter provided. Valid values are: [STANDARD, STANDARD_INFREQUENT_ACCESS].");
+    }
+
+    const bool dicts_enabled = bool(proxy.features().sstable_compression_dicts);
+    compression_parameters configured = proxy.data_dictionary().get_config().get_sstable_compression_user_table_options(dicts_enabled);
+    std::string_view table_class_name = rjson::to_string_view(*table_class_value);
+    if (table_class_name == "STANDARD") {
+        builder.set_compressor_params(configured);
+    } else if (table_class_name == "STANDARD_INFREQUENT_ACCESS") {
+        auto options = configured.get_options();
+        options[compression_parameters::SSTABLE_COMPRESSION] = sstring(compression_parameters::algorithm_to_name(dicts_enabled
+                ? compression_parameters::algorithm::zstd_with_dicts
+                : compression_parameters::algorithm::zstd));
+        builder.set_compressor_params(compression_parameters(options));
+    } else {
+        throw api_error::validation("Invalid table-class parameter provided. Valid values are: [STANDARD, STANDARD_INFREQUENT_ACCESS].");
+    }
+    return true;
+}
+
 create_table_params validate_create_table_request(const rjson::value& request, const gms::feature_service& feat, const db::tablets_mode_t::mode tablets_mode, const char* caller) {
     // We begin by parsing and validating the content of the CreateTable
     // command. We can't inspect the current database schema at this point
@@ -2556,6 +2597,9 @@ future<executor::request_return_type> executor::commit_table_creation(
         }
         const bool include_all_columns = true;
         view_builder.with_view_info(schema, include_all_columns, ""/*where clause*/);
+        // A table's secondary indexes use the same TableClass - so the same
+        // compression - as the base table.
+        view_builder.set_compressor_params(schema->get_compressor_params());
     }
 
     size_t retries = _mm.get_concurrent_ddl_retries();
@@ -2708,6 +2752,13 @@ future<executor::request_return_type> executor::commit_table_creation(
     co_await wait_for_schema_agreement_after_ddl(_mm, _proxy.local_db());
     rjson::value status = rjson::empty_object();
     executor::supplement_table_info(request, *schema, _proxy);
+    // The response reports a TableClass given in the request, even STANDARD
+    // (unlike DescribeTable which omits it, see fill_table_description()).
+    if (const rjson::value* table_class = rjson::find(request, "TableClass")) {
+        rjson::value table_class_summary = rjson::empty_object();
+        rjson::add(table_class_summary, "TableClass", rjson::copy(*table_class));
+        rjson::add(request, "TableClassSummary", std::move(table_class_summary));
+    }
     rjson::add(status, "TableDescription", std::move(request));
     co_return rjson::print(std::move(status));
 }
@@ -2724,6 +2775,10 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
     co_await verify_create_permission(enforce_authorization, warn_authorization, client_state, _stats);
 
     create_table_params validated = validate_create_table_request(request, _proxy.features(), tablets_mode, "CreateTable");
+    // TableClass is handled here, and not in validate_create_table_request(),
+    // because it needs _proxy (for the configured compression), and because
+    // only CreateTable accepts it - ImportTable's TableCreationParameters don't.
+    handle_table_class(request, validated.builder, _proxy);
 
     co_return co_await commit_table_creation(std::move(request), std::move(validated), std::move(client_state), tablets_mode);
 }
@@ -2916,6 +2971,18 @@ future<executor::request_return_type> executor::update_table(client_state& clien
             }
             if (warm_throughput_given || billing_mode) {
                 builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(std::move(table_tags)));
+            }
+
+            bool table_class_updated = handle_table_class(request, builder, p.local());
+            if (table_class_updated) {
+                empty_request = false;
+                if (rjson::find(request, "StreamSpecification") ||
+                    rjson::find(request, "GlobalSecondaryIndexUpdates") ||
+                    rjson::find(request, "VectorIndexUpdates") ||
+                    rjson::find(request, "BillingMode") ||
+                    rjson::find(request, "WarmThroughput")) {
+                    co_return api_error::validation("One or more parameter values were invalid: TableClass modification must be the only operation in the request");
+                }
             }
 
             rjson::value* stream_specification = rjson::find(request, "StreamSpecification");
@@ -3347,6 +3414,8 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                         }
                         const bool include_all_columns = true;
                         view_builder.with_view_info(schema, include_all_columns, ""/*where clause*/);
+                        // A new GSI uses the base table's TableClass.
+                        view_builder.set_compressor_params(schema->get_compressor_params());
                         new_views.emplace_back(view_builder.build());
                     } else if (op == "Delete") {
                         elogger.trace("Deleting GSI {}", index_name);
@@ -3403,10 +3472,19 @@ future<executor::request_return_type> executor::update_table(client_state& clien
             }
 
             if (empty_request) {
-                co_return api_error::validation("UpdateTable requires one of GlobalSecondaryIndexUpdates, VectorIndexUpdates, StreamSpecification, BillingMode or WarmThroughput to be specified");
+                co_return api_error::validation("UpdateTable requires one of GlobalSecondaryIndexUpdates, VectorIndexUpdates, StreamSpecification, BillingMode, WarmThroughput or TableClass to be specified");
             }
 
             co_await verify_permission(enforce_authorization, warn_authorization, local_client_state, schema, auth::permission::ALTER, e.local()._stats);
+            // When the TableClass changes, the table's existing secondary
+            // indexes change to the same TableClass as the base table.
+            if (table_class_updated) {
+                for (const view_ptr& view : p.local().data_dictionary().find_column_family(tab).views()) {
+                    schema_builder view_builder(view);
+                    view_builder.set_compressor_params(schema->get_compressor_params());
+                    updated_views.push_back(view_ptr(view_builder.build()));
+                }
+            }
             auto m = co_await service::prepare_column_family_update_announcement(p.local(), schema, std::move(updated_views), group0_guard.write_timestamp());
             for (view_ptr view : new_views) {
                 auto m2 = co_await service::prepare_new_view_announcement(p.local(), view, group0_guard.write_timestamp());
