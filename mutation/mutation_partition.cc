@@ -34,7 +34,6 @@
 #include "utils/unconst.hh"
 #include "mutation/async_utils.hh"
 
-logging::logger mclog("mutation_compactor");
 logging::logger mplog("mutation_partition");
 
 void on_bad_row_key(const schema& s, position_in_partition_view pos, const char* reason) {
@@ -2549,5 +2548,3 @@ future<> mutation_cleaner_impl::drain() {
         });
     });
 }
-
-logging::logger compound_logger("compound");

@@ -15,6 +15,7 @@
 #include <boost/algorithm/string.hpp>
 
 logging::logger klog("keys");
+logging::logger compound_logger("compound");
 
 const legacy_compound_view<partition_key_view::c_type>
 partition_key_view::legacy_form(const schema& s) const {
