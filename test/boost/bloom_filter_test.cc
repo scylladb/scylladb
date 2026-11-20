@@ -6,7 +6,10 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
+#include <limits>
+
 #include <seastar/testing/test_case.hh>
+#include <seastar/testing/on_internal_error.hh>
 
 #include "sstables/sstable_writer.hh"
 #include "test/lib/eventually.hh"
@@ -187,6 +190,30 @@ SEASTAR_TEST_CASE(test_reclaimed_bloom_filter_survives_disposal_of_equal_sized_s
         // limit available memory to the sstables_manager to test reclaiming.
         // this will set the reclaim threshold to 100 bytes.
         .available_memory = 500
+    });
+}
+
+// The reclaimable-memory counter can drift from what _active holds; reclaim
+// must stop instead of spinning, and resync the counter.
+SEASTAR_TEST_CASE(test_maybe_reclaim_components_terminates_without_reclaimable_memory) {
+    return test_env::do_with_async([] (test_env& env) {
+        simple_schema ss;
+        auto sst = env.make_sstable(ss.schema());
+        auto& sst_mgr = env.manager();
+
+        // the drift is reported via on_internal_error_noexcept
+        seastar::testing::scoped_no_abort_on_internal_error abort_guard;
+        // sst has no bloom filter built, so nothing is actually reclaimable
+        sst_mgr.set_total_reclaimable_memory(std::numeric_limits<size_t>::max() / 2);
+        auto f = sst_mgr.maybe_reclaim_components();
+        const bool spinning = !f.available();
+        if (spinning) {
+            // let the loop exit so teardown doesn't race it
+            sst_mgr.set_total_reclaimable_memory(0);
+        }
+        f.get();
+        BOOST_REQUIRE(!spinning);
+        BOOST_REQUIRE_EQUAL(sst_mgr.get_total_reclaimable_memory(), 0);
     });
 }
 
