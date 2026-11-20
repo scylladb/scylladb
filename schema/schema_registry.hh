@@ -116,7 +116,7 @@ class schema_registry {
     std::unordered_map<table_schema_version, lw_shared_ptr<schema_registry_entry>> _entries;
     std::unique_ptr<db::schema_ctxt> _ctxt;
     schema_registry_entry::erase_clock::duration _grace_period{std::chrono::seconds(1)};
-    // Generation of the last schema change committed on this shard, see schema_applier::commit().
+    // Generation of the last schema change committed on this shard, see schema_and_topology_applier::commit().
     // All shards have the same generation once a commit has reached them all.
     uint64_t _commit_gen = 0;
     condition_variable _commit_gen_advanced;
@@ -185,7 +185,7 @@ schema_registry& local_schema_registry();
 // automatically propagated to other shards, no matter how long the processing
 // chain will last.
 //
-// Schema changes are committed shard by shard (see schema_applier::commit()), so the schema may
+// Schema changes are committed shard by shard (see schema_and_topology_applier::commit()), so the schema may
 // reach a shard which has not committed the change it comes from yet. get() waits for that shard
 // to catch up, comparing the schema commit generations of the two shards.
 class global_schema_ptr {
