@@ -51,8 +51,8 @@ db::timeout_clock::time_point test_timeout() {
 write_buffer_ring_config make_write_buffer_ring_config(size_t buffer_size, size_t ring_size, std::chrono::milliseconds sync_period = std::chrono::milliseconds(0)) {
     return write_buffer_ring_config{
         .buffer_size = buffer_size,
-        .ring_size = ring_size,
         .flush_sg = seastar::default_scheduling_group(),
+        .ring_size = ring_size,
         .sync_period = sync_period,
     };
 }

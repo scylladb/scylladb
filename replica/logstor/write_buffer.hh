@@ -449,8 +449,18 @@ private:
 // Configuration passed to write_buffer_ring constructor (excluding the flush function).
 struct write_buffer_ring_config {
     size_t buffer_size;
-    size_t ring_size;
+    // The scheduling group that the ring runs its flushes in.
     seastar::scheduling_group flush_sg;
+    // The number of buffers in the ring, which allows at most `ring_size - 1` flushes in flight.
+    // With a sync period of 0, records collect in a buffer only while all flushes are in flight, so
+    // a larger ring writes more and smaller chunks, each padded to a block, and adds no throughput.
+    // The default allows four flushes in flight, which are sufficient to overlap the disk write with
+    // the index and separator work.
+    size_t ring_size{5};
+    // The time that the ring waits after the first record of a head buffer that is not full, before
+    // the head advances past the buffer. A longer period writes fewer and larger chunks at low load,
+    // but each write then waits up to the period. With the default of 0, records still collect in a
+    // buffer while all flushes are in flight, so the chunks are not small under load.
     std::chrono::milliseconds sync_period{0};
 };
 
