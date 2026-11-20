@@ -14,6 +14,7 @@
 #include <seastar/core/timed_out_error.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/when_any.hh>
+#include <seastar/coroutine/exception.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include "raft_group0_client.hh"
 #include "raft_group_registry.hh"
@@ -26,6 +27,7 @@
 #include "replica/database.hh"
 #include "utils/assert.hh"
 #include "utils/chain_abort_source.hh"
+#include "utils/error_injection.hh"
 #include "utils/to_string.hh"
 #include "db/system_keyspace.hh"
 #include "mutation/timestamp.hh"
@@ -171,6 +173,7 @@ future<> raft_group0_client::add_entry(group0_command group0_cmd, group0_guard g
     }
 
     auto new_group0_state_id = guard.new_group0_state_id();
+    std::exception_ptr timeout_ex;
 
     co_await [&, guard = std::move(guard)] () -> future<> { // lambda is needed to limit guard's lifetime
         raft::command cmd;
@@ -197,6 +200,9 @@ future<> raft_group0_client::add_entry(group0_command group0_cmd, group0_guard g
                 // Just fail the operation by propagating the error.
                 logger.error("add_entry: unexpected `not_a_leader` error: \"{}\". Please file an issue.", e);
                 throw;
+            } catch (const raft_operation_timeout_error&) {
+                // The entry may still be applied; only the history check below can confirm success.
+                timeout_ex = std::current_exception();
             }
 
             // Thanks to the `prev_state_id` check in `group0_state_machine::apply`, the command is idempotent.
@@ -208,10 +214,23 @@ future<> raft_group0_client::add_entry(group0_command group0_cmd, group0_guard g
         // on this node to proceed
     } ();
 
+    co_await utils::get_local_injector().inject("group0_add_entry_before_history_check", utils::wait_for_message(std::chrono::minutes(1)));
     // If the row exists, the command was applied — done, regardless of elapsed time.
     // Must check before any clock, or a slow add_entry() (e.g. stalled Raft leader) can misclassify success as timeout.
-    if (co_await _sys_ks.group0_history_contains(new_group0_state_id)) {
+    bool applied = false;
+    try {
+        applied = co_await _sys_ks.group0_history_contains(new_group0_state_id);
+    } catch (...) {
+        // A failed history read must not mask the timeout that callers handle.
+        if (!timeout_ex) {
+            throw;
+        }
+    }
+    if (applied) {
         co_return;
+    }
+    if (timeout_ex) {
+        co_await coroutine::return_exception_ptr(std::move(timeout_ex));
     }
 
     // Row absent: classify by whether our state ID is still inside the GC window (`now_ts` taken here, right after
