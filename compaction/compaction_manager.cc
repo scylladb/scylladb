@@ -2152,6 +2152,16 @@ protected:
 
         while (!_sstables.empty() && can_proceed()) {
             auto sst = consume_sstable();
+            // perform_task_on_all_files() captured the sstables before it registered
+            // this task, so an operation that removed sstables from the group in
+            // between, like a truncate, could not stop this task (SCYLLADB-6095).
+            // A truncate unlinks them before it re-enables compaction, so skip the
+            // unlinked ones: they are no longer in the group to be replaced.
+            if (sst->unlinked_at()) {
+                cmlog.info("{}: skipping {}, which was already deleted", *this, sst->get_filename());
+                _compacting.release_compacting({sst});
+                continue;
+            }
             auto res = co_await rewrite_sstable(std::move(sst));
             _cm._validation_errors += res.stats.validation_errors;
             stats += res.stats;
@@ -2653,6 +2663,12 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_tas
     }, std::move(reason));
     if (sstables.empty()) {
         co_return std::nullopt;
+    }
+    if constexpr (std::is_same_v<TaskType, split_compaction_task_executor>) {
+        // Lets a test change the table, e.g., truncate it, after the split captured
+        // its sstables but before the task that rewrites them is registered.
+        co_await utils::get_local_injector().inject("split_compaction_after_capturing_sstables",
+                utils::wait_for_message(std::chrono::minutes(5)));
     }
     co_return co_await perform_compaction<TaskType>(std::move(params), do_throw_if_stopping, info, &t, std::move(options), std::move(owned_ranges_ptr), std::move(sstables), std::move(compacting), std::forward<Args>(args)...);
 }
