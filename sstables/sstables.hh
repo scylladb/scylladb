@@ -536,12 +536,12 @@ public:
     template<typename Func, typename... Args>
     requires std::is_nothrow_move_constructible_v<Func>
     auto sstable_write_io_check(Func&& func, Args&&... args) const noexcept {
-        return do_io_check(_write_error_handler, std::forward<Func>(func), std::forward<Args>(args)...);
+        return do_io_check(_error_handlers.write, std::forward<Func>(func), std::forward<Args>(args)...);
     }
 
     // required since touch_directory has an optional parameter
     auto sstable_touch_directory_io_check(std::filesystem::path name) const noexcept {
-        return do_io_check(_write_error_handler, [name = std::move(name)] () mutable {
+        return do_io_check(_error_handlers.write, [name = std::move(name)] () mutable {
             return touch_directory(name.native());
         });
     }
@@ -696,8 +696,8 @@ private:
 
     db_clock::time_point _now;
 
-    io_error_handler _read_error_handler;
-    io_error_handler _write_error_handler;
+    // Owned by the handlers' thread_local storage, which outlives the sstable.
+    const io_error_handlers& _error_handlers;
 
     db::large_data_handler& _large_data_handler;
     db::corrupt_data_handler& _corrupt_data_handler;
