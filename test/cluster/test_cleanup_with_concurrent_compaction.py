@@ -84,3 +84,64 @@ async def test_regular_compaction_skips_sstables_waiting_for_cleanup(manager: Sc
         finally:
             await manager.api.message_injection(server.ip_addr, 'sstable_cleanup_wait')
             await cleanup
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_cleanup_stops_major_compaction(manager: ScyllaClusterManager):
+    """
+    When cleanup starts while a major compaction is running, it must stop
+    the major compaction and then clean all the sstables, including the ones
+    that the major compaction had taken. Otherwise, either the same sstables
+    are compacted by both, or cleanup skips the sstables that the major
+    compaction holds, and leaves them uncleaned.
+    The test pauses a major compaction after it took all the sstables, runs
+    cleanup, and checks in the log that the major compaction was stopped
+    before cleanup started cleaning, and that cleanup cleaned all the
+    sstables.
+    Reproduces #8155.
+    """
+    server = await manager.server_add(cmdline=['--smp', '1', '--logger-log-level', 'compaction=debug'])
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}") as ks:
+        await cql.run_async(f'CREATE TABLE {ks}.test (pk int PRIMARY KEY, v int)')
+        await manager.api.disable_autocompaction(server.ip_addr, ks, 'test')
+        sstables = await write_sstables(manager, server, ks, 0, 4)
+        assert len(sstables) == 4
+
+        log = await manager.server_open_log(server.server_id)
+        mark = await log.mark()
+        await inject_error_one_shot(manager.api, server.ip_addr, 'major_compaction_wait')
+        major = asyncio.create_task(manager.api.keyspace_compaction(server.ip_addr, ks, 'test'))
+        try:
+            await manager.api.wait_for_injection_enter(server.ip_addr, 'major_compaction_wait')
+            # If cleanup didn't stop the major compaction, it would wait for
+            # the sstables the major compaction holds for 5 minutes, and then
+            # fail. Fail sooner.
+            await asyncio.wait_for(manager.api.cleanup_keyspace(server.ip_addr, ks), timeout=60)
+        finally:
+            await manager.api.message_injection(server.ip_addr, 'major_compaction_wait')
+            await major
+
+        # Follow the compactions of the table in the log, in order.
+        major_took = set()
+        major_running = {}
+        cleaned = set()
+        for line, m in await log.grep(rf'\[(Major|Cleanup) {ks}\.test (\S+)\] (Compacting \[|Compacting of .* interrupted|Compacted |Cleaning \[)', from_mark=mark):
+            kind, uuid, event = m.groups()
+            if kind == 'Major' and event == 'Compacting [':
+                major_running[uuid] = sstables_in(line)
+                major_took |= major_running[uuid]
+            elif kind == 'Major':
+                major_running.pop(uuid, None)
+            elif event == 'Cleaning [':
+                cleaning = sstables_in(line)
+                # Check that no major compaction is still compacting the
+                # sstables that cleanup starts cleaning.
+                assert not any(cleaning & s for s in major_running.values())
+                cleaned |= cleaning
+        logger.info(f'Major compaction took {major_took}, cleanup cleaned {cleaned}')
+        # Check that the major compaction took the sstables, so the checks
+        # above aren't vacuous.
+        assert major_took == sstables
+        # Check that cleanup cleaned all the sstables.
+        assert cleaned == sstables
