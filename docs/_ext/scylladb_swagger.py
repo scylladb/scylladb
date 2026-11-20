@@ -1,5 +1,7 @@
+import json
 import os
 from os.path import relpath
+from pathlib import Path
 import shutil
 
 from docutils import nodes
@@ -80,13 +82,36 @@ class SwaggerProcessor():
         dest_dir = os.path.join(app.builder.outdir, '_static/api')
         dest_folder = os.path.join(dest_dir, folder_name)
 
-        if os.path.exists(dest_folder):
-            LOGGER.info(f"{folder_name} directory already exists in {dest_folder}. Skipping copy.")
-        elif os.path.exists(source_folder):
+        if os.path.exists(source_folder):
+            if os.path.exists(dest_folder):
+                shutil.rmtree(dest_folder)
             shutil.copytree(source_folder, dest_folder)
+            # Swagger 2.0 APIs are fragments assembled by the server at runtime.
+            # Publish standalone specifications for the shared Swagger UI template.
+            for definitions_file in Path(source_folder).glob('*.def.json'):
+                name = definitions_file.name.removesuffix('.def.json')
+                spec = _assemble_spec(Path(source_folder), name)
+                (Path(dest_folder) / f'{name}.json').write_text(json.dumps(spec, indent=2) + '\n', encoding='utf-8')
             LOGGER.info(f"{folder_name} directory copied.")
         else:
             LOGGER.error(f"{source_folder} does not exists.")
+
+
+def _read_fragment(path: Path) -> dict:
+    return json.loads('{' + path.read_text(encoding='utf-8').lstrip().removeprefix(',') + '}')
+
+
+def _assemble_spec(api_dir: Path, name: str) -> dict:
+    spec = json.loads((api_dir / 'swagger20_header.json').read_text(encoding='utf-8') + '}}')
+    spec['paths'] = _read_fragment(api_dir / f'{name}.json')
+    spec['definitions'] = _read_fragment(api_dir / f'{name}.def.json')
+    # Error responses refer to Seastar's HTTP exception schema.
+    spec['definitions']['ErrorModel'] = {
+        'type': 'object',
+        'properties': {'message': {'type': 'string'}, 'code': {'type': 'integer'}},
+    }
+    spec['host'] = '127.0.0.1:10000'
+    return spec
 
 
 def custom_pathto(app, docname, typ=None, anchor=None):

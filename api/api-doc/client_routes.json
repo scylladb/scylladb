@@ -1,6 +1,6 @@
     , "/v2/client-routes":{
         "get": {
-            "description":"List all client route entries",
+            "description":"List all client route entries stored in the cluster. The Client Routes API is available after every node supports and enables the CLIENT_ROUTES cluster feature. Deployment infrastructure should use this API instead of writing directly to system.client_routes.",
             "operationId":"get_client_routes",
             "tags":["client_routes"],
             "produces":[
@@ -21,7 +21,7 @@
             }
         },
         "post": {
-            "description":"Upsert one or more client route entries",
+            "description":"Create or replace one or more client route entries. Each entry must provide an address and at least one port between 1 and 65535. An entry with an existing (connection_id, host_id) key replaces its address and port values. Changes made through any node are stored cluster-wide and notify drivers subscribed to CLIENT_ROUTES_CHANGE.",
             "operationId":"set_client_routes",
             "tags":["client_routes"],
             "parameters":[
@@ -44,7 +44,7 @@
             }
         },
         "delete": {
-            "description":"Delete one or more client route entries",
+            "description":"Delete the client route entries identified by the supplied (connection_id, host_id) pairs. Changes made through any node are stored cluster-wide and notify drivers subscribed to CLIENT_ROUTES_CHANGE.",
             "operationId":"delete_client_routes",
             "tags":["client_routes"],
             "parameters":[
