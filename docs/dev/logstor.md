@@ -62,6 +62,8 @@ Only step 4 writes to the disk - all other steps only update in-memory metadata.
 2. The separator buffer is flushed when it's full, or requested to flush for other reason. It is written into a new segment in the compaction group, and it updates the location of the records from the original mixed segments to the new segments in the compaction group.
 3. After the separator buffer is flushed and all records from the original segment are moved, it releases the reference of the segment. When there are no more reference to the segment it is freed.
 
+The separator runs in the memtable scheduling group, whose shares are set by the memtable flush controller from the memtable backlog. Logstor tables have no memtables, so the separator reports the shares it needs and the controller gives the group at least that many: none while the separator is idle, a floor while it is active, rising to the controller's maximum as its task queue fills. Writes wait for the separator once that queue is full.
+
 **Compaction:**
 1. The amount of live data is tracked for each segment in its (in-memory) segment_descriptor. The segment descriptors are stored in a histogram by live data. This histogram is called a `segment_set` and each compaction group owns one.
 2. A segment set from a single compaction group is submitted for compaction.
