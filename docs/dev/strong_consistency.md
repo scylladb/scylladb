@@ -465,6 +465,39 @@ tablet migrated away or its table dropped, will never be replayed. `release_all(
 destroys the handles instead of detaching them, so the use counts drop and the
 segments can be reclaimed (SCYLLADB-3827).
 
+# In-memory raft log
+
+Raft keeps the log entries in memory as well as in the commitlog: a leader sends them
+to its followers from memory, and the applier fiber reads them from there. A raft
+snapshot is what lets a server drop entries from memory. Taking one is free for a
+strongly consistent group, since the state machine's data is in the memtables and
+sstables already. A group keeps its applied entries until its log reaches
+`snapshot_threshold_log_size` (10MB), so that a replica which is slow or down catches
+up from the log.
+
+Per shard, `groups_manager` accounts for each log after every batch its group applies
+(raft's `on_applied` callback), and drops logs:
+
+- When the logs exceed 5% of the shard's memory, those of the groups written to the
+  longest ago, until they are within the budget
+  (`groups_manager::reclaim_raft_log_memory()`).
+- Every 10 seconds, those of the groups not written to for 10 seconds
+  (`groups_manager::drop_idle_raft_logs()`).
+
+A log is dropped by a snapshot which keeps none of the applied entries
+(`raft::server::trigger_snapshot()`), which the group's applier fiber takes in the
+background, and by `raft::server::drop_trailing_log()` for the entries an earlier
+snapshot left in it.
+
+A write the shard leads waits, before it is added to the log, while the logs of the shard
+are over the budget (`groups_manager::wait_for_raft_log_room()`). It first starts
+dropping the applied entries itself, so it waits only for those drops and for entries
+which are not applied yet. Those are applied without taking more memory, so the wait
+ends once they are, unless their group has lost its majority. A replica which is down
+never makes writes wait: what is kept for it is applied, and can be dropped.
+
+A replica which needs a dropped entry is brought up to date by a raft snapshot transfer.
+
 # Metrics
 
 The coordinator exports its metrics per scheduling group, under the
