@@ -145,15 +145,26 @@ seastar::future<instance_cache::value_type> instance_cache::get(const db::functi
         // that, we need to make sure that there is enough free memory for the
         // wasm runtime stack, that is allocated at the start of the UDF execution,
         // and which is not allocated using seastar allocator, but using mmap.
-        reserve_wasm_stack();
+        // On failure, the caller doesn't get the entry, so it won't recycle()
+        // it. So we must unlock the entry ourselves, or later calls of this
+        // function would wait for the lock forever.
+        try {
+            reserve_wasm_stack();
+        } catch (...) {
+            entry->mutex.unlock();
+            return make_exception_future<instance_cache::value_type>(std::current_exception());
+        }
         if (!entry->instance) {
             ++shard_stats().cache_misses;
             try {
                 entry->instance.emplace(load(ctx));
             } catch (...) {
                 // We couldn't actually use the compiled module, so we need to remove
-                // the reference to it.
+                // the reference to it (the module_handle created by load() did that),
+                // and release the stack reserved above and the entry's lock.
                 std::exception_ptr ex = std::current_exception();
+                free_wasm_stack();
+                entry->mutex.unlock();
                 return make_exception_future<instance_cache::value_type>(std::move(ex));
             }
         } else {
