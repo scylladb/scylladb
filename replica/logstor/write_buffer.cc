@@ -742,15 +742,6 @@ future<> write_buffer_ring::consumer_loop() {
 
             co_await coroutine::maybe_yield();
         }
-
-        while (!_queued_writes.empty()) {
-            auto request = std::move(_queued_writes.front());
-            _queued_writes.pop_front();
-            on_queued_write_removed(request);
-            on_queued_writes_changed();
-            fail_queued_write(request, std::make_exception_ptr(seastar::gate_closed_exception()));
-            co_await coroutine::maybe_yield();
-        }
     } catch (...) {
         on_internal_error(logstor_logger, fmt::format("The consumer of the write buffer ring failed: {:t}", std::current_exception()));
     }
