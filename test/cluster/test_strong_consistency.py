@@ -4581,6 +4581,13 @@ async def test_raft_log_kept_for_a_down_replica_is_dropped_over_the_budget(manag
         rows = await cql.run_async(f"SELECT c FROM {ks}.test WHERE pk = {writes}")
         assert rows[0].c == writes
 
+        # Over the budget, the writes wait for the entries in flight to be applied
+        # and dropped, and none waits for good.
+        keys = range(writes + 1, 3 * writes + 1)
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({i}, {i})") for i in keys])
+        rows = await cql.run_async(f"SELECT c FROM {ks}.test WHERE pk = {3 * writes}")
+        assert rows[0].c == 3 * writes
+
 
 @pytest.mark.asyncio
 async def test_raft_log_kept_for_a_down_replica_is_dropped_when_idle(manager: ScyllaClusterManager):
@@ -4612,3 +4619,45 @@ async def test_raft_log_kept_for_a_down_replica_is_dropped_when_idle(manager: Sc
             logger.info(f"Raft log entries held in memory: {entries}")
             return True if sum(entries) == 0 else None
         await wait_for(logs_are_empty, time.time() + 60)
+
+
+@pytest.mark.asyncio
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
+async def test_raft_log_of_a_group_without_majority_does_not_block_other_groups(manager: ScyllaClusterManager):
+    """A group which has lost its majority holds entries which cannot be applied, nor
+    dropped. They do not count against the memory budget of the raft logs of the shard,
+    so the writes to the other groups of the shard go on."""
+    servers = await manager.servers_add(3, cmdline=DEFAULT_CMDLINE + ['--smp=1'], auto_rack_dc='my_dc')
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1} AND consistency = 'global'") as ks_alone, \
+            new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1} AND consistency = 'global'") as ks_stuck:
+        await cql.run_async(f"CREATE TABLE {ks_alone}.test (pk int PRIMARY KEY, c int)")
+        await cql.run_async(f"CREATE TABLE {ks_stuck}.test (pk int PRIMARY KEY, c int)")
+
+        # Both groups are led by the only replica of the first one.
+        host_id = str((await get_tablet_replicas(manager, servers[0], ks_alone, 'test', 0))[0][0])
+        host_ids = await get_host_ids(manager, servers)
+        server = servers[host_ids.index(host_id)]
+        others = [s for s in servers if s != server]
+        await ensure_raft_group_leader_on(manager, server, await get_table_raft_group_id(manager, ks_stuck, 'test'))
+
+        cql = await manager.get_cql_exclusive(server)
+        await cql.run_async(f"INSERT INTO {ks_stuck}.test (pk, c) VALUES (0, 0)")
+        await cql.run_async(f"INSERT INTO {ks_alone}.test (pk, c) VALUES (0, 0)")
+
+        for s in others:
+            await manager.server_pause(s.server_id)
+        try:
+            # The entry stays in the log of the group, not applied.
+            with pytest.raises(Exception):
+                await cql.run_async(f"INSERT INTO {ks_stuck}.test (pk, c) VALUES (1, 1)")
+
+            await manager.api.enable_injection(server.ip_addr, 'sc_raft_log_memory_budget', one_shot=False, parameters={'value': 1})
+            for i in range(1, 11):
+                await cql.run_async(f"INSERT INTO {ks_alone}.test (pk, c) VALUES ({i}, {i})")
+            rows = await cql.run_async(f"SELECT c FROM {ks_alone}.test WHERE pk = 10")
+            assert rows[0].c == 10
+        finally:
+            for s in others:
+                await manager.server_unpause(s.server_id)
