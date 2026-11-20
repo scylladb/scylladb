@@ -711,15 +711,9 @@ private:
     manager_set_link_type _manager_set_link;
 
 
-    // The _large_data_stats map stores e.g. largest partitions, rows, cells sizes,
-    // and max number of rows in a partition.
-    //
-    // It can be disengaged normally when loading legacy sstables that do not have this
-    // information in their scylla metadata.
-    std::optional<scylla_metadata::large_data_stats> _large_data_stats;
+    // Per-shard copy: the records carry intrusive hooks into a per-shard index.
     std::optional<scylla_metadata::large_data_records> _large_data_records;
     sstring _origin;
-    std::optional<scylla_metadata::ext_timestamp_stats> _ext_timestamp_stats;
     optimized_optional<sstable_id> _sstable_identifier;
 
     // Total reclaimable memory from all the components of the SSTable.
@@ -1231,8 +1225,8 @@ public:
     }
 
     // Return the large_data_stats_entry identified by large_data_type
-    // iff _large_data_stats is available and the requested entry is in
-    // the map.  Otherwise, return a disengaged optional.
+    // iff the scylla metadata has large data stats with the requested entry.
+    // Otherwise, return a default-constructed entry.
     std::optional<large_data_stats_entry> get_large_data_stat(large_data_type t) const noexcept;
 
     // Return the large_data_records stored in scylla_metadata, if present.

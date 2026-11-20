@@ -1998,10 +1998,6 @@ future<> sstable::open_data(sstable_open_config cfg) noexcept {
         co_await utils::clear_gently(sm->token_ranges.elements);
         sm->token_ranges.elements = {};
     }
-    auto* ld_stats = _components->scylla_metadata->data.get<scylla_metadata_type::LargeDataStats, scylla_metadata::large_data_stats>();
-    if (ld_stats) {
-        _large_data_stats.emplace(*ld_stats);
-    }
     auto* ld_records = _components->scylla_metadata->data.get<scylla_metadata_type::LargeDataRecords, scylla_metadata::large_data_records>();
     if (ld_records) {
         _large_data_records.emplace(*ld_records);
@@ -2009,10 +2005,6 @@ future<> sstable::open_data(sstable_open_config cfg) noexcept {
     auto* origin = _components->scylla_metadata->data.get<scylla_metadata_type::SSTableOrigin, scylla_metadata::sstable_origin>();
     if (origin) {
         _origin = sstring(to_string_view(bytes_view(origin->value)));
-    }
-    auto* ts_stats = _components->scylla_metadata->data.get<scylla_metadata_type::ExtTimestampStats, scylla_metadata::ext_timestamp_stats>();
-    if (ts_stats) {
-        _ext_timestamp_stats.emplace(*ts_stats);
     }
     _open_mode.emplace(open_flags::ro);
     _stats.on_open_for_reading();
@@ -4473,9 +4465,10 @@ future<> sstable::destroy() {
 }
 
 std::optional<large_data_stats_entry> sstable::get_large_data_stat(large_data_type t) const noexcept {
-    if (_large_data_stats) {
-        auto it = _large_data_stats->map.find(t);
-        if (it != _large_data_stats->map.end()) {
+    const auto& sm = _components->scylla_metadata;
+    if (auto* ld_stats = sm ? sm->data.get<scylla_metadata_type::LargeDataStats, scylla_metadata::large_data_stats>() : nullptr) {
+        auto it = ld_stats->map.find(t);
+        if (it != ld_stats->map.end()) {
             return std::make_optional<large_data_stats_entry>(it->second);
         }
     }
@@ -4483,8 +4476,9 @@ std::optional<large_data_stats_entry> sstable::get_large_data_stat(large_data_ty
 }
 
 scylla_metadata::ext_timestamp_stats::map_type sstable::get_ext_timestamp_stats() const noexcept {
-    if (_ext_timestamp_stats) {
-        return _ext_timestamp_stats->map;
+    const auto& sm = _components->scylla_metadata;
+    if (auto* ts_stats = sm ? sm->get_ext_timestamp_stats() : nullptr) {
+        return ts_stats->map;
     }
     return scylla_metadata::ext_timestamp_stats::map_type{};
 }
