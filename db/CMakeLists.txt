@@ -27,6 +27,7 @@ target_sources(db
     hints/host_filter.cc
     hints/sync_point.cc
     config.cc
+    native_transport_config.cc
     extensions.cc
     heat_load_balance.cc
     large_data_handler.cc

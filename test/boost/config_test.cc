@@ -17,6 +17,7 @@
 #include "test/lib/test_utils.hh"
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/core/future-util.hh>
+#include <seastar/net/api.hh>
 #include <yaml-cpp/yaml.h>
 #include "db/config.hh"
 #include "db/object_storage_endpoint_param.hh"
@@ -1094,4 +1095,126 @@ SEASTAR_THREAD_TEST_CASE(test_config_not_broadcast_on_other_shard) {
         cfg->data_file_directories.set({"/some/dir"});
         BOOST_REQUIRE_EQUAL(cfg->data_file_directories(), std::vector<sstring>{"/some/dir"});
     }).get();
+}
+
+// Unified listener configuration must keep proxy metadata and shard routing independent.
+SEASTAR_THREAD_TEST_CASE(test_unified_port_configuration) {
+    config cfg;
+    BOOST_REQUIRE_EQUAL(cfg.native_transport_unified_port().port, 0);
+    cfg.read_from_yaml(R"yaml(
+native_transport_unified_port:
+  port: 29042
+  encryption: tls-only
+  shard_routing:
+    default: balanced
+    ppv2:
+      mode: optional
+      trusted_proxies:
+        interface_subnets: ["*"]
+        addresses: ["192.0.2.10/32", "2001:db8::/32"]
+)yaml", throw_on_error);
+    const auto& value = cfg.native_transport_unified_port();
+    BOOST_REQUIRE_EQUAL(value.port, 29042);
+    BOOST_REQUIRE_EQUAL(value.encryption, "tls-only");
+    BOOST_REQUIRE_EQUAL(value.default_routing, "balanced");
+    BOOST_REQUIRE_EQUAL(value.ppv2, "optional");
+    BOOST_REQUIRE_EQUAL(value.interface_subnets.size(), 1);
+    BOOST_REQUIRE_EQUAL(value.interface_subnets.front(), "*");
+    BOOST_REQUIRE_EQUAL(value.addresses.size(), 2);
+    auto round_trip = db::native_transport_unified_port_config::decode(YAML::Load(fmt::format("{}", value)));
+    BOOST_REQUIRE(value == round_trip);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_unified_port_configuration_validation) {
+    for (const auto& mapping : {
+            "29042", "{port: -1, encryption: both}", "{port: 65536, encryption: both}",
+            "{port: 29042}", "{port: 29042, encryption: invalid}",
+            "{port: 29042, encryption: both, extra: true}",
+            "{shard_routing: {default: false}}",
+            "{shard_routing: {ppv2: {mode: invalid}}}",
+            "{shard_routing: {ppv2: {trusted_proxies: {addresses: '*'}}}}",
+            "{shard_routing: {ppv2: {trusted_proxies: {interface_subnets: '*'}}}}",
+            "{shard_routing: {ppv2: {trusted_proxies: {addresses: [hostname]}}}}",
+            "{shard_routing: {ppv2: {trusted_proxies: {addresses: ['192.0.2.1/33']}}}}",
+            "{shard_routing: {ppv2: {trusted_proxies: {addresses: ['::1/129']}}}}",
+            "{shard_routing: {ppv2: {trusted_proxies: {addresses: ['192.0.2.1/-1']}}}}"}) {
+        config cfg;
+        BOOST_CHECK_THROW(cfg.read_from_yaml(format("native_transport_unified_port: {}", mapping), throw_on_error), std::exception);
+    }
+}
+
+SEASTAR_THREAD_TEST_CASE(test_unified_port_proxy_address_trust) {
+    db::native_transport_unified_port_config cfg;
+    cfg.addresses = {"192.0.2.0/24", "2001:db8::/32"};
+    auto options = cfg.make_listen_options();
+    BOOST_REQUIRE(options.trusted_proxy(seastar::net::inet_address("192.0.2.255")));
+    BOOST_REQUIRE(!options.trusted_proxy(seastar::net::inet_address("192.0.3.1")));
+    BOOST_REQUIRE(options.trusted_proxy(seastar::net::inet_address("2001:db8:ffff::1")));
+    BOOST_REQUIRE(!options.trusted_proxy(seastar::net::inet_address("2001:db9::1")));
+    cfg.addresses = {"*"};
+    options = cfg.make_listen_options();
+    BOOST_REQUIRE(options.trusted_proxy(seastar::net::inet_address("203.0.113.1")));
+    BOOST_REQUIRE(options.trusted_proxy(seastar::net::inet_address("2001:db9::1")));
+    cfg.addresses.clear();
+    options = cfg.make_listen_options();
+    BOOST_REQUIRE(!options.trusted_proxy(seastar::net::inet_address("127.0.0.1")));
+}
+
+SEASTAR_THREAD_TEST_CASE(test_unified_port_mapped_proxy_address_trust) {
+    using seastar::net::inet_address;
+    db::native_transport_unified_port_config cfg;
+    auto check_range = [&cfg] (const char* subnet, const char* inside, const char* outside) {
+        cfg.addresses = {subnet};
+        auto options = cfg.make_listen_options();
+        BOOST_REQUIRE(options.trusted_proxy(inet_address(inside)));
+        BOOST_REQUIRE(!options.trusted_proxy(inet_address(outside)));
+        BOOST_REQUIRE(!options.trusted_proxy(inet_address("2001:db8::1")));
+    };
+    check_range("::ffff:192.0.2.10", "192.0.2.10", "192.0.2.11");
+    check_range("::ffff:192.0.2.10/128", "::ffff:192.0.2.10", "::ffff:192.0.2.11");
+    check_range("::ffff:192.0.2.10/120", "192.0.2.255", "192.0.3.1");
+    check_range("::ffff:0.0.0.0/96", "203.0.113.1", "2001:db8::1");
+
+    // Shorter prefixes remain IPv6 ranges; mapped peers have IPv4 identity.
+    cfg.addresses = {"::ffff:192.0.2.10/95"};
+    auto options = cfg.make_listen_options();
+    BOOST_REQUIRE(options.trusted_proxy(inet_address("::fffe:192.0.2.10")));
+    BOOST_REQUIRE(!options.trusted_proxy(inet_address("192.0.2.10")));
+    BOOST_REQUIRE(!options.trusted_proxy(inet_address("::ffff:192.0.2.10")));
+    cfg.addresses = {"::/0"};
+    options = cfg.make_listen_options();
+    BOOST_REQUIRE(options.trusted_proxy(inet_address("2001:db8::1")));
+    BOOST_REQUIRE(!options.trusted_proxy(inet_address("192.0.2.10")));
+    BOOST_REQUIRE(!options.trusted_proxy(inet_address("::ffff:192.0.2.10")));
+    cfg.addresses = {"0.0.0.0/0", "::/0"};
+    options = cfg.make_listen_options();
+    BOOST_REQUIRE(options.trusted_proxy(inet_address("192.0.2.10")));
+    BOOST_REQUIRE(options.trusted_proxy(inet_address("::ffff:192.0.2.10")));
+    BOOST_REQUIRE(options.trusted_proxy(inet_address("2001:db8::1")));
+}
+
+SEASTAR_THREAD_TEST_CASE(test_unified_port_proxy_interface_trust) {
+    db::native_transport_unified_port_config cfg;
+    cfg.interface_subnets = {"lo"};
+    cfg.addresses = {"192.0.2.10"};
+    auto options = cfg.make_listen_options();
+    BOOST_REQUIRE(options.trusted_proxy(seastar::net::inet_address("127.0.0.1")));
+    BOOST_REQUIRE(options.trusted_proxy(seastar::net::inet_address("192.0.2.10")));
+    BOOST_REQUIRE(!options.trusted_proxy(seastar::net::inet_address("192.0.2.11")));
+    cfg.interface_subnets = {"*"};
+    options = cfg.make_listen_options();
+    BOOST_REQUIRE(!options.trusted_proxy(seastar::net::inet_address("127.0.0.1")));
+    BOOST_REQUIRE(options.trusted_proxy(seastar::net::inet_address("192.0.2.10")));
+    cfg.interface_subnets = {"nonexistent"};
+    BOOST_CHECK_THROW(cfg.make_listen_options(), std::invalid_argument);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_unified_port_malformed_policy_is_fatal) {
+    config cfg;
+    bool error_ignored = false;
+    auto ignore_error = [&] (const auto&, const auto&, auto) { error_ignored = true; };
+    BOOST_REQUIRE_THROW(cfg.read_from_yaml(
+        "native_transport_unified_port: {port: 29042, encryption: invalid}", ignore_error),
+        utils::invalid_config_value_error);
+    BOOST_REQUIRE(!error_ignored);
 }
