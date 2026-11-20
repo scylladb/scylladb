@@ -1201,7 +1201,7 @@ future<> sstable::do_read_simple(component_type type,
     auto component_name = filename(type);
     sstlog.trace("Reading {} file {}", sstable_version_constants::get_component_map(_version).at(type), component_name);
     try {
-        file fi = co_await new_sstable_component_file(_read_error_handler, type, open_flags::ro);
+        file fi = co_await new_sstable_component_file(_error_handlers.read, type, open_flags::ro);
         uint64_t size = co_await fi.size();
 
         co_await read_component(_version, std::move(fi), size);
@@ -1391,7 +1391,7 @@ void sstable::validate_partitioner() {
 
 future<uint32_t> sstable::read_scylla_file_digest() const {
     constexpr size_t digest_size = sizeof(uint32_t);
-    auto f = co_await new_sstable_component_file(_read_error_handler, component_type::Scylla, open_flags::ro);
+    auto f = co_await new_sstable_component_file(_error_handlers.read, component_type::Scylla, open_flags::ro);
     auto size = co_await f.size();
 
     if (size < digest_size) {
@@ -1418,7 +1418,7 @@ future<uint32_t> sstable::read_scylla_file_digest() const {
 }
 
 future<uint32_t> sstable::compute_component_file_digest(component_type type, std::optional<abort_source&> as) const {
-    auto f = co_await new_sstable_component_file(_read_error_handler, type, open_flags::ro);
+    auto f = co_await new_sstable_component_file(_error_handlers.read, type, open_flags::ro);
     auto size = co_await f.size();
     if (type == component_type::Scylla && _components->scylla_metadata->digest) {
         // For Scylla metadata, the digest is stored at the end of the file, so we need to exclude it from the checksum calculation.
@@ -1967,7 +1967,7 @@ future<> sstable::read_summary() noexcept {
 }
 
 future<file> sstable::open_file(component_type type, open_flags flags, file_open_options opts) const noexcept {
-    return new_sstable_component_file(_read_error_handler, type, flags, opts);
+    return new_sstable_component_file(_error_handlers.read, type, flags, opts);
 }
 
 future<> sstable::open_or_create_data(open_flags oflags, file_open_options options) noexcept {
@@ -2368,15 +2368,15 @@ future<> sstable::load(sstables::foreign_sstable_open_info info) noexcept {
     static_assert(std::is_nothrow_move_constructible_v<sstables::foreign_sstable_open_info>);
     co_await read_toc();
     set_components(std::move(info.components));
-    _data_file = make_checked_file(_read_error_handler, info.data.to_file());
+    _data_file = make_checked_file(_error_handlers.read, info.data.to_file());
   if (info.index) {
-    _index_file = make_checked_file(_read_error_handler, info.index->to_file());
+    _index_file = make_checked_file(_error_handlers.read, info.index->to_file());
   }
     if (info.partitions) {
-        _partitions_file = make_checked_file(_read_error_handler, info.partitions->to_file());
+        _partitions_file = make_checked_file(_error_handlers.read, info.partitions->to_file());
     }
     if (info.rows) {
-        _rows_file = make_checked_file(_read_error_handler, info.rows->to_file());
+        _rows_file = make_checked_file(_error_handlers.read, info.rows->to_file());
     }
     _shards = std::move(info.owners);
     _metadata_size_on_disk = info.metadata_size_on_disk;
@@ -2982,7 +2982,7 @@ future<> sstable::generate_summary() {
         }
     };
 
-    auto index_file = co_await new_sstable_component_file(_read_error_handler, component_type::Index, open_flags::ro);
+    auto index_file = co_await new_sstable_component_file(_error_handlers.read, component_type::Index, open_flags::ro);
     auto sem = reader_concurrency_semaphore(reader_concurrency_semaphore::no_limits{}, "sstables::generate_summary()",
             reader_concurrency_semaphore::register_metrics::no);
 
@@ -4403,8 +4403,7 @@ sstable::sstable(schema_ptr schema,
     , _version(v)
     , _format(f)
     , _now(now)
-    , _read_error_handler(error_handler_gen(sstable_read_error))
-    , _write_error_handler(error_handler_gen(sstable_write_error))
+    , _error_handlers(error_handler_gen())
     , _large_data_handler(large_data_handler)
     , _corrupt_data_handler(corrupt_data_handler)
     , _manager(manager)

@@ -36,8 +36,14 @@ io_error_handler default_io_error_handler(disk_error_signal_type& signal) {
     };
 }
 
-io_error_handler_gen default_io_error_handler_gen() {
-    return [] (disk_error_signal_type& signal) {
-        return default_io_error_handler(signal);
+static const io_error_handlers& default_io_error_handlers() {
+    static thread_local const io_error_handlers handlers{
+        default_io_error_handler(sstable_read_error),
+        default_io_error_handler(sstable_write_error),
     };
+    return handlers;
+}
+
+io_error_handler_gen default_io_error_handler_gen() {
+    return default_io_error_handlers;
 }

@@ -29,11 +29,18 @@ extern thread_local disk_error_signal_type logstor_error;
 bool should_stop_on_system_error(const std::system_error& e);
 
 using io_error_handler = std::function<void (std::exception_ptr)>;
-// stores a function that generates a io handler for a given signal.
-using io_error_handler_gen = std::function<io_error_handler (disk_error_signal_type&)>;
+
+// An sstable's read and write error handlers. Checked files keep references
+// to them, so they must outlive every sstable and file of their shard.
+struct io_error_handlers {
+    io_error_handler read;
+    io_error_handler write;
+};
+// Returns the calling shard's handlers: a plain function, so it is safe to pass across shards.
+using io_error_handler_gen = const io_error_handlers& (*)();
 
 io_error_handler default_io_error_handler(disk_error_signal_type& signal);
-// generates handler that handles exception for a given signal
+// handlers that signal sstable_read_error / sstable_write_error
 io_error_handler_gen default_io_error_handler_gen();
 
 extern thread_local io_error_handler commit_error_handler;
