@@ -203,10 +203,10 @@ static future<uint32_t> create_file(const std::string& path, size_t file_size) {
  * with s3_test_fixture creating per-test buckets for isolation
  */
 
-void client_put_get_object(const client_maker_function& client_maker) {
+void client_put_get_object(const client_maker_function& client_maker, std::string_view object_name = "testobject") {
     s3_test_fixture guard(client_maker);
     auto cln = guard.client();
-    const auto name = guard.object_path("testobject");
+    const auto name = guard.object_path(object_name);
 
     testlog.info("Put object {}\n", name);
     temporary_buffer<char> data = sstring("1234567890").release();
@@ -247,15 +247,87 @@ SEASTAR_THREAD_TEST_CASE(test_client_put_get_object_proxy) {
     client_put_get_object(make_proxy_client);
 }
 
+<<<<<<< HEAD
 void do_test_client_multipart_upload(const client_maker_function& client_maker, bool with_copy_upload) {
+||||||| parent of 737381b892 (utils/s3: URI-encode the object path of a request)
+void client_get_object_info_etag(const client_maker_function& client_maker) {
     s3_test_fixture guard(client_maker);
     auto cln = guard.client();
-    const auto name = guard.object_path(fmt::format("test{}object", with_copy_upload ? "jumbo" : "large"));
+    const auto name = guard.object_path("testetagobject");
+
+    static constexpr auto content = "1234567890"sv;
+    // The fixture's bucket is unencrypted, so for an object uploaded in a single
+    // PUT S3 derives the ETag from the hex-encoded MD5 of its content (that does
+    // not hold in general, see s3::object_info::etag). The header carries it as a
+    // quoted entity-tag, and both the quotes and the value have to survive the
+    // trip through put_object_and_get_etag() and get_object_info().
+    const auto expected_etag = format("\"{}\"", to_hex(md5_hasher::calculate(content)));
+
+    testlog.info("Put object {}\n", name);
+    const auto put_etag = cln->put_object_and_get_etag(name, temporary_buffer<char>(content.data(), content.size())).get();
+    BOOST_REQUIRE_EQUAL(put_etag, expected_etag);
+
+    testlog.info("Get object info\n");
+    s3::object_info info = cln->get_object_info(name).get();
+    BOOST_REQUIRE_EQUAL(info.etag, expected_etag);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_client_get_object_info_etag_s3) {
+    client_get_object_info_etag(make_s3_client);
+}
+
+void do_test_client_multipart_upload(const client_maker_function& client_maker, bool with_copy_upload) {
+=======
+// A key with characters that SigV4 URI encoding changes, including a valid
+// escape ("%41"), '?', '#' and UTF-8 bytes. Without the encoding of the path
+// and of x-amz-copy-source, the requests for it fail (SCYLLADB-5827).
+static constexpr std::string_view special_characters_object_name = "backup(2026)/it's!*+=,;:@$&?# %41obj-zażółć";
+
+SEASTAR_THREAD_TEST_CASE(test_client_put_get_object_with_special_characters_s3) {
+    client_put_get_object(make_s3_client, special_characters_object_name);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_client_put_get_object_with_special_characters_proxy) {
+    client_put_get_object(make_proxy_client, special_characters_object_name);
+}
+
+void client_get_object_info_etag(const client_maker_function& client_maker) {
+    s3_test_fixture guard(client_maker);
+    auto cln = guard.client();
+    const auto name = guard.object_path("testetagobject");
+
+    static constexpr auto content = "1234567890"sv;
+    // The fixture's bucket is unencrypted, so for an object uploaded in a single
+    // PUT S3 derives the ETag from the hex-encoded MD5 of its content (that does
+    // not hold in general, see s3::object_info::etag). The header carries it as a
+    // quoted entity-tag, and both the quotes and the value have to survive the
+    // trip through put_object_and_get_etag() and get_object_info().
+    const auto expected_etag = format("\"{}\"", to_hex(md5_hasher::calculate(content)));
+
+    testlog.info("Put object {}\n", name);
+    const auto put_etag = cln->put_object_and_get_etag(name, temporary_buffer<char>(content.data(), content.size())).get();
+    BOOST_REQUIRE_EQUAL(put_etag, expected_etag);
+
+    testlog.info("Get object info\n");
+    s3::object_info info = cln->get_object_info(name).get();
+    BOOST_REQUIRE_EQUAL(info.etag, expected_etag);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_client_get_object_info_etag_s3) {
+    client_get_object_info_etag(make_s3_client);
+}
+
+void do_test_client_multipart_upload(const client_maker_function& client_maker, bool with_copy_upload,
+        std::optional<std::string_view> object_name = {}, unsigned chunks = 128 * 1024) {
+>>>>>>> 737381b892 (utils/s3: URI-encode the object path of a request)
+    s3_test_fixture guard(client_maker);
+    auto cln = guard.client();
+    const auto name = guard.object_path(object_name.value_or(with_copy_upload ? "testjumboobject" : "testlargeobject"));
 
     testlog.info("Upload object (with copy = {})\n", with_copy_upload);
     auto out = output_stream<char>(
-        // Make it 3 parts per piece, so that 128Mb buffer below
-        // would be split into several 15Mb pieces
+        // Make it 3 parts per piece, so that the data below
+        // is split into 15Mb pieces
         with_copy_upload ? cln->make_upload_jumbo_sink(name, s3::object_metadata{}, 3) : cln->make_upload_sink(name)
     );
     auto close = seastar::deferred_close(out);
@@ -263,7 +335,7 @@ void do_test_client_multipart_upload(const client_maker_function& client_maker, 
     static constexpr unsigned chunk_size = 1000;
     auto rnd = tests::random::get_bytes(chunk_size);
     uint64_t object_size = 0;
-    for (unsigned ch = 0; ch < 128 * 1024; ch++) {
+    for (unsigned ch = 0; ch < chunks; ch++) {
         out.write(reinterpret_cast<char*>(rnd.begin()), rnd.size()).get();
         object_size += rnd.size();
     }
@@ -311,6 +383,221 @@ SEASTAR_THREAD_TEST_CASE(test_client_multipart_copy_upload_proxy) {
     do_test_client_multipart_upload(make_proxy_client, true);
 }
 
+<<<<<<< HEAD
+||||||| parent of 737381b892 (utils/s3: URI-encode the object path of a request)
+// A recognizable exception to abort the uploads below with. Asserting on it
+// rather than on seastar's default abort_requested_exception keeps the checks
+// from being satisfied by an unrelated failure -- in particular not by the
+// "Failed to parse ETag list. Aborting multipart upload." error, which is what
+// the sink reports today when a part upload is cancelled.
+class upload_cancelled_marker : public std::exception {
+public:
+    const char* what() const noexcept override { return "upload_cancelled_marker"; }
+};
+
+// Cancelling an upload has to stop it and reach the caller as the cancellation
+// itself.
+//
+// Part uploads are issued in the background and their failures are only logged,
+// so an aborted part leaves its ETag unset and finalize_upload() then reports
+// the resulting hole in the ETag list instead of the abort. The jumbo sink adds
+// another layer of the same: the child sink's entire flush path runs in the
+// background and its exception is consumed after the piece is closed and its
+// temporary object deleted.
+void do_test_client_multipart_upload_abort(const client_maker_function& client_maker, bool with_copy_upload) {
+    s3_test_fixture guard(client_maker);
+    auto cln = guard.client();
+    const auto name = guard.object_path(fmt::format("testaborted{}object", with_copy_upload ? "jumbo" : "large"));
+
+    seastar::abort_source as;
+    auto out = output_stream<char>(
+        // One part per piece, so that every completed part makes the jumbo sink
+        // hand a piece over to the parent upload -- and thus start it.
+        with_copy_upload ? cln->make_upload_jumbo_sink(name, s3::object_metadata{}, 1, &as)
+                         : cln->make_upload_sink(name, s3::object_metadata{}, &as)
+    );
+
+    // A part's worth of data plus 1Mb, which is more than the 128Kb the
+    // output_stream may still be holding back, so that by the time this returns
+    // the sink has certainly handed a full part over to the upload and started
+    // collecting the next one.
+    static constexpr size_t chunk_size = 1_MiB;
+    auto rnd = tests::random::get_bytes(chunk_size);
+    auto write_part = [&] {
+        for (size_t written = 0; written <= s3::minimum_part_size; written += chunk_size) {
+            out.write(reinterpret_cast<char*>(rnd.begin()), rnd.size()).get();
+        }
+    };
+
+    auto reports_the_abort = [](const std::exception& ex) {
+        testlog.info("Aborted upload reported: {}", ex.what());
+        // Either the abort exception itself, or the storage_io_error that
+        // map_s3_client_exception() turns a failed request into, which names it.
+        return std::string_view(ex.what()).find("upload_cancelled_marker") != std::string_view::npos;
+    };
+
+    // The first part starts the multipart upload while the abort source is still
+    // clean, so nothing below can simply be the sink's own upload-initiating
+    // request coming back aborted.
+    write_part();
+
+    testlog.info("Abort the upload (with copy = {})\n", with_copy_upload);
+    as.request_abort_ex(upload_cancelled_marker{});
+
+    if (with_copy_upload) {
+        // The part above filled a piece, so the jumbo sink has handed that piece
+        // over to the parent upload and opened a fresh piece sink, which has not
+        // initiated a multipart upload of its own yet. Writing another part is
+        // what makes it initiate one, and that request is the one the abort
+        // source now handed down to the piece sinks has to cancel -- so this
+        // write has to fail rather than upload more data. Without the abort
+        // source reaching the piece sink the piece uploads happily and only the
+        // finalization below ever notices that the upload was cancelled.
+        testlog.info("Write into the aborted upload\n");
+        BOOST_REQUIRE_EXCEPTION(write_part(), std::exception, reports_the_abort);
+    } else {
+        // The plain sink issues its part uploads in the background, so a write
+        // cannot report their cancellation -- only the flush below can.
+        write_part();
+    }
+
+    testlog.info("Flush the aborted upload\n");
+    BOOST_REQUIRE_EXCEPTION(out.flush().get(), std::exception, reports_the_abort);
+
+    // The failed flush has already aborted the multipart upload, so closing is
+    // cleanup only and must not fail.
+    testlog.info("Closing\n");
+    out.close().get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_client_multipart_upload_abort_minio) {
+    do_test_client_multipart_upload_abort(make_s3_client, false);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_client_multipart_upload_abort_proxy) {
+    do_test_client_multipart_upload_abort(make_proxy_client, false);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_client_multipart_copy_upload_abort_minio) {
+    do_test_client_multipart_upload_abort(make_s3_client, true);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_client_multipart_copy_upload_abort_proxy) {
+    do_test_client_multipart_upload_abort(make_proxy_client, true);
+}
+
+=======
+// About 16 MB: a 15 MiB piece and a 640 KiB piece, both copied with UploadPartCopy.
+SEASTAR_THREAD_TEST_CASE(test_client_copy_upload_object_with_special_characters_s3) {
+    do_test_client_multipart_upload(make_s3_client, true, special_characters_object_name, 16 * 1024);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_client_copy_upload_object_with_special_characters_proxy) {
+    do_test_client_multipart_upload(make_proxy_client, true, special_characters_object_name, 16 * 1024);
+}
+
+// A recognizable exception to abort the uploads below with. Asserting on it
+// rather than on seastar's default abort_requested_exception keeps the checks
+// from being satisfied by an unrelated failure -- in particular not by the
+// "Failed to parse ETag list. Aborting multipart upload." error, which is what
+// the sink reports today when a part upload is cancelled.
+class upload_cancelled_marker : public std::exception {
+public:
+    const char* what() const noexcept override { return "upload_cancelled_marker"; }
+};
+
+// Cancelling an upload has to stop it and reach the caller as the cancellation
+// itself.
+//
+// Part uploads are issued in the background and their failures are only logged,
+// so an aborted part leaves its ETag unset and finalize_upload() then reports
+// the resulting hole in the ETag list instead of the abort. The jumbo sink adds
+// another layer of the same: the child sink's entire flush path runs in the
+// background and its exception is consumed after the piece is closed and its
+// temporary object deleted.
+void do_test_client_multipart_upload_abort(const client_maker_function& client_maker, bool with_copy_upload) {
+    s3_test_fixture guard(client_maker);
+    auto cln = guard.client();
+    const auto name = guard.object_path(fmt::format("testaborted{}object", with_copy_upload ? "jumbo" : "large"));
+
+    seastar::abort_source as;
+    auto out = output_stream<char>(
+        // One part per piece, so that every completed part makes the jumbo sink
+        // hand a piece over to the parent upload -- and thus start it.
+        with_copy_upload ? cln->make_upload_jumbo_sink(name, s3::object_metadata{}, 1, &as)
+                         : cln->make_upload_sink(name, s3::object_metadata{}, &as)
+    );
+
+    // A part's worth of data plus 1Mb, which is more than the 128Kb the
+    // output_stream may still be holding back, so that by the time this returns
+    // the sink has certainly handed a full part over to the upload and started
+    // collecting the next one.
+    static constexpr size_t chunk_size = 1_MiB;
+    auto rnd = tests::random::get_bytes(chunk_size);
+    auto write_part = [&] {
+        for (size_t written = 0; written <= s3::minimum_part_size; written += chunk_size) {
+            out.write(reinterpret_cast<char*>(rnd.begin()), rnd.size()).get();
+        }
+    };
+
+    auto reports_the_abort = [](const std::exception& ex) {
+        testlog.info("Aborted upload reported: {}", ex.what());
+        // Either the abort exception itself, or the storage_io_error that
+        // map_s3_client_exception() turns a failed request into, which names it.
+        return std::string_view(ex.what()).find("upload_cancelled_marker") != std::string_view::npos;
+    };
+
+    // The first part starts the multipart upload while the abort source is still
+    // clean, so nothing below can simply be the sink's own upload-initiating
+    // request coming back aborted.
+    write_part();
+
+    testlog.info("Abort the upload (with copy = {})\n", with_copy_upload);
+    as.request_abort_ex(upload_cancelled_marker{});
+
+    if (with_copy_upload) {
+        // The part above filled a piece, so the jumbo sink has handed that piece
+        // over to the parent upload and opened a fresh piece sink, which has not
+        // initiated a multipart upload of its own yet. Writing another part is
+        // what makes it initiate one, and that request is the one the abort
+        // source now handed down to the piece sinks has to cancel -- so this
+        // write has to fail rather than upload more data. Without the abort
+        // source reaching the piece sink the piece uploads happily and only the
+        // finalization below ever notices that the upload was cancelled.
+        testlog.info("Write into the aborted upload\n");
+        BOOST_REQUIRE_EXCEPTION(write_part(), std::exception, reports_the_abort);
+    } else {
+        // The plain sink issues its part uploads in the background, so a write
+        // cannot report their cancellation -- only the flush below can.
+        write_part();
+    }
+
+    testlog.info("Flush the aborted upload\n");
+    BOOST_REQUIRE_EXCEPTION(out.flush().get(), std::exception, reports_the_abort);
+
+    // The failed flush has already aborted the multipart upload, so closing is
+    // cleanup only and must not fail.
+    testlog.info("Closing\n");
+    out.close().get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_client_multipart_upload_abort_minio) {
+    do_test_client_multipart_upload_abort(make_s3_client, false);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_client_multipart_upload_abort_proxy) {
+    do_test_client_multipart_upload_abort(make_proxy_client, false);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_client_multipart_copy_upload_abort_minio) {
+    do_test_client_multipart_upload_abort(make_s3_client, true);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_client_multipart_copy_upload_abort_proxy) {
+    do_test_client_multipart_upload_abort(make_proxy_client, true);
+}
+
+>>>>>>> 737381b892 (utils/s3: URI-encode the object path of a request)
 // A zero-byte component is not hypothetical. BTI's Rows.db is empty for an
 // sstable holding only small partitions, and sstables/mx/writer.cc papers over
 // that by appending four bytes of padding before closing the writer. The tests
@@ -587,11 +874,10 @@ static std::unordered_set<sstring> populate_bucket(shared_ptr<s3::client> client
     return names;
 }
 
-void client_list_objects(const client_maker_function& client_maker) {
+void client_list_objects(const client_maker_function& client_maker, const sstring& prefix = "testprefix/") {
     s3_test_fixture guard(client_maker);
     auto client = guard.client();
     const sstring& bucket = guard.bucket();
-    const sstring prefix("testprefix/");
 
     // Put extra object to check list-by-prefix filters it out
     temporary_buffer<char> data = sstring("1234567890").release();
@@ -616,6 +902,14 @@ SEASTAR_THREAD_TEST_CASE(test_client_list_objects_minio) {
 
 SEASTAR_THREAD_TEST_CASE(test_client_list_objects_proxy) {
     client_list_objects(make_proxy_client);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_client_list_objects_with_special_characters_s3) {
+    client_list_objects(make_s3_client, fmt::format("{}/", special_characters_object_name));
+}
+
+SEASTAR_THREAD_TEST_CASE(test_client_list_objects_with_special_characters_proxy) {
+    client_list_objects(make_proxy_client, fmt::format("{}/", special_characters_object_name));
 }
 
 void client_list_objects_incomplete(const client_maker_function& client_maker) {
@@ -861,11 +1155,11 @@ SEASTAR_THREAD_TEST_CASE(test_chunked_download_data_source_with_delays_proxy) {
     test_chunked_download_data_source(make_proxy_client, 20_MiB);
 }
 
-void test_object_copy(const client_maker_function& client_maker, size_t chunk_size, size_t chunks) {
+void test_object_copy(const client_maker_function& client_maker, std::string_view object_name, size_t chunk_size, size_t chunks) {
     s3_test_fixture guard(client_maker);
     auto cln = guard.client();
-    const auto name = guard.object_path("testobject");
-    const auto name_copy = guard.object_path("testobject-copy");
+    const auto name = guard.object_path(object_name);
+    const auto name_copy = guard.object_path(fmt::format("{}-copy", object_name));
 
     auto out = output_stream<char>(cln->make_upload_sink(name));
     auto rnd = tests::random::get_bytes(chunk_size);
@@ -892,19 +1186,47 @@ void test_object_copy(const client_maker_function& client_maker, size_t chunk_si
 }
 
 SEASTAR_THREAD_TEST_CASE(test_small_object_copy) {
+<<<<<<< HEAD
     test_object_copy(make_minio_client, 1000, 2);
+||||||| parent of 737381b892 (utils/s3: URI-encode the object path of a request)
+    test_object_copy(make_s3_client, 1000, 2);
+=======
+    test_object_copy(make_s3_client, "testobject", 1000, 2);
+>>>>>>> 737381b892 (utils/s3: URI-encode the object path of a request)
 }
 
 SEASTAR_THREAD_TEST_CASE(test_large_object_copy) {
+<<<<<<< HEAD
     test_object_copy(make_minio_client, 1_MiB, 6);
+||||||| parent of 737381b892 (utils/s3: URI-encode the object path of a request)
+    test_object_copy(make_s3_client, 1_MiB, 6);
+=======
+    test_object_copy(make_s3_client, "testobject", 1_MiB, 6);
+>>>>>>> 737381b892 (utils/s3: URI-encode the object path of a request)
 }
 
 SEASTAR_THREAD_TEST_CASE(test_small_object_copy_proxy) {
-    test_object_copy(make_proxy_client, 1000, 2);
+    test_object_copy(make_proxy_client, "testobject", 1000, 2);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_large_object_copy_proxy) {
-    test_object_copy(make_proxy_client, 1_MiB, 6);
+    test_object_copy(make_proxy_client, "testobject", 1_MiB, 6);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_small_object_copy_with_special_characters) {
+    test_object_copy(make_s3_client, special_characters_object_name, 1000, 2);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_large_object_copy_with_special_characters) {
+    test_object_copy(make_s3_client, special_characters_object_name, 1_MiB, 6);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_small_object_copy_with_special_characters_proxy) {
+    test_object_copy(make_proxy_client, special_characters_object_name, 1000, 2);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_large_object_copy_with_special_characters_proxy) {
+    test_object_copy(make_proxy_client, special_characters_object_name, 1_MiB, 6);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_creds) {
