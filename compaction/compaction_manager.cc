@@ -2568,6 +2568,21 @@ protected:
         return make_descriptor(sst, _opt);
     }
 
+    virtual future<compaction_manager::compaction_stats_opt> do_run() override {
+        // Test hook: inputs are registered as compacting, maintenance permit not taken yet.
+        // can_proceed() skips the repairing view, whose compaction is always disabled.
+        if (can_proceed()) {
+            try {
+                co_await utils::get_local_injector().inject("split_before_maintenance_permit",
+                        utils::wait_for_message(std::chrono::minutes(5), &_compaction_data.abort));
+                cmlog.info("split_before_maintenance_permit: released");
+            } catch (const abort_requested_exception&) {
+                cmlog.info("split_before_maintenance_permit: aborted due to stop_compaction");
+            }
+        }
+        co_return co_await rewrite_sstables_compaction_task_executor::do_run();
+    }
+
     future<compaction_result> do_rewrite_sstable(const sstables::shared_sstable sst) {
         if (sstable_needs_split(sst)) {
             co_return co_await rewrite_sstables_compaction_task_executor::rewrite_sstable(std::move(sst));
@@ -2575,22 +2590,6 @@ protected:
         // SSTable that doesn't require split can bypass compaction and the table will be able to place
         // it into the correct compaction group. Similar approach is done in off-strategy compaction for
         // sstables that don't require reshape and are ready to be moved across sets.
-        co_await utils::get_local_injector().inject("split_bypass_before_completion",
-                [this, &sst] (auto& handler) -> future<> {
-            bool aborted = false;
-            cmlog.info("split_bypass_before_completion: parked sst={}", sst->get_filename());
-            try {
-                co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes(5),
-                        &_compaction_data.abort);
-            } catch (const abort_requested_exception&) {
-                aborted = true;
-            }
-            if (aborted) {
-                cmlog.info("split_bypass_before_completion: aborted due to stop_compaction sst={}", sst->get_filename());
-            } else {
-                cmlog.info("split_bypass_before_completion: released sst={}", sst->get_filename());
-            }
-        }, false);
         compaction_completion_desc desc { .old_sstables = {sst}, .new_sstables = {sst} };
         // Must hold sstable_set_lock while calling on_compaction_completion, because it
         // mutates the sstable set (moves sstables between compaction groups). Otherwise
