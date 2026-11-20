@@ -62,8 +62,11 @@ def normalize_output(output):
                              False,
                          ]
                          )
-def test_info(nodetool, display_all_tokens):
+@pytest.mark.parametrize("gossip_running", [True, False])
+@pytest.mark.parametrize("bootstrapping", [False, True])
+def test_info(nodetool, display_all_tokens, gossip_running, bootstrapping):
     host_id = 'hostid0'
+    endpoint = '127.0.0.1'
     generation_number = 42
     load = 42424242
     uptime = 12345
@@ -92,13 +95,15 @@ def test_info(nodetool, display_all_tokens):
               '50927788561116407']
 
     expected_requests = [
-        expected_request('GET', '/storage_service/gossiping', response=True),
+        expected_request('GET', '/storage_service/gossiping', response=gossip_running),
         expected_request('GET', '/storage_service/hostid/local', response=host_id),
         expected_request('GET', '/storage_service/rpc_server', response=False),
         expected_request('GET', '/storage_service/native_transport', response=True),
         expected_request('GET', '/storage_service/load', response=load),
-        expected_request('GET', '/storage_service/generation_number', response=generation_number),
     ]
+    if gossip_running:
+        expected_requests.append(
+            expected_request('GET', '/storage_service/generation_number', response=generation_number))
 
     expected_requests.append(
         expected_request('GET', '/system/uptime_ms', response=uptime))
@@ -142,21 +147,27 @@ def test_info(nodetool, display_all_tokens):
         expected_request('GET', '/storage_service/join_ring',
                          response=join_ring))
 
-    if join_ring:
+    if join_ring and gossip_running:
+        # A bootstrapping node is not in the host id map yet.
+        host_id_map = [{'key': '127.0.0.2', 'value': 'hostid1'}]
+        if not bootstrapping:
+            host_id_map.append({'key': endpoint, 'value': host_id})
         expected_requests.append(
-            expected_request('GET', '/storage_service/tokens',
-                             response=tokens))
+            expected_request('GET', '/storage_service/host_id', response=host_id_map))
+        if not bootstrapping:
+            expected_requests.append(
+                expected_request('GET', f'/storage_service/tokens/{endpoint}', response=tokens))
 
     mem_used = 0.0
     mem_max = 0.0
     off_heap_mem_used_in_mib = off_heap_mem_used / 1024 / 1024
     expected_output = f'''\
 {'ID':<23}: {host_id}
-{'Gossip active':<23}: true
+{'Gossip active':<23}: {str(gossip_running).lower()}
 {'Thrift active':<23}: false
 {'Native Transport active':<23}: true
 {'Load':<23}: {format_size(load)}
-{'Generation No':<23}: {generation_number}
+{'Generation No':<23}: {generation_number if gossip_running else 0}
 {'Uptime (seconds)':<23}: {uptime}
 {'Heap Memory (MiB)':<23}: {mem_used:.2f} / {mem_max:.2f}
 {'Off Heap Memory (MiB)':<23}: {off_heap_mem_used_in_mib:.2f}
@@ -176,8 +187,12 @@ def test_info(nodetool, display_all_tokens):
 
     percent_repaired = 0.0
     expected_output += f"{'Percent Repaired':<23}: {percent_repaired:.1f}%\n"
-    if join_ring:
-        name = 'Token'
+    name = 'Token'
+    if join_ring and not gossip_running:
+        expected_output += f'{name:<23}: (gossip is not active)\n'
+    elif join_ring and bootstrapping:
+        expected_output += f'{name:<23}: (node is not joined to the cluster)\n'
+    elif join_ring:
         if display_all_tokens:
             for token in tokens:
                 expected_output += f'{name:<23}: {token}\n'
