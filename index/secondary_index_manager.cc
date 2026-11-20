@@ -57,6 +57,13 @@ index::supports_expression_v index::supports_expression(const column_definition&
         return supports_expression_v::from_bool(op == cql3::expr::oper_t::LIKE);
     }
 
+    // An index without a view serves nothing here, so this check
+    // must stay after the pattern index, which serves LIKE without one.
+    auto custom_class = secondary_index_manager::get_custom_class(_im);
+    if (custom_class && !(*custom_class)->view_should_exist()) {
+        return supports_expression_v::from_bool(false);
+    }
+
     switch (op) {
         case cql3::expr::oper_t::EQ:
             return supports_expression_v::from_bool(_target_type == target_type::regular_values); 
