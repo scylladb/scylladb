@@ -966,6 +966,8 @@ when replicas are slow or unresponsive.  The following are legal values (case-in
 ========================= ================ =============================================================================
 
 This setting does not affect reads with consistency level ``ALL`` because they already query all replicas.
+It does not affect tables in keyspaces with :ref:`strong consistency <consistency-option>` either:
+their reads query a single replica.
 
 Note that frequently reading from additional replicas can hurt cluster performance.
 When in doubt, keep the default ``99PERCENTILE``.
