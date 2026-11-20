@@ -146,6 +146,8 @@ void mutation_partition::ensure_last_dummy(const schema& s) {
     }
 }
 
+namespace {
+
 struct mutation_fragment_applier {
     const schema& _s;
     mutation_partition& _mp;
@@ -175,6 +177,8 @@ struct mutation_fragment_applier {
         dr.apply(_s, std::move(temp).as_deletable_row());
     }
 };
+
+} // anonymous namespace
 
 void
 mutation_partition::apply(const schema& s, const mutation_fragment& mf) {
@@ -748,12 +752,6 @@ bool has_any_live_data(const schema& s, column_kind kind, const row& cells, tomb
         return stop_iteration::no;
     });
     return any_live;
-}
-
-std::ostream&
-operator<<(std::ostream& os, const std::pair<column_id, const atomic_cell_or_collection::printer&>& c) {
-    fmt::print(os, "{{column: {} {}}}", c.first, c.second);
-    return os;
 }
 
 // Transforms given range of printable into a range of strings where each element
