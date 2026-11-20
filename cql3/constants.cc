@@ -25,7 +25,7 @@ constants::setter::setter(const column_definition& column, expr::expression e)
 { }
 
 void
-constants::setter::execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) {
+constants::setter::execute(mutation_cell_collector& m, const clustering_key_prefix& prefix, const update_parameters& params) {
     auto value = _requires_read
         ? params.evaluate_on_prefetched_row(
             *_e,
@@ -36,16 +36,32 @@ constants::setter::execute(mutation& m, const clustering_key_prefix& prefix, con
 }
 
 void
-constants::setter::execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params, const column_definition& column, cql3::raw_value_view value) {
+constants::setter::execute(mutation_cell_collector& m, const clustering_key_prefix& prefix, const update_parameters& params, const column_definition& column, cql3::raw_value_view value) {
+    // Write the cells' serialized form directly into the row, rather than
+    // allocating atomic_cells.
     if (value.is_null()) {
-        m.set_cell(prefix, column, params.make_dead_cell());
+        const auto tomb = params.make_tombstone();
+        m.set_serialized_cell(prefix, column, atomic_cell_type::dead_serialized_size(), [&] (managed_bytes_mutable_view out) {
+            atomic_cell_type::write_dead(out, tomb.timestamp, tomb.deletion_time);
+        });
     } else if (value.is_value()) {
-        m.set_cell(prefix, column, params.make_cell(*column.type, value));
+        const auto ttl = params.ttl();
+        value.with_value([&] (const FragmentedView auto& v) {
+            if (ttl.count() > 0) {
+                m.set_serialized_cell(prefix, column, atomic_cell_type::live_expiring_serialized_size(v.size_bytes()), [&] (managed_bytes_mutable_view out) {
+                    atomic_cell_type::write_live(out, params.timestamp(), fragment_range(v), params.expiry(), ttl);
+                });
+            } else {
+                m.set_serialized_cell(prefix, column, atomic_cell_type::live_serialized_size(v.size_bytes()), [&] (managed_bytes_mutable_view out) {
+                    atomic_cell_type::write_live(out, params.timestamp(), fragment_range(v));
+                });
+            }
+        });
     }
 }
 
 void
-constants::adder::execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) {
+constants::adder::execute(mutation_cell_collector& m, const clustering_key_prefix& prefix, const update_parameters& params) {
     auto value = expr::evaluate(*_e, params._options);
     if (value.is_null()) {
         throw exceptions::invalid_request_exception("Invalid null value for counter increment");
@@ -55,7 +71,7 @@ constants::adder::execute(mutation& m, const clustering_key_prefix& prefix, cons
 }
 
 void
-constants::subtracter::execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) {
+constants::subtracter::execute(mutation_cell_collector& m, const clustering_key_prefix& prefix, const update_parameters& params) {
     auto value = expr::evaluate(*_e, params._options);
     if (value.is_null()) {
         throw exceptions::invalid_request_exception("Invalid null value for counter increment");
@@ -67,7 +83,7 @@ constants::subtracter::execute(mutation& m, const clustering_key_prefix& prefix,
     m.set_cell(prefix, column, params.make_counter_update_cell(-increment));
 }
 
-void constants::deleter::execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) {
+void constants::deleter::execute(mutation_cell_collector& m, const clustering_key_prefix& prefix, const update_parameters& params) {
     if (column.type->is_multi_cell()) {
         m.set_cell(prefix, column, collection_mutation_writer(params.make_tombstone()).finish());
     } else {

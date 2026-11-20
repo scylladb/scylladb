@@ -74,7 +74,10 @@ add_perf_test(perf_checksum)
 add_perf_test(perf_commitlog
   LIBRARIES
     JsonCpp::JsonCpp)
-add_perf_test(perf_collection)
+add_perf_test(perf_collection
+  LIBRARIES
+    mutation
+    schema)
 add_perf_test(perf_cql_parser
   LIBRARIES
     cql3)
