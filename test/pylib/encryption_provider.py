@@ -6,7 +6,9 @@
 
 import os
 import asyncio
+import functools
 import logging
+import subprocess
 import threading
 import yaml
 import json
@@ -19,8 +21,11 @@ from test.pylib.dockerized_service import DockerizedServer
 from test.pylib.kmip_wrapper import KMIPServerWrapper
 from test.pylib.azure_vault_server_mock import MockAzureVaultServer
 from test.pylib.gcp_kms_server_mock import MockGcpKmsServer
+from test.pylib.skip_types import skip_env
 
 import boto3
+
+logger = logging.getLogger(__name__)
 
 class KeyProvider(Enum):
     """Enumeration of key providers in scylla"""
@@ -379,6 +384,30 @@ class GcpKeyProviderFactory(KeyProviderFactory):
         return True
 
 
+@functools.cache
+def key_providers(scylla_exe) -> frozenset[str] | None:
+    """Providers reported by `scylla --list-key-providers`, or None if the binary can't tell."""
+    try:
+        # A timeout propagates rather than being cached as "assume KMIP"; no profraw from coverage builds.
+        res = subprocess.run([str(scylla_exe), "--list-key-providers"], capture_output=True, text=True, timeout=120,
+                             env=os.environ | {"LLVM_PROFILE_FILE": os.devnull})
+        names = res.stdout.split()
+        # An older binary rejects the option with a non-zero exit.
+        if res.returncode == 0 and names:
+            return frozenset(names)
+        reason = f"exit code {res.returncode}, output {res.stdout!r}"
+    except OSError as e:
+        reason = repr(e)
+    logger.warning("%s --list-key-providers is not usable (%s); assuming KMIP is available", scylla_exe, reason)
+    return None
+
+
+def has_kmip_support(scylla_exe) -> bool:
+    """False only if the binary reports its providers and kmip is not among them."""
+    providers = key_providers(scylla_exe)
+    return providers is None or KeyProvider.kmip.value in providers
+
+
 def make_key_provider_factory(provider: KeyProvider, tmpdir, log_dir, scylla_exe):
     """Create key provider factory for enum
 
@@ -391,6 +420,8 @@ def make_key_provider_factory(provider: KeyProvider, tmpdir, log_dir, scylla_exe
     elif provider == KeyProvider.replicated:
         res = ReplicatedKeyProviderFactory(tmpdir, scylla_exe)
     elif provider == KeyProvider.kmip:
+        if not has_kmip_support(scylla_exe):
+            skip_env("scylla was built without KMIP support")
         res = KmipKeyProviderFactory(tmpdir)
     elif provider == KeyProvider.kms:
         res = KMSKeyProviderFactory(tmpdir, log_dir)
