@@ -13,6 +13,7 @@
 #include <seastar/util/closeable.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/sleep.hh>
+#include <seastar/testing/on_internal_error.hh>
 #include "test/lib/scylla_test_case.hh"
 #include "test/lib/test_utils.hh"
 #include "locator/token_metadata.hh"
@@ -301,6 +302,46 @@ SEASTAR_THREAD_TEST_CASE(test_replace_node_with_same_endpoint) {
     BOOST_REQUIRE_EQUAL(erm->get_natural_replicas(dht::token::from_int64(1)),
         host_id_vector_replica_set{e1_id1});
     BOOST_REQUIRE_EQUAL(token_metadata->get_endpoint(t1), e1_id1);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_topology_change_info_survives_clone) {
+    const auto e1_id = gen_id(1);
+    const auto e2_id = gen_id(2);
+    const replication_strategy_config_options opts{{"replication_factor", "1"}};
+
+    for (bool leaving : {false, true}) {
+        semaphore sem(1);
+        auto tm_cfg = create_token_metadata_config(e1_id);
+        shared_token_metadata stm([&] () noexcept { return get_units(sem, 1); }, tm_cfg);
+        auto stop_stm = deferred_stop(stm);
+        auto token_metadata = stm.make_token_metadata_ptr();
+        token_metadata->update_topology(e1_id, get_dc_rack(e1_id), node::state::normal);
+        token_metadata->update_topology(e2_id, get_dc_rack(e2_id), node::state::normal);
+        token_metadata->update_normal_tokens({dht::token::from_int64(1)}, e1_id).get();
+        if (leaving) {
+            token_metadata->update_normal_tokens({dht::token::from_int64(100)}, e2_id).get();
+            token_metadata->add_leaving_endpoint(e2_id);
+        } else {
+            token_metadata->add_bootstrap_token(dht::token::from_int64(100), e2_id);
+        }
+
+        // Without the topology change info the map would silently lack pending replicas.
+        {
+            auto strategy = seastar::make_shared<simple_strategy>(
+                    replication_strategy_params(opts, std::nullopt, std::nullopt), &token_metadata->get_topology());
+            seastar::testing::scoped_no_abort_on_internal_error abort_guard;
+            BOOST_REQUIRE_THROW(calculate_vnode_effective_replication_map(std::move(strategy), token_metadata).get(), std::runtime_error);
+        }
+
+        auto erm = create_erm<simple_strategy>(token_metadata, opts);
+        auto clone = stm.make_token_metadata_ptr(token_metadata->clone_async().get());
+        BOOST_REQUIRE(clone->get_topology_change_info());
+        auto strategy = seastar::make_shared<simple_strategy>(replication_strategy_params(opts, std::nullopt, std::nullopt), &clone->get_topology());
+        auto clone_erm = calculate_vnode_effective_replication_map(std::move(strategy), clone).get();
+        const auto token = dht::token::from_int64(50);
+        BOOST_REQUIRE(!erm->get_pending_replicas(token).empty());
+        BOOST_REQUIRE_EQUAL(clone_erm->get_pending_replicas(token), erm->get_pending_replicas(token));
+    }
 }
 
 SEASTAR_THREAD_TEST_CASE(test_stale_version_notification) {
