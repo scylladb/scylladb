@@ -2823,9 +2823,15 @@ protected:
     }
 
     virtual future<compaction_manager::compaction_stats_opt>  do_run() override {
-        switch_state(state::pending);
-        auto maintenance_permit = co_await acquire_semaphore(_cm._maintenance_ops_sem);
-
+        // Cleanup deliberately does not take _maintenance_ops_sem. That semaphore only
+        // throttles maintenance operations, exclusion comes from the registration of
+        // the candidates, and cleanup is already bounded in space by running one bucket
+        // at a time. Queueing behind it, FIFO, would stall a topology operation for as
+        // long as the user keeps the shard busy with other maintenance operations.
+        // Without it, cleanups of different keyspaces may run concurrently on a shard.
+        // That is intentional: the vnodes cleanup fiber cleans keyspaces in parallel and
+        // the tables of a keyspace one at a time, so it has at most one bucket per vnode
+        // keyspace in flight on a shard.
         while (!_pending_cleanup_jobs.empty() && can_proceed()) {
             auto active_job = std::move(_pending_cleanup_jobs.back());
             active_job.options = _cleanup_options;
