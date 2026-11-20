@@ -1210,17 +1210,22 @@ future<schema_ptr> migration_manager::get_schema_for_read(table_schema_version v
 }
 
 future<schema_ptr> migration_manager::get_schema_for_write(table_schema_version v, locator::host_id dst, unsigned shard, netw::messaging_service& ms, abort_source& as) {
+    auto s = local_schema_registry().get_or_null(v);
+    // A local synced schema needs neither a barrier nor a pull, so it is served
+    // also after drain(). Replicas keep serving requests until the messaging
+    // service shuts down.
+    if (s && s->is_synced()) {
+        co_return s;
+    }
+
     if (_as.abort_requested()) {
         co_return coroutine::exception(std::make_exception_ptr(abort_requested_exception()));
     }
 
-    auto s = local_schema_registry().get_or_null(v);
-    if (!s || !s->is_synced()) {
-        // Schema is synchronized through Raft, so perform a group 0 read barrier.
-        // Batch the barriers so we don't invoke them redundantly.
-        mlogger.trace("Performing raft read barrier because schema is not synced, version: {}", v);
-        co_await _group0_barrier.trigger(as);
-    }
+    // Schema is synchronized through Raft, so perform a group 0 read barrier.
+    // Batch the barriers so we don't invoke them redundantly.
+    mlogger.trace("Performing raft read barrier because schema is not synced, version: {}", v);
+    co_await _group0_barrier.trigger(as);
 
     if (!s) {
         // The schema returned by get_schema_definition comes (eventually) from the schema registry,

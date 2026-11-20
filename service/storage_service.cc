@@ -1950,7 +1950,7 @@ future<> storage_service::on_remove(gms::inet_address endpoint, locator::host_id
 
 future<> storage_service::on_dead(gms::inet_address endpoint, locator::host_id id, gms::endpoint_state_ptr state, gms::permit_id pid) {
     slogger.debug("endpoint={}/{} on_dead: permit_id={}", endpoint, id, pid);
-    return notify_down(endpoint, id);
+    return notify_down(endpoint, id, _gossiper.is_shutdown(*state));
 }
 
 future<> storage_service::on_restart(gms::inet_address endpoint, locator::host_id id, gms::endpoint_state_ptr state, gms::permit_id pid) {
@@ -2048,19 +2048,25 @@ future<> storage_service::stop_transport() {
         _transport_stopped = stopped.get_future();
 
         seastar::async([this] {
-            slogger.info("Stop transport: starts");
+            // Logs a step of the shutdown and lets tests pause the node after it.
+            auto step = [] (std::string_view what) {
+                slogger.info("Stop transport: {}", what);
+                utils::get_local_injector().inject("stop_transport_pause", utils::wait_for_message(5min), false).get();
+            };
+
+            step("starts");
 
             shutdown_protocol_servers().get();
-            slogger.info("Stop transport: shutdown rpc and cql server done");
+            step("shutdown rpc and cql server done");
 
             _gossiper.container().invoke_on_all(&gms::gossiper::shutdown).get();
-            slogger.info("Stop transport: stop_gossiping done");
+            step("stop_gossiping done");
 
             _messaging.invoke_on_all(&netw::messaging_service::shutdown).get();
-            slogger.info("Stop transport: shutdown messaging_service done");
+            step("shutdown messaging_service done");
 
             _stream_manager.invoke_on_all(&streaming::stream_manager::shutdown).get();
-            slogger.info("Stop transport: shutdown stream_manager done");
+            step("shutdown stream_manager done");
 
             slogger.info("Stop transport: done");
         }).forward_to(std::move(stopped));
@@ -7507,12 +7513,34 @@ future<> endpoint_lifecycle_notifier::notify_down(gms::inet_address endpoint, lo
     });
 }
 
-future<> storage_service::notify_down(inet_address endpoint, locator::host_id hid) {
-    co_await container().invoke_on_all([endpoint, hid] (auto&& ss) {
-        ss._messaging.local().remove_rpc_client(netw::msg_addr{endpoint, 0}, hid);
+future<> storage_service::notify_down(inet_address endpoint, locator::host_id hid, bool announced_shutdown) {
+    co_await container().invoke_on_all([endpoint, hid, announced_shutdown] (auto&& ss) {
+        if (announced_shutdown) {
+            (void)ss.remove_rpc_client_after_shutdown_announce(endpoint, hid).handle_exception([endpoint, hid] (std::exception_ptr ep) {
+                slogger.warn("Failed to drop connections to {}/{}: {}", endpoint, hid, ep);
+            });
+        } else {
+            ss._messaging.local().remove_rpc_client(netw::msg_addr{endpoint, 0}, hid);
+        }
         return ss._lifecycle_notifier.notify_down(endpoint, hid);
     });
     slogger.debug("Notify node {}/{} has been down", endpoint, hid);
+}
+
+// A node which announced its shutdown keeps serving requests for
+// shutdown_announce_in_ms, and coordinators stop sending it requests once they
+// mark it down. Dropping the connections only after that lets the replies to
+// requests already sent arrive.
+future<> storage_service::remove_rpc_client_after_shutdown_announce(inet_address endpoint, locator::host_id hid) {
+    if (auto holder = _async_gate.try_hold()) {
+        // Not abortable: when this node enters shutdown, its requests in
+        // flight still need the connections for their replies.
+        co_await seastar::sleep(std::chrono::milliseconds(_db.local().get_config().shutdown_announce_in_ms()));
+        if (_gossiper.is_alive(hid)) {
+            co_return;
+        }
+    }
+    _messaging.local().remove_rpc_client(netw::msg_addr{endpoint, 0}, hid);
 }
 
 future<> endpoint_lifecycle_notifier::notify_left(gms::inet_address endpoint, locator::host_id hid) {
@@ -7619,7 +7647,9 @@ future<> storage_service::notify_cql_change(inet_address endpoint, locator::host
     if (ready) {
         co_await notify_up(endpoint, hid);
     } else {
-        co_await notify_down(endpoint, hid);
+        co_await container().invoke_on_all([endpoint, hid] (auto&& ss) {
+            return ss._lifecycle_notifier.notify_down(endpoint, hid);
+        });
     }
 }
 
