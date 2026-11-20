@@ -1955,3 +1955,51 @@ def test_mv_where_case_sensitive_function_name(cql, test_keyspace):
                 ks, view = mv.split('.')
                 [where_clause] = [r[0] for r in cql.execute(f"SELECT where_clause FROM system_schema.views WHERE keyspace_name = '{ks}' AND view_name = '{view}'")]
                 assert f'{name}()' in where_clause
+
+# When a base write carries both a range tombstone and rows, the view update
+# reads the existing rows it may affect (read-before-write). For
+# DELETE ... WHERE a = 0 AND b > 1 the range is ((0, 1), (0)], which starts
+# after all rows with the prefix (0, 1), so it must come after the range of the
+# row (0, 1, 0) in the read's slice. These ranges used to be ordered by key
+# prefix, which put the tombstone's range first, and the slice was out of order.
+# With a large partition read from an sstable, the reader takes the end of the
+# data file range from the last range of the slice and then skips to the start
+# of the first one, which lies past that end, and the view update failed with
+# "parse_assert() failed". Reproduces SCYLLADB-6142.
+def test_view_read_before_write_range_tombstone_prefix_and_row(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int, a int, b int, c int, v text, w text, primary key (p, a, b, c)',
+            "WITH caching = {'enabled': 'false'}") as table:
+        with new_materialized_view(cql, table, 'p, a, b, c, v', 'v, p, a, b, c',
+                'v is not null and p is not null and a is not null and b is not null and c is not null') as mv:
+            # Enough rows under the (0, 1) prefix for the promoted index to have many blocks.
+            payload = 'x' * 1024
+            insert = cql.prepare(f"INSERT INTO {table} (p, a, b, c, v, w) VALUES (0, 0, 1, ?, 'old', '{payload}')")
+            for c in range(2000):
+                cql.execute(insert, [c])
+            nodetool.flush(cql, table)
+            cql.execute(f"BEGIN UNLOGGED BATCH "
+                        f"DELETE FROM {table} WHERE p = 0 AND a = 0 AND b > 1; "
+                        f"UPDATE {table} SET v = 'new' WHERE p = 0 AND a = 0 AND b = 1 AND c = 0; "
+                        f"APPLY BATCH")
+            assert list(cql.execute(f"SELECT v FROM {table} WHERE p = 0 AND a = 0 AND b = 1 AND c = 0")) == [('new',)]
+            assert list(cql.execute(f"SELECT c FROM {mv} WHERE v = 'new'")) == [(0,)]
+            assert list(cql.execute(f"SELECT c FROM {mv} WHERE v = 'old' AND p = 0 AND a = 0 AND b = 1 AND c = 0")) == []
+
+# A partition deletion must update all views. The read-before-write for it
+# reads the union of the clustering ranges of the views, and merging these
+# ranges by key prefix lost the range [(1, 1, 1), (1, 1)] of the first view
+# when the ranges of the other views were merged with it. The deleted row was
+# not read, so its view row was not deleted. Reproduces scylladb#22817.
+def test_view_partition_delete_multiple_views_with_prefix_ranges(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'k1 int, k2 int, k3 int, k4 int, r int, primary key (k1, k2, k3, k4)') as table:
+        with new_materialized_view(cql, table, '*', 'r, k4, k3, k2, k1',
+                'k1 is not null and (k2, k3, k4) >= (1, 1, 1) and (k2, k3) <= (1, 1) and r is not null') as mv1, \
+             new_materialized_view(cql, table, '*', 'r, k4, k3, k2, k1',
+                'k1 is not null and (k2, k3, k4) >= (9, 9, 9) and k4 is not null and r is not null'), \
+             new_materialized_view(cql, table, '*', 'r, k4, k3, k2, k1',
+                'k1 is not null and (k2, k3, k4) <= (1, 1, 1) and r is not null'):
+            cql.execute(f"INSERT INTO {table} (k1, k2, k3, k4, r) VALUES (5, 1, 1, 3, 5)")
+            assert list(cql.execute(f"SELECT k1 FROM {mv1}")) == [(5,)]
+            cql.execute(f"DELETE FROM {table} WHERE k1 = 5")
+            assert list(cql.execute(f"SELECT * FROM {table}")) == []
+            assert list(cql.execute(f"SELECT * FROM {mv1}")) == []

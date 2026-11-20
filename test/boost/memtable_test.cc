@@ -22,6 +22,7 @@
 #include <fmt/ranges.h>
 #include <seastar/core/thread.hh>
 #include "replica/memtable.hh"
+#include "mutation/position_range_utils.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/mutation_source_test.hh"
