@@ -1317,7 +1317,14 @@ void compaction_manager::enable() {
     // Unlike the periodic compaction submission timer, this one keeps running after the
     // compaction manager is drained and submission is guarded instead in the callback.
     if (!_automatic_scrub_submission_timer.armed()) {
-        _automatic_scrub_submission_timer.arm_periodic(automatic_scrub_submission_interval());
+        // The shards are enabled at about the same time. Have the first tick of each after
+        // a different part of the interval, so that their ticks, and the bursts of automatic
+        // scrub they start, are spread evenly over the interval instead of coinciding.
+        // No shard waits for more than an interval, which is what the eligibility of
+        // sstables allows for, see should_be_automatically_scrubbed().
+        const lowres_clock::duration interval = automatic_scrub_submission_interval();
+        const auto first_tick_in = interval * (this_shard_id() + 1) / smp::count;
+        _automatic_scrub_submission_timer.arm(lowres_clock::now() + first_tick_in, interval);
     }
 
     throwing_assert(!_waiting_reevaluation);
