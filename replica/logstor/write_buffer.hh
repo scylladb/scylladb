@@ -117,6 +117,26 @@ inline record_location locate_record(segment_position chunk_position, frame_exte
     };
 }
 
+namespace chunk_layout {
+
+// Returns the largest record_size that fits an empty chunk of `kind` in a buffer of `buffer_size`
+// bytes. The chunk header of a full segment is larger than the chunk header of a mixed segment, so
+// a record can fit a chunk of one kind and not a chunk of the other kind.
+constexpr size_t max_record_size(size_t buffer_size, segment_kind kind) noexcept {
+    const size_t overhead = ondisk::chunk_header_size(kind) + ondisk::record_frame_header_size;
+    return buffer_size > overhead ? buffer_size - overhead : 0;
+}
+
+// Returns the largest record_size that fits an empty chunk of each kind in a buffer of
+// `buffer_size` bytes. The separator rewrites the records of a mixed segment into full segments, so
+// a record that logstor accepts must fit both kinds.
+constexpr size_t max_record_size_any_kind(size_t buffer_size) noexcept {
+    return std::min(max_record_size(buffer_size, segment_kind::mixed),
+                    max_record_size(buffer_size, segment_kind::full));
+}
+
+}
+
 struct buffered_write_result {
     future<record_location_with_holder> persisted;
 };
@@ -193,33 +213,13 @@ public:
     segment_kind kind() const noexcept { return _segment_kind; }
 
     size_t max_record_size() const noexcept {
-        return max_record_size(_buffer_size, _segment_kind);
+        return chunk_layout::max_record_size(_buffer_size, _segment_kind);
     }
 
     // Returns the bytes of an appended record frame, without the padding after the frame.
     bytes_view frame_bytes(frame_extent frame) const noexcept {
         return bytes_view(reinterpret_cast<const int8_t*>(_buffer.get() + frame.offset), frame.size);
     }
-
-    // The largest record - record header and value, the frame header aside - that fits an
-    // empty buffer of this size and kind. The kinds differ in what they carry ahead of their
-    // records, so a record can fit a buffer of one kind and not of the other.
-    static constexpr size_t max_record_size(size_t buffer_size, segment_kind kind) noexcept {
-        const size_t overhead = ondisk::chunk_header_size(kind) + ondisk::record_frame_header_size;
-        return buffer_size > overhead ? buffer_size - overhead : 0;
-    }
-
-    // The largest record that fits an empty buffer of this size whatever its kind. A record is
-    // written to a segment of one kind and can be rewritten into a segment of the other - the
-    // separator rewrites the records of a mixed segment into full segments of their compaction
-    // group - so a record that logstor accepts at all has to fit both.
-    static constexpr size_t max_record_size_any_kind(size_t buffer_size) noexcept {
-        return std::min(max_record_size(buffer_size, segment_kind::mixed),
-                        max_record_size(buffer_size, segment_kind::full));
-    }
-
-    // How many segments of this kind `record_count` records of `record_bytes` bytes take.
-    static size_t estimate_required_segments(size_t record_bytes, size_t record_count, size_t segment_size, segment_kind);
 
 private:
     using ostream = seastar::simple_memory_output_stream;

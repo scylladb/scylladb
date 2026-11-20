@@ -150,25 +150,6 @@ bool chunk_builder::fits(size_t record_size) const noexcept {
     return align_up(frame_size, ondisk::record_alignment) <= _stream.size();
 }
 
-size_t chunk_builder::estimate_required_segments(size_t record_bytes, size_t record_count, size_t segment_size, segment_kind kind) {
-    if (record_count == 0 || record_bytes == 0) {
-        return 0;
-    }
-
-    const size_t fixed_overhead = ondisk::chunk_header_size(kind);
-
-    if (segment_size <= fixed_overhead) {
-        return 1;
-    }
-
-    const auto usable_bytes = segment_size - fixed_overhead;
-    auto records_per_segment = (usable_bytes * record_count) / record_bytes;
-    if (records_per_segment == 0) {
-        records_per_segment = 1;
-    }
-    return (record_count + records_per_segment - 1) / records_per_segment;
-}
-
 void chunk_builder::pad_to_alignment(size_t alignment) {
     auto current_pos = serialized_size();
     auto next_pos = align_up(current_pos, alignment);
@@ -680,7 +661,7 @@ future<buffered_write_result> write_buffer_ring::write_to_buffer(log_record_writ
     // later rewrites it into, so it is bounded by whichever of the two takes less: one that only
     // fits the buffer it is written to first would be accepted here and then never fit anywhere the
     // separator could put it.
-    const size_t max_size = chunk_builder::max_record_size_any_kind(head_buf().buffer_size());
+    const size_t max_size = chunk_layout::max_record_size_any_kind(head_buf().buffer_size());
     if (writer.record_size() > max_size) [[unlikely]] {
         return make_exception_future<buffered_write_result>(std::runtime_error(
                 fmt::format("Write size {} exceeds the maximum record size {}", writer.record_size(), max_size)));
