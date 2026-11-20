@@ -465,6 +465,26 @@ def test_describe_stream_with_nonexistent_last_shard(dynamodb, dynamodbstreams):
             # local java throws here. real does not. 
             ensure_java_server(dynamodbstreams, error=None)
 
+# When UpdateTable enables a stream, the stream becomes active some time
+# after UpdateTable returns. DescribeStream must not report it as ENABLED
+# while it has no shards yet: a client which waits for ENABLED and then reads
+# the shard list would find it empty. DynamoDB, too, reports the stream as
+# ENABLING until it has shards.
+# Reproduces SCYLLADB-6446 (with tablets).
+def test_enabled_stream_has_shards(dynamodb, dynamodbstreams):
+    with create_stream_test_table(dynamodb) as table:
+        table.update(StreamSpecification={'StreamEnabled': True, 'StreamViewType': 'KEYS_ONLY'})
+        deadline = time.time() + 60
+        while True:
+            streams = dynamodbstreams.list_streams(TableName=table.name)['Streams']
+            if streams:
+                desc = dynamodbstreams.describe_stream(StreamArn=streams[0]['StreamArn'])['StreamDescription']
+                if desc['StreamStatus'] == 'ENABLED':
+                    assert desc['Shards']
+                    break
+            assert time.time() < deadline
+            time.sleep(1 if is_aws(dynamodb) else 0.001)
+
 # We run a batch that mixes noop operations (in our concrete example - one delete of non-existing item) with real changes (put of two new items).
 # Expected behaviour - Streams will return only two inserts (no delete). Observed behaviour - we get modify for delete as well.
 # Test requires `alternator_streams_increased_compatibility` set to be true, otherwise will fail due to how Streams work without the flag.
