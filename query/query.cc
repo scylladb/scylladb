@@ -17,11 +17,17 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/thread.hh>
 #include "bytes.hh"
+#include "mutation/collection_mutation.hh"
+#include "mutation/counters.hh"
+#include "mutation/mutation_compactor.hh"
+#include "mutation/mutation_fragment.hh"
+#include "mutation/mutation_partition.hh"
 #include "mutation/mutation_partition_serializer.hh"
 #include "query-result-reader.hh"
 #include "query_result_merger.hh"
 #include "partition_slice_builder.hh"
 #include "schema/schema_registry.hh"
+#include "types/map.hh"
 #include "utils/assert.hh"
 #include "utils/overloaded_functor.hh"
 
@@ -461,4 +467,284 @@ std::optional<query::clustering_range> position_range_to_clustering_range(const 
     };
 
     return query::clustering_range{to_bound(r.start(), true), to_bound(r.end(), false)};
+}
+
+template<typename RowWriter>
+void write_cell(RowWriter& w, const query::partition_slice& slice, ::atomic_cell_view c) {
+    SCYLLA_ASSERT(c.is_live());
+    auto wr = w.add().write();
+    auto after_timestamp = [&, wr = std::move(wr)] () mutable {
+        if (slice.options.contains<query::partition_slice::option::send_timestamp>()) {
+            return std::move(wr).write_timestamp(c.timestamp());
+        } else {
+            return std::move(wr).skip_timestamp();
+        }
+    }();
+    auto after_value = [&, wr = std::move(after_timestamp)] () mutable {
+        if (slice.options.contains<query::partition_slice::option::send_expiry>() && c.is_live_and_has_ttl()) {
+            return std::move(wr).write_expiry(c.expiry());
+        } else {
+            return std::move(wr).skip_expiry();
+        }
+    }().write_fragmented_value(fragment_range(c.value()));
+    [&, wr = std::move(after_value)] () mutable {
+        if (slice.options.contains<query::partition_slice::option::send_ttl>() && c.is_live_and_has_ttl()) {
+            return std::move(wr).write_ttl(c.ttl());
+        } else {
+            return std::move(wr).skip_ttl();
+        }
+    }().end_qr_cell();
+}
+
+template<typename RowWriter>
+void write_cell(RowWriter& w, const query::partition_slice& slice, data_type type, collection_mutation_view v) {
+    if (type->is_collection() && slice.options.contains<query::partition_slice::option::collections_as_maps>()) {
+        auto& ctype = static_cast<const collection_type_impl&>(*type);
+        type = map_type_impl::get_instance(ctype.name_comparator(), ctype.value_comparator(), true);
+    }
+
+    bytes_ostream serialized = ((type->is_map() || type->is_set() || type->is_user_type()) && type->is_multi_cell()
+                && slice.options.contains<query::partition_slice::option::send_collection_timestamps>())
+            ? serialize_for_cql_with_timestamps(*type, std::move(v))
+            : serialize_for_cql(*type, std::move(v));
+    w.add().write().skip_timestamp()
+        .skip_expiry()
+        .write_fragmented_value(std::move(serialized))
+        .skip_ttl()
+        .end_qr_cell();
+}
+
+template<typename RowWriter>
+void write_counter_cell(RowWriter& w, const query::partition_slice& slice, ::atomic_cell_view c) {
+    SCYLLA_ASSERT(c.is_live());
+    auto ccv = counter_cell_view(c);
+    auto wr = w.add().write();
+    [&, wr = std::move(wr)] () mutable {
+        if (slice.options.contains<query::partition_slice::option::send_timestamp>()) {
+            return std::move(wr).write_timestamp(c.timestamp());
+        } else {
+            return std::move(wr).skip_timestamp();
+        }
+    }().skip_expiry()
+            .write_value(counter_cell_view::total_value_type()->decompose(ccv.total_value()))
+            .skip_ttl()
+            .end_qr_cell();
+}
+
+template<typename RowWriter>
+static void get_compacted_row_slice(const schema& s,
+    const query::partition_slice& slice,
+    column_kind kind,
+    const row& cells,
+    const query::column_id_vector& columns,
+    RowWriter& writer)
+{
+    for (auto id : columns) {
+        const atomic_cell_or_collection* cell = cells.find_cell(id);
+        if (!cell) {
+            writer.add().skip();
+        } else {
+            auto&& def = s.column_at(kind, id);
+            if (def.is_atomic()) {
+                auto c = cell->as_atomic_cell(def);
+                if (!c.is_live()) {
+                    writer.add().skip();
+                } else if (def.is_counter()) {
+                    write_counter_cell(writer, slice, cell->as_atomic_cell(def));
+                } else {
+                    write_cell(writer, slice, cell->as_atomic_cell(def));
+                }
+            } else {
+                auto mut = cell->as_collection_mutation();
+                if (!mut.is_any_live(*def.type)) {
+                    writer.add().skip();
+                } else {
+                    write_cell(writer, slice, def.type, std::move(mut));
+                }
+            }
+        }
+    }
+}
+
+mutation_querier::mutation_querier(const schema& s, query::result::partition_writer pw,
+                                   query::result_memory_accounter& memory_accounter)
+    : _schema(s)
+    , _memory_accounter(memory_accounter)
+    , _static_cells_wr(pw.start().start_static_row().start_cells())
+    , _pw(std::move(pw))
+{
+}
+
+void mutation_querier::query_static_row(const row& r, tombstone current_tombstone)
+{
+    const query::partition_slice& slice = _pw.slice();
+    if (!slice.static_columns.empty()) {
+        if (_pw.requested_result()) {
+            auto start = _static_cells_wr._out.size();
+            get_compacted_row_slice(_schema, slice, column_kind::static_column,
+                                    r, slice.static_columns, _static_cells_wr);
+            _memory_accounter.update(_static_cells_wr._out.size() - start);
+        } else {
+            seastar::measuring_output_stream stream;
+            ser::qr_partition__static_row__cells<seastar::measuring_output_stream> out(stream, { });
+            auto start = stream.size();
+            get_compacted_row_slice(_schema, slice, column_kind::static_column,
+                                    r, slice.static_columns, out);
+            _memory_accounter.update(stream.size() - start);
+        }
+        if (_pw.requested_digest()) {
+            max_timestamp max_ts{_pw.last_modified()};
+            _pw.digest().feed_hash(current_tombstone);
+            max_ts.update(current_tombstone.timestamp);
+            _pw.digest().feed_hash(r, _schema, column_kind::static_column, slice.static_columns, max_ts);
+            _pw.last_modified() = max_ts.max;
+        }
+    }
+    _rows_wr.emplace(std::move(_static_cells_wr).end_cells().end_static_row().start_rows());
+}
+
+stop_iteration mutation_querier::consume(static_row&& sr, tombstone current_tombstone) {
+    query_static_row(sr.cells(), current_tombstone);
+    _live_data_in_static_row = true;
+    return stop_iteration::no;
+}
+
+void mutation_querier::prepare_writers() {
+    if (!_rows_wr) {
+        row empty_row;
+        query_static_row(empty_row, { });
+        _live_data_in_static_row = false;
+    }
+}
+
+stop_iteration mutation_querier::consume(clustering_row&& cr, row_tombstone current_tombstone) {
+    prepare_writers();
+
+    const query::partition_slice& slice = _pw.slice();
+
+    if (_pw.requested_digest()) {
+        _pw.digest().feed_hash(cr.key(), _schema);
+        _pw.digest().feed_hash(current_tombstone);
+        max_timestamp max_ts{_pw.last_modified()};
+        max_ts.update(current_tombstone.tomb().timestamp);
+        _pw.digest().feed_hash(cr.cells(), _schema, column_kind::regular_column, slice.regular_columns, max_ts);
+        _pw.last_modified() = max_ts.max;
+    }
+
+    auto write_row = [&] (auto& rows_writer) {
+        auto cells_wr = [&] {
+            if (slice.options.contains(query::partition_slice::option::send_clustering_key)) {
+                return rows_writer.add().write_key(cr.key()).start_cells().start_cells();
+            } else {
+                return rows_writer.add().skip_key().start_cells().start_cells();
+            }
+        }();
+        get_compacted_row_slice(_schema, slice, column_kind::regular_column, cr.cells(), slice.regular_columns, cells_wr);
+        std::move(cells_wr).end_cells().end_cells().end_qr_clustered_row();
+    };
+
+    auto stop = stop_iteration::no;
+    if (_pw.requested_result()) {
+        auto start = _rows_wr->_out.size();
+        write_row(*_rows_wr);
+        stop = _memory_accounter.update_and_check(_rows_wr->_out.size() - start);
+    } else {
+        seastar::measuring_output_stream stream;
+        ser::qr_partition__rows<seastar::measuring_output_stream> out(stream, { });
+        auto start = stream.size();
+        write_row(out);
+        stop = _memory_accounter.update_and_check(stream.size() - start);
+    }
+
+    _live_clustering_rows++;
+    return stop;
+}
+
+uint64_t mutation_querier::consume_end_of_stream() {
+    prepare_writers();
+
+    // If we got no rows, but have live static columns, we should only
+    // give them back IFF we did not have any CK restrictions.
+    // #589
+    // If ck:s exist, and we do a restriction on them, we either have matching
+    // rows, or return nothing, since cql does not allow "is null".
+    bool return_static_content_on_partition_with_no_rows =
+        _pw.slice().options.contains(query::partition_slice::option::always_return_static_content) ||
+        !has_ck_selector(_pw.ranges());
+    if (!_live_clustering_rows && (!return_static_content_on_partition_with_no_rows || !_live_data_in_static_row)) {
+        _pw.retract();
+        return 0;
+    } else {
+        auto live_rows = std::max(_live_clustering_rows, uint64_t(1));
+        _pw.row_count() += live_rows;
+        _pw.partition_count() += 1;
+        std::move(*_rows_wr).end_rows().end_qr_partition();
+        return live_rows;
+    }
+}
+
+query_result_builder::query_result_builder(const schema& s, query::result::builder& rb) noexcept
+    : _schema(s), _rb(rb)
+{ }
+
+void query_result_builder::consume_new_partition(const dht::decorated_key& dk) {
+    _mutation_consumer.emplace(mutation_querier(_schema, _rb.add_partition(_schema, dk.key()), _rb.memory_accounter()));
+}
+
+void query_result_builder::consume(tombstone t) {
+    _mutation_consumer->consume(t);
+    _stop = _rb.bump_and_check_tombstone_limit();
+}
+stop_iteration query_result_builder::consume(static_row&& sr, tombstone t, bool is_live) {
+    if (!is_live) {
+        _stop = _rb.bump_and_check_tombstone_limit();
+        return _stop;
+    }
+    _stop = _mutation_consumer->consume(std::move(sr), t);
+    return _stop;
+}
+stop_iteration query_result_builder::consume(clustering_row&& cr, row_tombstone t,  bool is_live) {
+    if (!is_live) {
+        _stop = _rb.bump_and_check_tombstone_limit();
+        return _stop;
+    }
+    _stop = _mutation_consumer->consume(std::move(cr), t);
+    return _stop;
+}
+stop_iteration query_result_builder::consume(range_tombstone_change&& rtc) {
+    _stop = _rb.bump_and_check_tombstone_limit();
+    return _stop;
+}
+
+stop_iteration query_result_builder::consume_end_of_partition() {
+    auto live_rows_in_partition = _mutation_consumer->consume_end_of_stream();
+    if (live_rows_in_partition > 0 && !_stop) {
+        _stop = _rb.memory_accounter().check();
+    }
+    if (_stop) {
+        _rb.mark_as_short_read();
+    }
+    return _stop;
+}
+
+void query_result_builder::consume_end_of_stream() {
+}
+
+stop_iteration query::result_memory_accounter::check_local_limit() const {
+    if (_short_read_allowed) {
+        return stop_iteration(_total_used_memory > _maximum_result_size.get_page_size());
+    } else {
+        if (_total_used_memory > _maximum_result_size.hard_limit) {
+            throw std::runtime_error(fmt::format(
+                    "Memory usage of unpaged query exceeds hard limit of {} (configured via max_memory_for_unlimited_query_hard_limit)",
+                    _maximum_result_size.hard_limit));
+        }
+        if (_below_soft_limit && _total_used_memory > _maximum_result_size.soft_limit) {
+            mplog.warn(
+                    "Memory usage of unpaged query exceeds soft limit of {} (configured via max_memory_for_unlimited_query_soft_limit)",
+                    _maximum_result_size.soft_limit);
+            _below_soft_limit = false;
+        }
+    }
+    return stop_iteration::no;
 }
