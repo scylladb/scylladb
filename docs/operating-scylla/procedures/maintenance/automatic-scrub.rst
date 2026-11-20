@@ -41,6 +41,36 @@ in the sstable during a regular compaction, the malformed input sstable will be 
    Consequently, enabling automatic scrub for the first time may cause a large number of
    sstable rewrites.
 
+Pacing
+------
+
+Automatic scrub is paced: the ``auto_scrub_io_throughput_mb_per_sec_per_shard``
+:doc:`cluster configuration option </cql/cluster-config>` limits the average rate at which each
+shard goes over its sstables. The default is 10 MiB/s per shard. To change it:
+
+.. code-block:: cql
+
+    ALTER CLUSTER WITH auto_scrub_io_throughput_mb_per_sec_per_shard = 20;
+
+Use ``0`` to disable the limit. The option can only be set for the whole cluster.
+
+The limit applies to the average, not to the scrub of a single sstable: an sstable is scrubbed
+at full speed, so that it becomes available to compaction again as soon as possible. Automatic
+scrub works in bursts: once an hour, the shard picks the sstables which were validated the
+longest time ago, about as many as the limit allows for an hour (36 GiB with the default limit),
+and scrubs them one after the other. An sstable is always scrubbed whole: after scrubbing more
+than the limit allows for an hour, the shard skips the following hours to make up for it.
+
+Pacing spreads out the work when many sstables are due at the same time, most notably when
+automatic scrub is enabled on a table which already has data, or after an upgrade from a version
+which doesn't store the ``scrub_time``. It also gives regular compaction time to replace such
+sstables before automatic scrub gets to them.
+
+The limit also bounds how much data a shard can validate in a scrub period: with the default
+limit, about 0.82 TiB per day, or 2.5 TiB in 72 hours. A shard which holds more data than that
+validates its sstables less often than the scrub period asks for; raise the limit or the scrub
+period in this case.
+
 Setting the scrub period
 ------------------------
 

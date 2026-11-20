@@ -195,6 +195,40 @@ async def test_auto_scrub_period_is_reapplied_after_restart(manager: ScyllaClust
 
 
 @pytest.mark.asyncio
+async def test_auto_scrub_io_throughput_is_applied_and_validated(manager: ScyllaClusterManager) -> None:
+    server = await manager.server_add(property_file={"dc": "dc1", "rack": "rack1"})
+    await manager.driver_connect()
+    cql, _ = await manager.get_ready_cql([server])
+    log = await manager.server_open_log(server.server_id)
+
+    await cql.run_async("CREATE KEYSPACE ks_scrub WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}")
+    await cql.run_async("CREATE TABLE ks_scrub.tbl (pk int PRIMARY KEY)")
+
+    mark = await log.mark()
+    await cql.run_async("ALTER CLUSTER WITH auto_scrub_io_throughput_mb_per_sec_per_shard = 25")
+    await log.wait_for("Automatic scrub throughput limit set to 25 MiB/s per shard", from_mark=mark)
+
+    mark = await log.mark()
+    await cql.run_async("ALTER CLUSTER WITH auto_scrub_io_throughput_mb_per_sec_per_shard = 0")
+    await log.wait_for("Automatic scrub throughput limit disabled", from_mark=mark)
+
+    # Removing the value brings back the default.
+    mark = await log.mark()
+    await cql.run_async("ALTER CLUSTER WITH auto_scrub_io_throughput_mb_per_sec_per_shard = null")
+    await log.wait_for("Automatic scrub throughput limit set to 10 MiB/s per shard", from_mark=mark)
+
+    await cql.run_async("ALTER CLUSTER WITH auto_scrub_io_throughput_mb_per_sec_per_shard = 1048576")
+    for bad in ("-1", "1048577", "1.5"):
+        with pytest.raises((InvalidRequest, ConfigurationException)):
+            await cql.run_async(f"ALTER CLUSTER WITH auto_scrub_io_throughput_mb_per_sec_per_shard = {bad}")
+
+    # Only the CLUSTER scope is supported.
+    for statement in ("ALTER KEYSPACE ks_scrub", "ALTER TABLE ks_scrub.tbl", 'ALTER DATACENTER "dc1"', 'ALTER RACK "dc1" "rack1"'):
+        with pytest.raises((InvalidRequest, SyntaxException)):
+            await cql.run_async(f"{statement} WITH auto_scrub_io_throughput_mb_per_sec_per_shard = 20")
+
+
+@pytest.mark.asyncio
 async def test_auto_scrub_period_rejects_invalid_values_and_node_scopes(manager: ScyllaClusterManager) -> None:
     server = await manager.server_add(property_file={"dc": "dc1", "rack": "rack1"})
     await manager.driver_connect()

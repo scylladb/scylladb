@@ -219,6 +219,12 @@ Available options
        at that scope even if a broader scope enabled it, whereas ``NULL`` removes the value and
        falls back to the broader scope. See
        :doc:`Automatic Scrub </operating-scylla/procedures/maintenance/automatic-scrub>`.
+   * - ``auto_scrub_io_throughput_mb_per_sec_per_shard``
+     - integer
+     - ``CLUSTER``
+     - Limit the average rate at which automatic scrub goes over sstables on each shard, in
+       MiB/s. Accepts ``0`` to ``1048576``. Default: ``10``. ``0`` disables the limit. See
+       :doc:`Automatic Scrub </operating-scylla/procedures/maintenance/automatic-scrub>`.
    * - ``repair_hints_batchlog_flush_timeout_in_seconds``
      - integer
      - ``CLUSTER``

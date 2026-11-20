@@ -666,7 +666,7 @@ void test_env_compaction_manager::trigger_auto_scrub_timer() {
 }
 
 future<> test_env_compaction_manager::submit_automatic_scrub(compaction::compaction_group_view& t) {
-    return _cm.submit_automatic_scrub(t);
+    return _cm.run_automatic_scrub({&t});
 }
 
 future<> test_env_compaction_manager::reevaluate_automatic_scrub() {

@@ -181,6 +181,30 @@ private:
 
     static constexpr std::chrono::seconds automatic_scrub_submission_interval() { return std::chrono::seconds(3600); }
 
+    // Automatic scrub is paced: its average throughput on this shard is limited to this many
+    // bytes per second. The scrub of an sstable is not slowed down, as that would keep the
+    // sstable from being compacted for longer. Instead, each tick of the submission timer
+    // adds the bytes the limit allows for one interval to the credit below, and the
+    // reevaluation plans the sstables to scrub up-front: those validated the longest time
+    // ago, as many as there is credit for. These are scrubbed back to back.
+    // This spreads out the work when many sstables become eligible at once, e.g. when
+    // automatic scrub is enabled on existing data. 0 disables pacing.
+    // Follows the auto_scrub_io_throughput_mb_per_sec_per_shard cluster config option.
+    // The compaction manager of tests is not paced, so that they don't wait between sstables.
+    uint64_t _automatic_scrub_throughput = 0;
+    // The bytes automatic scrub may still plan. Unused credit is not carried over to the
+    // next interval. An sstable is planned whole, so the credit can go negative: the
+    // following ticks make up for it before anything else is planned.
+    int64_t _automatic_scrub_credit = 0;
+    // Changes when the plans made so far are no longer good, see set_automatic_scrub_throughput().
+    uint64_t _automatic_scrub_plan_epoch = 0;
+
+    void refill_automatic_scrub_credit() noexcept;
+
+    // Plan and run the automatic scrub of the sstables of the given views: scrub the
+    // eligible sstables which were validated the longest time ago, as the credit allows.
+    future<> run_automatic_scrub(std::vector<compaction::compaction_group_view*> views);
+
     config _cfg;
     timer<lowres_clock> _compaction_submission_timer;
     timer<lowres_clock> _automatic_scrub_submission_timer;
@@ -411,8 +435,14 @@ private:
 
     future<> on_compaction_completion(compaction_group_view& t, compaction_completion_desc desc, sstables::offstrategy offstrategy);
 
-    future<> submit_automatic_scrub(compaction_group_view& t);
+    // Scrub the given sstables of the view, those which are still there and are still eligible.
+    future<> submit_automatic_scrub(compaction_group_view& t, std::vector<sstables::generation_type> sstables);
 public:
+    // Limit the average throughput of automatic scrub on this shard, 0 disables the limit.
+    // Takes effect from the next scrubbed sstable on: what is left of the current plan,
+    // which was made with the previous limit, is dropped. The next tick of the submission
+    // timer plans with the new limit.
+    void set_automatic_scrub_throughput(uint64_t bytes_per_sec) noexcept;
     // Submit a table to be upgraded and wait for its termination.
     future<> perform_sstable_upgrade(owned_ranges_ptr sorted_owned_ranges, compaction::compaction_group_view& t, bool exclude_current_version, tasks::task_info info);
 

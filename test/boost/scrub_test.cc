@@ -1900,7 +1900,6 @@ SEASTAR_THREAD_TEST_CASE(test_automatic_scrub_does_not_retry_failed_sstable) {
 
         {
             scoped_error_injection injection{"automatic_scrub_compaction", true, {{"what", "throw"}}};
-            scoped_error_injection retry_immediately{"automatic_scrub_retry_immediately", true, {}};
             cm.reevaluate_automatic_scrub().get();
         }
 
@@ -1918,6 +1917,92 @@ SEASTAR_THREAD_TEST_CASE(test_automatic_scrub_does_not_retry_failed_sstable) {
         }
 
         BOOST_REQUIRE_EQUAL(validated, table_count * sst_count - 1);
+    });
+}
+
+// After scrubbing an sstable, automatic scrub has to pause before scrubbing the next one,
+// and the sstable which was validated the longest time ago has to be scrubbed first.
+SEASTAR_THREAD_TEST_CASE(test_automatic_scrub_is_paced_and_scrubs_oldest_sstable_first) {
+    automatic_scrub_test_framework test(tests::random_schema_specification::compress_sstable::yes);
+
+    auto& test_env = test.env();
+    constexpr auto sst_count = 4;
+
+    test.run(sst_count, [&test_env] (table_for_tests& table, compaction::compaction_group_view& ts, std::vector<sstables::shared_sstable> sstables) {
+        auto& cm = test_env.test_compaction_manager();
+
+        // All are eligible, the oldest one is neither the first nor the last one.
+        sstables[0]->set_scrub_time(db_clock::from_time_t(3000));
+        sstables[1]->set_scrub_time(db_clock::from_time_t(2000));
+        sstables[2]->set_scrub_time(db_clock::from_time_t(1000));
+        sstables[3]->set_scrub_time(db_clock::from_time_t(4000));
+        const std::array expected_order = {2, 1, 0, 3};
+
+        cm.set_automatic_scrub_throughput(1);
+        table->set_scrub_period(std::chrono::hours(5));
+
+        auto scrubbed_count = [&sstables] {
+            return std::ranges::count_if(sstables, [] (const sstables::shared_sstable& sst) { return bool(sst->unlinked_at()); });
+        };
+
+        for (size_t round = 0; round < expected_order.size(); ++round) {
+            // Any sstable uses up a credit of one byte: one sstable is planned.
+            cm.set_automatic_scrub_credit(1);
+            cm.submit_automatic_scrub(ts).get();
+
+            BOOST_REQUIRE(sstables[expected_order[round]]->unlinked_at());
+            BOOST_REQUIRE_EQUAL(size_t(scrubbed_count()), round + 1);
+
+            // No credit: nothing is scrubbed.
+            cm.submit_automatic_scrub(ts).get();
+            BOOST_REQUIRE_EQUAL(size_t(scrubbed_count()), round + 1);
+        }
+
+        BOOST_REQUIRE_EQUAL(table->get_sstables()->size(), sstables.size());
+    });
+}
+
+// The sstables to scrub are picked across all the views: the one which was validated the
+// longest time ago comes first, whichever view it belongs to.
+SEASTAR_THREAD_TEST_CASE(test_automatic_scrub_paced_scrubs_oldest_sstable_of_all_views_first) {
+    automatic_scrub_test_framework test(tests::random_schema_specification::compress_sstable::yes);
+
+    auto& test_env = test.env();
+    constexpr auto table_count = 3;
+    constexpr auto sst_count = 2;
+
+    test.run_with_many_tables(table_count, sst_count, [&test_env] (std::span<table_for_tests> tables, std::span<compaction::compaction_group_view*> views, std::span<std::vector<sstables::shared_sstable>> sstable_sets) {
+        auto& cm = test_env.test_compaction_manager();
+
+        // The validation order goes back and forth between the views.
+        std::vector<sstables::shared_sstable> expected_order;
+        for (size_t sst_idx = 0; sst_idx < sst_count; ++sst_idx) {
+            for (size_t table_idx = 0; table_idx < table_count; ++table_idx) {
+                auto& sst = sstable_sets[table_idx][sst_idx];
+                sst->set_scrub_time(db_clock::from_time_t(1000 * (expected_order.size() + 1)));
+                expected_order.push_back(sst);
+            }
+        }
+        for (auto& t : tables) {
+            t->set_scrub_period(std::chrono::hours(5));
+        }
+        cm.set_automatic_scrub_throughput(1);
+
+        auto scrubbed_count = [&expected_order] {
+            return size_t(std::ranges::count_if(expected_order, [] (const sstables::shared_sstable& sst) { return bool(sst->unlinked_at()); }));
+        };
+
+        for (size_t scrubbed = 1; scrubbed <= expected_order.size(); ++scrubbed) {
+            // All views are submitted each time, like the timer does it.
+            // Any sstable uses up a credit of one byte: one sstable is planned.
+            cm.set_automatic_scrub_credit(1);
+            cm.get_awaiting_automatic_scrub().insert_range(views);
+            cm.reevaluate_automatic_scrub().get();
+
+            BOOST_REQUIRE(cm.get_awaiting_automatic_scrub().empty());
+            BOOST_REQUIRE(expected_order[scrubbed - 1]->unlinked_at());
+            BOOST_REQUIRE_EQUAL(scrubbed_count(), scrubbed);
+        }
     });
 }
 
