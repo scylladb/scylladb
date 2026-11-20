@@ -12,6 +12,13 @@ from ...porting import  *
 from cassandra.query import UNSET_VALUE, BoundStatement
 
 from uuid import UUID
+<<<<<<< HEAD
+||||||| parent of c4bc772a03 (cql3: fix crash on collection element of a DESC clustering column)
+import uuid
+from test.pylib.skip_types import skip_bug
+=======
+import uuid
+>>>>>>> c4bc772a03 (cql3: fix crash on collection element of a DESC clustering column)
 import random
 import struct
 import time
@@ -1599,3 +1606,260 @@ def testSelectionOfEmptyCollections(cql, test_keyspace):
             assert_rows(execute(cql, table, "SELECT m['0'], s[0] FROM %s WHERE k = 3"), [None, None])
             assert_rows(execute(cql, table, "SELECT m['0'..'1'], s[0..1] FROM %s WHERE k = 3"), [None, None])
             assert_rows(execute(cql, table, "SELECT m['0'..'1']['3'..'5'], s[0..1][3..5] FROM %s WHERE k = 3"), [None, None])
+<<<<<<< HEAD
+||||||| parent of c4bc772a03 (cql3: fix crash on collection element of a DESC clustering column)
+
+# Tests for CASSANDRA-17623
+# Before CASSANDRA-17623, parameterized queries with maps as values would fail because frozen maps were
+# required to be sorted by the sort order of their key type, but weren't always sorted correctly.
+# Also adding tests for Sets, which did work because they always used SortedSet, to make sure this behavior is maintained.
+# The Python driver serializes a map (dict) or set parameter in the order of
+# its iteration, so we pass a dict, or a list instead of a set, in the
+# (unsorted) order we want to send.
+
+def testInsertingMapDataWithParameterizedQueriesIsKeyOrderIndependent(cql, test_keyspace):
+    uuid1 = uuid.uuid1()
+    uuid2 = uuid.uuid1()
+    with create_table(cql, test_keyspace, "(k text, c frozen<map<timeuuid, text>>, PRIMARY KEY (k, c));") as table:
+        execute(cql, table, "INSERT INTO %s (k, c) VALUES ('0', ?)", {uuid1: "0", uuid2: "1"})
+        execute(cql, table, "INSERT INTO %s (k, c) VALUES ('0', ?)", {uuid2: "3", uuid1: "4"})
+        for _ in before_and_after_flush(cql, table):
+            assert_row_count(execute(cql, table, "SELECT * FROM %s WHERE k='0' AND c={" + str(uuid1) + ": '0', " + str(uuid2) + ": '1'}"), 1)
+            assert_row_count(execute(cql, table, "SELECT * FROM %s WHERE k='0' AND c={" + str(uuid2) + ": '1', " + str(uuid1) + ": '0'}"), 1)
+            assert_row_count(execute(cql, table, "SELECT * FROM %s WHERE k='0' AND c={" + str(uuid1) + ": '4', " + str(uuid2) + ": '3'}"), 1)
+            assert_row_count(execute(cql, table, "SELECT * FROM %s WHERE k='0' AND c={" + str(uuid2) + ": '3', " + str(uuid1) + ": '4'}"), 1)
+
+def testInsertingMapDataWithParameterizedQueriesIsKeyOrderIndependentWithSelectSlice(cql, test_keyspace):
+    uuid1 = uuid.uuid1()
+    uuid2 = uuid.uuid1()
+    with create_table(cql, test_keyspace, "(k text, c frozen<map<timeuuid, text>>, PRIMARY KEY (k, c));") as table:
+        for _ in before_and_after_flush(cql, table):
+            execute(cql, table, "INSERT INTO %s (k, c) VALUES ('0', ?)", {uuid2: "2", uuid1: "1"})
+            # Make sure that we can slice either value out of the map
+            assert_rows(execute(cql, table, "SELECT k, c[" + str(uuid2) + "] from %s"), row("0", "2"))
+            assert_rows(execute(cql, table, "SELECT k, c[" + str(uuid1) + "] from %s"), row("0", "1"))
+
+def testSelectingMapDataWithParameterizedQueriesIsKeyOrderIndependent(cql, test_keyspace):
+    uuid1 = uuid.uuid1()
+    uuid2 = uuid.uuid1()
+    with create_table(cql, test_keyspace, "(k text, c frozen<map<timeuuid, text>>, PRIMARY KEY (k, c));") as table:
+        execute(cql, table, "INSERT INTO %s (k, c) VALUES ('0', {" + str(uuid1) + ": '0', " + str(uuid2) + ": '1'})")
+        execute(cql, table, "INSERT INTO %s (k, c) VALUES ('0', {" + str(uuid2) + ": '3', " + str(uuid1) + ": '4'})")
+        for _ in before_and_after_flush(cql, table):
+            assert_row_count(execute(cql, table, "SELECT * FROM %s WHERE k=? AND c=?", "0", {uuid1: "0", uuid2: "1"}), 1)
+            assert_row_count(execute(cql, table, "SELECT * FROM %s WHERE k=? AND c=?", "0", {uuid2: "1", uuid1: "0"}), 1)
+            assert_row_count(execute(cql, table, "SELECT * FROM %s WHERE k=? AND c=?", "0", {uuid1: "4", uuid2: "3"}), 1)
+            assert_row_count(execute(cql, table, "SELECT * FROM %s WHERE k=? AND c=?", "0", {uuid2: "3", uuid1: "4"}), 1)
+
+def testInsertingSetDataWithParameterizedQueriesIsKeyOrderIndependent(cql, test_keyspace):
+    uuid1 = uuid.uuid1()
+    uuid2 = uuid.uuid1()
+    with create_table(cql, test_keyspace, "(k text, c frozen<set<timeuuid>>, PRIMARY KEY (k, c));") as table:
+        execute(cql, table, "INSERT INTO %s (k, c) VALUES ('0', ?)", [uuid1, uuid2])
+        execute(cql, table, "INSERT INTO %s (k, c) VALUES ('0', ?)", [uuid2, uuid1])
+        for _ in before_and_after_flush(cql, table):
+            assert_row_count(execute(cql, table, "SELECT * FROM %s WHERE k='0' AND c={" + str(uuid1) + ", " + str(uuid2) + "}"), 1)
+            assert_row_count(execute(cql, table, "SELECT * FROM %s WHERE k='0' AND c={" + str(uuid2) + ", " + str(uuid1) + "}"), 1)
+            assert_row_count(execute(cql, table, "SELECT * FROM %s WHERE k='0' AND c={" + str(uuid1) + ", " + str(uuid2) + "}"), 1)
+            assert_row_count(execute(cql, table, "SELECT * FROM %s WHERE k='0' AND c={" + str(uuid2) + ", " + str(uuid1) + "}"), 1)
+
+def testInsertingSetDataWithParameterizedQueriesIsKeyOrderIndependentWithSelectSlice(cql, test_keyspace):
+    uuid1 = uuid.uuid1()
+    uuid2 = uuid.uuid1()
+    with create_table(cql, test_keyspace, "(k text, c frozen<set<timeuuid>>, PRIMARY KEY (k, c));") as table:
+        for _ in before_and_after_flush(cql, table):
+            execute(cql, table, "INSERT INTO %s (k, c) VALUES ('0', ?)", [uuid2, uuid1])
+            assert_rows(execute(cql, table, "SELECT k, c[" + str(uuid2) + "] from %s"), row("0", uuid2))
+            assert_rows(execute(cql, table, "SELECT k, c[" + str(uuid1) + "] from %s"), row("0", uuid1))
+
+def testSelectingSetDataWithParameterizedQueriesIsKeyOrderIndependent(cql, test_keyspace):
+    uuid1 = uuid.uuid1()
+    uuid2 = uuid.uuid1()
+    with create_table(cql, test_keyspace, "(k text, c frozen<set<timeuuid>>, PRIMARY KEY (k, c));") as table:
+        execute(cql, table, "INSERT INTO %s (k, c) VALUES ('0', {" + str(uuid1) + ", " + str(uuid2) + "})")
+        for _ in before_and_after_flush(cql, table):
+            assert_rows(execute(cql, table, "SELECT k, c from %s where k='0' and c=?", [uuid1, uuid2]), row("0", {uuid1, uuid2}))
+            assert_rows(execute(cql, table, "SELECT k, c from %s where k='0' and c=?", [uuid2, uuid1]), row("0", {uuid1, uuid2}))
+# End tests for CASSANDRA-17623
+
+# Selecting an element of a frozen collection which is a clustering column
+# with descending order (CLUSTERING ORDER BY (c DESC)) crashes Scylla - see
+# SCYLLADB-5210 - so the following two tests are skipped on Scylla. When
+# that is fixed, they will still fail on Scylla because they also select
+# slices of a collection, which Scylla doesn't support (#22075).
+def skip_reversed_collection_crash(cql):
+    if is_scylla(cql):
+        skip_bug(link="https://scylladb.atlassian.net/browse/SCYLLADB-5210",
+                 reason="Selecting an element of a reversed frozen collection crashes Scylla")
+
+def testMapReversed(cql, test_keyspace):
+    skip_reversed_collection_crash(cql)
+    with create_table(cql, test_keyspace, "(" +
+                      "   k int, " +
+                      "   c frozen<map<text, int>>, " +
+                      "   v int, " +
+                      "   PRIMARY KEY(k, c)" +
+                      ") WITH CLUSTERING ORDER BY (c DESC)") as table:
+
+        execute(cql, table, "INSERT INTO %s(k, c, v) VALUES (1, {'t1':1,'t2':2,'t3':3,'t4':4}, 2)")
+        assert_rows(execute(cql, table, "SELECT c['nonexisting'] FROM %s"), row(None))
+        assert_rows(execute(cql, table, "SELECT c['t1'] FROM %s"), row(1))
+        assert_rows(execute(cql, table, "SELECT c['t1'..'t3'] FROM %s"), row({"t1": 1, "t2": 2, "t3": 3}))
+        assert_rows(execute(cql, table, "SELECT c['t3'..'t5'] FROM %s"), row({"t3": 3, "t4": 4}))
+        assert_rows(execute(cql, table, "SELECT c[..'t2'] FROM %s"), row({"t1": 1, "t2": 2}))
+        assert_rows(execute(cql, table, "SELECT c['t3'..] FROM %s"), row({"t3": 3, "t4": 4}))
+        assert_rows(execute(cql, table, "SELECT c[..'t5'] FROM %s"), row({"t1": 1, "t2": 2, "t3": 3, "t4": 4}))
+
+def testSetReversed(cql, test_keyspace):
+    skip_reversed_collection_crash(cql)
+    with create_table(cql, test_keyspace, "(" +
+                      "   k int, " +
+                      "   c frozen<set<text>>, " +
+                      "   v int, " +
+                      "   PRIMARY KEY(k, c)" +
+                      ") WITH CLUSTERING ORDER BY (c DESC)") as table:
+
+        execute(cql, table, "INSERT INTO %s(k, c, v) VALUES (1, {'t1','t2','t3','t4'}, 2)")
+        assert_rows(execute(cql, table, "SELECT c['nonexisting'] FROM %s"), row(None))
+        assert_rows(execute(cql, table, "SELECT c['t1'] FROM %s"), row("t1"))
+        assert_rows(execute(cql, table, "SELECT c['t1'..'t3'] FROM %s"), row({"t1", "t2", "t3"}))
+        assert_rows(execute(cql, table, "SELECT c['t3'..'t5'] FROM %s"), row({"t3", "t4"}))
+        assert_rows(execute(cql, table, "SELECT c[..'t2'] FROM %s"), row({"t1", "t2"}))
+        assert_rows(execute(cql, table, "SELECT c['t3'..] FROM %s"), row({"t3", "t4"}))
+        assert_rows(execute(cql, table, "SELECT c[..'t5'] FROM %s"), row({"t1", "t2", "t3", "t4"}))
+
+# Row.Builder is cached, and there was logic to reuse the same builder cross
+# rows, even if the builder was returned to the pool! This is "fine" in the happy path, but if the second row fails
+# for any reason, then the builder is in a partial state and also referenced by the pool!
+# (The Java test is named CASSANDRA_21055.)
+def testCASSANDRA_21055(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(pk int, ck int, l list<int>, PRIMARY KEY (pk, ck))") as table:
+        execute(cql, table, "INSERT INTO %s (pk, ck, l) VALUES (1, 1, [10, 20, 30])")
+        assert_invalid_message(cql, table, "Attempted to set an element on a list which is null",
+                               "UPDATE %s SET l[0] = 0 WHERE pk=1 AND ck IN (1, 2)")
+        execute(cql, table, "INSERT INTO %s (pk, ck, l) VALUES (1, 2, [40, 50, 60])")
+=======
+
+# Tests for CASSANDRA-17623
+# Before CASSANDRA-17623, parameterized queries with maps as values would fail because frozen maps were
+# required to be sorted by the sort order of their key type, but weren't always sorted correctly.
+# Also adding tests for Sets, which did work because they always used SortedSet, to make sure this behavior is maintained.
+# The Python driver serializes a map (dict) or set parameter in the order of
+# its iteration, so we pass a dict, or a list instead of a set, in the
+# (unsorted) order we want to send.
+
+def testInsertingMapDataWithParameterizedQueriesIsKeyOrderIndependent(cql, test_keyspace):
+    uuid1 = uuid.uuid1()
+    uuid2 = uuid.uuid1()
+    with create_table(cql, test_keyspace, "(k text, c frozen<map<timeuuid, text>>, PRIMARY KEY (k, c));") as table:
+        execute(cql, table, "INSERT INTO %s (k, c) VALUES ('0', ?)", {uuid1: "0", uuid2: "1"})
+        execute(cql, table, "INSERT INTO %s (k, c) VALUES ('0', ?)", {uuid2: "3", uuid1: "4"})
+        for _ in before_and_after_flush(cql, table):
+            assert_row_count(execute(cql, table, "SELECT * FROM %s WHERE k='0' AND c={" + str(uuid1) + ": '0', " + str(uuid2) + ": '1'}"), 1)
+            assert_row_count(execute(cql, table, "SELECT * FROM %s WHERE k='0' AND c={" + str(uuid2) + ": '1', " + str(uuid1) + ": '0'}"), 1)
+            assert_row_count(execute(cql, table, "SELECT * FROM %s WHERE k='0' AND c={" + str(uuid1) + ": '4', " + str(uuid2) + ": '3'}"), 1)
+            assert_row_count(execute(cql, table, "SELECT * FROM %s WHERE k='0' AND c={" + str(uuid2) + ": '3', " + str(uuid1) + ": '4'}"), 1)
+
+def testInsertingMapDataWithParameterizedQueriesIsKeyOrderIndependentWithSelectSlice(cql, test_keyspace):
+    uuid1 = uuid.uuid1()
+    uuid2 = uuid.uuid1()
+    with create_table(cql, test_keyspace, "(k text, c frozen<map<timeuuid, text>>, PRIMARY KEY (k, c));") as table:
+        for _ in before_and_after_flush(cql, table):
+            execute(cql, table, "INSERT INTO %s (k, c) VALUES ('0', ?)", {uuid2: "2", uuid1: "1"})
+            # Make sure that we can slice either value out of the map
+            assert_rows(execute(cql, table, "SELECT k, c[" + str(uuid2) + "] from %s"), row("0", "2"))
+            assert_rows(execute(cql, table, "SELECT k, c[" + str(uuid1) + "] from %s"), row("0", "1"))
+
+def testSelectingMapDataWithParameterizedQueriesIsKeyOrderIndependent(cql, test_keyspace):
+    uuid1 = uuid.uuid1()
+    uuid2 = uuid.uuid1()
+    with create_table(cql, test_keyspace, "(k text, c frozen<map<timeuuid, text>>, PRIMARY KEY (k, c));") as table:
+        execute(cql, table, "INSERT INTO %s (k, c) VALUES ('0', {" + str(uuid1) + ": '0', " + str(uuid2) + ": '1'})")
+        execute(cql, table, "INSERT INTO %s (k, c) VALUES ('0', {" + str(uuid2) + ": '3', " + str(uuid1) + ": '4'})")
+        for _ in before_and_after_flush(cql, table):
+            assert_row_count(execute(cql, table, "SELECT * FROM %s WHERE k=? AND c=?", "0", {uuid1: "0", uuid2: "1"}), 1)
+            assert_row_count(execute(cql, table, "SELECT * FROM %s WHERE k=? AND c=?", "0", {uuid2: "1", uuid1: "0"}), 1)
+            assert_row_count(execute(cql, table, "SELECT * FROM %s WHERE k=? AND c=?", "0", {uuid1: "4", uuid2: "3"}), 1)
+            assert_row_count(execute(cql, table, "SELECT * FROM %s WHERE k=? AND c=?", "0", {uuid2: "3", uuid1: "4"}), 1)
+
+def testInsertingSetDataWithParameterizedQueriesIsKeyOrderIndependent(cql, test_keyspace):
+    uuid1 = uuid.uuid1()
+    uuid2 = uuid.uuid1()
+    with create_table(cql, test_keyspace, "(k text, c frozen<set<timeuuid>>, PRIMARY KEY (k, c));") as table:
+        execute(cql, table, "INSERT INTO %s (k, c) VALUES ('0', ?)", [uuid1, uuid2])
+        execute(cql, table, "INSERT INTO %s (k, c) VALUES ('0', ?)", [uuid2, uuid1])
+        for _ in before_and_after_flush(cql, table):
+            assert_row_count(execute(cql, table, "SELECT * FROM %s WHERE k='0' AND c={" + str(uuid1) + ", " + str(uuid2) + "}"), 1)
+            assert_row_count(execute(cql, table, "SELECT * FROM %s WHERE k='0' AND c={" + str(uuid2) + ", " + str(uuid1) + "}"), 1)
+            assert_row_count(execute(cql, table, "SELECT * FROM %s WHERE k='0' AND c={" + str(uuid1) + ", " + str(uuid2) + "}"), 1)
+            assert_row_count(execute(cql, table, "SELECT * FROM %s WHERE k='0' AND c={" + str(uuid2) + ", " + str(uuid1) + "}"), 1)
+
+def testInsertingSetDataWithParameterizedQueriesIsKeyOrderIndependentWithSelectSlice(cql, test_keyspace):
+    uuid1 = uuid.uuid1()
+    uuid2 = uuid.uuid1()
+    with create_table(cql, test_keyspace, "(k text, c frozen<set<timeuuid>>, PRIMARY KEY (k, c));") as table:
+        for _ in before_and_after_flush(cql, table):
+            execute(cql, table, "INSERT INTO %s (k, c) VALUES ('0', ?)", [uuid2, uuid1])
+            assert_rows(execute(cql, table, "SELECT k, c[" + str(uuid2) + "] from %s"), row("0", uuid2))
+            assert_rows(execute(cql, table, "SELECT k, c[" + str(uuid1) + "] from %s"), row("0", uuid1))
+
+def testSelectingSetDataWithParameterizedQueriesIsKeyOrderIndependent(cql, test_keyspace):
+    uuid1 = uuid.uuid1()
+    uuid2 = uuid.uuid1()
+    with create_table(cql, test_keyspace, "(k text, c frozen<set<timeuuid>>, PRIMARY KEY (k, c));") as table:
+        execute(cql, table, "INSERT INTO %s (k, c) VALUES ('0', {" + str(uuid1) + ", " + str(uuid2) + "})")
+        for _ in before_and_after_flush(cql, table):
+            assert_rows(execute(cql, table, "SELECT k, c from %s where k='0' and c=?", [uuid1, uuid2]), row("0", {uuid1, uuid2}))
+            assert_rows(execute(cql, table, "SELECT k, c from %s where k='0' and c=?", [uuid2, uuid1]), row("0", {uuid1, uuid2}))
+# End tests for CASSANDRA-17623
+
+# The following two tests also reproduce SCYLLADB-5210 (selecting an element
+# of a frozen collection clustering column with descending order crashed
+# Scylla).
+@pytest.mark.xfail(reason="Cassandra 4.0 feature of selecting a collection slice not yet supported. Issue #22075")
+def testMapReversed(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(" +
+                      "   k int, " +
+                      "   c frozen<map<text, int>>, " +
+                      "   v int, " +
+                      "   PRIMARY KEY(k, c)" +
+                      ") WITH CLUSTERING ORDER BY (c DESC)") as table:
+
+        execute(cql, table, "INSERT INTO %s(k, c, v) VALUES (1, {'t1':1,'t2':2,'t3':3,'t4':4}, 2)")
+        assert_rows(execute(cql, table, "SELECT c['nonexisting'] FROM %s"), row(None))
+        assert_rows(execute(cql, table, "SELECT c['t1'] FROM %s"), row(1))
+        assert_rows(execute(cql, table, "SELECT c['t1'..'t3'] FROM %s"), row({"t1": 1, "t2": 2, "t3": 3}))
+        assert_rows(execute(cql, table, "SELECT c['t3'..'t5'] FROM %s"), row({"t3": 3, "t4": 4}))
+        assert_rows(execute(cql, table, "SELECT c[..'t2'] FROM %s"), row({"t1": 1, "t2": 2}))
+        assert_rows(execute(cql, table, "SELECT c['t3'..] FROM %s"), row({"t3": 3, "t4": 4}))
+        assert_rows(execute(cql, table, "SELECT c[..'t5'] FROM %s"), row({"t1": 1, "t2": 2, "t3": 3, "t4": 4}))
+
+@pytest.mark.xfail(reason="Cassandra 4.0 feature of selecting a set slice not yet supported. Issue #22075")
+def testSetReversed(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(" +
+                      "   k int, " +
+                      "   c frozen<set<text>>, " +
+                      "   v int, " +
+                      "   PRIMARY KEY(k, c)" +
+                      ") WITH CLUSTERING ORDER BY (c DESC)") as table:
+
+        execute(cql, table, "INSERT INTO %s(k, c, v) VALUES (1, {'t1','t2','t3','t4'}, 2)")
+        assert_rows(execute(cql, table, "SELECT c['nonexisting'] FROM %s"), row(None))
+        assert_rows(execute(cql, table, "SELECT c['t1'] FROM %s"), row("t1"))
+        assert_rows(execute(cql, table, "SELECT c['t1'..'t3'] FROM %s"), row({"t1", "t2", "t3"}))
+        assert_rows(execute(cql, table, "SELECT c['t3'..'t5'] FROM %s"), row({"t3", "t4"}))
+        assert_rows(execute(cql, table, "SELECT c[..'t2'] FROM %s"), row({"t1", "t2"}))
+        assert_rows(execute(cql, table, "SELECT c['t3'..] FROM %s"), row({"t3", "t4"}))
+        assert_rows(execute(cql, table, "SELECT c[..'t5'] FROM %s"), row({"t1", "t2", "t3", "t4"}))
+
+# Row.Builder is cached, and there was logic to reuse the same builder cross
+# rows, even if the builder was returned to the pool! This is "fine" in the happy path, but if the second row fails
+# for any reason, then the builder is in a partial state and also referenced by the pool!
+# (The Java test is named CASSANDRA_21055.)
+def testCASSANDRA_21055(cql, test_keyspace):
+    with create_table(cql, test_keyspace, "(pk int, ck int, l list<int>, PRIMARY KEY (pk, ck))") as table:
+        execute(cql, table, "INSERT INTO %s (pk, ck, l) VALUES (1, 1, [10, 20, 30])")
+        assert_invalid_message(cql, table, "Attempted to set an element on a list which is null",
+                               "UPDATE %s SET l[0] = 0 WHERE pk=1 AND ck IN (1, 2)")
+        execute(cql, table, "INSERT INTO %s (pk, ck, l) VALUES (1, 2, [40, 50, 60])")
+>>>>>>> c4bc772a03 (cql3: fix crash on collection element of a DESC clustering column)
