@@ -10,6 +10,7 @@
 
 #include "seastarx.hh"
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <span>
@@ -164,6 +165,52 @@ future<std::unique_ptr<export_pipeline_interface>> create_sink_pipeline(std::var
 // A caller that wants to know whether it read a whole export must let `close()` succeed - with gzip
 // compression that is where the object's completeness is checked, see `import_pipeline_interface::close()`.
 future<std::unique_ptr<import_pipeline_interface>> create_source_pipeline(std::variant<in_memory_target_config, s3_target_config> target_config, std::function<future<>(rjson::value)> on_item, compression_type compression);
+
+// Counts of what `read_s3_prefix()` read. The read updates them as it goes, so after a failed read
+// they count what was read up to the failure.
+struct s3_prefix_read_result {
+    // The objects found under the prefix whose reading started, the invalid ones included.
+    uint64_t object_count = 0;
+    // The objects which turned out to hold invalid data, see `read_s3_prefix()`. Each counts once,
+    // however much of it was left unread.
+    uint64_t error_count = 0;
+    // The objects among `error_count` whose reading stopped at a line which never reached `on_item`:
+    // a line which is not JSON, or is too long. DynamoDB counts a line which is not JSON as a
+    // processed item, so a caller which counts the items `on_item` gets has to add these to its
+    // ProcessedItemCount. A too long line counts the same, which is not checked against DynamoDB.
+    uint64_t unparsable_line_count = 0;
+};
+
+// Reads every object of `bucket` whose key starts with `key_prefix` - with an empty prefix, every
+// object of the bucket - one after another, in the order S3 lists them, with a source pipeline of
+// its own for each (see `create_source_pipeline()`). Calls `on_item` for each item of each object,
+// and waits for each call's future before going on. Blank lines are skipped. A prefix which matches
+// no object reads as no items, without an error. Counts what it read in `result`. Runs in the
+// caller's scheduling group.
+//
+// Invalid data does not fail the read, but stops the reading of the object which holds it: the
+// rest of that object is skipped, the object counts in `result.error_count` and is logged, and the
+// read goes on with the next object - as DynamoDB's ImportTable does after a line which is not
+// JSON or has no "Item" member. The object's items before the invalid one have reached `on_item`
+// by then. Invalid data is:
+//  - a line which is not JSON, or which is longer than the parser accepts,
+//  - a corrupt or truncated gzip stream,
+//  - an item which `on_item` rejects by throwing an `rjson::error`, or an `api_error` of type
+//    ValidationException or SerializationException - as the validation of an Alternator item
+//    does - or PayloadTooLarge, as the parser does for a too long line. A caller which wants the
+//    read to go on with the object's next item instead catches these itself.
+// Any other error fails the read: an S3 error (a missing bucket or object, denied access, ...) and
+// any other exception from `on_item`, an `api_error` of another type included. So does an abort of
+// `as`, with the abort's exception, whatever else failed after the abort. The abort is noticed by
+// the read of an object, or before the next object starts; it does not cut short a listing request
+// in flight. `as`, if set, must stay valid until the returned future resolves.
+//
+// The objects are listed while they are read, and each object's pipeline is closed before the
+// next one is made, so neither the list of objects nor more than one object's buffers are held
+// in memory at a time.
+future<> read_s3_prefix(shared_ptr<s3::client> client, sstring bucket, sstring key_prefix,
+        compression_type compression, abort_source* as, std::function<future<>(rjson::value)> on_item,
+        s3_prefix_read_result& result);
 
 
 /// Full table scan of an Alternator table, calling `cb` with every item (DynamoDB-style JSON).
