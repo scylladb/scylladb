@@ -384,7 +384,7 @@ future<std::list<repair_row>> to_repair_rows_list(repair_rows_on_wire rows,
 bool makes_repair_row(const mutation_fragment& mf);
 // The row repair builds from a fragment it read from disk; dk is the current partition, never null.
 repair_row make_repair_row_from_disk(
-        const lw_shared_ptr<const decorated_key_with_hash>& dk, repair_hasher& hasher, const schema& s, const mutation_fragment& mf);
+        const lw_shared_ptr<const decorated_key_with_hash>& dk, repair_hasher& hasher, const schema& s, mutation_fragment&& mf);
 void flush_rows(schema_ptr s, std::list<repair_row>& rows, lw_shared_ptr<repair_writer>& writer, std::optional<small_table_optimization_params> small_table_optimization = std::nullopt, repair_meta* rm = nullptr);
 
 // A struct to hold the first and last token of a tablet.

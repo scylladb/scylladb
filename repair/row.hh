@@ -8,6 +8,7 @@
 
 #pragma once
 #include <optional>
+#include <variant>
 #include "mutation/frozen_mutation.hh"
 #include <seastar/core/shared_ptr.hh>
 #include "repair/decorated_key_with_hash.hh"
@@ -21,7 +22,8 @@ class decorated_key_with_hash;
 class repair_hash;
 
 class repair_row {
-    std::optional<frozen_mutation_fragment> _fm;
+    // A row read from disk and not frozen yet keeps its future frozen and position sizes here instead.
+    std::variant<std::monostate, frozen_mutation_fragment, uint32_t> _fm;
     lw_shared_ptr<const decorated_key_with_hash> _dk_with_hash;
     lw_shared_ptr<mutation_fragment> _mf;
     repair_hash _hash;
@@ -37,14 +39,29 @@ public:
             std::optional<repair_hash> hash,
             is_dirty_on_master dirty_on_master,
             lw_shared_ptr<mutation_fragment> mf = {})
-            : _fm(std::move(fm))
-            , _dk_with_hash(std::move(dk_with_hash))
+            : _dk_with_hash(std::move(dk_with_hash))
             , _mf(std::move(mf))
             , _hash(hash.value_or(repair_hash()))
             , _position(std::move(pos))
             , _has_hash(hash.has_value())
             , _dirty_on_master(dirty_on_master)
-    { }
+    {
+        if (fm) {
+            _fm = std::move(*fm);
+        }
+    }
+    // Row read from disk: kept off its permit, as the frozen row it replaces was.
+    repair_row(const schema& s, lw_shared_ptr<const decorated_key_with_hash> dk_with_hash, repair_hash hash, mutation_fragment&& mf)
+            : _dk_with_hash(std::move(dk_with_hash))
+            , _mf(make_lw_shared<mutation_fragment>(std::move(mf)))
+            , _hash(hash)
+            , _has_hash(true)
+            , _dirty_on_master(is_dirty_on_master::no)
+    {
+        // The key term matches the _position the frozen row will have.
+        _fm = uint32_t(frozen_size(s, *_mf) + (_mf->has_key() ? _mf->key().external_memory_usage() : 0));
+        _mf->release_memory();
+    }
     lw_shared_ptr<mutation_fragment>& get_mutation_fragment_ptr() { return _mf; }
     mutation_fragment& get_mutation_fragment() {
         if (!_mf) {
@@ -55,26 +72,42 @@ public:
     void reset_mutation_fragment() {
         _mf = nullptr;
     }
+    // Freezes a row read from disk, once; other rows are left as they are.
+    void freeze_for_send(const schema& s) {
+        if (std::holds_alternative<uint32_t>(_fm)) {
+            auto fm = freeze(s, *_mf);
+            _position = position_in_partition(_mf->position());
+            _fm = std::move(fm);
+            _mf = nullptr;
+        }
+    }
     frozen_mutation_fragment& get_frozen_mutation() {
-        if (!_fm) {
+        auto* fm = std::get_if<frozen_mutation_fragment>(&_fm);
+        if (!fm) {
             throw std::runtime_error("empty frozen_mutation_fragment");
         }
-        return *_fm;
+        return *fm;
     }
     const frozen_mutation_fragment& get_frozen_mutation() const {
-        if (!_fm) {
+        auto* fm = std::get_if<frozen_mutation_fragment>(&_fm);
+        if (!fm) {
             throw std::runtime_error("empty frozen_mutation_fragment");
         }
-        return *_fm;
+        return *fm;
     }
     const lw_shared_ptr<const decorated_key_with_hash>& get_dk_with_hash() const {
         return _dk_with_hash;
     }
+    // Always the frozen size, so peers of different versions agree on round sizes.
     size_t size() const {
-        if (!_fm) {
+        if (auto* unfrozen_size = std::get_if<uint32_t>(&_fm)) {
+            return sizeof(repair_row) + _dk_with_hash->dk.external_memory_usage() + *unfrozen_size;
+        }
+        auto* fm = std::get_if<frozen_mutation_fragment>(&_fm);
+        if (!fm) {
             throw std::runtime_error("empty size due to empty frozen_mutation_fragment");
         }
-        auto size = sizeof(repair_row) + _fm->representation().size();
+        auto size = sizeof(repair_row) + fm->representation().size();
         if (_position) {
             // Shared key counted per row: conservative, as before the key copy was dropped.
             size += _dk_with_hash->dk.external_memory_usage() + _position->external_memory_usage();
@@ -84,7 +117,11 @@ public:
         }
         return size;
     }
-    const position_in_partition& position() const {
+    // For a row not frozen yet, valid until freeze_for_send().
+    position_in_partition_view position() const {
+        if (std::holds_alternative<uint32_t>(_fm)) {
+            return _mf->position();
+        }
         if (!_position) {
             throw std::runtime_error("empty repair_sync_boundary");
         }
@@ -100,15 +137,17 @@ public:
         return _dirty_on_master;
     }
     future<> clear_gently() noexcept {
-        if (_fm) {
-            co_await _fm->clear_gently();
-            _fm.reset();
+        if (auto* fm = std::get_if<frozen_mutation_fragment>(&_fm)) {
+            co_await fm->clear_gently();
         }
+        _fm = std::monostate();
         _dk_with_hash = {};
         _position.reset();
         _has_hash = false;
         _mf = {};
     }
 };
+// size() counts sizeof(repair_row), which peers of different versions must agree on.
+static_assert(sizeof(repair_row) == 80);
 
 
