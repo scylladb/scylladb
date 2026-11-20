@@ -2063,8 +2063,11 @@ future<> gossiper::start_gossiping(gms::generation_type generation_nbr, applicat
         logger.warn("Use the generation number provided by user: generation = {}", generation_nbr);
     }
 
-    // Create a new local state.
-    endpoint_state local_state{get_broadcast_address()};
+    // Create a new local state. If gossip is being reenabled, a local state already
+    // exists. Keep its application states: they include HOST_ID, without which
+    // replicate() ignores the new state and the new generation is lost.
+    auto old_local_state = get_this_endpoint_state_ptr();
+    endpoint_state local_state = old_local_state ? *old_local_state : endpoint_state{get_broadcast_address()};
     local_state.set_heart_beat_state_and_update_timestamp(heart_beat_state(generation_nbr));
     for (auto& entry : preload_local_states) {
         local_state.add_application_state(entry.first, entry.second);
