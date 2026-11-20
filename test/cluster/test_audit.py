@@ -314,6 +314,7 @@ class AuditTester:
             user=user, password=password,
             property_file=property_file,
             cmdline=cmdline)
+        await self.helper.open_server_logs(self.manager)
         session = self.manager.get_cql()
         session.execute("DROP KEYSPACE IF EXISTS ks")
         if create_keyspace:
@@ -348,6 +349,9 @@ class AuditBackend:
         raise NotImplementedError
 
     def clear_audit_logs(self, session: Session | None = None) -> None:
+        pass
+
+    async def open_server_logs(self, manager: ScyllaClusterManager) -> None:
         pass
 
     def update_audit_settings(self, audit_settings, modifiers=None):
@@ -570,6 +574,11 @@ class AuditBackendComposite(AuditBackend):
         for backend in self.backends:
             backend.clear_audit_logs(session)
 
+    @override
+    async def open_server_logs(self, manager: ScyllaClusterManager) -> None:
+        for backend in self.backends:
+            await backend.open_server_logs(manager)
+
     def update_audit_settings(self, audit_settings, modifiers=None):
         if modifiers is None:
             modifiers = {}
@@ -599,6 +608,101 @@ class AuditBackendComposite(AuditBackend):
                 assert mode not in rows_dict
                 rows_dict[mode] = backend_rows
         return rows_dict
+
+
+stdout_audit_field_value = r'(?:[^"\\]|\\.)*'
+stdout_audit_record = re.compile(r"\w{3} [ \d]\d \d\d:\d\d:\d\d scylla-audit: " + ", ".join(
+    f'{field}="(?P<{field}>{stdout_audit_field_value})"'
+    for field in ["node", "category", "cl", "error", "keyspace", "query", "client_ip", "table", "username"]))
+
+
+@dataclass
+class StdoutAuditNode:
+    pid: int
+    log_path: Path
+    offset: int
+    rows: list
+
+
+class AuditBackendStdout(AuditBackend):
+    audit_default_settings = {"audit": "stdout", "audit_categories": "ADMIN,AUTH,QUERY,DML,DDL,DCL", "audit_keyspaces": "ks"}
+
+    def __init__(self, socket_path: str | None = None):
+        super().__init__(socket_path=socket_path)
+        self.nodes: list[StdoutAuditNode] = []
+        self.named_tuple_factory = namedtuple("Row", ["date", "node", "event_time", "category", "consistency", "error", "keyspace_name", "operation", "source", "table_name", "username"])
+
+    @override
+    def audit_mode(self) -> str:
+        return "stdout"
+
+    @override
+    async def open_server_logs(self, manager: ScyllaClusterManager) -> None:
+        self.nodes = []
+        for server in await manager.running_servers():
+            log = await manager.server_open_log(server.server_id)
+            self.nodes.append(StdoutAuditNode(server.pid, log.file, log.file.stat().st_size, []))
+
+    @override
+    def clear_audit_logs(self, session: Session | None = None) -> None:
+        for node in self.nodes:
+            self._sync(node)
+            node.rows.clear()
+
+    def update_audit_settings(self, audit_settings, modifiers=None):
+        new_audit_settings = copy.deepcopy(audit_settings or self.audit_default_settings)
+        # the shared tests use "table" for any enabled sink
+        if new_audit_settings.get("audit") == "table":
+            new_audit_settings["audit"] = self.audit_mode()
+        new_audit_settings.update(modifiers or {})
+        return new_audit_settings
+
+    @override
+    def get_audit_log_dict(self, session, consistency_level):
+        for node in self.nodes:
+            self._sync(node)
+        return {self.audit_mode(): [row for node in self.nodes for row in node.rows]}
+
+    def _sync(self, node: StdoutAuditNode) -> None:
+        """Read the records the node wrote before this call from its log file."""
+        stdout = Path(f"/proc/{node.pid}/fd/1")
+        assert stdout.is_fifo()
+        # Records written to the pipe before the marker reach the log file before it.
+        marker = f"audit test sync {uuid.uuid4()}\n".encode()
+        fd = os.open(stdout, os.O_WRONLY)
+        try:
+            os.write(fd, marker)
+        finally:
+            os.close(fd)
+
+        def read_to_marker() -> bool:
+            with node.log_path.open("rb") as log:
+                log.seek(node.offset)
+                logged, found, _ = log.read().partition(marker)
+            if not found:
+                return False
+            for line in logged.decode(errors="replace").split("\n"):
+                if record := stdout_audit_record.fullmatch(line):
+                    node.rows.append(self._row(record, len(node.rows)))
+            node.offset += len(logged) + len(marker)
+            return True
+
+        wait_for(read_to_marker, step=0.01, timeout=60)
+
+    @staticmethod
+    def _unescape(value: str) -> str:
+        def unescaped(escape: re.Match) -> str:
+            if escape[1][0] in "xu":
+                return chr(int(escape[1][1:], 16))
+            return {"n": "\n", "r": "\r", "t": "\t"}.get(escape[1], escape[1])
+        return re.sub(r"\\(x[0-9a-f]{2}|u[0-9a-f]{4}|.)", unescaped, value)
+
+    def _row(self, record: re.Match, idx: int):
+        fields = {name: self._unescape(value) for name, value in record.groupdict().items()}
+        return self.named_tuple_factory(
+            datetime.datetime(2000, 1, 1, 0, 0), AuditBackendSyslog._parse_address(fields["node"]), uuid.UUID(int=idx),
+            fields["category"], fields["cl"], fields["error"] == "true", fields["keyspace"], fields["query"],
+            AuditBackendSyslog._parse_address(fields["client_ip"]), fields["table"], fields["username"])
 
 
 class CQLAuditTester(AuditTester):
@@ -2679,6 +2783,7 @@ async def test_audit_maintenance_socket_user_creation(manager: ScyllaClusterMana
     await t._test_audit_maintenance_socket_user_creation(manager, AuditBackendTable)
     Syslog = functools.partial(AuditBackendSyslog, socket_path=syslog_socket_path)
     await t._test_audit_maintenance_socket_user_creation(manager, Syslog)
+    await t._test_audit_maintenance_socket_user_creation(manager, AuditBackendStdout)
 
 
 # AuditBackendSyslog, no auth, rf=1
@@ -2745,6 +2850,123 @@ async def test_audit_composite_auth(manager: ScyllaClusterManager, rules_mode: b
     await t._test_permissions(Composite)
 
 
+# AuditBackendStdout, no auth, rf=1
+
+@verify_legacy_and_rules
+async def test_audit_stdout_noauth(manager: ScyllaClusterManager, rules_mode: bool):
+    """Stdout backend, no auth, single node."""
+    t = CQLAuditTester(manager, rules_mode=rules_mode)
+    await t._test_using_non_existent_keyspace(AuditBackendStdout)
+    await t._test_audit_keyspace(AuditBackendStdout)
+    await t._test_audit_keyspace_extra_parameter(AuditBackendStdout)
+    await t._test_audit_keyspace_many_ks(AuditBackendStdout)
+    await t._test_audit_keyspace_table_not_exists(AuditBackendStdout)
+    await t._test_audit_categories_part2(AuditBackendStdout)
+    await t._test_audit_categories_part3(AuditBackendStdout)
+    await t._test_prepare(AuditBackendStdout)
+    await t._test_batch(AuditBackendStdout)
+    await t._test_batch_native_protocol(AuditBackendStdout)
+    await t._test_empty_keyspace_ddl(AuditBackendStdout)
+
+
+# AuditBackendStdout, auth, rf=1
+
+@verify_legacy_and_rules
+async def test_audit_stdout_auth(manager: ScyllaClusterManager, rules_mode: bool):
+    """Stdout backend, auth enabled, single node."""
+    t = CQLAuditTester(manager, rules_mode=rules_mode)
+    await t._test_user_password_masking(AuditBackendStdout)
+    await t._test_role_password_masking(AuditBackendStdout)
+    await t._test_permissions(AuditBackendStdout)
+
+
+# Stdout backend. A node whose audit config includes stdout gets a pipe as its
+# standard output, relayed line by line to its log file.
+
+def stdout_audit_line(category: str, query: str, table: str) -> str:
+    """Return a regular expression matching the stdout audit line of a statement
+    the anonymous user ran in keyspace ks."""
+    escaped_query = query.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\r", "\\r")
+    return (r' scylla-audit: node="[^"]*", '
+            + re.escape(f'category="{category}", ')
+            + r'cl="[A-Z_]*", '
+            + re.escape(f'error="false", keyspace="ks", query="{escaped_query}", ')
+            + r'client_ip="[^"]*", '
+            + re.escape(f'table="{table}", username="anonymous"')
+            + "$")
+
+
+@pytest.mark.parametrize("on_cmdline", [False, True], ids=["config", "cmdline"])
+async def test_audit_stdout(manager: ScyllaClusterManager, on_cmdline: bool):
+    """The stdout backend writes each audited statement as one line, escaping
+    quotes, backslashes and line breaks, and creates no audit keyspace."""
+    settings = {"audit": "stdout", "audit_categories": "DDL,DML,QUERY", "audit_keyspaces": "ks"}
+    if on_cmdline:
+        server = await manager.server_add(cmdline=[f"--{key.replace('_', '-')}={value}" for key, value in settings.items()])
+    else:
+        server = await manager.server_add(config=settings)
+    log = await manager.server_open_log(server.server_id)
+    mark = await log.mark()
+    cql = manager.get_cql()
+    statements = [
+        ("DDL", "CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}", ""),
+        ("DDL", "CREATE TABLE ks.t (p int PRIMARY KEY, v text)", "t"),
+        ("DML", "INSERT INTO ks.t (p, v) VALUES (1, 'a \"quoted\"\nmultiline\\value')", "t"),
+        ("QUERY", "SELECT v FROM ks.t WHERE p = 1", "t"),
+    ]
+    for _, query, _ in statements:
+        await cql.run_async(query)
+
+    patterns = [stdout_audit_line(*statement) for statement in statements]
+    await log.wait_for(*patterns, from_mark=mark, timeout=60)
+    for pattern in patterns:
+        assert len(await log.grep(pattern, from_mark=mark)) == 1
+    assert not await cql.run_async("SELECT keyspace_name FROM system_schema.keyspaces WHERE keyspace_name = 'audit'")
+
+
+async def test_audit_table_and_stdout(manager: ScyllaClusterManager):
+    """With the table and the stdout backends combined, each of them gets the record."""
+    server = await manager.server_add(config={"audit": "table,stdout", "audit_categories": "DDL", "audit_keyspaces": "ks"})
+    log = await manager.server_open_log(server.server_id)
+    mark = await log.mark()
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}")
+    query = "CREATE TABLE ks.t (p int PRIMARY KEY)"
+    await cql.run_async(query)
+
+    await log.wait_for(stdout_audit_line("DDL", query, "t"), from_mark=mark, timeout=60)
+    rows = await cql.run_async(SimpleStatement("SELECT operation FROM audit.audit_log", consistency_level=ConsistencyLevel.ONE))
+    assert query in [row.operation for row in rows]
+
+
+async def test_audit_rules_stdout(manager: ScyllaClusterManager):
+    """Audit rules route a statement to the stdout sink only when they name it."""
+    rules = [
+        {"sinks": ["stdout"], "categories": ["DML"], "qualified_table_names": ["ks.stdout_sink"], "roles": ["*"]},
+        {"sinks": ["table"], "categories": ["DML"], "qualified_table_names": ["ks.table_sink"], "roles": ["*"]},
+    ]
+    server = await manager.server_add(config={"audit": "table,stdout", "audit_categories": "", "audit_keyspaces": "",
+                                              "audit_tables": "", "audit_rules": rules})
+    log = await manager.server_open_log(server.server_id)
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}")
+    await cql.run_async("CREATE TABLE ks.stdout_sink (p int PRIMARY KEY)")
+    await cql.run_async("CREATE TABLE ks.table_sink (p int PRIMARY KEY)")
+    mark = await log.mark()
+    table_insert = "INSERT INTO ks.table_sink (p) VALUES (1)"
+    stdout_insert = "INSERT INTO ks.stdout_sink (p) VALUES (1)"
+    await cql.run_async(table_insert)
+    await cql.run_async(stdout_insert)
+
+    await log.wait_for(stdout_audit_line("DML", stdout_insert, "stdout_sink"), from_mark=mark, timeout=60)
+    # The table-only insert ran first, so its line would precede the one waited for.
+    assert not await log.grep(stdout_audit_line("DML", table_insert, "table_sink"), from_mark=mark)
+    rows = await cql.run_async(SimpleStatement("SELECT operation FROM audit.audit_log", consistency_level=ConsistencyLevel.ONE))
+    operations = [row.operation for row in rows]
+    assert table_insert in operations
+    assert stdout_insert not in operations
+
+
 _syslog = functools.partial(AuditBackendSyslog, socket_path=syslog_socket_path)
 _composite = functools.partial(AuditBackendComposite, socket_path=syslog_socket_path)
 
@@ -2756,6 +2978,8 @@ _composite = functools.partial(AuditBackendComposite, socket_path=syslog_socket_
     pytest.param(_syslog, CQLAuditTester.AuditCqlConfigChanger, id="syslog-cql"),
     pytest.param(_composite, CQLAuditTester.AuditSighupConfigChanger, id="composite-sighup"),
     pytest.param(_composite, CQLAuditTester.AuditCqlConfigChanger, id="composite-cql"),
+    pytest.param(AuditBackendStdout, CQLAuditTester.AuditSighupConfigChanger, id="stdout-sighup"),
+    pytest.param(AuditBackendStdout, CQLAuditTester.AuditCqlConfigChanger, id="stdout-cql"),
 ])
 async def test_config_no_liveupdate(manager: ScyllaClusterManager, helper_class, config_changer):
     """Non-live audit config params (audit, audit_unix_socket_path) must be unmodifiable."""
@@ -2769,6 +2993,8 @@ async def test_config_no_liveupdate(manager: ScyllaClusterManager, helper_class,
     pytest.param(_syslog, CQLAuditTester.AuditCqlConfigChanger, id="syslog-cql"),
     pytest.param(_composite, CQLAuditTester.AuditSighupConfigChanger, id="composite-sighup"),
     pytest.param(_composite, CQLAuditTester.AuditCqlConfigChanger, id="composite-cql"),
+    pytest.param(AuditBackendStdout, CQLAuditTester.AuditSighupConfigChanger, id="stdout-sighup"),
+    pytest.param(AuditBackendStdout, CQLAuditTester.AuditCqlConfigChanger, id="stdout-cql"),
 ])
 async def test_config_liveupdate(manager: ScyllaClusterManager, helper_class, config_changer):
     """Live-updatable audit config params (categories, keyspaces, tables) must be modifiable at runtime."""
@@ -2779,6 +3005,7 @@ async def test_config_liveupdate(manager: ScyllaClusterManager, helper_class, co
     pytest.param(AuditBackendTable, id="table"),
     pytest.param(_syslog, id="syslog"),
     pytest.param(_composite, id="composite"),
+    pytest.param(AuditBackendStdout, id="stdout"),
 ])
 async def test_parallel_syslog_audit(manager: ScyllaClusterManager, helper_class):
     """Cluster must not fail when multiple queries are audited in parallel."""

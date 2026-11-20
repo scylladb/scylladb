@@ -3,7 +3,7 @@ ScyllaDB Auditing Guide
 ========================
 
 Auditing allows the administrator to monitor activities on a ScyllaDB cluster, including CQL queries and data changes, as well as Alternator (DynamoDB-compatible API) requests.
-The information is stored in a Syslog or a ScyllaDB table.
+The information is stored in a Syslog or a ScyllaDB table, or written to the standard output of the ScyllaDB process.
 
 Prerequisite
 ------------
@@ -20,7 +20,10 @@ You can set the following options:
 * ``none`` - Audit is disabled.
 * ``table`` - Audit is enabled, and messages are stored in a ScyllaDB table (default).
 * ``syslog`` - Audit is enabled, and messages are sent to Syslog.
+* ``stdout`` - Audit is enabled, and messages are written to the standard output of the ScyllaDB process.
 * ``syslog,table`` - Audit is enabled, and messages are stored in a ScyllaDB table and sent to Syslog.
+
+Backends can be combined in any way by separating them with a comma, for example ``table,stdout``.
 
 Configuring any other value results in an error at ScyllaDB startup.
 
@@ -211,7 +214,7 @@ matching options, including table patterns and role patterns.
 
 Each rule contains the following fields:
 
-- **sinks** — target sinks for matched events (e.g. ``table``, ``syslog``).
+- **sinks** — target sinks for matched events (``table``, ``syslog``, ``stdout``).
   Must be a subset of the global ``audit`` setting; a rule referencing a sink
   not enabled globally will log an error and events for that sink will not be
   written.
@@ -258,7 +261,7 @@ Example ``scylla.yaml`` configuration:
 Configuring Audit Storage
 ---------------------------
 
-Auditing messages can be sent to :ref:`Syslog <auditing-syslog-storage>` or stored in a ScyllaDB :ref:`table <auditing-table-storage>` or both.
+Auditing messages can be sent to :ref:`Syslog <auditing-syslog-storage>`, stored in a ScyllaDB :ref:`table <auditing-table-storage>`, written to the :ref:`standard output <auditing-stdout-storage>`, or any combination of them.
 
 .. _auditing-syslog-storage:
 
@@ -392,7 +395,52 @@ Storing Audit Messages in a Table and Syslog Simultaneously
 
       audit: "syslog,table"
 
+.. _auditing-stdout-storage:
 
+Writing Audit Messages to the Standard Output
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The ``stdout`` backend writes each audit message as one line to the standard output of the ScyllaDB process. It is meant for containers (Docker, Kubernetes, OpenShift), where the container runtime forwards the standard output to a log collector.
+
+The standard output must be a pipe, as provided by a container runtime, or a terminal. ScyllaDB fails to start if the standard output is a regular file, a socket (for example, the systemd journal), ``/dev/null``, or a pipe it has no permission to open, such as one created by another user. Use the ``syslog`` backend when the standard output is a file or the journal.
+
+**Procedure**
+
+#. Set the ``audit`` parameter in the ``scylla.yaml`` file to ``stdout``.
+
+   For example:
+
+   .. code-block:: shell
+
+      # audit setting
+      # 'audit' config option controls if and where to output audited events:
+      audit: "stdout"
+      #
+      # List of statement categories that should be audited.
+      audit_categories: "DCL,DDL,AUTH"
+
+#. Restart the ScyllaDB node. For example, in the ScyllaDB Docker image:
+
+   .. code-block:: shell
+
+      docker exec -it some-scylla supervisorctl restart scylla
+
+Each message starts with the local time and the ``scylla-audit:`` tag, which sets it apart from the other output of ScyllaDB, followed by the same fields as a Syslog message. Double quotes, backslashes, control characters, and bytes that are not valid UTF-8 are escaped with a backslash, so every message is one line of valid UTF-8.
+
+Output example (CQL drop table):
+
+.. code-block:: shell
+
+   Mar 18 09:53:52 scylla-audit: node="10.143.2.108:0", category="DDL", cl="ONE", error="false", keyspace="nba", query="DROP TABLE nba.team_roster ;", client_ip="127.0.0.1:0", table="team_roster", username="anonymous"
+
+If the reader of the standard output falls behind, audited requests may be delayed, and the audit messages that are not written in time are logged in the regular ScyllaDB log and may still reach the standard output later (see :ref:`Handling Audit Failures <auditing-failures>`).
+
+.. note::
+
+   * Keep the regular ScyllaDB log on the standard error, where ``--log-to-stdout`` writes it by default (``--logger-ostream-type stderr``), and do not redirect the standard error to the standard output (for example, with ``2>&1``). Otherwise, a log message can end up in the middle of an audit message.
+   * Container runtimes can split a long line into several log entries. Configure your log collector to join them.
+
+.. _auditing-failures:
 
 Handling Audit Failures
 ---------------------------
@@ -401,6 +449,7 @@ In some cases, auditing may not be possible, for example, when:
 
 * A table is used as the audit’s backend, and the partitions where the audit rows are saved are unavailable because the nodes holding those partitions are down or unreachable due to network issues.
 * Syslog is used as the audit’s backend, and the Syslog sink (a regular Unix socket) is unresponsive or unavailable.
+* The standard output is used as the audit’s backend, and nothing reads it anymore (the pipe is closed) or its reader falls behind.
 
 If the audit fails and audit messages are not stored in the configured audit’s backend, you can still review the audit log in the regular ScyllaDB logs.
 
