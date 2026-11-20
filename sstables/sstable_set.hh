@@ -60,6 +60,9 @@ public:
     // the sstable with oldest mtime represents the whole run, as it would be
     // the mtime had the run be composed of a single sstable.
     db_clock::time_point data_file_write_time() const;
+    // The highest write timestamp of the data in the run, i.e. what it would be had the run been
+    // composed of a single sstable.
+    api::timestamp_type max_timestamp() const;
 };
 
 using shared_sstable_run = lw_shared_ptr<sstable_run>;

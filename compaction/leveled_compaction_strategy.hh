@@ -16,7 +16,7 @@
 #include <seastar/core/sstring.hh>
 
 #include "compaction_strategy_type.hh"
-#include "size_tiered_compaction_strategy.hh"
+#include "incremental_compaction_strategy.hh"
 #include "compaction_strategy_impl.hh"
 #include "compaction_backlog_manager.hh"
 #include "sstables/shared_sstable.hh"
@@ -43,7 +43,8 @@ class leveled_compaction_strategy : public compaction_strategy_impl {
     static constexpr auto SSTABLE_SIZE_OPTION = "sstable_size_in_mb";
 
     int32_t _max_sstable_size_in_mb = DEFAULT_MAX_SSTABLE_SIZE_IN_MB;
-    size_tiered_compaction_strategy_options _stcs_options;
+    // Level 0 is compacted with ICS when it falls behind, its runs bucketed into size tiers by these options.
+    incremental_compaction_strategy_options _ics_options;
 private:
     int32_t calculate_max_sstable_size_in_mb(std::optional<sstring> option_value) const;
 

@@ -99,6 +99,10 @@ LCS options
      'class' : 'LeveledCompactionStrategy', 
      'sstable_size_in_mb' : int}
 
+When Level 0 falls behind, it is compacted using incremental compaction, so LCS also takes the
+``bucket_low``, ``bucket_high`` and ``min_sstable_size`` options of :ref:`ICS <ics-options>`,
+which apply to Level 0.
+
 ``sstable_size_in_mb`` (default: 160)
    This is the target size in megabytes, that will be used as the goal for an SSTable size following a compression. 
    Although SSTable sizes should be less or equal to sstable_size_in_mb, it is possible that compaction could produce a larger SSTable during compaction. This occurs when data for a given partition key is exceptionally large.
@@ -236,7 +240,16 @@ TWCS options
      'compaction_window_size' : int,
      'expired_sstable_check_frequency_seconds' : int,
      'min_threshold' : num_sstables,
-     'max_threshold' : num_sstables}
+     'max_threshold' : num_sstables,
+     'sstable_size_in_mb' : int,
+     'bucket_low' : double,
+     'bucket_high' : double,
+     'min_sstable_size' : int}
+
+SSTables within a time window are compacted using incremental compaction, so TWCS also takes the
+``sstable_size_in_mb``, ``bucket_low``, ``bucket_high`` and ``min_sstable_size`` options of
+:ref:`ICS <ics-options>`, which apply within each window. ``space_amplification_goal`` is not
+supported, as it applies across size tiers rather than within a window.
 
 ``compaction_window_unit`` (default: DAYS)
   A time unit used to determine the window size which can be one of the following:
@@ -260,7 +273,7 @@ TWCS options
 =====
 
 ``min_threshold`` (default: 4)
-  Minimum number of SSTables that need to belong to the same size bucket before compaction is triggered on that bucket. 
+  Minimum number of SSTable runs that need to belong to the same size bucket before compaction is triggered on that bucket. 
 
 =====
 
