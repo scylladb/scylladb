@@ -12,7 +12,8 @@ from cassandra.protocol import ConfigurationException
 import pytest
 import time
 
-# The maximum TTL Scylla accepts, 20 years in seconds (max_ttl in gc_clock.hh).
+# The maximum TTL, 20 years in seconds. It is the same in Scylla (max_ttl in
+# gc_clock.hh) and in Cassandra (MAX_TTL in Attributes.java).
 MAX_TTL = 20 * 365 * 24 * 60 * 60
 
 # Fixture with a table with a default TTL set to 1, so new data would be
