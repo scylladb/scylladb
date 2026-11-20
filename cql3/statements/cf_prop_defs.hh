@@ -121,6 +121,9 @@ public:
 
     void apply_to_builder(schema_builder& builder, schema::extensions_map schema_extensions, const data_dictionary::database& db, sstring ks_name, bool supports_repair) const;
     void validate_minimum_int(const sstring& field, int32_t minimum_value, int32_t default_value) const;
+    void validate_maximum_int(const sstring& field, int32_t maximum_value, int32_t default_value) const;
+    // Throws configuration_exception, with Cassandra's message, when value exceeds maximum_value.
+    static void check_maximum_int(const sstring& field, int32_t value, int32_t maximum_value);
 };
 
 // SizeTieredCompactionStrategy is deprecated and is now merely an alias of
