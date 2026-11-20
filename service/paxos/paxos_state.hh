@@ -105,6 +105,19 @@ public:
         : _promised_ballot(std::move(promised))
         , _accepted_proposal(std::move(accepted))
         , _most_recent_commit(std::move(commit)) {}
+    // A SERIAL read in reversed order runs a paxos round too. The round's state and the
+    // proposals it saves and learns belong to the table, so they always use the table
+    // schema; the reversed schema the read was prepared with is used only to read the data.
+    struct round_schemas {
+        schema_ptr table; // paxos state and proposals
+        schema_ptr query; // reading the data with the round's read_command
+    };
+    // `s` is either the table schema or the schema `cmd` was prepared with.
+    static round_schemas get_round_schemas(schema_ptr s, const query::read_command& cmd);
+    // Before SCYLLADB-6044 was fixed, a reversed SERIAL read saved its proposals with the
+    // reversed table schema. Returns such a proposal converted to the table schema `s`,
+    // any other proposal as is.
+    static std::optional<proposal> unreverse_if_needed(std::optional<proposal> p, const schema_ptr& s);
     // Replica RPC endpoint for Paxos "prepare" phase.
     static future<prepare_response> prepare(storage_proxy& sp, paxos_store& paxos_store, tracing::trace_state_ptr tr_state, schema_ptr schema,
             const query::read_command& cmd, const partition_key& key, utils::UUID ballot,
