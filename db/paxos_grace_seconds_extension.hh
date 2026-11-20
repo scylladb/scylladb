@@ -11,6 +11,7 @@
 
 #include <seastar/core/on_internal_error.hh>
 
+#include "gc_clock.hh"
 #include "serializer.hh"
 #include "schema/schema.hh"
 #include "utils/log.hh"
@@ -52,8 +53,15 @@ public:
         on_internal_error(dblog, "Cannot create paxos_grace_seconds_extensions from map");
     }
 
-    explicit paxos_grace_seconds_extension(bytes b) : _paxos_gc_sec(deserialize(b))
-    {}
+    // The persisted value was not validated against max_ttl before SCYLLADB-6065,
+    // so a stored value can exceed it. It becomes the TTL of the paxos state, and
+    // DESCRIBE prints it in a statement which CREATE TABLE has to accept, so clamp
+    // it once here, for every consumer of the extension.
+    explicit paxos_grace_seconds_extension(bytes b) : _paxos_gc_sec(deserialize(b)) {
+        if (const auto max = gc_clock::as_int32(max_ttl); _paxos_gc_sec > max) {
+            _paxos_gc_sec = max;
+        }
+    }
 
     explicit paxos_grace_seconds_extension(const sstring& s)
         : _paxos_gc_sec(std::stoi(s))
