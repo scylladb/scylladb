@@ -25,6 +25,8 @@
 #include "utils/assert.hh"
 #include "utils/overloaded_functor.hh"
 #include <fmt/format.h>
+#include <algorithm>
+#include <cmath>
 
 namespace alternator {
 
@@ -39,6 +41,22 @@ std::optional<int> get_int_attribute(const rjson::value& value, std::string_view
                 attribute_name, *attribute_value));
     }
     return attribute_value->GetInt();
+}
+
+std::optional<int32_t> get_lenient_int_attribute(const rjson::value& value, std::string_view attribute_name) {
+    const rjson::value* attribute_value = rjson::find(value, attribute_name);
+    if (!attribute_value)
+        return {};
+    if (!attribute_value->IsNumber()) {
+        throw api_error::validation(fmt::format("Expected number value for attribute {}, got: {}",
+                attribute_name, *attribute_value));
+    }
+    // GetDouble() works for any number, even an integer too large to fit
+    // in 64 bits. Any precision it loses doesn't matter after clamping.
+    double d = std::trunc(attribute_value->GetDouble());
+    return static_cast<int32_t>(std::clamp(d,
+            double(std::numeric_limits<int32_t>::min()),
+            double(std::numeric_limits<int32_t>::max())));
 }
 
 std::string get_string_attribute(const rjson::value& value, std::string_view attribute_name, std::optional<std::string_view> default_return) {
