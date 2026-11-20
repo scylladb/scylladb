@@ -45,6 +45,7 @@ BYPASS LARGE_DATA_GUARDRAILS;
 The clause is supported only for standalone `DELETE` statements. It is not
 supported for `INSERT`, `UPDATE`, or `BATCH` statements.
 
+(cql-paxos-grace-seconds)=
 ## "Paxos grace seconds" per-table option
 
 The `paxos_grace_seconds` option is used to set the amount of seconds which
