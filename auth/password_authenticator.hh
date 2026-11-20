@@ -11,11 +11,13 @@
 #pragma once
 
 #include <seastar/core/abort_source.hh>
+#include <seastar/core/metrics_registration.hh>
 #include <seastar/core/shared_future.hh>
 
 #include "auth/authenticator.hh"
 #include "auth/passwords.hh"
 #include "auth/cache.hh"
+#include "auth/verified_password_cache.hh"
 #include "service/raft/raft_group0_client.hh"
 
 namespace cql3 {
@@ -44,6 +46,8 @@ class password_authenticator : public authenticator {
     future<> _stopped;
     abort_source _as;
     shared_promise<> _superuser_created_promise;
+    mutable verified_password_cache _verified_passwords;
+    metrics::metric_groups _metrics;
     // We used to also support bcrypt, SHA-256, and MD5 (ref. scylladb#24524).
     constexpr static auth::passwords::scheme _scheme = passwords::scheme::sha_512;
 

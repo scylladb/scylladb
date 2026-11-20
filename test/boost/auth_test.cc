@@ -142,6 +142,37 @@ SEASTAR_TEST_CASE(test_password_authenticator_operations) {
     }, auth_on(false));
 }
 
+// Logins after a password change or a role re-creation must not succeed with
+// a password the verified password cache remembers.
+SEASTAR_TEST_CASE(test_password_authenticator_verified_password_cache) {
+    co_await do_with_cql_env_thread([](cql_test_env& env) {
+        using exceptions::authentication_exception;
+        // Leaves the login of the client state, which runs the statements below, alone.
+        auto authenticate = [&env] (const char* username, const char* password) {
+            return env.local_auth_service().underlying_authenticator().authenticate({
+                    {auth::authenticator::USERNAME_KEY, username},
+                    {auth::authenticator::PASSWORD_KEY, password}}).get();
+        };
+
+        cquery_nofail(env, "CREATE ROLE fisk WITH PASSWORD = 'one' AND LOGIN = true");
+        authenticate("fisk", "one");
+        authenticate("fisk", "one");
+        BOOST_REQUIRE_THROW(authenticate("fisk", "two"), authentication_exception);
+
+        cquery_nofail(env, "ALTER ROLE fisk WITH PASSWORD = 'two'");
+        BOOST_REQUIRE_THROW(authenticate("fisk", "one"), authentication_exception);
+        authenticate("fisk", "two");
+        authenticate("fisk", "two");
+
+        cquery_nofail(env, "DROP ROLE fisk");
+        BOOST_REQUIRE_THROW(authenticate("fisk", "two"), authentication_exception);
+
+        cquery_nofail(env, "CREATE ROLE fisk WITH PASSWORD = 'three' AND LOGIN = true");
+        BOOST_REQUIRE_THROW(authenticate("fisk", "two"), authentication_exception);
+        authenticate("fisk", "three");
+    }, auth_on(false));
+}
+
 namespace {
 
 /// Asserts that table is protected from alterations that can brick a node.
