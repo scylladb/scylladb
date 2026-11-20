@@ -123,22 +123,29 @@ future<> send_mutation_fragments(lw_shared_ptr<send_info> si) {
   }
   return si->estimate_partitions().then([si] (size_t estimated_partitions) {
     sslog.info("[Stream #{}] Start sending ks={}, cf={}, estimated_partitions={}, with new rpc streaming", si->plan_id, si->cf->schema()->ks_name(), si->cf->schema()->cf_name(), estimated_partitions);
-    return si->ms.make_sink_and_source_for_stream_mutation_fragments(si->reader.schema()->version(), si->plan_id, si->cf_id, estimated_partitions, si->reason, si->topo_guard, si->id).then_unpack([si] (rpc::sink<frozen_mutation_fragment, stream_mutation_fragments_cmd> sink, rpc::source<int32_t> source) mutable {
+    return si->ms.make_sink_and_source_for_stream_mutation_fragments(si->reader.schema()->version(), si->plan_id, si->cf_id, estimated_partitions, si->reason, si->topo_guard, si->id).then_unpack([si] (rpc::sink<frozen_mutation_fragment, stream_mutation_fragments_cmd> sink, rpc::source<stream_mutation_fragments_status> source) mutable {
         auto got_error_from_peer = make_lw_shared<bool>(false);
         auto table_is_dropped = make_lw_shared<bool>(false);
 
         auto source_op = [source, got_error_from_peer, table_is_dropped, si] () mutable -> future<> {
             return repeat([source, got_error_from_peer, table_is_dropped, si] () mutable {
-                return source().then([source, got_error_from_peer, table_is_dropped, si] (std::optional<std::tuple<int32_t>> status_opt) mutable {
+                return source().then([source, got_error_from_peer, table_is_dropped, si] (std::optional<std::tuple<stream_mutation_fragments_status>> status_opt) mutable {
                     if (status_opt) {
                         auto status = std::get<0>(*status_opt);
-                        if (status == -1) {
-                            *got_error_from_peer = true;
-                        } else if (status == -2) {
+                        switch (status) {
+                        case stream_mutation_fragments_status::ok:
+                            break;
+                        case stream_mutation_fragments_status::table_dropped:
                             *got_error_from_peer = true;
                             *table_is_dropped = true;
+                            break;
+                        case stream_mutation_fragments_status::error:
+                        default:
+                            // A status this node doesn't know (sent by a newer node) is not a success
+                            *got_error_from_peer = true;
+                            break;
                         }
-                        sslog.debug("Got status code from peer={}, plan_id={}, cf_id={}, status={}", si->id, si->plan_id, si->cf_id, status);
+                        sslog.debug("Got status code from peer={}, plan_id={}, cf_id={}, status={}", si->id, si->plan_id, si->cf_id, fmt::underlying(status));
                         // we've got an error from the other side, but we cannot just abandon rpc::source we
                         // need to continue reading until EOS since this will signal that no more work
                         // is left and rpc::source can be destroyed. The sender closes connection immediately

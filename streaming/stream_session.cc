@@ -219,7 +219,7 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
             auto result_handling_cont = [this, s, plan_id, from, sink, estimated_partitions, log_done, cf_id, sh_ptr = std::move(sharder_ptr)] (future<uint64_t> f) mutable -> future<> {
                 auto& db = _db;
                 auto& mm = _mm;
-                int32_t status = 0;
+                auto status = stream_mutation_fragments_status::ok;
                 uint64_t received_partitions = 0;
                 if (f.failed()) {
                     auto ex = f.get_exception();
@@ -234,12 +234,11 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
                             aborted = true;
                         }
                     }
-                    status = -1;
-                    // The status code -2 means error and the table is dropped
+                    status = stream_mutation_fragments_status::error;
                     try {
                         if (db.local_is_initialized() && mm.local_is_initialized() && co_await table_sync_and_check(db.local(), mm.local(), cf_id)) {
                             level = seastar::log_level::debug;
-                            status = -2;
+                            status = stream_mutation_fragments_status::table_dropped;
                         }
                     } catch (...) {
                         // The check needs a group0 barrier, which fails once the node
@@ -267,7 +266,7 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
                     sslog.info("[Stream #{}] Write to sstable for ks={}, cf={}, estimated_partitions={}, received_partitions={}",
                             plan_id, s->ks_name(), s->cf_name(), estimated_partitions, received_partitions);
                 }
-                if (status == -1) {
+                if (status == stream_mutation_fragments_status::error) {
                     try {
                         if (!utils::get_local_injector().is_enabled("stream_mutation_fragments_skip_fail_stream_plan")) {
                             co_await fail_stream_plan(plan_id);
@@ -298,11 +297,11 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
                 });
             });
           } catch (...) {
-            return sink.close().then([sink, eptr = std::current_exception()] () -> future<rpc::sink<int>> {
-                return make_exception_future<rpc::sink<int>>(eptr);
+            return sink.close().then([sink, eptr = std::current_exception()] () -> future<rpc::sink<stream_mutation_fragments_status>> {
+                return make_exception_future<rpc::sink<stream_mutation_fragments_status>>(eptr);
             });
           }
-            return make_ready_future<rpc::sink<int>>(sink);
+            return make_ready_future<rpc::sink<stream_mutation_fragments_status>>(sink);
       });
     });
     ser::streaming_rpc_verbs::register_stream_mutation_done(&ms, [this] (const rpc::client_info& cinfo, streaming::plan_id plan_id, dht::token_range_vector ranges, table_id cf_id, unsigned dst_cpu_id) {
