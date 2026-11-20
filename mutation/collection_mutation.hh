@@ -167,7 +167,7 @@ public:
 };
 
 struct collection_mutation_compact_and_expire_result {
-    collection_mutation collection; // can be empty
+    std::optional<collection_mutation> collection; // disengaged if the input needs no change; can be empty
     compact_and_expire_result result;
 };
 
