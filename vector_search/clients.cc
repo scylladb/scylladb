@@ -9,6 +9,7 @@
 #include "clients.hh"
 #include "load_balancer.hh"
 #include "utils/exceptions.hh"
+#include "utils/on_internal_error.hh"
 #include <random>
 #include <expected>
 #include <seastar/coroutine/as_future.hh>
@@ -50,6 +51,45 @@ auto make_unexpected(const auto& err) {
 };
 
 } // namespace
+
+// No `default`, so -Wswitch fails the build when a new value has no name.
+std::string_view to_name(request_status status) {
+    switch (status) {
+    using enum request_status;
+    case ok:
+        return "ok";
+    case rejected:
+        return "rejected";
+    case not_ready:
+        return "not_ready";
+    case unavailable:
+        return "unavailable";
+    case error:
+        return "error";
+    case aborted:
+        return "aborted";
+    case num_statuses:
+        break;
+    }
+    utils::on_internal_error(fmt::format("invalid request_status {}", int(status)));
+}
+
+request_status to_request_status(http::reply::status_type status) {
+    using status_type = http::reply::status_type;
+    if (int(status) >= 200 && int(status) < 300) {
+        return request_status::ok;
+    }
+    switch (status) {
+    case status_type::bad_request:
+    case status_type::not_found:
+    case status_type::unprocessable_entity:
+        return request_status::rejected;
+    case status_type::service_unavailable:
+        return request_status::not_ready;
+    default:
+        return request_status::error;
+    }
+}
 
 clients::clients(logging::logger& logger, refresh_trigger_callback trigger_refresh, utils::updateable_value<uint32_t> unreachable_node_detection_time_in_ms,
         truststore& truststore)
