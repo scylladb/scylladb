@@ -96,12 +96,6 @@ static void verify_operand_count(const rjson::value* array, const size_check& ex
     }
 }
 
-struct rjson_engaged_ptr_comp {
-    bool operator()(const rjson::value* p1, const rjson::value* p2) const {
-        return rjson::single_value_comp()(*p1, *p2);
-    }
-};
-
 // It's not enough to compare underlying JSON objects when comparing sets,
 // as internally they're stored in an array, and the order of elements is
 // not important in set equality. See issue #5021
@@ -109,7 +103,7 @@ static bool check_EQ_for_sets(const rjson::value& set1, const rjson::value& set2
     if (!set1.IsArray() || !set2.IsArray() || set1.Size() != set2.Size()) {
         return false;
     }
-    std::set<const rjson::value*, rjson_engaged_ptr_comp> set1_raw;
+    std::set<const rjson::value*, rjson::single_value_ptr_comp> set1_raw;
     for (auto it = set1.Begin(); it != set1.End(); ++it) {
         set1_raw.insert(&*it);
     }

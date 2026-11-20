@@ -382,6 +382,13 @@ struct single_value_comp {
     bool operator()(const rjson::value& r1, const rjson::value& r2) const;
 };
 
+// Compares the pointed-to values, so a std::set can refer to values without copying them.
+struct single_value_ptr_comp {
+    bool operator()(const rjson::value* p1, const rjson::value* p2) const {
+        return single_value_comp()(*p1, *p2);
+    }
+};
+
 // Helper function for parsing a JSON straight into a map
 // of strings representing their values - useful for various
 // database helper functions.
