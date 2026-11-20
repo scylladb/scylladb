@@ -572,6 +572,8 @@ result::
    (0 rows)
 
 
+.. _alter-type-statement:
+
 Altering a UDT
 ~~~~~~~~~~~~~~
 
