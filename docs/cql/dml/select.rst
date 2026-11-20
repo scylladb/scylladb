@@ -34,9 +34,9 @@ Querying data from data is done using a ``SELECT`` statement:
    where_clause: `relation` ( AND `relation` )*
    group_by_clause: `column_name` (',' `column_name` )*
    relation: `column_name` `operator` `term`
-           : '(' `column_name` ( ',' `column_name` )* ')' `operator` `tuple_literal`
-           : TOKEN '(' `column_name` ( ',' `column_name` )* ')' `operator` `term`
-           : `column_name` IS [ NOT ] NULL
+           : | '(' `column_name` ( ',' `column_name` )* ')' `operator` `tuple_literal`
+           : | TOKEN '(' `column_name` ( ',' `column_name` )* ')' `operator` `term`
+           : | `column_name` IS [ NOT ] NULL
    operator: '=' | '<' | '>' | '<=' | '>=' | IN | NOT IN | CONTAINS | CONTAINS KEY
    ordering_clause: `column_name` [ ASC | DESC ] ( ',' `column_name` [ ASC | DESC ] )*
    timeout: `duration`
