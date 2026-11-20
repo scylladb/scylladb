@@ -143,7 +143,7 @@ struct buffered_write_result {
 // it knows the segment_seq.
 //
 // This type only serializes a chunk. Tests and write_buffer use it directly.
-class raw_write_buffer {
+class chunk_builder {
 public:
 
     using ostream = seastar::simple_memory_output_stream;
@@ -180,15 +180,15 @@ private:
 
 public:
 
-    raw_write_buffer(size_t buffer_size, segment_kind kind);
+    chunk_builder(size_t buffer_size, segment_kind kind);
 
     void reset();
 
-    raw_write_buffer(const raw_write_buffer&) = delete;
-    raw_write_buffer& operator=(const raw_write_buffer&) = delete;
+    chunk_builder(const chunk_builder&) = delete;
+    chunk_builder& operator=(const chunk_builder&) = delete;
 
-    raw_write_buffer(raw_write_buffer&&) noexcept = default;
-    raw_write_buffer& operator=(raw_write_buffer&&) noexcept = default;
+    chunk_builder(chunk_builder&&) noexcept = default;
+    chunk_builder& operator=(chunk_builder&&) noexcept = default;
 
     const char* data() const noexcept { return _buffer.get(); }
 
@@ -257,11 +257,11 @@ private:
     friend class write_buffer;
 };
 
-// Tracks asynchronous write completion on top of raw_write_buffer.
+// Tracks asynchronous write completion on top of chunk_builder.
 //
 // This is the buffer type used by the segment manager, buffered_writer,
 // compaction, and separator flows. write() appends a record to the underlying
-// raw buffer and returns a future that resolves to the final record_location once
+// chunk builder and returns a future that resolves to the final record_location once
 // the buffer is flushed. The returned gate holder keeps the buffer alive for
 // follow-up work such as index updates. For mixed buffers it also keeps copies
 // of appended records so separator rewriting can replay them after the flush.
@@ -282,7 +282,7 @@ public:
     };
 
 private:
-    raw_write_buffer _raw;
+    chunk_builder _builder;
     shared_promise<segment_position> _written;
     seastar::gate _write_gate;
 
@@ -303,23 +303,23 @@ public:
     future<> close();
     bool is_closed() const noexcept;
 
-    size_t serialized_size() const noexcept { return _raw.serialized_size(); }
+    size_t serialized_size() const noexcept { return _builder.serialized_size(); }
 
-    size_t buffer_size() const noexcept { return _raw.buffer_size(); }
+    size_t buffer_size() const noexcept { return _builder.buffer_size(); }
 
-    bool can_fit(size_t record_size) const noexcept { return _raw.can_fit(record_size); }
+    bool can_fit(size_t record_size) const noexcept { return _builder.can_fit(record_size); }
     template <log_record_writer_concept Writer>
-    bool can_fit(const Writer& writer) const noexcept { return _raw.can_fit(writer); }
-    bool has_data() const noexcept { return _raw.has_data(); }
+    bool can_fit(const Writer& writer) const noexcept { return _builder.can_fit(writer); }
+    bool has_data() const noexcept { return _builder.has_data(); }
 
-    size_t max_record_size() const noexcept { return _raw.max_record_size(); }
-    size_t record_bytes() const noexcept { return _raw.record_bytes(); }
-    size_t record_count() const noexcept { return _raw.record_count(); }
+    size_t max_record_size() const noexcept { return _builder.max_record_size(); }
+    size_t record_bytes() const noexcept { return _builder.record_bytes(); }
+    size_t record_count() const noexcept { return _builder.record_count(); }
 
-    size_t finish() { return _raw.finish(); }
+    size_t finish() { return _builder.finish(); }
 
     bytes_view seal(segment_sequence segment_seq, std::optional<table_id> table) {
-        return _raw.seal(segment_seq, table);
+        return _builder.seal(segment_seq, table);
     }
 
     // Write a record to the buffer.
@@ -335,7 +335,7 @@ public:
 
 private:
     bool with_record_copy() const noexcept {
-        switch (_raw.kind()) {
+        switch (_builder.kind()) {
         case segment_kind::mixed:
             return true;
         case segment_kind::full:
@@ -351,8 +351,8 @@ private:
     friend struct separator_buffer;
 };
 
-extern template raw_write_buffer::append_result raw_write_buffer::append<log_record_writer>(const log_record_writer&);
-extern template raw_write_buffer::append_result raw_write_buffer::append<log_record_bytes_writer>(const log_record_bytes_writer&);
+extern template chunk_builder::append_result chunk_builder::append<log_record_writer>(const log_record_writer&);
+extern template chunk_builder::append_result chunk_builder::append<log_record_bytes_writer>(const log_record_bytes_writer&);
 
 extern template future<record_location_with_holder> write_buffer::write<log_record_writer>(log_record_writer, write_target);
 extern template future<record_location_with_holder> write_buffer::write<log_record_bytes_writer>(log_record_bytes_writer, write_target);

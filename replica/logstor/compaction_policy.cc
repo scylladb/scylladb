@@ -218,7 +218,7 @@ std::optional<compaction_batch> select_compaction_batch(const segment_set& segme
 
         const auto score = compaction_candidate_score{
             .n_in = candidates.size(),
-            .n_out = raw_write_buffer::estimate_required_segments(accum_record_bytes, accum_record_count, segment_size, segment_kind::full),
+            .n_out = chunk_builder::estimate_required_segments(accum_record_bytes, accum_record_count, segment_size, segment_kind::full),
             .live_bytes = accum_record_bytes,
         };
         prefix_scores.push_back(score);

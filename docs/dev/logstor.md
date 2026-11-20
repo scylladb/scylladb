@@ -35,7 +35,7 @@ The `segment_manager` receives new writes via a `write_buffer`, and appends each
 
 #### Write Buffer
 
-The `write_buffer` manages a buffer of log records and handles the serialization of the records including headers and alignment. It can be used to write multiple records to the buffer, then seal it into a chunk and write the chunk to a segment through the segment manager.
+The `chunk_builder` builds one chunk in memory: it serializes the records and the headers, and pads the chunk to the alignment. The `write_buffer` adds the tracking of each write to a chunk builder. It can be used to write multiple records to the buffer, then seal it into a chunk and write the chunk to a segment through the segment manager. The future of each write resolves to the location of the record once the chunk is written.
 
 The `buffered_writer` manages multiple write buffers for user writes, an active buffer and multiple flushing ones, to batch writes and manage backpressure.
 
@@ -197,7 +197,7 @@ the exact layout, the field types and the encodings:
 
 - [replica/logstor/ondisk.hh](../../replica/logstor/ondisk.hh) for the headers and the record
   frame.
-- the `raw_write_buffer` comment in
+- the `chunk_builder` comment in
   [replica/logstor/write_buffer.hh](../../replica/logstor/write_buffer.hh) for the layout of a
   chunk.
 

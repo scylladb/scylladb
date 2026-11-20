@@ -30,9 +30,9 @@ void log_record_bytes_writer::write_frame(ostream& out) const {
     ondisk::write_record_frame(out, log_record_bytes_view{_header_bytes, _value_bytes});
 }
 
-// raw_write_buffer
+// chunk_builder
 
-raw_write_buffer::raw_write_buffer(size_t buffer_size, segment_kind kind)
+chunk_builder::chunk_builder(size_t buffer_size, segment_kind kind)
         : _buffer_size(buffer_size)
         , _buffer(seastar::allocate_aligned_buffer<char>(buffer_size, 4096))
         , _segment_kind(kind)
@@ -40,7 +40,7 @@ raw_write_buffer::raw_write_buffer(size_t buffer_size, segment_kind kind)
     reset();
 }
 
-void raw_write_buffer::reset() {
+void chunk_builder::reset() {
     _stream = seastar::simple_memory_output_stream(_buffer.get(), _buffer_size);
     _stream.skip(chunk_header_size());
     _record_bytes = 0;
@@ -51,18 +51,18 @@ void raw_write_buffer::reset() {
     _sealed = false;
 }
 
-bool raw_write_buffer::can_fit(size_t record_size) const noexcept {
+bool chunk_builder::can_fit(size_t record_size) const noexcept {
     // The record with its frame header and the padding that follows the frame.
     const auto frame_size = ondisk::record_frame_header_size + record_size;
     return align_up(frame_size, ondisk::record_alignment) <= _stream.size();
 }
 
-bool raw_write_buffer::has_data() const noexcept {
+bool chunk_builder::has_data() const noexcept {
     return serialized_size() > chunk_header_size();
 }
 
 template <log_record_writer_concept Writer>
-raw_write_buffer::append_result raw_write_buffer::append(const Writer& writer) {
+chunk_builder::append_result chunk_builder::append(const Writer& writer) {
     const auto& header = writer.header();
     const size_t header_size = writer.header_size();
     const size_t value_size = writer.value_size();
@@ -105,7 +105,7 @@ raw_write_buffer::append_result raw_write_buffer::append(const Writer& writer) {
     };
 }
 
-void raw_write_buffer::pad_to_alignment(size_t alignment) {
+void chunk_builder::pad_to_alignment(size_t alignment) {
     auto current_pos = serialized_size();
     auto next_pos = align_up(current_pos, alignment);
     auto padding = next_pos - current_pos;
@@ -114,7 +114,7 @@ void raw_write_buffer::pad_to_alignment(size_t alignment) {
     }
 }
 
-size_t raw_write_buffer::finish() {
+size_t chunk_builder::finish() {
     if (_finished_body) {
         return serialized_size();
     }
@@ -131,7 +131,7 @@ size_t raw_write_buffer::finish() {
     return serialized_size();
 }
 
-bytes_view raw_write_buffer::seal(segment_sequence segment_seq, std::optional<table_id> table) {
+bytes_view chunk_builder::seal(segment_sequence segment_seq, std::optional<table_id> table) {
     if (_sealed) {
         throw std::runtime_error("Cannot seal write buffer more than once");
     }
@@ -163,7 +163,7 @@ bytes_view raw_write_buffer::seal(segment_sequence segment_seq, std::optional<ta
     return bytes_view(reinterpret_cast<const int8_t*>(_buffer.get()), serialized_size());
 }
 
-size_t raw_write_buffer::estimate_required_segments(size_t record_bytes, size_t record_count, size_t segment_size, segment_kind kind) {
+size_t chunk_builder::estimate_required_segments(size_t record_bytes, size_t record_count, size_t segment_size, segment_kind kind) {
     if (record_count == 0 || record_bytes == 0) {
         return 0;
     }
@@ -182,21 +182,21 @@ size_t raw_write_buffer::estimate_required_segments(size_t record_bytes, size_t 
     return (record_count + records_per_segment - 1) / records_per_segment;
 }
 
-template raw_write_buffer::append_result raw_write_buffer::append<log_record_writer>(const log_record_writer&);
-template raw_write_buffer::append_result raw_write_buffer::append<log_record_bytes_writer>(const log_record_bytes_writer&);
+template chunk_builder::append_result chunk_builder::append<log_record_writer>(const log_record_writer&);
+template chunk_builder::append_result chunk_builder::append<log_record_bytes_writer>(const log_record_bytes_writer&);
 
 // write_buffer
 
 write_buffer::write_buffer(size_t buffer_size, segment_kind kind)
-        : _raw(buffer_size, kind)
+        : _builder(buffer_size, kind)
 {
     if (with_record_copy()) {
-        _records_copy.reserve(_raw.buffer_size() / 100);
+        _records_copy.reserve(_builder.buffer_size() / 100);
     }
 }
 
 void write_buffer::reset() {
-    _raw.reset();
+    _builder.reset();
     _written = {};
     _records_copy.clear();
     _write_gate = {};
@@ -214,7 +214,7 @@ bool write_buffer::is_closed() const noexcept {
 
 template <log_record_writer_concept Writer>
 future<record_location_with_holder> write_buffer::write(Writer writer, write_target target) {
-    auto append_result = _raw.append(writer);
+    auto append_result = _builder.append(writer);
 
     if (with_record_copy()) {
         if constexpr (std::same_as<Writer, log_record_writer>) {
@@ -686,7 +686,7 @@ future<buffered_write_result> buffered_writer::write_to_buffer(log_record_writer
     // later rewrites it into, so it is bounded by whichever of the two takes less: one that only
     // fits the buffer it is written to first would be accepted here and then never fit anywhere the
     // separator could put it.
-    const size_t max_size = raw_write_buffer::max_record_size_any_kind(head_buf().buffer_size());
+    const size_t max_size = chunk_builder::max_record_size_any_kind(head_buf().buffer_size());
     if (writer.record_size() > max_size) [[unlikely]] {
         return make_exception_future<buffered_write_result>(std::runtime_error(
                 fmt::format("Write size {} exceeds the maximum record size {}", writer.record_size(), max_size)));

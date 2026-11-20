@@ -567,7 +567,7 @@ class logstor_bench {
     std::optional<reader_permit> _permit;
     // One record of the dataset in the forms the steps of the read and the write path work on, for
     // the tests that measure a single step.
-    std::unique_ptr<raw_write_buffer> _serialization_buffer;
+    std::unique_ptr<chunk_builder> _serialization_buffer;
     temporary_buffer<char> _serialized_record;
     std::optional<mutation> _mutation;
     std::optional<single_row_partition> _partition;
@@ -598,7 +598,7 @@ public:
         , _slice_bypassing_cache(make_read_slice(*_schema, cfg.select_columns, true))
         , _semaphore(reader_concurrency_semaphore::no_limits{}, "perf_logstor", reader_concurrency_semaphore::register_metrics::no)
         , _permit(_semaphore.make_tracking_only_permit(nullptr, "perf_logstor", db::no_timeout, {}))
-        , _serialization_buffer(std::make_unique<raw_write_buffer>(cfg.segment_size, segment_kind::mixed))
+        , _serialization_buffer(std::make_unique<chunk_builder>(cfg.segment_size, segment_kind::mixed))
         , _dir(dir) {
         std::ranges::fill(_value, int8_t('v'));
         auto logstor_cfg = tests::logstor::make_test_logstor_config(dir, {
