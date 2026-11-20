@@ -143,11 +143,13 @@ aws_error aws_error::from_http_code(seastar::http::reply::status_type http_code)
         ret_val = all_errors.at("HTTP_NOT_IMPLEMENTED");
         break;
     default:
-        ret_val = {aws_error_type::UNKNOWN,
-                   seastar::format("Erroneous HTTP code has been encountered. Reason: {}", http_code),
-                   retryable{seastar::http::reply::classify_status(http_code) == seastar::http::reply::status_class::server_error}};
+        // Code is already embedded in the message below, don't append it again.
+        return {aws_error_type::UNKNOWN,
+                seastar::format("Erroneous HTTP code has been encountered. Reason: {}", http_code),
+                retryable{seastar::http::reply::classify_status(http_code) == seastar::http::reply::status_class::server_error}};
     }
-    ret_val._message = seastar::format("{} HTTP code: {}", ret_val._message, http_code);
+    // Named entries carry no message of their own, so only add a separator when there's something to append to.
+    ret_val._message = seastar::format("{}{}HTTP code: {}", ret_val._message, ret_val._message.empty() ? "" : " ", http_code);
     return ret_val;
 }
 
