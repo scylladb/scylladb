@@ -513,3 +513,88 @@ def test_cluster_repair_specified_table_dropped(nodetool):
                 ]
             },
             [f"Can't find a column family table1 in keyspace ks"])
+
+
+def test_repair_all_with_strongly_consistent_keyspace(nodetool):
+    # Repairing all keyspaces skips a strongly consistent one after its first
+    # table is refused, and repairs the others.
+    id1 = "ef1b7a61-66c8-494c-bb03-6f65724e6eee"
+    id2 = "ef1b7a61-66c8-494c-bb03-6f65724e6eef"
+    res = nodetool("cluster", "repair", expected_requests=[
+        expected_request("GET", "/storage_service/keyspaces", params={"type": "non_local_strategy", "replication": "vnodes"}, response=[]),
+        expected_request("GET", "/storage_service/keyspaces", params={"type": "non_local_strategy", "replication": "tablets"}, response=["ks1", "sc", "ks2"]),
+        expected_request("GET", "/column_family", response=[
+            {"ks": "ks1", "cf": "table1"}, {"ks": "sc", "cf": "table1"}, {"ks": "sc", "cf": "table2"}, {"ks": "ks2", "cf": "table2"}]),
+        expected_request(
+            "POST",
+            "/storage_service/tablets/repair",
+            params={
+                "ks": "ks1",
+                "table": "table1",
+                "tokens": "all"},
+            response={"tablet_task_id": id1}),
+        expected_request(
+            "GET",
+            f"/task_manager/wait_task/{id1}",
+            response={"state": "done"}),
+        expected_request(
+            "POST",
+            "/storage_service/tablets/repair",
+            params={
+                "ks": "sc",
+                "table": "table1",
+                "tokens": "all"},
+            response={
+                "message": "Cannot repair table 'sc'.'table1' because keyspace 'sc' is "
+                           "strongly consistent. Raft keeps the replicas of a strongly "
+                           "consistent table in sync, so there is nothing to repair.",
+                "code": 400},
+            response_status=400),
+        expected_request(
+            "POST",
+            "/storage_service/tablets/repair",
+            params={
+                "ks": "ks2",
+                "table": "table2",
+                "tokens": "all"},
+            response={"tablet_task_id": id2}),
+        expected_request(
+            "GET",
+            f"/task_manager/wait_task/{id2}",
+            response={"state": "done"}),
+        ])
+
+    assert _remove_log_timestamp(res.stdout) == f"""\
+Starting repair with task_id={id1} keyspace=ks1 table=table1
+Repair with task_id={id1} finished
+Skipping keyspace=sc: it is strongly consistent
+Starting repair with task_id={id2} keyspace=ks2 table=table2
+Repair with task_id={id2} finished
+"""
+
+def test_repair_strongly_consistent_keyspace(nodetool):
+    # Repairing a strongly consistent keyspace by name fails after its first
+    # table is refused, without trying the other tables.
+    check_nodetool_fails_with_error_contains(
+            nodetool,
+            ("cluster", "repair", "sc"),
+            {"expected_requests": [
+                expected_request("GET", "/storage_service/keyspaces", response=["sc"]),
+                expected_request("GET", "/storage_service/keyspaces", params={"replication": "tablets"}, response=["sc"]),
+                expected_request("GET", "/column_family", response=[{"ks": "sc", "cf": "table1"}, {"ks": "sc", "cf": "table2"}]),
+                expected_request(
+                    "POST",
+                    "/storage_service/tablets/repair",
+                    params={
+                        "ks": "sc",
+                        "table": "table1",
+                        "tokens": "all"},
+                    response={
+                        "message": "Cannot repair table 'sc'.'table1' because keyspace 'sc' is "
+                                   "strongly consistent. Raft keeps the replicas of a strongly "
+                                   "consistent table in sync, so there is nothing to repair.",
+                        "code": 400},
+                    response_status=400),
+                ]
+            },
+            ["keyspace 'sc' is strongly consistent"])

@@ -1,10 +1,21 @@
 import pytest
 import asyncio
+import re
 import subprocess
+from test.cluster.util import create_new_test_keyspace
+from test.pylib.internal_types import ServerInfo
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for_first_completed
 
-pytestmark = pytest.mark.prepare_3_nodes_cluster
+
+async def run_nodetool(manager: ScyllaClusterManager, server: ServerInfo, *args: str) -> subprocess.CompletedProcess:
+    """Runs `nodetool <args>` against `server`, with the server's executable."""
+    exe_path = await manager.server_get_exe(server.server_id)
+    cmd = [exe_path, "nodetool", *args, "--logger-log-level", "scylla-nodetool=trace", "-h", server.ip_addr]
+    proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    stdout, stderr = await proc.communicate()
+    assert proc.returncode is not None
+    return subprocess.CompletedProcess(cmd, proc.returncode, stdout.decode(), stderr.decode())
 
 
 async def validate_status_operation(result: str, live_eps: list, down_eps: list, leaving: list, joining: list,
@@ -70,17 +81,13 @@ async def validate_status_operation(result: str, live_eps: list, down_eps: list,
     assert lines[i] == ""
 
 
+@pytest.mark.prepare_3_nodes_cluster
 async def test_zero_token_node_normal(manager: ScyllaClusterManager):
     zero_token_nodes = await manager.servers_add(servers_num=2, config={'join_ring': False})
 
     servers = await manager.running_servers()
 
-    exe_path = await manager.server_get_exe(servers[0].server_id)
-    cmd = [exe_path, "nodetool", "status"] + ["--logger-log-level",
-                                              "scylla-nodetool=trace",
-                                              "-h", servers[0].ip_addr]
-
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = await run_nodetool(manager, servers[0], "status")
 
     live_eps = await manager.api.client.get_json("/gossiper/endpoint/live", host=servers[0].ip_addr)
     down_eps = await manager.api.client.get_json("/gossiper/endpoint/down", host=servers[0].ip_addr)
@@ -105,15 +112,12 @@ async def test_zero_token_node_normal(manager: ScyllaClusterManager):
     config = await manager.server_get_config(servers[0].server_id)
     await validate_status_operation(result.stdout, live_eps, down_eps, leaving, [], zero_token_eps, host_id_map, config['num_tokens'])
 
-    zero_token_cmd = [exe_path, "nodetool", "status"] + ["--logger-log-level",
-                                                         "scylla-nodetool=trace",
-                                                         "-h", zero_token_eps[0]]
-
-    zero_token_result = subprocess.run(zero_token_cmd, capture_output=True, text=True)
+    zero_token_result = await run_nodetool(manager, zero_token_nodes[0], "status")
     await validate_status_operation(zero_token_result.stdout, live_eps, down_eps, leaving, [], zero_token_eps,
                                     host_id_map, config['num_tokens'])
 
 
+@pytest.mark.prepare_3_nodes_cluster
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_zero_token_node_down_leaving(manager: ScyllaClusterManager):
     servers = await manager.running_servers()
@@ -123,16 +127,11 @@ async def test_zero_token_node_down_leaving(manager: ScyllaClusterManager):
     await manager.server_stop_gracefully(zero_token_node.server_id)
     task = asyncio.create_task(manager.remove_node(servers[0].server_id, zero_token_node.server_id))
 
-    exe_path = await manager.server_get_exe(servers[0].server_id)
-    cmd = [exe_path, "nodetool", "status"] + ["--logger-log-level",
-                                              "scylla-nodetool=trace",
-                                              "-h", servers[0].ip_addr]
-
     await wait_for_first_completed([
         manager.api.wait_for_injection_enter(srv.ip_addr, "delay_node_removal") for srv in servers
     ])
 
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = await run_nodetool(manager, servers[0], "status")
 
     live_eps = await manager.api.client.get_json("/gossiper/endpoint/live", host=servers[0].ip_addr)
     down_eps = await manager.api.client.get_json("/gossiper/endpoint/down", host=servers[0].ip_addr)
@@ -159,18 +158,14 @@ async def test_zero_token_node_down_leaving(manager: ScyllaClusterManager):
     await task
 
 
+@pytest.mark.prepare_3_nodes_cluster
 async def test_zero_token_node_down_normal(manager: ScyllaClusterManager):
     servers = await manager.running_servers()
 
     zero_token_node = await manager.server_add(config={'join_ring': False})
     await manager.server_stop_gracefully(zero_token_node.server_id)
 
-    exe_path = await manager.server_get_exe(servers[0].server_id)
-    cmd = [exe_path, "nodetool", "status"] + ["--logger-log-level",
-                                              "scylla-nodetool=trace",
-                                              "-h", servers[0].ip_addr]
-
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = await run_nodetool(manager, servers[0], "status")
 
     live_eps = await manager.api.client.get_json("/gossiper/endpoint/live", host=servers[0].ip_addr)
     down_eps = await manager.api.client.get_json("/gossiper/endpoint/down", host=servers[0].ip_addr)
@@ -194,6 +189,7 @@ async def test_zero_token_node_down_normal(manager: ScyllaClusterManager):
                                     host_id_map, config['num_tokens'])
 
 
+@pytest.mark.prepare_3_nodes_cluster
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_regular_node_joining(manager: ScyllaClusterManager):
     servers = await manager.running_servers()
@@ -202,15 +198,10 @@ async def test_regular_node_joining(manager: ScyllaClusterManager):
     joining_server = await manager.server_add(start=False)
     task = asyncio.create_task(manager.server_start(joining_server.server_id))
 
-    exe_path = await manager.server_get_exe(servers[0].server_id)
-    cmd = [exe_path, "nodetool", "status"] + ["--logger-log-level",
-                                              "scylla-nodetool=trace",
-                                              "-h", servers[0].ip_addr]
-
     await wait_for_first_completed([
         manager.api.wait_for_injection_enter(srv.ip_addr, "delay_node_bootstrap") for srv in servers
     ])
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = await run_nodetool(manager, servers[0], "status")
 
     live_eps = await manager.api.client.get_json("/gossiper/endpoint/live", host=servers[0].ip_addr)
     down_eps = await manager.api.client.get_json("/gossiper/endpoint/down", host=servers[0].ip_addr)
@@ -238,3 +229,34 @@ async def test_regular_node_joining(manager: ScyllaClusterManager):
     [await manager.api.message_injection(s.ip_addr, 'delay_node_bootstrap') for s in servers]
 
     await task
+
+
+async def test_cluster_repair_skips_strongly_consistent_keyspaces(manager: ScyllaClusterManager):
+    """
+    `nodetool cluster repair` without a keyspace repairs every tablet keyspace. It skips a
+    strongly consistent one, which the server refuses to repair, and repairs the others.
+    Repairing a strongly consistent keyspace by name fails.
+    """
+    servers = await manager.servers_add(3, config={'experimental_features': ['strongly-consistent-tables']}, auto_rack_dc='dc1')
+    cql, _ = await manager.get_ready_cql(servers)
+
+    sc_ks = await create_new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} "
+                                                "AND tablets = {'initial': 2} "
+                                                "AND consistency = 'global'")
+    ec_ks = await create_new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} "
+                                                "AND tablets = {'initial': 2}")
+    await cql.run_async(f"CREATE TABLE {sc_ks}.test1 (pk int PRIMARY KEY, c int)")
+    await cql.run_async(f"CREATE TABLE {sc_ks}.test2 (pk int PRIMARY KEY, c int)")
+    await cql.run_async(f"CREATE TABLE {ec_ks}.test (pk int PRIMARY KEY, c int)")
+
+    result = await run_nodetool(manager, servers[0], "cluster", "repair")
+    assert result.returncode == 0, result.stdout
+    assert f"Skipping keyspace={sc_ks}: it is strongly consistent" in result.stdout
+    started = re.search(f"Starting repair with task_id=(\\S+) keyspace={ec_ks} table=test", result.stdout)
+    assert started, result.stdout
+    assert f"Repair with task_id={started.group(1)} finished" in result.stdout
+    assert f"keyspace={sc_ks} table=" not in result.stdout
+
+    result = await run_nodetool(manager, servers[0], "cluster", "repair", sc_ks)
+    assert result.returncode != 0, result.stdout
+    assert f"keyspace '{sc_ks}' is strongly consistent" in result.stdout

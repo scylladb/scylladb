@@ -19,7 +19,7 @@ from cassandra.policies import FallthroughRetryPolicy, WhiteListRoundRobinPolicy
 from cassandra.query import BatchStatement, SimpleStatement, BoundStatement
 from test.pylib.tablets import get_all_tablet_replicas, get_tablet_info, get_tablet_replicas
 from test.pylib.driver_utils import safe_shutting_down
-from test.pylib.rest_client import read_barrier, ScyllaMetrics, ScyllaMetricsLine
+from test.pylib.rest_client import inject_error, read_barrier, HTTPError, ScyllaMetrics, ScyllaMetricsLine
 
 import asyncio
 import pytest
@@ -4532,3 +4532,74 @@ async def test_truncate_coordinator_crash_dedup(manager: ScyllaClusterManager):
         rows = await select_rows(cql, f"SELECT c FROM {ks}.test WHERE pk = 9999")
         assert [r.c for r in rows] == [9999]
 
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_repair_refused(manager: ScyllaClusterManager):
+    """
+    Raft keeps the replicas of a strongly consistent tablet in sync,
+    and the coordinator of its requests can't serve them while the tablet
+    is in the repair stage. So neither a user repair nor an automatic one
+    may be scheduled for a strongly consistent table.
+    """
+
+    servers = await manager.servers_add(2, config=DEFAULT_CONFIG, cmdline=DEFAULT_CMDLINE,
+                                        auto_rack_dc='my_dc')
+    s1, s2 = servers
+    cql = await manager.get_cql_exclusive(s1)
+
+    async def get_table_id(ks: str, table: str) -> str:
+        rows = await cql.run_async(f"SELECT id FROM system_schema.tables "
+                                   f"WHERE keyspace_name = '{ks}' "
+                                   f"AND table_name = '{table}'")
+        return str(rows[0].id)
+
+    sc_ks = await create_new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} "
+                                                "AND tablets = {'initial': 2} "
+                                                "AND consistency = 'global'")
+    ec_ks = await create_new_test_keyspace(cql, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} "
+                                                "AND tablets = {'initial': 1}")
+
+    table_name = "test_table"
+    await cql.run_async(f"CREATE TABLE {sc_ks}.{table_name} (pk int PRIMARY KEY, c int)")
+    sc_table_id = await get_table_id(sc_ks, table_name)
+
+    for pk in range(5):
+        await cql.run_async(f"INSERT INTO {sc_ks}.{table_name} (pk, c) VALUES ({pk}, {pk})")
+
+    logger.info("Requesting a user repair of the strongly consistent table")
+    with pytest.raises(HTTPError, match=f"keyspace '{sc_ks}' is strongly consistent"):
+        await manager.api.tablet_repair(s1.ip_addr, sc_ks, table_name, "all")
+
+    logs = [await manager.server_open_log(s.server_id) for s in servers]
+    marks = [await log.mark() for log in logs]
+
+    logger.info("Forcing automatic repairs of all tablets")
+    async with inject_error(manager.api, s1.ip_addr, "tablet_keep_repairing"), \
+            inject_error(manager.api, s2.ip_addr, "tablet_keep_repairing"):
+        # Enabling the injection doesn't wake up the topology coordinator,
+        # and nothing is scheduled until it wakes up. Creating a table does
+        # wake it up.
+        await cql.run_async(f"CREATE TABLE {ec_ks}.{table_name} (pk int PRIMARY KEY, c int)")
+        ec_table_id = await get_table_id(ec_ks, table_name)
+
+        async def ec_table_repaired_twice():
+            for log, mark in zip(logs, marks):
+                matches = await log.grep(f"Initiating tablet repair .* tablet={ec_table_id}:",
+                                         from_mark=mark)
+                if len(matches) >= 2:
+                    return True
+            return None
+        await wait_for(ec_table_repaired_twice, time.time() + 60)
+
+        # Repairs keep being scheduled while the injection is enabled, so a repair
+        # of the strongly consistent table would make these requests fail.
+        for pk in range(5, 10):
+            await cql.run_async(f"INSERT INTO {sc_ks}.{table_name} (pk, c) VALUES ({pk}, {pk})")
+        for pk in range(10):
+            rows = await cql.run_async(f"SELECT c FROM {sc_ks}.{table_name} WHERE pk = {pk}")
+            assert [r.c for r in rows] == [pk]
+
+    for (log, mark), server in zip(zip(logs, marks), servers):
+        matches = await log.grep(f"tablet repair .* tablet={sc_table_id}:", from_mark=mark)
+        assert not matches, f"Repair for table_id={sc_table_id} on {server.ip_addr}"
