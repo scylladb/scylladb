@@ -737,6 +737,7 @@ void dump_performance_profiles() {
 }
 
 static int scylla_main(int ac, char** av) {
+    // TEST CI: no-op change to trigger a full CI run, do not merge.
     // Allow core dumps. The would be disabled by default if
     // CAP_SYS_NICE was added to the binary, as is suggested by the
     // epoll backend.
