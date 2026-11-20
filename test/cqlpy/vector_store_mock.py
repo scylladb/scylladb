@@ -17,6 +17,16 @@ import threading
 import time
 
 
+class PortZeroHTTPServer(ThreadingHTTPServer):
+    # HTTPServer sets SO_REUSEADDR. On Linux, that lets another socket which
+    # also sets SO_REUSEADDR bind our port in the window between our bind()
+    # and listen() - and if it listens first, our listen() fails with
+    # EADDRINUSE. SO_REUSEADDR is only useful for binding a fixed port that
+    # still has connections in TIME_WAIT, never for a port the kernel picks
+    # (port 0, which is what VectorStoreMock always uses), so don't set it.
+    allow_reuse_address = False
+
+
 @dataclass
 class Request:
     path: str
@@ -269,7 +279,7 @@ class VectorStoreMock:
 
         # One thread per request, so that a delayed answer does not hold back the requests sent
         # beside it.
-        self._server = ThreadingHTTPServer((host, 0), Handler)
+        self._server = PortZeroHTTPServer((host, 0), Handler)
         self._thread = threading.Thread(target=self._server.serve_forever)
         self._thread.daemon = True
         self._thread.start()
