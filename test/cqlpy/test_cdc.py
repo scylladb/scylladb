@@ -120,6 +120,40 @@ def test_cdc_taken_log_name(scylla_only, cql, test_keyspace):
     finally:
         cql.execute(f"DROP TABLE {name}_scylla_cdc_log")
 
+# Secondary indexes are implemented as materialized views, and materialized
+# views cannot be created on CDC log tables, so creating a secondary index
+# - global or local - on a CDC log table must fail too.
+# Reproduces SCYLLADB-5773.
+def test_cdc_log_secondary_index_forbidden(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, v int", "with cdc = {'enabled': true}") as table:
+        cdc_log_table_name = f"{table}_scylla_cdc_log"
+        global_index_name = unique_name()
+        local_index_name = unique_name()
+        # If an index is wrongly created, drop it before the base table: dropping
+        # the base table would drop the CDC log but leave the index's view behind,
+        # crashing the node shared with other tests.
+        try:
+            with pytest.raises(InvalidRequest, match="not supported on CDC log tables"):
+                cql.execute(f"CREATE INDEX {global_index_name} ON {cdc_log_table_name}(v)")
+            with pytest.raises(InvalidRequest, match="not supported on CDC log tables"):
+                cql.execute(f'CREATE INDEX {local_index_name} ON {cdc_log_table_name}(("cdc$stream_id"), v)')
+        finally:
+            cql.execute(f"DROP INDEX IF EXISTS {test_keyspace}.{global_index_name}")
+            cql.execute(f"DROP INDEX IF EXISTS {test_keyspace}.{local_index_name}")
+
+# Disabling CDC keeps the log table, and dropping the base table still drops
+# the log, so a secondary index on the log must remain forbidden.
+def test_cdc_disabled_log_secondary_index_forbidden(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, v int", "with cdc = {'enabled': true}") as table:
+        cql.execute(f"ALTER TABLE {table} WITH cdc = {{'enabled': false}}")
+        cdc_log_table_name = f"{table}_scylla_cdc_log"
+        index_name = unique_name()
+        try:
+            with pytest.raises(InvalidRequest, match="not supported on CDC log tables"):
+                cql.execute(f"CREATE INDEX {index_name} ON {cdc_log_table_name}(v)")
+        finally:
+            cql.execute(f"DROP INDEX IF EXISTS {test_keyspace}.{index_name}")
+
 def test_alter_column_of_cdc_log_table(cql, test_keyspace, scylla_only):
     with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, v int, u int", "with cdc = {'enabled': true}") as table:
         cdc_log_table_name = f"{table}_scylla_cdc_log"
