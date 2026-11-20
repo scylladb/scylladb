@@ -1084,7 +1084,7 @@ SEASTAR_THREAD_TEST_CASE(test_object_storage_endpoints_command_line) {
 // Checks that a config that isn't broadcast to all shards can be used on a
 // shard other than 0, even after another config was broadcast on that shard.
 SEASTAR_THREAD_TEST_CASE(test_config_not_broadcast_on_other_shard) {
-    if (smp::count < 2) {
+    if (this_smp_shard_count() < 2) {
         return;
     }
     auto broadcast_cfg = std::make_unique<config>();
