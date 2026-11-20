@@ -9,6 +9,8 @@
 #pragma once
 
 #include "auth/authorizer.hh"
+#include "auth/resource.hh"
+#include "auth/role_or_anonymous.hh"
 #include <seastar/core/future.hh>
 
 namespace cql3 {
@@ -41,8 +43,13 @@ public:
         return allow_all_authorizer_name;
     }
 
-    virtual future<permission_set> authorize(const role_or_anonymous&, const resource&) const override {
-        return make_ready_future<permission_set>(permissions::ALL);
+    // A role that logged in does not get CONFIGURE on the cluster and its topology: those
+    // scopes affect the whole cluster and stay with superusers, who are not asked here.
+    virtual future<permission_set> authorize(const role_or_anonymous& role, const resource& r) const override {
+        if (r.kind() == resource_kind::cluster && !is_anonymous(role)) {
+            return make_ready_future<permission_set>(permissions::ALL);
+        }
+        return make_ready_future<permission_set>(permissions::ALL_AND_CONFIGURE);
     }
 
     virtual future<> grant(std::string_view, permission_set, const resource&, ::service::group0_batch&) override {

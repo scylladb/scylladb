@@ -1262,7 +1262,7 @@ grantStatement returns [std::unique_ptr<grant_statement> stmt]
           r=resource
       K_TO
           grantee=userOrRoleName
-      { $stmt = std::make_unique<grant_statement>($permissionOrAll.perms, std::move(r), std::move(grantee)); }
+      { $stmt = std::make_unique<grant_statement>($permissionOrAll.perms, std::move(r), std::move(grantee), std::move($permissionOrAll.config_options)); }
     ;
 
 /**
@@ -1275,7 +1275,7 @@ revokeStatement returns [std::unique_ptr<revoke_statement> stmt]
           r=resource
       K_FROM
           revokee=userOrRoleName
-      { $stmt = std::make_unique<revoke_statement>($permissionOrAll.perms, std::move(r), std::move(revokee)); }
+      { $stmt = std::make_unique<revoke_statement>($permissionOrAll.perms, std::move(r), std::move(revokee), std::move($permissionOrAll.config_options)); }
     ;
 
 /**
@@ -1305,17 +1305,23 @@ listPermissionsStatement returns [std::unique_ptr<list_permissions_statement> st
       ( K_ON rr=resource { r = std::move(rr); } )?
       ( K_OF rn=userOrRoleName { role = sstring(cql3::role_name(std::move(rn)).to_string()); } )?
       ( K_NORECURSIVE { recursive = false; } )?
-      { $stmt = std::make_unique<list_permissions_statement>($permissionOrAll.perms, std::move(r), std::move(role), recursive); }
+      { $stmt = std::make_unique<list_permissions_statement>($permissionOrAll.perms, std::move(r), std::move(role), recursive, std::move($permissionOrAll.config_options)); }
     ;
 
 permission returns [auth::permission perm = auth::permission{}]
-    : p=(K_CREATE | K_ALTER | K_DROP | K_SELECT | K_MODIFY | K_AUTHORIZE | K_DESCRIBE | K_EXECUTE | K_VECTOR_SEARCH_INDEXING | K_TEXT_SEARCH_INDEXING | K_PATTERN_SEARCH_INDEXING)
+    : p=(K_CREATE | K_ALTER | K_DROP | K_SELECT | K_MODIFY | K_AUTHORIZE | K_DESCRIBE | K_EXECUTE | K_VECTOR_SEARCH_INDEXING | K_TEXT_SEARCH_INDEXING | K_PATTERN_SEARCH_INDEXING | K_CONFIGURE)
     { $perm = auth::permissions::from_string($p.text); }
     ;
 
-permissionOrAll returns [auth::permission_set perms]
+/**
+ * CONFIGURE takes an optional list of cluster config options: CONFIGURE (opt1, opt2).
+ */
+permissionOrAll returns [auth::permission_set perms, std::vector<sstring> config_options]
     : K_ALL ( K_PERMISSIONS )?       { $perms = auth::permissions::ALL; }
     | p=permission ( K_PERMISSION )? { $perms = auth::permission_set::from_mask(auth::permission_set::mask_for($p.perm)); }
+      ( '(' o1=ident { $config_options.push_back(o1->to_string()); }
+            ( ',' on=ident { $config_options.push_back(on->to_string()); } )*
+        ')' )?
     ;
 
 resource returns [uninitialized<auth::resource> res]
@@ -1323,6 +1329,19 @@ resource returns [uninitialized<auth::resource> res]
     | r=roleResource     { $res = std::move(r); }
     | f=functionResource { $res = std::move(f); }
     | o=objectStorageResource { $res = std::move(o); }
+    | c=clusterResource  { $res = std::move(c); }
+    ;
+
+/**
+ * The cluster and the parts of its topology. The cluster, which is above every cluster
+ * config scope, is written ALL SCOPES: CLUSTER can be the name of a table, ALL is reserved.
+ */
+clusterResource returns [uninitialized<auth::resource> res]
+    : K_ALL K_SCOPES { $res = auth::root_cluster_resource(); }
+    | K_DATACENTER dc=ident { $res = auth::make_cluster_resource(dc->to_string()); }
+    | K_RACK rdc=ident rack=ident { $res = auth::make_cluster_resource(rdc->to_string(), rack->to_string()); }
+    // A node's datacenter and rack are filled in from the topology when the statement runs.
+    | K_NODE node_uuid=UUID { $res = auth::make_cluster_resource("", "", sstring{$node_uuid.text}); }
     ;
 
 dataResource returns [uninitialized<auth::resource> res]
@@ -2235,9 +2254,11 @@ basic_unreserved_keyword returns [sstring str]
     : k=( K_KEYS
         | K_AS
         | K_CLUSTER
+        | K_CONFIGURE
         | K_CLUSTERING
         | K_COMPACT
         | K_DATACENTER
+        | K_SCOPES
         | K_NODE
         | K_RACK
         | K_STORAGE
@@ -2419,6 +2440,7 @@ K_OF:          O F;
 K_REVOKE:      R E V O K E;
 K_MODIFY:      M O D I F Y;
 K_AUTHORIZE:   A U T H O R I Z E;
+K_CONFIGURE:   C O N F I G U R E;
 K_DESCRIBE:    D E S C R I B E;
 K_NORECURSIVE: N O R E C U R S I V E;
 
@@ -2438,6 +2460,7 @@ K_OPTIONS:     O P T I O N S;
 K_CLUSTER:     C L U S T E R;
 K_CLUSTERING:  C L U S T E R I N G;
 K_DATACENTER:  D A T A C E N T E R;
+K_SCOPES:      S C O P E S;
 K_NODE:        N O D E;
 K_RACK:        R A C K;
 K_ASCII:       A S C I I;

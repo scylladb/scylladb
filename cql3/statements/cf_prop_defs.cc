@@ -347,6 +347,10 @@ std::map<sstring, std::optional<sstring>> cf_prop_defs::get_config_updates(const
     return updates;
 }
 
+std::vector<sstring> cf_prop_defs::get_config_names(const gms::feature_service& feat) const {
+    return cluster_config_props::config_names(table_scope, *this, feat);
+}
+
 void cf_prop_defs::apply_to_builder(schema_builder& builder, schema::extensions_map schema_extensions, const data_dictionary::database& db, sstring ks_name, bool supports_repair) const {
     if (has_property(KW_COMMENT)) {
         builder.set_comment(get_string(KW_COMMENT, ""));

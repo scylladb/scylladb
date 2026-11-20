@@ -30,7 +30,7 @@ public:
     }
 
     future<permission_set> authorize(const role_or_anonymous&, const resource&) const override {
-        return make_ready_future<permission_set>(permissions::ALL);
+        return make_ready_future<permission_set>(permissions::ALL_AND_CONFIGURE);
     }
 };
 

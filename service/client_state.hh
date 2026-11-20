@@ -446,13 +446,19 @@ public:
     future<> has_column_family_access(const sstring&, const sstring&, auth::permission,
                                       auth::command_desc::type = auth::command_desc::type::OTHER, auth::permission_set additional_permissions = {}) const;
 
+    // The rules has_keyspace_access() and has_column_family_access() apply to an ALTER of
+    // the resource (system and internal keyspaces and tables), without requiring the ALTER
+    // permission. For a statement that is authorized by another permission.
+    future<> check_alter_rules(const sstring& ks, const auth::resource&,
+                               auth::command_desc::type = auth::command_desc::type::OTHER) const;
+
     future<> has_functions_access(auth::permission p) const;
     future<> has_functions_access(const sstring& ks, auth::permission p) const;
     future<> has_function_access(const sstring& ks, const sstring& function_signature, auth::permission p) const;
 private:
     future<> check_internal_table_permissions(std::string_view ks, std::string_view table_name, auth::permission permission, const auth::resource& resource) const;
     future<> check_access_rules(const sstring& ks, auth::permission permission, const auth::resource& resource,
-                                auth::command_desc::type type, auth::permission_set additional_permissions) const;
+                                auth::command_desc::type type, auth::permission_set additional_permissions, bool rules_only = false) const;
     future<> has_access(const sstring& keyspace, auth::permission permission, const auth::resource& resource,
                         auth::command_desc::type type = auth::command_desc::type::OTHER, auth::permission_set additional_permissions = {}) const;
     sstring generate_authorization_error_msg(const auth::command_desc&) const;
@@ -461,6 +467,12 @@ private:
 public:
     template<typename Cmd = auth::command_desc> future<bool> check_has_permission(Cmd) const;
     template<typename Cmd = auth::command_desc> future<> ensure_has_permission(Cmd) const;
+
+    // Checks a permission along the cluster config scope chain of `target` (see
+    // auth::config_scope_parent()). With `option`, a CONFIGURE grant narrowed to that
+    // option on any resource of the chain also counts.
+    future<bool> check_has_config_permission(auth::permission, const auth::resource& target, std::optional<std::string_view> option) const;
+    future<> ensure_has_config_permission(auth::permission, const auth::resource& target, std::optional<std::string_view> option) const;
     void maybe_update_per_service_level_params();
     void update_per_service_level_params(qos::service_level_options& slo);
 
