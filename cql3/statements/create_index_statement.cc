@@ -451,6 +451,10 @@ create_index_statement::validate_while_executing(data_dictionary::database db, l
         throw exceptions::invalid_request_exception("Secondary indexes are not supported on materialized views");
     }
 
+    if (db.get_cdc_base_table(*schema)) {
+        throw exceptions::invalid_request_exception("Secondary indexes are not supported on CDC log tables");
+    }
+
     if (schema->is_dense()) {
         throw exceptions::invalid_request_exception(
                 "Secondary indexes are not supported on COMPACT STORAGE tables that have clustering columns");
