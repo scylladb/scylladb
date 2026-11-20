@@ -9,10 +9,13 @@
 #include "clients.hh"
 #include "load_balancer.hh"
 #include "utils/exceptions.hh"
+#include "utils/on_internal_error.hh"
 #include <random>
 #include <expected>
 #include <seastar/coroutine/as_future.hh>
 #include <seastar/core/lowres_clock.hh>
+#include <seastar/core/metrics.hh>
+#include <seastar/core/smp.hh>
 
 using namespace seastar;
 
@@ -40,6 +43,29 @@ auto wait_for_signal(condition_variable& cv, lowres_clock::time_point timeout) -
     co_return;
 }
 
+/// The `endpoint` label of the per-endpoint metrics: the configured host and port.
+auto endpoint_name(const seastar::sstring& host, std::uint16_t port) -> seastar::sstring {
+    return seastar::format("{}:{}", host, port);
+}
+
+/// The status of one attempt to an endpoint.
+auto attempt_status(const client::request_result& result) -> request_status {
+    if (result) {
+        return to_request_status(result->status);
+    }
+    return std::visit(
+            [](const auto& e) -> request_status {
+                using T = std::decay_t<decltype(e)>;
+                if constexpr (std::is_same_v<T, aborted_error>) {
+                    return request_status::aborted;
+                } else {
+                    static_assert(std::is_same_v<T, service_unavailable_error>);
+                    return request_status::unavailable;
+                }
+            },
+            result.error());
+}
+
 template <typename Variant>
 auto make_unexpected(const auto& err) {
     return std::unexpected{std::visit(
@@ -51,8 +77,47 @@ auto make_unexpected(const auto& err) {
 
 } // namespace
 
-clients::clients(logging::logger& logger, refresh_trigger_callback trigger_refresh, utils::updateable_value<uint32_t> unreachable_node_detection_time_in_ms,
-        truststore& truststore)
+// No `default`, so -Wswitch fails the build when a new value has no name.
+std::string_view to_name(request_status status) {
+    switch (status) {
+    using enum request_status;
+    case ok:
+        return "ok";
+    case rejected:
+        return "rejected";
+    case not_ready:
+        return "not_ready";
+    case unavailable:
+        return "unavailable";
+    case error:
+        return "error";
+    case aborted:
+        return "aborted";
+    case num_statuses:
+        break;
+    }
+    utils::on_internal_error(fmt::format("invalid request_status {}", int(status)));
+}
+
+request_status to_request_status(http::reply::status_type status) {
+    using status_type = http::reply::status_type;
+    if (int(status) >= 200 && int(status) < 300) {
+        return request_status::ok;
+    }
+    switch (status) {
+    case status_type::bad_request:
+    case status_type::not_found:
+    case status_type::unprocessable_entity:
+        return request_status::rejected;
+    case status_type::service_unavailable:
+        return request_status::not_ready;
+    default:
+        return request_status::error;
+    }
+}
+
+clients::clients(logging::logger& logger, seastar::sstring role, refresh_trigger_callback trigger_refresh,
+        utils::updateable_value<uint32_t> unreachable_node_detection_time_in_ms, truststore& truststore)
     : _producer([&]() -> future<clients_vec> {
         return try_with_gate(_gate, [this] -> future<clients_vec> {
             _trigger_refresh();
@@ -64,7 +129,8 @@ clients::clients(logging::logger& logger, refresh_trigger_callback trigger_refre
     , _timeout(WAIT_FOR_CLIENT_TIMEOUT)
     , _logger(logger)
     , _unreachable_node_detection_time_in_ms(std::move(unreachable_node_detection_time_in_ms))
-    , _truststore(truststore) {
+    , _truststore(truststore)
+    , _role(std::move(role)) {
 }
 
 future<clients::request_result> clients::request(
@@ -78,7 +144,15 @@ future<clients::request_result> clients::request(
 
         load_balancer lb(std::move(*clients), random_engine);
         while (auto client = lb.next()) {
-            auto result = co_await client->request(method, path, content, as);
+            // Count every attempt, so an address that fails while another one
+            // answers is visible.
+            auto f = co_await coroutine::as_future(client->request(method, path, content, as));
+            if (f.failed()) {
+                record_attempt(client->endpoint(), request_status::error);
+                co_await coroutine::return_exception_ptr(f.get_exception());
+            }
+            auto result = f.get();
+            record_attempt(client->endpoint(), attempt_status(result));
             if (result) {
                 co_return std::move(result.value());
             }
@@ -118,17 +192,103 @@ future<clients::get_clients_result> clients::get_clients(abort_source& as) {
 
 future<> clients::handle_changed(const std::vector<uri>& uris, const dns::host_address_map& addrs) {
     clear();
+    for (auto& [_, m] : _endpoint_metrics) {
+        m->addresses = 0;
+    }
     for (const auto& uri : uris) {
         auto it = addrs.find(uri.host);
         if (it != addrs.end()) {
+            if (auto m = _endpoint_metrics.find(endpoint_name(uri.host, uri.port)); m != _endpoint_metrics.end()) {
+                m->second->addresses = it->second.size();
+            }
             for (const auto& addr : it->second) {
                 _clients.push_back(co_await make_client(uri, addr));
             }
         }
     }
 
+    // Keep one set of attempt series for each resolved address: an address
+    // that no longer resolves loses its series, a new one gets them.
+    std::map<address_key, std::unique_ptr<address_metrics>> kept;
+    for (const auto& c : _clients) {
+        auto key = address_key{endpoint_name(c->endpoint().host, c->endpoint().port), fmt::format("{}", c->endpoint().ip)};
+        if (kept.contains(key)) {
+            continue;
+        }
+        if (auto it = _address_metrics.find(key); it != _address_metrics.end()) {
+            kept.emplace(key, std::move(it->second));
+        } else {
+            auto m = std::make_unique<address_metrics>();
+            register_address_metrics(key, *m);
+            kept.emplace(key, std::move(m));
+        }
+    }
+    _address_metrics = std::move(kept);
+
     _refresh_cv.broadcast();
     co_await close_old_clients();
+}
+
+void clients::set_endpoints(const std::vector<uri>& uris) {
+    std::map<seastar::sstring, std::unique_ptr<endpoint_metrics>> kept;
+    for (const auto& uri : uris) {
+        auto name = endpoint_name(uri.host, uri.port);
+        if (kept.contains(name)) {
+            continue;
+        }
+        auto it = _endpoint_metrics.find(name);
+        if (it != _endpoint_metrics.end()) {
+            kept.emplace(name, std::move(it->second));
+        } else {
+            auto m = std::make_unique<endpoint_metrics>();
+            register_endpoint_metrics(name, *m);
+            kept.emplace(name, std::move(m));
+        }
+    }
+    // The metrics of the URIs left out are unregistered when they are destroyed here.
+    _endpoint_metrics = std::move(kept);
+    std::erase_if(_address_metrics, [this](const auto& entry) {
+        return !_endpoint_metrics.contains(entry.first.first);
+    });
+}
+
+void clients::register_endpoint_metrics(const seastar::sstring& endpoint, endpoint_metrics& m) {
+    // Every shard resolves the same addresses, so the gauge is exported once, from shard 0.
+    if (this_shard_id() != 0) {
+        return;
+    }
+    namespace sm = seastar::metrics;
+    sm::label role_label("role");
+    sm::label endpoint_label("endpoint");
+    m.metrics.add_group("vector_store", {sm::make_gauge("endpoint_addresses",
+            sm::description("Number of addresses resolved for a configured Vector Store endpoint; 0 when its host does not resolve"),
+            {role_label(_role), endpoint_label(endpoint)}, [&m] {
+                return m.addresses;
+            })});
+}
+
+void clients::register_address_metrics(const address_key& key, address_metrics& m) {
+    namespace sm = seastar::metrics;
+    sm::label role_label("role");
+    sm::label endpoint_label("endpoint");
+    sm::label ip_label("ip");
+    sm::label status_label("status");
+    for (size_t status = 0; status < size_t(request_status::num_statuses); ++status) {
+        m.metrics.add_group("vector_store", {sm::make_counter("endpoint_requests",
+                sm::description("Number of attempts to send a request to one address of a Vector Store endpoint, by outcome. "
+                                "A request that fails over to another address is counted once for each address it tried"),
+                {role_label(_role), endpoint_label(key.first), ip_label(key.second), status_label(to_name(request_status(status)))},
+                m.requests[status])
+                        .aggregate({sm::shard_label})});
+    }
+}
+
+void clients::record_attempt(const client::endpoint_type& endpoint, request_status status) {
+    // The address may have stopped resolving while the attempt was in flight.
+    auto it = _address_metrics.find(address_key{endpoint_name(endpoint.host, endpoint.port), fmt::format("{}", endpoint.ip)});
+    if (it != _address_metrics.end()) {
+        ++it->second->requests[size_t(status)];
+    }
 }
 
 future<> clients::stop() {
