@@ -762,6 +762,10 @@ public:
         return _log.in_memory_size();
     }
 
+    // Drop the entries the snapshot covers, whether a member still needs them
+    // or not. A member that does is brought up to date by a snapshot transfer.
+    void drop_trailing_log();
+
     size_t log_memory_usage() const {
         return _log.memory_usage();
     };
