@@ -1,0 +1,20 @@
+type: Topology
+pool_size: 4
+cluster:
+  initial_size: 0
+extra_scylla_config_options:
+    authenticator: AllowAllAuthenticator
+    authorizer: AllowAllAuthorizer
+    enable_user_defined_functions: False
+    enable_tablets: True
+run_first:
+  - test_raft_cluster_features
+  - test_raft_ignore_nodes
+  - test_tablets
+skip_in_release:
+  - test_raft_cluster_features
+skip_in_debug:
+  - test_cdc_generation_clearing
+  - test_cdc_generation_publishing
+run_in_dev:
+  - test_raft_ignore_nodes
