@@ -34,6 +34,7 @@
 #include "cdc/cdc_partitioner.hh"
 #include "view_info.hh"
 #include "replica/database.hh"
+#include "sstables/sstables_manager.hh"
 #include "replica/tablets.hh"
 #include "db/config.hh"
 #include "lang/manager.hh"
@@ -665,11 +666,18 @@ future<> schema_applier::merge_tables_and_views()
         return vp;
     });
 
+    auto& local_storage = _affected_tables_and_views.tables_and_views.local().storage;
+    for (const auto* created : {&local_cdc.created, &local_tables.created, &local_views.created}) {
+        for (const auto& s : *created) {
+            local_storage.emplace(s->id(), co_await init_table_storage(*s));
+        }
+    }
+
     // create schema_ptrs for all shards
     frozen_schema_diff tables_frozen = co_await local_tables.freeze();
     frozen_schema_diff cdc_frozen = co_await local_cdc.freeze();
     frozen_schema_diff views_frozen = co_await local_views.freeze();
-    co_await _affected_tables_and_views.tables_and_views.invoke_on_others([this, &tables_frozen, &cdc_frozen, &views_frozen] (affected_tables_and_views_per_shard& tables_and_views) -> future<> {
+    co_await _affected_tables_and_views.tables_and_views.invoke_on_others([this, &tables_frozen, &cdc_frozen, &views_frozen, &local_storage] (affected_tables_and_views_per_shard& tables_and_views) -> future<> {
         auto& db = _proxy.local().get_db().local();
         tables_and_views.tables = co_await schema_diff_per_shard::copy_from(
                 db, _types_storage, tables_frozen);
@@ -677,6 +685,9 @@ future<> schema_applier::merge_tables_and_views()
                 db, _types_storage, cdc_frozen);
         tables_and_views.views = co_await schema_diff_per_shard::copy_from(
                 db, _types_storage, views_frozen);
+        for (const auto& [id, sopts] : local_storage) {
+            tables_and_views.storage.emplace(id, make_lw_shared<const data_dictionary::storage_options>(*sopts));
+        }
     });
 
     auto& db = _proxy.local().get_db();
@@ -695,6 +706,25 @@ future<> schema_applier::merge_tables_and_views()
         _affected_tables_and_views.table_shards.insert({uuid,
                 co_await replica::database::prepare_drop_table_on_all_shards(db, uuid)});
     });
+}
+
+// Creates the storage of a table being created, before the table exists. Its
+// directory depends only on the schema, and the table has to carry a usable
+// storage from the moment it is registered: it accepts writes, and so
+// flushes, right away.
+future<lw_shared_ptr<const data_dictionary::storage_options>> schema_applier::init_table_storage(const schema& s) {
+    auto& db = _proxy.local().get_db().local();
+    const data_dictionary::storage_options* ks_sopts = nullptr;
+    for (const auto& ks_all_shards : _affected_keyspaces.created) {
+        auto& ksm = *ks_all_shards[this_shard_id()]->metadata();
+        if (ksm.name() == s.ks_name()) {
+            ks_sopts = &ksm.get_storage_options();
+        }
+    }
+    if (!ks_sopts) {
+        ks_sopts = &db.find_keyspace(s.ks_name()).metadata()->get_storage_options();
+    }
+    co_return co_await db.get_sstables_manager(s).init_table_storage(s, *ks_sopts);
 }
 
 future<frozen_schema_diff> schema_diff_per_shard::freeze() const {
@@ -1026,19 +1056,10 @@ void schema_applier::commit_tables_and_views() {
         replica::database::drop_table(sharded_db, s->ks_name(), s->cf_name(), true, diff.table_shards[s->id()]);
     }
 
-    for (auto& schema : cdc.created) {
+    const auto& storage = diff.tables_and_views.local().storage;
+    for (auto& schema : std::views::concat(cdc.created, tables.created, views.created)) {
         auto& ks = db.find_keyspace(schema->ks_name());
-        db.add_column_family(ks, schema, ks.make_column_family_config(*schema, db), replica::database::is_new_cf::yes, _pending_token_metadata.local());
-    }
-
-    for (auto& schema : tables.created) {
-        auto& ks = db.find_keyspace(schema->ks_name());
-        db.add_column_family(ks, schema, ks.make_column_family_config(*schema, db), replica::database::is_new_cf::yes, _pending_token_metadata.local());
-    }
-
-    for (auto& schema : views.created) {
-        auto& ks = db.find_keyspace(schema->ks_name());
-        db.add_column_family(ks, schema, ks.make_column_family_config(*schema, db), replica::database::is_new_cf::yes, _pending_token_metadata.local());
+        db.add_column_family(ks, schema, ks.make_column_family_config(*schema, db), storage.at(schema->id()), replica::database::is_new_cf::yes, _pending_token_metadata.local());
     }
 
     diff.tables_and_views.local().columns_changed.reserve(tables.altered.size() + cdc.altered.size() + views.altered.size());
@@ -1160,14 +1181,10 @@ future<> schema_applier::finalize_tables_and_views() {
         const auto& tables = diff.tables_and_views.local().tables;
         const auto& cdc = diff.tables_and_views.local().cdc;
         const auto& views = diff.tables_and_views.local().views;
-        auto make_directories = [&db] (const auto& created) {
-            return max_concurrent_for_each(created, max_concurrent, [&db] (const schema_ptr& s) {
-                return db.make_column_family_directory(s);
-            });
-        };
-        co_await make_directories(cdc.created);
-        co_await make_directories(tables.created);
-        co_await make_directories(views.created);
+        for (const auto& s : std::views::concat(cdc.created, tables.created, views.created)) {
+            db.find_column_family(s).get_index_manager().reload();
+            co_await coroutine::maybe_yield();
+        }
     });
 
     // Insert column_mapping into history table for altered and created tables.
@@ -1194,6 +1211,8 @@ future<> schema_applier::finalize_tables_and_views() {
 }
 
 future<> schema_applier::post_commit() {
+    co_await utils::get_local_injector().inject("schema_applier_pause_before_post_commit",
+            utils::wait_for_message(std::chrono::minutes(1)));
     co_await finalize_tables_and_views();
     auto& sharded_db = _proxy.local().get_db();
     co_await sharded_db.invoke_on_all([&] (replica::database& db) -> future<> {
