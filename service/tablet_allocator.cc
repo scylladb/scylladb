@@ -7,6 +7,7 @@
  */
 
 #include "cdc/cdc_options.hh"
+#include "cdc/log.hh"
 #include "cql3/statements/ks_prop_defs.hh"
 #include "db/system_keyspace.hh"
 #include "db/view/view_build_status.hh"
@@ -5342,6 +5343,30 @@ future<> validate_keyspace_views_for_tablets_migration(
                         " Wait for the view build to finish and retry.",
                         ks_name, ks_name, view->cf_name(), host_id));
             }
+        }
+    }
+}
+
+void validate_keyspace_cdc_for_tablets_migration(
+        const replica::database& db,
+        const gms::feature_service& features,
+        const sstring& ks_name) {
+    const auto& cf_meta_data = db.find_keyspace(ks_name).metadata()->cf_meta_data();
+    bool has_cdc_log_tables = std::ranges::any_of(cf_meta_data | std::views::values, [] (const schema_ptr& s) {
+        return cdc::is_log_schema(*s);
+    });
+    if (has_cdc_log_tables && (!features.cdc_vnodes_to_tablets_migration || !features.cdc_with_tablets)) {
+        throw std::runtime_error(fmt::format(
+                "Cannot migrate keyspace {} to tablets: it has CDC log tables, which not all nodes can migrate."
+                " Finish upgrading the cluster and retry.", ks_name));
+    }
+    // CQL rejects the 'repair' mode for CDC log tables, but older versions didn't.
+    for (const auto& s : cf_meta_data | std::views::values) {
+        if (cdc::is_log_schema(*s) && s->tombstone_gc_options().mode() == tombstone_gc_mode::repair) {
+            throw std::runtime_error(fmt::format(
+                    "Cannot migrate keyspace {} to tablets: CDC log table {}.{} uses the 'repair' tombstone_gc mode,"
+                    " which CDC log tables don't support. Switch it to 'timeout' with ALTER TABLE and retry.",
+                    ks_name, ks_name, s->cf_name()));
         }
     }
 }

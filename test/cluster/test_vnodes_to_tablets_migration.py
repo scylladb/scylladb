@@ -8,6 +8,7 @@ import glob
 import json
 import time
 import uuid
+import datetime
 import pytest
 import asyncio
 import hashlib
@@ -16,7 +17,8 @@ import subprocess
 from uuid import UUID
 from collections import Counter
 from contextlib import asynccontextmanager
-from cassandra import OperationTimedOut, RequestExecutionException
+from cassandra import InvalidRequest, OperationTimedOut, RequestExecutionException
+from cassandra.policies import FallthroughRetryPolicy
 from cassandra.query import SimpleStatement, ConsistencyLevel
 from cassandra.cluster import NoHostAvailable, Session
 from cassandra.connection import ConnectionException
@@ -4465,3 +4467,379 @@ async def test_replace_during_migration_with_a_tablets_keyspace(manager: ScyllaC
         replicas = await get_all_tablet_replicas(manager, new_server, tablets_ks, "t")
         assert replicas and all(host != replaced_host_id for r in replicas for host, _ in r.replicas), \
             f"tablets of {tablets_ks}.t still have replicas on the replaced node: {replicas}"
+
+
+# The tests below cover the migration of keyspaces with CDC tables (SCYLLADB-1166).
+
+CDC_STREAM_STATE_CURRENT = 0  # cdc::stream_state::current
+
+
+def timeuuid_to_micros(u: UUID) -> int:
+    # UUID v1 time counts 100ns intervals since 1582-10-15.
+    return (u.time - 0x01b21dd213814000) // 10
+
+
+def datetime_to_millis(dt: datetime.datetime) -> int:
+    return round(dt.replace(tzinfo=datetime.timezone.utc).timestamp() * 1000)
+
+
+async def get_cdc_tablet_stream_sets(cql, ks: str, table: str, host=None) -> dict[int, set[bytes]]:
+    """The published tablet stream sets of the CDC log of ks.table, by the
+    time they start operating, in milliseconds."""
+    rows = await cql.run_async(f"SELECT timestamp, stream_state, stream_id FROM system.cdc_streams "
+                               f"WHERE keyspace_name = '{ks}' AND table_name = '{table}'", host=host)
+    stream_sets: dict[int, set[bytes]] = {}
+    for r in rows:
+        if r.stream_state == CDC_STREAM_STATE_CURRENT:
+            stream_sets.setdefault(datetime_to_millis(r.timestamp), set()).add(r.stream_id)
+    return stream_sets
+
+
+async def get_cdc_switch_time(cql, ks: str, table: str, host=None) -> int:
+    """The time the CDC log of ks.table switched from the vnode-based CDC
+    generations to tablet streams, in milliseconds: the first published
+    stream set."""
+    rows = await cql.run_async(f"SELECT timestamp FROM system.cdc_timestamps "
+                               f"WHERE keyspace_name = '{ks}' AND table_name = '{table}'", host=host)
+    assert rows, f"No published CDC stream set for {ks}.{table}"
+    return min(datetime_to_millis(r.timestamp) for r in rows)
+
+
+async def verify_cdc_log_after_migration(cql, ks: str, table: str, expected_keys: list[int], switch_ms: int) -> tuple[int, int]:
+    """Verify that every write to ks.table is in its CDC log exactly once: in a
+    stream of the vnode-based CDC generations if its timestamp is before the
+    switch to tablet streams at `switch_ms`, and in the tablet stream set in
+    force at its timestamp otherwise.
+
+    Returns the number of log rows in vnode streams and in tablet streams."""
+    tablet_sets = await get_cdc_tablet_stream_sets(cql, ks, table)
+    assert min(tablet_sets) == switch_ms, f"Unexpected tablet stream sets: {sorted(tablet_sets)}, switch at {switch_ms}"
+    all_tablet_streams = set().union(*tablet_sets.values())
+
+    stmt = SimpleStatement(f'SELECT pk, "cdc$stream_id" AS sid, "cdc$time" AS t FROM {ks}.{table}_scylla_cdc_log',
+                           consistency_level=ConsistencyLevel.QUORUM)
+    rows = await cql.run_async(stmt)
+    assert Counter(r.pk for r in rows) == Counter(expected_keys), "The CDC log doesn't hold each write exactly once"
+
+    vnode_rows = [r for r in rows if timeuuid_to_micros(r.t) < switch_ms * 1000]
+    tablet_rows = [r for r in rows if timeuuid_to_micros(r.t) >= switch_ms * 1000]
+
+    # The vnode-based CDC generations are published asynchronously.
+    async def vnode_streams_published():
+        res = await cql.run_async(SimpleStatement("SELECT streams FROM system_distributed.cdc_streams_descriptions_v2",
+                                                  consistency_level=ConsistencyLevel.ONE))
+        published = {sid for r in res for sid in r.streams}
+        return published if all(r.sid in published for r in vnode_rows) else None
+    vnode_streams = await wait_for(vnode_streams_published, time.time() + 60)
+    for r in vnode_rows:
+        assert r.sid not in all_tablet_streams, f"Key {r.pk} written before the switch is in a tablet stream"
+        assert r.sid in vnode_streams
+
+    for r in tablet_rows:
+        set_ms = max(ts for ts in tablet_sets if ts * 1000 <= timeuuid_to_micros(r.t))
+        assert r.sid in tablet_sets[set_ms], \
+            f"Key {r.pk} written at {timeuuid_to_micros(r.t)}us is not in the tablet stream set of {set_ms}ms"
+
+    return len(vnode_rows), len(tablet_rows)
+
+
+async def upgrade_all_nodes_to_tablets(manager: ScyllaClusterManager, servers: list[ServerInfo], after_restart=None):
+    for s in servers:
+        logger.info(f"Upgrading node {s.server_id} to tablets and restarting it")
+        await manager.api.upgrade_node_to_tablets(s.ip_addr)
+        await manager.server_restart(s.server_id)
+        await reconnect_driver(manager)
+        cql, hosts = await manager.get_ready_cql(servers)
+        if after_restart:
+            await after_restart(cql, hosts)
+
+
+async def test_migration_with_cdc(manager: ScyllaClusterManager):
+    """Verify the vnodes-to-tablets migration of a keyspace with CDC tables.
+
+    The CDC log of a table must hold every write to it exactly once, before,
+    during and after the migration, in streams consumers can find: writes
+    with timestamps before the switch to tablet streams in the vnode-based CDC
+    generations, later ones in the table's tablet streams.
+
+    Steps:
+    1. Start 3 nodes in 3 racks, with ring_delay_ms=10000, so that the switch
+       is ~25s after the finalization, enough for a node restart in debug
+       mode. Create a vnode keyspace (RF=3) with a CDC table, and with a table
+       whose CDC was disabled, which keeps its log table. Write to the CDC
+       table.
+    2. Start the migration.
+       - Verify the log tables are co-located with their base tables.
+       - Verify the CDC streams of the log are not published yet.
+    3. Upgrade each node and restart it; write through every node in the
+       mixed cluster.
+    4. Finalize the migration.
+       - Verify all nodes publish the same switch, in the future, and that
+         it opens all the streams of the tablet stream set.
+       - Restart a node, which loads the stream state with the switch still
+         in the future from disk, and write through it.
+       - Write through every node with timestamps assigned at write time,
+         and with a timestamp just before the switch, which go to vnode
+         streams.
+    5. Once the switch is over, write through every node.
+       - Verify a write with a timestamp just before the switch is rejected
+         now.
+    6. Re-enable CDC on the table whose CDC was disabled and write to it.
+    7. Verify the CDC logs.
+    8. Wait for the pow2 convergence, whose merges change the tablet streams
+       of the co-location group; verify the log is still co-located, write
+       through every node and verify the CDC log again.
+    """
+    num_nodes = 3
+    num_keys = 100
+    cfg = {'num_tokens': 8, 'ring_delay_ms': 10000, 'tablet_load_stats_refresh_interval_in_seconds': 1}
+    racks = [{'dc': 'dc1', 'rack': f'rack{i}'} for i in range(num_nodes)]
+    servers = await manager.servers_add(num_nodes, cmdline=['--smp', '2'], config=cfg, property_file=racks)
+    cql, _ = await manager.get_ready_cql(servers)
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {num_nodes}}} AND tablets = {{'enabled': false}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v int) WITH cdc = {{'enabled': true}}")
+        await cql.run_async(f"CREATE TABLE {ks}.detached (pk int PRIMARY KEY, v int) WITH cdc = {{'enabled': true}}")
+        await cql.run_async(f"ALTER TABLE {ks}.detached WITH cdc = {{'enabled': false}}")
+
+        written: list[int] = []
+
+        async def write(keys, host=None, using_timestamp=None):
+            using = f" USING TIMESTAMP {using_timestamp}" if using_timestamp is not None else ""
+            stmt = SimpleStatement(f"INSERT INTO {ks}.test (pk, v) VALUES (%s, %s){using}",
+                                   consistency_level=ConsistencyLevel.QUORUM)
+            for k in keys:
+                # Restarts replace the driver session.
+                await manager.get_cql().run_async(stmt, [k, k], host=host)
+            written.extend(keys)
+
+        def next_keys(n):
+            start = max(written, default=-1) + 1
+            return list(range(start, start + n))
+
+        logger.info("Writing before the migration")
+        await write(next_keys(num_keys))
+
+        logger.info("Starting the migration")
+        await manager.api.create_vnode_tablet_migration(servers[0].ip_addr, ks)
+        for s in servers:
+            await read_barrier(manager.api, s.ip_addr)
+        for table in ('test', 'detached'):
+            base_id = await manager.get_table_id(ks, table)
+            log_id = await manager.get_table_id(ks, f"{table}_scylla_cdc_log")
+            assert await get_base_table(manager, log_id) == base_id, f"The CDC log of {table} is not co-located with it"
+        rows = await cql.run_async(f"SELECT * FROM system.cdc_timestamps WHERE keyspace_name = '{ks}' AND table_name = 'test'")
+        assert not rows, f"The CDC streams of a migrating table are published: {rows}"
+
+        async def write_through_every_node(cql, hosts):
+            for h in hosts:
+                await write(next_keys(10), host=h)
+        await upgrade_all_nodes_to_tablets(manager, servers, write_through_every_node)
+        cql = manager.get_cql()
+        hosts = [cql.cluster.metadata.get_host(s.ip_addr) for s in servers]
+
+        logger.info("Finalizing the migration")
+        finalize_ms = int(time.time() * 1000)
+        await manager.api.finalize_vnode_tablet_migration(servers[0].ip_addr, ks)
+        for s in servers:
+            await read_barrier(manager.api, s.ip_addr)
+        switch_ms = await get_cdc_switch_time(cql, ks, 'test', host=hosts[0])
+        for h in hosts[1:]:
+            assert await get_cdc_switch_time(cql, ks, 'test', host=h) == switch_ms
+        # 2 * ring_delay + the 5s CDC generation leeway
+        assert switch_ms >= finalize_ms + 25000, f"Switch at {switch_ms}ms, finalized at {finalize_ms}ms"
+        rows = await cql.run_async(f"SELECT stream_state, stream_id FROM system.cdc_streams WHERE keyspace_name = '{ks}' "
+                                   f"AND table_name = 'test' AND timestamp = {switch_ms}")
+        by_state = {state: {r.stream_id for r in rows if r.stream_state == state} for state in range(3)}
+        assert by_state[CDC_STREAM_STATE_CURRENT] and by_state[2] == by_state[CDC_STREAM_STATE_CURRENT] and not by_state[1], \
+            f"The switch doesn't open all its streams: {by_state}"
+
+        logger.info("Restarting a node before the switch, and writing through it")
+        await manager.server_restart(servers[1].server_id)
+        cql = await reconnect_driver(manager)
+        await manager.get_ready_cql(servers)
+        await write(next_keys(10), host=cql.cluster.metadata.get_host(servers[1].ip_addr))
+        assert time.time() * 1000 < switch_ms, "The restarted node was written through only after the switch"
+        hosts = [cql.cluster.metadata.get_host(s.ip_addr) for s in servers]
+
+        logger.info("Writing with a timestamp just before the switch")
+        # Writes more than 5s into the future are rejected.
+        async def switch_near():
+            return True if time.time() * 1000 > switch_ms - 4000 else None
+        await wait_for(switch_near, time.time() + 60)
+        just_before_switch = (switch_ms - 1) * 1000
+        just_before_keys = next_keys(len(hosts))
+        for k, h in zip(just_before_keys, hosts):
+            await write([k], host=h, using_timestamp=just_before_switch)
+
+        logger.info("Writing around the switch")
+        await write_through_every_node(cql, hosts)
+
+        logger.info("Waiting for the switch to be over")
+        async def switch_over():
+            return True if time.time() * 1000 > switch_ms + 5000 else None
+        await wait_for(switch_over, time.time() + 60)
+        await write_through_every_node(cql, hosts)
+        # Without the switch, the vnode-based CDC generation would accept it.
+        with pytest.raises(InvalidRequest, match="switched from the vnode-based CDC generations"):
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES (-1, -1) USING TIMESTAMP {just_before_switch}")
+
+        logger.info("Re-enabling CDC on a table whose log table was migrated without CDC")
+        await cql.run_async(f"ALTER TABLE {ks}.detached WITH cdc = {{'enabled': true}}")
+        await cql.run_async(SimpleStatement(f"INSERT INTO {ks}.detached (pk, v) VALUES (1, 1)",
+                                            consistency_level=ConsistencyLevel.QUORUM))
+        detached_switch_ms = await get_cdc_switch_time(cql, ks, 'detached')
+        assert await verify_cdc_log_after_migration(cql, ks, 'detached', [1], detached_switch_ms) == (0, 1)
+
+        logger.info("Verifying the CDC log")
+        vnode_rows, tablet_rows = await verify_cdc_log_after_migration(cql, ks, 'test', written, switch_ms)
+        rows = await cql.run_async(SimpleStatement(f'SELECT pk, "cdc$time" AS t FROM {ks}.test_scylla_cdc_log',
+                                                   consistency_level=ConsistencyLevel.QUORUM))
+        assert {r.pk for r in rows if timeuuid_to_micros(r.t) == just_before_switch} == set(just_before_keys)
+        # Written before the migration, during it, and before the switch:
+        # through the restarted node and with the timestamp just before it.
+        assert vnode_rows >= num_keys + num_nodes * 10 * num_nodes + 10 + len(just_before_keys)
+        assert tablet_rows >= num_nodes * 10
+
+        logger.info("Waiting for pow2 convergence")
+        await wait_for_pow2_convergence(manager, servers[0], ks, 'test')
+        base_id = await manager.get_table_id(ks, 'test')
+        log_id = await manager.get_table_id(ks, 'test_scylla_cdc_log')
+        assert await get_base_table(manager, log_id) == base_id, "The CDC log is not co-located after pow2 convergence"
+        hosts = [cql.cluster.metadata.get_host(s.ip_addr) for s in servers]
+        for s in servers:
+            await read_barrier(manager.api, s.ip_addr)
+        await write_through_every_node(cql, hosts)
+        await verify_cdc_log_after_migration(cql, ks, 'test', written, switch_ms)
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_migration_with_cdc_write_while_finalization_is_applied(manager: ScyllaClusterManager):
+    """Verify that a node can write to a CDC table while it applies the
+    finalization of the migration.
+
+    A node applies the schema change of a group0 command before it reloads
+    the CDC streams. In between, the keyspace already uses tablets, but the
+    switch to tablet streams isn't loaded yet. The CDC log table got its CDC
+    stream state when the migration was prepared, so the node keeps using
+    the vnode-based CDC generations.
+
+    Steps:
+    1. Start 2 nodes, migrate a keyspace with a CDC table up to finalization.
+    2. Hold the second node in group0 apply, before it reloads the CDC
+       streams, until it has applied the schema change of the finalization.
+    3. Write through the second node.
+    4. Let the node continue; verify the write is in the CDC log, in a vnode
+       stream.
+    """
+    cfg = {'ring_delay_ms': 3000}
+    racks = [{'dc': 'dc1', 'rack': f'rack{i}'} for i in range(2)]
+    servers = await manager.servers_add(2, cmdline=['--smp', '2'], config=cfg, property_file=racks)
+    cql, _ = await manager.get_ready_cql(servers)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'enabled': false}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v int) WITH cdc = {{'enabled': true}}")
+        await manager.api.create_vnode_tablet_migration(servers[0].ip_addr, ks)
+        await upgrade_all_nodes_to_tablets(manager, servers)
+        cql = manager.get_cql()
+        await ensure_group0_leader_on(manager, servers[0])
+        node = servers[1]
+        host = cql.cluster.metadata.get_host(node.ip_addr)
+
+        # Hold the topology coordinator until the finalization request is
+        # queued and the node applied every group0 command so far. Then the
+        # finalization is the next command it applies.
+        coordinator_pause = "topology_coordinator_pause_before_processing_backlog"
+        await manager.api.enable_injection(servers[0].ip_addr, coordinator_pause, one_shot=True)
+        finalize = asyncio.create_task(manager.api.finalize_vnode_tablet_migration(servers[0].ip_addr, ks))
+        await manager.api.wait_for_injection_enter(servers[0].ip_addr, coordinator_pause, deadline=time.time() + 60)
+        async def finalization_queued():
+            rows = await cql.run_async("SELECT request_type, done FROM system.topology_requests")
+            return True if any(r.request_type == 'finalize_migration' and not r.done for r in rows) else None
+        await wait_for(finalization_queued, time.time() + 60)
+        await read_barrier(manager.api, node.ip_addr)
+        injection = "group0_state_machine_pause_before_reload_modules"
+        await manager.api.enable_injection(node.ip_addr, injection, one_shot=True)
+        await manager.api.message_injection(servers[0].ip_addr, coordinator_pause)
+        await manager.api.wait_for_injection_enter(node.ip_addr, injection, deadline=time.time() + 60)
+
+        # The keyspace uses tablets, but the switch isn't loaded yet.
+        res = await cql.run_async(f"SELECT initial_tablets FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{ks}'", host=host)
+        assert res and res[0].initial_tablets is not None, "The node holds a group0 command other than the finalization"
+        rows = await cql.run_async(f"SELECT * FROM system.cdc_timestamps WHERE keyspace_name = '{ks}' AND table_name = 'test'", host=host)
+        assert not rows, f"The node already loaded the CDC streams of the finalization: {rows}"
+
+        logger.info("Writing through the node while it applies the finalization")
+        # Without retries: the node is held for at most a minute.
+        stmt = SimpleStatement(f"INSERT INTO {ks}.test (pk, v) VALUES (1, 1)", consistency_level=ConsistencyLevel.ONE,
+                               retry_policy=FallthroughRetryPolicy())
+        await cql.run_async(stmt, host=host)
+
+        await manager.api.message_injection(node.ip_addr, injection)
+        await finalize
+        for s in servers:
+            await read_barrier(manager.api, s.ip_addr)
+
+        switch_ms = await get_cdc_switch_time(cql, ks, 'test')
+        assert await verify_cdc_log_after_migration(cql, ks, 'test', [1], switch_ms) == (1, 0)
+
+
+async def test_migration_with_cdc_rollback(manager: ScyllaClusterManager):
+    """Verify that rolling back the migration of a keyspace with a CDC table
+    removes the CDC stream state of the log table along with its tablet map,
+    and that the migration can be started again and finalized.
+
+    Steps:
+    1. Start a node, create a vnode keyspace with a CDC table, write to it.
+    2. Start the migration, upgrade the node, downgrade it, roll back.
+       - Verify the log table has neither a tablet map nor CDC stream state.
+       - Verify writes keep going to the vnode-based CDC generations.
+    3. Start the migration again and finalize it.
+       - Verify the CDC log.
+    """
+    servers = await manager.servers_add(1, cmdline=['--smp', '2'], config={'num_tokens': 8})
+    server = servers[0]
+    cql, _ = await manager.get_ready_cql(servers)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v int) WITH cdc = {{'enabled': true}}")
+        log_id = await manager.get_table_id(ks, 'test_scylla_cdc_log')
+        stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, v) VALUES (?, ?)")
+        await asyncio.gather(*(cql.run_async(stmt, [k, k]) for k in range(10)))
+
+        logger.info("Starting the migration and rolling it back")
+        await manager.api.create_vnode_tablet_migration(server.ip_addr, ks)
+        rows = await cql.run_async(f"SELECT stream_id FROM system.cdc_streams_state WHERE table_id = {log_id}")
+        assert rows, "Starting the migration didn't give the CDC log table its CDC stream state"
+        await manager.api.upgrade_node_to_tablets(server.ip_addr)
+        await manager.server_restart(server.server_id)
+        await reconnect_driver(manager)
+        await manager.api.downgrade_node_to_vnodes(server.ip_addr)
+        await manager.server_restart(server.server_id)
+        cql = await reconnect_driver(manager)
+        await manager.get_ready_cql(servers)
+        await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks)
+
+        for table in ('cdc_streams_state', 'cdc_streams_history'):
+            rows = await cql.run_async(f"SELECT * FROM system.{table} WHERE table_id = {log_id}")
+            assert not rows, f"The rollback left the CDC stream state of the log table in system.{table}: {rows}"
+        rows = await cql.run_async(f"SELECT * FROM system.tablets WHERE table_id = {log_id}")
+        assert not rows, "The rollback left the tablet map of the CDC log table"
+        stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, v) VALUES (?, ?)")
+        await asyncio.gather(*(cql.run_async(stmt, [k, k]) for k in range(10, 20)))
+        rows = await cql.run_async(f"SELECT * FROM {ks}.test_scylla_cdc_log")
+        assert len(rows) == 20
+
+        logger.info("Starting the migration again and finalizing it")
+        await manager.api.create_vnode_tablet_migration(server.ip_addr, ks)
+        await upgrade_all_nodes_to_tablets(manager, servers)
+        cql = manager.get_cql()
+        await manager.api.finalize_vnode_tablet_migration(server.ip_addr, ks)
+        await read_barrier(manager.api, server.ip_addr)
+        switch_ms = await get_cdc_switch_time(cql, ks, 'test')
+        async def switch_over():
+            return True if time.time() * 1000 > switch_ms else None
+        await wait_for(switch_over, time.time() + 60)
+        stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, v) VALUES (?, ?)")
+        await asyncio.gather(*(cql.run_async(stmt, [k, k]) for k in range(20, 30)))
+        assert await verify_cdc_log_after_migration(cql, ks, 'test', list(range(30)), switch_ms) == (20, 10)

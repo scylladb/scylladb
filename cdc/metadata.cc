@@ -168,7 +168,7 @@ cdc::stream_id cdc::metadata::get_vnode_stream(api::timestamp_type ts, dht::toke
     return ret;
 }
 
-const utils::chunked_vector<cdc::stream_id>& cdc::metadata::get_tablet_stream_set(table_id tid, api::timestamp_type ts) const {
+cdc::table_streams::const_iterator cdc::metadata::get_tablet_stream_set(const table_streams& table_streams, table_id tid, api::timestamp_type ts) const {
     auto now = api::new_timestamp();
     if (ts > now + get_generation_leeway().count()) {
         throw exceptions::invalid_request_exception(seastar::format(
@@ -180,16 +180,9 @@ const utils::chunked_vector<cdc::stream_id>& cdc::metadata::get_tablet_stream_se
                 "  with the database's clocks.", format_timestamp(ts), format_timestamp(now)));
     }
 
-    auto table_it = _tablet_streams.find(tid);
-    if (table_it == _tablet_streams.end()) {
-        throw std::runtime_error(fmt::format(
-                "cdc::metadata::get_stream: could not find stream metadata for table {}.", tid));
-    }
-
     // find the most recent entry of stream sets with timestamp <= write timestamp.
     // start from the most recent entry, which is the most likely candidate, and go
     // back until we find matching entry.
-    const auto& table_streams = *table_it->second;
     auto it = table_streams.crbegin();
     for (; it != table_streams.crend() && it->first > ts; ++it);
 
@@ -201,11 +194,37 @@ const utils::chunked_vector<cdc::stream_id>& cdc::metadata::get_tablet_stream_se
                 table_streams.empty() ? std::nullopt : std::optional(table_streams.begin()->first));
     }
 
-    return it->second.streams;
+    return std::prev(it.base());
 }
 
 cdc::stream_id cdc::metadata::get_tablet_stream(table_id tid, api::timestamp_type ts, dht::token tok) {
-    return ::get_stream(get_tablet_stream_set(tid, ts), tok);
+    auto table_it = _tablet_streams.find(tid);
+    if (table_it == _tablet_streams.end()) {
+        throw std::runtime_error(fmt::format(
+                "cdc::metadata::get_stream: could not find stream metadata for table {}.", tid));
+    }
+    const auto& table_streams = *table_it->second;
+
+    auto it = get_tablet_stream_set(table_streams, tid, ts);
+    if (!is_vnode_streams_set(it->second)) {
+        return ::get_stream(it->second.streams, tok);
+    }
+
+    // The next stream set is missing only while the finalization of the
+    // migration is being applied: the keyspace already uses tablets, but the
+    // switch to the tablet streams isn't loaded yet.
+    auto next_it = std::next(it);
+    auto now = api::new_timestamp();
+    if (next_it != table_streams.end() && next_it->first <= now && ts <= now - get_generation_leeway().count()) {
+        throw exceptions::invalid_request_exception(seastar::format(
+                "cdc: attempted to get a stream \"from the past\" ({}; current server time: {})."
+                " The CDC log of this table switched from the vnode-based CDC generations to tablet streams at {}"
+                " and only accepts writes with earlier timestamps for a short time after that.\n"
+                "Are you using client-side timestamps? Make sure your clocks are well-synchronized"
+                " with the database's clocks.", format_timestamp(ts), format_timestamp(now), format_timestamp(next_it->first)));
+    }
+
+    return get_vnode_stream(ts, tok);
 }
 
 bool cdc::metadata::known_or_obsolete(db_clock::time_point tp) const {
@@ -328,6 +347,11 @@ void cdc::metadata::remove_tablet_streams_map(table_id tid) {
 
 std::vector<table_id> cdc::metadata::get_tables_with_cdc_tablet_streams() const {
     return _tablet_streams | std::views::keys | std::ranges::to<std::vector<table_id>>();
+}
+
+bool cdc::metadata::has_only_vnode_streams_set(table_id tid) const {
+    auto it = _tablet_streams.find(tid);
+    return it != _tablet_streams.end() && it->second->size() == 1 && is_vnode_streams_set(it->second->begin()->second);
 }
 
 future<cdc::cdc_stream_diff> cdc::metadata::generate_stream_diff(const utils::chunked_vector<stream_id>& before, const utils::chunked_vector<stream_id>& after) {

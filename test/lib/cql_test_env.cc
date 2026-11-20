@@ -469,6 +469,10 @@ public:
         return _ss;
     }
 
+    virtual sharded<cdc::generation_service>& get_cdc_generation_service() override {
+        return _cdc_generation_service;
+    }
+
     virtual sharded<tasks::task_manager>& get_task_manager() override {
         return _task_manager;
     }

@@ -82,7 +82,10 @@ Keyspace and table configuration
 * All tables, materialized views and secondary indexes in the keyspace should
   have ``tombstone_gc`` mode set to ``repair`` to prevent tombstone garbage
   collection from running during migration. For guidance, see
-  :ref:`Tombstone Garbage Collection <ddl-tombstones-gc>`.
+  :ref:`Tombstone Garbage Collection <ddl-tombstones-gc>`. This doesn't apply
+  to CDC log tables, which don't support the ``repair`` mode. If a CDC log
+  table uses it, which older ScyllaDB versions allowed, switch the table to
+  ``timeout`` with ``ALTER TABLE``, or preparing the migration fails.
 * All materialized views and secondary indexes in the keyspace must be
   **fully built** before the migration is started. Builds in progress are not
   carried over to tablets. Check the build status with
@@ -103,7 +106,8 @@ The current migration procedure has the following limitations:
 * **No schema changes** during the migration. Creating or dropping tables, views,
   or indexes, and dropping the migrating keyspace are rejected until the
   migration is finished. Altering the properties of existing tables and views is
-  allowed, except enabling CDC, which is not supported.
+  allowed, except enabling CDC on a table that doesn't have a CDC log table
+  yet, which creates the log table and is rejected too.
 * **No planned topology changes** during the migration. Do not add, remove,
   decommission, or rebuild nodes while a migration is in progress. Replacing
   a dead node is supported as an emergency recovery operation.
@@ -113,16 +117,28 @@ The current migration procedure has the following limitations:
   Do not take snapshots, run backups, or restore into the migrating keyspace
   while the migration is in progress.
 * **No TRUNCATE** on tables in the migrating keyspace during the migration.
-* Only **CQL tables, materialized views, and secondary indexes** can be
-  migrated. CDC tables and Alternator tables are not supported. Views whose
-  partition key consists of exactly the base table's partition key columns,
-  in the same order, including the backing views of local secondary indexes,
-  are migrated as :term:`co-located tables <Colocated Table>` with their base
-  table (sharing its tablets). Other views, including the backing views of
-  global secondary indexes, get tablets of their own.
+* Only **CQL tables, including tables with CDC, materialized views, and
+  secondary indexes** can be migrated. Alternator tables are not supported.
+  Views whose partition key consists of exactly the base table's partition
+  key columns, in the same order, including the backing views of local
+  secondary indexes, are migrated as
+  :term:`co-located tables <Colocated Table>` with their base table (sharing
+  its tablets). Other views, including the backing views of global secondary
+  indexes, get tablets of their own. CDC log tables are always migrated as
+  co-located tables with their base table. See :ref:`Tables with CDC
+  <migrate-vnodes-to-tablets-cdc>` for how the migration affects CDC
+  consumers.
+* The finalization switches the CDC log tables of the keyspace to tablet
+  streams all at once, and the size of that update is limited. If the tables
+  with CDC have too many tablets in total, which can happen on a cluster with
+  many vnodes, preparing the migration fails with an error saying so.
 * Tables with **LWTs** cannot be migrated.
 * Only tables using the **Incremental Compaction Strategy (ICS)** can be migrated.
-  Other compaction strategies are not supported.
+  Other compaction strategies are not supported. CDC log tables are an
+  exception: they are migrated with their base tables whatever their
+  compaction strategy, which is the Time-Window Compaction Strategy by
+  default. Resharding a CDC log table that doesn't use ICS can temporarily
+  take extra disk space, up to the size of the table.
 
 Overview
 --------
@@ -351,6 +367,11 @@ Procedure
       Finalization **cannot be undone**. Once the migration is finalized, the
       keyspace cannot be switched back to vnodes.
 
+   #. If the keyspace has tables with CDC, prepare their CDC consumers, as
+      described in :ref:`Tables with CDC <migrate-vnodes-to-tablets-cdc>`.
+      After the finalization, restart them only once they have read the
+      changes up to the switch.
+
    #. Issue the finalization request:
 
       .. code-block:: console
@@ -447,6 +468,86 @@ Procedure
       nodetool cluster repair
 
    Run both if the cluster has keyspaces of both kinds.
+
+.. _migrate-vnodes-to-tablets-cdc:
+
+Tables with CDC
+---------------
+
+The CDC log of a table keeps working throughout the migration, but its
+streams change:
+
+* Until the migration is finalized, the CDC log uses the streams of the CDC
+  generations of vnode-based keyspaces, described in
+  ``system_distributed.cdc_generation_timestamps`` and
+  ``system_distributed.cdc_streams_descriptions_v2``. The table isn't listed
+  in ``system.cdc_timestamps`` and ``system.cdc_streams``.
+* Finalization switches the CDC log to the table's own tablet streams, at a
+  time after the finalization, the same on all nodes: twice ``ring_delay_ms``
+  plus 5 seconds later, which is 65 seconds with the default ``ring_delay_ms``.
+  This is the first timestamp of the table in ``system.cdc_timestamps``.
+  Changes with earlier timestamps are in the streams of the vnode-based CDC
+  generations, later changes in the tablet streams, which are described like
+  those of a table created in a keyspace with tablets. See
+  :doc:`Querying CDC Streams </features/cdc/cdc-querying-streams/>`.
+
+CDC consumers must read the streams of the vnode-based CDC generations up to
+the switch, then the tablet streams from the switch on.
+
+The CDC client libraries, and the connectors built on them, don't follow the
+switch. A consumer reads either the streams of the vnode-based CDC generations
+or the tablet streams, depending on whether the keyspace uses tablets, which
+changes at the finalization, before the switch. It decides when it starts,
+and some consumers decide again by themselves: after an internal error, or
+when their platform restarts or moves them, as Kafka Connect can do with a
+connector. A consumer that reads the streams of the vnode-based CDC
+generations gets no changes after the switch. A consumer that reads the tablet
+streams starts at the switch at the earliest, and doesn't read the streams of
+the vnode-based CDC generations.
+
+So, for each CDC consumer of the keyspace's tables:
+
+* Before the finalization, make sure that the consumer reads tables of this
+  keyspace only, and one table only, as some libraries require. A consumer
+  that also reads tables of other keyspaces, or several tables, can stop
+  working when it restarts after the finalization. Split it into several
+  consumers.
+* After the finalization, keep the consumer running until it has read the
+  changes up to the switch: its progress, such as its checkpoints, must be
+  past the switch. This takes at least the consumer's confidence window after
+  the switch, which is 30 seconds by default in the client libraries (called
+  the safety interval in scylla-cdc-rust), and longer if the consumer lags
+  behind.
+* Then restart the consumer, and have it start reading at the switch or
+  earlier, not at the current time.
+
+A consumer that restarts earlier, for any reason, skips the changes before the
+switch that it hasn't read yet. A consumer started after the finalization
+doesn't read any change before the switch. These changes stay in the CDC log
+until the CDC TTL expires them, and can be read with CQL, as described in
+:doc:`Querying CDC Streams </features/cdc/cdc-querying-streams/>`: read the
+streams of the vnode-based CDC generations, listed in
+``system_distributed.cdc_generation_timestamps`` and
+``system_distributed.cdc_streams_descriptions_v2``, up to the switch.
+
+Once the switch has happened, writes with client-side timestamps more than 5
+seconds older than the current time are rejected if their timestamps are
+before the switch, as writes to a previous CDC generation are.
+
+When the migration is finalized, the CDC log entries of a change are stored
+on the same nodes as the change itself. Between the finalization and the
+switch, the tablet load balancer can move some tablets of the table to other
+nodes, and then the CDC log entries of some changes are stored on other nodes
+than the changes. This doesn't affect reading the CDC log. But writing such
+a change requires the nodes of both the change and its CDC log entries to be
+available, and a write that fails is more likely to be applied to only one of
+the table and its CDC log. Retry failed writes, as always.
+
+Rolling the migration back keeps the CDC log on the streams of the
+vnode-based CDC generations.
+
+A migration of a keyspace with CDC tables started by a ScyllaDB version that
+didn't support them can't be finalized: roll it back and start it again.
 
 Rollback Procedure
 ------------------
