@@ -153,7 +153,15 @@ def _check_exists(cql, table_name, columns):
     assert list(cql.execute(f"SELECT {cols} FROM system.{table_name}"))
 
 def test_protocol_servers(scylla_only, cql):
-    _check_exists(cql, "protocol_servers", ("name", "listen_addresses", "protocol", "protocol_version"))
+    _check_exists(cql, "protocol_servers", ("name", "listen_addresses", "protocol", "protocol_version", "listen_backlog"))
+
+# The CQL server reports the backlog of its listening sockets, by default
+# scaled with the shard count above Seastar's fixed 100 (the test server runs
+# 2 shards). Reproduces SCYLLADB-6181.
+def test_protocol_servers_cql_listen_backlog(scylla_only, cql):
+    rows = list(cql.execute("SELECT listen_backlog FROM system.protocol_servers WHERE name = 'native transport'"))
+    assert len(rows) == 1
+    assert rows[0].listen_backlog > 100
 
 def test_runtime_info(scylla_only, cql):
     _check_exists(cql, "runtime_info", ("group", "item", "value"))

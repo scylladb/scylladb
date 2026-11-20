@@ -88,9 +88,13 @@ public:
     static execute_under_tenant_type no_tenant();
 };
 
+// Seastar's default listen backlog.
+inline constexpr uint32_t default_listen_backlog = seastar::listen_options{}.listen_backlog;
+
 struct config {
     utils::updateable_value<uint32_t> uninitialized_connections_semaphore_cpu_concurrency;
     utils::updateable_value<uint32_t> shutdown_timeout_in_seconds;
+    uint32_t listen_backlog = default_listen_backlog;
 };
 
 // A generic TCP socket server.
@@ -128,6 +132,7 @@ private:
     uint32_t _prev_conns_cpu_concurrency;
     named_semaphore _conns_cpu_concurrency_semaphore;
     std::chrono::seconds _shutdown_timeout;
+    uint32_t _listen_backlog;
 public:
     server(const sstring& server_name, logging::logger& logger, config cfg);
 
@@ -149,6 +154,9 @@ public:
         bool proxy_protocol = false,
         std::function<server&()> get_shard_instance = {}
         );
+
+    // The backlog listen() passes to the listening sockets.
+    uint32_t listen_backlog() const { return _listen_backlog; }
 
     future<> do_accepts(int which, bool keepalive, socket_address server_addr, bool is_tls);
 

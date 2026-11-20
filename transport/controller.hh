@@ -36,6 +36,17 @@ namespace cql_transport {
 
 class cql_server;
 struct connection_service_level_params;
+
+// Backlog of the CQL listening sockets: the configured value, or, when it is 0,
+// a value scaled with the shard count and capped at somaxconn, unless that is 0
+// (unknown).
+// Throws std::invalid_argument when the configured value doesn't fit the int
+// that listen() takes.
+uint32_t compute_listen_backlog(uint32_t configured, unsigned shard_count, uint32_t somaxconn);
+
+// compute_listen_backlog() for native_transport_listen_backlog on this node.
+uint32_t compute_listen_backlog(const db::config& cfg);
+
 class controller : public protocol_server {
     std::vector<socket_address> _listen_addresses;
     std::unique_ptr<sharded<cql_server>> _server;
@@ -79,6 +90,7 @@ public:
     virtual sstring protocol() const override;
     virtual sstring protocol_version() const override;
     virtual std::vector<socket_address> listen_addresses() const override;
+    virtual std::optional<uint32_t> listen_backlog() const override;
     virtual future<> start_server() override;
     virtual future<> stop_server() override;
     virtual future<> request_stop_server() override;
