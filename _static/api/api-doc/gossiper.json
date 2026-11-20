@@ -1,0 +1,177 @@
+{
+   "apiVersion":"0.0.1",
+   "swaggerVersion":"1.2",
+   "basePath":"{{Protocol}}://{{Host}}",
+   "resourcePath":"/gossiper",
+   "produces":[
+      "application/json"
+   ],
+   "apis":[
+      {
+         "path":"/gossiper/endpoint/down/",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get the addresses of the down endpoints",
+               "type":"array",
+               "items":{
+                  "type":"string"
+               },
+               "nickname":"get_down_endpoint",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/gossiper/endpoint/live/",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get the addresses of live endpoints",
+               "type":"array",
+               "items":{
+                  "type":"string"
+               },
+               "nickname":"get_live_endpoint",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/gossiper/downtime/{addr}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get the downtime of an end point",
+               "type":"long",
+               "nickname":"get_endpoint_downtime",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"addr",
+                     "description":"The endpoint address",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/gossiper/generation_number/{addr}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Returns files which are pending for archival attempt. Does NOT include failed archive attempts",
+               "type": "long",
+               "nickname":"get_current_generation_number",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"addr",
+                     "description":"The endpoint address",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/gossiper/heart_beat_version/{addr}",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get heart beat version for a node",
+               "type": "long",
+               "nickname":"get_current_heart_beat_version",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"addr",
+                     "description":"The endpoint address",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/gossiper/assassinate/{addr}",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Assassinate an end point",
+               "type":"void",
+               "nickname":"assassinate_endpoint",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"addr",
+                     "description":"The endpoint address",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  },
+                  {
+                     "name":"unsafe",
+                     "description":"Set to True to perform an unsafe assassination",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"boolean",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/gossiper/force_remove_endpoint/{addr}",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Force remove an endpoint from gossip",
+               "type":"void",
+               "nickname":"force_remove_endpoint",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"addr",
+                     "description":"The endpoint address",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  }
+               ]
+            }
+         ]
+      }
+   ]
+}

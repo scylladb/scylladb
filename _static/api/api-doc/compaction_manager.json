@@ -1,0 +1,360 @@
+{
+   "apiVersion":"0.0.1",
+   "swaggerVersion":"1.2",
+   "basePath":"{{Protocol}}://{{Host}}",
+   "resourcePath":"/compaction_manager",
+   "produces":[
+      "application/json"
+   ],
+   "apis":[
+      {
+         "path":"/compaction_manager/compactions",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"get List of running compactions",
+               "type":"array",
+               "items":{
+                  "type":"summary"
+               },
+               "nickname":"get_compactions",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/compaction_manager/compaction_history",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"get List of the compaction history",
+               "type":"array",
+               "items":{
+                  "type":"history"
+               },
+               "nickname":"get_compaction_history",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/compaction_manager/compaction_info",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"get a list of all active compaction info",
+               "type":"array",
+               "items":{
+                  "type":"compaction_info"
+               },
+               "nickname":"get_compaction_info",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/compaction_manager/force_user_defined_compaction",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Triggers the compaction of user specified sstables. You can specify files from various keyspaces and columnfamilies. If you do so, user defined compaction is performed several times to the groups of files in the same keyspace/columnfamily. must contain keyspace and columnfamily name in path(for 2.1+) or file name itself.",
+               "type":"void",
+               "nickname":"force_user_defined_compaction",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"data_files",
+                     "description":"a comma separated list of sstable file to compact. must contain keyspace and columnfamily name in path(for 2.1+) or file name itself",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/compaction_manager/stop_compaction",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Stop all running compaction-like tasks having the provided type",
+               "type":"void",
+               "nickname":"stop_compaction",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"type",
+                     "description":"The type of compaction to stop. Can be one of: COMPACTION | CLEANUP | SCRUB | UPGRADE | RESHAPE",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+         "path":"/compaction_manager/stop_keyspace_compaction/{keyspace}",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Stop all running compaction-like tasks in the given keyspace and tables having the provided type.",
+               "type":"void",
+               "nickname":"stop_keyspace_compaction",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"keyspace",
+                     "description":"The keyspace to stop compaction in",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"path"
+                  },
+                  {
+                     "name":"tables",
+                     "description":"Comma-separated tables to stop compaction in",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"type",
+                     "description":"The type of compaction to stop. Can be one of: COMPACTION | CLEANUP | SCRUB | UPGRADE | RESHAPE",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
+      "path": "/compaction_manager/metrics/pending_tasks",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get pending tasks",
+          "type": "long",
+          "nickname": "get_pending_tasks",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/compaction_manager/metrics/pending_tasks_by_table",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get pending tasks by table name",
+          "type": "array",
+          "items": {
+              "type": "pending_compaction"
+           },
+          "nickname": "get_pending_tasks_by_table",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/compaction_manager/metrics/completed_tasks",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get completed tasks",
+          "type": "long",
+          "nickname": "get_completed_tasks",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/compaction_manager/metrics/total_compactions_completed",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get total compactions completed",
+          "type": "long",
+          "nickname": "get_total_compactions_completed",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    },
+    {
+      "path": "/compaction_manager/metrics/bytes_compacted",
+      "operations": [
+        {
+          "method": "GET",
+          "summary": "Get bytes compacted",
+          "type": "long",
+          "nickname": "get_bytes_compacted",
+          "produces": [
+            "application/json"
+          ],
+          "parameters": []
+        }
+      ]
+    }
+   ],
+   "models":{
+      "row_merged":{
+         "id":"row_merged",
+         "description":"A row merged information",
+         "properties":{
+            "key":{
+               "type": "long",
+               "description":"The number of sstable"
+            },
+            "value":{
+               "type":"long",
+               "description":"The number or row compacted"
+            }
+         }
+      },
+      "compaction_info" :{
+          "id": "compaction_info",
+          "description":"A key value mapping",
+          "properties":{
+            "operation_type":{
+               "type":"string",
+               "description":"The operation type"
+            },
+            "completed":{
+               "type":"long",
+               "description":"The current completed"
+            },
+            "total":{
+               "type":"long",
+               "description":"The total to compact"
+            },
+            "unit":{
+               "type":"string",
+               "description":"The compacted unit"
+            }
+          }
+      },
+      "summary":{
+         "id":"summary",
+         "description":"A compaction summary object",
+         "properties":{
+            "id":{
+               "type":"string",
+               "description":"The UUID"
+            },
+            "ks":{
+               "type":"string",
+               "description":"The keyspace name"
+            },
+            "cf":{
+               "type":"string",
+               "description":"The column family name"
+            },
+            "completed":{
+               "type":"long",
+               "description":"The number of units completed"
+            },
+            "total":{
+               "type":"long",
+               "description":"The total number of units"
+            },
+            "task_type":{
+               "type":"string",
+               "description":"The task compaction type"
+            },
+            "unit":{
+               "type":"string",
+               "description":"The units being used"
+            }
+         }
+      },
+      "pending_compaction": {
+        "id": "pending_compaction",
+        "properties": {
+            "cf": {
+               "type": "string",
+               "description": "The column family name"
+            },
+            "ks": {
+               "type":"string",
+               "description": "The keyspace name"
+            },
+            "task": {
+               "type":"long",
+               "description": "The number of pending tasks"
+            }
+        }
+      },
+      "history": {
+      "id":"history",
+      "description":"Compaction history information",
+      "properties":{
+            "id":{
+               "type":"string",
+               "description":"The UUID"
+            },
+            "cf":{
+               "type":"string",
+               "description":"The column family name"
+            },
+            "ks":{
+               "type":"string",
+               "description":"The keyspace name"
+            },
+            "compacted_at":{
+               "type":"long",
+               "description":"The time of compaction"
+            },
+            "bytes_in":{
+               "type":"long",
+               "description":"Bytes in"
+            },
+            "bytes_out":{
+               "type":"long",
+               "description":"Bytes out"
+            },
+            "rows_merged":{
+               "type":"array",
+               "items":{
+                  "type":"row_merged"
+               },
+               "description":"The merged rows"
+            }
+        }
+      }
+   }
+}

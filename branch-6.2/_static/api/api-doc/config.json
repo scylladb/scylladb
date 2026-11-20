@@ -1,0 +1,30 @@
+"/v2/config/{id}": {
+      "get": {
+        "description": "Return a config value",
+        "operationId": "find_config_id",
+        "produces": [
+          "application/json"
+        ],
+        "tags": ["config"],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "ID of config to return",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Config value"
+          },
+          "default": {
+            "description": "unexpected error",
+            "schema": {
+              "$ref": "#/definitions/ErrorModel"
+            }
+          }
+        }
+      }
+}
