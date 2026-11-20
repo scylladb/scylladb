@@ -138,19 +138,37 @@ class LcovRecord(metaclass = MakeLcovRouter):
         self.source_file = Path(fields[0])
         return False
 
+    def _add_function(self, line: int, func_name: str, hits: int) -> None:
+        """Record `hits` for `func_name`, keeping one entry per function name.
+
+        Binaries built from the same header can report the same function at
+        different start lines - e.g. a constructor at its declaration in one
+        test binary and at its body in another - so merging their traces would
+        otherwise give one record two FN entries with the same name, which
+        neither FNDA (looked up by name) nor lcov itself can tell apart. Keep
+        the earliest line and add the hits together.
+        """
+        existing = self.functions_to_lines.get(func_name)
+        if existing is None:
+            self.functions_to_lines[func_name] = line
+            self.function_hits[(line, func_name)] = hits
+            return
+        if line < existing:
+            self.function_hits[(line, func_name)] = self.function_hits.pop((existing, func_name))
+            self.functions_to_lines[func_name] = line
+        self.function_hits[(self.functions_to_lines[func_name], func_name)] += hits
+
     def add_FN(self, fields: List[str]) -> bool:
         line, func_name = fields
-        line = int(line)
-        assert func_name not in self.functions_to_lines
-        self.functions_to_lines[func_name] = line
-        self.function_hits.setdefault((line, func_name), 0)
+        self._add_function(int(line), func_name, 0)
         return False
 
     def add_FNDA(self, fields: List[str]) -> bool:
         hits, func_name = fields
         line = self.functions_to_lines[func_name]
-        hits = int(hits)
-        self.function_hits[(line, func_name)] = hits
+        # += rather than =: a function listed twice (see _add_function) has two
+        # FNDA lines, and both counts belong to it.
+        self.function_hits[(line, func_name)] += int(hits)
         return False
 
     def add_FNF(self, fields: List[str]) -> bool:
@@ -333,12 +351,9 @@ class LcovRecord(metaclass = MakeLcovRouter):
                 self.line_hits[line] = other.line_hits[line]
             else:
                 self.line_hits[line] += other.line_hits[line]
-        for key in other.function_hits.keys():
-            if key not in self.function_hits:
-                self.function_hits[key] = other.function_hits[key]
-            else:
-                self.function_hits[key] += other.function_hits[key]
         self._refresh_functions_to_lines()
+        for (line, func_name), hits in other.function_hits.items():
+            self._add_function(line, func_name, hits)
         for key in other.branch_hits.keys():
             if key not in self.branch_hits or self.branch_hits[key] is None:
                 self.branch_hits[key] = other.branch_hits[key]
