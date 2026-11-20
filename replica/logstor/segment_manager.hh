@@ -113,7 +113,7 @@ struct segment_manager_usage {
     uint64_t space_on_disk{0};
     // Memory the segment manager holds: the descriptors of every segment and the buffers of the
     // compaction and separator pools. The indexes of the tables are not part of it, nor is the
-    // buffered writer of the write path, which logstor holds rather than the segment manager.
+    // write buffer ring of the write path, which logstor holds rather than the segment manager.
     size_t memory_usage{0};
 };
 

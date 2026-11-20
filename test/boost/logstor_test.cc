@@ -258,8 +258,8 @@ db::timeout_clock::time_point test_timeout() {
     return db::timeout_clock::now() + std::chrono::minutes(1);
 }
 
-buffered_writer_config make_buffered_writer_config(size_t buffer_size, size_t ring_size, std::chrono::milliseconds sync_period = std::chrono::milliseconds(0)) {
-    return buffered_writer_config{
+write_buffer_ring_config make_write_buffer_ring_config(size_t buffer_size, size_t ring_size, std::chrono::milliseconds sync_period = std::chrono::milliseconds(0)) {
+    return write_buffer_ring_config{
         .buffer_size = buffer_size,
         .ring_size = ring_size,
         .flush_sg = seastar::default_scheduling_group(),
@@ -286,7 +286,7 @@ sstring make_single_buffer_value(schema_ptr schema, size_t buffer_size) {
     }
 }
 
-log_record make_buffered_writer_record(schema_ptr schema, size_t idx, const sstring& value, api::timestamp_type ts) {
+log_record make_write_buffer_ring_record(schema_ptr schema, size_t idx, const sstring& value, api::timestamp_type ts) {
     return make_log_record(schema, sstring(fmt::format("pk{:04}", idx)), value, ts);
 }
 
@@ -2224,27 +2224,27 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_streamed_segment_rewriter_rejects_truncate
     BOOST_REQUIRE_THROW(rewrite_streamed_segment(log_segment_id{41}, segment_sequence{341}, std::span(&truncated, 1)), std::runtime_error);
 }
 
-// Checks that buffered_writer forwards records to the flush callback and resolves returned locations.
-SEASTAR_THREAD_TEST_CASE(test_logstor_buffered_writer_basic_flushes_records) {
+// Checks that write_buffer_ring forwards records to the flush callback and resolves returned locations.
+SEASTAR_THREAD_TEST_CASE(test_logstor_write_buffer_ring_basic_flushes_records) {
     auto schema = make_kv_schema();
     constexpr size_t buffer_size = 4 * 1024;
 
     test_flush_controller flush_ctl;
-    buffered_writer writer(make_buffered_writer_config(buffer_size, 3), [&flush_ctl] (write_buffer& wb) {
+    write_buffer_ring ring(make_write_buffer_ring_config(buffer_size, 3), [&flush_ctl] (write_buffer& wb) {
         return flush_ctl(wb);
     });
 
-    writer.start().get();
-    auto stop = defer([&writer] noexcept {
-        writer.stop().get();
+    ring.start().get();
+    auto stop = defer([&ring] noexcept {
+        ring.stop().get();
     });
 
     std::vector<log_record> expected;
     std::vector<future<record_location_with_holder>> persisted;
     for (size_t i = 0; i < 3; ++i) {
-        auto record = make_buffered_writer_record(schema, i, sstring(fmt::format("value{}", i)), api::timestamp_type(100 + i));
+        auto record = make_write_buffer_ring_record(schema, i, sstring(fmt::format("value{}", i)), api::timestamp_type(100 + i));
         expected.push_back(record);
-        auto accepted = writer.write_to_buffer(log_record_writer(record), test_timeout()).get();
+        auto accepted = ring.write_to_buffer(log_record_writer(record), test_timeout()).get();
         persisted.push_back(std::move(accepted.persisted));
     }
 
@@ -2264,33 +2264,33 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_buffered_writer_basic_flushes_records) {
 }
 
 // Checks that flush() seals and writes a partially filled head buffer even when the sync timer has not expired.
-SEASTAR_THREAD_TEST_CASE(test_logstor_buffered_writer_flushes_partial_buffer_with_large_sync_period) {
+SEASTAR_THREAD_TEST_CASE(test_logstor_write_buffer_ring_flushes_partial_buffer_with_large_sync_period) {
     auto schema = make_kv_schema();
     constexpr size_t buffer_size = 4 * 1024;
     constexpr auto sync_period = std::chrono::hours(1);
 
     test_flush_controller flush_ctl;
-    buffered_writer writer(make_buffered_writer_config(buffer_size, 3, sync_period), [&flush_ctl] (write_buffer& wb) {
+    write_buffer_ring ring(make_write_buffer_ring_config(buffer_size, 3, sync_period), [&flush_ctl] (write_buffer& wb) {
         return flush_ctl(wb);
     });
 
-    writer.start().get();
-    auto stop = defer([&writer] noexcept {
-        writer.stop().get();
+    ring.start().get();
+    auto stop = defer([&ring] noexcept {
+        ring.stop().get();
     });
 
     std::vector<log_record> expected;
     std::vector<future<record_location_with_holder>> persisted;
     for (size_t i = 0; i < 3; ++i) {
-        auto record = make_buffered_writer_record(schema, i, sstring(fmt::format("value{}", i)), api::timestamp_type(150 + i));
+        auto record = make_write_buffer_ring_record(schema, i, sstring(fmt::format("value{}", i)), api::timestamp_type(150 + i));
         expected.push_back(record);
-        auto accepted = writer.write_to_buffer(log_record_writer(record), test_timeout()).get();
+        auto accepted = ring.write_to_buffer(log_record_writer(record), test_timeout()).get();
         persisted.push_back(std::move(accepted.persisted));
     }
 
     BOOST_REQUIRE(flush_ctl.flushed_buffers.empty());
 
-    auto flush = writer.flush();
+    auto flush = ring.flush();
     flush_ctl.wait_for_flush_starts(1);
 
     std::vector<record_location> locations;
@@ -2314,39 +2314,39 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_buffered_writer_flushes_partial_buffer_wit
 }
 
 // Checks that a paused tail flush can fill the ring, queue later writes, and then drain them without losing order.
-SEASTAR_THREAD_TEST_CASE(test_logstor_buffered_writer_paused_flush_fills_ring_then_drains) {
+SEASTAR_THREAD_TEST_CASE(test_logstor_write_buffer_ring_paused_flush_fills_ring_then_drains) {
     auto schema = make_kv_schema();
     constexpr size_t buffer_size = 4 * 1024;
     const auto large_value = make_single_buffer_value(schema, buffer_size);
 
     test_flush_controller flush_ctl{.pause_flushes = true};
-    buffered_writer writer(make_buffered_writer_config(buffer_size, 2), [&flush_ctl] (write_buffer& wb) {
+    write_buffer_ring ring(make_write_buffer_ring_config(buffer_size, 2), [&flush_ctl] (write_buffer& wb) {
         return flush_ctl(wb);
     });
 
-    writer.start().get();
-    auto stop = defer([&writer] noexcept {
-        writer.stop().get();
+    ring.start().get();
+    auto stop = defer([&ring] noexcept {
+        ring.stop().get();
     });
 
     std::vector<log_record> expected;
     for (size_t i = 0; i < 4; ++i) {
-        expected.push_back(make_buffered_writer_record(schema, i, large_value, api::timestamp_type(200 + i)));
+        expected.push_back(make_write_buffer_ring_record(schema, i, large_value, api::timestamp_type(200 + i)));
     }
 
-    auto accepted0 = writer.write_to_buffer(log_record_writer(expected[0]), test_timeout()).get();
+    auto accepted0 = ring.write_to_buffer(log_record_writer(expected[0]), test_timeout()).get();
     auto persisted0 = std::move(accepted0.persisted);
     flush_ctl.wait_for_flush_starts(1);
     BOOST_REQUIRE(!persisted0.available());
 
-    auto accepted1 = writer.write_to_buffer(log_record_writer(expected[1]), test_timeout()).get();
+    auto accepted1 = ring.write_to_buffer(log_record_writer(expected[1]), test_timeout()).get();
     auto persisted1 = std::move(accepted1.persisted);
 
-    auto queued2 = writer.write_to_buffer(log_record_writer(expected[2]), test_timeout());
-    auto queued3 = writer.write_to_buffer(log_record_writer(expected[3]), test_timeout());
+    auto queued2 = ring.write_to_buffer(log_record_writer(expected[2]), test_timeout());
+    auto queued3 = ring.write_to_buffer(log_record_writer(expected[3]), test_timeout());
     BOOST_REQUIRE(!queued2.available());
     BOOST_REQUIRE(!queued3.available());
-    BOOST_REQUIRE_EQUAL(writer.queued_write_count(), 2u);
+    BOOST_REQUIRE_EQUAL(ring.queued_write_count(), 2u);
 
     flush_ctl.release_one_flush();
     wait_for_persisted(persisted0);
@@ -2355,7 +2355,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_buffered_writer_paused_flush_fills_ring_th
     auto accepted2 = queued2.get();
     auto persisted2 = std::move(accepted2.persisted);
     BOOST_REQUIRE(!queued3.available());
-    BOOST_REQUIRE_EQUAL(writer.queued_write_count(), 1u);
+    BOOST_REQUIRE_EQUAL(ring.queued_write_count(), 1u);
 
     flush_ctl.release_one_flush();
     wait_for_persisted(persisted1);
@@ -2363,7 +2363,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_buffered_writer_paused_flush_fills_ring_th
 
     auto accepted3 = queued3.get();
     auto persisted3 = std::move(accepted3.persisted);
-    BOOST_REQUIRE_EQUAL(writer.queued_write_count(), 0u);
+    BOOST_REQUIRE_EQUAL(ring.queued_write_count(), 0u);
 
     flush_ctl.release_one_flush();
     wait_for_persisted(persisted2);
@@ -2378,49 +2378,49 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_buffered_writer_paused_flush_fills_ring_th
 // A record that finds no room in the ring is queued, and it has to keep the write target it came
 // with: the holders of that target are what keep its compaction group from being reported empty to
 // a tablet split and from finishing its stop() while the write is still to come.
-SEASTAR_THREAD_TEST_CASE(test_logstor_buffered_writer_queued_write_keeps_its_write_target) {
+SEASTAR_THREAD_TEST_CASE(test_logstor_write_buffer_ring_queued_write_keeps_its_write_target) {
     auto schema = make_kv_schema();
     constexpr size_t buffer_size = 4 * 1024;
     const auto large_value = make_single_buffer_value(schema, buffer_size);
 
-    // Outlive the writer, so that the holders of the queued write are released before the gates
+    // Outlive the ring, so that the holders of the queued write are released before the gates
     // they were taken from are destroyed.
     seastar::gate non_empty_gate;
     seastar::gate alive_gate;
 
     test_flush_controller flush_ctl{.pause_flushes = true};
-    buffered_writer writer(make_buffered_writer_config(buffer_size, 2), [&flush_ctl] (write_buffer& wb) {
+    write_buffer_ring ring(make_write_buffer_ring_config(buffer_size, 2), [&flush_ctl] (write_buffer& wb) {
         return flush_ctl(wb);
     });
 
-    writer.start().get();
-    auto stop = defer([&writer] noexcept {
-        writer.stop().get();
+    ring.start().get();
+    auto stop = defer([&ring] noexcept {
+        ring.stop().get();
     });
 
     std::vector<log_record> expected;
     for (size_t i = 0; i < 3; ++i) {
-        expected.push_back(make_buffered_writer_record(schema, i, large_value, api::timestamp_type(300 + i)));
+        expected.push_back(make_write_buffer_ring_record(schema, i, large_value, api::timestamp_type(300 + i)));
     }
 
     // Fill the ring: the first record is being flushed and the second holds the only other buffer.
-    auto accepted0 = writer.write_to_buffer(log_record_writer(expected[0]), test_timeout()).get();
+    auto accepted0 = ring.write_to_buffer(log_record_writer(expected[0]), test_timeout()).get();
     auto persisted0 = std::move(accepted0.persisted);
     flush_ctl.wait_for_flush_starts(1);
-    auto accepted1 = writer.write_to_buffer(log_record_writer(expected[1]), test_timeout()).get();
+    auto accepted1 = ring.write_to_buffer(log_record_writer(expected[1]), test_timeout()).get();
     auto persisted1 = std::move(accepted1.persisted);
 
     // The third record has nowhere to go, so it is queued rather than appended.
-    auto queued = writer.write_to_buffer(log_record_writer(expected[2]), test_timeout(), write_target{
+    auto queued = ring.write_to_buffer(log_record_writer(expected[2]), test_timeout(), write_target{
             .cg = nullptr,
             .non_empty_holder = non_empty_gate.hold(),
             .alive_holder = alive_gate.hold(),
     });
     BOOST_REQUIRE(!queued.available());
-    BOOST_REQUIRE_EQUAL(writer.queued_write_count(), 1u);
+    BOOST_REQUIRE_EQUAL(ring.queued_write_count(), 1u);
 
     // The write is in flight, so its group is still held by both of the target's holders. Checked
-    // rather than required, so that a failure here still drains the writer below: a queued write
+    // rather than required, so that a failure here still drains the ring below: a queued write
     // left behind would hang the stop() of this test rather than fail it.
     BOOST_CHECK_EQUAL(non_empty_gate.get_count(), 1u);
     BOOST_CHECK_EQUAL(alive_gate.get_count(), 1u);
@@ -2432,7 +2432,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_buffered_writer_queued_write_keeps_its_wri
 
     auto accepted2 = queued.get();
     auto persisted2 = std::move(accepted2.persisted);
-    BOOST_REQUIRE_EQUAL(writer.queued_write_count(), 0u);
+    BOOST_REQUIRE_EQUAL(ring.queued_write_count(), 0u);
 
     flush_ctl.release_one_flush();
     wait_for_persisted(persisted1);
@@ -2445,44 +2445,44 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_buffered_writer_queued_write_keeps_its_wri
 }
 
 // Checks that queued writes are accepted and persisted in FIFO order once capacity becomes available.
-SEASTAR_THREAD_TEST_CASE(test_logstor_buffered_writer_queued_writes_preserve_fifo_order) {
+SEASTAR_THREAD_TEST_CASE(test_logstor_write_buffer_ring_queued_writes_preserve_fifo_order) {
     auto schema = make_kv_schema();
     constexpr size_t buffer_size = 4 * 1024;
     const auto large_value = make_single_buffer_value(schema, buffer_size);
 
     test_flush_controller flush_ctl{.pause_flushes = true};
-    buffered_writer writer(make_buffered_writer_config(buffer_size, 2), [&flush_ctl] (write_buffer& wb) {
+    write_buffer_ring ring(make_write_buffer_ring_config(buffer_size, 2), [&flush_ctl] (write_buffer& wb) {
         return flush_ctl(wb);
     });
 
-    writer.start().get();
-    auto stop = defer([&writer] noexcept {
-        writer.stop().get();
+    ring.start().get();
+    auto stop = defer([&ring] noexcept {
+        ring.stop().get();
     });
 
     std::vector<log_record> expected;
     for (size_t i = 0; i < 5; ++i) {
-        expected.push_back(make_buffered_writer_record(schema, i, large_value, api::timestamp_type(300 + i)));
+        expected.push_back(make_write_buffer_ring_record(schema, i, large_value, api::timestamp_type(300 + i)));
     }
 
-    auto accepted0 = writer.write_to_buffer(log_record_writer(expected[0]), test_timeout()).get();
+    auto accepted0 = ring.write_to_buffer(log_record_writer(expected[0]), test_timeout()).get();
     auto persisted0 = std::move(accepted0.persisted);
     flush_ctl.wait_for_flush_starts(1);
 
-    auto accepted1 = writer.write_to_buffer(log_record_writer(expected[1]), test_timeout()).get();
+    auto accepted1 = ring.write_to_buffer(log_record_writer(expected[1]), test_timeout()).get();
     auto persisted1 = std::move(accepted1.persisted);
 
-    auto queued2 = writer.write_to_buffer(log_record_writer(expected[2]), test_timeout());
-    auto queued3 = writer.write_to_buffer(log_record_writer(expected[3]), test_timeout());
-    auto queued4 = writer.write_to_buffer(log_record_writer(expected[4]), test_timeout());
+    auto queued2 = ring.write_to_buffer(log_record_writer(expected[2]), test_timeout());
+    auto queued3 = ring.write_to_buffer(log_record_writer(expected[3]), test_timeout());
+    auto queued4 = ring.write_to_buffer(log_record_writer(expected[4]), test_timeout());
 
     BOOST_REQUIRE(!queued2.available());
     BOOST_REQUIRE(!queued3.available());
     BOOST_REQUIRE(!queued4.available());
-    BOOST_REQUIRE_EQUAL(writer.queued_write_count(), 3u);
+    BOOST_REQUIRE_EQUAL(ring.queued_write_count(), 3u);
     const auto record_size = log_record_writer(expected[2]).record_size();
-    BOOST_REQUIRE_EQUAL(writer.queued_write_bytes(), 3 * record_size);
-    BOOST_REQUIRE_EQUAL(writer.total_queued_writes(), 3u);
+    BOOST_REQUIRE_EQUAL(ring.queued_write_bytes(), 3 * record_size);
+    BOOST_REQUIRE_EQUAL(ring.total_queued_writes(), 3u);
 
     // FIFO acceptance is proven by the !available() checks after each drain step below:
     // each step frees exactly one buffer, and only the oldest queued write may be
@@ -2516,44 +2516,44 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_buffered_writer_queued_writes_preserve_fif
     flush_ctl.release_one_flush();
     wait_for_persisted(persisted4);
 
-    BOOST_REQUIRE_EQUAL(writer.queued_write_bytes(), 0u);
-    BOOST_REQUIRE_EQUAL(writer.total_queued_writes(), 3u);
+    BOOST_REQUIRE_EQUAL(ring.queued_write_bytes(), 0u);
+    BOOST_REQUIRE_EQUAL(ring.total_queued_writes(), 3u);
     assert_records_in_order(schema, flush_ctl.all_records(), expected);
 }
 
 // Checks that a queued write that times out fails with timed_out_error, leaves the queue, and leaves
 // no failed future that nothing waits for.
-SEASTAR_THREAD_TEST_CASE(test_logstor_buffered_writer_queued_write_times_out) {
+SEASTAR_THREAD_TEST_CASE(test_logstor_write_buffer_ring_queued_write_times_out) {
     auto schema = make_kv_schema();
     constexpr size_t buffer_size = 4 * 1024;
     const auto large_value = make_single_buffer_value(schema, buffer_size);
 
     test_flush_controller flush_ctl{.pause_flushes = true};
-    buffered_writer writer(make_buffered_writer_config(buffer_size, 2), [&flush_ctl] (write_buffer& wb) {
+    write_buffer_ring ring(make_write_buffer_ring_config(buffer_size, 2), [&flush_ctl] (write_buffer& wb) {
         return flush_ctl(wb);
     });
 
-    writer.start().get();
-    auto stop = defer([&writer, &flush_ctl] noexcept {
+    ring.start().get();
+    auto stop = defer([&ring, &flush_ctl] noexcept {
         flush_ctl.release_all_flushes();
-        writer.stop().get();
+        ring.stop().get();
     });
 
-    auto accepted0 = writer.write_to_buffer(log_record_writer(make_buffered_writer_record(schema, 0, large_value, api::timestamp_type(500))), test_timeout()).get();
+    auto accepted0 = ring.write_to_buffer(log_record_writer(make_write_buffer_ring_record(schema, 0, large_value, api::timestamp_type(500))), test_timeout()).get();
     auto persisted0 = std::move(accepted0.persisted);
     flush_ctl.wait_for_flush_starts(1);
 
-    auto accepted1 = writer.write_to_buffer(log_record_writer(make_buffered_writer_record(schema, 1, large_value, api::timestamp_type(501))), test_timeout()).get();
+    auto accepted1 = ring.write_to_buffer(log_record_writer(make_write_buffer_ring_record(schema, 1, large_value, api::timestamp_type(501))), test_timeout()).get();
     auto persisted1 = std::move(accepted1.persisted);
 
     const auto abandoned_before = seastar::engine().abandoned_failed_futures();
-    auto queued = writer.write_to_buffer(log_record_writer(make_buffered_writer_record(schema, 2, large_value, api::timestamp_type(502))),
+    auto queued = ring.write_to_buffer(log_record_writer(make_write_buffer_ring_record(schema, 2, large_value, api::timestamp_type(502))),
             db::timeout_clock::now() + std::chrono::milliseconds(10));
-    BOOST_REQUIRE_EQUAL(writer.queued_write_count(), 1u);
+    BOOST_REQUIRE_EQUAL(ring.queued_write_count(), 1u);
     BOOST_REQUIRE_THROW(queued.get(), seastar::timed_out_error);
-    BOOST_REQUIRE_EQUAL(writer.queued_write_count(), 0u);
-    BOOST_REQUIRE_EQUAL(writer.queued_write_bytes(), 0u);
-    BOOST_REQUIRE_EQUAL(writer.total_queued_writes(), 1u);
+    BOOST_REQUIRE_EQUAL(ring.queued_write_count(), 0u);
+    BOOST_REQUIRE_EQUAL(ring.queued_write_bytes(), 0u);
+    BOOST_REQUIRE_EQUAL(ring.total_queued_writes(), 1u);
     BOOST_REQUIRE_EQUAL(seastar::engine().abandoned_failed_futures(), abandoned_before);
 
     flush_ctl.release_all_flushes();
@@ -2562,35 +2562,35 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_buffered_writer_queued_write_times_out) {
 }
 
 // Checks that write_to_buffer() stays pending while a request is queued and only persistence remains pending once it is accepted.
-SEASTAR_THREAD_TEST_CASE(test_logstor_buffered_writer_acceptance_stays_blocked_while_write_is_queued) {
+SEASTAR_THREAD_TEST_CASE(test_logstor_write_buffer_ring_acceptance_stays_blocked_while_write_is_queued) {
     auto schema = make_kv_schema();
     constexpr size_t buffer_size = 4 * 1024;
     const auto large_value = make_single_buffer_value(schema, buffer_size);
 
     test_flush_controller flush_ctl{.pause_flushes = true};
-    buffered_writer writer(make_buffered_writer_config(buffer_size, 2), [&flush_ctl] (write_buffer& wb) {
+    write_buffer_ring ring(make_write_buffer_ring_config(buffer_size, 2), [&flush_ctl] (write_buffer& wb) {
         return flush_ctl(wb);
     });
 
-    writer.start().get();
-    auto stop = defer([&writer] noexcept {
-        writer.stop().get();
+    ring.start().get();
+    auto stop = defer([&ring] noexcept {
+        ring.stop().get();
     });
 
-    auto record0 = make_buffered_writer_record(schema, 0, large_value, api::timestamp_type(500));
-    auto record1 = make_buffered_writer_record(schema, 1, large_value, api::timestamp_type(501));
-    auto record2 = make_buffered_writer_record(schema, 2, large_value, api::timestamp_type(502));
+    auto record0 = make_write_buffer_ring_record(schema, 0, large_value, api::timestamp_type(500));
+    auto record1 = make_write_buffer_ring_record(schema, 1, large_value, api::timestamp_type(501));
+    auto record2 = make_write_buffer_ring_record(schema, 2, large_value, api::timestamp_type(502));
 
-    auto accepted0 = writer.write_to_buffer(log_record_writer(record0), test_timeout()).get();
+    auto accepted0 = ring.write_to_buffer(log_record_writer(record0), test_timeout()).get();
     auto persisted0 = std::move(accepted0.persisted);
     flush_ctl.wait_for_flush_starts(1);
 
-    auto accepted1 = writer.write_to_buffer(log_record_writer(record1), test_timeout()).get();
+    auto accepted1 = ring.write_to_buffer(log_record_writer(record1), test_timeout()).get();
     auto persisted1 = std::move(accepted1.persisted);
 
-    auto queued2 = writer.write_to_buffer(log_record_writer(record2), test_timeout());
+    auto queued2 = ring.write_to_buffer(log_record_writer(record2), test_timeout());
     BOOST_REQUIRE(!queued2.available());
-    BOOST_REQUIRE_EQUAL(writer.queued_write_count(), 1u);
+    BOOST_REQUIRE_EQUAL(ring.queued_write_count(), 1u);
 
     flush_ctl.release_one_flush();
     wait_for_persisted(persisted0);
@@ -2613,23 +2613,23 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_buffered_writer_acceptance_stays_blocked_w
 }
 
 // Checks that stop() waits for a blocked in-flight flush instead of dropping it.
-SEASTAR_THREAD_TEST_CASE(test_logstor_buffered_writer_stop_drains_blocked_in_flight_write) {
+SEASTAR_THREAD_TEST_CASE(test_logstor_write_buffer_ring_stop_drains_blocked_in_flight_write) {
     auto schema = make_kv_schema();
     constexpr size_t buffer_size = 4 * 1024;
-    const auto record = make_buffered_writer_record(schema, 0, "value", api::timestamp_type(600));
+    const auto record = make_write_buffer_ring_record(schema, 0, "value", api::timestamp_type(600));
 
     test_flush_controller flush_ctl{.pause_flushes = true};
-    buffered_writer writer(make_buffered_writer_config(buffer_size, 2), [&flush_ctl] (write_buffer& wb) {
+    write_buffer_ring ring(make_write_buffer_ring_config(buffer_size, 2), [&flush_ctl] (write_buffer& wb) {
         return flush_ctl(wb);
     });
 
-    writer.start().get();
+    ring.start().get();
 
-    auto accepted = writer.write_to_buffer(log_record_writer(record), test_timeout()).get();
+    auto accepted = ring.write_to_buffer(log_record_writer(record), test_timeout()).get();
     auto persisted = std::move(accepted.persisted);
     flush_ctl.wait_for_flush_starts(1);
 
-    auto stop_fut = writer.stop();
+    auto stop_fut = ring.stop();
     BOOST_REQUIRE(!stop_fut.available());
 
     flush_ctl.release_one_flush();
@@ -2642,12 +2642,12 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_buffered_writer_stop_drains_blocked_in_fli
 }
 
 // Checks that a flush failure is propagated to every write that was already accepted into that buffer.
-SEASTAR_THREAD_TEST_CASE(test_logstor_buffered_writer_flush_failure_fails_all_writes_in_buffer) {
+SEASTAR_THREAD_TEST_CASE(test_logstor_write_buffer_ring_flush_failure_fails_all_writes_in_buffer) {
     auto schema = make_kv_schema();
     constexpr size_t buffer_size = 4 * 1024;
 
-    auto record0 = make_buffered_writer_record(schema, 0, "value0", api::timestamp_type(700));
-    auto record1 = make_buffered_writer_record(schema, 1, "value1", api::timestamp_type(701));
+    auto record0 = make_write_buffer_ring_record(schema, 0, "value0", api::timestamp_type(700));
+    auto record1 = make_write_buffer_ring_record(schema, 1, "value1", api::timestamp_type(701));
     chunk_builder scratch(buffer_size, segment_kind::mixed);
     BOOST_REQUIRE(scratch.can_fit(log_record_writer(record0)));
     scratch.append(log_record_writer(record0));
@@ -2655,19 +2655,19 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_buffered_writer_flush_failure_fails_all_wr
 
     test_flush_controller flush_ctl{.fail_flush_index = 0};
     // long sync period so both writes land in the same buffer.
-    buffered_writer writer(make_buffered_writer_config(buffer_size, 3, std::chrono::hours(1)), [&flush_ctl] (write_buffer& wb) {
+    write_buffer_ring ring(make_write_buffer_ring_config(buffer_size, 3, std::chrono::hours(1)), [&flush_ctl] (write_buffer& wb) {
         return flush_ctl(wb);
     });
 
-    writer.start().get();
-    auto stop = defer([&writer] noexcept {
-        writer.stop().get();
+    ring.start().get();
+    auto stop = defer([&ring] noexcept {
+        ring.stop().get();
     });
 
-    auto accepted0 = writer.write_to_buffer(log_record_writer(record0), test_timeout()).get();
-    auto accepted1 = writer.write_to_buffer(log_record_writer(record1), test_timeout()).get();
+    auto accepted0 = ring.write_to_buffer(log_record_writer(record0), test_timeout()).get();
+    auto accepted1 = ring.write_to_buffer(log_record_writer(record1), test_timeout()).get();
 
-    auto flush = writer.flush();
+    auto flush = ring.flush();
 
     BOOST_REQUIRE_THROW(accepted0.persisted.get(), std::runtime_error);
     BOOST_REQUIRE_THROW(accepted1.persisted.get(), std::runtime_error);

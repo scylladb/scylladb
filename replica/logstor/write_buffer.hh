@@ -259,7 +259,7 @@ private:
 
 // Tracks asynchronous write completion on top of chunk_builder.
 //
-// This is the buffer type used by the segment manager, buffered_writer,
+// This is the buffer type used by the segment manager, write_buffer_ring,
 // compaction, and separator flows. write() appends a record to the underlying
 // chunk builder and returns a future that resolves to the final record_location once
 // the buffer is flushed. The returned gate holder keeps the buffer alive for
@@ -346,7 +346,7 @@ private:
 
     std::vector<record_in_buffer> take_separator_records();
 
-    friend class buffered_writer;
+    friend class write_buffer_ring;
     friend class segment_manager_impl;
     friend struct separator_buffer;
 };
@@ -460,8 +460,8 @@ private:
     void drop_buffer(std::unique_ptr<write_buffer> wb, seastar::semaphore_units<>& pool_units) noexcept;
 };
 
-// Configuration passed to buffered_writer constructor (excluding the flush function).
-struct buffered_writer_config {
+// Configuration passed to write_buffer_ring constructor (excluding the flush function).
+struct write_buffer_ring_config {
     size_t buffer_size;
     size_t ring_size;
     seastar::scheduling_group flush_sg;
@@ -472,9 +472,9 @@ struct buffered_writer_config {
 //
 // Writers append to the head buffer.  A single consumer coroutine drains the
 // tail.  The head advances when the current head buffer is full (can't fit the
-// next write) or when the consumer seals it.  Writers wait if the ring is full
-// (all buffers are pending flush).
-class buffered_writer {
+// next write) or when the consumer advances it to flush the head buffer.
+// Writers wait if the ring is full (all buffers are pending flush).
+class write_buffer_ring {
     seastar::scheduling_group _flush_sg;
     size_t _buffer_size;
     size_t _ring_size;
@@ -526,7 +526,7 @@ class buffered_writer {
         seastar::promise<record_location_with_holder> persisted_pr; // written to a segment
         log_record_writer writer;
         write_target target;
-        // Keeps the writer from finishing its stop() while the record is on the queue. It is held
+        // Keeps the ring from finishing its stop() while the record is on the queue. It is held
         // by the request rather than by whoever waits for it, so that queueing a write needs no
         // coroutine of its own.
         seastar::gate::holder async_gate_holder;
@@ -546,7 +546,7 @@ class buffered_writer {
     };
 
     struct on_queued_write_expiry {
-        buffered_writer* owner{};
+        write_buffer_ring* owner{};
 
         void operator()(queued_write& w) noexcept {
             owner->on_queued_write_removed(w);
@@ -580,7 +580,7 @@ class buffered_writer {
 
     seastar::gate _async_gate;
 
-    // The single flush-consumer fiber, running for the lifetime of the writer.
+    // The single flush-consumer fiber, running for the lifetime of the ring.
     future<> _consumer{make_ready_future<>()};
 
     auto&& head_buf(this auto&& self) noexcept { return self._ring[self._head % self._ring_size]; }
@@ -622,11 +622,11 @@ class buffered_writer {
     future<> consumer_loop();
 
 public:
-    explicit buffered_writer(buffered_writer_config cfg,
+    explicit write_buffer_ring(write_buffer_ring_config cfg,
             seastar::noncopyable_function<future<>(write_buffer&)> flush_func);
 
-    buffered_writer(const buffered_writer&) = delete;
-    buffered_writer& operator=(const buffered_writer&) = delete;
+    write_buffer_ring(const write_buffer_ring&) = delete;
+    write_buffer_ring& operator=(const write_buffer_ring&) = delete;
 
     future<> start();
     future<> stop();

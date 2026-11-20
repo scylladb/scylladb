@@ -404,9 +404,9 @@ future<> write_buffer_pool::stop() {
     _free.clear();
 }
 
-// buffered_writer
+// write_buffer_ring
 
-buffered_writer::buffered_writer(buffered_writer_config cfg, seastar::noncopyable_function<future<>(write_buffer&)> flush_func)
+write_buffer_ring::write_buffer_ring(write_buffer_ring_config cfg, seastar::noncopyable_function<future<>(write_buffer&)> flush_func)
         : _flush_sg(cfg.flush_sg)
         , _buffer_size(cfg.buffer_size)
         , _ring_size(cfg.ring_size)
@@ -418,11 +418,11 @@ buffered_writer::buffered_writer(buffered_writer_config cfg, seastar::noncopyabl
         , _head_flush_timer([this] { on_head_flush_timer(); }) {
 
     if (_ring_size < 2) {
-        on_internal_error(logstor_logger, fmt::format("buffered_writer ring_size must be >= 2 (got {})", _ring_size));
+        on_internal_error(logstor_logger, fmt::format("Write buffer ring needs at least 2 buffers, got {}", _ring_size));
     }
 
     if (_buffer_size == 0) {
-        on_internal_error(logstor_logger, "buffered_writer buffer_size must be > 0");
+        on_internal_error(logstor_logger, "Write buffer ring needs a buffer size above 0");
     }
 
     _ring.reserve(_ring_size);
@@ -431,15 +431,15 @@ buffered_writer::buffered_writer(buffered_writer_config cfg, seastar::noncopyabl
     }
 }
 
-bool buffered_writer::has_pending_buffers() const noexcept {
+bool write_buffer_ring::has_pending_buffers() const noexcept {
     return _tail < _head || head_buf().has_data();
 }
 
-bool buffered_writer::should_rotate_head_for_flush() const noexcept {
+bool write_buffer_ring::should_rotate_head_for_flush() const noexcept {
     return _dispatch_tail == _head && head_buf().has_data() && (_async_gate.is_closed() || _head_deadline_expired);
 }
 
-void buffered_writer::arm_head_flush_timer() {
+void write_buffer_ring::arm_head_flush_timer() {
     if (_head_deadline_expired || _head_flush_timer.armed()) {
         return;
     }
@@ -450,29 +450,29 @@ void buffered_writer::arm_head_flush_timer() {
     _head_flush_timer.arm(db::timeout_clock::now() + _sync_period);
 }
 
-void buffered_writer::on_head_flush_timer() noexcept {
+void write_buffer_ring::on_head_flush_timer() noexcept {
     _head_deadline_expired = true;
     _consumer_progress_cv.signal();
 }
 
-void buffered_writer::cancel_head_flush_timer() noexcept {
+void write_buffer_ring::cancel_head_flush_timer() noexcept {
     _head_flush_timer.cancel();
     _head_deadline_expired = false;
 }
 
-void buffered_writer::on_queued_writes_changed() noexcept {
+void write_buffer_ring::on_queued_writes_changed() noexcept {
     _queued_writes_changed.broadcast();
 }
 
-void buffered_writer::on_queued_write_removed(const queued_write& w) noexcept {
+void write_buffer_ring::on_queued_write_removed(const queued_write& w) noexcept {
     _queued_write_bytes -= w.write_size;
 }
 
-void buffered_writer::fail_queued_write(queued_write& request, std::exception_ptr ep) noexcept {
+void write_buffer_ring::fail_queued_write(queued_write& request, std::exception_ptr ep) noexcept {
     request.accepted_pr.set_exception(std::move(ep));
 }
 
-bool buffered_writer::maybe_advance_head() noexcept {
+bool write_buffer_ring::maybe_advance_head() noexcept {
     if (ring_full() || !head_buf().has_data()) {
         return false;
     }
@@ -485,7 +485,7 @@ bool buffered_writer::maybe_advance_head() noexcept {
 // The target is taken by reference and moved from only once the record is in a buffer: a caller
 // whose append does not happen goes on to queue the record, and the write target it queues has to
 // be the one it came with, holders and all.
-std::optional<future<record_location_with_holder>> buffered_writer::append_to_head_buffer(log_record_writer& writer, write_target& target) {
+std::optional<future<record_location_with_holder>> write_buffer_ring::append_to_head_buffer(log_record_writer& writer, write_target& target) {
     if (!head_buf().can_fit(writer) && !maybe_advance_head()) {
         return std::nullopt;
     }
@@ -499,7 +499,7 @@ std::optional<future<record_location_with_holder>> buffered_writer::append_to_he
     return persisted;
 }
 
-bool buffered_writer::try_dispatch_next_buffer() {
+bool write_buffer_ring::try_dispatch_next_buffer() {
     auto idx = _dispatch_tail;
     auto& state = dispatch_tail_write();
     auto& buf = _ring[idx % _ring_size];
@@ -517,7 +517,7 @@ bool buffered_writer::try_dispatch_next_buffer() {
     return true;
 }
 
-future<> buffered_writer::run_dispatched_write(size_t idx) {
+future<> write_buffer_ring::run_dispatched_write(size_t idx) {
     auto& buf = _ring[idx % _ring_size];
     auto f = co_await coroutine::as_future(_flush_func(buf));
     _consumer_progress_cv.signal();
@@ -526,7 +526,7 @@ future<> buffered_writer::run_dispatched_write(size_t idx) {
     }
 }
 
-future<bool> buffered_writer::reclaim_completed_tails() {
+future<bool> write_buffer_ring::reclaim_completed_tails() {
     bool reclaimed = false;
     while (_tail < _dispatch_tail) {
         auto& state = tail_write();
@@ -557,7 +557,7 @@ future<bool> buffered_writer::reclaim_completed_tails() {
     co_return reclaimed;
 }
 
-future<bool> buffered_writer::drain_queued_writes() {
+future<bool> write_buffer_ring::drain_queued_writes() {
     bool removed_queued_writes = false;
     while (!_queued_writes.empty()) {
         auto& next = _queued_writes.front();
@@ -587,19 +587,19 @@ future<bool> buffered_writer::drain_queued_writes() {
     co_return removed_queued_writes;
 }
 
-future<> buffered_writer::start() {
-    logstor_logger.info("Starting write buffer");
+future<> write_buffer_ring::start() {
+    logstor_logger.info("Starting the write buffer ring");
     _consumer = with_scheduling_group(_flush_sg, [this] {
         return consumer_loop();
     });
     co_return;
 }
 
-future<> buffered_writer::stop() {
+future<> write_buffer_ring::stop() {
     if (_async_gate.is_closed()) {
         co_return;
     }
-    logstor_logger.info("Stopping write buffer");
+    logstor_logger.info("Stopping the write buffer ring");
 
     cancel_head_flush_timer();
 
@@ -619,10 +619,10 @@ future<> buffered_writer::stop() {
         }
     }
 
-    logstor_logger.info("Write buffer stopped");
+    logstor_logger.info("Write buffer ring stopped");
 }
 
-future<> buffered_writer::flush() {
+future<> write_buffer_ring::flush() {
     auto holder = _async_gate.hold();
 
     // Snapshot the queue insertion boundary. New writes pushed after this point
@@ -678,7 +678,7 @@ future<> buffered_writer::flush() {
 // Not being a coroutine, it has to report a failure as a failed future itself, which is what the
 // noexcept says: the caller counts a failed write off the future it gets back, and a throw out of
 // here would go past that accounting. The try costs nothing on the path that does not throw.
-future<buffered_write_result> buffered_writer::write_to_buffer(log_record_writer writer, db::timeout_clock::time_point timeout, write_target target) noexcept {
+future<buffered_write_result> write_buffer_ring::write_to_buffer(log_record_writer writer, db::timeout_clock::time_point timeout, write_target target) noexcept {
   try {
     auto holder = _async_gate.hold();
 
@@ -715,7 +715,7 @@ future<buffered_write_result> buffered_writer::write_to_buffer(log_record_writer
 // The future of the request is what this returns, so there is nothing to wait for here either: the
 // consumer resolves it when it makes room for the record. The request carries the gate holder of the
 // write, which is what has to outlive the wait.
-future<buffered_write_result> buffered_writer::queue_write(log_record_writer writer, db::timeout_clock::time_point timeout,
+future<buffered_write_result> write_buffer_ring::queue_write(log_record_writer writer, db::timeout_clock::time_point timeout,
         write_target target, seastar::gate::holder holder) {
     const bool queue_was_empty = _queued_writes.empty();
     const auto write_size = writer.record_size();
@@ -730,7 +730,7 @@ future<buffered_write_result> buffered_writer::queue_write(log_record_writer wri
     return accepted;
 }
 
-future<> buffered_writer::consumer_loop() {
+future<> write_buffer_ring::consumer_loop() {
     try {
         while (true) {
             bool progressed = false;
@@ -768,7 +768,7 @@ future<> buffered_writer::consumer_loop() {
             co_await coroutine::maybe_yield();
         }
     } catch (...) {
-        on_internal_error(logstor_logger, format("buffered_writer consumer loop aborted unexpectedly: {:t}", std::current_exception()));
+        on_internal_error(logstor_logger, fmt::format("The consumer of the write buffer ring failed: {:t}", std::current_exception()));
     }
 }
 

@@ -57,7 +57,7 @@ primary_index_key::primary_index_key(const dht::decorated_key& dk)
 
 logstor::logstor(logstor_config config, ::cache_tracker& shared_cache_tracker)
     : _segment_manager(config.segment_manager_cfg)
-    , _write_buffer(buffered_writer_config{
+    , _write_buffer(write_buffer_ring_config{
             .buffer_size = _segment_manager.get_segment_size(),
             .ring_size = config.write_buffer_ring_size,
             .flush_sg = config.flush_sg,
@@ -68,7 +68,7 @@ logstor::logstor(logstor_config config, ::cache_tracker& shared_cache_tracker)
 
     _metrics.add_group("logstor", {
         sm::make_gauge("queued_write_count", [this] { return _write_buffer.queued_write_count(); },
-                       sm::description("Number of writes currently queued in the write buffer.")),
+                       sm::description("Number of writes currently queued in the write buffer ring.")),
         sm::make_gauge("queued_write_bytes", [this] { return _write_buffer.queued_write_bytes(); },
                        sm::description("Bytes of the records that wait in the write buffer queue for room in a buffer.")),
         sm::make_counter("total_queued_writes", [this] { return _write_buffer.total_queued_writes(); },

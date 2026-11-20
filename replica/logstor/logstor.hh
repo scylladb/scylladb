@@ -56,7 +56,7 @@ class logstor {
     };
 
     segment_manager _segment_manager;
-    buffered_writer _write_buffer;
+    write_buffer_ring _write_buffer;
     cache_tracker _cache_tracker;
     seastar::metrics::metric_groups _metrics;
     stats _stats;
