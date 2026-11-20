@@ -850,10 +850,6 @@ future<> object_storage_base::delete_components(sstable_version_types version, s
     auto delete_component = [this, &prefix, &sid, log_errors] (std::string_view component) -> future<> {
         try {
             co_await delete_object(object_name(_bucket, prefix, sid, component));
-        } catch (const storage_io_error& e) {
-            if (e.code().value() != ENOENT) {
-                throw;
-            }
         } catch (...) {
             if (!log_errors) {
                 throw;
@@ -1102,13 +1098,7 @@ future<> object_storage_base::remove_by_registry_entry(entry_descriptor desc, lo
     auto sid = *desc.sid;
 
     auto ref_name = make_ref_object_name(sid, desc.generation, node_owner);
-    try {
-        co_await delete_object(ref_name);
-    } catch (const storage_io_error& e) {
-        if (e.code().value() != ENOENT) {
-            throw;
-        }
-    }
+    co_await delete_object(ref_name);
 
     auto remaining_refs = co_await num_references(sid);
     if (remaining_refs) {
