@@ -2519,11 +2519,6 @@ future<> gossiper::mark_as_shutdown(const locator::host_id& endpoint, permit_id 
     }
 }
 
-void gossiper::force_newer_generation() {
-    auto& eps = my_endpoint_state();
-    eps.get_heart_beat_state().force_newer_generation_unsafe();
-}
-
 static sstring do_get_gossip_status(const gms::versioned_value* app_state) noexcept {
     if (!app_state) {
         return sstring(gms::versioned_value::STATUS_UNKNOWN);
