@@ -1157,10 +1157,25 @@ static raw_value arithmetic_add(const expression& lhs_expr, const expression& rh
         return raw_value::make_null();
     }
     const abstract_type& t = type_of(lhs_expr)->without_reversed();
-    if (const abstract_type& rhs_t = type_of(rhs_expr)->without_reversed(); rhs_t != t) {
+    // An ascii value is also a valid text value, so it can be concatenated
+    // to a text value (e.g., "SET t = t + (ascii)'a'").
+    if (const abstract_type& rhs_t = type_of(rhs_expr)->without_reversed(); rhs_t != t && !(t == *utf8_type && rhs_t == *ascii_type)) {
         throw exceptions::invalid_request_exception(
             format("Arithmetic ADD on different types ({} and {}) is not yet supported",
                 t.cql3_type_name(), rhs_t.cql3_type_name()));
+    }
+    if (t.is_string()) {
+        // String concatenation. A serialized ascii or text value is just the
+        // string's bytes, so we can concatenate the serialized values. Strings
+        // may be large, so they are copied fragment by fragment, without
+        // linearizing them.
+        managed_bytes_view lhs_mbv = lhs_val.to_managed_bytes_view();
+        managed_bytes_view rhs_mbv = rhs_val.to_managed_bytes_view();
+        managed_bytes res(managed_bytes::initialized_later(), lhs_mbv.size_bytes() + rhs_mbv.size_bytes());
+        managed_bytes_mutable_view out(res);
+        write_fragmented(out, lhs_mbv);
+        write_fragmented(out, rhs_mbv);
+        return raw_value::make_value(std::move(res));
     }
     bytes result = lhs_val.view().with_linearized([&](bytes_view lhs_bv) -> bytes {
         return rhs_val.view().with_linearized([&](bytes_view rhs_bv) -> bytes {

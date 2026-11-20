@@ -146,6 +146,11 @@ operation::addition::to_string(const column_definition& receiver) const {
 
 std::unique_ptr<operation>
 operation::addition::prepare(data_dictionary::database db, const sstring& keyspace, const column_definition& receiver) const {
+    // Check this before preparing the value, so that a value which doesn't
+    // match the tuple's type doesn't hide this error.
+    if (receiver.type->is_tuple()) {
+        throw exceptions::invalid_request_exception(fmt::format("Invalid operation ({}) for tuple column {}", to_string(receiver), receiver.name_as_text()));
+    }
     auto v = prepare_expression(_value, db, keyspace, nullptr, receiver.column_specification);
     verify_no_aggregate_functions(v, "SET clause");
 
@@ -155,8 +160,9 @@ operation::addition::prepare(data_dictionary::database db, const sstring& keyspa
             return std::make_unique<constants::adder>(receiver, std::move(v));
         }
         // Allow arithmetic on numeric non-counter columns in LWT updates
-        // (issue #10568). Build an expression that constants:setter will use.
-        if (receiver.type->is_arithmetic()) {
+        // (issue #10568), and string concatenation on string columns
+        // (SCYLLADB-5384). Build an expression that constants:setter will use.
+        if (receiver.type->is_arithmetic() || receiver.type->is_string()) {
             expr::expression arith_expr = expr::binary_operator(
                 expr::column_value{&receiver},
                 expr::oper_t::ADD,
