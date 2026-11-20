@@ -1127,6 +1127,8 @@ private:
     future<> cleanup_compaction_groups(db::system_keyspace& sys_ks, locator::tablet_id tid, storage_group& sg);
 public:
     future<> cleanup_tablet(database&, db::system_keyspace&, locator::tablet_id);
+    // Flush the memtables of one tablet. A no-op for a tablet this shard no longer holds.
+    future<> flush_tablet(locator::tablet_id tid);
     // For tests only.
     future<> cleanup_tablet_without_deallocation(database& db, db::system_keyspace& sys_ks, locator::tablet_id tid);
     // Drops all data of the tablet on this shard: memtables are discarded without

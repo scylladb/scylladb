@@ -278,7 +278,7 @@ future<> db::commitlog_replayer::impl::process(
             // Everything for this batch is decided as it arrives: see
             // raft_commitlog_replay_buffer.
             try {
-                co_await _raft_buffer->local().add_batch(_db.local(), _qp->local(), _sys_ks.local(),
+                co_await _raft_buffer->local().add_batch(_db.local(), _qp->local(),
                         batch.group_id, rp.id, batch.commit_idx, batch.entries);
             } catch (...) {
                 std::throw_with_nested(raft_replay_error(fmt::format(

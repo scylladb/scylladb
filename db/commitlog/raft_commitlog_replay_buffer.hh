@@ -26,7 +26,6 @@ class query_processor;
 }
 
 namespace db {
-class system_keyspace;
 
 namespace raft_buffer_detail {
 
@@ -82,6 +81,9 @@ class raft_commitlog_replay_buffer {
         bool known = false;
         locator::global_tablet_id tablet{table_id{}, locator::tablet_id(0)};
 
+        // The floor the row was loaded with: every entry at or below it was applied
+        // before the crash.
+        raft::index_t loaded_floor{0};
         // The running commit index and the term of the entry at it.
         raft::index_t commit_idx{0};
         // How far an unbroken run of indexes read in this pass reaches, starting from
@@ -90,9 +92,26 @@ class raft_commitlog_replay_buffer {
         raft::index_t contiguous_to{0};
         // Term of the entry at commit_idx.
         raft::term_t commit_term{0};
+        // The last index applied in order from the loaded floor, and its term: where the
+        // floor lands if a write above it cannot be applied, see `unresolved`.
+        raft::index_t applied_to{0};
+        raft::term_t applied_term{0};
+        // The first write announced at a group0 schema version this node has not reached,
+        // so possibly of a version newer than the table's. It and everything above it stay
+        // in the log for the state machine, and the floor stops just below it. Always
+        // above the loaded floor.
+        std::optional<raft::index_t> unresolved;
         // The newest configuration at or below commit_idx, and its entry's index.
         raft::configuration config;
         raft::index_t config_idx{0};
+        // The schema_changed the entries being applied were announced under, with its
+        // index: the row's at the floor, then the last one replayed. Persisted with the
+        // new floor. A write below its index was flushed before the row named it, so
+        // replay skips it (see state_machine::apply()).
+        std::optional<service::strong_consistency::indexed_schema_changed> announced;
+        // A replayed schema_changed replaced `announced`: finish_replay() flushes the
+        // tablet before the row names the new index.
+        bool announcement_replaced = false;
 
         // The uncommitted tail, ascending.
         std::deque<raft_buffer_detail::buffered_entry> buf;
@@ -131,21 +150,22 @@ class raft_commitlog_replay_buffer {
         raft::group_id group_id, group_state& group);
 
     // Apply one committed command entry: a write to its table's memtable, a resize marker
-    // to the group's row in system.raft_groups, a truncate to the tablet. A write the
-    // recorded truncate dropped is skipped.
-    future<> apply_committed(replica::database& db, db::system_keyspace& sys_ks,
-        raft::group_id group_id, group_state& group, const raft::log_entry_ptr& entry);
+    // to the group's row in system.raft_groups, a truncate to the tablet, a schema_changed
+    // to `group.announced`. A write the recorded truncate dropped is skipped. False if the
+    // entry was left to the state machine instead, see `unresolved`: the caller keeps it
+    // in the uncommitted tail.
+    future<bool> apply_committed(replica::database& db, raft::group_id group_id, group_state& group,
+        const raft::log_entry_ptr& entry);
 
     // Consume the buffered entries the floor has reached.
-    future<> drain_committed(replica::database& db, db::system_keyspace& sys_ks,
-        raft::group_id group_id, group_state& group);
+    future<> drain_committed(replica::database& db, raft::group_id group_id, group_state& group);
 
-    // Note a committed entry's term and configuration.
-    static void note_committed(group_state& group, const raft::log_entry_ptr& entry);
+    // Note an applied entry's term and configuration.
+    static void note_applied(group_state& group, const raft::log_entry_ptr& entry);
 
 public:
     // Called once per raft batch during replay, in write order.
-    future<> add_batch(replica::database& db, cql3::query_processor& qp, db::system_keyspace& sys_ks,
+    future<> add_batch(replica::database& db, cql3::query_processor& qp,
         raft::group_id group_id, db::segment_id_type segment, raft::index_t commit_idx,
         const std::vector<raft::log_entry_ptr>& entries);
 

@@ -192,8 +192,11 @@ async def test_new_leader_timestamps_above_uncommitted_write(manager: ScyllaClus
     is then a part of the group's history, and the new leader's writes have to be above it.
     """
     async with cluster_with_skewed_leader(manager) as cluster:
-        # The write below is then the only entry the new leader appends to its log
-        # from here on, so its count of persisted entries shows when it got there.
+        # The first write of a term announces the schema version ahead of it; get that
+        # entry out of the way, so that the write below is the only entry the new leader
+        # appends to its log from here on, and its count of persisted entries shows when
+        # it got there.
+        await cluster.cql.run_async(f"INSERT INTO {cluster.table} (pk, v) VALUES (1, 1)", host=cluster.old_leader_host)
         await read_barrier(manager.api, cluster.new_leader.ip_addr, cluster.group_id, timeout=WAIT_TIMEOUT_S)
 
         async def persisted_on_new_leader() -> int:
