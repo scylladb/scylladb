@@ -71,7 +71,7 @@ fedora_packages=(
     compiler-rt
     libasan
     libubsan
-    gdb
+    'gdb < 18' # gdb 18 type lookup uses ~19 GiB: https://sourceware.org/bugzilla/show_bug.cgi?id=34990
     lua-devel
     yaml-cpp-devel
     jsoncpp-devel
