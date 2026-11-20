@@ -1635,12 +1635,17 @@ void executor::supplement_table_stream_info(rjson::value& descr, const schema& s
         rjson::add(descr, "LatestStreamArn", arn);
         rjson::add(descr, "LatestStreamLabel", rjson::from_string(stream_label(*log_schema)));
 
-        auto stream_desc = rjson::empty_object();
-        rjson::add(stream_desc, "StreamEnabled", opts.enabled());
-
-        stream_view_type mode = cdc_options_to_stream_view_type(opts);
-        rjson::add(stream_desc, "StreamViewType", mode);
-        rjson::add(descr, "StreamSpecification", std::move(stream_desc));
+        // DynamoDB leaves out StreamSpecification for disabled streams.
+        // A stream being enabled (enable_requested) is reported as enabled,
+        // as in the else-if branch below. The log already exists in this
+        // case if a vector index uses it.
+        if (opts.enabled() || opts.enable_requested()) {
+            auto stream_desc = rjson::empty_object();
+            rjson::add(stream_desc, "StreamEnabled", true);
+            stream_view_type mode = cdc_options_to_stream_view_type(opts);
+            rjson::add(stream_desc, "StreamViewType", mode);
+            rjson::add(descr, "StreamSpecification", std::move(stream_desc));
+        }
     } else if (opts.enable_requested()) {
         // DynamoDB returns StreamEnabled=true in StreamSpecification even when
         // the stream status is ENABLING (not yet fully active). We mirror this
