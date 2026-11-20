@@ -359,12 +359,12 @@ struct separator_buffer {
     }
 
     template <log_record_writer_concept Writer>
-    bool can_fit(const Writer& writer) const noexcept {
-        return buf && buf->can_fit(writer);
+    bool fits(const Writer& writer) const noexcept {
+        return buf && buf->fits(writer);
     }
 
-    bool can_fit(size_t write_size) const noexcept {
-        return buf && buf->can_fit(write_size);
+    bool fits(size_t write_size) const noexcept {
+        return buf && buf->fits(write_size);
     }
 
     bool empty() const noexcept {

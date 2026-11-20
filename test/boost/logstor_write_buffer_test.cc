@@ -66,9 +66,9 @@ sstring make_single_buffer_value(schema_ptr schema, size_t buffer_size) {
         auto next_writer = log_record_writer(next_record);
         chunk_builder wb(buffer_size, segment_kind::mixed);
 
-        BOOST_REQUIRE(wb.can_fit(next_writer));
+        BOOST_REQUIRE(wb.fits(next_writer));
         wb.append(next_writer);
-        if (!wb.can_fit(next_writer)) {
+        if (!wb.fits(next_writer)) {
             return next_value;
         }
 
@@ -233,7 +233,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_chunk_builder_accepts_record_at_max_record
     }
 
     BOOST_REQUIRE_EQUAL(writer.record_size(), max_size);
-    BOOST_REQUIRE(wb.can_fit(writer));
+    BOOST_REQUIRE(wb.fits(writer));
 
     wb.append(writer);
 
@@ -317,13 +317,9 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_chunk_builder_reused_for_another_table_sea
 SEASTAR_THREAD_TEST_CASE(test_logstor_chunk_builder_bytes_writer_writes_the_same_frame) {
     auto schema = make_kv_schema();
     auto writer = log_record_writer(make_log_record(schema, "pk0", "value0", api::timestamp_type(5)));
-    auto frame_bytes = [] (const chunk_builder& builder, frame_extent frame) {
-        return bytes_view(reinterpret_cast<const int8_t*>(builder.data()) + frame.offset, frame.size);
-    };
-
     chunk_builder original(32 * 1024, segment_kind::mixed);
     const auto original_frame = original.append(writer);
-    const auto original_bytes = frame_bytes(original, original_frame);
+    const auto original_bytes = original.frame_bytes(original_frame);
 
     seastar::simple_memory_input_stream in(reinterpret_cast<const char*>(original_bytes.data()), original_bytes.size());
     auto parsed = ondisk::try_read_record_frame(in);
@@ -336,7 +332,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_chunk_builder_bytes_writer_writes_the_same
     const auto rewritten_frame = rewritten.append(bytes_writer);
 
     BOOST_REQUIRE_EQUAL(rewritten_frame.size, original_frame.size);
-    BOOST_REQUIRE(frame_bytes(rewritten, rewritten_frame) == original_bytes);
+    BOOST_REQUIRE(rewritten.frame_bytes(rewritten_frame) == original_bytes);
 }
 
 // Checks that a buffer holding records that were never flushed can still be closed and reused
@@ -964,9 +960,9 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_write_buffer_ring_flush_failure_fails_all_
     auto record0 = make_write_buffer_ring_record(schema, 0, "value0", api::timestamp_type(700));
     auto record1 = make_write_buffer_ring_record(schema, 1, "value1", api::timestamp_type(701));
     chunk_builder scratch(buffer_size, segment_kind::mixed);
-    BOOST_REQUIRE(scratch.can_fit(log_record_writer(record0)));
+    BOOST_REQUIRE(scratch.fits(log_record_writer(record0)));
     scratch.append(log_record_writer(record0));
-    BOOST_REQUIRE(scratch.can_fit(log_record_writer(record1)));
+    BOOST_REQUIRE(scratch.fits(log_record_writer(record1)));
 
     test_flush_controller flush_ctl{.fail_flush_index = 0};
     // long sync period so both writes land in the same buffer.

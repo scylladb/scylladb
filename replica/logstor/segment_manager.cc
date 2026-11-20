@@ -1777,7 +1777,7 @@ struct compaction_buffer {
 
         auto writer = log_record_bytes_writer(header, record_view);
 
-        if (!buf->can_fit(writer)) {
+        if (!buf->fits(writer)) {
             co_await flush();
         }
 
@@ -2716,7 +2716,7 @@ future<> logstor_group::allocate_active_separator_buffer() {
 
 template <log_record_writer_concept Writer>
 future<> logstor_group::write_to_separator(Writer writer, segment_ref seg_ref, std::optional<segment_sequence> segment_seq_num, separator_index_update after_written) {
-    while (!_active_buffer.can_fit(writer)) {
+    while (!_active_buffer.fits(writer)) {
         if (!_separator_enabled) {
             break;
         }
