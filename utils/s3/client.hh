@@ -237,6 +237,9 @@ class client : public enable_shared_from_this<client> {
     struct private_tag {};
 
     future<> update_credentials_and_rearm();
+    // Timer-spawned; the pointer keeps the client alive if its owner drops it meanwhile.
+    future<> invalidate_expired_credentials(shared_ptr<client>);
+    future<> update_credentials_in_background(shared_ptr<client>);
     future<> authorize(http::request&);
     group_client& find_or_create_client();
     group_client& find_or_create_client_slow();
