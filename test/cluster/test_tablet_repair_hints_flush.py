@@ -31,6 +31,9 @@ REPAIR_FLUSH_SERVED = r"repair\[[0-9a-f-]+\]: Finished to flush batchlog for rep
 REPAIR_FLUSH_REQUESTED = r"repair\[[0-9a-f-]+\]: Started to process repair_flush_hints_batchlog_request"
 INITIATING_REPAIR = r"raft_topology - Initiating tablet repair "
 FINISHED_REPAIR = r"raft_topology - Finished tablet repair "
+UNFLUSHED_REPAIR = r"repair - repair\[[0-9a-f-]+\]: Finished tablet repair for table=.* without flushing hints and batchlog"
+FAILED_REPAIR = r"repair for tablet .* failed: .*Flush is needed for repair .* but failed"
+FAILED_ROUND = r"hints_batchlog_flusher - Flushing hints and batchlog failed on node="
 
 # Long enough that no cached flush time expires during a test.
 LONG_CACHE_TIME_MS = 600 * 1000
@@ -70,14 +73,15 @@ async def test_concurrent_repairs_share_one_flush(manager: ScyllaClusterManager)
 
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.parametrize("tombstone_gc_mode", ["repair", "timeout"])
-async def test_repair_fails_and_recovers_when_flush_fails(manager: ScyllaClusterManager, tombstone_gc_mode: str):
+async def test_user_repair_records_no_repair_time_when_flush_fails(manager: ScyllaClusterManager, tombstone_gc_mode: str):
     """
     When the coordinator cannot flush a node, it still sends the tablet
-    repair, which syncs the tablet without flushing on its own but fails at
-    the end, so no repair time is recorded and the coordinator retries.
-    Once the node flushes again the retried repair completes and the time
-    is recorded. This holds whatever the tombstone GC mode of the table: the
-    flush time is the repair time also for a table which is not in repair mode.
+    repair, which syncs the tablet without flushing on its own. A user repair
+    then finishes, instead of being retried for as long as the flush fails
+    (SCYLLADB-6086), but it records no repair time: the tablet keeps the one
+    it had. Once the node flushes again, the next repair records the time.
+    This holds whatever the tombstone GC mode of the table: the flush time is
+    the repair time also for a table which is not in repair mode.
     """
     injection = "repair_flush_hints_batchlog_handler_bm_uninitialized"
     nr_tablets = 4
@@ -91,19 +95,55 @@ async def test_repair_fails_and_recovers_when_flush_fails(manager: ScyllaCluster
 
     await manager.api.enable_injection(servers[2].ip_addr, injection, one_shot=False)
     try:
-        # The coordinator keeps rescheduling the failed repair, so the request never completes.
-        with pytest.raises(asyncio.TimeoutError):
-            await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", "all", timeout=30)
+        await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", "all")
 
-        failed_rounds = sum(await count_in_logs(logs, r"hints_batchlog_flusher - Flushing hints and batchlog failed on node="))
-        failed_repairs = sum(await count_in_logs(logs, r"repair for tablet .* failed: .*Flush is needed for repair .* but failed"))
-        initiated = sum(await count_in_logs(logs, INITIATING_REPAIR))
+        failed_rounds = sum(await count_in_logs(logs, FAILED_ROUND))
+        failed_repairs = sum(await count_in_logs(logs, FAILED_REPAIR))
+        unflushed_repairs = sum(await count_in_logs(logs, UNFLUSHED_REPAIR))
+        finished = sum(await count_in_logs(logs, FINISHED_REPAIR))
         self_flush_requests = sum(await count_in_logs(logs, REPAIR_FLUSH_REQUESTED))
-        logger.info(f"{failed_rounds=} {failed_repairs=} {initiated=} {self_flush_requests=}")
+        logger.info(f"{failed_rounds=} {failed_repairs=} {unflushed_repairs=} {finished=} {self_flush_requests=}")
         assert failed_rounds > 0
-        assert failed_repairs > 0
-        assert initiated > 0
+        assert failed_repairs == 0
+        assert unflushed_repairs == nr_tablets
+        assert finished == nr_tablets
         assert self_flush_requests == 0
+        during = await load_tablet_repair_time(cql, hosts[0:1], table_id)
+        assert during == before, f"{before=} {during=}"
+    finally:
+        await manager.api.disable_injection(servers[2].ip_addr, injection)
+
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", "all")
+    after = await load_tablet_repair_time(cql, hosts[0:1], table_id)
+    assert all(v is not None and v.year > 2000 for v in after.values()), f"{after=}"
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_auto_repair_fails_and_recovers_when_flush_fails(manager: ScyllaClusterManager):
+    """
+    An auto repair is there to advance the repair time, so unlike a user
+    repair, it fails when the coordinator cannot flush a node: no repair time
+    is recorded and the scheduler retries it, with the delay it applies to a
+    failed repair. Once the node flushes again the retried repair completes
+    and the time is recorded.
+    """
+    injection = "repair_flush_hints_batchlog_handler_bm_uninitialized"
+    nr_tablets = 4
+    cmdline = ["--logger-log-level", "repair=debug"]
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager, tablets=nr_tablets, disable_flush_cache_time=True, cmdline=cmdline)
+    logs = await open_logs(manager, servers)
+
+    await manager.api.enable_injection(servers[2].ip_addr, injection, one_shot=False)
+    try:
+        await cql.run_async(f"ALTER TABLE {ks}.test WITH auto_repair_enabled = true AND auto_repair_threshold_in_seconds = 1")
+
+        async def repair_failed():
+            failed_repairs = sum(await count_in_logs(logs, FAILED_REPAIR))
+            return True if failed_repairs >= nr_tablets else None
+        await wait_for(repair_failed, time.time() + 300)
+
+        unflushed_repairs = sum(await count_in_logs(logs, UNFLUSHED_REPAIR))
+        assert unflushed_repairs == 0
         during = await load_tablet_repair_time(cql, hosts[0:1], table_id)
         assert all(v is None for v in during.values()), f"{during=}"
     finally:
@@ -208,3 +248,40 @@ async def test_repair_flushes_itself_for_request_without_flush_mode(manager: Scy
     assert self_flush_requests == nr_tablets * len(servers)
     times = await load_tablet_repair_time(cql, hosts[0:1], table_id)
     assert all(v is not None for v in times.values()), f"{times=}"
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_user_repair_which_flushes_itself_records_no_repair_time_when_flush_fails(manager: ScyllaClusterManager):
+    """
+    A user repair which flushes on all nodes itself, for a coordinator too
+    old to do it, finishes too when the flush fails, and keeps the repair
+    time the tablet had: such a coordinator records the time the repair
+    returns. The injection which drops the flush parameter on the receiving
+    side stands in for such a coordinator.
+    """
+    ignore_flush_mode = "tablet_repair_ignore_flush_mode"
+    fail_flush = "repair_flush_hints_batchlog_handler_bm_uninitialized"
+    nr_tablets = 4
+    cmdline = ["--logger-log-level", "repair=debug"]
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager, tablets=nr_tablets, disable_flush_cache_time=True, cmdline=cmdline)
+    logs = await open_logs(manager, servers)
+
+    before = await load_tablet_repair_time(cql, hosts[0:1], table_id)
+
+    await asyncio.gather(*[manager.api.enable_injection(s.ip_addr, ignore_flush_mode, one_shot=False) for s in servers])
+    await manager.api.enable_injection(servers[2].ip_addr, fail_flush, one_shot=False)
+    try:
+        await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", "all")
+    finally:
+        await manager.api.disable_injection(servers[2].ip_addr, fail_flush)
+        await asyncio.gather(*[manager.api.disable_injection(s.ip_addr, ignore_flush_mode) for s in servers])
+
+    finished = sum(await count_in_logs(logs, FINISHED_REPAIR))
+    unflushed_repairs = sum(await count_in_logs(logs, UNFLUSHED_REPAIR))
+    failed_repairs = sum(await count_in_logs(logs, FAILED_REPAIR))
+    logger.info(f"{finished=} {unflushed_repairs=} {failed_repairs=}")
+    assert finished == nr_tablets
+    assert unflushed_repairs == nr_tablets
+    assert failed_repairs == 0
+    during = await load_tablet_repair_time(cql, hosts[0:1], table_id)
+    assert during == before, f"{before=} {during=}"

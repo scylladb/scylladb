@@ -2589,6 +2589,9 @@ future<gc_clock::time_point> repair_service::repair_tablet(gms::gossip_address_m
     auto hosts_filter = info.repair_task_info ? info.repair_task_info->repair_hosts_filter : std::unordered_set<locator::host_id>{};
     auto dcs_filter = info.repair_task_info ? info.repair_task_info->repair_dcs_filter : std::unordered_set<sstring>{};
     auto incremental_mode = info.repair_task_info ? info.repair_task_info->repair_incremental_mode : locator::tablet_repair_incremental_mode::disabled;
+    // Read now: the tablet map is not guaranteed to stay alive across the repair.
+    bool is_user_request = info.repair_task_info && info.repair_task_info->is_user_repair_request();
+    auto current_repair_time = gc_clock::from_time_t(db_clock::to_time_t(info.repair_time));
     for (auto& r : replicas) {
         auto shard = r.shard;
         if (r.host != myhostid) {
@@ -2644,7 +2647,22 @@ future<gc_clock::time_point> repair_service::repair_tablet(gms::gossip_address_m
     co_await task->done();
 
     if (should_flush_and_flush_failed) {
-        throw std::runtime_error(fmt::format("Flush is needed for repair {} with parent {}, but failed", task->id(), task->get_parent_id()));
+        // The tablet was synced, but without the flush there is no repair time to record.
+        //
+        // A user request is done nevertheless: failing it would only make the coordinator
+        // sync the tablet again and again, for as long as the flush keeps failing. Return
+        // the repair time the tablet already has, the coordinator records what we return.
+        //
+        // An auto repair is there to advance the repair time, so it did not do its job.
+        // Finishing it would also make the tablet due for repair again right away, without
+        // the delay the scheduler applies before it retries a failed repair.
+        if (!is_user_request) {
+            throw std::runtime_error(fmt::format("Flush is needed for repair {} with parent {}, but failed", task->id(), task->get_parent_id()));
+        }
+        rlogger.warn("repair[{}]: Finished tablet repair for table={}.{} range={} global_tablet_id={} without flushing hints and batchlog: "
+                "the tablet is synced but its repair time stays at {}, so tombstone gc does not advance",
+                id.uuid(), keyspace_name, table_name, range, gid, current_repair_time);
+        co_return current_repair_time;
     }
 
     auto delay = utils::get_local_injector().inject_parameter<uint32_t>("tablet_repair_add_delay_in_ms");

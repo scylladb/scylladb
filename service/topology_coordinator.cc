@@ -3321,7 +3321,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                             // by reference, is gone once this yields.
                             auto repair_time = gc_clock::from_time_t(db_clock::to_time_t(tinfo.repair_time));
                             // Without a flush time the replica still syncs the tablet, but
-                            // fails the repair at the end without recording a repair time.
+                            // records no repair time: a user repair returns the repair time
+                            // the tablet already has, an auto repair fails at the end.
                             flush = {tablet_repair_flush_mode::flushed, co_await _hints_batchlog_flusher.flush_time(repair_time)};
                         }
                         rtlogger.info("Initiating tablet repair host={} tablet={} request_type={} flush_time={}", dst, tablet, request_type, flush.time);
@@ -3359,7 +3360,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         if (valid && is_filter_off) {
                             auto sched_time = tinfo.repair_task_info->sched_time;
                             auto time = tablet_state.repair_time;
-                            update.set_repair_time(last_token, time);
+                            // A user repair which could not flush hints and batchlog returns
+                            // the repair time the tablet already has: there is nothing to record.
+                            if (time != tinfo.repair_time) {
+                                update.set_repair_time(last_token, time);
+                            }
                             auto repaired_at = sstring("None");
                             if (_feature_service.tablet_incremental_repair && incremental) {
                                 auto sstables_repaired_at = tinfo.sstables_repaired_at + 1;

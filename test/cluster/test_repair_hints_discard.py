@@ -288,9 +288,9 @@ async def test_repair_discards_hints_it_cannot_wait_for(manager: ScyllaClusterMa
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
 async def test_tablet_repair_discards_hints_it_cannot_wait_for(manager: ScyllaClusterManager):
     """
-    A tablet repair whose hints flush times out fails outright, unlike a vnode repair, and the tablet
-    scheduler retries it until it succeeds. With the option off, every attempt fails and the hints stay.
-    With the option on, the first attempt discards them, so the next one succeeds and records a repair time.
+    A tablet repair whose hints flush times out finishes without recording a repair time, like a vnode
+    repair. With the option off, the hints stay, so every repair ends this way. With the option on, a
+    repair discards them, so a later one flushes and records a repair time.
     """
     n1, n2 = await start_cluster(manager, 2, tablets=True)
     cql = manager.get_cql()
@@ -309,25 +309,22 @@ async def test_tablet_repair_discards_hints_it_cannot_wait_for(manager: ScyllaCl
     log1 = await manager.server_open_log(n1.server_id)
     mark = await log1.mark()
 
-    # Option off: the request is not awaited, it would never complete. A second flush request shows
-    # that the first attempt failed and was retried.
+    # Option off: the repair finishes, but the hints stay and no repair time is recorded.
     await set_option(manager, cql, [n1, n2], hosts, False)
-    await manager.api.tablet_repair(n1.ip_addr, "ks", "repaired", "all", await_completion=False)
-
-    async def retried():
-        return True if len(await log1.grep(FLUSH_STARTED_LOG, from_mark=mark)) >= 2 else None
-    await wait_for(retried, time.time() + 120)
+    await manager.api.tablet_repair(n1.ip_addr, "ks", "repaired", "all")
+    assert await log1.grep(FLUSH_STARTED_LOG, from_mark=mark)
     assert not await log1.grep(DISCARD_LOG, from_mark=mark)
     assert not await tablet_repaired(cql, host1, table_id)
     assert await metric_sum(manager, [n1], DISCARDED) == 0
 
-    # Option on: a retried attempt discards the hints and the one after it succeeds, with the hints still failing.
+    # Option on: a repair discards the hints and a later one records a repair time, with the hints still failing.
     await set_option(manager, cql, [n1, n2], hosts, True)
-    await log1.wait_for(DISCARD_LOG, from_mark=mark, timeout=120)
-    await wait_for_metric(manager, [n1], DISCARDED, 1)
     async def repaired():
+        await manager.api.tablet_repair(n1.ip_addr, "ks", "repaired", "all")
         return True if await tablet_repaired(cql, host1, table_id) else None
-    await wait_for(repaired, time.time() + 120)
+    await wait_for(repaired, time.time() + 120, period=1)
+    assert await log1.grep(DISCARD_LOG, from_mark=mark)
+    await wait_for_metric(manager, [n1], DISCARDED, 1)
 
 
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
