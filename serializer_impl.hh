@@ -557,14 +557,16 @@ struct serializer<bytes> {
     }
     template<typename Output>
     static void write(Output& out, const managed_bytes& mb) {
-        safe_serialize_as_uint32(out, mb.size());
+        static_assert(std::is_same_v<decltype(mb.size()), uint32_t>);
+        serialize(out, mb.size());
         for (bytes_view frag : fragment_range(managed_bytes_view(mb))) {
             out.write(reinterpret_cast<const char*>(frag.data()), frag.size());
         }
     }
     template<typename Output>
     static void write(Output& out, const bytes_ostream& v) {
-        safe_serialize_as_uint32(out, v.size());
+        static_assert(std::is_same_v<decltype(v.size()), uint32_t>);
+        serialize(out, v.size());
         for (bytes_view frag : v.fragments()) {
             out.write(reinterpret_cast<const char*>(frag.begin()), frag.size());
         }
@@ -572,7 +574,7 @@ struct serializer<bytes> {
     template<typename Output, typename FragmentedBuffer>
     requires FragmentRange<FragmentedBuffer>
     static void write_fragmented(Output& out, FragmentedBuffer&& fragments) {
-        safe_serialize_as_uint32(out, fragments.size_bytes());
+        safe_serialize_as_uint32(out, uint64_t(fragments.size_bytes()));
         for (bytes_view frag : fragments) {
             out.write(reinterpret_cast<const char*>(frag.begin()), frag.size());
         }

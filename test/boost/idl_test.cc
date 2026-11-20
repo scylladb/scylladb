@@ -22,6 +22,14 @@
 #include "test/lib/test_utils.hh"
 #include "bytes.hh"
 #include "bytes_ostream.hh"
+#include "serializer.hh"
+
+// The deleted uint32_t overload must reject already-narrowed sizes.
+// Templated so the deleted call is a substitution failure, not a hard error.
+template <typename Size>
+concept can_safe_serialize_as_uint32 = requires(bytes_ostream& out, Size n) { ser::safe_serialize_as_uint32(out, n); };
+static_assert(!can_safe_serialize_as_uint32<uint32_t>);
+static_assert(can_safe_serialize_as_uint32<uint64_t>);
 
 struct simple_compound {
     // TODO: change this to test for #905
