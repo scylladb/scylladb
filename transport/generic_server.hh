@@ -60,6 +60,9 @@ protected:
     future<> _ready_to_respond = make_ready_future<>();
     seastar::named_gate _pending_requests_gate;
     seastar::gate::holder _hold_server;
+    // Fired once no more requests will be read (client gone or server shutting down),
+    // while earlier requests may still run.
+    seastar::abort_source _input_closed;
 
     bool _ssl_enabled = false;
     std::optional<sstring> _ssl_cipher_suite = std::nullopt;

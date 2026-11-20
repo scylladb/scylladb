@@ -357,6 +357,15 @@ uint64_t accumulate_on_active_memtables(replica::table& t, noncopyable_function<
     return ret;
 }
 
+// Ends the sampling windows of running toppartitions queries when the API is torn down at shutdown.
+static thread_local lw_shared_ptr<abort_source> toppartitions_abort_source;
+
+static void check_toppartitions_capacity(unsigned capacity) {
+    if (capacity == 0 || capacity > db::toppartitions_query::max_capacity) {
+        throw bad_param_exception(format("capacity must be in [1, {}]", db::toppartitions_query::max_capacity));
+    }
+}
+
 static
 future<json::json_return_type>
 rest_toppartitions_generic(sharded<replica::database>& db, std::unique_ptr<http::request> req) {
@@ -397,14 +406,16 @@ rest_toppartitions_generic(sharded<replica::database>& db, std::unique_ptr<http:
 
         auto duration = get_query_param<std::chrono::milliseconds>(*req, "duration", 1000ms);
         auto capacity = get_query_param<unsigned>(*req, "capacity", 256);
+        check_toppartitions_capacity(capacity);
         auto list_size = get_query_param<unsigned>(*req, "list_size", 10);
 
         apilog.info("toppartitions query: #table_filters={} #keyspace_filters={} duration={} list_size={} capacity={}",
             !table_filters.empty() ? std::to_string(table_filters.size()) : "all", !keyspace_filters.empty() ? std::to_string(keyspace_filters.size()) : "all", duration, list_size, capacity);
 
-        return seastar::do_with(db::toppartitions_query(db, std::move(table_filters), std::move(keyspace_filters), duration, list_size, capacity), [] (db::toppartitions_query& q) {
-            return run_toppartitions_query(q);
-        });
+        return seastar::do_with(db::toppartitions_query(db, std::move(table_filters), std::move(keyspace_filters), duration, list_size, capacity),
+                toppartitions_abort_source, [] (db::toppartitions_query& q, lw_shared_ptr<abort_source>& as) {
+                    return run_toppartitions_query(q, *as);
+                });
 }
 
 static
@@ -578,6 +589,7 @@ drop_quarantined_sstables(http_context& ctx, sharded<replica::database>& db, std
 }
 
 void set_column_family(http_context& ctx, routes& r, sharded<replica::database>& db) {
+    toppartitions_abort_source = make_lw_shared<abort_source>();
     cf::get_column_family_name.set(r, [&db] (const_req req){
         std::vector<sstring> res;
         const replica::database::tables_metadata& meta = db.local().get_tables_metadata();
@@ -1272,14 +1284,16 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
 
         auto duration = get_query_param<std::chrono::milliseconds>(*req, "duration", 1000ms);
         auto capacity = get_query_param<unsigned>(*req, "capacity", 256);
+        check_toppartitions_capacity(capacity);
         auto list_size = get_query_param<unsigned>(*req, "list_size", 10);
 
         apilog.info("toppartitions query: name={} duration={} list_size={} capacity={}",
             name, duration, list_size, capacity);
 
-        return seastar::do_with(db::toppartitions_query(db, {{ks, cf}}, {}, duration, list_size, capacity), [] (db::toppartitions_query& q) {
-            return run_toppartitions_query(q, true);
-        });
+        return seastar::do_with(db::toppartitions_query(db, {{ks, cf}}, {}, duration, list_size, capacity), toppartitions_abort_source,
+                [] (db::toppartitions_query& q, lw_shared_ptr<abort_source>& as) {
+                    return run_toppartitions_query(q, *as, true);
+                });
     });
 
     ss::toppartitions_generic.set(r, [&db] (std::unique_ptr<http::request> req) {
@@ -1459,6 +1473,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
 }
 
 void unset_column_family(http_context& ctx, routes& r) {
+    toppartitions_abort_source->request_abort();
     cf::get_column_family_name.unset(r);
     cf::get_column_family.unset(r);
     cf::get_column_family_name_keyspace.unset(r);

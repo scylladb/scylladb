@@ -141,6 +141,20 @@ protected:
 
 public:
     generic_describe_statement(std::optional<sstring> keyspace, sstring name, bool with_internals);
+    friend class commands_describe_statement;
+};
+
+// DESCRIBE COMMANDS: one row per EXECUTE COMMAND parameter, unless an object named
+// commands exists, which is then described as before COMMANDS became a keyword.
+class commands_describe_statement : public describe_statement {
+    generic_describe_statement _object;
+
+protected:
+    virtual std::vector<lw_shared_ptr<column_specification>> get_column_specifications() const override;
+    virtual seastar::future<std::vector<std::vector<managed_bytes_opt>>> describe(cql3::query_processor& qp, const service::client_state& client_state) const override;
+
+public:
+    explicit commands_describe_statement(bool with_internals);
 };
 
 }

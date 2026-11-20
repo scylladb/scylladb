@@ -105,6 +105,13 @@ Example output:
 
    10.0.0.72
 
+Running over CQL
+----------------
+
+This command can also be run over CQL, see :doc:`EXECUTE COMMAND toppartitions </cql/commands/toppartitions>`.
+A node runs at most 4 toppartitions queries at once, whether started by nodetool or over CQL;
+another one fails right away (HTTP 503). The capacity is at most 10000.
+
 Additional Information
 ----------------------
 

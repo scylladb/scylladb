@@ -183,6 +183,7 @@ future<> connection::process()
                 return process_until_tenant_switch();
             });
         }).then_wrapped([this] (future<> f) {
+            _input_closed.request_abort();
             handle_error(std::move(f));
         });
     }).finally([this] {

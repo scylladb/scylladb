@@ -8,10 +8,12 @@
 
 #pragma once
 
+#include <seastar/core/abort_source.hh>
 #include <seastar/core/sharded.hh>
 #include <seastar/core/future.hh>  // IWYU pragma: keep
 #include <seastar/core/weak_ptr.hh>
 
+#include "exceptions/exceptions.hh"
 #include "utils/hash.hh"
 #include "schema/schema_fwd.hh"
 #include "readers/mutation_reader.hh"
@@ -115,7 +117,8 @@ private:
     top_k _top_k_write;
 
 public:
-    toppartitions_data_listener(replica::database& db, std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash> table_filters, std::unordered_set<sstring> keyspace_filters);
+    toppartitions_data_listener(replica::database& db, std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash> table_filters,
+            std::unordered_set<sstring> keyspace_filters, size_t capacity);
     ~toppartitions_data_listener();
 
     virtual mutation_reader on_read(const schema_ptr& s, const dht::partition_range& range,
@@ -124,6 +127,12 @@ public:
     virtual void on_write(const schema_ptr& s, const frozen_mutation& m) override;
 
     future<> stop();
+};
+
+// Thrown when the node already runs as many toppartitions queries as it allows.
+class toppartitions_busy_exception : public exceptions::invalid_request_exception {
+public:
+    using exceptions::invalid_request_exception::invalid_request_exception;
 };
 
 class toppartitions_query {
@@ -136,6 +145,13 @@ class toppartitions_query {
     std::unique_ptr<sharded<toppartitions_data_listener>> _query;
 
 public:
+    // Each query adds a listener that every read and write on every shard walks.
+    static constexpr unsigned max_concurrent = 4;
+    // Queries of roles that are not superusers may hold only this many, so they cannot lock out the rest.
+    static constexpr unsigned max_concurrent_restricted = 2;
+    // Every shard keeps up to this many read and write keys per query.
+    static constexpr size_t max_capacity = 10000;
+
     toppartitions_query(seastar::sharded<replica::database>& xdb, std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash>&& table_filters,
         std::unordered_set<sstring>&& keyspace_filters, std::chrono::milliseconds duration, size_t list_size, size_t capacity);
 
@@ -150,8 +166,13 @@ public:
     size_t list_size() const { return _list_size; }
     size_t capacity() const { return _capacity; }
 
+    // Samples for duration(), or until `as` fires, and returns what was sampled. `restricted`
+    // queries count against max_concurrent_restricted too.
+    future<results> run(abort_source* as, bool restricted = false);
+
+private:
     future<> scatter();
-    future<results> gather(unsigned results_size = 256);
+    future<results> gather(unsigned results_size);
 };
 
 } // namespace db

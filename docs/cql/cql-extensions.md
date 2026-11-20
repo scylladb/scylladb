@@ -218,6 +218,11 @@ value. For example, to run the PRUNE with 100 parallel reads/writes, you can use
 ```cql
   PRUNE MATERIALIZED VIEW my_view WHERE v = 19 USING CONCURRENCY 100;
 ```
+## EXECUTE COMMAND
+
+`EXECUTE COMMAND <name> [WITH <param> = <value> AND ...]` runs a built-in administrative
+command, see {doc}`CQL Commands </cql/commands>`.
+
 (synchronous-materialized-views)=
 
 ## Synchronous materialized views

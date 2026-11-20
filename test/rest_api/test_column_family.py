@@ -10,7 +10,7 @@ import threading
 import time
 
 from ..cqlpy.util import new_test_table, new_test_keyspace
-from test.rest_api.rest_util import scylla_inject_error
+from test.rest_api.rest_util import scylla_inject_error, ThreadWrapper
 
 def do_test_column_family_attribute_api_table(cql, this_dc, rest_api, api_name):
     ksdef = f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : '1' }}"
@@ -195,3 +195,45 @@ def test_sstables_total_disk_space_sanity(cql, this_dc, rest_api):
             live_size = int(resp.json())
             print(f'Reported live size : {live_size}')
             assert live_size <= total_real_size
+
+# capacity=0 would trip space_saving_top_k's assertion, and capacity sizes every shard's
+# sampler, so both toppartitions endpoints reject 0 and anything above 10000.
+@pytest.mark.parametrize("capacity", ["0", "10001"])
+@pytest.mark.parametrize("path", ["column_family/toppartitions/{ks}:{cf}", "storage_service/toppartitions"])
+def test_toppartitions_rejects_bad_capacity(cql, this_dc, rest_api, path, capacity):
+    ksdef = f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : '1' }}"
+    with new_test_keyspace(cql, ksdef) as ks:
+        with new_test_table(cql, ks, "pk int PRIMARY KEY") as t:
+            cf = t.split('.')[1]
+            resp = rest_api.send("GET", path.format(ks=ks, cf=cf), {"duration": "100", "capacity": capacity, "table_filters": f"{ks}:{cf}"})
+            assert resp.status_code == 400 and "capacity must be in [1, 10000]" in resp.text
+
+
+# A node runs at most 4 toppartitions queries; another one gets a retryable 503.
+@pytest.mark.parametrize("path", ["column_family/toppartitions/{ks}:{cf}", "storage_service/toppartitions"])
+def test_toppartitions_busy_is_503(cql, this_dc, rest_api, path):
+    ksdef = f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : '1' }}"
+    with new_test_keyspace(cql, ksdef) as ks:
+        with new_test_table(cql, ks, "pk int PRIMARY KEY") as t:
+            cf = t.split('.')[1]
+            def run(duration):
+                return rest_api.send("GET", path.format(ks=ks, cf=cf), {"duration": str(duration), "table_filters": f"{ks}:{cf}"})
+            def start():
+                h = ThreadWrapper(target=run, args=(10000,))
+                h.start()
+                return h
+            holders = [start() for _ in range(4)]
+            deadline = time.time() + 8
+            while True:
+                # A probe can take a slot before a holder starts; restart the holder it turned away.
+                for i, h in enumerate(holders):
+                    if not h.is_alive():
+                        assert h.join().status_code == 503
+                        holders[i] = start()
+                if (resp := run(1)).status_code != 200:
+                    break
+                assert time.time() < deadline
+                time.sleep(0.05)
+            assert resp.status_code == 503 and "Too many concurrent toppartitions queries" in resp.text
+            for h in holders:
+                assert h.join().status_code == 200
