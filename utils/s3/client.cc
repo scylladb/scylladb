@@ -264,6 +264,8 @@ future<> client::update_credentials_in_background(shared_ptr<client>) {
     }
     s3l.info("Update creds in the background");
     try {
+        // Stands in for a slow provider fetch (IMDS/STS round trip).
+        co_await utils::get_local_injector().inject("s3_client_update_credentials_wait", utils::wait_for_message(std::chrono::seconds(60)));
         co_await update_credentials_and_rearm();
     } catch (...) {
         _credentials = {};
