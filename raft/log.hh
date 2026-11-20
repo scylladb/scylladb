@@ -117,6 +117,9 @@ public:
     // Used in elections to not vote for a candidate with
     // a less recent term.
     term_t last_term() const;
+    // Drop the entries the snapshot covers which apply_snapshot() left in
+    // the log for followers that are behind. Returns the memory released.
+    size_t drop_trailing();
     // Return the number of log entries in memory
     size_t in_memory_size() const {
         return _log.size();
