@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
+import concurrent.futures
 import json
 import os
 import shutil
@@ -12,6 +13,7 @@ import pytest
 import requests
 from .util import new_materialized_view, new_test_keyspace, new_test_table, unique_name, sleep_till_whole_second
 from . import nodetool, rest_api
+from .rest_api import scylla_inject_error, wait_for_injection_parameter, message_injection
 from .test_materialized_view import wait_for_view_built
 from .test_snapshot import table_dir
 
@@ -217,6 +219,55 @@ def test_nodetool_py_compact(cql, test_keyspace):
         nodetool.compact(cql, table, flush_memtables=True)
         nodetool.compact_keyspace(cql, test_keyspace, flush_memtables=False)
         nodetool.compact_keyspace(cql, test_keyspace, flush_memtables=True)
+
+# The tests above check that compaction doesn't purge a tombstone that deletes
+# data in a memtable. But a flush can move such data out of the memtable into a
+# new sstable while a compaction runs, after the compaction took its snapshot of
+# the table's sstables, so the compaction finds the data in neither place,
+# purges the tombstone, and the deleted data comes back to life. This test
+# reproduces this race (SCYLLADB-4747), with an error injection that pauses the
+# compaction while the flush happens. The table uses "immediate" mode tombstone
+# GC, which purges a tombstone a second after the deletion. When this test was
+# written, this was also what the default "repair" mode did in an RF=1 keyspace,
+# but we set it explicitly so the test doesn't depend on that. The keyspace has
+# a single tablet, so the table has a single compaction, which the injection
+# pauses.
+def test_tombstone_gc_with_memtable_flushed_during_compaction(scylla_only, cql):
+    injection = 'compaction_wait_before_reading'
+    ks_opts = "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}"
+    # The row cache may still have the purged tombstone, and hide the bug, so
+    # disable it, and read from the memtables and sstables.
+    table_opts = "WITH caching = {'enabled': 'false'} AND tombstone_gc = {'mode': 'immediate'}"
+    with new_test_keyspace(cql, ks_opts) as ks, \
+            new_test_table(cql, ks, 'p int, c int, v int, primary key (p, c)', extra=table_opts) as table:
+        # Write a row at timestamp 1, and delete it at timestamp 2, into two
+        # sstables.
+        cql.execute(f'INSERT INTO {table} (p, c, v) VALUES (1, 1, 1) USING TIMESTAMP 1')
+        nodetool.flush(cql, table)
+        cql.execute(f'DELETE FROM {table} USING TIMESTAMP 2 WHERE p = 1 AND c = 1')
+        nodetool.flush(cql, table)
+        # In a later second than the deletion (so the tombstone can be purged),
+        # write the row again at timestamp 1, into the memtable.
+        sleep_till_whole_second()
+        cql.execute(f'INSERT INTO {table} (p, c, v) VALUES (1, 1, 1) USING TIMESTAMP 1')
+        # Check that the deletion still deletes the row
+        assert list(cql.execute(f'SELECT * FROM {table}')) == []
+        # Compact the table without flushing its memtable first. While the
+        # compaction is paused before it reads its sstables, flush_all() moves
+        # the row from the memtable to a new sstable, and drops the commitlog
+        # segments that kept the tombstone from being purged.
+        with scylla_inject_error(cql, injection, parameters={'table_name': table}):
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                compaction = executor.submit(nodetool.compact, cql, table, flush_memtables=False)
+                # Always resume the compaction, or it waits for the injection's timeout.
+                try:
+                    wait_for_injection_parameter(cql, injection, 'suspended')
+                    nodetool.flush_all(cql)
+                finally:
+                    message_injection(cql, injection)
+                compaction.result()
+        # Check that the deletion still deletes the row
+        assert list(cql.execute(f'SELECT * FROM {table}')) == []
 
 # Test that major compaction - of all tables, or of one table - merges the
 # table's two sstables into one.
