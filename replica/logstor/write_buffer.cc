@@ -7,6 +7,7 @@
  */
 #include "replica/logstor/write_buffer.hh"
 
+#include <algorithm>
 #include <chrono>
 
 #include <seastar/core/align.hh>
@@ -593,14 +594,8 @@ future<> write_buffer_ring::stop() {
     co_await std::move(close_fut);
     co_await std::move(_consumer);
 
-    for (auto& state : _in_flight) {
-        if (state.completion) {
-            auto f = co_await coroutine::as_future(std::move(*state.completion));
-            state.completion.reset();
-            if (f.failed()) {
-                logstor_logger.warn("Buffered write completion failed during stop: {}. Ignoring.", f.get_exception());
-            }
-        }
+    if (!std::ranges::all_of(_in_flight, &in_flight_write::idle)) {
+        on_fatal_internal_error(logstor_logger, "Write buffer ring stopped with a flush in flight");
     }
 
     logstor_logger.info("Write buffer ring stopped");
