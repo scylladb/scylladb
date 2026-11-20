@@ -21,6 +21,7 @@
 #include "locator/network_topology_strategy.hh"
 #include "locator/load_sketch.hh"
 #include "test/lib/topology_builder.hh"
+#include "test/lib/tablet_test_utils.hh"
 #include "replica/tablets.hh"
 #include "locator/tablet_replication_strategy.hh"
 #include "db/config.hh"
@@ -40,6 +41,8 @@ using namespace locator;
 using namespace replica;
 using namespace service;
 using namespace tools::utils;
+using tablet_test_utils::add_table;
+using tablet_test_utils::add_keyspace;
 
 namespace bpo = boost::program_options;
 
@@ -51,36 +54,6 @@ static
 cql_test_config tablet_cql_test_config() {
     cql_test_config c;
     return c;
-}
-
-static
-future<table_id> add_table(cql_test_env& e, sstring test_ks_name = "") {
-    auto id = table_id(utils::UUID_gen::get_time_UUID());
-    co_await e.create_table([&] (std::string_view ks_name) {
-        if (!test_ks_name.empty()) {
-            ks_name = test_ks_name;
-        }
-        return *schema_builder(this_smp_shard_count(), ks_name, id.to_sstring(), id)
-                .with_column("p1", utf8_type, column_kind::partition_key)
-                .with_column("r1", int32_type)
-                .build();
-    });
-    co_return id;
-}
-
-// Run in a seastar thread
-static
-sstring add_keyspace(cql_test_env& e, std::unordered_map<sstring, int> dc_rf, int initial_tablets = 0) {
-    static std::atomic<int> ks_id = 0;
-    auto ks_name = fmt::format("keyspace{}", ks_id.fetch_add(1));
-    sstring rf_options;
-    for (auto& [dc, rf] : dc_rf) {
-        rf_options += format(", '{}': {}", dc, rf);
-    }
-    e.execute_cql(fmt::format("create keyspace {} with replication = {{'class': 'NetworkTopologyStrategy'{}}}"
-                              " and tablets = {{'enabled': true, 'initial': {}}}",
-                              ks_name, rf_options, initial_tablets)).get();
-    return ks_name;
 }
 
 static

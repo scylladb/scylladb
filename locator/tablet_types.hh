@@ -108,6 +108,7 @@ struct tablet_routing_info_v2 {
 
 class tablet_map;
 class tablet_metadata;
+struct tablet_metadata_change_hint;
 struct combined_load_stats;
 struct rf_rack_topology_operation;
 
