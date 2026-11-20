@@ -26,7 +26,7 @@
 #include "utils/preempt.hh"
 #include "utils/lru.hh"
 #include "utils/managed_ref.hh"
-#include "utils/compact-radix-tree.hh"
+#include "mutation/atomic_cell_or_collection_block.hh"
 #include "mutation/cell_hash.hh"
 #include "utils/immutable-collection.hh"
 #include "mutation/compact_and_expire_result.hh"
@@ -75,13 +75,29 @@ class compaction_garbage_collector;
 // for space-efficiency reasons. Whenever a method accepts a column_kind,
 // the caller must always supply the same column_kind.
 //
+// Cells are stored packed in atomic_cell_or_collection_blocks; see
+// atomic_cell_or_collection_block.hh. Access to cells is through views,
+// which are invalidated by any modification of the row.
 //
 class row {
     friend class size_calculator;
     using size_type = std::make_unsigned_t<column_id>;
-    size_type _size = 0;
-    using sparse_array_type = compact_radix_tree::tree<cell_and_hash, column_id>;
-    sparse_array_type _cells;
+    using cells_type = atomic_cell_or_collection_block_tree;
+    using block_index_type = cells_type::block_index_type;
+    using block_type = atomic_cell_or_collection_block;
+    using block_ptr = block_type::ptr;
+    using block_being_rebuilt = cells_type::block_being_rebuilt;
+    cells_type _cells;
+
+    static block_index_type block_index_of(column_id id) noexcept {
+        return id >> atomic_cell_or_collection_block_slot_bits;
+    }
+    static unsigned slot_of(column_id id) noexcept {
+        return id & (atomic_cell_or_collection_block_nr_cells - 1);
+    }
+    static column_id column_of(block_index_type block_index, unsigned slot) noexcept {
+        return (column_id(block_index) << atomic_cell_or_collection_block_slot_bits) | slot;
+    }
 public:
     row();
     ~row();
@@ -89,8 +105,8 @@ public:
     static row construct(const schema& our_schema, const schema& their_schema, column_kind, const row&);
     row(row&& other) noexcept;
     row& operator=(row&& other) noexcept;
-    size_t size() const { return _size; }
-    bool empty() const { return _size == 0; }
+    size_t size() const { return _cells.size(); }
+    bool empty() const { return _cells.empty(); }
 
     atomic_cell_or_collection_view cell_at(column_id id) const;
 
@@ -99,21 +115,45 @@ public:
     // Returns a view of cell's value and hash or a disengaged optional if column is not set.
     std::optional<cell_and_hash_view> find_cell_and_hash(column_id id) const;
 
+    // Removes cells for which func(column_id, atomic_cell_or_collection&) returns true.
+    // func may also modify the cell.
     template<typename Func>
     void remove_if(Func&& func) {
-        _cells.weed([func, this] (column_id id, cell_and_hash& cah) {
-            if (!func(id, cah.cell)) {
-                return false;
+        rebuild_cells([&func] (column_id id, cell_and_hash& cah) {
+            if (func(id, cah.cell)) {
+                cah.cell = atomic_cell_or_collection();
             }
-
-            _size--;
-            return true;
         });
     }
 
 private:
+    // Compatibility path for code which needs atomic_cell_or_collection objects:
+    // materializes the cells of each block, calls func(column_id, cell_and_hash&)
+    // on each, and rebuilds the block from the results. Cells left empty are removed.
+    // Slow; prefer views.
     template<typename Func>
-    void consume_with(Func&&);
+    void rebuild_cells(Func&& func);
+
+    // Replaces or inserts the cell at `id`. If `stealable` is not null, it holds
+    // `value` and may be moved from.
+    void put_cell(column_id id, managed_bytes_view value, managed_bytes* stealable, cell_hash_opt hash);
+    // Like put_cell(), given the block of `id`'s block index (find_block()), or null.
+    void put_cell(const block_type* old_block, column_id id, managed_bytes_view value, managed_bytes* stealable, cell_hash_opt hash);
+    void apply_cell(const column_definition& column, atomic_cell_or_collection_view value, managed_bytes* stealable, cell_hash_opt hash,
+            db::large_data_cache_tracker* tracker);
+    // Merges the block of other at block_index into this row, whose block there
+    // (as found by the caller) is this_block, or nullptr if it has none. If steal
+    // is true, external cells of other_block may be moved from, and if the merged
+    // block would be other_block itself (it has all of this block's columns, and
+    // wins all of their merges), nothing is done and true is returned, so that the
+    // caller can install other_block instead.
+    // blocks_to_follow is passed to set_block() if the block is new to this row.
+    bool merge_block(const schema& s, column_kind kind, block_index_type block_index, const block_type* this_block,
+            const block_type& other_block, bool steal,
+            db::large_data_cache_tracker* tracker, std::optional<unsigned> blocks_to_follow);
+    // The number of blocks which merging `other` into this row will add after
+    // block_index (which this row lacks), in the vector of blocks holding block_index.
+    unsigned blocks_to_follow_from(const row& other, block_index_type block_index) const noexcept;
 
     template<typename Func>
     static constexpr bool is_const_func = std::is_invocable_v<Func&, column_id&, const cell_and_hash_view&>
@@ -123,15 +163,21 @@ private:
 
     // Func obeys the same requirements as for for_each_cell below.
     template<typename Func>
-    static constexpr auto invoke_const(Func& func, column_id& id, const cell_and_hash& c_a_h) {
+    static constexpr auto invoke_const(Func& func, column_id& id, const block_type::cell_entry& e) {
+        auto cell = atomic_cell_or_collection_view(e.cell);
         if constexpr (std::is_invocable_v<Func&, column_id&, const cell_and_hash_view&>) {
-            return func(id, cell_and_hash_view{c_a_h.cell, c_a_h.hash});
+            return func(id, cell_and_hash_view{cell, e.hash});
         } else if constexpr (std::is_invocable_v<Func&, column_id&, atomic_cell_or_collection_view>) {
-            return func(id, atomic_cell_or_collection_view(c_a_h.cell));
+            return func(id, cell);
         } else if constexpr (std::is_invocable_v<Func&, column_id&, const cell_and_hash&>) {
-            return func(id, c_a_h);
+            // Compatibility path, materializes a copy of the cell.
+            auto cah = cell_and_hash(atomic_cell_or_collection::from_serialized(managed_bytes(e.cell)), e.hash);
+            return func(id, std::as_const(cah));
         } else {
-            return func(id, c_a_h.cell);
+            // Compatibility path, materializes a copy of the cell.
+            static_assert(std::is_invocable_v<Func&, column_id&, const atomic_cell_or_collection&>);
+            auto c = atomic_cell_or_collection::from_serialized(managed_bytes(e.cell));
+            return func(id, std::as_const(c));
         }
     }
 
@@ -147,34 +193,97 @@ private:
 public:
     // Calls Func(column_id, const cell_and_hash_view&) or Func(column_id, atomic_cell_or_collection_view)
     // for each cell in this row, depending on the concrete Func type.
-    // Func(column_id, cell_and_hash&) and Func(column_id, atomic_cell_or_collection&),
-    // which may modify cells, are also supported.
-    // noexcept if Func doesn't throw.
+    // For compatibility, Func(column_id, cell_and_hash&) and Func(column_id, atomic_cell_or_collection&)
+    // (which may modify cells) are also supported, at a cost.
+    // noexcept if Func doesn't throw and doesn't modify cells.
     template<typename Func>
     void for_each_cell(Func&& func) {
         if constexpr (is_const_func<Func>) {
             std::as_const(*this).for_each_cell(func);
         } else {
-            _cells.walk([&func] (column_id id, cell_and_hash& cah) {
+            rebuild_cells([&func] (column_id id, cell_and_hash& cah) {
                 maybe_invoke_with_hash(func, id, cah);
-                return true;
             });
         }
     }
 
     template<typename Func>
     void for_each_cell(Func&& func) const {
-        _cells.walk([&func] (column_id id, const cell_and_hash& cah) {
-            invoke_const(func, id, cah);
-            return true;
+        _cells.for_each_block([&func] (block_index_type block_index, const block_type& block) {
+            block.for_each_cell([&func, block_index] (const block_type::cell_entry& e) {
+                column_id id = column_of(block_index, e.slot);
+                invoke_const(func, id, e);
+            });
         });
     }
 
     template<typename Func>
     void for_each_cell_until(Func&& func) const {
-        _cells.walk([&func] (column_id id, const cell_and_hash& cah) {
-            return invoke_const(func, id, cah) != stop_iteration::yes;
+        _cells.for_each_block([&func] (block_index_type block_index, const block_type& block) {
+            return block.for_each_cell([&func, block_index] (const block_type::cell_entry& e) {
+                column_id id = column_of(block_index, e.slot);
+                return invoke_const(func, id, e);
+            });
         });
+    }
+
+    struct cell_entry {
+        column_id id;
+        atomic_cell_or_collection_view cell;
+    };
+
+    // A forward iterator over the cells, in column id order, yielding cell_entry by value.
+    // Invalidated by any modification of the row.
+    //
+    // It is slower than for_each_cell() (each block step descends the tree from the
+    // root), so prefer for_each_cell() and its variants. The iterator is for consumers
+    // which need to walk two rows side by side or want std::ranges algorithms.
+    class const_cell_iterator {
+        cells_type::const_iterator _block;
+        // The slots of the current block still to visit; empty at the end.
+        block_type::mask_type _remaining_slots = 0;
+    public:
+        using value_type = cell_entry;
+        using difference_type = std::ptrdiff_t;
+
+        const_cell_iterator() noexcept = default;
+        explicit const_cell_iterator(const row& r) noexcept
+            : _block(r._cells)
+        {
+            if (_block != std::default_sentinel) {
+                _remaining_slots = (*_block).block.present();
+            }
+        }
+        cell_entry operator*() const noexcept {
+            auto [block_index, block] = *_block;
+            auto slot = std::countr_zero(_remaining_slots);
+            return {column_of(block_index, slot), atomic_cell_or_collection_view(block.cell(slot))};
+        }
+        const_cell_iterator& operator++() noexcept {
+            _remaining_slots &= _remaining_slots - 1;
+            if (!_remaining_slots) {
+                ++_block;
+                if (_block != std::default_sentinel) {
+                    _remaining_slots = (*_block).block.present();
+                }
+            }
+            return *this;
+        }
+        const_cell_iterator operator++(int) noexcept {
+            auto ret = *this;
+            ++*this;
+            return ret;
+        }
+        bool operator==(const const_cell_iterator& o) const noexcept {
+            return _block == o._block && _remaining_slots == o._remaining_slots;
+        }
+        bool operator==(std::default_sentinel_t) const noexcept { return !_remaining_slots; }
+    };
+
+    // The cells, as a range of const_cell_iterator. See const_cell_iterator for when to
+    // prefer for_each_cell().
+    std::ranges::subrange<const_cell_iterator, std::default_sentinel_t> cell_range() const noexcept {
+        return {const_cell_iterator(*this), std::default_sentinel};
     }
 
     // Calls func(column_id, managed_bytes_mutable_view) for each cell, with a view of the
@@ -183,11 +292,12 @@ public:
     // Resets the cached hashes of the cells.
     template<typename Func>
     void for_each_cell_in_place(Func&& func) {
-        _cells.walk([&func] (column_id id, cell_and_hash& cah) {
-            func(id, managed_bytes_mutable_view(cah.cell.data()));
-            // The cached hash may no longer match the cell.
-            cah.hash = cell_hash_opt();
-            return true;
+        _cells.for_each_block([&func] (block_index_type block_index, block_type& block) {
+            bitmask::for_each_set(block.present(), [&] (unsigned slot) {
+                func(column_of(block_index, slot), block.mutable_cell(slot));
+                // The cached hash may no longer match the cell.
+                block.hash(slot) = cell_hash_opt();
+            });
         });
     }
 
@@ -272,6 +382,33 @@ public:
     };
     friend std::ostream& operator<<(std::ostream& os, const printer& p);
 };
+
+template<typename Func>
+void row::rebuild_cells(Func&& func) {
+    _cells.rebuild_blocks([&func] (block_index_type block_index, block_being_rebuilt& block) {
+        std::array<cell_and_hash, atomic_cell_or_collection_block_nr_cells> cells;
+        std::array<uint8_t, atomic_cell_or_collection_block_nr_cells> slots;
+        unsigned nr = 0;
+        block->for_each_cell([&] (const block_type::cell_entry& e) {
+            cells[nr] = cell_and_hash(atomic_cell_or_collection::from_serialized(managed_bytes(e.cell)), e.hash);
+            slots[nr] = e.slot;
+            ++nr;
+        });
+        for (unsigned i = 0; i < nr; ++i) {
+            column_id id = column_of(block_index, slots[i]);
+            func(id, cells[i]);
+        }
+        atomic_cell_or_collection_block_builder builder;
+        for (unsigned i = 0; i < nr; ++i) {
+            builder.add_owned(slots[i], std::move(cells[i].cell.data()), cells[i].hash);
+        }
+        if (builder.empty()) {
+            block.remove();
+        } else {
+            block.replace(builder.build());
+        }
+    });
+}
 
 // Like row, but optimized for the case where the row doesn't exist (e.g. static rows)
 class lazy_row {

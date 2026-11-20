@@ -43,3 +43,8 @@ def test_row_printer(gdb_cmd, cached_table):
     # A failing pretty printer doesn't fail the command, it reports an exception.
     assert "Python Exception" not in result.stderr, f"stdout: {result.stdout} stderr: {result.stderr}"
     assert "cells=" in result.stdout, f"stdout: {result.stdout} stderr: {result.stderr}"
+    # Every cell is printed, with its column id and value.
+    for i in range(nr_columns):
+        value = f"gdb-cell-{i:02}".encode().hex()
+        assert value in result.stdout, f"value {i} missing. stdout: {result.stdout} stderr: {result.stderr}"
+    assert result.stdout.count("{id=") == nr_columns, f"stdout: {result.stdout} stderr: {result.stderr}"

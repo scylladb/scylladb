@@ -438,6 +438,76 @@ class compact_radix_tree:
         return 'compact radix tree @ 0x%x' % self.root
 
 
+class atomic_cell_or_collection_block_tree:
+    """Walks an atomic_cell_or_collection_block_tree, the cells of a row."""
+
+    def __init__(self, ref):
+        self.root = ref['_root']['_node']
+        self.height = int(ref['_height'])
+        self.size = int(ref['_size'])
+        self.block_type = gdb.lookup_type('atomic_cell_or_collection_block')
+        self.vector_type = gdb.lookup_type('atomic_cell_or_collection_block_vector')
+        self.node_ptr_type = gdb.lookup_type('atomic_cell_or_collection_block_tree_node_ptr')
+        self.managed_bytes_type = gdb.lookup_type('managed_bytes')
+        # The masks have a bit per cell (in a block) or child (in a vector).
+        self.cells_per_block = self.block_type['_present'].type.sizeof * 8
+        self.fanout = self.vector_type['_present'].type.sizeof * 8
+        self.offset_type = self.block_type['_inline_size'].type
+
+    def __blocks_in(self, node, height, base):
+        if height == 0:
+            yield base, node.cast(self.block_type.pointer()).dereference()
+            return
+        vector = node.cast(self.vector_type.pointer())
+        present = int(vector['_present'])
+        children = (vector + 1).cast(self.node_ptr_type.pointer())
+        rank = 0
+        for index in range(self.fanout):
+            if present & (1 << index):
+                child_base = base * self.fanout + index
+                yield from self.__blocks_in(children[rank]['_node'], height - 1, child_base)
+                rank += 1
+
+    def blocks(self):
+        """Yields (block_index, block) in block index order."""
+        if self.root:
+            yield from self.__blocks_in(self.root, self.height, 0)
+
+    def cells(self):
+        """Yields (column_id, serialized cell as bytes) in column id order."""
+        inf = gdb.selected_inferior()
+        # Layout: header, managed_bytes external[], cell_hash_opt hashes[],
+        # offset_type offsets[nr_internal + 1], data[]; see atomic_cell_or_collection_block.
+        hash_size = gdb.lookup_type('cell_hash').sizeof
+        for block_index, block in self.blocks():
+            present = int(block['_present'])
+            external = int(block['_external'])
+            nr_present = bin(present).count('1')
+            nr_external = bin(external).count('1')
+            nr_internal = nr_present - nr_external
+            externals = (block.address + 1).cast(self.managed_bytes_type.pointer())
+            hashes_address = int(externals) + nr_external * self.managed_bytes_type.sizeof
+            offsets = gdb.Value(hashes_address + nr_present * hash_size).cast(self.offset_type.pointer())
+            data_address = int(offsets) + (nr_internal + 1) * self.offset_type.sizeof
+            external_rank = 0
+            internal_rank = 0
+            for slot in range(self.cells_per_block):
+                if not present & (1 << slot):
+                    continue
+                column_id = block_index * self.cells_per_block + slot
+                if external & (1 << slot):
+                    yield column_id, managed_bytes(externals[external_rank]).get()
+                    external_rank += 1
+                else:
+                    begin = int(offsets[internal_rank])
+                    end = int(offsets[internal_rank + 1])
+                    yield column_id, bytes(inf.read_memory(data_address + begin, end - begin))
+                    internal_rank += 1
+
+    def to_string(self):
+        return ', '.join('{id=%d, data=%s}' % (column_id, data.hex()) for column_id, data in self.cells())
+
+
 class intrusive_btree:
     def __init__(self, ref):
         container_type = ref.type.strip_typedefs()
@@ -1395,6 +1465,12 @@ class row_printer(gdb.printing.PrettyPrinter):
         return '{type=%s, cells=%s}' % (self.val['_type'], cells)
 
     def to_string(self):
+        try:
+            return '{cells=[%s]}' % atomic_cell_or_collection_block_tree(self.val['_cells']).to_string()
+        except gdb.error:
+            pass
+        # Compatibility, rows used to keep their cells in a compact_radix_tree,
+        # and before that, in a vector or a set.
         try:
             return '{cells=[%s]}' % compact_radix_tree(self.val['_cells']).to_string()
         except gdb.error:

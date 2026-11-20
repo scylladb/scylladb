@@ -2713,6 +2713,29 @@ public:
     size_t allocated_bytes() const { return _allocated_bytes; }
 };
 
+SEASTAR_THREAD_TEST_CASE(test_row_cell_range) {
+    auto make_cell = [] (column_id id) {
+        return atomic_cell_or_collection(atomic_cell::make_live(*bytes_type, id, bytes(id % 7 + 1, int8_t(id))));
+    };
+    // Sparse ids, spanning several blocks and tree levels.
+    for (const auto& ids : std::vector<std::vector<column_id>>{
+            {}, {0}, {5}, {0, 1, 7}, {0, 8, 9, 63, 64, 511, 512, 513, 4095, 40000}}) {
+        row r;
+        for (auto id : ids) {
+            r.append_cell(id, make_cell(id));
+        }
+        std::vector<std::pair<column_id, atomic_cell_or_collection_view>> expected;
+        r.for_each_cell([&] (column_id id, atomic_cell_or_collection_view c) {
+            expected.emplace_back(id, c);
+        });
+        BOOST_REQUIRE_EQUAL(expected.size(), ids.size());
+        BOOST_REQUIRE(std::ranges::equal(r.cell_range(), expected, [] (const row::cell_entry& e, const auto& id_and_cell) {
+            return e.id == id_and_cell.first && e.cell.data().linearize() == id_and_cell.second.data().linearize();
+        }));
+        BOOST_REQUIRE_EQUAL(std::ranges::distance(r.cell_range()), ids.size());
+    }
+}
+
 SEASTAR_THREAD_TEST_CASE(test_external_memory_usage) {
     measuring_allocator alloc;
     auto s = simple_schema();
