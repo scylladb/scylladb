@@ -118,6 +118,14 @@ constexpr std::array registry_options = {
         // overflow.
         .valid_range = integer_range{.min = 1, .max = 10 * 365 * 24 * 3600},
     },
+    option{
+        .name = option_name::max_type_nesting,
+        .description = "Maximum nesting depth of a type in a client statement",
+        .scopes = scope_set::of<scope::cluster>(),
+        .default_value = int64_t{32},
+        // 0 would reject every collection, tuple, vector and user type.
+        .valid_range = integer_range{.min = 1, .max = std::numeric_limits<unsigned>::max()},
+    },
 };
 
 constexpr bool all_registry_options_are_single_domain() {

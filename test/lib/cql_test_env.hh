@@ -165,6 +165,8 @@ public:
 
     virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_cql(std::string_view text) = 0;
 
+    virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_cql(std::string_view text, cql3::dialect d) = 0;
+
     virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_cql(
             std::string_view text, std::unique_ptr<cql3::query_options> qo) = 0;
 
