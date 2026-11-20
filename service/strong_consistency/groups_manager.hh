@@ -145,6 +145,8 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     // try_acquire_server(), acquire_server(), or from a control operation.
     struct raft_group_state : public boost::intrusive::list_base_hook<boost::intrusive::link_mode<boost::intrusive::auto_unlink>> {
         bool has_tablet = false;
+        // Of the group's tablet; once it is dropped, the teardown erases the group's row.
+        table_id table;
         lw_shared_ptr<gate> gate = nullptr;
         raft::server* server = nullptr;
         // Of the table of this tablet; expires when the table is dropped.
@@ -228,11 +230,16 @@ class groups_manager : public peering_sharded_service<groups_manager> {
 
     // If `clean_up`, also does what cleanup_group() does for a migrated tablet, erasing the
     // group's persisted raft state, for a group whose tablet has no cleanup stage: a resizing
-    // parent which the tablet map dropped. Only valid with log_disposition::release.
+    // parent which the tablet map dropped, or a group of a dropped table. Only valid with
+    // log_disposition::release.
     void schedule_raft_group_deletion(raft::group_id group_id, raft_group_state& group_state,
         log_disposition disposition, bool clean_up = false);
 
     void schedule_raft_groups_deletion(bool all, log_disposition disposition);
+
+    // Erases this shard's rows of the groups gone from tablet metadata, which a crash
+    // between their teardown and its erase leaves behind.
+    future<> erase_rows_of_gone_groups();
 
     // Queues a start or deletion of the group's raft::server behind the
     // previous one; at most one control operation runs per group. `op` is
@@ -333,7 +340,7 @@ public:
 
     // Called during node boot. Starts all raft::server instances corresponding
     // to the latest group0 state in the background.
-    void start();
+    future<> start();
 
     // Stops the groups of every shard, from any shard: unregisters the RPC handlers
     // on every shard, waiting for those still running, and then stops every shard.

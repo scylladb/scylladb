@@ -1142,6 +1142,61 @@ async def test_drop_table_during_insert(manager: ScyllaClusterManager):
         await manager.api.get_host_id(server.ip_addr)
 
 
+async def get_raft_groups_rows(cql, host, group_ids: set[str]) -> set[str]:
+    rows = await cql.run_async("SELECT group_id FROM system.raft_groups", host=host)
+    return {str(r.group_id) for r in rows} & group_ids
+
+
+async def create_sc_table_with_raft_groups_rows(manager: ScyllaClusterManager, cql, host, ks: str) -> set[str]:
+    """Creates `ks`.test with two tablets and returns its group ids, once each has a row."""
+    await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+    for pk in range(10):
+        await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({pk}, {pk})")
+    table_id = await manager.get_table_id(ks, "test")
+    rows = await cql.run_async(f"SELECT raft_group_id FROM system.tablets WHERE table_id = {table_id}")
+    group_ids = {str(r.raft_group_id) for r in rows}
+    assert len(group_ids) == 2
+    assert await get_raft_groups_rows(cql, host, group_ids) == group_ids
+    return group_ids
+
+
+async def test_drop_table_erases_raft_groups_rows(manager: ScyllaClusterManager):
+    """SCYLLADB-6261: DROP TABLE erases the rows of the table's raft groups in system.raft_groups."""
+    server = await manager.server_add(cmdline=DEFAULT_CMDLINE)
+    (cql, hosts) = await manager.get_ready_cql([server])
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2} AND consistency = 'global'") as ks:
+        group_ids = await create_sc_table_with_raft_groups_rows(manager, cql, hosts[0], ks)
+        await cql.run_async(f"DROP TABLE {ks}.test")
+
+        async def rows_erased():
+            return True if not await get_raft_groups_rows(cql, hosts[0], group_ids) else None
+        await wait_for(rows_erased, time.time() + 60, label="the rows of the dropped table's groups to be erased")
+
+
+@pytest.mark.skip_mode("release", "error injections aren't enabled in release mode")
+async def test_restart_erases_raft_groups_rows_of_dropped_table(manager: ScyllaClusterManager):
+    """SCYLLADB-6261: a crash between DROP TABLE and the erase of the groups' rows leaves the rows
+    behind; the next start erases them."""
+    server = await manager.server_add(cmdline=DEFAULT_CMDLINE)
+    (cql, hosts) = await manager.get_ready_cql([server])
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2} AND consistency = 'global'") as ks:
+        group_ids = await create_sc_table_with_raft_groups_rows(manager, cql, hosts[0], ks)
+
+        # Holds the teardown of the dropped table's groups before it erases their rows.
+        await manager.api.enable_injection(server.ip_addr, "sc_raft_group_deletion_pause", one_shot=False)
+        await cql.run_async(f"DROP TABLE {ks}.test")
+        await manager.api.wait_for_injection_enter(server.ip_addr, "sc_raft_group_deletion_pause")
+        assert await get_raft_groups_rows(cql, hosts[0], group_ids) == group_ids
+
+        await manager.server_stop(server.server_id, convict=False)
+        await manager.server_start(server.server_id)
+        (cql, hosts) = await manager.get_ready_cql([server])
+
+        assert not await get_raft_groups_rows(cql, hosts[0], group_ids)
+
+
 @pytest.mark.skip_mode(mode="release", reason="error injections are not supported in release mode")
 async def test_timed_out_queries(manager: ScyllaClusterManager):
     """

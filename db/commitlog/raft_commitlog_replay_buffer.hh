@@ -167,6 +167,13 @@ public:
         return result;
     }
 
+    // Drop the replayed data of every group `discard` accepts, a group that will not
+    // start on this shard. Unlike stop(), this releases the references, so the segments
+    // can be deleted.
+    void discard_groups(std::invocable<raft::group_id> auto discard) {
+        std::erase_if(_per_group_data, [&] (const auto& group) { return discard(group.first); });
+    }
+
     uint64_t total_entries() const {
         return _total_entries;
     }

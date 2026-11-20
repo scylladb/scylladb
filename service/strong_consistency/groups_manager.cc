@@ -37,6 +37,9 @@
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/as_future.hh>
 #include "utils/chain_abort_source.hh"
+#include "cql3/untyped_result_set.hh"
+#include <ranges>
+#include <unordered_set>
 #include "utils/exponential_backoff_retry.hh"
 
 #include <seastar/core/abort_source.hh>
@@ -495,9 +498,11 @@ void groups_manager::schedule_raft_groups_deletion(bool all, log_disposition dis
                         all ? "the node is shutting down" : "its tablet left this shard, a resize replaced it, or its table was dropped");
             }
             // A resizing parent which the tablet map dropped is gone for good: its resize replaced
-            // it, or its table was dropped. A shutdown keeps what it persisted, which a restart in
-            // the middle of the resize needs.
-            schedule_raft_group_deletion(group_id, group_state, disposition, !all && _resize_tracker.is_resizing(group_id));
+            // it, or its table was dropped. So is any group of a dropped table, which has no
+            // cleanup stage either. A shutdown keeps what it persisted, which a restart in the
+            // middle of the resize needs.
+            const bool gone = _resize_tracker.is_resizing(group_id) || !_db.column_family_exists(group_state.table);
+            schedule_raft_group_deletion(group_id, group_state, disposition, !all && gone);
         }
         it = next;
     }
@@ -1248,6 +1253,7 @@ void groups_manager::update(token_metadata_ptr new_tm) {
 
             auto& state = _raft_groups[id];
             state.has_tablet = true;
+            state.table = table_id;
             // Start the server, unless it is started or starting already and not being
             // deleted.
             if (!state.gate || state.gate->is_closed()) {
@@ -1256,6 +1262,17 @@ void groups_manager::update(token_metadata_ptr new_tm) {
         }
     }
     _leader_cache.end_sweep();
+
+    // A group that is not started never takes its replayed entries, and their references
+    // would pin the segments until shutdown, e.g. when its table was dropped before start().
+    _raft_replay_buffer.discard_groups([this] (raft::group_id id) {
+        const auto it = _raft_groups.find(id);
+        if (it != _raft_groups.end() && it->second.has_tablet) {
+            return false;
+        }
+        logger.info("update(): group id {} is not hosted by this shard, discarding its replayed commitlog entries", id);
+        return true;
+    });
 
     // A group whose tablet left this shard is never replayed, so release its segments.
     schedule_raft_groups_deletion(false, log_disposition::release);
@@ -1311,7 +1328,57 @@ future<raft_server> groups_manager::acquire_server(table_id table_id, raft::grou
     });
 }
 
-void groups_manager::start() {
+future<> groups_manager::erase_rows_of_gone_groups() {
+    static const auto select_cql = format("SELECT group_id, WRITETIME(start_resize) AS start_ts, WRITETIME(end_resize) AS end_ts "
+            "FROM system.{} WHERE shard = ? ALLOW FILTERING",
+            db::system_keyspace::RAFT_GROUPS);
+    const auto rows = co_await _qp.execute_internal(select_cql, {int16_t(this_shard_id())},
+            cql3::query_processor::cache_internal::yes);
+
+    // Read after the rows: a group gets its row only once it is in tablet metadata, and a
+    // group id that leaves it never comes back. A started group is kept too, in case its
+    // row was written for a newer metadata than this one.
+    std::unordered_set<raft::group_id> known(std::from_range, _raft_groups | std::views::keys);
+    const auto tm = _db.get_shared_token_metadata().get();
+    const auto& tablets = tm->tablets();
+    for (const auto& [table, _] : tablets.all_table_groups()) {
+        const auto& tablet_map = tablets.get_tablet_map(table);
+        if (!tablet_map.has_raft_info()) {
+            continue;
+        }
+        for (const auto tid : tablet_map.tablet_ids()) {
+            known.insert(tablet_map.get_tablet_raft_info(tid).group_id);
+            if (tablet_map.has_raft_resize_info(tid)) {
+                const auto& new_gids = tablet_map.get_raft_resize_info(tid).new_gids;
+                known.insert(new_gids.begin(), new_gids.end());
+            }
+        }
+        co_await coroutine::maybe_yield();
+    }
+
+    for (const auto& row : *rows) {
+        const auto gid = raft::group_id{row.get_as<utils::UUID>("group_id")};
+        if (!known.contains(gid)) {
+            logger.info("erase_rows_of_gone_groups(): group id {} is gone from tablet metadata, erasing its row", gid);
+            // A gone group is never bootstrapped here again, so the tombstone may go above the
+            // resize markers, which carry the leader's clock.
+            auto marker_ts = api::min_timestamp;
+            for (const auto* col : {"start_ts", "end_ts"}) {
+                if (row.has(col)) {
+                    marker_ts = std::max(marker_ts, row.get_as<api::timestamp_type>(col));
+                }
+            }
+            try {
+                co_await raft_groups_storage::erase_persisted_state(_qp, gid, this_shard_id(), marker_ts);
+            } catch (...) {
+                logger.warn("erase_rows_of_gone_groups(): group id {}: failed to erase its row: {}",
+                    gid, std::current_exception());
+            }
+        }
+    }
+}
+
+future<> groups_manager::start() {
     _started = true;
 
     // Register the commitlog's flush handler, which tells every group how far the
@@ -1320,8 +1387,9 @@ void groups_manager::start() {
     // without start() running again, so a handler registered behind the feature
     // could be missing. The flag also decides whether system.raft_groups has a
     // schema at all: asking for its id without the flag aborts.
-    if (_db.get_config().check_experimental(
-                db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES)) {
+    const bool sc_enabled = _db.get_config().check_experimental(
+            db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES);
+    if (sc_enabled) {
         auto* commitlog = _db.commitlog();
         if (!commitlog) {
             // Fail at startup: without the commitlog the first group trips an assert.
@@ -1360,6 +1428,16 @@ void groups_manager::start() {
 
     if (_pending_tm) {
         update(std::move(_pending_tm));
+    }
+
+    if (sc_enabled && _features.strongly_consistent_tables) {
+        // Garbage only, so a failure doesn't fail the boot; the next one retries.
+        try {
+            co_await erase_rows_of_gone_groups();
+        } catch (...) {
+            logger.warn("start(): failed to erase the rows of the groups gone from tablet metadata: {}",
+                    std::current_exception());
+        }
     }
 }
 
