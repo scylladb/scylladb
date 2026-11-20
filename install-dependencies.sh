@@ -148,7 +148,7 @@ fedora_packages=(
     libev-devel # for python driver
 
     # test.py re-execs itself under `uv run --locked` against
-    # test/pyproject.toml (see _ensure_running_under_uv() in test.py)
+    # test/pyproject.toml (see test/pylib/uv_venv.py)
     uv
 )
 
@@ -172,8 +172,8 @@ fedora_python3_packages=(
 # shipped python3 relocatable package / dist/common/scripts). test.py's own
 # dependencies (scylla-driver and everything else it or pytest needs to run)
 # live in test/pyproject.toml / test/uv.lock instead: test.py re-execs itself
-# under `uv run --locked` on startup (see _ensure_running_under_uv() in
-# test.py), so their versions stay decoupled from this frozen toolchain
+# under `uv run --locked` on startup (see test/pylib/uv_venv.py), so
+# their versions stay decoupled from this frozen toolchain
 # image, and any invocation that needs them directly (e.g. bare pytest) is
 # expected to also go through `uv run --project test --locked` rather than
 # relying on this image.
@@ -386,7 +386,7 @@ elif [ "$ID" == "arch" ]; then
 fi
 
 # test.py re-execs itself under `uv run --locked` against test/pyproject.toml
-# (see _ensure_running_under_uv() in test.py), so uv is required on PATH.
+# (see test/pylib/uv_venv.py), so uv is required on PATH.
 # Fedora and Arch get it from the distro package manager above. Debian, Ubuntu
 # and CentOS have no official uv package, so install Astral's standalone,
 # self-contained binary into /usr/local/bin rather than pip-installing it into

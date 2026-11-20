@@ -5,12 +5,13 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 #
 
-# Python dependencies required to run test.py.
+# Python dependencies required to run test.py, and the test/*/run scripts
+# such as test/cqlpy/run.
 #
 # scylla-driver's pin here is intentionally independent of both
 # tools/cqlsh/requirements.txt and install-dependencies.sh: test.py syncs
-# this environment itself on startup (see _ensure_running_under_uv() in
-# test.py), so bumping the version here takes effect immediately and does
+# this environment itself on startup (see test/pylib/uv_venv.py), so
+# bumping the version here takes effect immediately and does
 # not require rebuilding the frozen toolchain image.
 [project]
 name = "scylla-test"
@@ -37,6 +38,7 @@ dependencies = [
     "pytest-asyncio==1.3.0",
     "pytest-timeout==2.4.0",
     "pytest-sugar==1.1.1",
+    "pytest-repeat==0.9.4",
     "deepdiff==8.6.2",
     "pyyaml==6.0.3",
     "requests==2.34.2",
