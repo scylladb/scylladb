@@ -7,6 +7,7 @@
  */
 
 #include <seastar/coroutine/maybe_yield.hh>
+#include <seastar/coroutine/exception.hh>
 #include <seastar/util/closeable.hh>
 
 #include "mutation.hh"
@@ -297,7 +298,8 @@ public:
 future<> split_mutation(mutation source, utils::chunked_vector<mutation>& target, size_t max_size) {
     reader_concurrency_semaphore sem(reader_concurrency_semaphore::no_limits{}, "split_mutation",
         reader_concurrency_semaphore::register_metrics::no);
-    {
+    std::exception_ptr ex;
+    try {
         auto s = source.schema();
         auto reader = make_mutation_reader_from_mutations(s,
             sem.make_tracking_only_permit(s, "split_mutation", db::no_timeout, {}),
@@ -307,8 +309,14 @@ future<> split_mutation(mutation source, utils::chunked_vector<mutation>& target
                 target.emplace_back(std::move(m));
             }));
         });
+    } catch (...) {
+        ex = std::current_exception();
     }
+    // The semaphore has to be stopped, even if the read failed.
     co_await sem.stop();
+    if (ex) {
+        co_await coroutine::return_exception_ptr(std::move(ex));
+    }
 }
 
 auto fmt::formatter<mutation>::format(const mutation& m, fmt::format_context& ctx) const
