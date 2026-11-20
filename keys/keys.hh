@@ -16,7 +16,9 @@
 #include "utils/utf8.hh"
 #include "replica/database_fwd.hh"
 #include "schema/schema_fwd.hh"
+#include "utils/range_of.hh"
 #include <compare>
+#include <ranges>
 #include <span>
 
 //
@@ -103,13 +105,11 @@ public:
         return end();
     }
 
-    // Returns a range of managed_bytes_view
-    auto components() const {
+    utils::range_of<managed_bytes_view> auto components() const {
         return TopLevelView::compound::element_type::components(representation());
     }
 
-    // Returns a range of managed_bytes_view
-    auto components(const schema& s) const {
+    utils::range_of<managed_bytes_view> auto components(const schema& s) const {
         return components();
     }
 
@@ -306,13 +306,11 @@ public:
         return is_empty();
     }
 
-    // Returns a range of managed_bytes_view
-    auto components() const {
+    utils::range_of<managed_bytes_view> auto components() const {
         return TopLevelView::compound::element_type::components(representation());
     }
 
-    // Returns a range of managed_bytes_view
-    auto components(const schema& s) const {
+    utils::range_of<managed_bytes_view> auto components(const schema& s) const {
         return components();
     }
 
@@ -510,6 +508,13 @@ public:
     };
 };
 
+// Kept narrow: accepting any range would make keys constructible from e.g. std::optional
+// (a range since C++26), disabling optional's converting constructor for types holding a key.
+template<typename R>
+concept range_of_key_components = std::ranges::forward_range<R>
+    && (FragmentedView<std::ranges::range_value_t<R>>
+        || std::same_as<std::ranges::range_value_t<R>, bytes_view>);
+
 class partition_key_view : public compound_view_wrapper<partition_key_view> {
 public:
     using c_type = compound_type<allow_prefixes::no>;
@@ -594,6 +599,10 @@ public:
 
     partition_key(std::vector<bytes> v)
         : compound_wrapper(managed_bytes(c_type::serialize_value(std::move(v))))
+    { }
+    // explicit: key views are themselves component ranges, so don't convert between key types
+    explicit partition_key(range_of_key_components auto&& v)
+        : partition_key(from_range(std::forward<decltype(v)>(v)))
     { }
     partition_key(std::initializer_list<bytes> v) : partition_key(std::vector(v)) {}    
 
@@ -755,6 +764,10 @@ public:
     { }
     clustering_key_prefix(std::vector<managed_bytes> v)
         : prefix_compound_wrapper(compound::element_type::serialize_value(std::move(v)))
+    { }
+    // explicit: key views are themselves component ranges, so don't convert between key types
+    explicit clustering_key_prefix(range_of_key_components auto&& v)
+        : clustering_key_prefix(from_range(std::forward<decltype(v)>(v)))
     { }
     clustering_key_prefix(std::initializer_list<bytes> v) : clustering_key_prefix(std::vector(v)) {}
 

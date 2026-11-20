@@ -14,9 +14,16 @@
 #include <assert.h>
 #include <sstream>
 #include <initializer_list>
+#include <span>
+#include <ranges>
+#include <algorithm>
+#include <forward_list>
+#include <map>
+#include <unordered_map>
 
 #include "utils/serialization.hh"
 #include "types/types.hh"
+#include "keys/keys.hh"
 #include "gms/inet_address.hh"
 #include "gms/inet_address_serializer.hh"
 #include "test/lib/test_utils.hh"
@@ -340,3 +347,63 @@ BOOST_AUTO_TEST_CASE(serialize_fragmented_too_big) {
     BOOST_CHECK_THROW(ser::serialize_fragmented(out, oversized_fragment_range{}), std::runtime_error);
     BOOST_CHECK_EQUAL(out.size(), 0);
 }
+
+// span and subrange have no dedicated serializer, so they hit the generic range one
+// (unlike std::vector); filter_view can't, as its begin() isn't const.
+BOOST_AUTO_TEST_CASE(range_of_serializer_sized_range) {
+    std::vector<int32_t> backing = { 3, 1, 4, 1, 5 };
+    std::span<const int32_t> sp(backing);
+    static_assert(std::ranges::sized_range<std::span<const int32_t>>);
+
+    auto buf = ser::serialize_to_buffer<bytes>(sp);
+    auto expected_buf = ser::serialize_to_buffer<bytes>(backing);
+    BOOST_CHECK(buf == expected_buf);
+
+    auto round_tripped = ser::deserialize_from_buffer(buf, std::type_identity<std::vector<int32_t>>());
+    BOOST_CHECK(round_tripped == backing);
+}
+
+BOOST_AUTO_TEST_CASE(range_of_serializer_non_sized_range) {
+    std::forward_list<int32_t> backing = { 3, 1, 4, 1, 5 };
+    auto view = std::ranges::subrange(backing.begin(), backing.end());
+    static_assert(!std::ranges::sized_range<decltype(view)>);
+
+    std::vector<int32_t> expected(backing.begin(), backing.end());
+
+    auto buf = ser::serialize_to_buffer<bytes>(view);
+    auto expected_buf = ser::serialize_to_buffer<bytes>(expected);
+    BOOST_CHECK(buf == expected_buf);
+
+    auto round_tripped = ser::deserialize_from_buffer(buf, std::type_identity<std::vector<int32_t>>());
+    BOOST_CHECK(round_tripped == expected);
+}
+
+// Maps must keep their own key/value serializer, not fall into the generic range one.
+// Templated so the requires-expression is SFINAE, not a hard error on a concrete type.
+template<typename T>
+constexpr bool is_generic_range_serializer_v = requires { ser::serializer<T>::is_generic_range_serializer; };
+static_assert(!is_generic_range_serializer_v<std::map<int32_t, int32_t>>);
+static_assert(!is_generic_range_serializer_v<std::unordered_map<int32_t, int32_t>>);
+
+struct plain_range : std::vector<int32_t> {};
+static_assert(is_generic_range_serializer_v<plain_range>);
+
+// proxy elements (vector<bool> bit references) have no serializer: the range must be rejected, not fail inside write()
+using bit_proxy_range = std::ranges::subrange<std::vector<bool>::iterator>;
+static_assert(!is_generic_range_serializer_v<bit_proxy_range>);
+// by-value elements of the value type stay accepted
+static_assert(is_generic_range_serializer_v<std::ranges::iota_view<int32_t, int32_t>>);
+// keys' components(): by-value const managed_bytes_view elements
+static_assert(is_generic_range_serializer_v<decltype(std::declval<const partition_key&>().components())>);
+
+// map-like range with no dedicated serializer
+struct map_like_range : std::map<int32_t, int32_t> {};
+static_assert(!is_generic_range_serializer_v<map_like_range>);
+static_assert(!is_generic_range_serializer_v<bytes_ostream>);
+
+// option-like range: would otherwise fall into the generic range serializer
+struct option_like_range : std::vector<int32_t> {
+    bool has_value() const { return !empty(); }
+    const int32_t& operator*() const { return front(); }
+};
+static_assert(!is_generic_range_serializer_v<option_like_range>);
