@@ -5,7 +5,7 @@ Source: https://github.com/scylladb/scylla
 
 Files: *
 Copyright: Copyright (C) 2015-present ScyllaDB
-License: ScyllaDB-Source-Available-1.0
+License: ScyllaDB-Source-Available-1.1
 
 Files: seastar/*
 Copyright: Copyright (C) 2015-present ScyllaDB
@@ -15,4 +15,4 @@ Files: seastar/dpdk/*
 Copyright: Copyright(c) 2015 Intel Corporation. All rights reserved.
 License: BSD-3-clause
 
-License: ScyllaDB-Source-Available-1.0
+License: ScyllaDB-Source-Available-1.1
