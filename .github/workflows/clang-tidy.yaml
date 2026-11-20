@@ -50,8 +50,10 @@ jobs:
           sudo dnf -y install clang-tools-extra
       - name: Generate the building system
         run: |
+          ./configure.py --use-cmake --mode=release --build-dir=$BUILD_DIR --install-dependencies-only
           cmake                                         \
             -DCMAKE_BUILD_TYPE=$BUILD_TYPE              \
+            -DCMAKE_PREFIX_PATH=$PWD/$BUILD_DIR/conan/cmake \
             -DCMAKE_C_COMPILER=clang                    \
             -DScylla_USE_LINKER=ld.lld                  \
             -DCMAKE_CXX_COMPILER=clang++                \
