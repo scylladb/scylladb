@@ -1299,7 +1299,8 @@ The ``ALTER TABLE`` statement can:
   below. Due to lazy removal, the altering itself is a constant (in the amount of data removed or contained in the
   cluster) time operation. A column that an index or a materialized view uses cannot be removed; drop the index or
   the view first.
-- Change data type of the column to a compatible type.
+- Change data type of the column to a compatible type (through the ``ALTER`` instruction). See
+  :ref:`Changing the Type of a Column <alter-table-column-type>` for the supported type changes.
 - Change some of the table options (through the ``WITH`` instruction). The :ref:`supported options
   <create-table-options>` are the same that when creating a table (outside of ``COMPACT STORAGE`` and ``CLUSTERING
   ORDER`` that cannot be changed after creation). Note that setting any ``compaction`` sub-options has the effect of
@@ -1334,6 +1335,91 @@ Otherwise, you can resurrect your data (if you skip ``ALTER ... DROP/ADD ...`` e
 or you can lose data inserted after column re-addition (if you drop the column without the timestamp).
 
 .. warning:: Dropping a column with specified timestamp should only be used to restore schema from description (``DESCRIBE SCHEMA WITH INTERNALS``).
+
+.. _alter-table-column-type:
+
+Changing the Type of a Column
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``ALTER TABLE ... ALTER column_name TYPE cql_type`` changes the type of an existing column.
+The data already stored in the column is not rewritten, so the new type must be able to read
+the existing values. Which changes are allowed depends on the kind of the column.
+
+For a partition key column, a regular column, or a static column, the new type must be able to
+interpret the stored values of the current type:
+
+.. list-table::
+   :widths: 30 70
+   :header-rows: 1
+
+   * - New type
+     - Allowed current types
+   * - ``blob``
+     - Any type
+   * - ``text`` (``varchar``)
+     - ``ascii``, ``text``
+   * - ``bigint``
+     - ``bigint``, ``timestamp``
+   * - ``timestamp``
+     - ``timestamp``, ``bigint``
+   * - ``uuid``
+     - ``uuid``, ``timeuuid``
+   * - ``varint``
+     - ``varint``, ``tinyint``, ``smallint``, ``int``, ``bigint``, ``timestamp``
+
+For a clustering column, the new type must also sort the existing values in the same order as
+the current type, so fewer changes are allowed:
+
+.. list-table::
+   :widths: 30 70
+   :header-rows: 1
+
+   * - New type
+     - Allowed current types
+   * - ``blob``
+     - ``ascii``, ``text``, ``blob``
+   * - ``text`` (``varchar``)
+     - ``ascii``, ``text``
+   * - ``varint``
+     - ``varint``, ``tinyint``, ``smallint``, ``int``, ``bigint``
+
+Any other change of a native type, for example from ``text`` to ``ascii`` or from ``int`` to
+``bigint``, is rejected. A primary key column cannot be changed to ``counter``.
+
+The following rules apply to the other types:
+
+* **Collections** - The new type must be the same kind of collection (``map``, ``set``, or
+  ``list``) with the same frozenness. You cannot change a non-frozen collection to a frozen one
+  or the other way around. Map keys and set elements must follow the clustering column rules
+  above, and map values and list elements must follow the rules for regular columns. For
+  example, ``set<text>`` can be changed to ``set<blob>``, and ``map<int, text>`` to
+  ``map<int, blob>``. If the collection is a clustering column, all its element types must
+  follow the clustering column rules.
+* **Tuples** - The new tuple can have more components than the current one. Each existing
+  component must be compatible with the corresponding component of the new tuple.
+* **Vectors** - The new vector must have the same dimension, and its element type must be
+  compatible with the current element type.
+* **User-defined types** - The new type must be in the same keyspace, have the same frozenness,
+  and its fields must start with the fields of the current type, with compatible types. To add a
+  field to a user-defined type, use :ref:`ALTER TYPE <alter-type-statement>` instead.
+
+If the column is used by a :doc:`materialized view </features/materialized-views>`, the change
+is validated against the view as well. For example, if a regular column of the base table is a
+clustering column of the view, the clustering column rules apply.
+
+Examples:
+
+.. code-block:: cql
+
+   CREATE TABLE events (id int, day text, at timestamp, note text, score int, tags set<text>,
+                        PRIMARY KEY (id, day));
+
+   ALTER TABLE events ALTER note TYPE blob;      -- allowed: any type can become blob
+   ALTER TABLE events ALTER at TYPE bigint;      -- allowed: timestamp values are read as bigint
+   ALTER TABLE events ALTER tags TYPE set<blob>; -- allowed: text set elements can become blob
+   ALTER TABLE events ALTER day TYPE blob;       -- allowed: text sorts in the same order as blob
+   ALTER TABLE events ALTER id TYPE blob;        -- allowed: any type can become blob
+   ALTER TABLE events ALTER score TYPE bigint;   -- rejected: int and bigint are incompatible
 
 .. _drop-table-statement:
 
