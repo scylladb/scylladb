@@ -43,6 +43,7 @@
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/temporary_buffer.hh>
+#include <seastar/core/thread.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/switch_to.hh>
 #include <seastar/util/defer.hh>
@@ -111,6 +112,10 @@ struct parsing_interface {
     virtual future<> parse(std::span<const std::byte>) = 0;
     virtual future<> close() = 0;
     virtual void cancel() noexcept = 0;
+    // The number of bytes which `parse()` consumed so far.
+    virtual uint64_t parsed_bytes() const noexcept = 0;
+    // The number of lines which `parse()` and `close()` consumed so far, blank ones included.
+    virtual uint64_t parsed_lines() const noexcept = 0;
     virtual ~parsing_interface() = default;
 };
 
@@ -118,6 +123,16 @@ struct decompression_interface {
     virtual future<> decompress(std::span<const std::byte>) = 0;
     virtual future<> close() = 0;
     virtual void cancel() noexcept = 0;
+    // The number of decompressed bytes which the parser consumed so far.
+    uint64_t decompressed_bytes() const noexcept {
+        return parser().parsed_bytes();
+    }
+    // The number of decompressed lines which the parser consumed so far.
+    uint64_t decompressed_lines() const noexcept {
+        return parser().parsed_lines();
+    }
+    // The parser which consumes the decompressed data, for its counters.
+    virtual const parsing_interface& parser() const noexcept = 0;
     virtual ~decompression_interface() = default;
 };
 
@@ -359,6 +374,9 @@ public:
     future<> close() override {
         return _parser->close();
     }
+    const parsing_interface& parser() const noexcept override {
+        return *_parser;
+    }
 };
 
 // Gzip decompressor - decompresses gzip data and passes decompressed chunks to the parser.
@@ -471,6 +489,9 @@ public:
         _cancelled = true;
         _parser->cancel();
     }
+    const parsing_interface& parser() const noexcept override {
+        return *_parser;
+    }
 
     future<> close() override {
         // We consider stream of size 0 (_no_input_yet set to true) as valid, not truncated and empty stream
@@ -490,6 +511,16 @@ public:
 class json_parser : public parsing_interface {
     std::function<future<>(rjson::value)> _on_item;
     std::string _buffer;
+    // A buffer grown above this by a long line is freed, not kept for the next lines.
+    static constexpr size_t max_kept_buffer_capacity = 1024 * 1024;
+    uint64_t _parsed_bytes = 0;
+    uint64_t _parsed_lines = 0;
+
+    // True if `line` holds only JSON whitespace (RFC 8259) other than '\n', which ends a line: ' ',
+    // '\t' and '\r' (which covers a CRLF line end).
+    static bool is_blank(std::string_view line) {
+        return line.find_first_not_of(" \t\r") == std::string_view::npos;
+    }
 public:
     json_parser(std::function<future<>(rjson::value)> on_item) : _on_item(std::move(on_item)) {}
     future<> parse(std::span<const std::byte> data) override {
@@ -502,34 +533,79 @@ public:
             if (nl == std::string_view::npos) {
                 nl = sv.size();
             }
+            // Count the bytes before the line is parsed, so that those of a line which fails to
+            // parse or is too long count too.
+            _parsed_bytes += nl - pos + (nl < sv.size() ? 1 : 0);
             if (_buffer.size() + (nl - pos) > maximum_buffer_size_in_mb * 1024 * 1024) {
+                // The line which is too long is counted in the line count, for its line number in
+                // the log.
+                ++_parsed_lines;
                 throw api_error::payload_too_large(fmt::format("JSON line exceeds maximum buffer size of {} MB", maximum_buffer_size_in_mb));
             }
             _buffer.append(sv.substr(pos, nl - pos));
             // We found a newline character, so we have a complete line to process.
             if (nl < sv.size()) {
-                // We ignore empty lines here as a good will (those should not happen in valid JSON input).
-                if (!_buffer.empty()) {
-                    auto _ = defer([&]() noexcept {
-                        _buffer.clear();
-                    });
-                    co_await _on_item(rjson::parse(_buffer));
+                ++_parsed_lines;
+                // We ignore blank lines here as a good will (those should not happen in valid JSON
+                // input). DynamoDB's import skips empty lines and lines of spaces too.
+                // A long blank line, or one which fails to parse, frees the buffer too.
+                auto _ = defer([&]() noexcept {
+                    release_buffer();
+                });
+                if (!is_blank(_buffer)) {
+                    auto item = co_await parse_buffer();
+                    release_buffer();
+                    co_await _on_item(std::move(item));
                     co_await coroutine::maybe_yield();
                 }
             }
             pos = nl + 1;
         }
     }
+    // Empties the buffer of a parsed line before on_item, which may wait (e.g. an import, for its
+    // writes), and frees it if a long line grew it above max_kept_buffer_capacity, so that the text
+    // of a long line and its parsed item are not held at once.
+    void release_buffer() noexcept {
+        if (_buffer.capacity() > max_kept_buffer_capacity) {
+            std::string().swap(_buffer);
+        } else {
+            _buffer.clear();
+        }
+    }
+    // Parses the buffered line. A line of at least yieldable_parsing_threshold bytes - the
+    // threshold of the HTTP server's own parser, server::json_parser - is parsed with
+    // parse_yieldable() in a seastar thread, so that a long line (up to 16 MB) of an import's source
+    // does not stall the reactor.
+    static constexpr size_t yieldable_parsing_threshold = 16 * 1024;
+    future<rjson::value> parse_buffer() {
+        if (_buffer.size() < yieldable_parsing_threshold) {
+            return make_ready_future<rjson::value>(rjson::parse(_buffer));
+        }
+        return seastar::async([this] {
+            return rjson::parse_yieldable(_buffer);
+        });
+    }
     void cancel() noexcept override {
         _buffer.clear();
     }
+    uint64_t parsed_bytes() const noexcept override {
+        return _parsed_bytes;
+    }
+    uint64_t parsed_lines() const noexcept override {
+        return _parsed_lines;
+    }
     future<> close() override {
+        // Process any remaining data as a final line (even if it doesn't end with a newline).
+        auto _ = defer([&]() noexcept {
+            release_buffer();
+        });
         if (!_buffer.empty()) {
-            // Process any remaining data as a final line (even if it doesn't end with a newline).
-            auto _ = defer([&]() noexcept {
-                _buffer.clear();
-            });
-            co_await _on_item(rjson::parse(_buffer));
+            ++_parsed_lines;
+        }
+        if (!is_blank(_buffer)) {
+            auto item = co_await parse_buffer();
+            release_buffer();
+            co_await _on_item(std::move(item));
         }
         co_return;
     }
@@ -697,6 +773,9 @@ public:
 class import_pipeline_impl : public import_pipeline_interface {
     std::unique_ptr<source_interface> _source;
     std::unique_ptr<decompression_interface> _decompressor;
+    // processed_size_bytes() and processed_lines() of the closed pipeline.
+    uint64_t _processed_size_bytes = 0;
+    uint64_t _processed_lines = 0;
 
 public:
     import_pipeline_impl(std::unique_ptr<source_interface> source, std::unique_ptr<decompression_interface> decompressor) noexcept
@@ -741,8 +820,13 @@ public:
         }
         if (_decompressor) {
             try {
-                auto z = std::exchange(_decompressor, nullptr);
-                co_await z->close();
+                // Closing the decompressor parses the last line, if it has no newline. Count it.
+                auto count = defer([&] () noexcept {
+                    _processed_size_bytes = _decompressor->decompressed_bytes();
+                    _processed_lines = _decompressor->decompressed_lines();
+                    _decompressor = nullptr;
+                });
+                co_await _decompressor->close();
             } catch(...) {
                 if (!exception) {
                     exception = std::current_exception();
@@ -752,6 +836,12 @@ public:
         if (exception) {
             std::rethrow_exception(std::move(exception));
         }
+    }
+    uint64_t processed_size_bytes() const noexcept override {
+        return _decompressor ? _decompressor->decompressed_bytes() : _processed_size_bytes;
+    }
+    uint64_t processed_lines() const noexcept override {
+        return _decompressor ? _decompressor->decompressed_lines() : _processed_lines;
     }
 };
 

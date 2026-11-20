@@ -9,6 +9,7 @@
 #pragma once
 
 #include "snapshot_types.hh"
+#include "db_clock.hh"
 #include "schema/schema_fwd.hh"
 #include "utils/chunked_vector.hh"
 #include "db/consistency_level_type.hh"
@@ -16,6 +17,7 @@
 #include "dht/token.hh"
 #include "sstables/types.hh"
 
+#include <seastar/core/abort_source.hh>
 #include <seastar/core/future.hh>
 #include <chrono>
 #include <seastar/core/sstring.hh>
@@ -152,6 +154,100 @@ public:
 
 private:
     future<> create_tables(std::vector<schema_ptr> tables);
+};
+
+/* A row of alternator_import_from_s3_imports. Its schema, with a comment on each column, is in
+ * system_distributed_keyspace.cc. processed_size_bytes is null until the import writes its
+ * progress; the other counters are read back as 0 if null. For the format of `node_id`, see the comment
+ * of its column.
+ * This row is not a member of alternator_import_table_helper below, so that alternator/ can forward
+ * declare it. */
+struct alternator_import_row {
+    sstring import_arn;
+    sstring client_token;
+    sstring request;
+    sstring requester_role;
+    ::table_id table_id;
+    bool target_table_existed = false;
+    sstring import_status;
+    std::optional<sstring> failure_code;
+    std::optional<sstring> failure_message;
+    int64_t processed_item_count = 0;
+    int64_t imported_item_count = 0;
+    int64_t error_count = 0;
+    std::optional<int64_t> processed_size_bytes;
+    sstring import_id_token;
+    db_clock::time_point accepted_at;
+    std::optional<db_clock::time_point> completed_at;
+    sstring node_id;
+};
+
+/* Reads and writes the two Alternator import from S3 tables with CQL statements. It lives here
+ * rather than in alternator/, because Alternator has no query_processor of its own, and follows
+ * snapshot_table_helper below. The conditional writes use LWT, at QUORUM (ONE with a single token
+ * owner). */
+class alternator_import_table_helper {
+    cql3::query_processor& _qp;
+public:
+    using import_row = alternator_import_row;
+
+    /* A row of alternator_import_from_s3_client_tokens. */
+    struct client_token_row {
+        sstring client_token;
+        sstring import_arn;
+        sstring request;
+        sstring node_id;
+    };
+
+    /* The columns of an import row that the garbage collector needs to decide whether to collect
+     * it. An optional member is unset if the row does not have the column. */
+    struct import_summary_row {
+        sstring import_arn;
+        std::optional<sstring> import_status;
+        std::optional<sstring> node_id;
+    };
+
+    explicit alternator_import_table_helper(cql3::query_processor&);
+
+    /* Inserts an import row if no row with the same ARN exists. Returns nullopt if it inserted the
+     * row, and the existing row if it did not. The table has no default TTL, so the insert sets
+     * `ttl`: an UPDATE cannot set the TTL of the row marker. */
+    future<std::optional<import_row>> insert_import(const import_row&, std::chrono::seconds ttl);
+
+    /* Writes all non-key columns of an import row, if the row has the status `expected_status` and
+     * the node `expected_node_id`. Returns true if it wrote the row. Each write sets `ttl`, because
+     * a write without a TTL clears the TTL of the columns it writes. */
+    future<bool> update_import(const import_row&, const sstring& expected_status, const sstring& expected_node_id,
+            std::chrono::seconds ttl);
+
+    /* Like update_import(), but writes the row only if it still has the status, the node and the
+     * progress of `expected` - the three item counters and processed_size_bytes, which a progress
+     * write may advance alone and which may be null (null equals null in an LWT condition): a running
+     * import which wrote its progress since `expected` was read keeps its row. For a garbage
+     * collector which takes the row of an import. Returns true if it wrote the row. */
+    future<bool> take_import(const import_row&, const import_row& expected, std::chrono::seconds ttl);
+
+    /* Inserts a client token row if no row with the same token exists. Returns nullopt if it
+     * inserted the row, and the existing row if it did not. The default TTL of the table (the
+     * 8 hours of ClientToken idempotency) applies. */
+    future<std::optional<client_token_row>> insert_client_token(const client_token_row&);
+
+    /* Returns the import row of `import_arn`, or nullopt if there is no such row. With `serial`, the
+     * read is at SERIAL consistency, on the shard which owns the row: it completes a conditional
+     * write of the row which was accepted but not committed (e.g. a progress write of a node which
+     * died), so that a conditional write which expects the values read applies. */
+    future<std::optional<import_row>> get_import(const sstring& import_arn, bool serial = false) const;
+
+    /* Returns the client token row of `client_token`, or nullopt if there is no such row. With
+     * `serial`, the read is at SERIAL consistency, on the shard which owns the row: it decides an
+     * insert of the row whose outcome is unknown - it either completes it (always if a quorum
+     * accepted it) or fences it, so that it never applies later. */
+    future<std::optional<client_token_row>> get_client_token(const sstring& client_token, bool serial = false) const;
+
+    /* Return all rows of the respective table, in no specified order, with paging. If set, `as`
+     * aborts the scan. */
+    future<utils::chunked_vector<import_summary_row>> get_all_imports(const seastar::abort_source* as = nullptr) const;
+    future<utils::chunked_vector<client_token_row>> get_all_client_tokens(const seastar::abort_source* as = nullptr) const;
 };
 
 // Restore uses a TTL to expire rows, cluster snapshots/backups don't anymore, they rely on specific

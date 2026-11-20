@@ -541,6 +541,7 @@ scylla_tests = set([
     'test/boost/allocation_strategy_test',
     'test/boost/alternator_unit_test',
     'test/boost/alternator_export_test',
+    'test/boost/alternator_import_test',
     'test/boost/anchorless_list_test',
     'test/boost/auth_passwords_test',
     'test/boost/audit_rule_test',
@@ -1533,7 +1534,8 @@ alternator = [
        'alternator/ttl.cc',
        'alternator/http_compression.cc',
        'alternator/export.cc',
-       'alternator/import.cc'
+       'alternator/import.cc',
+       'alternator/node_incarnation.cc',
 ]
 
 idls = ['idl/gossip_digest.idl.hh',
