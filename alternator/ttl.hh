@@ -13,6 +13,7 @@
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/semaphore.hh>
 #include "data_dictionary/data_dictionary.hh"
+#include "utils/observable.hh"
 
 namespace gms {
 class gossiper;
@@ -60,6 +61,11 @@ private:
     // Ensures that at most 1 page of scan results at a time is processed by the TTL service
     named_semaphore _page_sem{1, named_semaphore_exception_factory{"alternator_ttl"}};
     bool shutting_down() { return _abort_source.abort_requested(); }
+    // A change of alternator_ttl_period_in_seconds aborts the sleep between
+    // two scans, so that run() starts a new sleep with the new period.
+    std::optional<abort_source> _ttl_period_sleep_abort_source;
+    utils::observer<double> _ttl_period_observer;
+    void abort_ttl_period_sleep();
     stats _expiration_stats;
 public:
     // sharded_service<expiration_service>::start() creates this object on
