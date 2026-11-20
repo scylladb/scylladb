@@ -70,6 +70,7 @@
 #include "dht/token-sharding.hh"
 #include "utils/overloaded_functor.hh"
 #include "utils/pretty_printers.hh"
+#include "cql3/query_processor.hh"
 
 using namespace seastar;
 using namespace sstables;

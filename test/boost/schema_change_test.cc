@@ -37,6 +37,7 @@
 #include "test/lib/test_utils.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "replica/database.hh"
+#include "cql3/query_processor.hh"
 
 BOOST_AUTO_TEST_SUITE(schema_change_test)
 

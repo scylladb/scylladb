@@ -16,6 +16,7 @@
 #include "service/query_state.hh"
 #include "utils/error_injection.hh"
 #include "service/raft/raft_group0_client.hh"
+#include "cql3/query_processor.hh"
 
 namespace cql3 {
 

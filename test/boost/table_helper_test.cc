@@ -18,7 +18,6 @@
 #include "test/lib/log.hh"
 
 #include "table_helper.hh"
-#include "cql3/query_processor.hh"
 #include "cql3/query_options.hh"
 #include "cql3/cql_config.hh"
 #include "service/client_state.hh"
