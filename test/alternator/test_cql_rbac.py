@@ -13,7 +13,6 @@
 # all tests in this file are skipped when running against Amazon DynamoDB.
 
 import pytest
-import boto3
 from botocore.exceptions import ClientError
 import time
 from contextlib import contextmanager
@@ -22,27 +21,11 @@ from functools import cache
 import re
 
 from test.pylib.skip_types import skip_env
-from .util import new_role, new_dynamodb, unique_table_name, random_string, new_test_table, get_cert, get_table_arn
+from .util import new_role, new_dynamodb, new_dynamodb_streams, unique_table_name, random_string, new_test_table, get_table_arn
 from .test_gsi_updatetable import wait_for_gsi, wait_for_gsi_gone
 from .test_gsi import assert_index_query
 from test.alternator.test_vector import needs_vector_store, wait_for_vector_index_active, table_vs, vector_store_configured, VECTOR_STORE_TIMEOUT, need_vector_search_in_botocore
 from .test_export import unknown_export_id
-
-@contextmanager
-def new_dynamodb_streams(dynamodb, role, key):
-    if get_cert(dynamodb):
-        skip_env("new_dynamodb_streams() authenticates using SigV4 role/key pairs, which are not supported under mTLS")
-    url = dynamodb.meta.client._endpoint.host
-    config = dynamodb.meta.client._client_config
-    region_name = dynamodb.meta.client.meta.region_name
-    verify = not url.startswith('https')
-    ret = boto3.client('dynamodbstreams', endpoint_url=url, verify=verify,
-        aws_access_key_id=role, aws_secret_access_key=key,
-        region_name=region_name, config=config)
-    try:
-        yield ret
-    finally:
-        ret.close()
 
 # A basic test for creating a new role. The ListTables operation is allowed
 # to any role, so it should work in the new role when given the right password

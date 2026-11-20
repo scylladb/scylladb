@@ -16,7 +16,6 @@
 #include <seastar/net/tls.hh>
 #include <optional>
 #include "alternator/auth.hh"
-#include "timeout_config.hh"
 #include "service/qos/service_level_controller.hh"
 #include "utils/small_vector.hh"
 #include "utils/updateable_value.hh"
@@ -71,10 +70,6 @@ class server : public peering_sharded_service<server> {
     utils::updateable_value<uint64_t> _max_users_query_size_in_trace_output;
     utils::small_vector<std::reference_wrapper<seastar::httpd::http_server>, 2> _enabled_servers;
     named_gate _pending_requests;
-    // In some places we will need a CQL updateable_timeout_config object even
-    // though it isn't really relevant for Alternator which defines its own
-    // timeouts separately.
-    updateable_timeout_config& _timeout_config;
     client_options_cache_type _connection_options_keys_and_values;
 
     alternator_callbacks_map _callbacks;
@@ -122,7 +117,7 @@ class server : public peering_sharded_service<server> {
     std::optional<utils::observer<bool>> _date_header_observer;
 
 public:
-    server(executor& executor, service::storage_proxy& proxy, gms::gossiper& gossiper, auth::service& service, qos::service_level_controller& sl_controller, updateable_timeout_config& timeout_config);
+    server(executor& executor, service::storage_proxy& proxy, gms::gossiper& gossiper, auth::service& service, qos::service_level_controller& sl_controller);
 
     future<> init(net::inet_address addr, std::optional<uint16_t> port, std::optional<uint16_t> https_port,
             std::optional<uint16_t> port_proxy_protocol, std::optional<uint16_t> https_port_proxy_protocol,
