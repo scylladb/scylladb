@@ -24,6 +24,7 @@
 #include <ranges>
 
 #include <seastar/coroutine/exception.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 
 template<typename T = void>
 using coordinator_result = exceptions::coordinator_result<T>;
@@ -57,13 +58,15 @@ future<utils::chunked_vector<mutation>> get_mutations(const batch_statement& bat
                 const_cast<mutation&>(*pos).apply(std::move(m)); // Won't change key
             }
         }
+        co_await coroutine::maybe_yield();
     }
 
-    // can't use range adaptors, because we want to move
+    // The set's elements are const, so extract them to move rather than copy them.
     auto vresult = utils::chunked_vector<mutation>();
     vresult.reserve(result.size());
-    for (auto&& m : result) {
-        vresult.push_back(std::move(m));
+    while (!result.empty()) {
+        vresult.push_back(std::move(result.extract(result.begin()).value()));
+        co_await coroutine::maybe_yield();
     }
     co_return vresult;
 }
