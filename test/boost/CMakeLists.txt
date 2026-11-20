@@ -281,6 +281,8 @@ add_scylla_test(sstable_move_test
   KIND SEASTAR)
 add_scylla_test(sstable_mutation_test
   KIND SEASTAR)
+add_scylla_test(sstable_partition_codec_test
+  KIND SEASTAR)
 add_scylla_test(sstable_partition_index_cache_test
   KIND SEASTAR)
 add_scylla_test(sstable_resharding_test

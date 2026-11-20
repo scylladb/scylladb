@@ -12,6 +12,7 @@
 #include <concepts>
 #include <seastar/core/future.hh>
 #include "gc_clock.hh"
+#include "encoding_stats.hh"
 #include "mutation/timestamp.hh"
 #include "sstables/types.hh"
 #include "sstables/exceptions.hh"
@@ -38,9 +39,9 @@ inline future<> read_vint(random_access_reader& in, T& value) {
     }
 }
 
-inline api::timestamp_type parse_timestamp(const serialization_header& header,
+inline api::timestamp_type parse_timestamp(const encoding_stats& bases,
                                            uint64_t delta) {
-    return static_cast<api::timestamp_type>(header.get_min_timestamp() + delta);
+    return static_cast<api::timestamp_type>(bases.min_timestamp + delta);
 }
 
 inline gc_clock::duration parse_ttl(int64_t value) {
@@ -55,12 +56,12 @@ inline gc_clock::duration parse_ttl(int64_t value) {
     return gc_clock::duration(value);
 }
 
-inline gc_clock::duration parse_ttl(const serialization_header& header,
+inline gc_clock::duration parse_ttl(const encoding_stats& bases,
                                     uint64_t delta) {
     // sign-extend min_ttl back to 64 bits and
     // add the delta using unsigned arithmetic
     // to prevent signed integer overflow
-    uint64_t min_ttl = static_cast<uint64_t>(header.get_min_ttl());
+    uint64_t min_ttl = static_cast<uint64_t>(bases.min_ttl.count());
     return parse_ttl(static_cast<int64_t>(min_ttl + delta));
 }
 
@@ -68,12 +69,12 @@ inline gc_clock::time_point parse_expiry(int64_t value) {
     return gc_clock::time_point(gc_clock::duration(value));
 }
 
-inline gc_clock::time_point parse_expiry(const serialization_header& header,
+inline gc_clock::time_point parse_expiry(const encoding_stats& bases,
                                    uint64_t delta) {
     // sign-extend min_local_deletion_time back to 64 bits and
     // add the delta using unsigned arithmetic
     // to prevent signed integer overflow
-    uint64_t min_local_deletion_time = static_cast<uint64_t>(header.get_min_local_deletion_time());
+    uint64_t min_local_deletion_time = static_cast<uint64_t>(bases.min_local_deletion_time.time_since_epoch().count());
     return parse_expiry(static_cast<int64_t>(min_local_deletion_time + delta));
 }
 

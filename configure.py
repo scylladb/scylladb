@@ -663,6 +663,7 @@ scylla_tests = set([
     'test/boost/sstable_inexact_index_test',
     'test/boost/sstable_move_test',
     'test/boost/sstable_mutation_test',
+    'test/boost/sstable_partition_codec_test',
     'test/boost/sstable_partition_index_cache_test',
     'test/boost/sstable_resharding_test',
     'test/boost/sstable_test',
