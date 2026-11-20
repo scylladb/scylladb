@@ -16,6 +16,9 @@
 #include "gc_clock.hh"
 #include "schema/schema.hh"
 #include "serializer_impl.hh"
+#include "utils/log.hh"
+
+extern logging::logger cdc_log;
 
 namespace cdc {
 
@@ -35,7 +38,10 @@ public:
     // so a stored value can exceed it; clamp it once here, so every consumer
     // of the options sees a TTL the sstable reader accepts.
     explicit cdc_extension(const bytes& b) : _cdc_options(cdc_extension::deserialize(b)) {
-        _cdc_options.clamp_ttl(gc_clock::as_int32(max_ttl));
+        if (const auto max = gc_clock::as_int32(max_ttl); _cdc_options.ttl() > max) {
+            cdc_log.warn("The stored CDC option ttl = {} is above the maximum of {}; using the maximum", _cdc_options.ttl(), max);
+            _cdc_options.ttl(max);
+        }
     }
     explicit cdc_extension(const sstring& s) {
         throw std::logic_error("Cannot create cdc info from string");

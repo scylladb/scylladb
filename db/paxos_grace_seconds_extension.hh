@@ -59,6 +59,7 @@ public:
     // it once here, for every consumer of the extension.
     explicit paxos_grace_seconds_extension(bytes b) : _paxos_gc_sec(deserialize(b)) {
         if (const auto max = gc_clock::as_int32(max_ttl); _paxos_gc_sec > max) {
+            dblog.warn("The stored paxos_grace_seconds = {} is above the maximum of {}; using the maximum", _paxos_gc_sec, max);
             _paxos_gc_sec = max;
         }
     }
