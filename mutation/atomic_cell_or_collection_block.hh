@@ -269,3 +269,83 @@ public:
     }
 };
 
+// Collects up to atomic_cell_or_collection_block_nr_cells cells and builds an
+// atomic_cell_or_collection_block from them.
+//
+// Cells may be added in any slot order, each slot at most once. Their serialized form
+// may come from:
+//  - add_copy(): bytes copied into the builder's scratch buffer right away;
+//  - add_borrowed(): bytes which stay valid until build() returns, optionally with the
+//    managed_bytes holding them, which build() may move into the block (and
+//    roll_back() can return);
+//  - add_owned(): a managed_bytes owned by the builder.
+// The scratch buffer holds inline_budget bytes; cells which don't fit get a
+// managed_bytes of their own instead.
+//
+// build() decides which cells are stored inline: it starts with all cells inline and,
+// while the inline area exceeds inline_budget, moves the largest remaining inline cell
+// (the lowest slot among equals) out to external storage. This decision depends only on
+// the sizes of the cells, so equal sets of cells always produce equal layouts.
+class atomic_cell_or_collection_block_builder {
+public:
+    static constexpr size_t inline_budget = 4096;
+    using mask_type = atomic_cell_or_collection_block_mask;
+    using block_ptr = atomic_cell_or_collection_block::ptr;
+private:
+    enum class source_kind : uint8_t { scratch, borrowed, owned };
+    struct entry {
+        managed_bytes owned;
+        managed_bytes_view borrowed;
+        managed_bytes* stealable = nullptr;
+        size_t scratch_offset = 0;
+        size_t size = 0;
+        cell_hash_opt hash;
+        source_kind kind = source_kind::borrowed;
+    };
+    // Indexed by slot; the entry of a slot is constructed iff the slot is in _slots.
+    union entry_storage {
+        entry e;
+        entry_storage() noexcept {}
+        ~entry_storage() {}
+    };
+    std::array<entry_storage, atomic_cell_or_collection_block_nr_cells> _entries;
+    mask_type _slots = 0;
+    size_t _scratch_size = 0;
+    std::array<bytes::value_type, inline_budget> _scratch;
+
+    entry& new_entry(unsigned slot, size_t size, cell_hash_opt hash);
+    entry& entry_of(unsigned slot) noexcept { return _entries[slot].e; }
+    managed_bytes_view entry_view(const entry& e) const noexcept;
+    // Reserves `size` bytes of scratch space for the entry, or an owned managed_bytes
+    // if the scratch buffer is full, and returns a view of it.
+    managed_bytes_mutable_view reserve(entry& e, size_t size);
+public:
+    atomic_cell_or_collection_block_builder() noexcept {}
+    ~atomic_cell_or_collection_block_builder() { clear(); }
+    atomic_cell_or_collection_block_builder(const atomic_cell_or_collection_block_builder&) = delete;
+    atomic_cell_or_collection_block_builder& operator=(const atomic_cell_or_collection_block_builder&) = delete;
+
+    bool empty() const noexcept { return _slots == 0; }
+    unsigned size() const noexcept { return std::popcount(_slots); }
+    mask_type slots() const noexcept { return _slots; }
+
+    // Empty cells represent missing cells and are ignored.
+    void add_copy(unsigned slot, managed_bytes_view cell, cell_hash_opt hash);
+    void add_borrowed(unsigned slot, managed_bytes_view cell, cell_hash_opt hash, managed_bytes* stealable = nullptr) noexcept;
+    void add_owned(unsigned slot, managed_bytes&& cell, cell_hash_opt hash) noexcept;
+
+    // Builds the block with current_allocator(). Must not be called on an empty builder.
+    //
+    // If it throws, nothing was moved from stealable sources. If it succeeds, some
+    // stealable sources may have been moved from; roll_back() moves them back.
+    // The returned block has no owner.
+    block_ptr build();
+
+    // Undoes the effects of a successful build() on stealable sources and destroys the
+    // block. `block` must be the result of the last build(), and the builder must not
+    // have been cleared since (its entries tell where the external cells came from).
+    // The sources must still be alive.
+    void roll_back(block_ptr block) noexcept;
+
+    void clear() noexcept;
+};

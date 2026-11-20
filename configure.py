@@ -549,6 +549,7 @@ scylla_tests = set([
     'test/boost/alternator_unit_test',
     'test/boost/alternator_export_test',
     'test/boost/anchorless_list_test',
+    'test/boost/atomic_cell_or_collection_block_test',
     'test/boost/auth_passwords_test',
     'test/boost/audit_rule_test',
     'test/boost/auth_resource_test',
