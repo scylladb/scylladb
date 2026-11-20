@@ -164,7 +164,7 @@ public:
     future<> start();
     future<> stop();
 
-    future<> write(write_buffer& wb);
+    future<> write(mixed_write_buffer& wb);
 
     // Reads the record at a location from the index. Keep the guard of the location until the
     // read is complete, so that the segment stays allocated.

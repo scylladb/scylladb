@@ -35,7 +35,7 @@ The `segment_manager` receives new writes via a `write_buffer`, and appends each
 
 #### Write Buffer
 
-The `chunk_builder` builds one chunk in memory: it serializes the records and the headers, and pads the chunk to the alignment. The `write_buffer` adds the tracking of each write to a chunk builder. It can be used to write multiple records to the buffer, then seal it into a chunk and write the chunk to a segment through the segment manager. The future of each write resolves to the location of the record once the chunk is written.
+The `chunk_builder` builds one chunk in memory: it serializes the records and the headers, and pads the chunk to the alignment. The `write_buffer` adds the tracking of each write to a chunk builder. It can be used to write multiple records to the buffer, then seal it into a chunk and write the chunk to a segment through the segment manager. The future of each write resolves to the location of the record once the chunk is written. The `mixed_write_buffer` takes the user writes and keeps their records for the separator, and the `full_write_buffer` takes the records that compaction and the separator write to full segments.
 
 The `write_buffer_ring` manages multiple write buffers for user writes, an active buffer and multiple flushing ones, to batch writes and manage backpressure.
 

@@ -60,7 +60,7 @@ logstor::logstor(logstor_config config, ::cache_tracker& shared_cache_tracker)
     , _write_buffer(write_buffer_ring_config{
             .buffer_size = _segment_manager.get_segment_size(),
             .flush_sg = config.flush_sg,
-        }, [&sm = _segment_manager] (write_buffer& buf) { return sm.write(buf); })
+        }, [&sm = _segment_manager] (mixed_write_buffer& buf) { return sm.write(buf); })
     , _cache_tracker(shared_cache_tracker) {
 
     namespace sm = seastar::metrics;

@@ -101,7 +101,7 @@ struct test_flush_controller {
     uint32_t next_segment_id{100};
     uint64_t next_sequence{1};
 
-    future<> operator()(write_buffer& wb) {
+    future<> operator()(mixed_write_buffer& wb) {
         const auto flush_idx = started_count++;
         flush_started.signal(1);
 
@@ -118,7 +118,7 @@ struct test_flush_controller {
             .offset = 0,
         };
         flushed_buffers.push_back(flushed_buffer{
-            .data = copy_chunk(wb.seal(segment_sequence{next_sequence++}, std::nullopt)),
+            .data = copy_chunk(wb.seal(segment_sequence{next_sequence++})),
             .base_position = base_position,
             .record_count = wb.record_count(),
         });
@@ -170,7 +170,6 @@ write_buffer_pool::config make_test_write_buffer_pool_config(size_t capacity, si
     return write_buffer_pool::config{
         .capacity = capacity,
         .buffer_size = 4 * 1024,
-        .kind = segment_kind::full,
         .preallocate = preallocate,
         .max_cached = max_cached,
     };
@@ -237,7 +236,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_chunk_builder_accepts_record_at_max_record
 
     wb.append(writer);
 
-    BOOST_REQUIRE_EQUAL(wb.seal(segment_sequence{29}, std::nullopt).size(), ondisk::block_alignment);
+    BOOST_REQUIRE_EQUAL(wb.seal(segment_sequence{29}).size(), ondisk::block_alignment);
 }
 
 // Checks that the size finish() returns is the size of the chunk seal() returns, and that the
@@ -251,10 +250,10 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_chunk_builder_finish_returns_the_final_chu
     BOOST_REQUIRE_EQUAL(size % ondisk::block_alignment, 0u);
     BOOST_REQUIRE_EQUAL(wb.finish(), size);
 
-    auto chunk = copy_chunk(wb.seal(segment_sequence{3}, std::nullopt));
+    auto chunk = copy_chunk(wb.seal(segment_sequence{3}));
     BOOST_REQUIRE_EQUAL(chunk.size(), size);
     BOOST_REQUIRE_EQUAL(read_chunk_header(chunk).value().segment.segment_seq.value, 3u);
-    BOOST_REQUIRE_THROW(wb.seal(segment_sequence{3}, std::nullopt), std::runtime_error);
+    BOOST_REQUIRE_THROW(wb.seal(segment_sequence{3}), std::runtime_error);
 }
 
 // Checks that a builder that is reset after a chunk of one table seals a chunk of another table with
@@ -342,7 +341,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_chunk_builder_bytes_writer_writes_the_same
 SEASTAR_THREAD_TEST_CASE(test_logstor_write_buffer_abort_writes_reclaims_unflushed_buffer) {
     auto schema = make_kv_schema();
 
-    write_buffer wb(32 * 1024, segment_kind::full);
+    full_write_buffer wb(32 * 1024);
     auto written = wb.write(log_record_writer(make_log_record(schema, "pk0", "v0", api::timestamp_type(1))));
     BOOST_REQUIRE(!written.available());
 
@@ -365,7 +364,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_write_buffer_abort_writes_reclaims_unflush
 SEASTAR_THREAD_TEST_CASE(test_logstor_write_buffer_complete_writes_waits_for_record_holders) {
     auto schema = make_kv_schema();
 
-    write_buffer wb(32 * 1024, segment_kind::full);
+    full_write_buffer wb(32 * 1024);
     auto write = wb.write(log_record_writer(make_log_record(schema, "pk0", "v0", api::timestamp_type(1))));
     wb.seal(segment_sequence{1}, schema->id());
 
@@ -379,6 +378,56 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_write_buffer_complete_writes_waits_for_rec
     }
     completed.get();
     BOOST_REQUIRE(wb.is_closed());
+}
+
+// Checks that a mixed buffer gives the separator each record with its write target and its location,
+// also for a chunk at an offset other than 0, and that an aborted buffer drops its records and the
+// holders of their targets.
+SEASTAR_THREAD_TEST_CASE(test_logstor_mixed_write_buffer_keeps_its_records_for_the_separator) {
+    auto schema = make_kv_schema();
+    // Outlives the buffers, whose records hold it.
+    seastar::gate target_gate;
+
+    mixed_write_buffer wb(32 * 1024);
+    std::vector<future<record_location_with_holder>> writes;
+    for (size_t i = 0; i < 3; ++i) {
+        auto record = make_log_record(schema, fmt::format("pk{}", i), "v", api::timestamp_type(1 + i));
+        writes.push_back(wb.write(log_record_writer(std::move(record)), write_target{.non_empty_holder = target_gate.hold()}));
+    }
+    BOOST_REQUIRE_EQUAL(target_gate.get_count(), 3u);
+
+    wb.seal(segment_sequence{1});
+    const auto chunk_position = segment_position{.segment = log_segment_id{7}, .offset = 3 * ondisk::block_alignment};
+    auto completed = wb.complete_writes(chunk_position);
+    std::vector<record_location> locations;
+    for (auto& write : writes) {
+        locations.push_back(wait_for_persisted(write));
+    }
+    completed.get();
+
+    auto records = wb.take_separator_records();
+    BOOST_REQUIRE_EQUAL(records.size(), 3u);
+    BOOST_REQUIRE(wb.take_separator_records().empty());
+    for (size_t i = 0; i < records.size(); ++i) {
+        BOOST_REQUIRE(records[i].location(chunk_position) == locations[i]);
+        BOOST_REQUIRE_GE(locations[i].offset, chunk_position.offset + ondisk::chunk_header_size(segment_kind::mixed));
+        BOOST_REQUIRE_EQUAL(records[i].writer.record().header.timestamp, api::timestamp_type(1 + i));
+    }
+    // The write targets stay with the records until the separator is done with them.
+    BOOST_REQUIRE_EQUAL(target_gate.get_count(), 3u);
+    records.clear();
+    BOOST_REQUIRE_EQUAL(target_gate.get_count(), 0u);
+
+    mixed_write_buffer aborted(32 * 1024);
+    auto write = aborted.write(log_record_writer(make_log_record(schema, "pk3", "v", api::timestamp_type(4))),
+            write_target{.non_empty_holder = target_gate.hold()});
+    BOOST_REQUIRE_EQUAL(target_gate.get_count(), 1u);
+    aborted.abort_writes(std::make_exception_ptr(std::runtime_error("chunk was not written"))).get();
+    BOOST_REQUIRE_THROW(write.get(), std::runtime_error);
+    BOOST_REQUIRE_EQUAL(target_gate.get_count(), 0u);
+    BOOST_REQUIRE(aborted.take_separator_records().empty());
+
+    target_gate.close().get();
 }
 
 // Checks that a pool builds its buffers at the point of use and keeps only max_cached of them once
@@ -492,7 +541,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_write_buffer_ring_basic_flushes_records) {
     constexpr size_t buffer_size = 4 * 1024;
 
     test_flush_controller flush_ctl;
-    write_buffer_ring ring(make_write_buffer_ring_config(buffer_size, 3), [&flush_ctl] (write_buffer& wb) {
+    write_buffer_ring ring(make_write_buffer_ring_config(buffer_size, 3), [&flush_ctl] (mixed_write_buffer& wb) {
         return flush_ctl(wb);
     });
 
@@ -532,7 +581,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_write_buffer_ring_flushes_partial_buffer_w
     constexpr auto sync_period = std::chrono::hours(1);
 
     test_flush_controller flush_ctl;
-    write_buffer_ring ring(make_write_buffer_ring_config(buffer_size, 3, sync_period), [&flush_ctl] (write_buffer& wb) {
+    write_buffer_ring ring(make_write_buffer_ring_config(buffer_size, 3, sync_period), [&flush_ctl] (mixed_write_buffer& wb) {
         return flush_ctl(wb);
     });
 
@@ -582,7 +631,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_write_buffer_ring_paused_flush_fills_ring_
     const auto large_value = make_single_buffer_value(schema, buffer_size);
 
     test_flush_controller flush_ctl{.pause_flushes = true};
-    write_buffer_ring ring(make_write_buffer_ring_config(buffer_size, 2), [&flush_ctl] (write_buffer& wb) {
+    write_buffer_ring ring(make_write_buffer_ring_config(buffer_size, 2), [&flush_ctl] (mixed_write_buffer& wb) {
         return flush_ctl(wb);
     });
 
@@ -651,7 +700,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_write_buffer_ring_queued_write_keeps_its_w
     seastar::gate alive_gate;
 
     test_flush_controller flush_ctl{.pause_flushes = true};
-    write_buffer_ring ring(make_write_buffer_ring_config(buffer_size, 2), [&flush_ctl] (write_buffer& wb) {
+    write_buffer_ring ring(make_write_buffer_ring_config(buffer_size, 2), [&flush_ctl] (mixed_write_buffer& wb) {
         return flush_ctl(wb);
     });
 
@@ -713,7 +762,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_write_buffer_ring_queued_writes_preserve_f
     const auto large_value = make_single_buffer_value(schema, buffer_size);
 
     test_flush_controller flush_ctl{.pause_flushes = true};
-    write_buffer_ring ring(make_write_buffer_ring_config(buffer_size, 2), [&flush_ctl] (write_buffer& wb) {
+    write_buffer_ring ring(make_write_buffer_ring_config(buffer_size, 2), [&flush_ctl] (mixed_write_buffer& wb) {
         return flush_ctl(wb);
     });
 
@@ -791,7 +840,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_write_buffer_ring_queued_write_times_out) 
     const auto large_value = make_single_buffer_value(schema, buffer_size);
 
     test_flush_controller flush_ctl{.pause_flushes = true};
-    write_buffer_ring ring(make_write_buffer_ring_config(buffer_size, 2), [&flush_ctl] (write_buffer& wb) {
+    write_buffer_ring ring(make_write_buffer_ring_config(buffer_size, 2), [&flush_ctl] (mixed_write_buffer& wb) {
         return flush_ctl(wb);
     });
 
@@ -830,7 +879,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_write_buffer_ring_acceptance_stays_blocked
     const auto large_value = make_single_buffer_value(schema, buffer_size);
 
     test_flush_controller flush_ctl{.pause_flushes = true};
-    write_buffer_ring ring(make_write_buffer_ring_config(buffer_size, 2), [&flush_ctl] (write_buffer& wb) {
+    write_buffer_ring ring(make_write_buffer_ring_config(buffer_size, 2), [&flush_ctl] (mixed_write_buffer& wb) {
         return flush_ctl(wb);
     });
 
@@ -881,7 +930,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_write_buffer_ring_stop_drains_blocked_in_f
     const auto record = make_write_buffer_ring_record(schema, 0, "value", api::timestamp_type(600));
 
     test_flush_controller flush_ctl{.pause_flushes = true};
-    write_buffer_ring ring(make_write_buffer_ring_config(buffer_size, 2), [&flush_ctl] (write_buffer& wb) {
+    write_buffer_ring ring(make_write_buffer_ring_config(buffer_size, 2), [&flush_ctl] (mixed_write_buffer& wb) {
         return flush_ctl(wb);
     });
 
@@ -911,7 +960,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_write_buffer_ring_stop_drains_queued_write
     const auto large_value = make_single_buffer_value(schema, buffer_size);
 
     test_flush_controller flush_ctl{.pause_flushes = true};
-    write_buffer_ring ring(make_write_buffer_ring_config(buffer_size, 2), [&flush_ctl] (write_buffer& wb) {
+    write_buffer_ring ring(make_write_buffer_ring_config(buffer_size, 2), [&flush_ctl] (mixed_write_buffer& wb) {
         return flush_ctl(wb);
     });
 
@@ -966,7 +1015,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_write_buffer_ring_flush_failure_fails_all_
 
     test_flush_controller flush_ctl{.fail_flush_index = 0};
     // long sync period so both writes land in the same buffer.
-    write_buffer_ring ring(make_write_buffer_ring_config(buffer_size, 3, std::chrono::hours(1)), [&flush_ctl] (write_buffer& wb) {
+    write_buffer_ring ring(make_write_buffer_ring_config(buffer_size, 3, std::chrono::hours(1)), [&flush_ctl] (mixed_write_buffer& wb) {
         return flush_ctl(wb);
     });
 
