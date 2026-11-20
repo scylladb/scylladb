@@ -78,8 +78,11 @@ There is no nodetool command for this restore yet. It is started through the RES
 (see the :doc:`storage_service API reference </reference/api/storage-service>`), with
 ``POST /storage_service/tablets/restore``. The query parameters are the destination ``keyspace`` and ``table``
 and the ``snapshot`` name. The request body is a JSON array with one entry per datacenter the keyspace replicates to,
-each giving the ``datacenter``, the ``endpoint``, ``bucket`` and ``prefix`` of the backup location, and ``manifests``,
-the paths of the table's backup manifests relative to that prefix.
+each giving the ``datacenter`` and the ``endpoint``, ``bucket`` and ``prefix`` of the backup location. ScyllaDB finds
+the backup in the location by the snapshot name.
+
+If the backup was taken from a keyspace or a table with a different name than the destination, also pass the
+``source_keyspace`` and ``source_table`` query parameters with the names used at the time of the backup.
 
 **Procedure**
 
@@ -94,8 +97,7 @@ the paths of the table's backup manifests relative to that prefix.
         -d '[{"datacenter": "mydc",
               "endpoint": "s3.us-east-2.amazonaws.com",
               "bucket": "bucket-foo",
-              "prefix": "backups/mysnapshot",
-              "manifests": ["snapshots/mykeyspace/team_roster/mysnapshot/manifest.json"]}]'
+              "prefix": "backups/mysnapshot"}]'
 
    The call returns the ID of the restore task.
 

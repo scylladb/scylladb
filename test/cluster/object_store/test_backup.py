@@ -2586,6 +2586,98 @@ async def run_cluster_backup_clear_and_restore(object_storage, topology, manager
     await check_mutation_replicas(cql, manager, servers, range(100), topology, logger, ks, cf)
 
 
+async def run_cluster_backup_and_restore_by_tag(object_storage, topology, manager: ScyllaClusterManager, snapshot_name: str, ks: str, cf:str, servers: list[ServerInfo]):
+    """
+    Helper
+    """
+    prefix = unique_name('kokomo')
+    await run_cluster_backup(object_storage, prefix, manager, snapshot_name, ks, cf, servers)
+    cql = manager.get_cql()
+    s = servers[0]
+
+    async def restore(dst_ks, dst_cf, snapshot, **source):
+        return await manager.api.restore_tablets(s.ip_addr, dst_ks, dst_cf, snapshot, s.datacenter, object_storage.address, object_storage.bucket_name,
+                                                 prefix=prefix, **source)
+
+    async def restore_and_check(dst_ks, dst_cf, **source):
+        tid = await restore(dst_ks, dst_cf, snapshot_name, **source)
+        status = await manager.api.wait_task(s.ip_addr, tid)
+        assert (status is not None) and (status['state'] == 'done'), f"Restore of {dst_ks}.{dst_cf} via {s.ip_addr} failed: {status}"
+        assert status['progress_total'] > 0
+        assert status['progress_completed'] == status['progress_total']
+        await check_mutation_replicas(cql, manager, servers, range(100), topology, logger, dst_ks, dst_cf)
+
+    # no backup with such a tag in the location
+    with pytest.raises(HTTPError, match=f'Failed to load manifest {prefix}/snapshots/{ks}/{cf}/no_such_snapshot/manifest.json'):
+        await restore(ks, cf, 'no_such_snapshot')
+
+    await cql.run_async(f"TRUNCATE {ks}.{cf}")
+    await restore_and_check(ks, cf)
+
+    # The manifest is stored under the names the table had when it was backed up, so a restore
+    # into a table with another name must say where the snapshot was taken from.
+    async with new_test_keyspace(manager, f"WITH REPLICATION = {{ 'replication_factor' : {topology.rf} }} AND tablets = {{'initial': 20 }}") as dst_ks:
+        dst_cf = f'{cf}_restored'
+        await cql.run_async(f"CREATE TABLE {dst_ks}.{dst_cf} (pk text primary key, value int)")
+        with pytest.raises(HTTPError, match=f'Failed to load manifest {prefix}/snapshots/{dst_ks}/{dst_cf}/{snapshot_name}/manifest.json'):
+            await restore(dst_ks, dst_cf, snapshot_name)
+        await restore_and_check(dst_ks, dst_cf, source_ks=ks, source_cf=cf)
+
+
+@pytest.mark.asyncio
+async def test_cluster_snapshot_backup_and_restore_by_tag(manager: ScyllaClusterManager, object_storage):
+    """
+    Tests that a cluster snapshot backup can be restored given only the snapshot name and
+    the backup location, without the path of the manifest, also into a table with another name
+    """
+    topology = topo(rf = 3, nodes = 3, racks = 3, dcs = 1)
+    await do_test_snapshot_on_all_nodes(manager, partial(run_cluster_backup_and_restore_by_tag, object_storage, topology)
+                                        , object_storage, True, True, topology)
+
+
+@pytest.mark.asyncio
+async def test_cluster_snapshot_backup_and_restore_by_tag_multidc(manager: ScyllaClusterManager, object_storage):
+    """
+    Tests that a cluster snapshot backup of several datacenters, each backed up to its own
+    location, can be restored given only the snapshot name and the locations
+    """
+    topology = topo(rf = 2, nodes = 4, racks = 2, dcs = 2)
+    servers, _ = await create_cluster(topology, manager, logger, object_storage)
+    s = servers[0]
+    cql = manager.get_cql()
+
+    snapshot_name = unique_name('snap_')
+    locations = [{
+        "datacenter": dc,
+        "endpoint": object_storage.address,
+        "bucket": object_storage.bucket_name,
+        "prefix": unique_name(f'kokomo_{dc}_'),
+    } for dc in sorted({srv.datacenter for srv in servers})]
+    assert len(locations) == topology.dcs
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}} AND tablets = {{'initial': 8 }}") as ks:
+        async with new_test_table(manager, ks, "pk text primary key, value int", "") as tbl:
+            cf = tbl.split('.')[1]
+            insert_stmt = cql.prepare(f"INSERT INTO {ks}.{cf} (pk, value) VALUES (?, ?)")
+            insert_stmt.consistency_level = ConsistencyLevel.ALL
+            await asyncio.gather(*(cql.run_async(insert_stmt, (str(i), i)) for i in range(100)))
+
+            await manager.api.take_cluster_snapshot(s.ip_addr, ks, tag=snapshot_name, tables=[cf])
+            tid = await manager.api.backup_cluster_snapshot_to_locations(s.ip_addr, ks, snapshot_name, locations, tables=[cf])
+            status = await manager.api.wait_task(s.ip_addr, tid)
+            assert (status is not None) and (status['state'] == 'done'), f"Cluster backup failed: {status}"
+
+            await cql.run_async(f"TRUNCATE {ks}.{cf}")
+
+            tid = await manager.api.restore_tablets_multidc(s.ip_addr, ks, cf, snapshot_name, locations)
+            status = await manager.api.wait_task(s.ip_addr, tid)
+            assert (status is not None) and (status['state'] == 'done'), f"Restore of {ks}.{cf} via {s.ip_addr} failed: {status}"
+            assert status['progress_total'] > 0
+            assert status['progress_completed'] == status['progress_total']
+
+            await check_mutation_replicas(cql, manager, servers, range(100), topology, logger, ks, cf)
+
+
 @pytest.mark.asyncio
 async def test_cluster_snapshot_backup_and_restore(manager: ScyllaClusterManager, object_storage):
     """
