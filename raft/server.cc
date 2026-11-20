@@ -1982,6 +1982,10 @@ future<> server_impl::applier_fiber() {
                 const auto max_trailing_bytes = force_snapshot ? 0 : _config.snapshot_trailing_size;
                 co_await take_snapshot(max_trailing, max_trailing_bytes);
             }
+
+            if (_config.on_applied) {
+                _config.on_applied();
+            }
         }
     };
 

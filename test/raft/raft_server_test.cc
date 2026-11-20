@@ -2510,3 +2510,49 @@ SEASTAR_THREAD_TEST_CASE(test_drop_trailing_log) {
     cluster.wait_log_all().get();
     BOOST_CHECK_GT(stats->install_snapshot_sent, 0);
 }
+
+// on_applied runs after every applied batch, once the batch's snapshot is
+// taken, and may drop the log of the server it runs on.
+SEASTAR_THREAD_TEST_CASE(test_on_applied_may_drop_trailing_log) {
+    auto stats = make_lw_shared<raft::server_stats>();
+    size_t calls = 0;
+    bool drop = false;
+    raft::server* leader_ptr = nullptr;
+    std::vector<raft::server::configuration> configs(3, trailing_log_config());
+    configs[0].on_applied = [&] {
+        ++calls;
+        if (drop && leader_ptr) {
+            leader_ptr->drop_trailing_log();
+        }
+    };
+    auto cluster = get_trailing_log_cluster(std::move(configs), stats);
+    cluster.start_all().get();
+    auto stop = defer([&cluster] noexcept { cluster.stop_all().get(); });
+    auto& leader = cluster.get_server(0);
+    leader_ptr = &leader;
+
+    cluster.add_entries(5, 0).get();
+    cluster.wait_log_all().get();
+    BOOST_CHECK_GT(calls, 0);
+
+    // A disconnected follower makes the leader keep what it misses...
+    cluster.disconnect(2);
+    cluster.add_entries(50, 0).get();
+    leader.read_barrier(nullptr).get();
+    BOOST_CHECK_GE(leader.get_status().in_memory_log_size, 50);
+
+    // ...until the callback drops it, after the next batch.
+    drop = true;
+    const auto before = calls;
+    cluster.add_entries(1, 0).get();
+    leader.read_barrier(nullptr).get();
+    BOOST_CHECK(eventually_true([&] {
+        const auto status = leader.get_status();
+        return calls > before && status.in_memory_log_size == (status.last_idx - status.last_snapshot_idx).value();
+    }));
+
+    cluster.connect_all();
+    cluster.add_entries(10, 0).get();
+    cluster.wait_log_all().get();
+    BOOST_CHECK_GT(stats->install_snapshot_sent, 0);
+}
