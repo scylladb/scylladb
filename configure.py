@@ -599,6 +599,7 @@ scylla_tests = set([
     'test/boost/frozen_mutation_test',
     'test/boost/generic_server_test',
     'test/boost/gossiping_property_file_snitch_test',
+    'test/boost/growth_counter_test',
     'test/boost/hash_test',
     'test/boost/hashers_test',
     'test/boost/hint_storage_test',
@@ -1687,6 +1688,7 @@ pure_boost_tests = set([
     'test/boost/dynamic_bitset_test',
     'test/boost/enum_option_test',
     'test/boost/enum_set_test',
+    'test/boost/growth_counter_test',
     'test/boost/idl_test',
     'test/boost/interval_index_test',
     'test/boost/json_test',
@@ -1880,6 +1882,7 @@ deps['test/boost/murmur_hash_test'] = ['bytes.cc', 'utils/murmur_hash.cc', 'test
 deps['test/boost/allocation_strategy_test'] = ['test/boost/allocation_strategy_test.cc', 'utils/logalloc.cc', 'utils/dynamic_bitset.cc', 'utils/labels.cc']
 deps['test/boost/log_heap_test'] = ['test/boost/log_heap_test.cc']
 deps['test/boost/rolling_max_tracker_test'] = ['test/boost/rolling_max_tracker_test.cc']
+deps['test/boost/growth_counter_test'] = ['test/boost/growth_counter_test.cc']
 deps['test/boost/estimated_histogram_test'] = ['test/boost/estimated_histogram_test.cc']
 deps['test/boost/summary_test'] = ['test/boost/summary_test.cc']
 deps['test/boost/anchorless_list_test'] = ['test/boost/anchorless_list_test.cc']
