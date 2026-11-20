@@ -58,10 +58,10 @@ Syntax
 
    nodetool [(-h <host> | --host <host>)] [(-p <port> | --port <port>)] cluster backup
                [--keyspaces <keyspace>]...
-               [--table <table>]
-               [--snapshot <snapshot>]
-               --location <dc>,<endpoint>,<bucket>(,<prefix>)
-               [--location <dc2>,<endpoint2>,<bucket2>(,<prefix2>)]...
+               [--table <table>[,<table>...]]
+               [(-s <snapshot> | --snapshot <snapshot>)]
+               (-l | --location) <dc>,<endpoint>,<bucket>[,<prefix>]
+               [(-l | --location) <dc2>,<endpoint2>,<bucket2>[,<prefix2>]]...
                [--nowait]
                [--move-files]
 
@@ -76,10 +76,10 @@ Options
 -------
 
 * ``-h <host>`` or ``--host <host>`` - Node hostname or IP address.
-* ``--keyspaces`` - Name of a keyspace to copy SSTables from. Repeat for each keyspace. By default, all keyspaces are backed up
-* ``--table`` - Name of a table to copy SSTables from, or a comma-separated list of tables. Requires exactly one keyspace
-* ``--snapshot`` - Name of a snapshot to copy sstables from. If it does not exist, it is taken first
-* ``--location`` - Tuple of <dc>,<endpoint>,<bucket> and optional <prefix> which to write the backup. Repeat for each DC
+* ``--keyspaces`` - Keyspace to back up. Repeat for each keyspace. If omitted, all keyspaces are backed up.
+* ``--table`` - Table(s) to back up, multiple ones can be joined with ``,``. Requires exactly one keyspace to be specified.
+* ``-s`` or ``--snapshot`` - Name of the snapshot to back up. It is created if it does not exist. If omitted, a new snapshot, named after the current timestamp, is taken.
+* ``-l`` or ``--location`` - Tuple of <dc>,<endpoint>,<bucket> and optional <prefix> which to write the backup to. Required; repeat it for each DC.
   Endpoints should be configured as per :ref:`the object storage configuration instructions <object-storage-configuration>`.
 * ``--nowait`` - Don't wait on the backup process
 * ``--move-files`` - Move files instead of copying them. This will delete the files from the local disk after they are uploaded to the object storage.

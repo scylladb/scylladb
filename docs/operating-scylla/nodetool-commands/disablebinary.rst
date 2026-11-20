@@ -7,7 +7,7 @@ For example:
 
 ``nodetool disablebinary``
 
-To verify the gossip status run ``nodetool statusbinary``  Result will be ``not running``
+To verify the CQL native transport status run ``nodetool statusbinary``  Result will be ``not running``
 
 See also
 

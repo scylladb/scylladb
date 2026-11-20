@@ -16,6 +16,7 @@ Example output:
    Cluster Information:
    	Name: Test Cluster
 	Snitch: org.apache.cassandra.locator.SimpleSnitch
+	DynamicEndPointSnitch: disabled
 	Partitioner: org.apache.cassandra.dht.Murmur3Partitioner
 	Schema versions:
 		86a67fc7-1d7c-3dc3-9be9-9c86b27e2506: [172.17.0.2]

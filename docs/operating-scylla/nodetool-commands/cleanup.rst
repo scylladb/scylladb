@@ -11,6 +11,7 @@ In addition, the following should be noted:
 - An optional keyspace and column family (table) can be specified to restrict the cleanup action. 
 - If no keyspace is specified, it will perform cleanup in all keyspaces
 - There is no need to run cleanup when nodes are being removed permanently
+- Cleanup applies only to vnode-based keyspaces. Tablet keyspaces are cleaned up automatically and are skipped.
 
 For example:
 

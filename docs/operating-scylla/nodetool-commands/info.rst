@@ -4,6 +4,8 @@ Nodetool info
 cluster, such as uptime, load, key cache hit rate, the total count of all
 exceptions, and more. If needed, you can specify which node to view by
 using the ``--host`` argument with the host IP address.
+Use ``-T`` or ``--tokens`` to print all the tokens owned by the node,
+instead of just their count.
 
 For example:
 
@@ -22,14 +24,15 @@ Example output:
     Load                   : 294.44 MiB
     Generation No          : 1474434958
     Uptime (seconds)       : 1868
-    Heap Memory (MiB)      : 39.21 / 247.50
+    Heap Memory (MiB)      : 0.00 / 0.00
     Off Heap Memory (MiB)  : 7.74
     Data Center            : us-east
     Rack                   : 1b
     Exceptions             : 0
-    Key Cache              : entries 0, size 0 bytes, capacity 0 bytes, 0 hits, 0 requests, 0 recent hit rate, 0 save period in seconds
+    Key Cache              : entries 0, size 0 bytes, capacity 0 bytes, 0 hits, 0 requests, 0.000 recent hit rate, 0 save period in seconds
     Row Cache              : entries 1064771, size 1.02 MiB, capacity 450.80 MiB, 96 hits, 120 requests, 0.800 recent hit rate, 0 save period in seconds
     Counter Cache          : entries 0, size 0 bytes, capacity 0 bytes, 0 hits, 0 requests, 0.000 recent hit rate, 0 save period in seconds
+    Percent Repaired       : 0.0%
     Token                  : (invoke with -T/--tokens to see all 256 tokens)
 
 +-----------+------------------------------+

@@ -6,7 +6,7 @@ Syntax
 -------
 .. code-block:: console
 
-   nodetool tablestats [<keyspace.cfname>...]
+   nodetool tablestats [(-i | --ignore)] [(-H | --human-readable)] [(-F | --format) <format>] [<keyspace.cfname>...]
 
 Typically, the keyspace and cfname are separated by a dot character. However, if either of them contains a dot, you can 
 use a forward slash character (``/``) as a delimiter. For example:
@@ -24,6 +24,13 @@ the slash refers to a keyspace. For example:
    nodetool tablestats my.keyspace/
 
 If you don't add ``/``, nodetool will assume that "my" is the keyspace and "keyspace" is the cfname.
+
+Options
+-------
+
+* ``-i`` or ``--ignore`` - Ignore the listed tables/keyspaces and display all the remaining ones.
+* ``-H`` or ``--human-readable`` - Display bytes in human readable form, i.e. KiB, MiB, GiB, TiB.
+* ``-F`` or ``--format`` - Output format: ``plain`` (default), ``json`` or ``yaml``.
 
 Example
 --------

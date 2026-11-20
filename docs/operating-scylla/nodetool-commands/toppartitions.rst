@@ -1,9 +1,9 @@
 Nodetool toppartitions
 ======================
 
-**toppartitions** <keyspace> <table> <duration> - Samples cluster writes and reads and reports the most active partitions in a specified table and time frame.
+**toppartitions** <keyspace> <table> <duration> - Samples the writes and reads on the node and reports the most active partitions in the specified table(s) and time frame.
 
-**toppartitions**  [<--ks-filters ks>] [<--cf-filters tables>] [<-d duration>] [<-s|--capacity capacity>] [<-a|--samplers samplers>]
+**toppartitions** ``[--ks-filters <keyspaces>] [--cf-filters <tables>] [-d|--duration <duration>] [-s|--capacity <capacity>] [-k|--size <size>] [-a|--samplers <samplers>]``
 
 .. note::
 
@@ -16,13 +16,15 @@ keyspace    The keyspace name
 ----------  -----------------------------------
 table       The table name
 ----------  -----------------------------------
-duration    The duration in milliseconds (requires a ``-d`` prefix)
+duration    The duration in milliseconds. Given positionally together with keyspace and table, or with ``-d``/``--duration`` (default 5000) when no positional arguments are used.
 ----------  -----------------------------------
 ks-filters  List of keyspaces
 ----------  -----------------------------------
 cf-filters  List of Tables (Column Families)
 ----------  -----------------------------------
 capacity    The capacity of the sampler; higher values increase accuracy at the cost of memory (default 256 keys).
+----------  -----------------------------------
+size        The number of top partitions to list (default 10); must be smaller than capacity.
 ----------  -----------------------------------
 samplers    The samplers to use; ``WRITES``, ``READS``, or both (default).
 ==========  ===================================
@@ -45,31 +47,31 @@ Example output:
 
 .. code-block:: shell
 
-   WRITES Sampler:
-     Cardinality: ~5 (256 capacity)
-     Top 10 partitions:
-	    Partition                Count       +/-
-            Russell Westbrook         100         0
-	    Jermi Grant               25          0
-	    Victor Oladipo            17          0
-	    Andre Roberson            1           0
-	    Steven Adams              1           0
-
    READS Sampler:
      Cardinality: ~5 (256 capacity)
      Top 10 partitions:
-	    Partition                Count       +/-
-            Russell Westbrook         100         0
-	    Victor Oladipo            17          0
-	    Jermi Grant               12          0
-	    Andre Roberson            5           0
-	    Steven Adams              1           0
+           Partition                               Count       +/-
+           (nba:team_roster) Russell Westbrook       100         0
+           (nba:team_roster) Victor Oladipo           17         0
+           (nba:team_roster) Jermi Grant              12         0
+           (nba:team_roster) Andre Roberson            5         0
+           (nba:team_roster) Steven Adams              1         0
+
+   WRITES Sampler:
+     Cardinality: ~5 (256 capacity)
+     Top 10 partitions:
+           Partition                               Count       +/-
+           (nba:team_roster) Russell Westbrook       100         0
+           (nba:team_roster) Jermi Grant              25         0
+           (nba:team_roster) Victor Oladipo           17         0
+           (nba:team_roster) Andre Roberson            1         0
+           (nba:team_roster) Steven Adams              1         0
 
 In this example, we can see that for the ``Partition`` with ``Partition Key`` "Russell Westbrook", 100 writes and 100 read operations were done during the set duration.
 
 For each of the samplers (WRITES and READS in this specific example), nodetool toppartitions reports:
 
-* The cardinality of the sampled operations (number of unique operations in the sample set).
+* The cardinality of the sampled operations (number of distinct partitions sampled, bounded by the capacity).
 
 * The number of partitions in a specified table that had the most traffic in a specified time period.
 
@@ -84,10 +86,6 @@ Partition      The Partition Key, prefixed by the Keyspace and table (ks:cf)
 Count          The number of operations of the specified type that occurred during the specified time period
 -------------  ---------------------------------------------------------------------------------------------
 +/-            The margin of error for the Count statistic
--------------  ---------------------------------------------------------------------------------------------
-Write Count    The total number of writes since last boot
--------------  ---------------------------------------------------------------------------------------------
-Write Latency  The average read latency
 =============  =============================================================================================
 
 To know which node hold the partition key use the nodetool :doc:`getendpoints </operating-scylla/nodetool-commands/getendpoints/>` command.
