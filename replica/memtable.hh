@@ -17,6 +17,7 @@
 #include "encoding_stats.hh"
 #include "dirty_memory_manager.hh"
 #include "db/commitlog/replay_position.hh"
+#include "db_clock.hh"
 #include "db/commitlog/rp_set.hh"
 #include "utils/extremum_tracking.hh"
 #include "mutation/mutation_cleaner.hh"
@@ -156,6 +157,8 @@ private:
     replica::table_stats& _table_stats;
     // Lets the table flush timer skip a memtable created recently (e.g. after another flush trigger).
     seastar::lowres_clock::time_point _created_at = seastar::lowres_clock::now();
+    // When the memtable was created, i.e. started accepting writes.
+    db_clock::time_point _creation_time = db_clock::now();
 
     class memtable_encoding_stats_collector : public encoding_stats_collector {
     private:
@@ -236,6 +239,7 @@ public:
     // Never resolves with a failed future.
     future<> clear_gently() noexcept;
     schema_ptr schema() const noexcept { return _schema; }
+    db_clock::time_point creation_time() const noexcept { return _creation_time; }
     void set_schema(schema_ptr) noexcept;
     future<> apply(memtable&, reader_permit);
     // Applies mutation to this memtable.

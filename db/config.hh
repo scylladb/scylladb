@@ -682,6 +682,13 @@ public:
     named_value<float> memtable_flush_static_shares;
     named_value<float> compaction_static_shares;
     named_value<float> compaction_max_shares;
+    named_value<sstring> compaction_controller;
+    named_value<bool> compaction_rate_matching_controller_shadow_mode;
+    named_value<uint32_t> compaction_rate_matching_controller_rate_window_in_seconds;
+    named_value<uint32_t> compaction_rate_matching_controller_achieved_window_in_seconds;
+    named_value<double> compaction_rate_matching_controller_alpha;
+    named_value<double> compaction_rate_matching_controller_max_step;
+    named_value<float> compaction_normalization_factor;
     named_value<bool> compaction_enforce_min_threshold;
     named_value<uint32_t> compaction_flush_all_tables_before_major_seconds;
 

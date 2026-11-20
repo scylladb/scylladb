@@ -27,6 +27,8 @@
 #include "db/config.hh"
 #include "cql3/query_processor.hh"
 #include "exceptions/exceptions.hh"
+#include "backlog_controller.hh"
+#include "compaction/compaction_manager.hh"
 #include "replica/database.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/eventually.hh"
@@ -1303,6 +1305,31 @@ SEASTAR_TEST_CASE(test_registration_stop_waits_for_in_flight_callback) {
 
 // stop() waits only for its own callback: it resolves at once when no invocation of it is
 // in flight, also while the pass is awaiting another callback.
+// compaction_controller is a db::config-backed option at every node-oriented scope: a node
+// switches controllers as soon as an override applies to it, and back once it is removed.
+SEASTAR_TEST_CASE(test_compaction_controller_switches_by_cluster_config) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        auto& mgr = e.cluster_config_manager();
+        const auto node_uuid = e.shared_token_metadata().local().get()->get_topology().my_host_id().uuid();
+        auto uses = [&] <typename Controller> () {
+            return e.db().map_reduce0([] (replica::database& db) {
+                return bool(dynamic_cast<const Controller*>(&db.get_compaction_manager().get_compaction_controller()));
+            }, true, std::logical_and<bool>()).get();
+        };
+        BOOST_REQUIRE(uses.template operator()<backlog_proportional_compaction_controller>());
+
+        e.execute_cql(seastar::format("ALTER NODE {} WITH compaction_controller = 'rate_matching'", node_uuid)).get();
+        mgr.local().refresh().get();
+        BOOST_REQUIRE(uses.template operator()<rate_matching_compaction_controller>());
+
+        BOOST_REQUIRE_THROW(e.execute_cql("ALTER CLUSTER WITH compaction_controller = 'v2'").get(), exceptions::invalid_request_exception);
+
+        e.execute_cql(seastar::format("ALTER NODE {} WITH compaction_controller = NULL", node_uuid)).get();
+        mgr.local().refresh().get();
+        BOOST_REQUIRE(uses.template operator()<backlog_proportional_compaction_controller>());
+    });
+}
+
 SEASTAR_TEST_CASE(test_registration_stop_does_not_wait_for_other_callbacks) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("CREATE KEYSPACE ks_stop2 WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}").get();

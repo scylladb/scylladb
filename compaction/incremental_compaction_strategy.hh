@@ -42,7 +42,14 @@ public:
 
     static void validate(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options);
 
+    // The runs a tier has to hold for regular compaction to compact it: min_threshold when
+    // it's enforced, otherwise as few as two.
+    static unsigned effective_min_threshold(unsigned min_threshold, bool enforce_min_threshold) noexcept {
+        return enforce_min_threshold ? min_threshold : std::min(min_threshold, 2u);
+    }
+
     friend class incremental_compaction_strategy;
+    friend class incremental_backlog_tracker;
 };
 
 using sstable_run_and_length = std::pair<sstables::frozen_sstable_run, uint64_t>;
@@ -61,7 +68,7 @@ private:
     std::optional<double> _space_amplification_goal;
     static std::vector<sstable_run_and_length> create_run_and_length_pairs(const std::vector<sstables::frozen_sstable_run>& runs);
 
-    std::vector<std::vector<sstables::frozen_sstable_run>> get_buckets(const std::vector<sstables::frozen_sstable_run>& runs) const {
+    std::vector<sstable_run_bucket_and_length> get_buckets(const std::vector<sstables::frozen_sstable_run>& runs) const {
         return get_buckets(runs, _options);
     }
 
@@ -86,8 +93,8 @@ public:
 
     static void validate_options(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options);
 
-    // Group runs of similar size into buckets.
-    static std::vector<std::vector<sstables::frozen_sstable_run>> get_buckets(const std::vector<sstables::frozen_sstable_run>& runs, const incremental_compaction_strategy_options& options);
+    // Group runs of similar size into buckets, each with the sum of the sizes of its runs.
+    static std::vector<sstable_run_bucket_and_length> get_buckets(const std::vector<sstables::frozen_sstable_run>& runs, const incremental_compaction_strategy_options& options);
 
     virtual future<compaction_descriptor> get_sstables_for_compaction(compaction_group_view& t, strategy_control& control) override;
 

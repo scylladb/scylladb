@@ -86,8 +86,8 @@ class test_env_compaction_manager {
     compaction::compaction_manager _cm;
 
 public:
-    test_env_compaction_manager()
-        : _cm(_tm, compaction::compaction_manager::for_testing_tag{})
+    test_env_compaction_manager(seastar::scheduling_group compaction_sg = {}, seastar::scheduling_group maintenance_sg = {})
+        : _cm(_tm, compaction::compaction_manager::for_testing_tag{}, compaction_sg, maintenance_sg)
     {}
 
     compaction::compaction_manager& get_compaction_manager() { return _cm; }
@@ -117,6 +117,10 @@ struct test_env_config {
     db::corrupt_data_handler* corrupt_data_handler = nullptr;
     data_dictionary::storage_options storage; // will be local by default
     size_t available_memory = memory::stats().total_memory();
+    // The scheduling groups the compaction manager runs regular compaction and the other
+    // kinds in, the main one for both by default.
+    seastar::scheduling_group compaction_scheduling_group;
+    seastar::scheduling_group maintenance_scheduling_group;
 };
 
 data_dictionary::storage_options make_test_object_storage_options(std::string_view type);
