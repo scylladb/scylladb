@@ -318,6 +318,11 @@ def test_scylla_sstable_dump_component(cql, test_keyspace, scylla_path, scylla_d
             assert sst_metadata["sharding"] != [], f"Expected non-empty sharding metadata in sstable scylla-metadata: sstable={sst_name}: {sst_metadata}"
             assert "scrub_time" in sst_metadata, f"Expected 'scrub_time' in json output: {json_out}"
             assert sst_metadata["scrub_time"] > 0, f"Expected non-zero 'scrub_time'"
+            # The features which are listed by name are the ones whose bit is set in the mask.
+            # Any sstable which Scylla writes has the first of them.
+            features = sst_metadata["features"]
+            assert len(features["features"]) == bin(features["mask"]).count("1"), f"Expected a name for each bit of the mask of features: {features}"
+            assert "NonCompoundPIEntries" in features["features"], f"Expected 'NonCompoundPIEntries' in the features: {features}"
 
 @pytest.mark.parametrize("components_spec", [
     None,                           # None -> --all-components
@@ -471,6 +476,34 @@ def test_scylla_sstable_write_cql_query_file_reader(cql, test_keyspace, scylla_p
 
         keys = {row['pk'] for row in result}
         assert keys == {0, 1, 2, 3}
+
+
+# A node writes the sstable feature CorrectNaNAndVarintIndexKeys, and the encoding of
+# index keys which it stands for, only when the whole cluster can read them.
+# scylla-sstable has no cluster to wait for, so the sstables which it writes have it.
+def test_scylla_sstable_write_sets_canonical_index_keys_feature(cql, test_keyspace, scylla_path):
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        schema_file = os.path.join(tmp_dir, 'schema.cql')
+        with open(schema_file, 'w') as f:
+            f.write("CREATE TABLE ks.tbl (pk int PRIMARY KEY)")
+
+        input_file = os.path.join(tmp_dir, 'input.cql')
+        with open(input_file, 'w') as f:
+            f.write("INSERT INTO scylla_sstable.tbl (pk) VALUES (0)")
+
+        generation = subprocess.check_output([scylla_path, "sstable", "write",
+                                              "--schema-file", schema_file,
+                                              "--input-format", "cql",
+                                              "--input-file", input_file,
+                                              "--output-dir", tmp_dir], text=True).strip()
+
+        sstable_files = glob.glob(os.path.join(tmp_dir, f"*-{generation}-big-Data.db"))
+        assert len(sstable_files) == 1
+
+        out = subprocess.check_output([scylla_path, "sstable", "dump-scylla-metadata", "--schema-file", schema_file, sstable_files[0]])
+        for sst_metadata in json.loads(out)["sstables"].values():
+            features = sst_metadata["features"]
+            assert "CorrectNaNAndVarintIndexKeys" in features["features"], f"Expected 'CorrectNaNAndVarintIndexKeys' in the features: {features}"
 
 
 def test_scylla_sstable_write_cql(cql, test_keyspace, scylla_path):

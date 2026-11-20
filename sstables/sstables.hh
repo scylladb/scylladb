@@ -128,6 +128,10 @@ struct sstable_writer_config {
     uint64_t summary_max_partitions_per_page;
     sstring origin;
     bool correct_pi_block_width = true;
+    // Whether the keys of the trie-based indexes are encoded with canonical_nans_and_varints::yes.
+    // Otherwise the sstable is written like the versions which didn't have this encoding wrote it,
+    // which is what has to be done as long as such a version may have to read it.
+    bool correct_nan_and_varint_index_keys = true;
     uint32_t large_data_records_per_sstable = 10;
 
 private:
@@ -961,6 +965,12 @@ public:
 
     bool has_shadowable_tombstones() const {
         return has_feature(sstable_feature::ShadowableTombstones);
+    }
+
+    // The encoding of the keys in the trie-based indexes of this sstable.
+    // They can only be searched with keys which are encoded in the same way.
+    canonical_nans_and_varints index_keys_have_canonical_nans_and_varints() const {
+        return canonical_nans_and_varints(has_feature(sstable_feature::CorrectNaNAndVarintIndexKeys));
     }
 
     sstable_enabled_features features() const {

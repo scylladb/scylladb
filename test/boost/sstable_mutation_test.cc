@@ -1528,3 +1528,125 @@ SEASTAR_TEST_CASE(writer_handles_subsequent_range_tombstone_changes_without_tomb
     });
 }
 
+
+// The keys of the trie-based indexes of an sstable which doesn't have the feature
+// CorrectNaNAndVarintIndexKeys encode the NaNs, and the varints with redundant sign
+// bytes, in the old way (see canonical_nans_and_varints). Such an index is only
+// searched correctly with keys which are encoded in the same way.
+//
+// The partitions of this test are ones which could be written, and were read
+// correctly, before the encoding was changed: the old encoding happens to order
+// their keys like the comparator does. They are written both in the old way and in
+// the new one, and each time every row has to be found through the index.
+SEASTAR_TEST_CASE(test_reading_index_with_old_encoding_of_nans_and_varints) {
+    return test_env::do_with_async([] (test_env& env) {
+        // An index block for every row, so the rows are only all found if the index is searched correctly.
+        env.manager().set_promoted_index_block_size(1);
+
+        struct table {
+            schema_ptr s;
+            std::vector<clustering_key> cks;
+        };
+        std::vector<table> tables;
+        const int n_rows = 20;
+        for (const bool reverse : {false, true}) {
+            // Varints in 8 bytes, which is how a bigint is serialized.
+            for (const int sign : {1, -1}) {
+                auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
+                    .with_column("pk", int32_type, column_kind::partition_key)
+                    .with_column("ck", reverse ? reversed(varint_type) : varint_type, column_kind::clustering_key)
+                    .with_column("v", int32_type)
+                    .build();
+                std::vector<clustering_key> cks;
+                for (int i = 1; i <= n_rows; ++i) {
+                    cks.push_back(clustering_key::from_single_value(*s, long_type->decompose(int64_t(sign * i))));
+                }
+                tables.emplace_back(std::move(s), std::move(cks));
+            }
+            // The same NaN, with its sign bit set, in the first clustering column of all the rows.
+            auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
+                .with_column("pk", int32_type, column_kind::partition_key)
+                .with_column("ck1", reverse ? reversed(float_type) : float_type, column_kind::clustering_key)
+                .with_column("ck2", int32_type, column_kind::clustering_key)
+                .with_column("v", int32_type)
+                .build();
+            std::vector<clustering_key> cks;
+            for (int i = 1; i <= n_rows; ++i) {
+                cks.push_back(clustering_key::from_exploded(*s, {from_hex("ffc00000"), int32_type->decompose(i)}));
+            }
+            tables.emplace_back(std::move(s), std::move(cks));
+        }
+
+        for (const bool correct : {false, true}) {
+            env.manager().set_correct_nan_and_varint_index_keys(correct);
+            for (const auto version : {sstable_version_types::ms, sstable_version_types::mt}) {
+                for (auto& [s, cks] : tables) {
+                    std::ranges::sort(cks, clustering_key::less_compare(*s));
+                    const auto dk = dht::decorate_key(*s, partition_key::from_single_value(*s, int32_type->decompose(0)));
+                    mutation m(s, dk);
+                    for (const auto& ck : cks) {
+                        m.set_clustered_cell(ck, "v", data_value(0), api::new_timestamp());
+                    }
+                    utils::chunked_vector<mutation> muts;
+                    muts.push_back(std::move(m));
+                    auto sst = make_sstable_containing(env.make_sstable(s, version), std::move(muts)).get();
+                    // Open it like a node which didn't write it does: the feature comes from the Scylla component.
+                    sst = env.reusable_sst(sst).get();
+                    BOOST_REQUIRE_EQUAL(sst->has_feature(sstable_feature::CorrectNaNAndVarintIndexKeys), correct);
+
+                    const auto pr = dht::partition_range::make_singular(dk);
+                    // Each row, by its key.
+                    for (const auto& ck : cks) {
+                        const auto slice = partition_slice_builder(*s)
+                            .with_range(query::clustering_range::make_singular(ck))
+                            .build();
+                        assert_that(sst->make_reader(s, env.make_reader_permit(), pr, slice))
+                            .produces_partition_start(dk)
+                            .produces_row_with_key(ck)
+                            .produces_partition_end()
+                            .produces_end_of_stream();
+                    }
+                    // A slice in the middle of the partition.
+                    const int first = 5, end = 14;
+                    const auto slice = partition_slice_builder(*s)
+                        .with_range(query::clustering_range::make({cks[first], true}, {cks[end], false}))
+                        .build();
+                    auto reader = assert_that(sst->make_reader(s, env.make_reader_permit(), pr, slice));
+                    reader.produces_partition_start(dk);
+                    for (int i = first; i < end; ++i) {
+                        reader.produces_row_with_key(cks[i]);
+                    }
+                    reader.produces_partition_end().produces_end_of_stream();
+                    // The same slice, read in reverse.
+                    const auto reversed_s = s->make_reversed();
+                    const auto reversed_slice = partition_slice_builder(*reversed_s)
+                        .with_range(query::clustering_range::make({cks[end], false}, {cks[first], true}))
+                        .with_option<query::partition_slice::option::reversed>()
+                        .build();
+                    auto reversed_reader = assert_that(sst->make_reader(reversed_s, env.make_reader_permit(), pr, reversed_slice));
+                    reversed_reader.produces_partition_start(dk);
+                    for (int i = end - 1; i >= first; --i) {
+                        reversed_reader.produces_row_with_key(cks[i]);
+                    }
+                    reversed_reader.produces_partition_end().produces_end_of_stream();
+
+                    // The two kinds of indexes really have different keys: searched like an index of
+                    // the other kind, this one doesn't lead to a row in the middle of the partition.
+                    // A key in the other encoding is ordered before all the keys of the index, or after
+                    // all of them. So the read ends after the first block, as the reader takes its end
+                    // from the index too, or it starts at the end of the partition.
+                    auto features = sst->features();
+                    features.enabled_features ^= uint64_t(1) << sstable_feature::CorrectNaNAndVarintIndexKeys;
+                    sst->set_features(features);
+                    const auto middle = partition_slice_builder(*s)
+                        .with_range(query::clustering_range::make_singular(cks[n_rows / 2]))
+                        .build();
+                    assert_that(sst->make_reader(s, env.make_reader_permit(), pr, middle))
+                        .produces_partition_start(dk)
+                        .produces_partition_end()
+                        .produces_end_of_stream();
+                }
+            }
+        }
+    });
+}

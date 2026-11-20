@@ -19,7 +19,7 @@ namespace sstables::trie {
 
 class row_index_writer_impl {
 public:
-    row_index_writer_impl(bti_node_sink&);
+    row_index_writer_impl(canonical_nans_and_varints, bti_node_sink&);
     ~row_index_writer_impl();
     row_index_writer_impl(row_index_writer_impl&&) = delete;
 private:
@@ -46,6 +46,8 @@ public:
 
 private:
     trie_writer<bti_node_sink> _wr;
+    // The encoding of the keys in the index.
+    canonical_nans_and_varints _canonical;
     size_t _added_blocks = 0;
     // Storage for _last_key, _last_separator and _tmp_key.
     // 
@@ -70,8 +72,9 @@ private:
     std::remove_reference_t<decltype(_keys[0])>* _tmp_key = &_keys[2];
 };
 
-row_index_writer_impl::row_index_writer_impl(bti_node_sink& out)
+row_index_writer_impl::row_index_writer_impl(canonical_nans_and_varints canonical, bti_node_sink& out)
     : _wr(out)
+    , _canonical(canonical)
 {}
 row_index_writer_impl::~row_index_writer_impl() {
 }
@@ -150,8 +153,8 @@ void row_index_writer_impl::add(
         offset_from_partition_start,
         range_tombstone_before_first_ck
     );
-    auto first_ck = lazy_comparable_bytes_from_clustering_position(s, first_ck_info);
-    _tmp_key->emplace(s, std::move(last_ck_info));
+    auto first_ck = lazy_comparable_bytes_from_clustering_position(s, first_ck_info, _canonical);
+    _tmp_key->emplace(s, std::move(last_ck_info), _canonical);
 
     auto payload = make_payload(offset_from_partition_start, range_tombstone_before_first_ck);
 
@@ -352,9 +355,9 @@ struct bti_row_index_writer::impl
     : bti_node_sink
     , row_index_writer_impl
 {
-    impl(sstables::file_writer& fw)
+    impl(canonical_nans_and_varints canonical, sstables::file_writer& fw)
         : bti_node_sink(fw, BTI_PAGE_SIZE)
-        , row_index_writer_impl(static_cast<bti_node_sink&>(*this))
+        , row_index_writer_impl(canonical, static_cast<bti_node_sink&>(*this))
     {}
     impl(impl&&) = delete;
 };
@@ -363,8 +366,8 @@ bti_row_index_writer::bti_row_index_writer() noexcept = default;
 
 bti_row_index_writer::~bti_row_index_writer() noexcept = default;
 
-bti_row_index_writer::bti_row_index_writer(sstables::file_writer& fw)
-    : _impl(std::make_unique<impl>(fw))
+bti_row_index_writer::bti_row_index_writer(canonical_nans_and_varints canonical, sstables::file_writer& fw)
+    : _impl(std::make_unique<impl>(canonical, fw))
 {}
 bti_row_index_writer::bti_row_index_writer(bti_row_index_writer&&) noexcept = default;
 bti_row_index_writer& bti_row_index_writer::operator=(bti_row_index_writer&&) noexcept = default;

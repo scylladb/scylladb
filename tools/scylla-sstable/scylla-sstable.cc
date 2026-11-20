@@ -1742,14 +1742,15 @@ public:
                 {sstables::sstable_feature::CorrectEmptyCounters, "CorrectEmptyCounters"},
                 {sstables::sstable_feature::CorrectUDTsInCollections, "CorrectUDTsInCollections"},
                 {sstables::sstable_feature::CorrectLastPiBlockWidth, "CorrectLastPiBlockWidth"},
+                {sstables::sstable_feature::CorrectNaNAndVarintIndexKeys, "CorrectNaNAndVarintIndexKeys"},
         };
         _writer.StartObject();
         _writer.Key("mask");
         _writer.Uint64(val.enabled_features);
         _writer.Key("features");
         _writer.StartArray();
-        for (const auto& [mask, name] : all_features) {
-            if (mask & val.enabled_features) {
+        for (const auto& [feature, name] : all_features) {
+            if (val.is_enabled(feature)) {
                 _writer.String(name);
             }
         }
@@ -3603,6 +3604,7 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
 
         feature_service.ms_sstable.enable();
         feature_service.mt_sstable.enable();
+        feature_service.canonical_nans_and_varints_in_sstable_index_keys.enable();
         sstables::sstables_manager sst_man(
             "scylla_sstable",
             large_data_handler,

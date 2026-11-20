@@ -109,9 +109,9 @@ BOOST_AUTO_TEST_CASE(test_lazy_comparable_bytes_from_ring_position_preserves_ord
         std::unique_ptr<encoding> prev;
         for (const auto& rpv : generate_rpvs(*s, sst_ver)) {
             if (!prev) {
-                prev = std::make_unique<encoding>(sst_ver, *s, rpv);
+                prev = std::make_unique<encoding>(sst_ver, *s, rpv, canonical_nans_and_varints::yes);
             } else {
-                auto curr = std::make_unique<encoding>(sst_ver, *s, rpv);
+                auto curr = std::make_unique<encoding>(sst_ver, *s, rpv, canonical_nans_and_varints::yes);
                 auto prev_bytes = linearize(prev->begin());
                 auto curr_bytes = linearize(curr->begin());
                 testlog.debug("prev_bytes={}, curr_bytes={}", fmt_hex(prev_bytes), fmt_hex(curr_bytes));
@@ -120,8 +120,9 @@ BOOST_AUTO_TEST_CASE(test_lazy_comparable_bytes_from_ring_position_preserves_ord
             }
         }
         auto prev_bytes = linearize(prev->begin());
-        SCYLLA_ASSERT(prev_bytes <= linearize(encoding(sst_ver, *s, dht::ring_position_view(dht::maximum_token(), nullptr, -1)).begin()));
-        SCYLLA_ASSERT(prev_bytes <= linearize(encoding(sst_ver, *s, dht::ring_position_view::max()).begin()));
+        SCYLLA_ASSERT(prev_bytes <= linearize(
+                encoding(sst_ver, *s, dht::ring_position_view(dht::maximum_token(), nullptr, -1), canonical_nans_and_varints::yes).begin()));
+        SCYLLA_ASSERT(prev_bytes <= linearize(encoding(sst_ver, *s, dht::ring_position_view::max(), canonical_nans_and_varints::yes).begin()));
     }
 }
 
@@ -151,13 +152,13 @@ BOOST_AUTO_TEST_CASE(test_lazy_comparable_bytes_from_ring_position_trim) {
     for (auto sst_ver : {sstables::sstable_version_types::ms, sstables::sstable_version_types::mt}) {
         testlog.info("checking sstable_version={}", sst_ver);
         const auto dk = dht::decorated_key(dht::token::from_int64(42), pk);
-        const auto encoded = linearize(encoding(sst_ver, *s, dk).begin());
+        const auto encoded = linearize(encoding(sst_ver, *s, dk, canonical_nans_and_varints::yes).begin());
 
         constexpr auto modification_byte = std::byte('z');
         for (size_t view_position = 0; view_position <= encoded.size(); ++view_position)
         for (size_t trim_position = 0; trim_position <= view_position; ++trim_position)
         for (size_t modification_position = 0; modification_position <= trim_position; ++modification_position) {
-            auto enc = encoding(sst_ver, *s, dk);
+            auto enc = encoding(sst_ver, *s, dk, canonical_nans_and_varints::yes);
             {
                 size_t n_seen = 0;
                 auto it = enc.begin();
@@ -294,7 +295,7 @@ BOOST_AUTO_TEST_CASE(test_lazy_comparable_bytes_from_ring_position_fixed_cases_m
         }};
         for (const auto& sub : subs) {
             auto rpv = dht::ring_position_view(tok, sub.pk_ptr, sub.weight);
-            encoding enc(sst_ver, *s, rpv);
+            encoding enc(sst_ver, *s, rpv, canonical_nans_and_varints::yes);
             auto got_hex = fmt::format("{}", fmt_hex(linearize(enc.begin())));
             BOOST_REQUIRE_MESSAGE(got_hex == sub.expected,
                 fmt::format("case '{}' position_kind={}: expected={} got={}",
@@ -415,7 +416,7 @@ BOOST_AUTO_TEST_CASE(test_lazy_comparable_bytes_from_ring_position_fixed_cases_m
         }};
         for (const auto& sub : subs) {
             auto rpv = dht::ring_position_view(tok, sub.pk_ptr, sub.weight);
-            encoding enc(sst_ver, *s, rpv);
+            encoding enc(sst_ver, *s, rpv, canonical_nans_and_varints::yes);
             auto got_hex = fmt::format("{}", fmt_hex(linearize(enc.begin())));
             BOOST_REQUIRE_MESSAGE(got_hex == sub.expected,
                 fmt::format("case '{}' position_kind={}: expected={} got={}",
@@ -466,9 +467,9 @@ BOOST_AUTO_TEST_CASE(test_lazy_comparable_bytes_from_clustering_position_preserv
     std::unique_ptr<encoding> prev;
     for (const auto& pipv : generate_pipvs(*s)) {
         if (!prev) {
-            prev = std::make_unique<encoding>(*s, pipv);
+            prev = std::make_unique<encoding>(*s, pipv, canonical_nans_and_varints::yes);
         } else {
-            auto curr = std::make_unique<encoding>(*s, pipv);
+            auto curr = std::make_unique<encoding>(*s, pipv, canonical_nans_and_varints::yes);
             auto prev_bytes = linearize(prev->begin());
             auto curr_bytes = linearize(curr->begin());
             testlog.debug("prev_bytes={}, curr_bytes={}", fmt_hex(prev_bytes), fmt_hex(curr_bytes));
@@ -495,13 +496,13 @@ BOOST_AUTO_TEST_CASE(test_lazy_comparable_bytes_from_clustering_position_trim) {
     });
     using encoding = sstables::trie::lazy_comparable_bytes_from_clustering_position;
     const auto pipv = position_in_partition_view(ck, bound_weight(0));
-    const auto encoded = linearize(encoding(*s, pipv).begin());
+    const auto encoded = linearize(encoding(*s, pipv, canonical_nans_and_varints::yes).begin());
 
     constexpr auto modification_byte = std::byte('z');
     for (size_t view_position = 0; view_position <= encoded.size(); ++view_position)
     for (size_t trim_position = 0; trim_position <= view_position; ++trim_position)
     for (size_t modification_position = 0; modification_position <= trim_position; ++modification_position) {
-        auto enc = encoding(*s, pipv);
+        auto enc = encoding(*s, pipv, canonical_nans_and_varints::yes);
         {
             size_t n_seen = 0;
             auto it = enc.begin();
@@ -616,13 +617,66 @@ BOOST_AUTO_TEST_CASE(test_lcb_mismatch) {
 }
 
 
+// The parameter canonical_nans_and_varints selects the encoding of the NaNs, and of the
+// varints with redundant sign bytes, in the translated keys. With `no`, they have to be
+// encoded like the keys of the indexes which were written before the canonical encoding
+// of these values existed.
+BOOST_AUTO_TEST_CASE(test_key_translation_with_old_encoding_of_nans_and_varints) {
+    const auto old = canonical_nans_and_varints::no;
+    const auto canonical = canonical_nans_and_varints::yes;
+    // 1 in 8 bytes, and a NaN with its sign bit set.
+    const auto varint = from_hex("0000000000000001");
+    const auto nan = from_hex("ffc00000");
+    auto to_hex = [] (comparable_bytes_iterator auto&& it) {
+        return fmt::format("{}", fmt_hex(linearize(it)));
+    };
+
+    {
+        auto s = schema_builder(1, "ks", "t")
+            .with_column("pk", long_type, column_kind::partition_key)
+            .with_column("ck1", varint_type, column_kind::clustering_key)
+            .with_column("ck2", reversed(float_type), column_kind::clustering_key)
+            .build();
+        const auto ck = clustering_key_prefix::from_exploded(*s, {varint, nan});
+        const auto pipv = position_in_partition_view(ck, bound_weight(0));
+        using encoding = sstables::trie::lazy_comparable_bytes_from_clustering_position;
+        // Each component follows the separator 0x40, and the bits of the reversed one are flipped.
+        BOOST_REQUIRE_EQUAL(to_hex(encoding(*s, pipv, old).begin()), "40ff000000000000000140ffc0000038");
+        BOOST_REQUIRE_EQUAL(to_hex(encoding(*s, pipv, canonical).begin()), "408140003fffff38");
+    }
+
+    {
+        auto s = schema_builder(1, "ks", "t")
+            .with_column("pk", varint_type, column_kind::partition_key)
+            .build();
+        const auto pk = partition_key::from_exploded(*s, {varint});
+        const auto rpv = dht::ring_position_view(dht::token::from_int64(0), &pk, 0);
+        using encoding = sstables::trie::lazy_comparable_bytes_from_ring_position;
+        // What follows the 9 bytes of the token.
+        auto encoded_key = [&] (sstables::sstable_version_types sst_ver, canonical_nans_and_varints canonical) {
+            return to_hex(encoding(sst_ver, *s, rpv, canonical).begin()).substr(18);
+        };
+        // Only ms encodes the columns of the partition key.
+        BOOST_REQUIRE_EQUAL(encoded_key(sstables::sstable_version_types::ms, old), "40ff000000000000000138");
+        BOOST_REQUIRE_EQUAL(encoded_key(sstables::sstable_version_types::ms, canonical), "408138");
+        BOOST_REQUIRE_EQUAL(encoded_key(sstables::sstable_version_types::mt, old), encoded_key(sstables::sstable_version_types::mt, canonical));
+        // The index writer translates a decorated key, and the index reader a ring position.
+        const auto dk = dht::decorated_key(dht::token::from_int64(0), pk);
+        auto encoded_decorated_key = [&] (canonical_nans_and_varints canonical) {
+            return to_hex(encoding(sstables::sstable_version_types::ms, *s, dk, canonical).begin()).substr(18);
+        };
+        BOOST_REQUIRE_EQUAL(encoded_decorated_key(old), "40ff000000000000000138");
+        BOOST_REQUIRE_EQUAL(encoded_decorated_key(canonical), "408138");
+    }
+}
+
 // Cross-check of the clustering position encoding against Cassandra.
 //
 // The samples were generated by a tool added to a Cassandra codebase, which drives
 // Cassandra's own test data generators and encodes the resulting clustering positions
 // with Cassandra's ClusteringComparator::asByteComparable.
 //
-// They are Cassandra's output verbatim, except for the samples covering the two places
+// They are Cassandra's output verbatim, except for the samples covering two of the places
 // where we deliberately deviate from Cassandra, whose expected encoding was corrected
 // by hand:
 // * an "empty" value nested inside a multi-component type, which Cassandra encodes
@@ -630,6 +684,10 @@ BOOST_AUTO_TEST_CASE(test_lcb_mismatch) {
 // * a zero-sized value of a tuple (or UDT) type, which Cassandra encodes as an "empty"
 //   value rather than as the all-null tuple it is (see
 //   has_encoding_for_zero_sized_value_visitor).
+//
+// A third such place needed no correction, because the samples have no NaN: we encode
+// every NaN of a float or a double in the same way, while Cassandra encodes the bits of
+// each one (see convert_fixed_length_float()).
 //
 // Two things aren't covered at all, because Cassandra has no valid encoding of them to
 // compare against: a null *component* of the clustering key itself (a Cassandra-only
@@ -680,7 +738,7 @@ static size_t check_cassandra_samples(const char* path) {
         std::string got;
         try {
             got = fmt::format("{}", fmt_hex(linearize(
-                sstables::trie::lazy_comparable_bytes_from_clustering_position(*s, pipv).begin())));
+                sstables::trie::lazy_comparable_bytes_from_clustering_position(*s, pipv, canonical_nans_and_varints::yes).begin())));
         } catch (const std::exception& e) {
             got = fmt::format("<{}>", e.what());
         }
@@ -892,7 +950,7 @@ BOOST_AUTO_TEST_CASE(test_comparable_bytes_from_compound_random_valid_data) {
             testlog.debug("key={}", ckp);
             for (int weight = -1; weight <= 1; ++weight) {
                 auto e = entry{ckp, bound_weight(weight), {}};
-                e.encoded = linearize(encoding(*s, e.pos()).begin());
+                e.encoded = linearize(encoding(*s, e.pos(), canonical_nans_and_varints::yes).begin());
                 entries.push_back(std::move(e));
             }
         }
@@ -933,7 +991,7 @@ static void check_encoding_is_well_behaved(const schema& s, const clustering_key
     for (int weight = -1; weight <= 1; ++weight) {
         auto pipv = position_in_partition_view(ckp, bound_weight(weight));
         try {
-            auto encoded = linearize(encoding(s, pipv).begin());
+            auto encoded = linearize(encoding(s, pipv, canonical_nans_and_varints::yes).begin());
             // The encoding always ends with the terminator byte, so it's never empty.
             BOOST_REQUIRE(!encoded.empty());
         } catch (const marshal_exception&) {

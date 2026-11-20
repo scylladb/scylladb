@@ -259,6 +259,7 @@ void test_index_files(
         footer.trie_root_position,
         data_db_size,
         bti_ver,
+        canonical_nans_and_varints::yes,
         s,
         env.make_reader_permit(),
         trace_state
@@ -503,8 +504,8 @@ void do_test(const test_config& cfg) {
             auto close_rows_db = defer([&] () noexcept { rows_db_writer.close(); });
 
             // Construct BTI index writers on top of the `file_writer`s.
-            auto bti_partition_index_writer = sstables::trie::bti_partition_index_writer(bti_version, partitions_db_writer);
-            auto bti_row_index_writer = sstables::trie::bti_row_index_writer(rows_db_writer);
+            auto bti_partition_index_writer = sstables::trie::bti_partition_index_writer(bti_version, canonical_nans_and_varints::yes, partitions_db_writer);
+            auto bti_row_index_writer = sstables::trie::bti_row_index_writer(canonical_nans_and_varints::yes, rows_db_writer);
 
             struct current_partition_data {
                 uint64_t data_file_offset;

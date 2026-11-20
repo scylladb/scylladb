@@ -384,6 +384,8 @@ class bti_index_reader : public sstables::abstract_index_reader {
 
     bti_node_reader _in_row;
     sstable_version_types _sst_ver;
+    // The encoding of the keys in the index.
+    canonical_nans_and_varints _canonical;
     // We need the schema solely to parse the partition keys serialized in row index headers.
     schema_ptr _s;
     reader_permit _permit;
@@ -427,6 +429,7 @@ public:
         uint64_t root_pos,
         uint64_t total_file_size,
         sstable_version_types sst_ver,
+        canonical_nans_and_varints,
         schema_ptr,
         reader_permit,
         tracing::trace_state_ptr);
@@ -773,6 +776,7 @@ bti_index_reader::bti_index_reader(
     uint64_t root_offset,
     uint64_t total_file_size,
     sstable_version_types sst_ver,
+    canonical_nans_and_varints canonical,
     schema_ptr s,
     reader_permit rp,
     tracing::trace_state_ptr trace_state
@@ -781,6 +785,7 @@ bti_index_reader::bti_index_reader(
     , _local_rows_db(std::move(rows_db_file))
     , _in_row(rows_db)
     , _sst_ver(sst_ver)
+    , _canonical(canonical)
     , _s(std::move(s))
     , _permit(std::move(rp))
     , _trace_state(std::move(trace_state))
@@ -811,14 +816,14 @@ future<bool> bti_index_reader::advance_lower_and_check_if_present(dht::ring_posi
 future<bool> bti_index_reader::advance_lower_and_check_if_present(dht::ring_position_view key, const utils::hashed_key& hash) {
     trie_logger.debug("bti_index_reader::advance_lower_and_check_if_present: this={} key={}", fmt::ptr(this), key);
     utils::get_local_injector().inject("advance_lower_and_check_if_present", [] { throw std::runtime_error("advance_lower_and_check_if_present"); });
-    auto k = lazy_comparable_bytes_from_ring_position(_sst_ver, *_s, key);
+    auto k = lazy_comparable_bytes_from_ring_position(_sst_ver, *_s, key, _canonical);
     std::byte expected_hash = std::byte(hash.hash()[1]);
     auto res = co_await _lower.set_to_partition(k, expected_hash);
     co_return res == set_result::possible_match;
     co_return true;
 }
 future<> bti_index_reader::init_lower_bound() {
-    auto k = lazy_comparable_bytes_from_ring_position(_sst_ver, *_s, dht::ring_position_view::min());
+    auto k = lazy_comparable_bytes_from_ring_position(_sst_ver, *_s, dht::ring_position_view::min(), _canonical);
     if (_lower.partition_cursor_set()) {
         on_internal_error(trie_logger, "bti_index_reader::init_lower_bound: partition cursor already set");
     }
@@ -841,18 +846,18 @@ sstables::indexable_element bti_index_reader::element_kind() const {
 }
 future<> bti_index_reader::advance_to_definitely_present_partition(const dht::decorated_key& dk) {
     trie_logger.debug("bti_index_reader::advance_after_existing(partition) this={} pos={}", fmt::ptr(this), dk);
-    auto k = lazy_comparable_bytes_from_ring_position(_sst_ver, *_s, dht::ring_position_view(dk.token(), &dk.key(), 0));
+    auto k = lazy_comparable_bytes_from_ring_position(_sst_ver, *_s, dht::ring_position_view(dk.token(), &dk.key(), 0), _canonical);
     co_await _lower.set_before_partition(k);
 }
 future<> bti_index_reader::advance_past_definitely_present_partition(const dht::decorated_key& dk) {
     trie_logger.debug("bti_index_reader::advance_after_existing(partition) this={} pos={}", fmt::ptr(this), dk);
-    auto k = lazy_comparable_bytes_from_ring_position(_sst_ver, *_s, dht::ring_position_view(dk.token(), &dk.key(), 0));
+    auto k = lazy_comparable_bytes_from_ring_position(_sst_ver, *_s, dht::ring_position_view(dk.token(), &dk.key(), 0), _canonical);
     co_await _lower.set_after_partition(k);
 }
 future<> bti_index_reader::advance_to(position_in_partition_view pos) {
     trie_logger.debug("bti_index_reader::advance_to(row) this={} pos={}", fmt::ptr(this), pos);
     co_await maybe_init_lower_bound();
-    auto k = lazy_comparable_bytes_from_clustering_position(*_s, pos);
+    auto k = lazy_comparable_bytes_from_clustering_position(*_s, pos, _canonical);
     co_await _lower.set_before_row(k);
 }
 std::optional<sstables::deletion_time> bti_index_reader::partition_tombstone() {
@@ -881,7 +886,7 @@ future<> bti_index_reader::advance_reverse(position_in_partition_view pos) {
     trie_logger.debug("bti_index_reader::advance_reverse this={} pos={}", fmt::ptr(this), pos);
     co_await maybe_init_lower_bound();
     _upper = _lower;
-    auto k = lazy_comparable_bytes_from_clustering_position(*_s, pos);
+    auto k = lazy_comparable_bytes_from_clustering_position(*_s, pos, _canonical);
     co_await _upper.set_after_row(k);
 }
 future<> bti_index_reader::read_partition_data() {
@@ -891,11 +896,11 @@ future<> bti_index_reader::read_partition_data() {
 future<> bti_index_reader::advance_to(const dht::partition_range& range) {
     trie_logger.debug("bti_index_reader::advance_to(range) this={} range={}", fmt::ptr(this), range);
     {
-        auto k = lazy_comparable_bytes_from_ring_position(_sst_ver, *_s, dht::ring_position_view::for_range_start(range));
+        auto k = lazy_comparable_bytes_from_ring_position(_sst_ver, *_s, dht::ring_position_view::for_range_start(range), _canonical);
         co_await _lower.set_before_partition(k);
     }
     {
-        auto k = lazy_comparable_bytes_from_ring_position(_sst_ver, *_s, dht::ring_position_view::for_range_end(range));
+        auto k = lazy_comparable_bytes_from_ring_position(_sst_ver, *_s, dht::ring_position_view::for_range_end(range), _canonical);
         co_await _upper.set_after_partition(k);
     }
 }
@@ -915,7 +920,7 @@ future<> bti_index_reader::advance_upper_past(position_in_partition_view pos) {
         co_await _upper.next_partition();
         co_return;
     }
-    auto k = lazy_comparable_bytes_from_clustering_position(*_s, pos);
+    auto k = lazy_comparable_bytes_from_clustering_position(*_s, pos, _canonical);
     co_await _upper.set_after_row(k);
 }
 std::optional<sstables::open_rt_marker> bti_index_reader::end_open_marker() const {
@@ -992,6 +997,7 @@ std::unique_ptr<sstables::abstract_index_reader> make_bti_index_reader(
     uint64_t partitions_db_root_pos,
     uint64_t total_data_db_file_size,
     sstable_version_types sst_ver,
+    canonical_nans_and_varints canonical,
     schema_ptr s,
     reader_permit permit,
     tracing::trace_state_ptr trace_state
@@ -1007,6 +1013,7 @@ std::unique_ptr<sstables::abstract_index_reader> make_bti_index_reader(
         partitions_db_root_pos,
         total_data_db_file_size,
         sst_ver,
+        canonical,
         std::move(s),
         std::move(permit),
         std::move(trace_state)
