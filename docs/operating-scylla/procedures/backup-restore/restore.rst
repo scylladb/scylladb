@@ -17,7 +17,7 @@ Choosing a restore method
 
 ScyllaDB supports several restore methods. Choose the one that matches where your backup files are and whether the cluster topology changed since the backup was taken:
 
-* :ref:`Restore a cluster backup <restore-cluster-backup>` - restore a backup made with :doc:`nodetool cluster backup </operating-scylla/nodetool-commands/backup>` into a tablet-based table. Each replica downloads the SSTables of its own tablets straight from object storage, with no streaming between nodes. Runs on a running cluster.
+* :ref:`Restore a cluster backup <restore-cluster-backup>` - restore a backup made with :doc:`nodetool cluster backup </operating-scylla/nodetool-commands/cluster/backup>` into a tablet-based table. Each replica downloads the SSTables of its own tablets straight from object storage, with no streaming between nodes. Runs on a running cluster.
 
 * :ref:`Restore from object storage <restore-object-storage>` - restore SSTables backed up to S3-compatible object storage with :doc:`nodetool backup </operating-scylla/nodetool-commands/backup>`. Runs on a running cluster and works regardless of cluster topology changes since the backup.
 

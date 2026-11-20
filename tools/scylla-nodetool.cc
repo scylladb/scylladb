@@ -4241,7 +4241,7 @@ For more information, see: {}
                         "Take a cluster-wide snapshot of specified keyspaces or a snapshot of the specified table(s)",
 fmt::format(R"(
 For more information, see: {}
-)", doc_link("operating-scylla/nodetool-commands/snapshot.html")),
+)", doc_link("operating-scylla/nodetool-commands/cluster/snapshot.html")),
                         {
                             typed_option<sstring>("table", "The table(s) to snapshot, multiple ones can be joined with ','"),
                             typed_option<sstring>("tag,t", "The name of the snapshot"),
@@ -4255,7 +4255,7 @@ For more information, see: {}
                         "Backup a cluster-wide snapshot of specified keyspaces or specified table(s) to remote location",
 fmt::format(R"(
 For more information, see: {}
-)", doc_link("operating-scylla/nodetool-commands/backup.html")),
+)", doc_link("operating-scylla/nodetool-commands/cluster/backup.html")),
                         {
                             typed_option<sstring>("table", "The table(s) to backup, multiple ones can be joined with ','"),
                             typed_option<sstring>("snapshot,s", "The name of the snapshot to backup. It will be created if it does not exist"),
