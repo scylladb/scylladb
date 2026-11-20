@@ -21,6 +21,7 @@ from test.cluster.util import FeatureConfig
 from test.pylib.async_cql import run_async
 from test.pylib.connect_options import add_cql_connection_options, add_s3_options
 from test.pylib.encryption_provider import KeyProvider, make_key_provider_factory
+from test.pylib.network_proxy import NetworkProxy
 from test.pylib.object_storage import Storage, StorageFactory, StorageKind, create_gs_server, create_s3_server, format_tuples
 from test.pylib.random_tables import RandomTables
 from test.pylib.runner import PHASE_REPORT_KEY, SEASTAR_IO_KEY
@@ -311,6 +312,19 @@ async def key_provider(request, tmpdir, suite_log_dir, scylla_binary):
 @pytest.fixture(scope="function")
 def failure_detector_timeout(build_mode):
     return 5000 * MODES_TIMEOUT_FACTOR[build_mode]
+
+
+@pytest.fixture
+async def network_proxy(manager: ScyllaClusterManager) -> AsyncGenerator[NetworkProxy]:
+    """Puts every server the test adds behind a TCP proxy on its internode and CQL ports, and acts on it.
+
+    Cuts and degradations are removed on teardown; the proxies go away with the cluster.
+    """
+    proxy = NetworkProxy(await manager.network_proxy_enable())
+    try:
+        yield proxy
+    finally:
+        await proxy.heal()
 
 
 @pytest.fixture(params=[None, "s3", "gs"], ids=["local", "s3", "gs"])
