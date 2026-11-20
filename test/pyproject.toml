@@ -17,7 +17,13 @@ name = "scylla-test"
 version = "0.1.0"
 requires-python = ">=3.14"
 dependencies = [
+<<<<<<< HEAD
     "scylla-driver==3.29.7",
+||||||| parent of bba9aa0ba4 (test: update scylla-driver to 3.29.13)
+    "scylla-driver==3.29.12",
+=======
+    "scylla-driver==3.29.13",
+>>>>>>> bba9aa0ba4 (test: update scylla-driver to 3.29.13)
     "treelib==1.8.0",
     "allure-pytest==2.16.0",
     "pytest==8.4.2",
