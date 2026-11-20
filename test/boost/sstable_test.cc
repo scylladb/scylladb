@@ -815,6 +815,213 @@ SEASTAR_TEST_CASE(test_skipping_in_compressed_stream) {
     });
 }
 
+// Whole chunks buffered by one underlying read come out as one buffer, staying
+// correct across skips into such a buffer and across chunk corruption.
+SEASTAR_TEST_CASE(test_compressed_stream_coalesces_chunks) {
+    return seastar::async([] {
+        tests::reader_concurrency_semaphore_wrapper semaphore;
+
+        tmpdir tmp;
+        auto file_path = (tmp.path() / "test").string();
+        file f = open_file_dma(file_path, open_flags::create | open_flags::wo).get();
+
+        constexpr size_t chunk_len = 4 * 1024;
+        constexpr size_t nchunks = 300;
+        file_input_stream_options opts;
+        opts.buffer_size = 128 * 1024;
+        opts.read_ahead = 4;
+
+        compression_parameters cp({
+            { compression_parameters::SSTABLE_COMPRESSION, "LZ4Compressor" },
+            { compression_parameters::CHUNK_LENGTH_KB, std::to_string(chunk_len / 1024) },
+        });
+
+        sstables::compression c;
+        auto os = make_file_output_stream(f, file_output_stream_options()).get();
+        auto out = make_compressed_file_m_format_output_stream(std::move(os), &c, cp, make_lz4_sstable_compressor_for_tests());
+
+        // Mildly compressible so many chunks fit in one 128 KB read.
+        bytes data(bytes::initialized_later(), nchunks * chunk_len);
+        for (size_t i = 0; i < data.size(); ++i) {
+            data[i] = static_cast<bytes::value_type>((i * 7919 / 3) & 0x3f);
+        }
+        out.write(reinterpret_cast<const char*>(data.data()), data.size()).get();
+        out.close().get();
+        c.update(seastar::file_size(file_path).get());
+
+        auto make_is = [&] {
+            f = open_file_dma(file_path, open_flags::ro).get();
+            auto stream_creator = [f](uint64_t pos, uint64_t len, file_input_stream_options options)->future<input_stream<char>> {
+                co_return input_stream<char>(make_file_data_source(std::move(f), pos, len, std::move(options)));
+            };
+            return make_compressed_file_m_format_input_stream(stream_creator, &c, 0, data.size(), opts, semaphore.make_permit(), std::nullopt);
+        };
+
+        // Reads to EOF, checking that no buffer exceeds the coalescing cap.
+        auto drain = [&] (input_stream<char>& in) {
+            bytes result;
+            while (true) {
+                auto b = in.read().get();
+                if (b.empty()) {
+                    break;
+                }
+                BOOST_REQUIRE_LE(b.size(), std::max(sstables::max_coalesced_output_size, chunk_len));
+                result.append(reinterpret_cast<const bytes::value_type*>(b.get()), b.size());
+            }
+            return result;
+        };
+
+        {
+            auto in = make_is();
+            auto got = drain(in);
+            BOOST_REQUIRE(got == data);
+            in.close().get();
+        }
+
+        for (size_t skip : {size_t(1), chunk_len - 1, chunk_len, 3 * chunk_len + 100, opts.buffer_size + 5, data.size() - 1}) {
+            auto in = make_is();
+            in.skip(skip).get();
+            auto got = drain(in);
+            BOOST_REQUIRE(bytes_view(got) == bytes_view(data).substr(skip));
+            in.close().get();
+        }
+
+        {
+            // Skip after a partial read trims the block already buffered.
+            auto in = make_is();
+            auto head = in.read_exactly(chunk_len + 10).get();
+            BOOST_REQUIRE(bytes_view(reinterpret_cast<const bytes::value_type*>(head.get()), head.size()) == bytes_view(data).substr(0, chunk_len + 10));
+            in.skip(5 * chunk_len).get();
+            auto got = drain(in);
+            BOOST_REQUIRE(bytes_view(got) == bytes_view(data).substr(6 * chunk_len + 10));
+            in.close().get();
+        }
+
+        {
+            // Corrupt a byte inside chunk 5; reading must still fail.
+            auto chunk_start = c.offsets.get_accessor().at(5);
+            f = open_file_dma(file_path, open_flags::rw).get();
+            auto wbuf = allocate_aligned_buffer<char>(f.disk_write_dma_alignment(), f.memory_dma_alignment());
+            auto aligned_pos = align_down<uint64_t>(chunk_start + 1, f.disk_write_dma_alignment());
+            f.dma_read(aligned_pos, wbuf.get(), f.disk_write_dma_alignment()).get();
+            wbuf.get()[chunk_start + 1 - aligned_pos] ^= 0x55;
+            f.dma_write(aligned_pos, wbuf.get(), f.disk_write_dma_alignment()).get();
+            f.close().get();
+            auto in = make_is();
+            // The good chunks before the corrupt one are still delivered.
+            auto good = in.read_exactly(5 * chunk_len).get();
+            BOOST_REQUIRE(bytes_view(reinterpret_cast<const bytes::value_type*>(good.get()), good.size()) == bytes_view(data).substr(0, 5 * chunk_len));
+            // The error must be chunk 5's own, at its offset, not a misaligned read further on.
+            BOOST_REQUIRE_EXCEPTION(drain(in), malformed_sstable_exception, [&] (const malformed_sstable_exception& e) {
+                const std::string_view msg = e.what();
+                return msg.contains("failed checksum") && msg.contains(fmt::format("at file offset {} ", chunk_start));
+            });
+            in.close().get();
+        }
+        {
+            // Skipping over the corrupt chunk after reading the good ones reads the rest intact.
+            auto in = make_is();
+            in.read_exactly(5 * chunk_len).get();
+            in.skip(chunk_len).get();
+            auto rest = drain(in);
+            BOOST_REQUIRE(bytes_view(rest) == bytes_view(data).substr(6 * chunk_len));
+            in.close().get();
+        }
+    });
+}
+
+// The number of chunks coalesced into one buffer is derived from the compressed
+// chunk boundaries, so chunks of very different compressed sizes must not confuse it.
+SEASTAR_TEST_CASE(test_compressed_stream_mixed_chunk_sizes) {
+    return seastar::async([] {
+        tests::reader_concurrency_semaphore_wrapper semaphore;
+
+        tmpdir tmp;
+        auto file_path = (tmp.path() / "test").string();
+        file f = open_file_dma(file_path, open_flags::create | open_flags::wo).get();
+
+        constexpr size_t chunk_len = 4 * 1024;
+        constexpr size_t nchunks = 64;
+        file_input_stream_options opts;
+        opts.buffer_size = 128 * 1024;
+
+        compression_parameters cp({
+            { compression_parameters::SSTABLE_COMPRESSION, "LZ4Compressor" },
+            { compression_parameters::CHUNK_LENGTH_KB, std::to_string(chunk_len / 1024) },
+        });
+
+        sstables::compression c;
+        auto os = make_file_output_stream(f, file_output_stream_options()).get();
+        auto out = make_compressed_file_m_format_output_stream(std::move(os), &c, cp, make_lz4_sstable_compressor_for_tests());
+
+        // Alternate incompressible and compressible chunks.
+        bytes data(bytes::initialized_later(), nchunks * chunk_len);
+        uint32_t x = 12345;
+        for (size_t i = 0; i < data.size(); i += chunk_len) {
+            if ((i / chunk_len) % 2 == 0) {
+                for (size_t j = 0; j < chunk_len; ++j) {
+                    x = x * 1103515245 + 12345;
+                    data[i + j] = static_cast<bytes::value_type>(x >> 16);
+                }
+            } else {
+                std::fill_n(data.begin() + i, chunk_len, 0);
+            }
+        }
+        out.write(reinterpret_cast<const char*>(data.data()), data.size()).get();
+        out.close().get();
+        c.update(seastar::file_size(file_path).get());
+
+        // The compressed chunks must really differ in size, or the test is vacuous.
+        const auto& offsets = c.offsets.get_accessor();
+        size_t min_chunk = c.compressed_file_length();
+        size_t max_chunk = 0;
+        for (size_t i = 0; i < c.offsets.size(); ++i) {
+            const size_t end = (i + 1 == c.offsets.size()) ? c.compressed_file_length() : offsets.at(i + 1);
+            const size_t len = end - offsets.at(i);
+            min_chunk = std::min(min_chunk, len);
+            max_chunk = std::max(max_chunk, len);
+        }
+        BOOST_REQUIRE_LT(min_chunk * 4, max_chunk);
+
+        auto make_is = [&] {
+            f = open_file_dma(file_path, open_flags::ro).get();
+            auto stream_creator = [f](uint64_t pos, uint64_t len, file_input_stream_options options)->future<input_stream<char>> {
+                co_return input_stream<char>(make_file_data_source(std::move(f), pos, len, std::move(options)));
+            };
+            return make_compressed_file_m_format_input_stream(stream_creator, &c, 0, data.size(), opts, semaphore.make_permit(), std::nullopt);
+        };
+
+        {
+            auto in = make_is();
+            bytes got;
+            while (true) {
+                auto b = in.read().get();
+                if (b.empty()) {
+                    break;
+                }
+                got.append(reinterpret_cast<const bytes::value_type*>(b.get()), b.size());
+            }
+            BOOST_REQUIRE(got == data);
+            in.close().get();
+        }
+
+        for (size_t skip : {size_t(1), chunk_len - 1, 3 * chunk_len + 100, data.size() - 1}) {
+            auto in = make_is();
+            in.skip(skip).get();
+            bytes got;
+            while (true) {
+                auto b = in.read().get();
+                if (b.empty()) {
+                    break;
+                }
+                got.append(reinterpret_cast<const bytes::value_type*>(b.get()), b.size());
+            }
+            BOOST_REQUIRE(bytes_view(got) == bytes_view(data).substr(skip));
+            in.close().get();
+        }
+    });
+}
+
 // Test that sstables::key_view::tri_compare(const schema& s, partition_key_view other)
 // should correctly compare empty keys. The fact we did this incorrectly was
 // noticed while fixing #9375, and a separate issue on it is #10178.
