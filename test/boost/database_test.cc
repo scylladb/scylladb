@@ -44,6 +44,7 @@
 #include "schema/schema_builder.hh"
 #include "service/migration_manager.hh"
 #include "sstables/sstables.hh"
+#include "sstables/consumer.hh"
 #include "sstables/generation_type.hh"
 #include "sstables/sstable_version.hh"
 #include "db/config.hh"
@@ -2939,6 +2940,149 @@ SEASTAR_TEST_CASE(test_lowering_dirty_memory_threshold_triggers_flush) {
         // The flush brings the dirty memory back under the soft limit, which relieves the pressure.
         BOOST_REQUIRE(eventually_true([&] { return !dmm.region_group().over_unspooled_soft_limit(); }));
         BOOST_REQUIRE_LT(dmm.unspooled_dirty_memory(), dirty);
+    });
+}
+
+struct data_file {
+    sstables::sstable_version_types version;
+    // The decompressed data component.
+    sstring data;
+};
+
+// Returns the data files of the sstables of the table.
+static std::vector<data_file> read_data_files(sharded<replica::database>& db, table_id id) {
+    return db.map_reduce0([id] (replica::database& db) -> future<std::vector<data_file>> {
+        auto& t = db.find_column_family(id);
+        std::vector<data_file> ret;
+        for (const auto& sst : co_await t.take_sstable_set_snapshot()) {
+            auto permit = co_await db.obtain_reader_permit(t, "test", db::no_timeout, {});
+            // A full scan: data_read() can't take a logical range of an sstable
+            // that uses physical positions.
+            auto stream = co_await sst->data_stream(sst->full_range(), std::move(permit), nullptr, nullptr);
+            sstring data;
+            co_await stream->consume(std::nullopt, [&] (temporary_buffer<char> buf) -> consumption_result<char> {
+                data.append(buf.get(), buf.size());
+                return seastar::continue_consuming{};
+            });
+            co_await stream->close();
+            BOOST_REQUIRE_EQUAL(data.size(), sst->data_size());
+            ret.push_back({sst->get_version(), std::move(data)});
+        }
+        co_return ret;
+    }, std::vector<data_file>(), [] (std::vector<data_file> a, std::vector<data_file> b) {
+        std::ranges::move(b, std::back_inserter(a));
+        return a;
+    }).get();
+}
+
+// Checks that every sample is a full chunk of some data component, so that
+// it contains no uninitialized bytes. Returns the versions of the sstables
+// that the samples come from.
+static std::set<sstables::sstable_version_types> check_samples(const utils::chunked_vector<temporary_buffer<char>>& samples,
+        const std::vector<data_file>& data_files, uint64_t chunk_size) {
+    std::set<sstables::sstable_version_types> versions;
+    for (const auto& sample : samples) {
+        BOOST_REQUIRE_EQUAL(sample.size(), chunk_size);
+        const std::string_view s(sample.get(), sample.size());
+        auto it = std::ranges::find_if(data_files, [&] (const data_file& f) {
+            return std::string_view(f.data).find(s) != std::string_view::npos;
+        });
+        BOOST_REQUIRE(it != data_files.end());
+        versions.insert(it->version);
+    }
+    return versions;
+}
+
+// Creates the table ks.`name` with chunks of 1 KiB. For each format in
+// `formats`, writes an sstable of about 4 MiB of data, in that format. Then a
+// `mu` sstable on each shard has dozens of sampled chunks.
+static table_id make_table_for_sampling(cql_test_env& e, std::string_view name, std::vector<std::string_view> formats) {
+    e.execute_cql(fmt::format("CREATE TABLE ks.{} (pk int, ck int, v text, PRIMARY KEY (pk, ck))"
+            " WITH compaction = {{'class': 'NullCompactionStrategy'}}"
+            " AND compression = {{'sstable_compression': 'LZ4Compressor', 'chunk_length_in_kb': 1}}", name)).get();
+    const auto id = e.local_db().find_schema("ks", sstring(name))->id();
+    auto insert = e.prepare(fmt::format("INSERT INTO ks.{} (pk, ck, v) VALUES (?, ?, ?)", name)).get();
+    for (size_t n = 0; n < formats.size(); ++n) {
+        e.db_config().sstable_format.set_value_on_all_shards(sstring(formats[n]), utils::config_file::config_source::Internal).get();
+        for (int i = 0; i < 400; ++i) {
+            e.execute_prepared(insert, {
+                cql3::raw_value::make_value(int32_type->decompose(i % 10)),
+                cql3::raw_value::make_value(int32_type->decompose(int32_t(n * 1000 + i))),
+                cql3::raw_value::make_value(utf8_type->decompose(tests::random::get_sstring(10000))),
+            }).get();
+        }
+        replica::database::flush_table_on_all_shards(e.db(), id).get();
+    }
+    return id;
+}
+
+// Checks that sample_data_files() samples a table with sstables of both an
+// older format and `mu`. CompressionInfo.db of `mu` stores only a sample of the
+// chunk offsets, so its samples start in the sampled chunks.
+SEASTAR_TEST_CASE(test_sample_data_files_mixed_formats) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        const auto id = make_table_for_sampling(e, "t", {"me", "mu", "me", "mu"});
+        const auto data_files = read_data_files(e.db(), id);
+        const auto all_versions = std::set{sstables::sstable_version_types::me, sstables::sstable_version_types::mu};
+        BOOST_REQUIRE((data_files | std::views::transform(&data_file::version) | std::ranges::to<std::set>()) == all_versions);
+
+        // Samples smaller than a chunk start at a random place in a chunk.
+        // Larger samples continue into the next chunks.
+        for (const uint64_t chunk_size : {512, 4096}) {
+            testlog.info("chunk_size {}", chunk_size);
+            const uint64_t n_chunks = 64;
+            auto samples = e.local_db().sample_data_files(id, chunk_size, n_chunks).get();
+            BOOST_REQUIRE_EQUAL(samples.size(), n_chunks);
+            BOOST_REQUIRE(check_samples(samples, data_files, chunk_size) == all_versions);
+        }
+
+        // A sample larger than sampled_chunk_min_data can run past the end of
+        // the data of a `mu` sstable. Such a sample is left out, so the result
+        // can be short, but the other samples are valid.
+        {
+            const uint64_t chunk_size = 4 * sstables::sampled_chunk_min_data;
+            const uint64_t n_chunks = 64;
+            auto samples = e.local_db().sample_data_files(id, chunk_size, n_chunks).get();
+            testlog.info("chunk_size {}: {} samples", chunk_size, samples.size());
+            BOOST_REQUIRE_LE(samples.size(), n_chunks);
+            check_samples(samples, data_files, chunk_size);
+        }
+    });
+}
+
+// Checks that sample_data_files() draws with replacement: a request for more
+// samples than the `mu` sstables have sampled chunks is met in full, by
+// repeating samples.
+SEASTAR_TEST_CASE(test_sample_data_files_with_replacement) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        const auto id = make_table_for_sampling(e, "t", {"mu", "mu"});
+        const auto data_files = read_data_files(e.db(), id);
+        // The number of distinct samples of the size of a chunk.
+        const uint64_t n_distinct = e.db().map_reduce0([id] (replica::database& db) -> future<uint64_t> {
+            uint64_t n = 0;
+            for (const auto& sst : co_await db.find_column_family(id).take_sstable_set_snapshot()) {
+                n += sst->get_compression().sample_size();
+            }
+            co_return n;
+        }, uint64_t(0), std::plus<uint64_t>()).get();
+        testlog.info("{} distinct samples", n_distinct);
+        BOOST_REQUIRE_GT(n_distinct, 50);
+
+        const uint64_t chunk_size = 1024;
+        for (const uint64_t n_chunks : {n_distinct / 4, n_distinct, 2 * n_distinct}) {
+            testlog.info("n_chunks {}", n_chunks);
+            auto samples = e.local_db().sample_data_files(id, chunk_size, n_chunks).get();
+            BOOST_REQUIRE_EQUAL(samples.size(), n_chunks);
+            check_samples(samples, data_files, chunk_size);
+            // The chunks hold random data, so distinct chunks hold distinct bytes.
+            const auto distinct = samples
+                    | std::views::transform([] (const temporary_buffer<char>& b) { return std::string_view(b.get(), b.size()); })
+                    | std::ranges::to<std::set>();
+            BOOST_REQUIRE_LE(distinct.size(), n_distinct);
+            if (n_chunks > n_distinct) {
+                BOOST_REQUIRE_LT(distinct.size(), samples.size());
+            }
+        }
     });
 }
 

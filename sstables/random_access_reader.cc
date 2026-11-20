@@ -18,7 +18,10 @@ extern logging::logger sstlog;
 
 future <temporary_buffer<char>> random_access_reader::read_exactly(size_t n) noexcept {
   try {
-    return _in->read_exactly(n);
+    return _in->read_exactly(n).then([this] (temporary_buffer<char> buf) {
+        _offset += buf.size();
+        return buf;
+    });
   } catch (...) {
     return current_exception_as_future<temporary_buffer<char>>();
   }
@@ -33,6 +36,7 @@ static future<> close_if_needed(std::unique_ptr<input_stream<char>> in) {
 
 future<> random_access_reader::seek(uint64_t pos) noexcept {
     try {
+        _offset = pos;
         auto tmp = std::make_unique<input_stream<char>>(open_at(pos));
         std::swap(tmp, _in);
         return close_if_needed(std::move(tmp));

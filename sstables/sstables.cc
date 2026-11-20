@@ -54,6 +54,7 @@
 #include "metadata_collector.hh"
 #include "progress_monitor.hh"
 #include "compress.hh"
+#include "framed_chunk.hh"
 #include "checksummed_data_source.hh"
 #include "digest_checked_data_source.hh"
 #include "index_reader.hh"
@@ -72,6 +73,8 @@
 #include "sstables/partition_index_cache.hh"
 #include "db/large_data_handler.hh"
 #include "db/config.hh"
+#include "consumer.hh"
+#include "sstables/decompressing_cursor.hh"
 #include "sstables/random_access_reader.hh"
 #include "sstables/sstables_manager.hh"
 #include "sstables/partition_index_cache.hh"
@@ -88,6 +91,7 @@
 #include "readers/reversing.hh"
 #include "readers/forwardable.hh"
 #include "sstables/trie/bti_index.hh"
+#include "sstables/trie/bti_page_footer.hh"
 #include "partition_slice_builder.hh"
 
 #include "release.hh"
@@ -245,6 +249,22 @@ read_monitor_generator& default_read_monitor_generator() {
     return noop_read_monitor_generator;
 }
 
+read_progress_estimator::read_progress_estimator(const sstable& sst)
+    : _data_size(sst.data_size())
+    , _ondisk_data_size(sst.ondisk_data_size())
+{}
+
+uint64_t read_progress_estimator::operator()(sstable_position pos) const {
+    if (!pos.is_physical()) {
+        return pos.to_logical();
+    }
+    if (_ondisk_data_size == 0) {
+        return 0;
+    }
+    auto fraction = double(pos.as_physical().chunk_position) / _ondisk_data_size;
+    return std::min(uint64_t(fraction * _data_size), _data_size);
+}
+
 std::unique_ptr<crc32_digest_file_writer> make_calculate_digest_writer() noexcept {
     return std::make_unique<crc32_digest_file_writer>(make_null_data_sink(default_sstable_buffer_size), default_sstable_buffer_size);
 }
@@ -300,6 +320,7 @@ const std::unordered_map<sstable_version_types, sstring, enum_hash<sstable_versi
     { sstable_version_types::me , "me" },
     { sstable_version_types::ms , "ms" },
     { sstable_version_types::mt , "mt" },
+    { sstable_version_types::mu , "mu" },
 };
 
 const std::unordered_map<sstable_format_types, sstring, enum_hash<sstable_format_types>> format_string = {
@@ -937,6 +958,44 @@ static future<> do_parse_compression(const schema& s, sstable_version_types v, r
     c.set_uncompressed_chunk_length(chunk_len);
     c.set_uncompressed_file_length(data_len);
 
+    if (index_holds_physical_positions(v)) {
+        // `mu` stores a sample of the chunk offsets, preceded by the sampling
+        // denominator and the size of the sample.
+        uint32_t denominator = 0;
+        uint32_t len = 0;
+        co_await parse(s, v, in, denominator, len);
+        if (denominator == 0) {
+            throw_malformed_sstable_exception("CompressionInfo is malformed: zero sampling denominator");
+        }
+        c.set_sampling_denominator(denominator);
+        const uint64_t start_pos = in.offset();
+        // The readers of the sample read it from the file when they need it, so
+        // don't keep it in memory. Still read through it: the caller might be
+        // computing the digest of the component. Check that the offsets increase
+        // strictly.
+        uint64_t prev = 0;
+        size_t parsed = 0;
+        while (parsed != len) {
+            auto now = std::min<size_t>(len - parsed, 100000 / sizeof(uint64_t));
+            auto buf = co_await in.read_exactly(now * sizeof(uint64_t));
+            if (buf.size() != now * sizeof(uint64_t)) {
+                throw_malformed_sstable_exception(format("CompressionInfo is truncated: expected {} sampled offsets, got {}",
+                        len, parsed + buf.size() / sizeof(uint64_t)));
+            }
+            for (size_t i = 0; i < now; ++i) {
+                const uint64_t value = seastar::read_be<uint64_t>(buf.get() + i * sizeof(uint64_t));
+                if (parsed + i > 0 && value <= prev) {
+                    throw_malformed_sstable_exception(format("CompressionInfo is malformed: sampled offset {} at index {} doesn't follow {}",
+                            value, parsed + i, prev));
+                }
+                prev = value;
+            }
+            parsed += now;
+        }
+        c.set_sample_location(start_pos, len);
+        co_return;
+    }
+
     uint32_t len = 0;
     compression::segmented_offsets::writer offsets = c.offsets.get_writer();
     co_await parse(s, v, in, len);
@@ -970,8 +1029,21 @@ future<> parse(const schema& s, sstable_version_types v, random_access_reader& i
     }
 }
 
-void write(sstable_version_types v, file_writer& out, const compression& c) {
+void write(sstable_version_types v, file_writer& out, compression& c) {
     write(v, out, c.name, c.options, c.uncompressed_chunk_length(), c.uncompressed_file_length());
+
+    if (index_holds_physical_positions(v)) {
+        // This frees the sample. The writer doesn't need it after this, and the
+        // readers read it from the file.
+        auto sample = c.take_sampled_offsets();
+        write(v, out, c.sampling_denominator(), static_cast<uint32_t>(sample.size()));
+        c.set_sample_location(out.offset(), sample.size());
+        for (auto& offset : sample) {
+            offset = net::hton(offset);
+        }
+        out.write(reinterpret_cast<const char*>(sample.data()), sample.size() * sizeof(uint64_t));
+        return;
+    }
 
     write(v, out, static_cast<uint32_t>(c.offsets.size()));
 
@@ -1317,7 +1389,7 @@ uint32_t sstable::do_write_simple_with_digest(component_type type,
 }
 
 template <component_type Type, typename T>
-uint32_t sstable::write_simple_with_digest(const T& component) {
+uint32_t sstable::write_simple_with_digest(T& component) {
     return do_write_simple_with_digest(Type, [&component] (version_types v, file_writer& w) {
         write(v, w, component);
     }, sstable_buffer_size);
@@ -1327,7 +1399,7 @@ template future<> sstable::read_simple<component_type::Filter>(sstables::filter&
 template void sstable::write_simple<component_type::Filter>(const sstables::filter& f);
 
 template void sstable::write_simple<component_type::Summary>(const sstables::summary_ka&);
-template uint32_t sstable::write_simple_with_digest<component_type::Summary>(const sstables::summary&);
+template uint32_t sstable::write_simple_with_digest<component_type::Summary>(sstables::summary&);
 
 future<> sstable::read_compression() {
      // FIXME: If there is no compression, we should expect a CRC file to be present.
@@ -1990,6 +2062,10 @@ future<> sstable::open_or_create_data(open_flags oflags, file_open_options optio
 
 future<> sstable::open_data(sstable_open_config cfg) noexcept {
     co_await open_or_create_data(open_flags::ro);
+    if (uses_physical_positions()) {
+        // Verify that the chunk length is a power of 2.
+        (void)get_bti_position_encoding();
+    }
     co_await update_info_for_opened_data(cfg);
     parse_assert(!_shards.empty(), get_filename());
     auto* sm = _components->scylla_metadata->data.get<scylla_metadata_type::Sharding, sharding_metadata>();
@@ -2050,7 +2126,8 @@ future<> sstable::update_info_for_opened_data(sstable_open_config cfg) {
             _manager.get_cache_tracker().get_lru(),
             _manager.get_cache_tracker().region(),
             size,
-            component_name(*this, component_type::Partitions).format()
+            component_name(*this, component_type::Partitions).format(),
+            trie::make_bti_page_verifier(_version, component_name(*this, component_type::Partitions).format())
         );
         _partitions_file = make_cached_seastar_file(*_cached_partitions_file);
         co_await read_partitions_db_footer();
@@ -2064,7 +2141,8 @@ future<> sstable::update_info_for_opened_data(sstable_open_config cfg) {
             _manager.get_cache_tracker().get_lru(),
             _manager.get_cache_tracker().region(),
             size,
-            component_name(*this, component_type::Rows).format()
+            component_name(*this, component_type::Rows).format(),
+            trie::make_bti_page_verifier(_version, component_name(*this, component_type::Rows).format())
         );
         _rows_file = make_cached_seastar_file(*_cached_rows_file);
     }
@@ -2627,6 +2705,13 @@ sstable::read_scylla_metadata() noexcept {
             auto computed_digest = co_await compute_component_file_digest(component_type::Scylla);
             validate_component_digest(component_type::Scylla, computed_digest);
 
+            if (auto* f = _components->scylla_metadata->get_incompatible_features()) {
+                if (auto unknown = f->unknown(); !unknown.empty()) {
+                    throw std::runtime_error(fmt::format("SSTable {} uses incompatible features unknown to this version of Scylla: {}",
+                            get_filename(), fmt::join(unknown, ", ")));
+                }
+            }
+
             // If we already know which identifier this sstable is, the metadata
             // we just read must say the same.  On object storage the identifier
             // we opened the sstable by is the one its component objects are
@@ -2681,6 +2766,9 @@ sstable::write_scylla_metadata(shard_id shard, struct run_identifier identifier,
     _components->scylla_metadata->data.set<scylla_metadata_type::Sharding>(std::move(sm));
     // Note: data.set() wants an rvalue, so we have to make a copy. It's a uint64 anyway.
     _components->scylla_metadata->data.set<scylla_metadata_type::Features>(sstable_enabled_features(_features));
+    if (supports_incompatible_features(_version)) {
+        _components->scylla_metadata->data.set<scylla_metadata_type::IncompatibleFeatures>(sstable_incompatible_features{});
+    }
     _components->scylla_metadata->data.set<scylla_metadata_type::RunIdentifier>(std::move(identifier));
     if (ld_stats) {
         _components->scylla_metadata->data.set<scylla_metadata_type::LargeDataStats>(std::move(*ld_stats));
@@ -3059,6 +3147,106 @@ uint64_t sstable::ondisk_data_size() const {
     return _data_file_size;
 }
 
+bool sstable::uses_physical_positions() const {
+    return index_holds_physical_positions(_version) && has_component(component_type::CompressionInfo);
+}
+
+framed_chunk_codec sstable::get_chunk_codec() const {
+    return framed_chunk_codec(_version, get_compression().uncompressed_chunk_length());
+}
+
+trie::bti_position_encoding sstable::get_bti_position_encoding() const {
+    if (uses_physical_positions()) {
+        return trie::bti_position_encoding::physical(get_chunk_codec());
+    }
+    return trie::bti_position_encoding::logical();
+}
+
+sstable_position sstable::start_position() const {
+    if (uses_physical_positions()) {
+        // `mu` is read by the physical cursor, which navigates by chunk
+        // coordinates, so the start position must carry the real coordinates of
+        // the first chunk. The first chunk begins at on-disk position 0, at
+        // logical/uncompressed position 0.
+        //
+        // Its length is left unknown (an extent_hint of 0), so that the start
+        // position doesn't depend on the chunk offsets from CompressionInfo.db.
+        // The cursor handles an unknown length by reading the length out of the
+        // chunk's own header, which costs one extra small read at the start of a
+        // scan.
+        return sstable_position::from_physical(0, 0, 0);
+    }
+    return sstable_position::from_logical(0);
+}
+
+sstable_position sstable::end_position() const {
+    if (uses_physical_positions()) {
+        // For `mu`, the end-of-data sentinel is the start of a chunk that would
+        // follow the last chunk: the on-disk data size, with offset 0. It orders
+        // after every real position. A cursor doesn't load a chunk that starts at
+        // or after the end of its range, so a read that ends at the sentinel
+        // stops after the last chunk.
+        auto physical_end = ondisk_data_size();
+        return sstable_position::from_physical(physical_end, 0, 0);
+    }
+    return sstable_position::from_logical(data_size());
+}
+
+disk_read_range sstable::disk_read_range_from_logical_range(uint64_t begin, uint64_t end) const {
+    SCYLLA_ASSERT(begin < end && end <= data_size());
+    if (uses_physical_positions()) {
+        // CompressionInfo.db of `mu` stores only a sample of the chunk offsets,
+        // so a logical position can't be translated to a physical one.
+        on_internal_error(sstlog, format("disk_read_range_from_logical_range() called for {}, which uses physical positions", get_filename()));
+    }
+    return {sstable_position::from_logical(begin), sstable_position::from_logical(end)};
+}
+
+// Which fraction of the data file is covered by `range`.
+double sstable::approximate_file_fraction(sstable_positions_range range) const {
+    auto start = range.start;
+    auto end = range.end.value_or(end_position());
+    if (start == end) {
+        return 0;
+    }
+    if (!start.is_physical()) {
+        return static_cast<double>(end.to_logical() - start.to_logical()) / data_size();
+    }
+    const auto& physical_start = start.as_physical();
+    const auto& physical_end = end.as_physical();
+    // A physical position only names the chunk it falls into, so measuring the
+    // range in whole chunks (from the start of the first one to the end of the
+    // last one) rounds it up by up to two chunks. That granularity is far too
+    // coarse for a small table, where a range covering a fraction of a single
+    // chunk gets rounded up to that whole chunk, inflating the estimate several
+    // times over.
+    //
+    // Refine both bounds by mapping them to approximate uncompressed positions.
+    // The chunk part is scaled by the file-wide compression ratio: a chunk that
+    // starts at on-disk position P is preceded by roughly P / ondisk_data_size of
+    // the file's chunks, hence by that fraction of its uncompressed bytes. The
+    // offset within the chunk is already an uncompressed byte count, so it is
+    // added as is. Note that `extent_hint` deliberately plays no part here:
+    // the index stores it rounded up to whole 512-byte blocks, which for the small
+    // chunks of a small table is a bias of a factor of two or more.
+    auto ondisk_size = ondisk_data_size();
+    if (!ondisk_size) {
+        return 0;
+    }
+    auto compression_ratio = static_cast<double>(data_size()) / ondisk_size;
+    auto approximate_logical_position = [compression_ratio] (const auto& pos) {
+        return pos.chunk_position * compression_ratio + pos.offset_within_chunk;
+    };
+    auto logical_end = approximate_logical_position(physical_end);
+    // Chunks vary in size, so the scaled bounds can cross over for a range covering
+    // a sliver of the file. The range is non-empty (`start == end` returned above),
+    // so hold the start below the end and keep the estimate non-empty too, rather
+    // than reporting nothing.
+    auto logical_start = std::min(approximate_logical_position(physical_start), logical_end - 1);
+    auto fraction = (logical_end - logical_start) / data_size();
+    return std::clamp<double>(fraction, 0.0, 1.0);
+}
+
 utils::file_size_stats sstable::get_file_size_stats() const {
     if (!_metadata_size_on_disk) {
         on_internal_error(sstlog, "On-disk size of sstable metadata was not set");
@@ -3160,6 +3348,7 @@ sstring sstable::component_basename(const sstring& ks, const sstring& cf, versio
     case sstable::version_types::me:
     case sstable::version_types::ms:
     case sstable::version_types::mt:
+    case sstable::version_types::mu:
         return v + "-" + g + "-" + f + "-" + component;
     }
     on_internal_error(sstlog, seastar::format("invalid version {} for sstable: table={}.{}, generation={}, format={}, component={}",
@@ -3303,7 +3492,7 @@ static std::expected<std::tuple<entry_descriptor, sstring, sstring>, sstring> ma
     //   la-42-big-Data.db
     //   ka-42-big-Data.db
     //   me-3g8w_00qf_4pbog2i7h2c7am0uoe-big-Data.db
-    static boost::regex la_mx("(la|m[cdest])-([^-]+)-(\\w+)-(.*)");
+    static boost::regex la_mx("(la|m[cdestu])-([^-]+)-(\\w+)-(.*)");
     static boost::regex ka("(\\w+)-(\\w+)-ka-(\\d+)-(.*)");
 
     // Use non-greedy match so that a snapshot tag that ressembles a name-<uuid> wouldn't match
@@ -3399,7 +3588,7 @@ sstable_format_types format_from_string(std::string_view s) {
 }
 
 bool has_summary_and_index(sstable_version_types v) {
-    return v != sstable_version_types::ms && v != sstable_version_types::mt;
+    return v != sstable_version_types::ms && v != sstable_version_types::mt && v != sstable_version_types::mu;
 }
 
 bool uses_legacy_dk_order(sstable_version_types v) {
@@ -3415,6 +3604,28 @@ bool uses_legacy_dk_order(sstable_version_types v) {
     return v != sstable_version_types::ms;
 }
 
+// Whether the index of a compressed sstable holds physical (chunk position,
+// chunk size, offset inside chunk) rather than logical (i.e. pre-compression)
+// positions of rows and partitions. An uncompressed sstable always holds logical
+// positions.
+bool index_holds_physical_positions(sstable_version_types v) {
+    return v == sstable_version_types::mu;
+}
+
+// Physically indexed formats put the compressed length in a header and a footer
+// for each chunk. Use the header to find the next chunk. Use the footer to find
+// the previous chunk. Thus, a reader can move in both directions in Data.db
+// without CompressionInfo.db.
+bool chunk_has_length_framing(sstable_version_types v) {
+    return index_holds_physical_positions(v);
+}
+
+// Every Scylla version that can read these formats checks the
+// IncompatibleFeatures entry of Scylla.db. Older Scylla versions skip it.
+bool supports_incompatible_features(sstable_version_types v) {
+    return v >= sstable_version_types::mu;
+}
+
 component_type sstable::component_from_sstring(version_types v, const sstring &s) {
     try {
         return reverse_map(s, sstable_version_constants::get_component_map(v));
@@ -3423,22 +3634,109 @@ component_type sstable::component_from_sstring(version_types v, const sstring &s
     }
 }
 
-future<input_stream<char>> sstable::data_stream(uint64_t pos, size_t len,
-        reader_permit permit, tracing::trace_state_ptr trace_state, lw_shared_ptr<file_input_stream_history> history, raw_stream raw,
+disk_read_range sstable::full_range() {
+    return {start_position(), end_position()};
+}
+
+future<std::unique_ptr<data_consumer::continuous_data_consumer_input_stream>> sstable::data_stream(disk_read_range range,
+        reader_permit permit, tracing::trace_state_ptr trace_state, lw_shared_ptr<file_input_stream_history> history,
         integrity_check integrity, integrity_error_handler error_handler) {
     file_input_stream_options options;
     options.buffer_size = sstable_buffer_size;
     options.read_ahead = 4;
     options.dynamic_adjustments = std::move(history);
-    return data_stream(pos, len, permit, std::move(trace_state), history, std::move(options), raw, integrity, std::move(error_handler));
+    return data_stream(range, permit, std::move(trace_state), history, std::move(options), integrity, std::move(error_handler));
 }
 
-future<input_stream<char>> sstable::data_stream(uint64_t pos, size_t len,
+future<std::unique_ptr<data_consumer::continuous_data_consumer_input_stream>> sstable::data_stream(disk_read_range range,
         reader_permit permit, tracing::trace_state_ptr trace_state, lw_shared_ptr<file_input_stream_history> history,
         file_input_stream_options options,
-        raw_stream raw, integrity_check integrity,
+        integrity_check integrity,
         integrity_error_handler error_handler) {
+    std::optional<uint32_t> digest;
+    if (integrity == integrity_check::yes) {
+        digest = get_digest();
+    }
 
+    if (uses_physical_positions()) {
+        if (!range.start.is_physical() || !range.end.is_physical()) {
+            on_internal_error(sstlog, format("data_stream() of {} got the logical range [{}, {}), but the sstable uses physical positions",
+                    get_filename(), range.start, range.end));
+        }
+        // The physical-position compressed format (`mu`) is read through the
+        // decompressing cursor, which navigates the data file by chunk
+        // coordinates. It opens its own (traced) file, verifies per-chunk
+        // checksums, and - when reading the whole file in order from the start -
+        // folds each chunk's checksum into a running whole-file digest (verified
+        // at end of file) when `digest` is set.
+        co_return make_decompressing_cursor(shared_from_this(), range, permit, std::move(trace_state), std::move(options), digest);
+    }
+
+    file f = make_tracked_file(_data_file, permit);
+    if (trace_state) {
+        f = tracing::make_traced_file(std::move(f), std::move(trace_state), format("{}:", get_filename()));
+    }
+    auto stream_creator = [this, f](uint64_t pos, uint64_t len, file_input_stream_options options) mutable -> future<input_stream<char>> {
+        co_return input_stream<char>(co_await _storage->make_data_or_index_source(*this, component_type::Data, std::move(f), pos, len, std::move(options)));
+    };
+
+    if (_components->compression) {
+        // Logical-position compressed formats (mc..me, ka/la) decompress on the
+        // fly using the external compression offsets, verifying per-chunk
+        // checksums (and the whole-file digest when `digest` is set). The
+        // resulting decompressed byte stream is a plain input_stream fed to the
+        // parsers through the seastar-input-stream adapter.
+        if (_version >= sstable_version_types::mc) {
+            co_return std::make_unique<data_consumer::continuous_data_consumer_seastar_input_stream>(
+                make_compressed_file_m_format_input_stream(stream_creator, &_components->compression, _version,
+                    range, std::move(options), permit, digest));
+        }
+        co_return std::make_unique<data_consumer::continuous_data_consumer_seastar_input_stream>(
+            make_compressed_file_k_l_format_input_stream(stream_creator, &_components->compression, _version,
+                range, std::move(options), permit, digest));
+    }
+
+    uint64_t pos = range.start.to_logical();
+    size_t len = range.end.to_logical() - range.start.to_logical();
+
+    if (_components->checksum && integrity == integrity_check::yes) {
+        auto checksum = get_checksum();
+        auto file_len = data_size();
+        if (_version >= sstable_version_types::mc) {
+             co_return std::make_unique<data_consumer::continuous_data_consumer_seastar_input_stream>(
+                make_checksummed_file_m_format_input_stream(stream_creator, file_len,
+                    *checksum, pos, len, std::move(options), digest, error_handler));
+        } else {
+            co_return std::make_unique<data_consumer::continuous_data_consumer_seastar_input_stream>(
+                make_checksummed_file_k_l_format_input_stream(stream_creator, file_len,
+                    *checksum, pos, len, std::move(options), digest, error_handler));
+        }
+    }
+    co_return std::make_unique<data_consumer::continuous_data_consumer_seastar_input_stream>(
+        co_await stream_creator(pos, len, std::move(options)));
+}
+
+future<input_stream<char>> sstable::data_stream_raw(
+        reader_permit permit, tracing::trace_state_ptr trace_state, lw_shared_ptr<file_input_stream_history> history) {
+    file_input_stream_options options;
+    options.buffer_size = sstable_buffer_size;
+    options.read_ahead = 4;
+    options.dynamic_adjustments = std::move(history);
+
+    file f = make_tracked_file(_data_file, permit);
+    if (trace_state) {
+        f = tracing::make_traced_file(std::move(f), std::move(trace_state), format("{}:", get_filename()));
+    }
+    uint64_t pos = 0;
+    size_t len = ondisk_data_size();
+    co_return input_stream<char>(co_await _storage->make_data_or_index_source(*this, component_type::Data, std::move(f), pos, len, std::move(options)));
+}
+
+future<input_stream<char>> sstable::data_stream_compressed_chunks(
+        reader_permit permit, tracing::trace_state_ptr trace_state, lw_shared_ptr<file_input_stream_history> history,
+        file_input_stream_options options,
+        integrity_check integrity,
+        integrity_error_handler error_handler) {
     file f = make_tracked_file(_data_file, permit);
     if (trace_state) {
         f = tracing::make_traced_file(std::move(f), std::move(trace_state), format("{}:", get_filename()));
@@ -3451,23 +3749,16 @@ future<input_stream<char>> sstable::data_stream(uint64_t pos, size_t len,
     auto stream_creator = [this, f](uint64_t pos, uint64_t len, file_input_stream_options options) mutable -> future<input_stream<char>> {
         co_return input_stream<char>(co_await _storage->make_data_or_index_source(*this, component_type::Data, std::move(f), pos, len, std::move(options)));
     };
-    if (_components->compression && raw == raw_stream::no) {
-        if (_version >= sstable_version_types::mc) {
-            co_return make_compressed_file_m_format_input_stream(stream_creator, &_components->compression,
-               pos, len, std::move(options), permit, digest);
-        } else {
-            co_return make_compressed_file_k_l_format_input_stream(stream_creator, &_components->compression,
-                pos, len, std::move(options), permit, digest);
-        }
+    if (_components->compression && _version >= sstable_version_types::mc) {
+        co_return make_compressed_raw_file_input_stream(stream_creator, &_components->compression, _version, std::move(options), permit, digest);
     }
 
-    if (_components->compression && raw == raw_stream::compressed_chunks && _version >= sstable_version_types::mc) {
-        co_return make_compressed_raw_file_input_stream(stream_creator, &_components->compression, std::move(options), permit, digest);
-    }
-
+    uint64_t pos = 0;
+    size_t len = ondisk_data_size();
     if (_components->checksum && integrity == integrity_check::yes) {
         auto checksum = get_checksum();
         auto file_len = data_size();
+
         if (_version >= sstable_version_types::mc) {
              co_return make_checksummed_file_m_format_input_stream(stream_creator, file_len,
                 *checksum, pos, len, std::move(options), digest, error_handler);
@@ -3479,56 +3770,224 @@ future<input_stream<char>> sstable::data_stream(uint64_t pos, size_t len,
     co_return co_await stream_creator(pos, len, std::move(options));
 }
 
+future<temporary_buffer<char>> sstable::read_compression_offsets(file& f, uint64_t first, uint64_t n) const {
+    const auto& c = _components->compression;
+    try {
+        // dma_read_exactly() takes care of the alignment requirements of the underlying file.
+        co_return co_await f.dma_read_exactly<char>(c.offsets_start_pos() + first * sizeof(uint64_t), n * sizeof(uint64_t));
+    } catch (const file::eof_error&) {
+        throw_malformed_sstable_exception(format("CompressionInfo of {} is truncated: no sampled offsets {} to {}",
+                get_filename(), first, first + n - 1));
+    }
+}
+
+future<file> sstable::open_compression_info() const {
+    // See read_digest(). The lock keeps change_state() from moving the file and
+    // unlink() from removing it while we open it by name.
+    auto lock = co_await get_units(_mutate_sem, 1);
+    // FIXME: this assumes that unlinking removes the files of the sstable. If
+    // the deletion rules change so that an unlinked sstable keeps its files
+    // until it is released, fail only if the files may really be gone.
+    if (_unlinked_at) {
+        // Compaction can unlink the sstable while a reader still holds it. Fail
+        // as the open would, but without the error that a failed open logs.
+        throw std::system_error(ENOENT, std::system_category(),
+                fmt::format("{} was unlinked", filename(component_type::CompressionInfo)));
+    }
+    co_return co_await open_file(component_type::CompressionInfo, open_flags::ro);
+}
+
+future<> sstable::for_each_compression_offset(noncopyable_function<void (uint64_t)> func) const {
+    const auto& c = _components->compression;
+    if (!uses_physical_positions()) {
+        for (uint64_t offset : c.offsets) {
+            func(offset);
+        }
+        co_return;
+    }
+    auto f = co_await open_compression_info();
+    std::exception_ptr ex;
+    try {
+        // Read the offsets in batches, so that memory use doesn't grow with the
+        // number of chunks.
+        const uint64_t per_read = 100000 / sizeof(uint64_t);
+        for (uint64_t first = 0; first < c.sample_size(); first += per_read) {
+            const uint64_t n = std::min<uint64_t>(c.sample_size() - first, per_read);
+            auto buf = co_await read_compression_offsets(f, first, n);
+            for (uint64_t i = 0; i < n; ++i) {
+                func(seastar::read_be<uint64_t>(buf.get() + i * sizeof(uint64_t)));
+            }
+        }
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    co_await f.close();
+    maybe_rethrow_exception(std::move(ex));
+}
+
+future<std::vector<uint64_t>> sstable::read_sampled_offsets(std::vector<uint64_t> indices) const {
+    const auto& c = _components->compression;
+    if (!uses_physical_positions()) {
+        on_internal_error(sstlog, format("read_sampled_offsets() called for {}, which doesn't use physical positions", get_filename()));
+    }
+    for (uint64_t index : indices) {
+        if (index >= c.sample_size()) {
+            on_internal_error(sstlog, format("read_sampled_offsets(): index {} is out of range, {} has {} sampled offsets",
+                    index, get_filename(), c.sample_size()));
+        }
+    }
+    std::vector<uint64_t> result;
+    result.reserve(indices.size());
+    if (indices.empty()) {
+        co_return result;
+    }
+    auto f = co_await open_compression_info();
+    std::exception_ptr ex;
+    try {
+        // Read a block of offsets that starts at an index which the last read
+        // didn't cover. The following indices are likely in the same block.
+        const uint64_t per_read = 4096 / sizeof(uint64_t);
+        // The offsets [first, first + buf.size() / sizeof(uint64_t)).
+        uint64_t first = 0;
+        temporary_buffer<char> buf;
+        for (uint64_t index : indices) {
+            if (index < first || index >= first + buf.size() / sizeof(uint64_t)) {
+                first = index;
+                buf = co_await read_compression_offsets(f, first, std::min<uint64_t>(c.sample_size() - first, per_read));
+            }
+            result.push_back(seastar::read_be<uint64_t>(buf.get() + (index - first) * sizeof(uint64_t)));
+        }
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    co_await f.close();
+    maybe_rethrow_exception(std::move(ex));
+    co_return result;
+}
+
 future<temporary_buffer<char>> sstable::data_read(uint64_t pos, size_t len, reader_permit permit) {
-    auto stream = co_await data_stream(pos, len, std::move(permit), tracing::trace_state_ptr(), {});
-    auto buff = co_await stream.read_exactly(len);
-    co_await stream.close();
-    co_return buff;
+    // Clamp the range to the (uncompressed) data size so a read that runs off the
+    // end of the file returns a short buffer rather than over-reading. Callers
+    // (e.g. the data-file sampler, which may read a partial last chunk) rely on
+    // this. An empty range returns an empty buffer, because
+    // disk_read_range_from_logical_range() requires a nonempty range. Clamp
+    // `len` before adding it to `pos`, so that the sum can't overflow.
+    if (pos >= data_size() || len == 0) {
+        co_return temporary_buffer<char>();
+    }
+    auto end = pos + std::min<uint64_t>(len, data_size() - pos);
+    auto disk_range = disk_read_range_from_logical_range(pos, end);
+    co_return co_await data_read(disk_range, end - pos, std::move(permit));
+}
+
+future<temporary_buffer<char>> sstable::data_read(disk_read_range range, size_t len, reader_permit permit) {
+    file_input_stream_options options;
+    options.buffer_size = sstable_buffer_size;
+    options.read_ahead = 4;
+    return data_read(range, len, std::move(permit), std::move(options));
+}
+
+future<temporary_buffer<char>> sstable::data_read(disk_read_range range, size_t len, reader_permit permit, file_input_stream_options options) {
+    if (len == 0) {
+        co_return temporary_buffer<char>();
+    }
+    // Random-access read of a byte range. data_stream() decompresses if needed and
+    // handles both compressed and uncompressed data files; we drain at most the
+    // requested number of decompressed bytes from it. No whole-file digest is
+    // verified here.
+    const size_t want = len;
+    auto stream = co_await data_stream(range, std::move(permit), tracing::trace_state_ptr(), nullptr, std::move(options));
+    // A physical stream can return data past range.end, up to the end of its
+    // chunk, so clip the buffers at range.end.
+    stream->init_stream_position(range.start);
+    temporary_buffer<char> result(want);
+    size_t filled = 0;
+    co_await stream->consume(range.end, [&] (temporary_buffer<char> data) -> consumption_result<char> {
+        size_t take = std::min(data.size(), want - filled);
+        std::copy_n(data.get(), take, result.get_write() + filled);
+        filled += take;
+        if (filled == want) {
+            return stop_consuming<char>{temporary_buffer<char>()};
+        }
+        return continue_consuming{};
+    });
+    co_await stream->close();
+    result.trim(filled);
+    co_return result;
 }
 
 template <typename ChecksumType>
-static future<bool> do_validate_compressed(input_stream<char>& stream, const sstables::compression& c, bool checksum_all, std::optional<uint32_t> expected_digest) {
+static future<bool> do_validate_compressed(input_stream<char>& stream, const sstables::compression& c, bool checksum_all, std::optional<uint32_t> expected_digest, const framed_chunk_codec& codec) {
     bool valid = true;
     uint64_t offset = 0;
     uint32_t actual_full_checksum = ChecksumType::init_checksum();
 
     auto accessor = c.offsets.get_accessor();
-    for (size_t i = 0; i < c.offsets.size(); ++i) {
-        auto current_pos = accessor.at(i);
-        auto next_pos = i + 1 == c.offsets.size() ? c.compressed_file_length() : accessor.at(i + 1);
-        auto chunk_len = next_pos - current_pos;
-        auto buf = co_await stream.read_exactly(chunk_len);
+    framed_chunk_stream_reader chunk_reader(codec);
+    // Without framing, the chunk boundaries come from the offsets, so there is
+    // one chunk per offset.
+    const uint64_t n_chunks = codec.framed() ? c.chunk_count() : c.offsets.size();
+    for (uint64_t i = 0; i < n_chunks; ++i) {
+        uint64_t chunk_len;
+        temporary_buffer<char> buf;
 
-        if (!chunk_len) {
-            sstlog.error("Found unexpected chunk of length 0 at offset {}", offset);
-            valid = false;
-            break;
+        if (codec.framed()) {
+            // The length of this chunk comes from its own header, rather than
+            // from the offset of the next one. Throws if the stream ends in the
+            // header, or if the length is obviously too large, which the caller
+            // turns into a validation failure.
+            const auto header = co_await chunk_reader.read_header(stream, offset);
+            chunk_len = codec.extent(header.frame.compressed_len);
+            buf = co_await chunk_reader.read_chunk(stream, header);
+            if (buf.size() < chunk_len) {
+                sstlog.error("Truncated file at offset {}: expected to get chunk of size {}, got {}", offset, chunk_len, buf.size());
+                valid = false;
+                break;
+            }
+        } else {
+            auto current_pos = accessor.at(i);
+            auto next_pos = i + 1 == n_chunks ? c.compressed_file_length() : accessor.at(i + 1);
+            chunk_len = next_pos - current_pos;
+            buf = co_await stream.read_exactly(chunk_len);
+
+            if (!chunk_len) {
+                sstlog.error("Found unexpected chunk of length 0 at offset {}", offset);
+                valid = false;
+                break;
+            }
+
+            if (buf.size() < chunk_len) {
+                sstlog.error("Truncated file at offset {}: expected to get chunk of size {}, got {}", offset, chunk_len, buf.size());
+                valid = false;
+                break;
+            }
         }
 
-        if (buf.size() < chunk_len) {
-            sstlog.error("Truncated file at offset {}: expected to get chunk of size {}, got {}", offset, chunk_len, buf.size());
-            valid = false;
-            break;
-        }
-
-        auto compressed_len = chunk_len - 4;
-        auto expected_checksum = read_be<uint32_t>(buf.get() + compressed_len);
-        auto actual_checksum = ChecksumType::checksum(buf.get(), compressed_len);
-        if (actual_checksum != expected_checksum) {
-            sstlog.error("Compressed chunk checksum mismatch at offset {}, for chunk #{} of size {}: expected={}, actual={}", offset, i, chunk_len, expected_checksum, actual_checksum);
+        // Throws if the chunk is too small to hold its framing and checksum,
+        // which the caller turns into a validation failure.
+        auto chunk = codec.parse(std::string_view(buf.get(), buf.size()));
+        auto actual_checksum = chunk.template compute_checksum<ChecksumType>();
+        if (actual_checksum != chunk.stored_checksum) {
+            sstlog.error("Compressed chunk checksum mismatch at offset {}, for chunk #{} of size {}: expected={}, actual={}", offset, i, chunk_len, chunk.stored_checksum, actual_checksum);
             valid = false;
         }
 
         if (expected_digest) {
-            actual_full_checksum = checksum_combine_or_feed<ChecksumType>(actual_full_checksum, actual_checksum, buf.get(), compressed_len);
-            if (checksum_all) {
-                uint32_t be_actual_checksum = cpu_to_be(actual_checksum);
-                actual_full_checksum = ChecksumType::checksum(actual_full_checksum,
-                        reinterpret_cast<const char*>(&be_actual_checksum), sizeof(be_actual_checksum));
-            }
+            actual_full_checksum = chunk.template fold_into_digest<ChecksumType>(actual_full_checksum, actual_checksum, checksum_all);
         }
 
         offset += chunk_len;
+    }
+
+    // Anything past the last chunk is data the compression metadata doesn't account
+    // for, e.g. bytes appended to Data.db after it was written. Without per-chunk
+    // framing this can't happen, because the last chunk is *defined* to extend to
+    // the end of the file; but a framed ("mu") chunk carries its own length, so
+    // trailing junk has to be caught explicitly.
+    if (valid && offset != c.compressed_file_length()) {
+        sstlog.error("Data.db has {} bytes of trailing data past the last chunk, at offset {}",
+                c.compressed_file_length() - offset, offset);
+        valid = false;
     }
 
     if (expected_digest && actual_full_checksum != *expected_digest) {
@@ -3759,35 +4218,45 @@ future<validate_checksums_result> validate_checksums_and_digests(shared_sstable 
         co_return ret;
     }
 
-    input_stream<char> data_stream = co_await (sst->get_compression()
-        ? sst->data_stream(0, sst->ondisk_data_size(), permit,
-                nullptr, nullptr, sstable::raw_stream::yes)
-        : sst->data_stream(0, sst->data_size(), permit,
-                nullptr, nullptr, sstable::raw_stream::no,
+    if (sst->get_compression()) {
+        auto raw_stream = co_await sst->data_stream_raw(
+                permit, nullptr, nullptr);
+        const auto& compression = sst->get_compression();
+        const auto codec = sst->get_chunk_codec();
+        try {
+            if (sst->get_version() >= sstable_version_types::mc) {
+                valid = co_await do_validate_compressed<crc32_utils>(raw_stream, compression, true, digest, codec);
+            } else {
+                valid = co_await do_validate_compressed<adler32_utils>(raw_stream, compression, false, digest, codec);
+            }
+        } catch (malformed_sstable_exception& e) {
+            valid = false;
+            sstlog.error("{}", e.what());
+        } catch (...) {
+            ex = std::current_exception();
+        }
+        co_await raw_stream.close();
+    } else {
+        file_input_stream_options options;
+        options.buffer_size = default_sstable_buffer_size;
+        options.read_ahead = 4;
+        auto checked_stream = co_await sst->data_stream_compressed_chunks(
+                permit, nullptr, nullptr, std::move(options),
                 integrity_check::yes, [&ret](sstring msg) {
                     sstlog.error("{}", msg);
                     ret.status = validate_checksums_status::invalid;
-                })
-        );
-
-    try {
-        if (sst->get_compression()) {
-            if (sst->get_version() >= sstable_version_types::mc) {
-                valid = co_await do_validate_compressed<crc32_utils>(data_stream, sst->get_compression(), true, digest);
-            } else {
-                valid = co_await do_validate_compressed<adler32_utils>(data_stream, sst->get_compression(), false, digest);
-            }
-        } else {
-            valid = co_await do_validate_uncompressed(data_stream, checksum->checksums.size(), checksum->chunk_size);
+                });
+        try {
+            valid = co_await do_validate_uncompressed(checked_stream, checksum->checksums.size(), checksum->chunk_size);
+        } catch (malformed_sstable_exception& e) {
+            valid = false;
+            sstlog.error("{}", e.what());
+        } catch (...) {
+            ex = std::current_exception();
         }
-    } catch (malformed_sstable_exception& e) {
-        valid = false;
-        sstlog.error("{}", e.what());
-    } catch (...) {
-        ex = std::current_exception();
+        co_await checked_stream.close();
     }
 
-    co_await data_stream.close();
     maybe_rethrow_exception(std::move(ex));
 
     if (!valid) {
@@ -4107,18 +4576,11 @@ future<uint64_t> sstable::estimated_keys_for_range(const dht::token_range& range
     std::exception_ptr ex;
     try {
         co_await ir->advance_to(dht::to_partition_range(range));
-        auto data_file_range = ir->data_file_positions();
-        auto uncompressed_data_size = data_size();
-        auto start = data_file_range.start;
-        auto end = data_file_range.end.value_or(uncompressed_data_size);
+        auto file_fraction = approximate_file_fraction(ir->sstable_positions());
         auto total_count = get_estimated_key_count();
-        sstlog.debug("estimated_keys_for_range(sst={}, range={}): data_start: {}, data_end: {}, data_size: {}, estimated_key_count: {}",
-                get_filename(), range, start, end, uncompressed_data_size, total_count);
-        if (start == end) {
-            result = 0;
-        } else {
-            result = std::ceil(double(end - start) / uncompressed_data_size * total_count);
-        }
+        sstlog.debug("estimated_keys_for_range(sst={}, range={}): file_fraction: {}, estimated_key_count: {}",
+                get_filename(), range, file_fraction, total_count);
+        result = std::ceil(file_fraction * total_count);
     } catch (...) {
         ex = std::current_exception();
     }
@@ -4356,6 +4818,9 @@ future<> init_metrics() {
 
         sm::make_gauge("bloom_filter_memory_size", [] { return utils::filter::bloom_filter::get_shard_stats().memory_size; },
             sm::description("Bloom filter memory usage in bytes.")),
+
+        sm::make_gauge("compression_offsets_memory_size", [] { return sstables_stats::get_shard_stats().compression_offsets_memory; },
+            sm::description("Memory usage, in bytes, of the in-memory copies of sstable compression chunk offsets (CompressionInfo.db).")),
     });
   });
 }
@@ -4511,6 +4976,14 @@ std::unique_ptr<abstract_index_reader> sstable::make_index_reader(
         if (!_partitions_db_footer) [[unlikely]] {
             on_internal_error(sstlog, fmt::format("_partitions_db_footer is empty for sstable {}", get_filename()));
         }
+        // Formats the component name only if the format has page footers,
+        // so that reads of other formats don't pay for it.
+        auto page_verifier = [&] (component_type c) -> cached_file::page_verifier {
+            if (!trie::bti_index_has_page_footers(_version)) {
+                return {};
+            }
+            return trie::make_bti_page_verifier(_version, component_name(*this, c).format());
+        };
         auto cached_partitions_file = caching == use_caching::yes
             ? _cached_partitions_file
             :  seastar::make_shared<cached_file>(
@@ -4519,7 +4992,8 @@ std::unique_ptr<abstract_index_reader> sstable::make_index_reader(
                 _manager.get_cache_tracker().get_lru(),
                 _manager.get_cache_tracker().region(),
                 _cached_partitions_file->size(),
-                trace_state ? component_name(*this, component_type::Partitions).format() : sstring()
+                trace_state ? component_name(*this, component_type::Partitions).format() : sstring(),
+                page_verifier(component_type::Partitions)
             );
             auto cached_rows_file = caching == use_caching::yes
             ? _cached_rows_file
@@ -4529,15 +5003,18 @@ std::unique_ptr<abstract_index_reader> sstable::make_index_reader(
                 _manager.get_cache_tracker().get_lru(),
                 _manager.get_cache_tracker().region(),
                 _cached_rows_file->size(),
-                trace_state ? component_name(*this, component_type::Rows).format() : sstring()
+                trace_state ? component_name(*this, component_type::Rows).format() : sstring(),
+                page_verifier(component_type::Rows)
             );
         return trie::make_bti_index_reader(
             cached_partitions_file,
             cached_rows_file,
             _partitions_db_footer.value().trie_root_position,
-            data_size(),
+            start_position(),
+            end_position(),
             _version,
             _schema,
+            get_bti_position_encoding(),
             std::move(permit),
             std::move(trace_state)
         );
@@ -4687,7 +5164,7 @@ future<std::vector<std::unique_ptr<sstable_stream_source>>> create_stream_source
             , _checksum(std::move(checksum))
         {}
         future<input_stream<char>> input(const file_input_stream_options& options) const override {
-            co_return co_await _sst->data_stream(0, _sst->ondisk_data_size(), _permit, nullptr, nullptr, options, sstable::raw_stream::compressed_chunks, integrity_check::yes);
+            return _sst->data_stream_compressed_chunks(_permit, nullptr, nullptr, options, integrity_check::yes);
         }
     };
 
@@ -4939,9 +5416,101 @@ future<data_source> file_io_extension::wrap_source(const sstable& sst, component
 
 namespace trie {
 
+// Reads the trailer of a Partitions.db file with page footers.
+//
+// The fixed-size tail of the trailer ends at the chunk table of the last page.
+// The keys can span pages, so they are read around the page footers.
+// Each page read is verified.
+static future<bti_partitions_db_footer> read_paged_bti_partitions_db_footer(const seastar::file& f, uint64_t file_size) {
+    constexpr uint64_t page_size = BTI_PAGE_SIZE;
+    if (file_size == 0 || file_size % page_size != 0) {
+        throw_malformed_sstable_exception(fmt::format("Partitions.db size {} isn't a multiple of the page size {}", file_size, page_size));
+    }
+    // seastar::file is a handle, so the copy reads the same file.
+    auto file = f;
+    auto read_page = [&] (uint64_t page_pos) -> future<temporary_buffer<char>> {
+        auto buf = co_await file.dma_read_exactly<char>(page_pos, page_size);
+        verify_bti_page(std::as_bytes(std::span(buf.get(), buf.size())), page_pos, page_size, "Partitions.db");
+        co_return buf;
+    };
+    auto usable_size = [] (const temporary_buffer<char>& page, uint64_t page_pos) {
+        return bti_page_view(std::as_bytes(std::span(page.get(), page.size())), page_pos).usable_size();
+    };
+
+    constexpr size_t tail_size = 3 * sizeof(uint64_t);
+    uint64_t last_page_pos = file_size - page_size;
+    auto last_page = co_await read_page(last_page_pos);
+    auto last_usable = usable_size(last_page, last_page_pos);
+    if (last_usable < tail_size) {
+        throw_malformed_sstable_exception(fmt::format("Partitions.db malformed: the last page has only {} usable bytes", last_usable));
+    }
+    // The tail is contiguous, so it can be read from this one page.
+    // Unlike the keys, the writer never splits the tail across pages: it writes
+    // the whole tail with bti_node_sink::write_page_tail(). If the current page
+    // has too little room, write_page_tail() starts a new page. It then pads the
+    // page with zeros, so that the tail ends exactly at the chunk table.
+    const char* tail = last_page.get() + last_usable - tail_size;
+    uint64_t keys_position = seastar::read_be<uint64_t>(tail);
+    uint64_t partition_count = seastar::read_be<uint64_t>(tail + 8);
+    uint64_t trie_root = seastar::read_be<uint64_t>(tail + 16);
+    if (trie_root >= file_size) {
+        throw_malformed_sstable_exception(fmt::format("Partitions.db malformed: trie_root={}, file_size={}", trie_root, file_size));
+    }
+    if (keys_position >= file_size) {
+        throw_malformed_sstable_exception(fmt::format("Partitions.db malformed: keys_position={}, file_size={}", keys_position, file_size));
+    }
+
+    // Reads raw bytes from `pos`, skipping the chunk table and the footer of each page.
+    // A position at the start of a page's chunk table means the start of the next page,
+    // the same as for bti_node_sink::write_raw().
+    uint64_t pos = keys_position;
+    uint64_t page_pos = round_down(pos, page_size);
+    auto page = page_pos == last_page_pos ? last_page.share() : co_await read_page(page_pos);
+    auto read_bytes = [&] (size_t n) -> future<bytes> {
+        bytes result(bytes::initialized_later(), n);
+        size_t done = 0;
+        while (done < n) {
+            auto usable = usable_size(page, page_pos);
+            auto in_page = pos - page_pos;
+            if (in_page > usable) {
+                throw_malformed_sstable_exception(fmt::format("Partitions.db malformed: keys_position={} points into a chunk table", keys_position));
+            }
+            if (in_page == usable) {
+                page_pos += page_size;
+                if (page_pos >= file_size) {
+                    throw_malformed_sstable_exception(fmt::format("Partitions.db malformed: the keys at {} extend past the end of the file", keys_position));
+                }
+                pos = page_pos;
+                page = page_pos == last_page_pos ? last_page.share() : co_await read_page(page_pos);
+                continue;
+            }
+            auto k = std::min<size_t>(n - done, usable - in_page);
+            std::memcpy(result.data() + done, page.get() + in_page, k);
+            done += k;
+            pos += k;
+        }
+        co_return result;
+    };
+    auto read_key = [&] () -> future<bytes> {
+        auto len = co_await read_bytes(sizeof(uint16_t));
+        co_return co_await read_bytes(seastar::read_be<uint16_t>(reinterpret_cast<const char*>(len.data())));
+    };
+    auto first_key = co_await read_key();
+    auto last_key = co_await read_key();
+    co_return trie::bti_partitions_db_footer{
+        .first_key = sstables::key::from_bytes(std::move(first_key)),
+        .last_key = sstables::key::from_bytes(std::move(last_key)),
+        .partition_count = partition_count,
+        .trie_root_position = trie_root,
+    };
+}
+
 // This implementation would belong better in sstables/trie/bti_partition_index_writer.cc,
 // but we put it here to have access to the `parse(...)` helpers.
 future<bti_partitions_db_footer> read_bti_partitions_db_footer(const schema& s, sstable_version_types v, const seastar::file& f, uint64_t file_size) {
+    if (bti_index_has_page_footers(v)) {
+        co_return co_await read_paged_bti_partitions_db_footer(f, file_size);
+    }
     file_random_access_reader reader(f, file_size, default_sstable_buffer_size);
     if (file_size < 24) {
         throw_malformed_sstable_exception(fmt::format("Partitions.db file is too small: file_size={}", file_size));

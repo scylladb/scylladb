@@ -12,6 +12,7 @@
 
 #include <seastar/core/shared_ptr.hh>
 #include "shared_sstable.hh"
+#include "sstables/sstable_position.hh"
 
 namespace sstables {
 
@@ -29,14 +30,36 @@ public:
 write_monitor& default_write_monitor();
 
 struct reader_position_tracker {
-    uint64_t position = 0;
-    uint64_t total_read_size = 0;
+    // The position of the first byte that has not been consumed yet.
+    sstable_position position;
+    // The number of uncompressed bytes consumed since the start of the stream.
+    // Bytes passed over by skip(n) are counted. Moves by skip_to() are not
+    // counted, so this is not a position in the data file. It is meant for
+    // distances within one stream. Read monitors measure their
+    // progress with `position` and read_progress_estimator instead.
+    int64_t bytes_consumed = 0;
+};
+
+// Converts a reader position into read progress through the data file, in
+// units of sstable::data_size(). Monitors compare it with data_size() totals.
+//
+// A logical position is an uncompressed offset, so it converts exactly. A
+// physical position has no known uncompressed offset, because the chunk
+// offsets may not be in memory. Its progress is the fraction of the compressed
+// file before its chunk, scaled to data_size().
+class read_progress_estimator {
+    uint64_t _data_size;
+    uint64_t _ondisk_data_size;
+public:
+    explicit read_progress_estimator(const sstable& sst);
+    uint64_t operator()(sstable_position pos) const;
 };
 
 class read_monitor {
 public:
     virtual ~read_monitor() { }
-    // parameters are the current position in the data file
+    // The tracker holds the reader's current position in the data file. It
+    // stays valid until on_read_completed().
     virtual void on_read_started(const reader_position_tracker&) = 0;
     virtual void on_read_completed() = 0;
 };

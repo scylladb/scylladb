@@ -55,7 +55,7 @@ sink_offset writer_node::recalc_sizes(ptr<writer_node> self, const Output& out, 
             // our offsets to children, which might have changed our size.
             // We have to recalculate.
             node->_node_size = out.serialized_size(*node, sink_pos(global_pos));
-            expensive_assert(uint64_t(node->_node_size.value) <= out.page_size());
+            expensive_assert(uint64_t(node->_node_size.value) <= out.page_capacity());
         }
         global_pos = global_pos + node->_node_size;
         stack.pop_back();
@@ -67,13 +67,13 @@ template <trie_writer_sink Output>
 void writer_node::write(ptr<writer_node> self, Output& out, bool guaranteed_fit) {
     expensive_log(
         "writer_node::write: subtree={} pos={}, ps={} sz={} ",
-        fmt::ptr(self.get()), out.pos().value, out.page_size(), (self->_branch_size + self->_node_size).value);
+        fmt::ptr(self.get()), out.pos().value, out.page_capacity(), (self->_branch_size + self->_node_size).value);
     expensive_assert(!self->_pos.valid());
     expensive_assert(self->_node_size.valid());
     if (guaranteed_fit) {
-        auto page_of_first_byte = round_down(out.pos().value, out.page_size());
-        auto page_of_last_byte = round_down((out.pos() + self->_branch_size + self->_node_size).value - 1, out.page_size());
-        expensive_assert(page_of_first_byte == page_of_last_byte);
+        // The subtree, together with the chunk table growth, fits before the table.
+        // (The sink checks this for each node, too).
+        expensive_assert(self->weight(out) <= out.bytes_left_in_page());
     }
     auto starting_pos = out.pos();
     // A trie can be arbitrarily deep, so we can't afford to use recursion.
@@ -115,14 +115,17 @@ void writer_node::write(ptr<writer_node> self, Output& out, bool guaranteed_fit)
             node->_pos = sink_pos(out.write(*node, sink_pos(out.pos())));
             SCYLLA_ASSERT(out.pos() - startpos == node->_branch_size + node->_node_size);
         } else {
-            if (uint64_t(out.serialized_size(*node, sink_pos(out.pos())).value) > out.bytes_left_in_page()) {
+            // The node's own payload adds at most one chunk table entry.
+            auto weight = uint64_t(out.serialized_size(*node, sink_pos(out.pos())).value)
+                + (node->_payload.has_chunk() ? out.table_entry_size() : 0);
+            if (weight > out.bytes_left_in_page()) {
                 out.pad_to_page_boundary();
             }
             node->_branch_size = out.pos() - startpos;
             auto before = out.pos();
             node->_pos = sink_pos(out.write(*node, sink_pos(out.pos())));
             node->_node_size = node_size((out.pos() - before).value);
-            expensive_assert(uint64_t(node->_node_size.value) <= out.page_size());
+            expensive_assert(uint64_t(node->_node_size.value) <= out.page_capacity());
         }
 
         node->_first_transition_byte = std::byte(node->_transition[0]);
@@ -131,6 +134,7 @@ void writer_node::write(ptr<writer_node> self, Output& out, bool guaranteed_fit)
     expensive_assert(out.pos() - starting_pos == self->_branch_size + self->_node_size);
     self->_branch_size = sink_offset(0);
     self->_node_size = node_size(0);
+    self->_chunks = chunk_set();
     self->_has_out_of_page_children = false;
     self->_has_out_of_page_descendants = false;
 }

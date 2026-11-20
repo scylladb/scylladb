@@ -39,6 +39,9 @@
 #include "sstables/sstable_mutation_reader.hh"
 #include "sstables/binary_search.hh"
 #include "sstables/exceptions.hh"
+#include "sstables/decompressing_cursor.hh"
+#include "sstables/trie/bti_index.hh"
+#include "sstables/consumer.hh"
 
 #include <boost/range/combine.hpp>
 
@@ -715,10 +718,83 @@ SEASTAR_TEST_CASE(sub_partitions_read) {
   });
 }
 
+// A uniform read interface over the two compressed-stream implementations that
+// test_skipping_in_compressed_stream exercises. Logically-indexed sstables (`me`
+// and earlier) are read through make_compressed_file_m_format_input_stream, which
+// yields a plain input_stream<char>. Physically-indexed sstables (`mu`) are read
+// through decompressing_cursor, which is driven by physical positions
+// and speaks the continuous_data_consumer_input_stream interface (consume /
+// skip) instead. This adapter lets the test drive either with the same
+// read_exactly / read / skip operations.
+namespace {
+class compressed_reader {
+    std::variant<input_stream<char>, std::unique_ptr<data_consumer::continuous_data_consumer_input_stream>> _stream;
+
+    data_consumer::continuous_data_consumer_input_stream& cds() {
+        return *std::get<std::unique_ptr<data_consumer::continuous_data_consumer_input_stream>>(_stream);
+    }
+
+    future<temporary_buffer<char>> read_via_consume() {
+        // Takes a single buffer (an empty one at end of file), and stops.
+        temporary_buffer<char> out;
+        co_await cds().consume(std::nullopt, [&] (temporary_buffer<char> data) -> consumption_result<char> {
+            out = std::move(data);
+            return stop_consuming<char>{temporary_buffer<char>()};
+        });
+        co_return out;
+    }
+
+    future<temporary_buffer<char>> read_exactly_via_consume(size_t n) {
+        temporary_buffer<char> out(n);
+        size_t filled = 0;
+        if (n != 0) {
+            co_await cds().consume(std::nullopt, [&] (temporary_buffer<char> data) -> consumption_result<char> {
+                const size_t take = std::min(data.size(), n - filled);
+                std::copy_n(data.get(), take, out.get_write() + filled);
+                filled += take;
+                if (filled == n) {
+                    // Hand back what we didn't take, so the next read gets it.
+                    return stop_consuming<char>{data.share(take, data.size() - take)};
+                }
+                return continue_consuming{};
+            });
+        }
+        out.trim(filled);
+        co_return out;
+    }
+
+public:
+    explicit compressed_reader(input_stream<char> s) : _stream(std::move(s)) {}
+    explicit compressed_reader(std::unique_ptr<data_consumer::continuous_data_consumer_input_stream> s) : _stream(std::move(s)) {}
+
+    future<temporary_buffer<char>> read_exactly(size_t n) {
+        if (auto* is = std::get_if<input_stream<char>>(&_stream)) {
+            return is->read_exactly(n);
+        }
+        return read_exactly_via_consume(n);
+    }
+
+    future<temporary_buffer<char>> read() {
+        if (auto* is = std::get_if<input_stream<char>>(&_stream)) {
+            return is->read();
+        }
+        return read_via_consume();
+    }
+
+    future<> skip(uint64_t n) {
+        if (auto* is = std::get_if<input_stream<char>>(&_stream)) {
+            return is->skip(n);
+        }
+        return cds().skip(n);
+    }
+};
+} // anonymous namespace
+
 SEASTAR_TEST_CASE(test_skipping_in_compressed_stream) {
     return seastar::async([] {
         tests::reader_concurrency_semaphore_wrapper semaphore;
 
+      for (const auto version : {sstables::sstable_version_types::me, sstables::sstable_version_types::mu}) {
         tmpdir tmp;
         auto file_path = (tmp.path() / "test").string();
         file f = open_file_dma(file_path, open_flags::create | open_flags::wo).get();
@@ -734,7 +810,7 @@ SEASTAR_TEST_CASE(test_skipping_in_compressed_stream) {
         sstables::compression c;
         // this initializes "c"
         auto os = make_file_output_stream(f, file_output_stream_options()).get();
-        auto out = make_compressed_file_m_format_output_stream(std::move(os), &c, cp, make_lz4_sstable_compressor_for_tests());
+        auto out = make_compressed_file_m_format_output_stream(std::move(os), &c, version, cp, make_lz4_sstable_compressor_for_tests(), 0);
 
         // Make sure that amount of written data is a multiple of chunk_len so that we hit #2143.
         temporary_buffer<char> buf1(c.uncompressed_chunk_length());
@@ -752,20 +828,39 @@ SEASTAR_TEST_CASE(test_skipping_in_compressed_stream) {
         auto compressed_size = seastar::file_size(file_path).get();
         c.update(compressed_size);
 
-        auto make_is = [&] {
+        auto make_is = [&] () -> compressed_reader {
+            if (index_holds_physical_positions(version)) {
+                // Physically-indexed (`mu`): navigate by chunk coordinates through
+                // decompressing_cursor, opening a fresh data source over
+                // the whole compressed file each time.
+                auto opener = [file_path, compressed_size] () -> future<data_source> {
+                    auto rf = co_await open_file_dma(file_path, open_flags::ro);
+                    file_input_stream_options options;
+                    options.read_ahead = 0;
+                    co_return make_file_data_source(std::move(rf), 0, compressed_size, std::move(options));
+                };
+                return compressed_reader(make_decompressing_cursor(
+                        sstables::decompressing_cursor_source_opener(std::move(opener)),
+                        sstables::disk_read_range(sstables::sstable_position::from_physical(0, 0, 0),
+                                sstables::sstable_position::from_physical(compressed_size, 0, 0)),
+                        c.get_compressor(), sstables::framed_chunk_codec(version, c.uncompressed_chunk_length()), compressed_size, semaphore.make_permit(), std::nullopt));
+            }
             f = open_file_dma(file_path, open_flags::ro).get();
             auto stream_creator = [f](uint64_t pos, uint64_t len, file_input_stream_options options)->future<input_stream<char>> {
                 co_return input_stream<char>(make_file_data_source(std::move(f), pos, len, std::move(options)));
             };
-            return make_compressed_file_m_format_input_stream(stream_creator, &c, 0, uncompressed_size, opts, semaphore.make_permit(), std::nullopt);
+            return compressed_reader(make_compressed_file_m_format_input_stream(stream_creator, &c, version,
+                    sstables::disk_read_range(sstables::sstable_position::from_logical(0),
+                                              sstables::sstable_position::from_logical(uncompressed_size)),
+                    opts, semaphore.make_permit(), std::nullopt));
         };
 
-        auto expect = [] (input_stream<char>& in, const temporary_buffer<char>& buf) {
+        auto expect = [] (compressed_reader& in, const temporary_buffer<char>& buf) {
             auto b = in.read_exactly(buf.size()).get();
             BOOST_REQUIRE(b == buf);
         };
 
-        auto expect_eof = [] (input_stream<char>& in) {
+        auto expect_eof = [] (compressed_reader& in) {
             auto b = in.read().get();
             BOOST_REQUIRE(b.empty());
         };
@@ -811,6 +906,7 @@ SEASTAR_TEST_CASE(test_skipping_in_compressed_stream) {
         in.skip(opts.buffer_size).get();
         in.skip(opts.buffer_size).get();
         expect_eof(in);
+      }
       }
     });
 }
@@ -1207,6 +1303,10 @@ SEASTAR_TEST_CASE(test_digest_persistence_data_compressed) {
     return test_component_digest_persistence(component_type::Data, sstable::version_types::me, compress_sstable::yes);
 }
 
+SEASTAR_TEST_CASE(test_digest_persistence_data_compressed_mu) {
+    return test_component_digest_persistence(component_type::Data, sstable::version_types::mu, compress_sstable::yes);
+}
+
 static future<> test_component_digest_validation(component_type component, sstable::version_types version, sstring expected_message, compress_sstable compress = compress_sstable::no) {
     return test_env::do_with_async([component, version, expected_message = std::move(expected_message), compress] (test_env& env) mutable {
         sstables::scoped_no_abort_on_malformed_sstable_error no_abort;
@@ -1259,4 +1359,121 @@ SEASTAR_TEST_CASE(test_digest_validation_toc) {
 
 SEASTAR_TEST_CASE(test_digest_validation_scylla) {
     return test_component_digest_validation(component_type::Scylla, sstable::version_types::me, "Scylla digest mismatch");
+}
+
+// Formats that support incompatible features always write an empty
+// IncompatibleFeatures entry to Scylla.db. Older formats don't write it.
+// Loading an sstable that uses an unknown incompatible feature must fail.
+SEASTAR_TEST_CASE(test_incompatible_features) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto random_spec = tests::make_random_schema_specification(
+            "ks",
+            std::uniform_int_distribution<size_t>(1, 4),
+            std::uniform_int_distribution<size_t>(2, 4),
+            std::uniform_int_distribution<size_t>(2, 8),
+            std::uniform_int_distribution<size_t>(2, 8));
+        auto random_schema = tests::random_schema{tests::random::get_int<uint32_t>(), *random_spec};
+        auto schema = random_schema.schema();
+        const auto muts = tests::generate_random_mutations(random_schema, 2).get();
+
+        for (auto version : writable_sstable_versions) {
+            testlog.info("version={}", version);
+            auto sst = make_sstable_containing(env.make_sstable(schema, version), muts).get();
+            auto* features = sstables::test(sst)._scylla_metadata()->get_incompatible_features();
+            BOOST_REQUIRE_EQUAL(bool(features), supports_incompatible_features(version));
+            if (features) {
+                BOOST_REQUIRE(features->words.elements.empty());
+            }
+        }
+
+        auto sst = make_sstable_containing(env.make_sstable(schema, sstable_version_types::mu), muts).get();
+        auto toc_path = fmt::to_string(sst->toc_filename());
+        auto entry_desc = sstables::parse_path(toc_path, schema->ks_name(), schema->cf_name()).value();
+        auto dir_path = std::filesystem::path(toc_path).parent_path().string();
+
+        // Set feature 100, which this version of Scylla doesn't know.
+        sstables::test(sst).remove_component(component_type::Scylla).get();
+        sst->write_component_with_metadata_and_modifier(component_type::Scylla, [&] (sstable&) {
+            sstable_incompatible_features features;
+            features.words.elements = {0, uint64_t(1) << 36};
+            sstables::test(sst)._scylla_metadata()->data.set<scylla_metadata_type::IncompatibleFeatures>(std::move(features));
+        });
+        sst = nullptr;
+
+        auto sst_reopened = env.make_sstable(schema, dir_path, entry_desc.generation, entry_desc.version, entry_desc.format);
+        BOOST_REQUIRE_EXCEPTION(sst_reopened->load(schema->get_sharder()).get(), std::runtime_error,
+            exception_predicate::message_contains("uses incompatible features unknown to this version of Scylla: 100"));
+    });
+}
+
+// Changes one byte in each page of a file.
+static void corrupt_every_page(sstring path) {
+    auto f = open_file_dma(path, open_flags::rw).get();
+    auto close_f = deferred_close(f);
+    auto size = f.size().get();
+    for (uint64_t pos = 0; pos < size; pos += sstables::trie::BTI_PAGE_SIZE) {
+        auto page = f.dma_read_exactly<char>(pos, sstables::trie::BTI_PAGE_SIZE).get();
+        auto buf = temporary_buffer<char>::aligned(f.memory_dma_alignment(), page.size());
+        std::copy(page.begin(), page.end(), buf.get_write());
+        buf.get_write()[7] ^= 1;
+        f.dma_write(pos, buf.get(), buf.size()).get();
+    }
+    f.flush().get();
+}
+
+// The CRC32 of each page of the BTI index files of `mu` is checked on every
+// path that reads the pages from disk: when the sstable is loaded, and by index
+// readers with and without the index cache.
+SEASTAR_TEST_CASE(test_mu_index_page_checksums) {
+    return test_env::do_with_async([] (test_env& env) {
+        for (auto compression : {compression_parameters::no_compression(), compression_parameters(compression_parameters::algorithm::lz4)}) {
+            auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
+                .with_column("pk", int32_type, column_kind::partition_key)
+                .with_column("ck", int32_type, column_kind::clustering_key)
+                .with_column("v", bytes_type)
+                .set_compressor_params(compression)
+                .build();
+            utils::chunked_vector<mutation> muts;
+            for (int32_t i = 0; i < 10; ++i) {
+                mutation m(s, partition_key::from_single_value(*s, int32_type->decompose(i)));
+                // Partition 0 is large, so it has a row index.
+                for (int32_t ck = 0; ck < (i == 0 ? 2000 : 1); ++ck) {
+                    m.set_clustered_cell(clustering_key::from_single_value(*s, int32_type->decompose(ck)), "v",
+                        data_value(bytes(bytes::initialized_later(), 200)), api::new_timestamp());
+                }
+                muts.push_back(std::move(m));
+            }
+            auto sst = make_sstable_containing(env.make_sstable(s, sstable_version_types::mu), muts).get();
+            auto toc_path = fmt::to_string(sst->toc_filename());
+            auto entry_desc = sstables::parse_path(toc_path, s->ks_name(), s->cf_name()).value();
+            auto dir_path = std::filesystem::path(toc_path).parent_path().string();
+            BOOST_REQUIRE_GT(std::filesystem::file_size(sst->get_filename(component_type::Rows).format().c_str()), 0);
+
+            auto look_up_all = [&] (use_caching caching) {
+                auto ir = sst->make_index_reader(env.make_reader_permit(), {}, caching, false);
+                auto close_ir = deferred_close(*ir);
+                for (const auto& m : muts) {
+                    BOOST_REQUIRE(ir->advance_lower_and_check_if_present(dht::ring_position_view(m.decorated_key())).get());
+                    (void)ir->sstable_positions();
+                }
+            };
+            // Without the cache, so that Rows.db stays uncached.
+            look_up_all(use_caching::no);
+
+            // Rows.db isn't cached yet, so both paths read it from disk.
+            corrupt_every_page(sst->get_filename(component_type::Rows).format());
+            BOOST_REQUIRE_THROW(look_up_all(use_caching::no), sstables::malformed_sstable_exception);
+            BOOST_REQUIRE_THROW(look_up_all(use_caching::yes), sstables::malformed_sstable_exception);
+
+            // Loading the sstable read the Partitions.db trailer through the
+            // cache, so only the path without the cache reads it from disk.
+            corrupt_every_page(sst->get_filename(component_type::Partitions).format());
+            BOOST_REQUIRE_THROW(look_up_all(use_caching::no), sstables::malformed_sstable_exception);
+
+            // Loading the sstable again reads the trailer from disk.
+            sst = nullptr;
+            auto sst_reopened = env.make_sstable(s, dir_path, entry_desc.generation, entry_desc.version, entry_desc.format);
+            BOOST_REQUIRE_THROW(sst_reopened->load(s->get_sharder()).get(), sstables::malformed_sstable_exception);
+        }
+    });
 }

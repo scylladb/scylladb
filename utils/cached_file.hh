@@ -18,6 +18,8 @@
 #include "tracing/trace_state.hh"
 #include "utils/cached_file_stats.hh"
 
+#include <functional>
+#include <span>
 #include <seastar/core/file.hh>
 #include <seastar/core/layered_file.hh>
 #include <seastar/coroutine/maybe_yield.hh>
@@ -47,6 +49,11 @@ public:
     using page_count_type = uint64_t;
 
     using offset_type = uint64_t;
+
+    // Checks a page read from the file, before the page is cached.
+    // Throws if the page is corrupt. Then the read fails, and nothing is cached.
+    // The arguments are the position of the page in the file, and its contents.
+    using page_verifier = std::function<void(offset_type, std::span<const char>)>;
 
 private:
     class cached_page final : public index_evictable {
@@ -163,6 +170,7 @@ private:
 
     offset_type _last_page_size;
     page_idx_type _last_page;
+    page_verifier _verifier;
 public:
     using ptr_type = cached_page::ptr_type;
     struct page_read_result {
@@ -206,6 +214,12 @@ private:
 
         return _file.dma_read_exactly<char>(idx * page_size, size)
             .then([this, ag = std::move(await_guard), units = std::move(units), idx] (temporary_buffer<char>&& buf) mutable {
+                if (_verifier) {
+                    // Verify all pages before caching any of them.
+                    for (size_t off = 0; off < buf.size(); off += page_size) {
+                        _verifier((idx * page_size) + off, std::span<const char>(buf.get() + off, std::min(page_size, buf.size() - off)));
+                    }
+                }
                 cached_page::ptr_type first_page;
                 while (buf.size()) {
                     auto this_size = std::min(page_size, buf.size());
@@ -456,7 +470,8 @@ public:
     /// \param m Metrics object which should be updated from operations on this object.
     ///          The metrics object can be shared by many cached_file instances, in which case it
     ///          will reflect the sum of operations on all cached_file instances.
-    cached_file(file f, cached_file_stats& m, lru& l, logalloc::region& reg, offset_type size, sstring file_name = {})
+    /// \param verifier If set, checks every page read from the file before it is cached.
+    cached_file(file f, cached_file_stats& m, lru& l, logalloc::region& reg, offset_type size, sstring file_name = {}, page_verifier verifier = {})
         : _file(std::move(f))
         , _file_name(std::move(file_name))
         , _metrics(m)
@@ -467,6 +482,7 @@ public:
         }))
         , _cache(page_idx_less_comparator())
         , _size(size)
+        , _verifier(std::move(verifier))
     {
         offset_type last_byte_offset = _size ? (_size - 1) : 0;
         _last_page_size = (last_byte_offset % page_size) + (_size ? 1 : 0);
