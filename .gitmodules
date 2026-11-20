@@ -12,12 +12,13 @@
 [submodule "scylla-python3"]
 	path = tools/python3
 	url = ../scylla-python3
-[submodule "tools/cqlsh"]
-	path = tools/cqlsh
-	url = ../scylla-cqlsh
 [submodule "fmt"]
 	path = fmt
 	url = ../fmt
 [submodule "c-ares"]
 	path = c-ares
 	url = ../c-ares
+[submodule "tools/cqlsh-rs"]
+	path = tools/cqlsh-rs
+	url = ../cqlsh-rs
+	branch = main
