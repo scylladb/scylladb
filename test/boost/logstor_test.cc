@@ -56,6 +56,7 @@
 #include "serializer_impl.hh"
 #include "test/lib/exception_utils.hh"
 #include "test/lib/eventually.hh"
+#include "test/lib/logstor_record_utils.hh"
 #include "test/lib/logstor_test_utils.hh"
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/mutation_reader_assertions.hh"
@@ -70,58 +71,8 @@ using namespace tests::logstor;
 
 namespace {
 
-schema_ptr make_kv_schema() {
-    return schema_builder(1, "ks", "cf")
-            .with_column("pk", utf8_type, column_kind::partition_key)
-            .with_column("v", utf8_type)
-            .build();
-}
-
 primary_index_key make_index_key(const schema&, const dht::decorated_key& dk) {
     return primary_index_key{dk};
-}
-
-mutation make_kv_mutation(schema_ptr schema, const partition_key& key, sstring value, api::timestamp_type ts = api::min_timestamp) {
-    auto dk = dht::decorate_key(*schema, key);
-    mutation m(schema, dk);
-    auto& row = m.partition().clustered_row(*schema, clustering_key::make_empty());
-    row.apply(row_marker(ts));
-    const auto& v_def = *schema->get_column_definition("v");
-    row.cells().apply(v_def, atomic_cell::make_live(*v_def.type, ts, serialized(value)));
-    return m;
-}
-
-mutation make_kv_mutation(schema_ptr schema, sstring pk, sstring value, api::timestamp_type ts = api::min_timestamp) {
-    auto key = partition_key::from_single_value(*schema, serialized(pk));
-    return make_kv_mutation(std::move(schema), key, std::move(value), ts);
-}
-
-log_record make_log_record(schema_ptr schema, sstring pk, sstring value, api::timestamp_type ts = api::min_timestamp) {
-    auto m = make_kv_mutation(schema, std::move(pk), std::move(value), ts);
-    return log_record {
-        .header = {
-            .key = m.decorated_key(),
-            .timestamp = ts,
-            .table = schema->id(),
-        },
-        .value = encode_record_value(m),
-    };
-}
-
-// The mutation that a record value decodes to, for the tests that compare mutations: the decoder
-// gives a single_row_partition.
-mutation decode_to_mutation(const record_value& v, schema_ptr s, const record_header& h) {
-    auto partition = decode_record_value(v, *s, h);
-    return to_mutation(std::move(s), h.key, std::move(partition));
-}
-
-// The mutation that a whole record holds.
-mutation to_mutation(const log_record& r, schema_ptr s) {
-    return decode_to_mutation(r.value, std::move(s), r.header);
-}
-
-temporary_buffer<char> copy_chunk(bytes_view chunk) {
-    return temporary_buffer<char>(reinterpret_cast<const char*>(chunk.data()), chunk.size());
 }
 
 temporary_buffer<char> concat_chunks(std::initializer_list<const temporary_buffer<char>*> bufs) {
@@ -139,33 +90,8 @@ temporary_buffer<char> concat_chunks(std::initializer_list<const temporary_buffe
     return out;
 }
 
-log_record read_record_at_location(const temporary_buffer<char>& segment, record_location loc) {
-    BOOST_REQUIRE_EQUAL(loc.offset + loc.size <= segment.size(), true);
-
-    temporary_buffer<char> buf(loc.size);
-    std::copy_n(segment.get() + loc.offset, loc.size, buf.get_write());
-    auto frame = simple_memory_input_stream(buf.begin(), buf.size());
-    return ondisk::read_record_frame(frame);
-}
-
 void flip_byte(temporary_buffer<char>& buf, size_t offset) {
     buf.get_write()[offset] ^= char(0x1);
-}
-
-ondisk::chunk_header_common read_chunk_header_common(const temporary_buffer<char>& buf) {
-    auto in = seastar::simple_memory_input_stream(buf.get(), ondisk::chunk_header_common_size);
-    return ser::deserialize(in, std::type_identity<ondisk::chunk_header_common>{});
-}
-
-// Returns the bytes of the chunk header at the start of `buf` that follow its common part.
-std::span<const char> chunk_header_rest(const temporary_buffer<char>& buf, segment_kind kind) {
-    return std::span(buf.get() + ondisk::chunk_header_common_size, ondisk::chunk_header_size(kind) - ondisk::chunk_header_common_size);
-}
-
-// Returns the chunk header at the start of `buf`, or nullopt if it is not valid.
-std::optional<ondisk::chunk_header> read_chunk_header(const temporary_buffer<char>& buf) {
-    const auto common = read_chunk_header_common(buf);
-    return ondisk::parse_chunk_header(common, chunk_header_rest(buf, common.kind));
 }
 
 // Rewrites the common part of the chunk header at the start of `buf` with `change` applied and a
@@ -224,28 +150,6 @@ rewritten_stream_result rewrite_streamed_segment(log_segment_id segment_id, segm
     temporary_buffer<char> out(written.size());
     std::copy(written.begin(), written.end(), out.get_write());
     return rewritten_stream_result{.data = std::move(out), .write_count = write_count};
-}
-
-struct scanned_record {
-    record_location location;
-    log_record record;
-};
-
-std::vector<scanned_record> scan_buffer_records(const temporary_buffer<char>& buf, log_segment_id segment_id) {
-    temporary_buffer<char> copy(buf.size());
-    std::copy_n(buf.get(), buf.size(), copy.get_write());
-    auto in = seastar::util::as_input_stream(std::move(copy));
-    std::vector<scanned_record> records;
-
-    segment_scanner scanner(in, segment_id, buf.size());
-    while (auto* chunk = scanner.next_chunk().get()) {
-        for (const auto& record : chunk->records()) {
-            records.push_back(scanned_record{.location = record.location, .record = record.to_log_record()});
-        }
-    }
-    in.close().get();
-
-    return records;
 }
 
 void assert_log_record_matches(schema_ptr schema, const log_record& actual, const log_record& expected) {
