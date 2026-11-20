@@ -95,6 +95,9 @@ public:
     void propagate_replacement(compaction::compaction_group_view& table_s, const std::vector<shared_sstable>& removed, const std::vector<shared_sstable>& added);
 
     future<> perform_compaction(shared_ptr<compaction::compaction_task_executor> task);
+    // Like perform_compaction(), but runs the task the way the compaction manager does, as a task
+    // of the task manager.
+    future<> perform_compaction_as_task(shared_ptr<compaction::compaction_task_executor> task);
 
     bool is_compaction_state_gate_closed(compaction::compaction_group_view& table_s);
     future<> close_compaction_state_gate(compaction::compaction_group_view& table_s);
@@ -102,6 +105,10 @@ public:
     void trigger_auto_scrub_timer();
     future<> submit_automatic_scrub(compaction::compaction_group_view& t);
     future<> reevaluate_automatic_scrub();
+
+    // Marks those of the sstables which hold data outside of the owned ranges as requiring
+    // cleanup, the way cleanup does before it compacts them.
+    void mark_sstables_requiring_cleanup(compaction::compaction_group_view& t, const std::vector<shared_sstable>& sstables, compaction::owned_ranges_ptr owned_ranges);
 
     std::unordered_map<compaction::compaction_group_view*, compaction::compaction_state>& get_compaction_state() {
         return _cm._compaction_state;

@@ -129,6 +129,9 @@ public:
     future<> on_compaction_completion(compaction::compaction_completion_desc desc, sstables::offstrategy offstrategy) override {
         return table().try_get_compaction_group_view_with_static_sharding().on_compaction_completion(std::move(desc), offstrategy);
     }
+    future<> set_run_identifier(std::vector<sstables::shared_sstable> sstables, sstables::run_id run_identifier) override {
+        return table().try_get_compaction_group_view_with_static_sharding().set_run_identifier(std::move(sstables), run_identifier);
+    }
     bool is_auto_compaction_disabled_by_user() const noexcept override {
         return table().is_auto_compaction_disabled_by_user();
     }
@@ -653,6 +656,17 @@ future<> test_env_compaction_manager::perform_compaction(shared_ptr<compaction::
     co_await task->run_compaction();
 }
 
+future<> test_env_compaction_manager::perform_compaction_as_task(shared_ptr<compaction::compaction_task_executor> executor) {
+    _cm._tasks.push_back(*executor);
+    auto unregister_task = defer([executor] noexcept {
+        executor->release();
+        executor->unlink();
+        executor->switch_state(compaction::compaction_task_executor::state::none);
+    });
+    auto task = co_await _cm.start_compaction_task(executor, {.type = "test compaction"}, tasks::make_empty_task_info());
+    co_await task->done();
+}
+
 bool test_env_compaction_manager::is_compaction_state_gate_closed(compaction::compaction_group_view& table_s) {
     return _cm.get_compaction_state(&table_s).gate.is_closed();
 }
@@ -671,6 +685,16 @@ future<> test_env_compaction_manager::submit_automatic_scrub(compaction::compact
 
 future<> test_env_compaction_manager::reevaluate_automatic_scrub() {
     return _cm.do_one_automatic_scrub_reevaluation();
+}
+
+void test_env_compaction_manager::mark_sstables_requiring_cleanup(compaction::compaction_group_view& t, const std::vector<shared_sstable>& sstables, compaction::owned_ranges_ptr owned_ranges) {
+    for (const auto& sst : sstables) {
+        _cm.update_sstable_cleanup_state(t, sst, *owned_ranges);
+    }
+    auto& cs = _cm.get_compaction_state(&t);
+    if (cs.has_sstables_requiring_cleanup()) {
+        cs.set_cleanup_owned_ranges(std::move(owned_ranges));
+    }
 }
 
 }

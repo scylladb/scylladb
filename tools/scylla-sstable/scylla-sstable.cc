@@ -1139,6 +1139,13 @@ public:
     virtual api::timestamp_type min_memtable_live_row_marker_timestamp() const override { return api::min_timestamp; }
     virtual bool memtable_has_key(const dht::decorated_key& key) const override { return false; }
     virtual future<> on_compaction_completion(compaction::compaction_completion_desc desc, sstables::offstrategy offstrategy) override { return make_ready_future<>(); }
+    virtual future<> set_run_identifier(std::vector<sstables::shared_sstable> sstables, sstables::run_id run_identifier) override {
+        // The main set holds no sstables to index by run identifier.
+        for (auto& sst : sstables) {
+            sst->set_run_identifier(run_identifier);
+        }
+        return make_ready_future<>();
+    }
     virtual bool is_auto_compaction_disabled_by_user() const noexcept override { return false; }
     virtual bool tombstone_gc_enabled() const noexcept override { return false; }
     virtual tombstone_gc_state get_tombstone_gc_state() const noexcept override { return _tombstone_gc_state; }
