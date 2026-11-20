@@ -1778,9 +1778,7 @@ const storage_group_map& table::storage_groups() const {
     return _sg_manager->storage_groups();
 }
 
-future<utils::chunked_vector<sstables::sstable_files_snapshot>> table::take_storage_snapshot(dht::token_range tr) {
-    utils::chunked_vector<sstables::sstable_files_snapshot> ret;
-
+future<> table::for_each_sstable_in_storage_snapshot(dht::token_range tr, noncopyable_function<future<>(const sstables::shared_sstable&)> func) {
     for (auto& sg : storage_groups_for_token_range(tr)) {
         co_await utils::get_local_injector().inject("take_storage_snapshot", utils::wait_for_message(60s));
 
@@ -1798,14 +1796,27 @@ future<utils::chunked_vector<sstables::sstable_files_snapshot>> table::take_stor
         auto deletion_guard = co_await get_sstable_list_permit();
         // It's vital that we build a set on the storage group level, since sstables
         // might move across compaction groups in the background.
-        co_await sg->make_sstable_set()->for_each_sstable_gently([&] (const sstables::shared_sstable& sst) -> future<> {
-           ret.push_back({
-               .sst = sst,
-               .files = co_await sst->readable_file_for_all_components(),
-           });
-        });
+        co_await sg->make_sstable_set()->for_each_sstable_gently([&func] (const sstables::shared_sstable& sst) { return func(sst); });
     }
+}
 
+future<utils::chunked_vector<sstables::sstable_files_snapshot>> table::take_storage_snapshot(dht::token_range tr) {
+    utils::chunked_vector<sstables::sstable_files_snapshot> ret;
+    co_await for_each_sstable_in_storage_snapshot(tr, [&] (const sstables::shared_sstable& sst) -> future<> {
+        ret.push_back({
+            .sst = sst,
+            .files = co_await sst->readable_file_for_all_components(),
+        });
+    });
+    co_return std::move(ret);
+}
+
+future<utils::chunked_vector<sstables::shared_sstable>> table::take_storage_sstables_snapshot(dht::token_range tr) {
+    utils::chunked_vector<sstables::shared_sstable> ret;
+    co_await for_each_sstable_in_storage_snapshot(tr, [&] (const sstables::shared_sstable& sst) -> future<> {
+        ret.push_back(sst);
+        return make_ready_future<>();
+    });
     co_return std::move(ret);
 }
 

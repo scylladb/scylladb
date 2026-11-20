@@ -1540,6 +1540,8 @@ private:
     void do_update_off_strategy_trigger();
 
     compaction_group* try_get_compaction_group_with_static_sharding() const;
+    // Flushes and visits the sstables of the storage groups overlapping tr, under the sstable list permit.
+    future<> for_each_sstable_in_storage_snapshot(dht::token_range tr, noncopyable_function<future<>(const sstables::shared_sstable&)> func);
 public:
     void update_off_strategy_trigger();
     void enable_off_strategy_trigger();
@@ -1564,6 +1566,8 @@ public:
     // all compaction groups that overlap with a given token range. The output is
     // a list of SSTables that represent the snapshot.
     future<utils::chunked_vector<sstables::sstable_files_snapshot>> take_storage_snapshot(dht::token_range tr);
+    // Same as take_storage_snapshot(), without opening the component files.
+    future<utils::chunked_vector<sstables::shared_sstable>> take_storage_sstables_snapshot(dht::token_range tr);
 
     // Takes snapshot of current sstable set all compaction groups.
     future<utils::chunked_vector<sstables::shared_sstable>> take_sstable_set_snapshot();
