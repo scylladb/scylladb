@@ -28,6 +28,8 @@ public:
         std::string region;
         std::string iam_role_arn;
         bool legacy_format; // FIXME convert it to bool_class after seastar#3198
+        // Set when the entry gives its address in `uri`; the entry is then looked up by this name.
+        std::string name;
 
         std::strong_ordering operator<=>(const s3_storage&) const = default;
         std::string to_json_string() const;
@@ -36,6 +38,8 @@ public:
     struct gs_storage {
         std::string endpoint; // "default"/empty or an URI
         std::string credentials_file; // optional
+        // Set when the entry gives its address in `uri`; the entry is then looked up by this name.
+        std::string name;
 
         std::strong_ordering operator<=>(const gs_storage&) const = default;
         std::string to_json_string() const;

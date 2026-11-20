@@ -106,11 +106,17 @@ class storage_manager : public peering_sharded_service<storage_manager> {
     semaphore _object_storage_clients_memory;
     s3::group_connections _group_connections;
     std::unordered_map<sstring, object_storage_endpoint> _object_storage_endpoints;
+    // The clients that talk to the object storage, one per address. Endpoints that
+    // have the same address share one; the first of them in the configuration
+    // supplies its settings.
+    std::unordered_map<sstring, object_storage_endpoint> _address_clients;
     std::unique_ptr<config_updater_sync> _config_updater;
     std::unique_ptr<connections_updater_sync> _connections_updater;
     seastar::metrics::metric_groups metrics;
 
     object_storage_endpoint& get_endpoint(const sstring& ep);
+    void add_address(const db::object_storage_endpoint_param& ep);
+    shared_ptr<object_storage_client> get_address_client(const sstring& address);
     void reload_group_connections(const db::config& cfg, std::optional<unsigned> budget_override = std::nullopt);
 
 public:
