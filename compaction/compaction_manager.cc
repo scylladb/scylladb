@@ -27,11 +27,13 @@
 #include <seastar/coroutine/maybe_yield.hh>
 #include "sstables/sstable_directory.hh"
 #include "utils/assert.hh"
+#include "utils/chunked_vector.hh"
 #include "utils/error_injection.hh"
 #include "utils/UUID_gen.hh"
 #include "db/compaction_history_entry.hh"
 #include "db/system_keyspace.hh"
 #include "db/config.hh"
+#include "db/cluster_config_registry.hh"
 #include "tombstone_gc-internals.hh"
 #include <cmath>
 #include "utils/labels.hh"
@@ -1238,6 +1240,9 @@ compaction_manager::compaction_manager(config cfg, abort_source& as, tasks::task
 {
     tm.register_module(_task_manager_module->get_name(), _task_manager_module);
     register_metrics();
+    // The option's default, until the cluster config delivers the effective value.
+    const auto& throughput_opt = *db::cluster_config_registry::find(db::cluster_config_registry::option_name::auto_scrub_io_throughput_mb_per_sec_per_shard);
+    _automatic_scrub_throughput = uint64_t(db::cluster_config_registry::to_integer(throughput_opt, std::nullopt)) << 20;
 }
 
 compaction_manager::compaction_manager(tasks::task_manager& tm)
@@ -1335,6 +1340,8 @@ std::function<void()> compaction_manager::compaction_submission_callback() {
 
 std::function<void()> compaction_manager::automatic_scrub_submission_callback() {
     return [this] {
+        refill_automatic_scrub_credit();
+
         // The timer is independent of enable()/drain(), so a tick landing while the manager
         // is disabled must do nothing: the reevaluation fiber only runs while it is enabled.
         if (is_disabled()) {
@@ -1354,16 +1361,125 @@ future<> compaction_manager::do_one_automatic_scrub_reevaluation() {
         cmlog.debug("Running automatic scrub");
     }
 
-    auto candidates = std::exchange(_awaiting_automatic_scrub, {});
+    auto views = std::exchange(_awaiting_automatic_scrub, {}) | std::ranges::to<std::vector>();
+    try {
+        co_await run_automatic_scrub(std::move(views));
+    } catch (...) {
+        cmlog.warn("Automatic scrub failed: {}", std::current_exception());
+    }
+}
 
-    for (auto t : candidates) {
-        try {
-            if (is_disabled() || !_compaction_state.contains(t) || !automatic_scrub_enabled(*t)) {
-                co_await coroutine::maybe_yield();
-                continue;
+// The time an sstable was last validated at, for the purpose of ordering sstables.
+// Sstables whose validation time is unknown, or is in the future (see
+// should_be_automatically_scrubbed()), sort before all others.
+static db_clock::time_point automatic_scrub_last_validated_at(const sstables::shared_sstable& sst, db_clock::time_point now) {
+    auto timestamp = sst->has_scylla_component() ? sst->get_scrub_time() : std::nullopt;
+    if (!timestamp || *timestamp > now) {
+        return db_clock::time_point::min();
+    }
+    return *timestamp;
+}
+
+future<> compaction_manager::run_automatic_scrub(std::vector<compaction_group_view*> views) {
+    const bool paced = _automatic_scrub_throughput != 0;
+    if (paced && _automatic_scrub_credit <= 0) {
+        // Nothing waits for the credit: the next tick submits the views again.
+        co_return;
+    }
+
+    struct planned_sstable {
+        compaction_group_view* view;
+        sstables::generation_type generation;
+        uint64_t bytes;
+        db_clock::time_point validated_at;
+    };
+    // The plan: the eligible sstables which were validated the longest time ago, as many as
+    // there is credit for. Scrubbing these first makes sure that no sstable is starved when
+    // there are more eligible sstables than what can be scrubbed in a scrub period.
+    //
+    // When paced, the plan is a max-heap while going over the sstables: when it has more
+    // than enough, the sstable which was validated the most recently is dropped. This way
+    // the plan, and the work to order it, is bounded by the credit and not by the number
+    // of eligible sstables. Unpaced, the plan has all the eligible sstables.
+    //
+    // Compaction is not disabled, so the plan can be outdated by the time a task gets to an
+    // sstable: the task checks each sstable again. The plan only has the generations of the
+    // sstables, so that it does not keep alive those which are removed in the meantime.
+    utils::chunked_vector<planned_sstable> planned;
+    uint64_t planned_bytes = 0;
+    const uint64_t credit = paced ? _automatic_scrub_credit : 0;
+    const auto validated_before = [] (const planned_sstable& a, const planned_sstable& b) {
+        return a.validated_at < b.validated_at;
+    };
+    const auto now = db_clock::now();
+    const auto plan_epoch = _automatic_scrub_plan_epoch;
+
+    for (auto t : views) {
+        co_await coroutine::maybe_yield();
+        if (!_compaction_state.contains(t) || !automatic_scrub_enabled(*t)) {
+            continue;
+        }
+        // Keeps the view and its compaction state alive.
+        auto gh = start_compaction(*t);
+        if (!gh) {
+            continue;
+        }
+        auto& state = get_compaction_state(t);
+        if (state.compaction_disabled()) {
+            // Leave it to the reenabler to reschedule the automatic scrub.
+            state.automatic_scrub_blocked = true;
+            continue;
+        }
+        auto main_set = co_await t->main_sstable_set();
+        co_await main_set->for_each_sstable_gently([&] (const sstables::shared_sstable& sst) {
+            if (!eligible_for_compaction(sst) || state.requires_cleanup(sst) || !should_be_automatically_scrubbed(*t, sst)) {
+                return;
             }
+            planned.push_back({t, sst->generation(), sst->bytes_on_disk(), automatic_scrub_last_validated_at(sst, now)});
+            planned_bytes += planned.back().bytes;
+            if (!paced) {
+                return;
+            }
+            std::ranges::push_heap(planned, validated_before);
+            // An sstable is planned whole, so the plan has more than enough if it uses up
+            // the credit even without its most recently validated sstable.
+            while (planned_bytes - planned.front().bytes >= credit) {
+                std::ranges::pop_heap(planned, validated_before);
+                planned_bytes -= planned.back().bytes;
+                planned.pop_back();
+            }
+        });
+    }
 
-            co_await submit_automatic_scrub(*t);
+    if (plan_epoch != _automatic_scrub_plan_epoch) {
+        // The limit changed while planning.
+        co_return;
+    }
+    if (paced) {
+        _automatic_scrub_credit -= planned_bytes;
+    }
+    std::ranges::sort(planned, validated_before);
+
+    // One task for each view which has planned sstables.
+    std::vector<std::pair<compaction_group_view*, std::vector<sstables::generation_type>>> plan;
+    std::unordered_map<compaction_group_view*, size_t> plan_index;
+    for (const auto& sst : planned) {
+        auto [it, inserted] = plan_index.try_emplace(sst.view, plan.size());
+        if (inserted) {
+            plan.emplace_back(sst.view, std::vector<sstables::generation_type>());
+        }
+        plan[it->second].second.push_back(sst.generation);
+    }
+    planned.clear();
+
+    for (auto& [t, sstables] : plan) {
+        if (plan_epoch != _automatic_scrub_plan_epoch) {
+            break;
+        }
+        try {
+            if (_compaction_state.contains(t)) {
+                co_await submit_automatic_scrub(*t, std::move(sstables));
+            }
         } catch (...) {
             if (_compaction_state.contains(t)) {
                 cmlog.warn("Automatic scrub submission for {} failed: {}", *t, std::current_exception());
@@ -1449,6 +1565,24 @@ future<> compaction_manager::stop_automatic_scrub() noexcept {
 
 void compaction_manager::schedule_table_for_automatic_scrub(compaction_group_view* t) {
     _awaiting_automatic_scrub.insert(t);
+}
+
+void compaction_manager::set_automatic_scrub_throughput(uint64_t bytes_per_sec) noexcept {
+    if (bytes_per_sec == _automatic_scrub_throughput) {
+        return;
+    }
+    _automatic_scrub_throughput = bytes_per_sec;
+    ++_automatic_scrub_plan_epoch;
+    if (bytes_per_sec) {
+        cmlog.info0("Automatic scrub throughput limit set to {} MiB/s per shard", bytes_per_sec >> 20);
+    } else {
+        cmlog.info0("Automatic scrub throughput limit disabled");
+    }
+}
+
+void compaction_manager::refill_automatic_scrub_credit() noexcept {
+    const int64_t per_interval = _automatic_scrub_throughput * automatic_scrub_submission_interval().count();
+    _automatic_scrub_credit = std::min(_automatic_scrub_credit + per_interval, per_interval);
 }
 
 bool compaction_manager::should_be_automatically_scrubbed(const compaction_group_view& t, const sstables::shared_sstable& sst, for_regular_compaction regular) {
@@ -2205,31 +2339,42 @@ protected:
 };
 
 class automatic_scrub_task_executor final : public compaction_task_executor {
-    std::unordered_set<sstables::generation_type> _excluded_sstables;
+    // The sstables this task was created to scrub, those it has not got to yet.
+    // An sstable is tried once, so the task finishes even if scrub compactions fail.
+    std::unordered_set<sstables::generation_type> _planned_sstables;
+    const uint64_t _plan_epoch;
 public:
-    automatic_scrub_task_executor(compaction_manager& mgr, throw_if_stopping do_throw_if_stopping, compaction_group_view& t)
+    automatic_scrub_task_executor(compaction_manager& mgr, throw_if_stopping do_throw_if_stopping, compaction_group_view& t,
+            std::vector<sstables::generation_type> sstables)
         : compaction_task_executor(mgr, do_throw_if_stopping, &t, compaction_type::Scrub, "Automatic scrub")
+        , _planned_sstables(std::from_range, std::move(sstables))
+        , _plan_epoch(mgr._automatic_scrub_plan_epoch)
     {}
 private:
-    // Return an sstable eligible for compaction, if there is one.
+    // Return the planned sstable which was validated the longest time ago, if there is one
+    // which is still there and is still eligible.
     future<std::optional<sstables::shared_sstable>> select_sstable(compaction_group_view& t) {
         auto main_set = co_await t.main_sstable_set();
 
         auto filter = [this, &t] (const sstables::shared_sstable& sst) {
-            return _cm.eligible_for_compaction(sst) && !_compaction_state.requires_cleanup(sst)
-                    && compaction_manager::should_be_automatically_scrubbed(t, sst) && !_excluded_sstables.contains(sst->generation());
+            return _planned_sstables.contains(sst->generation())
+                    && _cm.eligible_for_compaction(sst) && !_compaction_state.requires_cleanup(sst)
+                    && compaction_manager::should_be_automatically_scrubbed(t, sst);
         };
 
+        const auto now = db_clock::now();
         std::optional<sstables::shared_sstable> res;
-        auto do_select = [&res, &filter] (const sstables::shared_sstable& sst) -> future<stop_iteration> {
-            if (filter(sst)) {
-                res = sst;
-                co_return stop_iteration::yes;
+        auto res_validated_at = db_clock::time_point::max();
+        co_await main_set->for_each_sstable_gently([&] (const sstables::shared_sstable& sst) {
+            if (!filter(sst)) {
+                return;
             }
-            co_return stop_iteration::no;
-        };
-
-        co_await main_set->for_each_sstable_gently_until(do_select);
+            auto validated_at = automatic_scrub_last_validated_at(sst, now);
+            if (!res || validated_at < res_validated_at) {
+                res = sst;
+                res_validated_at = validated_at;
+            }
+        });
         co_return res;
     }
 
@@ -2401,6 +2546,9 @@ public:
             if (!can_proceed()) {
                 co_return std::nullopt;
             }
+            if (_planned_sstables.empty()) {
+                co_return std::nullopt;
+            }
             switch_state(state::pending);
 
             auto maintenance_permit = co_await acquire_semaphore(_cm._maintenance_ops_sem);
@@ -2413,7 +2561,9 @@ public:
             }
 
             auto sstable_set_units = co_await get_units(_compaction_state.sstable_set_lock, 1);
-            if (!can_proceed()) {
+            // The plan is checked here, after all the waiting, so that no sstable is
+            // started once the plan is dropped.
+            if (!can_proceed() || _plan_epoch != _cm._automatic_scrub_plan_epoch) {
                 co_return std::nullopt;
             }
 
@@ -2430,9 +2580,9 @@ public:
                 co_return std::nullopt;
             }
 
-            // The sstable will not be picked again this automatic scrub cycle.
+            // The sstable will not be picked again by this task.
             // This ensures, that even if scrub compactions fail, this task finishes.
-            _excluded_sstables.emplace(sst->generation());
+            _planned_sstables.erase(sst->generation());
 
             auto descriptor = make_descriptor(sst);
 
@@ -2462,10 +2612,6 @@ public:
 
                 compaction_result res = co_await validate_sstable(std::move(descriptor), std::move(registration));
                 _cm._validation_errors += res.stats.validation_errors;
-                // The newly created sstable should not be selected by the executor, even if it would be eligible.
-                for (const auto& new_sst : res.new_sstables) {
-                    _excluded_sstables.emplace(new_sst->generation());
-                }
                 cmlog.debug("Finished automatic scrub compaction old_sstable={} new_sstable={} compaction_uuid={}",
                     sst, res.new_sstables, _compaction_data.compaction_uuid);
                 finish_compaction();
@@ -2485,11 +2631,26 @@ public:
             finish_compaction(state::failed);
             auto_scrub_permit.return_all();
             maintenance_permit.return_all();
-            if (utils::get_local_injector().enter("automatic_scrub_retry_immediately")) {
-                continue;
-            }
-            if ((co_await maybe_retry(std::move(ex))) == stop_iteration::yes) {
+
+            // No retry, and so no waiting in the task: the sstable is still eligible, a
+            // later reevaluation plans it again.
+            try {
+                std::rethrow_exception(std::move(ex));
+            } catch (compaction_stopped_exception& e) {
+                cmlog.info("{}: {}: stopping", *this, e.what());
                 co_return std::nullopt;
+            } catch (compaction_aborted_exception& e) {
+                cmlog.error("{}: {}: stopping", *this, e.what());
+                _cm._stats.errors++;
+                co_return std::nullopt;
+            } catch (storage_io_error& e) {
+                cmlog.error("{}: failed due to storage io error: {}: stopping", *this, e.what());
+                _cm._stats.errors++;
+                _cm.do_stop();
+                throw;
+            } catch (...) {
+                _cm._stats.errors++;
+                cmlog.error("{}: failed to scrub {}: {}", *this, sst, std::current_exception());
             }
         }
 
@@ -3432,7 +3593,7 @@ compaction_backlog_tracker& compaction_manager::get_backlog_tracker(compaction_g
     return t.get_backlog_tracker();
 }
 
-future<> compaction_manager::submit_automatic_scrub(compaction_group_view& t) {
+future<> compaction_manager::submit_automatic_scrub(compaction_group_view& t, std::vector<sstables::generation_type> sstables) {
     auto gh = start_compaction(t);
     if (!gh) {
         co_return;
@@ -3442,7 +3603,8 @@ future<> compaction_manager::submit_automatic_scrub(compaction_group_view& t) {
         {.type = "automatic scrub", .internal = tasks::is_internal::yes, .reports_progress = false},
         throw_if_stopping::no,
         tasks::make_empty_task_info(),
-        t
+        t,
+        std::move(sstables)
     );
 }
 

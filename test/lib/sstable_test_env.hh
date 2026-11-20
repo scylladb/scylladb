@@ -102,6 +102,13 @@ public:
     void trigger_auto_scrub_timer();
     future<> submit_automatic_scrub(compaction::compaction_group_view& t);
     future<> reevaluate_automatic_scrub();
+    // Automatic scrub is not paced in tests by default, see compaction_manager::_automatic_scrub_throughput.
+    void set_automatic_scrub_throughput(uint64_t bytes_per_sec) {
+        _cm._automatic_scrub_throughput = bytes_per_sec;
+    }
+    void set_automatic_scrub_credit(int64_t bytes) {
+        _cm._automatic_scrub_credit = bytes;
+    }
 
     std::unordered_map<compaction::compaction_group_view*, compaction::compaction_state>& get_compaction_state() {
         return _cm._compaction_state;
