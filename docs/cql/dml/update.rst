@@ -70,6 +70,7 @@ Regarding the :token:`assignment`:
 - ``id.field = 3`` is for setting the value of a field on non-frozen user-defined types. 
 
 Please refer to the :ref:`update parameters <update-parameters>` section for more information on the :token:`update_parameter`.
+For timestamps that are not related to real time, see :ref:`synthetic write timestamps <synthetic-timestamps>`.
 
 .. _IF:
 
