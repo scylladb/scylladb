@@ -264,7 +264,7 @@ class TestSchemaManagement(Tester):
 
         session = self.patient_cql_connection(node1)
 
-        def create_table_case():
+        def create_table_case(populate=True):
             try:
                 logger.debug("Creating table")
                 create_c1c2_table(session)
@@ -274,8 +274,13 @@ class TestSchemaManagement(Tester):
                 # this node.
                 read_barrier(node3)
 
-                logger.debug("Populating")
-                insert_c1c2(session, n=10)
+                if populate:
+                    logger.debug("Populating")
+                    # Write the rows to all three replicas before node2 is killed. With the default periodic
+                    # commitlog sync, killing node2 loses the writes it received in the last seconds. A QUORUM write
+                    # may have reached only node2 and one other replica, and after node2 loses its copy, a QUORUM
+                    # read that goes to node2 and the third replica doesn't find the row.
+                    insert_c1c2(session, n=10, consistency=ConsistencyLevel.ALL)
             except AlreadyExists:
                 # the CQL command can be called multiple time case of retries
                 pass
@@ -300,7 +305,7 @@ class TestSchemaManagement(Tester):
             create_table_case()
 
         case_map = {
-            "create_table": create_table_case,
+            "create_table": functools.partial(create_table_case, populate=False),
             "alter_table": alter_table_case,
             "drop_table": drop_table_case,
         }
@@ -309,6 +314,13 @@ class TestSchemaManagement(Tester):
             kill_node_future = executor.submit(node2.stop, gently=False, wait_other_notice=True)
             case_map[case]()
             kill_node_future.result()
+
+        if case == "create_table":
+            # Write the rows only now, when node2 is down and node1 and node3 know it, so that each QUORUM write
+            # must reach both of them. A row written while node2 was still up, racing the kill, may have reached only
+            # node2 and one other replica, and be lost with node2's copy.
+            logger.debug("Populating")
+            insert_c1c2(session, n=10)
 
         logger.debug("3. Start the stopped node2")
         node2.start(wait_for_binary_proto=True)
@@ -324,13 +336,18 @@ class TestSchemaManagement(Tester):
                 try:
                     query_c1c2(session=session, key=key, consistency=ConsistencyLevel.QUORUM)
                 except AssertionError:
-                    all_rows = rows_to_list(session.execute(SimpleStatement("SELECT * FROM ks.cf;", consistency_level=ConsistencyLevel.QUORUM)))
-                    logger.error(f"Key k{key} not found via QUORUM. All rows in ks.cf: {all_rows}")
+                    logger.error(f"Key k{key} not found via QUORUM")
+                    # Log what each node holds itself. A CL=ONE read through a node can't show this: when the
+                    # node's own read is slow, its speculative retry asks another replica, whose answer may come
+                    # first. MUTATION_FRAGMENTS reads only the node that runs the query. Read before the QUORUM
+                    # scan below, whose read repair can copy the row to more nodes.
                     for node, node_name in [(node1, "node1"), (node2, "node2"), (node3, "node3")]:
                         node_session = self.patient_exclusive_cql_connection(node)
-                        node_rows = rows_to_list(node_session.execute(SimpleStatement(
-                            f"SELECT * FROM ks.cf WHERE key='k{key}';", consistency_level=ConsistencyLevel.ONE)))
-                        logger.error(f"  {node_name} ({node.address()}) has key k{key}: {node_rows}")
+                        fragments = [(r.mutation_source, r.mutation_fragment_kind, r.metadata) for r in node_session.execute(
+                            f"SELECT * FROM MUTATION_FRAGMENTS(ks.cf) WHERE key='k{key}';")]
+                        logger.error(f"  {node_name} ({node.address()}) holds for key k{key}: {fragments}")
+                    all_rows = rows_to_list(session.execute(SimpleStatement("SELECT * FROM ks.cf;", consistency_level=ConsistencyLevel.QUORUM)))
+                    logger.error(f"All rows in ks.cf: {all_rows}")
                     raise
 
         expected_case_result_map = {
