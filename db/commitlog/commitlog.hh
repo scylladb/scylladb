@@ -118,6 +118,10 @@ public:
         bool warn_about_segments_left_on_disk_after_shutdown = true;
         bool allow_going_over_size_limit = false;
         bool allow_fragmented_entries = false;
+        // Segment files of this shard found on disk at start are deleted by
+        // replay cleanup (delete_segments()). Live segments are not deleted
+        // or recycled before them.
+        bool wait_for_replay_cleanup = false;
 
         // The base segment ID to use.
         // The segment IDs of newly allocated segments will be issued sequentially
@@ -314,6 +318,13 @@ public:
      */
     future<> delete_segments(std::vector<sstring>) const;
 
+    /**
+     * Splits segment paths into one group per shard, for delete_segments().
+     * All segments written by one shard land in the same group, so that one
+     * shard deletes them in order. Names that do not parse go to group 0.
+     */
+    static std::vector<std::vector<sstring>> split_segments_for_delete(std::vector<sstring> paths, unsigned shards);
+
     uint64_t get_total_size() const;
     uint64_t get_buffer_size() const;
     uint64_t get_completed_tasks() const;
@@ -398,8 +409,9 @@ public:
     replay_position min_position() const;
 
     // How far the flush requests have got: every closed segment at or below this
-    // position has had its dirty tables asked to flush, and will not be asked again.
-    // Advanced after a round's handlers run, so a handler sees the previous value.
+    // position has had its dirty tables asked to flush. Of those, only the oldest
+    // segment is asked again. Never moves backwards. Advanced after a round's
+    // handlers run, so a handler sees the previous value.
     replay_position flush_position() const;
 
     // For testing only. Returns the active segments current position
