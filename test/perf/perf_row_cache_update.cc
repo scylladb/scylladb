@@ -30,7 +30,7 @@ static const int cell_size = 128;
 static bool cancelled = false;
 
 template<typename MutationGenerator>
-void run_test(const sstring& name, schema_ptr s, MutationGenerator&& gen) {
+void run_test(const sstring& name, schema_ptr s, MutationGenerator&& gen, std::function<mutation()> before_flush = {}) {
     tests::reader_concurrency_semaphore_wrapper semaphore;
     cache_tracker tracker;
     row_cache cache(s, make_empty_snapshot_source(), tracker, is_continuous::yes);
@@ -57,6 +57,10 @@ void run_test(const sstring& name, schema_ptr s, MutationGenerator&& gen) {
                 if (cancelled) {
                     return;
                 }
+            }
+            if (before_flush) {
+                mutation m = before_flush();
+                mt->apply(m);
             }
         });
         memtable_slm.stop();
@@ -181,6 +185,43 @@ static void test_partition_with_lots_of_small_rows() {
     });
 }
 
+static void test_partition_with_lots_of_small_rows_covered_by_tombstone() {
+    auto s = schema_builder("ks", "cf")
+        .with_column("pk", uuid_type, column_kind::partition_key)
+        .with_column("ck", int32_type, column_kind::clustering_key)
+        .with_column("v1", bytes_type, column_kind::regular_column)
+        .with_column("v2", bytes_type, column_kind::regular_column)
+        .with_column("v3", bytes_type, column_kind::regular_column)
+        .build();
+
+    auto pk = dht::decorate_key(*s, partition_key::from_single_value(*s,
+        serialized(utils::UUID_gen::get_time_UUID())));
+    int ck_idx = 0;
+    int flush_ck_idx = 0;
+
+    run_test("Large partition, lots of small rows covered by single tombstone", s, [&] {
+        mutation m(s, pk);
+        auto val = data_value(bytes(bytes::initialized_later(), cell_size));
+        auto ck = clustering_key::from_single_value(*s, serialized(ck_idx++));
+        auto ts = api::new_timestamp();
+        m.set_clustered_cell(ck, "v1", val, ts);
+        m.set_clustered_cell(ck, "v2", val, ts);
+        m.set_clustered_cell(ck, "v3", val, ts);
+        return m;
+    }, [&] { // before_flush
+        // Delete key range [-inf, flush_ck_idx)
+        std::cout << "Generated " << (ck_idx - flush_ck_idx) << " rows\n";
+        auto m = mutation(s, pk);
+        auto ck = clustering_key::from_single_value(*s, serialized(flush_ck_idx));
+        m.partition().apply_row_tombstone(*s, range_tombstone(
+                position_in_partition_view::before_all_clustered_rows(),
+                position_in_partition_view::before_key(ck),
+                tombstone(api::new_timestamp(), gc_clock::now())));
+        flush_ck_idx = ck_idx;
+        return m;
+    });
+}
+
 static void test_partition_with_few_small_rows() {
     auto s = schema_builder("ks", "cf")
         .with_column("pk", uuid_type, column_kind::partition_key)
@@ -276,6 +317,7 @@ int scylla_row_cache_update_main(int argc, char** argv) {
                 return make_ready_future();
             });
             logalloc::prime_segment_pool(memory::stats().total_memory(), memory::min_free_memory()).get();
+            test_partition_with_lots_of_small_rows_covered_by_tombstone();
             test_small_partitions();
             test_partition_with_few_small_rows();
             test_partition_with_lots_of_small_rows();
