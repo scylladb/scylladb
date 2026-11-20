@@ -743,9 +743,10 @@ bool fsm::can_serve_lease_read() {
     if (!leaseguard_enabled()) {
         return false;
     }
-    // The committed entry must be present in the in-memory log (not folded into
-    // a snapshot) for its recorded interval to be available.
-    if (_commit_idx <= _log.get_snapshot().idx) {
+    // The committed entry must be present in the in-memory log for its
+    // recorded interval to be available. A snapshot does not by itself remove
+    // it: it may leave it in the log as a trailing entry.
+    if (!_log.in_memory(_commit_idx)) {
         return false;
     }
     const auto now = _config.leaseguard->clock.interval_now();
@@ -965,12 +966,12 @@ void fsm::tick_leader() {
         if (auto now = _config.leaseguard->clock.interval_now()) {
             const auto delta = _config.leaseguard->delta;
             // The newest committed entry, when it is still in the in-memory log.
-            // Once it has been folded into a snapshot its interval is gone, which
+            // Once it has been dropped from the log its interval is gone, which
             // is indistinguishable from holding no lease -- and note this is a
             // state a read-only workload cannot leave on its own, since only a new
             // entry can restore a lease. So treat it like an unstamped entry and
             // renew. (The bounds check also keeps _log[] indexing in range.)
-            const log_entry* newest = _commit_idx > _log.get_snapshot().idx
+            const log_entry* newest = _log.in_memory(_commit_idx)
                     ? &*_log[_commit_idx.value()] : nullptr;
             // Renew once the newest committed entry is past half the lease
             // duration -- early enough that a still-valid lease stays valid
