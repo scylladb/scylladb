@@ -529,6 +529,102 @@ async def test_small_table_optimization_repair(manager):
     assert len(rows) == 1
 
 
+@pytest.mark.parametrize("repair_master", ["stale_node", "replica", "lagging_replica"])
+async def test_small_table_optimization_repair_ignores_stale_data(manager: ScyllaClusterManager, repair_master: str):
+    """Repair with small_table_optimization must not sync the data of a node which doesn't own it.
+
+    With small_table_optimization, all normal token owners take part in the repair of the whole
+    ring. A node which has data for tokens it no longer owns (it wasn't cleaned up after a
+    topology change) doesn't receive the tombstones of this data. If the repair synced its data
+    to the replicas, deleted data would be resurrected once the replicas purged the tombstone.
+
+    Ignoring the data of such a node must not prevent the repair from syncing the same data
+    between the replicas, so the test also has a row which the stale node and only some of the
+    replicas have.
+
+    1. Start 3 nodes on 3 racks, create a vnodes keyspace with RF=3 and write rows.
+       Write more rows while node3 is down, so node3 misses them.
+    2. Add a 4th node to the rack of node1. node1 loses some tokens to it, but keeps their data.
+    3. Delete a row which node1 no longer owns and purge the tombstone on the replicas.
+    4. Repair with small_table_optimization, started on node1, on a replica or on node3. The row
+       must stay deleted, and node3 must get a row it missed, which node1 has but no longer owns.
+       With node3 as the master, the master can receive this row from node1 first, in which case
+       it has to ignore it and get it from a replica.
+    """
+    cmdline = ["--hinted-handoff-enabled", "0"]
+    servers = await manager.servers_add(3, cmdline=cmdline, property_file=[
+        {"dc": "dc1", "rack": "rack1"},
+        {"dc": "dc1", "rack": "rack2"},
+        {"dc": "dc1", "rack": "rack3"},
+    ])
+    stale_node, _, lagging_replica = servers
+
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}"
+                                          " AND tablets = {'enabled': false}") as ks:
+        table = f"{ks}.tbl"
+        await cql.run_async(f"CREATE TABLE {table} (pk int, ck int, v int, PRIMARY KEY (pk, ck))"
+                            " WITH tombstone_gc = {'mode': 'immediate'}"
+                            " AND compaction = {'class': 'NullCompactionStrategy'}")
+
+        async def insert(keys, cl):
+            await asyncio.gather(*[cql.run_async(SimpleStatement(f"INSERT INTO {table} (pk, ck, v) VALUES ({pk}, 0, {pk})",
+                                                                consistency_level=cl)) for pk in keys])
+
+        keys = range(64)
+        await insert(keys, ConsistencyLevel.ALL)
+
+        missed_keys = range(64, 128)
+        await manager.server_stop_gracefully(lagging_replica.server_id)
+        await insert(missed_keys, ConsistencyLevel.QUORUM)
+        await manager.server_start(lagging_replica.server_id)
+        await manager.servers_see_each_other(servers)
+
+        for server in servers:
+            await manager.api.keyspace_flush(server.ip_addr, ks, "tbl")
+
+        new_node = await manager.server_add(cmdline=cmdline, property_file={"dc": "dc1", "rack": "rack1"})
+        replicas = [servers[1], lagging_replica, new_node]
+        lagging_host = (await wait_for_cql_and_get_hosts(cql, [lagging_replica], time.time() + 60))[0]
+
+        async def find_key_lost_by_stale_node(candidates) -> int:
+            for key in candidates:
+                endpoints = await manager.api.natural_endpoints(servers[1].ip_addr, ks, "tbl", str(key))
+                if stale_node.ip_addr not in endpoints:
+                    return key
+            pytest.fail("Failed to find a partition which the stale node lost to the new node")
+
+        # Whether the node has the partition in its sstables. Unlike a read with CQL, this works on a
+        # node which is not a replica of the partition.
+        async def has_partition(server: ServerInfo, key: int) -> bool:
+            return bool(await manager.api.client.get_json(f"/column_family/sstables/by_key/{ks}:tbl",
+                                                          host=server.ip_addr, params={"key": str(key)}))
+
+        pk = await find_key_lost_by_stale_node(keys)
+        missed_pk = await find_key_lost_by_stale_node(missed_keys)
+        assert await has_partition(stale_node, pk)
+        assert await has_partition(stale_node, missed_pk)
+        assert not await has_partition(lagging_replica, missed_pk)
+
+        await cql.run_async(SimpleStatement(f"DELETE FROM {table} WHERE pk = {pk} AND ck = 0", consistency_level=ConsistencyLevel.ALL))
+        for server in replicas:
+            await manager.api.keyspace_flush(server.ip_addr, ks, "tbl")
+        # The tombstone is purgeable once its deletion time, which has second resolution, is in the past.
+        await asyncio.sleep(2)
+        for server in replicas:
+            await manager.api.keyspace_compaction(server.ip_addr, ks, "tbl")
+            assert not await has_partition(server, pk), f"the tombstone was not purged on {server.ip_addr}"
+        assert await has_partition(stale_node, pk)
+
+        master = {"stale_node": stale_node, "replica": replicas[0], "lagging_replica": lagging_replica}[repair_master]
+        await manager.api.repair(master.ip_addr, ks, "tbl", small_table_optimization=True)
+
+        rows = list(await cql.run_async(SimpleStatement(f"SELECT * FROM {table} WHERE pk = {pk}", consistency_level=ConsistencyLevel.ALL)))
+        assert rows == [], f"deleted row was resurrected: {rows}"
+        assert _row_states(cql, lagging_host, table, missed_pk)[0], "the repair didn't sync a row between the replicas"
+
+
 @pytest.mark.parametrize("reason", ["rebuild", "bootstrap", "decommission"])
 async def test_small_table_optimization_for_rbno_auto_detect_by_size(manager, reason):
     """Verify that the small table optimization is automatically enabled for a
