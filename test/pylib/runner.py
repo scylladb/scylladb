@@ -43,6 +43,7 @@ from test.pylib.db.writer import SQLiteWriter, DEFAULT_DB_NAME, HOST_INFO_TABLE
 from test.pylib.host_registry import HostRegistry
 from test.pylib.s3_proxy import S3ProxyServer
 from test.pylib.s3_server_mock import MockS3Server
+from test.pylib import sched_dir
 from test.pylib.scylla_cluster import ScyllaCluster
 from test.pylib.scylla_server import merge_cmdline_options
 from test.pylib.skip_reason_plugin import skip_marker
@@ -91,6 +92,11 @@ def pytest_addoption(parser: pytest.Parser) -> None:
                      help="Specific byte limit for failure injection (random by default)")
     parser.addoption("--gather-metrics", action=BooleanOptionalAction, default=False,
                      help='Switch on gathering cgroup metrics')
+    parser.addoption("--dynamic-scheduler", action=BooleanOptionalAction, default=True,
+                     help="Start a test only when its CPU and memory fit the machine, using the costs "
+                          "in <tmpdir>/profile.json if there is one and built-in estimates otherwise "
+                          "(see test/pylib/dynamic_scheduler.py).  --no-dynamic-scheduler restores "
+                          "xdist worksteal.")
     parser.addoption('--random-seed', action="store",
                      help="Random number generator seed to be used by boost tests")
 
@@ -160,6 +166,35 @@ RECYCLED_CLUSTERS_KEY = pytest.StashKey[list[ScyllaCluster]]()
 # Picked up by pytest_runtest_protocol to store with the per-test metrics.
 SEASTAR_IO_KEY = pytest.StashKey[dict[str, int]]()
 
+# (resource_gather, test_mock, first_in_file) of the test currently running in this
+# worker, so pytest_runtest_makereport can attach the measured cost to the
+# teardown report (the dynamic scheduler on the controller learns from it).
+RESOURCE_GATHER_KEY = pytest.StashKey[tuple]()
+# (path, build mode, run id): each --repeat copy of a file is a module of its own, with
+# its own fixtures, so the copy after it on the same worker pays the setup again.
+_last_test_file: tuple | None = None
+# Set on a test the dynamic scheduler evicted: its worker is shutting down and skips it.
+EVICTED_KEY = pytest.StashKey[bool]()
+
+
+def _cost_sample(item: pytest.Item, resource_gather, metrics, first_in_file: bool, wall: float) -> dict:
+    from test.pylib.dynamic_scheduler import profile_key  # lazy: the module is also a pytest plugin
+    sample = {
+        "key": profile_key(item.nodeid),
+        "wall": wall,
+        "usage_sec": getattr(metrics, "usage_sec", None),
+        # the anonymous peak: what the test itself took.  memory.peak was tried and it
+        # inherits whatever cache the worker already held, so a two-second boost case
+        # learned a footprint of eight gigabytes.  The cache is the kernel's to manage.
+        "memory_peak": getattr(resource_gather, "anon_peak", None) or getattr(metrics, "memory_peak", None),
+        "first_in_file": first_in_file,
+        # contention: share of the test's wall time its cgroup spent waiting for a CPU
+        "cpu_stall_frac": (getattr(resource_gather, "cpu_stall_sec", None) / wall
+                           if getattr(resource_gather, "cpu_stall_sec", None) is not None and wall > 0 else None),
+    }
+    return sample
+
+
 def _build_test_mock(item: pytest.Item) -> SimpleNamespace:
     """Build a SimpleNamespace test object for resource gathering from any pytest item.
 
@@ -208,15 +243,27 @@ def _build_test_mock(item: pytest.Item) -> SimpleNamespace:
 
 @pytest.hookimpl(wrapper=True)
 def pytest_runtest_protocol(item, nextitem):
+    global _last_test_file
+    from test.pylib.dynamic_scheduler import take_eviction  # lazy: the module is heavy
+    if take_eviction(os.environ.get("PYTEST_XDIST_WORKER"), item.nodeid):
+        # The dynamic scheduler sent this worker home to free memory, and the test it held
+        # goes to another worker.  Run nothing and report nothing: the hook below keeps
+        # pytest from running it, and session teardown stops the previous module's cluster.
+        item.stash[EVICTED_KEY] = True
+        return (yield)
     test_mock = _build_test_mock(item)
     test_mock.time_start = time.time()
+    this_file = (item.path, item.stash.get(BUILD_MODE, None), item.stash.get(RUN_ID, None))
+    first_in_file = this_file != _last_test_file
+    _last_test_file = this_file
 
     resource_gather = get_resource_gather(
         temp_dir=pathlib.Path(item.config.getoption("--tmpdir")),
-        is_switched_on=item.config.getoption("--gather-metrics"),
+        is_switched_on=needs_worker_cgroups(item.config),
         test=test_mock,
         worker_id=os.environ.get("PYTEST_XDIST_WORKER"),
     )
+    item.stash[RESOURCE_GATHER_KEY] = (resource_gather, test_mock, first_in_file)
     try:
         resource_gather.setup_test_tracking()
         resource_gather.cgroup_monitor()
@@ -257,8 +304,23 @@ def pytest_runtest_protocol(item, nextitem):
                     metrics=test_metrics,
                     success=success
                 )
+                try:
+                    from test.pylib.dynamic_scheduler import append_sample
+                    append_sample(pathlib.Path(item.config.getoption("--tmpdir")).absolute(),
+                                  _cost_sample(item, resource_gather, test_metrics, first_in_file,
+                                               test_metrics.time_taken))
+                except Exception as e:
+                    logger.debug("cost sample not recorded for %s: %s", item.nodeid, e)
             finally:
+                item.stash[RESOURCE_GATHER_KEY] = None
                 resource_gather.teardown_test_tracking()
+
+
+@pytest.hookimpl(tryfirst=True, specname="pytest_runtest_protocol")
+def pytest_runtest_protocol_skip_evicted(item, nextitem):
+    if item.stash.get(EVICTED_KEY, False):
+        return True
+    return None
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -428,15 +490,19 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     # Check if this is an xdist worker
     is_xdist_worker = xdist.is_xdist_worker(request_or_session=session)
 
-    gather_metrics = session.config.getoption("--gather-metrics")
+    worker_cgroups = needs_worker_cgroups(session.config)
     temp_dir = pathlib.Path(session.config.getoption("--tmpdir")).absolute()
+
+    if not is_xdist_worker and dynamic_scheduler_needs_cgroups(session.config):
+        require_scheduler_cgroups(session.config)
 
     # Run stuff just once for the main pytest process (not in xdist workers).
     if not is_xdist_worker:
+        sched_dir.prepare()
         prepare_environment(
             tempdir_base=temp_dir,
             modes=get_modes_to_run(session.config),
-            gather_metrics=gather_metrics,
+            gather_metrics=worker_cgroups,
             save_log_on_success=session.config.getoption("--save-log-on-success"),
             toxiproxy_byte_limit= session.config.getoption("--byte-limit"),
         )
@@ -451,12 +517,56 @@ def pytest_sessionstart(session: pytest.Session) -> None:
 
         artifacts.add_exit_artifact(stop_resource_monitor)
 
-    if gather_metrics:
+    if worker_cgroups:
         # In the master process, set up the cgroup hierarchy if test.py hasn't done it already.
         # Workers inherit SCYLLA_TEST_CGROUP_BASE_ENV from the master via environment inheritance.
         if not is_xdist_worker and SCYLLA_TEST_CGROUP_BASE_ENV not in os.environ:
             setup_cgroup(is_required=True)
         setup_worker_cgroup()
+
+
+def dynamic_scheduler_needs_cgroups(config: pytest.Config) -> bool:
+    """Whether the dynamic scheduler runs this session, and so needs worker cgroups."""
+    distributed = hasattr(config, "workerinput") or config.getoption("dist", "no") != "no"
+    return bool(config.getoption("--dynamic-scheduler") and distributed)
+
+
+def require_scheduler_cgroups(config: pytest.Config) -> None:
+    """Set up the cgroups the dynamic scheduler reads, or stop the session.
+
+    Without them the scheduler sees no load and no memory and learns nothing, so it
+    would run blind.  Falling back to the old scheduling silently would hide that, so
+    the user is told to choose it.
+    """
+    try:
+        setup_cgroup(is_required=True)
+        if setup_worker_cgroup():
+            return
+        reason = "could not move test.py into its cgroup"
+    except Exception as e:
+        reason = f"{type(e).__name__}: {e}"
+    rerun = "--no-dynamic-scheduler"
+    if config.getoption("--gather-metrics"):
+        rerun += " --no-gather-metrics"
+    pytest.exit("The dynamic scheduler can't run here: it measures the tests in cgroups, and this\n"
+                "process can't create them.\n"
+                "  - To fix it, give test.py write access to cgroup v2, e.g. run it in a delegated\n"
+                "    scope: systemd-run --user --scope -p Delegate=yes ./test.py ...\n"
+                f"  - Or run with the previous scheduler: add {rerun}\n"
+                f"(error: {reason})",
+                returncode=pytest.ExitCode.USAGE_ERROR)
+
+
+def needs_worker_cgroups(config: pytest.Config) -> bool:
+    """Whether each worker runs in a cgroup of its own that per-test measurements read.
+
+    --gather-metrics needs them for its metrics, and the dynamic scheduler reads its live
+    load and learns each test's cost from them; without them it sees no load at all, admits
+    on its priors alone and grows its pool without bound.  So the scheduler gets them
+    whatever --gather-metrics says, but only when xdist distributes the tests: a serial
+    session has no scheduler to feed.
+    """
+    return bool(config.getoption("--gather-metrics")) or dynamic_scheduler_needs_cgroups(config)
 
 
 @pytest.hookimpl(tryfirst=True)
@@ -538,6 +648,8 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
     # resort for what they leave behind, and it must not overlap with a
     # manager whose operations are still in flight.
     if session.config.getoption("--collect-only"):
+        if not xdist.is_xdist_worker(request_or_session=session):
+            sched_dir.remove()
         return
 
     swept = asyncio.run(recycle_leftover_clusters(session))
@@ -556,6 +668,8 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
     except Exception:
         logger.exception("Could not summarize the resource utilization of this run")
 
+    sched_dir.remove()
+
     # Modify exit code to reflect the number of failed tests for easier detection in CI.
     maxfail = session.config.getoption("maxfail")
 
@@ -567,6 +681,7 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
 def pytest_configure(config: pytest.Config) -> None:
     global _pytest_config
     _pytest_config = config
+    sched_dir.configure(config.getoption("--tmpdir"))
     setup_session_log(config)
 
     if exe_url := config.getoption("--exe-url"):
@@ -724,6 +839,19 @@ def pytest_runtest_makereport(item, call):
 
     # Store report per phase for use by fixtures and hooks
     item.stash.setdefault(PHASE_REPORT_KEY, {})[report.when] = report
+
+    if report.when == "teardown":
+        # Ship the measured cost to the xdist controller with the last report of
+        # the test, so the dynamic scheduler can refine its estimates during the run.
+        tracked = item.stash.get(RESOURCE_GATHER_KEY, None)
+        if tracked is not None:
+            resource_gather, test_mock, first_in_file = tracked
+            try:
+                metrics = resource_gather.get_test_metrics()
+                report.scylla_cost = _cost_sample(item, resource_gather, metrics, first_in_file,
+                                                  time.time() - test_mock.time_start)
+            except Exception as e:
+                logger.debug("cost not attached for %s: %s", item.nodeid, e)
 
     save_phase_log(item, report)
 
