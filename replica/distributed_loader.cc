@@ -70,8 +70,9 @@ static io_error_handler error_handler_for_upload_dir() {
     };
 }
 
-io_error_handler error_handler_gen_for_upload_dir(disk_error_signal_type& dummy) {
-    return error_handler_for_upload_dir();
+static const io_error_handlers& error_handlers_for_upload_dir() {
+    static thread_local const io_error_handlers handlers{error_handler_for_upload_dir(), error_handler_for_upload_dir()};
+    return handlers;
 }
 
 future<>
@@ -187,7 +188,7 @@ distributed_loader::process_upload_dir(sharded<replica::database>& db, sharded<d
 
         sharded<sstables::sstable_directory> directory;
         directory.start(global_table.as_sharded_parameter(),
-            sstables::sstable_state::upload, &error_handler_gen_for_upload_dir
+            sstables::sstable_state::upload, &error_handlers_for_upload_dir
         ).get();
 
         auto stop_directory = deferred_stop(directory);
@@ -205,7 +206,7 @@ distributed_loader::process_upload_dir(sharded<replica::database>& db, sharded<d
             auto generation = gen();
             return sstm.make_sstable(global_table->schema(), global_table->get_storage_options(),
                                      generation, sstables::sstable_state::upload, sstm.get_preferred_sstable_version(),
-                                     sstables::sstable_format_types::big, db_clock::now(), &error_handler_gen_for_upload_dir);
+                                     sstables::sstable_format_types::big, db_clock::now(), &error_handlers_for_upload_dir);
         };
         // Pass owned_ranges_ptr to reshard to piggy-back cleanup on the resharding compaction.
         // Note that needs_cleanup() is inaccurate and may return false positives,
@@ -241,7 +242,7 @@ distributed_loader::get_sstables_from_upload_dir(sharded<replica::database>& db,
     bool need_mutate_level = true;
     return get_sstables_from(db, ks, cf, cfg, [] (auto& global_table, auto& directory) {
         return directory.start(global_table.as_sharded_parameter(),
-            sstables::sstable_state::upload, &error_handler_gen_for_upload_dir
+            sstables::sstable_state::upload, &error_handlers_for_upload_dir
         );
     }, need_mutate_level);
 }
@@ -258,7 +259,7 @@ distributed_loader::get_sstables_from_object_store(sharded<replica::database>& d
                 return make_lw_shared<const data_dictionary::storage_options>(make_storage_options());
             }),
             sstables,
-            &error_handler_gen_for_upload_dir);
+            &error_handlers_for_upload_dir);
     }, need_mutate_level);
 }
 

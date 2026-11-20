@@ -779,7 +779,7 @@ private:
         file_input_stream_options options;
         options.buffer_size = _sstable->sstable_buffer_size;
         options.read_ahead = 2;
-        options.dynamic_adjustments = _sstable->_index_history;
+        options.dynamic_adjustments = sstable::get_history(_sstable->_index_history);
         return options;
     }
 
@@ -795,7 +795,7 @@ public:
             : std::make_unique<partition_index_cache>(_sstable->manager().get_cache_tracker().get_lru(),
                                                       _sstable->manager().get_cache_tracker().region(),
                                                       _sstable->manager().get_cache_tracker().get_partition_index_cache_stats()))
-        , _index_cache(caching ? *_sstable->_index_cache : *_local_index_cache)
+        , _index_cache(caching ? _sstable->index_cache() : *_local_index_cache)
         , _alloc_section(abstract_formatter([sst = _sstable] (fmt::format_context& ctx) {
             fmt::format_to(ctx.out(), "index_reader {}", sst->get_filename());
         }))

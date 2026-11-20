@@ -30,6 +30,7 @@
 #include "sstables/progress_monitor.hh"
 #include "db/commitlog/replay_position.hh"
 #include "component_type.hh"
+#include "enum_set.hh"
 #include "sstables/exceptions.hh"
 #include "column_translation.hh"
 #include "stats.hh"
@@ -200,6 +201,30 @@ class delayed_commit_changes {
 public:
     future<> commit();
 };
+
+// Set of recognized component types; excludes Unknown, which is not a real
+// component. The sizeof check fails if an enumerator is missing from the list.
+template <component_type... Cs>
+struct component_list {
+    static_assert(sizeof...(Cs) == num_component_types, "component_list must name every component_type below Unknown");
+    using set = enum_set<super_enum<component_type, Cs...>>;
+};
+using component_set = component_list<
+        component_type::Index,
+        component_type::CompressionInfo,
+        component_type::Data,
+        component_type::TOC,
+        component_type::Summary,
+        component_type::Digest,
+        component_type::CRC,
+        component_type::Filter,
+        component_type::Statistics,
+        component_type::TemporaryTOC,
+        component_type::TemporaryStatistics,
+        component_type::Scylla,
+        component_type::Rows,
+        component_type::Partitions,
+        component_type::TemporaryHashes>::set;
 
 class sstable_stream_sink_impl;
 
@@ -385,11 +410,15 @@ public:
     }
 
     const std::set<generation_type>& compaction_ancestors() const {
-        return _compaction_ancestors;
+        static const std::set<generation_type> empty;
+        return _compaction_ancestors ? *_compaction_ancestors : empty;
     }
 
     void add_ancestor(generation_type generation) {
-        _compaction_ancestors.insert(generation);
+        if (!_compaction_ancestors) {
+            _compaction_ancestors = std::make_unique<std::set<generation_type>>();
+        }
+        _compaction_ancestors->insert(generation);
     }
 
     // Returns true iff this sstable contains data which belongs to many shards.
@@ -507,12 +536,12 @@ public:
     template<typename Func, typename... Args>
     requires std::is_nothrow_move_constructible_v<Func>
     auto sstable_write_io_check(Func&& func, Args&&... args) const noexcept {
-        return do_io_check(_write_error_handler, std::forward<Func>(func), std::forward<Args>(args)...);
+        return do_io_check(_error_handlers.write, std::forward<Func>(func), std::forward<Args>(args)...);
     }
 
     // required since touch_directory has an optional parameter
     auto sstable_touch_directory_io_check(std::filesystem::path name) const noexcept {
-        return do_io_check(_write_error_handler, [name = std::move(name)] () mutable {
+        return do_io_check(_error_handlers.write, [name = std::move(name)] () mutable {
             return touch_directory(name.native());
         });
     }
@@ -568,15 +597,24 @@ private:
         return component_name(*this, f);
     }
 
-    std::unordered_set<component_type, enum_hash<component_type>> _recognized_components;
-    std::vector<sstring> _unrecognized_components;
+    // Set of recognized component types present for this sstable.
+    component_set _recognized_components;
+    std::unique_ptr<std::vector<sstring>> _unrecognized_components;
+
+    void add_component(component_type c) noexcept {
+        _recognized_components.set(c);
+    }
+    void remove_component(component_type c) noexcept {
+        _recognized_components.remove(c);
+    }
 
     foreign_ptr<lw_shared_ptr<shareable_components>> _components = make_foreign(make_lw_shared<shareable_components>());
     column_translation _column_translation;
     std::optional<open_flags> _open_mode;
     // _compaction_ancestors track which sstable generations were used to generate this sstable.
     // it is then used to generate the ancestors metadata in the statistics or scylla components.
-    std::set<generation_type> _compaction_ancestors;
+    // Lazily allocated — only populated during compaction output.
+    std::unique_ptr<std::set<generation_type>> _compaction_ancestors;
     file _index_file;
     seastar::shared_ptr<cached_file> _cached_index_file;
     file _data_file;
@@ -602,9 +640,16 @@ private:
     utils::observable<sstable&> _on_closed;
     utils::observable<sstable&> _on_delete;
 
-    lw_shared_ptr<file_input_stream_history> _single_partition_history = make_lw_shared<file_input_stream_history>();
-    lw_shared_ptr<file_input_stream_history> _partition_range_history = make_lw_shared<file_input_stream_history>();
-    lw_shared_ptr<file_input_stream_history> _index_history = make_lw_shared<file_input_stream_history>();
+    // Created on first read; many sstables never use some of them.
+    lw_shared_ptr<file_input_stream_history> _single_partition_history;
+    lw_shared_ptr<file_input_stream_history> _partition_range_history;
+    lw_shared_ptr<file_input_stream_history> _index_history;
+    static lw_shared_ptr<file_input_stream_history> get_history(lw_shared_ptr<file_input_stream_history>& h) {
+        if (!h) {
+            h = make_lw_shared<file_input_stream_history>();
+        }
+        return h;
+    }
 
     schema_ptr _schema;
     generation_type _generation{0};
@@ -617,7 +662,9 @@ private:
     const format_types _format;
 
     filter_tracker _filter_tracker;
+    // Only big-format index reads use it, so it is created on first use.
     std::unique_ptr<partition_index_cache> _index_cache;
+    partition_index_cache& index_cache();
 
     enum class mark_for_deletion {
         implicit = -1,
@@ -649,8 +696,8 @@ private:
 
     db_clock::time_point _now;
 
-    io_error_handler _read_error_handler;
-    io_error_handler _write_error_handler;
+    // Owned by the handlers' thread_local storage, which outlives the sstable.
+    const io_error_handlers& _error_handlers;
 
     db::large_data_handler& _large_data_handler;
     db::corrupt_data_handler& _corrupt_data_handler;
@@ -663,15 +710,9 @@ private:
     manager_set_link_type _manager_set_link;
 
 
-    // The _large_data_stats map stores e.g. largest partitions, rows, cells sizes,
-    // and max number of rows in a partition.
-    //
-    // It can be disengaged normally when loading legacy sstables that do not have this
-    // information in their scylla metadata.
-    std::optional<scylla_metadata::large_data_stats> _large_data_stats;
+    // Per-shard copy: the records carry intrusive hooks into a per-shard index.
     std::optional<scylla_metadata::large_data_records> _large_data_records;
     sstring _origin;
-    std::optional<scylla_metadata::ext_timestamp_stats> _ext_timestamp_stats;
     optimized_optional<sstable_id> _sstable_identifier;
 
     // Total reclaimable memory from all the components of the SSTable.
@@ -685,13 +726,25 @@ private:
 
     // The mutate semaphore is used to serialize operations like rewrite_statistics
     // with linking or moving the sstable between directories.
-    mutable named_semaphore _mutate_sem{1, named_semaphore_exception_factory{"sstable mutate"}};
-    std::optional<sstring> _cloned_to_sstable_filename;
-    // Used only for writing sstable.
-    scylla_metadata::components_digests _components_digests;
+    // Created on first use: most live sstables never link, snapshot or unlink.
+    mutable std::unique_ptr<named_semaphore> _mutate_sem;
+    named_semaphore& mutate_sem() const {
+        if (!_mutate_sem) {
+            _mutate_sem = std::make_unique<named_semaphore>(1, named_semaphore_exception_factory{"sstable mutate"});
+        }
+        return *_mutate_sem;
+    }
+    std::unique_ptr<sstring> _cloned_to_sstable_filename;
+    // TOC CRC32, set by write_toc()/read_toc() and checked against ComponentsDigests on load.
     uint32_t _toc_digest{};
 public:
     bool has_component(component_type f) const;
+    template<typename Func>
+    void for_each_component(Func&& fn) const {
+        for (auto c : _recognized_components) {
+            fn(c);
+        }
+    }
     sstables_manager& manager() { return _manager; }
     const sstables_manager& manager() const { return _manager; }
 
@@ -743,13 +796,15 @@ private:
     void open_sstable(const sstring& origin);
 
     future<> read_compression();
-    void write_compression();
+    // Writes the CompressionInfo component (if present) and returns its digest.
+    std::optional<uint32_t> write_compression();
 
     future<> read_scylla_metadata() noexcept;
     future<std::unique_ptr<memory_data_sink_buffers>> serialize_scylla_metadata(scylla_metadata metadata) const;
 
     void write_scylla_metadata(shard_id shard,
                                run_identifier identifier,
+                               scylla_metadata::components_digests components_digests,
                                std::optional<scylla_metadata::large_data_stats> ld_stats,
                                std::optional<scylla_metadata::ext_timestamp_stats> ts_stats,
                                std::optional<scylla_metadata::large_data_records> ld_records = std::nullopt);
@@ -760,7 +815,8 @@ private:
 
     future<> read_filter(sstable_open_config cfg = {});
 
-    void write_filter();
+    // Writes the Filter component (if present) and returns its digest.
+    std::optional<uint32_t> write_filter();
     // Rebuild a bloom filter from the index with the given number of
     // partitions, if the partition estimate provided during bloom
     // filter initialisation was not good.
@@ -774,9 +830,10 @@ private:
     future<> read_toc(sstable_open_config cfg = {}) noexcept;
     future<> read_summary() noexcept;
 
-    void write_summary() {
-        auto digest = write_simple_with_digest<component_type::Summary>(_components->summary);
-        _components_digests.map[component_type::Summary] = digest;
+    // Writes the Summary component and returns its digest, to be recorded by
+    // the writer in the ComponentsDigests map.
+    uint32_t write_summary() {
+        return write_simple_with_digest<component_type::Summary>(_components->summary);
     }
 
     // To be called when we try to load an SSTable that lacks a Summary. Could
@@ -786,7 +843,8 @@ private:
     future<> read_partitions_db_footer();
 
     future<> read_statistics();
-    void write_statistics();
+    // Writes the Statistics component and returns its digest.
+    uint32_t write_statistics();
     // Validate metadata that's used to optimize reads when user specifies
     // a clustering key range. If this specific metadata is incorrect, then
     // it should be cleared. Otherwise, it could lead to bad decisions.
@@ -838,8 +896,8 @@ private:
     void disable_component_memory_reload();
 
     static bool is_component_rewrite_supported(component_type type);
-    // Must be called in a seastar thread
-    void write_component(component_type type);
+    // Must be called in a seastar thread. Returns the component's digest.
+    uint32_t write_component(component_type type);
 public:
     // Finds first position_in_partition in a given partition.
     // If reversed is false, then the first position is actually the first row (can be the static one).
@@ -1123,11 +1181,6 @@ public:
         return _components->digest;
     }
 
-    // Used only for writing sstable.
-    scylla_metadata::components_digests& get_components_digests() {
-        return _components_digests;
-    }
-
     std::optional<uint32_t> get_component_digest(component_type c) const;
 
     std::optional<db_clock::time_point> get_scrub_time() const;
@@ -1161,8 +1214,8 @@ public:
     }
 
     // Return the large_data_stats_entry identified by large_data_type
-    // iff _large_data_stats is available and the requested entry is in
-    // the map.  Otherwise, return a disengaged optional.
+    // iff the scylla metadata has large data stats with the requested entry.
+    // Otherwise, return a default-constructed entry.
     std::optional<large_data_stats_entry> get_large_data_stat(large_data_type t) const noexcept;
 
     // Return the large_data_records stored in scylla_metadata, if present.
@@ -1206,7 +1259,7 @@ public:
     // Set on the source of a component rewrite (see link_with_rewritten_component()):
     // the basename of the Data component of the sstable it was cloned into. Lets holders
     // of a reference to the replaced sstable find its current generation in the table.
-    const std::optional<sstring>& cloned_to_sstable_filename() const noexcept {
+    const std::unique_ptr<sstring>& cloned_to_sstable_filename() const noexcept {
         return _cloned_to_sstable_filename;
     }
 
