@@ -10,6 +10,7 @@
 
 #include <memory>
 #include <optional>
+#include <ranges>
 #include <tuple>
 #include <variant>
 #include <vector>
@@ -21,15 +22,20 @@
 #include <seastar/util/defer.hh>
 #include <seastar/core/smp.hh>
 #include <seastar/core/sharded.hh>
+#include <seastar/core/memory.hh>
 
 #include "db/cluster_config_manager.hh"
 #include "db/cluster_config_registry.hh"
 #include "db/config.hh"
+#include "db/schema_applier.hh"
+#include "db/schema_tables.hh"
 #include "cql3/query_processor.hh"
 #include "exceptions/exceptions.hh"
 #include "replica/database.hh"
+#include "schema/schema_builder.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/eventually.hh"
+#include "utils/chunked_vector.hh"
 
 BOOST_AUTO_TEST_SUITE(cluster_config_manager_test)
 
@@ -1352,5 +1358,40 @@ SEASTAR_TEST_CASE(test_registration_stop_resolves_when_callback_fails) {
         BOOST_REQUIRE(!cb.returned);
     });
 }
+
+// A callback pass over thousands of tables makes no oversized allocation (SCYLLADB-6291).
+#ifndef SEASTAR_DEFAULT_ALLOCATOR // large allocations are counted only by the seastar allocator
+SEASTAR_TEST_CASE(test_callback_pass_over_many_tables_makes_no_large_allocation) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        // Enough tables for a contiguous per-table array of lookup_context, or of hash map
+        // slots, to exceed the 128 KiB warning threshold.
+        constexpr int table_count = 2000;
+        utils::chunked_vector<mutation> mutations;
+        for (auto i : std::views::iota(0, table_count)) {
+            auto s = schema_builder(this_smp_shard_count(), "ks", fmt::format("cf_{}", i))
+                    .with_column("pk", int32_type, column_kind::partition_key)
+                    .build();
+            db::schema_tables::make_schema_mutations(s, api::new_timestamp(), true).copy_to(mutations);
+        }
+        db::schema_tables::merge_schema(e.get_system_keyspace(), e.get_storage_proxy(), e.get_storage_service(),
+                std::move(mutations)).get();
+
+        size_t invocations = 0;
+        auto& mgr = e.cluster_config_manager();
+        auto registration = mgr.local().register_config_callback("auto_repair_enabled",
+                [&invocations] (const db::cluster_config_manager::lookup_context&, std::optional<sstring>) {
+                    ++invocations;
+                    return make_ready_future<>();
+                });
+        const auto large_allocations_before = memory::stats().large_allocations();
+        {
+            const memory::scoped_large_allocation_warning_threshold guard{(size_t(128) << 10) + 1};
+            mgr.local().refresh().get();
+        }
+        BOOST_REQUIRE_GE(invocations, size_t(table_count));
+        BOOST_REQUIRE_EQUAL(memory::stats().large_allocations(), large_allocations_before);
+    });
+}
+#endif
 
 BOOST_AUTO_TEST_SUITE_END()
