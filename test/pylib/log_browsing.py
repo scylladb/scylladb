@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-from test.pylib.util import universalasync_typed_wrap
 import asyncio
 import logging
 import re
@@ -63,7 +62,6 @@ class FileSnapshot:
         self.file.close()
 
 
-@universalasync_typed_wrap
 class ScyllaLogFile:
     """Browse a Scylla log file.
 
