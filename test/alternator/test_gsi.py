@@ -407,6 +407,26 @@ def test_table_gsi_2(dynamodb):
     yield table
     table.delete()
 
+# Like test_table_gsi_2, but the GSI has ProjectionType=KEYS_ONLY.
+@pytest.fixture(scope="module")
+def test_table_gsi_2_keys_only(dynamodb):
+    table = create_test_table(dynamodb,
+        KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
+        AttributeDefinitions=[
+                    { 'AttributeName': 'p', 'AttributeType': 'S' },
+                    { 'AttributeName': 'x', 'AttributeType': 'S' },
+        ],
+        GlobalSecondaryIndexes=[
+            {   'IndexName': 'hello',
+                'KeySchema': [
+                    { 'AttributeName': 'x', 'KeyType': 'HASH' },
+                ],
+                'Projection': { 'ProjectionType': 'KEYS_ONLY' }
+            }
+        ])
+    yield table
+    table.delete()
+
 def test_gsi_2(test_table_gsi_2):
     items1 = [{'p': random_string(), 'x': random_string()} for i in range(10)]
     x1 = items1[0]['x']
@@ -430,50 +450,61 @@ def test_gsi_2(test_table_gsi_2):
 # attribute "x" (a regular attribute in the base table, a partition key in
 # the GSI) to cause all these different operations on the view rows, and
 # check various code paths in the view update code.
-def test_update_gsi_pk(test_table_gsi_2):
+# The test is run both on test_table_gsi_2, whose GSI has ProjectionType=ALL,
+# and on test_table_gsi_2_keys_only, whose GSI has ProjectionType=KEYS_ONLY.
+# The view of a KEYS_ONLY GSI has no ":attrs" column, so its rows have no
+# non-key cells, and only their row marker keeps them alive. So in that case
+# it's especially interesting to check that a change to a non-key attribute
+# keeps the item in the GSI.
+@pytest.mark.parametrize('projection_type', ['ALL', 'KEYS_ONLY'])
+def test_update_gsi_pk(request, projection_type):
+    table = request.getfixturevalue('test_table_gsi_2' if projection_type == 'ALL' else 'test_table_gsi_2_keys_only')
+    # The item we expect to see in the GSI for the given base-table item:
+    # a KEYS_ONLY GSI has only the key attributes 'p' and 'x'.
+    project = (lambda item: item) if projection_type == 'ALL' else (lambda item: {'p': item['p'], 'x': item['x']})
     p = random_string()
     x1 = random_string()
     y = random_string()
     z = random_string()
 
     # Create a new GSI row (x1), see that it appears
-    test_table_gsi_2.put_item(Item={'p': p, 'x': x1, 'y': y, 'z': z})
-    assert_index_query(test_table_gsi_2, 'hello', [{'p': p, 'x': x1, 'y': y, 'z': z}],
+    table.put_item(Item={'p': p, 'x': x1, 'y': y, 'z': z})
+    assert_index_query(table, 'hello', [project({'p': p, 'x': x1, 'y': y, 'z': z})],
         KeyConditions={'x': {'AttributeValueList': [x1], 'ComparisonOperator': 'EQ'}})
 
     # Update only the unrelated attribute y. Should leave the same row in
     # the GSI (x=x1), just with a modified y (and unmodified z)
     y = random_string()
-    test_table_gsi_2.update_item(Key={'p': p}, AttributeUpdates={'y': {'Value': y, 'Action': 'PUT'}})
-    assert_index_query(test_table_gsi_2, 'hello', [{'p': p, 'x': x1, 'y': y, 'z': z}],
+    table.update_item(Key={'p': p}, AttributeUpdates={'y': {'Value': y, 'Action': 'PUT'}})
+    assert_index_query(table, 'hello', [project({'p': p, 'x': x1, 'y': y, 'z': z})],
         KeyConditions={'x': {'AttributeValueList': [x1], 'ComparisonOperator': 'EQ'}})
 
     # Update the GSI's key attribute x to x2. The old row (x=x1) should
     # disappear from the GSI, and the new row (x=x2) should appear, with the
     # base row's "y" and "z" value that weren't changed in this update.
     x2 = random_string()
-    test_table_gsi_2.update_item(Key={'p': p}, AttributeUpdates={'x': {'Value': x2, 'Action': 'PUT'}})
-    assert_index_query(test_table_gsi_2, 'hello', [],
+    table.update_item(Key={'p': p}, AttributeUpdates={'x': {'Value': x2, 'Action': 'PUT'}})
+    assert_index_query(table, 'hello', [],
         KeyConditions={'x': {'AttributeValueList': [x1], 'ComparisonOperator': 'EQ'}})
-    assert_index_query(test_table_gsi_2, 'hello', [{'p': p, 'x': x2, 'y': y, 'z': z}],
+    assert_index_query(table, 'hello', [project({'p': p, 'x': x2, 'y': y, 'z': z})],
         KeyConditions={'x': {'AttributeValueList': [x2], 'ComparisonOperator': 'EQ'}})
 
     # Delete only the attribute x from our base-table row. The row should
     # remain in the table (with no x), but disappear from the view
-    test_table_gsi_2.update_item(Key={'p': p}, AttributeUpdates={'x': {'Action': 'DELETE'}})
-    assert test_table_gsi_2.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'y': y, 'z': z}
-    assert_index_query(test_table_gsi_2, 'hello', [],
+    table.update_item(Key={'p': p}, AttributeUpdates={'x': {'Action': 'DELETE'}})
+    assert table.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {'p': p, 'y': y, 'z': z}
+    assert_index_query(table, 'hello', [],
         KeyConditions={'x': {'AttributeValueList': [x2], 'ComparisonOperator': 'EQ'}})
 
     # Set x again to x1, see the view item re-appears in the view:
-    test_table_gsi_2.update_item(Key={'p': p}, AttributeUpdates={'x': {'Value': x1, 'Action': 'PUT'}})
-    assert_index_query(test_table_gsi_2, 'hello', [{'p': p, 'x': x1, 'y': y, 'z': z}],
+    table.update_item(Key={'p': p}, AttributeUpdates={'x': {'Value': x1, 'Action': 'PUT'}})
+    assert_index_query(table, 'hello', [project({'p': p, 'x': x1, 'y': y, 'z': z})],
         KeyConditions={'x': {'AttributeValueList': [x1], 'ComparisonOperator': 'EQ'}})
 
     # Delete the entire item in the base table, the view row should also
     # disappear
-    test_table_gsi_2.delete_item(Key={'p': p})
-    assert_index_query(test_table_gsi_2, 'hello', [],
+    table.delete_item(Key={'p': p})
+    assert_index_query(table, 'hello', [],
         KeyConditions={'x': {'AttributeValueList': [x1], 'ComparisonOperator': 'EQ'}})
 
 # Similar to the previous test (test_update_gsi_pk) except that the base's
@@ -1309,7 +1340,6 @@ def test_gsi_describe_table_schema_all(dynamodb):
 # "ProjectionType:: KEYS_ONLY" works. We note that it projects both
 # the index's key, *and* the base table's key. So items which had different
 # base-table keys cannot suddenly become the same item in the index.
-@pytest.mark.xfail(reason="GSI projection not supported - issue #5036")
 def test_gsi_projection_keys_only(dynamodb):
     with new_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
@@ -1336,7 +1366,7 @@ def test_gsi_projection_keys_only(dynamodb):
 # Test for "ProjectionType: INCLUDE". The secondary table includes the
 # its own and the base's keys (as in KEYS_ONLY) plus the extra keys given
 # in NonKeyAttributes.
-@pytest.mark.xfail(reason="GSI projection not supported - issue #5036")
+@pytest.mark.xfail(reason="Issue #5036 - ProjectionType=INCLUDE not yet supported")
 def test_gsi_projection_include(dynamodb):
     with new_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
@@ -1364,9 +1394,58 @@ def test_gsi_projection_include(dynamodb):
         assert_index_scan(table, 'hello', expected_items)
         print(len(expected_items))
 
+# Although Alternator doesn't support ProjectionType=INCLUDE yet (see the
+# xfailing test above), creating a GSI or LSI with it must work, and reading
+# from it must return at least the projected attributes. Alternator creates
+# such an index with ProjectionType=ALL, so it may return more attributes,
+# and this test doesn't check that it doesn't. Applications and migration
+# tools which create INCLUDE indexes rely on this. We check both CreateTable
+# and adding a GSI with UpdateTable.
+def test_gsi_lsi_projection_include_works(dynamodb):
+    include = {'ProjectionType': 'INCLUDE', 'NonKeyAttributes': ['a']}
+    with new_test_table(dynamodb,
+        KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                    { 'AttributeName': 'c', 'KeyType': 'RANGE' } ],
+        AttributeDefinitions=[
+                    { 'AttributeName': 'p', 'AttributeType': 'S' },
+                    { 'AttributeName': 'c', 'AttributeType': 'S' },
+                    { 'AttributeName': 'x', 'AttributeType': 'S' },
+        ],
+        GlobalSecondaryIndexes=[
+            {   'IndexName': 'gsi',
+                'KeySchema': [{ 'AttributeName': 'x', 'KeyType': 'HASH' }],
+                'Projection': include
+            }
+        ],
+        LocalSecondaryIndexes=[
+            {   'IndexName': 'lsi',
+                'KeySchema': [{ 'AttributeName': 'p', 'KeyType': 'HASH' },
+                              { 'AttributeName': 'x', 'KeyType': 'RANGE' }],
+                'Projection': include
+            }
+        ]) as table:
+        table.meta.client.update_table(TableName=table.name,
+            AttributeDefinitions=[{'AttributeName': 'y', 'AttributeType': 'S'}],
+            GlobalSecondaryIndexUpdates=[{'Create': {
+                'IndexName': 'gsi2',
+                'KeySchema': [{'AttributeName': 'y', 'KeyType': 'HASH'}],
+                'Projection': include
+            }}])
+        wait_for_gsi(table, 'gsi2')
+        items = [{'p': random_string(), 'c': random_string(), 'x': random_string(), 'y': random_string(), 'a': random_string(), 'b': random_string()} for i in range(5)]
+        with table.batch_writer() as batch:
+            for item in items:
+                batch.put_item(item)
+        # Each index projects the base table's keys, its own keys, and 'a':
+        for index_name, wanted in [('gsi', ['p', 'c', 'x', 'a']),
+                                   ('lsi', ['p', 'c', 'x', 'a']),
+                                   ('gsi2', ['p', 'c', 'y', 'a'])]:
+            # GSIs are eventually consistent, so assert_index_scan() retries.
+            assert_index_scan(table, index_name, [{k: item[k] for k in wanted} for item in items],
+                ProjectionExpression=','.join(wanted))
+
 # Test that when "ProjectionType" is set to anything but "INCLUDE" (i.e.,
 # "ALL" or "KEYS_ONLY"), "NonKeyAttributes" must not be specified.
-@pytest.mark.xfail(reason="GSI projection not supported - issue #5036")
 def test_gsi_projection_nonkeyattributess_forbidden(dynamodb):
     for projection_type in ['ALL', 'KEYS_ONLY']:
         with pytest.raises(ClientError, match='ValidationException.*NonKeyAttributes'):
@@ -1387,10 +1466,37 @@ def test_gsi_projection_nonkeyattributess_forbidden(dynamodb):
                 ]) as table:
                 pass
 
+# Test that the "Projection" option of a GSI is mandatory, both when the GSI
+# is created with CreateTable and when it is added with UpdateTable.
+def test_gsi_projection_missing(dynamodb):
+    with pytest.raises(ClientError, match='ValidationException.*[Pp]rojection'):
+        with new_test_table(dynamodb,
+            KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
+            AttributeDefinitions=[
+                { 'AttributeName': 'p', 'AttributeType': 'S' },
+                { 'AttributeName': 'x', 'AttributeType': 'S' },
+            ],
+            GlobalSecondaryIndexes=[
+                {   'IndexName': 'hello',
+                    'KeySchema': [ { 'AttributeName': 'x', 'KeyType': 'HASH' } ],
+                }
+            ]) as table:
+            pass
+    with new_test_table(dynamodb,
+        KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
+        AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' } ]) as table:
+        with pytest.raises(ClientError, match='ValidationException.*[Pp]rojection'):
+            table.meta.client.update_table(TableName=table.name,
+                AttributeDefinitions=[{'AttributeName': 'x', 'AttributeType': 'S'}],
+                GlobalSecondaryIndexUpdates=[{'Create': {
+                    'IndexName': 'hello',
+                    'KeySchema': [{'AttributeName': 'x', 'KeyType': 'HASH'}],
+                }}])
+
 # Despite the name "NonKeyAttributes", key attributes *may* be listed.
 # But they have no effect - because key attributes are always projected
 # anyway.
-@pytest.mark.xfail(reason="GSI projection not supported - issue #5036")
+@pytest.mark.xfail(reason="Issue #5036 - ProjectionType=INCLUDE not yet supported")
 def test_gsi_projection_include_keyattributes(dynamodb):
     with new_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
@@ -1424,7 +1530,7 @@ def test_gsi_projection_include_keyattributes(dynamodb):
 # GSI keys currently become actual Scylla columns - while regular attributes
 # do not (they are elements of a single map column), so we need to remember
 # to project both real columns and map elements into the view.
-@pytest.mark.xfail(reason="GSI projection not supported - issue #5036")
+@pytest.mark.xfail(reason="Issue #5036 - ProjectionType=INCLUDE not yet supported")
 def test_gsi_projection_include_otherkey(dynamodb):
     with new_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
@@ -1472,7 +1578,6 @@ def test_gsi_projection_include_otherkey(dynamodb):
         assert_index_scan(table, 'indexx', expected_items)
 
 # With ProjectionType=INCLUDE, NonKeyAttributes must not be missing:
-@pytest.mark.xfail(reason="GSI projection not supported - issue #5036")
 def test_gsi_projection_error_missing_nonkeyattributes(dynamodb):
     with pytest.raises(ClientError, match='ValidationException.*NonKeyAttributes'):
         with new_test_table(dynamodb,
@@ -1491,29 +1596,7 @@ def test_gsi_projection_error_missing_nonkeyattributes(dynamodb):
             ]) as table:
             pass
 
-# With ProjectionType!=INCLUDE, NonKeyAttributes must not be present:
-@pytest.mark.xfail(reason="GSI projection not supported - issue #5036")
-def test_gsi_projection_error_superflous_nonkeyattributes(dynamodb):
-    with pytest.raises(ClientError, match='ValidationException.*NonKeyAttributes'):
-        with new_test_table(dynamodb,
-            KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
-            AttributeDefinitions=[
-                { 'AttributeName': 'p', 'AttributeType': 'S' },
-                { 'AttributeName': 'x', 'AttributeType': 'S' },
-            ],
-            GlobalSecondaryIndexes=[
-                {   'IndexName': 'hello',
-                    'KeySchema': [
-                        { 'AttributeName': 'x', 'KeyType': 'HASH' },
-                    ],
-                    'Projection': { 'ProjectionType': 'ALL',
-                                    'NonKeyAttributes': ['a'] }
-                }
-            ]) as table:
-            pass
-
 # Duplicate attribute names in NonKeyAttributes of INCLUDE are not allowed:
-@pytest.mark.xfail(reason="GSI projection not supported - issue #5036")
 def test_gsi_projection_error_duplicate(dynamodb):
     with pytest.raises(ClientError, match='ValidationException.*Duplicate'):
         with new_test_table(dynamodb,
@@ -1536,7 +1619,7 @@ def test_gsi_projection_error_duplicate(dynamodb):
 # NonKeyAttributes must be a list of strings. Non-strings in this list
 # result, for some reason, in SerializationException instead of the more
 # usual ValidationException.
-@pytest.mark.xfail(reason="GSI projection not supported - issue #5036")
+@pytest.mark.xfail(reason="Issue #5036 - ProjectionType=INCLUDE not yet supported")
 def test_gsi_projection_error_nonstring_nonkeyattributes(dynamodb):
     with pytest.raises(ClientError, match='SerializationException'):
         with new_test_table(dynamodb,
@@ -1557,7 +1640,6 @@ def test_gsi_projection_error_nonstring_nonkeyattributes(dynamodb):
             pass
 
 # An unsupported ProjectionType value should result in an error:
-@pytest.mark.xfail(reason="GSI projection not supported - issue #5036")
 def test_gsi_bad_projection_type(dynamodb):
     with pytest.raises(ClientError, match='ValidationException.*nonsense'):
         with new_test_table(dynamodb,
@@ -1577,7 +1659,6 @@ def test_gsi_bad_projection_type(dynamodb):
 # "Projection" is optional - and Boto3 allows it to be missing. But in
 # fact, it is not allowed to be missing: DynamoDB complains: "Unknown
 # ProjectionType: null".
-@pytest.mark.xfail(reason="GSI projection not supported - issue #5036")
 def test_gsi_missing_projection_type(dynamodb):
     with pytest.raises(ClientError, match='ValidationException.*ProjectionType'):
         with new_test_table(dynamodb,
@@ -1747,8 +1828,14 @@ def test_gsi_query_select_1(test_table_gsi_1):
         Select='COUNT',
         KeyConditions={'c': {'AttributeValueList': [c], 'ComparisonOperator': 'EQ'}})
 
-@pytest.mark.xfail(reason="Projection not supported yet. Issue #5036")
-def test_gsi_query_select_2(dynamodb):
+@pytest.mark.parametrize('projection_type', [
+    'KEYS_ONLY',
+    pytest.param('INCLUDE', marks=pytest.mark.xfail(reason="Issue #5036 - ProjectionType=INCLUDE not yet supported")),
+])
+def test_gsi_query_select_2(dynamodb, projection_type):
+    projection = {'ProjectionType': projection_type}
+    if projection_type == 'INCLUDE':
+        projection['NonKeyAttributes'] = ['a']
     with new_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
         AttributeDefinitions=[
@@ -1758,8 +1845,7 @@ def test_gsi_query_select_2(dynamodb):
         GlobalSecondaryIndexes=[
             {   'IndexName': 'hello',
                 'KeySchema': [ { 'AttributeName': 'x', 'KeyType': 'HASH' } ],
-                'Projection': { 'ProjectionType': 'INCLUDE',
-                                'NonKeyAttributes': ['a'] }
+                'Projection': projection,
             }
         ]) as table:
         items = [{'p': random_string(), 'x': random_string(), 'a': random_string(), 'b': random_string()} for i in range(10)]
@@ -1768,10 +1854,14 @@ def test_gsi_query_select_2(dynamodb):
                 batch.put_item(item)
         x = items[0]['x']
         # Unlike in base tables, here Select=ALL_PROJECTED_ATTRIBUTES is
-        # allowed, and only the projected attributes are returned (in this
-        # case the key of both base and GSI ('p' and 'x') and 'a' - but not
-        # 'b'. Moreover, it is the default if Select isn't specified at all.
-        expected_items = [{'p': z['p'], 'x': z['x'], 'a': z['a']} for z in items if z['x'] == x]
+        # allowed, and only the projected attributes are returned.
+        # For INCLUDE: the key of both base and GSI ('p' and 'x') and 'a' - but not 'b'.
+        # For KEYS_ONLY: only the key attributes ('p' and 'x') - no 'a' or 'b'.
+        if projection_type == 'INCLUDE':
+            expected_items = [{'p': z['p'], 'x': z['x'], 'a': z['a']} for z in items if z['x'] == x]
+        else:
+            expected_items = [{'p': z['p'], 'x': z['x']} for z in items if z['x'] == x]
+        # ALL_PROJECTED_ATTRIBUTES is the default if Select isn't specified at all.
         assert_index_query(table, 'hello', expected_items,
             KeyConditions={'x': {'AttributeValueList': [x], 'ComparisonOperator': 'EQ'}})
         assert_index_query(table, 'hello', expected_items,
@@ -1779,29 +1869,56 @@ def test_gsi_query_select_2(dynamodb):
             KeyConditions={'x': {'AttributeValueList': [x], 'ComparisonOperator': 'EQ'}})
         # Because in this GSI not all attributes are projected into the index,
         # Select=ALL_ATTRIBUTES is *not* allowed.
-        with pytest.raises(ClientError, match='ValidationException.*ALL_ATTRIBUTES'):
+        with pytest.raises(ClientError, match='ValidationException.*ALL_ATTRIBUTES.*hello'):
             assert_index_query(table, 'hello', expected_items,
                 Select='ALL_ATTRIBUTES',
                 KeyConditions={'x': {'AttributeValueList': [x], 'ComparisonOperator': 'EQ'}})
-        # SPECIFIC_ATTRIBUTES (with AttributesToGet / ProjectionExpression)
-        # is allowed for the projected attributes, but not allowed for
-        # unprojected attributes:
-        expected_items = [{'a': z['a']} for z in items if z['x'] == x]
-        assert_index_query(table, 'hello', expected_items,
+        # SPECIFIC_ATTRIBUTES for a projected key attribute ('x') is allowed.
+        # 'x' is the GSI's key, but a regular attribute in the base table, so
+        # this also checks that such a GSI key is projected and readable.
+        expected_keys = [{'x': z['x']} for z in items if z['x'] == x]
+        assert_index_query(table, 'hello', expected_keys,
             Select='SPECIFIC_ATTRIBUTES',
-            AttributesToGet=['a'],
+            AttributesToGet=['x'],
             KeyConditions={'x': {'AttributeValueList': [x], 'ComparisonOperator': 'EQ'}})
+        # The base table's key ('p') is also projected, so SPECIFIC_ATTRIBUTES
+        # for it is allowed too:
+        expected_keys = [{'p': z['p']} for z in items if z['x'] == x]
+        assert_index_query(table, 'hello', expected_keys,
+            Select='SPECIFIC_ATTRIBUTES',
+            AttributesToGet=['p'],
+            KeyConditions={'x': {'AttributeValueList': [x], 'ComparisonOperator': 'EQ'}})
+        if projection_type == 'INCLUDE':
+            # For INCLUDE, 'a' is projected so SPECIFIC_ATTRIBUTES for 'a' is allowed:
+            expected_items = [{'a': z['a']} for z in items if z['x'] == x]
+            assert_index_query(table, 'hello', expected_items,
+                Select='SPECIFIC_ATTRIBUTES',
+                AttributesToGet=['a'],
+                KeyConditions={'x': {'AttributeValueList': [x], 'ComparisonOperator': 'EQ'}})
         # Requesting an unprojected attribute 'b' via AttributesToGet or
         # ProjectionExpression returns an explicit error, not silent nothing.
-        with pytest.raises(ClientError, match='ValidationException.*project'):
+        with pytest.raises(ClientError, match=r'ValidationException.*hello.*project.*\bb\b'):
             table.query(IndexName='hello',
                 Select='SPECIFIC_ATTRIBUTES',
                 AttributesToGet=['b'],
                 KeyConditions={'x': {'AttributeValueList': [x], 'ComparisonOperator': 'EQ'}})
-        with pytest.raises(ClientError, match='ValidationException.*project'):
+        with pytest.raises(ClientError, match=r'ValidationException.*hello.*project.*\bb\b'):
             table.query(IndexName='hello',
                 ProjectionExpression='b',
-            KeyConditions={'x': {'AttributeValueList': [x], 'ComparisonOperator': 'EQ'}})
+                KeyConditions={'x': {'AttributeValueList': [x], 'ComparisonOperator': 'EQ'}})
+        # Check that requesting a nested path in the unprojected 'b', an
+        # attribute which no item has, or 'b' via ExpressionAttributeNames, is
+        # also an error.
+        for projection_expression, names in [('b.c', {}), ('nosuch', {}),
+                ('#b', {'ExpressionAttributeNames': {'#b': 'b'}})]:
+            with pytest.raises(ClientError, match='ValidationException.*hello.*project'):
+                table.query(IndexName='hello',
+                    ProjectionExpression=projection_expression, **names,
+                    KeyConditions={'x': {'AttributeValueList': [x], 'ComparisonOperator': 'EQ'}})
+        # Check that, like Query, Scan doesn't allow Select=ALL_ATTRIBUTES
+        # on this GSI.
+        with pytest.raises(ClientError, match='ValidationException.*ALL_ATTRIBUTES.*hello'):
+            table.scan(IndexName='hello', Select='ALL_ATTRIBUTES')
         # Select=COUNT is also allowed, and doesn't return item content
         assert not 'Items' in table.query(ConsistentRead=False,
             IndexName='hello',
@@ -2485,3 +2602,213 @@ def test_gsi_query_exclusivestartkey_spurious_column(test_table_gsi_5):
     exclusive_start_key['y'] = 'meerkat'
     with pytest.raises(ClientError, match='ValidationException.*starting key'):
         test_table_gsi_5.query(ExclusiveStartKey=exclusive_start_key, **query_args)
+
+# Test that after creating a GSI with different ProjectionType options
+# (ALL, KEYS_ONLY, INCLUDE), DescribeTable is able to show the correct
+# ProjectionType and the GSI. For ProjectionType=INCLUDE, it should also show
+# the correct NonKeyAttributes created with the GSI.
+# We test creating the GSI to be described in two ways - via CreateTable
+# (creating a base table and a GSI together) and via UpdateTable (adding a
+# new GSI to an existing table).
+@pytest.mark.parametrize('projection_type', [
+    'ALL',
+    'KEYS_ONLY',
+    pytest.param('INCLUDE', marks=pytest.mark.xfail(reason='Issue #5036 - ProjectionType=INCLUDE not yet supported')),
+])
+def test_gsi_projection_type_describe(dynamodb, projection_type):
+    non_key_attrs = ['extra', 'hello']
+    projection = {'ProjectionType': projection_type}
+    if projection_type == 'INCLUDE':
+        projection['NonKeyAttributes'] = non_key_attrs
+    gsi_spec = {
+        'IndexName': 'gsi',
+        'KeySchema': [{'AttributeName': 'x', 'KeyType': 'HASH'}],
+        'Projection': projection,
+    }
+    with new_test_table(dynamodb,
+            KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+            AttributeDefinitions=[
+                {'AttributeName': 'p', 'AttributeType': 'S'},
+                {'AttributeName': 'x', 'AttributeType': 'S'},
+            ],
+            GlobalSecondaryIndexes=[gsi_spec]) as table:
+        desc = table.meta.client.describe_table(TableName=table.name)
+        gsi_list = desc['Table']['GlobalSecondaryIndexes']
+        assert len(gsi_list) == 1
+        assert gsi_list[0]['Projection']['ProjectionType'] == projection_type
+        if projection_type == 'INCLUDE':
+            assert sorted(gsi_list[0]['Projection']['NonKeyAttributes']) == sorted(non_key_attrs)
+        # Above we created the GSI with CreateTable and showed DescribeTable
+        # describes its Projection correctly. Now we also want to show that if
+        # we add a GSI with UpdateTable, DescribeTable also describes its
+        # Projection correctly.
+        gsi2_spec = {
+            'IndexName': 'gsi2',
+            'KeySchema': [{'AttributeName': 'y', 'KeyType': 'HASH'}],
+            'Projection': projection,
+        }
+        dynamodb.meta.client.update_table(TableName=table.name,
+            AttributeDefinitions=[{'AttributeName': 'y', 'AttributeType': 'S'}],
+            GlobalSecondaryIndexUpdates=[{'Create': gsi2_spec}])
+        wait_for_gsi(table, 'gsi2')
+        desc2 = table.meta.client.describe_table(TableName=table.name)
+        gsi2_list = [g for g in desc2['Table']['GlobalSecondaryIndexes'] if g['IndexName'] == 'gsi2']
+        assert len(gsi2_list) == 1
+        assert gsi2_list[0]['Projection']['ProjectionType'] == projection_type
+        if projection_type == 'INCLUDE':
+            assert sorted(gsi2_list[0]['Projection']['NonKeyAttributes']) == sorted(non_key_attrs)
+
+# Check that filtering (FilterExpression) on non-projected attributes is not
+# allowed in a Query on a KEYS_ONLY GSI. DynamoDB rejects this with a
+# ValidationException saying the index does not project the filter attribute.
+# Scan, on the other hand, does allow such a filter, which is checked at the
+# end of this test.
+def test_gsi_keys_only_filter_on_non_projected_attribute(dynamodb):
+    with new_test_table(dynamodb,
+        KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'},
+                   {'AttributeName': 'c', 'KeyType': 'RANGE'}],
+        AttributeDefinitions=[
+            {'AttributeName': 'p', 'AttributeType': 'S'},
+            {'AttributeName': 'c', 'AttributeType': 'S'},
+            {'AttributeName': 'x', 'AttributeType': 'S'},
+        ],
+        GlobalSecondaryIndexes=[{
+            'IndexName': 'hello',
+            'KeySchema': [{'AttributeName': 'x', 'KeyType': 'HASH'}],
+            'Projection': {'ProjectionType': 'KEYS_ONLY'},
+        }]) as table:
+        p = random_string()
+        items = [{'p': p, 'c': str(i), 'x': str(i), 'd': str(i)} for i in range(5)]
+        with table.batch_writer() as batch:
+            for item in items:
+                batch.put_item(item)
+        # Filtering on 'd' (a non-projected attribute) is not allowed.
+        with pytest.raises(ClientError, match='ValidationException.*hello.*does not project.*filter.*d'):
+            full_query(table, ConsistentRead=False, IndexName='hello',
+                KeyConditions={'x': {'AttributeValueList': ['2'], 'ComparisonOperator': 'EQ'}},
+                FilterExpression='d = :d',
+                ExpressionAttributeValues={':d': '2'})
+        # Filtering on 'x' (the GSI's key column) is also not allowed, but for
+        # a different reason not related to projection: key attributes must be
+        # used in KeyConditions/KeyConditionExpression, not FilterExpression.
+        # The error message is different.
+        with pytest.raises(ClientError, match='ValidationException.*primary key'):
+            full_query(table, ConsistentRead=False, IndexName='hello',
+                KeyConditions={'x': {'AttributeValueList': ['2'], 'ComparisonOperator': 'EQ'}},
+                FilterExpression='x = :val',
+                ExpressionAttributeValues={':val': '2'})
+        # Curiously, there remains one single attribute we may filter on - c.
+        # This is because c is not officially part of the GSI key schema, but
+        # is still projected because it is one of the base table's key
+        # attributes so DynamoDB does allow filtering on it. The GSI is
+        # eventually consistent, so assert_index_query() retries the query
+        # until the GSI has the item.
+        assert_index_query(table, 'hello', [{'p': p, 'c': '2', 'x': '2'}],
+            KeyConditions={'x': {'AttributeValueList': ['2'], 'ComparisonOperator': 'EQ'}},
+            FilterExpression='c = :val',
+            ExpressionAttributeValues={':val': '2'})
+        # Unlike Query, Scan does allow a filter on a non-projected attribute.
+        # The filter sees the items as they are in the GSI, which doesn't
+        # have 'd', so no item matches. First wait until the GSI has all the
+        # items, so that an empty result doesn't just mean that the GSI isn't
+        # up to date yet.
+        assert_index_scan(table, 'hello', [{'p': p, 'c': str(i), 'x': str(i)} for i in range(5)])
+        # Check that a Scan with a FilterExpression on 'd' matches no item.
+        assert full_scan(table, ConsistentRead=False, IndexName='hello',
+            FilterExpression='d = :d', ExpressionAttributeValues={':d': '2'}) == []
+        # Check the same with the older ScanFilter.
+        assert full_scan(table, ConsistentRead=False, IndexName='hello',
+            ScanFilter={'d': {'AttributeValueList': ['2'], 'ComparisonOperator': 'EQ'}}) == []
+
+# Same as test_gsi_keys_only_filter_on_non_projected_attribute but for
+# ProjectionType=INCLUDE. The INCLUDE list contains 'e' but not 'd', so
+# filtering on 'd' should be rejected, while filtering on 'e' (or key
+# attributes) should work.
+@pytest.mark.xfail(reason="Issue #5036 - ProjectionType=INCLUDE not yet supported")
+def test_gsi_include_filter_on_non_projected_attribute(dynamodb):
+    with new_test_table(dynamodb,
+        KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'},
+                   {'AttributeName': 'c', 'KeyType': 'RANGE'}],
+        AttributeDefinitions=[
+            {'AttributeName': 'p', 'AttributeType': 'S'},
+            {'AttributeName': 'c', 'AttributeType': 'S'},
+            {'AttributeName': 'x', 'AttributeType': 'S'},
+        ],
+        GlobalSecondaryIndexes=[{
+            'IndexName': 'hello',
+            'KeySchema': [{'AttributeName': 'x', 'KeyType': 'HASH'}],
+            'Projection': {'ProjectionType': 'INCLUDE', 'NonKeyAttributes': ['e']},
+        }]) as table:
+        p = random_string()
+        items = [{'p': p, 'c': str(i), 'x': str(i), 'd': str(i), 'e': str(i)} for i in range(5)]
+        with table.batch_writer() as batch:
+            for item in items:
+                batch.put_item(item)
+        # Filtering on 'd' (not in the INCLUDE list) is not allowed.
+        with pytest.raises(ClientError, match='ValidationException.*hello.*does not project.*filter.*d'):
+            full_query(table, ConsistentRead=False, IndexName='hello',
+                KeyConditions={'x': {'AttributeValueList': ['2'], 'ComparisonOperator': 'EQ'}},
+                FilterExpression='d = :d',
+                ExpressionAttributeValues={':d': '2'})
+        # Filtering on 'e' (included in the projection) must be allowed.
+        results = full_query(table, ConsistentRead=False, IndexName='hello',
+            KeyConditions={'x': {'AttributeValueList': ['2'], 'ComparisonOperator': 'EQ'}},
+            FilterExpression='e = :e',
+            ExpressionAttributeValues={':e': '2'})
+        assert len(results) == 1 and results[0]['e'] == '2'
+
+# In test_item.py we have several tests for "empty items" - these are
+# items that have only key attributes, but they still exist. In particular,
+# creating an item with some non-key attributes and then deleting these
+# attributes with UpdateItem leaves an empty item behind - it does not
+# delete the whole item. We want to verify that such empty items are still
+# visible in a GSI, including in a GSI that projects only keys.
+#
+# This test helps explain why unlike in CQL, in Alternator we don't need to
+# add virtual columns for unprojected base columns, even when the view key has
+# the same columns as the base key (as is the case in this test). Unlike CQL
+# where modifying unprojected base columns can cause the view item to change
+# its liveness (appear and disappear), this is not the case in Alternator -
+# even if you add and remove attributes to the base-table item, the GSI item
+# will always be there - possibly empty but does not disappear or reappear.
+@pytest.mark.parametrize('projection_type', ['ALL', 'KEYS_ONLY'])
+def test_gsi_empty_item_visible(dynamodb, projection_type):
+    # The base table has hash key 'p' and sort key 'c'. The GSI uses the
+    # inverted key schema (c HASH, p RANGE), so all base key columns appear
+    # in the GSI key. This is the interesting case for KEYS_ONLY: `:attrs`
+    # is absent from the view, but because c and p are base primary key
+    # columns the view condition is always satisfied.
+    with new_test_table(dynamodb,
+        KeySchema=[
+            {'AttributeName': 'p', 'KeyType': 'HASH'},
+            {'AttributeName': 'c', 'KeyType': 'RANGE'},
+        ],
+        AttributeDefinitions=[
+            {'AttributeName': 'p', 'AttributeType': 'S'},
+            {'AttributeName': 'c', 'AttributeType': 'S'},
+        ],
+        GlobalSecondaryIndexes=[{
+            'IndexName': 'gsi',
+            'KeySchema': [
+                {'AttributeName': 'c', 'KeyType': 'HASH'},
+                {'AttributeName': 'p', 'KeyType': 'RANGE'},
+            ],
+            'Projection': {'ProjectionType': projection_type},
+        }]) as table:
+        p = random_string()
+        c = random_string()
+        # Case 1: PutItem with only the key attributes (no other attributes).
+        # The item is "empty" in the sense of having no non-key attributes,
+        # and should still be visible in the GSI.
+        table.put_item(Item={'p': p, 'c': c})
+        assert_index_query(table, 'gsi', [{'p': p, 'c': c}],
+            KeyConditions={'c': {'AttributeValueList': [c], 'ComparisonOperator': 'EQ'}})
+        # Case 2: Create an item with a non-key attribute 'a', then delete 'a'
+        # via UpdateItem. The resulting item has only key attributes but should
+        # still be visible in the GSI.
+        p2 = random_string()
+        c2 = random_string()
+        table.put_item(Item={'p': p2, 'c': c2, 'a': random_string()})
+        table.update_item(Key={'p': p2, 'c': c2}, AttributeUpdates={'a': {'Action': 'DELETE'}})
+        assert_index_query(table, 'gsi', [{'p': p2, 'c': c2}],
+            KeyConditions={'c': {'AttributeValueList': [c2], 'ComparisonOperator': 'EQ'}})

@@ -9,12 +9,13 @@
 # which are extremely slow in DynamoDB, often taking minutes (!).
 
 import time
+from decimal import Decimal
 
 import pytest
 import requests
 from botocore.exceptions import ClientError
 
-from test.alternator.util import create_test_table, new_test_table, random_string, full_scan, full_query, multiset, unique_table_name
+from test.alternator.util import create_test_table, new_test_table, random_string, full_scan, full_query, multiset, unique_table_name, full_query_and_counts, full_scan_and_count, scylla_config_temporary, metrics, get_metric, check_increases_metric_exact
 
 
 # LSIs support strongly-consistent reads, so the following functions do not
@@ -416,10 +417,456 @@ def test_lsi_get_not_projected_attribute(test_table_lsi_keys_only):
         KeyConditions={'p': {'AttributeValueList': [p2], 'ComparisonOperator': 'EQ'},
                        'b': {'AttributeValueList': [b2], 'ComparisonOperator': 'EQ'}},
         Select='SPECIFIC_ATTRIBUTES', AttributesToGet=['d'])
+    # Check that asking for an attribute which no item has returns empty
+    # items, not an error. Unlike a GSI, which rejects a request for any
+    # attribute it doesn't project (see test_gsi_query_select_2), an LSI can
+    # read any attribute from the base table.
+    assert_index_query(test_table_lsi_keys_only, 'hello', [{}],
+        KeyConditions={'p': {'AttributeValueList': [p2], 'ComparisonOperator': 'EQ'},
+                       'b': {'AttributeValueList': [b2], 'ComparisonOperator': 'EQ'}},
+        ProjectionExpression='nosuch')
+
+# Check that querying an entire LSI partition (all items with the same hash
+# key) works correctly: ALL_PROJECTED_ATTRIBUTES returns only the projected
+# attributes (in this case, key columns p, c, b), while ALL_ATTRIBUTES returns
+# the full items (including the non-projected attribute d). The items are
+# returned sorted by the LSI sort key 'b', which is a different order than the
+# base table sort key 'c'. We also read the full items page by page, with a
+# small Limit: Limit counts LSI rows, and LastEvaluatedKey is an LSI key.
+def test_lsi_get_whole_partition(test_table_lsi_keys_only):
+    p = random_string()
+    # Write several items into the same partition 'p', with distinct 'b' and
+    # 'c' values so the LSI order (by b) differs from the base order (by c).
+    items = [{'p': p, 'c': str(i), 'b': str(9 - i), 'd': random_string()} for i in range(5)]
+    with test_table_lsi_keys_only.batch_writer() as batch:
+        for item in items:
+            batch.put_item(item)
+    # Query the whole partition via the LSI.
+    # ALL_PROJECTED_ATTRIBUTES: expect only projected columns p, c, b - no d,
+    # returned in LSI sort order (by 'b').
+    expected_projected_ordered = sorted(
+        [{'p': i['p'], 'c': i['c'], 'b': i['b']} for i in items],
+        key=lambda x: x['b'])
+    result = full_query(test_table_lsi_keys_only, IndexName='hello',
+        KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}},
+        Select='ALL_PROJECTED_ATTRIBUTES')
+    assert result == expected_projected_ordered
+    # ALL_ATTRIBUTES: expect full items including non-projected attribute d,
+    # also in LSI sort order (by 'b').
+    expected_ordered = sorted(items, key=lambda x: x['b'])
+    result = full_query(test_table_lsi_keys_only, IndexName='hello',
+        KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}},
+        Select='ALL_ATTRIBUTES')
+    assert result == expected_ordered
+    # Check that reading the full items in pages of 2 items, forward and in
+    # reverse order, also returns all of them in the LSI's order.
+    for forward in [True, False]:
+        result = full_query(test_table_lsi_keys_only, IndexName='hello', Limit=2,
+            KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}},
+            Select='ALL_ATTRIBUTES', ScanIndexForward=forward)
+        assert result == (expected_ordered if forward else expected_ordered[::-1])
+
+# Check that Scan on a KEYS_ONLY LSI with Select=ALL_ATTRIBUTES or
+# Select=SPECIFIC_ATTRIBUTES (for a non-projected attribute) correctly
+# fetches full items from the base table rather than returning only
+# the projected key columns. This is the Scan version of the other tests
+# we have for Query.
+def test_lsi_keys_only_scan_all_attributes(dynamodb):
+    # Scan does not support restricting to a specific partition so
+    # unfortunately we can't re-use a shared table.
+    with new_test_table(dynamodb,
+        KeySchema=[
+            { 'AttributeName': 'p', 'KeyType': 'HASH' },
+            { 'AttributeName': 'c', 'KeyType': 'RANGE' }
+        ],
+        AttributeDefinitions=[
+            { 'AttributeName': 'p', 'AttributeType': 'S' },
+            { 'AttributeName': 'c', 'AttributeType': 'S' },
+            { 'AttributeName': 'b', 'AttributeType': 'S' }
+        ],
+        LocalSecondaryIndexes=[
+            {   'IndexName': 'hello',
+                'KeySchema': [
+                    { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                    { 'AttributeName': 'b', 'KeyType': 'RANGE' }
+                ],
+                'Projection': { 'ProjectionType': 'KEYS_ONLY' }
+            }
+        ]) as table:
+        items = [{'p': random_string(), 'c': random_string(), 'b': random_string(), 'd': random_string()} for i in range(5)]
+        with table.batch_writer() as batch:
+            for item in items:
+                batch.put_item(item)
+        # Scan with Select=ALL_PROJECTED_ATTRIBUTES: only projected key columns
+        # p, c, b are returned (not the non-projected attribute d).
+        results = full_scan(table, IndexName='hello', Select='ALL_PROJECTED_ATTRIBUTES')
+        expected_projected = [{'p': i['p'], 'c': i['c'], 'b': i['b']} for i in items]
+        assert multiset(results) == multiset(expected_projected)
+        # Scan with Select=ALL_ATTRIBUTES: full items including the non-
+        # projected attribute d must be fetched from the base table.
+        results = full_scan(table, IndexName='hello', Select='ALL_ATTRIBUTES')
+        assert multiset(results) == multiset(items)
+        # Scan with Select=SPECIFIC_ATTRIBUTES requesting only the non-
+        # projected attribute d: also requires a base-table fetch per item.
+        results = full_scan(table, IndexName='hello', Select='SPECIFIC_ATTRIBUTES', AttributesToGet=['d'])
+        assert multiset(results) == multiset([{'d': i['d']} for i in items])
+
+# Check that a Query on a KEYS_ONLY LSI with a number or binary sort key
+# returns the full items read from the base table, in the LSI's order. The
+# other tests use string sort keys. Scylla checks that the LSI sort key of
+# each item it reads from the base table is still the one in the LSI row,
+# so this test checks that this check doesn't wrongly drop items when the
+# key is a number - also one written in an unusual form - or binary.
+def test_lsi_keys_only_number_and_binary_sort_keys(dynamodb):
+    with new_test_table(dynamodb,
+        KeySchema=[
+            { 'AttributeName': 'p', 'KeyType': 'HASH' },
+            { 'AttributeName': 'c', 'KeyType': 'RANGE' }
+        ],
+        AttributeDefinitions=[
+            { 'AttributeName': 'p', 'AttributeType': 'S' },
+            { 'AttributeName': 'c', 'AttributeType': 'S' },
+            { 'AttributeName': 'n', 'AttributeType': 'N' },
+            { 'AttributeName': 'x', 'AttributeType': 'B' }
+        ],
+        LocalSecondaryIndexes=[
+            {   'IndexName': 'num',
+                'KeySchema': [
+                    { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                    { 'AttributeName': 'n', 'KeyType': 'RANGE' }
+                ],
+                'Projection': { 'ProjectionType': 'KEYS_ONLY' }
+            },
+            {   'IndexName': 'bin',
+                'KeySchema': [
+                    { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                    { 'AttributeName': 'x', 'KeyType': 'RANGE' }
+                ],
+                'Projection': { 'ProjectionType': 'KEYS_ONLY' }
+            }
+        ]) as table:
+        p = random_string()
+        numbers = ['1.50', '1E+3', '-0.001', '0', '123456789012345678901234567890', '7']
+        items = [{'p': p, 'c': str(i), 'n': Decimal(numbers[i]), 'x': bytearray([5 - i, i]),
+                  'd': random_string()} for i in range(len(numbers))]
+        with table.batch_writer() as batch:
+            for item in items:
+                batch.put_item(item)
+        for index_name, key in [('num', 'n'), ('bin', 'x')]:
+            expected = sorted(items, key=lambda i: i[key])
+            # Check that Select=ALL_ATTRIBUTES returns all the full items,
+            # in the LSI's order.
+            result = full_query(table, IndexName=index_name, KeyConditionExpression='p = :p',
+                ExpressionAttributeValues={':p': p}, Select='ALL_ATTRIBUTES')
+            assert result == expected
+            # Check that selecting only a non-projected attribute, which
+            # doesn't include the LSI sort key, also returns all the items.
+            result = full_query(table, IndexName=index_name, KeyConditionExpression='p = :p',
+                ExpressionAttributeValues={':p': p}, ProjectionExpression='d')
+            assert result == [{'d': i['d']} for i in expected]
+
+# Check that filtering (FilterExpression) on non-projected attributes is not
+# allowed in a Query on a KEYS_ONLY LSI. DynamoDB rejects this with a
+# ValidationException saying the index does not project the filter attribute.
+# Scan, on the other hand, does allow such a filter, which is checked at the
+# end of this test. In a Query, DynamoDB forbids filtering on non-projected
+# attributes even when the read is with Select=ALL_ATTRIBUTES (which LSI
+# supports). Filtering on non-projected attributes could have been allowed
+# in this case - because the full items are read from the base table so
+# filtering could access them. But since DynamoDB forbids it, Alternator will
+# forbid it too. Forbidding such a filter in a Query has a performance
+# advantage, because it allows applying the filter before fetching unneeded
+# rows from the base table.
+def test_lsi_keys_only_filter_on_non_projected_attribute(test_table_lsi_keys_only):
+    p = random_string()
+    items = [{'p': p, 'c': str(i), 'b': str(i), 'd': str(i), 'e': str(i)} for i in range(5)]
+    with test_table_lsi_keys_only.batch_writer() as batch:
+        for item in items:
+            batch.put_item(item)
+    # Filtering on 'd' (a non-projected attribute) is not allowed.
+    with pytest.raises(ClientError, match='ValidationException.*hello.*does not project.*filter.*d'):
+        full_query(test_table_lsi_keys_only, IndexName='hello',
+            KeyConditionExpression='p = :p',
+            FilterExpression='d = :d',
+            ExpressionAttributeValues={':p': p, ':d': '2'})
+    # With Select=ALL_ATTRIBUTES, DynamoDB reads the entire items and
+    # could in theory filter on 'd', but still forbids it.
+    with pytest.raises(ClientError, match='ValidationException.*hello.*does not project.*filter.*d'):
+        full_query(test_table_lsi_keys_only, IndexName='hello',
+            KeyConditionExpression='p = :p',
+            FilterExpression='d = :d',
+            ExpressionAttributeValues={':p': p, ':d': '2'},
+            Select='ALL_ATTRIBUTES')
+    # Similarly, Select=SPECIFIC_ATTRIBUTES (and ProjectionExpression)
+    # requesting 'd' also makes 'd' available and could in theory filter on
+    # 'd', but is still forbidden.
+    with pytest.raises(ClientError, match='ValidationException.*hello.*does not project.*filter.*d'):
+        full_query(test_table_lsi_keys_only, IndexName='hello',
+            KeyConditionExpression='p = :p',
+            FilterExpression='d = :d',
+            ExpressionAttributeValues={':p': p, ':d': '2'},
+            Select='SPECIFIC_ATTRIBUTES',
+            ProjectionExpression='d')
+    # Filtering on the LSI's key columns (p, b) is also not allowed, but for a
+    # different reason not related to projection: Key attributes must be used
+    # in KeyConditions/KeyConditionExpression, not in FilterExpression.
+    # The error message is different.
+    for key_attr in ['p', 'b']:
+        with pytest.raises(ClientError, match='ValidationException.*primary key'):
+            full_query(test_table_lsi_keys_only, IndexName='hello',
+                KeyConditionExpression='p = :p',
+                FilterExpression=f'{key_attr} = :val',
+                ExpressionAttributeValues={':p': p, ':val': '2'})
+    # Curiously, there remains one single attribute we may filter on - c.
+    # This is because c is not officially part of the LSI key schema, but
+    # is still projected because it is one of the base table's key attributes
+    # so DynamoDB does allow filtering on it.
+    results = full_query(test_table_lsi_keys_only, IndexName='hello',
+        KeyConditionExpression='p = :p',
+        FilterExpression='c = :val',
+        ExpressionAttributeValues={':p': p, ':val': '2'})
+    assert len(results) == 1 and results[0]['c'] == '2'
+    # Unlike Query, Scan does allow a filter on a non-projected attribute.
+    # The filter sees the item as it was read, so 'd' is missing unless the
+    # Scan reads the item from the base table. The filter on 'p' limits the
+    # Scan of the shared table to this test's items.
+    # Check that by default (Select=ALL_PROJECTED_ATTRIBUTES), the items read
+    # from the LSI don't have 'd', so no item matches.
+    assert full_scan(test_table_lsi_keys_only, IndexName='hello',
+        FilterExpression='p = :p AND d = :d',
+        ExpressionAttributeValues={':p': p, ':d': '2'}) == []
+    # Check that with Select=ALL_ATTRIBUTES, the filter sees the full item
+    # read from the base table, so the item with d = '2' matches.
+    assert full_scan(test_table_lsi_keys_only, IndexName='hello',
+        FilterExpression='p = :p AND d = :d',
+        ExpressionAttributeValues={':p': p, ':d': '2'},
+        Select='ALL_ATTRIBUTES') == [items[2]]
+    # Check that with a ProjectionExpression of 'd', which also reads the
+    # item from the base table, the item matches too, and only 'd' is
+    # returned.
+    assert full_scan(test_table_lsi_keys_only, IndexName='hello',
+        FilterExpression='p = :p AND d = :d',
+        ExpressionAttributeValues={':p': p, ':d': '2'},
+        ProjectionExpression='d') == [{'d': '2'}]
+    # Check that the filter also sees non-projected attributes of the full
+    # item which the ProjectionExpression doesn't return: here the filter is
+    # on 'e', but only 'd' is returned.
+    assert full_scan(test_table_lsi_keys_only, IndexName='hello',
+        FilterExpression='p = :p AND e = :e',
+        ExpressionAttributeValues={':p': p, ':e': '3'},
+        ProjectionExpression='d') == [{'d': '3'}]
+
+# In test_filter_expression.py::test_filter_expression_and_projection_expression
+# we check that when selecting specific attributes with ProjectionExpression,
+# we can still filter on unselected attributes. Let's check this also in the
+# separate code path of an LSI with ProjectionType=KEYS_ONLY which selects
+# a non-projected (non-key) attribute. In such a case we should be able to
+# filter on a key attribute, but return only another, non-key, attribute.
+def test_lsi_keys_only_filter_expression_and_projection_expression(test_table_lsi_keys_only):
+    p = random_string()
+    items = [{'p': p, 'c': str(i), 'b': str(i), 'd': str(i)} for i in range(5)]
+    with test_table_lsi_keys_only.batch_writer() as batch:
+        for item in items:
+            batch.put_item(item)
+    # Filter on 'c' (a key attribute, projected into KEYS_ONLY LSI) but
+    # project only 'd' (a non-projected, non-key attribute requiring a
+    # base-table fetch). The result should contain only the 'd' attribute
+    # of the item whose 'c' matches the filter.
+    results = full_query(test_table_lsi_keys_only, IndexName='hello',
+        KeyConditionExpression='p = :p',
+        FilterExpression='c = :c',
+        ProjectionExpression='d',
+        ExpressionAttributeValues={':p': p, ':c': '2'})
+    assert len(results) == 1 and results[0] == {'d': '2'}
+
+# Same as test_lsi_keys_only_filter_on_non_projected_attribute but for
+# ProjectionType=INCLUDE. The INCLUDE list contains 'e' but not 'd', so
+# filtering on 'd' should be rejected, while filtering on 'e' (or key
+# attributes) should work.
+@pytest.mark.xfail(reason="Issue #5036 - ProjectionType=INCLUDE not yet supported")
+def test_lsi_include_filter_on_non_projected_attribute(dynamodb):
+    with new_test_table(dynamodb,
+        KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}, {'AttributeName': 'c', 'KeyType': 'RANGE'}],
+        AttributeDefinitions=[
+            {'AttributeName': 'p', 'AttributeType': 'S'},
+            {'AttributeName': 'c', 'AttributeType': 'S'},
+            {'AttributeName': 'b', 'AttributeType': 'S'},
+        ],
+        LocalSecondaryIndexes=[{
+            'IndexName': 'hello',
+            'KeySchema': [
+                {'AttributeName': 'p', 'KeyType': 'HASH'},
+                {'AttributeName': 'b', 'KeyType': 'RANGE'},
+            ],
+            'Projection': {'ProjectionType': 'INCLUDE', 'NonKeyAttributes': ['e']},
+        }]) as table:
+        p = random_string()
+        items = [{'p': p, 'c': str(i), 'b': str(i), 'd': str(i), 'e': str(i)} for i in range(5)]
+        with table.batch_writer() as batch:
+            for item in items:
+                batch.put_item(item)
+        # Filtering on 'd' (not in the INCLUDE list) is not allowed.
+        with pytest.raises(ClientError, match='ValidationException.*hello.*does not project.*filter.*d'):
+            full_query(table, IndexName='hello',
+                KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}},
+                FilterExpression='d = :d',
+                ExpressionAttributeValues={':d': '2'})
+        # Filtering on 'e' (included in the projection) must be allowed.
+        results = full_query(table, IndexName='hello',
+            KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}},
+            FilterExpression='e = :e',
+            ExpressionAttributeValues={':e': '2'})
+        assert len(results) == 1 and results[0]['e'] == '2'
+
+# Check that querying a KEYS_ONLY LSI uses base-table reads only when needed:
+#  - Selecting projected (key) columns directly reads from the LSI view without
+#    touching the base table (efficient path).
+#  - Selecting a non-projected column (Select=SPECIFIC_ATTRIBUTES with 'd')
+#    must fall back to a base-table point read per item (inefficient path).
+#  - Select=ALL_ATTRIBUTES also triggers per-item base-table reads.
+# To check whether base-table reads happened, the test uses the metric
+# scylla_alternator_table_lsi_reads_from_base_table of the LSI (using the
+# per-table metric makes this test safe even if there is concurrent activity
+# on the same Scylla instance).
+# This test is Scylla-specific, so it is skipped on AWS.
+def test_lsi_query_select_efficiency(test_table_lsi_keys_only, metrics):
+    table = test_table_lsi_keys_only
+    p = random_string()
+    items = [{'p': p, 'c': str(i), 'b': str(i), 'd': str(i)} for i in range(5)]
+    with table.batch_writer() as batch:
+        for item in items:
+            batch.put_item(item)
+    per_table_metric = 'scylla_alternator_table_lsi_reads_from_base_table'
+    # The LSI's per-table metrics have the LSI's name, which in Scylla is the
+    # table's name followed by "!:" and the index name.
+    table_labels = {'cf': table.name + '!:hello'}
+    key_conditions = {'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}}
+    # The items in the LSI's order (by 'b'), and their projected attributes.
+    expected_items = sorted(items, key=lambda i: i['b'])
+    expected_keys = [{'p': i['p'], 'c': i['c'], 'b': i['b']} for i in expected_items]
+    # Each case is the Query's parameters, the items it should return, and
+    # the number of base-table reads it should do.
+    for params, expected, base_reads in [
+        # The default Select (ALL_PROJECTED_ATTRIBUTES) reads only from the
+        # LSI view.
+        ({}, expected_keys, 0),
+        ({'Select': 'ALL_PROJECTED_ATTRIBUTES'}, expected_keys, 0),
+        # Selecting only key attributes, which are projected, doesn't need
+        # the base table either.
+        ({'Select': 'SPECIFIC_ATTRIBUTES', 'AttributesToGet': ['p', 'c', 'b']}, expected_keys, 0),
+        # Selecting the non-projected 'd' needs a base-table read per item,
+        # and returns only 'd' (not even the key attributes).
+        ({'Select': 'SPECIFIC_ATTRIBUTES', 'AttributesToGet': ['d']},
+            [{'d': i['d']} for i in expected_items], len(items)),
+        # Select=ALL_ATTRIBUTES also needs a base-table read per item.
+        ({'Select': 'ALL_ATTRIBUTES'}, expected_items, len(items)),
+    ]:
+        with check_increases_metric_exact(metrics, per_table_metric, [[base_reads, table_labels]]):
+            assert full_query(table, IndexName='hello', KeyConditions=key_conditions, **params) == expected, params
+    # Check that the global (not per-table) metric
+    # scylla_alternator_lsi_reads_from_base_table is updated as well. It may
+    # increase by more than len(items) due to concurrent activity, but must
+    # increase by at least len(items).
+    global_metric = 'scylla_alternator_lsi_reads_from_base_table'
+    before_global = get_metric(metrics, global_metric)
+    full_query(table, IndexName='hello', KeyConditions=key_conditions, Select='ALL_ATTRIBUTES')
+    assert get_metric(metrics, global_metric) - before_global >= len(items)
+
+# Test paging of a Query or Scan on a KEYS_ONLY LSI which reads full items
+# from the base table (Select=ALL_ATTRIBUTES). The page read from the LSI
+# contains only keys, so it can hold many more rows than fit in a page of
+# full items - so Scylla must also stop a page when the items it read from
+# the base table reach the page size. Check that it does, and that paging
+# through all the pages returns all the items in the right order, with the
+# right counts, also in reverse order and with a filter.
+# This test is Scylla-specific because it lowers Scylla's page size (the
+# query_page_size_in_bytes option), to make the test fast and small.
+def test_lsi_keys_only_paging_base_read(dynamodb, test_table_lsi_keys_only, scylla_only):
+    table = test_table_lsi_keys_only
+    p = random_string()
+    # 20 items of about 200 bytes each, so a 1000-byte page holds only a
+    # few of them. We pick 'b' values so the LSI's order (by 'b') differs
+    # from the base table's order (by 'c').
+    items = [{'p': p, 'c': f'{i:02}', 'b': f'{19 - i:02}', 'd': 'x' * 200 + random_string()} for i in range(20)]
+    with table.batch_writer() as batch:
+        for item in items:
+            batch.put_item(item)
+    expected = sorted(items, key=lambda x: x['b'])
+    with scylla_config_temporary(dynamodb, 'query_page_size_in_bytes', '1000'):
+        # Reading only the keys (ALL_PROJECTED_ATTRIBUTES) doesn't need the
+        # base table. With such small rows, all 20 should fit in one page,
+        # and we expect more pages below where the full items are read.
+        _, _, projected_pages, _ = full_query_and_counts(table, IndexName='hello',
+            KeyConditionExpression='p = :p', ExpressionAttributeValues={':p': p},
+            Select='ALL_PROJECTED_ATTRIBUTES')
+        scanned, count, pages, result = full_query_and_counts(table, IndexName='hello',
+            KeyConditionExpression='p = :p', ExpressionAttributeValues={':p': p},
+            Select='ALL_ATTRIBUTES')
+        assert result == expected
+        assert scanned == count == len(items)
+        assert pages > projected_pages
+        # The same in reverse order:
+        scanned, count, pages, result = full_query_and_counts(table, IndexName='hello',
+            KeyConditionExpression='p = :p', ExpressionAttributeValues={':p': p},
+            Select='ALL_ATTRIBUTES', ScanIndexForward=False)
+        assert result == expected[::-1]
+        assert scanned == count == len(items)
+        assert pages > projected_pages
+        # With a filter (on the projected base sort key 'c') which keeps only
+        # half of the items. ScannedCount still counts all of them.
+        scanned, count, pages, result = full_query_and_counts(table, IndexName='hello',
+            KeyConditionExpression='p = :p', FilterExpression='c < :c',
+            ExpressionAttributeValues={':p': p, ':c': '10'}, Select='ALL_ATTRIBUTES')
+        assert result == [i for i in expected if i['c'] < '10']
+        assert scanned == len(items)
+        assert count == len(items) // 2
+        # A Scan of the LSI uses the same code for reading the base table,
+        # so check it too. We use a filter to only read our own partition
+        # from the shared table.
+        count, result = full_scan_and_count(table, IndexName='hello', Select='ALL_ATTRIBUTES',
+            FilterExpression='p = :p', ExpressionAttributeValues={':p': p})
+        assert result == expected
+        assert count == len(items)
+
+# Like test_lsi_keys_only_paging_base_read, but with tiny items. A page must
+# stop not only when the items read from the base table reach the page size,
+# but also after a limited number of base-table reads, because each one is a
+# separate read and too many of them in one page would make the request time
+# out. Scylla counts each base-table read as at least 4096 bytes toward the
+# page size, so a page can hold at most page_size/4096 (rounded up) items,
+# however small they are.
+# This test is Scylla-specific because it lowers Scylla's page size (the
+# query_page_size_in_bytes option), and checks Scylla's specific limit.
+def test_lsi_keys_only_paging_base_read_small_items(dynamodb, test_table_lsi_keys_only, scylla_only):
+    table = test_table_lsi_keys_only
+    p = random_string()
+    items = [{'p': p, 'c': f'{i:02}', 'b': f'{19 - i:02}', 'd': 'x'} for i in range(20)]
+    with table.batch_writer() as batch:
+        for item in items:
+            batch.put_item(item)
+    expected = sorted(items, key=lambda x: x['b'])
+    page_size = 20000
+    max_items_per_page = -(-page_size // 4096)
+    with scylla_config_temporary(dynamodb, 'query_page_size_in_bytes', str(page_size)):
+        # Check that reading only the keys, which doesn't need the base
+        # table, returns all these small items in one page.
+        _, _, pages, result = full_query_and_counts(table, IndexName='hello',
+            KeyConditionExpression='p = :p', ExpressionAttributeValues={':p': p},
+            Select='ALL_PROJECTED_ATTRIBUTES')
+        assert len(result) == len(items)
+        assert pages == 1
+        # Check that reading the full items needs more pages, because of
+        # the limit on base-table reads per page, and still returns all the
+        # items in the right order.
+        scanned, count, pages, result = full_query_and_counts(table, IndexName='hello',
+            KeyConditionExpression='p = :p', ExpressionAttributeValues={':p': p},
+            Select='ALL_ATTRIBUTES')
+        assert result == expected
+        assert scanned == count == len(items)
+        assert pages >= -(-len(items) // max_items_per_page)
 
 # Check that by default (Select=ALL_PROJECTED_ATTRIBUTES), only projected
 # attributes are extracted
-@pytest.mark.xfail(reason="LSI in alternator currently only implement full projections")
 def test_lsi_get_all_projected_attributes(test_table_lsi_keys_only):
     items1 = [{'p': random_string(), 'c': random_string(), 'b': random_string(), 'd': random_string()} for i in range(10)]
     p1, b1, d1 = items1[0]['p'], items1[0]['b'], items1[0]['d']
@@ -429,6 +876,9 @@ def test_lsi_get_all_projected_attributes(test_table_lsi_keys_only):
     with test_table_lsi_keys_only.batch_writer() as batch:
         for item in items:
             batch.put_item(item)
+    # The default Select is ALL_PROJECTED_ATTRIBUTES, which returns only the
+    # projected attributes, which are the key attributes - p, c and b. The
+    # attribute d is not projected and should not appear.
     expected_items = [{'p': i['p'], 'c': i['c'],'b': i['b']} for i in items if i['p'] == p1 and i['b'] == b1]
     assert_index_query(test_table_lsi_keys_only, 'hello', expected_items,
         KeyConditions={'p': {'AttributeValueList': [p1], 'ComparisonOperator': 'EQ'},
@@ -438,8 +888,14 @@ def test_lsi_get_all_projected_attributes(test_table_lsi_keys_only):
 # a test 'test_query_select' for this parameter on a query of a normal (base)
 # table, but for GSI and LSI the ALL_PROJECTED_ATTRIBUTES is additionally
 # allowed (and in fact is the default), and we want to test it.
-@pytest.mark.xfail(reason="Projection not supported yet. Issue #5036")
-def test_lsi_query_select(dynamodb):
+@pytest.mark.parametrize('projection_type', [
+    'KEYS_ONLY',
+    pytest.param('INCLUDE', marks=pytest.mark.xfail(reason="Issue #5036 - ProjectionType=INCLUDE not yet supported")),
+])
+def test_lsi_query_select(dynamodb, projection_type):
+    projection = {'ProjectionType': projection_type}
+    if projection_type == 'INCLUDE':
+        projection['NonKeyAttributes'] = ['a']
     with new_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, { 'AttributeName': 'c', 'KeyType': 'RANGE' } ],
         AttributeDefinitions=[
@@ -453,8 +909,7 @@ def test_lsi_query_select(dynamodb):
                     { 'AttributeName': 'p', 'KeyType': 'HASH' },
                     { 'AttributeName': 'b', 'KeyType': 'RANGE' }
                 ],
-                'Projection': { 'ProjectionType': 'INCLUDE',
-                                'NonKeyAttributes': ['a'] }
+                'Projection': projection,
             }
         ]) as table:
         items = [{'p': random_string(), 'c': random_string(), 'b': random_string(), 'a': random_string(), 'x': random_string()} for i in range(10)]
@@ -463,11 +918,13 @@ def test_lsi_query_select(dynamodb):
                 batch.put_item(item)
         p = items[0]['p']
         b = items[0]['b']
-        # Although in LSI all attributes are available (as we'll check
-        # below) the default Select is ALL_PROJECTED_ATTRIBUTES, and
-        # returns just the projected attributes (in this case all key
-        # attributes in either base or LSI, and 'a' - but not 'x'):
-        expected_items = [{'p': z['p'], 'c': z['c'], 'b': z['b'], 'a': z['a']} for z in items if z['b'] == b]
+        # The default Select is ALL_PROJECTED_ATTRIBUTES, which returns only
+        # the projected attributes. For INCLUDE: p, c, b, a (but not x).
+        # For KEYS_ONLY: only the key attributes p, c, b.
+        if projection_type == 'INCLUDE':
+            expected_items = [{'p': z['p'], 'c': z['c'], 'b': z['b'], 'a': z['a']} for z in items if z['b'] == b]
+        else:
+            expected_items = [{'p': z['p'], 'c': z['c'], 'b': z['b']} for z in items if z['b'] == b]
         assert_index_query(table, 'hello', expected_items,
             KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'},
                            'b': {'AttributeValueList': [b], 'ComparisonOperator': 'EQ'}})
@@ -484,7 +941,8 @@ def test_lsi_query_select(dynamodb):
                            'b': {'AttributeValueList': [b], 'ComparisonOperator': 'EQ'}})
         # Also in LSI, SPECIFIC_ATTRIBUTES (with AttributesToGet /
         # ProjectionExpression) is allowed for any attribute, projected
-        # or not projected. Let's try 'a' (projected) and 'x' (not projected):
+        # or not projected. Let's try 'a' (projected in INCLUDE, not in
+        # KEYS_ONLY) and 'x' (not projected in either case):
         expected_items = [{'a': z['a'], 'x': z['x']} for z in items if z['b'] == b]
         assert_index_query(table, 'hello', expected_items,
             Select='SPECIFIC_ATTRIBUTES',
@@ -947,3 +1405,94 @@ def test_lsi_describe_table_schema_all(dynamodb):
         got_lsis = [ {k: v for k, v in got_lsi.items() if k in lsis[0]} for got_lsi in got_lsis ]
         # Use multiset to compare ignoring order
         assert multiset(got_lsis) == multiset(lsis)
+
+# Test that when "ProjectionType" of an LSI is set to anything but "INCLUDE"
+# (i.e., "ALL" or "KEYS_ONLY"), "NonKeyAttributes" must not be specified.
+# This is the LSI version of test_gsi.py::test_gsi_projection_nonkeyattributess_forbidden.
+def test_lsi_projection_nonkeyattributes_forbidden(dynamodb):
+    for projection_type in ['ALL', 'KEYS_ONLY']:
+        with pytest.raises(ClientError, match='ValidationException.*NonKeyAttributes'):
+            with new_test_table(dynamodb,
+                KeySchema=[
+                    { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                    { 'AttributeName': 'c', 'KeyType': 'RANGE' },
+                ],
+                AttributeDefinitions=[
+                    { 'AttributeName': 'p', 'AttributeType': 'S' },
+                    { 'AttributeName': 'c', 'AttributeType': 'S' },
+                    { 'AttributeName': 'x', 'AttributeType': 'S' },
+                ],
+                LocalSecondaryIndexes=[
+                    {   'IndexName': 'hello',
+                        'KeySchema': [
+                            { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                            { 'AttributeName': 'x', 'KeyType': 'RANGE' },
+                        ],
+                        'Projection': { 'ProjectionType': projection_type,
+                                        'NonKeyAttributes': ['a', 'b'] }
+                    }
+                ]) as table:
+                pass
+
+# Test that the "Projection" option of an LSI is mandatory.
+# This is the LSI version of test_gsi.py::test_gsi_projection_missing.
+def test_lsi_projection_missing(dynamodb):
+    with pytest.raises(ClientError, match='ValidationException.*[Pp]rojection'):
+        with new_test_table(dynamodb,
+            KeySchema=[
+                { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                { 'AttributeName': 'c', 'KeyType': 'RANGE' },
+            ],
+            AttributeDefinitions=[
+                { 'AttributeName': 'p', 'AttributeType': 'S' },
+                { 'AttributeName': 'c', 'AttributeType': 'S' },
+                { 'AttributeName': 'x', 'AttributeType': 'S' },
+            ],
+            LocalSecondaryIndexes=[
+                {   'IndexName': 'hello',
+                    'KeySchema': [
+                        { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                        { 'AttributeName': 'x', 'KeyType': 'RANGE' },
+                    ],
+                }
+            ]) as table:
+            pass
+
+# Test that after creating an LSI with different ProjectionType options
+# (ALL, KEYS_ONLY, INCLUDE), DescribeTable is able to show the correct
+# ProjectionType and the LSI. For ProjectionType=INCLUDE, it should also show
+# the correct NonKeyAttributes created with the LSI.
+@pytest.mark.parametrize('projection_type', [
+    'ALL',
+    'KEYS_ONLY',
+    pytest.param('INCLUDE', marks=pytest.mark.xfail(reason='Issue #5036 - ProjectionType=INCLUDE not yet supported')),
+])
+def test_lsi_projection_type_describe(dynamodb, projection_type):
+    projection = {'ProjectionType': projection_type}
+    non_key_attrs = ['extra', 'hello']
+    if projection_type == 'INCLUDE':
+        projection['NonKeyAttributes'] = non_key_attrs
+    with new_test_table(dynamodb,
+            KeySchema=[
+                {'AttributeName': 'p', 'KeyType': 'HASH'},
+                {'AttributeName': 'c', 'KeyType': 'RANGE'},
+            ],
+            AttributeDefinitions=[
+                {'AttributeName': 'p', 'AttributeType': 'S'},
+                {'AttributeName': 'c', 'AttributeType': 'S'},
+                {'AttributeName': 'x', 'AttributeType': 'S'},
+            ],
+            LocalSecondaryIndexes=[{
+                'IndexName': 'lsi',
+                'KeySchema': [
+                    {'AttributeName': 'p', 'KeyType': 'HASH'},
+                    {'AttributeName': 'x', 'KeyType': 'RANGE'},
+                ],
+                'Projection': projection,
+            }]) as table:
+        desc = table.meta.client.describe_table(TableName=table.name)
+        lsi_list = desc['Table']['LocalSecondaryIndexes']
+        assert len(lsi_list) == 1
+        assert lsi_list[0]['Projection']['ProjectionType'] == projection_type
+        if projection_type == 'INCLUDE':
+            assert sorted(lsi_list[0]['Projection']['NonKeyAttributes']) == sorted(non_key_attrs)
