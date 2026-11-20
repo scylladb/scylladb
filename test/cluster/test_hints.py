@@ -268,6 +268,11 @@ async def get_stored_keys(manager: ScyllaClusterManager, server: ServerInfo, tab
 async def get_stored_keys_on_any(manager: ScyllaClusterManager, servers: list[ServerInfo], table: str, pk: str) -> set:
     """
     Return the partition keys of the rows of `table` stored on any of `servers`, read with `get_stored_keys()`.
+
+    The servers are read one by one, and each of them only returns the rows of the tablets it currently
+    serves reads for. Tablets must not migrate between `servers` in the meantime (e.g. disable tablet
+    balancing): the servers switch to the new read replica at slightly different times, so for a moment
+    each of them may consider the other one the read replica, and the rows of the tablet would be missed.
     """
     return set().union(*await gather_safely(*[get_stored_keys(manager, server, table, pk) for server in servers]))
 
@@ -1368,6 +1373,10 @@ async def test_hints_decom(manager: ScyllaClusterManager):
     config = {"error_injections_at_startup": ["decrease_hints_flush_period"]}
     s1, s2, s3 = await manager.servers_add(3, cmdline=cmdline, config=config, property_file={"dc": "dc1", "rack": "r1"})
 
+    # The rows are checked on s1 and s2 one by one, so tablets mustn't migrate
+    # between them. Decommission still drains the tablets of s3.
+    await manager.disable_tablet_balancing()
+
     s1_hints_dir = await get_hints_dir(manager, s1)
     s2_hints_dir = await get_hints_dir(manager, s2)
     s3_host_id = await manager.get_host_id(s3.server_id)
@@ -1650,6 +1659,10 @@ async def test_hintedhandoff_sync_point_api(manager: ScyllaClusterManager):
               "tablet_load_stats_refresh_interval_in_seconds": 1}
     s1, s2 = await manager.servers_add(2, cmdline=["--smp", "2", "--logger-log-level", "hints_manager=trace"],
                                        config=config, property_file={"dc": "dc1", "rack": "r1"})
+
+    # The rows are checked on s1 and s2 one by one, so tablets mustn't migrate
+    # between them. Decommission still drains the tablets of s2 in subtest 4.
+    await manager.disable_tablet_balancing()
 
     # We are using RF=1, so roughly half of the writes will be written as hints
     keys1 = list(range(50))
