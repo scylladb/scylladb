@@ -34,7 +34,15 @@ public:
         lua::runtime_config cfg;
     };
 
-    using context = std::variant<lua_context, wasm::context>;
+    // A function stored in the schema whose code failed to compile when
+    // loading it (e.g., because a limit became stricter since the function
+    // was created). Calling it fails with this error, but it can be dropped
+    // or replaced.
+    struct failed_context {
+        sstring error;
+    };
+
+    using context = std::variant<lua_context, wasm::context, failed_context>;
 
 private:
     std::vector<sstring> _arg_names;

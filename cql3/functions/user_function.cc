@@ -61,6 +61,9 @@ managed_bytes_opt user_function::execute(std::span<const managed_bytes_opt> para
             }
             return lua::run_script(lua::bitcode_view{ctx.bitcode}, values, return_type(), ctx.cfg).get();
         },
+        [&] (failed_context& ctx) -> bytes_opt {
+            throw exceptions::invalid_request_exception(format("Function {} failed to compile: {}", name(), ctx.error));
+        },
         [&] (wasm::context& ctx) -> bytes_opt {
             // FIXME: change wasm::run_script to accept fragmented buffers
             auto linear_parameters = parameters
