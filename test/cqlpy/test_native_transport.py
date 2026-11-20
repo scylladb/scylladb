@@ -9,17 +9,28 @@ from .util import new_test_table
 from cassandra.cluster import NoHostAvailable
 from cassandra.query import SimpleStatement, BatchStatement, BatchType
 
+# Test that disabling the CQL server ("nodetool disablebinary") makes
+# requests fail, and enabling it again ("nodetool enablebinary") makes them
+# work again, and that "nodetool statusbinary" reports whether it is running.
+# The statusbinary checks were translated from scylla-dtest's
+# nodetool_additional_test.py::TestNodetool::test_binary.
 def test_enable_disable_binary(cql, test_keyspace):
     schema = 'k text, v text, primary key (k)'
     with new_test_table(cql, test_keyspace, schema) as table:
         cql.execute(f"INSERT INTO {table} (k,v) VALUES ('foo', 'bar')")
         cql.execute(f"SELECT * FROM {table}")
+        assert nodetool.statusbinary(cql)
 
         nodetool.disablebinary(cql)
-        with pytest.raises(NoHostAvailable):
-            cql.execute(f"SELECT * FROM {table}")
-
-        nodetool.enablebinary(cql)
+        # If a check fails while the CQL server is disabled, enable it
+        # anyway, so the following tests can still connect.
+        try:
+            assert not nodetool.statusbinary(cql)
+            with pytest.raises(NoHostAvailable):
+                cql.execute(f"SELECT * FROM {table}")
+        finally:
+            nodetool.enablebinary(cql)
+        assert nodetool.statusbinary(cql)
         pause = 0.1
         while pause < 100:
             try:

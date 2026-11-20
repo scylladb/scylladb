@@ -3,7 +3,7 @@
 import sys
 
 # Use the run.py library from ../cqlpy:
-sys.path.insert(1, sys.path[0] + '/test/cqlpy')
+sys.path.insert(1, sys.path[0] + '/../cqlpy')
 import run
 
 print('Scylla is: ' + run.find_scylla() + '.')

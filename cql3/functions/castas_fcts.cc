@@ -12,6 +12,10 @@
 #include "cql3/functions/native_scalar_function.hh"
 #include <boost/date_time/posix_time/posix_time.hpp>
 #include <chrono>
+#include <cmath>
+#include <concepts>
+#include <limits>
+#include <type_traits>
 
 namespace cql3 {
 namespace functions {
@@ -66,10 +70,40 @@ static data_value identity_castas_fctn(data_value val) {
 
 using bytes_opt = std::optional<bytes>;
 
+// Converts a floating-point value to an integer type the way Java does
+// (JLS 5.1.3), as Cassandra does: the value is truncated toward zero to an
+// int (to a long, for a long result), NaN becomes 0, and values beyond that
+// range saturate to its minimum or maximum. A narrower type then keeps the
+// low bits of that int. A plain static_cast would be undefined behavior for
+// a value outside the target type's range.
+template<std::integral ToType, std::floating_point FromType>
+static ToType java_floating_to_integral(FromType val) {
+    using java_type = std::conditional_t<(sizeof(ToType) < sizeof(int32_t)), int32_t, ToType>;
+    // The minimum, -2^(n-1), and the maximum plus one, 2^(n-1), are exact
+    // in any floating-point type.
+    constexpr auto min = static_cast<FromType>(std::numeric_limits<java_type>::min());
+    java_type ret;
+    if (std::isnan(val)) {
+        ret = 0;
+    } else if (val <= min) {
+        ret = std::numeric_limits<java_type>::min();
+    } else if (val >= -min) {
+        ret = std::numeric_limits<java_type>::max();
+    } else {
+        ret = static_cast<java_type>(val);
+    }
+    // Converting an integer to a narrower integer type keeps its low bits.
+    return static_cast<ToType>(ret);
+}
+
 template<typename ToType, typename FromType>
 static data_value castas_fctn_simple(data_value from) {
     auto val_from = value_cast<FromType>(from);
-    return static_cast<ToType>(val_from);
+    if constexpr (std::floating_point<FromType> && std::integral<ToType>) {
+        return java_floating_to_integral<ToType>(val_from);
+    } else {
+        return static_cast<ToType>(val_from);
+    }
 }
 
 template<typename ToType>

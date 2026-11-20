@@ -10,7 +10,12 @@
 # unit tests from Cassandra (cassandra_tests), and its interaction with
 # other features (filtering, secondary indexes, etc.) in other test files.
 
+import itertools
+import time
+from contextlib import contextmanager
+
 import pytest
+from cassandra.query import SimpleStatement
 
 from .util import new_test_table, unique_key_int, sleep_till_whole_second
 from . import nodetool
@@ -148,3 +153,137 @@ def test_reversed_read_purgeable_range_tombstone(cql, test_keyspace):
         sleep_till_whole_second()
         assert list(cql.execute(f"SELECT c FROM {table} WHERE p = 0 AND c <= 2 ORDER BY c DESC LIMIT 1")) == [(0,)]
         assert list(cql.execute(f"SELECT c FROM {table} WHERE p = 0")) == [(0,), (4,)]
+
+#############################################################################
+# The following tests were translated from scylla-dtest's
+# reversed_queries_test.py.
+#############################################################################
+
+# A table with partitions 1 to 5, where partition 1 has range tombstones
+# covering some of its rows, for the tests of reversed (ORDER BY DESC)
+# queries below.
+@contextmanager
+def table_for_reversed_selects(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'bucket int, id int, id2 int, value text, PRIMARY KEY (bucket, id, id2)') as table:
+        insert = cql.prepare(f'INSERT INTO {table} (bucket, id, id2, value) VALUES (?, ?, ?, ?)')
+        rows = [(1, 4), (2, 1), (2, 5), (2, 9), (2, 10), (3, 3), (4, 2), (4, 5), (4, 6), (5, 4), (6, 1), (6, 3), (7, 1), (8, 1)]
+        for bucket in [1, 2]:
+            for id, id2 in rows:
+                cql.execute(insert, [bucket, id, id2, 'testing'])
+        for bucket in [3, 4, 5]:
+            cql.execute(insert, [bucket, 1, 1, 'testing'])
+        cql.execute(f'DELETE FROM {table} WHERE bucket = 1 AND id < 0')
+        cql.execute(f'DELETE FROM {table} WHERE bucket = 1 AND id = 2 AND id2 < 4')
+        cql.execute(f'DELETE FROM {table} WHERE bucket = 1 AND id = 2 AND id2 > 9')
+        cql.execute(f'DELETE FROM {table} WHERE bucket = 1 AND (id, id2) >= (4, 6) AND (id, id2) <= (6, 2)')
+        cql.execute(f'DELETE FROM {table} WHERE bucket = 1 AND id >= 8')
+        yield table
+
+# Check reversed queries with various restrictions on the clustering key,
+# on partition 1 of table_for_reversed_selects. "suffix" is appended to
+# each query.
+def check_reversed_single_partition_selects(cql, table, suffix=''):
+    def select(where):
+        return list(cql.execute(f'SELECT id, id2 FROM {table} WHERE bucket = 1 {where} ORDER BY id DESC {suffix}'))
+    assert select('') == [(7, 1), (6, 3), (4, 5), (4, 2), (3, 3), (2, 9), (2, 5), (1, 4)]
+    # Single column restrictions
+    assert select('AND id = 2') == [(2, 9), (2, 5)]
+    assert select('AND id IN (4, 2, 20)') == [(4, 5), (4, 2), (2, 9), (2, 5)]
+    assert select('AND id < 3') == [(2, 9), (2, 5), (1, 4)]
+    assert select('AND id > 4') == [(7, 1), (6, 3)]
+    assert select('AND id > 3 AND id < 7') == [(6, 3), (4, 5), (4, 2)]
+    # Multi-column restrictions
+    assert select('AND (id, id2) IN ((2, 9), (7, 1))') == [(7, 1), (2, 9)]
+    assert select('AND (id, id2) < (2, 8)') == [(2, 5), (1, 4)]
+    assert select('AND (id, id2) > (3, 3)') == [(7, 1), (6, 3), (4, 5), (4, 2)]
+    assert select('AND (id, id2) < (3, 5) AND (id, id2) > (1, 10)') == [(3, 3), (2, 9), (2, 5)]
+    # Independent restrictions on both clustering columns
+    assert select('AND id IN (3, 6) AND id2 IN (3, 4)') == [(6, 3), (3, 3)]
+
+# Check reversed queries on partitions 1 and 2 of table_for_reversed_selects.
+# Cassandra only allows ORDER BY with an IN restriction on the partition key
+# when paging is disabled. CQL doesn't specify the order of "ties" - rows
+# equal in all the ORDER BY columns - and Scylla and Cassandra order them
+# differently (see #15099). Ties can come from different partitions, and
+# when ORDER BY lists only "id", also from the same partition: for
+# "ORDER BY id DESC", Scylla returns a partition's rows with the same id in
+# ascending id2 order (e.g., (2, 6, 1) before (2, 6, 3)), while Cassandra
+# returns them in descending id2 order, the reverse of the clustering order.
+# The dtest expected Scylla's exact order. Here, each expected result is a
+# list of groups of tied rows, and the order of rows within each group isn't
+# checked.
+def check_reversed_multi_partition_selects(cql, table, suffix=''):
+    def select(order, nties):
+        rows = [tuple(r) for r in cql.execute(SimpleStatement(
+            f'SELECT bucket, id, id2 FROM {table} WHERE bucket IN (1, 2) AND id > 3 AND id < 7 ORDER BY {order} {suffix}',
+            fetch_size=None))]
+        # The ORDER BY columns are the last nties columns
+        return [sorted(group) for _, group in itertools.groupby(rows, key=lambda r: r[1:1 + nties])]
+    assert select('id DESC', 1) == [[(1, 6, 3), (2, 6, 1), (2, 6, 3)], [(2, 5, 4)], [(1, 4, 2), (1, 4, 5), (2, 4, 2), (2, 4, 5), (2, 4, 6)]]
+    assert select('id DESC, id2 DESC', 2) == [[(1, 6, 3), (2, 6, 3)], [(2, 6, 1)], [(2, 5, 4)], [(2, 4, 6)], [(1, 4, 5), (2, 4, 5)], [(1, 4, 2), (2, 4, 2)]]
+    assert select('id DESC, id2 DESC PER PARTITION LIMIT 3', 2) == [[(1, 6, 3), (2, 6, 3)], [(2, 6, 1)], [(2, 5, 4)], [(1, 4, 5)], [(1, 4, 2)]]
+
+# Test reversed queries on a single partition with range tombstones, reading
+# from the memtable and then, after a flush, from the sstable (and cache).
+# Translated from scylla-dtest's reversed_queries_test.py::TestSinglePartitionReversedQueriesSelectors::test_reverse_selectors,
+# except its reads with BYPASS CACHE, which are in
+# test_reversed_selects_single_partition_bypass_cache below.
+def test_reversed_selects_single_partition(cql, test_keyspace):
+    with table_for_reversed_selects(cql, test_keyspace) as table:
+        check_reversed_single_partition_selects(cql, table)
+        nodetool.flush(cql, table)
+        check_reversed_single_partition_selects(cql, table)
+
+# Like test_reversed_selects_single_partition, reading the sstable with
+# BYPASS CACHE, which is a Scylla extension.
+# Translated from scylla-dtest's reversed_queries_test.py::TestSinglePartitionReversedQueriesSelectors::test_reverse_selectors.
+def test_reversed_selects_single_partition_bypass_cache(cql, test_keyspace, scylla_only):
+    with table_for_reversed_selects(cql, test_keyspace) as table:
+        nodetool.flush(cql, table)
+        check_reversed_single_partition_selects(cql, table, 'BYPASS CACHE')
+
+# Test reversed queries on two partitions, one with range tombstones,
+# reading from the memtable and then, after a flush, from the sstable (and
+# cache).
+# Translated from scylla-dtest's reversed_queries_test.py::TestMultiPartitionReversedQueriesSelectors::test_reverse_selectors,
+# except its reads with BYPASS CACHE, which are in
+# test_reversed_selects_multi_partition_bypass_cache below.
+def test_reversed_selects_multi_partition(cql, test_keyspace):
+    with table_for_reversed_selects(cql, test_keyspace) as table:
+        check_reversed_multi_partition_selects(cql, table)
+        nodetool.flush(cql, table)
+        check_reversed_multi_partition_selects(cql, table)
+
+# Like test_reversed_selects_multi_partition, reading the sstable with
+# BYPASS CACHE, which is a Scylla extension.
+# Translated from scylla-dtest's reversed_queries_test.py::TestMultiPartitionReversedQueriesSelectors::test_reverse_selectors.
+def test_reversed_selects_multi_partition_bypass_cache(cql, test_keyspace, scylla_only):
+    with table_for_reversed_selects(cql, test_keyspace) as table:
+        nodetool.flush(cql, table)
+        check_reversed_multi_partition_selects(cql, table, 'BYPASS CACHE')
+
+# Test a reversed query (ORDER BY ASC on a table with CLUSTERING ORDER BY
+# DESC) on a table using TimeWindowCompactionStrategy, whose rows are spread
+# over five sstables in five different time windows.
+# Translated from scylla-dtest's reversed_queries_test.py::TestReversedQueriesWithTimeWindowCompactionStrategy::test_reversed_queries_with_time_window_compaction_strategy.
+# The dtest wrote 300 rows, one per second, and flushed every 60 rows. It
+# meant to spread the rows over five one-minute windows, but its USING
+# TIMESTAMP values were in seconds instead of microseconds, so all the rows
+# were in the same window. This test writes 10 rows with timestamps in
+# microseconds, two rows in each of five consecutive one-minute windows,
+# and flushes after each window's rows. The dtest also checked that there
+# are five sstables; with autocompaction disabled, this follows from the
+# five flushes.
+def test_reversed_query_twcs(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'pk int, ck int, v int, PRIMARY KEY (pk, ck)',
+            "WITH CLUSTERING ORDER BY (ck DESC) AND compaction = {'class': 'TimeWindowCompactionStrategy', 'compaction_window_unit': 'MINUTES', 'compaction_window_size': 1}") as table:
+        with nodetool.no_autocompaction_context(cql, table):
+            insert = cql.prepare(f'INSERT INTO {table} (pk, ck, v) VALUES (?, ?, ?) USING TIMESTAMP ?')
+            # The start of the one-minute window five minutes ago
+            start = (int(time.time()) // 60 - 5) * 60
+            for i in range(1, 11):
+                window = (i - 1) // 2
+                cql.execute(insert, [0, i, -i, (start + 60 * window + i % 2) * 1000000])
+                if i % 2 == 0:
+                    nodetool.flush(cql, table)
+            assert list(cql.execute(f'SELECT ck, v FROM {table} WHERE pk = 0 ORDER BY ck ASC')) == [(i, -i) for i in range(1, 11)]

@@ -10,7 +10,6 @@
 
 from .porting import *
 from cassandra.query import SimpleStatement
-from ..test_materialized_view_old import clock
 
 # The original Java test starts its own Cassandra node and creates its own
 # keyspace with replication_factor 2. We use the usual test keyspace instead,
