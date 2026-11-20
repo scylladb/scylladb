@@ -513,7 +513,7 @@ public:
     mutation_cleaner& cleaner() { return *_cleaner; }
 
     tombstone partition_tombstone() const;
-    ::static_row static_row(bool digest_requested) const;
+    ::static_row static_row(digest_request digest_requested) const;
     bool static_row_continuous() const;
     mutation_partition squashed() const;
 

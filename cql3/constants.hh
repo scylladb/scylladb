@@ -42,22 +42,22 @@ public:
             // constants::setter so we don't need to support it here.
             return _requires_read;
         }
-        virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
+        virtual void execute(mutation_cell_collector& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
 
-        static void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params, const column_definition& column, cql3::raw_value_view value);
+        static void execute(mutation_cell_collector& m, const clustering_key_prefix& prefix, const update_parameters& params, const column_definition& column, cql3::raw_value_view value);
 
     };
 
     struct adder final : operation_skip_if_unset {
         using operation_skip_if_unset::operation_skip_if_unset;
 
-        virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
+        virtual void execute(mutation_cell_collector& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
     };
 
     struct subtracter final : operation_skip_if_unset {
         using operation_skip_if_unset::operation_skip_if_unset;
 
-        virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
+        virtual void execute(mutation_cell_collector& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
     };
 
     class deleter : public operation_no_unset_support {
@@ -66,7 +66,7 @@ public:
             : operation_no_unset_support(column, std::nullopt)
         { }
 
-        virtual void execute(mutation& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
+        virtual void execute(mutation_cell_collector& m, const clustering_key_prefix& prefix, const update_parameters& params) override;
     };
 };
 

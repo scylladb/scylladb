@@ -24,6 +24,7 @@ struct noop_hasher {
 
 class digester final {
     std::variant<noop_hasher, xx_hasher> _impl;
+    bool _row_level = false;
 
 public:
     explicit digester(digest_algorithm algo) {
@@ -31,11 +32,18 @@ public:
         case digest_algorithm::xxHash:
             _impl = xx_hasher();
             break;
+        case digest_algorithm::xxHash_row:
+            _impl = xx_hasher();
+            _row_level = true;
+            break;
         case digest_algorithm ::none:
             _impl = noop_hasher();
             break;
         }
     }
+
+    // Rows are fed as one hash of their cell hashes, which can be cached per row.
+    bool row_level() const noexcept { return _row_level; }
 
     template<typename T, typename... Args>
     void feed_hash(const T& value, Args&&... args) {

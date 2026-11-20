@@ -63,6 +63,12 @@ static void set_column(mutation& m, const sstring& column_name) {
     m.set_clustered_cell(clustering_key::make_empty(), to_bytes(column_name), value, next_timestamp());
 }
 
+// Large enough for the cell to get a hash slot.
+static void set_large_column(mutation& m, const sstring& column_name) {
+    auto value = data_value(make_unique_bytes() + bytes(atomic_cell_or_collection_block::hashed_cell_min_size, int8_t(0)));
+    m.set_clustered_cell(clustering_key::make_empty(), to_bytes(column_name), value, next_timestamp());
+}
+
 static
 mutation make_unique_mutation(schema_ptr s) {
     return mutation(s, partition_key::from_single_value(*s, make_unique_bytes()));
@@ -857,7 +863,7 @@ SEASTAR_TEST_CASE(test_hash_is_cached) {
         auto mt = make_lw_shared<replica::memtable>(s);
 
         auto m = make_unique_mutation(s);
-        set_column(m, "v");
+        set_large_column(m, "v");
         mt->apply(m);
 
         {
@@ -886,7 +892,7 @@ SEASTAR_TEST_CASE(test_hash_is_cached) {
             BOOST_REQUIRE(row.cells().cell_hash_for(0));
         }
 
-        set_column(m, "v");
+        set_large_column(m, "v");
         mt->apply(m);
 
         {
@@ -913,6 +919,19 @@ SEASTAR_TEST_CASE(test_hash_is_cached) {
             rd().get()->as_partition_start();
             clustering_row row = std::move(*rd().get()).as_clustering_row();
             BOOST_REQUIRE(row.cells().cell_hash_for(0));
+        }
+
+        // Small cells have no hash slot, so digest reads leave nothing cached.
+        set_column(m, "v");
+        mt->apply(m);
+        {
+            auto slice = s->full_slice();
+            slice.options.set<query::partition_slice::option::with_digest>();
+            auto rd = mt->make_mutation_reader(s, semaphore.make_permit(), query::full_partition_range, slice);
+            auto close_rd = deferred_close(rd);
+            rd().get()->as_partition_start();
+            clustering_row row = std::move(*rd().get()).as_clustering_row();
+            BOOST_REQUIRE(!row.cells().cell_hash_for(0));
         }
     });
 }

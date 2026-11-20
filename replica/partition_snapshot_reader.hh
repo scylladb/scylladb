@@ -59,7 +59,7 @@ class partition_snapshot_reader : public mutation_reader::impl, public Accounter
         logalloc::region& _region;
         logalloc::allocating_section& _read_section;
         partition_snapshot_row_cursor _cursor;
-        bool _digest_requested;
+        digest_request _digest_requested;
         bool _done = false;
     private:
         template<typename Function>
@@ -71,7 +71,7 @@ class partition_snapshot_reader : public mutation_reader::impl, public Accounter
     public:
         explicit lsa_partition_reader(const schema& s, reader_permit permit, partition_snapshot_ptr snp,
                                       logalloc::region& region, logalloc::allocating_section& read_section,
-                                      bool digest_requested)
+                                      digest_request digest_requested)
             : _query_schema(s)
             , _permit(permit)
             , _snapshot(std::move(snp))
@@ -233,7 +233,7 @@ private:
 public:
     template <typename... Args>
     partition_snapshot_reader(schema_ptr s, reader_permit permit, dht::decorated_key dk, partition_snapshot_ptr snp,
-                              query::clustering_key_filter_ranges crr, bool digest_requested,
+                              query::clustering_key_filter_ranges crr, digest_request digest_requested,
                               logalloc::region& region, logalloc::allocating_section& read_section,
                               std::any pointer_to_container, Args&&... args)
         : impl(std::move(s), std::move(permit))
@@ -290,7 +290,7 @@ make_partition_snapshot_reader(schema_ptr s,
                                     dht::decorated_key dk,
                                     query::clustering_key_filter_ranges crr,
                                     partition_snapshot_ptr snp,
-                                    bool digest_requested,
+                                    digest_request digest_requested,
                                     logalloc::region& region,
                                     logalloc::allocating_section& read_section,
                                     std::any pointer_to_container,
