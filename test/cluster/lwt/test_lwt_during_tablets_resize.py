@@ -55,7 +55,7 @@ async def run_random_resizes(
     ks: str,
     table: str,
     target_steps: int = TARGET_RESIZE_COUNT,
-    pause_range=(0.5, 2.0),
+    pause_range=(0.05, 0.2),
     max_tablets: int = MAX_TABLETS,
 ):
     """
