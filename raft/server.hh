@@ -65,6 +65,12 @@ public:
         // A callback to invoke if one of internal server
         // background activities has stopped because of an error.
         std::function<void(std::exception_ptr e)> on_background_error;
+        // Invoked by the applier fiber after each batch of entries it applies,
+        // once the snapshot the batch may trigger is taken, so the log is as
+        // small as the server makes it on its own. Lets the owner of many
+        // servers account for their logs as they change, and free them with
+        // trigger_snapshot() and drop_trailing_log(). Must not throw.
+        std::function<void()> on_applied;
         // Human-readable tag used in log messages instead of server_id.
         // Helps distinguish raft instances when multiple groups share the
         // same server_id. If empty, server_id is used as the default.
