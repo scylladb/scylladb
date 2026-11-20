@@ -54,6 +54,19 @@ async def safe_server_stop_gracefully(manager, server_id, timeout: float = 60, r
         cql = await reconnect_driver(manager)
     return cql
 
+# Moves the sstables of a stopped node's table to the upload directory of dst_table_dir, or its
+# own, and returns the moved files.
+def move_sstables_to_upload(table_dir: str, dst_table_dir: str | None = None) -> list[str]:
+    upload_dir = os.path.join(dst_table_dir or table_dir, "upload")
+    moved_files = []
+    for sst in glob.glob(os.path.join(table_dir, "*-Data.db")):
+        for src_path in glob.glob(sst.removesuffix("-Data.db") + "*"):
+            dst_path = os.path.join(upload_dir, os.path.basename(src_path))
+            logger.info(f"Moving sstable file {src_path} to {dst_path}")
+            os.rename(src_path, dst_path)
+            moved_files.append(dst_path)
+    return moved_files
+
 async def safe_rolling_restart(manager, servers, with_down):
     # https://github.com/scylladb/python-driver/issues/230 is not fixed yet, so for sake of CI stability,
     # driver must be reconnected after rolling restart of servers.
@@ -1249,18 +1262,6 @@ async def test_tablet_load_and_stream(manager: ScyllaClusterManager, primary_rep
     dst_table_dir = glob.glob(os.path.join(node_workdir, "data", ks2, "test-*"))[0]
     logger.info(f"Dst table dir: {dst_table_dir}")
 
-    def move_sstables_to_upload(table_dir: str, dst_table_dir: str):
-        logger.info("Moving sstables to upload dir of destination table")
-        table_upload_dir = os.path.join(dst_table_dir, "upload")
-        moved_files = []
-        for sst in glob.glob(os.path.join(table_dir, "*-Data.db")):
-            for src_path in glob.glob(os.path.join(table_dir, sst.removesuffix("-Data.db") + "*")):
-                dst_path = os.path.join(table_upload_dir, os.path.basename(src_path))
-                logger.info(f"Moving sstable file {src_path} to {dst_path}")
-                os.rename(src_path, dst_path)
-                moved_files.append(dst_path)
-        return moved_files
-
     moved_sstable_files = move_sstables_to_upload(table_dir, dst_table_dir)
 
     await manager.server_start(servers[0].server_id)
@@ -2059,15 +2060,6 @@ async def test_tablet_load_and_stream_and_split_synchronization(manager: ScyllaC
         table_dir = glob.glob(os.path.join(node_workdir, "data", ks, "test-*"))[0]
         logger.info(f"Table dir: {table_dir}")
 
-        def move_sstables_to_upload(table_dir: str):
-            logger.info("Moving sstables to upload dir")
-            table_upload_dir = os.path.join(table_dir, "upload")
-            for sst in glob.glob(os.path.join(table_dir, "*-Data.db")):
-                for src_path in glob.glob(os.path.join(table_dir, sst.removesuffix("-Data.db") + "*")):
-                    dst_path = os.path.join(table_upload_dir, os.path.basename(src_path))
-                    logger.info(f"Moving sstable file {src_path} to {dst_path}")
-                    os.rename(src_path, dst_path)
-
         move_sstables_to_upload(table_dir)
 
         await manager.server_start(servers[0].server_id)
@@ -2104,6 +2096,78 @@ async def test_tablet_load_and_stream_and_split_synchronization(manager: ScyllaC
         await load_and_stream_task
 
         await check(ks)
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_split_finalization_vs_abandoned_load_and_stream_receiver(manager: ScyllaClusterManager):
+    cfg = {'tablet_load_stats_refresh_interval_in_seconds': 1}
+    # The split ack is logged by shard 0 only, so keep the tablets there.
+    cmdline = [
+        '--smp', '1',
+        '--logger-log-level', 'raft_topology=debug',
+        '--logger-log-level', 'table=debug',
+    ]
+    servers = await manager.servers_add(2, config=cfg, cmdline=cmdline, auto_rack_dc="dc1")
+    sender, receiver = servers
+
+    await manager.disable_tablet_balancing()
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+        keys = range(100)
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k})") for k in keys])
+        await manager.api.flush_keyspace(sender.ip_addr, ks)
+
+        sender_workdir = await manager.server_get_workdir(sender.server_id)
+        await safe_server_stop_gracefully(manager, sender.server_id)
+        move_sstables_to_upload(glob.glob(os.path.join(sender_workdir, "data", ks, "test-*"))[0])
+        await manager.server_start(sender.server_id)
+        cql = manager.get_cql()
+        await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
+        logs = [await manager.server_open_log(s.server_id) for s in servers]
+        marks = [await log.mark() for log in logs]
+
+        await asyncio.gather(*[manager.api.enable_injection(s.ip_addr, "tablet_resize_finalization_postpone", one_shot=False) for s in servers])
+        await manager.enable_tablet_balancing()
+        await cql.run_async(f"ALTER TABLE {ks}.test WITH tablets = {{'min_tablet_count': 2}}")
+        for log, mark in zip(logs, marks):
+            await log.wait_for("Setting split ready sequence number", from_mark=mark)
+
+        # The sender waits for the receiver to report the attach, so it holds its topology
+        # version, and with it finalization, until it is killed.
+        await manager.api.enable_injection(receiver.ip_addr, "stream_consumer_wait_before_add", one_shot=True)
+        load_and_stream = asyncio.create_task(manager.api.load_new_sstables(sender.ip_addr, ks, "test"))
+        await manager.api.wait_for_injection_enter(receiver.ip_addr, "stream_consumer_wait_before_add")
+
+        marks = [await log.mark() for log in logs]
+        await manager.server_stop(sender.server_id, convict=True)
+        with pytest.raises(Exception):
+            await load_and_stream
+        await manager.server_start(sender.server_id)
+        await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
+        await asyncio.gather(*[manager.api.disable_injection(s.ip_addr, "tablet_resize_finalization_postpone") for s in servers])
+
+        async def finalization_postponed():
+            for log, mark in zip(logs, marks):
+                if await log.grep("Postponing split finalization of tables", from_mark=mark):
+                    return True
+            return None
+        await wait_for(finalization_postponed, time.time() + 120)
+        assert await get_tablet_count(manager, receiver, ks, 'test') == 1
+
+        await manager.api.message_injection(receiver.ip_addr, "stream_consumer_wait_before_add")
+        await logs[1].wait_for("Stale topology detected, request has been fenced out", from_mark=marks[1])
+
+        async def split_finished():
+            return await get_tablet_count(manager, receiver, ks, 'test') == 2 or None
+        await wait_for(split_finished, time.time() + 120)
+
+        # The sender may have been killed before attaching the sstables locally, but the rows
+        # are still on the receiver, from the inserts.
+        rows = await cql.run_async(SimpleStatement(f"SELECT * FROM {ks}.test BYPASS CACHE", consistency_level=ConsistencyLevel.ALL))
+        assert sorted(r.pk for r in rows) == list(keys)
 
 async def test_update_load_stats_after_rebuild(manager: ScyllaClusterManager):
     logger.info("Bootstrapping cluster")
@@ -2689,6 +2753,11 @@ async def test_split_and_intranode_synchronization(manager: ScyllaClusterManager
 
         await manager.api.disable_injection(server.ip_addr, "tablet_resize_finalization_postpone")
 
+        # The streamed sstables are not split, so the shard takes its ack back and the
+        # coordinator postpones the split, until the split monitor is let through.
+        mark, _ = await log.wait_for("Withdrawing split ack of tables", from_mark=mark)
+        await manager.api.disable_injection(server.ip_addr, "split_sstable_force_stop_exception")
+
         async def finished_splitting():
             tablet_count = await get_tablet_count(manager, server, ks, 'test')
             return tablet_count >= expected_tablet_count or None
@@ -2934,3 +3003,101 @@ async def test_split_ack_waits_for_write_waiting_for_memory(manager: ScyllaClust
         assert await get_tablet_count(manager, server, ks, 'test') == 2
         rows = await cql.run_async(f"SELECT pk, c FROM {ks}.test")
         assert [(r.pk, r.c) for r in rows] == [(0, 0)]
+
+
+@pytest.mark.parametrize("source", ['load_and_stream', 'repair'])
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_split_finalization_rechecks_replicas(manager: ScyllaClusterManager, source: str):
+    # The split ack is logged by shard 0 only, so keep the tablets there. Hints would bring the
+    # missed writes back before repair does.
+    cmdline = ['--smp', '1', '--hinted-handoff-enabled', '0']
+    servers = await manager.servers_add(2, config={'tablet_load_stats_refresh_interval_in_seconds': 1}, cmdline=cmdline, auto_rack_dc="dc1")
+
+    await manager.disable_tablet_balancing()
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}") as ks:
+        tables = ['held', 'free']
+        keys = range(100)
+        for t in tables:
+            await cql.run_async(f"CREATE TABLE {ks}.{t} (pk int PRIMARY KEY, c int) WITH tablets = {{'min_tablet_count': 1}}")
+
+        # Load-and-stream sends the sstable to the primary replica, so that one takes the hit.
+        primary = (await get_all_tablet_replicas(manager, servers[0], ks, 'held'))[0].replicas[0][0]
+        host_ids = [await manager.api.get_host_id(s.ip_addr) for s in servers]
+        hit, other = servers if host_ids[0] == primary else servers[::-1]
+        if source == 'repair':
+            # The hit replica misses the writes to the held table, so that repair has to send them.
+            await manager.api.enable_injection(hit.ip_addr, "database_apply", one_shot=False, parameters={"ks_name": ks, "cf_name": "held", "what": "throw"})
+
+        for t in tables:
+            stmt = cql.prepare(f"INSERT INTO {ks}.{t} (pk, c) VALUES (?, ?)")
+            stmt.consistency_level = ConsistencyLevel.ONE
+            await asyncio.gather(*[cql.run_async(stmt, (k, k)) for k in keys])
+
+        if source == 'load_and_stream':
+            # Move the hit replica's sstables of the held table to its upload directory, so that
+            # they can be loaded back later.
+            await manager.api.flush_keyspace(hit.ip_addr, ks)
+            workdir = await manager.server_get_workdir(hit.server_id)
+            await safe_server_stop_gracefully(manager, hit.server_id)
+            move_sstables_to_upload(glob.glob(os.path.join(workdir, "data", ks, "held-*"))[0])
+            await manager.server_start(hit.server_id)
+            cql = manager.get_cql()
+            await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+        else:
+            await manager.api.disable_injection(hit.ip_addr, "database_apply")
+            await manager.api.flush_keyspace(other.ip_addr, ks)
+
+        logs = {s.server_id: await manager.server_open_log(s.server_id) for s in servers}
+        marks = {s.server_id: await logs[s.server_id].mark() for s in servers}
+
+        # Let the replicas split and ack both tables, but keep the balancer from finalizing.
+        await asyncio.gather(*[manager.api.enable_injection(s.ip_addr, "tablet_resize_finalization_postpone", one_shot=False) for s in servers])
+        await manager.enable_tablet_balancing()
+        for t in tables:
+            await cql.run_async(f"ALTER TABLE {ks}.{t} WITH tablets = {{'min_tablet_count': 2}}")
+        for s in servers:
+            for t in tables:
+                await logs[s.server_id].wait_for(f"Setting split ready sequence number to .* for table {ks}.{t}", from_mark=marks[s.server_id])
+
+        # Hold the hit replica's second split, so that the held table stays postponed.
+        await manager.api.enable_injection(hit.ip_addr, "split_storage_groups_wait", one_shot=True)
+
+        # Put an unsplit sstable of the held table into a main group of the hit replica,
+        # behind its ack.
+        if source == 'load_and_stream':
+            await manager.api.load_new_sstables(hit.ip_addr, ks, "held", primary_replica=True)
+        else:
+            await manager.api.tablet_repair(hit.ip_addr, ks, "held", "all")
+
+        marks = {s.server_id: await logs[s.server_id].mark() for s in servers}
+        await asyncio.gather(*[manager.api.disable_injection(s.ip_addr, "tablet_resize_finalization_postpone") for s in servers])
+
+        held_id = (await cql.run_async(f"SELECT id FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = 'held'"))[0].id
+        async def postponed():
+            for s in servers:
+                if await logs[s.server_id].grep(f"Postponing split finalization of tables .*{held_id}", from_mark=marks[s.server_id]):
+                    return True
+            return None
+        await wait_for(postponed, time.time() + 120)
+
+        async def free_split():
+            return await get_tablet_count(manager, hit, ks, 'free') == 2 or None
+        await wait_for(free_split, time.time() + 120)
+        await manager.api.wait_for_injection_enter(hit.ip_addr, "split_storage_groups_wait")
+        assert await get_tablet_count(manager, hit, ks, 'held') == 1
+
+        await manager.api.message_injection(hit.ip_addr, "split_storage_groups_wait")
+        await logs[hit.server_id].wait_for(f"Setting split ready sequence number to .* for table {ks}.held", from_mark=marks[hit.server_id])
+
+        async def held_split():
+            return await get_tablet_count(manager, hit, ks, 'held') == 2 or None
+        await wait_for(held_split, time.time() + 120)
+
+        # Nothing landed on the other replica, so it must not have withdrawn its ack.
+        assert not await logs[other.server_id].grep("Setting split ready sequence number", from_mark=marks[other.server_id])
+
+        for t in tables:
+            rows = await cql.run_async(SimpleStatement(f"SELECT pk, c FROM {ks}.{t} BYPASS CACHE", consistency_level=ConsistencyLevel.ALL))
+            assert sorted((r.pk, r.c) for r in rows) == [(k, k) for k in keys]

@@ -5730,14 +5730,11 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
             }
         }
 
-        // Split of the pending replica's compaction group is handled by the
-        // split monitor (process_tablet_split_candidate) and by split-on-attach
-        // (maybe_split_new_sstable in add_new_sstable_and_update_cache) which
-        // splits every incoming sstable before it is loaded into the compaction
-        // group.  There is no need to block the streaming stage on a full
-        // compaction-group split here — doing so would hold a streaming slot on
-        // the coordinator while the split compaction runs, preventing it from
-        // scheduling further migrations.
+        // The pending replica's compaction group is split by the split monitor, at
+        // the latest once the readiness check before finalization withdraws a stale
+        // ack. Waiting for that here would hold a streaming slot on the coordinator
+        // while the split compaction runs, preventing it from scheduling further
+        // migrations.
         co_await utils::get_local_injector().inject("pause_after_streaming_tablet", utils::wait_for_message{std::chrono::minutes(1)});
         co_return tablet_operation_result();
     });
@@ -6346,6 +6343,54 @@ future<> storage_service::restore_tablets(table_id table, sstring snap_name) {
     }
 
     slogger.info("Restoring {} finished", table);
+}
+
+future<std::vector<table_id>> storage_service::tablet_split_ready() {
+    auto holder = _async_gate.hold();
+
+    // Make sure the fence set by the coordinator before this call is already
+    // in force on this node, so nothing fenced out can be added later.
+    {
+        auto group0_holder = _group0->hold_group0_gate();
+        co_await _group0->group0_server().read_barrier(&_group0_as);
+    }
+
+    std::vector<table_id> ready;
+    auto tm = get_token_metadata_ptr();
+    for (const auto& [base, group] : tm->tablets().all_table_groups()) {
+        if (!tm->tablets().get_tablet_map(base).needs_split()) {
+            continue;
+        }
+        bool split = co_await _db.map_reduce0([group] (replica::database& db) {
+            return std::ranges::all_of(group, [&db] (table_id id) {
+                auto t = db.get_tables_metadata().get_table_if_exists(id);
+                return !t || t->storage_groups_split_mode();
+            });
+        }, true, std::logical_and<>());
+        if (split) {
+            ready.push_back(base);
+            continue;
+        }
+        // The ack reported through the load stats is sticky, so an unsplit sstable
+        // which landed after it would keep the table acked but never split. Take the
+        // ack back and let the split monitor split the table and ack it again.
+        bool withdrawn = co_await _db.map_reduce0([group] (replica::database& db) {
+            bool withdrawn = false;
+            for (auto id : group) {
+                if (auto t = db.get_tables_metadata().get_table_if_exists(id)) {
+                    withdrawn |= t->withdraw_split_ack();
+                }
+            }
+            return withdrawn;
+        }, false, std::logical_or<>());
+        if (withdrawn) {
+            slogger.info("Withdrawing split ack of tables {}, not split on all shards", group);
+            for (auto id : group) {
+                register_tablet_split_candidate(id);
+            }
+        }
+    }
+    co_return ready;
 }
 
 future<locator::load_stats> storage_service::load_stats_for_tablet_based_tables() {
@@ -7354,6 +7399,11 @@ void storage_service::init_messaging_service() {
     ser::storage_service_rpc_verbs::register_table_load_stats(&_messaging.local(), [this] (raft::server_id dst_id) {
         return handle_raft_rpc(dst_id, [] (auto& ss) mutable {
             return ss.load_stats_for_tablet_based_tables();
+        });
+    });
+    ser::storage_service_rpc_verbs::register_tablet_split_ready(&_messaging.local(), [this] (rpc::opt_time_point, raft::server_id dst_id) {
+        return handle_raft_rpc(dst_id, [] (auto& ss) {
+            return ss.tablet_split_ready();
         });
     });
     ser::storage_service_rpc_verbs::register_table_load_stats_v1(&_messaging.local(), [this] (raft::server_id dst_id) {

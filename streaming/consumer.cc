@@ -19,6 +19,7 @@
 #include "sstables/sstables.hh"
 #include "sstables/sstables_manager.hh"
 #include "debug.hh"
+#include "utils/error_injection.hh"
 
 namespace streaming {
 
@@ -30,8 +31,9 @@ mutation_reader_consumer make_streaming_consumer(sstring origin,
         stream_reason reason,
         sstables::offstrategy offstrategy,
         service::frozen_topology_guard frozen_guard,
-        std::function<void (sstables::shared_sstable sst)> on_sstable_written) {
-    return [&db, &vb = vb.container(), &vbw, estimated_partitions, reason, offstrategy, origin = std::move(origin), frozen_guard, on_sstable_written] (mutation_reader reader) -> future<> {
+        std::function<void (sstables::shared_sstable sst)> on_sstable_written,
+        std::function<void ()> check_fence) {
+    return [&db, &vb = vb.container(), &vbw, estimated_partitions, reason, offstrategy, origin = std::move(origin), frozen_guard, on_sstable_written, check_fence] (mutation_reader reader) -> future<> {
         std::exception_ptr ex;
         try {
             if (current_scheduling_group() != debug::streaming_scheduling_group) {
@@ -52,7 +54,7 @@ mutation_reader_consumer make_streaming_consumer(sstring origin,
             const auto adjusted_estimated_partitions = (offstrategy) ? estimated_partitions : cs.adjust_partition_estimate(metadata, estimated_partitions, cf->schema());
             mutation_reader_consumer consumer =
                     [cf = std::move(cf), adjusted_estimated_partitions, use_view_update_path, &vb, &vbw, origin = std::move(origin),
-                offstrategy, on_sstable_written] (mutation_reader reader) {
+                offstrategy, on_sstable_written, check_fence] (mutation_reader reader) {
                 sstables::shared_sstable sst;
                 try {
                     sst = use_view_update_path == db::view::sstable_destination_decision::normal_directory ? cf->make_streaming_sstable_for_write() : cf->make_streaming_staging_sstable();
@@ -79,8 +81,12 @@ mutation_reader_consumer make_streaming_consumer(sstring origin,
                     // filesystem right after the operation fails.
                     co_await sst->unlink();
                     std::rethrow_exception(ep);
-                }).then([cf, sst, offstrategy, origin, on_sstable_written, cfg] -> future<std::vector<sstables::shared_sstable>> {
-                    auto on_add = [sst, origin, on_sstable_written, cfg] (sstables::shared_sstable loading_sst) -> future<> {
+                }).then([cf, sst, offstrategy, origin, on_sstable_written, check_fence, cfg] -> future<std::vector<sstables::shared_sstable>> {
+                    auto on_add = [sst, origin, on_sstable_written, check_fence, cfg] (sstables::shared_sstable loading_sst) -> future<> {
+                        co_await utils::get_local_injector().inject("stream_consumer_wait_before_add", utils::wait_for_message(std::chrono::minutes(5)));
+                        if (check_fence) {
+                            check_fence();
+                        }
                         if (on_sstable_written) {
                             on_sstable_written(loading_sst);
                         }
@@ -93,6 +99,20 @@ mutation_reader_consumer make_streaming_consumer(sstring origin,
                         sstables::sstlog.debug("Enabled automatic off-strategy trigger for table {}.{}",
                                 cf->schema()->ks_name(), cf->schema()->cf_name());
                         cf->enable_off_strategy_trigger();
+                    }
+                    // After a split was finalized, the sstable may span two tablets, which
+                    // add_new_sstable_and_update_cache() rejects as an internal error.
+                    if (check_fence) {
+                        std::exception_ptr ex;
+                        try {
+                            check_fence();
+                        } catch (...) {
+                            ex = std::current_exception();
+                        }
+                        if (ex) {
+                            co_await sst->unlink();
+                            std::rethrow_exception(ex);
+                        }
                     }
                     co_return co_await cf->add_new_sstable_and_update_cache(sst, on_add, offstrategy);
                 }).then([cf, s, sst, use_view_update_path, &vb, &vbw] (std::vector<sstables::shared_sstable> new_sstables) mutable -> future<> {

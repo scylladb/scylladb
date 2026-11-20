@@ -105,5 +105,6 @@ verb [[cancellable]] tablet_cleanup (raft::server_id dst_id, locator::global_tab
 verb [[cancellable]] table_load_stats_v1 (raft::server_id dst_id) -> locator::load_stats_v1;
 verb [[cancellable]] table_load_stats (raft::server_id dst_id) -> locator::load_stats;
 verb [[cancellable]] tablet_repair(raft::server_id dst_id, locator::global_tablet_id, service::session_id session [[version 2025.4]], service::tablet_repair_flush_info flush [[version 2027.1]]) -> service::tablet_operation_repair_result;
+verb [[with_timeout, cancellable]] tablet_split_ready (raft::server_id dst_id) -> std::vector<table_id>;
 
 }
