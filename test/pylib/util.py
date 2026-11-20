@@ -142,23 +142,39 @@ async def wait_for_cql_and_get_hosts(cql: Session, servers: list[ServerInfo], de
             # driver reconnect (scylladb/scylladb#17616). `wait_for` will retry anyway and it's enough
             # if we succeed only one `get_hosts()` attempt before timing out.
             pass
-    hosts = await wait_for(
+    await wait_for(
         pred=get_hosts,
         deadline=deadline,
         before_retry=try_refresh_nodes,
     )
 
-    # Take only hosts from `ip_set` (there may be more)
-    hosts = [h for h in hosts if h.address in ip_set]
-
-    # Make sure `hosts` has same order as `servers`, that is: a given index will
-    # refer to the same underlying Scylla instance in both `servers` and `hosts`.
     servers_by_ip = {srv.rpc_address: i for i, srv in enumerate(servers)}
-    hosts.sort(key=lambda x: servers_by_ip[x.address])
 
-    await asyncio.gather(*(wait_for_cql(cql, deadline, h) for h in hosts))
+    # Look the hosts up again on every attempt, instead of waiting for the Host
+    # objects found above: the driver identifies a Host by its host ID, so when
+    # a node replaces another one and reuses its IP address, the driver may
+    # still have the replaced node's Host for that address, and later replace
+    # it with a new Host. After that, queries sent to the old Host always fail.
+    async def get_ready_hosts() -> Optional[list[Host]]:
+        hosts = await get_hosts()
+        if hosts is None:
+            return None
 
-    return hosts
+        # Take only hosts from `ip_set` (there may be more)
+        hosts = [h for h in hosts if h.address in ip_set]
+
+        # Make sure `hosts` has same order as `servers`, that is: a given index will
+        # refer to the same underlying Scylla instance in both `servers` and `hosts`.
+        hosts.sort(key=lambda x: servers_by_ip[x.address])
+
+        try:
+            await asyncio.gather(*(cql.run_async("select * from system.local", host=h) for h in hosts))
+        except NoHostAvailable as e:
+            logging.info(f"Driver not connected to all of {hosts} yet: {e}")
+            return None
+        return hosts
+
+    return await wait_for(get_ready_hosts, deadline)
 
 def read_last_line(file_path: pathlib.Path, max_line_bytes = 512):
     file_size = os.stat(file_path).st_size
