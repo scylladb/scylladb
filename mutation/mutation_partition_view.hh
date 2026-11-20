@@ -94,6 +94,9 @@ private:
             ser::vector_deserializer<ser::deletable_row_view>::const_iterator crs_end;
         };
         std::optional<rts_crs_iterators> iterators;
+        // Cells of a row holding a large collection, left for the caller to visit gently.
+        std::optional<ser::row_view> gentle_cells;
+        column_kind gentle_kind = column_kind::regular_column;
     };
 
     struct accept_ordered_result {

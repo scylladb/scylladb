@@ -24,6 +24,7 @@
 class abstract_type;
 class collection_type_impl;
 class atomic_cell_or_collection;
+class collection_mutation_view;
 
 using atomic_cell_value = managed_bytes;
 template <mutable_view is_mutable>
@@ -85,6 +86,7 @@ private:
     static constexpr unsigned ttl_offset = expiry_offset + expiry_size;
     static constexpr unsigned ttl_size = 4;
     friend class counter_cell_builder;
+    friend struct appending_hash<collection_mutation_view>;
 private:
     static bool is_counter_update(atomic_cell_value_view cell) {
         return cell.front() & COUNTER_UPDATE_FLAG;
