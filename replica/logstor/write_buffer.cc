@@ -219,6 +219,9 @@ future<> write_buffer::abort_writes(std::exception_ptr ex) {
 }
 
 void write_buffer::reset() {
+    if (!is_closed()) {
+        on_internal_error(logstor_logger, "Cannot reset a write buffer that is not closed");
+    }
     _builder.reset();
     _written = {};
     _write_gate = {};
@@ -528,11 +531,7 @@ future<bool> write_buffer_ring::reclaim_completed_tails() {
         auto f = co_await coroutine::as_future(std::move(completion));
 
         if (f.failed()) {
-            auto ex = f.get_exception();
-            auto abort_f = co_await coroutine::as_future(tail_buf().abort_writes(std::move(ex)));
-            if (abort_f.failed()) {
-                logstor_logger.warn("Failed to abort buffered writes: {}. Ignoring.", abort_f.get_exception());
-            }
+            co_await tail_buf().abort_writes(f.get_exception());
         }
 
         tail_buf().reset();

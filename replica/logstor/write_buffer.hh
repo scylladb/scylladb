@@ -282,7 +282,6 @@ public:
     future<> complete_writes(segment_position chunk_position);
 
     // Waits for the holders of the written records.
-    // The caller must close the buffer before it resets the buffer.
     future<> close();
     bool is_closed() const noexcept;
 
@@ -309,6 +308,8 @@ protected:
     // Fails the tracked writes with `ex`, for a chunk that is not written, and closes the buffer.
     future<> abort_writes(std::exception_ptr ex);
 
+    // Empties the buffer for a new chunk.
+    // The caller must close the buffer first.
     void reset();
 
     chunk_builder& builder() noexcept { return _builder; }
