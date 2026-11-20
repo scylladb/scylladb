@@ -317,8 +317,8 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_chunk_builder_reused_for_another_table_sea
 SEASTAR_THREAD_TEST_CASE(test_logstor_chunk_builder_bytes_writer_writes_the_same_frame) {
     auto schema = make_kv_schema();
     auto writer = log_record_writer(make_log_record(schema, "pk0", "value0", api::timestamp_type(5)));
-    auto frame_bytes = [] (const chunk_builder& builder, const chunk_builder::append_result& frame) {
-        return bytes_view(reinterpret_cast<const int8_t*>(builder.data()) + frame.frame_offset, frame.frame_size);
+    auto frame_bytes = [] (const chunk_builder& builder, frame_extent frame) {
+        return bytes_view(reinterpret_cast<const int8_t*>(builder.data()) + frame.offset, frame.size);
     };
 
     chunk_builder original(32 * 1024, segment_kind::mixed);
@@ -335,7 +335,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_chunk_builder_bytes_writer_writes_the_same
     BOOST_REQUIRE_EQUAL(bytes_writer.record_size(), writer.record_size());
     const auto rewritten_frame = rewritten.append(bytes_writer);
 
-    BOOST_REQUIRE_EQUAL(rewritten_frame.frame_size, original_frame.frame_size);
+    BOOST_REQUIRE_EQUAL(rewritten_frame.size, original_frame.size);
     BOOST_REQUIRE(frame_bytes(rewritten, rewritten_frame) == original_bytes);
 }
 

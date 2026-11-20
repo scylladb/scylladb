@@ -104,14 +104,20 @@ concept log_record_writer_concept = requires(const T& w, seastar::simple_memory_
 
 using record_location_with_holder = std::tuple<record_location, seastar::gate::holder>;
 
-// Where a record whose frame sits at `frame_offset` of a chunk ends up, once that chunk has been
-// written to a segment at `chunk_position`. A buffer learns where its chunk was written once, and
-// the location of every record in it follows from that.
-inline record_location locate_record(segment_position chunk_position, size_t frame_offset, size_t frame_size) noexcept {
+// Holds the offset of a record frame in a chunk and the frame_size of the frame, as record_location
+// does.
+struct frame_extent {
+    uint32_t offset;
+    uint32_t size;
+};
+
+// Returns the location of the record whose frame is at `frame` in a chunk that is written at
+// `chunk_position`.
+inline record_location locate_record(segment_position chunk_position, frame_extent frame) noexcept {
     return record_location {
         .segment = chunk_position.segment,
-        .offset = static_cast<uint32_t>(chunk_position.offset + frame_offset),
-        .size = static_cast<uint32_t>(frame_size),
+        .offset = chunk_position.offset + frame.offset,
+        .size = frame.size,
     };
 }
 
@@ -147,13 +153,6 @@ class chunk_builder {
 public:
 
     using ostream = seastar::simple_memory_output_stream;
-
-    // Where the appended record frame starts in the buffer, and how many bytes it takes
-    // without its padding - which is what record_location::size holds.
-    struct append_result {
-        size_t frame_offset;
-        size_t frame_size;
-    };
 
 private:
 
@@ -233,7 +232,7 @@ public:
     segment_kind kind() const noexcept { return _segment_kind; }
 
     template <log_record_writer_concept Writer>
-    append_result append(const Writer& writer);
+    frame_extent append(const Writer& writer);
 
     // How many segments of this kind `record_count` records of `record_bytes` bytes take.
     static size_t estimate_required_segments(size_t record_bytes, size_t record_count, size_t segment_size, segment_kind);
@@ -257,6 +256,17 @@ private:
     friend class write_buffer;
 };
 
+// A record of a mixed buffer, which the separator rewrites after the buffer is flushed.
+struct separator_record {
+    log_record_writer writer;
+    frame_extent frame;
+    write_target target;
+
+    record_location location(segment_position chunk_position) const noexcept {
+        return locate_record(chunk_position, frame);
+    }
+};
+
 // Tracks asynchronous write completion on top of chunk_builder.
 //
 // This is the buffer type used by the segment manager, write_buffer_ring,
@@ -266,27 +276,11 @@ private:
 // follow-up work such as index updates. For mixed buffers it also keeps copies
 // of appended records so separator rewriting can replay them after the flush.
 class write_buffer {
-public:
-    struct record_in_buffer {
-        log_record_writer writer;
-        // Where the record's frame sits in the buffer, rather than a future of where it ended up:
-        // the separator only ever looks at these once the buffer has been written, so a record can
-        // be located from the position of the chunk instead of waiting for one of its own.
-        size_t frame_offset;
-        size_t frame_size;
-        write_target target;
-
-        record_location location(segment_position chunk_position) const noexcept {
-            return locate_record(chunk_position, frame_offset, frame_size);
-        }
-    };
-
-private:
     chunk_builder _builder;
     shared_promise<segment_position> _written;
     seastar::gate _write_gate;
 
-    std::vector<record_in_buffer> _records_copy;
+    std::vector<separator_record> _separator_records;
 
 public:
 
@@ -344,15 +338,15 @@ private:
         std::unreachable();
     }
 
-    std::vector<record_in_buffer> take_separator_records();
+    std::vector<separator_record> take_separator_records();
 
     friend class write_buffer_ring;
     friend class segment_manager_impl;
     friend struct separator_buffer;
 };
 
-extern template chunk_builder::append_result chunk_builder::append<log_record_writer>(const log_record_writer&);
-extern template chunk_builder::append_result chunk_builder::append<log_record_bytes_writer>(const log_record_bytes_writer&);
+extern template frame_extent chunk_builder::append<log_record_writer>(const log_record_writer&);
+extern template frame_extent chunk_builder::append<log_record_bytes_writer>(const log_record_bytes_writer&);
 
 extern template future<record_location_with_holder> write_buffer::write<log_record_writer>(log_record_writer, write_target);
 extern template future<record_location_with_holder> write_buffer::write<log_record_bytes_writer>(log_record_bytes_writer, write_target);
