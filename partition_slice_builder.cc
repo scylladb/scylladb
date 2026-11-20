@@ -15,6 +15,7 @@ partition_slice_builder::partition_slice_builder(const schema& schema, query::pa
     , _specific_ranges(std::move(slice._specific_ranges))
     , _schema(schema)
     , _options(std::move(slice.options))
+    , _partition_row_limit(slice.partition_row_limit())
 {
 }
 
