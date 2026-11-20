@@ -507,18 +507,17 @@ public:
     /**
      * Set the slow query record TTL
      *
-     * We limit the number of seconds in the TTL by a maximal signed 32-bit
-     * integer.
-     *
-     * If a new TTL value exceeds the above limitation we will override it
-     * with the value based on a limit above.
+     * A negative TTL, or one above max_ttl, is rejected, like that of an
+     * INSERT; a TTL of 0 means that the records don't expire.
      *
      * @param new_ttl new TTL
      */
     void set_slow_query_record_ttl(std::chrono::seconds new_ttl) {
-        if (new_ttl.count() > std::numeric_limits<int32_t>::max()) {
-            _slow_query_record_ttl = std::chrono::seconds(std::numeric_limits<int32_t>::max());
-            return;
+        if (new_ttl.count() < 0) {
+            throw std::invalid_argument("slow query record TTL must be greater or equal to 0, got " + std::to_string(new_ttl.count()));
+        }
+        if (new_ttl > max_ttl) {
+            throw std::invalid_argument("slow query record TTL must not exceed " + std::to_string(max_ttl.count()) + ", got " + std::to_string(new_ttl.count()));
         }
 
         _slow_query_record_ttl = new_ttl;
