@@ -12,14 +12,17 @@ object-store restore API (the sstables are uploaded to a bucket and downloaded b
 'load_method' parameter exercises both paths.
 """
 
+import asyncio
 import logging
 import os
 import shutil
 
 import pytest
+from cassandra.cluster import ConsistencyLevel
 from cassandra.protocol import InvalidRequest
 
-from test.cluster.util import new_test_keyspace
+from test.cluster.util import new_test_keyspace, truncate_auto_snapshot_dir
+from test.pylib.rest_client import read_barrier
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 
 logger = logging.getLogger(__name__)
@@ -27,6 +30,9 @@ logger = logging.getLogger(__name__)
 # rf=1, tablets disabled - a single node owns all the data, which keeps the snapshot based
 # restore deterministic.
 KEYSPACE_OPTS = "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}"
+# A strongly consistent keyspace needs tablets; rf=1 on the single node gives each tablet a
+# raft group of one.
+SC_KEYSPACE_OPTS = "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1} AND consistency = 'global'"
 
 # The sstables are reloaded either from the local 'upload' directory ('refresh') or from an
 # object-store bucket ('restore'). Both start from the same table recreated from schema.cql.
@@ -125,6 +131,14 @@ async def add_server(manager: ScyllaClusterManager, s3_storage):
     return await manager.server_add(config=config)
 
 
+async def sc_catch_up(manager: ScyllaClusterManager, server, ks: str, cf: str) -> None:
+    """Make the replica apply what the table's raft groups have committed, with a read barrier per group."""
+    table_id = await manager.get_table_id(ks, cf)
+    groups = [str(r.raft_group_id) for r in await manager.get_cql().run_async(f"SELECT raft_group_id FROM system.tablets WHERE table_id = {table_id}")]
+    for gid in groups:
+        await read_barrier(manager.api, server.ip_addr, group_id=gid, timeout=60)
+
+
 @pytest.mark.parametrize("load_method", LOAD_METHODS)
 async def test_auto_snapshot_restore_table(manager: ScyllaClusterManager, s3_storage, load_method: str):
     """
@@ -154,6 +168,116 @@ async def test_auto_snapshot_restore_table(manager: ScyllaClusterManager, s3_sto
         assert rows[0].c1 == "c1-0"
         assert rows[1].c1 == "c1-1"
 
+
+@pytest.mark.parametrize("load_method", LOAD_METHODS)
+async def test_auto_snapshot_restore_strongly_consistent_table(manager: ScyllaClusterManager, s3_storage, load_method: str):
+    """
+    test_auto_snapshot_restore_table for a strongly consistent table: the pre-drop snapshot is
+    taken on every node as the schema change is applied, like any other table's, and restores
+    like any other.
+
+    A write of such a table is acked once its raft entry is committed and reaches the memtable
+    only when applied, and the pre-drop snapshot waits for no apply (the table is unregistered by
+    then), so the test makes the replica apply its committed writes before the flush and before
+    the drop; a write still unapplied at the drop may be missing from the snapshot, see
+    docs/dev/strong_consistency_backup_restore.md.
+
+    TRUNCATE of such a table takes its auto snapshot on every replica before its entries are
+    committed: see test_auto_snapshot_restore_truncated_strongly_consistent_table.
+    """
+    server = await add_server(manager, s3_storage)
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, SC_KEYSPACE_OPTS) as ks:
+        cf = "cf"
+        await cql.run_async(f"CREATE TABLE {ks}.{cf} (key int PRIMARY KEY, c1 text)")
+
+        insert = cql.prepare(f"INSERT INTO {ks}.{cf} (key, c1) VALUES (?, ?)")
+        insert.consistency_level = ConsistencyLevel.QUORUM
+        # One flushed row and one row left in the memtable (never flushed) before the drop.
+        await cql.run_async(insert, (0, "c1-0"))
+        await sc_catch_up(manager, server, ks, cf)
+        await manager.api.keyspace_flush(server.ip_addr, ks, cf)
+        await cql.run_async(insert, (1, "c1-1"))
+        await sc_catch_up(manager, server, ks, cf)
+
+        await cql.run_async(f"DROP TABLE {ks}.{cf}")
+
+        await restore_table_from_auto_snapshot(manager, server, cql, ks, cf, load_method=load_method, s3_storage=s3_storage)
+
+        # A strongly consistent SELECT is single-partition only.
+        select = cql.prepare(f"SELECT * FROM {ks}.{cf} WHERE key = ?")
+        select.consistency_level = ConsistencyLevel.QUORUM
+        rows = {row.key: row for key in (0, 1) for row in await cql.run_async(select, (key,))}
+        assert rows.keys() == {0, 1}, f"expected keys {{0, 1}} after restore, got {sorted(rows)}"
+        assert rows[0].c1 == "c1-0"
+        assert rows[1].c1 == "c1-1"
+
+
+@pytest.mark.parametrize("load_method", LOAD_METHODS)
+async def test_auto_snapshot_restore_truncated_strongly_consistent_table(manager: ScyllaClusterManager, s3_storage, load_method: str):
+    """
+    TRUNCATE of a strongly consistent table takes the auto snapshot too, and the truncated data
+    restores from it.
+
+    The truncate is an entry in each tablet's raft log; before it commits those entries, the
+    topology coordinator has every replica take the snapshot, after a read barrier per tablet,
+    so the snapshot holds every write acked before the TRUNCATE, flushed or not: unlike before
+    the drop, no catch-up is needed. The table has two tablets.
+    """
+    server = await add_server(manager, s3_storage)
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, SC_KEYSPACE_OPTS.replace("'initial': 1", "'initial': 2")) as ks:
+        cf = "cf"
+        await cql.run_async(f"CREATE TABLE {ks}.{cf} (key int PRIMARY KEY, c1 text)")
+
+        insert = cql.prepare(f"INSERT INTO {ks}.{cf} (key, c1) VALUES (?, ?)")
+        insert.consistency_level = ConsistencyLevel.QUORUM
+        keys = range(20)
+        # Half of the rows flushed, the rest left in the memtables, where the truncate finds them.
+        await asyncio.gather(*(cql.run_async(insert, (k, f"c1-{k}")) for k in keys[:10]))
+        await sc_catch_up(manager, server, ks, cf)
+        await manager.api.keyspace_flush(server.ip_addr, ks, cf)
+        await asyncio.gather(*(cql.run_async(insert, (k, f"c1-{k}")) for k in keys[10:]))
+
+        await cql.run_async(f"TRUNCATE TABLE {ks}.{cf}")
+
+        # A strongly consistent SELECT is single-partition only.
+        select = cql.prepare(f"SELECT * FROM {ks}.{cf} WHERE key = ?")
+        select.consistency_level = ConsistencyLevel.QUORUM
+        async def read_rows():
+            return {row.key: row.c1 for key in keys for row in await cql.run_async(select, (key,))}
+        assert not await read_rows()
+
+        snapshot_dir = await truncate_auto_snapshot_dir(manager, server, ks, cf, tablet_count=2)
+        assert os.path.isfile(os.path.join(snapshot_dir, "schema.cql"))
+        # The truncated table is empty, so the snapshot loads straight into it.
+        if load_method == "refresh":
+            await reload_sstables_via_refresh(manager, server, ks, cf, snapshot_dir)
+        else:
+            await reload_sstables_via_restore(manager, server, ks, cf, snapshot_dir, s3_storage)
+
+        assert await read_rows() == {k: f"c1-{k}" for k in keys}
+
+
+async def test_truncate_strongly_consistent_table_without_auto_snapshot(manager: ScyllaClusterManager):
+    """With auto_snapshot off, TRUNCATE of a strongly consistent table takes no snapshot."""
+    server = await manager.server_add(config={"auto_snapshot": False})
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, SC_KEYSPACE_OPTS) as ks:
+        cf = "cf"
+        await cql.run_async(f"CREATE TABLE {ks}.{cf} (key int PRIMARY KEY, c1 text)")
+        insert = cql.prepare(f"INSERT INTO {ks}.{cf} (key, c1) VALUES (?, ?)")
+        insert.consistency_level = ConsistencyLevel.QUORUM
+        await cql.run_async(insert, (0, "c1-0"))
+
+        await cql.run_async(f"TRUNCATE TABLE {ks}.{cf}")
+
+        snapshots_dir = os.path.join(await table_data_dir(manager, server, ks, cf), "snapshots")
+        snapshots = os.listdir(snapshots_dir) if os.path.isdir(snapshots_dir) else []
+        assert not snapshots, f"TRUNCATE took a snapshot with auto_snapshot off: {snapshots}"
 
 @pytest.mark.parametrize("load_method", LOAD_METHODS)
 async def test_auto_snapshot_restore_table_with_dropped_column(manager: ScyllaClusterManager, s3_storage, load_method: str):
