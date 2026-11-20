@@ -22,7 +22,7 @@
 # Boto3 does not support automatic decompression of responses, so we implement
 # a context manager `client_response_decompression` that registers an event handler
 # to decompress responses before they are parsed by Boto3.
-# Another event handler (controlled by `request_custom_headers`) 
+# Another event handler (controlled by `client_headers`)
 # is used to add the "Accept-Encoding" header to requests.
 
 import gzip
@@ -32,7 +32,7 @@ import string
 import pytest
 from contextlib import contextmanager
 
-from .util import random_string, is_aws
+from .util import client_headers, random_string, is_aws
 from test.alternator.util import scylla_config_temporary
 import urllib3
 from botocore.exceptions import ClientError
@@ -48,14 +48,6 @@ def register_event_handler(dynamodb, event_name, handler):
         yield
     finally:
         dynamodb.meta.client.meta.events.unregister(event_name, handler)
-
-# Register the event handler to add custom headers before the request is signed
-@contextmanager
-def request_custom_headers(dynamodb, headers : dict[str, str]):
-    def add_request_custom_headers(params, **kwargs):
-        params['headers'].update(headers)
-    with register_event_handler(dynamodb, 'before-call', add_request_custom_headers):
-        yield
 
 # Enable decompressing responses before parsing
 # It also adds some info about compression to the response dict
@@ -104,7 +96,7 @@ def test_compressed_response(dynamodb, test_table_s, encoding):
             assert "WasCompressed" not in response
 
             # Now check the compression case
-            with request_custom_headers(dynamodb, {"Accept-Encoding": encoding}):
+            with client_headers(dynamodb.meta.client, {"Accept-Encoding": encoding}):
                 response = test_table_s.get_item(Key={'p': p}, ProjectionExpression='a, b, c')
                 assert all(response['Item'][col] == compressible_data for col in ('a', 'b', 'c'))
                 assert "WasCompressed" in response
@@ -129,7 +121,7 @@ def test_compressed_response_large(dynamodb, test_table_s, encoding):
                 
     with client_response_decompression(dynamodb):
         with server_response_compression(dynamodb):
-            with request_custom_headers(dynamodb, {"Accept-Encoding": encoding}):
+            with client_headers(dynamodb.meta.client, {"Accept-Encoding": encoding}):
                 response = test_table_s.get_item(Key={'p': p}, ProjectionExpression='y')
                 assert response['Item']['y'] == large_slightly_compressible_data
                 assert "WasCompressed" in response
@@ -151,7 +143,7 @@ def test_compressed_response_overflow(dynamodb, test_table_s):
     p = random_string()
     with client_response_decompression(dynamodb):
         with server_response_compression(dynamodb):
-            with request_custom_headers(dynamodb, {'Accept-Encoding': 'gzip'}):
+            with client_headers(dynamodb.meta.client, {'Accept-Encoding': 'gzip'}):
                 # The response length must be over 4096 to trigger compression.
                 # We want to use relatively poorly compressible data, so the
                 # output will need multiple buffers.
@@ -187,7 +179,7 @@ def test_compressed_response_small(dynamodb, test_table_s, scylla_only, encoding
     with client_response_decompression(dynamodb):
         # Tell Alternator to compress even tiny responses:
         with server_response_compression(dynamodb, compression_threshold=1):
-            with request_custom_headers(dynamodb, {"Accept-Encoding": encoding}):
+            with client_headers(dynamodb.meta.client, {"Accept-Encoding": encoding}):
                 response = test_table_s.get_item(Key={'p': p})
                 assert response['Item']['x'] == small_data
                 assert response['WasCompressed'] == encoding
@@ -234,7 +226,7 @@ def test_chunked_response_compression(dynamodb, test_table_s, encoding):
                 response = get_batch()
                 assert "WasCompressed" not in response
 
-                with request_custom_headers(dynamodb, {"Accept-Encoding": encoding}):
+                with client_headers(dynamodb.meta.client, {"Accept-Encoding": encoding}):
                     response = get_batch()
                     assert "WasCompressed" in response
                     assert response["WasCompressed"] == encoding
@@ -251,7 +243,7 @@ def test_accept_encoding_header(dynamodb, test_table_s):
 
     # Helper to check expected response compression with given custom headers
     def check_response_with_custom_headers(custom_headers, should_be_compressed):
-        with request_custom_headers(dynamodb, custom_headers):
+        with client_headers(dynamodb.meta.client, custom_headers):
             response = test_table_s.get_item(Key={'p': p})
             assert response['Item']['x'] == compressible_data
             assert_context = f"with {custom_headers}"
@@ -377,16 +369,16 @@ def test_multiple_accept_encoding_headers(request, dynamodb, test_table_s):
             # signature (mismatched or not) is silently ignored, so no
             # signature error is raised - skip this part of the test.
             if not request.config.getoption('mtls'):
-                with request_custom_headers(dynamodb, {"Accept-Encoding": "identity"}):
+                with client_headers(dynamodb.meta.client, {"Accept-Encoding": "identity"}):
                     with pytest.raises(ClientError, match="signature"): # InvalidSignatureException
                         check_replaced_accept_encoding_headers([("Accept-Encoding", b'gzip')], expected_compression=None)
 
             # We can split the header into multiple ones and it works with signing
-            with request_custom_headers(dynamodb, {"Accept-Encoding": "gzip,identity"}):
+            with client_headers(dynamodb.meta.client, {"Accept-Encoding": "gzip,identity"}):
                 check_replaced_accept_encoding_headers([("Accept-Encoding", "gzip"), ("Accept-Encoding", "identity")], expected_compression="gzip")
 
             # But again DynamoDB actually uses only first one:
-            with request_custom_headers(dynamodb, {"Accept-Encoding": "identity,gzip"}):
+            with client_headers(dynamodb.meta.client, {"Accept-Encoding": "identity,gzip"}):
                 check_replaced_accept_encoding_headers([("Accept-Encoding", "identity"), ("Accept-Encoding", "gzip")], expected_compression=compression)
 
 
@@ -408,7 +400,7 @@ def test_multiple_accept_encoding_headers(request, dynamodb, test_table_s):
 def test_signature_trims_accept_encoding_spaces(dynamodb, test_table_s):
     p = random_string()
 
-    with request_custom_headers(dynamodb, {"Accept-Encoding": "  gzip,  deflate,    br  "}):
+    with client_headers(dynamodb.meta.client, {"Accept-Encoding": "  gzip,  deflate,    br  "}):
         test_table_s.get_item(Key={'p': p})
 
 # So far we used DynamoDB's default threshold of 4KB for response compression and default compression level.
@@ -434,7 +426,7 @@ def test_set_compression_options(dynamodb, test_table_s, scylla_only, encoding):
                 return response["HTTPContentLength"]
 
     with client_response_decompression(dynamodb):
-        with request_custom_headers(dynamodb, {"Accept-Encoding": encoding}):
+        with client_headers(dynamodb.meta.client, {"Accept-Encoding": encoding}):
             # With compression disabled no compression and we can get actual response size
             response_length = check_response_with_threshold(gzip_level=0, threshold=1, should_be_compressed=None)
 

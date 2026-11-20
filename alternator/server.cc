@@ -7,6 +7,8 @@
  */
 
 #include "alternator/server.hh"
+#include <array>
+#include <limits>
 #include "audit/audit.hh"
 #include "alternator/executor_util.hh"
 #include "utils/chunked_string.hh"
@@ -17,6 +19,7 @@
 #include <seastar/util/short_streams.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/thread.hh>
+#include <seastar/core/with_timeout.hh>
 #include <seastar/coroutine/as_future.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/try_future.hh>
@@ -43,6 +46,9 @@
 #include "utils/exceptions.hh"
 #include <zlib.h>
 #include "alternator/http_compression.hh"
+#include "types/duration.hh"
+#include "cql3/attributes.hh"
+#include "utils/error_injection.hh"
 
 static logging::logger slogger("alternator-server");
 
@@ -776,7 +782,38 @@ ungzip(chunked_content&& compressed_body, size_t length_limit, bool gzip = true)
     co_return ret;
 }
 
+// Returns the per-request timeout, if the request supplies one.
+static std::optional<db::timeout_clock::duration> request_timeout(const request& req) {
+    // The header map's case-insensitive hash copies its sstring argument.
+    // Scan without allocating lookup keys on requests without an override.
+    auto matches = [] (const sstring& name, std::string_view expected) {
+        return std::ranges::equal(name, expected, [] (unsigned char a, char b) {
+            // HTTP field names use ASCII, so locale-aware folding is unnecessary.
+            const auto lower = a >= 'A' && a <= 'Z' ? a + ('a' - 'A') : a;
+            return lower == b;
+        });
+    };
+    for (const auto& [header, value] : req._headers) {
+        if (!matches(header, "x-scylla-timeout")) {
+            continue;
+        }
+        try {
+            auto timeout = cql3::timeout_from_duration(cql_duration(value));
+            if (timeout > std::chrono::milliseconds(std::numeric_limits<uint32_t>::max())) {
+                throw api_error::validation(fmt::format("{} cannot exceed 4294967295ms", header));
+            }
+            return timeout;
+        } catch (const exceptions::invalid_request_exception& e) {
+            throw api_error::validation(fmt::format("Invalid {}: {}", header, e.what()));
+        } catch (const cql_duration_error& e) {
+            throw api_error::validation(fmt::format("Invalid {}: {}", header, e.what()));
+        }
+    }
+    return std::nullopt;
+}
+
 future<executor::request_return_type> server::handle_api_request(std::unique_ptr<request> req) {
+    const auto request_start = db::timeout_clock::now();
     _executor._stats.total_operations++;
     sstring target = req->get_header("X-Amz-Target");
     // target is DynamoDB API version followed by a dot '.' and operation type (e.g. CreateTable)
@@ -803,8 +840,21 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
         co_await coroutine::try_future(drain_request_body(*req->content_stream, request_content_length_limit));
         co_return std::move(err);
     }
-    _pending_requests.enter();
-    auto leave = defer([this] () noexcept { _pending_requests.leave(); });
+    auto leave = _pending_requests.hold();
+    static constexpr std::array<std::string_view, 10> timed_operations = {
+        "GetItem", "BatchGetItem", "Query", "Scan", "PutItem", "UpdateItem",
+        "DeleteItem", "BatchWriteItem", "GetRecords", "SearchVectors"};
+    std::optional<db::timeout_clock::time_point> admission_deadline;
+    if (std::ranges::contains(timed_operations, op)) {
+        try {
+            if (auto timeout = request_timeout(*req)) {
+                admission_deadline = request_start + *timeout;
+            }
+        } catch (const api_error&) {
+            // Defer invalid-header errors until after reading the body and
+            // verifying the signature, as for requests that do not wait here.
+        }
+    }
     // JSON parsing can allocate up to roughly 2x the size of the raw
     // document, + a couple of bytes for maintenance.
     // If the Content-Length of the request is not available, we assume
@@ -812,10 +862,33 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
     // and after reading the request we return_units() the excess.
     size_t mem_estimate = (req->content_length ? req->content_length : request_content_length_limit) * 2 + 8000;
     auto units_fut = get_units(*_memory_limiter, mem_estimate);
+    lw_shared_ptr<gate::holder> memory_wait_guard;
+    if (admission_deadline && !units_fut.available()) {
+        // A timed semaphore wait can retain an expired slot behind an untimed
+        // waiter. Keep the wait live and charge its concurrency slot until both
+        // admission and the HTTP handler finish, so timeouts cannot grow the
+        // queue beyond max_concurrent_requests_per_shard.
+        memory_wait_guard = make_lw_shared<gate::holder>(std::move(leave));
+        units_fut = with_timeout<semaphore_default_exception_factory>(*admission_deadline,
+                std::move(units_fut).finally([memory_wait_guard] {}));
+    }
     if (_memory_limiter->waiters()) {
         ++_executor._stats.requests_blocked_memory;
     }
-    auto units = co_await std::move(units_fut);
+    auto units_result = co_await coroutine::as_future(std::move(units_fut));
+    if (units_result.failed()) {
+        auto ex = units_result.get_exception();
+        if (!try_catch<semaphore_timed_out>(ex)) {
+            std::rethrow_exception(ex);
+        }
+        ++_executor._stats.requests_timed_out_before_execution;
+        // As in the overload path above, drain before replying so that the
+        // next request on this connection starts at the next HTTP header.
+        throwing_assert(req->content_stream);
+        co_await coroutine::try_future(drain_request_body(*req->content_stream, request_content_length_limit));
+        co_return api_error::internal("Alternator request timed out before execution");
+    }
+    auto units = units_result.get();
     throwing_assert(req->content_stream);
     chunked_content content = co_await read_entire_stream(*req->content_stream, request_content_length_limit);
     // If the request had no Content-Length, we reserved too many units
@@ -868,6 +941,10 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
     }
     executor::client_state client_state(service::client_state::external_tag(),
         _auth_service, &_sl_controller, _timeout_config.current_values(), req->get_client_address());
+    // Validate the extension on every API, but apply it only to data operations.
+    if (auto timeout = request_timeout(*req); timeout && std::ranges::contains(timed_operations, op)) {
+        client_state.set_request_deadline(request_start + *timeout);
+    }
     if (!username.empty()) {
         client_state.set_login(auth::authenticated_user(username));
     }
@@ -880,9 +957,24 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
     auto f = [this, content = std::move(content), &callback = callback_it->second,
             client_state = std::move(client_state), trace_state = std::move(trace_state),
             units = std::move(units), req = std::move(req)] () mutable -> future<executor::request_return_type> {
+        auto deadline_expired = [&] {
+            if (auto deadline = client_state.request_deadline(); deadline && *deadline <= db::timeout_clock::now()) {
+                ++_executor._stats.requests_timed_out_before_execution;
+                tracing::trace(trace_state, "Request deadline expired before execution");
+                return true;
+            }
+            return false;
+        };
+        if (deadline_expired()) {
+            co_return api_error::internal("Alternator request timed out before execution");
+        }
         rjson::value json_request = co_await _json_parser.parse(std::move(content));
         if (!json_request.IsObject()) {
             co_return api_error::validation("Request content must be an object");
+        }
+        co_await utils::get_local_injector().inject("alternator_timeout_before_execution", std::chrono::milliseconds(200));
+        if (deadline_expired()) {
+            co_return api_error::internal("Alternator request timed out before execution");
         }
         std::unique_ptr<audit::audit_info_alternator> audit_info;
 
@@ -896,6 +988,7 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
             )
         );
         auto ret = ret_fut.failed() ? convert_exception_ptr_to_api_error(ret_fut.get_exception()) : ret_fut.get();
+        co_await utils::get_local_injector().inject("alternator_delay_completed_request", std::chrono::milliseconds(200));
         if (audit_info) {
             bool has_error = std::holds_alternative<api_error>(ret);
             co_await audit::inspect(*audit_info, client_state, has_error);
