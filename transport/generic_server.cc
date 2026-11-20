@@ -259,11 +259,12 @@ server::server(const sstring& server_name, logging::logger& logger, config cfg)
 }
 
 future<> server::stop() {
-    co_await shutdown();
+    co_await shutdown_connections();
+    abort_requests();
     co_await std::exchange(_all_connections_stopped, make_ready_future<>());
 }
 
-future<> server::shutdown() {
+future<> server::shutdown_connections() {
     if (_gate.is_closed()) {
         co_return;
     }
@@ -307,9 +308,13 @@ future<> server::shutdown() {
         c.get().shutdown();
         _logger.debug("shutdown connection {} out of {} done", ++nr_conn, nr_conn_total);
     });
-    _abort_source.request_abort();
 
-    _logger.debug("generic_server::shutdown completed");
+    _logger.debug("generic_server::shutdown_connections completed");
+}
+
+void server::abort_requests() noexcept {
+    _abort_source.request_abort();
+    _logger.debug("generic_server::abort_requests completed");
 }
 
 future<>
