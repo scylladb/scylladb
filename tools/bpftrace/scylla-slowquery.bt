@@ -1,0 +1,22 @@
+#!/usr/bin/env bpftrace
+/*
+ * scylla-slowquery: print every data query slower than a threshold,
+ * live, with its table and result size. Demonstrates ad-hoc filtering:
+ * change the predicate below without touching Scylla.
+ *
+ * Usage (as root):
+ *     bpftrace tools/bpftrace/scylla-slowquery.bt -p $(pgrep -x scylla | head -1)
+ */
+
+BEGIN
+{
+    printf("%-12s %-20s %-20s %10s %10s\n",
+           "TIME", "KEYSPACE", "TABLE", "US", "BYTES");
+}
+
+usdt:*:scylla:query_done
+/ arg2 > 10000 /   /* slower than 10ms */
+{
+    printf("%s     %-20s %-20s %10ld %10ld%s\n", strftime("%H:%M:%S", nsecs),
+           str(arg0), str(arg1), arg2, arg3, arg4 ? "  (short read)" : "");
+}

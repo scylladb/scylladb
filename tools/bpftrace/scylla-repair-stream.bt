@@ -1,0 +1,67 @@
+#!/usr/bin/env bpftrace
+/*
+ * scylla-repair-stream: live view of repair range progress and file
+ * streaming throughput from the scylla:repair_range_* and
+ * scylla:file_stream_* USDT probes.
+ *
+ * Usage (as root):
+ *     bpftrace tools/bpftrace/scylla-repair-stream.bt -p $(pgrep -x scylla | head -1)
+ *
+ * Probe arguments:
+ *     repair_range_start(ks, table, ranges_index, ranges_total)
+ *     repair_range_done(ks, table, duration_us)
+ *     repair_range_failed(ks, table, duration_us)
+ *     file_stream_tx_start(filename)          file_stream_rx_start(filename)
+ *     file_stream_tx_done(filename, bytes, duration_us)
+ *     file_stream_tx_failed(filename, bytes, duration_us)
+ *     file_stream_rx_done(filename, bytes, duration_us)
+ *     file_stream_rx_failed(filename, bytes, duration_us)
+ */
+
+BEGIN
+{
+    printf("Tracing scylla repair and file streaming... hit ^C for summary\n");
+}
+
+usdt:*:scylla:repair_range_start
+{
+    printf("%s repair range %ld/%ld start %s.%s\n",
+           strftime("%H:%M:%S", nsecs), arg2, arg3, str(arg0), str(arg1));
+}
+
+usdt:*:scylla:repair_range_done
+{
+    @repair_range_us[str(arg0), str(arg1)] = hist(arg2);
+    @repair_ranges_done = count();
+}
+
+usdt:*:scylla:repair_range_failed
+{
+    printf("%s repair range FAILED %s.%s after %ld us\n",
+           strftime("%H:%M:%S", nsecs), str(arg0), str(arg1), arg2);
+    @repair_ranges_failed = count();
+}
+
+usdt:*:scylla:file_stream_tx_done
+{
+    /* bytes per microsecond equals MB/s */
+    printf("%s stream tx done %s: %ld bytes, %ld us, %ld MB/s\n",
+           strftime("%H:%M:%S", nsecs), str(arg0), arg1, arg2,
+           arg2 > 0 ? arg1 / arg2 : 0);
+    @stream_tx_bytes = sum(arg1);
+    @stream_tx_mbps = hist(arg2 > 0 ? arg1 / arg2 : 0);
+}
+
+usdt:*:scylla:file_stream_rx_done
+{
+    @stream_rx_bytes = sum(arg1);
+    @stream_rx_mbps = hist(arg2 > 0 ? arg1 / arg2 : 0);
+}
+
+usdt:*:scylla:file_stream_tx_failed,
+usdt:*:scylla:file_stream_rx_failed
+{
+    printf("%s stream FAILED %s after %ld bytes, %ld us\n",
+           strftime("%H:%M:%S", nsecs), str(arg0), arg1, arg2);
+    @stream_failed = count();
+}
