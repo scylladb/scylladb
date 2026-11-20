@@ -287,6 +287,7 @@ def run_scylla_cmd(pid, dir):
         '--unsafe-bypass-fsync', '1',
         '--kernel-page-cache=1',
         '--commitlog-use-o-dsync', '0',
+        '--abort-on-internal-error', '1',
         '--flush-schema-tables-after-modification=false',
         '--api-address', ip,
         '--rpc-address', ip,
