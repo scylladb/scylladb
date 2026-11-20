@@ -740,7 +740,7 @@ stop_iteration query::result_memory_accounter::check_local_limit() const {
                     _maximum_result_size.hard_limit));
         }
         if (_below_soft_limit && _total_used_memory > _maximum_result_size.soft_limit) {
-            mplog.warn(
+            qlogger.warn(
                     "Memory usage of unpaged query exceeds soft limit of {} (configured via max_memory_for_unlimited_query_soft_limit)",
                     _maximum_result_size.soft_limit);
             _below_soft_limit = false;
