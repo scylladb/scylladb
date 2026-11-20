@@ -1813,6 +1813,7 @@ deps['test/boost/combined_tests'] += [
     'test/boost/logstor_compaction_driver_test.cc',
     'test/boost/logstor_compaction_policy_test.cc',
     'test/boost/logstor_index_test.cc',
+    'test/boost/logstor_write_buffer_test.cc',
     'test/boost/memtable_test.cc',
     'test/boost/multishard_combining_reader_as_mutation_source_test.cc',
     'test/boost/multishard_query_test.cc',
