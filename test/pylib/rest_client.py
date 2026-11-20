@@ -511,6 +511,18 @@ class ScyllaRESTAPIClient:
             params['table'] = ','.join(tables)
         return await self.client.post_json("/storage_service/tablets/backup", host=node_ip, params=params, json=locations)
 
+    async def list_cluster_backup_at_locations(self, node_ip: str, ks: str, locations: list, tables: list[str] = None, snapshot: str = None) -> str:
+        """Backup cluster snapshot"""
+        params = {}
+        if ks:
+            params['keyspace'] = ks
+        if snapshot:
+            params['snapshot'] = snapshot
+        if tables:
+            params['table'] = ','.join(tables)
+        return await self.client.post_json("/storage_service/tablets/backup/list", host=node_ip, params=params, json=locations)
+
+
     async def backup_cluster_snapshot(self, node_ip: str, ks: str, snapshot: str, datacenter: str, endpoint: str, bucket: str, prefix: str, tables: list[str] = None) -> str:
         """Backup cluster snapshot"""
         return await self.backup_cluster_snapshot_to_locations(node_ip, ks, snapshot, [
@@ -521,6 +533,16 @@ class ScyllaRESTAPIClient:
                 "prefix": prefix
             }
         ], tables = tables)
+
+    async def list_cluster_backup(self, node_ip: str, ks: str, endpoint: str, bucket: str, prefix: str, tables: list[str] = None, snapshot: str = None ) -> str:
+        """Backup cluster snapshot"""
+        return await self.list_cluster_backup_at_locations(node_ip, ks, [
+            {
+                "endpoint": endpoint,
+                "bucket": bucket,
+                "prefix": prefix
+            }
+        ], tables = tables, snapshot=snapshot)
 
     async def cleanup_keyspace(self, node_ip: str, ks: str) -> None:
         """Cleanup keyspace"""
