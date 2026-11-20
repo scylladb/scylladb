@@ -895,6 +895,7 @@ template <typename K, typename Less, size_t Size>
 requires SimpleLessCompare<K, Less>
 struct searcher<K, int64_t, Less, Size, key_search::linear> {
     static_assert(sizeof(maybe_key<int64_t, Less>) == sizeof(int64_t));
+    static_assert(Size % 4 == 0, "array_search_gt() scans keys in 4-wide vectors");
     static size_t gt(const K& k, const maybe_key<int64_t, Less>* keys, size_t nr, Less less) noexcept {
         return utils::array_search_gt(less.simplify_key(k), reinterpret_cast<const int64_t*>(keys), Size, nr);
     }
