@@ -7,14 +7,17 @@
  */
 
 #include <map>
+#include <stdexcept>
 
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 
 #include "mutation/atomic_cell_or_collection_block.hh"
+#include "utils/logalloc.hh"
 
 using block = atomic_cell_or_collection_block;
 using builder = atomic_cell_or_collection_block_builder;
+using tree = atomic_cell_or_collection_block_tree;
 using block_ptr = block::ptr;
 constexpr unsigned nr_cells = atomic_cell_or_collection_block_nr_cells;
 
@@ -171,4 +174,190 @@ SEASTAR_THREAD_TEST_CASE(test_in_place_modification) {
         expected[slot].first[0] = 'x';
     }
     check_contents(*b, expected);
+}
+
+// Reference model for tree tests: block index -> contents.
+using tree_model = std::map<tree::block_index_type, cells_map>;
+
+static block_ptr make_block_for(tree::block_index_type index, cells_map& expected) {
+    // Make some blocks have external cells.
+    size_t big = index % 3 == 0 ? builder::inline_budget + index % 100 : 10;
+    return build_block({{index % nr_cells, 5 + index % 17}, {(index + 3) % nr_cells, big}}, expected);
+}
+
+static void check_tree(const tree& t, const tree_model& model) {
+    for (auto& [index, cells] : model) {
+        auto* b = t.find_block(index);
+        BOOST_REQUIRE(b);
+        check_contents(*b, cells);
+    }
+    auto it = model.begin();
+    t.for_each_block([&] (tree::block_index_type index, const block& b) {
+        BOOST_REQUIRE(it != model.end());
+        BOOST_REQUIRE_EQUAL(index, it->first);
+        check_contents(b, it->second);
+        ++it;
+    });
+    BOOST_REQUIRE(it == model.end());
+    // The iterator visits the same blocks as for_each_block().
+    BOOST_REQUIRE(std::ranges::equal(t.block_range(), model, [&] (const tree::block_entry& e, const auto& index_and_cells) {
+        check_contents(e.block, index_and_cells.second);
+        return e.index == index_and_cells.first;
+    }));
+    size_t nr_cells_in_model = 0;
+    for (auto& [index, cells] : model) {
+        nr_cells_in_model += cells.size();
+    }
+    BOOST_REQUIRE_EQUAL(t.size(), nr_cells_in_model);
+    if (model.empty()) {
+        BOOST_REQUIRE(t.empty());
+        BOOST_REQUIRE_EQUAL(t.height(), 0);
+    } else {
+        // The height is the smallest that holds the largest block index.
+        unsigned expected_height = 0;
+        for (uint64_t capacity = 1; model.rbegin()->first >= capacity; capacity <<= atomic_cell_or_collection_block_vector_index_bits) {
+            ++expected_height;
+        }
+        BOOST_REQUIRE_EQUAL(t.height(), expected_height);
+    }
+}
+
+static std::vector<tree::block_index_type> interesting_indexes() {
+    return {0, 1, 5, 63, 64, 65, 127, 4095, 4096, 4097, 300000, 2, 1000, 64 * 64 * 64 * 2 + 1};
+}
+
+static void populate(tree& t, tree_model& model) {
+    for (auto index : interesting_indexes()) {
+        cells_map expected;
+        auto b = make_block_for(index, expected);
+        t.set_block(index, std::move(b));
+        model[index] = std::move(expected);
+        check_tree(t, model);
+        BOOST_REQUIRE(!t.find_block(index + 1000000));
+    }
+}
+
+SEASTAR_THREAD_TEST_CASE(test_tree_insert_find_remove) {
+    tree t;
+    tree_model model;
+    populate(t, model);
+
+    // Replace an existing block.
+    {
+        cells_map expected;
+        auto b = build_block({{1, 3}}, expected);
+        t.set_block(64, std::move(b));
+        model[64] = std::move(expected);
+        check_tree(t, model);
+    }
+
+    // Remove in an order different from insertion; the height must go back
+    // down as high blocks are removed.
+    auto indexes = interesting_indexes();
+    std::ranges::sort(indexes, std::greater<>());
+    for (auto index : indexes) {
+        t.remove_block(index);
+        model.erase(index);
+        check_tree(t, model);
+        if (!model.empty()) {
+            auto max_index = model.rbegin()->first;
+            unsigned expected_height = 0;
+            for (uint64_t capacity = 1; max_index >= capacity; capacity <<= atomic_cell_or_collection_block_vector_index_bits) {
+                ++expected_height;
+            }
+            BOOST_REQUIRE_EQUAL(t.height(), expected_height);
+        }
+    }
+    BOOST_REQUIRE(t.empty());
+}
+
+SEASTAR_THREAD_TEST_CASE(test_tree_rebuild_blocks) {
+    tree t;
+    tree_model model;
+    populate(t, model);
+
+    // Take turns keeping, removing, replacing and releasing blocks; also try to
+    // release one into a function that throws without taking it.
+    tree released;
+    tree_model released_model;
+    unsigned turn = 0;
+    t.rebuild_blocks([&] (tree::block_index_type index, tree::block_being_rebuilt& b) {
+        switch (turn++ % 5) {
+        case 0:
+            break;
+        case 1:
+            b.remove();
+            model.erase(index);
+            break;
+        case 2: {
+            cells_map expected;
+            b.replace(build_block({{index % nr_cells, 1 + index % 5}}, expected));
+            model[index] = std::move(expected);
+            break;
+        }
+        case 3:
+            b.release_to([&] (block_ptr&& block) {
+                released.set_block(index, std::move(block));
+            });
+            released_model[index] = std::move(model[index]);
+            model.erase(index);
+            break;
+        case 4:
+            BOOST_REQUIRE_THROW(b.release_to([] (block_ptr&&) {
+                throw std::runtime_error("not taken");
+            }), std::runtime_error);
+            check_contents(*b, model[index]);
+            break;
+        }
+    });
+    check_tree(t, model);
+    check_tree(released, released_model);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_tree_move_and_clone) {
+    tree t;
+    tree_model model;
+    populate(t, model);
+
+    auto t2 = std::move(t);
+    BOOST_REQUIRE(t.empty());
+    check_tree(t2, model);
+
+    auto t3 = t2.clone([] (const block& b) {
+        builder bld;
+        b.for_each_cell([&] (const block::cell_entry& e) {
+            bld.add_borrowed(e.slot, e.cell, e.hash);
+        });
+        return bld.build();
+    });
+    check_tree(t3, model);
+    // The clone's vectors have no spare capacity.
+    BOOST_REQUIRE_LE(t3.memory_usage(), t2.memory_usage());
+}
+
+SEASTAR_THREAD_TEST_CASE(test_lsa_migration) {
+    logalloc::region region;
+    with_allocator(region.allocator(), [&] {
+        tree_model model;
+        {
+            tree t;
+            populate(t, model);
+            // Also move the tree around, so that its root slot changes.
+            std::vector<tree> trees;
+            trees.push_back(std::move(t));
+            for (int i = 0; i < 3; ++i) {
+                region.full_compaction();
+                check_tree(trees.back(), model);
+                trees.push_back(std::move(trees.back()));
+            }
+            // In-place modifications survive compaction.
+            auto* b = trees.back().find_block(0);
+            b->hash(b->present() & 1 ? 0 : std::countr_zero(b->present())) = cell_hash{7};
+            auto first_slot = std::countr_zero(b->present());
+            model[0][first_slot].second = cell_hash{7};
+            region.full_compaction();
+            check_tree(trees.back(), model);
+        }
+        BOOST_REQUIRE_EQUAL(region.occupancy().used_space(), 0);
+    });
 }

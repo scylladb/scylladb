@@ -250,3 +250,375 @@ void atomic_cell_or_collection_block_builder::clear() noexcept {
     _slots = 0;
     _scratch_size = 0;
 }
+
+static_assert(std::has_single_bit(atomic_cell_or_collection_block_vector_fanout));
+static_assert(sizeof(atomic_cell_or_collection_block_vector) == 24);
+static_assert(std::forward_iterator<atomic_cell_or_collection_block_tree::const_iterator>);
+static_assert(std::sentinel_for<std::default_sentinel_t, atomic_cell_or_collection_block_tree::const_iterator>);
+static_assert(sizeof(atomic_cell_or_collection_block_vector) % alignof(atomic_cell_or_collection_block_tree_node_ptr) == 0);
+static_assert(sizeof(atomic_cell_or_collection_block_tree) == 16);
+
+atomic_cell_or_collection_block_vector::atomic_cell_or_collection_block_vector(atomic_cell_or_collection_block_vector&& o) noexcept
+    : atomic_cell_or_collection_block_tree_node_header{o._backref}
+    , _present(o._present)
+    , _capacity(o._capacity)
+{
+    auto* src = o.children();
+    auto* dst = children();
+    for (unsigned i = 0; i < nr_children(); ++i) {
+        new (&dst[i]) node_ptr(src[i]);
+        dst[i].set_owner(&dst[i]);
+    }
+    relocated_to(this);
+}
+
+void atomic_cell_or_collection_block_tree::destroy_subtree(node_ptr p, unsigned height) noexcept {
+    if (height == 0) {
+        current_allocator().destroy(p.block());
+        return;
+    }
+    auto* v = p.vector();
+    auto* children = v->children();
+    for (unsigned i = 0; i < v->nr_children(); ++i) {
+        destroy_subtree(children[i], height - 1);
+    }
+    current_allocator().destroy(v);
+}
+
+void atomic_cell_or_collection_block_tree::clear() noexcept {
+    if (_root) {
+        destroy_subtree(_root, _height);
+    }
+    _root = {};
+    _size = 0;
+    _height = 0;
+}
+
+size_t atomic_cell_or_collection_block_tree::subtree_memory_usage(node_ptr p, unsigned height) noexcept {
+    if (height == 0) {
+        return p.block()->memory_usage();
+    }
+    auto* v = p.vector();
+    size_t usage = v->storage_size();
+    auto* children = v->children();
+    for (unsigned i = 0; i < v->nr_children(); ++i) {
+        usage += subtree_memory_usage(children[i], height - 1);
+    }
+    return usage;
+}
+
+size_t atomic_cell_or_collection_block_tree::memory_usage() const noexcept {
+    return _root ? subtree_memory_usage(_root, _height) : 0;
+}
+
+atomic_cell_or_collection_block_tree::node_ptr
+atomic_cell_or_collection_block_tree::make_vector(atomic_cell_or_collection_block_vector::mask_type present, const node_ptr* children, unsigned capacity) {
+    auto nr = std::popcount(present);
+    SCYLLA_ASSERT(unsigned(nr) <= capacity);
+    void* storage = current_allocator().alloc<atomic_cell_or_collection_block_vector>(atomic_cell_or_collection_block_vector::storage_size_for(capacity));
+    auto* v = new (storage) atomic_cell_or_collection_block_vector(present, capacity);
+    auto* dst = v->children();
+    for (int i = 0; i < nr; ++i) {
+        new (&dst[i]) node_ptr(children[i]);
+        dst[i].set_owner(&dst[i]);
+    }
+    return node_ptr(v);
+}
+
+unsigned atomic_cell_or_collection_block_tree::vector_capacity(unsigned height, atomic_cell_or_collection_block_vector::mask_type present,
+        std::optional<unsigned> blocks_to_follow) noexcept {
+    constexpr unsigned fanout = atomic_cell_or_collection_block_vector::fanout;
+    const unsigned nr = std::popcount(present);
+    if (blocks_to_follow == 0u) {
+        // No vector will get more children.
+        return nr;
+    }
+    if (height == 1 && blocks_to_follow) {
+        // Blocks are expected in increasing index order, so only the indexes above the
+        // highest present one can still be filled.
+        const unsigned highest = std::bit_width(present) - 1;
+        return nr + std::min(*blocks_to_follow, fanout - 1 - highest);
+    }
+    return std::max(nr, std::min(fanout, std::max(min_vector_capacity, std::bit_ceil(nr))));
+}
+
+atomic_cell_or_collection_block_tree::node_ptr
+atomic_cell_or_collection_block_tree::make_chain(node_ptr node, unsigned node_height, unsigned height, block_index_type block_index,
+        std::optional<unsigned> blocks_to_follow) {
+    node_ptr top = node;
+    unsigned top_height = node_height;
+    try {
+        for (; top_height < height; ++top_height) {
+            auto present = bitmask::bit<atomic_cell_or_collection_block_vector::mask_type>(child_index(block_index, top_height + 1));
+            top = make_vector(present, &top, vector_capacity(top_height + 1, present, blocks_to_follow));
+        }
+    } catch (...) {
+        destroy_chain(top, top_height, node_height);
+        node.set_owner(nullptr);
+        throw;
+    }
+    return top;
+}
+
+void atomic_cell_or_collection_block_tree::destroy_chain(node_ptr chain, unsigned height, unsigned node_height) noexcept {
+    // Destroys the single-child vectors above node_height, but not the node below them.
+    for (; height > node_height; --height) {
+        auto* v = chain.vector();
+        auto child = v->children()[0];
+        current_allocator().destroy(v);
+        chain = child;
+    }
+}
+
+void atomic_cell_or_collection_block_tree::remove_child(node_ptr& slot, unsigned index) noexcept {
+    auto* v = slot.vector();
+    auto bit = bitmask::bit<atomic_cell_or_collection_block_vector::mask_type>(index);
+    auto rank = bitmask::rank(v->_present, index);
+    auto* children = v->children();
+    auto nr = v->nr_children();
+    for (unsigned i = rank; i + 1 < nr; ++i) {
+        install(children[i], children[i + 1]);
+    }
+    v->_present &= ~bit;
+    if (!v->_present) {
+        current_allocator().destroy(v);
+        slot = {};
+    }
+}
+
+void atomic_cell_or_collection_block_tree::remove_cleared_children(node_ptr& slot, unsigned height) noexcept {
+    if (height == 0 || !slot) {
+        return;
+    }
+    auto* v = slot.vector();
+    auto* children = v->children();
+    auto present = v->_present;
+    unsigned kept = 0;
+    bitmask::for_each_set_with_rank(v->_present, [&] (unsigned position, unsigned rank) {
+        remove_cleared_children(children[rank], height - 1);
+        if (children[rank]) {
+            if (kept != rank) {
+                install(children[kept], children[rank]);
+            }
+            ++kept;
+        } else {
+            present &= ~bitmask::bit<atomic_cell_or_collection_block_vector::mask_type>(position);
+        }
+    });
+    v->_present = present;
+    if (!present) {
+        current_allocator().destroy(v);
+        slot = {};
+    }
+}
+
+void atomic_cell_or_collection_block_tree::shrink_root() noexcept {
+    if (!_root) {
+        _height = 0;
+        return;
+    }
+    while (_height > 0) {
+        auto* v = _root.vector();
+        if (v->present() != 1) {
+            return;
+        }
+        // The only child holds blocks 0 to the capacity of its height.
+        auto child = v->children()[0];
+        current_allocator().destroy(v);
+        install(_root, child);
+        --_height;
+    }
+}
+
+atomic_cell_or_collection_block_tree::node_ptr* atomic_cell_or_collection_block_tree::find_slot(block_index_type block_index) noexcept {
+    if (!_root || height_for(block_index) > _height) {
+        return nullptr;
+    }
+    node_ptr* slot = &_root;
+    for (auto h = _height; h > 0; --h) {
+        slot = slot->vector()->child(child_index(block_index, h));
+        if (!slot) {
+            return nullptr;
+        }
+    }
+    return slot;
+}
+
+const atomic_cell_or_collection_block* atomic_cell_or_collection_block_tree::find_block(block_index_type block_index) const noexcept {
+    auto p = _root;
+    if (!p || height_for(block_index) > _height) {
+        return nullptr;
+    }
+    for (auto h = _height; h > 0; --h) {
+        auto* slot = p.vector()->child(child_index(block_index, h));
+        if (!slot) {
+            return nullptr;
+        }
+        p = *slot;
+    }
+    return p.block();
+}
+
+const atomic_cell_or_collection_block*
+atomic_cell_or_collection_block_tree::find_block_at_or_after_in(node_ptr p, unsigned height, block_index_type base,
+        block_index_type block_index, block_index_type& found_index) noexcept {
+    if (height == 0) {
+        found_index = base;
+        return p.block();
+    }
+    auto* v = p.vector();
+    auto candidates = v->present();
+    if (block_index > base) {
+        // Skip the children wholly below block_index.
+        candidates &= ~atomic_cell_or_collection_block_vector::mask_type(0) << child_index(block_index, height);
+    }
+    for (; candidates; candidates &= candidates - 1) {
+        unsigned index = std::countr_zero(candidates);
+        auto child = v->children()[bitmask::rank(v->present(), index)];
+        if (auto* b = find_block_at_or_after_in(child, height - 1, child_base(base, index, height), block_index, found_index)) {
+            return b;
+        }
+    }
+    return nullptr;
+}
+
+const atomic_cell_or_collection_block*
+atomic_cell_or_collection_block_tree::find_block_at_or_after(block_index_type block_index, block_index_type& found_index) const noexcept {
+    if (!_root || height_for(block_index) > _height) {
+        return nullptr;
+    }
+    return find_block_at_or_after_in(_root, _height, 0, block_index, found_index);
+}
+
+void atomic_cell_or_collection_block_tree::set_block(block_index_type block_index, block_ptr&& block, std::optional<unsigned> blocks_to_follow) {
+    auto block_node = node_ptr(block.get());
+    const auto block_count = block->nr_present();
+    const auto needed = height_for(block_index);
+    if (!_root) {
+        install(_root, make_chain(block_node, 0, needed, block_index, blocks_to_follow));
+        _height = needed;
+        _size = block_count;
+        (void)block.release();
+        return;
+    }
+    // Grow the root. Each step leaves a valid tree, so on failure only shrink back.
+    try {
+        while (_height < needed) {
+            using vector_mask_type = atomic_cell_or_collection_block_vector::mask_type;
+            const auto present = bitmask::bit<vector_mask_type>(0);
+            // The new block (and those to follow it) go into this vector only if it
+            // is the one which holds blocks; otherwise they go into a sibling subtree.
+            const auto capacity = _height + 1 < needed
+                    ? vector_capacity(_height + 1, present, blocks_to_follow ? std::optional<unsigned>(0) : std::nullopt)
+                    : vector_capacity(_height + 1, present | bitmask::bit<vector_mask_type>(child_index(block_index, needed)), blocks_to_follow);
+            install(_root, make_vector(present, &_root, capacity));
+            ++_height;
+        }
+    } catch (...) {
+        shrink_root();
+        throw;
+    }
+    node_ptr* slot = &_root;
+    for (auto h = _height; h > 0; --h) {
+        auto* v = slot->vector();
+        auto idx = child_index(block_index, h);
+        if (auto* child = v->child(idx)) {
+            slot = child;
+            continue;
+        }
+        // Insert a new child into v, through a chain of new vectors down to the block.
+        node_ptr chain;
+        try {
+            chain = make_chain(block_node, 0, h - 1, block_index, blocks_to_follow);
+            auto present = v->_present | bitmask::bit<atomic_cell_or_collection_block_vector::mask_type>(idx);
+            auto rank = bitmask::rank(present, idx);
+            auto nr = v->nr_children();
+            if (nr < v->_capacity) {
+                // Fits in place.
+                auto* children = v->children();
+                for (unsigned i = nr; i > rank; --i) {
+                    install(children[i], children[i - 1]);
+                }
+                install(children[rank], chain);
+                v->_present = present;
+            } else {
+                std::array<node_ptr, atomic_cell_or_collection_block_vector_fanout> children;
+                std::copy_n(v->children(), rank, children.begin());
+                children[rank] = chain;
+                std::copy_n(v->children() + rank, nr - rank, children.begin() + rank + 1);
+                auto nv = make_vector(present, children.data(), vector_capacity(h, present, blocks_to_follow));
+                current_allocator().destroy(v);
+                install(*slot, nv);
+            }
+        } catch (...) {
+            if (chain) {
+                destroy_chain(chain, h - 1, 0);
+            }
+            block_node.set_owner(nullptr);
+            shrink_root();
+            throw;
+        }
+        _size += block_count;
+        (void)block.release();
+        return;
+    }
+    // Replace the existing block.
+    auto* old = slot->block();
+    _size = _size - old->nr_present() + block_count;
+    current_allocator().destroy(old);
+    install(*slot, block_node);
+    (void)block.release();
+}
+
+atomic_cell_or_collection_block_vector::mask_type
+atomic_cell_or_collection_block_tree::group_present(block_index_type block_index) const noexcept {
+    if (!_root || height_for(block_index) > _height) {
+        return 0;
+    }
+    if (_height == 0) {
+        // The only block is block 0.
+        return block_index < atomic_cell_or_collection_block_vector_fanout ? 1 : 0;
+    }
+    auto p = _root;
+    for (auto h = _height; h > 1; --h) {
+        auto* slot = p.vector()->child(child_index(block_index, h));
+        if (!slot) {
+            return 0;
+        }
+        p = *slot;
+    }
+    return p.vector()->present();
+}
+
+void atomic_cell_or_collection_block_tree::remove_block(block_index_type block_index) noexcept {
+    if (!_root || height_for(block_index) > _height) {
+        return;
+    }
+    // Walk down, remembering the path to remove the block and any vectors left empty.
+    std::array<node_ptr*, max_height + 1> path;
+    path[0] = &_root;
+    for (unsigned h = _height, depth = 0; h > 0; --h, ++depth) {
+        auto* child = path[depth]->vector()->child(child_index(block_index, h));
+        if (!child) {
+            return;
+        }
+        path[depth + 1] = child;
+    }
+    auto* block = path[_height]->block();
+    _size -= block->nr_present();
+    current_allocator().destroy(block);
+    if (_height == 0) {
+        _root = {};
+    } else {
+        // Remove the child from its vector; if that empties the vector, remove the
+        // vector from its parent, and so on.
+        for (unsigned depth = _height; depth > 0; --depth) {
+            auto& parent = *path[depth - 1];
+            remove_child(parent, child_index(block_index, _height - depth + 1));
+            if (parent) {
+                break;
+            }
+        }
+    }
+    shrink_root();
+}
