@@ -22,6 +22,7 @@
 #include <seastar/util/noncopyable_function.hh>
 
 #include <source_location>
+#include <unordered_set>
 
 namespace db {
 class system_keyspace;
@@ -188,6 +189,33 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     abort_source _as;
 
     tablet_group_leader_cache _leader_cache;
+    // The tables given a seal boundaries provider, to take it back in stop().
+    std::unordered_set<table_id> _seal_provider_tables;
+
+    // Seals the data of the groups this shard leads, and promotes the seals: a seal is appended
+    // to a group's log once enough has been written since the last one, or the oldest unsealed
+    // write is old enough, while fewer than max_pending_seals wait for their promotion. The
+    // newest seal every replica has applied is promoted.
+    class seal_proposer {
+        groups_manager& _gm;
+        future<> _fiber = make_ready_future<>();
+
+        future<> run();
+        future<> round();
+        future<> maybe_seal(raft::group_id gid, raft_group_state& state);
+        // `min_applied` is the newest change every replica of the group has applied.
+        future<> maybe_promote(raft::group_id gid, raft_group_state& state, api::timestamp_type min_applied);
+        // Appends the command with a timeout, and logs a failure instead of throwing,
+        // so that one group does not hold back the round.
+        future<> append(raft_server& srv, raft::group_id gid,
+                noncopyable_function<raft_command(api::timestamp_type, raft::term_t)> make_command);
+    public:
+        explicit seal_proposer(groups_manager& gm) : _gm(gm) {}
+        void start();
+        // The manager's abort source must be requested first.
+        future<> stop();
+    };
+    seal_proposer _seal_proposer{*this};
 
     // Keeps the flush handler registered. The handler forwards each round's
     // position to every group; see raft_commitlog::closed_up_to().
@@ -199,6 +227,7 @@ class groups_manager : public peering_sharded_service<groups_manager> {
 
     // Should be called on the shard that hosts the Raft group
     future<> start_raft_group(locator::global_tablet_id tablet,
+        dht::token_range range,
         raft::group_id group_id,
         locator::token_metadata_ptr tm,
         lw_shared_ptr<raft::server_stats> server_stats,
@@ -207,6 +236,22 @@ class groups_manager : public peering_sharded_service<groups_manager> {
 
     // Creates them if the table does not have any yet.
     table_metrics& get_table_metrics(const schema& s);
+
+    void register_seal_boundaries_provider(replica::table& t);
+
+    // Read from the group's storage; nothing while the group does not run on this shard.
+    std::optional<replica::seal_boundaries> seal_boundaries_for(raft::group_id id) const;
+
+    // Groups named by id, with the tablet each one serves to locate it by.
+    using tablet_per_group = std::unordered_map<raft::group_id, locator::global_tablet_id>;
+    using applied_timestamp_per_group = std::unordered_map<raft::group_id, api::timestamp_type>;
+    // The newest change this shard has applied for each of `groups`, which it must host.
+    future<applied_timestamp_per_group> get_applied_timestamps(const tablet_per_group& groups) const;
+
+    // For every group this shard leads with a seal to promote, the newest change all of its
+    // replicas have applied, so the newest seal which may be promoted. Groups a replica did
+    // not answer for are left out.
+    future<std::unordered_map<raft::group_id, api::timestamp_type>> min_applied_timestamps();
 
     // A table keeps its metrics until it is dropped, even once its last tablet
     // has left this shard, or the sum over the shards would go backwards.
@@ -255,6 +300,10 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     // The shard hosting the raft group `expected_gid` of `tablet`,
     // nullopt if this node holds no replica of the tablet or the table is gone.
     std::optional<shard_id> find_shard_for_tablet(locator::global_tablet_id tablet, raft::group_id expected_gid) const;
+
+    enum class append_result { committed, not_leader, commit_status_unknown };
+    future<append_result> append_command(raft_server& srv, raft::group_id gid, abort_source& as,
+            noncopyable_function<raft_command(api::timestamp_type, raft::term_t)> make_command);
 
     // Appends a truncate of the group's tablet to the log of the group `gid` if this replica
     // leads it, and tells whether the entry is committed. Runs on the shard hosting the group.
