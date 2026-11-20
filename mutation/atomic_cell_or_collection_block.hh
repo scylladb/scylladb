@@ -25,6 +25,7 @@
 #include "utils/allocation_strategy.hh"
 #include "utils/fragment_range.hh"
 #include "utils/managed_bytes.hh"
+#include "utils/small_vector.hh"
 
 // Packed, allocation-light storage for the cells of a row.
 //
@@ -523,6 +524,8 @@ public:
     // blocks holds), as a mask indexed by block_index % fanout.
     atomic_cell_or_collection_block_vector::mask_type group_present(block_index_type block_index) const noexcept;
 
+    class loader;
+
     // Removes and destroys the block at block_index, if any.
     void remove_block(block_index_type block_index) noexcept;
 
@@ -644,6 +647,98 @@ public:
 
     // Memory used by all the nodes and external cells.
     size_t memory_usage() const noexcept;
+};
+
+// Builds a tree from blocks added in increasing block index order, bottom-up, so
+// that every vector is allocated once, with exactly the capacity for its children
+// (atomic_cell_or_collection_block_tree::set_block() grows vectors by doubling,
+// as it can't know how many children they will end up with).
+//
+// Since blocks come in index order, every vector of the tree is complete once a
+// block past the block indexes it covers is added. So the loader only keeps, for
+// each height, the rightmost node: the one which may still get children. It holds
+// that node's children, not yet in a vector. When a block past it is added, the
+// node is sealed: its children are moved into a vector of exactly their number,
+// which becomes a child of the rightmost node of the next height. load_into()
+// seals the remaining rightmost nodes, from the bottom up to the root.
+//
+// So the loader holds at most fanout children per height of the tree being built;
+// a height-2 tree (up to fanout^2 * atomic_cell_or_collection_block_nr_cells
+// columns) needs no allocation beyond the tree's own nodes.
+//
+// The held nodes are LSA-migratable, so the loader must not be moved.
+class atomic_cell_or_collection_block_tree::loader {
+    using vector_mask_type = atomic_cell_or_collection_block_vector::mask_type;
+    static constexpr unsigned fanout = atomic_cell_or_collection_block_vector::fanout;
+    // The rightmost node at some height h (>= 1), still open to new children: the
+    // children (of height h - 1) of the vector it will be sealed into.
+    struct rightmost_open_node {
+        // The index of the vector among the vectors of its height, i.e. the block
+        // indexes it covers divided by fanout^h.
+        block_index_type index;
+        vector_mask_type present = 0;
+        // Indexed by child index; each owns (is the back-reference of) its child.
+        std::array<node_ptr, fanout> children;
+    };
+    // _rightmost_open_node_by_height[h - 1] is the rightmost node at height h. The
+    // one at height h + 1, if any, is the parent of the one at height h, and the
+    // last is the top of the tree built so far.
+    utils::small_vector<rightmost_open_node, 2> _rightmost_open_node_by_height;
+    // The number of cells in all blocks.
+    uint32_t _size = 0;
+    // Most rows have a single block, which needs no vectors. So the first block is
+    // kept here (owning it), and only moved into a rightmost node of height 1 when
+    // a block with another index is added. Building that node (with its fanout
+    // child slots) for a row which turns out to have one block would be wasted work.
+    node_ptr _only_block;
+    block_index_type _only_block_index = 0;
+
+    // Points the back-references of the children of all rightmost nodes at their slots.
+    void set_owners() noexcept;
+    // Moves _only_block into a new rightmost node of height 1.
+    void move_only_block_to_rightmost_node();
+    void load_nonempty_into(atomic_cell_or_collection_block_tree& tree);
+    // Adds a rightmost node of the next height, the parent of the current top one.
+    void add_level();
+    // Seals the rightmost node at `height` into a vector, adding it to the rightmost
+    // node above, and leaves an empty rightmost node with `next_index` in its place.
+    void seal(unsigned height, block_index_type next_index);
+public:
+    loader() noexcept = default;
+    loader(const loader&) = delete;
+    loader& operator=(const loader&) = delete;
+    ~loader() {
+        if (!empty()) {
+            clear();
+        }
+    }
+
+    bool empty() const noexcept { return !_only_block && _rightmost_open_node_by_height.empty(); }
+    // Whether set_block() can take block_index: whether it is not before the block
+    // indexes covered by the rightmost node of height 1, since the vectors of blocks
+    // before it are sealed.
+    bool can_set_block(block_index_type block_index) const noexcept {
+        if (_only_block) {
+            return block_index / fanout >= _only_block_index / fanout;
+        }
+        return _rightmost_open_node_by_height.empty() || block_index / fanout >= _rightmost_open_node_by_height.front().index;
+    }
+    // Returns the block at block_index, if it is held by the loader (it was added,
+    // and can_set_block(block_index)).
+    block_type* find_block(block_index_type block_index) noexcept;
+    // Adds block at block_index, replacing the block there, if any.
+    // can_set_block(block_index) must be true. If it throws, block still owns the
+    // block, and the loader holds the blocks added before.
+    void set_block(block_index_type block_index, block_ptr&& block);
+    // Moves all blocks into `tree`, which must be empty. If it throws, the loader
+    // still holds the blocks and the tree is empty.
+    void load_into(atomic_cell_or_collection_block_tree& tree) {
+        if (!empty()) {
+            load_nonempty_into(tree);
+        }
+    }
+    // Destroys all blocks.
+    void clear() noexcept;
 };
 
 stop_iteration atomic_cell_or_collection_block_tree::for_each_block_in(node_ptr p, unsigned height, block_index_type base,

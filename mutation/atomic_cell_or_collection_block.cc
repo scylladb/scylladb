@@ -590,6 +590,161 @@ atomic_cell_or_collection_block_tree::group_present(block_index_type block_index
     return p.vector()->present();
 }
 
+void atomic_cell_or_collection_block_tree::loader::set_owners() noexcept {
+    for (auto& n : _rightmost_open_node_by_height) {
+        bitmask::for_each_set(n.present, [&] (unsigned position) {
+            auto& slot = n.children[position];
+            slot.set_owner(&slot);
+        });
+    }
+}
+
+void atomic_cell_or_collection_block_tree::loader::move_only_block_to_rightmost_node() {
+    _rightmost_open_node_by_height.push_back(rightmost_open_node{.index = _only_block_index / fanout});
+    auto& n = _rightmost_open_node_by_height.front();
+    auto position = _only_block_index % fanout;
+    install(n.children[position], std::exchange(_only_block, {}));
+    n.present = bitmask::bit<vector_mask_type>(position);
+}
+
+void atomic_cell_or_collection_block_tree::loader::add_level() {
+    auto* old_data = _rightmost_open_node_by_height.data();
+    _rightmost_open_node_by_height.push_back(rightmost_open_node{.index = _rightmost_open_node_by_height.back().index / fanout});
+    if (_rightmost_open_node_by_height.data() != old_data) {
+        set_owners();
+    }
+}
+
+void atomic_cell_or_collection_block_tree::loader::seal(unsigned height, block_index_type next_index) {
+    if (height == _rightmost_open_node_by_height.size()) {
+        add_level();
+    }
+    auto& n = _rightmost_open_node_by_height[height - 1];
+    auto& parent = _rightmost_open_node_by_height[height];
+    std::array<node_ptr, fanout> children;
+    unsigned nr = 0;
+    bitmask::for_each_set(n.present, [&] (unsigned position) {
+        children[nr++] = n.children[position];
+    });
+    // Takes over the back-references of the children.
+    auto v = make_vector(n.present, children.data(), nr);
+    install(parent.children[n.index % fanout], v);
+    parent.present |= bitmask::bit<vector_mask_type>(n.index % fanout);
+    n.present = 0;
+    n.index = next_index;
+}
+
+atomic_cell_or_collection_block*
+atomic_cell_or_collection_block_tree::loader::find_block(block_index_type block_index) noexcept {
+    if (_only_block) {
+        return block_index == _only_block_index ? _only_block.block() : nullptr;
+    }
+    if (_rightmost_open_node_by_height.empty() || _rightmost_open_node_by_height.front().index != block_index / fanout) {
+        return nullptr;
+    }
+    auto& n = _rightmost_open_node_by_height.front();
+    auto position = block_index % fanout;
+    return n.present & bitmask::bit<vector_mask_type>(position) ? n.children[position].block() : nullptr;
+}
+
+void atomic_cell_or_collection_block_tree::loader::set_block(block_index_type block_index, block_ptr&& block) {
+    SCYLLA_ASSERT(can_set_block(block_index));
+    if (empty() || (_only_block && block_index == _only_block_index)) {
+        if (_only_block) {
+            _size -= _only_block.block()->nr_present();
+            current_allocator().destroy(_only_block.block());
+        }
+        _size += block->nr_present();
+        install(_only_block, node_ptr(block.release()));
+        _only_block_index = block_index;
+        return;
+    }
+    if (_only_block) {
+        move_only_block_to_rightmost_node();
+    }
+    // Seal the rightmost nodes which block_index is past, bottom-up: a sealed node
+    // goes into the rightmost node above it, which may then be sealed too.
+    block_index_type index = block_index / fanout;
+    for (unsigned height = 1; height <= _rightmost_open_node_by_height.size() && _rightmost_open_node_by_height[height - 1].index != index; ++height, index /= fanout) {
+        if (_rightmost_open_node_by_height[height - 1].present) {
+            seal(height, index);
+        } else {
+            // Emptied by sealing earlier; nothing to seal.
+            _rightmost_open_node_by_height[height - 1].index = index;
+        }
+    }
+    auto& n = _rightmost_open_node_by_height.front();
+    auto position = block_index % fanout;
+    auto& slot = n.children[position];
+    const auto block_count = block->nr_present();
+    if (n.present & bitmask::bit<vector_mask_type>(position)) {
+        _size -= slot.block()->nr_present();
+        current_allocator().destroy(slot.block());
+    }
+    install(slot, node_ptr(block.release()));
+    n.present |= bitmask::bit<vector_mask_type>(position);
+    _size += block_count;
+}
+
+void atomic_cell_or_collection_block_tree::loader::load_nonempty_into(atomic_cell_or_collection_block_tree& tree) {
+    SCYLLA_ASSERT(tree.empty());
+    if (_only_block) {
+        // No more blocks follow, so any vectors on its path are exactly sized.
+        block_ptr block(_only_block.block());
+        try {
+            tree.set_block(_only_block_index, std::move(block), 0);
+        } catch (...) {
+            install(_only_block, node_ptr(block.release()));
+            throw;
+        }
+        _only_block = {};
+        _size = 0;
+        return;
+    }
+    // Seal the rightmost nodes bottom-up, until the top one covers block 0, and so
+    // is the root. A top node whose only child is its first, at index 0, is not
+    // needed: the child is the root.
+    unsigned height = 1;
+    for (;; ++height) {
+        auto& n = _rightmost_open_node_by_height[height - 1];
+        const bool top = height == _rightmost_open_node_by_height.size();
+        if (top && n.index == 0) {
+            if (n.present == 1) {
+                install(tree._root, n.children[0]);
+                tree._height = height - 1;
+            } else {
+                std::array<node_ptr, fanout> children;
+                unsigned nr = 0;
+                bitmask::for_each_set(n.present, [&] (unsigned position) {
+                    children[nr++] = n.children[position];
+                });
+                install(tree._root, make_vector(n.present, children.data(), nr));
+                tree._height = height;
+            }
+            break;
+        }
+        seal(height, n.index);
+    }
+    tree._size = _size;
+    _rightmost_open_node_by_height.clear();
+    _size = 0;
+}
+
+void atomic_cell_or_collection_block_tree::loader::clear() noexcept {
+    if (_only_block) {
+        current_allocator().destroy(_only_block.block());
+        _only_block = {};
+    }
+    for (unsigned height = 1; height <= _rightmost_open_node_by_height.size(); ++height) {
+        auto& n = _rightmost_open_node_by_height[height - 1];
+        bitmask::for_each_set(n.present, [&] (unsigned position) {
+            destroy_subtree(n.children[position], height - 1);
+        });
+    }
+    _rightmost_open_node_by_height.clear();
+    _size = 0;
+}
+
 void atomic_cell_or_collection_block_tree::remove_block(block_index_type block_index) noexcept {
     if (!_root || height_for(block_index) > _height) {
         return;

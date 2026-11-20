@@ -335,6 +335,145 @@ SEASTAR_THREAD_TEST_CASE(test_tree_move_and_clone) {
     BOOST_REQUIRE_LE(t3.memory_usage(), t2.memory_usage());
 }
 
+static block_ptr clone_block(const block& b) {
+    builder bld;
+    b.for_each_cell([&] (const block::cell_entry& e) {
+        bld.add_borrowed(e.slot, e.cell, e.hash);
+    });
+    return bld.build();
+}
+
+static std::vector<tree::block_index_type> sorted_interesting_indexes() {
+    auto indexes = interesting_indexes();
+    std::ranges::sort(indexes);
+    return indexes;
+}
+
+// Loads `indexes` (in the given, non-decreasing, order) into a tree with a loader,
+// calling between_blocks() after each block is added to the loader.
+static tree load(const std::vector<tree::block_index_type>& indexes, tree_model& model, std::invocable<tree::loader&> auto&& between_blocks) {
+    tree::loader loader;
+    for (auto index : indexes) {
+        BOOST_REQUIRE(loader.can_set_block(index));
+        cells_map expected;
+        loader.set_block(index, make_block_for(index, expected));
+        model[index] = std::move(expected);
+        between_blocks(loader);
+        // Only the blocks of the open vector of blocks can be found.
+        for (auto& [i, cells] : model) {
+            auto* b = loader.find_block(i);
+            BOOST_REQUIRE_EQUAL(bool(b), i / atomic_cell_or_collection_block_vector_fanout == index / atomic_cell_or_collection_block_vector_fanout);
+            if (b) {
+                check_contents(*b, cells);
+            }
+            BOOST_REQUIRE_EQUAL(loader.can_set_block(i), i / atomic_cell_or_collection_block_vector_fanout >= index / atomic_cell_or_collection_block_vector_fanout);
+        }
+        BOOST_REQUIRE(!loader.find_block(index + 1000000));
+    }
+    tree t;
+    loader.load_into(t);
+    BOOST_REQUIRE(loader.empty());
+    return t;
+}
+
+SEASTAR_THREAD_TEST_CASE(test_tree_loader) {
+    auto no_op = [] (tree::loader&) {};
+    auto check_exactly_sized = [] (const tree& t) {
+        // Every vector is exactly sized, as in a clone.
+        BOOST_REQUIRE_EQUAL(t.memory_usage(), t.clone(clone_block).memory_usage());
+    };
+    // Single block 0: no vectors.
+    {
+        tree_model model;
+        auto t = load({0}, model, no_op);
+        check_tree(t, model);
+        BOOST_REQUIRE_EQUAL(t.height(), 0);
+    }
+    // Single blocks elsewhere, where the root has a single child.
+    for (tree::block_index_type index : {1u, 64u, 4096u, 300000u}) {
+        tree_model model;
+        auto t = load({index}, model, no_op);
+        check_tree(t, model);
+        check_exactly_sized(t);
+    }
+    // A single block, replaced while it is the only one.
+    {
+        tree_model model;
+        auto t = load({3, 3}, model, no_op);
+        check_tree(t, model);
+        check_exactly_sized(t);
+    }
+    // A single block replaced, then another added.
+    {
+        tree_model model;
+        auto t = load({3, 3, 70}, model, no_op);
+        check_tree(t, model);
+        check_exactly_sized(t);
+    }
+    // Block 0 and a block which needs a higher tree: block 0 is in a chain.
+    {
+        tree_model model;
+        auto t = load({0, 4096}, model, no_op);
+        check_tree(t, model);
+        check_exactly_sized(t);
+    }
+    // Over several levels.
+    {
+        tree_model model;
+        auto t = load(sorted_interesting_indexes(), model, no_op);
+        check_tree(t, model);
+        check_exactly_sized(t);
+        // The loaded tree is a regular one.
+        cells_map expected;
+        t.set_block(66, make_block_for(66, expected));
+        model[66] = std::move(expected);
+        check_tree(t, model);
+    }
+    // Filling vectors of blocks, with the blocks of the open vector replaced.
+    {
+        std::vector<tree::block_index_type> indexes;
+        for (tree::block_index_type i = 0; i < 150; ++i) {
+            indexes.push_back(i);
+        }
+        indexes.push_back(130);
+        indexes.push_back(149);
+        indexes.push_back(5000);
+        tree_model model;
+        auto t = load(indexes, model, no_op);
+        check_tree(t, model);
+        check_exactly_sized(t);
+    }
+    // Blocks of a loader which is destroyed are freed.
+    {
+        logalloc::region region;
+        with_allocator(region.allocator(), [&] {
+            {
+                tree::loader loader;
+                for (auto index : sorted_interesting_indexes()) {
+                    cells_map expected;
+                    loader.set_block(index, make_block_for(index, expected));
+                }
+            }
+            BOOST_REQUIRE_EQUAL(region.occupancy().used_space(), 0);
+        });
+    }
+}
+
+SEASTAR_THREAD_TEST_CASE(test_tree_loader_lsa_migration) {
+    logalloc::region region;
+    with_allocator(region.allocator(), [&] {
+        {
+            tree_model model;
+            auto t = load(sorted_interesting_indexes(), model, [&] (tree::loader&) {
+                region.full_compaction();
+            });
+            region.full_compaction();
+            check_tree(t, model);
+        }
+        BOOST_REQUIRE_EQUAL(region.occupancy().used_space(), 0);
+    });
+}
+
 SEASTAR_THREAD_TEST_CASE(test_lsa_migration) {
     logalloc::region region;
     with_allocator(region.allocator(), [&] {
