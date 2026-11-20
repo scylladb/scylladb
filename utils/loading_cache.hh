@@ -70,10 +70,11 @@ struct do_nothing_loading_cache_stats {
 /// safe to call when caching is disabled (it asserts) since it returns a handle into the cache.
 ///
 /// \note In order to avoid the eviction of cached entries due to "aging" of the contained value the user has to choose
-/// the "expiration" to be at least ("refresh" + "max load latency"). This way the value is going to stay in the cache and is going to be
-/// read in a non-blocking way as long as it's frequently accessed. Note however that since reloading is an asynchronous
-/// procedure it may get delayed by other running task. Therefore choosing the "expiration" too close to the ("refresh" + "max load latency")
-/// value one risks to have his/her cache values evicted when the system is heavily loaded.
+/// the "expiration" to be greater than (2 * "refresh" + "max load latency"): the timer ticks every min("expiration", "refresh"), so a
+/// value is reloaded at the first tick after "refresh" has passed, i.e. up to 2 * "refresh" after it was loaded. This way the value is
+/// going to stay in the cache and is going to be read in a non-blocking way as long as it's frequently accessed. Note however that
+/// since reloading is an asynchronous procedure it may get delayed by other running task. Therefore choosing the "expiration" too close
+/// to the (2 * "refresh" + "max load latency") value one risks to have his/her cache values evicted when the system is heavily loaded.
 ///
 /// The cache is also limited in size and if adding the next value is going
 /// to exceed the cache size limit the least recently used value(s) is(are) going to be evicted until the size of the cache
