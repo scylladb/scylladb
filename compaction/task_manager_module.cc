@@ -13,6 +13,7 @@
 #include "compaction/compaction_manager.hh"
 #include "replica/database.hh"
 #include "locator/abstract_replication_strategy.hh"
+#include "locator/tablets.hh"
 #include "sstables/sstables.hh"
 #include "sstables/sstable_directory.hh"
 #include "utils/error_injection.hh"
@@ -159,6 +160,18 @@ future<> reshard(sstables::sstable_directory& dir, sstables::sstable_directory::
         }
         buckets.back().push_back(std::move(sst));
     });
+    if (table.uses_tablets() && !owned_ranges_ptr) {
+        // Split by tablet so each output sstable fits a single storage group.
+        auto erm = table.get_effective_replication_map();
+        auto& tmap = erm->get_token_metadata().tablets().get_tablet_map(table.schema()->id());
+        dht::token_range_vector ranges;
+        ranges.reserve(tmap.tablet_count());
+        for (auto tid : tmap.tablet_ids()) {
+            ranges.push_back(tmap.get_token_range(tid));
+        }
+        owned_ranges_ptr = compaction::make_owned_ranges_ptr(std::move(ranges));
+        vnodes_resharding = true;
+    }
     // There is a semaphore inside the compaction manager in run_resharding_jobs. So we
     // parallel_for_each so the statistics about pending jobs are updated to reflect all
     // jobs. But only one will run in parallel at a time
