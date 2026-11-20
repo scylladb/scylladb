@@ -58,7 +58,7 @@ async def test_decommission_blocked_by_a_rack_list_fails_promptly(manager: Scyll
         logger.info(f"Decommissioning {last_in_r3}, the only node in r3, while {ks} still lists r3")
         start = time.time()
         await manager.decommission_node(last_in_r3.server_id,
-                                        expected_error="Consider adding new nodes or reducing replication factor",
+                                        expected_error="would make some existing keyspace RF-rack-invalid",
                                         timeout=300)
         elapsed = time.time() - start
         logger.info(f"Decommission was rejected after {elapsed:.1f}s")
