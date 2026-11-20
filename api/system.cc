@@ -7,10 +7,14 @@
  */
 
 #include "api/api_init.hh"
+#include "api/api.hh"
+#include "api/utils.hh"
 #include "api/api-doc/system.json.hh"
 #include "api/api-doc/metrics.json.hh"
 #include "replica/database.hh"
 #include "sstables/sstables_manager.hh"
+#include "utils/minidump/dumper.hh"
+#include "db/config.hh"
 
 #include <rapidjson/document.h>
 #include <boost/lexical_cast.hpp>
@@ -20,6 +24,9 @@
 #include <seastar/http/exception.hh>
 #include <seastar/util/short_streams.hh>
 #include <seastar/util/short_streams.hh>
+#include <seastar/core/seastar.hh>
+#include <fmt/chrono.h>
+#include <fmt/ranges.h>
 
 #include "utils/log.hh"
 
@@ -186,6 +193,63 @@ void set_system(http_context& ctx, routes& r) {
             auto format = ctx.db.local().get_user_sstables_manager().get_preferred_sstable_version();
             return make_ready_future<json::json_return_type>(seastar::to_sstring(format));
         });
+    });
+
+    hs::take_minidump.set(r, [&ctx] (std::unique_ptr<request> req) -> future<json::json_return_type> {
+        minidump::options opts;
+        auto selectors = [&] (const char* name) {
+            auto v = split(req->get_query_param(name), ",");
+            return std::vector<std::string>(v.begin(), v.end());
+        };
+        opts.include = selectors("include");
+        opts.exclude = selectors("exclude");
+        opts.dry_run = get_query_param<bool>(*req, "dry_run");
+        auto number = [&] <typename T> (const char* name, T& out) {
+            out = get_query_param<T>(*req, name, out);
+        };
+        number("max_size_ratio", opts.max_size_ratio);
+        number("min_free_disk_ratio", opts.min_free_disk_ratio);
+        // Written so that NaN fails too.
+        if (!(opts.max_size_ratio > 0 && opts.max_size_ratio <= 1) || !(opts.min_free_disk_ratio >= 0 && opts.min_free_disk_ratio < 1)) {
+            throw bad_param_exception("max_size_ratio must be in (0, 1] and min_free_disk_ratio in [0, 1)");
+        }
+        number("write_rate_mb", opts.write_rate_mb);
+        number("max_stall_us", opts.max_stall_us);
+        number("max_park_us", opts.max_park_us);
+        number("max_fault_us", opts.max_fault_us);
+        number("max_copy_seconds", opts.max_copy_seconds);
+        auto megabytes = [&] (const char* name) {
+            auto mb = get_query_param<size_t>(*req, name);
+            if (mb > std::numeric_limits<size_t>::max() >> 20) {
+                throw bad_param_exception(fmt::format("{} is too large", name));
+            }
+            return mb << 20;
+        };
+        opts.max_memory_bytes = megabytes("max_memory_mb");
+        opts.min_free_memory_bytes = megabytes("min_free_memory_mb");
+        opts.helper_cpus = req->get_query_param("helper_cpus");
+        opts.path = req->get_query_param("path");
+        if (opts.path.empty() && !opts.dry_run) {
+            auto dir = ctx.db.local().get_config().work_directory() + "/minidumps";
+            co_await recursive_touch_directory(dir);
+            opts.path = fmt::format("{}/scylla-{:%Y%m%dT%H%M%S}.core", dir, fmt::gmtime(std::time(nullptr)));
+        }
+        apilog.info("minidump: path={} include={} exclude={} dry_run={}", opts.path, opts.include, opts.exclude, opts.dry_run);
+        auto res = co_await smp::submit_to(0, [opts = std::move(opts)] () mutable {
+            return minidump::take(std::move(opts));
+        });
+        if (!res.ok) {
+            // The report says why; a non-200 status makes nodetool fail.
+            throw server_error_exception(std::string(res.report));
+        }
+        co_return json::json_return_type(json::json_return_type::body_writer_type([res = std::move(res.report)] (output_stream<char>&& os) mutable -> future<> {
+            // Moved into the coroutine frame before it suspends: the lambda
+            // may be gone by then.
+            auto out = std::move(os);
+            auto report = std::move(res);
+            co_await out.write(report);
+            co_await out.close();
+        }));
     });
 
     hs::get_shard_to_numa_node_mapping.set(r, [](const_req req) {

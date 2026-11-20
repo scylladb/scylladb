@@ -81,6 +81,7 @@ cache_tracker::cache_tracker(utils::updateable_value<double> index_cache_fractio
     if (with_metrics) {
         setup_metrics();
     }
+    _region.set_dump_owner("cache");
 
     _region.make_evictable([this] {
         return with_allocator(_region.allocator(), [this] () noexcept {

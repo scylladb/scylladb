@@ -1084,6 +1084,8 @@ public:
     void prime(size_t available_memory, size_t min_free_memory);
     void use_standard_allocator_segment_pool_backend(size_t available_memory);
     segment* new_segment(region::impl* r);
+    void export_for_dump(dump_segment_export& e) noexcept;
+    size_t dump_max_segments() const noexcept { return max_segments(); }
     const segment_descriptor& descriptor(const segment* seg) const noexcept {
         uintptr_t index = idx_from_segment(seg);
         return _segments[index];
@@ -2378,10 +2380,18 @@ public:
         pool.set_current_emergency_reserve_goal(new_goal);
     }
 
+public:
+    // Minidump label (see region::set_dump_owner()).
+    std::string_view _dump_owner;
+
     friend class region;
     friend class lsa_buffer;
     friend class region_evictable_occupancy_ascending_less_comparator;
 };
+
+void region::set_dump_owner(std::string_view owner) noexcept {
+    get_impl()._dump_owner = owner;
+}
 
 lsa_buffer::~lsa_buffer() {
     if (_link) {
@@ -2421,6 +2431,41 @@ memory::reclaiming_result tracker::reclaim(seastar::memory::reclaimer::request r
 region::region()
     : _impl(make_shared<impl>(shard_tracker(), this))
 { }
+
+void segment_pool::export_for_dump(dump_segment_export& e) noexcept {
+    e.segments_base = reinterpret_cast<uintptr_t>(segment_from_idx(0));
+    e.nr_segments = std::min(e.segment_owner.size(), _segments.size());
+    e.nr_owners = 0;
+    for (size_t idx = 0; idx < e.nr_segments; ++idx) {
+        uint16_t v = dump_segment_not_lsa;
+        if (_lsa_owned_segments_bitmap.test(idx)) {
+            v = dump_segment_lsa_free;
+            if (!_lsa_free_segments_bitmap.test(idx)) {
+                v = dump_segment_lsa_unknown_region;
+                if (auto* r = _segments[idx]._region) {
+                    // A few owners only: a linear search is enough.
+                    auto owners = std::span(e.owners).first(e.nr_owners);
+                    auto o = std::ranges::find(owners, r->_dump_owner) - owners.begin();
+                    if (size_t(o) == e.nr_owners && e.nr_owners < e.owners.size()) {
+                        e.owners[e.nr_owners++] = r->_dump_owner;
+                    }
+                    if (size_t(o) < e.nr_owners) {
+                        v = dump_segment_first_owner + o;
+                    }
+                }
+            }
+        }
+        e.segment_owner[idx] = v;
+    }
+}
+
+size_t dump_max_segments() noexcept {
+    return shard_tracker().get_impl().segment_pool().dump_max_segments();
+}
+
+void export_segments_for_dump(dump_segment_export& e) noexcept {
+    shard_tracker().get_impl().segment_pool().export_for_dump(e);
+}
 
 void
 region::listen(region_listener* listener) {
