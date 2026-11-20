@@ -75,6 +75,10 @@ static constexpr std::string_view cell_values[] = {
     "0x222fcbe31ffa1e689540e1499b87fa3f9c781065fccd10e4772b4c7039c2efd0fb27",
 };
 
+static std::string_view cell_value(unsigned i) {
+    return cell_values[i % std::size(cell_values)];
+}
+
 // How many partition reads the caches of all the shards served, and how many they had to go to the
 // storage engine for. Both the row cache of an sstable backed table and the logstor cache of a
 // logstor one count here, so this says which of the two paths a read test really measured.
@@ -147,6 +151,9 @@ struct test_config {
     bool bypass_cache;
     std::optional<unsigned> initial_tablets;
     unsigned collection = 0;
+    unsigned columns = 5;
+    // The fraction of the columns each row has a cell for.
+    double row_density = 1.0;
     db::consistency_level consistency_level;
     bool shard_aware;
     // Store the table with logstor rather than with sstables. Implies tablets, which is the only
@@ -181,10 +188,42 @@ std::ostream& operator<<(std::ostream& os, const test_config& cfg) {
            << ", query_single_key=" << (cfg.query_single_key ? "yes" : "no")
            << ", counters=" << (cfg.counters ? "yes" : "no")
            << ", collection=" << cfg.collection
+           << ", columns=" << cfg.columns
+           << ", row_density=" << cfg.row_density
            << ", shard_aware=" << (cfg.shard_aware ? "yes" : "no")
            << ", logstor=" << (cfg.logstor ? "yes" : "no")
            << ", auto_compaction=" << (cfg.auto_compaction ? "yes" : "no")
            << "}";
+}
+
+// The name of regular column i: "C" and i, zero-padded so that the order of the names (and so of
+// the column ids) is that of the numbers.
+static std::string column_name(const test_config& cfg, unsigned i) {
+    auto width = fmt::formatted_size("{}", std::max(cfg.columns, 1u) - 1);
+    return fmt::format("C{:0{}}", i, width);
+}
+
+// The regular columns which the rows have cells for: row_density of them, spread evenly.
+static std::vector<unsigned> written_columns(const test_config& cfg) {
+    auto nr = std::clamp<unsigned>(std::lround(cfg.columns * cfg.row_density), 1, cfg.columns);
+    std::vector<unsigned> result;
+    for (unsigned k = 0; k < nr; ++k) {
+        result.push_back(uint64_t(k) * cfg.columns / nr);
+    }
+    return result;
+}
+
+// The written columns, each followed by `suffix(i)`, separated by commas.
+static std::string column_list(const test_config& cfg, std::invocable<unsigned> auto&& suffix) {
+    std::string result;
+    for (auto i : written_columns(cfg)) {
+        result += fmt::format("{}\"{}\"{}", result.empty() ? "" : ", ", column_name(cfg, i), suffix(i));
+    }
+    return result;
+}
+
+static std::string column_list(const test_config& cfg) {
+    return column_list(cfg, [] (unsigned) { return ""; });
 }
 
 // The statements the test measures, with the key left to be bound. Logstor holds a whole row per
@@ -199,25 +238,25 @@ static sstring make_write_query(const test_config& cfg, std::string_view usings 
             collection_column = ", \"CC\"";
             collection_value = fmt::format(", {}", make_collection_literal(cfg.collection));
         }
-        return format("INSERT INTO cf (\"KEY\", \"C0\", \"C1\", \"C2\", \"C3\", \"C4\"{}) "
-                "VALUES (?, {}, {}, {}, {}, {}{}) {}",
-                collection_column, cell_values[0], cell_values[1], cell_values[2], cell_values[3], cell_values[4],
-                collection_value, usings);
+        std::string values;
+        for (auto i : written_columns(cfg)) {
+            values += fmt::format(", {}", cell_value(i));
+        }
+        return format("INSERT INTO cf (\"KEY\", {}{}) VALUES (?{}{}) {}",
+                column_list(cfg), collection_column, values, collection_value, usings);
     }
     std::string collection_assignment;
     if (cfg.collection > 0) {
         collection_assignment = fmt::format(", \"CC\" = {}", make_collection_literal(cfg.collection));
     }
-    return format("UPDATE cf {}SET \"C0\" = {}, \"C1\" = {}, \"C2\" = {}, \"C3\" = {}, \"C4\" = {}{} "
-            "WHERE \"KEY\" = ?",
-            usings, cell_values[0], cell_values[1], cell_values[2], cell_values[3], cell_values[4],
-            collection_assignment);
+    return format("UPDATE cf {}SET {}{} WHERE \"KEY\" = ?",
+            usings, column_list(cfg, [] (unsigned i) { return fmt::format(" = {}", cell_value(i)); }), collection_assignment);
 }
 
-static sstring make_counter_update_query(std::string_view usings = "") {
-    return format("UPDATE cf {}SET "
-            "\"C0\" = \"C0\" + 1, \"C1\" = \"C1\" + 2, \"C2\" = \"C2\" + 3, \"C3\" = \"C3\" + 4, \"C4\" = \"C4\" + 5 "
-            "WHERE \"KEY\" = ?", usings);
+static sstring make_counter_update_query(const test_config& cfg, std::string_view usings = "") {
+    return format("UPDATE cf {}SET {} WHERE \"KEY\" = ?", usings, column_list(cfg, [&] (unsigned i) {
+        return fmt::format(" = \"{}\" + {}", column_name(cfg, i), i % 5 + 1);
+    }));
 }
 
 static sstring make_delete_query(const test_config& cfg, std::string_view usings = "") {
@@ -228,7 +267,7 @@ static sstring make_delete_query(const test_config& cfg, std::string_view usings
     if (cfg.collection > 0) {
         collection_column = ", \"CC\"";
     }
-    return format("DELETE \"C0\", \"C1\", \"C2\", \"C3\", \"C4\"{} FROM cf {}WHERE \"KEY\" = ?", collection_column, usings);
+    return format("DELETE {}{} FROM cf {}WHERE \"KEY\" = ?", column_list(cfg), collection_column, usings);
 }
 
 // A USING clause, with the trailing space the statements above expect between it and what follows.
@@ -242,7 +281,7 @@ static constexpr unsigned populate_concurrency = 100;
 
 static void create_partitions(cql_test_env& env, test_config& cfg) {
     std::cout << "Creating " << cfg.partitions << " partitions..." << std::endl;
-    auto id = env.prepare(cfg.counters ? make_counter_update_query() : make_write_query(cfg)).get();
+    auto id = env.prepare(cfg.counters ? make_counter_update_query(cfg) : make_write_query(cfg)).get();
     // Strongly consistent writes need QUORUM/LOCAL_QUORUM. For eventual consistency it does not
     // matter because there is only one node involved.
     auto write = [&env, id] (unsigned sequence) {
@@ -325,7 +364,7 @@ static void warm_logstor_cache(cql_test_env& env, const test_config& cfg, cql3::
 
 static std::vector<query_perf_result> test_read(cql_test_env& env, test_config& cfg, sharded<std::vector<uint64_t>>& shard_seqs) {
     create_partitions(env, cfg);
-    sstring query = "select \"C0\", \"C1\", \"C2\", \"C3\", \"C4\"";
+    sstring query = "select " + column_list(cfg);
     if (cfg.collection > 0) {
         query += ", \"CC\"";
     }
@@ -379,7 +418,7 @@ static std::vector<query_perf_result> test_delete(cql_test_env& env, test_config
 }
 
 static std::vector<query_perf_result> test_counter_update(cql_test_env& env, test_config& cfg, sharded<std::vector<uint64_t>>& shard_seqs) {
-    auto id = env.prepare(make_counter_update_query(make_timeout_using(cfg))).get();
+    auto id = env.prepare(make_counter_update_query(cfg, make_timeout_using(cfg))).get();
     return time_parallel_ex<query_perf_result>([&env, &cfg, &shard_seqs, id] {
             auto key = next_key(cfg, shard_seqs.local());
             if (!key) {
@@ -391,30 +430,26 @@ static std::vector<query_perf_result> test_counter_update(cql_test_env& env, tes
         }, cfg.concurrency, cfg.duration_in_seconds, cfg.operations_per_shard, cfg.stop_on_error, query_stats_updater(env.db()));
 }
 
-static schema_ptr make_counter_schema(std::string_view ks_name) {
-    return schema_builder(this_smp_shard_count(), ks_name, "cf")
-            .with_column("KEY", bytes_type, column_kind::partition_key)
-            .with_column("C0", counter_type)
-            .with_column("C1", counter_type)
-            .with_column("C2", counter_type)
-            .with_column("C3", counter_type)
-            .with_column("C4", counter_type)
-            .build();
+static schema_ptr make_counter_schema(const test_config& cfg, std::string_view ks_name) {
+    auto sb = schema_builder(this_smp_shard_count(), ks_name, "cf")
+            .with_column("KEY", bytes_type, column_kind::partition_key);
+    for (unsigned i = 0; i < cfg.columns; ++i) {
+        sb.with_column(to_bytes(column_name(cfg, i)), counter_type);
+    }
+    return sb.build();
 }
 
 static std::vector<query_perf_result> do_cql_test(cql_test_env& env, test_config& cfg) {
     std::cout << "Running test with config: " << cfg << std::endl;
     env.create_table([&cfg] (auto ks_name) {
         if (cfg.counters) {
-            return *make_counter_schema(ks_name);
+            return *make_counter_schema(cfg, ks_name);
         }
         auto sb = schema_builder(this_smp_shard_count(), ks_name, "cf")
-                .with_column("KEY", bytes_type, column_kind::partition_key)
-                .with_column("C0", bytes_type)
-                .with_column("C1", bytes_type)
-                .with_column("C2", bytes_type)
-                .with_column("C3", bytes_type)
-                .with_column("C4", bytes_type);
+                .with_column("KEY", bytes_type, column_kind::partition_key);
+        for (unsigned i = 0; i < cfg.columns; ++i) {
+            sb.with_column(to_bytes(column_name(cfg, i)), bytes_type);
+        }
         if (cfg.collection > 0) {
             sb.with_column("CC", map_type_impl::get_instance(bytes_type, bytes_type, true));
         }
@@ -472,6 +507,12 @@ void write_json_result(std::string result_file, const test_config& cfg, const ag
     if (cfg.collection > 0) {
         params["collection"] = cfg.collection;
     }
+    if (cfg.columns != 5) {
+        params["columns"] = cfg.columns;
+    }
+    if (cfg.row_density != 1.0) {
+        params["row_density"] = cfg.row_density;
+    }
     params["logstor"] = cfg.logstor;
     params["auto_compaction"] = cfg.auto_compaction;
 
@@ -523,6 +564,8 @@ int scylla_simple_query_main(int argc, char** argv) {
         ("concurrency", bpo::value<unsigned>()->default_value(100), "workers per core")
         ("operations-per-shard", bpo::value<unsigned>(), "run this many operations per shard (overrides duration)")
         ("counters", "test counters")
+        ("columns", bpo::value<unsigned>()->default_value(5), "number of regular columns")
+        ("row-density", bpo::value<double>()->default_value(1.0), "fraction (0.0-1.0) of the regular columns each row has a cell for, spread evenly")
         ("collection", bpo::value<unsigned>()->default_value(0), "add map<text,text> collection column with N cells per row (excludes --counters)")
         ("tablets", "use tablets")
         ("logstor", "store the table with the logstor storage engine instead of sstables (implies --tablets)")
@@ -621,6 +664,14 @@ int scylla_simple_query_main(int argc, char** argv) {
             cfg.counters = app.configuration().contains("counters");
             cfg.flush_memtables = app.configuration().contains("flush");
             cfg.collection = app.configuration()["collection"].as<unsigned>();
+            cfg.columns = app.configuration()["columns"].as<unsigned>();
+            if (cfg.columns == 0) {
+                throw std::invalid_argument("--columns must be positive");
+            }
+            cfg.row_density = app.configuration()["row-density"].as<double>();
+            if (!(cfg.row_density > 0.0 && cfg.row_density <= 1.0)) {
+                throw std::invalid_argument("--row-density must be in (0.0, 1.0]");
+            }
             cfg.logstor = app.configuration().contains("logstor");
             if (cfg.counters && cfg.collection > 0) {
                 throw std::invalid_argument("--collection and --counters are mutually exclusive");
