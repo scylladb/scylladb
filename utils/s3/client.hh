@@ -229,6 +229,7 @@ class client : public enable_shared_from_this<client> {
     // Send brake for this client, shared by every scheduling group on the shard.
     std::unique_ptr<throttling_controller> _request_limiter;
     seastar::metrics::metric_groups _client_metrics;
+    bool _metrics_unregistered = false;
     void register_client_metrics();
     using global_factory = std::function<shared_ptr<client>(std::string)>;
     global_factory _gf;
@@ -349,6 +350,10 @@ public:
     // client keeps one http client per scheduling group and names the class
     // label after it, so the caller supplies only the type and the endpoint.
     void report_object_storage_metrics(utils::object_storage_metrics_labels labels);
+    // Releases every series this client registered, and registers none from now on.
+    // For a client whose endpoint was dropped but which sstables still reference,
+    // so that a client created for the same endpoint can take the series over.
+    void unregister_metrics();
 
     struct handle {
         std::string _host;

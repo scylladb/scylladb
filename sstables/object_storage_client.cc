@@ -134,13 +134,12 @@ public:
                         sm::description("Total number of bytes written to objects"), labels),
             });
         } catch (const seastar::metrics::double_registration& e) {
-            // An endpoint dropped from the configuration keeps its client for as
-            // long as sstables reference it, so a client created after the same
-            // endpoint is added back can find the labels taken. Losing the metrics
-            // is not a reason to fail the operation that created the client.
+            // Defensive: only another client for this endpoint on this shard can hold
+            // the labels; losing the metrics must not fail creating the client.
             osclog.warn("Not reporting object storage bytes for {}: {}", ep.key(), e.what());
         }
     }
+    void clear() { _metrics.clear(); }
 };
 
 static shared_ptr<s3::client> make_s3_client(const db::object_storage_endpoint_param& ep, std::function<shared_ptr<s3::client>(std::string)> factory, s3::group_connections connections) {
@@ -205,6 +204,10 @@ public:
     }
     void update_group_connections(const s3::group_connections& connections) override {
         _client->update_group_connections(connections);
+    }
+    void unregister_metrics() override {
+        _byte_metrics.clear();
+        _client->unregister_metrics();
     }
     future<> close() override {
         return _client->close();
@@ -470,6 +473,10 @@ public:
     }
     void update_group_connections(const s3::group_connections&) override {
         // GCS client does not support per-scheduling-group connection budgeting
+    }
+    void unregister_metrics() override {
+        _byte_metrics.clear();
+        _client->unregister_metrics();
     }
     future<> close() override {
         osclog.info("Closing GCS client...");
