@@ -67,6 +67,10 @@ class large_data_handler;
 class corrupt_data_handler;
 }
 
+namespace hll {
+class HyperLogLog;
+}
+
 namespace sstables {
 
 template <typename ChecksumType, bool calculate_chunk_checksums>
@@ -719,6 +723,9 @@ private:
     future<> read_simple_and_verify_digest(T& comp);
     future<> do_read_simple(component_type type,
                             noncopyable_function<future<> (version_types, file&&, uint64_t sz)> read_component);
+    // Like do_read_simple(), but doesn't account the size in _metadata_size_on_disk; returns it instead.
+    future<uint64_t> do_read_component(component_type type,
+                            noncopyable_function<future<> (version_types, file&&, uint64_t sz)> read_component) const;
     // this variant closes the file on parse completion
     future<> do_read_simple(component_type type,
                             noncopyable_function<future<> (version_types, file)> read_component);
@@ -1074,6 +1081,10 @@ public:
         const compaction_metadata& s = *static_cast<compaction_metadata *>(p.get());
         return s;
     }
+    // Reads Compaction metadata from disk: its cardinality sketch is not kept in memory.
+    future<compaction_metadata> read_compaction_metadata() const;
+    // Partition key cardinality sketch; nullopt if not in our encoding (e.g. written by Cassandra).
+    future<std::optional<hll::HyperLogLog>> read_cardinality_estimator() const;
     const serialization_header& get_serialization_header() const {
         return get_mutable_serialization_header(*_components);
     }

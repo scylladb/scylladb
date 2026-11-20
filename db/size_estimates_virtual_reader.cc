@@ -9,6 +9,8 @@
  */
 
 #include <algorithm>
+#include <cmath>
+#include <unordered_map>
 
 #include "utils/assert.hh"
 
@@ -19,6 +21,8 @@
 #include "partition_range_compat.hh"
 #include "utils/interval.hh"
 #include "mutation/mutation_fragment.hh"
+#include "sstables/hyperloglog.hh"
+#include "sstables/metadata_collector.hh"
 #include "sstables/sstables.hh"
 #include "replica/database.hh"
 
@@ -29,10 +33,13 @@
 #include "utils/chunked_vector.hh"
 
 #include <seastar/coroutine/maybe_yield.hh>
+#include <seastar/util/log.hh>
 
 namespace db {
 
 namespace size_estimates {
+
+static logging::logger selogger("size_estimates");
 
 struct virtual_row {
     const bytes& cf_name;
@@ -94,36 +101,88 @@ static dht::partition_range as_ring_position_range(const dht::token_range& r) {
 }
 
 /**
- * Add a new range_estimates for the specified range, considering the sstables associated
- * with the table identified by `cf_id` across all shards.
+ * Estimates for the specified ranges of the table identified by `cf_id`, considering its sstables across all shards.
  */
-static future<system_keyspace::range_estimates> estimate(replica::database& db, table_id cf_id, schema_ptr schema, const token_range& r) {
-    struct shard_estimate {
+static future<std::vector<system_keyspace::range_estimates>> estimate(replica::database& db, table_id cf_id, schema_ptr schema, std::vector<token_range> trs) {
+    struct range_estimate {
         int64_t count = 0;
         utils::estimated_histogram hist{0};
     };
+    using shard_estimate = std::vector<range_estimate>;
     auto from_bytes = [] (auto& b) {
         return dht::token::from_sstring(utf8_type->to_string(b));
     };
-    dht::token_range_vector ranges;
-    ::compat::unwrap_into(
-        wrapping_interval<dht::token>({{ from_bytes(r.start), false }}, {{ from_bytes(r.end) }}),
-        dht::token_comparator(),
-        [&] (auto&& rng) { ranges.push_back(std::move(rng)); });
+    std::vector<dht::token_range_vector> ranges;
+    for (const auto& tr : trs) {
+        auto& unwrapped = ranges.emplace_back();
+        ::compat::unwrap_into(
+            wrapping_interval<dht::token>({{ from_bytes(tr.start), false }}, {{ from_bytes(tr.end) }}),
+            dht::token_comparator(),
+            [&] (auto&& rng) { unwrapped.push_back(std::move(rng)); });
+    }
 
-    // Estimate partition count and size distribution from sstables on a single shard.
+    // Estimate partition count and size distribution of each range from sstables on a single shard.
     auto estimate_on_shard = [cf_id, ranges] (replica::database& local_db) -> future<shard_estimate> {
+        shard_estimate result(ranges.size());
         auto table_ptr = local_db.get_tables_metadata().get_table_if_exists(cf_id);
         if (!table_ptr) {
-            co_return shard_estimate{};
+            co_return result;
         }
         auto& cf = *table_ptr;
-        shard_estimate result;
-        for (auto&& r : ranges) {
-            auto rp_range = as_ring_position_range(r);
-            for (auto&& sstable : cf.select_sstables(rp_range)) {
-                result.count += co_await sstable->estimated_keys_for_range(r);
-                result.hist.merge(sstable->get_stats_metadata().estimated_partition_size);
+        // Sketches live on disk; read each sstable's once per query, not once per range.
+        std::unordered_map<sstables::shared_sstable, std::optional<hll::HyperLogLog>> sketches;
+        constexpr uint32_t sketch_registers = uint32_t(1) << sstables::metadata_collector::cardinality_precision;
+        for (size_t i = 0; i < ranges.size(); ++i) {
+            co_await coroutine::maybe_yield();
+            for (auto&& r : ranges[i]) {
+                auto sstables = cf.select_sstables(as_ring_position_range(r));
+                int64_t count = 0;
+                uint64_t total_keys = 0;
+                std::optional<hll::HyperLogLog> merged;
+                bool use_sketches = sstables.size() > 1;
+                for (auto&& sstable : sstables) {
+                    count += co_await sstable->estimated_keys_for_range(r);
+                    result[i].hist.merge(sstable->get_stats_metadata().estimated_partition_size);
+                    if (use_sketches) {
+                        auto it = sketches.find(sstable);
+                        if (it == sketches.end()) {
+                            std::optional<hll::HyperLogLog> sketch;
+                            // A compacted-away sstable's files may be gone already.
+                            if (!sstable->marked_for_deletion() && !sstable->unlinked_at()) {
+                                try {
+                                    sketch = co_await sstable->read_cardinality_estimator();
+                                } catch (const std::bad_alloc&) {
+                                    throw;
+                                } catch (const sstables::malformed_sstable_exception& e) {
+                                    selogger.warn("Cannot read cardinality sketch of {}: {}", sstable->get_filename(), e.what());
+                                } catch (...) {
+                                    selogger.debug("Cannot read cardinality sketch of {}: {}", sstable->get_filename(), std::current_exception());
+                                }
+                            }
+                            it = sketches.emplace(sstable, std::move(sketch)).first;
+                        }
+                        const auto& sketch = it->second;
+                        // Legacy b=4 sketches are too coarse, and merge() rejects mixed precisions.
+                        if (!sketch || sketch->registerSize() != sketch_registers) {
+                            use_sketches = false;
+                        } else if (merged) {
+                            merged->merge(*sketch);
+                        } else {
+                            merged = sketch;
+                        }
+                        total_keys += sstable->get_estimated_key_count();
+                    }
+                }
+                // The per-sstable sum counts keys present in several overlapping sstables more than once.
+                // Ratios within 2 standard errors (1.04/sqrt(m)) of 1 are sketch noise, not overlap.
+                if (use_sketches && total_keys > 0) {
+                    const double ratio = merged->estimate() / total_keys;
+                    if (count > 0 && ratio < 1.0 - 2 * 1.04 / std::sqrt(double(merged->registerSize()))) {
+                        // Never round a non-empty range down to zero; Spark plans splits from these counts.
+                        count = std::max<int64_t>(1, std::llround(count * ratio));
+                    }
+                }
+                result[i].count += count;
             }
         }
         co_return result;
@@ -131,14 +190,21 @@ static future<system_keyspace::range_estimates> estimate(replica::database& db, 
 
     // Combine partial results from two shards.
     auto reduce = [] (shard_estimate a, const shard_estimate& b) {
-        a.count += b.count;
-        a.hist.merge(b.hist);
+        for (size_t i = 0; i < a.size(); ++i) {
+            a[i].count += b[i].count;
+            a[i].hist.merge(b[i].hist);
+        }
         return a;
     };
 
-    auto aggregate = co_await db.container().map_reduce0(std::move(estimate_on_shard), shard_estimate{}, std::move(reduce));
-    int64_t mean_size = aggregate.count > 0 ? aggregate.hist.mean() : 0;
-    co_return system_keyspace::range_estimates{std::move(schema), r.start, r.end, aggregate.count, mean_size};
+    auto aggregate = co_await db.container().map_reduce0(std::move(estimate_on_shard), shard_estimate(ranges.size()), std::move(reduce));
+    std::vector<system_keyspace::range_estimates> estimates;
+    estimates.reserve(trs.size());
+    for (size_t i = 0; i < trs.size(); ++i) {
+        int64_t mean_size = aggregate[i].count > 0 ? aggregate[i].hist.mean() : 0;
+        estimates.push_back(system_keyspace::range_estimates{schema, std::move(trs[i].start), std::move(trs[i].end), aggregate[i].count, mean_size});
+    }
+    co_return estimates;
 }
 
 /**
@@ -300,7 +366,13 @@ size_estimates_mutation_reader::estimates_for_current_keyspace() const {
         utils::chunked_vector<token_range> tablet_ranges;
         const utils::chunked_vector<token_range>* table_ranges = nullptr;
         schema_ptr s;
+        // Estimated together, so each sstable's sketch is read once per table.
+        std::vector<token_range> wanted;
+        bool limit_reached = false;
         for (const auto& pr : pranges) {
+            if (limit_reached) {
+                break;
+            }
             // All rows of a table share its name as first component, so a miss on it skips the table.
             // Rows of the table lie strictly between before_key(cf_key) and after_all_prefixed(cf_key).
             if (!(less(pr.start(), position_in_partition_view::after_all_prefixed(cf_key))
@@ -352,13 +424,18 @@ size_estimates_mutation_reader::estimates_for_current_keyspace() const {
             auto first = std::ranges::partition_point(*table_ranges, [&] (const token_range& r) { return row_pos_less(r, pr.start()); });
             auto last = std::partition_point(first, table_ranges->end(), [&] (const token_range& r) { return row_pos_less(r, pr.end()); });
             for (ssize_t i = 0, n = last - first; i < n; ++i) {
-                const auto& r = reversed ? *(last - 1 - i) : *(first + i);
-                co_await coroutine::maybe_yield();
-                estimates.push_back(co_await estimate(_db, s->id(), s, r));
-                if (estimates.size() >= slice.partition_row_limit()) {
-                    co_return estimates;
+                wanted.push_back(reversed ? *(last - 1 - i) : *(first + i));
+                if (estimates.size() + wanted.size() >= slice.partition_row_limit()) {
+                    limit_reached = true;
+                    break;
                 }
             }
+        }
+        if (!wanted.empty()) {
+            std::ranges::move(co_await estimate(_db, s->id(), s, std::move(wanted)), std::back_inserter(estimates));
+        }
+        if (limit_reached) {
+            co_return estimates;
         }
     }
     co_return estimates;

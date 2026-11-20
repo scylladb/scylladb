@@ -119,11 +119,8 @@ struct column_stats {
 class metadata_collector {
 public:
     static constexpr double NO_COMPRESSION_RATIO = -1.0;
-
-    static hll::HyperLogLog hyperloglog(int p, int sp) {
-        // FIXME: hll::HyperLogLog doesn't support sparse format, so ignoring parameters by the time being.
-        return hll::HyperLogLog();
-    }
+    // p=10: 1KiB per sstable, ~3.25% standard error.
+    static constexpr int cardinality_precision = 10;
 private:
     const schema& _schema;
     component_name _name;
@@ -148,13 +145,7 @@ private:
     uint64_t _columns_count = 0;
     uint64_t _rows_count = 0;
 
-    /**
-     * Default cardinality estimation method is to use HyperLogLog++.
-     * Parameter here(p=13, sp=25) should give reasonable estimation
-     * while lowering bytes required to hold information.
-     * See CASSANDRA-5906 for detail.
-     */
-    hll::HyperLogLog _cardinality = hyperloglog(13, 25);
+    hll::HyperLogLog _cardinality{cardinality_precision};
 private:
     void convert(disk_array<uint32_t, disk_string<uint16_t>>&to, const std::optional<position_in_partition>& from);
 public:
