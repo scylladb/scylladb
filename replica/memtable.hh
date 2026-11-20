@@ -133,6 +133,9 @@ private:
     // mutation_source is necessary for the combined mutation source to be
     // monotonic. That combined source in this case is cache + memtable.
     mutation_source_opt _underlying;
+    // Set once the partitions start being moved out of the memtable, either by merging
+    // them into the cache or by clear_gently(). From then on a lookup may miss data that
+    // readers still hold snapshots of, see memtable_list::get_max_purgeable().
     bool _merging_into_cache = false;
     bool _merged_into_cache = false;
     // Tracks the difference between the amount of memory "spooled" during the flush
