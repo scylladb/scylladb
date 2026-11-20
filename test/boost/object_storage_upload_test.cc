@@ -13,10 +13,17 @@
 
 #include <seastar/core/future.hh>
 #include <seastar/testing/test_case.hh>
+#include <seastar/core/sharded.hh>
+#include <seastar/core/sleep.hh>
 #include <seastar/testing/test_fixture.hh>
+#include <seastar/testing/thread_test_case.hh>
+#include <seastar/util/defer.hh>
 
 #include "db/config.hh"
+#include "sstables/sstables_manager.hh"
 #include "sstables/object_storage_client.hh"
+#include "utils/error_injection.hh"
+#include "utils/s3/client.hh"
 #include "sstables/storage.hh"
 #include "sstables/sstable_version.hh"
 #include "utils/upload_progress.hh"
@@ -142,3 +149,64 @@ SEASTAR_FIXTURE_TEST_CASE(test_large_file_upload_gs, gcs_fixture, *check_run_tes
 SEASTAR_FIXTURE_TEST_CASE(test_sstable_object_attributes_gs, gcs_fixture, *check_run_test_decorator("ENABLE_GCP_STORAGE_TEST", true)) {
     return test_sstable_attributes(test_env_config{ .storage = make_test_object_storage_options("GS") });
 }
+
+#ifdef SCYLLA_ENABLE_ERROR_INJECTION
+static void wait_for_parked_refresh(utils::error_injection_type& injector, std::string_view injection) {
+    for (int tries = 0; injector.waiters(injection) == 0; ++tries) {
+        if (tries >= 3000) {
+            BOOST_FAIL("the credentials refresh did not reach the injection point within 30s");
+        }
+        seastar::sleep(std::chrono::milliseconds(10)).get();
+    }
+}
+
+// Dropping an endpoint from the config erases its client without close(), while the
+// client's background credentials refresh may still be in flight.
+SEASTAR_THREAD_TEST_CASE(test_dropped_s3_endpoint_with_inflight_credentials_refresh) {
+    // Static credentials keep the provider chain off IMDS/STS.
+    tests::tmp_set_env access_key("AWS_ACCESS_KEY_ID", "test");
+    tests::tmp_set_env secret_key("AWS_SECRET_ACCESS_KEY", "test");
+    constexpr auto injection = "s3_client_update_credentials_wait";
+    auto& injector = utils::get_local_injector();
+    injector.enable(injection, true);
+    auto disable = defer([&] () noexcept { injector.disable(injection); });
+
+    db::config cfg;
+    const db::object_storage_endpoint_param ep(db::object_storage_endpoint_param::s3_storage{
+            .endpoint = "http://dropped.s3.test:9000", .region = "us-east-1", .iam_role_arn = "", .legacy_format = false});
+    cfg.object_storage_endpoints({ep});
+
+    sharded<sstables::storage_manager> sstm;
+    sstm.start(std::ref(cfg), sstables::storage_manager::config{.skip_metrics_registration = true}).get();
+    auto stop_sstm = deferred_stop(sstm);
+
+    // Instantiate the client; its constructor arms the credentials refresh to fire immediately.
+    sstm.local().get_endpoint_client(ep.key());
+    wait_for_parked_refresh(injector, injection);
+
+    // The storage manager held the only reference: this destroys the client.
+    cfg.object_storage_endpoints({});
+    BOOST_REQUIRE(!sstm.local().is_known_endpoint(ep.key()));
+
+    injector.receive_message(injection);
+    seastar::sleep(std::chrono::seconds(1)).get();
+}
+
+// A client closed and dropped without ever sending a request, while the refresh its
+// constructor armed is still pending, as in aws_error_injection_test's short tests.
+SEASTAR_THREAD_TEST_CASE(test_closed_s3_client_with_pending_credentials_refresh) {
+    constexpr auto injection = "s3_client_update_credentials_wait";
+    auto& injector = utils::get_local_injector();
+    injector.enable(injection, true);
+    auto disable = defer([&] () noexcept { injector.disable(injection); });
+
+    auto cln = s3::client::make("http://closed.s3.test:9000", "us-east-1", "", {}, {});
+    wait_for_parked_refresh(injector, injection);
+    cln->close().get();
+    cln = nullptr;
+
+    // The refresh resumes after close() and after the owner dropped the client.
+    injector.receive_message(injection);
+    seastar::sleep(std::chrono::seconds(1)).get();
+}
+#endif

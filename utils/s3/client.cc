@@ -258,6 +258,8 @@ future<> client::invalidate_expired_credentials(shared_ptr<client>) {
 }
 
 future<> client::update_credentials_in_background(shared_ptr<client>) {
+    // Parks a fired refresh before it takes the semaphore, so tests can close or drop the client first.
+    co_await utils::get_local_injector().inject("s3_client_update_credentials_wait", utils::wait_for_message(std::chrono::seconds(60)));
     auto units = co_await get_units(_creds_sem, 1);
     if (_requests_gate.is_closed()) { // close() already cancelled the timers
         co_return;
