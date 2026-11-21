@@ -8,7 +8,6 @@
 
 #pragma once
 
-#include <algorithm>
 #include <map>
 #include <optional>
 #include <seastar/core/sstring.hh>
@@ -66,7 +65,6 @@ public:
     delta_mode get_delta_mode() const { return _delta_mode; }
     void set_delta_mode(delta_mode m) { _delta_mode = m; }
     int ttl() const { return _ttl; }
-    void clamp_ttl(int max) { _ttl = std::min(_ttl, max); }
 
     void enabled(bool b) { _enabled = b; }
     // For the cases when enabling cannot be immediately enforced, like with Alternator Streams

@@ -1213,10 +1213,10 @@ SEASTAR_TEST_CASE(metadata_id_unchanged) {
 
 // default_time_to_live and paxos_grace_seconds were not validated against
 // max_ttl before SCYLLADB-6065, so the schema tables can hold a larger value.
-// Loading such a schema clamps both. The schema tables are not rewritten on
-// load: a schema change persists the clamped default_time_to_live, as it
-// writes the table's row from the in-memory schema, while the paxos_grace_seconds
-// extension keeps its stored value.
+// Loading such a schema clamps both, including the paxos_grace_seconds
+// extension itself, which is what DESCRIBE prints. The schema tables are not
+// rewritten on load: a schema change persists the clamped values, as it writes
+// them from the in-memory schema.
 SEASTAR_TEST_CASE(test_schema_load_clamps_too_big_ttl_properties) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         const auto too_big = max_ttl + gc_clock::duration(1);
@@ -1232,23 +1232,23 @@ SEASTAR_TEST_CASE(test_schema_load_clamps_too_big_ttl_properties) {
             auto sm = db::schema_tables::make_schema_mutations(s, api::new_timestamp(), true);
             return db::schema_tables::create_table_from_mutations(ctxt, std::move(sm), ctxt.user_types(), nullptr);
         };
-        auto stored_paxos_grace_seconds = [] (const schema& s) {
-            return get_schema_extension<db::paxos_grace_seconds_extension>(s.extensions(), db::paxos_grace_seconds_extension::NAME)->get_paxos_grace_seconds();
+        auto paxos_grace_seconds_ext = [] (const schema& s) {
+            return get_schema_extension<db::paxos_grace_seconds_extension>(s.extensions(), db::paxos_grace_seconds_extension::NAME);
         };
+        BOOST_REQUIRE_EQUAL(paxos_grace_seconds_ext(*s)->get_paxos_grace_seconds(), gc_clock::as_int32(too_big));
 
         auto loaded = load(s);
         BOOST_REQUIRE_EQUAL(loaded->default_time_to_live().count(), max_ttl.count());
         BOOST_REQUIRE_EQUAL(loaded->paxos_grace_seconds().count(), max_ttl.count());
-        BOOST_REQUIRE_EQUAL(stored_paxos_grace_seconds(*loaded), gc_clock::as_int32(too_big));
+        // DESCRIBE prints the extension with options_to_string(), and CREATE
+        // TABLE rejects a value above max_ttl.
+        BOOST_REQUIRE_EQUAL(paxos_grace_seconds_ext(*loaded)->options_to_string(), std::to_string(max_ttl.count()));
 
-        // What a schema change writes for the table: the clamped
-        // default_time_to_live, and the paxos extension as stored.
+        // What a schema change writes for the table: the clamped values.
         auto sm = db::schema_tables::make_schema_mutations(loaded, api::new_timestamp(), true);
         auto tables_rs = query::result_set(sm.columnfamilies_mutation());
         BOOST_REQUIRE_EQUAL(tables_rs.row(0).get_nonnull<int32_t>("default_time_to_live"), gc_clock::as_int32(max_ttl));
-        auto reloaded = load(loaded);
-        BOOST_REQUIRE_EQUAL(reloaded->paxos_grace_seconds().count(), max_ttl.count());
-        BOOST_REQUIRE_EQUAL(stored_paxos_grace_seconds(*reloaded), gc_clock::as_int32(too_big));
+        BOOST_REQUIRE_EQUAL(db::paxos_grace_seconds_extension::deserialize(paxos_grace_seconds_ext(*loaded)->serialize()), gc_clock::as_int32(max_ttl));
     });
 }
 

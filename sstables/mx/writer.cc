@@ -747,8 +747,12 @@ private:
     // against. It comes from the unclamped input (the memtable's stats, or
     // the source sstables' on compaction), so clamp it too, otherwise a
     // clamped cell's delta is negative and goes out as a wrapped vint: still
-    // read back correctly, but 10 bytes instead of 1, with a header min_ttl
+    // read back correctly, but 9 bytes instead of 1, with a header min_ttl
     // above the limit the reader enforces on cells.
+    // The header's min_local_deletion_time is left as is. Clamping moves the
+    // expiry earlier, so the expiry of a clamped cell can be below this base
+    // and is then written as such a wrapped delta. This costs only space, and
+    // only for the clamped cells.
     static encoding_stats clamp_enc_stats_ttl(encoding_stats enc_stats) {
         enc_stats.min_ttl = std::min(enc_stats.min_ttl, max_ttl);
         return enc_stats;
