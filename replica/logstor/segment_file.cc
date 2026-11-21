@@ -162,6 +162,9 @@ future<file_id_t> file_manager::recovery::open_found_files() {
         logstor_logger.info("Recovery: removing leftover temp file {}", path);
         return seastar::remove_file(path);
     });
+    // A format can rename a file and then stop before it syncs the directory. Recovery allocates
+    // that file, so its name must be durable before a segment write to it.
+    co_await seastar::sync_directory(files._cfg.base_dir.string());
 
     file_id_t found_file_count = 0;
     for (auto file_id : found_file_ids) {
@@ -254,10 +257,18 @@ future<> file_manager::format_remaining_files() {
     }
 }
 
+// Starts the format of the next file in the background, and logs a failure when it occurs, because
+// the next allocation of the file can come much later.
 void file_manager::start_next_file_format() {
-    _next_file_format = with_gate(_async_gate, [this, file_id = _allocated_file_count] {
+    const auto file_id = _allocated_file_count;
+    _next_file_format = with_gate(_async_gate, [this, file_id] {
         return with_scheduling_group(_cfg.format_sg, [this, file_id] {
             return format_file(file_id);
+        }).handle_exception([this, file_id] (std::exception_ptr ep) {
+            static thread_local logger::rate_limit format_failure_rate_limit(std::chrono::seconds(10));
+            logstor_logger.log(log_level::warn, format_failure_rate_limit, "Cannot format file {}: {:t}", file_path(file_id).string(), ep);
+            _next_file_format_failed_at = lowres_clock::now();
+            return make_exception_future<>(std::move(ep));
         });
     });
 }
@@ -266,6 +277,10 @@ void file_manager::start_next_file_format() {
 // logstor_error_handler: failing to grow (e.g. ENOSPC) only stops further allocation and
 // must not isolate the node, while writes to already formatted files keep working.
 future<> file_manager::format_file(file_id_t file_id) {
+    utils::get_local_injector().inject("logstor_format_file_fail", [] {
+        throw std::runtime_error("file format failed by injection");
+    });
+
     auto path = file_path(file_id).string();
     bool file_exists = co_await seastar::file_exists(path);
     if (!file_exists) {
@@ -274,27 +289,47 @@ future<> file_manager::format_file(file_id_t file_id) {
         // The temporary file is deliberately not opened with O_DSYNC, unlike the file the segments
         // are then written through: a segment write is acknowledged when it completes and has to be
         // durable by then, while formatting only has to be durable before the rename publishes the
-        // file. Flushing once at the end rather than on every one of the writes below is worth more
-        // than an order of magnitude, and the durability of the published file is the same either
-        // way. The commitlog re-opens its segments without O_DSYNC to pre-write them for the same
-        // reason, see segment_manager::allocate_segment_ex().
+        // file. Flushing once at the end rather than on every write of format_temporary_file() is
+        // worth more than an order of magnitude, and the durability of the published file is the
+        // same either way. The commitlog re-opens its segments without O_DSYNC to pre-write them for
+        // the same reason, see segment_manager::allocate_segment_ex().
         auto tmp_path = path + ".tmp";
-        auto tmp_file = co_await seastar::open_file_dma(tmp_path,
-                seastar::open_flags::rw | seastar::open_flags::create | seastar::open_flags::truncate);
-        if (_cfg.sparse_files) {
-            // Reading a hole yields zeros, so the file is already formatted as
-            // far as the reader is concerned.
-            co_await tmp_file.truncate(_cfg.file_size);
-        } else {
-            co_await tmp_file.allocate(0, _cfg.file_size);
-            co_await write_zeros(tmp_file, 0, _cfg.file_size);
-        }
-        co_await tmp_file.flush();
-        co_await tmp_file.close();
+        auto format_f = co_await coroutine::as_future([this, &tmp_path, &path] () -> future<> {
+            co_await seastar::with_file(
+                    seastar::open_file_dma(tmp_path, seastar::open_flags::rw | seastar::open_flags::create | seastar::open_flags::truncate),
+                    [this] (seastar::file& tmp_file) { return format_temporary_file(tmp_file); });
 
-        // move the temp file to the final location
-        co_await seastar::rename_file(tmp_path, path);
+            // move the temp file to the final location
+            co_await seastar::rename_file(tmp_path, path);
+        }());
+        if (format_f.failed()) {
+            // A format that fails, for example with ENOSPC, can keep the space that it allocated in
+            // the temporary file. The format removes the file, so that the rest of the node can use
+            // that space until the next attempt.
+            // An error of the removal is ignored, because recovery removes a temporary file that
+            // remains.
+            auto remove_f = co_await coroutine::as_future(seastar::remove_file(tmp_path));
+            remove_f.ignore_ready_future();
+            co_await std::move(format_f);
+        }
     }
+
+    // The name of the file must be durable before the file is allocated, because a segment write to
+    // the file is acknowledged when it completes. Sync also when the file exists, because a format
+    // that is tried again can find a file that the failed format renamed but did not sync.
+    co_await seastar::sync_directory(_cfg.base_dir.string());
+}
+
+future<> file_manager::format_temporary_file(seastar::file& tmp_file) {
+    if (_cfg.sparse_files) {
+        // Reading a hole yields zeros, so the file is already formatted as
+        // far as the reader is concerned.
+        co_await tmp_file.truncate(_cfg.file_size);
+    } else {
+        co_await tmp_file.allocate(0, _cfg.file_size);
+        co_await write_zeros(tmp_file, 0, _cfg.file_size);
+    }
+    co_await tmp_file.flush();
 }
 
 // The most a single write of the zero fill may ask the disk for. Larger requests keep saturating
@@ -345,10 +380,34 @@ future<seastar::file> file_manager::get_file_for_new_segment(file_id_t file_id) 
     co_return get_open_file(file_id);
 }
 
+bool file_manager::check_file_ready_for_new_segment(file_id_t file_id) {
+    check_recovery_step(recovery_step::finished, "check_file_ready_for_new_segment");
+    if (file_id < _allocated_file_count) {
+        return true;
+    }
+    if (file_id != _allocated_file_count) [[unlikely]] {
+        on_internal_error(logstor_logger, fmt::format("Attempted to check file {}: {} files allocated", file_id, _allocated_file_count));
+    }
+    retry_failed_format();
+    return _next_file_format.available() && !_next_file_format.failed();
+}
+
+// A format failure is assumed to be temporary, and a failure that lasts is not handled. The format
+// starts again only when a segment needs the file, so no timer runs it. A retry is safe, because
+// format_file() does not change a file that it published, and it truncates the temporary file.
+void file_manager::retry_failed_format() {
+    if (_next_file_format.failed() && lowres_clock::now() - _next_file_format_failed_at >= _cfg.format_retry_interval) {
+        logstor_logger.debug("Trying again to format file {}", file_path(_allocated_file_count).string());
+        start_next_file_format();
+    }
+}
+
+// Before the retry interval passes, a failed format fails the allocation at once with its error.
 future<> file_manager::allocate_file(file_id_t file_id) {
     if (file_id != _allocated_file_count || file_id >= _cfg.file_count) [[unlikely]] {
         on_internal_error(logstor_logger, fmt::format("Attempted to allocate file {}: {} files allocated, {} configured", file_id, _allocated_file_count, _cfg.file_count));
     }
+    retry_failed_format();
     co_await _next_file_format.get_future();
     if (file_id != _allocated_file_count) [[unlikely]] {
         on_internal_error(logstor_logger, fmt::format("Attempted to allocate file {} twice", file_id));
