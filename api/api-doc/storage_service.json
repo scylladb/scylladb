@@ -3176,6 +3176,41 @@
             }
          ]
       },
+      {
+         "path":"/storage_service/tablets/resize",
+         "operations":[
+            {
+               "nickname":"get_tablet_resize_enabled",
+               "method":"GET",
+               "summary":"Returns whether tablet splits and merges are enabled",
+               "type":"boolean",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            },
+            {
+               "nickname":"tablet_resize_enable",
+               "method":"POST",
+               "summary":"Controls tablet splits and merges",
+               "type":"void",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"enabled",
+                     "description":"When set to false, the tablet count of every table stays fixed: pending tablet split and merge decisions are revoked and no new ones are made. Revoking is asynchronous. Tablet migrations are not affected. The power-of-two tablet layout convergence which follows a vnodes-to-tablets migration is paused until resize is enabled again.",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"boolean",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
 
       {
          "path":"/storage_service/tablets/snapshots",
