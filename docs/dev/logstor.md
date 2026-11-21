@@ -200,7 +200,7 @@ the exact layout, the field types and the encodings:
 ### Files
 
 Each shard keeps its segments in large files (default 32MB), named
-`ls_{shard_id}-{file_id}-Data.db`. A file holds a fixed number of segments, and logstor
+`logstor-{shard}-Data-{file_id}.db`. A file holds a fixed number of segments, and logstor
 pre-formats the file (fills it with zeros) before use.
 
 ### Segments

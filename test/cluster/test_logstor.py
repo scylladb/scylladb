@@ -24,7 +24,7 @@ segment_size = 128 * 1024
 
 async def count_logstor_data_files(manager: ScyllaClusterManager, server_id: int, shard: int) -> int:
     workdir = await manager.server_get_workdir(server_id)
-    return len(list((Path(workdir) / "logstor").glob(f"ls_{shard}-*-Data.db")))
+    return len(list((Path(workdir) / "logstor").glob(f"logstor-{shard}-Data-*.db")))
 
 async def test_config_option_consistency(manager: ScyllaClusterManager):
     """

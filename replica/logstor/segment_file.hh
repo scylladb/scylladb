@@ -12,6 +12,7 @@
 #include <memory>
 #include <optional>
 #include <ranges>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -22,7 +23,6 @@
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/core/scheduling.hh>
 #include <seastar/core/semaphore.hh>
-#include <seastar/core/shard_id.hh>
 #include <seastar/core/shared_future.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/util/log.hh>
@@ -95,9 +95,70 @@ private:
     const uint64_t _file_count;
 };
 
+// Makes and parses the name of a logstor file in the base directory. A name has this form:
+//
+//   logstor-{shard}-{component}[-{file_id}].db
+//
+// The fields of the name have these values:
+// - {shard} is the shard that owns the file. All the shards share the base directory, and each
+//   shard uses only the files of its own shard.
+// - {component} is the kind of the file, for example Data for a data file.
+// - {file_id} is the number of the file in a component that has more than one file, for example 3
+//   in logstor-0-Data-3.db.
+//
+// The numbers in a name have no leading zeros. The name of a temporary file is the final name with
+// .tmp after it. A writer makes a new file under the temporary name, and renames the file to the
+// final name when the file is complete.
+class file_name {
+public:
+    enum class component : uint8_t {
+        // A data file holds segments and has a file id.
+        data,
+    };
+
+    static file_name data(unsigned shard, file_id_t file_id) noexcept {
+        return file_name(shard, component::data, file_id, false);
+    }
+
+    // Returns the parsed `name`, or nullopt when `name` is not a logstor file name.
+    // A number with a leading zero does not parse, so a name parses only in the form that str()
+    // makes.
+    static std::optional<file_name> parse(std::string_view name);
+
+    // Returns the name of the temporary file of this file.
+    file_name tmp() const noexcept {
+        return file_name(_shard, _component, _file_id, true);
+    }
+
+    std::string str() const;
+
+    std::filesystem::path in(const std::filesystem::path& dir) const {
+        return dir / str();
+    }
+
+    unsigned shard() const noexcept { return _shard; }
+    component kind() const noexcept { return _component; }
+    std::optional<file_id_t> file_id() const noexcept { return _file_id; }
+    bool is_tmp() const noexcept { return _tmp; }
+
+    bool operator==(const file_name&) const = default;
+
+private:
+    unsigned _shard;
+    component _component;
+    std::optional<file_id_t> _file_id;
+    bool _tmp;
+
+    file_name(unsigned shard, component c, std::optional<file_id_t> file_id, bool tmp) noexcept
+        : _shard(shard), _component(c), _file_id(file_id), _tmp(tmp) {}
+};
+
 // The configuration of the segment files of one shard.
 struct file_manager_config {
     std::filesystem::path base_dir;
+    // The file manager puts this shard in the names of its files, and it makes, finds and removes
+    // only the files of this shard, so that the files of all the shards can share the base directory.
+    unsigned shard;
     uint64_t file_size;
     // The file count of the configuration. A new file is allocated only below it. Recovery can
     // find more files, from an earlier, larger configuration.
@@ -108,9 +169,9 @@ struct file_manager_config {
     bool sparse_files;
 };
 
-// The segment files of one shard. A file holds a fixed count of segments, and is named
-// ls_{shard_id}-{file_id}-Data.db in the base directory. The segment manager owns one file manager
-// for the life of the shard.
+// The segment files of one shard. A file holds a fixed count of segments, and file_name::data()
+// makes its name in the base directory. The segment manager owns one file manager for the life of
+// the shard.
 //
 // A file goes through these states, in this order:
 // - formatted: the file exists on disk with its full size, zero filled or sparse. The format of
@@ -146,8 +207,7 @@ public:
     future<> stop();
 
     std::filesystem::path file_path(file_id_t file_id) const {
-        auto fname = fmt::format("{}{}-Data.db", file_name_prefix(), file_id);
-        return _cfg.base_dir / fname;
+        return file_name::data(_cfg.shard, file_id).in(_cfg.base_dir);
     }
 
     // The recovery of the files of the shard. start_recovery() makes one, and its three steps run
@@ -225,14 +285,6 @@ private:
     std::vector<seastar::file> _open_files;
 
     const std::unique_ptr<char[], seastar::free_deleter> _zero_buf;
-
-    // The file names are ls_{shard_id}-{file_id}-Data.db
-    static sstring file_name_prefix() {
-        return fmt::format("ls_{}-", this_shard_id());
-    }
-
-    // The file id in a file name of this shard, or none if the name is not one.
-    static std::optional<file_id_t> file_id_of(std::string_view file_name);
 
     // Fails with an internal error when the recovery is not at the expected step.
     void check_recovery_step(recovery_step expected, std::string_view call) const;

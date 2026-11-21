@@ -35,6 +35,7 @@
 #include <seastar/core/scheduling.hh>
 #include <seastar/core/when_all.hh>
 #include <seastar/core/on_internal_error.hh>
+#include <seastar/core/shard_id.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/exception.hh>
@@ -753,6 +754,7 @@ future<owned_write_buffer> compaction_manager_impl::allocate_separator_buffer() 
 static file_manager_config make_file_manager_config(const segment_manager_config& config, const segment_geometry& geometry) {
     return file_manager_config{
         .base_dir = config.base_dir,
+        .shard = this_shard_id(),
         .file_size = config.file_size,
         .file_count = geometry.file_count(),
         // The format of a file is background work of the store, not of a write.
