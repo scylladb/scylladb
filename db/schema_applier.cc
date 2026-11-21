@@ -35,6 +35,7 @@
 #include "view_info.hh"
 #include "replica/database.hh"
 #include "replica/tablets.hh"
+#include "sstables/sstables_manager.hh"
 #include "db/config.hh"
 #include "lang/manager.hh"
 #include "db/system_keyspace.hh"
@@ -1003,6 +1004,47 @@ future<> schema_applier::update() {
     co_await update_tablets();
     co_await merge_functions();
     co_await merge_aggregates();
+    co_await create_table_storage();
+}
+
+const data_dictionary::storage_options& schema_applier::keyspace_storage_options(std::string_view ks_name) const {
+    for (const auto& ks_per_shard : _affected_keyspaces.created) {
+        const auto& ks = *ks_per_shard[this_shard_id()];
+        if (ks.metadata()->name() == ks_name) {
+            return ks.metadata()->get_storage_options();
+        }
+    }
+    for (const auto& change_per_shard : _affected_keyspaces.altered) {
+        const auto& change = *change_per_shard[this_shard_id()];
+        if (change.keyspace_name() == ks_name) {
+            return change.metadata->get_storage_options();
+        }
+    }
+    return _proxy.local().get_db().local().find_keyspace(ks_name).metadata()->get_storage_options();
+}
+
+future<> schema_applier::create_table_storage() {
+    auto& db = _proxy.local().get_db().local();
+    const auto& diff = _affected_tables_and_views.tables_and_views.local();
+    if (diff.cdc.created.empty() && diff.tables.created.empty() && diff.views.created.empty()) {
+        co_return;
+    }
+    // A removal of the storage of a dropped table with the same ID as a
+    // created table may be in progress. The lock is held until commit() has
+    // constructed the table objects on every shard, see
+    // replica::database::remove_unused_table_storage().
+    utils::get_local_injector().enter("schema_applier_lock_table_dirs");
+    _table_dir_lock = co_await db.lock_table_dirs();
+    auto create = [&] (const std::vector<schema_ptr>& created) {
+        return max_concurrent_for_each(created, max_concurrent, [&] (const schema_ptr& s) -> future<> {
+            auto& mgr = db.get_sstables_manager(*s);
+            auto so = mgr.make_table_storage_options(*s, keyspace_storage_options(s->ks_name()));
+            co_await mgr.init_table_storage(*so);
+        });
+    };
+    co_await create(diff.cdc.created);
+    co_await create(diff.tables.created);
+    co_await create(diff.views.created);
 }
 
 void schema_applier::commit_tables_and_views() {
@@ -1124,6 +1166,7 @@ future<> schema_applier::commit() {
     });
     // unlock as some functions in post_commit() may read data under those locks
     _metadata_locks = nullptr;
+    _table_dir_lock.reset();
 }
 
 future<> schema_applier::finalize_tables_and_views() {
@@ -1156,18 +1199,15 @@ future<> schema_applier::finalize_tables_and_views() {
         _ss.local().wake_up_topology_state_machine();
     }
 
+    // update() created the directories of the created tables.
     co_await sharded_db.invoke_on_all([&diff] (replica::database& db) -> future<> {
-        const auto& tables = diff.tables_and_views.local().tables;
-        const auto& cdc = diff.tables_and_views.local().cdc;
-        const auto& views = diff.tables_and_views.local().views;
-        auto make_directories = [&db] (const auto& created) {
-            return max_concurrent_for_each(created, max_concurrent, [&db] (const schema_ptr& s) {
-                return db.make_column_family_directory(s);
-            });
-        };
-        co_await make_directories(cdc.created);
-        co_await make_directories(tables.created);
-        co_await make_directories(views.created);
+        const auto& local = diff.tables_and_views.local();
+        for (const auto* created : {&local.cdc.created, &local.tables.created, &local.views.created}) {
+            for (const auto& s : *created) {
+                db.find_column_family(s).get_index_manager().reload();
+                co_await coroutine::maybe_yield();
+            }
+        }
     });
 
     // Insert column_mapping into history table for altered and created tables.
@@ -1246,6 +1286,7 @@ future<> schema_applier::post_commit() {
 }
 
 future<> schema_applier::destroy() {
+    _table_dir_lock.reset();
     co_await _affected_user_types.stop();
     co_await _affected_tables_and_views.tables_and_views.stop();
     co_await _pending_token_metadata.destroy();
