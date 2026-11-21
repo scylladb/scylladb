@@ -14,6 +14,7 @@
 #include <seastar/util/closeable.hh>
 
 #include "mutation/frozen_mutation.hh"
+#include "mutation/frozen_mutation_consumer.hh"
 #include "mutation/async_utils.hh"
 #include "mutation/collection_mutation.hh"
 #include "schema/schema_builder.hh"
