@@ -613,7 +613,7 @@ public:
     }
 
     sstring get_segment_file_path(log_segment_id segment_id) const {
-        return sstring(_file_mgr.file_path(_geometry.location_of(segment_id).file_id).native());
+        return sstring(_file_mgr.file_path(_geometry.position_of(segment_id).file_id).native());
     }
 
     future<> discard_segments(logstor_group&);
@@ -1253,7 +1253,7 @@ future<log_record> segment_manager_impl::read(record_location location) {
             location.segment, location.offset, location.size, _cfg.segment_size))));
     }
 
-    auto [file_id, file_offset] = _geometry.location_of(location.segment);
+    auto [file_id, offset] = _geometry.position_of(location);
     // The file it reads from outlives the read: it is held here, on the frame of this coroutine,
     // because the read is issued on it and seastar keeps reading from it after the first suspension.
     auto file = _file_mgr.get_open_file(file_id);
@@ -1261,7 +1261,7 @@ future<log_record> segment_manager_impl::read(record_location location) {
     // The bulk read is what dma_read_exactly() does underneath, over two coroutine frames of its
     // own: one to trim the buffer the disk gave back to the size that was asked for, and one to
     // reject a short read. This coroutine is already here to do both.
-    auto buf = co_await file.dma_read_bulk<char>(file_offset + location.offset, location.size);
+    auto buf = co_await file.dma_read_bulk<char>(offset, location.size);
     if (buf.size() < location.size) [[unlikely]] {
         co_return coroutine::exception(std::make_exception_ptr(std::runtime_error(fmt::format(
             "Short read of segment {}: got {} bytes of the {} asked for at offset {}",
@@ -1341,7 +1341,7 @@ future<> segment_manager_impl::replenish_reserve() {
 }
 
 bool segment_manager_impl::is_segment_ready(log_segment_id seg_id) {
-    return _file_mgr.check_file_ready_for_new_segment(_geometry.location_of(seg_id).file_id);
+    return _file_mgr.check_file_ready_for_new_segment(_geometry.position_of(seg_id).file_id);
 }
 
 future<seg_ptr> segment_manager_impl::allocate_segment() {
@@ -1350,9 +1350,9 @@ future<seg_ptr> segment_manager_impl::allocate_segment() {
             throw std::runtime_error("segment allocation failed by injection");
         });
 
-        auto seg_loc = _geometry.location_of(seg_id);
-        auto file = co_await _file_mgr.get_file_for_new_segment(seg_loc.file_id);
-        auto seg = make_lw_shared<segment>(seg_id, std::move(file), seg_loc.file_offset, _cfg.segment_size);
+        auto position = _geometry.position_of(seg_id);
+        auto file = co_await _file_mgr.get_file_for_new_segment(position.file_id);
+        auto seg = make_lw_shared<segment>(seg_id, std::move(file), position.offset, _cfg.segment_size);
         get_segment_descriptor(seg_id).reset(_cfg.segment_size);
         _stats.segments_allocated++;
         co_return std::move(seg);
@@ -1486,7 +1486,7 @@ future<> segment_manager_impl::discard_segments(logstor_group& cg) {
     // Invalidate the first header block so recovery treats the slot as empty.
     co_await max_concurrent_for_each(segments, 32, [this] (log_segment_id seg_id) -> future<> {
         logstor_logger.trace("Discard segment {}", seg_id);
-        auto [file_id, file_offset] = _geometry.location_of(seg_id);
+        auto [file_id, file_offset] = _geometry.position_of(seg_id);
         // The segments being discarded were written, so their file is allocated.
         co_await _file_mgr.zero_region(file_id, file_offset, block_alignment);
         free_segment(seg_id);
@@ -2159,7 +2159,7 @@ future<> segment_manager_impl::recovery::place_found_segments() {
             continue;
         }
         _summary.used_segments++;
-        _used_file_count = _sm._geometry.location_of(seg_id).file_id + 1;
+        _used_file_count = _sm._geometry.position_of(seg_id).file_id + 1;
         // The scan indexes only the records of a valid chunk, so a used segment has a valid first
         // chunk.
         const auto& info = _segment_infos[seg_idx];
@@ -2552,7 +2552,7 @@ public:
 };
 
 future<seastar::input_stream<char>> segment_manager_impl::create_segment_input_stream(log_segment_id segment_id, const seastar::file_input_stream_options& opts) {
-    auto [file_id, file_offset] = _geometry.location_of(segment_id);
+    auto [file_id, file_offset] = _geometry.position_of(segment_id);
     auto stream = make_file_input_stream(_file_mgr.get_open_file(file_id), file_offset, _cfg.segment_size, opts);
     co_return std::move(stream);
 }

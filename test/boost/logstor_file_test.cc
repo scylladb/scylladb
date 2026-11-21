@@ -83,8 +83,10 @@ void make_file(const std::filesystem::path& path) {
 } // anonymous namespace
 
 // Checks that the segment ids continue from one file to the next, also in the files above the
-// configured count, and that segments_in_file() gives the segments that location_of() puts in the
+// configured count, and that segments_in_file() gives the segments that position_of() puts in the
 // file.
+// Also checks that the position of a record frame is the position of its segment plus the offset of
+// the frame in the segment.
 BOOST_AUTO_TEST_CASE(test_segment_geometry_maps_a_segment_to_its_file) {
     constexpr uint64_t segment_size = 128 * 1024;
     const segment_geometry geometry(segment_size, 4 * segment_size, 17 * segment_size);
@@ -92,30 +94,34 @@ BOOST_AUTO_TEST_CASE(test_segment_geometry_maps_a_segment_to_its_file) {
     BOOST_REQUIRE_EQUAL(geometry.file_count(), 4);
     BOOST_REQUIRE_EQUAL(geometry.segment_count(), 16);
 
-    auto location = geometry.location_of(log_segment_id(0));
-    BOOST_REQUIRE_EQUAL(location.file_id, 0);
-    BOOST_REQUIRE_EQUAL(location.file_offset, 0);
-    location = geometry.location_of(log_segment_id(3));
-    BOOST_REQUIRE_EQUAL(location.file_id, 0);
-    BOOST_REQUIRE_EQUAL(location.file_offset, 3 * segment_size);
-    location = geometry.location_of(log_segment_id(4));
-    BOOST_REQUIRE_EQUAL(location.file_id, 1);
-    BOOST_REQUIRE_EQUAL(location.file_offset, 0);
-    location = geometry.location_of(log_segment_id(21));
-    BOOST_REQUIRE_EQUAL(location.file_id, 5);
-    BOOST_REQUIRE_EQUAL(location.file_offset, segment_size);
+    auto position = geometry.position_of(log_segment_id(0));
+    BOOST_REQUIRE_EQUAL(position.file_id, 0);
+    BOOST_REQUIRE_EQUAL(position.offset, 0);
+    position = geometry.position_of(log_segment_id(3));
+    BOOST_REQUIRE_EQUAL(position.file_id, 0);
+    BOOST_REQUIRE_EQUAL(position.offset, 3 * segment_size);
+    position = geometry.position_of(log_segment_id(4));
+    BOOST_REQUIRE_EQUAL(position.file_id, 1);
+    BOOST_REQUIRE_EQUAL(position.offset, 0);
+    position = geometry.position_of(log_segment_id(21));
+    BOOST_REQUIRE_EQUAL(position.file_id, 5);
+    BOOST_REQUIRE_EQUAL(position.offset, segment_size);
 
     for (file_id_t file_id = 0; file_id < 6; ++file_id) {
         uint64_t expected_offset = 0;
         for (auto segment_id : geometry.segments_in_file(file_id)) {
             BOOST_REQUIRE_EQUAL(segment_id.value, file_id * 4 + expected_offset / segment_size);
-            location = geometry.location_of(segment_id);
-            BOOST_REQUIRE_EQUAL(location.file_id, file_id);
-            BOOST_REQUIRE_EQUAL(location.file_offset, expected_offset);
+            position = geometry.position_of(segment_id);
+            BOOST_REQUIRE_EQUAL(position.file_id, file_id);
+            BOOST_REQUIRE_EQUAL(position.offset, expected_offset);
             expected_offset += segment_size;
         }
         BOOST_REQUIRE_EQUAL(expected_offset, 4 * segment_size);
     }
+
+    position = geometry.position_of(record_location{.segment = log_segment_id(21), .offset = 4104, .size = 100});
+    BOOST_REQUIRE_EQUAL(position.file_id, 5);
+    BOOST_REQUIRE_EQUAL(position.offset, segment_size + 4104);
 }
 
 // Checks that a file holds only the segments that fit in it completely, and that the disk holds
@@ -127,9 +133,9 @@ BOOST_AUTO_TEST_CASE(test_segment_geometry_counts_only_complete_segments_and_fil
     BOOST_REQUIRE_EQUAL(geometry.file_count(), 3);
     BOOST_REQUIRE_EQUAL(geometry.segment_count(), 6);
 
-    const auto location = geometry.location_of(log_segment_id(2));
-    BOOST_REQUIRE_EQUAL(location.file_id, 1);
-    BOOST_REQUIRE_EQUAL(location.file_offset, 0);
+    const auto position = geometry.position_of(log_segment_id(2));
+    BOOST_REQUIRE_EQUAL(position.file_id, 1);
+    BOOST_REQUIRE_EQUAL(position.offset, 0);
 }
 
 // Checks that segment_geometry refuses these configurations:
