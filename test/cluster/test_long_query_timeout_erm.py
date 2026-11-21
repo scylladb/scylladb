@@ -282,12 +282,22 @@ async def test_read_with_stuck_extra_target_releases_erm(manager: ScyllaClusterM
     logger.info("Make one replica pause the read")
     handler = await inject_error_one_shot(manager.api, servers[1].ip_addr, 'storage_proxy::handle_read',
                                           parameters={'cf_name': 't'})
+    # The coordinator cancels the requests which haven't replied as soon as
+    # the read reaches its consistency level, and a request which wasn't sent
+    # yet is then never sent. So also pause the read on servers[2] until
+    # servers[1] has received its request: the read can't reach its
+    # consistency level before that.
+    other_handler = await inject_error_one_shot(manager.api, servers[2].ip_addr, 'storage_proxy::handle_read',
+                                                parameters={'cf_name': 't'})
     try:
         query_timeout = 600
-        rows = await cql.run_async(SimpleStatement(f"SELECT * FROM ks.t WHERE pk = 0 USING TIMEOUT {query_timeout}s",
-                                                   consistency_level=ConsistencyLevel.QUORUM), timeout=2*query_timeout)
-        assert [(r.pk, r.v) for r in rows] == [(0, 0)]
+        read = cql.run_async(SimpleStatement(f"SELECT * FROM ks.t WHERE pk = 0 USING TIMEOUT {query_timeout}s",
+                                             consistency_level=ConsistencyLevel.QUORUM), timeout=2*query_timeout)
         await manager.api.wait_for_injection_enter(servers[1].ip_addr, 'storage_proxy::handle_read')
+        logger.info("Let the other replica reply")
+        await other_handler.message()
+        rows = await read
+        assert [(r.pk, r.v) for r in rows] == [(0, 0)]
 
         logger.info("Add a new node while the replica is paused - ERM should not be blocked")
         await asyncio.wait_for(manager.server_add(config={"rf_rack_valid_keyspaces": False}), timeout=40)
@@ -295,3 +305,4 @@ async def test_read_with_stuck_extra_target_releases_erm(manager: ScyllaClusterM
         assert await get_read_failures(manager, servers[0]) == (read_errors, cancelled_reads + 1, dropped_reads)
     finally:
         await handler.message()
+        await other_handler.message()
