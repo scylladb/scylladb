@@ -114,23 +114,10 @@ client::client(std::string host, endpoint_config_ptr cfg, global_factory gf, pri
         , _cfg(std::move(cfg))
         , _creds_sem(1)
         , _creds_invalidation_timer([this] {
-            std::ignore = [this]() -> future<> {
-                auto units = co_await get_units(_creds_sem, 1);
-                s3l.info("Credentials update attempt in background failed. Outdated credentials will be discarded, triggering synchronous re-obtainment"
-                         " attempts for future requests.");
-                _credentials = {};
-            }();
+            std::ignore = invalidate_expired_credentials(shared_from_this());
         })
         , _creds_update_timer([this] {
-            std::ignore = [this]() -> future<> {
-                auto units = co_await get_units(_creds_sem, 1);
-                s3l.info("Update creds in the background");
-                try {
-                    co_await update_credentials_and_rearm();
-                } catch (...) {
-                    _credentials = {};
-                }
-            }();
+            std::ignore = update_credentials_in_background(shared_from_this());
         })
         , _request_limiter(std::move(tc))
         , _gf(std::move(gf))
@@ -160,7 +147,7 @@ void client::update_config_sync(std::string region, std::string ira) {
     };
     _cfg = make_lw_shared<endpoint_config>(std::move(new_cfg));
 
-    (void)get_units(_creds_sem, 1).then_wrapped([this, h = std::move(holder)](future<semaphore_units<>> f) {
+    (void)get_units(_creds_sem, 1).then_wrapped([this, self = shared_from_this(), h = std::move(holder)](future<semaphore_units<>> f) {
         try {
             s3l.info("Invalidating credentials");
             
@@ -257,6 +244,31 @@ future<> client::update_credentials_and_rearm() {
     if (_credentials) {
         _creds_invalidation_timer.rearm(_credentials.expires_at);
         _creds_update_timer.rearm(_credentials.expires_at - 1h);
+    }
+}
+
+future<> client::invalidate_expired_credentials(shared_ptr<client>) {
+    auto units = co_await get_units(_creds_sem, 1);
+    if (_requests_gate.is_closed()) { // close() already cancelled the timers
+        co_return;
+    }
+    s3l.info("Credentials update attempt in background failed. Outdated credentials will be discarded, triggering synchronous re-obtainment"
+             " attempts for future requests.");
+    _credentials = {};
+}
+
+future<> client::update_credentials_in_background(shared_ptr<client>) {
+    auto units = co_await get_units(_creds_sem, 1);
+    if (_requests_gate.is_closed()) { // close() already cancelled the timers
+        co_return;
+    }
+    s3l.info("Update creds in the background");
+    try {
+        // Stands in for a slow provider fetch (IMDS/STS round trip).
+        co_await utils::get_local_injector().inject("s3_client_update_credentials_wait", utils::wait_for_message(std::chrono::seconds(60)));
+        co_await update_credentials_and_rearm();
+    } catch (...) {
+        _credentials = {};
     }
 }
 
