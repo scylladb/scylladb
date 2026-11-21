@@ -212,6 +212,32 @@ SEASTAR_TEST_CASE(frozen_mutation_is_consumed_in_order) {
     co_await validate_consume_gently(s, fm, m);
 }
 
+// Splitting a frozen mutation into pieces of a few rows must lose nothing:
+// the pieces add up to the original.
+SEASTAR_THREAD_TEST_CASE(test_unfreeze_and_split_gently) {
+    random_mutation_generator gen{random_mutation_generator::generate_counters::no};
+    for (int i = 0; i < 10; ++i) {
+        mutation m = gen();
+        frozen_mutation fm{m};
+        for (size_t max_rows : {1, 2, 5, 1000}) {
+            std::optional<mutation> sum;
+            size_t pieces = 0;
+            unfreeze_and_split_gently(fm, m.schema(), max_rows, [&] (mutation piece) -> future<> {
+                ++pieces;
+                if (sum) {
+                    *sum += std::move(piece);
+                } else {
+                    sum = std::move(piece);
+                }
+                return make_ready_future<>();
+            }).get();
+            BOOST_REQUIRE(sum);
+            testlog.debug("max_rows={} pieces={}", max_rows, pieces);
+            assert_that(std::move(*sum)).is_equal_to(m);
+        }
+    }
+}
+
 SEASTAR_THREAD_TEST_CASE(test_freeze_unfreeze_with_large_collection_cells) {
     const auto collection_type = map_type_impl::get_instance(int32_type, bytes_type, true);
     schema_ptr s = new_table()

@@ -136,6 +136,36 @@ class partition_split_builder final : public async_mutation_partition_visitor {
     std::optional<mutation> _m;
     mutation_partition* _partition;
     deletable_row* _current_row;
+    // Build the cells of the static row and the current row a block at a time.
+    std::optional<row::cell_appender> _static_cells;
+    std::optional<row::cell_appender> _row_cells;
+
+    void finish_row() {
+        if (_row_cells) {
+            _row_cells->finish();
+            _row_cells.reset();
+        }
+    }
+    // Adds the cells fed so far to the mutation.
+    void finish_cells() {
+        if (_static_cells) {
+            _static_cells->finish();
+            _static_cells.reset();
+        }
+        finish_row();
+    }
+    row::cell_appender& static_cells() {
+        if (!_static_cells) {
+            _static_cells.emplace(_partition->static_row().maybe_create(), *_schema, column_kind::static_column);
+        }
+        return *_static_cells;
+    }
+    row::cell_appender& row_cells() {
+        if (!_row_cells) {
+            _row_cells.emplace(_current_row->cells(), *_schema, column_kind::regular_column);
+        }
+        return *_row_cells;
+    }
 
     void make_mutation() {
         _m = mutation(_schema, _key);
@@ -145,6 +175,7 @@ class partition_split_builder final : public async_mutation_partition_visitor {
     }
 
     future<> maybe_process_mutation() {
+        finish_cells();
         if (_current_rows >= _max_rows) {
             co_await _process_mutation(std::move(*_m));
             make_mutation();
@@ -171,13 +202,11 @@ public:
     }
 
     void accept_static_cell(column_id id, atomic_cell&& cell) {
-        row& r = _partition->static_row().maybe_create();
-        r.append_cell(id, atomic_cell_or_collection(std::move(cell)));
+        static_cells().append(id, atomic_cell_or_collection(std::move(cell)));
     }
 
     virtual void accept_static_cell(column_id id, collection_mutation_view collection) override {
-        row& r = _partition->static_row().maybe_create();
-        r.append_cell(id, collection_mutation(std::move(collection)));
+        static_cells().append(id, collection_mutation(std::move(collection)));
     }
 
     virtual future<> accept_row_tombstone(const range_tombstone& rt) override {
@@ -201,16 +230,15 @@ public:
     }
 
     void accept_row_cell(column_id id, atomic_cell&& cell) {
-        row& r = _current_row->cells();
-        r.append_cell(id, std::move(cell));
+        row_cells().append(id, std::move(cell));
     }
 
     virtual void accept_row_cell(column_id id, collection_mutation_view collection) override {
-        row& r = _current_row->cells();
-        r.append_cell(id, collection_mutation(std::move(collection)));
+        row_cells().append(id, collection_mutation(std::move(collection)));
     }
 
     virtual future<> accept_end_of_partition() override {
+        finish_cells();
         return _process_mutation(std::move(*_m));
     }
 };
