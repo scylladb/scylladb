@@ -523,6 +523,7 @@ future<tablet_metadata> tablet_metadata::copy() const {
     copy._base_table = _base_table;
 
     copy._balancing_enabled = _balancing_enabled;
+    copy._resize_enabled = _resize_enabled;
 
     co_return copy;
 }

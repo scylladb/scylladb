@@ -752,6 +752,7 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
             tablets = co_await replica::read_tablet_metadata(_qp);
         }
         tablets->set_balancing_enabled(topology.tablet_balancing_enabled);
+        tablets->set_resize_enabled(topology.tablet_resize_enabled);
         tmptr->set_tablets(std::move(*tablets));
 
         // left_nodes_rs must be narrowed before sync_raft_topology_nodes() reads it.
@@ -4094,6 +4095,7 @@ future<locator::mutable_token_metadata_ptr> storage_service::prepare_tablet_meta
         pending_token_metadata->set_tablets(co_await replica::read_tablet_metadata(_qp));
     }
     pending_token_metadata->tablets().set_balancing_enabled(_topology_state_machine._topology.tablet_balancing_enabled);
+    pending_token_metadata->tablets().set_resize_enabled(_topology_state_machine._topology.tablet_resize_enabled);
     co_return pending_token_metadata;
 }
 
@@ -6692,6 +6694,58 @@ future<> storage_service::set_tablet_balancing_enabled(bool enabled, std::option
             co_await _topology_state_machine.event.when();
         }
     }
+}
+
+future<> storage_service::set_tablet_resize_enabled(bool enabled) {
+    auto holder = _async_gate.hold();
+
+    if (this_shard_id() != 0) {
+        // group0 is only set on shard 0.
+        co_return co_await container().invoke_on(0, [enabled] (auto& ss) {
+            return ss.set_tablet_resize_enabled(enabled);
+        });
+    }
+
+    if (!_feature_service.tablet_resize_disabling) {
+        throw std::runtime_error("Cannot change the tablet resize setting: the cluster does not "
+                                 "support the TABLET_RESIZE_DISABLING feature yet");
+    }
+
+    auto reason = format("Setting tablet resize to {}", enabled);
+
+    while (true) {
+        group0_guard guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
+
+        rtlogger.info("{}", reason);
+        topology_change change{{canonical_mutation(
+                topology_mutation_builder(guard.write_timestamp())
+                     .set_tablet_resize_enabled(enabled)
+                     .build())}};
+        group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, reason);
+        try {
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), _group0_as, raft_timeout{});
+            break;
+        } catch (group0_concurrent_modification&) {
+            rtlogger.debug("set_tablet_resize_enabled(): concurrent modification");
+        }
+    }
+}
+
+future<bool> storage_service::get_tablet_resize_enabled() {
+    auto holder = _async_gate.hold();
+
+    if (this_shard_id() != 0) {
+        // group0 is only set on shard 0.
+        co_return co_await container().invoke_on(0, [] (auto& ss) {
+            return ss.get_tablet_resize_enabled();
+        });
+    }
+
+    {
+        auto group0_holder = _group0->hold_group0_gate();
+        co_await _group0->group0_server().read_barrier(&_group0_as);
+    }
+    co_return _topology_state_machine._topology.tablet_resize_enabled;
 }
 
 future<utils::UUID> storage_service::submit_quiesce_topology_request() {

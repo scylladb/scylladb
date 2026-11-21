@@ -2914,6 +2914,18 @@ public:
     future<table_resize_plan> make_resize_plan(const migration_plan& plan) {
         table_resize_plan resize_plan;
 
+        if (!_tm->tablets().resize_enabled()) {
+            for (auto&& [table, tables] : _tm->tablets().all_table_groups()) {
+                if (_tm->tablets().get_tablet_map(table).resize_decision().split_or_merge()) {
+                    resize_plan.resize[table] = cluster_resize_load::revoke_resize_decision();
+                    _stats.for_cluster().resizes_revoked++;
+                    lblogger.info("Revoking resize decision for table {}, tablet resize is disabled", table);
+                }
+                co_await coroutine::maybe_yield();
+            }
+            co_return std::move(resize_plan);
+        }
+
         if (!_tm->tablets().balancing_enabled()) {
             co_return std::move(resize_plan);
         }
@@ -4790,7 +4802,7 @@ public:
             plan.merge(co_await make_rf_change_plan(nodes, rf_change_actions, dc, rack.value()));
         }
 
-        if (_tm->tablets().balancing_enabled() && plan.empty() && !ongoing_rack_list_colocation()) {
+        if (_tm->tablets().balancing_enabled() && _tm->tablets().resize_enabled() && plan.empty() && !ongoing_rack_list_colocation()) {
             auto dc_merge_plan = co_await make_merge_colocation_plan(nodes);
             auto level = dc_merge_plan.tablet_migration_count() > 0 ? seastar::log_level::info : seastar::log_level::debug;
             lblogger.log(level, "Prepared {} migrations for co-locating sibling tablets in {}", dc_merge_plan.tablet_migration_count(), _location);

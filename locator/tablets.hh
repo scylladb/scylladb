@@ -935,8 +935,12 @@ private:
 
     // When false, tablet load balancer will not try to rebalance tablets.
     bool _balancing_enabled = true;
+
+    // When false, tablet load balancer revokes the pending tablet splits and merges and starts no new ones.
+    bool _resize_enabled = true;
 public:
     bool balancing_enabled() const { return _balancing_enabled; }
+    bool resize_enabled() const { return _resize_enabled; }
     const tablet_map& get_tablet_map(table_id id) const;
     // Gets shared ownership of tablet map
     future<tablet_map_ptr> get_tablet_map_ptr(table_id id) const;
@@ -988,6 +992,7 @@ public:
     tablet_metadata& operator=(tablet_metadata&&) = default;
 
     void set_balancing_enabled(bool value) { _balancing_enabled = value; }
+    void set_resize_enabled(bool value) { _resize_enabled = value; }
     void set_tablet_map(table_id, tablet_map);
     future<> set_colocated_table(table_id id, table_id base_id);
     void drop_tablet_map(table_id);

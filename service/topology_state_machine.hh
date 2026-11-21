@@ -212,6 +212,9 @@ struct topology {
     // When false, tablet load balancer will not try to rebalance tablets.
     bool tablet_balancing_enabled = true;
 
+    // When false, tablet load balancer revokes the pending tablet splits and merges and starts no new ones.
+    bool tablet_resize_enabled = true;
+
     // The set of nodes that should be considered dead during topology operations
     std::unordered_set<raft::server_id> ignored_nodes;
 
