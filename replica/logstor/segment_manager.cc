@@ -407,6 +407,7 @@ class segment_manager_impl {
         std::array<uint64_t, write_source_count> data_bytes_written{0};
         uint64_t write_failures{0};
         uint64_t bytes_read{0};
+        uint64_t data_bytes_read{0};
         uint64_t bytes_freed{0};
         uint64_t segments_allocated{0};
         uint64_t segment_allocation_failures{0};
@@ -910,6 +911,8 @@ segment_manager_impl::segment_manager_impl(segment_manager_config config)
                        sm::description("Counts number of write failures when appending to a logstor segment.")),
         sm::make_counter("bytes_read", _stats.bytes_read,
                        sm::description("Counts number of bytes read from the disk.")),
+        sm::make_counter("data_bytes_read", _stats.data_bytes_read,
+                       sm::description("Counts the record bytes that the reads of records return, without the alignment of the disk reads.")),
         sm::make_counter("bytes_freed", _stats.bytes_freed,
                        sm::description("Counts number of data bytes freed.")),
         sm::make_counter("segments_allocated", _stats.segments_allocated,
@@ -1272,18 +1275,23 @@ future<log_record> segment_manager_impl::read(record_location location) noexcept
                 "Short read of segment {}: got {} bytes of the {} asked for at offset {}",
                 location.segment, buf.size(), location.size, location.offset)));
         }
-        _stats.bytes_read += location.size;
+        _stats.data_bytes_read += location.size;
         auto frame = simple_memory_input_stream(buf.begin(), location.size);
         return make_ready_future<log_record>(ondisk::read_record_frame(frame));
     };
 
-    return read.then([location, offset, front, parse_record, file = std::move(file), buf = std::move(buf),
+    return read.then([this, location, offset, front, parse_record, file = std::move(file), buf = std::move(buf),
             holder = std::move(holder)] (size_t size) mutable {
+        _stats.bytes_read += size;
         if (size < front + location.size || utils::get_local_injector().enter("logstor_read_short")) [[unlikely]] {
             // A short read can occur before the end of the file, and dma_read_bulk() reads again
             // until it has all the bytes or gets to the end of the file.
             auto reread = file.dma_read_bulk<char>(offset, location.size);
-            return reread.then([parse_record, file, holder = std::move(holder)] (temporary_buffer<char> buf) {
+            return reread.then([this, front, parse_record, file, holder = std::move(holder)] (temporary_buffer<char> buf) {
+                // dma_read_bulk() returns the bytes after `front` that it read, so its last disk read
+                // covered `front` and the bytes of `buf`.
+                // The disk reads that dma_read_bulk() retried before its last read are not counted.
+                _stats.bytes_read += buf.empty() ? 0 : front + buf.size();
                 return parse_record(buf);
             });
         }
