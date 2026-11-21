@@ -8,6 +8,7 @@ ScyllaDB Best Practices
    production-readiness
    avoid-node-mismanagement
    benchmark-tips
+   tablets-data-ingestion
    How to Maximize Performance lesson <https://university.scylladb.com/courses/scylla-operations/lessons/advanced-monitoring-and-how-to-maximize-performance/>
 
 
@@ -23,6 +24,7 @@ ScyllaDB Best Practices
   * :doc:`Production Readiness Guidelines <production-readiness>`
   * :doc:`How to Avoid Node Mismanagement <avoid-node-mismanagement>`
   * :doc:`Maximizing ScyllaDB Performance <benchmark-tips>`
+  * :doc:`Ingesting Data into Tables with Tablets <tablets-data-ingestion>`
   * `ScyllaDB Monitoring lesson <https://university.scylladb.com/courses/scylla-operations/lessons/scylla-monitoring/>`_ on ScyllaDB University
 
 
