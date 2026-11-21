@@ -1062,6 +1062,27 @@ class log_mutation_builder {
     // The mutation under construction
     mutation& _log_mut;
 
+    // The cells of the log row being written, added to _log_mut a block at a time
+    // by flush(). Log rows are written one after another, but the cells of a
+    // row not in column order.
+    struct pending_cell {
+        const column_definition* cdef;
+        atomic_cell cell;
+    };
+    struct pending_row {
+        clustering_key ck;
+        std::vector<pending_cell> cells;
+    };
+    std::optional<pending_row> _pending_row;
+
+    void set_cell(const clustering_key& log_ck, const column_definition& cdef, atomic_cell&& cell) {
+        if (!_pending_row || !_pending_row->ck.equal(_log_schema, log_ck)) {
+            flush();
+            _pending_row.emplace(log_ck, std::vector<pending_cell>());
+        }
+        _pending_row->cells.push_back(pending_cell{&cdef, std::move(cell)});
+    }
+
 public:
     log_mutation_builder(mutation& log_mut, api::timestamp_type ts,
                          const partition_key& base_pk, const schema& base_schema)
@@ -1122,9 +1143,33 @@ public:
         set_key_columns(log_ck, _base_schema.clustering_key_columns(), base_ckey.explode_fragmented());
     }
 
+    // Adds the cells set so far to the log mutation.
+    void flush() {
+        if (!_pending_row) {
+            return;
+        }
+        auto pending = std::exchange(_pending_row, std::nullopt);
+        auto& cells = pending->cells;
+        std::ranges::stable_sort(cells, std::less<>(), [] (const pending_cell& c) { return c.cdef->id; });
+        auto& r = _log_mut.partition().clustered_row(_log_schema, std::move(pending->ck)).cells();
+        auto repeats = std::ranges::adjacent_find(cells, std::equal_to<>(), [] (const pending_cell& c) { return c.cdef->id; });
+        if (!r.empty() || repeats != cells.end()) {
+            // A row written again, or a column set twice: merge, as set_cell() does.
+            for (auto& c : cells) {
+                r.apply(*c.cdef, atomic_cell_or_collection(std::move(c.cell)));
+            }
+            return;
+        }
+        row::cell_appender appender(r, _log_schema, column_kind::regular_column);
+        for (auto& c : cells) {
+            appender.append(c.cdef->id, atomic_cell_or_collection(std::move(c.cell)));
+        }
+        appender.finish();
+    }
+
     // Sets the `cdc$operation` column for the given row.
     void set_operation(const clustering_key& log_ck, operation op) {
-        _log_mut.set_cell(log_ck, _op_col, atomic_cell::make_live(
+        set_cell(log_ck, _op_col, atomic_cell::make_live(
                     *_op_col.type, _ts, _op_col.type->decompose(operation_native_type(op)), _ttl));
     }
 
@@ -1133,7 +1178,7 @@ public:
     // Calling it with a non-null value and then with a null value will keep the non-null value.
     void set_ttl(const clustering_key& log_ck, ttl_opt ttl) {
         if (ttl) {
-            _log_mut.set_cell(log_ck, _ttl_col, atomic_cell::make_live(
+            set_cell(log_ck, _ttl_col, atomic_cell::make_live(
                         *_ttl_col.type, _ts, _ttl_col.type->decompose(ttl->count()), _ttl));
         }
     }
@@ -1147,7 +1192,7 @@ public:
             throw exceptions::invalid_request_exception(format("CDC log schema for {}.{} does not have base column {}",
                 _log_schema.ks_name(), _log_schema.cf_name(), base_cdef.name_as_text()));
         }
-        _log_mut.set_cell(log_ck, *log_cdef_ptr, atomic_cell::make_live(*base_cdef.type, _ts, value, _ttl));
+        set_cell(log_ck, *log_cdef_ptr, atomic_cell::make_live(*base_cdef.type, _ts, value, _ttl));
     }
 
     // Each regular and static column in the base schema has a corresponding column in the log schema
@@ -1161,7 +1206,7 @@ public:
                 _log_schema.ks_name(), _log_schema.cf_name(), base_cdef.name_as_text()));
         }
         auto& log_cdef = *log_cdef_ptr;
-        _log_mut.set_cell(log_ck, *log_cdef_ptr, atomic_cell::make_live(*log_cdef.type, _ts, log_cdef.type->decompose(true), _ttl));
+        set_cell(log_ck, log_cdef, atomic_cell::make_live(*log_cdef.type, _ts, log_cdef.type->decompose(true), _ttl));
     }
 
     // Each regular and static non-atomic column in the base schema has a corresponding column in the log schema
@@ -1176,13 +1221,15 @@ public:
                 _log_schema.ks_name(), _log_schema.cf_name(), base_cdef.name_as_text()));
         }
         auto& log_cdef = *log_cdef_ptr;
-        _log_mut.set_cell(log_ck, log_cdef, atomic_cell::make_live(*log_cdef.type, _ts, deleted_elements, _ttl));
+        set_cell(log_ck, log_cdef, atomic_cell::make_live(*log_cdef.type, _ts, deleted_elements, _ttl));
     }
 
     void end_record() {
         if (has_rows()) {
-            _log_mut.set_cell(last_row_key(), log_meta_column_name_bytes("end_of_batch"), data_value(true), _ts, _ttl);
+            auto& cdef = *_log_schema.get_column_definition(log_meta_column_name_bytes("end_of_batch"));
+            set_cell(last_row_key(), cdef, atomic_cell::make_live(*cdef.type, _ts, cdef.type->decompose(true), _ttl));
         }
+        flush();
     }
 private:
     void set_key_columns(const clustering_key& log_ck, schema::const_iterator_range_type columns, const std::vector<managed_bytes>& key) {
@@ -1192,7 +1239,7 @@ private:
                 break;
             }
             auto& cdef = *_log_schema.get_column_definition(log_data_column_name_bytes(column.name()));
-            _log_mut.set_cell(log_ck, cdef, atomic_cell::make_live(*column.type, _ts, managed_bytes_view(key[pos]), _ttl));
+            set_cell(log_ck, cdef, atomic_cell::make_live(*column.type, _ts, managed_bytes_view(key[pos]), _ttl));
             ++pos;
         }
     }
@@ -1830,6 +1877,9 @@ public:
     // DON'T move the transformer after this
     void begin_timestamp(api::timestamp_type ts, bool is_last) override {
         const auto stream_id = _uses_tablets ? _ctx._cdc_metadata.get_tablet_stream(_log_schema->id(), ts, _dk.token()) : _ctx._cdc_metadata.get_vnode_stream(ts, _dk.token());
+        if (_builder) {
+            _builder->flush();
+        }
         _result_mutations.emplace_back(_log_schema, stream_id.to_partition_key(*_log_schema));
         _builder.emplace(_result_mutations.back(), ts, _dk.key(), *_schema);
         // alternator_streams_increased_compatibility set to true reads preimage, but we need to set
@@ -1962,6 +2012,9 @@ public:
     // Takes and returns generated cdc log mutations and associated statistics about parts touched during transformer's lifetime.
     // The `transformer` object on which this method was called on should not be used anymore.
     std::tuple<utils::chunked_vector<mutation>, stats::part_type_set> finish() && {
+        if (_builder) {
+            _builder->flush();
+        }
         return std::make_pair<utils::chunked_vector<mutation>, stats::part_type_set>(std::move(_result_mutations), std::move(_touched_parts));
     }
 
