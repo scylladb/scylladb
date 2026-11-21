@@ -1449,6 +1449,7 @@ set_type_impl::deserialize(View in) const {
     return make_value(std::move(s));
 }
 template data_value set_type_impl::deserialize<>(ser::buffer_view<bytes_ostream::fragment_iterator>) const;
+template data_value set_type_impl::deserialize<>(managed_bytes_view) const;
 
 bytes
 set_type_impl::serialize_partially_deserialized_form(
@@ -1600,6 +1601,7 @@ list_type_impl::deserialize(View in) const {
     return make_value(std::move(s));
 }
 template data_value list_type_impl::deserialize<>(ser::buffer_view<bytes_ostream::fragment_iterator>) const;
+template data_value list_type_impl::deserialize<>(managed_bytes_view) const;
 
 // Elements can be null on the wire; data_value's formatter renders those as "null".
 static sstring vector_to_string(const std::vector<data_value>& v, std::string_view sep) {
