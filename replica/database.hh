@@ -1958,6 +1958,9 @@ private:
     future<std::unique_ptr<keyspace>> create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::effective_replication_map_factory& erm_factory, const locator::token_metadata_ptr& token_metadata, system_keyspace system);
     void setup_metrics();
     void setup_scylla_memory_diagnostics_producer();
+    // The replica work of the default service level runs in its own group,
+    // but it uses the semaphores of the service level.
+    seastar::scheduling_group semaphore_scheduling_group() const noexcept;
     reader_concurrency_semaphore& read_concurrency_sem();
     reader_concurrency_semaphore& view_update_read_concurrency_sem();
     auto sum_read_concurrency_sem_var(std::invocable<reader_concurrency_semaphore&> auto member);
@@ -2042,6 +2045,10 @@ public:
 
     seastar::scheduling_group get_gossip_scheduling_group() const { return _dbcfg.gossip_scheduling_group; }
     seastar::scheduling_group get_export_import_scheduling_group() const { return _dbcfg.export_import_scheduling_group; }
+    // Returns the group that runs the replica work of the requests that run in sg.
+    seastar::scheduling_group get_replica_scheduling_group(seastar::scheduling_group sg) const noexcept {
+        return sg == _dbcfg.statement_scheduling_group ? _dbcfg.statement_replica_scheduling_group.value_or(sg) : sg;
+    }
 
     compaction::compaction_manager& get_compaction_manager() {
         return _compaction_manager;

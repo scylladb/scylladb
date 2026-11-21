@@ -43,8 +43,9 @@ async def get_cpu_metrics(manager: ScyllaClusterManager):
         metrics = await manager.metrics.query(ip)
         ms_streaming += metrics.get('scylla_scheduler_runtime_ms', {'group': 'streaming'})
         # Today, the default statement scheduling group is called "sl:default",
-        # not "statement".
-        ms_statement += metrics.get('scylla_scheduler_runtime_ms', {'group': 'sl:default'})
+        # not "statement". The replica work of the default service level runs
+        # in sl:$default_replica.
+        ms_statement += metrics.get('scylla_scheduler_runtime_ms', {'group': {'sl:default', 'sl:$default_replica'}})
         items_deleted += (metrics.get('scylla_expiration_items_deleted') or 0)
     return (ms_streaming, ms_statement, items_deleted)
 

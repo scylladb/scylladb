@@ -18,6 +18,7 @@
 #include <seastar/util/log.hh>
 #include "reader_permit.hh"
 #include "utils/updateable_value.hh"
+#include "utils/assert.hh"
 #include "dht/i_partitioner_fwd.hh"
 
 namespace bi = boost::intrusive;
@@ -314,6 +315,8 @@ private:
     named_gate _close_readers_gate;
     named_gate _permit_gate;
     std::optional<future<>> _execution_loop_future;
+    // Runs the execution loop. When it is not set, the loop runs in the group of the first read that waits for admission.
+    std::optional<seastar::scheduling_group> _execution_scheduling_group;
     reader_permit::impl* _blessed_permit = nullptr;
 
 private:
@@ -597,6 +600,13 @@ public:
     /// \ref obtain_permit(), then \ref with_ready_permit() is less
     /// optimal then just using \ref with_permit().
     future<> with_ready_permit(reader_permit permit, read_func func);
+
+    /// Run the admitted reads of \ref with_permit() and \ref with_ready_permit() in \p sg.
+    /// Call it before the first read waits for admission.
+    void set_execution_scheduling_group(seastar::scheduling_group sg) noexcept {
+        SCYLLA_ASSERT(!_execution_loop_future);
+        _execution_scheduling_group = sg;
+    }
 
     /// Set the total resources of the semaphore to \p r.
     ///

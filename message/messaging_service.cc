@@ -450,7 +450,10 @@ void messaging_service::do_start_listen() {
     auto limits = rpc_resource_limits(_cfg.rpc_memory_limit);
     limits.isolate_connection = [this] (sstring isolation_cookie) {
 
-        return scheduling_group_for_isolation_cookie(isolation_cookie).then([] (scheduling_group sg) {
+        return scheduling_group_for_isolation_cookie(isolation_cookie).then([this] (scheduling_group sg) {
+            if (_scheduling_config.default_service_level_replica && sg == _sl_controller.get_default_scheduling_group()) {
+                sg = *_scheduling_config.default_service_level_replica;
+            }
             return rpc::isolation_config{.sched_group = sg};
         });
     };

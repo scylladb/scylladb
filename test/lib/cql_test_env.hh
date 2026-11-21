@@ -114,6 +114,7 @@ struct scheduling_groups {
     scheduling_group logstor_compaction_scheduling_group;
     scheduling_group streaming_scheduling_group;
     scheduling_group statement_scheduling_group;
+    scheduling_group statement_replica_scheduling_group;
     scheduling_group memtable_scheduling_group;
     scheduling_group memtable_to_cache_scheduling_group;
     scheduling_group gossip_scheduling_group;

@@ -347,9 +347,14 @@ public:
     }
 };
 
+scheduling_group database::semaphore_scheduling_group() const noexcept {
+    const auto sg = current_scheduling_group();
+    return sg == _dbcfg.statement_replica_scheduling_group ? _dbcfg.statement_scheduling_group : sg;
+}
+
 reader_concurrency_semaphore&
 database::read_concurrency_sem() {
-    reader_concurrency_semaphore* sem = _reader_concurrency_semaphores_group.get_or_null(current_scheduling_group());
+    reader_concurrency_semaphore* sem = _reader_concurrency_semaphores_group.get_or_null(semaphore_scheduling_group());
     if (!sem) {
         // this line is commented out, however we shouldn't get here because it means that a user query or even worse,
         // some random query was triggered from an unanticipated scheduling groups and this violates the isolation we are trying to achieve.
@@ -373,7 +378,7 @@ database::read_concurrency_sem() {
 // With same concerns as read_concurrency_sem().
 reader_concurrency_semaphore&
 database::view_update_read_concurrency_sem() {
-    reader_concurrency_semaphore* sem = _view_update_read_concurrency_semaphores_group.get_or_null(current_scheduling_group());
+    reader_concurrency_semaphore* sem = _view_update_read_concurrency_semaphores_group.get_or_null(semaphore_scheduling_group());
     if (!sem) {
         sem = _view_update_read_concurrency_semaphores_group.get_or_null(_default_read_concurrency_group);
         if (!sem) {
@@ -418,7 +423,9 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     , _cfg(cfg)
     // Allow system tables a pool of 10 MB memory to write, but never block on other regions.
     , _system_dirty_memory_manager(*this, 10 << 20, cfg.unspooled_dirty_soft_limit(), default_scheduling_group())
-    , _dirty_memory_manager(*this, dbcfg.available_memory * dirty_memory_threshold_fraction, cfg.unspooled_dirty_soft_limit(), dbcfg.statement_scheduling_group)
+    // The releaser resumes the writes that wait for memory, and these writes are replica work.
+    , _dirty_memory_manager(*this, dbcfg.available_memory * dirty_memory_threshold_fraction, cfg.unspooled_dirty_soft_limit(),
+            dbcfg.statement_replica_scheduling_group.value_or(dbcfg.statement_scheduling_group))
     , _dirty_memory_threshold_controller([this] {
         if (_logstor) {
             update_dirty_memory_threshold(get_logstor_memory_usage());
@@ -2140,9 +2147,10 @@ reader_concurrency_semaphore& database::get_reader_concurrency_semaphore() {
 
 // With same concerns as read_concurrency_sem().
 db::timeout_semaphore& database::get_view_update_concurrency_sem() {
-    auto sem_it = _view_update_concurrency_semaphores.find(current_scheduling_group());
+    const auto sg = semaphore_scheduling_group();
+    auto sem_it = _view_update_concurrency_semaphores.find(sg);
     if (sem_it == _view_update_concurrency_semaphores.end()) {
-        dblog.error("View update concurrency semaphore for scheduling group '{}' not found, using default", current_scheduling_group().name());
+        dblog.error("View update concurrency semaphore for scheduling group '{}' not found, using default", sg.name());
         sem_it = _view_update_concurrency_semaphores.find(_default_read_concurrency_group);
         if (sem_it == _view_update_concurrency_semaphores.end()) {
             seastar::on_internal_error(dblog, "Default view update concurrency semaphore wasn't found, something probably went wrong during database::start");
@@ -2926,8 +2934,14 @@ future<> database::start(sharded<qos::service_level_controller>& sl_controller, 
     // The former _dbcfg.statement_scheduling_group and the later can be the same group, so we want
     // the later to be the accurate one.
     _default_read_concurrency_group = default_service_level.sg;
-    _reader_concurrency_semaphores_group.add_or_update(default_service_level.sg, default_shares);
-    _view_update_read_concurrency_semaphores_group.add_or_update(default_service_level.sg, default_shares);
+    auto& default_sem = _reader_concurrency_semaphores_group.add_or_update(default_service_level.sg, default_shares);
+    auto& default_view_update_sem = _view_update_read_concurrency_semaphores_group.add_or_update(default_service_level.sg, default_shares);
+    if (_dbcfg.statement_replica_scheduling_group && default_service_level.sg == _dbcfg.statement_scheduling_group) {
+        // Run the admitted reads of the default service level in its replica group, also the reads
+        // that its coordinator group starts.
+        default_sem.set_execution_scheduling_group(*_dbcfg.statement_replica_scheduling_group);
+        default_view_update_sem.set_execution_scheduling_group(*_dbcfg.statement_replica_scheduling_group);
+    }
 
     // lets insert the statement scheduling group only if we haven't reused it in sl_controller,
     // but it shouldn't happen

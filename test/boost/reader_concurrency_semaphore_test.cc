@@ -3138,4 +3138,23 @@ SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_signal_detects_negati
     BOOST_REQUIRE_EQUAL(semaphore.consumed_resources(), reader_resources{});
 }
 
+// The execution loop runs the admitted reads in the scheduling group that the semaphore
+// gets, not in the group of the first read (SCYLLADB-6090).
+SEASTAR_THREAD_TEST_CASE(test_reader_concurrency_semaphore_execution_scheduling_group) {
+    simple_schema s;
+    auto sg = create_scheduling_group("rcs_execution", 100).get();
+    auto destroy_sg = defer([sg] () noexcept { destroy_scheduling_group(sg).get(); });
+    reader_concurrency_semaphore semaphore(reader_concurrency_semaphore::for_tests{}, get_name(), 1, 1024);
+    auto stop_sem = deferred_stop(semaphore);
+    semaphore.set_execution_scheduling_group(sg);
+
+    scheduling_group read_sg;
+    reader_permit_opt permit_holder;
+    semaphore.with_permit(s.schema(), get_name().c_str(), 1024, db::no_timeout, {}, permit_holder, [&read_sg] (reader_permit) {
+        read_sg = current_scheduling_group();
+        return make_ready_future<>();
+    }).get();
+    BOOST_REQUIRE(read_sg == sg);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

@@ -290,8 +290,8 @@ async def test_fence_lwt_during_bootstap(manager: ScyllaClusterManager):
             result = 0
             for m in metrics:
                 # Internal requests of the stale node, like TTL scans, are fenced out too, but in other scheduling groups.
-                # We don't want them counted here.
-                result += m.get(metric_name, {'scheduling_group_name': 'sl:default'}) or 0
+                # We don't want them counted here. The replica work of the default service level runs in sl:$default_replica.
+                result += m.get(metric_name, {'scheduling_group_name': {'sl:default', 'sl:$default_replica'}}) or 0
             return result
 
         assert await fenced_out_requests() == 0

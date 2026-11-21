@@ -341,6 +341,9 @@ public:
         std::vector<tenant> statement_tenants;
         scheduling_group streaming;
         scheduling_group gossip;
+        // Runs the requests of the default service level that the peers send. They are replica work or
+        // steps of admitted requests. When it is not set, they run in the group of the service level.
+        std::optional<scheduling_group> default_service_level_replica;
     };
 
 private:

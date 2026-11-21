@@ -1318,7 +1318,15 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             dbcfg.streaming_scheduling_group = create_scheduling_group("streaming", "strm", 200, maintenance_supergroup).get();
             debug::streaming_scheduling_group = dbcfg.streaming_scheduling_group;
             dbcfg.maintenance_scheduling_group = maintenance_scheduling_group;
-            dbcfg.statement_scheduling_group = create_scheduling_group("statement", "stmt", 1000, user_ssg).get();
+            // The default service level has a supergroup with its shares. In the supergroup, the replica
+            // work gets 9 times the CPU time of the coordinator work, so that an overloaded shard serves
+            // the replica reads that the coordinators of all shards wait for (SCYLLADB-6090). The
+            // coordinator work gets all the CPU time of the supergroup when there is no replica work.
+            // The IO scheduler puts the two groups in the IO group of user_ssg with their own shares,
+            // so their sum is the shares of the supergroup.
+            auto default_service_level_ssg = create_scheduling_supergroup(1000, user_ssg).get();
+            dbcfg.statement_scheduling_group = create_scheduling_group("statement", "stmt", 100, default_service_level_ssg).get();
+            dbcfg.statement_replica_scheduling_group = create_scheduling_group("sl:$default_replica", "slrd", 900, default_service_level_ssg).get();
             dbcfg.memtable_scheduling_group = create_scheduling_group("memtable", "mt", 1000).get();
             dbcfg.memtable_to_cache_scheduling_group = create_scheduling_group("memtable_to_cache", "mt2c", 200).get();
             dbcfg.gossip_scheduling_group = create_scheduling_group("gossip", "gms", 1000).get();
@@ -1808,6 +1816,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             };
             scfg.streaming = dbcfg.streaming_scheduling_group;
             scfg.gossip = dbcfg.gossip_scheduling_group;
+            scfg.default_service_level_replica = dbcfg.statement_replica_scheduling_group;
 
             checkpoint(stop_signal, "starting messaging service");
             debug::the_messaging_service = &messaging;

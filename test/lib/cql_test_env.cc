@@ -104,7 +104,10 @@ future<scheduling_groups> get_scheduling_groups() {
         _scheduling_groups->memory_compaction_scheduling_group = co_await create_scheduling_group("mem_compaction", 1000);
         _scheduling_groups->logstor_compaction_scheduling_group = co_await create_scheduling_group("logstor_compaction", 1000);
         _scheduling_groups->streaming_scheduling_group = co_await create_scheduling_group("streaming", 200);
-        _scheduling_groups->statement_scheduling_group = co_await create_scheduling_group("statement", 1000);
+        // As in main.cc, the default service level has a supergroup with its coordinator group and its replica group.
+        auto default_service_level_ssg = co_await create_scheduling_supergroup(1000);
+        _scheduling_groups->statement_scheduling_group = co_await create_scheduling_group("statement", "stmt", 100, default_service_level_ssg);
+        _scheduling_groups->statement_replica_scheduling_group = co_await create_scheduling_group("sl:$default_replica", "slrd", 900, default_service_level_ssg);
         _scheduling_groups->memtable_scheduling_group = co_await create_scheduling_group("memtable", 1000);
         _scheduling_groups->memtable_to_cache_scheduling_group = co_await create_scheduling_group("memtable_to_cache", 200);
         _scheduling_groups->gossip_scheduling_group = co_await create_scheduling_group("gossip", 1000);
@@ -707,6 +710,7 @@ private:
             dbcfg.logstor_compaction_scheduling_group = scheduling_groups.logstor_compaction_scheduling_group;
             dbcfg.streaming_scheduling_group = scheduling_groups.streaming_scheduling_group;
             dbcfg.statement_scheduling_group = scheduling_groups.statement_scheduling_group;
+            dbcfg.statement_replica_scheduling_group = scheduling_groups.statement_replica_scheduling_group;
             dbcfg.memtable_scheduling_group = scheduling_groups.memtable_scheduling_group;
             dbcfg.memtable_to_cache_scheduling_group = scheduling_groups.memtable_to_cache_scheduling_group;
             dbcfg.gossip_scheduling_group = scheduling_groups.gossip_scheduling_group;

@@ -15,13 +15,15 @@ from . import nodetool
 from .util import ScyllaMetrics, new_test_table
 
 # Return the number of bytes which reads of user requests (in the default
-# service level) read from the disk. Background work, like compactions of
-# other tables, reads in other I/O classes, so it isn't counted.
+# service level) read from the disk. The default service level reads in the
+# sl:default and sl:$default_replica I/O classes, which have no metrics before
+# their first I/O. Background work, like compactions of other tables, reads in
+# other I/O classes, so it isn't counted.
 def user_disk_read_bytes(cql):
     metrics = ScyllaMetrics.query(cql)
     iogroups = metrics.label_values('scylla_io_queue_total_read_bytes', 'iogroup')
     mountpoints = metrics.label_values('scylla_io_queue_total_read_bytes', 'mountpoint')
-    return metrics.get('scylla_io_queue_total_read_bytes', {'class': 'sl:default', 'iogroup': iogroups, 'mountpoint': mountpoints})
+    return metrics.get('scylla_io_queue_total_read_bytes', {'class': {'sl:default', 'sl:$default_replica'}, 'iogroup': iogroups, 'mountpoint': mountpoints}) or 0
 
 # Write rows of 2 KB, totaling the given size, compact them into one
 # sstable, read them all - each partition separately, or with a paged scan -

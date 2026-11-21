@@ -809,7 +809,11 @@ class ScyllaMetrics:
         return [l for l in self.lines if l.startswith(prefix)]
 
     def _labels_match(self, metric_labels: dict, filter_labels: dict):
-        return all(metric_labels.get(k) == str(v) for k, v in filter_labels.items())
+        def value_matches(value, wanted):
+            if isinstance(wanted, (list, tuple, set, frozenset)):
+                return value in {str(w) for w in wanted}
+            return value == str(wanted)
+        return all(value_matches(metric_labels.get(k), v) for k, v in filter_labels.items())
 
     def get(self, name: str, labels = {}):
         """Get the metric value by name, optionally filtering by labels.
@@ -817,6 +821,7 @@ class ScyllaMetrics:
         The name parameter is used to filter metrics by prefix - all metrics whose
         names start with the given string will be considered. The labels parameter
         is a dictionary of key-value pairs used to further filter the metrics.
+        A label value can be a collection of accepted values.
 
         Example:
             metrics.get('scylla_transport_cql_errors_total',

@@ -19,9 +19,18 @@ The groups currently defined are:
 | memtable_to_cache                            | 1000
 | compaction                                   | 1000
 | memory_compaction                            | 1000
-| statement                                    | 1000
+| statement                                    | 100 (see below)
+| statement_replica                            | 900 (see below)
 | gossip                                       | 1000
 | streaming (a.k.a maintenance)                | 200
+
+The statement group (named `sl:default` in metrics) and the statement_replica group (`sl:$default_replica`) run the work of the default service level:
+
+- They are in a supergroup that has the shares of the service level (1000). Together, they get the CPU time of the service level.
+- In the supergroup, statement_replica gets 9 times the CPU time of statement. When statement_replica has no work, statement gets all the CPU time of the supergroup.
+- statement_replica runs the requests of the service level that the peers send, the reads that the coordinator sends to the local replica, and the admitted reads. The requests from the peers include replica reads and writes, and steps of admitted requests, such as write acknowledgements and forwarded CQL requests.
+- statement runs the coordinator work.
+- The IO scheduler has no nested level. It puts the two groups in the IO group of the user supergroup with their own shares. While both groups do IO, they get the IO share of the service level. While only one group does IO, it gets the share that its own shares give.
 
 TODO: explain the purpose of each of these scheduling groups, and what they are used for. E.g., "streaming" is also called maintenance and used also used for repair. memtable is used for memtable flushes (?). default is used for gossip, etc.
 
@@ -46,4 +55,4 @@ We do not yet support multi-tenancy, in the sense that different tenants of the 
 
 ## Preserving isolation across RPC calls
 ScyllaDB uses RPC verbs heavily to communicate with other nodes. RPC is based on "verbs". Each RPC call will invoke a verb, which is associated with a C++ function. Most verbs have a fixed scheduling groups associated with them (see `messaging/messaging_service.cc` `do_get_rpc_client_idx()`). The remote node, when receiving that RPC verb, will execute it with the scheduling group associated with said verb.
-There is one group of RPC verbs -- called the statement group -- whose verbs can be invoked from the context of multiple scheduling groups. To support this, statement RPC verbs support "tenants". The list of these tenants are configured in `main.cc`. Each tenant has a scheduling groups and an identifier. Each tenant has its own RPC connection. The tenant identifier is used during connection setup to communicate to the remote node, which tenant is associated with this connection, and therefore which scheduling group RPC verb should be executed in.
+There is one group of RPC verbs -- called the statement group -- whose verbs can be invoked from the context of multiple scheduling groups. To support this, statement RPC verbs support "tenants". The list of these tenants are configured in `main.cc`. Each tenant has a scheduling groups and an identifier. Each tenant has its own RPC connection. The tenant identifier is used during connection setup to communicate to the remote node, which tenant is associated with this connection, and therefore which scheduling group RPC verb should be executed in. The remote node runs the verbs of the default service level in the statement_replica group (see above).

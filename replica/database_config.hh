@@ -9,6 +9,7 @@
 #pragma once
 
 #include <cstddef>
+#include <optional>
 #include <seastar/core/scheduling.hh>
 
 namespace replica {
@@ -21,6 +22,9 @@ struct database_config {
     seastar::scheduling_group memory_compaction_scheduling_group;
     seastar::scheduling_group logstor_compaction_scheduling_group;
     seastar::scheduling_group statement_scheduling_group;
+    // Runs the replica work of the requests that run in statement_scheduling_group.
+    // When it is not set, that replica work runs in statement_scheduling_group.
+    std::optional<seastar::scheduling_group> statement_replica_scheduling_group;
     seastar::scheduling_group streaming_scheduling_group;
     seastar::scheduling_group maintenance_scheduling_group;
     seastar::scheduling_group gossip_scheduling_group;

@@ -563,6 +563,12 @@ void service_level_controller::make_service_level_available(sstring name, servic
     }
 }
 
+// The caller of the constructor created the group of the default service level with the shares that it
+// needs. In main.cc, this group is in a supergroup that has the shares of the service level.
+static bool keeps_its_shares(const sstring& service_level_name) {
+    return service_level_name == service_level_controller::default_service_level_name;
+}
+
 future<> service_level_controller::notify_service_level_updated(sstring name, service_level_options slo) {
     auto sl_it = _service_levels_db.find(name);
     future<> f = make_ready_future();
@@ -581,7 +587,7 @@ future<> service_level_controller::notify_service_level_updated(sstring name, se
                     sl_logger.error("notify_service_level_updated: exception occurred in one of the observers callbacks {:t}", std::current_exception());
                 }
             });
-            if (sl_it->second.slo.shares != slo.shares) {
+            if (sl_it->second.slo.shares != slo.shares && !keeps_its_shares(name)) {
                 int32_t new_shares = default_shares;
                 if (auto new_shares_p = std::get_if<int32_t>(&slo.shares)) {
                     new_shares = *new_shares_p;
@@ -801,10 +807,14 @@ future<> service_level_controller::do_add_service_level(sstring name, service_le
                         sl.sg = _global_controller_db->deleted_scheduling_groups.front();
                         _global_controller_db->deleted_scheduling_groups.pop_front();
                     }
-                    return container().invoke_on_all([&sl, share_count] (service_level_controller& service) {
-                        scheduling_group non_const_sg = sl.sg;
-                        return non_const_sg.set_shares((float)share_count);
-                    }).then([&sl, &name] {
+                    auto set_shares = make_ready_future<>();
+                    if (!keeps_its_shares(name)) {
+                        set_shares = container().invoke_on_all([&sl, share_count] (service_level_controller& service) {
+                            scheduling_group non_const_sg = sl.sg;
+                            return non_const_sg.set_shares((float)share_count);
+                        });
+                    }
+                    return set_shares.then([&sl, &name] {
                         return rename_scheduling_group(sl.sg, seastar::format(scheduling_group_name_pattern, name));
                     });
                 } else if (_global_controller_db->scheduling_groups_exhausted) {

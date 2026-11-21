@@ -16,6 +16,7 @@
 #include <seastar/core/sleep.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/util/later.hh>
+#include <seastar/core/with_scheduling_group.hh>
 #include <seastar/coroutine/try_future.hh>
 #include <seastar/util/defer.hh>
 #include "gms/inet_address.hh"
@@ -6371,6 +6372,13 @@ storage_proxy::query_result_local_digest(locator::effective_replication_map_ptr 
 future<rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>>
 storage_proxy::query_result_local(locator::effective_replication_map_ptr erm, schema_ptr query_schema, lw_shared_ptr<query::read_command> cmd, const dht::partition_range& pr, query::result_options opts,
                                   tracing::trace_state_ptr trace_state, storage_proxy::clock_type::time_point timeout, db::per_partition_rate_limit::info rate_limit_info) {
+    const auto sg = current_scheduling_group();
+    if (const auto replica_sg = _db.local().get_replica_scheduling_group(sg); replica_sg != sg) {
+        // The coordinator work must not delay this replica work (SCYLLADB-6090). with_scheduling_group()
+        // frees its copy of pr when the call returns, so the call copies pr before its first wait.
+        return with_scheduling_group(replica_sg, std::mem_fn(&storage_proxy::query_result_local), this, std::move(erm), std::move(query_schema), std::move(cmd), pr, opts,
+                std::move(trace_state), timeout, rate_limit_info);
+    }
     cmd->slice.options.set_if<query::partition_slice::option::with_digest>(opts.request != query::result_request::only_result);
     if (auto shard_opt = dht::is_single_shard(erm->get_sharder(*query_schema), *query_schema, pr)) {
         auto shard = *shard_opt;

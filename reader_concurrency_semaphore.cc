@@ -14,6 +14,7 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/core/metrics.hh>
+#include <seastar/coroutine/switch_to.hh>
 #include <utility>
 
 #include "reader_concurrency_semaphore.hh"
@@ -1014,6 +1015,9 @@ struct stop_execution_loop {
 }
 
 future<> reader_concurrency_semaphore::execution_loop() noexcept {
+    if (_execution_scheduling_group) {
+        co_await coroutine::switch_to(*_execution_scheduling_group);
+    }
     while (true) {
         try {
             co_await _ready_list_cv.when();

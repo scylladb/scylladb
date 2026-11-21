@@ -154,8 +154,8 @@ async def test_alternator_ttl_scheduling_group(manager: ScyllaClusterManager):
         for ip in ips:
             metrics = await manager.metrics.query(ip)
             ms_streaming += metrics.get('scylla_scheduler_runtime_ms', {'group': 'streaming'})
-            # in enterprise, default execution is in sl:default, not statement
-            ms_statement += metrics.get('scylla_scheduler_runtime_ms', {'group': 'sl:default'})
+            # The default service level runs in sl:default and sl:$default_replica.
+            ms_statement += metrics.get('scylla_scheduler_runtime_ms', {'group': {'sl:default', 'sl:$default_replica'}})
         return (ms_streaming, ms_statement)
 
     ms_streaming_before, ms_statement_before = await get_cpu_metrics()
