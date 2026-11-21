@@ -69,6 +69,62 @@ uint64_t segment_geometry::checked_segment_size(uint64_t segment_size, uint64_t 
     return segment_size;
 }
 
+// Each logstor file name starts with this prefix, which marks the file as a logstor file.
+static constexpr std::string_view file_name_prefix = "logstor";
+
+static std::string_view component_name(file_name::component c) {
+    switch (c) {
+    case file_name::component::data: return "Data";
+    }
+    on_internal_error(logstor_logger, fmt::format("Unknown file component {}", static_cast<int>(c)));
+}
+
+std::optional<file_name> file_name::parse(std::string_view name) {
+    auto consume = [&name] (std::string_view prefix) {
+        if (!name.starts_with(prefix)) {
+            return false;
+        }
+        name.remove_prefix(prefix.size());
+        return true;
+    };
+    auto consume_number = [&name] (auto& value) {
+        if (name.size() > 1 && name[0] == '0' && name[1] >= '0' && name[1] <= '9') {
+            return false;
+        }
+        const auto [end, ec] = std::from_chars(name.data(), name.data() + name.size(), value);
+        if (ec != std::errc()) {
+            return false;
+        }
+        name.remove_prefix(end - name.data());
+        return true;
+    };
+
+    const bool tmp = name.ends_with(".tmp");
+    if (tmp) {
+        name.remove_suffix(std::string_view(".tmp").size());
+    }
+    if (!name.ends_with(".db")) {
+        return std::nullopt;
+    }
+    name.remove_suffix(std::string_view(".db").size());
+
+    unsigned shard;
+    if (!consume(file_name_prefix) || !consume("-") || !consume_number(shard) || !consume("-")) {
+        return std::nullopt;
+    }
+    file_id_t file_id;
+    if (consume(component_name(component::data)) && consume("-") && consume_number(file_id) && name.empty()) {
+        return file_name(shard, component::data, file_id, tmp);
+    }
+    return std::nullopt;
+}
+
+std::string file_name::str() const {
+    const auto file_id = _file_id ? fmt::format("-{}", *_file_id) : std::string();
+    return fmt::format("{}-{}-{}{}.db{}", file_name_prefix, _shard, component_name(_component), file_id,
+            _tmp ? ".tmp" : "");
+}
+
 file_manager::file_manager(file_manager_config cfg)
     : _cfg(std::move(cfg))
     , _open_files(static_cast<size_t>(_cfg.file_count))
@@ -96,21 +152,6 @@ future<> file_manager::stop() {
             logstor_logger.warn("Failed to close logstor file {}: {}", file_path(file_id).string(), result.get_exception());
         }
     });
-}
-
-std::optional<file_id_t> file_manager::file_id_of(std::string_view file_name) {
-    const std::string prefix = file_name_prefix();
-    const std::string_view suffix = "-Data.db";
-    if (!file_name.starts_with(prefix) || !file_name.ends_with(suffix) || file_name.size() <= prefix.size() + suffix.size()) {
-        return std::nullopt;
-    }
-    const auto digits = file_name.substr(prefix.size(), file_name.size() - prefix.size() - suffix.size());
-    file_id_t file_id;
-    const auto [end, ec] = std::from_chars(digits.data(), digits.data() + digits.size(), file_id);
-    if (ec != std::errc() || end != digits.data() + digits.size()) {
-        return std::nullopt;
-    }
-    return file_id;
 }
 
 file_manager::recovery file_manager::start_recovery() {
@@ -143,19 +184,19 @@ future<file_id_t> file_manager::recovery::open_found_files() {
 
     std::set<file_id_t> found_file_ids;
     std::vector<sstring> temporary_files;
-    const std::string prefix = file_name_prefix();
     co_await lister::scan_dir(files._cfg.base_dir, lister::dir_entry_types::of<directory_entry_type::regular>(),
             [&] (fs::path dir, directory_entry de) {
-        if (de.name.starts_with(prefix)) {
-            if (auto file_id = file_id_of(de.name)) {
-                found_file_ids.insert(*file_id);
-            } else if (de.name.ends_with(".tmp")) {
+        const auto name = file_name::parse(de.name);
+        if (name && name->shard() == files._cfg.shard && name->kind() == file_name::component::data) {
+            if (name->is_tmp()) {
                 temporary_files.push_back((dir / de.name).string());
+            } else {
+                found_file_ids.insert(*name->file_id());
             }
         }
         return make_ready_future<>();
     });
-    logstor_logger.info("Recovery: found {} files for shard {} in {}", found_file_ids.size(), this_shard_id(), files._cfg.base_dir.string());
+    logstor_logger.info("Recovery: found {} files for shard {} in {}", found_file_ids.size(), files._cfg.shard, files._cfg.base_dir.string());
 
     // A temporary file is a format that did not finish. format_file() makes a new one.
     co_await coroutine::parallel_for_each(temporary_files.begin(), temporary_files.end(), [] (const sstring& path) {
@@ -266,7 +307,8 @@ void file_manager::start_next_file_format() {
 // logstor_error_handler: failing to grow (e.g. ENOSPC) only stops further allocation and
 // must not isolate the node, while writes to already formatted files keep working.
 future<> file_manager::format_file(file_id_t file_id) {
-    auto path = file_path(file_id).string();
+    const auto name = file_name::data(_cfg.shard, file_id);
+    const auto path = name.in(_cfg.base_dir).string();
     bool file_exists = co_await seastar::file_exists(path);
     if (!file_exists) {
         // Create and format a temporary file, then move it to the final location.
@@ -278,7 +320,7 @@ future<> file_manager::format_file(file_id_t file_id) {
         // than an order of magnitude, and the durability of the published file is the same either
         // way. The commitlog re-opens its segments without O_DSYNC to pre-write them for the same
         // reason, see segment_manager::allocate_segment_ex().
-        auto tmp_path = path + ".tmp";
+        const auto tmp_path = name.tmp().in(_cfg.base_dir).string();
         auto tmp_file = co_await seastar::open_file_dma(tmp_path,
                 seastar::open_flags::rw | seastar::open_flags::create | seastar::open_flags::truncate);
         if (_cfg.sparse_files) {

@@ -20,11 +20,13 @@
 
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/core/seastar.hh>
+#include <seastar/core/shard_id.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/util/defer.hh>
 
 #include "replica/logstor/index.hh"
 #include "replica/logstor/logstor.hh"
+#include "replica/logstor/segment_file.hh"
 #include "replica/logstor/segment_manager.hh"
 #include "schema/schema_builder.hh"
 #include "test/lib/exception_utils.hh"
@@ -755,7 +757,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_lifecycle_misuse_is_an_internal_error) {
     // start() after a failed recovery fails. The recovery fails because the directory holds file 1
     // and no file 0.
     with_store([] (const tmpdir& dir, logstor& ls) {
-        const auto file_1 = dir.path() / fmt::format("ls_{}-1-Data.db", this_shard_id());
+        const auto file_1 = file_name::data(this_shard_id(), 1).in(dir.path());
         seastar::open_file_dma(file_1.string(), seastar::open_flags::wo | seastar::open_flags::create).get().close().get();
         test_recovery_catalog no_tables;
         BOOST_REQUIRE_THROW(ls.do_recovery(no_tables).get(), std::runtime_error);
