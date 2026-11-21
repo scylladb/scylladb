@@ -87,7 +87,7 @@ During connection setup, the driver and server negotiate `TABLETS_ROUTING_V2` su
 
 The extension is gated behind the experimental feature `strongly-consistent-tables`.
 
-**Note:** We temporarily use a different name for the protocol extension: `TABLETS_ROUTING_V2_EXPERIMENTAL`.
+**Note:** We temporarily use a different name for the protocol extension: `TABLETS_ROUTING_V2_EXPERIMENTAL_V2`.
 The name explicitly conveys that the feature is still experimental and may be modified.
 
 ### EXECUTE request extension
@@ -106,6 +106,8 @@ where <tablet_version_block> is a byte.
 The `tablet_version_block` is associated with the target table of the prepared statement and the specific token being accessed. The driver fetches the `tablet_version` it has cached for the tablet covering the request’s partition token, chooses an arbitrary tablet version block, and sends it as part of the `EXECUTE` request.
 
 For requests that are not single-partition (e.g. range scans), the driver sends an arbitrary `tablet_version_block`. It will be ignored and no routing information will be returned (cf. section [“Server-side changes”](#server-side-changes) below).
+
+Batches, including the `BATCH` request, are covered in [tablets-routing-v2-batches.md](tablets-routing-v2-batches.md).
 
 ### Response payload
 
