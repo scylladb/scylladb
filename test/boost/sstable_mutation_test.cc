@@ -1569,7 +1569,9 @@ SEASTAR_TEST_CASE(test_data_read_corrupt_chunk) {
 
 namespace {
 
-// One partition with a static row and three rows in an uncompressed sstable.
+constexpr int32_t reversed_read_ck_base = 0x7a7b7c00;
+
+// One partition with a static row and nr_rows rows in an uncompressed sstable.
 // With big_row_bytes, row 1 also holds a cell of that size.
 struct reversed_read_corruption_fixture {
     schema_ptr s;
@@ -1580,9 +1582,9 @@ struct reversed_read_corruption_fixture {
     std::vector<uint64_t> ck_ends;
 };
 
-reversed_read_corruption_fixture make_reversed_read_corruption_fixture(test_env& env, size_t big_row_bytes = 0) {
-    constexpr int32_t ck_base = 0x7a7b7c00;
-    constexpr int nr_rows = 3;
+reversed_read_corruption_fixture make_reversed_read_corruption_fixture(test_env& env, size_t big_row_bytes = 0, int nr_rows = 3) {
+    constexpr int32_t ck_base = reversed_read_ck_base;
+    BOOST_REQUIRE_LE(nr_rows, 256);
     auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
             .with_column("pk", int32_type, column_kind::partition_key)
             .with_column("ck", int32_type, column_kind::clustering_key)
@@ -1642,9 +1644,16 @@ void overwrite_data_byte(shared_sstable sst, uint64_t pos, uint8_t value) {
     f.truncate(size).get();
 }
 
-void require_reversed_read_fails(const reversed_read_corruption_fixture& fx, test_env& env, std::string_view expected_msg) {
+// With last_row, reads only the rows up to and including that one.
+void require_reversed_read_fails(const reversed_read_corruption_fixture& fx, test_env& env, std::string_view expected_msg,
+        std::optional<int> last_row = {}) {
     auto rev_s = fx.s->make_reversed();
-    auto slice = query::reverse_slice(*fx.s, fx.s->full_slice());
+    auto slice = fx.s->full_slice();
+    if (last_row) {
+        auto ck = clustering_key::from_single_value(*fx.s, int32_type->decompose(reversed_read_ck_base + *last_row));
+        slice = partition_slice_builder(*fx.s).with_range(query::clustering_range::make_ending_with({ck})).build();
+    }
+    slice = query::reverse_slice(*fx.s, std::move(slice));
     auto pr = dht::partition_range::make_singular(dht::decorate_key(*fx.s, fx.pk));
     auto rd = fx.sst->make_reader(rev_s, env.make_reader_permit(), pr, slice);
     auto close_rd = deferred_close(rd);
@@ -1680,5 +1689,57 @@ SEASTAR_TEST_CASE(test_reversed_read_truncated_data) {
         // Cut at the start of the last row: its flags and clustering block header precede the 4-byte key.
         std::filesystem::resize_file(test(fx.sst).filename(component_type::Data).native(), fx.ck_ends.back() - 6);
         require_reversed_read_fails(fx, env, "no end of partition");
+    });
+}
+
+// A previous-row size that points before the first row must fail a reversed
+// read, not read before the start of the buffer holding the rows.
+SEASTAR_TEST_CASE(test_reversed_read_prev_row_size_before_first_row) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto fx = make_reversed_read_corruption_fixture(env);
+        const auto prev_row_size = fx.ck_ends[2] - fx.ck_ends[1];
+        BOOST_REQUIRE_LT(prev_row_size + 50, 0x80);
+        overwrite_data_byte(fx.sst, fx.ck_ends[2] + 1, prev_row_size + 50);
+        require_reversed_read_fails(fx, env, "previous row start");
+    });
+}
+
+// Same with a partition larger than the first read, where the read for the
+// bogus row starts at its start and isn't short.
+SEASTAR_TEST_CASE(test_reversed_read_prev_row_size_before_first_row_large_partition) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto fx = make_reversed_read_corruption_fixture(env, 5000);
+        // A two-byte vint, pointing near the start of the file.
+        const uint64_t bogus = fx.ck_ends[2] - 10;
+        BOOST_REQUIRE_LT(bogus, 0x4000);
+        overwrite_data_byte(fx.sst, fx.ck_ends[2] + 1, 0x80 | (bogus >> 8));
+        overwrite_data_byte(fx.sst, fx.ck_ends[2] + 2, bogus & 0xff);
+        require_reversed_read_fails(fx, env, "previous row start");
+    });
+}
+
+// A reversed read of a range ending before the last index block starts at the
+// first row after the range, whose previous-row size here wraps the subtraction.
+SEASTAR_TEST_CASE(test_reversed_read_prev_row_size_wraps_at_range_end) {
+    return test_env::do_with_async([] (test_env& env) {
+        env.manager().set_promoted_index_block_size(1);
+        auto fx = make_reversed_read_corruption_fixture(env, 5000, 200);
+        constexpr uint64_t bogus = 0x3fff;
+        BOOST_REQUIRE_LT(fx.ck_ends[2], bogus);
+        overwrite_data_byte(fx.sst, fx.ck_ends[2] + 1, 0x80 | (bogus >> 8));
+        overwrite_data_byte(fx.sst, fx.ck_ends[2] + 2, bogus & 0xff);
+        require_reversed_read_fails(fx, env, "is not before the row start", 1);
+    });
+}
+
+// Same, with a previous-row size reaching before the first row but not to
+// the partition start, as for an empty range.
+SEASTAR_TEST_CASE(test_reversed_read_prev_row_size_before_first_row_at_range_end) {
+    return test_env::do_with_async([] (test_env& env) {
+        env.manager().set_promoted_index_block_size(1);
+        auto fx = make_reversed_read_corruption_fixture(env, 0, 200);
+        BOOST_REQUIRE_LT(fx.ck_ends[1] - fx.ck_ends[0], 0x7f);
+        overwrite_data_byte(fx.sst, fx.ck_ends[1] + 1, 0x7f);
+        require_reversed_read_fails(fx, env, "doesn't lead to the partition start", 0);
     });
 }

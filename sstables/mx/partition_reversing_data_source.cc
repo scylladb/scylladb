@@ -515,6 +515,11 @@ public:
                 } else {
                     _row_end = _row_start;
                     _row_start -= _row_skipping_context->prev_len();
+                    // Can be before _clustering_range_start when the range is empty, checked below.
+                    if (_row_start >= _row_end) {
+                        throw_malformed_sstable_exception(format("partition_reversing_data_source: previous row start {} is not before the row start {}",
+                                _row_start, _row_end), _sst->get_filename());
+                    }
                 }
             }
             if (look_in_last_block) {
@@ -552,10 +557,10 @@ public:
                 // The first index block starts after the range being read,
                 // i.e. the range being read is empty.
                 if (_row_skipping_context->prev_len() != _clustering_range_start - _partition_start) {
-                    on_internal_error(sstlog, format(
-                        "partition_reversing_data_source: invariant broken: _row_start({}) < _clustering_range_start({})"
-                        ", but _row_skipping_context->prev_len()({}) != _clustering_range_start - _partition_start({})",
-                        _row_start, _clustering_range_start, _row_skipping_context->prev_len(), _partition_start));
+                    throw_malformed_sstable_exception(format(
+                        "partition_reversing_data_source: row start {} is before the clustering range start {}"
+                        ", but the previous row size {} doesn't lead to the partition start {} (corrupt index or row size)",
+                        _row_start, _clustering_range_start, _row_skipping_context->prev_len(), _partition_start), _sst->get_filename());
                 }
                 _row_start = _clustering_range_start;
                 _state = state::FINISHED;
@@ -577,6 +582,10 @@ public:
             _row_start -= _row_skipping_context->prev_len();
             if (_row_end == _clustering_range_start) {
                 _state = state::PARTITION_END;
+            } else if (_row_start < _clustering_range_start || _row_start >= _row_end) {
+                // Also catches a wrapped subtraction.
+                throw_malformed_sstable_exception(format("partition_reversing_data_source: previous row start {} is outside the rows [{}, {})",
+                        _row_start, _clustering_range_start, _row_end), _sst->get_filename());
             }
             co_return ret;
         }
