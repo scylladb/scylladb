@@ -221,6 +221,11 @@ netns = "pasta"
 # the host's engine, and with it CI, keeps labeling its containers.
 label = false
 
+[engine]
+# Concurrent runs share the nested engine's state but each has a private
+# /dev/shm, which the default shm locks live in.
+lock_type = "file"
+
 EOF
 
 # Nested containers (e.g. mock services started by test.py) get a container
@@ -261,6 +266,17 @@ if grep -q 'cgroup2.*/sys/fs/cgroup ' /proc/mounts; then
         --pids-limit -1
         --annotation run.oci.keep_original_groups=1
     )
+    # Share the nested engine's tmp dir and runroot per boot: fresh ones look like a
+    # reboot, and the refresh removes concurrent runs' live --rm containers.  Not under
+    # docker, whose rootless nested engine keeps a per-container pause pid there.
+    if [ -n "$is_podman" ]; then
+        nested_rundir="$XDG_CACHE_HOME/scylladb/dbuild-containers-run/$nested_storage_driver/$(< /proc/sys/kernel/random/boot_id)"
+        mkdir -p "$nested_rundir/libpod" "$nested_rundir/storage"
+        docker_common_args+=(
+            -v "$nested_rundir/libpod:/run/libpod"
+            -v "$nested_rundir/storage:/run/containers/storage"
+        )
+    fi
 fi
 
 # if --pids-limit is not supported, add
