@@ -2915,7 +2915,7 @@ public:
     future<table_resize_plan> make_resize_plan(const migration_plan& plan) {
         table_resize_plan resize_plan;
 
-        if (!_tm->tablets().balancing_enabled()) {
+        if (!_tm->tablets().balancing_enabled() || !_tm->tablets().resize_enabled()) {
             co_return std::move(resize_plan);
         }
 
@@ -4791,7 +4791,7 @@ public:
             plan.merge(co_await make_rf_change_plan(nodes, rf_change_actions, dc, rack.value()));
         }
 
-        if (_tm->tablets().balancing_enabled() && plan.empty() && !ongoing_rack_list_colocation()) {
+        if (_tm->tablets().balancing_enabled() && _tm->tablets().resize_enabled() && plan.empty() && !ongoing_rack_list_colocation()) {
             auto dc_merge_plan = co_await make_merge_colocation_plan(nodes);
             auto level = dc_merge_plan.tablet_migration_count() > 0 ? seastar::log_level::info : seastar::log_level::debug;
             lblogger.log(level, "Prepared {} migrations for co-locating sibling tablets in {}", dc_merge_plan.tablet_migration_count(), _location);
