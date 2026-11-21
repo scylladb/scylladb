@@ -15,8 +15,6 @@
 #include "db/partition_snapshot_row_cursor.hh"
 #include <any>
 
-extern seastar::logger mplog;
-
 namespace replica {
 
 template <bool Reversing, typename Accounter>

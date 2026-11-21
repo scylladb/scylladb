@@ -115,7 +115,6 @@ public:
     struct printer {
         const reconcilable_result& self;
         schema_ptr schema;
-        friend std::ostream& operator<<(std::ostream&, const printer&);
     };
 
     printer pretty_printer(schema_ptr) const;
