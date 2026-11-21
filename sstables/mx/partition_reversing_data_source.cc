@@ -533,6 +533,11 @@ public:
                     last_row_start = _row_start;
                     _row_start = _row_skipping_context->position();
                     co_await _row_skipping_context->consume_input();
+                    // No progress: the data ended or a skip hit the range end before the end of partition flag.
+                    if (!_row_skipping_context->end_of_partition() && _row_skipping_context->position() == _row_start) {
+                        throw_malformed_sstable_exception(format("partition_reversing_data_source: no end of partition before {}",
+                                _partition_end), _sst->get_filename());
+                    }
                 }
                 _row_end = _row_start;
                 _row_start = last_row_start;

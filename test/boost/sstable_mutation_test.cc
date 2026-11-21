@@ -36,6 +36,8 @@
 #include "test/lib/log.hh"
 
 #include "readers/from_fragments.hh"
+#include <seastar/core/on_internal_error.hh>
+#include <seastar/core/with_timeout.hh>
 
 using namespace sstables;
 using namespace std::chrono_literals;
@@ -1562,5 +1564,121 @@ SEASTAR_TEST_CASE(test_data_read_corrupt_chunk) {
 
             BOOST_REQUIRE_THROW(sst->data_read(0, sst->data_size(), env.make_reader_permit()).get(), malformed_sstable_exception);
         }
+    });
+}
+
+namespace {
+
+// One partition with a static row and three rows in an uncompressed sstable.
+// With big_row_bytes, row 1 also holds a cell of that size.
+struct reversed_read_corruption_fixture {
+    schema_ptr s;
+    partition_key pk;
+    shared_sstable sst;
+    // Data.db offset past each row's clustering key, where its
+    // row_body_size and prev_unfiltered_size vints start.
+    std::vector<uint64_t> ck_ends;
+};
+
+reversed_read_corruption_fixture make_reversed_read_corruption_fixture(test_env& env, size_t big_row_bytes = 0) {
+    constexpr int32_t ck_base = 0x7a7b7c00;
+    constexpr int nr_rows = 3;
+    auto s = schema_builder(this_smp_shard_count(), "ks", "cf")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .with_column("ck", int32_type, column_kind::clustering_key)
+            .with_column("s", utf8_type, column_kind::static_column)
+            .with_column("v", int32_type)
+            .with_column("big", utf8_type)
+            .set_compressor_params(compression_parameters::no_compression())
+            .build();
+    auto pk = partition_key::from_single_value(*s, int32_type->decompose(1));
+    mutation m(s, pk);
+    m.set_static_cell(to_bytes("s"), data_value(sstring(200, 'x')), 1);
+    for (int i = 0; i < nr_rows; ++i) {
+        auto ck = clustering_key::from_single_value(*s, int32_type->decompose(ck_base + i));
+        m.set_clustered_cell(ck, to_bytes("v"), data_value(i), 1);
+        if (big_row_bytes && i == 1) {
+            m.set_clustered_cell(ck, to_bytes("big"), data_value(sstring(big_row_bytes, 'y')), 1);
+        }
+    }
+    auto sst = make_sstable_containing(env.make_sstable(s), {std::move(m)}).get();
+    BOOST_REQUIRE(!sst->has_component(component_type::CompressionInfo));
+
+    auto data = sst->data_read(0, sst->data_size(), env.make_reader_permit()).get();
+    std::string_view view(data.get(), data.size());
+    std::vector<uint64_t> ck_ends;
+    for (int i = 0; i < nr_rows; ++i) {
+        auto ck = int32_type->decompose(ck_base + i);
+        auto pos = view.find(std::string_view(reinterpret_cast<const char*>(ck.data()), ck.size()));
+        BOOST_REQUIRE(pos != std::string_view::npos);
+        pos += ck.size();
+        BOOST_REQUIRE_LT(pos + 1, view.size());
+        // One-byte vints can be overwritten in place. Row 0's previous unfiltered is the large static row.
+        // With a big row 1, row 1's own size vint and row 2's previous size vint are two bytes.
+        const bool big_row = big_row_bytes && i == 1;
+        BOOST_REQUIRE(big_row || uint8_t(view[pos]) < 0x80);
+        if (big_row_bytes && i == 2) {
+            BOOST_REQUIRE_EQUAL(uint8_t(view[pos + 1]) & 0xc0, 0x80);
+        } else {
+            BOOST_REQUIRE(i == 0 || big_row || uint8_t(view[pos + 1]) < 0x80);
+        }
+        ck_ends.push_back(pos);
+    }
+    return {std::move(s), std::move(pk), std::move(sst), std::move(ck_ends)};
+}
+
+void overwrite_data_byte(shared_sstable sst, uint64_t pos, uint8_t value) {
+    auto f = open_file_dma(test(sst).filename(component_type::Data).native(), open_flags::rw).get();
+    auto close_f = deferred_close(f);
+    const auto block_size = f.disk_write_dma_alignment();
+    const auto block_pos = align_down<uint64_t>(pos, block_size);
+    auto buf = temporary_buffer<char>::aligned(f.memory_dma_alignment(), block_size);
+    const auto len = f.dma_read(block_pos, buf.get_write(), block_size).get();
+    BOOST_REQUIRE_GT(len, pos - block_pos);
+    buf.get_write()[pos - block_pos] = value;
+    const auto size = f.size().get();
+    BOOST_REQUIRE_EQUAL(f.dma_write(block_pos, buf.get(), block_size).get(), block_size);
+    // The full-block write pads past EOF; restore the original size.
+    f.truncate(size).get();
+}
+
+void require_reversed_read_fails(const reversed_read_corruption_fixture& fx, test_env& env, std::string_view expected_msg) {
+    auto rev_s = fx.s->make_reversed();
+    auto slice = query::reverse_slice(*fx.s, fx.s->full_slice());
+    auto pr = dht::partition_range::make_singular(dht::decorate_key(*fx.s, fx.pk));
+    auto rd = fx.sst->make_reader(rev_s, env.make_reader_permit(), pr, slice);
+    auto close_rd = deferred_close(rd);
+    try {
+        with_timeout(lowres_clock::now() + 60s, read_mutation_from_mutation_reader(rd)).get();
+        BOOST_FAIL("reversed read of a corrupt sstable succeeded");
+    } catch (const timed_out_error&) {
+        // The read can't be stopped, so the test can't finish.
+        on_fatal_internal_error(testlog, "reversed read of a corrupt sstable didn't finish");
+    } catch (const malformed_sstable_exception& e) {
+        testlog.info("reversed read failed as expected: {}", e.what());
+        BOOST_REQUIRE_MESSAGE(std::string_view(e.what()).contains(expected_msg), "unexpected error: " << e.what());
+    }
+}
+
+} // anonymous namespace
+
+// A row size that points past the end of the partition must fail a reversed
+// read, not make it loop forever looking for the last row.
+SEASTAR_TEST_CASE(test_reversed_read_row_size_past_partition_end) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto fx = make_reversed_read_corruption_fixture(env);
+        overwrite_data_byte(fx.sst, fx.ck_ends.back(), 0x7f);
+        require_reversed_read_fails(fx, env, "no end of partition");
+    });
+}
+
+// A Data.db shorter than the partition end in the index must fail a reversed
+// read too, though the row skip never crosses the end of its range.
+SEASTAR_TEST_CASE(test_reversed_read_truncated_data) {
+    return test_env::do_with_async([] (test_env& env) {
+        auto fx = make_reversed_read_corruption_fixture(env);
+        // Cut at the start of the last row: its flags and clustering block header precede the 4-byte key.
+        std::filesystem::resize_file(test(fx.sst).filename(component_type::Data).native(), fx.ck_ends.back() - 6);
+        require_reversed_read_fails(fx, env, "no end of partition");
     });
 }
