@@ -599,6 +599,35 @@ bool should_split(const mutation& m, const per_request_options& options) {
         || v._ts == api::missing_timestamp;
 }
 
+static atomic_cell_or_collection make_collection(const nonatomic_column_update& update) {
+    collection_mutation_writer w(update.t);
+    for (auto& [k, v] : update.cells) {
+        w.push_back(bytes_view(k), atomic_cell_view(v));
+    }
+    return std::move(w).finish();
+}
+
+// Adds the entries' cells to the empty row r, a block at a time.
+template<EntryContainer Container>
+static void append_entries(row& r, const schema& s, column_kind kind, Container& cont) {
+    // Each list is in column id order (the order of the cells in the base row),
+    // and a column is in one of them; merge them to append in column id order.
+    row::cell_appender appender(r, s, kind);
+    auto atomic = cont.atomic_entries.begin();
+    auto nonatomic = cont.nonatomic_entries.begin();
+    while (atomic != cont.atomic_entries.end() || nonatomic != cont.nonatomic_entries.end()) {
+        if (nonatomic == cont.nonatomic_entries.end()
+                || (atomic != cont.atomic_entries.end() && atomic->id < nonatomic->id)) {
+            appender.append(atomic->id, atomic_cell_or_collection(std::move(atomic->cell)));
+            ++atomic;
+        } else {
+            appender.append(nonatomic->id, make_collection(*nonatomic));
+            ++nonatomic;
+        }
+    }
+    appender.finish();
+}
+
 void process_changes_with_splitting(const mutation& base_mutation, change_processor& processor,
         bool enable_preimage, bool enable_postimage) {
     const auto base_schema = base_mutation.schema();
@@ -633,20 +662,7 @@ void process_changes_with_splitting(const mutation& base_mutation, change_proces
 
         for (auto& sr_update : btch.static_updates) {
             mutation m(base_schema, pk);
-            for (auto& atomic_update : sr_update.atomic_entries) {
-                auto& cdef = base_schema->column_at(column_kind::static_column, atomic_update.id);
-                m.set_static_cell(cdef, std::move(atomic_update.cell));
-            }
-            for (auto& nonatomic_update : sr_update.nonatomic_entries) {
-                auto& cdef = base_schema->column_at(column_kind::static_column, nonatomic_update.id);
-                m.set_static_cell(cdef, [&]() {
-                    collection_mutation_writer w(nonatomic_update.t);
-                    for (auto& [k, v] : nonatomic_update.cells) {
-                        w.push_back(bytes_view(k), atomic_cell_view(v));
-                    }
-                    return std::move(w).finish();
-                }());
-            }
+            append_entries(m.partition().static_row().maybe_create(), *base_schema, column_kind::static_column, sr_update);
             processor.process_change(m);
         }
 
@@ -654,20 +670,7 @@ void process_changes_with_splitting(const mutation& base_mutation, change_proces
             mutation m(base_schema, pk);
 
             auto& row = m.partition().clustered_row(*base_schema, cr_insert.key);
-            for (auto& atomic_update : cr_insert.atomic_entries) {
-                auto& cdef = base_schema->column_at(column_kind::regular_column, atomic_update.id);
-                row.cells().apply(cdef, std::move(atomic_update.cell));
-            }
-            for (auto& nonatomic_update : cr_insert.nonatomic_entries) {
-                auto& cdef = base_schema->column_at(column_kind::regular_column, nonatomic_update.id);
-                row.cells().apply(cdef, [&]() {
-                    collection_mutation_writer w(nonatomic_update.t);
-                    for (auto& [k, v] : nonatomic_update.cells) {
-                        w.push_back(bytes_view(k), atomic_cell_view(v));
-                    }
-                    return std::move(w).finish();
-                }());
-            }
+            append_entries(row.cells(), *base_schema, column_kind::regular_column, cr_insert);
             row.apply(cr_insert.marker);
 
             processor.process_change(m);
@@ -677,20 +680,7 @@ void process_changes_with_splitting(const mutation& base_mutation, change_proces
             mutation m(base_schema, pk);
 
             auto& row = m.partition().clustered_row(*base_schema, cr_update.key).cells();
-            for (auto& atomic_update : cr_update.atomic_entries) {
-                auto& cdef = base_schema->column_at(column_kind::regular_column, atomic_update.id);
-                row.apply(cdef, std::move(atomic_update.cell));
-            }
-            for (auto& nonatomic_update : cr_update.nonatomic_entries) {
-                auto& cdef = base_schema->column_at(column_kind::regular_column, nonatomic_update.id);
-                row.apply(cdef, [&]() {
-                    collection_mutation_writer w(nonatomic_update.t);
-                    for (auto& [k, v] : nonatomic_update.cells) {
-                        w.push_back(bytes_view(k), atomic_cell_view(v));
-                    }
-                    return std::move(w).finish();
-                }());
-            }
+            append_entries(row, *base_schema, column_kind::regular_column, cr_update);
 
             processor.process_change(m);
         }
