@@ -68,6 +68,7 @@
 #include "locator/token_metadata.hh"
 #include "locator/topology.hh"
 #include <seastar/core/smp.hh>
+#include <seastar/core/memory.hh>
 #include "replica/database.hh"
 #include "service/raft/raft_group0_client.hh"
 
@@ -1765,5 +1766,49 @@ SEASTAR_TEST_CASE(test_prepared_statement_after_use) {
             .is_rows().with_rows({{int32_type->decompose(2)}});
     });
 }
+
+#ifndef SEASTAR_DEFAULT_ALLOCATOR // Charges are measured with the seastar allocator stats.
+// Reports each statement's cache charge next to the memory it really retains:
+// the allocated_memory() growth while holding n copies, with no yield in between.
+SEASTAR_TEST_CASE(test_prepared_statement_cache_charge) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        sstring col_defs, col_names, markers;
+        for (int i = 0; i < 100; i++) {
+            col_defs += format(", c{} int", i);
+            col_names += format(", c{}", i);
+            markers += ", ?";
+        }
+        e.execute_cql(format("CREATE TABLE ks.wide (pk int PRIMARY KEY{})", col_defs)).get();
+
+        service::query_state qs(service::client_state::for_internal_calls(), empty_service_permit());
+        auto& qp = e.local_qp();
+        constexpr int n = 100;
+        const size_t min_charge = sizeof(cql3::statements::prepared_statement);
+        auto charge = [&] (const char* what, const sstring& query) {
+            std::vector<std::unique_ptr<cql3::statements::prepared_statement>> kept;
+            kept.reserve(n);
+            size_t charged = 0;
+            auto before = int64_t(memory::stats().allocated_memory());
+            for (int i = 0; i < n; i++) {
+                kept.push_back(qp.get_statement(query, qs.get_client_state(), cql3::internal_dialect(),
+                        cql3::query_processor::prepared_for_driver::yes));
+                charged += kept.back()->cache_charge;
+            }
+            auto retained = int64_t(memory::stats().allocated_memory()) - before;
+            BOOST_TEST_MESSAGE(fmt::format("{}: charged {} bytes, retained ~{} bytes, sizeof floor {}",
+                    what, charged / n, retained / n, min_charge));
+            BOOST_REQUIRE_GE(charged / n, min_charge);
+            return charged / n;
+        };
+
+        auto select = charge("SELECT", "SELECT * FROM ks.wide WHERE pk = ?");
+        auto insert = charge("INSERT(100 columns)", format("INSERT INTO ks.wide (pk{}) VALUES (?{})", col_names, markers));
+        auto batch = charge("BATCH(2 INSERTs)", "BEGIN BATCH INSERT INTO ks.wide (pk, c0) VALUES (?, ?); "
+                "INSERT INTO ks.wide (pk, c1) VALUES (?, ?); APPLY BATCH");
+        BOOST_REQUIRE_GT(insert, select);
+        BOOST_REQUIRE_GT(batch, min_charge);
+    });
+}
+#endif
 
 BOOST_AUTO_TEST_SUITE_END()

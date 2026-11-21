@@ -22,8 +22,7 @@ using prepared_cache_entry = std::unique_ptr<statements::prepared_statement>;
 
 struct prepared_cache_entry_size {
     size_t operator()(const prepared_cache_entry& val) {
-        // TODO: improve the size approximation
-        return 10000;
+        return val->cache_charge;
     }
 };
 

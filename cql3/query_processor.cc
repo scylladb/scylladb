@@ -837,6 +837,7 @@ query_processor::get_statement(utils::chunked_string_view query, const service::
         }
     }
     ++_stats.prepare_invocations;
+    [[maybe_unused]] auto bytes_before_prepare = seastar::memory::stats().total_bytes_allocated();
     auto p = statement->prepare(_db, _cql_stats, _cql_config);
     // The driver gets the partition key bind indices in the PREPARED metadata.
     p->statement->_may_use_token_aware_routing = for_driver && !p->partition_key_bind_indices.empty();
@@ -848,6 +849,12 @@ query_processor::get_statement(utils::chunked_string_view query, const service::
     }
     auto bytes_after = seastar::memory::stats().total_bytes_allocated();
     _parsing_cost_tracker.add_sample(bytes_after - bytes_before);
+#ifndef SEASTAR_DEFAULT_ALLOCATOR
+    // Upper bound on retained memory: prepare-time temporaries are counted too.
+    p->cache_charge = std::max<size_t>(bytes_after - bytes_before_prepare, sizeof(prepared_statement));
+#endif
+    // Cap so a huge statement still prepares and evicts at most a tenth of the cache; never 0.
+    p->cache_charge = std::max<size_t>(std::min(p->cache_charge, _mcfg.prepared_statment_cache_size / 10), 1);
     return p;
 }
 

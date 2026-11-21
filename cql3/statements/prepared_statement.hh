@@ -64,6 +64,9 @@ public:
     const std::vector<seastar::lw_shared_ptr<column_specification>> bound_names;
     const std::vector<uint16_t> partition_key_bind_indices;
     std::vector<sstring> warnings;
+    // Bytes charged to the prepared statements cache, measured by query_processor::get_statement().
+    // The default is kept when the seastar allocator (and its stats) is absent.
+    size_t cache_charge = 10000;
 private:
     cql_metadata_id_type _metadata_id;
 

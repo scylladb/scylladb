@@ -743,15 +743,29 @@ SEASTAR_THREAD_TEST_CASE(test_loading_cache_remove_leaves_no_old_entries_behind)
     }
 }
 
-SEASTAR_TEST_CASE(test_prepared_statement_small_cache) {
+SEASTAR_THREAD_TEST_CASE(test_prepared_statement_small_cache) {
     // CQL prepared statement cache uses loading_cache
     // internally.
-    constexpr auto CACHE_SIZE = 950000;
+    // Size the cache to hold ~90% of the charge of 100 statements, as measured in a first env.
+    size_t total_charge = 0;
+    do_with_cql_env_thread([&total_charge](cql_test_env& e) {
+        e.execute_cql("CREATE TABLE tbl1 (a int, b int, PRIMARY KEY (a))").get();
+        // Warm-up: first-prepare one-time allocations must not inflate the measured charges.
+        e.prepare("SELECT * FROM tbl1 WHERE a = -1").get();
+        for (int i = 0; i < 100; i++) {
+            auto prepared_id = e.prepare(fmt::format("SELECT * FROM tbl1 WHERE a = {}", i)).get();
+            total_charge += e.local_qp().get_prepared(prepared_id)->cache_charge;
+        }
+    }).get();
+    const size_t CACHE_SIZE = total_charge * 90 / 100;
+    testlog.info("100 statements charged {} bytes, cache size {}", total_charge, CACHE_SIZE);
 
     cql_test_config small_cache_config;
     small_cache_config.qp_mcfg = {CACHE_SIZE, CACHE_SIZE};
-    return do_with_cql_env_thread([](cql_test_env& e) {
+    do_with_cql_env_thread([](cql_test_env& e) {
         e.execute_cql("CREATE TABLE tbl1 (a int, b int, PRIMARY KEY (a))").get();
+        // Same warm-up as the measuring env, so steady-state charges match.
+        e.prepare("SELECT * FROM tbl1 WHERE a = -1").get();
 
         auto current_uid = 0;
 
@@ -822,23 +836,24 @@ SEASTAR_TEST_CASE(test_prepared_statement_small_cache) {
                 } 
             }
         }        
-    }, small_cache_config);
+    }, small_cache_config).get();
 }
 
-// A statement which is too big to fit in the prepared statement cache cannot
-// be prepared. Check that this is reported as an InvalidRequest (as in
-// Cassandra), and not as a generic server error.
+// A statement bigger than the prepared statement cache is charged a tenth
+// of the cache size, so it can still be prepared and executed.
 SEASTAR_TEST_CASE(test_prepared_statement_too_big_for_cache) {
     // A cache smaller than any single prepared statement
-    constexpr auto CACHE_SIZE = 100;
+    static constexpr size_t CACHE_SIZE = 100;
 
     cql_test_config tiny_cache_config;
     tiny_cache_config.qp_mcfg = {CACHE_SIZE, CACHE_SIZE};
     return do_with_cql_env_thread([](cql_test_env& e) {
         e.execute_cql("CREATE TABLE tbl1 (a int, b int, PRIMARY KEY (a))").get();
-        BOOST_REQUIRE_EXCEPTION(e.prepare("SELECT * FROM tbl1 WHERE a = 1").get(),
-                exceptions::invalid_request_exception,
-                exception_predicate::message_contains("Prepared statement is too big"));
+        auto prepared_id = e.prepare("SELECT * FROM tbl1 WHERE a = 1").get();
+        auto prepared = e.local_qp().get_prepared(prepared_id);
+        BOOST_REQUIRE(prepared);
+        BOOST_REQUIRE_EQUAL(prepared->cache_charge, CACHE_SIZE / 10);
+        e.execute_prepared(prepared_id, {}).get();
     }, tiny_cache_config);
 }
 
