@@ -505,7 +505,7 @@ public:
     future<> write(write_buffer&);
     future<> write_full_segment(write_buffer&, logstor_group&, write_source, abort_source* = nullptr);
 
-    future<log_record> read(record_location);
+    future<log_record> read(record_location) noexcept;
 
     void on_add_record(record_location) noexcept;
     void on_free_record(record_location) noexcept;
@@ -1244,33 +1244,55 @@ void segment_manager_impl::on_move_record(record_location from, record_location 
     _stats.live_record_bytes -= from.size;
 }
 
-future<log_record> segment_manager_impl::read(record_location location) {
+future<log_record> segment_manager_impl::read(record_location location) noexcept {
+  try {
     auto holder = _async_gate.hold();
 
     if (location.offset + location.size > _cfg.segment_size) [[unlikely]] {
-        co_return coroutine::exception(std::make_exception_ptr(std::runtime_error(fmt::format(
+        return make_exception_future<log_record>(std::runtime_error(fmt::format(
             "Read beyond end of segment {}: offset {} + size {} > segment size {}",
-            location.segment, location.offset, location.size, _cfg.segment_size))));
+            location.segment, location.offset, location.size, _cfg.segment_size)));
     }
 
     auto [file_id, offset] = _geometry.position_of(location);
-    // The file it reads from outlives the read: it is held here, on the frame of this coroutine,
-    // because the read is issued on it and seastar keeps reading from it after the first suspension.
     auto file = _file_mgr.get_open_file(file_id);
 
-    // The bulk read is what dma_read_exactly() does underneath, over two coroutine frames of its
-    // own: one to trim the buffer the disk gave back to the size that was asked for, and one to
-    // reject a short read. This coroutine is already here to do both.
-    auto buf = co_await file.dma_read_bulk<char>(offset, location.size);
-    if (buf.size() < location.size) [[unlikely]] {
-        co_return coroutine::exception(std::make_exception_ptr(std::runtime_error(fmt::format(
-            "Short read of segment {}: got {} bytes of the {} asked for at offset {}",
-            location.segment, buf.size(), location.size, location.offset))));
-    }
-    buf.trim(location.size);
-    _stats.bytes_read += location.size;
-    auto frame = simple_memory_input_stream(buf.begin(), buf.size());
-    co_return ondisk::read_record_frame(frame);
+    // A direct read must start and end at the disk alignment of the file, so the read takes the
+    // aligned range that holds the record frame.
+    const uint64_t alignment = file.disk_read_dma_alignment();
+    const uint64_t aligned_offset = align_down(offset, alignment);
+    const size_t front = offset - aligned_offset;
+    const size_t aligned_size = align_up(front + location.size, alignment);
+    auto buf = temporary_buffer<char>::aligned(file.memory_dma_alignment(), aligned_size);
+    auto read = file.dma_read(aligned_offset, buf.get_write(), aligned_size);
+
+    auto parse_record = [this, location] (const temporary_buffer<char>& buf) {
+        if (buf.size() < location.size) [[unlikely]] {
+            return make_exception_future<log_record>(std::runtime_error(fmt::format(
+                "Short read of segment {}: got {} bytes of the {} asked for at offset {}",
+                location.segment, buf.size(), location.size, location.offset)));
+        }
+        _stats.bytes_read += location.size;
+        auto frame = simple_memory_input_stream(buf.begin(), location.size);
+        return make_ready_future<log_record>(ondisk::read_record_frame(frame));
+    };
+
+    return read.then([location, offset, front, parse_record, file = std::move(file), buf = std::move(buf),
+            holder = std::move(holder)] (size_t size) mutable {
+        if (size < front + location.size || utils::get_local_injector().enter("logstor_read_short")) [[unlikely]] {
+            // A short read can occur before the end of the file, and dma_read_bulk() reads again
+            // until it has all the bytes or gets to the end of the file.
+            auto reread = file.dma_read_bulk<char>(offset, location.size);
+            return reread.then([parse_record, file, holder = std::move(holder)] (temporary_buffer<char> buf) {
+                return parse_record(buf);
+            });
+        }
+        buf.trim_front(front);
+        return parse_record(buf);
+    });
+  } catch (...) {
+    return current_exception_as_future<log_record>();
+  }
 }
 
 future<> segment_manager_impl::request_segment_switch() {
@@ -2442,7 +2464,7 @@ future<> segment_manager::write(write_buffer& wb) {
     return _impl->write(wb);
 }
 
-future<log_record> segment_manager::read(const index_read_guard&, record_location location) {
+future<log_record> segment_manager::read(const index_read_guard&, record_location location) noexcept {
     return _impl->read(location);
 }
 

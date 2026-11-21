@@ -1153,6 +1153,63 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_read_after_stop_fails_the_future) {
     BOOST_REQUIRE_THROW(read_mutation(ls, schema, cg.logstor_index(), m.decorated_key(), schema->full_slice()).get(), gate_closed_exception);
 }
 
+// A short read of a record frame before the end of the file makes the read of the segment read the
+// record frame again, and the read returns the record.
+SEASTAR_THREAD_TEST_CASE(test_logstor_read_after_short_read) {
+    if constexpr (!std::is_same_v<utils::error_injection_type, utils::error_injection<true>>) {
+        return;
+    }
+
+    auto schema = make_kv_schema();
+    tmpdir dir;
+
+    shared_logstor_cache cache;
+    logstor ls(make_test_logstor_config(dir.path()), cache.shared_tracker);
+    test_recovery_catalog no_tables;
+    ls.do_recovery(no_tables).get();
+    ls.start().get();
+    auto stop_store = seastar::defer([&ls] noexcept { ls.stop().get(); });
+
+    test_logstor_group cg(schema, ls);
+    auto expected = make_kv_mutation(schema, "pk0", "short-read-value");
+    ls.write(expected, write_target(&cg, {}), db::no_timeout).get();
+
+    utils::get_local_injector().enable("logstor_read_short", true);
+    auto actual = read_mutation(ls, schema, cg.logstor_index(), expected.decorated_key(), schema->full_slice()).get();
+    // The injection is one-shot, so it is disabled only if the read went through it.
+    BOOST_REQUIRE(!utils::get_local_injector().is_enabled("logstor_read_short"));
+    BOOST_REQUIRE(actual);
+    assert_that(*actual).is_equal_to(expected);
+}
+
+// A short read of a record frame at the end of the file makes the second read short too, and the
+// read of the segment fails.
+SEASTAR_THREAD_TEST_CASE(test_logstor_read_fails_after_two_short_reads) {
+    auto schema = make_kv_schema();
+    tmpdir dir;
+
+    shared_logstor_cache cache;
+    logstor ls(make_test_logstor_config(dir.path()), cache.shared_tracker);
+    test_recovery_catalog no_tables;
+    ls.do_recovery(no_tables).get();
+    ls.start().get();
+    auto stop_store = seastar::defer([&ls] noexcept { ls.stop().get(); });
+
+    test_logstor_group cg(schema, ls);
+    auto m = make_kv_mutation(schema, "pk0", "v0");
+    ls.write(m, write_target(&cg, {}), db::no_timeout).get();
+
+    // The test truncates the file of the record's segment to zero bytes, so each read of the record
+    // frame starts at the end of the file and returns no bytes.
+    const auto location = lookup_location(cg.logstor_index(), make_index_key(*schema, m.decorated_key()), *schema);
+    BOOST_REQUIRE(location);
+    const std::string path = ls.get_segment_manager().get_segment_file_path(location->segment);
+    std::filesystem::resize_file(path, 0);
+
+    BOOST_REQUIRE_EXCEPTION(read_mutation(ls, schema, cg.logstor_index(), m.decorated_key(), schema->full_slice()).get(),
+            std::runtime_error, exception_predicate::message_contains("Short read of segment"));
+}
+
 // Checks that a record that does not fit a segment of either kind is rejected by the write path,
 // rather than accepted into a mixed segment that the separator would then not be able to split.
 SEASTAR_THREAD_TEST_CASE(test_logstor_rejects_record_that_does_not_fit_a_segment_of_either_kind) {
