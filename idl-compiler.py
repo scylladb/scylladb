@@ -328,12 +328,16 @@ class ClassDef(ASTBase):
 {self.template_declaration}
 template <typename Output>
 void serializer<{full_name}>::write(Output& buf, const {full_name}& obj) {{""")
-        size = None if self.final else self.fixed_size()
+        fields = [m for m in self.members if not isinstance(m, (ClassDef, EnumDef))]
+        # A final class with one field writes once anyway; reserving would only add a substream.
+        # A zero-size class writes nothing, and bytes_ostream can't reserve 0 bytes.
+        size = None if self.final and len(fields) < 2 else self.fixed_size() or None
         out = "buf" if size is None else "idl_out"
         if size is not None:
             # Reserve the whole object once: each separate stream write reloads the stream's state (measured).
-            fprintln(cout, f"""  auto idl_out = reserve_fixed_size(buf, {size});
-  serialize(idl_out, size_type({size}));""")
+            fprintln(cout, f"""  auto idl_out = reserve_fixed_size(buf, {size});""")
+            if not self.final:
+                fprintln(cout, f"""  serialize(idl_out, size_type({size}));""")
         elif not self.final:
             fprintln(cout, f"""  auto {FRAME_VAR} = start_frame(buf);""")
         for member in self.members:

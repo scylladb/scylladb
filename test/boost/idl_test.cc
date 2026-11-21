@@ -15,6 +15,7 @@
 
 #include <fmt/ranges.h>
 
+#include <span>
 #include <vector>
 #include <optional>
 #include <fmt/ranges.h>
@@ -112,6 +113,11 @@ struct empty_struct { };
 
 struct empty_final_struct { };
 
+struct two_empty_final_structs {
+    empty_final_struct a;
+    empty_final_struct b;
+};
+
 class fragment_generator {
     std::vector<bytes> data;
 public:
@@ -192,20 +198,17 @@ BOOST_AUTO_TEST_CASE(test_simple_compound)
     BOOST_REQUIRE_EQUAL(sc.bar, sc_view.bar());
 }
 
-BOOST_AUTO_TEST_CASE(test_fixed_size_across_fragments)
-{
-    // Fixed-size classes reserve their whole size at once; 7-byte fragments split every reservation.
-    std::vector<simple_compound> vec;
-    for (uint32_t i = 0; i < 10; ++i) {
-        vec.push_back({i, ~i});
-    }
+// Fixed-size classes reserve their whole size at once; 7-byte fragments split every reservation.
+template <typename T>
+static void check_across_fragments(const std::vector<T>& vec, std::span<const uint8_t> golden, size_t size) {
     bytes_ostream expected_out;
     ser::serialize(expected_out, vec);
     auto expected = expected_out.linearize();
-    // Pin the wire format: vector count, then {i=0}: frame size 12, foo 0, bar ~0 (little-endian).
-    const uint8_t golden[] = {10, 0, 0, 0, 12, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 0xff, 0xff};
-    BOOST_REQUIRE_EQUAL(expected.size(), 4 + 10 * 12);
-    BOOST_REQUIRE(std::equal(std::begin(golden), std::end(golden), reinterpret_cast<const uint8_t*>(expected.data())));
+    BOOST_REQUIRE_EQUAL(expected.size(), size);
+    BOOST_REQUIRE(std::equal(golden.begin(), golden.end(), reinterpret_cast<const uint8_t*>(expected.data())));
+    // The measuring stream reports the IDL-computed size without writing; check it against the real write.
+    BOOST_REQUIRE_EQUAL(ser::get_sizeof(vec), size);
+    BOOST_REQUIRE(bytes_view(ser::serialize_to_buffer<bytes>(vec)) == expected);
 
     std::vector<seastar::temporary_buffer<char>> frags;
     for (size_t left = expected.size(); left; ) {
@@ -223,6 +226,28 @@ BOOST_AUTO_TEST_CASE(test_fixed_size_across_fragments)
         actual.append(f.get(), f.size());
     }
     BOOST_REQUIRE(actual == std::string(reinterpret_cast<const char*>(expected.data()), expected.size()));
+}
+
+BOOST_AUTO_TEST_CASE(test_fixed_size_across_fragments)
+{
+    std::vector<simple_compound> vec;
+    for (uint32_t i = 0; i < 10; ++i) {
+        vec.push_back({i, ~i});
+    }
+    // Pin the wire format: vector count, then {i=0}: frame size 12, foo 0, bar ~0 (little-endian).
+    const uint8_t golden[] = {10, 0, 0, 0, 12, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 0xff, 0xff};
+    check_across_fragments(vec, golden, 4 + 10 * 12);
+}
+
+BOOST_AUTO_TEST_CASE(test_final_fixed_size_across_fragments)
+{
+    std::vector<utils::UUID> vec;
+    for (int64_t i = 0; i < 10; ++i) {
+        vec.emplace_back(i + 1, ~i);
+    }
+    // Final classes have no frame: vector count, then msb 1, lsb ~0 (little-endian).
+    const uint8_t golden[] = {10, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
+    check_across_fragments(vec, golden, 4 + 10 * 16);
 }
 
 BOOST_AUTO_TEST_CASE(test_vector)
@@ -445,6 +470,13 @@ BOOST_AUTO_TEST_CASE(test_empty_struct)
 
     auto in2 = ser::as_input_stream(buf2.linearize());
     ser::deserialize(in2, std::type_identity<empty_final_struct>());
+
+    // A zero-size final class must not reserve 0 bytes in a fresh bytes_ostream.
+    bytes_ostream buf3;
+    ser::serialize(buf3, two_empty_final_structs());
+    BOOST_REQUIRE_EQUAL(buf3.size(), 0);
+    auto in3 = ser::as_input_stream(buf3.linearize());
+    ser::deserialize(in3, std::type_identity<two_empty_final_structs>());
 }
 
 BOOST_AUTO_TEST_CASE(test_just_a_variant)

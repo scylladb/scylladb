@@ -72,6 +72,11 @@ struct empty_struct { };
 
 struct empty_final_struct final { };
 
+struct two_empty_final_structs final {
+    empty_final_struct a;
+    empty_final_struct b;
+};
+
 struct just_a_variant stub [[writable]] {
     std::variant<writable_simple_compound, simple_compound> variant;
 };
