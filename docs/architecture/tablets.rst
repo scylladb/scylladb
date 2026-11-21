@@ -163,6 +163,9 @@ See :doc:`Configuring a Cluster with CQL </cql/cluster-config>`.
 Finally, the computed tablet count is compared with the current tablet count for each table, and if there is
 a difference, a table resize (split or merge) is executed.
 
+Splits and merges can be disabled for the whole cluster in an emergency, see
+:doc:`Disabling Tablet Background Operations </operating-scylla/procedures/maintenance/tablet-background-operations>`.
+
 .. _tablets-enable-tablets: 
 
 Enabling Tablets
