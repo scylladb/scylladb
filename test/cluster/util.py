@@ -121,11 +121,8 @@ class FeatureConfigurations(Enum):
         table_opts=" WITH storage_engine = 'logstor'",
         cluster_cfg={"logstor_disk_size_in_mb":20, "logstor_file_size_in_mb":1},
     )
-    LOGSTOR_STRONG_CONSISTENCY = FeatureConfig(
-        ks_opts=" WITH consistency = 'global'",
-        table_opts=" WITH storage_engine = 'logstor'",
-        cluster_cfg={"logstor_disk_size_in_mb":20, "logstor_file_size_in_mb":1},
-    )
+    # TODO: Re-evaluate existing tests for logstor + strong consistency combination
+    # after it becomes supported (SCYLLADB-5759) and add a mark for it here.
 
     def with_marks(self, *marks):
         """Return this configuration as a pytest.param with the given marks, e.g. to skip

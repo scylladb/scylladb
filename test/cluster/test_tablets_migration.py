@@ -737,8 +737,7 @@ async def test_restart_leaving_replica_during_cleanup(manager: ScyllaClusterMana
 
 
 @pytest.mark.parametrize("feature_config", feature_configs(FeatureConfigurations.EVENTUAL_CONSISTENCY,
-    FeatureConfigurations.STRONG_CONSISTENCY, FeatureConfigurations.LOGSTOR_EVENTUAL_CONSISTENCY,
-    FeatureConfigurations.LOGSTOR_STRONG_CONSISTENCY))
+    FeatureConfigurations.STRONG_CONSISTENCY, FeatureConfigurations.LOGSTOR_EVENTUAL_CONSISTENCY))
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_restart_in_cleanup_stage_after_cleanup(manager: ScyllaClusterManager, feature_config: FeatureConfig,
                                                       storage_config: FeatureConfig):

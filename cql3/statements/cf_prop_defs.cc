@@ -235,6 +235,10 @@ void cf_prop_defs::validate(const data_dictionary::database db, sstring ks_name,
             if (!db.features().logstor) {
                 throw exceptions::configuration_exception(format("The experimental feature 'logstor' must be enabled in order to use the 'logstor' storage engine."));
             }
+            // Strongly consistent logstor tables are not supported yet (SCYLLADB-5759).
+            if (strong_consistency::is_strongly_consistent(db, ks_name)) {
+                throw exceptions::configuration_exception("The 'logstor' storage engine is not supported in strongly consistent keyspaces");
+            }
         } else {
             throw exceptions::configuration_exception(format("Illegal value for '{}'", KW_STORAGE_ENGINE));
         }

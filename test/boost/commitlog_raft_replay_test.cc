@@ -2633,38 +2633,26 @@ SEASTAR_TEST_CASE(test_apply_keeps_segments_of_unapplied_entries) {
 #endif
 }
 
-// Test that the commitlog reclaims a segment holding only applied raft entries,
-// also when the table does not take over the reference apply() hands it, as with
-// logstor. Otherwise, every segment written by such a table is kept, and the
-// commitlog runs out of space.
-static future<> segment_of_applied_entries_is_reclaimed_impl(const bool use_logstor) {
+// Test that the commitlog reclaims a segment holding only applied raft entries.
+// Otherwise, every segment written by the table is kept, and the commitlog runs
+// out of space.
+SEASTAR_TEST_CASE(test_segment_of_applied_entries_is_reclaimed_strong_consistency) {
     auto db_cfg_ptr = make_shared<db::config>();
-    std::vector<enum_option<experimental_features_t>> features{db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES};
-    sstring table_opts = "";
-
-    if (use_logstor) {
-        features.push_back(db::experimental_features_t::feature::LOGSTOR);
-        db_cfg_ptr->logstor_disk_size_in_mb(20);
-        db_cfg_ptr->logstor_file_size_in_mb(1);
-        table_opts = "WITH storage_engine = 'logstor'";
-    }
-
-    db_cfg_ptr->experimental_features(std::move(features));
+    db_cfg_ptr->experimental_features({db::experimental_features_t::feature::STRONGLY_CONSISTENT_TABLES});
     // A group's newest record holds its segment until a commitlog flush round
     // names the segment. With a one-second data lifetime, the commitlog timer,
     // here every 100 ms, runs that round for every segment older than a second.
     db_cfg_ptr->commitlog_max_data_lifetime_in_seconds(1);
     db_cfg_ptr->commitlog_sync_period_in_ms(100);
 
-    return do_with_cql_env([table_opts = std::move(table_opts)] (cql_test_env& env) -> future<> {
+    return do_with_cql_env([] (cql_test_env& env) -> future<> {
         co_await env.get_storage_service().local().set_tablet_balancing_enabled(false);
         co_await env.execute_cql(
                 "CREATE KEYSPACE test_ks "
                 "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} "
                 "AND tablets = {'initial': 1} "
                 "AND consistency = 'global'");
-        co_await env.execute_cql(seastar::format(
-                "CREATE TABLE test_ks.tbl (pk int PRIMARY KEY, c int) {}", table_opts));
+        co_await env.execute_cql("CREATE TABLE test_ks.tbl (pk int PRIMARY KEY, c int)");
 
         const auto table = env.local_db().find_schema("test_ks", "tbl")->id();
         const auto& replicas = env
@@ -2734,14 +2722,6 @@ static future<> segment_of_applied_entries_is_reclaimed_impl(const bool use_logs
             assert_that(msg).is_rows().with_rows({{int32_type->decompose(pk)}});
         }
     }, std::move(db_cfg_ptr));
-}
-
-SEASTAR_TEST_CASE(test_segment_of_applied_entries_is_reclaimed_strong_consistency) {
-    return segment_of_applied_entries_is_reclaimed_impl(false);
-}
-
-SEASTAR_TEST_CASE(test_segment_of_applied_entries_is_reclaimed_logstor_strong_consistency) {
-    return segment_of_applied_entries_is_reclaimed_impl(true);
 }
 
 // Test that state_machine::apply() counts each applied entry in the database's

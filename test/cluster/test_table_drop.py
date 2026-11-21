@@ -20,8 +20,7 @@ async def test_drop_table_during_streaming_receiver_side(manager: ScyllaClusterM
 
 
 @pytest.mark.parametrize("feature_config", feature_configs(FeatureConfigurations.EVENTUAL_CONSISTENCY,
-    FeatureConfigurations.STRONG_CONSISTENCY, FeatureConfigurations.LOGSTOR_EVENTUAL_CONSISTENCY,
-    FeatureConfigurations.LOGSTOR_STRONG_CONSISTENCY))
+    FeatureConfigurations.STRONG_CONSISTENCY, FeatureConfigurations.LOGSTOR_EVENTUAL_CONSISTENCY))
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_drop_table_during_flush(manager: ScyllaClusterManager, feature_config: FeatureConfig):
     servers = [await manager.server_add(config=feature_config.get_cluster_cfg({})) for _ in range(2)]
