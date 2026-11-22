@@ -111,7 +111,7 @@ If you have your own time servers shared with an application using ScyllaDB, use
 
 Set Up RAID and Filesystem
 --------------------------
-Setting the file system to XFS is the most important and mandatory for production. ScyllaDB will significantly slow down without it.
+XFS is the recommended file system for ScyllaDB's data in production. ScyllaDB is tested primarily on XFS, which handles asynchronous appending writes better than ext4 and btrfs. Outside developer mode, :code:`scylla_io_setup` refuses a data directory on a file system that makes asynchronous direct I/O writes wait, such as btrfs; see :doc:`this article </troubleshooting/error-messages/kb-fs-not-qualified-aio>`.
 
 The script :code:`/usr/lib/scylla/scylla_raid_setup` performs the necessary RAID configuration and XFS filesystem creation for ScyllaDB.
 

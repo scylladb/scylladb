@@ -1,26 +1,16 @@
 Error message "File system on /var/lib/scylla is not qualified for seastar AIO" on startup
 ==========================================================================================
 
-During first startup, you may see the error message:
+Old versions of ScyllaDB printed this error message during the first startup. Current versions print a different message, from the same check:
 
 .. code-block:: sh
 
-   File system on /var/lib/scylla is not qualified for seastar AIO
+   Linux AIO is not supported by filesystem at /var/lib/scylla
 
-There can be two causes for this error:
+Before it measures the disk, ``scylla_io_setup`` runs the ``iotune`` tool, which writes to a file in the data directory with asynchronous direct I/O, and checks that the file system only starts these writes, without making the writing thread wait. If the writes wait, ScyllaDB would stall on them, so ``scylla_io_setup`` stops. XFS and ext4 pass this check, but some file systems fail it: for example, btrfs does.
 
-* You are not using XFS on your data directory
+* Remedy: place the data directory on XFS.
 
-  * Remedy: format the data directory with XFS
-
-* You are using XFS, but the kernel version is too old; see below for affected kernels
-
-  * Remedy: upgrade your kernel
-
-ScyllaDB requires using the XFS filesystem, since it is the only Linux filesystem with good Asynchronous I/O support. In addition, Linux kernels before 3.15 did not have good asynchronous append support, which is required by ScyllaDB.
-
-If you are using Red Hat Enterprise Linux or CentOS, use version 7.2 or higher of the operating system. These versions contain a kernel that provides the necessary support.
-
-If you are using Ubuntu 14.04, install kernel package ``linux-image-generic-lts-vivid``. This package contains a kernel that provides the necessary support
+XFS is the recommended file system for ScyllaDB's data in production. ScyllaDB is tested primarily on XFS, which handles asynchronous appending writes better than ext4 and btrfs. Linux kernels before 3.15 did not have good asynchronous append support on XFS either, but all the Linux distributions that ScyllaDB supports have newer kernels.
 
 .. include:: /troubleshooting/_common/ts-return.rst
