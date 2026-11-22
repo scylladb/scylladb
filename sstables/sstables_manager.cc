@@ -362,8 +362,8 @@ storage_manager::config_updater_sync::config_updater_sync(const db::config& cfg,
         // Update _object_storage_endpoints so that any subsequent call to
         // get_endpoint_client() immediately sees the new configuration.
         // Each client's update_config_sync() spawns its own async background
-        // work (credential refresh for S3, old client close for GCS) into a
-        // client-local gated fiber.
+        // work (the close of the client it replaced) into a client-local
+        // gated fiber.
         std::unordered_set<sstring> updates;
         std::unordered_set<sstring> addresses;
         for (auto& e : cfg.object_storage_endpoints()) {
