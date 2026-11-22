@@ -7666,6 +7666,28 @@ future<> storage_service::start_maintenance_mode() {
 }
 
 future<> storage_service::register_protocol_server(protocol_server& server, bool start_instantly) {
+    if (_transport_stopped.has_value()) {
+        // The transport was stopped before this server was registered, e.g. by
+        // isolate() after an I/O error during startup, so shutdown_protocol_servers()
+        // did not see it and nothing will stop it later. Wait for that stop to finish,
+        // then do not start the server. Do not add it to _protocol_servers either: it
+        // never listened, and the system.clients virtual table must not query a server
+        // that was never started. Stop it anyway: for the CQL server this marks it
+        // stopped, so a later start_server() (REST enablebinary) fails and an isolated
+        // node never serves clients.
+        try {
+            co_await stop_transport();
+        } catch (...) {
+            slogger.warn("Transport stop started before registering the {} server failed: {}", server.name(), std::current_exception());
+        }
+        slogger.info("Transport is stopped, keeping the {} server stopped", server.name());
+        try {
+            co_await server.stop_server();
+        } catch (...) {
+            slogger.error("Unexpected error shutting down {} server: {}", server.name(), std::current_exception());
+        }
+        co_return;
+    }
     _protocol_servers.push_back(&server);
     if (start_instantly) {
         co_await server.start_server();
