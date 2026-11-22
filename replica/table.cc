@@ -5466,6 +5466,16 @@ static future<> run_write_when_memory_available(const schema& s, dirty_memory_ma
     return rg.run_when_memory_available(std::forward<Func>(func), timeout);
 }
 
+static noncopyable_function<void() noexcept> start_logstor_write_latency(utils::timed_rate_moving_average_summary_and_histogram& stats) {
+    utils::latency_counter lc;
+    stats.set_latency(lc);
+    auto mark = [&stats, lc] () mutable noexcept {
+        stats.mark(lc);
+    };
+    static_assert(sizeof(mark) <= 32, "A larger capture does not fit in noncopyable_function and allocates on each write");
+    return mark;
+}
+
 future<> table::apply(const mutation& m, db::rp_handle&& h, db::timeout_clock::time_point timeout) {
     if (_virtual_writer) [[unlikely]] {
         return (*_virtual_writer)(freeze(m));
@@ -5476,7 +5486,8 @@ future<> table::apply(const mutation& m, db::rp_handle&& h, db::timeout_clock::t
     auto ss_holder = cg.sstable_add_gate().hold();
 
     if (_logstor) [[unlikely]] {
-        return _logstor->write(m, logstor::write_target(&cg.as_logstor_group(), std::move(ss_holder), std::move(holder)), timeout);
+        return _logstor->write(m, logstor::write_target(&cg.as_logstor_group(), std::move(ss_holder), std::move(holder)), timeout,
+                start_logstor_write_latency(_stats.writes));
     }
 
     return run_write_when_memory_available(*m.schema(), dirty_memory_region_group(), [this, &m, h = std::move(h), &cg, holder = std::move(holder), ss_holder = std::move(ss_holder)] () mutable {
@@ -5498,7 +5509,8 @@ future<> table::apply(const frozen_mutation& m, schema_ptr m_schema, db::rp_hand
     auto ss_holder = cg.sstable_add_gate().hold();
 
     if (_logstor) [[unlikely]] {
-        return _logstor->write(m, *m_schema, logstor::write_target(&cg.as_logstor_group(), std::move(ss_holder), std::move(holder)), timeout);
+        return _logstor->write(m, *m_schema, logstor::write_target(&cg.as_logstor_group(), std::move(ss_holder), std::move(holder)), timeout,
+                start_logstor_write_latency(_stats.writes));
     }
 
     return run_write_when_memory_available(s, dirty_memory_region_group(), [this, &m, m_schema = std::move(m_schema), h = std::move(h), &cg, holder = std::move(holder), ss_holder = std::move(ss_holder), guardrails = std::move(guardrails), violations_out]() mutable {

@@ -260,6 +260,35 @@ def test_column_family_partition_estimates(cql, this_dc, rest_api, storage_engin
             assert get_size_range() == (0, 0, 0)
 
 
+# Test that the column_family API counts the writes of a table and times
+# them. nodetool cfstats reads this API.
+def test_column_family_write_stats(cql, this_dc, rest_api, storage_engine):
+    key_count = 10
+    ksdef = f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : '1' }}"
+    with new_test_keyspace(cql, ksdef) as test_keyspace:
+        with new_test_table(cql, test_keyspace, "pk int PRIMARY KEY, v int", storage_engine.table_options) as t:
+            test_table = t.split('.')[1]
+            insert = cql.prepare(f"INSERT INTO {t} (pk, v) VALUES (?, ?)")
+            for pk in range(key_count):
+                cql.execute(insert, [pk, pk])
+
+            resp = rest_api.send("GET", f"column_family/metrics/write/{test_keyspace}:{test_table}")
+            resp.raise_for_status()
+            assert resp.json() == key_count
+
+            resp = rest_api.send("GET", f"column_family/metrics/write_latency/moving_average_histogram/{test_keyspace}:{test_table}")
+            resp.raise_for_status()
+            latency = resp.json()
+            assert latency['hist']['count'] == key_count
+            # A logstor write returns only after its buffer is written to disk,
+            # so its time is much more than the resolution of 1 us, and a time
+            # of 0 shows that the latency counter did not start.
+            # A memtable write can take less than 1 us, so the check is only for
+            # a logstor table.
+            if storage_engine.name == 'logstor':
+                assert latency['hist']['max'] > 0
+
+
 # Test that get_live|total_disk_space_used returns sane values
 def test_sstables_total_disk_space_sanity(cql, this_dc, rest_api):
     ksdef = f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : '1' }}"
