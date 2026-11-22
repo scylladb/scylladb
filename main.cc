@@ -18,6 +18,7 @@
 
 #include <seastar/util/closeable.hh>
 #include <seastar/core/abort_source.hh>
+#include <seastar/core/abort_on_expiry.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/sstring.hh>
 #include "clocks-impl.hh"
@@ -36,6 +37,7 @@
 #include "db/view/view_building_state.hh"
 #include "tasks/task_manager.hh"
 #include "types/types.hh"
+#include "utils/chain_abort_source.hh"
 #include "utils/assert.hh"
 #include "utils/build_id.hh"
 #include "utils/only_on_shard0.hh"
@@ -2696,6 +2698,42 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                         startlog.warn("Not all Raft groups started: {}", e);
                     });
                 }).get();
+            }
+
+            // A node which restarts missed the group 0 commands applied while it was down, e.g. a
+            // tablet table's truncation tombstone (see docs/dev/delete-all-data.md),
+            // without which it serves the truncated data it holds. Catch up with group 0 before
+            // joining the cluster: until this node starts gossiping in join_cluster(), other nodes see
+            // it as down and send it no requests, and it serves no clients. Group 0 itself needs only
+            // messaging, which is listening by now.
+            // Don't insist when group 0 cannot serve a read barrier: the node must be able to start and
+            // serve the data it has. When no leader shows up shortly, there is none to catch up with:
+            // group 0 has no majority, or the whole cluster is starting, in which case no leader is
+            // elected before the nodes gossip and no command was applied while they were all down.
+            if (raft_gr.local().is_group0_alive() && !group0_service.maintenance_mode()
+                    && sys_ks.local().bootstrap_complete() && group0_service.joined_group0()) {
+                checkpoint(stop_signal, "catching up with group 0");
+                static constexpr auto group0_leader_timeout = 5s;
+                static constexpr auto group0_catch_up_timeout = 30s;
+                const auto start = lowres_clock::now();
+                auto elapsed_ms = [start] {
+                    return std::chrono::duration_cast<std::chrono::milliseconds>(lowres_clock::now() - start).count();
+                };
+                try {
+                    auto holder = group0_service.hold_group0_gate();
+                    {
+                        abort_on_expiry leader_expiry(start + group0_leader_timeout);
+                        auto sub = utils::chain_abort_source(leader_expiry.abort_source(), stop_signal.as_local_abort_source());
+                        group0_service.group0_server().wait_for_leader(&leader_expiry.abort_source()).get();
+                    }
+                    group0_service.group0_server_with_timeouts().read_barrier(&stop_signal.as_local_abort_source(),
+                            service::raft_timeout{.value = start + group0_catch_up_timeout}).get();
+                    startlog.info("Caught up with group 0 in {}ms", elapsed_ms());
+                } catch (...) {
+                    startlog.warn("Could not catch up with group 0 before joining the cluster, after {}ms: {}. "
+                            "Until the node catches up, it may serve data which was truncated while it was down.",
+                            elapsed_ms(), std::current_exception());
+                }
             }
 
             api::set_server_client_routes(ctx, client_routes).get();
