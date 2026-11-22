@@ -14,9 +14,11 @@
 #include <optional>
 #include "dht/token.hh"
 #include "types.hh"
+#include "utils/assert.hh"
 #include "utils/bptree.hh"
 #include "utils/counting_allocation_strategy.hh"
 #include "utils/double-decker.hh"
+#include "utils/logalloc.hh"
 #include "utils/on_internal_error.hh"
 #include "utils/phased_barrier.hh"
 #include <utility>
@@ -194,6 +196,10 @@ struct primary_index_usage {
 //   each segment follow the index.
 // - A location from a lookup or a scan stays readable while the read guard that came with the
 //   location exists.
+//
+// The index uses a reference or an iterator into its tree only while its region is reclaim-locked.
+// The tree does not change while a reader holds the lock, so the iterators of the reader stay
+// valid.
 class primary_index final {
     using tree_type = double_decker<int64_t, primary_index_entry,
                             dht::raw_token_less_comparator, primary_index_key_cmp,
@@ -201,6 +207,7 @@ class primary_index final {
     using iterator = typename tree_type::iterator;
 
     counting_allocation_strategy _tree_allocator{standard_allocator(), logstor_logger};
+    mutable logalloc::region _region;
     tree_type _entries;
     size_t _key_count = 0;
     uint64_t _live_record_bytes = 0;
@@ -222,9 +229,19 @@ class primary_index final {
     // manager is the only subscriber.
     space_accounting_subscriber& _space_accounting;
 
+    void assert_locked() const noexcept {
+        SCYLLA_ASSERT(!_region.reclaiming_enabled());
+    }
+
+    void assert_unlocked() const noexcept {
+        SCYLLA_ASSERT(_region.reclaiming_enabled());
+    }
+
     // Returns a reference to the entry of the key in the tree, or nullopt if the index does not
-    // have the key. The reference is valid until the next insert into or erase from the tree.
+    // have the key. The reference is valid until the next insert into or erase from the tree, and
+    // only while the region is reclaim-locked.
     auto find_entry(this auto& self, const primary_index_key& key) -> std::optional<decltype(*self._entries.begin())> {
+        self.assert_locked();
         auto it = self._entries.find(key, primary_index_key_cmp{});
         if (it == self._entries.end()) {
             return std::nullopt;
@@ -300,6 +317,8 @@ public:
     // `cmp` does not find the new entry older. insert_result::inserted covers both cases.
     template <typename EntryCmp = default_entry_cmp>
     insert_outcome insert(const primary_index_key& key, index_entry new_entry, const EntryCmp& cmp = {}) {
+        assert_unlocked();
+        logalloc::reclaim_lock lock(_region);
         tree_type::bound_hint hint;
         auto i = _entries.lower_bound(key, primary_index_key_cmp{}, hint);
         if (hint.match) {
@@ -324,6 +343,7 @@ public:
     }
 
     bool update_record_location(const primary_index_key& key, record_location old_location, record_location new_location) {
+        logalloc::reclaim_lock lock(_region);
         auto e = find_entry_at(key, old_location);
         if (!e) {
             return false;
@@ -336,6 +356,8 @@ public:
     }
 
     bool erase(const primary_index_key& key, record_location location) {
+        assert_unlocked();
+        logalloc::reclaim_lock lock(_region);
         auto e = find_entry_at(key, location);
         if (!e) {
             return false;
@@ -346,14 +368,18 @@ public:
         return true;
     }
 
-    // Erases the entries of the token range a page at a time, with a yield between the pages. Each
-    // page seeks both of its ends, so that no iterator lives from one page to the next.
+    // Erases the entries of the token range a page at a time, with a yield between the pages.
+    //
+    // Each page seeks both of its ends under the lock, so that no iterator lives from one page to
+    // the next.
     future<> erase(dht::token_range tr) {
+        assert_unlocked();
         static constexpr size_t page_size = default_scan_batch_size;
         auto dispose = [this] (primary_index_entry* e) noexcept { dispose_entry(e); };
         std::optional<primary_index_key> next_key;
         while (true) {
             const bool done = with_allocator(_tree_allocator, [&] {
+                logalloc::reclaim_lock lock(_region);
                 auto [begin, end] = range_positions(tr);
                 if (next_key) {
                     begin = _entries.lower_bound(*next_key, primary_index_key_cmp{});
@@ -395,6 +421,7 @@ public:
     // not, returns the location of the record with a guard. The entry has only the hash of the key,
     // so the caller compares the key of a cached partition with its own.
     std::optional<read_lookup_result> lookup_for_read(const primary_index_key& key, const schema& target_schema, use_cache uses_cache) const {
+        logalloc::reclaim_lock lock(_region);
         return find_entry(key).transform([&] (const primary_index_entry& e) -> read_lookup_result {
             if (reads_cache() && uses_cache) {
                 if (auto cached = _cache_tracker->read_partition(e, target_schema)) {
@@ -415,6 +442,7 @@ public:
     // touches the cache's LRU nor counts a cache hit or miss, so that inspecting a table
     // does not perturb its cache.
     std::optional<dump_lookup_result> lookup_for_dump(const primary_index_key& key, schema_ptr target_schema) const {
+        logalloc::reclaim_lock lock(_region);
         return find_entry(key).transform([&] (const primary_index_entry& e) {
             return dump_lookup_result{
                 .entry = e.entry(),
@@ -424,6 +452,7 @@ public:
     }
 
     bool is_record_live(const primary_index_key& key, record_location location) const {
+        logalloc::reclaim_lock lock(_region);
         return find_entry_at(key, location).has_value();
     }
 
@@ -438,6 +467,7 @@ public:
             return false;
         }
 
+        logalloc::reclaim_lock lock(_region);
         auto e = find_entry_at(key, location);
         if (!e) {
             return false;
@@ -483,6 +513,7 @@ public:
         // does not hold the entry or when the index does not read the cache. Counts a hit or a miss
         // and touches the LRU, like a point read does.
         std::optional<keyed_single_row_partition> read_cached(const schema& target_schema) const {
+            _index.assert_locked();
             if (!_index.reads_cache()) {
                 return std::nullopt;
             }
@@ -542,9 +573,9 @@ public:
         }
 
         // Visits the entries of the next batch in index order, with `visit(const scanned_entry&)`,
-        // and returns what the batch covered, or nullopt at the end of the range. An entry is valid
-        // inside `visit` and not after it, so `visit` copies what it needs. `visit` must not yield
-        // and must not change the index.
+        // and returns what the batch covered, or nullopt at the end of the range. The index region is
+        // reclaim-locked around the visits, so an entry is valid inside `visit` and not after it.
+        // `visit` must not yield and must not insert into or erase from the index.
         template <typename Visit>
         requires std::invocable<Visit, const scanned_entry&>
                 && std::is_void_v<std::invoke_result_t<Visit, const scanned_entry&>>
@@ -553,6 +584,7 @@ public:
                 return std::nullopt;
             }
 
+            logalloc::reclaim_lock lock(_index->_region);
             auto [current, end] = _index->range_positions(unread_range());
             if (current == end) {
                 _exhausted = true;
@@ -667,6 +699,7 @@ private:
     // when the range holds no token.
     auto range_positions(this auto& self, const dht::token_range& tr)
             -> std::pair<decltype(self._entries.begin()), decltype(self._entries.end())> {
+        self.assert_locked();
         const auto bounds = raw_token_bounds::of(tr);
         if (!bounds) {
             return {self._entries.end(), self._entries.end()};
