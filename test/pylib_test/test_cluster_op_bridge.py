@@ -176,3 +176,86 @@ async def test_exception_keeps_its_type(cluster) -> None:
 
     with pytest.raises(AssertionError, match="Server 2 unknown"):
         await cluster.server_stop(ServerNum(2), convict=False)
+
+
+async def test_leftover_operation_ends_before_the_final_stop(tmp_path: pathlib.Path,
+                                                             caplog: pytest.LogCaptureFixture) -> None:
+    """An operation still running when run_in_thread() exits ends before stop() looks at the servers.
+
+    after_test() normally drains such operations, but not when the fixture
+    never got that far, or the drain ran out of time.  An add left running
+    across the final stop() could put a server in `running` after stop()
+    took its list, and the server would be marked stopped while it runs.
+    """
+    cluster = make_cluster(tmp_path)
+    stub = StubServer()
+    cluster.running[SERVER_ID] = stub
+    running_at_stop = []
+    real_stop = cluster.stop
+
+    async def stop() -> None:
+        running_at_stop.append(list(cluster.tasks_history.values()))
+        await real_stop()
+
+    cluster.stop = stop
+    try:
+        async with cluster.run_in_thread():
+            with pytest.raises(TimeoutError):
+                async with asyncio.timeout(0.5):
+                    await cluster.server_stop(SERVER_ID, convict=False)
+            assert stub.entered.is_set(), "operation never started"
+    finally:
+        await cluster.recycle()
+
+    assert running_at_stop[0] == [], "an operation was still running at the final stop()"
+    assert "Cancelling the operations left running: _server_stop(1,)" in caplog.text
+
+
+class SettlingServer(StubServer):
+    """A stub server whose stop, when cancelled, takes a while to settle."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.settling = threading.Event()     # readable from any thread
+
+    async def stop(self) -> None:
+        try:
+            await super().stop()
+        except asyncio.CancelledError:
+            self.settling.set()
+            await asyncio.sleep(0.5)
+            raise
+
+
+async def test_operation_arriving_during_shutdown_ends_before_the_final_stop(tmp_path: pathlib.Path) -> None:
+    """An operation that arrives while the leftovers settle is ended before stop() too."""
+    cluster = make_cluster(tmp_path)
+    leftover, late = SettlingServer(), StubServer()
+    cluster.running[ServerNum(1)] = leftover
+    cluster.running[ServerNum(2)] = late
+    running_at_stop = []
+    real_stop = cluster.stop
+
+    async def stop() -> None:
+        running_at_stop.append(list(cluster.tasks_history.values()))
+        await real_stop()
+
+    async def arrive_late() -> None:
+        assert await asyncio.to_thread(leftover.settling.wait, TIMEOUT), "the leftover was never cancelled"
+        await cluster.server_stop(ServerNum(2), convict=False)
+
+    cluster.stop = stop
+    arriving = None
+    try:
+        async with cluster.run_in_thread():
+            with pytest.raises(TimeoutError):
+                async with asyncio.timeout(0.5):
+                    await cluster.server_stop(ServerNum(1), convict=False)
+            arriving = asyncio.ensure_future(arrive_late())
+    finally:
+        await cluster.recycle()
+        if arriving is not None:
+            await asyncio.gather(arriving, return_exceptions=True)
+
+    assert late.entered.is_set(), "the late operation never started"
+    assert running_at_stop[0] == [], "an operation was still running at the final stop()"
