@@ -138,7 +138,10 @@ azure_kms_fixture::impl::impl(azure_mode m)
 }
 
 seastar::future<> azure_kms_fixture::impl::setup() {
-    if ((key_name.empty() || mode == azure_mode::local) && mode != azure_mode::real) {
+    // Only tests that explicitly ask for real Azure get it, and they are run
+    // only when ENABLE_AZURE_TEST_REAL is set. Everything else uses the mock,
+    // even if the environment has real Azure parameters.
+    if (mode != azure_mode::real) {
         // Isolate the default-credentials chain from the developer's real Azure
         // credentials, so tests that expect the chain to find *no* credentials
         // (e.g. test_azure_provider_with_incomplete_creds) don't spuriously
