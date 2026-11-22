@@ -20,6 +20,7 @@
 #include "db/cache_tracker.hh"
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/util/defer.hh>
+#include <seastar/util/alloc_failure_injector.hh>
 #include <algorithm>
 #include <array>
 #include <limits>
@@ -822,6 +823,73 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_cache_survives_lsa_compaction_before_excha
     assert_that(schema, lookup(index, keys[2], schema)).is_equal_to(replacement.partition());
     index.drain_cache().get();
 }
+
+#ifdef SEASTAR_ENABLE_ALLOC_FAILURE_INJECTION
+// An insert of a new key that meets an allocation failure must either throw and leave the index as
+// it was, or recover from the failure and insert the key.
+// This test injects a failure at each allocation of the insert of each key in turn. Each pass starts
+// from a new index that holds the earlier keys, so that each pass inserts a new key into the same
+// tree, and no state that an earlier failure left, such as a larger allocation reserve, goes to the
+// next pass.
+SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_insert_survives_allocation_failures) {
+    auto schema = make_logstor_schema();
+    auto& injector = memory::local_failure_injector();
+
+    constexpr int key_count = 200;
+    const auto entry_of = [] (int i) { return make_index_entry(1, uint32_t(i) * 8, 8, 1); };
+
+    std::vector<primary_index_key> keys;
+    keys.reserve(key_count);
+    for (int i = 0; i < key_count; ++i) {
+        keys.push_back(make_primary_index_key(*schema, fmt::format("pk-{:06d}", i)));
+    }
+
+    // The most allocations that one insert made. If no insert makes more than one allocation, the
+    // test does not reach the allocations of a node split.
+    uint64_t max_allocations = 0;
+    for (int i = 0; i < key_count; ++i) {
+        for (uint64_t fail_at = 0; ; ++fail_at) {
+            primary_index index(noop_space_accounting, nullptr, false);
+            for (int j = 0; j < i; ++j) {
+                index.insert(keys[j], entry_of(j));
+            }
+
+            // Only the insert runs with the injector armed, because the checks below can allocate.
+            bool inserted = false;
+            bool threw = false;
+            injector.fail_after(fail_at);
+            try {
+                inserted = index.insert(keys[i], entry_of(i)).inserted();
+            } catch (const std::bad_alloc&) {
+                threw = true;
+            }
+            injector.cancel();
+            const bool failed = injector.failed();
+            BOOST_REQUIRE(failed || !threw);
+            BOOST_REQUIRE(threw || inserted);
+
+            const int kept = threw ? i : i + 1;
+            BOOST_REQUIRE_EQUAL(index.get_usage().key_count, size_t(kept));
+            for (int j = 0; j < kept; ++j) {
+                auto location = lookup_location(index, keys[j], *schema);
+                BOOST_REQUIRE(location);
+                BOOST_REQUIRE(*location == entry_of(j).location);
+            }
+            if (threw) {
+                BOOST_REQUIRE(!lookup_location(index, keys[i], *schema));
+            }
+            index.clear().get();
+
+            if (!failed) {
+                max_allocations = std::max(max_allocations, fail_at);
+                break;
+            }
+        }
+    }
+    BOOST_TEST_MESSAGE(fmt::format("The most allocations of one insert: {}", max_allocations));
+    BOOST_REQUIRE_GE(max_allocations, 2u);
+}
+#endif
 
 SEASTAR_THREAD_TEST_CASE(test_logstor_cache_upgrades_cached_partition_after_schema_change) {
     auto schema = make_logstor_schema();
