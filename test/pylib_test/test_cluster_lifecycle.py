@@ -20,6 +20,8 @@ import asyncio
 import pathlib
 import signal
 import textwrap
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from functools import partial
 from types import SimpleNamespace
 
@@ -200,6 +202,10 @@ class LogWritingCluster:
 
     def take_log_savepoint(self) -> None:
         pass
+
+    @asynccontextmanager
+    async def run_in_thread(self) -> AsyncIterator[LogWritingCluster]:
+        yield self
 
     async def recycle(self) -> None:
         for server in self.running.values():

@@ -193,25 +193,20 @@ class ScyllaCluster:
 
     Parallel requests are not supported.
 
-    test/cluster runs the cluster on its own thread for the test's duration
-    (run_in_thread()), which stops the servers when it ends; recycle() then
-    disposes of the cluster.  after_test() drains what the test left running
-    and reports what it leaked.  The module-scoped cluster of the
-    single-server suites (cqlpy, alternator, scylla_gdb, ...) never starts
-    the thread: its fixture adds the one server with add_server() on its own
-    loop.
+    The cluster runs on its own thread (run_in_thread()) for as long as it
+    serves its test or module, and the thread stops the servers when it ends;
+    recycle() then disposes of the cluster.  In test/cluster, after_test()
+    drains what the test left running and reports what it leaked.
 
     A method that awaits cluster or server internals must be a @cluster_op --
     those objects belong to the cluster's loop -- and the CQL driver, the REST
-    helpers and anything composing operations must not be.  The exceptions are
-    add_server(), which operations call and the module-scoped fixtures call
-    on their own loop, and stop(): it runs on the cluster's thread as
-    run_in_thread() exits, or inside recycle() for a module-scoped cluster,
-    and the rest of recycle() awaits no cluster internals.  An operation body
-    runs entirely on the cluster's loop, so an entry point needing
-    caller-side work too (the caller's timeout, a driver refresh, a gossip
-    wait) is a private _x operation behind a public wrapper holding that
-    work.
+    helpers and anything composing operations must not be.  The exception is
+    stop(): it runs on the cluster's thread as run_in_thread() exits, or
+    inside recycle() for a cluster that never started the thread, and the
+    rest of recycle() awaits no cluster internals.  An operation body runs
+    entirely on the cluster's loop, so an entry point needing caller-side
+    work too (the caller's timeout, a driver refresh, a gossip wait) is a
+    private _x operation behind a public wrapper holding that work.
 
     Args:
         test_name: unique name of the test case (or module) the cluster
@@ -386,6 +381,7 @@ class ScyllaCluster:
             return [self.initial_seed] if self.initial_seed else []
         return [server.ip_addr for server in self.running.values()]
 
+    @cluster_op(timeout=None)
     async def add_server(self,
                          replace_cfg: ReplaceConfig | None = None,
                          cmdline: list[str] | None = None,
@@ -403,7 +399,7 @@ class ScyllaCluster:
         assert start or not expected_error, \
             "add_server: cannot add a stopped server and expect an error"
 
-        # Deep copy: the test keeps the dict (and _servers_add() shares it between
+        # Deep copy: the test keeps the dict (and servers_add() shares it between
         # servers), while ScyllaServer.__init__ writes to it and the server keeps
         # mutating nested values (e.g. change_seeds()).
         extra_config: dict[str, Any] = copy.deepcopy(config) if config else {}
@@ -653,12 +649,16 @@ class ScyllaCluster:
         # outlast the longest of them, a graceful stop, because
         # asyncio.wait_for() cancels the task when it expires -- and the task
         # here is the operation itself, not the shield the caller awaited.
-        drain_timeout = graceful_stop_timeout(self.mode) + 60
+        # They run concurrently, so they share one deadline: a batch add
+        # leaves an operation per server, and a budget each would let the
+        # batch outlast it.
+        loop = asyncio.get_running_loop()
+        drain_deadline = loop.time() + graceful_stop_timeout(self.mode) + 60
         for task, descr in list(self.tasks_history.items()):
             if not task.done():
                 self.logger.info("wait for task:%s, op:%s", task, descr)
                 try:
-                    await asyncio.wait_for(task, timeout=drain_timeout)
+                    await asyncio.wait_for(task, timeout=drain_deadline - loop.time())
                 except asyncio.TimeoutError:
                     tasks_leaked = f"timed out waiting for coro {task.get_name()}"
                     break
@@ -793,50 +793,6 @@ class ScyllaCluster:
             return True if status != psutil.STATUS_STOPPED else None
 
         await wait_for(process_is_not_stopped, time() + 30)
-
-    @cluster_op(timeout=None)
-    async def _servers_add(self,
-                           servers_num: int = 1,
-                           cmdline: list[str] | None = None,
-                           config: dict[str, Any] | None = None,
-                           version: ScyllaVersionDescription | None = None,
-                           property_file: list[dict[str, Any]] | dict[str, Any] | None = None,
-                           start: bool = True,
-                           seeds: list[IPAddress] | None = None,
-                           server_encryption: str = "none",
-                           expected_error: str | None = None,
-                           replace_cfg: ReplaceConfig | None = None,
-                           expected_server_up_state: ServerUpState = ServerUpState.SERVING,
-                           launcher: list[str] | None = None) -> list[ServerInfo]:
-        """Add new servers concurrently."""
-        assert servers_num > 0, f"_servers_add: cannot add {servers_num} servers"
-
-        def get_property_file(i) -> dict[str, Any] | None:
-            if property_file is None:
-                return None
-            elif isinstance(property_file, dict):
-                return property_file
-            else:
-                assert type(property_file) is list and len(property_file) == servers_num
-                return property_file[i]
-
-        adds = [
-            self.add_server(
-                replace_cfg=replace_cfg,
-                cmdline=cmdline,
-                config=config,
-                version=version,
-                property_file=get_property_file(i),
-                start=start,
-                seeds=seeds,
-                server_encryption=server_encryption,
-                expected_error=expected_error,
-                expected_server_up_state=expected_server_up_state,
-                launcher=launcher,
-            )
-            for i in range(servers_num)
-        ]
-        return await gather_safely(*adds)
 
     @cluster_op(timeout=None)
     async def _remove_node(self,
@@ -1672,6 +1628,15 @@ class ScyllaCluster:
         if auto_rack_dc:
             property_file = [{"dc":auto_rack_dc, "rack":f"rack{i+1}"} for i in range(servers_num)]
 
+        def get_property_file(i) -> dict[str, Any] | None:
+            if property_file is None:
+                return None
+            elif isinstance(property_file, dict):
+                return property_file
+            else:
+                assert type(property_file) is list and len(property_file) == servers_num
+                return property_file[i]
+
         try:
             # We should wait until all running nodes see the node being replaced
             # and all ignored nodes as dead. Replace could be rejected otherwise.
@@ -1684,20 +1649,23 @@ class ScyllaCluster:
                 await gather_safely(*(self.others_not_see_server(ip) for ip in dead_ips))
 
             async with asyncio.timeout(None if timeout is None else timeout * servers_num):
-                s_infos = await self._servers_add(
-                    servers_num=servers_num,
-                    cmdline=cmdline,
-                    config=config,
-                    version=version,
-                    property_file=property_file,
-                    start=start,
-                    seeds=seeds,
-                    server_encryption=server_encryption,
-                    expected_error=expected_error,
-                    replace_cfg=replace_cfg,
-                    expected_server_up_state=expected_server_up_state,
-                    launcher=launcher,
-                )
+                adds = [
+                    self.add_server(
+                        replace_cfg=replace_cfg,
+                        cmdline=cmdline,
+                        config=config,
+                        version=version,
+                        property_file=get_property_file(i),
+                        start=start,
+                        seeds=seeds,
+                        server_encryption=server_encryption,
+                        expected_error=expected_error,
+                        expected_server_up_state=expected_server_up_state,
+                        launcher=launcher,
+                    )
+                    for i in range(servers_num)
+                ]
+                s_infos = await gather_safely(*adds)
         except Exception as exc:
             raise RuntimeError("Failed to add server" if servers_num == 1 else "Failed to add servers") from exc
 

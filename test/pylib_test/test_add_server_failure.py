@@ -43,8 +43,9 @@ async def test_add_server_reports_why_the_server_was_not_built(tmp_path: pathlib
     monkeypatch.setattr(cluster.host_registry, "lease_host", lease_host)
     monkeypatch.setattr(cluster.host_registry, "release_host", release_host)
 
-    with pytest.raises(ValueError, match="invalid argument name smp=2"):
-        await cluster.add_server(cmdline=["smp=2"])
+    async with cluster.run_in_thread():
+        with pytest.raises(ValueError, match="invalid argument name smp=2"):
+            await cluster.add_server(cmdline=["smp=2"])
 
     assert not leased, "the address leased for the server was not released"
     assert not cluster.leased_ips

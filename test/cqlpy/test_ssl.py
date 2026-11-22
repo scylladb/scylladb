@@ -30,7 +30,7 @@ if TEST_RUNNER != "runpy":
 
     @pytest.fixture(scope="module")
     async def scylla_cluster(request, testpy_cluster_factory, testpy_uname):
-        async with testpy_cluster_factory(request.node, testpy_uname) as cluster:
+        async with testpy_cluster_factory(request.node, testpy_uname) as cluster, cluster.run_in_thread():
             await cluster.add_server(config={
                 'native_transport_port': 9042,
                 'native_shard_aware_transport_port': 19042,

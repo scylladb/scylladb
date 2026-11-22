@@ -370,19 +370,19 @@ def scylla_binary(request: pytest.FixtureRequest, build_mode: str) -> str:
 async def scylla_cluster(request: pytest.FixtureRequest,
                          testpy_cluster_factory: ClusterFactory,
                          testpy_uname: str) -> AsyncGenerator[ScyllaCluster]:
-    """A ScyllaCluster with one server, shared by the tests in a module."""
+    """A ScyllaCluster with one server, running on its own thread, shared by the tests in a module."""
 
-    async with testpy_cluster_factory(request.node, testpy_uname) as cluster:
+    async with testpy_cluster_factory(request.node, testpy_uname) as cluster, cluster.run_in_thread():
         await cluster.add_server()
         cluster.take_log_savepoint()
         yield cluster
         processes = [(server, server.cmd) for server in cluster.running.values() if server.cmd]
 
-    # Nothing stops these servers before recycle() does, and it kills each one
-    # still running with SIGKILL and waits for it, so any other exit status
-    # means the server died, which would otherwise pass unnoticed.  0 follows
-    # a shutdown asked for from outside, e.g. a Ctrl-C that reaches the
-    # servers too.
+    # Nothing stops these servers before the cluster thread's final stop(),
+    # which kills each one still running with SIGKILL and waits for it, so
+    # any other exit status means the server died, which would otherwise pass
+    # unnoticed.  0 follows a shutdown asked for from outside, e.g. a Ctrl-C
+    # that reaches the servers too.
     if exits := [f"{server} exited with status code {process.returncode}" for server, process in processes
                  if process.returncode not in (0, -signal.SIGKILL)]:
         raise RuntimeError("; ".join(exits))

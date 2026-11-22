@@ -171,12 +171,82 @@ async def test_caller_timeout_leaves_the_operation_running(cluster) -> None:
     assert cluster.stopped == {SERVER_ID: stub}
 
 
+async def test_leftover_operations_share_one_drain_budget(tmp_path: pathlib.Path,
+                                                          monkeypatch: pytest.MonkeyPatch) -> None:
+    """after_test() gives the operations a test left running one budget between them, not one each.
+
+    A batch add leaves an operation per server; with a budget each, the batch
+    could outlast the budget before the drain reports it.
+    """
+    budget = 2.0
+    # The drain's budget is graceful_stop_timeout() + 60 s.
+    monkeypatch.setattr("test.pylib.scylla_cluster.graceful_stop_timeout", lambda mode: budget - 60)
+    cluster = make_cluster(tmp_path)
+    first, second = StubServer(), StubServer()
+    cluster.running[ServerNum(1)] = first
+    cluster.running[ServerNum(2)] = second
+    try:
+        async with cluster.run_in_thread():
+            for server_id in (ServerNum(1), ServerNum(2)):
+                with pytest.raises(TimeoutError):
+                    async with asyncio.timeout(0.2):
+                        await cluster._server_stop(server_id, gracefully=False)
+            # The second ends within a budget of the first one's end, but past
+            # the budget of the drain as a whole.
+            loop = asyncio.get_running_loop()
+            releases = [loop.call_later(budget / 2, first.release),
+                        loop.call_later(budget * 1.25, second.release)]
+            try:
+                result = await cluster.after_test(success=True, gather_io=False)
+            finally:
+                for release in releases:
+                    release.cancel()
+                first.release()
+                second.release()
+    finally:
+        await cluster.recycle()
+
+    assert result["tasks_leaked"]
+    assert result["message"].startswith("timed out waiting")
+
+
 async def test_exception_keeps_its_type(cluster) -> None:
     """Failures arrive as themselves, not as an HTTP status turned into a string."""
     cluster, _, _ = cluster
 
     with pytest.raises(AssertionError, match="Server 2 unknown"):
         await cluster.server_stop(ServerNum(2), convict=False)
+
+
+async def test_add_server_runs_on_the_clusters_loop(cluster, monkeypatch: pytest.MonkeyPatch) -> None:
+    """add_server() is an operation too: it leases its address on the cluster's loop."""
+    cluster, _, cluster_loop = cluster
+    loops = []
+
+    async def lease_host() -> str:
+        loops.append(asyncio.get_running_loop())
+        raise RuntimeError("no address")
+
+    # The host registry is shared by the whole session: undo the stub at teardown.
+    monkeypatch.setattr(cluster.host_registry, "lease_host", lease_host)
+
+    with pytest.raises(RuntimeError, match="no address"):
+        await cluster.add_server()
+    assert loops == [cluster_loop]
+
+
+async def test_operation_without_the_thread_fails(tmp_path: pathlib.Path) -> None:
+    """An operation fails loudly unless the cluster runs on its thread, before run_in_thread() as after it."""
+    cluster = make_cluster(tmp_path)
+    try:
+        with pytest.raises(AssertionError, match="not running on its thread"):
+            await cluster.running_servers()
+        async with cluster.run_in_thread():
+            pass
+        with pytest.raises(AssertionError, match="not running on its thread"):
+            await cluster.running_servers()
+    finally:
+        await cluster.recycle()
 
 
 async def test_leftover_operation_ends_before_the_final_stop(tmp_path: pathlib.Path,
