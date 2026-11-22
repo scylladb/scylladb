@@ -1047,6 +1047,32 @@ SEASTAR_THREAD_TEST_CASE(test_object_storage_endpoint_uri) {
         std::invalid_argument);
 }
 
+SEASTAR_THREAD_TEST_CASE(test_object_storage_endpoint_list_is_strict) {
+    tests::tmp_unset_env no_region_env("AWS_DEFAULT_REGION");
+    auto parse = &object_storage_endpoint_param::parse_list;
+
+    auto endpoints = parse(R"([{"name": "store", "uri": "https://s3.us-east-1.amazonaws.com", "aws_region": "us-east-1"},)"
+                           R"( {"name": "archive", "type": "gs", "uri": "https://storage.googleapis.com"}])");
+    BOOST_REQUIRE_EQUAL(endpoints.size(), 2);
+    BOOST_CHECK_EQUAL(endpoints[0].key(), "store");
+    BOOST_CHECK(endpoints[0].is_s3_storage());
+    BOOST_CHECK_EQUAL(endpoints[1].key(), "archive");
+    BOOST_CHECK(endpoints[1].is_gs_storage());
+    BOOST_CHECK(parse("[]").empty());
+
+    // scylla.yaml skips an entry it cannot decode; here one bad entry fails the whole list.
+    for (auto bad : {
+            R"({"name": "store", "aws_region": "us-east-1"})",
+            R"("store")",
+            R"([{"name": "https://s3.us-east-1.amazonaws.com"}])",
+            R"([{"name": "store", "uri": "s3.us-east-1.amazonaws.com", "aws_region": "us-east-1"}])",
+            R"([{"aws_region": "us-east-1"}])",
+            R"([{"name": "store", "type": "gs"}, {"name": "store", "type": "gs"}])",
+            R"([{"name": "store", "type": "gs")"}) {
+        BOOST_CHECK_THROW(parse(bad), std::invalid_argument);
+    }
+}
+
 SEASTAR_THREAD_TEST_CASE(test_parse_object_storage_endpoints_one_entry_broken) {
     tests::tmp_unset_env no_region_env("AWS_DEFAULT_REGION");
     auto cfg_ptr = std::make_unique<config>();

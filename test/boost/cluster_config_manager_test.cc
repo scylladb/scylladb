@@ -25,6 +25,7 @@
 #include "db/cluster_config_manager.hh"
 #include "db/cluster_config_registry.hh"
 #include "db/config.hh"
+#include "db/object_storage_endpoint_param.hh"
 #include "cql3/query_processor.hh"
 #include "exceptions/exceptions.hh"
 #include "replica/database.hh"
@@ -1066,6 +1067,74 @@ SEASTAR_TEST_CASE(test_db_config_backed_option_applies_to_db_config_and_restores
         // The node-local write works again once the override is gone.
         entry(7, config_source::API);
         BOOST_REQUIRE_EQUAL(entry(), 7u);
+    });
+}
+
+// object_storage_endpoints is a db::config-backed option whose value is a list, registered at
+// the CLUSTER scope: an override replaces the node's own list on every shard, the
+// node-oriented forms and a value that is not a list of valid endpoints are rejected, and
+// removing the override restores the list the node started with.
+SEASTAR_TEST_CASE(test_object_storage_endpoints_option_replaces_the_node_list) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        using config_source = utils::config_file::config_source;
+        using endpoints = std::vector<db::object_storage_endpoint_param>;
+        auto& entry = e.db_config().object_storage_endpoints;
+        auto& mgr = e.cluster_config_manager();
+        const auto& topo = e.shared_token_metadata().local().get()->get_topology();
+        const sstring dc = topo.get_datacenter();
+        const sstring rack = topo.get_rack();
+        const auto node_uuid = topo.my_host_id().uuid();
+
+        auto list_with = [] (std::string_view uri) {
+            return seastar::format(R"([{{"name": "store", "type": "gs", "uri": "{}"}}])", uri);
+        };
+        auto uri_on_every_shard = [&] (std::string_view expected) {
+            for (unsigned shard = 0; shard < smp::count; ++shard) {
+                auto value = smp::submit_to(shard, [&] { return entry(); }).get();
+                BOOST_REQUIRE_EQUAL(value.size(), 1);
+                BOOST_REQUIRE_EQUAL(value[0].key(), "store");
+                BOOST_REQUIRE_EQUAL(value[0].get_gs_storage().endpoint, expected);
+            }
+        };
+        auto alter = [&] (sstring target, std::string_view uri) {
+            e.execute_cql(seastar::format("ALTER {} WITH object_storage_endpoints = '{}'", target, list_with(uri))).get();
+            mgr.local().refresh().get();
+        };
+        auto remove = [&] (sstring target) {
+            e.execute_cql(seastar::format("ALTER {} WITH object_storage_endpoints = null", target)).get();
+            mgr.local().refresh().get();
+        };
+
+        // A distinguishable baseline, as if it came from scylla.yaml.
+        const auto baseline = db::object_storage_endpoint_param::parse_list(list_with("http://yaml"));
+        smp::invoke_on_all([&] { entry.restore(endpoints(baseline), config_source::SettingsFile); }).get();
+
+        const sstring cluster = "CLUSTER";
+
+        alter(cluster, "http://cluster");
+        uri_on_every_shard("http://cluster");
+        BOOST_REQUIRE(entry.source() == config_source::ClusterConfig);
+
+        for (auto target : {
+                seastar::format("DATACENTER \"{}\"", dc),
+                seastar::format("RACK \"{}\" \"{}\"", dc, rack),
+                seastar::format("NODE {}", node_uuid)}) {
+            BOOST_REQUIRE_THROW(e.execute_cql(seastar::format("ALTER {} WITH object_storage_endpoints = '{}'", target, list_with("http://narrower"))).get(),
+                    exceptions::invalid_request_exception);
+        }
+
+        for (auto bad : {"'store'", "'{\"name\": \"store\", \"type\": \"gs\"}'", "'[{\"type\": \"gs\"}]'", "7"}) {
+            BOOST_REQUIRE_THROW(e.execute_cql(seastar::format("ALTER CLUSTER WITH object_storage_endpoints = {}", bad)).get(),
+                    exceptions::invalid_request_exception);
+        }
+        uri_on_every_shard("http://cluster");
+
+        alter(cluster, "http://changed");
+        uri_on_every_shard("http://changed");
+
+        remove(cluster);
+        uri_on_every_shard("http://yaml");
+        BOOST_REQUIRE(entry.source() == config_source::SettingsFile);
     });
 }
 
