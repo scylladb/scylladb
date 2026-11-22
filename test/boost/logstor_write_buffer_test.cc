@@ -219,7 +219,7 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_chunk_builder_accepts_record_at_max_record
     auto schema = make_kv_schema();
 
     chunk_builder wb(ondisk::block_alignment, segment_kind::mixed);
-    auto max_size = wb.max_record_size();
+    auto max_size = chunk_layout::max_record_size(ondisk::block_alignment, segment_kind::mixed);
 
     sstring value;
     auto record = make_log_record(schema, "pk", "", api::timestamp_type(27));
