@@ -1264,6 +1264,32 @@ class CQLAuditTester(AuditTester):
                     ks="",
                 )
 
+            # A hashed password is masked too.
+            hashed_password = "$6$aaaabbbbccccdddd$47PHiBMQlMZ2bZrMSCBtJfD9XDivV/QICFRGlvQ9MCHNKevtLomBfhrHjuVqdit0ZE5wOS6MaloqwKlunupPo0"
+            self.execute_and_validate_new_audit_entry(
+                session,
+                f"CREATE USER user3 WITH HASHED PASSWORD '{hashed_password}'",
+                category="DCL",
+                expected_operation="CREATE USER user3 WITH HASHED PASSWORD '***'",
+                user="cassandra",
+                ks="",
+            )
+            self.execute_and_validate_new_audit_entry(
+                session,
+                f"ALTER USER user3 WITH HASHED PASSWORD '{hashed_password}'",
+                category="DCL",
+                expected_operation="ALTER USER user3 WITH HASHED PASSWORD '***'",
+                user="cassandra",
+                ks="",
+            )
+            self.execute_and_validate_new_audit_entry(
+                session,
+                "DROP USER user3",
+                category="DCL",
+                user="cassandra",
+                ks="",
+            )
+
     async def _test_negative_audit_records_auth(self):
         """
         Test that failed AUTH attempts are audited.
