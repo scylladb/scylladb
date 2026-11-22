@@ -557,30 +557,36 @@ def test_like_local_index(cql, test_keyspace, scylla_only):
 def sorted_result_rows(result):
     return sorted(list(row) for row in result)
 
-# Scylla-only because Cassandra does not treat '_' as a wildcard in LIKE
-# patterns (only '%'), so the '_' patterns below match nothing there.
-def test_like_operator(cql, test_keyspace, scylla_only):
+def test_like_operator(cql, test_keyspace, new_to_cassandra_6):
     with new_test_table(cql, test_keyspace, "p int primary key, s text") as t:
         assert sorted_result_rows(cql.execute(f"select s from {t} where s like 'abc' allow filtering")) == []
         cql.execute(f"insert into {t} (p, s) values (1, 'abc')")
         assert sorted_result_rows(cql.execute(f"select s from {t} where s like 'abc' allow filtering")) == [["abc"]]
-        assert sorted_result_rows(cql.execute(f"select s from {t} where s like 'ab_' allow filtering")) == [["abc"]]
         cql.execute(f"insert into {t} (p, s) values (2, 'abb')")
-        assert sorted_result_rows(cql.execute(f"select s from {t} where s like 'ab_' allow filtering")) == [["abb"], ["abc"]]
         assert sorted_result_rows(cql.execute(f"select s from {t} where s like '%c' allow filtering")) == [["abc"]]
         assert sorted_result_rows(cql.execute(f"select s from {t} where s like 'aaa' allow filtering")) == []
 
 # Scylla-only because Cassandra does not treat '_' as a wildcard in LIKE
 # patterns (only '%'), so the '_' patterns below match nothing there.
-def test_like_operator_on_partition_key(cql, test_keyspace, scylla_only):
-    # Fully constrained:
+def test_like_operator_underscore_wildcard(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "p int primary key, s text") as t:
+        cql.execute(f"insert into {t} (p, s) values (1, 'abc')")
+        assert sorted_result_rows(cql.execute(f"select s from {t} where s like 'ab_' allow filtering")) == [["abc"]]
+        cql.execute(f"insert into {t} (p, s) values (2, 'abb')")
+        assert sorted_result_rows(cql.execute(f"select s from {t} where s like 'ab_' allow filtering")) == [["abb"], ["abc"]]
+
+# LIKE on the whole partition key.
+# Scylla-only because Cassandra does not treat '_' as a wildcard in LIKE
+# patterns (only '%'), so the '_' patterns below match nothing there.
+def test_like_operator_on_single_column_partition_key(cql, test_keyspace, scylla_only):
     with new_test_table(cql, test_keyspace, "s text primary key") as t:
         cql.execute(f"insert into {t} (s) values ('abc')")
         assert sorted_result_rows(cql.execute(f"select s from {t} where s like 'a__' allow filtering")) == [["abc"]]
         cql.execute(f"insert into {t} (s) values ('acc')")
         assert sorted_result_rows(cql.execute(f"select s from {t} where s like 'a__' allow filtering")) == [["abc"], ["acc"]]
 
-    # Partially constrained:
+# LIKE on one column of a composite partition key.
+def test_like_operator_on_partition_key_component(cql, test_keyspace, new_to_cassandra_6):
     with new_test_table(cql, test_keyspace, "s1 text, s2 text, primary key((s1, s2))") as t:
         cql.execute(f"insert into {t} (s1, s2) values ('abc', 'abc')")
         assert sorted_result_rows(cql.execute(f"select s2 from {t} where s2 like 'a%' allow filtering")) == [["abc"]]
@@ -611,24 +617,36 @@ def test_like_operator_conjunction(cql, test_keyspace, scylla_only):
         assert sorted_result_rows(cql.execute(f"select s1 from {t} where s1 like 'a%' and s1 like '_b_' and s1 like '%c' allow filtering")) == [["abc"]]
         assert sorted_result_rows(cql.execute(f"select s1 from {t} where s1 like 'a%' and s1 = 'abc' allow filtering")) == [["abc"]]
 
-# Scylla-only because Cassandra rejects the pattern '%' with "LIKE value
-# can't be empty".
-def test_like_operator_static_column(cql, test_keyspace, scylla_only):
+def test_like_operator_static_column(cql, test_keyspace, new_to_cassandra_6):
     with new_test_table(cql, test_keyspace, "p int, c text, s text static, primary key(p, c)") as t:
         assert sorted_result_rows(cql.execute(f"select s from {t} where s like '%c' allow filtering")) == []
         cql.execute(f"insert into {t} (p, s) values (1, 'abc')")
         assert sorted_result_rows(cql.execute(f"select s from {t} where s like '%c' allow filtering")) == [["abc"]]
+
+# A partition with only a static row has no clustering key value, so even
+# the pattern '%', which matches any string, does not match it.
+# Scylla-only because Cassandra rejects the pattern '%' with "LIKE value
+# can't be empty". Scylla follows SQL, where '%' matches any string, so
+# this is a Scylla extension.
+def test_like_operator_match_all_pattern_skips_static_row(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "p int, c text, s text static, primary key(p, c)") as t:
+        cql.execute(f"insert into {t} (p, s) values (1, 'abc')")
         assert sorted_result_rows(cql.execute(f"select * from {t} where c like '%' allow filtering")) == []
+
+def test_like_operator_bind_marker(cql, test_keyspace, new_to_cassandra_6):
+    with new_test_table(cql, test_keyspace, "s text primary key") as t:
+        cql.execute(f"insert into {t} (s) values ('abc')")
+        stmt = cql.prepare(f"select s from {t} where s like ? allow filtering")
+        assert sorted_result_rows(cql.execute(stmt, ["%g"])) == []
+        assert sorted_result_rows(cql.execute(stmt, ["%c"])) == [["abc"]]
 
 # Scylla-only because Cassandra does not treat '_' as a wildcard in LIKE
 # patterns (only '%'), so the '_b_' pattern below matches nothing there.
-def test_like_operator_bind_marker(cql, test_keyspace, scylla_only):
+def test_like_operator_bind_marker_underscore_wildcard(cql, test_keyspace, scylla_only):
     with new_test_table(cql, test_keyspace, "s text primary key") as t:
         cql.execute(f"insert into {t} (s) values ('abc')")
         stmt = cql.prepare(f"select s from {t} where s like ? allow filtering")
         assert sorted_result_rows(cql.execute(stmt, ["_b_"])) == [["abc"]]
-        assert sorted_result_rows(cql.execute(stmt, ["%g"])) == []
-        assert sorted_result_rows(cql.execute(stmt, ["%c"])) == [["abc"]]
 
 # Scylla-only because Cassandra rejects the empty pattern with "LIKE value
 # can't be empty".
