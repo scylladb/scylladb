@@ -220,3 +220,50 @@ async def test_deleted_data_is_not_replayed_from_commitlog(manager: ScyllaCluste
         await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
 
         assert await select_pks(cql, table) == set()
+
+
+async def test_truncate_clears_truncation_tombstone(manager: ScyllaClusterManager):
+    """
+    TRUNCATE removes the table's data physically from all the replicas, so none of them
+    holds data covered by a truncation tombstone set by DELETE ALL DATA, and TRUNCATE clears
+    it, for the table and its views. Data older than the cleared tombstone can then be
+    written, or restored, into the table.
+    """
+    servers = await manager.servers_add(3, auto_rack_dc="dc1")
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:
+        table = f"{ks}.cf"
+        await cql.run_async(f"CREATE TABLE {table} (pk int PRIMARY KEY, v int)")
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv AS SELECT * FROM {table} WHERE v IS NOT NULL AND pk IS NOT NULL PRIMARY KEY (v, pk)")
+        await wait_for_view(cql, "mv", len(servers))
+
+        async def data_deleted_at_timestamp(name: str):
+            if name == "mv":
+                table_id = (await cql.run_async(f"SELECT id FROM system_schema.views WHERE keyspace_name = '{ks}' AND view_name = '{name}'"))[0].id
+            else:
+                table_id = (await cql.run_async(f"SELECT id FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = '{name}'"))[0].id
+            rows = await cql.run_async(f"SELECT data_deleted_at_timestamp FROM system.tablets WHERE table_id = {table_id} LIMIT 1")
+            return rows[0].data_deleted_at_timestamp if rows else None
+
+        deleted_at = 1000
+        write = SimpleStatement(f"INSERT INTO {table} (pk, v) VALUES (1, 1) USING TIMESTAMP {deleted_at - 1}", consistency_level=ConsistencyLevel.ALL)
+        await cql.run_async(write)
+        await cql.run_async(f"DELETE ALL DATA FROM {table} USING TIMESTAMP {deleted_at}")
+        assert await data_deleted_at_timestamp("cf") == deleted_at
+        assert await data_deleted_at_timestamp("mv") == deleted_at
+        # While the truncation tombstone is set, a write it covers is dropped.
+        await cql.run_async(write)
+        assert await select_pks(cql, table) == set()
+
+        await cql.run_async(f"TRUNCATE {table}")
+        assert await data_deleted_at_timestamp("cf") is None
+        assert await data_deleted_at_timestamp("mv") is None
+        assert await select_pks(cql, table) == set()
+
+        await cql.run_async(write)
+        assert await select_pks(cql, table) == {1}
+
+        async def view_has_row():
+            rows = await cql.run_async(SimpleStatement(f"SELECT pk FROM {ks}.mv", consistency_level=ConsistencyLevel.ALL))
+            return True if {row.pk for row in rows} == {1} else None
+        await wait_for(view_has_row, time.time() + 60)

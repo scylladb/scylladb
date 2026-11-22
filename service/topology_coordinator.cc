@@ -3977,7 +3977,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
     // the guard is out: a deposed coordinator can still be inside bf() when
     // the new one retries the request and runs it again, so bf must tolerate
     // a concurrent bf of the same request.
-    future<> handle_topology_ordered_op(group0_guard guard, get_table_ids_func get_table_ids, send_all_func send_all, desc_func desc, std::string_view what, before_finalize_func bf = {}) {
+    // `on_success`, if set, adds updates to the group0 command which clears the operation's session,
+    // when the operation was sent to the replicas of `tables` and succeeded on all of them.
+    using on_success_func = std::function<void(const std::unordered_set<table_id>& tables, api::timestamp_type write_timestamp, utils::chunked_vector<canonical_mutation>& updates)>;
+
+    future<> handle_topology_ordered_op(group0_guard guard, get_table_ids_func get_table_ids, send_all_func send_all, desc_func desc, std::string_view what, before_finalize_func bf = {},
+            on_success_func on_success = {}) {
         // Execute a barrier to make sure the nodes we are performing truncate on see the session
         // and are able to create a topology_guard using the frozen_guard we are sending over RPC
         // TODO: Exclude nodes which don't contain replicas of the table we are truncating
@@ -4031,6 +4036,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     updates.push_back(topology_request_tracking_mutation_builder(global_request_id)
                                         .set("error", *error)
                                         .build());
+                } else if (on_success && !tables.empty()) {
+                    on_success(tables, guard.write_timestamp(), updates);
                 }
 
                 try {
@@ -4434,6 +4441,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         auto desc = [&] {
             return fmt::format("TRUNCATE on table {}.{}", ks_name, cf_name);
         };
+        // The truncation tombstones, set by DELETE ALL DATA, which the table and its views have when the
+        // TRUNCATE starts, after the barrier which made all the nodes observe them.
+        std::unordered_map<table_id, tombstone> truncation_tombstones;
 
         co_await handle_topology_ordered_op(std::move(guard)
             , [&](const db::system_keyspace::topology_requests_entry& topology_requests_entry) {
@@ -4445,6 +4455,17 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     cf_name = table->schema()->cf_name();
 
                     rtlogger.info("Performing TRUNCATE TABLE for {}.{}", ks_name, cf_name);
+
+                    const auto& tablets = get_token_metadata().tablets();
+                    std::vector<table_id> truncated{id};
+                    for (const auto& view : table->views()) {
+                        truncated.push_back(view->id());
+                    }
+                    for (auto tid : truncated) {
+                        if (const auto t = tablets.get_truncated_at(tid)) {
+                            truncation_tombstones.emplace(tid, t);
+                        }
+                    }
 
                     return std::unordered_set<table_id>({ id });
                 }
@@ -4465,6 +4486,47 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
             }
             , desc
             , "truncate"
+            , {}
+            , [&] (const std::unordered_set<table_id>& tables, api::timestamp_type write_timestamp, utils::chunked_vector<canonical_mutation>& updates) {
+                // TRUNCATE removed the table's data, and its views', from all their replicas, including the
+                // data covered by the truncation tombstones they had when it started, and whatever was
+                // written meanwhile was stripped of covered data, as all the nodes had them by then. So no
+                // replica holds data covered by them, and they are cleared, which lets data older than them
+                // be written or restored into the tables again. See docs/dev/delete-all-data.md.
+                // A truncation tombstone set by a DELETE ALL DATA while the TRUNCATE was running is kept:
+                // data it covers may have been written after the replicas were truncated and before they
+                // observed it.
+                // TRUNCATE is sent to the hosts of the base table's replicas, which truncate the table and
+                // its views there. A view which is not co-located with its base table may have replicas
+                // on other hosts, which were not truncated, so its truncation tombstone is kept.
+                const auto& tablets = get_token_metadata().tablets();
+                auto replica_hosts = [&] (table_id tid) {
+                    std::unordered_set<locator::host_id> hosts;
+                    for (const auto& info : tablets.get_tablet_map(tid).tablets()) {
+                        for (const auto& r : info.replicas) {
+                            hosts.insert(r.host);
+                        }
+                    }
+                    return hosts;
+                };
+                std::unordered_set<locator::host_id> truncated_hosts;
+                for (auto tid : tables) {
+                    if (tablets.has_tablet_map(tid)) {
+                        truncated_hosts.merge(replica_hosts(tid));
+                    }
+                }
+                for (const auto& [tid, t] : truncation_tombstones) {
+                    if (!tablets.has_tablet_map(tid) || tablets.get_truncated_at(tid) != t) {
+                        continue;
+                    }
+                    if (!tables.contains(tid) && !std::ranges::all_of(replica_hosts(tid), [&] (locator::host_id h) { return truncated_hosts.contains(h); })) {
+                        rtlogger.info("TRUNCATE keeps the truncation tombstone {} of view {}, which has replicas on nodes which were not truncated", t, tid);
+                        continue;
+                    }
+                    rtlogger.info("TRUNCATE clears the truncation tombstone {} of table {}", t, tid);
+                    updates.emplace_back(replica::tablet_mutation_builder(write_timestamp, tid).del_truncated_at().build());
+                }
+            }
         );
     }
 
