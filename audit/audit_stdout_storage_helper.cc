@@ -1,0 +1,552 @@
+/*
+ * Copyright (C) 2026-present ScyllaDB
+ */
+
+/*
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
+ */
+
+#include "audit/audit_stdout_storage_helper.hh"
+
+#include <algorithm>
+#include <array>
+#include <climits>
+#include <filesystem>
+#include <limits>
+#include <sys/sysmacros.h>
+
+#include <seastar/core/coroutine.hh>
+#include <seastar/core/fstream.hh>
+#include <seastar/core/seastar.hh>
+#include <seastar/core/semaphore.hh>
+#include <seastar/core/shared_future.hh>
+#include <seastar/core/smp.hh>
+#include <seastar/core/with_timeout.hh>
+#include <seastar/util/defer.hh>
+
+#include <fmt/chrono.h>
+
+#include "utils/chunked_vector.hh"
+
+namespace audit {
+
+namespace {
+
+// Returns the length of the well-formed UTF-8 sequence that the non-empty `s`
+// starts with, or 0 if it starts with none.
+size_t utf8_sequence_length(std::string_view s) {
+    auto byte = [s] (size_t i) { return static_cast<unsigned char>(s[i]); };
+    auto lead = byte(0);
+    if (lead < 0x80) {
+        return 1;
+    }
+    size_t length;
+    // The bounds of the second byte rule out the overlong forms, surrogates and
+    // code points past U+10FFFF that the lead byte lets through.
+    unsigned char low = 0x80;
+    unsigned char high = 0xbf;
+    if (lead >= 0xc2 && lead <= 0xdf) {
+        length = 2;
+    } else if (lead >= 0xe0 && lead <= 0xef) {
+        length = 3;
+        low = lead == 0xe0 ? 0xa0 : 0x80;
+        high = lead == 0xed ? 0x9f : 0xbf;
+    } else if (lead >= 0xf0 && lead <= 0xf4) {
+        length = 4;
+        low = lead == 0xf0 ? 0x90 : 0x80;
+        high = lead == 0xf4 ? 0x8f : 0xbf;
+    } else {
+        return 0;
+    }
+    if (s.size() < length || byte(1) < low || byte(1) > high) {
+        return 0;
+    }
+    for (size_t i = 2; i < length; ++i) {
+        if (byte(i) < 0x80 || byte(i) > 0xbf) {
+            return 0;
+        }
+    }
+    return length;
+}
+
+// Passes `value` to `put` in pieces, as valid UTF-8 with quotes, backslashes and
+// control characters escaped, so the record stays on one line and inert in a terminal.
+void put_escaped(auto&& put, std::string_view value) {
+    auto put_hex_escape = [&put] (std::string_view prefix, unsigned char byte) {
+        constexpr std::string_view digits = "0123456789abcdef";
+        std::array<char, 6> escape;
+        auto end = std::ranges::copy(prefix, escape.begin()).out;
+        *end++ = digits[byte >> 4];
+        *end++ = digits[byte & 0xf];
+        put(std::string_view(escape.data(), end - escape.begin()));
+    };
+    size_t unwritten = 0;
+    size_t i = 0;
+    while (i < value.size()) {
+        auto c = static_cast<unsigned char>(value[i]);
+        auto length = utf8_sequence_length(value.substr(i));
+        // U+0080 to U+009F, the C1 control characters
+        bool c1 = length == 2 && c == 0xc2 && static_cast<unsigned char>(value[i + 1]) < 0xa0;
+        if (length != 0 && !c1 && c != '"' && c != '\\' && c >= 0x20 && c != 0x7f) {
+            i += length;
+            continue;
+        }
+        if (i > unwritten) {
+            put(value.substr(unwritten, i - unwritten));
+        }
+        if (length == 0) {
+            put_hex_escape("\\x", c);
+            length = 1;
+        } else if (c1) {
+            put_hex_escape("\\u00", static_cast<unsigned char>(value[i + 1]));
+        } else if (c == '\n') {
+            put("\\n");
+        } else if (c == '\r') {
+            put("\\r");
+        } else if (c == '\t') {
+            put("\\t");
+        } else if (c == '"') {
+            put("\\\"");
+        } else if (c == '\\') {
+            put("\\\\");
+        } else {
+            put_hex_escape("\\x", c);
+        }
+        i += length;
+        unwritten = i;
+    }
+    if (unwritten < value.size()) {
+        put(value.substr(unwritten));
+    }
+}
+
+}
+
+// Records in the order they are written. The batch copies the records of its
+// own shard into chunks it owns, and only refers to the records of other shards.
+class record_batch {
+    static constexpr size_t min_chunk_size = 1024;
+    static constexpr size_t max_chunk_size = 64 * 1024;
+
+    std::vector<temporary_buffer<char>> _chunks;
+    size_t _chunk_free = 0;
+    utils::chunked_vector<std::string_view> _data;
+    semaphore_units<> _units;
+
+    void add(std::string_view data) {
+        if (!_data.empty() && _data.back().data() + _data.back().size() == data.data()) {
+            _data.back() = std::string_view(_data.back().data(), _data.back().size() + data.size());
+        } else {
+            _data.push_back(data);
+        }
+    }
+public:
+    struct position {
+        size_t chunks;
+        size_t chunk_free;
+        size_t data;
+        size_t last_data_size;
+        size_t units;
+    };
+
+    position mark() const noexcept {
+        return {_chunks.size(), _chunk_free, _data.size(), _data.empty() ? 0 : _data.back().size(), _units.count()};
+    }
+
+    // Drops everything appended after `pos`, and returns the units held since.
+    void truncate(const position& pos) noexcept {
+        _chunks.erase(_chunks.begin() + pos.chunks, _chunks.end());
+        _chunk_free = pos.chunk_free;
+        while (_data.size() > pos.data) {
+            _data.pop_back();
+        }
+        if (!_data.empty()) {
+            _data.back() = std::string_view(_data.back().data(), pos.last_data_size);
+        }
+        if (_units.count() > pos.units) {
+            _units.return_units(_units.count() - pos.units);
+        }
+    }
+
+    void append(std::string_view piece) {
+        while (!piece.empty()) {
+            if (_chunk_free == 0) {
+                auto size = std::min(max_chunk_size, min_chunk_size << std::min<size_t>(_chunks.size(), 6));
+                _chunks.emplace_back(size);
+                _chunk_free = size;
+            }
+            auto& chunk = _chunks.back();
+            auto dst = chunk.get_write() + chunk.size() - _chunk_free;
+            auto n = std::min(_chunk_free, piece.size());
+            std::copy_n(piece.data(), n, dst);
+            _chunk_free -= n;
+            add(std::string_view(dst, n));
+            piece.remove_prefix(n);
+        }
+    }
+
+    // `other` must stay alive as long as this batch refers to it.
+    void append(const record_batch& other) {
+        for (std::string_view data : other._data) {
+            _data.push_back(data);
+        }
+    }
+
+    void hold(semaphore_units<> units) noexcept {
+        if (_units.count() == 0) {
+            _units = std::move(units);
+        } else {
+            _units.adopt(std::move(units));
+        }
+    }
+
+    bool empty() const noexcept {
+        return _data.empty();
+    }
+
+    const utils::chunked_vector<std::string_view>& data() const noexcept {
+        return _data;
+    }
+};
+
+// The stream to the standard output, which only shard 0 writes to.
+struct stdout_stream {
+    sstring path;
+    std::optional<data_sink> sink;
+
+    future<> write(const record_batch& batch) {
+        if (!sink) {
+            throw audit_exception("Stdout audit backend is not started");
+        }
+        try {
+            const auto& data = batch.data();
+            // At most IOV_MAX buffers per put: not every reactor backend splits a longer
+            // writev, and no write builds a large array of buffers.
+            for (size_t start = 0; start < data.size(); start += IOV_MAX) {
+                auto end = std::min<size_t>(data.size(), start + IOV_MAX);
+                std::vector<temporary_buffer<char>> buffers;
+                buffers.reserve(end - start);
+                for (size_t i = start; i < end; ++i) {
+                    // a non-owning buffer: the batch outlives the put below
+                    buffers.emplace_back(const_cast<char*>(data[i].data()), data[i].size(), deleter());
+                }
+                co_await sink->put(std::move(buffers));
+            }
+        } catch (...) {
+            auto error_msg = seastar::format("Stdout audit backend failed (writing to {} resulted in {}).", path, std::current_exception());
+            logger.error("{}", error_msg);
+            throw audit_exception(std::move(error_msg));
+        }
+    }
+};
+
+// Collects records into batches: while one batch is being flushed, new
+// records wait for the next one. On shard 0 it also collects the batches of
+// the other shards.
+class stdout_record_batcher : public enable_shared_from_this<stdout_record_batcher> {
+public:
+    using flush_func = noncopyable_function<future<>(const record_batch&)>;
+private:
+    std::chrono::milliseconds _timeout;
+    size_t _max_unwritten_memory;
+    // Units are bytes, which a record of this shard holds from when it is copied
+    // until it is written. Declared before _pending, whose units return to it.
+    semaphore _unwritten_memory;
+    flush_func _flush;
+    record_batch _pending;
+    // Engaged whenever _pending is not empty.
+    std::optional<shared_promise<>> _pending_flushed;
+    bool _flushing = false;
+    lowres_clock::time_point _flush_started;
+    future<> _flush_loop = make_ready_future<>();
+
+    // Runs in the scheduling group of the write that starts it, as the writes
+    // of the other sinks do.
+    future<> flush_loop() {
+        // a flush into a pipe that nobody reads can outlive the helper
+        auto self = shared_from_this();
+        _flushing = true;
+        auto stop_flushing = defer([this] () noexcept { _flushing = false; });
+        while (!_pending.empty()) {
+            auto flushed = std::exchange(_pending_flushed, std::nullopt);
+            auto batch = std::exchange(_pending, {});
+            _flush_started = lowres_clock::now();
+            try {
+                co_await _flush(batch);
+                flushed->set_value();
+            } catch (...) {
+                flushed->set_exception(std::current_exception());
+            }
+        }
+    }
+
+    future<> append(auto&& add, lowres_clock::time_point timeout) {
+        auto pending_mark = _pending.mark();
+        try {
+            add(_pending);
+            if (!_pending_flushed) {
+                _pending_flushed.emplace();
+            }
+            auto flushed = _pending_flushed->get_shared_future(timeout);
+            if (!_flushing) {
+                _flush_loop = flush_loop();
+            }
+            return flushed;
+        } catch (...) {
+            // drop what was appended: a rejected or partly built record, or the
+            // views of a batch that the caller frees on failure
+            _pending.truncate(pending_mark);
+            throw;
+        }
+    }
+public:
+    stdout_record_batcher(std::chrono::milliseconds timeout, size_t max_unwritten_memory, flush_func flush)
+        : _timeout(timeout)
+        , _max_unwritten_memory(max_unwritten_memory)
+        , _unwritten_memory(max_unwritten_memory)
+        , _flush(std::move(flush))
+    {}
+
+    // Appends the pieces that `build` passes to its argument as one record. Fails at the timeout, or at
+    // once while the flush in progress has taken that long or this shard has no room for the record.
+    future<> write_record(auto&& build) {
+        auto now = lowres_clock::now();
+        if (_flushing && now - _flush_started > _timeout) {
+            return make_exception_future<>(audit_exception(seastar::format(
+                    "Stdout audit backend has not finished a write for over {}", _timeout)));
+        }
+        auto add = [this, &build] (record_batch& pending) {
+            size_t available = _unwritten_memory.available_units();
+            // a record longer than the limit fits once no other record waits
+            size_t room = available == _max_unwritten_memory ? std::numeric_limits<size_t>::max() : available;
+            size_t size = 0;
+            build([this, &pending, &size, available, room] (std::string_view piece) {
+                size += piece.size();
+                if (size > room) {
+                    throw audit_exception(seastar::format(
+                            "Stdout audit backend has no room for the record: {} of at most {} bytes of records are waiting to be written",
+                            _max_unwritten_memory - available, _max_unwritten_memory));
+                }
+                pending.append(piece);
+            });
+            pending.hold(consume_units(_unwritten_memory, std::min(size, _max_unwritten_memory)));
+        };
+        try {
+            return append(add, now + _timeout).handle_exception_type([timeout = _timeout] (const timed_out_error&) {
+                return make_exception_future<>(audit_exception(seastar::format(
+                        "Stdout audit backend did not write the record within {}", timeout)));
+            });
+        } catch (...) {
+            return current_exception_as_future();
+        }
+    }
+
+    // Resolves once the records of `batch` are flushed. Waits without a
+    // timeout, since the batch must stay alive until then.
+    future<> write_batch(const record_batch& batch) {
+        auto add = [&batch] (record_batch& pending) {
+            pending.append(batch);
+        };
+        return append(add, lowres_clock::time_point::max());
+    }
+
+    // Resolves once every record written so far is flushed. Fails with
+    // timed_out_error at the timeout after the batch in flight started.
+    future<> close() {
+        auto flush_loop = std::exchange(_flush_loop, make_ready_future<>());
+        if (flush_loop.available()) {
+            return flush_loop;
+        }
+        return with_timeout(_flush_started + _timeout, std::move(flush_loop));
+    }
+};
+
+namespace {
+
+// The batcher of shard 0, which writes to the stream. Set only on shard 0.
+thread_local stdout_record_batcher* shard0_batcher = nullptr;
+
+future<> forward_to_shard0(const record_batch& batch) {
+    return smp::submit_to(0, [&batch] {
+        if (!shard0_batcher) {
+            throw audit_exception("Stdout audit backend is not started");
+        }
+        return shard0_batcher->write_batch(batch);
+    });
+}
+
+std::string_view describe(directory_entry_type type) {
+    switch (type) {
+    case directory_entry_type::block_device: return "a block device";
+    case directory_entry_type::char_device: return "a character device";
+    case directory_entry_type::directory: return "a directory";
+    case directory_entry_type::fifo: return "a pipe";
+    case directory_entry_type::link: return "a symbolic link";
+    case directory_entry_type::regular: return "a regular file";
+    case directory_entry_type::socket: return "a socket";
+    case directory_entry_type::unknown: break;
+    }
+    return "of an unknown type";
+}
+
+// Opens `path` anew, so the non-blocking mode of the stream does not affect
+// other writers of the same pipe, such as the logger.
+future<data_sink> open_stream(const sstring& path) {
+    stat_data st;
+    try {
+        st = co_await file_stat(path);
+    } catch (...) {
+        throw audit_exception(seastar::format("Stdout audit backend failed to inspect {}: {}", path, std::current_exception()));
+    }
+    if (st.type != directory_entry_type::fifo && st.type != directory_entry_type::char_device) {
+        // A seastar file stream writes at explicit offsets, so it would
+        // overwrite whatever else the process writes to a regular file.
+        throw audit_exception(seastar::format("Stdout audit backend requires {} to be a pipe or a character device, but it is {}",
+                path, describe(st.type)));
+    }
+    // Memory devices are no place for records: most of them, like /dev/null,
+    // discard what is written to them without any error.
+    if (st.type == directory_entry_type::char_device && major(st.rdev) == 1) {
+        throw audit_exception(seastar::format("Stdout audit backend cannot write to {}: it is a memory device, such as /dev/null",
+                path));
+    }
+    try {
+        auto out = co_await make_pipe_output_stream(std::filesystem::path(path));
+        co_return std::move(out).detach();
+    } catch (const std::system_error& e) {
+        std::string_view hint;
+        if (st.type == directory_entry_type::fifo && e.code() == std::errc::permission_denied) {
+            hint = " (only the owner of a pipe can open it again)";
+        } else if (st.type == directory_entry_type::fifo && e.code() == std::errc::no_such_device_or_address) {
+            hint = " (nothing reads the pipe)";
+        }
+        throw audit_exception(seastar::format("Stdout audit backend failed to open {}: {}{}", path, e.what(), hint));
+    } catch (...) {
+        throw audit_exception(seastar::format("Stdout audit backend failed to open {}: {}", path, std::current_exception()));
+    }
+}
+
+// The local time, formatted at most once a second on each shard, since
+// localtime_r() takes a process-wide lock.
+std::string_view local_time() {
+    static thread_local std::time_t formatted_at = -1;
+    static thread_local std::array<char, 32> formatted;
+    static thread_local size_t size = 0;
+    auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    if (now != formatted_at) {
+        tm time;
+        localtime_r(&now, &time);
+        size = fmt::format_to_n(formatted.data(), formatted.size(), "{:%h %e %T}", time).out - formatted.data();
+        formatted_at = now;
+    }
+    return std::string_view(formatted.data(), size);
+}
+
+// Passes the record to `put` in pieces, ending with a line break.
+void put_record(auto&& put,
+                socket_address node_ip,
+                std::string_view category,
+                std::optional<db::consistency_level> cl,
+                bool error,
+                std::string_view keyspace,
+                std::string_view query,
+                socket_address client_ip,
+                std::string_view table,
+                std::string_view username) {
+    fmt::memory_buffer fields;
+    fmt::format_to(fmt::appender(fields), R"({} scylla-audit: node="{}", category="{}", cl="{}", error="{}", keyspace=")",
+                   local_time(), node_ip, category, cl ? format("{}", *cl) : sstring(), (error ? "true" : "false"));
+    put(std::string_view(fields.data(), fields.size()));
+    put_escaped(put, keyspace);
+    put(R"(", query=")");
+    put_escaped(put, query);
+    fields.clear();
+    fmt::format_to(fmt::appender(fields), R"(", client_ip="{}", table=")", client_ip);
+    put(std::string_view(fields.data(), fields.size()));
+    put_escaped(put, table);
+    put(R"(", username=")");
+    put_escaped(put, username);
+    put("\"\n");
+}
+
+}
+
+audit_stdout_storage_helper::audit_stdout_storage_helper(sstring path, std::chrono::milliseconds write_timeout, size_t max_unwritten_memory)
+    : _stream(seastar::make_shared<stdout_stream>(std::move(path)))
+    , _batcher(seastar::make_shared<stdout_record_batcher>(write_timeout, max_unwritten_memory, [stream = _stream] (const record_batch& batch) {
+        return this_shard_id() == 0 ? stream->write(batch) : forward_to_shard0(batch);
+    }))
+{}
+
+audit_stdout_storage_helper::~audit_stdout_storage_helper() {
+    if (shard0_batcher == _batcher.get()) {
+        shard0_batcher = nullptr;
+    }
+}
+
+future<> audit_stdout_storage_helper::check(sstring path) {
+    auto sink = co_await open_stream(path);
+    co_await sink.close();
+}
+
+future<> audit_stdout_storage_helper::start(const db::config&) {
+    if (this_shard_id() != 0) {
+        co_return;
+    }
+    _stream->sink = co_await open_stream(_stream->path);
+    shard0_batcher = _batcher.get();
+}
+
+future<> audit_stdout_storage_helper::stop() {
+    if (shard0_batcher == _batcher.get()) {
+        shard0_batcher = nullptr;
+    }
+    try {
+        co_await _batcher->close();
+    } catch (const timed_out_error&) {
+        // The flush keeps going, and keeps the stream and the batcher alive until it ends.
+        logger.warn("Stdout audit backend stopped while a write to {} is in progress", _stream->path);
+        co_return;
+    } catch (...) {
+        logger.warn("Stdout audit backend stopped while a write to {} failed: {}", _stream->path, std::current_exception());
+        co_return;
+    }
+    if (_stream->sink) {
+        try {
+            co_await _stream->sink->close();
+        } catch (...) {
+            logger.warn("Stdout audit backend failed to close {}: {}", _stream->path, std::current_exception());
+        }
+    }
+}
+
+future<> audit_stdout_storage_helper::write(audit_sink_set sinks,
+                                            const audit_info* audit_info,
+                                            socket_address node_ip,
+                                            socket_address client_ip,
+                                            std::optional<db::consistency_level> cl,
+                                            const sstring& username,
+                                            bool error) {
+    if (!sinks.contains(audit_sink::standard_output)) {
+        return make_ready_future<>();
+    }
+    return _batcher->write_record([&] (auto&& put) {
+        put_record(put, node_ip, audit_info->category_string(), cl, error, audit_info->keyspace(),
+                   audit_info->query(), client_ip, audit_info->table(), username);
+    });
+}
+
+future<> audit_stdout_storage_helper::write_login(audit_sink_set sinks,
+                                                  const sstring& username,
+                                                  socket_address node_ip,
+                                                  socket_address client_ip,
+                                                  bool error) {
+    if (!sinks.contains(audit_sink::standard_output)) {
+        return make_ready_future<>();
+    }
+    return _batcher->write_record([&] (auto&& put) {
+        put_record(put, node_ip, "AUTH", std::nullopt, error, "", "", client_ip, "", username);
+    });
+}
+
+}

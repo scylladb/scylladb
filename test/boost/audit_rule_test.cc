@@ -92,7 +92,7 @@ BOOST_AUTO_TEST_CASE(test_parse_audit_rules_json) {
 
 BOOST_AUTO_TEST_CASE(test_validate_audit_rule) {
     BOOST_CHECK_NO_THROW(audit::validate_audit_rule(
-        make_rule({"table", "syslog"}, {"QUERY", "DML", "DDL", "DCL", "AUTH", "ADMIN"},
+        make_rule({"table", "syslog", "stdout"}, {"QUERY", "DML", "DDL", "DCL", "AUTH", "ADMIN"},
                   {"ks.table", "ks.*", "!(system).*", "ks.table.extra", "", "table_only"},
                   {"admin", "admin_*", "user?", "user[0-9]", "admin\\*", "role\\?", "@(reader|writer)", "admin\\"})));
     BOOST_CHECK_NO_THROW(audit::validate_audit_rule(make_rule({"table"})));
@@ -271,7 +271,7 @@ BOOST_AUTO_TEST_CASE(test_matching_primitives) {
 }
 
 BOOST_AUTO_TEST_CASE(test_rule_matching_and_sinks) {
-    auto rule = make_rule({"table", "syslog"}, {"DML", "AUTH"}, {"ks.t1"}, {"admin_*"});
+    auto rule = make_rule({"table", "syslog", "stdout"}, {"DML", "AUTH"}, {"ks.t1"}, {"admin_*"});
     BOOST_CHECK(audit::matches_rule(rule, audit::statement_category::DML, "ks", "t1", "admin_read"));
     BOOST_CHECK(!audit::matches_rule(rule, audit::statement_category::DML, "ks", "t2", "admin_read"));
     BOOST_CHECK(!audit::matches_rule(rule, audit::statement_category::DML, "ks", "t1", "viewer"));
@@ -292,6 +292,7 @@ BOOST_AUTO_TEST_CASE(test_rule_matching_and_sinks) {
     auto sinks = audit::rule_sinks(rule);
     BOOST_CHECK(sinks.contains(audit::audit_sink::table));
     BOOST_CHECK(sinks.contains(audit::audit_sink::syslog));
+    BOOST_CHECK(sinks.contains(audit::audit_sink::standard_output));
 }
 
 BOOST_AUTO_TEST_CASE(test_hash_consistency_for_transparent_lookups) {
