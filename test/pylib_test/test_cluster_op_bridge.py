@@ -10,7 +10,7 @@ Scylla subprocess transports and the per-server asyncio locks.  Its operations
 therefore have to run on that loop, whichever loop -- or thread -- the caller
 happens to be on.  The cluster_op decorator is what guarantees that.
 
-The exercise here uses a real ScyllaCluster with a stub server stop, so the
+The exercise here uses a real ScyllaCluster with a stub server, so the
 decorator and the bridge under test are the production ones.
 """
 
@@ -18,6 +18,7 @@ import asyncio
 import pathlib
 import threading
 from collections.abc import AsyncIterator
+from types import SimpleNamespace
 
 import pytest
 
@@ -31,8 +32,8 @@ SERVER_ID = ServerNum(1)
 TIMEOUT = 30
 
 
-class StubStopServer:
-    """Stands in for ScyllaCluster._stop_server(), with one genuinely loop-bound object.
+class StubServer:
+    """Stands in for a running ScyllaServer, with one genuinely loop-bound object.
 
     ScyllaServer.stop() awaits its subprocess transport, and that transport
     suspends on a future belonging to the loop that spawned Scylla (see
@@ -47,30 +48,38 @@ class StubStopServer:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._release: asyncio.Future | None = None
         self.entered = threading.Event()      # readable from any thread
-        self.stopped: list[ServerNum] = []
+        self.released = False
+        self.stopped = False
+        # What recycle() touches.
+        self.log_file = None
+        self.maintenance_socket_dir = SimpleNamespace(cleanup=lambda: None)
 
-    async def __call__(self, server_id: ServerNum, gracefully: bool) -> None:
-        # The future belongs to the loop the operation runs on -- the
-        # cluster's -- like a real server's subprocess transport.
-        self._loop = asyncio.get_running_loop()
-        self._release = self._loop.create_future()
-        self.entered.set()
-        await self._release
-        self.stopped.append(server_id)
+    async def stop(self) -> None:
+        # Only the first stop before release() suspends; a later one, like the
+        # cluster's final stop(), returns at once.
+        if not self.entered.is_set() and not self.released:
+            # The future belongs to the loop the operation runs on -- the
+            # cluster's -- like a real server's subprocess transport.
+            self._loop = asyncio.get_running_loop()
+            self._release = self._loop.create_future()
+            self.entered.set()
+            await self._release
+        self.stopped = True
 
     def release(self) -> None:
-        """Let a suspended stop finish; callable from any thread."""
+        """Let a suspended stop finish, and later ones not suspend; callable from any thread."""
+        self.released = True
         if self._loop is not None:
             self._loop.call_soon_threadsafe(
                 lambda: None if self._release.done() else self._release.set_result(None))
 
 
 @pytest.fixture
-async def cluster(tmp_path: pathlib.Path) -> AsyncIterator[tuple[ScyllaCluster, StubStopServer, asyncio.AbstractEventLoop]]:
-    """A ScyllaCluster running on its own thread and loop, with a stub server stop."""
-    stub = StubStopServer()
+async def cluster(tmp_path: pathlib.Path) -> AsyncIterator[tuple[ScyllaCluster, StubServer, asyncio.AbstractEventLoop]]:
+    """A ScyllaCluster running on its own thread and loop, with one running stub server."""
+    stub = StubServer()
     cluster = make_cluster(tmp_path)
-    cluster._stop_server = stub
+    cluster.running[SERVER_ID] = stub
     try:
         async with cluster.run_in_thread():
             try:
@@ -92,7 +101,8 @@ async def test_operation_runs_on_the_clusters_loop(cluster) -> None:
     stub.release()
     await asyncio.wait_for(stopping, TIMEOUT)
 
-    assert stub.stopped == [SERVER_ID]
+    assert stub.stopped
+    assert cluster.stopped == {SERVER_ID: stub}
 
 
 def test_operation_from_a_worker_thread(cluster) -> None:
@@ -121,7 +131,8 @@ def test_operation_from_a_worker_thread(cluster) -> None:
 
     assert not thread.is_alive(), "call from a worker thread hung"
     assert not errors, f"call from a worker thread failed: {errors[0]!r}"
-    assert stub.stopped == [SERVER_ID]
+    assert stub.stopped
+    assert cluster.stopped == {SERVER_ID: stub}
 
 
 async def test_caller_timeout_leaves_the_operation_running(cluster) -> None:
@@ -134,14 +145,14 @@ async def test_caller_timeout_leaves_the_operation_running(cluster) -> None:
 
     with pytest.raises(asyncio.TimeoutError):
         async with asyncio.timeout(0.2):
-            await cluster._server_stop(SERVER_ID)
+            await cluster._server_stop(SERVER_ID, gracefully=False)
 
     assert stub.entered.is_set(), "operation never started"
     assert stub._loop is cluster_loop, "operation ran off the cluster's loop"
     assert len(cluster.tasks_history) == 1, "operation was not left for the drain"
     op, descr = next(iter(cluster.tasks_history.items()))
     assert not op.done()
-    assert descr.startswith("_server_stop")
+    assert descr == "_server_stop(1,)"
 
     # Once it completes it removes itself, which is what leaves after_test()'s
     # drain looking only at genuinely in-flight work.  op_finished is
@@ -155,17 +166,13 @@ async def test_caller_timeout_leaves_the_operation_running(cluster) -> None:
     await asyncio.wrap_future(
         asyncio.run_coroutine_threadsafe(wait_operations_done(), cluster_loop))
     assert not cluster.tasks_history
-    assert stub.stopped == [SERVER_ID]
+    assert stub.stopped
+    assert cluster.stopped == {SERVER_ID: stub}
 
 
 async def test_exception_keeps_its_type(cluster) -> None:
     """Failures arrive as themselves, not as an HTTP status turned into a string."""
     cluster, _, _ = cluster
 
-    async def fail(server_id: ServerNum, gracefully: bool) -> None:
-        raise ValueError("stop failed")
-
-    cluster._stop_server = fail
-
-    with pytest.raises(ValueError, match="stop failed"):
-        await cluster.server_stop(SERVER_ID, convict=False)
+    with pytest.raises(AssertionError, match="Server 2 unknown"):
+        await cluster.server_stop(ServerNum(2), convict=False)

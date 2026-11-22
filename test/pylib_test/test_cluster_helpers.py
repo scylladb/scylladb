@@ -93,7 +93,7 @@ async def cluster(tmp_path: pathlib.Path,
     async def release_host(host: Any) -> None:
         pass
 
-    cluster._stop_server = stop_server
+    cluster._server_stop = stop_server
     # The host registry is shared by the whole session: undo the stubs at teardown.
     monkeypatch.setattr(cluster.host_registry, "lease_host", lease_host)
     monkeypatch.setattr(cluster.host_registry, "release_host", release_host)

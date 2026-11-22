@@ -197,14 +197,14 @@ class ScyllaCluster:
     A method that awaits cluster or server internals must be a @cluster_op --
     those objects belong to the cluster's loop -- and the CQL driver, the REST
     helpers and anything composing operations must not be.  The exceptions are
-    add_server() and _stop_server(), which operations call; the module-scoped
-    fixtures also call add_server(), on their own loop.  stop() is one as
-    well: it runs on the cluster's thread as run_in_thread() exits, or inside
-    recycle() for a module-scoped cluster, and the rest of recycle() awaits no
-    cluster internals.  An operation body runs entirely on the cluster's loop,
-    so an entry point needing caller-side work too (the caller's timeout, a
-    driver refresh, a gossip wait) is a private _x operation behind a public
-    wrapper holding that work.
+    add_server(), which operations call and the module-scoped fixtures call
+    on their own loop, and stop(): it runs on the cluster's thread as
+    run_in_thread() exits, or inside recycle() for a module-scoped cluster,
+    and the rest of recycle() awaits no cluster internals.  An operation body
+    runs entirely on the cluster's loop, so an entry point needing
+    caller-side work too (the caller's timeout, a driver refresh, a gossip
+    wait) is a private _x operation behind a public wrapper holding that
+    work.
 
     Args:
         test_name: unique name of the test case (or module) the cluster
@@ -506,7 +506,7 @@ class ScyllaCluster:
             await handle_join_failure()
             raise
         finally:
-            # _stop_server() may have already removed the starting server
+            # _server_stop() may have already removed the starting server
             # if it interrupted this add_server() operation.
             if server is not None:
                 self.starting.pop(server.server_id, None)
@@ -671,9 +671,10 @@ class ScyllaCluster:
             "seastar_io": seastar_io,
         }
 
-    async def _stop_server(self, server_id: ServerNum, gracefully: bool) -> None:
+    @cluster_op(timeout=None)
+    async def _server_stop(self, server_id: ServerNum, gracefully: bool) -> None:
         """Stop a server. No-op if already stopped."""
-        self.logger.info("Cluster %s stopping server %s", self, server_id)
+        self.logger.info("Cluster %s stopping server %s%s", self, server_id, " gracefully" if gracefully else "")
         if server_id in self.stopped:
             return
         assert server_id in self.running or server_id in self.starting, f"Server {server_id} unknown"
@@ -692,18 +693,8 @@ class ScyllaCluster:
             self.stopped[server_id] = server
         else:
             # Starting servers are removed from self.starting by add_server()
-            # in its cleanup path. This is a fallback if _stop_server() wins the race.
+            # in its cleanup path. This is a fallback if _server_stop() wins the race.
             self.starting.pop(server_id, None)
-
-    @cluster_op
-    async def _server_stop(self, server_id: ServerNum) -> None:
-        """Stop a server. No-op if already stopped."""
-
-        await self._stop_server(server_id, gracefully=False)
-
-    @cluster_op(timeout=None)
-    async def _server_stop_gracefully(self, server_id: ServerNum) -> None:
-        await self._stop_server(server_id, gracefully=True)
 
     @cluster_op(timeout=None)
     async def _server_start(self,
@@ -884,7 +875,7 @@ class ScyllaCluster:
         except (RuntimeError, HTTPError) as exc:
             self._check_failure_expected("decommission", details, server.log_filename, exc, expected_error)
             return
-        await self._stop_server(server_id, gracefully=True)
+        await self._server_stop(server_id, gracefully=True)
         self._check_success_expected("decommission", details, server.log_filename, expected_error)
 
     @cluster_op(timeout=None)
@@ -901,7 +892,7 @@ class ScyllaCluster:
             self._check_failure_expected("rebuild", details, server.log_filename, exc, expected_error)
             return
         self._check_success_expected("rebuild", details, server.log_filename, expected_error)
-        await self._stop_server(server_id, gracefully=True)
+        await self._server_stop(server_id, gracefully=True)
 
     def _check_failure_expected(self,
                                 request: str,
@@ -1370,7 +1361,8 @@ class ScyllaCluster:
                 # Server may have never completed bootstrap, so host_id is unknown.
                 # Skip conviction in this case.
                 pass
-        await self._server_stop(server_id)
+        async with asyncio.timeout(DEFAULT_OP_TIMEOUT):
+            await self._server_stop(server_id, gracefully=False)
         if host_id is not None:
             try:
                 await self.convict_on_all(host_id)
@@ -1409,7 +1401,7 @@ class ScyllaCluster:
             timeout = graceful_stop_timeout(self.mode) + 60
 
         async with asyncio.timeout(timeout):
-            await self._server_stop_gracefully(server_id)
+            await self._server_stop(server_id, gracefully=True)
         await self._server_seen_dead_by(server_id, seen_by)
 
     async def disable_tablet_balancing(self) -> None:
