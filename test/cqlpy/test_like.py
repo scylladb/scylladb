@@ -667,14 +667,15 @@ def test_like_operator_varchar(cql, test_keyspace, new_to_cassandra_6):
         cql.execute(f"insert into {t} (s) values ('abc')")
         assert sorted_result_rows(cql.execute(f"select s from {t} where s like '%c' allow filtering")) == [["abc"]]
 
-# A column of a non-string type cannot be the LHS of the LIKE operator.
-# Scylla-only because Cassandra accepts LIKE on the numeric, timestamp,
-# date and time columns, for which 123 is a valid literal, and rejects it
-# on the other types only because 123 is not a valid literal for them.
-@pytest.mark.parametrize("type", ["bigint", "blob", "boolean", "counter", "decimal", "double", "duration", "float", "inet", "int",
-                                  "smallint", "timestamp", "tinyint", "uuid", "varint", "timeuuid", "date", "time"])
-def test_like_operator_fails_on_non_string(cql, test_keyspace, scylla_only, type):
-    with new_test_table(cql, test_keyspace, f"k {type}, p int primary key") as t:
+# A counter column cannot be the LHS of the LIKE operator, like a column of
+# any other non-string type. test_like_unsupported_types checks the other
+# non-string types, but not counter, since a counter can't share a table
+# with non-counter regular columns.
+# Cassandra accepts LIKE with a numeric literal on a counter column, as on
+# the other numeric columns, and silently matches nothing - rather than
+# rejecting it as meaningless. We consider this a Cassandra bug.
+def test_like_operator_fails_on_counter(cql, test_keyspace, cassandra_bug):
+    with new_test_table(cql, test_keyspace, "p int primary key, k counter") as t:
         with pytest.raises(InvalidRequest, match="only on string types"):
             cql.execute(f"select * from {t} where k like 123 allow filtering")
 
