@@ -18,6 +18,7 @@ from test.pylib.rest_client import ScyllaMetricsClient
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
 from test.pylib.object_storage import format_tuples, keyspace_options
+from test.pylib.skip_types import skip_env
 from test.cqlpy.rest_api import scylla_inject_error
 from test.cluster.test_alternator import alternator_config, get_alternator, unique_table_name
 from test.cluster.test_config import wait_for_config
@@ -384,6 +385,87 @@ async def get_object_storage_written_bytes(server_ip, storage_type: str) -> floa
     written = metrics.get('scylla_object_storage_total_write_bytes', {'type': label})
     assert written is not None, f'No scylla_object_storage_total_write_bytes for type={label}'
     return written
+
+
+async def create_named_endpoint_keyspace(cql, ks, object_storage, endpoint):
+    replication_opts = format_tuples({'class': 'NetworkTopologyStrategy', 'replication_factor': '1'})
+    storage_opts = format_tuples(type=f'{object_storage.type}', endpoint=endpoint, bucket=object_storage.bucket_name)
+    cql.execute(f'CREATE KEYSPACE {ks} WITH REPLICATION = {replication_opts} AND STORAGE = {storage_opts};')
+    cql.execute(f'CREATE TABLE {ks}.test (name text PRIMARY KEY, value int);')
+
+
+async def test_named_endpoints_share_an_address(manager: ScyllaClusterManager, object_storage):
+    '''Two endpoint names with the same uri serve one keyspace each.'''
+    base = object_storage.create_endpoint_conf()[0]
+    address = base['name']
+    objconf = [{**base, 'name': name, 'uri': address} for name in ('first', 'second')]
+    cfg = {'enable_user_defined_functions': False,
+           'object_storage_endpoints': objconf}
+    server = await manager.server_add(config=cfg)
+    cql = manager.get_cql()
+
+    endpoints = await manager.api.get_config(server.ip_addr, 'object_storage_endpoints')
+    for name in ('first', 'second'):
+        assert json.loads(endpoints[name])['uri'] == address, f'Unexpected configuration of {name}: {endpoints[name]}'
+
+    for value, name in enumerate(('first', 'second')):
+        ks = f'ks_{name}'
+        await create_named_endpoint_keyspace(cql, ks, object_storage, name)
+        await cql.run_async(f"INSERT INTO {ks}.test (name, value) VALUES ('key', {value});")
+        await manager.api.flush_keyspace(server.ip_addr, ks)
+
+    for value, name in enumerate(('first', 'second')):
+        res = cql.execute(f"SELECT value FROM ks_{name}.test WHERE name = 'key' BYPASS CACHE;")
+        assert res.one().value == value, f'Unexpected value read through endpoint {name}: {res.one().value}'
+
+    # A second client for the address could not register these metrics.
+    puts = await get_object_storage_put_requests(server.ip_addr, object_storage.type)
+    assert puts > 0, f'No PUT requests counted for {object_storage.type}'
+
+
+async def test_named_endpoint_uri_change(manager: ScyllaClusterManager, gs_storage):
+    '''After the uri of an endpoint changes, new sstables are written through the new address.
+
+    The test needs two addresses for one store: the fake GCS server and the
+    upload validator in front of it. The storage_manager resolves a name to an
+    address in the same way for both backends, so S3 has no case of its own.'''
+    if getattr(gs_storage, 'validator', None) is None:
+        skip_env('needs the upload validator as a second address of the store')
+    base = gs_storage.create_endpoint_conf()[0]
+    direct_host = f'{gs_storage.server.host}:{gs_storage.server.port}'
+
+    def named(uri):
+        return [{**base, 'name': 'store', 'uri': uri}]
+
+    async def direct_put_requests():
+        metrics = await ScyllaMetricsClient().query(server.ip_addr)
+        return metrics.get('scylla_object_storage_total_put_requests', {'type': 'gs', 'endpoint': direct_host}) or 0
+
+    cfg = {'enable_user_defined_functions': False,
+           'object_storage_endpoints': named(base['name'])}
+    server = await manager.server_add(config=cfg)
+    cql = manager.get_cql()
+
+    await create_named_endpoint_keyspace(cql, 'ks', gs_storage, 'store')
+    await cql.run_async("INSERT INTO ks.test (name, value) VALUES ('before', 1);")
+    await manager.api.flush_keyspace(server.ip_addr, 'ks')
+    assert await direct_put_requests() == 0, 'Requests reached the server directly before the uri change'
+
+    direct = f'http://{direct_host}'
+    await manager.server_update_config(server.server_id, 'object_storage_endpoints', named(direct))
+    expected_conf = f'{{ "type": "gs", "uri": "{direct}", "credentials_file": "{base["credentials_file"]}" }}'
+    await wait_for_config(manager, server, 'object_storage_endpoints', {'store': expected_conf})
+
+    await cql.run_async("INSERT INTO ks.test (name, value) VALUES ('after', 2);")
+    await manager.api.flush_keyspace(server.ip_addr, 'ks')
+    assert await direct_put_requests() > 0, 'The flush after the uri change did not go to the new address'
+
+    # The node closed the client of the old address, so the sstable written before the
+    # change is readable again only after the node opens it through the new address.
+    await manager.server_restart(server.server_id)
+    cql, _ = await manager.get_ready_cql([server])
+    rows = {r.name: r.value for r in cql.execute('SELECT * FROM ks.test BYPASS CACHE;')}
+    assert rows == {'before': 1, 'after': 2}, f'Unexpected table content: {rows}'
 
 
 async def test_create_keyspace_after_config_update(manager: ScyllaClusterManager, object_storage):

@@ -151,14 +151,30 @@ static shared_ptr<s3::client> make_s3_client(const db::object_storage_endpoint_p
 class s3_client_wrapper : public sstables::object_storage_client {
     shared_ptr<s3::client> _client;
     shard_client_factory _cf;
+    s3::group_connections _connections;
+    seastar::named_gate _config_update_gate;
+    // What the replaced clients moved, kept so that the reported total only grows
+    // across a config update. Shared with the fibers that close those clients,
+    // which can outlive this wrapper.
+    seastar::lw_shared_ptr<utils::object_storage_bytes> _replaced_bytes = seastar::make_lw_shared<utils::object_storage_bytes>();
+    utils::object_storage_metrics_labels _metrics_labels;
     object_storage_byte_metrics _byte_metrics;
 public:
     s3_client_wrapper(const db::object_storage_endpoint_param& ep, shard_client_factory cf, s3::group_connections connections)
-        : _client(make_s3_client(ep, std::bind_front(&s3_client_wrapper::shard_client, this), std::move(connections)))
+        : _client(make_s3_client(ep, std::bind_front(&s3_client_wrapper::shard_client, this), connections))
         , _cf(std::move(cf))
-        , _byte_metrics(ep, [this] { return _client->bytes(); })
+        , _connections(std::move(connections))
+        , _config_update_gate("s3_client_wrapper::config_update")
+        , _metrics_labels{.type = ep.type(), .endpoint = endpoint_label(ep)}
+        , _byte_metrics(ep, [this] {
+            auto bytes = _client->bytes();
+            return utils::object_storage_bytes{
+                .read = _replaced_bytes->read + bytes.read,
+                .written = _replaced_bytes->written + bytes.written,
+            };
+        })
     {
-        _client->report_object_storage_metrics({.type = ep.type(), .endpoint = endpoint_label(ep)});
+        _client->report_object_storage_metrics(_metrics_labels);
     }
     shared_ptr<s3::client> shard_client(std::string host) const {
         auto lc = _cf(host);
@@ -200,14 +216,45 @@ public:
         return _client->upload_file(std::move(path), name.str(), up, as);
     }
     void update_config_sync(const db::object_storage_endpoint_param& ep) override {
-        auto& epc = ep.get_s3_storage();
-        _client->update_config_sync(epc.region, epc.iam_role_arn);
+        if (_config_update_gate.is_closed()) {
+            osclog.info("config update gate is closed");
+            return;
+        }
+
+        osclog.info("Updating S3 client config");
+
+        auto holder = _config_update_gate.hold();
+        // Both clients carry the same metric labels and the old one closes in
+        // the background, so it has to release them before the new one takes
+        // them over.
+        _client->unregister_metrics();
+        auto new_client = make_s3_client(ep, std::bind_front(&s3_client_wrapper::shard_client, this), _connections);
+        auto old_client = std::exchange(_client, std::move(new_client));
+        _client->report_object_storage_metrics(_metrics_labels);
+        // Folded in before the close, so that the reported total does not dip
+        // while the replaced client drains.
+        auto snapshot = old_client->bytes();
+        _replaced_bytes->read += snapshot.read;
+        _replaced_bytes->written += snapshot.written;
+        (void)old_client->close()
+                .handle_exception([](std::exception_ptr ex) {
+                    osclog.error("Failed to close old S3 client during config update: {}", ex);
+                })
+                .finally([old_client = std::move(old_client), replaced = _replaced_bytes, snapshot, h = std::move(holder)] {
+                    auto drained = old_client->bytes();
+                    replaced->read += drained.read - snapshot.read;
+                    replaced->written += drained.written - snapshot.written;
+                    osclog.info("Old S3 client cleanup done, use_count={}", old_client.use_count());
+                });
     }
     void update_group_connections(const s3::group_connections& connections) override {
+        _connections = connections;
         _client->update_group_connections(connections);
     }
     future<> close() override {
-        return _client->close();
+        osclog.info("Closing S3 client...");
+        co_await _config_update_gate.close();
+        co_await _client->close();
     }
 };
 
