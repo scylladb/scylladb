@@ -1174,6 +1174,19 @@ future<> storage_service::sstable_vnodes_cleanup_fiber(raft::server& server, gat
 future<> storage_service::raft_state_monitor_fiber(raft::server& raft, gate::holder group0_holder) {
     std::optional<abort_source> as;
 
+    // Abort the coordinator as soon as group 0 is aborted. The group 0 abort
+    // fails the coordinator's group 0 operations and the topology command
+    // handlers it waits for, and the coordinator may handle such a failure
+    // before this fiber resumes from its aborted wait and aborts `as` below,
+    // in which case it reports the shutdown as an error. Subscriptions run
+    // inline in request_abort(), so `as` is aborted by the time the
+    // coordinator sees the failure.
+    auto group0_sub = _group0_as.subscribe([&as] () noexcept {
+        if (as) {
+            as->request_abort();
+        }
+    });
+
     try {
         while (!_group0_as.abort_requested()) {
             // Wait for a state change in case we are not a leader yet, or we are are the leader
@@ -1209,6 +1222,7 @@ future<> storage_service::raft_state_monitor_fiber(raft::server& raft, gate::hol
     } catch (...) {
         rtlogger.info("raft_state_monitor_fiber aborted with {:t}", std::current_exception());
     }
+    co_await utils::get_local_injector().inject("raft_state_monitor_fiber_pause_on_abort", utils::wait_for_message(std::chrono::minutes(5)));
     if (as) {
         as->request_abort(); // abort current coordinator if running
         co_await std::move(_topology_change_coordinator);
@@ -5377,6 +5391,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
         auto group0_holder = _group0->hold_group0_gate();
         // do barrier to make sure we always see the latest topology
         rtlogger.info("topology cmd rpc {} index={}: starting read_barrier, term={}", cmd.cmd, cmd_index, term);
+        co_await utils::get_local_injector().inject("raft_topology_cmd_handler_pause_before_read_barrier", utils::wait_for_message(std::chrono::minutes(5)));
         co_await raft_server.read_barrier(&_group0_as);
         rtlogger.info("topology cmd rpc {} index={}: read_barrier completed", cmd.cmd, cmd_index);
         if (raft_server.get_current_term() != term) {
