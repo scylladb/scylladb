@@ -281,8 +281,15 @@ table::make_mutation_reader(schema_ptr s,
         return (*_virtual_reader).make_mutation_reader(s, std::move(permit), range, slice, trace_state, fwd, fwd_mr);
     }
 
+    auto with_data_listeners = [&] (mutation_reader rd) {
+        if (_config.data_listeners && !_config.data_listeners->empty()) {
+            rd = _config.data_listeners->on_read(s, range, slice, std::move(rd));
+        }
+        return rd;
+    };
+
     if (_logstor) [[unlikely]] {
-        return _logstor->make_reader(s, logstor_index(), std::move(permit), range, slice, std::move(trace_state), fwd, fwd_mr);
+        return with_data_listeners(_logstor->make_reader(s, logstor_index(), std::move(permit), range, slice, std::move(trace_state), fwd, fwd_mr));
     }
 
     std::vector<mutation_reader> readers;
@@ -321,13 +328,7 @@ table::make_mutation_reader(schema_ptr s,
         readers.emplace_back(make_sstable_reader(s, permit, _sstables, range, slice, std::move(trace_state), fwd, fwd_mr));
     }
 
-    auto rd = make_combined_reader(s, permit, std::move(readers), fwd, fwd_mr);
-
-    if (_config.data_listeners && !_config.data_listeners->empty()) {
-        rd = _config.data_listeners->on_read(s, range, slice, std::move(rd));
-    }
-
-    return rd;
+    return with_data_listeners(make_combined_reader(s, permit, std::move(readers), fwd, fwd_mr));
 }
 
 sstables::shared_sstable table::make_streaming_sstable_for_write() {

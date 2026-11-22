@@ -7,6 +7,7 @@ import sys
 import requests
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 # Use the util.py library from ../cqlpy:
 from ..cqlpy.util import unique_name, new_test_table, new_test_keyspace, new_materialized_view, new_secondary_index
@@ -371,6 +372,31 @@ def test_toppartitions_pk_needs_escaping(cql, this_dc, rest_api):
                     raise
         # If we're here, we didn't "return" above so the test failed
         pytest.fail(f'Test failed, even {period_sec/2}s was not enough.')
+
+
+# Test that toppartitions samples the reads of a table.
+# The toppartitions request blocks for its whole sampling period, so the test
+# sends the request from a different thread and reads the hot key until the
+# request returns. So the reads cover the whole period, also on a slow machine.
+def test_toppartitions_reads(cql, this_dc, rest_api, storage_engine):
+    hot_key = 7
+    with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}") as keyspace:
+        with new_test_table(cql, keyspace, "pk int PRIMARY KEY, v int", storage_engine.table_options) as table:
+            for pk in range(10):
+                cql.execute(f"INSERT INTO {table} (pk, v) VALUES ({pk}, {pk})")
+            select = cql.prepare(f"SELECT v FROM {table} WHERE pk = ?")
+            ks, cf = table.split('.')
+
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                request = executor.submit(rest_api.send, 'GET', 'storage_service/toppartitions',
+                                          {'table_filters': f'{ks}:{cf}', 'duration': '500'})
+                while not request.done():
+                    assert cql.execute(select, [hot_key]).one().v == hot_key
+                resp = request.result()
+            resp.raise_for_status()
+            result = resp.json()
+            print(f"toppartitions: {result}")
+            assert any(r['partition'].split(' ')[-1] == str(hot_key) for r in result.get('read', []))
 
 
 # TODO: check that keyspace_flush actually does anything, like create new sstables.
