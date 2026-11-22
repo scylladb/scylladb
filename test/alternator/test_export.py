@@ -2934,6 +2934,8 @@ def test_export_garbage_collection_creates_failed_export_for_client_token_of_dea
 
 # Test that an unreadable ClientToken row of a dead node (the request is not JSON, and the ARN
 # has no export id) does not stop the round: the export of that node still becomes FAILED.
+# The round also writes a FAILED export row for the unreadable row itself. If that write failed,
+# the round would still mark the other export as FAILED, so the test checks the row too.
 def test_export_garbage_collection_unreadable_client_token_row(cql, scylla_only, rest_api, test_table_s):
     client = test_table_s.meta.client
     table_arn = get_table_arn(test_table_s)
@@ -2947,6 +2949,13 @@ def test_export_garbage_collection_unreadable_client_token_row(cql, scylla_only,
             with in_progress_export(cql, table_arn, dead_node_id(live_node_id)) as dead_export_arn:
                 run_garbage_collection()
                 assert client.describe_export(ExportArn=dead_export_arn)['ExportDescription']['ExportStatus'] == 'FAILED'
+            # DescribeExport refuses the malformed ARN, so read its row over CQL.
+            row = cql.execute(SimpleStatement(
+                "SELECT export_status, failure_code FROM system_distributed.alternator_export_to_s3_exports WHERE export_arn = %s",
+                consistency_level=ConsistencyLevel.ONE), [malformed_export_arn]).one()
+            assert row is not None
+            assert row.export_status == 'FAILED'
+            assert row.failure_code == 'NodeFailure'
         finally:
             # The round wrote an export row with the malformed ARN, which nothing else removes
             # until its TTL expires. Every later ListExports of this cluster would warn about
