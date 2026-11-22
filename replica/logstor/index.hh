@@ -678,6 +678,11 @@ public:
         };
     }
 
+    // Returns the occupancy of the index region, which also counts the free space in its segments.
+    logalloc::occupancy_stats region_occupancy() const noexcept {
+        return _region.occupancy();
+    }
+
 private:
     void evict_cached_partition(const primary_index_entry& e) noexcept {
         if (e._cached_entry) {

@@ -24,6 +24,7 @@
 #include <algorithm>
 #include <array>
 #include <limits>
+#include <map>
 #include <variant>
 #include "schema/schema_builder.hh"
 #include "test/lib/log.hh"
@@ -828,6 +829,117 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_cache_survives_lsa_compaction_before_excha
     populate(index, keys[2], replacement);
     assert_that(schema, lookup(index, keys[2], schema)).is_equal_to(replacement.partition());
     index.drain_cache().get();
+}
+
+// LSA compaction of the index region moves the entries. This test checks that the tree stays valid,
+// and that each entry and its cached partition stay linked when either of them moves. The keys span
+// several segments of the region, every other key is erased so that the segments have holes, and
+// then every region of the shard is compacted fully, which moves the cache region too. A full
+// compaction inside the visit of a scan must leave the index region as it is, because the scan
+// holds the lock of the region.
+SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_survives_lsa_compaction) {
+    auto schema = make_logstor_schema();
+    shared_logstor_cache cache;
+    primary_index index(noop_space_accounting, &cache.logstor_tracker, true);
+
+    constexpr int key_count = 6000;
+    constexpr int cached_every = 16;
+    const auto location_of = [] (int i) { return make_index_entry(1, uint32_t(i) * 8, 8, 1).location; };
+
+    // Inserts enough keys to fill several segments of the index region, and caches the partition of
+    // one key in `cached_every`, so that the compaction also moves entries that link to a cached
+    // partition.
+    std::vector<primary_index_key> keys;
+    keys.reserve(key_count);
+    std::vector<mutation> mutations;
+    for (int i = 0; i < key_count; ++i) {
+        keys.push_back(make_primary_index_key(*schema, format("pk-{:06d}", i)));
+        BOOST_REQUIRE(index.insert(keys[i], make_index_entry(1, uint32_t(i) * 8, 8, 1)).inserted());
+    }
+    for (int i = 0; i < key_count; i += cached_every) {
+        auto m = make_mutation(schema, format("pk-{:06d}", i), format("v{}", i));
+        populate(index, keys[i], m);
+        mutations.push_back(std::move(m));
+    }
+    BOOST_REQUIRE_GT(index.region_occupancy().total_space(), 2 * logalloc::segment_size);
+
+    // Erases every other key, so that each segment of the region has holes, and the compaction has
+    // to move the kept entries. `kept_locations` holds what the index must give back after the
+    // compaction.
+    std::map<primary_index_key, record_location> kept_locations;
+    for (int i = 0; i < key_count; ++i) {
+        if (i % 2 == 1) {
+            BOOST_REQUIRE(index.erase(keys[i], location_of(i)));
+        } else {
+            kept_locations.emplace(keys[i], location_of(i));
+        }
+    }
+    const size_t before_compaction = index.region_occupancy().total_space();
+
+    // The scan holds the lock of the index region during its visits, so a full compaction inside a
+    // visit must leave the region as it is. The compaction can still move the cached partitions,
+    // because the scan does not lock the cache region.
+    bool compacted_in_visit = false;
+    auto locked_scan = index.scan();
+    locked_scan.next_batch(1, [&] (const primary_index::scanned_entry&) {
+        if (!compacted_in_visit) {
+            compacted_in_visit = true;
+            logalloc::shard_tracker().full_compaction();
+            BOOST_REQUIRE_EQUAL(index.region_occupancy().total_space(), before_compaction);
+        }
+    });
+    BOOST_REQUIRE(compacted_in_visit);
+
+    // Without the lock, the full compaction moves the kept entries out of the segments with holes
+    // and frees those segments, so the region gets smaller.
+    logalloc::shard_tracker().full_compaction();
+    BOOST_REQUIRE_LT(index.region_occupancy().total_space(), before_compaction);
+
+    // After the compaction, a lookup must find each key as the test left it:
+    // - An erased key is absent.
+    // - A cached key gives its cached partition, so the moved entry and its cached partition are
+    //   still linked.
+    // - Any other kept key gives its location.
+
+    for (int i = 0; i < key_count; ++i) {
+        if (i % 2 == 1) {
+            BOOST_REQUIRE(!lookup_location(index, keys[i], *schema));
+        } else if (i % cached_every == 0) {
+            assert_that(schema, lookup(index, keys[i], schema)).is_equal_to(mutations[i / cached_every].partition());
+        } else {
+            auto result = index.lookup_for_read(keys[i], *schema, use_cache::yes);
+            BOOST_REQUIRE(result);
+            auto* found = std::get_if<primary_index::guarded_location>(&*result);
+            BOOST_REQUIRE(found);
+            BOOST_REQUIRE(found->location == location_of(i));
+        }
+    }
+
+    // A scan visits every kept key, in index order, with its location.
+    size_t visited = 0;
+    std::optional<primary_index_key> last;
+    auto scan = index.scan();
+    while (scan.next_batch(256, [&] (const primary_index::scanned_entry& e) {
+        if (last) {
+            BOOST_REQUIRE((*last <=> e.key()) < 0);
+        }
+        last = e.key();
+        auto kept = kept_locations.find(e.key());
+        BOOST_REQUIRE(kept != kept_locations.end());
+        BOOST_REQUIRE(e.entry().location == kept->second);
+        ++visited;
+    })) {
+    }
+    BOOST_REQUIRE_EQUAL(visited, size_t(key_count / 2));
+
+    // The moved entries still evict their cached partitions, on an erase and on a drain.
+    const auto removals_before = cache.shared_tracker.get_stats().partition_removals;
+    BOOST_REQUIRE(index.erase(keys[0], location_of(0)));
+    BOOST_REQUIRE_EQUAL(cache.shared_tracker.get_stats().partition_removals, removals_before + 1);
+    BOOST_REQUIRE(lookup_exists(index, keys[cached_every], schema));
+    index.drain_cache().get();
+    BOOST_REQUIRE(!lookup_exists(index, keys[cached_every], schema));
+    BOOST_REQUIRE_EQUAL(cache.shared_tracker.get_stats().partition_removals, removals_before + size_t(key_count / cached_every));
 }
 
 #ifdef SEASTAR_ENABLE_ALLOC_FAILURE_INJECTION
