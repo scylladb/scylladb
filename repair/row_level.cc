@@ -2221,8 +2221,23 @@ public:
             rpc::sink<repair_hash_with_cmd>& sink = std::get<0>(f);
             rpc::source<repair_row_on_wire_with_cmd>& source = std::get<1>(f);
             auto sink_op = get_row_diff_sink_op(std::move(set_diff), needs_all_rows, sink, remote_node);
-            get_row_diff_source_op(update_hash_set, remote_node, node_idx, sink, source);
-            sink_op.get();
+            // sink_op references the local sink: wait for it even if the reader fails.
+            std::exception_ptr ep;
+            try {
+                get_row_diff_source_op(update_hash_set, remote_node, node_idx, sink, source);
+            } catch (...) {
+                ep = std::current_exception();
+            }
+            try {
+                sink_op.get();
+            } catch (...) {
+                if (!ep) {
+                    ep = std::current_exception();
+                }
+            }
+            if (ep) {
+                std::rethrow_exception(ep);
+            }
         }
     }
 
