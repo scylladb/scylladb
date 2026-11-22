@@ -56,6 +56,11 @@ names the old address, the `storage_manager` drops its client from the map and
 closes it, so the sstables that are still open through it fail their requests
 until the node restarts.
 
+The endpoint list can also be stored in cluster config, as the option
+`object_storage_endpoints` (see `docs/dev/cluster_config.md`). Its value is the
+list as one line of JSON, and it replaces the `scylla.yaml` list of the nodes
+it applies to.
+
 ## Configuring GCP storage access
 
 Similarly to AWS, define endpoint details in `scylla.yaml` like:
