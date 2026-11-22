@@ -1195,16 +1195,23 @@ def test_export_paused_export_holds_its_slot(dynamodb, scylla_only, rest_api, s3
                 # connection, so usually the second request is rejected. The loop does not
                 # require this.
                 max_requests = 64
-                for _ in range(max_requests):
+                # With a limit of one, a running export fills its shard. An export of an earlier
+                # test can still hold the slot of a shard, because its fiber releases the slot
+                # shortly after it writes COMPLETED. So a shard where no export of this test runs
+                # can reject a request. Retry it until the deadline, as the loop below does.
+                deadline = time.time() + 60
+                while True:
                     shard, export_arn = start_export(client, bucket)
-                    if not export_arn:
-                        # With a limit of one, only a running export fills a shard.
-                        assert shard in occupied_shards, f'shard {shard} is full, but no export of this test runs there: {occupied_shards}'
+                    if export_arn:
+                        running.append(export_arn)
+                        occupied_shards.add(shard)
+                        if len(running) == max_requests:
+                            pytest.fail(f'No export was rejected in {max_requests} requests, so no shard reached its limit of one')
+                    elif shard in occupied_shards:
                         break
-                    running.append(export_arn)
-                    occupied_shards.add(shard)
-                else:
-                    pytest.fail(f'No export was rejected in {max_requests} requests, so no shard reached its limit of one')
+                    else:
+                        assert time.time() < deadline, f'Shard {shard} stayed full for 60s, but no export of this test runs there: {occupied_shards}'
+                        time.sleep(0.05)
                 wait_until_paused(len(running))
                 release_paused()
                 for export_arn in running:
