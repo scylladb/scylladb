@@ -8,6 +8,7 @@
  */
  
 #include <string>
+#include <unordered_set>
 #include <variant>
 #include <yaml-cpp/yaml.h>
 
@@ -186,6 +187,31 @@ db::object_storage_endpoint_param db::object_storage_endpoint_param::decode(cons
     }
     // TODO: other types
     throw std::invalid_argument(fmt::format("Could not decode object_storage_endpoint_param: {}", boost::lexical_cast<std::string>(node)));
+}
+
+std::vector<db::object_storage_endpoint_param> db::object_storage_endpoint_param::parse_list(std::string_view text) {
+    YAML::Node doc;
+    try {
+        doc = YAML::Load(std::string(text));
+    } catch (const YAML::Exception& e) {
+        throw std::invalid_argument(fmt::format("cannot parse the endpoint list: {}", e.what()));
+    }
+    if (!doc.IsSequence()) {
+        throw std::invalid_argument("the value is not a list");
+    }
+    std::vector<object_storage_endpoint_param> endpoints;
+    std::unordered_set<std::string> names;
+    for (size_t i = 0; i < doc.size(); ++i) {
+        try {
+            endpoints.push_back(decode(doc[i]));
+        } catch (const std::exception& e) {
+            throw std::invalid_argument(fmt::format("entry {}: {}", i, e.what()));
+        }
+        if (!names.insert(endpoints.back().key()).second) {
+            throw std::invalid_argument(fmt::format("entry {}: the name {} is used twice", i, endpoints.back().key()));
+        }
+    }
+    return endpoints;
 }
 
 const std::string db::object_storage_endpoint_param::s3_type = "s3";

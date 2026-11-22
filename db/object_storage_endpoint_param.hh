@@ -10,7 +10,9 @@
 #pragma once
 
 #include <string>
+#include <string_view>
 #include <variant>
+#include <vector>
 #include <compare>
 #include <fmt/core.h>
 #include "utils/s3/creds.hh"
@@ -68,6 +70,10 @@ public:
     const gs_storage& get_gs_storage() const;
 
     static object_storage_endpoint_param decode(const YAML::Node&);
+    // Decodes a list of entries written as JSON (or YAML). Unlike the scylla.yaml path, which
+    // skips an entry it cannot decode, this throws std::invalid_argument for anything that is
+    // not a list of valid entries with distinct names.
+    static std::vector<object_storage_endpoint_param> parse_list(std::string_view text);
     static const std::string s3_type; // "s3"
     static const std::string gs_type; // "gs"
 private:
