@@ -213,6 +213,34 @@ ScyllaDB closes the connections to it, and reads from the sstables that are
 already open fail until the node opens them again. Restart the node after you
 change a ``uri``. ScyllaDB does not move the data.
 
+The bucket of an endpoint
+=========================
+
+An endpoint entry can have a ``bucket``, for S3 and for GCS:
+
+.. code-block:: yaml
+
+   object_storage_endpoints:
+     - name: primary
+       type: s3
+       uri: https://s3.us-east-1.amazonaws.com
+       aws_region: us-east-1
+       bucket: my-bucket-us-east-1
+
+A keyspace that names no ``bucket`` in its ``STORAGE`` option keeps its data in
+the bucket of its endpoint. With a name that has a different ``uri`` and
+``bucket`` in each datacenter, the nodes of each datacenter keep the data of
+the keyspace in the store and the bucket of their own region.
+
+* A keyspace that names a ``bucket`` uses that bucket on every node, whatever
+  the endpoint says.
+* ScyllaDB rejects ``CREATE KEYSPACE`` with no ``bucket`` if the endpoint has
+  none on the node that receives the statement, and until every node of the
+  cluster is upgraded to a version that supports it.
+* A node reads the bucket of the endpoint when it first uses a table of the
+  keyspace. If you change the ``bucket`` of an endpoint, restart the node.
+  ScyllaDB does not move the data.
+
 .. _admin-object-storage-cql:
 
 Setting the endpoints with CQL
@@ -241,6 +269,7 @@ Obey these rules:
   in each S3 entry: a node does not accept an S3 entry with no region unless
   its own ``AWS_DEFAULT_REGION`` is set.
 * ``credentials_file`` is a path on each node.
+* An entry can have a ``bucket``; see the section above.
 * ``= NULL`` removes the list, and each node uses its ``scylla.yaml`` list
   again. Do not remove an endpoint that a keyspace uses.
 
@@ -556,7 +585,8 @@ Verifying keyspace storage
                ks |           S3 | {'bucket': 'my-bucket', 'endpoint': 'https://s3.us-east-1.amazonaws.com'}
 
 ``storage_type`` is set only for object-storage keyspaces, to ``S3`` or ``GS``,
-and ``storage_options`` then holds the bucket and endpoint. There is no
+and ``storage_options`` then holds the bucket and endpoint. A keyspace that
+takes the bucket of its endpoint has no ``bucket`` here. There is no
 ``LOCAL`` value: a keyspace that does not appear here, or appears with a null
 ``storage_type``, is not stored on object storage. This table is not a list of
 all keyspaces.

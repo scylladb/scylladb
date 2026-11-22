@@ -128,6 +128,10 @@ CREATE KEYSPACE ... WITH STORAGE = { 'type': 'S3', 'endpoint': '$endpoint_name',
 Use `'type': 'S3'` for S3-compatible object stores and `'type': 'GS'` for Google
 Cloud Storage.
 
+`bucket` is optional if the endpoint has a `bucket` of its own: the keyspace
+then keeps its data in the bucket of the endpoint, which can differ per
+datacenter.
+
 ```{important}
 `endpoint` must be **character-for-character identical** to the `name` of an
 endpoint configured in `scylla.yaml`. The lookup is an exact string match, so

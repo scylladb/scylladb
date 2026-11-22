@@ -56,6 +56,13 @@ names the old address, the `storage_manager` drops its client from the map and
 closes it, so the sstables that are still open through it fail their requests
 until the node restarts.
 
+An entry can have a `bucket`. A keyspace whose storage options name no bucket
+takes the one of its endpoint. The table resolves it on first use and not when
+it is created, because a joining node creates the table before it applies the
+endpoint list that arrives with the same schema. Creating such a keyspace needs
+the `KEYSPACE_STORAGE_ENDPOINT_BUCKET` cluster feature: a node without it fails
+to load a keyspace that has no bucket.
+
 The endpoint list can also be stored in cluster config, as the option
 `object_storage_endpoints` (see `docs/dev/cluster_config.md`). Its value is the
 list as one line of JSON, and it replaces the `scylla.yaml` list of the nodes
