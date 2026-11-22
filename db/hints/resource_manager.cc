@@ -14,6 +14,7 @@
 #include "seastarx.hh"
 #include <seastar/core/sleep.hh>
 #include <seastar/core/seastar.hh>
+#include <seastar/core/reactor.hh>
 #include <seastar/core/when_all.hh>
 #include "utils/div_ceil.hh"
 #include "utils/lister.hh"
@@ -265,12 +266,18 @@ future<> resource_manager::prepare_per_device_limits(manager& shard_manager) {
     dev_t device_id = shard_manager.hints_dir_device_id();
     auto it = _per_device_limits_map.find(device_id);
     if (it == _per_device_limits_map.end()) {
-        return is_mountpoint(shard_manager.hints_dir().parent_path()).then([this, device_id, &shard_manager](bool is_mountpoint) {
+        // We don't use seastar::file_system_space() here, because when it
+        // fails it doesn't return an exception: it returns a capacity of -1.
+        return when_all_succeed(is_mountpoint(shard_manager.hints_dir().parent_path()),
+                engine().statvfs(shard_manager.hints_dir().native())).then_unpack(
+                [this, device_id, &shard_manager](bool is_mountpoint, struct statvfs st) {
             auto [it, inserted] = _per_device_limits_map.emplace(device_id, space_watchdog::per_device_limits{});
             // Since we possibly deferred, we need to recheck the _per_device_limits_map.
             if (inserted) {
                 // By default, give each group of managers 10% of the available disk space. Give each shard an equal share of the available space.
-                it->second.max_shard_disk_space_size = std::filesystem::space(shard_manager.hints_dir().c_str()).capacity / (10 * this_smp_shard_count());
+                // The file system's capacity is computed like std::filesystem::space() does.
+                uint64_t capacity = uint64_t(st.f_blocks) * st.f_frsize;
+                it->second.max_shard_disk_space_size = capacity / (10 * this_smp_shard_count());
                 // If hints directory is a mountpoint, we assume it's on dedicated (i.e. not shared with data/commitlog/etc) storage.
                 // Then, reserve 90% of all space instead of 10% above.
                 if (is_mountpoint) {
