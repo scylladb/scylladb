@@ -118,6 +118,9 @@ public:
 public:
     bool is_cql_ready() const noexcept;
 
+    // Whether the node is ready for `service`, i.e. doesn't list it in SERVICES_NOT_READY.
+    bool is_ready_for(std::string_view service) const noexcept;
+
     // Return the value of the HOST_ID application state
     // or a null host_id if the application state is not found.
     locator::host_id get_host_id() const noexcept;

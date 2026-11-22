@@ -1590,6 +1590,11 @@ bool gossiper::is_cql_ready(const locator::host_id& endpoint) const {
     return ready;
 }
 
+bool gossiper::is_ready_for(const locator::host_id& endpoint, std::string_view service) const {
+    auto eps = get_endpoint_state_ptr(endpoint);
+    return !eps || eps->is_ready_for(service);
+}
+
 locator::host_id gossiper::get_host_id(inet_address endpoint) const {
     auto ids = _endpoint_state_map | std::views::values | std::views::filter([endpoint] (const auto& es) { return es->get_ip() == endpoint; });
 

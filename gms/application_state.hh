@@ -11,6 +11,7 @@
 #pragma once
 
 #include <fmt/core.h>
+#include <string_view>
 
 namespace gms {
 
@@ -39,7 +40,11 @@ enum class application_state {
     CDC_GENERATION_ID,
     SNITCH_NAME,
     GROUP0_STATE_ID,
+    SERVICES_NOT_READY,
 };
+
+// The services a node may list in SERVICES_NOT_READY.
+inline constexpr std::string_view service_paxos = "paxos";
 
 } // namespace gms
 

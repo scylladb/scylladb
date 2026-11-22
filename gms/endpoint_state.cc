@@ -13,6 +13,8 @@
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include <seastar/core/on_internal_error.hh>
 #include <boost/lexical_cast.hpp>
+#include <algorithm>
+#include <ranges>
 #include "utils/error_injection.hh"
 #include "utils/log.hh"
 
@@ -49,6 +51,24 @@ bool endpoint_state::is_cql_ready() const noexcept {
         });
     } catch (...) {
         return false;
+    }
+}
+
+bool endpoint_state::is_ready_for(std::string_view service) const noexcept {
+    // For compatibility with older nodes, which don't publish the state, keep the node out of a
+    // service only while it lists it.
+    auto* app_state = get_application_state_ptr(application_state::SERVICES_NOT_READY);
+    if (!app_state) {
+        return true;
+    }
+    try {
+        return app_state->value().with_linearized([service] (std::string_view sv) {
+            return std::ranges::none_of(sv | std::views::split(','), [service] (auto&& name) {
+                return std::string_view(name.begin(), name.end()) == service;
+            });
+        });
+    } catch (...) {
+        return true;
     }
 }
 
