@@ -1745,7 +1745,9 @@ schema_ptr schema_builder::build(schema::raw_schema& new_raw) {
     if (auto ext = get_schema_extension<db::paxos_grace_seconds_extension>(
                 new_raw._props.extensions,
                 db::paxos_grace_seconds_extension::NAME)) {
-        new_raw._props._paxos_grace_seconds = ext->get_paxos_grace_seconds();
+        // Not validated against max_ttl before SCYLLADB-6065, so a stored value
+        // can exceed it; it becomes the TTL of the paxos state, so clamp it.
+        new_raw._props._paxos_grace_seconds = std::min(ext->get_paxos_grace_seconds(), gc_clock::as_int32(max_ttl));
     }
 
     // cache the `per_partition_rate_limit` parameters for fast access through the schema object.
