@@ -2524,7 +2524,12 @@ def test_tracing_read_one_key(cql, test_keyspace, scylla_data_dir, scylla_only):
 def test_tracing_read_index_range(cql, test_keyspace, scylla_data_dir, scylla_only):
     with new_test_table(cql, test_keyspace, TRACING_SCHEMA) as table:
         with new_secondary_index(cql, table, 'rate'):
-            insert_tracing_rows(cql, table, 5)
+            # Write a single row, so a single tablet has data and the scanned
+            # shard always has a single sstable. With several rows, two of the
+            # table's tablets on the same shard could both get rows, and then
+            # the shard has two sstables, its scan is traced, and the test
+            # XPASSes.
+            insert_tracing_rows(cql, table, 1)
             nodetool.flush(cql, table)
             data_files = sstable_data_files(scylla_data_dir, table)
             activities = trace_activities(cql, cql.execute(f'SELECT * FROM {table} WHERE rate > 0 ALLOW FILTERING BYPASS CACHE', trace=True),
