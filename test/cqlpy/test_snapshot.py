@@ -144,7 +144,7 @@ def test_listsnapshots_several_keyspaces(cql, scylla_data_dir, scylla_only):
             for tag, ks in tags:
                 check_snapshot_sizes(cql, scylla_data_dir, tag, tables[ks])
             # Write another row to each table, so the second snapshot of each
-            # keyspace has a new sstable in addition to the first one's
+            # keyspace has a new sstable
             for ks_tables in tables.values():
                 for table in ks_tables:
                     cql.execute(f"INSERT INTO {table} (key, val) VALUES (2, 'asdf')")
@@ -154,13 +154,16 @@ def test_listsnapshots_several_keyspaces(cql, scylla_data_dir, scylla_only):
                 tags.append((tag, ks))
             for tag, ks in tags:
                 check_snapshot_sizes(cql, scylla_data_dir, tag, tables[ks])
-            # Each table's second snapshot has more sstables than its first
+            # Check that each table's second snapshot has an sstable that its
+            # first one doesn't. It needn't have more sstables: the flush of
+            # the second snapshot may start a compaction of the two sstables
+            # into one, which may finish before the snapshot links the files.
             def data_files(tag, table):
                 ks, cf = table.split('.')
-                return glob.glob(os.path.join(scylla_data_dir, ks, f'{cf}-*', 'snapshots', tag, '*-Data.db'))
+                return {os.path.basename(f) for f in glob.glob(os.path.join(scylla_data_dir, ks, f'{cf}-*', 'snapshots', tag, '*-Data.db'))}
             for (first_tag, ks), (second_tag, _) in zip(tags[:len(tables)], tags[len(tables):]):
                 for table in tables[ks]:
-                    assert len(data_files(second_tag, table)) > len(data_files(first_tag, table))
+                    assert data_files(second_tag, table) - data_files(first_tag, table)
         finally:
             for tag, _ in tags:
                 nodetool.del_snapshot(cql, tag)
