@@ -2013,6 +2013,8 @@ future<> compaction_manager_impl::flush_separator_buffer(separator_buffer& buf, 
         utils::get_local_injector().inject("fail_flush_separator_buffer", []() {
             throw std::runtime_error("flush_separator_buffer failed by injection");
         });
+        co_await utils::get_local_injector().inject("logstor_separator_flush_wait",
+                utils::wait_for_message(std::chrono::seconds{60}), false);
 
         if (!buf.empty()) {
             co_await with_scheduling_group(_cfg.separator_sg, [&] {
@@ -2734,6 +2736,13 @@ template future<> logstor_group::write_to_separator(log_record_writer, segment_r
 template future<> logstor_group::write_to_separator(log_record_bytes_writer, segment_ref, std::optional<segment_sequence>, separator_index_update);
 
 future<> logstor_group::flush_separator(std::optional<segment_sequence> seq_num) {
+    // After close_separator() started, there is nothing to flush, because the close discards what
+    // the buffers hold.
+    auto calls_holder = _separator_flush_calls.try_hold();
+    if (!calls_holder) {
+        co_return;
+    }
+
     auto should_flush = [seq_num] (separator_buffer& buf) {
         return !buf.empty() && (!seq_num || (buf.min_seq_num && buf.min_seq_num < *seq_num));
     };
@@ -2768,11 +2777,19 @@ future<> logstor_group::close_separator() {
     // the pool.
     _separator_enabled = false;
 
+    co_await _separator_flush_calls.close();
+
     // A flush in progress owns the buffer it is writing out, and releases it when it is done, so let
     // it finish rather than pulling the buffer out from under it.
     if (!_separator_flush.available()) {
         auto f = co_await coroutine::as_future(_separator_flush.get_future());
         f.ignore_ready_future();
+    }
+    // The cleared flag and the closed gate stop each switch of the buffers, so no flush can start
+    // during the wait above.
+    if (!_separator_flush.available()) {
+        on_internal_error(logstor_logger, fmt::format(
+                "A separator flush of table {} started while its compaction group closes", table_id()));
     }
 
     auto discard = [this] (separator_buffer& buf) -> future<> {

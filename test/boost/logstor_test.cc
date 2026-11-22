@@ -2938,6 +2938,75 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_separator_writers_of_a_group_share_one_buf
     }
 }
 
+// Checks that the close of a group waits for a flush_separator() call that started before the
+// close. The call and the close wait for the same flush, and the call resumes first and starts a
+// flush of the other buffer. The close must not give that buffer back to the pool during the flush,
+// and must not return while the call runs.
+SEASTAR_THREAD_TEST_CASE(test_logstor_separator_close_waits_for_a_flush_that_started_before_it) {
+    auto schema = make_kv_schema();
+    tmpdir dir;
+
+    shared_logstor_cache cache;
+    logstor ls(make_test_logstor_config(dir.path()), cache.shared_tracker);
+    test_recovery_catalog no_tables;
+    ls.do_recovery(no_tables).get();
+    ls.start().get();
+    auto stop_store = seastar::defer([&ls] noexcept { ls.stop().get(); });
+
+    test_logstor_group cg(schema, ls);
+
+    constexpr std::string_view flush_wait = "logstor_separator_flush_wait";
+    auto& injector = utils::get_local_injector();
+    injector.enable(flush_wait);
+    auto disable = seastar::defer([&injector, flush_wait] noexcept { injector.disable(flush_wait); });
+
+    auto write_to_separator_buffer = [&] (const mutation& m) {
+        ls.write(m, write_target(&cg, {}), db::no_timeout).get();
+        ls.flush_to_separator().get();
+    };
+
+    // The first flush takes the first record, and it waits at the injection.
+    auto m0 = make_kv_mutation(schema, "pk0", "value0");
+    write_to_separator_buffer(m0);
+    auto first_flush = cg.flush_separator();
+    BOOST_REQUIRE(eventually_true([&] { return injector.waiters(flush_wait) == 1; }));
+
+    // The second record goes into the other buffer. The second flush and then the close wait for
+    // the first flush.
+    auto m1 = make_kv_mutation(schema, "pk1", "value1");
+    write_to_separator_buffer(m1);
+    auto second_flush = cg.flush_separator();
+    auto remove = ls.get_compaction_manager().remove(cg);
+    BOOST_REQUIRE(!second_flush.available());
+    BOOST_REQUIRE(!remove.available());
+
+    // The second flush resumes first, and it starts the flush of the second record, which waits at
+    // the injection. The close waits for the second flush.
+    injector.receive_message(flush_wait);
+    first_flush.get();
+    BOOST_REQUIRE(eventually_true([&] { return injector.enter_count(flush_wait) == 2 && injector.waiters(flush_wait) == 1; }));
+    BOOST_REQUIRE(!second_flush.available());
+    BOOST_REQUIRE(!remove.available());
+
+    injector.receive_message(flush_wait);
+    second_flush.get();
+    remove.get();
+
+    // A flush of the closed group returns with nothing to do.
+    cg.flush_separator().get();
+
+    // The close discarded nothing, so each record is in a segment of the group.
+    BOOST_CHECK_EQUAL(injector.enter_count(flush_wait), 2u);
+    BOOST_REQUIRE(!cg.separator_has_data());
+    BOOST_REQUIRE_EQUAL(cg.separator_held_segment_count(), 0u);
+    BOOST_REQUIRE_EQUAL(cg.logstor_segments().segment_count(), 2u);
+    for (const auto& m : {m0, m1}) {
+        auto read = read_mutation(ls, schema, cg.logstor_index(), m.decorated_key(), schema->full_slice()).get();
+        BOOST_REQUIRE(read);
+        assert_that(*read).is_equal_to(m);
+    }
+}
+
 #endif // SCYLLA_ENABLE_ERROR_INJECTION
 
 // The live bytes of a segment set are maintained as segments are linked, freed from and unlinked,
