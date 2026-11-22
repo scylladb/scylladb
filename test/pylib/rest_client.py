@@ -17,12 +17,10 @@ from contextlib import asynccontextmanager
 from typing import Any, Optional, AsyncIterator
 
 import pytest
-import universalasync
 from aiohttp import request, BaseConnector, ClientTimeout
 from cassandra.pool import Host                          # type: ignore # pylint: disable=no-name-in-module
 
 from test.pylib.internal_types import IPAddress, HostID
-from test.pylib.util import universalasync_typed_wrap
 
 
 logger = logging.getLogger(__name__)
@@ -149,7 +147,6 @@ class TCPRESTClient(RESTClient):
             self.connector.close()
             self.connector = None
 
-@universalasync_typed_wrap
 class ScyllaRESTAPIClient:
     """Async Scylla REST API client"""
 
@@ -895,7 +892,6 @@ async def inject_error_one_shot(api: ScyllaRESTAPIClient, node_ip: IPAddress, in
     return InjectionHandler(api, injection, node_ip)
 
 
-@universalasync.async_to_sync_wraps
 async def read_barrier(api: ScyllaRESTAPIClient, node_ip: IPAddress, group_id: Optional[str] = None,
                        timeout: Optional[int] = None) -> None:
     """ Issue a read barrier on the specific host for the group_id.

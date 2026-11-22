@@ -56,7 +56,6 @@ from test.pylib.util import (
     Host,
     gather_safely,
     graceful_stop_timeout,
-    universalasync_typed_wrap,
     wait_for,
     wait_for_cql_and_get_hosts,
 )
@@ -167,7 +166,6 @@ def manager_op[**P, R](entry_point: ManagerAsyncFn[P, R] | None = None,
     return decorator if entry_point is None else decorator(entry_point)
 
 
-@universalasync_typed_wrap
 class ScyllaClusterManager:
     """Manages a Scylla cluster for a single test and serves the test API.
 
