@@ -132,6 +132,9 @@ public:
     // With no type (default), just checks that the endpoint is configured at all.
     // With a type ("s3"/"gs"), also checks that the endpoint is configured as that type.
     bool is_known_endpoint(sstring endpoint, sstring type = "") const;
+    // The bucket the endpoint gives to a keyspace that names none, empty if it has none
+    // or the endpoint is not configured.
+    sstring get_endpoint_bucket(const sstring& endpoint) const;
     sstring get_endpoint_type(sstring endpoint);
     future<> stop();
     std::vector<sstring> endpoints(sstring type = "") const noexcept;
@@ -257,6 +260,10 @@ public:
     bool is_known_endpoint(sstring endpoint, sstring type = "") const {
         SCYLLA_ASSERT(_storage != nullptr);
         return _storage->is_known_endpoint(std::move(endpoint), std::move(type));
+    }
+
+    sstring get_endpoint_bucket(const sstring& endpoint) const {
+        return _storage ? _storage->get_endpoint_bucket(endpoint) : sstring();
     }
 
     virtual sstable_writer_config configure_writer(sstring origin) const;

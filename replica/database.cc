@@ -1787,6 +1787,22 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
     return cfg;
 }
 
+// Not done in init_storage(): a node can create the table before it knows its endpoints,
+// when it joins and gets the schema and the cluster config together.
+void table::resolve_storage_bucket() const {
+    auto* os = std::get_if<storage_options::object_storage>(&_storage_opts->value);
+    if (!os || !os->bucket.empty()) {
+        return;
+    }
+    auto bucket = _sstables_manager.get_endpoint_bucket(os->endpoint);
+    if (bucket.empty()) {
+        return;
+    }
+    auto resolved = *_storage_opts;
+    std::get<storage_options::object_storage>(resolved.value).bucket = bucket;
+    _storage_opts = make_lw_shared<const storage_options>(std::move(resolved));
+}
+
 future<> table::init_storage() {
     _storage_opts = co_await _sstables_manager.init_table_storage(*_schema, *_storage_opts);
 }

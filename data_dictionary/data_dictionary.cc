@@ -342,11 +342,14 @@ static storage_options::object_storage object_storage_from_map(std::string_view 
     for (auto& option : allowed_options) {
         if (auto it = values.find(option.first); it != values.end()) {
             *option.second = it->second;
-        } else {
+        } else if (option.second != &options.bucket) {
+            // A keyspace can leave the bucket to its endpoint.
             throw std::runtime_error(fmt::format("Missing {} option: {}", type, option.first));
         }
     }
-    if (values.size() > allowed_options.size()) {
+    if (std::ranges::any_of(values | std::views::keys, [&] (const sstring& key) {
+        return std::ranges::find(allowed_options, key, &std::pair<sstring, std::string*>::first) == allowed_options.end();
+    })) {
         throw std::runtime_error(fmt::format("Extraneous options for {}: {}; allowed: {}",
             type, fmt::join(values | std::views::keys, ","),
             fmt::join(allowed_options | std::views::keys, ",")));
@@ -356,6 +359,9 @@ static storage_options::object_storage object_storage_from_map(std::string_view 
 }
 
 std::map<sstring, sstring> storage_options::object_storage::to_map() const {
+    if (bucket.empty()) {
+        return {{"endpoint", endpoint}};
+    }
     return {{"bucket", bucket},
             {"endpoint", endpoint}};
 }

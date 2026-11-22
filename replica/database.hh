@@ -518,7 +518,10 @@ private:
     const keyspace* _keyspace;
     config _config;
     locator::effective_replication_map_ptr _erm;
-    lw_shared_ptr<const storage_options> _storage_opts;
+    // Replaced on first use by a copy that holds the bucket of the endpoint, when the keyspace
+    // names none: see resolve_storage_bucket().
+    mutable lw_shared_ptr<const storage_options> _storage_opts;
+    void resolve_storage_bucket() const;
     memtable_table_shared_data _memtable_shared_data;
     mutable table_stats _stats;
     mutable db::view::stats _view_stats;
@@ -916,8 +919,14 @@ private:
              streamed_mutation::forwarding fwd,
              std::function<void(size_t)> reserve_fn) const;
 public:
-    const storage_options& get_storage_options() const noexcept { return *_storage_opts; }
-    lw_shared_ptr<const storage_options> get_storage_options_ptr() const noexcept { return _storage_opts; }
+    const storage_options& get_storage_options() const {
+        resolve_storage_bucket();
+        return *_storage_opts;
+    }
+    lw_shared_ptr<const storage_options> get_storage_options_ptr() const {
+        resolve_storage_bucket();
+        return _storage_opts;
+    }
     future<> init_storage();
     future<> destroy_storage();
 

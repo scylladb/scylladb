@@ -358,6 +358,11 @@ bool storage_manager::is_known_endpoint(sstring endpoint, sstring type) const {
     return it != _object_storage_endpoints.end() && (type == "" || it->second.cfg.is_storage_of_type(type));
 }
 
+sstring storage_manager::get_endpoint_bucket(const sstring& endpoint) const {
+    auto it = _object_storage_endpoints.find(endpoint);
+    return it == _object_storage_endpoints.end() ? sstring() : sstring(it->second.cfg.bucket());
+}
+
 std::vector<sstring> storage_manager::endpoints(sstring type) const noexcept {
     return _object_storage_endpoints | std::views::filter([&type] (auto& ep) {
         return type == "" || ep.second.cfg.is_storage_of_type(type);
@@ -746,6 +751,15 @@ void sstables_manager::validate_new_keyspace_storage_options(const data_dictiona
             auto requested_type = so.type | std::views::transform(&tolower) | std::ranges::to<std::string>();
             if (!is_known_endpoint(so.endpoint, requested_type)) {
                 throw exceptions::configuration_exception(format("Endpoint {} not configured as {}", so.endpoint, so.type));
+            }
+            if (so.bucket.empty()) {
+                // A node that does not know the feature cannot load a keyspace with no bucket.
+                if (!_features.keyspace_storage_endpoint_bucket) {
+                    throw exceptions::invalid_request_exception("A keyspace with no bucket is not supported in the cluster yet, set the bucket option");
+                }
+                if (get_endpoint_bucket(so.endpoint).empty()) {
+                    throw exceptions::configuration_exception(format("Endpoint {} has no bucket, set the bucket option of the keyspace", so.endpoint));
+                }
             }
         }
     }, so.value);
