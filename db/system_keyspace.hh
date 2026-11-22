@@ -23,6 +23,7 @@
 #include "query/query-result-set.hh"
 #include "db_clock.hh"
 #include "mutation_query.hh"
+#include "mutation/tombstone.hh"
 #include "system_keyspace_view_types.hh"
 #include "sstables/sstables_registry.hh"
 #include <seastar/core/gate.hh>
@@ -443,6 +444,8 @@ public:
         std::optional<std::unordered_map<table_id, int64_t>> prepare_migration_tables;
         std::optional<table_id> restore_table_id;
         std::optional<sstring> restore_snapshot_name;
+        // The restored table's truncation tombstone when the snapshot was taken, if any.
+        tombstone restore_truncation_tombstone;
     };
     using topology_requests_entries = std::unordered_map<utils::UUID, system_keyspace::topology_requests_entry>;
 

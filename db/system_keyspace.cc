@@ -350,6 +350,8 @@ schema_ptr system_keyspace::topology_requests() {
             .with_column("prepare_migration_tables", map_type_impl::get_instance(uuid_type, long_type, false))
             .with_column("restore_table_id", uuid_type)
             .with_column("restore_snapshot_name", utf8_type)
+            .with_column("restore_data_deleted_at_timestamp", long_type)
+            .with_column("restore_data_deleted_at_deletion_time", timestamp_type)
             .set_comment("Topology request tracking")
             .with_hash_version()
             .build();
@@ -3786,6 +3788,10 @@ system_keyspace::topology_requests_entry system_keyspace::topology_request_row_t
     if (row.has("restore_table_id")) {
         entry.restore_table_id = table_id(row.get_as<utils::UUID>("restore_table_id"));
         entry.restore_snapshot_name = row.get_as<sstring>("restore_snapshot_name");
+        if (row.has("restore_data_deleted_at_timestamp") && row.has("restore_data_deleted_at_deletion_time")) {
+            entry.restore_truncation_tombstone = tombstone(row.get_as<int64_t>("restore_data_deleted_at_timestamp"),
+                    gc_clock::from_time_t(db_clock::to_time_t(row.get_as<db_clock::time_point>("restore_data_deleted_at_deletion_time"))));
+        }
     }
 
     return entry;

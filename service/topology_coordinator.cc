@@ -2171,6 +2171,22 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 const auto& tmap = tmptr->tablets().get_tablet_map(tid);
 
                 replica::tablet_mutation_builder tablet_builder(guard.write_timestamp(), tid);
+                // The snapshot's sstables may hold data covered by the table's truncation tombstone when
+                // the snapshot was taken, so it is applied to the table together with starting the restore,
+                // before any of them is attached. The table's tablets are in transition from this command on,
+                // so the truncation tombstone is not garbage-collected before they are attached.
+                if (req_entry.restore_truncation_tombstone) {
+                    if (!_feature_service.eventually_consistent_delete_all_data) {
+                        throw std::runtime_error("the snapshot holds truncated data and the EVENTUALLY_CONSISTENT_DELETE_ALL_DATA feature is not enabled");
+                    }
+                    const auto current = tmptr->tablets().get_truncated_at(tid);
+                    auto truncated_at = current;
+                    truncated_at.apply(req_entry.restore_truncation_tombstone);
+                    if (truncated_at != current) {
+                        rtlogger.info("restore_tablets: truncating table {} with {}, as it was when snapshot {} was taken", tid, truncated_at, snap_name);
+                        tablet_builder.set_truncated_at(truncated_at);
+                    }
+                }
                 co_await tmap.for_each_tablet([&] (locator::tablet_id tablet, const locator::tablet_info& info) {
                     auto last_token = tmap.get_last_token(tablet);
                     tablet_builder

@@ -1052,7 +1052,10 @@ public:
     future<> move_tablet(table_id, dht::token, locator::tablet_replica src, locator::tablet_replica dst, loosen_constraints force = loosen_constraints::no);
     future<> add_tablet_replica(table_id, dht::token, locator::tablet_replica dst, loosen_constraints force = loosen_constraints::no);
     future<> del_tablet_replica(table_id, dht::token, locator::tablet_replica dst, loosen_constraints force = loosen_constraints::no);
-    future<> restore_tablets(table_id, sstring snap_name);
+    // Restores the table's tablets from the snapshot. The table's truncation tombstone when the snapshot
+    // was taken, if any, is applied to the table together with starting the restore, so that the data
+    // it covers in the snapshot's sstables stays deleted.
+    future<> restore_tablets(table_id, sstring snap_name, tombstone truncation_tombstone = {});
     future<> abort_restore_tablets(table_id);
     // When disabling, waits for the in-flight tablet transitions. Those still in flight after
     // grace_period are cancelled where possible; zero cancels nothing. Without grace_period, the

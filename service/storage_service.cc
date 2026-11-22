@@ -6347,14 +6347,18 @@ future<> storage_service::abort_restore_tablets(table_id table) {
     slogger.info("Aborted tablet restore for table_id={}", table);
 }
 
-future<> storage_service::restore_tablets(table_id table, sstring snap_name) {
+future<> storage_service::restore_tablets(table_id table, sstring snap_name, tombstone truncation_tombstone) {
     auto holder = _async_gate.hold();
 
     if (this_shard_id() != 0) {
         // group0 is only set on shard 0.
         co_return co_await container().invoke_on(0, [&] (auto& ss) {
-            return ss.restore_tablets(table, snap_name);
+            return ss.restore_tablets(table, snap_name, truncation_tombstone);
         });
+    }
+
+    if (truncation_tombstone && !_feature_service.eventually_consistent_delete_all_data) {
+        throw std::runtime_error("Cannot restore a truncated table: the EVENTUALLY_CONSISTENT_DELETE_ALL_DATA feature is not enabled on the cluster yet");
     }
 
     utils::UUID request_id;
@@ -6387,7 +6391,7 @@ future<> storage_service::restore_tablets(table_id table, sstring snap_name) {
         topology_mutation_builder builder(guard.write_timestamp());
         topology_request_tracking_mutation_builder trbuilder(request_id, _feature_service.topology_requests_type_column);
 
-        trbuilder.set_restore_tablets_data(table, snap_name)
+        trbuilder.set_restore_tablets_data(table, snap_name, truncation_tombstone)
                  .set("done", false)
                  .set("start_time", db_clock::now());
 
