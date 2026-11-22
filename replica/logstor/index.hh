@@ -14,9 +14,9 @@
 #include <optional>
 #include "dht/token.hh"
 #include "types.hh"
+#include "utils/abstract_formatter.hh"
 #include "utils/assert.hh"
 #include "utils/bptree.hh"
-#include "utils/counting_allocation_strategy.hh"
 #include "utils/double-decker.hh"
 #include "utils/logalloc.hh"
 #include "utils/on_internal_error.hh"
@@ -181,7 +181,7 @@ struct primary_index_usage {
     size_t key_count{0};
     // The memory of the entries alone, without the nodes of the B+tree.
     size_t entries_memory_usage{0};
-    // The memory of the B+tree, with its nodes and the entries in them.
+    // The space that the nodes and entries of the B+tree take in the index region.
     size_t memory_usage{0};
     // The sum of the sizes of the records that the index points at.
     uint64_t live_record_bytes{0};
@@ -197,17 +197,19 @@ struct primary_index_usage {
 // - A location from a lookup or a scan stays readable while the read guard that came with the
 //   location exists.
 //
-// The index uses a reference or an iterator into its tree only while its region is reclaim-locked.
-// The tree does not change while a reader holds the lock, so the iterators of the reader stay
-// valid.
+// The tree is in an LSA region of its own. The region is not evictable, because an entry is the
+// only pointer to its record. LSA can compact the region inside any allocation on the shard, and
+// compaction moves the entries, so the index uses a reference or an iterator into its tree only
+// while the region is reclaim-locked. The tree does not change while a reader holds the lock, so
+// the iterators of the reader stay valid.
 class primary_index final {
     using tree_type = double_decker<int64_t, primary_index_entry,
                             dht::raw_token_less_comparator, primary_index_key_cmp,
                             16, bplus::key_search::linear>;
     using iterator = typename tree_type::iterator;
 
-    counting_allocation_strategy _tree_allocator{standard_allocator(), logstor_logger};
     mutable logalloc::region _region;
+    logalloc::allocating_section _insert_section;
     tree_type _entries;
     size_t _key_count = 0;
     uint64_t _live_record_bytes = 0;
@@ -269,7 +271,10 @@ class primary_index final {
 
 public:
     explicit primary_index(space_accounting_subscriber& space_accounting, cache_tracker* ct, bool cache_enabled)
-        : _entries(dht::raw_token_less_comparator{})
+        : _insert_section(abstract_formatter([] (fmt::format_context& ctx) {
+            fmt::format_to(ctx.out(), "logstor_index.insert");
+        }))
+        , _entries(dht::raw_token_less_comparator{})
         , _cache_tracker(ct)
         , _cache_enabled(cache_enabled)
         , _space_accounting(space_accounting)
@@ -279,7 +284,7 @@ public:
     // links to a cached partition. Does not report the records of the entries to the space
     // accounting.
     ~primary_index() {
-        with_allocator(_tree_allocator, [this] {
+        with_allocator(_region.allocator(), [this] {
             _entries.clear_and_dispose([this] (primary_index_entry* e) noexcept {
                 evict_cached_partition(*e);
             });
@@ -315,27 +320,44 @@ public:
 
     // Inserts the entry of a key, or overwrites the entry that the index holds for the key when
     // `cmp` does not find the new entry older. insert_result::inserted covers both cases.
+    //
+    // An overwrite allocates nothing, so it runs under the lock alone, and it cannot fail. The insert
+    // of a new key runs in the allocating section, which can compact the region before it runs its
+    // function, and again before a retry after an allocation failure. So the function reuses the
+    // position that the first seek found only when the reclaim counter of the region did not change
+    // after that seek, and seeks the key again when it did.
+    // The caller must not hold the lock of the index, because the section needs the region unlocked.
     template <typename EntryCmp = default_entry_cmp>
     insert_outcome insert(const primary_index_key& key, index_entry new_entry, const EntryCmp& cmp = {}) {
         assert_unlocked();
-        logalloc::reclaim_lock lock(_region);
         tree_type::bound_hint hint;
-        auto i = _entries.lower_bound(key, primary_index_key_cmp{}, hint);
-        if (hint.match) {
-            if (cmp(i->_e, new_entry) > 0) {
-                return {insert_result::superseded, std::make_optional(i->_e)};
+        iterator i;
+        uint64_t reclaim_counter;
+        {
+            logalloc::reclaim_lock lock(_region);
+            i = _entries.lower_bound(key, primary_index_key_cmp{}, hint);
+            if (hint.match) {
+                if (cmp(i->_e, new_entry) > 0) {
+                    return {insert_result::superseded, std::make_optional(i->_e)};
+                }
+                // Overwriting with newer data: evict the stale cached partition.
+                evict_cached_partition(*i);
+                auto old_entry = std::exchange(i->_e, new_entry);
+                space_accounting_on_record_freed(old_entry.location);
+                space_accounting_on_record_added(new_entry.location);
+                return {insert_result::inserted, std::make_optional(old_entry)};
             }
-            // Overwriting with newer data: evict the stale cached partition.
-            evict_cached_partition(*i);
-            auto old_entry = std::exchange(i->_e, new_entry);
-            space_accounting_on_record_freed(old_entry.location);
-            space_accounting_on_record_added(new_entry.location);
-            return {insert_result::inserted, std::make_optional(old_entry)};
+            reclaim_counter = _region.reclaim_counter();
         }
 
         // The key is new, so the tree gets a new entry.
-        with_allocator(_tree_allocator, [&] {
-            _entries.emplace_before(i, key.raw_token().value, hint, key, new_entry);
+        _insert_section(_region, [&] {
+            with_allocator(_region.allocator(), [&] {
+                if (_region.reclaim_counter() != reclaim_counter) {
+                    i = _entries.lower_bound(key, primary_index_key_cmp{}, hint);
+                }
+                _entries.emplace_before(i, key.raw_token().value, hint, key, new_entry);
+            });
         });
         ++_key_count;
         space_accounting_on_record_added(new_entry.location);
@@ -362,7 +384,7 @@ public:
         if (!e) {
             return false;
         }
-        with_allocator(_tree_allocator, [&] {
+        with_allocator(_region.allocator(), [&] {
             iterator(&*e).erase_and_dispose(dht::raw_token_less_comparator{}, [this] (primary_index_entry* erased) noexcept { dispose_entry(erased); });
         });
         return true;
@@ -370,15 +392,15 @@ public:
 
     // Erases the entries of the token range a page at a time, with a yield between the pages.
     //
-    // Each page seeks both of its ends under the lock, so that no iterator lives from one page to
-    // the next.
+    // Each page seeks its ends again under the lock, because the region can compact during the
+    // yield. An erase frees and never allocates, so the lock alone is enough.
     future<> erase(dht::token_range tr) {
         assert_unlocked();
         static constexpr size_t page_size = default_scan_batch_size;
         auto dispose = [this] (primary_index_entry* e) noexcept { dispose_entry(e); };
         std::optional<primary_index_key> next_key;
         while (true) {
-            const bool done = with_allocator(_tree_allocator, [&] {
+            const bool done = with_allocator(_region.allocator(), [&] {
                 logalloc::reclaim_lock lock(_region);
                 auto [begin, end] = range_positions(tr);
                 if (next_key) {
@@ -651,7 +673,7 @@ public:
         return {
             .key_count = _key_count,
             .entries_memory_usage = _key_count * sizeof(primary_index_entry),
-            .memory_usage = _tree_allocator.allocated_memory(),
+            .memory_usage = _region.occupancy().used_space(),
             .live_record_bytes = _live_record_bytes,
         };
     }

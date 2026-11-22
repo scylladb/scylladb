@@ -422,8 +422,10 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_range_erase_and_clear_space_
     BOOST_REQUIRE_EQUAL(std::count(accounting.freed_locations.begin(), accounting.freed_locations.end(), entries[4].loc), 1);
 }
 
-// The `memory_usage` of an index counts the B+tree, and its `entries_memory_usage` does not, so the
-// first has to be the larger of the two, and it has to follow the index up and back down.
+// The `memory_usage` of an index counts the nodes and entries of the B+tree, and its
+// `entries_memory_usage` counts the entries alone, so the first has to be the larger of the two, and
+// it has to follow the index up and back down. clear() erases element-wise and leaves the root node
+// standing, so after clear() the index has to use as much as an index whose only key was erased.
 SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_memory_usage) {
     auto schema = make_logstor_schema();
     primary_index index(noop_space_accounting, nullptr, false);
@@ -452,7 +454,6 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_memory_usage) {
     BOOST_REQUIRE_GT(allocated, entries);
     testlog.info("primary index over {} keys: entries {} bytes, allocated {} bytes", key_count, entries, allocated);
 
-    // Erasing gives back both.
     for (size_t i = 0; i < key_count / 2; ++i) {
         BOOST_REQUIRE(index.erase(keys[i],
                 record_location{.segment = log_segment_id{1}, .offset = uint32_t(i * 64), .size = 32}));
@@ -461,13 +462,18 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_memory_usage) {
     BOOST_REQUIRE_LT(index.get_usage().memory_usage, allocated);
     BOOST_REQUIRE_GT(index.get_usage().memory_usage, index.get_usage().entries_memory_usage);
 
-    // Clearing gives back everything but the root, which an element-wise erase leaves standing.
-    // More than that left behind would mean the accounting had drifted.
     index.clear().get();
     BOOST_REQUIRE_EQUAL(index.get_usage().key_count, 0u);
     BOOST_REQUIRE_EQUAL(index.get_usage().entries_memory_usage, 0u);
     const size_t after_clear = index.get_usage().memory_usage;
     testlog.info("primary index after clear: allocated {} bytes", after_clear);
+
+    primary_index root_only(noop_space_accounting, nullptr, false);
+    const auto location = record_location{.segment = log_segment_id{1}, .offset = 0, .size = 32};
+    root_only.insert(keys[0], index_entry{.location = location, .timestamp = 1});
+    BOOST_REQUIRE(root_only.erase(keys[0], location));
+    BOOST_REQUIRE_GT(root_only.get_usage().memory_usage, 0u);
+    BOOST_REQUIRE_EQUAL(after_clear, root_only.get_usage().memory_usage);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_logstor_primary_index_cache_invalidation_and_eviction) {
