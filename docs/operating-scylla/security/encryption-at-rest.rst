@@ -861,10 +861,6 @@ Before configuring Azure Key Vault integration, ensure you have:
   on the key. For example, if your key vault uses RBAC, you can assign the
   built-in "Key Vault Crypto User" role to your identity.
 
-.. note::
-   ScyllaDB can also authenticate indirectly through a preconfigured Azure CLI,
-   but this is offered only for testing purposes.
-
 **Procedure**
 
 #. Edit the ``scylla.yaml`` file located in ``/etc/scylla/`` to add the
@@ -946,10 +942,7 @@ Before configuring Azure Key Vault integration, ensure you have:
          and ``AZURE_CLIENT_CERTIFICATE_PATH`` are set, the secret takes
          precedence.
 
-      2. **Azure CLI**: If the Azure CLI is installed and configured, ScyllaDB
-         will be using it to generate access tokens.
-
-      3. **Azure Instance Metadata Service (IMDS)**: If running on an Azure VM
+      2. **Azure Instance Metadata Service (IMDS)**: If running on an Azure VM
          with an assigned managed identity, ScyllaDB will be querying the IMDS
          for access tokens.
 

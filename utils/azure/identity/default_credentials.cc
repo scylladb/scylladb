@@ -11,7 +11,6 @@
 
 #include "exceptions.hh"
 #include "default_credentials.hh"
-#include "azure_cli_credentials.hh"
 #include "managed_identity_credentials.hh"
 #include "service_principal_credentials.hh"
 
@@ -43,14 +42,6 @@ future<> default_credentials::detect(const resource_type& resource_uri) {
         az_creds_logger.info("[{}] Detecting credentials in environment", *this);
         if (auto creds = co_await get_credentials_from_env(resource_uri)) {
             az_creds_logger.info("[{}] Credentials found in environment!", *this);
-            _creds = std::move(*creds);
-            co_return;
-        }
-    }
-    if (_sources.contains<source::AzureCli>()) {
-        az_creds_logger.info("[{}] Detecting credentials in CLI", *this);
-        if (auto creds = co_await get_credentials_from_azure_cli(resource_uri)) {
-            az_creds_logger.info("[{}] Credentials found in CLI!", *this);
             _creds = std::move(*creds);
             co_return;
         }
@@ -105,17 +96,6 @@ future<default_credentials::credentials_opt> default_credentials::get_credential
         co_await creds->get_access_token(resource_uri);
     } catch (auth_error& e) {
         az_creds_logger.info("[{}] Failed to obtain token from environment: {}", *this, e.what());
-        co_return std::nullopt;
-    }
-    co_return creds;
-}
-
-future<default_credentials::credentials_opt> default_credentials::get_credentials_from_azure_cli(const resource_type& resource_uri) {
-    auto creds = std::make_unique<azure_cli_credentials>(_logctx);
-    try {
-        co_await creds->get_access_token(resource_uri);
-    } catch (auth_error& e) {
-        az_creds_logger.info("[{}] Failed to obtain token from Azure CLI: {}", *this, e.what());
         co_return std::nullopt;
     }
     co_return creds;

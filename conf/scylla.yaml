@@ -886,7 +886,7 @@ maintenance_socket: workdir
 #
 # Authentication can be explicit with Service Principal credentials. Either secret or certificate can be provided.
 # If both are provided, the secret will be used. If no credentials are provided, the provider will try to detect them
-# from the environment, the Azure CLI, and IMDS, in this specific order.
+# from the environment and IMDS, in this specific order.
 #
 # master_key is a Vault key that will be used to wrap all keys used for actual encryption of scylla data.
 # This key must be pre-created and the principal must have permissions for Wrapkey and Unwrapkey operations on this key.

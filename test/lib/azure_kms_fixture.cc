@@ -156,13 +156,6 @@ seastar::future<> azure_kms_fixture::impl::setup() {
             v.unset(var);
             env_overrides.push_back(std::move(v));
         }
-        // The Azure CLI source spawns `az`, which reads the logged-in account
-        // from AZURE_CONFIG_DIR (defaulting to ~/.azure). Point it at an empty
-        // directory so `az` finds no account.
-        auto empty_azure_dir = tmp.path() / "empty-azure-config";
-        fs::create_directories(empty_azure_dir);
-        env_overrides.emplace_back("AZURE_CONFIG_DIR", empty_azure_dir.string());
-
         auto host = getenv_or_default("MOCK_AZURE_VAULT_SERVER_HOST", "127.0.0.1");
         auto [proc, port] = co_await start_fake_azure_server(tmp, host);
         local_azure.emplace(std::move(proc));
