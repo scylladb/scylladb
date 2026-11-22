@@ -4553,6 +4553,41 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancer_shuffle_mode) {
     BOOST_REQUIRE(!e.get_tablet_allocator().local().balance_tablets(stm.get(), nullptr, nullptr,topo.get_load_stats()).get().empty());
   }).get();
 }
+
+// Shards without candidates drop out of the intra-node source list, so shard ids
+// stop matching list positions.
+SEASTAR_THREAD_TEST_CASE(test_load_balancer_shuffle_mode_intra_node) {
+  do_with_cql_env_thread([] (auto& e) {
+    topology_builder topo(e);
+    const unsigned shard_count = 8;
+    auto host = topo.add_node(node_state::normal, shard_count);
+
+    auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, 16);
+    auto table1 = add_table(e, ks_name).get();
+
+    mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+        tablet_map tmap(16);
+        unsigned i = 0;
+        for (auto tid : tmap.tablet_ids()) {
+            tmap.set_tablet(tid, tablet_info{tablet_replica_set{tablet_replica{host, i++ % 2}}});
+        }
+        tmeta.set_tablet_map(table1, std::move(tmap));
+        co_return;
+    });
+
+    auto& stm = e.shared_token_metadata().local();
+    topo.get_shared_load_stats().set_default_tablet_sizes(stm.get());
+
+    utils::get_local_injector().enable("tablet_allocator_shuffle");
+    auto disable_injection = seastar::defer([&] noexcept {
+        utils::get_local_injector().disable("tablet_allocator_shuffle");
+    });
+
+    for (int round = 0; round < 50; ++round) {
+        BOOST_REQUIRE(!e.get_tablet_allocator().local().balance_tablets(stm.get(), nullptr, nullptr, topo.get_load_stats()).get().empty());
+    }
+  }).get();
+}
 #endif
 
 SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_two_empty_nodes) {

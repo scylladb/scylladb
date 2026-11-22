@@ -3506,8 +3506,9 @@ public:
             // 1) src and dst are chosen.
             // 2) src_shards.back() == src.
             if (shuffle) {
-                src = src_shards[rand_shard(src_shards.size())];
-                std::swap(src_shards.back(), src_shards[src]);
+                auto i = rand_shard(src_shards.size());
+                src = src_shards[i];
+                std::swap(src_shards.back(), src_shards[i]);
                 do {
                     dst = rand_shard(node_load.shard_count);
                 } while (src == dst); // There are at least two shards here so this converges.
@@ -3516,6 +3517,7 @@ public:
                 src = src_shards.back();
                 dst = sketch.get_least_loaded_shard(host);
             }
+            throwing_assert(src_shards.back() == src);
 
             auto push_back = seastar::defer([&] noexcept {
                 // When shuffling, src_shards is not a heap.
