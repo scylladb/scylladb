@@ -32,7 +32,7 @@ def write_generator(table, size_in_kb: int):
 
 
 # Number of INSERTs write_rows() keeps in flight. These tests run against nodes
-# whose data directory is a small fuse2fs volume, and in debug mode the nodes
+# whose data directory is a small volume, and in debug mode the nodes
 # are slow to begin with. Submitting a whole bulk load at once leaves thousands
 # of statements queued behind a single busy shard; once one of them stays
 # unanswered for longer than write_request_timeout_in_ms, the load fails with a
@@ -99,8 +99,11 @@ async def validate_data_existence(cql, successful_hosts: list[Host], failed_host
 
 CRITICAL_DISK_UTILIZATION_LEVEL = 0.5
 # Target disk fill ratio used in tests to push the node above the critical
-# utilization level.
-DISK_FILL_TARGET_RATIO = 1.1 * CRITICAL_DISK_UTILIZATION_LEVEL
+# utilization level. The margin above the level must be larger than what a
+# node frees by itself, e.g. its commitlog segments when it restarts (about 4%
+# of a 20M volume), or the node drops back below the level while the test
+# expects it to stay above.
+DISK_FILL_TARGET_RATIO = 1.2 * CRITICAL_DISK_UTILIZATION_LEVEL
 
 # Since we create 20M volumes, we need to reduce the commitlog segment size
 # otherwise we hit out of space.

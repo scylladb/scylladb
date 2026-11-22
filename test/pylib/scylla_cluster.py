@@ -147,7 +147,8 @@ class ScyllaCluster:
                          seeds: Optional[List[IPAddress]] = None,
                          server_encryption: str = "none",
                          expected_error: Optional[str] = None,
-                         expected_server_up_state: ServerUpState = ServerUpState.SERVING) -> ServerInfo:
+                         expected_server_up_state: ServerUpState = ServerUpState.SERVING,
+                         launcher: Optional[List[str]] = None) -> ServerInfo:
         """Add a new server to the cluster"""
 
         assert start or not expected_error, \
@@ -245,6 +246,7 @@ class ScyllaCluster:
                 config_options=config_options,
                 property_file=property_file,
                 append_env=self.append_env,
+                launcher=launcher,
             )
             server._per_server_cmdline_options = list(cmdline or [])
             self.starting[server.server_id] = server
