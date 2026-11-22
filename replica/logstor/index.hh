@@ -264,9 +264,7 @@ public:
     ~primary_index() {
         with_allocator(_tree_allocator, [this] {
             _entries.clear_and_dispose([this] (primary_index_entry* e) noexcept {
-                if (e->_cached_entry) {
-                    _cache_tracker->evict(*e);
-                }
+                evict_cached_partition(*e);
             });
         });
     }
@@ -305,9 +303,7 @@ public:
         if (hint.match) {
             if (cmp(i->_e, new_entry) <= 0) {
                 // Overwriting with newer data: evict the stale cached partition.
-                if (i->_cached_entry) {
-                    _cache_tracker->evict(*i);
-                }
+                evict_cached_partition(*i);
                 auto old_entry = i->_e;
                 i->_e = std::move(new_entry);
                 space_accounting_on_record_freed(old_entry.location);
@@ -611,7 +607,7 @@ public:
     future<> drain_cache() {
         if (_cache_used) {
             auto scan = this->scan();
-            while (scan.next_batch(default_scan_batch_size, [this] (const scanned_entry& e) { _cache_tracker->evict(e._e); })) {
+            while (scan.next_batch(default_scan_batch_size, [this] (const scanned_entry& e) { evict_cached_partition(e._e); })) {
                 co_await coroutine::maybe_yield();
             }
         }
@@ -628,6 +624,12 @@ public:
     }
 
 private:
+    void evict_cached_partition(const primary_index_entry& e) noexcept {
+        if (e._cached_entry) {
+            _cache_tracker->evict(e);
+        }
+    }
+
     void space_accounting_on_record_added(record_location location) noexcept {
         _space_accounting.on_add_record(location);
         _live_record_bytes += location.size;
@@ -655,9 +657,7 @@ private:
     // Evicts the cached partition of an entry that the tree erases, and frees its record in the
     // accounting.
     void dispose_entry(primary_index_entry* e) noexcept {
-        if (e->_cached_entry) {
-            _cache_tracker->evict(*e);
-        }
+        evict_cached_partition(*e);
         space_accounting_on_record_freed(e->_e.location);
         --_key_count;
     }
