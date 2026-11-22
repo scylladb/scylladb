@@ -283,6 +283,19 @@ def test_readd_int_column_as_blob(cql, test_keyspace, scylla_only):
         cql.execute(f'ALTER TABLE {table} ADD x blob')
         assert list(cql.execute(f'SELECT p, x, y FROM {table} BYPASS CACHE')) == [(1, None, 6)]
 
+# A vector of fixed-length elements, such as int, is serialized without the
+# elements' lengths, unlike a vector of variable-length elements, such as
+# varint. So although a varint value can interpret an int value, a dropped
+# vector<int, 2> column can't be re-added as vector<varint, 2>: the eight
+# bytes which a statement prepared before the DROP sends for the int vector
+# are not a valid vector<varint, 2>. Cassandra allows re-adding a vector
+# column only with the same type, so it refuses this too.
+def test_readd_vector_column_with_different_element_framing(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int PRIMARY KEY, x vector<int, 2>') as table:
+        cql.execute(f'ALTER TABLE {table} DROP x')
+        with pytest.raises(InvalidRequest):
+            cql.execute(f'ALTER TABLE {table} ADD x vector<varint, 2>')
+
 # The following tests were translated from scylla-dtest's schema_test.py.
 
 # Test that a column can't be dropped from a COMPACT STORAGE table.
