@@ -262,6 +262,8 @@ int64_t max_partition_size(replica::column_family& cf) {
 
 integral_ratio_holder mean_partition_size(replica::column_family& cf) {
     integral_ratio_holder res;
+    res.sub += cf.logstor_live_record_bytes();
+    res.total += cf.logstor_key_count();
     for (auto sstables = cf.get_sstables(); auto& i : *sstables) {
         auto c = i->get_stats_metadata().estimated_partition_size.count();
         res.sub += i->get_stats_metadata().estimated_partition_size.mean() * c;
@@ -762,6 +764,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
     cf::get_estimated_row_count.set(r, [&db] (std::unique_ptr<http::request> req) {
         return map_reduce_cf(db, req->get_path_param("name"), int64_t(0), [](replica::column_family& cf) {
             uint64_t res = 0;
+            res += cf.logstor_key_count();
             for (auto sstables = cf.get_sstables(); auto& i : *sstables) {
                 res += i->get_stats_metadata().estimated_partition_size.count();
             }

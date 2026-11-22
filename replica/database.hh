@@ -1321,6 +1321,9 @@ public:
     // Bytes of the live records of this table, which is less than the space its segments take by
     // however much room those segments still have.
     uint64_t logstor_live_record_bytes() const;
+    // Returns the number of keys in the logstor index of this table, and returns 0 for a table that
+    // does not use logstor.
+    uint64_t logstor_key_count() const;
 
     locator::combined_load_stats table_load_stats() const;
 
