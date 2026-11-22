@@ -109,6 +109,8 @@ manifest_json::table_info::table_info(const table_info& e) {
     table_id = e.table_id;
     tablets_type = e.tablets_type;
     tablet_count = e.tablet_count;
+    data_deleted_at_timestamp = e.data_deleted_at_timestamp;
+    data_deleted_at_deletion_time = e.data_deleted_at_deletion_time;
 }
 
 manifest_json::table_info& manifest_json::table_info::operator=(const table_info& e) {
@@ -118,6 +120,8 @@ manifest_json::table_info& manifest_json::table_info::operator=(const table_info
         table_id = e.table_id;
         tablets_type = e.tablets_type;
         tablet_count = e.tablet_count;
+        data_deleted_at_timestamp = e.data_deleted_at_timestamp;
+        data_deleted_at_deletion_time = e.data_deleted_at_deletion_time;
     }
     return *this;
 }
@@ -128,6 +132,8 @@ void manifest_json::table_info::register_params() {
     add(&table_id, "table_id");
     add(&tablets_type, "tablets_type");
     add(&tablet_count, "tablet_count");
+    add(&data_deleted_at_timestamp, "data_deleted_at_timestamp");
+    add(&data_deleted_at_deletion_time, "data_deleted_at_deletion_time");
 }
 
 manifest_json::sstable_info::sstable_info() {

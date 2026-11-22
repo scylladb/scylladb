@@ -74,6 +74,11 @@ struct manifest_json : public json::json_base {
         json::json_element<sstring> table_id;
         json::json_element<sstring> tablets_type;
         json::json_element<size_t> tablet_count;
+        // The table's truncation tombstone when the snapshot was taken, if any: the snapshot's
+        // sstables may hold data covered by it, which must stay deleted when they are restored.
+        // See docs/dev/delete-all-data.md.
+        json::json_element<int64_t> data_deleted_at_timestamp;
+        json::json_element<int64_t> data_deleted_at_deletion_time;
 
         table_info();
         table_info(const table_info& e);

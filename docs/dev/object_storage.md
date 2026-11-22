@@ -320,6 +320,7 @@ The `table` member contains metadata about the table being snapshot.
     - `powof2` - if the keyspace uses tablets replication, and the tablet token ranges are based on powers of 2.
     - `arbitrary` - if the keyspace uses tablets replication, and the tablet token ranges and count can be arbitrary.
 - `tablet_count` - Optional. If `tablets_type` is not `none`, contains the number of tablets allcated in the table. If `tablets_type` is `powof2`, tablet_count would be a power of 2.
+- `data_deleted_at_timestamp` and `data_deleted_at_deletion_time` - Optional, always together. The table-wide tombstone of the table when the snapshot was taken (the "truncation tombstone" in the code), set by `DELETE ALL DATA` on a tablet table and neither garbage-collected nor cleared by `TRUNCATE` yet: its write timestamp, and its deletion time in seconds since the epoch. The snapshot's SSTables may hold data written at or before `data_deleted_at_timestamp`, which the `DELETE ALL DATA` deleted logically and compaction did not purge yet. Restoring the snapshot must apply the tombstone to the destination table before attaching the SSTables, or that data reappears; the tablet-aware restore does so. See [DELETE ALL DATA](delete-all-data.md#backup-and-restore).
 
 The `sstables` member is a list containing metadata about the SSTables in the snapshot.
 - `id` - is the STable's unique id (a UUID).  It is carried over with the SSTable when it's streamed as part of tablet migration, even if it gets a new generation.

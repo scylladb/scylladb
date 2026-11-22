@@ -4594,7 +4594,8 @@ public:
                                     sstring name, db::snapshot_options opts,
                                     schema_ptr schema,
                                     std::optional<int64_t> tablet_count,
-                                    std::optional<locator::tablet_layout> tablet_layout) = 0;
+                                    std::optional<locator::tablet_layout> tablet_layout,
+                                    tombstone truncation_tombstone) = 0;
     virtual ~snapshot_writer() = default;
 };
 
@@ -4626,7 +4627,8 @@ public:
                             sstring name, db::snapshot_options opts,
                             schema_ptr schema,
                             std::optional<int64_t> tablet_count,
-                            std::optional<locator::tablet_layout> tablet_layout) override;
+                            std::optional<locator::tablet_layout> tablet_layout,
+                            tombstone truncation_tombstone) override;
 };
 
 class noop_snapshot_writer : public snapshot_writer {
@@ -4641,7 +4643,7 @@ public:
         return make_ready_future<>();
     }
     future<> write_manifest(const locator::topology&, const std::vector<snapshot_sstable_set>&, const std::vector<db::snapshot_tablet_entry>&,
-            sstring, db::snapshot_options, schema_ptr, std::optional<int64_t>, std::optional<locator::tablet_layout>) override {
+            sstring, db::snapshot_options, schema_ptr, std::optional<int64_t>, std::optional<locator::tablet_layout>, tombstone) override {
         return make_ready_future<>();
     }
 };
@@ -4652,7 +4654,8 @@ future<> local_snapshot_writer::write_manifest(const locator::topology& topology
                                                sstring name, db::snapshot_options opts,
                                                schema_ptr schema,
                                                std::optional<int64_t> tablet_count,
-                                               std::optional<locator::tablet_layout> tablet_layout) {
+                                               std::optional<locator::tablet_layout> tablet_layout,
+                                               tombstone truncation_tombstone) {
     using namespace db::snapshot;
 
     manifest_json manifest;
@@ -4683,6 +4686,10 @@ future<> local_snapshot_writer::write_manifest(const locator::topology& topology
     table.table_id = to_sstring(schema->id());
     table.tablets_type = tablet_layout ? locator::tablet_layout_to_string(*tablet_layout) : "none";
     table.tablet_count = tablet_count.value_or(0);
+    if (truncation_tombstone) {
+        table.data_deleted_at_timestamp = truncation_tombstone.timestamp;
+        table.data_deleted_at_deletion_time = gc_clock::to_time_t(truncation_tombstone.deletion_time);
+    }
     manifest.table = std::move(table);
 
     for (const auto& fsp : sstable_sets) {
@@ -4793,11 +4800,18 @@ future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, c
         std::vector<snapshot_sstable_set> sstable_sets(this_smp_shard_count());
         using sstable_hold = foreign_ptr<std::unique_ptr<std::vector<sstables::shared_sstable>>>;
         std::vector<sstable_hold> holds(this_smp_shard_count());
+        // The table's truncation tombstone, as each shard sees it when it lists its sstables.
+        // The snapshot's sstables may hold data covered by it, since it deletes data logically,
+        // so it is recorded with them, to be applied again wherever they are restored.
+        // It is sampled together with the sstable list: once it is garbage-collected, no sstable
+        // holds covered data, and a later TRUNCATE covers only data the snapshot may keep.
+        std::vector<tombstone> truncation_tombstones(this_smp_shard_count());
 
         co_await writer->init();
         co_await smp::invoke_on_all([&] -> future<> {
             auto& t = *table_shards;
             auto [tables, permit] = co_await t.snapshot_sstables();
+            truncation_tombstones[this_shard_id()] = t.get_truncation_tombstone();
             auto sstables_metadata = co_await t.get_sstables_manager().take_snapshot(tables, dir_name);
             sstable_sets[this_shard_id()] = make_foreign(std::make_unique<utils::chunked_vector<sstables::sstable_snapshot_metadata>>(std::move(sstables_metadata)));
             holds[this_shard_id()] = make_foreign(std::make_unique<std::vector<sstables::shared_sstable>>(std::move(tables)));
@@ -4847,8 +4861,12 @@ future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, c
                 }
             }
         }
+        tombstone truncation_tombstone;
+        for (const auto& shard_truncation_tombstone : truncation_tombstones) {
+            truncation_tombstone.apply(shard_truncation_tombstone);
+        }
         co_await writer->write_manifest(topology, sstable_sets, tablets, dir_name, opts, s,
-                                        tablet_count, tablet_layout).handle_exception([&] (std::exception_ptr ptr) {
+                                        tablet_count, tablet_layout, truncation_tombstone).handle_exception([&] (std::exception_ptr ptr) {
             tlogger.error("Failed to seal snapshot in {}: {}.", name, ptr);
             ex = std::move(ptr);
         });
