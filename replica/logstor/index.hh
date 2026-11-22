@@ -296,29 +296,30 @@ public:
 
     using entry_cmp_fn = std::function<std::strong_ordering(const index_entry&, const index_entry&)>;
 
+    // Inserts the entry of a key, or overwrites the entry that the index holds for the key when
+    // `cmp` does not find the new entry older. insert_result::inserted covers both cases.
     template <typename EntryCmp = default_entry_cmp>
     insert_outcome insert(const primary_index_key& key, index_entry new_entry, const EntryCmp& cmp = {}) {
         tree_type::bound_hint hint;
         auto i = _entries.lower_bound(key, primary_index_key_cmp{}, hint);
         if (hint.match) {
-            if (cmp(i->_e, new_entry) <= 0) {
-                // Overwriting with newer data: evict the stale cached partition.
-                evict_cached_partition(*i);
-                auto old_entry = i->_e;
-                i->_e = std::move(new_entry);
-                space_accounting_on_record_freed(old_entry.location);
-                space_accounting_on_record_added(i->_e.location);
-                return {insert_result::inserted, std::make_optional(old_entry)};
-            } else {
+            if (cmp(i->_e, new_entry) > 0) {
                 return {insert_result::superseded, std::make_optional(i->_e)};
             }
+            // Overwriting with newer data: evict the stale cached partition.
+            evict_cached_partition(*i);
+            auto old_entry = std::exchange(i->_e, new_entry);
+            space_accounting_on_record_freed(old_entry.location);
+            space_accounting_on_record_added(new_entry.location);
+            return {insert_result::inserted, std::make_optional(old_entry)};
         }
 
-        auto it = with_allocator(_tree_allocator, [&] {
-            return _entries.emplace_before(i, key.raw_token().value, hint, key, std::move(new_entry));
+        // The key is new, so the tree gets a new entry.
+        with_allocator(_tree_allocator, [&] {
+            _entries.emplace_before(i, key.raw_token().value, hint, key, new_entry);
         });
-        space_accounting_on_record_added(it->_e.location);
         ++_key_count;
+        space_accounting_on_record_added(new_entry.location);
         return {insert_result::inserted, std::nullopt};
     }
 
