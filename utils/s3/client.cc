@@ -1159,17 +1159,6 @@ protected:
         return !_upload_id.empty();
     }
 
-    // Create the object even though nothing was written into the sink. A
-    // zero-length component is still a component, and object stores hold
-    // zero-length objects. Without this the object is silently missing.
-    future<> put_empty_object() {
-        s3l.trace("PUT empty object {}", _object_name);
-        _object_produced = true;
-        return _client->put_object_and_get_etag(_object_name, temporary_buffer<char>(), _metadata, _as).then([this] (sstring tag) {
-            _produced_etag = std::move(tag);
-        });
-    }
-
     multipart_upload(shared_ptr<client> cln, sstring object_name, object_metadata metadata, std::optional<tag> tag, seastar::abort_source* as)
         : _client(std::move(cln))
         , _object_name(std::move(object_name))
@@ -1745,14 +1734,35 @@ class client::upload_jumbo_sink final : public upload_sink_base {
     static constexpr tag piece_tag = { .key = "kind", .value = "piece" };
 
     const unsigned _maximum_parts_in_piece;
+    // Half of the part numbers (or max_parts_per_piece, if smaller); pieces use the rest,
+    // ~10 per ~50 GiB piece, so an object tops out near 25 TB.
+    const unsigned _maximum_direct_parts;
+    // Most objects end here: one PUT or a plain multipart upload, with no piece to copy.
+    bool _direct = true;
+    memory_data_sink_buffers _bufs;
+    unsigned _next_piece = 0;
     std::unique_ptr<upload_sink> _current;
 
+    std::unique_ptr<upload_sink> make_piece() {
+        return std::make_unique<upload_sink>(_client, format("{}_{}", _object_name, _next_piece++), object_metadata{}, piece_tag, _as);
+    }
+
     future<> maybe_flush() {
+        if (_direct) {
+            if (_bufs.size() < minimum_part_size) {
+                co_return;
+            }
+            co_await upload_part(std::move(_bufs));
+            if (parts_count() >= _maximum_direct_parts) {
+                // Everything buffered went into the part, so no short part is left behind.
+                _direct = false;
+                _current = make_piece();
+            }
+            co_return;
+        }
         if (_current->parts_count() >= _maximum_parts_in_piece) {
-            auto next_name = format("{}_{}", _object_name, parts_count() + 1);
-            auto next = std::make_unique<upload_sink>(_client, next_name, object_metadata{}, piece_tag, _as);
-            co_await upload_part(std::exchange(_current, std::move(next)));
-            s3l.trace("Initiated piece {} (upload_id {})", next_name, _upload_id);
+            s3l.trace("Initiating piece {} (upload_id {})", _next_piece, _upload_id);
+            co_await upload_part(std::exchange(_current, make_piece()));
         }
     }
 
@@ -1760,16 +1770,33 @@ public:
     upload_jumbo_sink(shared_ptr<client> cln, sstring object_name, object_metadata metadata, std::optional<unsigned> max_parts_per_piece, seastar::abort_source* as)
         : upload_sink_base(std::move(cln), std::move(object_name), std::move(metadata), std::nullopt, as)
         , _maximum_parts_in_piece(max_parts_per_piece.value_or(maximum_parts_in_piece))
-        , _current(std::make_unique<upload_sink>(_client, format("{}_{}", _object_name, parts_count()), object_metadata{}, piece_tag, _as))
+        , _maximum_direct_parts(std::min(_maximum_parts_in_piece, maximum_parts_in_piece / 2))
     {}
 
     virtual future<> put(std::span<temporary_buffer<char>> data) override {
-        co_await _current->put(std::move(data));
+        if (_direct) {
+            append_buffers(_bufs, std::move(data));
+        } else {
+            co_await _current->put(std::move(data));
+        }
         co_await maybe_flush();
     }
 
     virtual future<> do_flush() override {
-        if (_current) {
+        if (_direct) {
+            if (_object_produced) {
+                co_return;
+            }
+            if (!upload_started()) {
+                // This also makes the zero-length object.
+                _object_produced = true;
+                _produced_etag = co_await _client->put_object_and_get_etag(_object_name, std::move(_bufs), _metadata, _as);
+                co_return;
+            }
+            if (_bufs.size() != 0) {
+                co_await upload_part(std::move(_bufs));
+            }
+        } else if (_current) {
             auto piece = std::exchange(_current, nullptr);
             if (piece->empty()) {
                 // Nothing was written into the piece, so upload_sink::flush()
@@ -1791,8 +1818,6 @@ public:
                 co_await abort_upload();
                 std::rethrow_exception(ex);
             }
-        } else if (!_object_produced) {
-            co_await put_empty_object();
         }
     }
 

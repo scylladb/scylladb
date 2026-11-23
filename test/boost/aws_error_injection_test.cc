@@ -209,15 +209,39 @@ SEASTAR_THREAD_TEST_CASE(test_multipart_upload_jumbo_sink_failure_2) {
 
 // When the upload cannot be started, the part that triggered it is lost, so the sink has to stay
 // failed: a flush that wrote the rest would leave a wrong object under the target name.
-SEASTAR_THREAD_TEST_CASE(test_upload_sink_stays_failed_after_initiate_failure) {
-    const sstring name(fmt::format("/test/initiate-failure-plain-{}", ::getpid()));
+static void do_test_sink_stays_failed_after_initiate_failure(bool is_jumbo) {
+    const sstring name(fmt::format("/test/initiate-failure-{}-{}", is_jumbo ? "jumbo" : "plain", ::getpid()));
     register_policy(name, failure_policy::INITIATE_FAILURE);
     auto cln = s3::client::make(get_address(), make_mock_config());
     auto close_client = deferred_close(*cln);
 
-    auto sink = cln->make_upload_sink(name);
+    auto sink = is_jumbo ? cln->make_upload_jumbo_sink(name) : cln->make_upload_sink(name);
     auto close_sink = deferred_close(sink);
     BOOST_REQUIRE_THROW(sink.put(temporary_buffer<char>(6_MiB)).get(), std::exception);
     sink.put(temporary_buffer<char>(1000)).get();
+    BOOST_REQUIRE_THROW(sink.flush().get(), std::exception);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_upload_sink_stays_failed_after_initiate_failure) {
+    do_test_sink_stays_failed_after_initiate_failure(false);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_upload_jumbo_sink_stays_failed_after_initiate_failure) {
+    do_test_sink_stays_failed_after_initiate_failure(true);
+}
+
+// A piece whose upload cannot be started loses its buffers and stays empty. The jumbo sink must
+// not skip it as empty: that would complete the target without the piece's data.
+SEASTAR_THREAD_TEST_CASE(test_upload_jumbo_sink_fails_when_piece_initiate_fails) {
+    const sstring name(fmt::format("/test/piece-initiate-failure-{}", ::getpid()));
+    register_policy(name + "_0", failure_policy::INITIATE_FAILURE);
+    auto cln = s3::client::make(get_address(), make_mock_config());
+    auto close_client = deferred_close(*cln);
+
+    // One direct part, so that the second part goes into the first piece.
+    auto sink = cln->make_upload_jumbo_sink(name, s3::object_metadata{}, 1);
+    auto close_sink = deferred_close(sink);
+    sink.put(temporary_buffer<char>(6_MiB)).get();
+    BOOST_REQUIRE_THROW(sink.put(temporary_buffer<char>(6_MiB)).get(), std::exception);
     BOOST_REQUIRE_THROW(sink.flush().get(), std::exception);
 }

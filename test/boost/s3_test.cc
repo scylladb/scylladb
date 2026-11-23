@@ -351,8 +351,7 @@ void do_test_client_multipart_upload(const client_maker_function& client_maker, 
 
     testlog.info("Upload object (with copy = {})\n", with_copy_upload);
     auto out = output_stream<char>(
-        // Make it 3 parts per piece, so that the data below
-        // is split into 15Mb pieces
+        // 3 parts per piece: the first 15 MiB go in directly, the rest in 15 MiB pieces
         with_copy_upload ? cln->make_upload_jumbo_sink(name, s3::object_metadata{}, 3) : cln->make_upload_sink(name)
     );
     auto close = seastar::deferred_close(out);
@@ -408,7 +407,7 @@ SEASTAR_THREAD_TEST_CASE(test_client_multipart_copy_upload_proxy) {
     do_test_client_multipart_upload(make_proxy_client, true);
 }
 
-// About 16 MB: a 15 MiB piece and a 640 KiB piece, both copied with UploadPartCopy.
+// About 16 MB: 15 MiB of direct parts, then a 640 KiB piece copied with UploadPartCopy.
 SEASTAR_THREAD_TEST_CASE(test_client_copy_upload_object_with_special_characters_s3) {
     do_test_client_multipart_upload(make_s3_client, true, special_characters_object_name, 16 * 1024);
 }
@@ -443,8 +442,8 @@ void do_test_client_multipart_upload_abort(const client_maker_function& client_m
 
     seastar::abort_source as;
     auto out = output_stream<char>(
-        // One part per piece, so that every completed part makes the jumbo sink
-        // hand a piece over to the parent upload -- and thus start it.
+        // One part per piece, so the first part goes in directly and starts the upload,
+        // and every later part goes into a piece.
         with_copy_upload ? cln->make_upload_jumbo_sink(name, s3::object_metadata{}, 1, &as)
                          : cln->make_upload_sink(name, s3::object_metadata{}, &as)
     );
@@ -477,14 +476,8 @@ void do_test_client_multipart_upload_abort(const client_maker_function& client_m
     as.request_abort_ex(upload_cancelled_marker{});
 
     if (with_copy_upload) {
-        // The part above filled a piece, so the jumbo sink has handed that piece
-        // over to the parent upload and opened a fresh piece sink, which has not
-        // initiated a multipart upload of its own yet. Writing another part is
-        // what makes it initiate one, and that request is the one the abort
-        // source now handed down to the piece sinks has to cancel -- so this
-        // write has to fail rather than upload more data. Without the abort
-        // source reaching the piece sink the piece uploads happily and only the
-        // finalization below ever notices that the upload was cancelled.
+        // The part above was the only direct one, so this write makes a fresh piece sink
+        // initiate its upload: the abort handed down to piece sinks must fail it.
         testlog.info("Write into the aborted upload\n");
         BOOST_REQUIRE_EXCEPTION(write_part(), std::exception, reports_the_abort);
     } else {
@@ -617,7 +610,7 @@ void do_test_client_upload_jumbo_sink_etag(const client_maker_function& client_m
     BOOST_REQUIRE_EQUAL(etag, cln->get_object_info(name).get().etag);
 }
 
-// 1000 bytes make the sink complete a multipart upload.
+// 1000 bytes make the sink create the object with a single PUT.
 SEASTAR_THREAD_TEST_CASE(test_client_upload_jumbo_sink_etag_s3) {
     do_test_client_upload_jumbo_sink_etag(make_s3_client, 1000);
 }
@@ -686,32 +679,33 @@ void do_test_client_upload_jumbo_sink_ranged_copy(const client_maker_function& c
 #endif
 }
 
-// A single piece of 40 MiB, copied in 4 ranges of 10 MiB.
-SEASTAR_THREAD_TEST_CASE(test_client_upload_jumbo_sink_ranged_copy_s3) {
-    do_test_client_upload_jumbo_sink_ranged_copy(make_s3_client, 40_MiB, std::nullopt, 4);
+// With the default number of parts in a piece, 40 MiB go in directly as 8 parts of 5 MiB.
+SEASTAR_THREAD_TEST_CASE(test_client_upload_jumbo_sink_direct_only_s3) {
+    do_test_client_upload_jumbo_sink_ranged_copy(make_s3_client, 40_MiB, std::nullopt, 8);
 }
 
-// A piece of exactly the limit is copied whole, one just above it in 2 ranges.
+// 3 direct parts of 5 MiB come first, then a piece of exactly the limit is copied whole,
+// and one just above it in 2 ranges.
 SEASTAR_THREAD_TEST_CASE(test_client_upload_jumbo_sink_ranged_copy_at_limit_s3) {
-    do_test_client_upload_jumbo_sink_ranged_copy(make_s3_client, jumbo_test_copy_part_size, std::nullopt, 1);
-    do_test_client_upload_jumbo_sink_ranged_copy(make_s3_client, jumbo_test_copy_part_size + 512_KiB, std::nullopt, 2);
+    do_test_client_upload_jumbo_sink_ranged_copy(make_s3_client, 15_MiB + jumbo_test_copy_part_size, 3, 4);
+    do_test_client_upload_jumbo_sink_ranged_copy(make_s3_client, 15_MiB + jumbo_test_copy_part_size + 512_KiB, 3, 5);
 }
 
-// Pieces of 3 parts of 5 MiB, 15, 15 and 10 MiB: each of the first two is copied in
-// 2 ranges while the next piece is being written, and the last one whole.
+// 3 direct parts of 5 MiB, then pieces of 3 parts of 5 MiB, 15 and 10 MiB: the first is
+// copied in 2 ranges while the next piece is being written, and the last one whole.
 SEASTAR_THREAD_TEST_CASE(test_client_upload_jumbo_sink_ranged_copy_pieces_s3) {
-    do_test_client_upload_jumbo_sink_ranged_copy(make_s3_client, 40_MiB, 3, 5);
+    do_test_client_upload_jumbo_sink_ranged_copy(make_s3_client, 40_MiB, 3, 6);
 }
 
-// A single piece copied in 4 ranges, the copy of the second one fails: its part has no
-// ETag, so the flush fails, no object is produced, and the piece object is still removed.
+// 3 direct parts (0-2), then one piece copied in 2 ranges (parts 3-4); the copy of part 4 fails:
+// it has no ETag, so the flush fails, no object is produced, and the piece is still removed.
 SEASTAR_THREAD_TEST_CASE(test_client_upload_jumbo_sink_ranged_copy_failure_s3) {
 #ifndef SCYLLA_ENABLE_ERROR_INJECTION
     testlog.info("Skipping, the test needs SCYLLA_ENABLE_ERROR_INJECTION to lower the copy part size limit and fail a copy");
 #else
     auto& injector = utils::get_local_injector();
     injector.enable("s3_jumbo_piece_copy_part_size", false, {{"value", fmt::to_string(jumbo_test_copy_part_size)}});
-    injector.enable("s3_copy_part_fail", false, {{"value", "1"}});
+    injector.enable("s3_copy_part_fail", false, {{"value", "4"}});
     auto disable_injections = defer([] () noexcept {
         utils::get_local_injector().disable("s3_jumbo_piece_copy_part_size");
         utils::get_local_injector().disable("s3_copy_part_fail");
@@ -722,9 +716,9 @@ SEASTAR_THREAD_TEST_CASE(test_client_upload_jumbo_sink_ranged_copy_failure_s3) {
     const auto name = guard.object_path("testjumborangedcopyfailureobject");
     const auto piece_name = name + "_0";
 
-    auto [sink, etag_f] = cln->make_upload_jumbo_sink_and_get_etag(name, s3::object_metadata{}, std::nullopt);
+    auto [sink, etag_f] = cln->make_upload_jumbo_sink_and_get_etag(name, s3::object_metadata{}, 3);
     auto close = seastar::deferred_close(sink);
-    for (size_t offset = 0; offset < 40_MiB; offset += 512_KiB) {
+    for (size_t offset = 0; offset < 30_MiB; offset += 512_KiB) {
         temporary_buffer<char> buf(512_KiB);
         std::fill_n(buf.get_write(), buf.size(), 'x');
         sink.put(std::move(buf)).get();
@@ -1138,8 +1132,7 @@ SEASTAR_THREAD_TEST_CASE(test_object_reupload) {
         for (auto i : {1, 2}) {
             testlog.info("Upload object {}, iteration {} (with copy = {})", name, i, jumbo);
             auto out = output_stream<char>(
-                // Make it 3 parts per piece, so that 128Mb buffer below
-                // would be split into several 15Mb pieces
+                // 3 parts per piece: 15 MiB go in directly, the rest of the 128Mb in 15 MiB pieces
                 jumbo ? cln->make_upload_jumbo_sink(name, s3::object_metadata{}, 3) : cln->make_upload_sink(name));
 
             constexpr unsigned chunk_size = 1000;
@@ -1712,20 +1705,16 @@ SEASTAR_THREAD_TEST_CASE(test_client_list_objects_round_trips_s3) {
     client_list_objects_round_trips(make_s3_client);
 }
 
-// The jumbo sink starts its own multipart upload only when it hands the first
-// piece over. If the abort comes before that, the start fails, and the piece,
-// which already has a multipart upload of its own, must still be closed: close()
-// is what drains the piece's part uploads in flight and aborts its upload.
-// Dropping the piece without it left the upload in the bucket, or, with a part
-// upload still holding the piece's gate, failed the gate's assertion.
-SEASTAR_THREAD_TEST_CASE(test_client_jumbo_upload_abort_before_first_piece_s3) {
+// An abort while the direct upload is started fails the flush; close() must drain the
+// in-flight parts and abort the upload.
+SEASTAR_THREAD_TEST_CASE(test_client_jumbo_upload_abort_direct_upload_s3) {
     s3_test_fixture guard(make_s3_client);
     auto cln = guard.client();
-    const auto name = guard.object_path("testabortedfirstpieceobject");
+    const auto name = guard.object_path("testaborteddirectobject");
 
     seastar::abort_source as;
-    // Two parts per piece, so that the part written below starts the piece's
-    // multipart upload but does not fill the piece.
+    // Two direct parts, so that the part written below starts the multipart upload
+    // but does not use them up.
     auto out = output_stream<char>(cln->make_upload_jumbo_sink(name, s3::object_metadata{}, 2, &as));
 
     static constexpr size_t chunk_size = 1_MiB;
@@ -1737,18 +1726,18 @@ SEASTAR_THREAD_TEST_CASE(test_client_jumbo_upload_abort_before_first_piece_s3) {
     const auto deletes_before = s3_delete_requests();
     as.request_abort_ex(upload_cancelled_marker{});
 
-    // The flush hands the piece over, and the jumbo sink cannot start its own
-    // upload with the aborted abort source.
+    // The flush uploads the rest of the data as the last part, which the aborted
+    // abort source refuses.
     BOOST_REQUIRE_EXCEPTION(out.flush().get(), std::exception, [](const std::exception& ex) {
         return std::string_view(ex.what()).find("upload_cancelled_marker") != std::string_view::npos;
     });
-    // The only DELETE is the abort of the piece's multipart upload: the jumbo
-    // sink has no upload to abort, and no piece object was created to remove.
-    BOOST_REQUIRE_EQUAL(s3_delete_requests() - deletes_before, 1);
 
     // Closing flushes the sink once more, and that flush fails with the
     // aborted abort source too.
     out.close().handle_exception([] (std::exception_ptr) {}).get();
+    // The only DELETE is the abort of the sink's own multipart upload: no piece
+    // object was created to remove.
+    BOOST_REQUIRE_EQUAL(s3_delete_requests() - deletes_before, 1);
 }
 
 // An exception leaving the reply handler makes seastar's http client drop the
