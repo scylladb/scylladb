@@ -87,7 +87,7 @@ SESSIONS = registry()
 THREAD_STATE = threading.local()
 
 
-FAULTS = ("unacknowledged_chunks", "failed_chunks", "failed_cancels", "cancelled_uploads", "empty_list_pages")
+FAULTS = ("unacknowledged_chunks", "failed_chunks", "failed_cancels", "cancelled_uploads", "empty_list_pages", "list_page_size", "paged_listings")
 
 # nextPageToken of an injected empty page; it means nothing upstream, so it is dropped on the way
 EMPTY_PAGE_TOKEN = "empty-page"
@@ -167,6 +167,14 @@ class injector:
 
     def take_empty_list_page(self):
         return self._take("empty_list_pages")
+
+    def list_page_size(self):
+        with self._lock:
+            return self._counts["list_page_size"]
+
+    def count_paged_listing(self):
+        with self._lock:
+            self._counts["paged_listings"] += 1
 
 
 INJECTED = injector()
@@ -388,6 +396,9 @@ class handler(BaseHTTPRequestHandler):
         failed_cancels        -- answer a session DELETE with 403
         cancelled_uploads     -- answer a session DELETE with 499, the way real GCS does
         empty_list_pages      -- answer an object listing with an empty page that has a next one
+        list_page_size        -- limit the page of every object listing that sets no maxResults to
+                                 this many objects, until reset; 0 is off. paged_listings counts
+                                 the listings it limited
 
         status_answers=<v>[,<v>...] scripts the next status queries instead of answering
         them from the session. Each <v> is a byte count, or "none"/0 for a Range-less
@@ -546,6 +557,11 @@ class handler(BaseHTTPRequestHandler):
                 return
             if query.get("pageToken") == [EMPTY_PAGE_TOKEN]:
                 del query["pageToken"]
+                self.path = urlparse(self.path)._replace(query=urlencode(query, doseq=True)).geturl()
+            page_size = INJECTED.list_page_size()
+            if page_size and "maxResults" not in query:
+                query["maxResults"] = [str(page_size)]
+                INJECTED.count_paged_listing()
                 self.path = urlparse(self.path)._replace(query=urlencode(query, doseq=True)).geturl()
 
         if self.command == "DELETE" and upload_id and INJECTED.take_cancelled_upload():
