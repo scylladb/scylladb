@@ -12,6 +12,7 @@
 #include <fmt/format.h>
 
 #include <seastar/core/future.hh>
+#include <seastar/core/metrics_api.hh>
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/test_fixture.hh>
 
@@ -133,6 +134,35 @@ SEASTAR_TEST_CASE(test_large_file_upload_s3, *boost::unit_test::precondition(tes
 SEASTAR_TEST_CASE(test_sstable_object_attributes_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
         *seastar::testing::async_fixture<s3_fixture>()) {
     return test_sstable_attributes(test_env_config{ .storage = make_test_object_storage_options("S3") });
+}
+
+static double object_storage_get_requests() {
+    double total = 0;
+    const auto& value_map = seastar::metrics::impl::get_value_map();
+    if (auto it = value_map.find("object_storage_total_get_requests"); it != value_map.end()) {
+        for (const auto& [holder, reg] : it->second) {
+            if (reg && reg->is_enabled()) {
+                total += (*reg)().d();
+            }
+        }
+    }
+    return total;
+}
+
+// Cloning an sstable reads nothing from the object storage: no listing of its references.
+SEASTAR_TEST_CASE(test_clone_does_not_list_references_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)
+        *seastar::testing::async_fixture<s3_fixture>()) {
+    return test_env::do_with_async([] (test_env& env) {
+        simple_schema ss;
+        auto schema = ss.schema();
+        auto mut = mutation(schema, tests::generate_partition_key(schema).key());
+        mut.partition().apply_insert(*schema, ss.make_ckey(0), ss.new_timestamp());
+        auto sst = make_sstable_containing(env.make_sstable(schema), {std::move(mut)}).get();
+
+        const auto gets = object_storage_get_requests();
+        sst->clone(env.new_generation()).get();
+        BOOST_REQUIRE_EQUAL(object_storage_get_requests() - gets, 0);
+    }, test_env_config{ .storage = make_test_object_storage_options("S3") });
 }
 
 SEASTAR_FIXTURE_TEST_CASE(test_large_file_upload_gs, gcs_fixture, *check_run_test_decorator("ENABLE_GCP_STORAGE_TEST", true)) {
