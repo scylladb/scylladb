@@ -593,6 +593,9 @@ public:
     future<> cancel_all_write_response_handlers();
     future<> cancel_nonlocal_write_response_handlers();
 
+    // Valid between start_remote() and stop_remote().
+    paxos::paxos_store& get_paxos_store();
+
 private:
     bool only_me(const locator::effective_replication_map& erm, const host_id_vector_replica_set& replicas) const noexcept;
 

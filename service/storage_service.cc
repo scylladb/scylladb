@@ -1619,6 +1619,12 @@ future<> storage_service::start_sys_dist_ks() const {
     return _sys_dist_ks.invoke_on_all(&db::system_distributed_keyspace::start);
 }
 
+future<> storage_service::mark_service_ready(std::string_view service) {
+    _services_not_ready.erase(service);
+    co_await _gossiper.add_local_application_state(gms::application_state::SERVICES_NOT_READY,
+            gms::versioned_value::services_not_ready(_services_not_ready));
+}
+
 future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
         std::unordered_set<gms::inet_address> initial_contact_nodes,
         std::unordered_map<locator::host_id, gms::loaded_endpoint_state> loaded_endpoints,
@@ -1694,6 +1700,11 @@ future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
     app_states.emplace(gms::application_state::CACHE_HITRATES, versioned_value::cache_hitrates(""));
     app_states.emplace(gms::application_state::SCHEMA_TABLES_VERSION, versioned_value(db::schema_tables::version));
     app_states.emplace(gms::application_state::RPC_READY, versioned_value::cql_ready(false));
+    auto& paxos_store = proxy.local().get_paxos_store();
+    if (paxos_store.has_pending_copy()) {
+        _services_not_ready.insert(gms::service_paxos);
+    }
+    app_states.emplace(gms::application_state::SERVICES_NOT_READY, versioned_value::services_not_ready(_services_not_ready));
     app_states.emplace(gms::application_state::VIEW_BACKLOG, versioned_value(""));
     app_states.emplace(gms::application_state::SCHEMA, versioned_value::schema(_db.local().get_version()));
     if (restarting_normal_node) {
@@ -1817,6 +1828,17 @@ future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
         if (raft_replace_info) {
             co_await await_tablets_rebuilt(raft_replace_info->raft_id);
         }
+    }
+
+    if (paxos_store.has_pending_copy()) {
+        // Perform the Paxos state copy.
+        // Do it before the node publishes its new storage mode, so that a crash in the middle
+        // copies again, and forward finalization waits for the copy.
+        co_await utils::get_local_injector().inject("pause_paxos_state_copy",
+                utils::wait_for_message(std::chrono::minutes(5)));
+        co_await paxos_store.copy_pending_state();
+        co_await mark_service_ready(gms::service_paxos);
+        slogger.info("Copied the Paxos state after the storage mode switch, the node is ready to serve Paxos RPCs");
     }
 
     co_await update_topology_with_local_metadata(raft_server);

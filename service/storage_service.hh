@@ -554,6 +554,8 @@ public:
 private:
     bool is_replacing();
     future<> start_sys_dist_ks() const;
+    // Removes `service` from the SERVICES_NOT_READY of this node, and publishes the result.
+    future<> mark_service_ready(std::string_view service);
     future<> join_topology(sharded<service::storage_proxy>& proxy,
             std::unordered_set<gms::inet_address> initial_contact_nodes,
             std::unordered_map<locator::host_id, gms::loaded_endpoint_state> loaded_endpoints,
@@ -920,6 +922,9 @@ private:
 
     future<> _topology_change_coordinator = make_ready_future<>();
     future<> topology_change_coordinator_fiber(raft::server&, raft::term_t, cdc::generation_service&, sharded<db::system_distributed_keyspace>&, abort_source&);
+
+    // The services this node lists in SERVICES_NOT_READY, as gms::service_* constants. Shard 0 only.
+    std::set<std::string_view> _services_not_ready;
 
     // Those futures hold results of streaming for various operations
     std::optional<shared_future<>> _bootstrap_result;

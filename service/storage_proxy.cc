@@ -3494,6 +3494,10 @@ storage_proxy::storage_proxy(sharded<replica::database>& db, storage_proxy::conf
     }
 }
 
+paxos::paxos_store& storage_proxy::get_paxos_store() {
+    return remote().paxos_store();
+}
+
 struct storage_proxy::remote& storage_proxy::remote() {
     return const_cast<struct remote&>(const_cast<const storage_proxy*>(this)->remote());
 }

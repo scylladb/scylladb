@@ -2442,6 +2442,24 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 paxos_store.stop().get();
             });
 
+            // Plan the Paxos state copy.
+            // Do it before the Paxos verbs exist, so that the node rejects Paxos requests from the
+            // start. join_cluster() runs the copy. Maintenance mode never copies, as it doesn't
+            // join the cluster.
+            if (!group0_service.maintenance_mode()) {
+                checkpoint(stop_signal, "planning the Paxos state copy of tables under vnodes-to-tablets migration");
+                // The topology is in memory: group0 loaded it before the keyspaces.
+                std::optional<service::storage_mode> current_storage_mode;
+                if (const auto* node = tsm.local()._topology.find(raft::server_id{db.local().get_token_metadata().get_my_id().uuid()})) {
+                    current_storage_mode = node->second.current_storage_mode;
+                }
+                if (auto copy = service::paxos::plan_paxos_state_copy(db.local(), current_storage_mode)) {
+                    paxos_store.invoke_on_all([&copy] (service::paxos::paxos_store& store) {
+                        store.set_pending_copy(*copy);
+                    }).get();
+                }
+            }
+
             checkpoint(stop_signal, "initializing storage proxy RPC verbs");
             proxy.invoke_on_all(&service::storage_proxy::start_remote, std::ref(messaging), std::ref(gossiper), std::ref(mm), std::ref(sys_ks), std::ref(paxos_store), std::ref(group0_client), std::ref(tsm), std::ref(vbsm)).get();
             auto stop_proxy_handlers = defer_verbose_shutdown("storage proxy RPC verbs", [&proxy] {
