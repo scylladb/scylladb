@@ -20,6 +20,7 @@
 #include "keys/keys.hh"
 #include "mutation/mutation.hh"
 #include "mutation/frozen_mutation.hh"
+#include "mutation/mutation_partition_view.hh"
 
 void verify_shard_order(counter_cell_view ccv) {
     if (ccv.shards().begin() == ccv.shards().end()) {

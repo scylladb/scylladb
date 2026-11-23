@@ -30,6 +30,7 @@
 #include "partition_slice_builder.hh"
 #include "readers/from_mutations.hh"
 #include "mutation/mutation_rebuilder.hh"
+#include "mutation/frozen_mutation_consumer.hh"
 #include "readers/mutation_source.hh"
 
 using namespace std::literals::chrono_literals;

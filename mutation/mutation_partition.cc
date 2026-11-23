@@ -28,6 +28,7 @@
 #include "types/map.hh"
 #include "compaction/compaction_garbage_collector.hh"
 #include "keys/clustering_key_filter.hh"
+#include "frozen_mutation_consumer.hh"
 #include "mutation_partition_view.hh"
 #include "tombstone_gc.hh"
 #include "utils/assert.hh"
