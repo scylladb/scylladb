@@ -101,8 +101,7 @@ static sstring pk_type_to_string(const schema& s) {
     }
 }
 
-static
-sstable_schema make_sstable_schema(const schema& s, const encoding_stats& enc_stats, const sstable_writer_config& cfg) {
+sstable_schema make_sstable_schema(const schema& s, const encoding_stats& enc_stats) {
     sstable_schema sst_sch;
     serialization_header& header = sst_sch.header;
     // mc serialization header minimum values are delta-encoded based on the default timestamp epoch times
@@ -379,7 +378,7 @@ public:
         : sstable_writer::writer_impl(sst, s, cfg)
         , _enc_stats(partition_encoder<writer, thread_yield>::clamp_enc_stats_ttl(enc_stats))
         , _shard(shard)
-        , _sst_schema(make_sstable_schema(s, _enc_stats, _cfg))
+        , _sst_schema(make_sstable_schema(s, _enc_stats))
         , _encoder(s, _sst_schema, _sst.get_version(), _enc_stats, *this, _sst.sstable_buffer_size)
         , _run_identifier(cfg.run_identifier)
         , _size_threshold([this] {

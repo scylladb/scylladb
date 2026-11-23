@@ -109,6 +109,34 @@ static bool is_certainly_scylla_sstable(const sstable_enabled_features& features
     return features.enabled_features;
 }
 
+static column_translation::column_info make_column_info(const schema& s, const bytes& name, data_type type, bool is_static) {
+    const column_definition* def = s.get_column_definition(name);
+    std::optional<column_id> id;
+    bool schema_mismatch = false;
+    // A column dropped and added again as the other kind has an id in the other
+    // kind's list, so the data's column is as missing as any dropped column. The
+    // static list of a static compact table holds its regular columns (#4139).
+    const auto kind = is_static && !s.is_static_compact_table() ? column_kind::static_column : column_kind::regular_column;
+    if (def && def->kind == kind) {
+        id = def->id;
+        schema_mismatch = def->is_multi_cell() != type->is_multi_cell() ||
+                          def->is_counter() != type->is_counter() ||
+                          !def->type->is_value_compatible_with(*type);
+    }
+    auto value_length = type->value_length_if_fixed();
+    bool is_collection = type->is_multi_cell();
+    bool is_counter = type->is_counter();
+    return column_translation::column_info{
+        &name,
+        std::move(type),
+        id,
+        value_length,
+        is_collection,
+        is_counter,
+        schema_mismatch
+    };
+}
+
 std::vector<column_translation::column_info> column_translation::state::build(
         const schema& s,
         const utils::chunked_vector<serialization_header::column_desc>& src,
@@ -127,10 +155,6 @@ std::vector<column_translation::column_info> column_translation::state::build(
             false
         });
     } else {
-        // A column dropped and added again as the other kind has an id in the other
-        // kind's list, so the data's column is as missing as any dropped column. The
-        // static list of a static compact table holds its regular columns (#4139).
-        const auto kind = is_static && !s.is_static_compact_table() ? column_kind::static_column : column_kind::regular_column;
         cols.reserve(src.size());
         for (auto&& desc : src) {
             const bytes& type_name = desc.type_name.value;
@@ -139,27 +163,20 @@ std::vector<column_translation::column_info> column_translation::state::build(
                 // See #6130.
                 type = freeze_types_in_collections(std::move(type));
             }
-            const column_definition* def = s.get_column_definition(desc.name.value);
-            std::optional<column_id> id;
-            bool schema_mismatch = false;
-            if (def && def->kind == kind) {
-                id = def->id;
-                schema_mismatch = def->is_multi_cell() != type->is_multi_cell() ||
-                                  def->is_counter() != type->is_counter() ||
-                                  !def->type->is_value_compatible_with(*type);
-            }
-            cols.push_back(column_info{
-                &desc.name.value,
-                type,
-                id,
-                type->value_length_if_fixed(),
-                type->is_multi_cell(),
-                type->is_counter(),
-                schema_mismatch
-            });
+            cols.push_back(make_column_info(s, desc.name.value, std::move(type), is_static));
         }
         std::ranges::stable_partition(cols, [](const column_info& column) { return !column.is_collection; });
     }
+    return cols;
+}
+
+std::vector<column_translation::column_info> column_translation::state::build(const schema& s, const std::vector<writer_column>& src, bool is_static) {
+    std::vector<column_info> cols;
+    cols.reserve(src.size());
+    for (auto&& col : src) {
+        cols.push_back(make_column_info(s, *col.name, col.type, is_static));
+    }
+    std::ranges::stable_partition(cols, [](const column_info& column) { return !column.is_collection; });
     return cols;
 }
 

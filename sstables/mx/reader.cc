@@ -2479,7 +2479,10 @@ class mutation_building_consumer {
             if (dropped != _schema->dropped_columns().end() && timestamp <= dropped->second.timestamp) {
                 return nullptr;
             }
-            throw_column_mismatch(column_info, dropped == _schema->dropped_columns().end()
+            const column_definition* def = _schema->get_column_definition(*column_info.name);
+            throw_column_mismatch(column_info, def
+                    ? format("is {} in the data and {} in the schema", _inside_static_row ? "static" : "regular", def->is_static() ? "static" : "regular")
+                    : dropped == _schema->dropped_columns().end()
                     ? sstring("is missing from the schema")
                     : format("holds data with timestamp {}, after the column was dropped at {}", timestamp, dropped->second.timestamp));
         }

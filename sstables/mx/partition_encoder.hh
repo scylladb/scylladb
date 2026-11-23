@@ -308,6 +308,10 @@ struct sstable_schema {
     indexed_columns static_columns;
 };
 
+// The header's minimum values come from enc_stats. The column lists refer to the
+// column_definitions of s, so s must outlive the result.
+sstable_schema make_sstable_schema(const schema& s, const encoding_stats& enc_stats);
+
 enum class cell_flags : uint8_t {
     none = 0x00,
     is_deleted_mask = 0x01, // Whether the cell is a tombstone or not.
