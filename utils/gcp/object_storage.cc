@@ -1434,7 +1434,7 @@ future<utils::chunked_vector<utils::gcp::storage::object_info>> utils::gcp::stor
     auto path = fmt::format("/storage/v1/b/{}/o", bucket);
     auto psep = "?";
     if (!prefix.empty()) {
-        path += fmt::format("{}prefix={}", psep, prefix);
+        path += fmt::format("{}prefix={}", psep, seastar::http::internal::url_encode(prefix));
         psep = "&";
     }
     if (pager.max_results != 0) {
@@ -1442,7 +1442,7 @@ future<utils::chunked_vector<utils::gcp::storage::object_info>> utils::gcp::stor
         psep = "&";
     }
     if (!pager.token.empty()) {
-        path += fmt::format("{}pageToken={}", psep, pager.token);
+        path += fmt::format("{}pageToken={}", psep, seastar::http::internal::url_encode(pager.token));
         psep = "&";
     }
 

@@ -666,6 +666,23 @@ SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_list_objects, local_gcs_wrapper, *che
     }
 }
 
+// The prefix is a query parameter, so a '+', '&', '#' or '%' in it must not be taken for syntax.
+SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_list_objects_with_special_characters_in_prefix, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
+    auto& env = *this;
+    auto& c = env.client();
+    auto base = make_name();
+    for (auto dir : {"a+b/", "a b/", "a&b/", "a%20b/", "a#b/"}) {
+        auto name = fmt::format("{}/{}x", base, dir);
+        env.objects_to_delete.emplace_back(name);
+        co_await create_object_of_size(c, env.bucket, name, 16);
+    }
+    for (auto dir : {"a+b/", "a b/", "a&b/", "a%20b/", "a#b/"}) {
+        auto infos = co_await c.list_objects(env.bucket, fmt::format("{}/{}", base, dir));
+        BOOST_REQUIRE_EQUAL(infos.size(), 1);
+        BOOST_REQUIRE_EQUAL(infos[0].name, fmt::format("{}/{}x", base, dir));
+    }
+}
+
 SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_delete_object, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
     auto& env = *this;
     auto& c = env.client();
