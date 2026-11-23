@@ -113,15 +113,15 @@ public:
     future<> take_column_family_snapshot(sstring ks_name, std::vector<sstring> tables, sstring tag, snapshot_options opts = {});
 
     /**
-     * Takes the snapshot of multiple tables or a whole keyspace, or all keyspaces,
+     * Takes the snapshot of a set of tables, of any number of keyspaces,
      * using global, clusterwide topology coordinated op.
      * A snapshot name must be specified.
      *
-     * @param ks_names the keyspaces to snapshot
-     * @param tables optional - a vector of tables names to snapshot
+     * @param ks_tables the (keyspace, table) pairs to snapshot. An empty table name
+     *        selects all tables of the keyspace, an empty set selects all keyspaces
      * @param tag the tag given to the snapshot; may not be null or empty
      */
-    future<> take_cluster_column_family_snapshot(std::vector<sstring>  ks_names, std::vector<sstring> tables, sstring tag, snapshot_options opts = {});
+    future<> take_cluster_column_family_snapshot(std::unordered_multimap<sstring, sstring> ks_tables, sstring tag, snapshot_options opts = {});
 
     /**
      * Remove the snapshot with the given name from the given keyspaces.
@@ -137,7 +137,7 @@ public:
     future<int64_t> true_snapshots_size();
     future<int64_t> true_snapshots_size(sstring ks, sstring cf);
 
-    future<tasks::task_id> start_global_backup(std::unordered_map<sstring, snapshot_dc_location> locations, std::vector<sstring> ks_names, std::vector<sstring> tables, sstring tag, bool move_files);
+    future<tasks::task_id> start_global_backup(std::unordered_map<sstring, snapshot_dc_location> locations, std::unordered_multimap<sstring, sstring> requested, sstring tag, bool move_files);
 
     future<> disable_all_operations();
 
@@ -195,7 +195,7 @@ private:
 
     future<> do_take_snapshot(sstring tag, std::vector<sstring> keyspace_names, snapshot_options opts = {}  );
     future<> do_take_column_family_snapshot(sstring ks_name, std::vector<sstring> tables, sstring tag, snapshot_options opts = {});
-    future<> do_take_cluster_column_family_snapshot(std::vector<sstring> ks_names, std::vector<sstring> tables, sstring tag, snapshot_options opts = {});
+    future<> do_take_cluster_column_family_snapshot(std::unordered_multimap<sstring, sstring> ks_tables, sstring tag, snapshot_options opts = {});
     // Validates the tag and options when the snapshot involves object-storage
     // tables, and rejects a tag already committed in the snapshot catalog.
     // Must happen before the topology request starts: per-node handlers
