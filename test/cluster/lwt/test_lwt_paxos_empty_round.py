@@ -24,7 +24,7 @@ import pytest
 from cassandra import ConsistencyLevel, OperationTimedOut, WriteFailure, WriteTimeout
 from cassandra.query import SimpleStatement
 
-from test.cluster.util import new_test_keyspace
+from test.cluster.util import new_test_keyspace, reconnect_driver
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 
 logger = logging.getLogger(__name__)
@@ -169,3 +169,35 @@ async def test_empty_round_hides_an_older_proposal(manager: ScyllaClusterManager
 
         applied = await outcome(cql.run_async(cas(f"UPDATE {ks}.t SET c = 5 WHERE pk = 1 IF c = 0"), host=h3))
         assert applied == "applied", f"the CAS that follows the reads {applied}"
+
+
+async def test_empty_proposal_outlives_its_schema_version(manager: ScyllaClusterManager):
+    """An accepted empty update is served to a prepare whatever became of the schema it was written with.
+
+    A SERIAL read leaves its empty update accepted and unlearned.  The
+    table is then altered, the column mapping of the old schema version
+    is dropped from the schema history, as it is once its TTL expires,
+    and the node is restarted so that it has no old schema cached.  The
+    next SERIAL read finds the empty update in its prepare.
+    """
+    server = await manager.server_add(config=CONFIG, cmdline=CMDLINE)
+    cql, _ = await manager.get_ready_cql([server])
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} "
+                                          "AND tablets = {'initial': 1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.t (pk int PRIMARY KEY, c int)")
+        await cql.run_async(f"INSERT INTO {ks}.t (pk, c) VALUES (1, 0) IF NOT EXISTS")
+        [row] = await cql.run_async(serial_read(ks))
+        assert row.c == 0
+
+        await cql.run_async(f"ALTER TABLE {ks}.t ADD d int")
+        [table] = await cql.run_async(f"SELECT id FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = 't'")
+        await cql.run_async(f"DELETE FROM system.scylla_table_schema_history WHERE cf_id = {table.id}")
+
+        await manager.server_stop_gracefully(server.server_id)
+        await manager.server_start(server.server_id)
+        cql = await reconnect_driver(manager)
+        await manager.get_ready_cql([server])
+
+        [row] = await cql.run_async(serial_read(ks))
+        assert row.c == 0
