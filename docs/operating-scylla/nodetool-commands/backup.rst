@@ -87,6 +87,7 @@ Options
 * ``--table`` - Table(s) to back up, multiple ones can be joined with ``,``. Requires exactly one keyspace to be specified.
 * ``--tables`` - Tables to back up, from any number of keyspaces, as ``<keyspace>[:<table>[,<table>...]]``. Repeat for each keyspace.
   A keyspace given without tables selects all of its tables. Cannot be combined with ``--keyspaces`` or ``--table``.
+  If the snapshot already exists, every table named explicitly must be in it, or the backup fails.
 * ``-s`` or ``--snapshot`` - Name of the snapshot to back up. It is created if it does not exist. If omitted, a new snapshot, named after the current timestamp, is taken.
 * ``-l`` or ``--location`` - Tuple of <dc>,<endpoint>,<bucket> and optional <prefix> which to write the backup to. Required; repeat it for each DC.
   Endpoints should be configured as per :ref:`the object storage configuration instructions <object-storage-configuration>`.

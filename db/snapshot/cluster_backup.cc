@@ -67,7 +67,23 @@ std::string db::snapshot::snapshot_prefix_from_manifest(std::string_view manifes
         .string();
 }
 
-static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string& snapshot_name, const std::unordered_multimap<sstring, sstring>& ks_tables, std::unordered_map<sstring, db::snapshot_dc_location>& dc_locations, bool remove_on_uploaded, tasks::task_manager::task::progress& total_progress, abort_source& as) {
+future<> db::snapshot::check_snapshot_has_tables(db::snapshot_table_helper& sth, std::string_view tag, std::string_view committed_name, const std::set<std::pair<sstring, sstring>>& tables) {
+    std::set<std::pair<sstring, sstring>> in_snapshot;
+    for (const auto& t : co_await sth.get_snapshot_tables(committed_name)) {
+        in_snapshot.emplace(t.keyspace_name, t.table_name);
+    }
+    std::vector<sstring> missing;
+    for (const auto& [ks_name, table] : tables) {
+        if (!in_snapshot.contains({ks_name, table})) {
+            missing.push_back(format("{}.{}", ks_name, table));
+        }
+    }
+    if (!missing.empty()) {
+        throw std::invalid_argument(fmt::format("Snapshot {} does not contain {}", tag, fmt::join(missing, ", ")));
+    }
+}
+
+static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string& snapshot_name, const std::unordered_multimap<sstring, sstring>& ks_tables, const std::set<std::pair<sstring, sstring>>& named_tables, std::unordered_map<sstring, db::snapshot_dc_location>& dc_locations, bool remove_on_uploaded, tasks::task_manager::task::progress& total_progress, abort_source& as) {
     using namespace db::snapshot;
 
     snap_log.info("Begin processing {} {}", snapshot_name, ks_tables);
@@ -89,6 +105,11 @@ static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string&
     const auto committed_name = co_await sth.find_committed_snapshot_name(snapshot_name);
     if (!committed_name) {
         throw std::runtime_error(fmt::format("Snapshot '{}' has no committed attempt", snapshot_name));
+    }
+    // The request checked these tables before the snapshot existed, so another backup of
+    // the same tag may have taken it without them since.
+    if (!named_tables.empty()) {
+        co_await check_snapshot_has_tables(sth, snapshot_name, *committed_name, named_tables);
     }
 
     auto locations = co_await sth.get_snapshot_remote_locations(snapshot_name);
@@ -366,7 +387,7 @@ static future<> do_cluster_backup(db::snapshot_ctl& snap_ctl, const std::string&
 }
 
 future<tasks::task_id> 
-db::snapshot::start_global_backup(db::snapshot_ctl& ctl, tasks::task_manager::module_ptr tm, std::string snapshot_name, std::unordered_multimap<sstring, sstring> ks_tables, std::unordered_map<sstring, snapshot_dc_location> locations, bool move_files) {
+db::snapshot::start_global_backup(db::snapshot_ctl& ctl, tasks::task_manager::module_ptr tm, std::string snapshot_name, std::unordered_multimap<sstring, sstring> ks_tables, std::set<std::pair<sstring, sstring>> named_tables, std::unordered_map<sstring, snapshot_dc_location> locations, bool move_files) {
     if (ks_tables.empty()) {
         throw std::invalid_argument("No tables provided for backup");
     }
@@ -381,12 +402,12 @@ db::snapshot::start_global_backup(db::snapshot_ctl& ctl, tasks::task_manager::mo
                 .set_progress_fn([progress] (const tasks::task_manager::task::impl&) {
                     return make_ready_future<tasks::task_manager::task::progress>(*progress);
                 });
-    auto task = co_await std::move(task_builder).build([&ctl, snapshot_name = std::move(snapshot_name), ks_tables = std::move(ks_tables), locations = std::move(locations), move_files, progress] (tasks::task_manager::task::impl& self) mutable {
+    auto task = co_await std::move(task_builder).build([&ctl, snapshot_name = std::move(snapshot_name), ks_tables = std::move(ks_tables), named_tables = std::move(named_tables), locations = std::move(locations), move_files, progress] (tasks::task_manager::task::impl& self) mutable {
         // this is mainly to prevent a drain from stopping us while we are running.
         // however, it will not prevent the nodes doing actual sending from being
         // unalived, but...
-        return ctl.run_snapshot_gate_operation([&ctl, &snapshot_name, &ks_tables, &locations, move_files, progress, &as = self.get_abort_source()] {
-            return do_cluster_backup(ctl, snapshot_name, ks_tables, locations, move_files, *progress, as);
+        return ctl.run_snapshot_gate_operation([&ctl, &snapshot_name, &ks_tables, &named_tables, &locations, move_files, progress, &as = self.get_abort_source()] {
+            return do_cluster_backup(ctl, snapshot_name, ks_tables, named_tables, locations, move_files, *progress, as);
         });
     });
     co_return task->id();

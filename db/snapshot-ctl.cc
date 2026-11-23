@@ -407,6 +407,15 @@ future<tasks::task_id> snapshot_ctl::start_global_backup(std::unordered_map<sstr
         }
     }
 
+    // An existing snapshot is backed up as it is, so it must hold every table named here.
+    // Tables that come from a whole keyspace are not checked: some may be newer than the snapshot.
+    snapshot_table_helper sth(_qp.local());
+    auto named_tables = requested | std::views::filter([] (const auto& kt) { return !kt.second.empty(); })
+            | std::ranges::to<std::set<std::pair<sstring, sstring>>>();
+    if (const auto committed_name = !named_tables.empty() ? co_await sth.find_committed_snapshot_name(tag) : std::nullopt) {
+        co_await snapshot::check_snapshot_has_tables(sth, tag, *committed_name, named_tables);
+    }
+
     // A set, as a table can be named both on its own and through its keyspace.
     std::set<std::pair<sstring, sstring>> tables;
 
@@ -431,7 +440,7 @@ future<tasks::task_id> snapshot_ctl::start_global_backup(std::unordered_map<sstr
     co_await coroutine::switch_to(_config.backup_sched_group);
     snap_log.info("Backup sstables from {}(cluster snapshot {}) to {}", ks_tables, tag, locations);
 
-    co_return co_await snapshot::start_global_backup(*this, static_pointer_cast<tasks::task_manager::module>(_task_manager_module), tag, std::move(ks_tables), std::move(locations), move_files);
+    co_return co_await snapshot::start_global_backup(*this, static_pointer_cast<tasks::task_manager::module>(_task_manager_module), tag, std::move(ks_tables), std::move(named_tables), std::move(locations), move_files);
 }
 
 future<>
