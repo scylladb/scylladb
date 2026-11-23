@@ -80,6 +80,15 @@ struct compaction_group_stats {
 // Deliberately not a compaction_group_view: a view is scoped to one repair state and
 // is the target a compaction runs against, while a backlog is a property of the whole
 // group, which has a single tracker.
+//
+// FIXME: make the backlog tracker aware of the repair sets. Compaction never compacts
+// sstables of different repair states together, but the group's single tracker accounts
+// for them together, so a tier mixing them looks ready although no compaction can take
+// it. Each compaction group view should have a tracker of its own, of its sstables.
+// See https://scylladb.atlassian.net/browse/SCYLLADB-6565. Waiting for
+// https://github.com/scylladb/scylladb/pull/32224, which simplifies it a lot: the
+// trackers will no longer have to be updated on every sstable movement across repair
+// sets.
 class compaction_backlog_source {
 public:
     virtual ~compaction_backlog_source() = default;
