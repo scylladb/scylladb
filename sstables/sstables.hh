@@ -1109,10 +1109,6 @@ public:
     // This will change sstable level only in memory.
     void set_sstable_level(uint32_t);
 
-    void generate_new_run_identifier() {
-        _run_identifier = run_id::create_random_id();
-    }
-
     double get_compression_ratio() const;
 
     const sstables::compression& get_compression() const {

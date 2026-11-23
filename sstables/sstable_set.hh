@@ -17,6 +17,7 @@
 #include "dht/ring_position.hh"
 #include <seastar/core/shared_ptr.hh>
 #include <type_traits>
+#include <unordered_map>
 #include <vector>
 #include <tuple>
 
@@ -48,6 +49,9 @@ public:
     sstable_run(shared_sstable);
     // Returns false if sstable being inserted cannot satisfy the disjoint invariant. Then caller should pick another run for it.
     [[nodiscard]] bool insert(shared_sstable sst);
+    // The run is ordered by first position, so it may hold another sstable which starts at the
+    // same position as the given one. contains() and erase() only consider the given sstable.
+    bool contains(const shared_sstable& sst) const;
     void erase(shared_sstable sst);
     bool empty() const noexcept {
         return _all.empty();
@@ -64,6 +68,17 @@ public:
 
 using shared_sstable_run = lw_shared_ptr<sstable_run>;
 using frozen_sstable_run = lw_shared_ptr<const sstable_run>;
+
+// Runs of sstables, by run identifier. Sstables which share a run identifier but overlap
+// one another can't be in the same run, so they're kept in several runs, all with that
+// identifier. The run identifier of an sstable is never changed for that: other sets may
+// hold the sstable, and index it by its run identifier.
+using sstable_runs_by_id = std::unordered_map<run_id, std::vector<shared_sstable_run>>;
+
+// Inserts the sstable into the first of the runs with its identifier which it doesn't
+// overlap, or into a new run if there's none. An sstable which is already in one of the runs
+// is left alone.
+void insert_into_runs(sstable_runs_by_id& runs, shared_sstable sst);
 
 class incremental_selector_impl {
 public:

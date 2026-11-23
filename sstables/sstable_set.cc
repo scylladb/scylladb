@@ -79,8 +79,25 @@ bool sstable_run::insert(shared_sstable sst) {
     return true;
 }
 
+void insert_into_runs(sstable_runs_by_id& runs, shared_sstable sst) {
+    auto& runs_of_id = runs[sst->run_identifier()];
+    for (auto& run : runs_of_id) {
+        if (run->contains(sst) || run->insert(sst)) {
+            return;
+        }
+    }
+    runs_of_id.push_back(make_lw_shared<sstable_run>(std::move(sst)));
+}
+
+bool sstable_run::contains(const shared_sstable& sst) const {
+    auto it = _all.find(sst);
+    return it != _all.end() && *it == sst;
+}
+
 void sstable_run::erase(shared_sstable sst) {
-    _all.erase(sst);
+    if (auto it = _all.find(sst); it != _all.end() && *it == sst) {
+        _all.erase(it);
+    }
 }
 
 uint64_t sstable_run::data_size() const {
@@ -158,7 +175,7 @@ sstable_set::all_sstable_runs() const {
 
 std::vector<frozen_sstable_run>
 partitioned_sstable_set::all_sstable_runs() const {
-    return _all_runs | std::views::values | std::ranges::to<std::vector<frozen_sstable_run>>();
+    return _all_runs | std::views::values | std::views::join | std::ranges::to<std::vector<frozen_sstable_run>>();
 }
 
 lw_shared_ptr<const sstable_list>
@@ -302,14 +319,16 @@ partitioned_sstable_set::partitioned_sstable_set(schema_ptr schema)
         , _all(make_lw_shared<sstable_list>()) {
 }
 
-static std::unordered_map<run_id, shared_sstable_run> clone_runs(const std::unordered_map<run_id, shared_sstable_run>& runs) {
+static sstable_runs_by_id clone_runs(const sstable_runs_by_id& runs) {
     return runs | std::views::transform([] (auto& p) {
-        return std::make_pair(p.first, make_lw_shared<sstable_run>(*p.second));
-    }) | std::ranges::to<std::unordered_map<run_id, shared_sstable_run>>();
+        return std::make_pair(p.first, p.second | std::views::transform([] (const shared_sstable_run& run) {
+            return make_lw_shared<sstable_run>(*run);
+        }) | std::ranges::to<std::vector<shared_sstable_run>>());
+    }) | std::ranges::to<sstable_runs_by_id>();
 }
 
 partitioned_sstable_set::partitioned_sstable_set(schema_ptr schema, const interval_index_type& sstables,
-        const lw_shared_ptr<sstable_list>& all, const std::unordered_map<run_id, shared_sstable_run>& all_runs, utils::file_size_stats bytes_on_disk)
+        const lw_shared_ptr<sstable_list>& all, const sstable_runs_by_id& all_runs, utils::file_size_stats bytes_on_disk)
         : sstable_set_impl(bytes_on_disk)
         , _schema(schema)
         , _sstables(sstables)
@@ -367,22 +386,8 @@ bool partitioned_sstable_set::insert(shared_sstable sst) {
         sub_file_size_stats(size_stats);
     });
 
-    auto maybe_insert_run_fragment = [this] (const shared_sstable& sst) mutable {
-        auto it = _all_runs.find(sst->run_identifier());
-        if (it == _all_runs.end()) {
-            auto new_run = make_lw_shared<sstable_run>(sst);
-            return _all_runs.emplace(sst->run_identifier(), std::move(new_run)).second;
-        }
-        return it->second->insert(sst);
-    };
-
-    // If sstable doesn't satisfy disjoint invariant, then place it in a new sstable run.
-    while (!maybe_insert_run_fragment(sst)) {
-        sstlog.warn("Generating a new run identifier for SSTable {} as overlapping was detected when inserting it into SSTable run {}",
-                    sst->get_filename(), sst->run_identifier());
-        sst->generate_new_run_identifier();
-    }
-    auto undo_all_runs_insert = defer([&] noexcept { _all_runs[sst->run_identifier()]->erase(sst); });
+    insert_into_runs(_all_runs, sst);
+    auto undo_all_runs_insert = defer([&] noexcept { erase_from_runs(sst); });
 
     _change_cnt++;
     auto interval = make_interval(*sst);
@@ -392,13 +397,26 @@ bool partitioned_sstable_set::insert(shared_sstable sst) {
     return true;
 }
 
-bool partitioned_sstable_set::erase(shared_sstable sst) {
-    if (auto it = _all_runs.find(sst->run_identifier()); it != _all_runs.end()) {
-        it->second->erase(sst);
-        if (it->second->empty()) {
-            _all_runs.erase(it);
+void partitioned_sstable_set::erase_from_runs(const shared_sstable& sst) noexcept {
+    auto it = _all_runs.find(sst->run_identifier());
+    if (it == _all_runs.end()) {
+        return;
+    }
+    auto& runs_of_id = it->second;
+    auto run = std::ranges::find_if(runs_of_id, [&sst] (const shared_sstable_run& run) { return run->contains(sst); });
+    if (run != runs_of_id.end()) {
+        (*run)->erase(sst);
+        if ((*run)->empty()) {
+            runs_of_id.erase(run);
         }
     }
+    if (runs_of_id.empty()) {
+        _all_runs.erase(it);
+    }
+}
+
+bool partitioned_sstable_set::erase(shared_sstable sst) {
+    erase_from_runs(sst);
     auto ret = _all->erase(sst) != 0;
     if (ret) {
         sub_file_size_stats(sst->get_file_size_stats());
