@@ -4227,6 +4227,10 @@ future<> storage_service::prepare_for_tablets_migration(const sstring& ks_name) 
         throw std::runtime_error("vnodes-to-tablets migration requires all nodes to support the"
                 " PREPARE_MIGRATION_AS_TOPOLOGY_OPERATION cluster feature");
     }
+    if (!_feature_service.vnodes_to_tablets_migration_lwt) {
+        throw std::runtime_error("vnodes-to-tablets migration requires all nodes to support the"
+                " VNODES_TO_TABLETS_MIGRATION_LWT cluster feature");
+    }
 
     slogger.info("Preparing vnodes-to-tablets migration for keyspace '{}'", ks_name);
 

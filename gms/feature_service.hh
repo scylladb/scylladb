@@ -208,6 +208,9 @@ public:
     gms::feature cluster_config { *this, "CLUSTER_CONFIG"sv };
     // Restore persists tablet transitions and a topology request that older nodes fail to parse.
     gms::feature tablet_aware_restore { *this, "TABLET_AWARE_RESTORE"sv };
+    // During a vnodes-to-tablets migration, the nodes keep the Paxos state of the
+    // migrating tables across a storage mode switch.
+    gms::feature vnodes_to_tablets_migration_lwt { *this, "VNODES_TO_TABLETS_MIGRATION_LWT"sv };
 
     // Features created at run time rather than declared above: one per cluster config
     // option, from the registry at construction, plus any a test adds. Node-based, so a
