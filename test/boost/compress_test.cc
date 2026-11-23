@@ -8,6 +8,10 @@
 
 #define BOOST_TEST_MODULE core
 
+#include <algorithm>
+#include <iterator>
+#include <ranges>
+
 #include <boost/test/unit_test.hpp>
 
 #include "sstables/compress.hh"
@@ -103,6 +107,55 @@ BOOST_AUTO_TEST_CASE(segmented_offsets_iterator) {
 
     for (std::size_t i = 0; i < size; i += 1024) {
         BOOST_REQUIRE_EQUAL(accessor.at(i), i);
+    }
+}
+
+// The iterator of segmented_offsets is a random-access iterator, which the
+// standard algorithms can use.
+BOOST_AUTO_TEST_CASE(segmented_offsets_random_access_iterator) {
+    using segmented_offsets = sstables::compression::segmented_offsets;
+    static_assert(std::random_access_iterator<segmented_offsets::const_iterator>);
+    static_assert(std::ranges::random_access_range<const segmented_offsets>);
+
+    segmented_offsets offsets;
+    offsets.init(1 << 14);
+    segmented_offsets::writer writer = offsets.get_writer();
+    const std::size_t size = 1000;
+    for (std::size_t i = 0; i < size; ++i) {
+        writer.push_back(i * 10);
+    }
+
+    // Check that post-increment returns the old position, and advances the
+    // iterator.
+    auto it = offsets.begin();
+    auto old = it++;
+    BOOST_REQUIRE(old == offsets.begin());
+    BOOST_REQUIRE(it == offsets.begin() + 1);
+    BOOST_REQUIRE_EQUAL(*old, 0);
+    BOOST_REQUIRE_EQUAL(*it, 10);
+
+    // Check that post-decrement returns the old position, and moves the
+    // iterator back.
+    old = it--;
+    BOOST_REQUIRE(old == offsets.begin() + 1);
+    BOOST_REQUIRE(it == offsets.begin());
+
+    // Check that an iterator can be assigned another iterator of the same
+    // offsets.
+    it = offsets.begin() + 5;
+    BOOST_REQUIRE_EQUAL(*it, 50);
+
+    // Check the difference of two iterators, and adding a number to an
+    // iterator from the left.
+    BOOST_REQUIRE_EQUAL(offsets.end() - offsets.begin(), size);
+    BOOST_REQUIRE_EQUAL(offsets.begin() + 7 - it, 2);
+    BOOST_REQUIRE(3 + offsets.begin() == offsets.begin() + 3);
+
+    // Check that std::ranges::upper_bound() finds the first offset greater
+    // than a position.
+    for (uint64_t pos : {0, 5, 10, 11, 9989, 9990, 9999}) {
+        auto found = std::ranges::upper_bound(offsets, pos);
+        BOOST_REQUIRE_EQUAL(found - offsets.begin(), pos / 10 + 1);
     }
 }
 
