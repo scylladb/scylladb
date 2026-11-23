@@ -1919,6 +1919,21 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         for (const auto& schema : tables) {
                             updates.emplace_back(replica::make_drop_tablet_map_mutation(schema->id(), guard.write_timestamp()));
                         }
+                        // Drop the Paxos state tables LWT coordinators made during the migration.
+                        // Every node copied their state back into system.paxos when it restarted
+                        // into vnodes, so nothing uses them any more. Coordinators make no new
+                        // ones once the maps are gone.
+                        // The schema change goes in directly: the keyspace still has tablet
+                        // maps, so the regular path would reject it.
+                        for (const auto& schema : tables) {
+                            if (!paxos::paxos_store::try_get_base_table(schema->cf_name())) {
+                                continue;
+                            }
+                            rtlogger.info("finalize_migration: dropping Paxos state table {}.{}", ks_name, schema->cf_name());
+                            for (auto& m : db::schema_tables::make_drop_table_mutations(ks.metadata(), schema, guard.write_timestamp())) {
+                                updates.emplace_back(std::move(m));
+                            }
+                        }
                     }
                 } catch (const std::exception& e) {
                     error = e.what();
