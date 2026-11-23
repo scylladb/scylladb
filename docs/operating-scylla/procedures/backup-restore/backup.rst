@@ -70,7 +70,7 @@ See :doc:`the relevant article to learn more </cql/describe-schema>`.
    By default, nodetool names the snapshot after the current time, in milliseconds since the Unix epoch.
    To choose the name (a.k.a. tag), list the keyspaces to snapshot, or set a TTL after which the snapshot
    is deleted automatically, see :doc:`nodetool snapshot </operating-scylla/nodetool-commands/snapshot>`.
-   ``nodetool cluster snapshot`` takes the snapshot on all nodes of the cluster with one command.
+   :doc:`nodetool cluster snapshot </operating-scylla/nodetool-commands/cluster/snapshot>` takes the snapshot on all nodes of the cluster with one command.
 
 .. note::
 
@@ -124,6 +124,8 @@ Native backup uploads the SSTables of the snapshot, not the schema. Back up the 
 ``DESC SCHEMA WITH INTERNALS AND PASSWORDS``, as in the :ref:`Full Backup <backup-full-backup-snapshots>` procedure,
 so that it can be recreated before the data is restored.
 
+.. _backup-cluster-wide-backup:
+
 Cluster-wide backup
 -------------------
 
@@ -133,7 +135,7 @@ Cluster-wide backup
    but is not generally available and is not recommended for production workloads.
 
 The whole cluster can be snapshotted and backed up from one node, with
-:doc:`nodetool cluster snapshot </operating-scylla/nodetool-commands/snapshot>` and :doc:`nodetool cluster backup </operating-scylla/nodetool-commands/backup>`.
+:doc:`nodetool cluster snapshot </operating-scylla/nodetool-commands/cluster/snapshot>` and :doc:`nodetool cluster backup </operating-scylla/nodetool-commands/cluster/backup>`.
 The cluster snapshot is taken on all nodes and recorded in the ``system_distributed`` keyspace, and the backup then has each node upload its own SSTables
 to the location given for its datacenter.
 
