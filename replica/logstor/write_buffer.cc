@@ -234,13 +234,19 @@ mixed_write_buffer::mixed_write_buffer(size_t buffer_size)
 }
 
 future<record_location_with_holder> mixed_write_buffer::write(log_record_writer writer, write_target target) {
-    const auto frame = builder().append(writer);
-    _separator_records.push_back(separator_record {
+    // The record goes into the vector before its frame goes into the chunk, so that a failed
+    // allocation of the vector cannot fail a write whose frame is already in the chunk.
+    auto& record = _separator_records.emplace_back(separator_record{
         .writer = std::move(writer),
-        .frame = frame,
-        .target = std::move(target)
+        .target = std::move(target),
     });
-    return track(frame);
+    try {
+        record.frame = builder().append(record.writer);
+    } catch (...) {
+        _separator_records.pop_back();
+        throw;
+    }
+    return track(record.frame);
 }
 
 std::vector<separator_record> mixed_write_buffer::take_separator_records() {
