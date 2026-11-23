@@ -118,5 +118,8 @@ public:
     void accept_ordered(const schema& schema, mutation_partition_view_virtual_visitor& mpvvv) const;
     future<> accept_gently_ordered(const schema&, mutation_partition_view_virtual_visitor& mpvvv) const;
 
+    // Whether the partition has no tombstones, no static cells and no rows.
+    bool empty() const;
+
     std::optional<clustering_key> last_row_key() const;
 };

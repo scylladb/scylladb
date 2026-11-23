@@ -429,6 +429,13 @@ future<> mutation_partition_view::accept_gently_ordered(const schema& s, mutatio
     } while (!res.stop);
 }
 
+bool mutation_partition_view::empty() const
+{
+    auto in = _in;
+    auto mpv = ser::deserialize(in, std::type_identity<ser::mutation_partition_view>());
+    return !tombstone(mpv.tomb()) && mpv.static_row().columns().empty() && mpv.range_tombstones().empty() && mpv.rows().empty();
+}
+
 std::optional<clustering_key> mutation_partition_view::last_row_key() const
 {
     auto in = _in;
