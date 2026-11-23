@@ -1,0 +1,87 @@
+#
+# Copyright (C) 2026-present ScyllaDB
+#
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
+#
+
+"""Check that run_porcupine_checker() retries failures of the container runtime, and only those.
+
+On CI, podman sometimes loses the checker container and exits with 127, with or
+without a message on stderr, although the checker never got to give a verdict
+(SCYLLADB-6545).  A fake runtime stands in for podman here: it fails a given
+number of times with a given exit code and then answers like the checker would.
+"""
+
+from pathlib import Path
+
+import pytest
+
+from test.cluster.tools.porcupine import porcupine
+from test.cluster.tools.porcupine import run_porcupine_checker
+
+HISTORY = '{"id":0,"client_id":0,"kind":"call","op":"write","key":1,"value":5,"time_ns":1}\n'
+
+FAKE_RUNTIME = """#!/bin/sh
+cat > /dev/null
+calls=$(($(cat "$FAKE_RUNTIME_CALLS" 2>/dev/null || echo 0) + 1))
+echo "$calls" > "$FAKE_RUNTIME_CALLS"
+if [ "$calls" -le "$FAKE_RUNTIME_FAILURES" ]; then
+    echo "Error: failed to connect to container's attach socket: no such file or directory" >&2
+    exit "$FAKE_RUNTIME_EXIT_CODE"
+fi
+echo '{"valid": true, "keys_checked": 1, "total_ops": 1}'
+"""
+
+
+@pytest.fixture
+def fake_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Point the checker at the fake runtime; returns a function setting its failures and one reading its calls."""
+
+    runtime = tmp_path / "fake-podman"
+    runtime.write_text(FAKE_RUNTIME)
+    runtime.chmod(0o755)
+    calls = tmp_path / "calls"
+    monkeypatch.setattr(porcupine, "CONTAINER_RUNTIME", str(runtime))
+    monkeypatch.setattr(porcupine, "USE_CONTAINER_CHECKER", True)
+    monkeypatch.setenv("FAKE_RUNTIME_CALLS", str(calls))
+
+    async def no_sleep(_seconds: float) -> None:
+        pass
+    monkeypatch.setattr(porcupine.asyncio, "sleep", no_sleep)
+
+    def fail(times: int, exit_code: int) -> None:
+        monkeypatch.setenv("FAKE_RUNTIME_FAILURES", str(times))
+        monkeypatch.setenv("FAKE_RUNTIME_EXIT_CODE", str(exit_code))
+
+    return fail, lambda: int(calls.read_text())
+
+
+@pytest.mark.parametrize("exit_code", porcupine.RUNTIME_FAILURE_CODES)
+async def test_runtime_failure_is_retried(fake_runtime, exit_code: int) -> None:
+    """Runtime failures on all attempts but the last still end with the checker's verdict."""
+
+    fail, calls = fake_runtime
+    fail(porcupine.RUNTIME_FAILURE_ATTEMPTS - 1, exit_code)
+    result = await run_porcupine_checker(HISTORY)
+    assert result["valid"] is True
+    assert calls() == porcupine.RUNTIME_FAILURE_ATTEMPTS
+
+
+async def test_persistent_runtime_failure_is_reported(fake_runtime) -> None:
+    """A runtime that fails every attempt is reported with its exit code and stderr, after the last attempt."""
+
+    fail, calls = fake_runtime
+    fail(porcupine.RUNTIME_FAILURE_ATTEMPTS, 127)
+    with pytest.raises(RuntimeError, match=r"(?s)exited with code 127.*attach socket"):
+        await run_porcupine_checker(HISTORY)
+    assert calls() == porcupine.RUNTIME_FAILURE_ATTEMPTS
+
+
+async def test_checker_error_is_not_retried(fake_runtime) -> None:
+    """Exit 2 is the checker rejecting its input, not the runtime failing: no retry."""
+
+    fail, calls = fake_runtime
+    fail(1, 2)
+    with pytest.raises(RuntimeError, match="exited with code 2"):
+        await run_porcupine_checker(HISTORY)
+    assert calls() == 1

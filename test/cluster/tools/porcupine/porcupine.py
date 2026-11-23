@@ -71,6 +71,17 @@ USE_CONTAINER_CHECKER = os.environ.get("PORCUPINE_USE_CONTAINER", "1") != "0"
 
 _IMAGE_FILE = _PORCUPINE_DIR / "porcupine_image"
 
+# Exit codes with which podman reports its own failure, before or after the
+# checker ran: 125 = podman error, 126/127 = could not invoke, or lost the
+# container (podman maps "no such file"/"not found" errors and a failed wait for
+# the container's exit to 127).  The checker itself exits only with 0, 1 or 2,
+# so retrying on these cannot hide a checker verdict.  On CI hosts the nested
+# podman of every dbuild shares one container database, and another dbuild
+# starting podman can remove a running container's attach socket or state
+# (SCYLLADB-6545).
+RUNTIME_FAILURE_CODES = (125, 126, 127)
+RUNTIME_FAILURE_ATTEMPTS = 3
+
 
 def _checker_image() -> str:
     """Read the checker image name from the 'image' file, with env override."""
@@ -137,45 +148,13 @@ async def _remove_container(name: str) -> None:
                        name, stderr.decode(errors="replace").strip())
 
 
-async def run_porcupine_checker(
-    history_data: str | bytes,
+async def _run_checker_once(
+    history_data: bytes,
     *,
-    timeout_seconds: float = 120,
-    output_dir: Path | None = None,
-) -> dict[str, Any]:
-    """Build (if needed) and run the Porcupine linearizability checker.
-
-    The history is piped to the checker's stdin as JSON-lines.
-
-    Args:
-        history_data: JSON-lines history content (str or bytes).
-        timeout_seconds: Maximum wall-clock time for the checker subprocess.
-        output_dir: Directory for debug artifacts (written only on failure).
-
-    Returns:
-        Parsed JSON result dict from the checker.  On success::
-
-            {"valid": True, "keys_checked": 100, "total_ops": 5000}
-
-        On linearizability violation::
-
-            {"valid": False, "error": "...",
-             "visualization": "/path/to/viz.html"}
-
-    Raises:
-        FileNotFoundError: If the checker source is missing (native mode).
-        RuntimeError: If the build fails, the checker exits non-zero, times
-            out, or produces unparseable output.
-    """
-    if not USE_CONTAINER_CHECKER:
-        _build_checker()
-
-    if isinstance(history_data, str):
-        history_data = history_data.encode()
-
-    if output_dir is not None:
-        output_dir.mkdir(parents=True, exist_ok=True)
-
+    timeout_seconds: float,
+    output_dir: Path | None,
+) -> tuple[int, bytes, str]:
+    """Run the checker once; return its exit code, stdout and stripped stderr."""
     container_name = f"porcupine-checker-{uuid.uuid4().hex[:12]}"
 
     if USE_CONTAINER_CHECKER:
@@ -219,11 +198,65 @@ async def run_porcupine_checker(
     if stderr_text:
         logger.info("Porcupine checker stderr:\n%s", stderr_text)
 
+    return proc.returncode, stdout, stderr_text
+
+
+async def run_porcupine_checker(
+    history_data: str | bytes,
+    *,
+    timeout_seconds: float = 120,
+    output_dir: Path | None = None,
+) -> dict[str, Any]:
+    """Build (if needed) and run the Porcupine linearizability checker.
+
+    The history is piped to the checker's stdin as JSON-lines.  In container
+    mode, a run that the container runtime failed (exit 125-127) is retried,
+    up to ``RUNTIME_FAILURE_ATTEMPTS`` runs in all.
+
+    Args:
+        history_data: JSON-lines history content (str or bytes).
+        timeout_seconds: Maximum wall-clock time for the checker subprocess.
+        output_dir: Directory for debug artifacts (written only on failure).
+
+    Returns:
+        Parsed JSON result dict from the checker.  On success::
+
+            {"valid": True, "keys_checked": 100, "total_ops": 5000}
+
+        On linearizability violation::
+
+            {"valid": False, "error": "...",
+             "visualization": "/path/to/viz.html"}
+
+    Raises:
+        FileNotFoundError: If the checker source is missing (native mode).
+        RuntimeError: If the build fails, the checker exits non-zero, times
+            out, or produces unparseable output.
+    """
+    if not USE_CONTAINER_CHECKER:
+        _build_checker()
+
+    if isinstance(history_data, str):
+        history_data = history_data.encode()
+
+    if output_dir is not None:
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+    attempts = RUNTIME_FAILURE_ATTEMPTS if USE_CONTAINER_CHECKER else 1
+    for attempt in range(1, attempts + 1):
+        returncode, stdout, stderr_text = await _run_checker_once(
+            history_data, timeout_seconds=timeout_seconds, output_dir=output_dir)
+        if returncode not in RUNTIME_FAILURE_CODES or attempt == attempts:
+            break
+        logger.warning("Container runtime failed to run the porcupine checker (attempt %d of %d, exit %d), retrying; stderr:\n%s",
+                       attempt, attempts, returncode, stderr_text)
+        await asyncio.sleep(1)
+
     # Exit 0 = linearizable, exit 1 = violation (both produce JSON).
     # Exit 2 = input/usage error, anything else is unexpected.
-    if proc.returncode not in (0, 1):
+    if returncode not in (0, 1):
         raise RuntimeError(
-            f"Porcupine checker exited with code {proc.returncode}\n"
+            f"Porcupine checker exited with code {returncode}\n"
             f"Artifacts: {output_dir}\n"
             f"stderr:\n{stderr_text}"
         )
