@@ -26,7 +26,7 @@ FAKE_RUNTIME = """#!/bin/sh
 # "run --rm -i --name <name> ..." and "rm --force --time 0 <name>" both have the name as $5.
 if [ "$1" = rm ]; then
     echo "$5" >> "$FAKE_RUNTIME_CALLS.removed"
-    exit 0
+    exit "${FAKE_RUNTIME_RM_EXIT_CODE:-0}"
 fi
 cat > /dev/null
 calls=$(($(cat "$FAKE_RUNTIME_CALLS" 2>/dev/null || echo 0) + 1))
@@ -105,3 +105,15 @@ async def test_checker_error_is_not_retried(fake_runtime) -> None:
         await run_porcupine_checker(HISTORY)
     assert calls() == 1
     assert not Path(f"{os.environ['FAKE_RUNTIME_CALLS']}.removed").exists()
+
+
+async def test_no_retry_while_failed_container_may_run(fake_runtime, monkeypatch: pytest.MonkeyPatch) -> None:
+    """If the container of a failed run cannot be removed, it may still run on the same output directory: no retry."""
+
+    fail, calls, removed_exactly_failed = fake_runtime
+    fail(1, 127)
+    monkeypatch.setenv("FAKE_RUNTIME_RM_EXIT_CODE", "1")
+    with pytest.raises(RuntimeError, match=r"(?s)exited with code 127.*could not be removed.*attach socket"):
+        await run_porcupine_checker(HISTORY)
+    assert calls() == 1
+    assert removed_exactly_failed()

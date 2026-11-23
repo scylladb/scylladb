@@ -129,13 +129,16 @@ def _build_checker() -> None:
     logger.info("Porcupine checker built successfully")
 
 
-async def _remove_container(name: str) -> None:
+async def _remove_container(name: str) -> bool:
     """Force-remove the checker container, ignoring a container already gone.
 
     Killing the ``podman run`` process does not stop the container it started:
     podman is daemonless, so the container and its monitor outlive the client.
     With ``--rm`` it is still removed, but only once it exits by itself -- and
     the reason we get here is that it was not going to exit any time soon.
+
+    Returns True if the container is gone: ``rm --force`` succeeds also for a
+    container that no longer exists.
     """
     proc = await asyncio.create_subprocess_exec(
         CONTAINER_RUNTIME, "rm", "--force", "--time", "0", name,
@@ -146,6 +149,8 @@ async def _remove_container(name: str) -> None:
     if proc.returncode != 0:
         logger.warning("Failed to remove checker container %s: %s",
                        name, stderr.decode(errors="replace").strip())
+        return False
+    return True
 
 
 async def _run_checker_once(
@@ -199,9 +204,17 @@ async def _run_checker_once(
         logger.info("Porcupine checker stderr:\n%s", stderr_text)
 
     # The runtime failed, and its --rm cleanup may have failed with it: make
-    # sure the container is gone before the caller starts another one.
+    # sure the container is gone before the caller starts another one.  If it
+    # may still run, a retry would run a second checker next to it, on the
+    # same output directory, so give up instead.
     if USE_CONTAINER_CHECKER and proc.returncode in RUNTIME_FAILURE_CODES:
-        await _remove_container(container_name)
+        if not await _remove_container(container_name):
+            raise RuntimeError(
+                f"Porcupine checker exited with code {proc.returncode}, and its "
+                f"container {container_name} could not be removed, so it is not retried\n"
+                f"Artifacts: {output_dir}\n"
+                f"stderr:\n{stderr_text}"
+            )
 
     return proc.returncode, stdout, stderr_text
 
