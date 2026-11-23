@@ -17,7 +17,7 @@ Choosing a restore method
 
 ScyllaDB supports several restore methods. Choose the one that matches where your backup files are and whether the cluster topology changed since the backup was taken:
 
-* :ref:`Restore a cluster backup <restore-cluster-backup>` - restore a backup made with :doc:`nodetool cluster backup </operating-scylla/nodetool-commands/backup>` into a tablet-based table. Each replica downloads the SSTables of its own tablets straight from object storage, with no streaming between nodes. Runs on a running cluster.
+* :ref:`Restore a cluster backup <restore-cluster-backup>` - restore a backup made with :doc:`nodetool cluster backup </operating-scylla/nodetool-commands/cluster/backup>` into a tablet-based table. Each replica downloads the SSTables of its own tablets straight from object storage, with no streaming between nodes. SSTables that the backup stored as a single copy are re-replicated to all replicas, but a full repair is still required after the restore. Runs on a running cluster.
 
 * :ref:`Restore from object storage <restore-object-storage>` - restore SSTables backed up to S3-compatible object storage with :doc:`nodetool backup </operating-scylla/nodetool-commands/backup>`. Runs on a running cluster and works regardless of cluster topology changes since the backup.
 
@@ -63,10 +63,10 @@ The following steps and notes apply to all restore methods.
 Restore a cluster backup
 ------------------------
 
-Use this method to restore a backup made with :ref:`nodetool cluster backup <backup-native-backup>` into a tablet-based table.
+Use this method to restore a backup made with :doc:`nodetool cluster backup </operating-scylla/nodetool-commands/cluster/backup>` into a tablet-based table.
 The restore runs as a topology operation: the replicas of each tablet download the SSTables that belong to the tablet
-directly from object storage and attach them, so no data is streamed between nodes. Repaired data that the backup
-stored as a single copy is restored to every replica it was taken from.
+directly from object storage and attach them, so no data is streamed between nodes. SSTables of repaired data, which the backup
+stored as a single copy, are re-replicated to all replicas. A full repair is still required after the restore.
 
 The object storage endpoint must be configured on the nodes, as described in :ref:`Configuring Object Storage <object-storage-configuration>`.
 
@@ -101,6 +101,9 @@ the paths of the table's backup manifests relative to that prefix.
 
 #. Monitor the restore with the :doc:`nodetool tasks </operating-scylla/nodetool-commands/tasks/index>` commands, for example
    ``nodetool tasks wait <task ID>`` to wait for it to finish, or ``nodetool tasks status <task ID>`` to see its progress.
+
+#. After the restore completes, run a full repair of the restored table with :doc:`nodetool cluster repair </operating-scylla/nodetool-commands/cluster/repair>`
+   on any single node, for example ``nodetool cluster repair mykeyspace team_roster``.
 
 .. note::
 
