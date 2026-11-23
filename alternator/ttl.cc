@@ -805,7 +805,8 @@ static future<bool> scan_table(
                     auto tablet_primary_replica = tablet_map.get_primary_replica(*tablet, erm->get_topology());
                     if (tablet_primary_replica.host == my_host_id && tablet_primary_replica.shard == this_shard_id()) {
                         range = dht::to_partition_range(std::move(tablet_token_range));
-                    } else if (erm->get_replication_factor() > 1) {
+                    } else if (tablet_map.get_tablet_info(*tablet).replicas.size() > 1) {
+                        // The tablet's own replica count, not the keyspace RF: they differ during an RF change.
                         // If each node only scans its own primary ranges, then when any node is
                         // down part of the token range will not get scanned. This can be viewed
                         // as acceptable (when it comes back online, it will resume its scan),
