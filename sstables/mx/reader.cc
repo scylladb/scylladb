@@ -729,6 +729,9 @@ private:
     row_schema* _row;
 
     uint64_t _missing_columns_to_read;
+    // Whether the indexes after the count list the present columns (the selector
+    // starts reset) or the missing ones (it starts set).
+    bool _listed_columns_present;
 
     std::ranges::subrange<std::vector<std::optional<uint32_t>>::const_iterator> _ck_column_value_fix_lengths;
 
@@ -878,6 +881,10 @@ private:
                 _range_tombstone_kind = bound_kind_m(this->_u8);
                 co_yield this->read_16(*_processing_data);
                 _ck_size = this->_u16;
+                if (_ck_size > _column_translation.clustering_column_value_fix_legths().size()) {
+                    throw_malformed_sstable_exception(format("Range tombstone clustering key has {} components, expected at most {}",
+                            _ck_size, _column_translation.clustering_column_value_fix_legths().size()));
+                }
                 if (_ck_size == 0) {
                     _row_key.clear();
                     _range_tombstone_kind = is_start(_range_tombstone_kind)
@@ -1006,6 +1013,12 @@ private:
                 co_yield this->read_unsigned_vint(*_processing_data);
                 uint64_t missing_column_bitmap_or_count = this->_u64;
                 if (_row->_columns.size() < 64) {
+                    // The shift is below 64 here. A bit past the column count is corruption
+                    // that the resize() below would otherwise drop silently.
+                    if (missing_column_bitmap_or_count >> _row->_columns.size()) {
+                        throw_malformed_sstable_exception(format("Missing columns bitmap {:#x} has bits past the column count {}",
+                                missing_column_bitmap_or_count, _row->_columns.size()));
+                    }
                     _row->_columns_selector.clear();
                     _row->_columns_selector.append(missing_column_bitmap_or_count);
                     _row->_columns_selector.flip();
@@ -1013,17 +1026,32 @@ private:
                     skip_absent_columns();
                     goto column_label;
                 }
+                if (missing_column_bitmap_or_count > _row->_columns.size()) {
+                    throw_malformed_sstable_exception(format("Row has {} missing columns, expected at most {}",
+                            missing_column_bitmap_or_count, _row->_columns.size()));
+                }
                 _row->_columns_selector.resize(_row->_columns.size());
                 if (_row->_columns.size() - missing_column_bitmap_or_count < _row->_columns.size() / 2) {
                     _missing_columns_to_read = _row->_columns.size() - missing_column_bitmap_or_count;
                     _row->_columns_selector.reset();
+                    _listed_columns_present = true;
                 } else {
                     _missing_columns_to_read = missing_column_bitmap_or_count;
                     _row->_columns_selector.set();
+                    _listed_columns_present = false;
                 }
                 while (_missing_columns_to_read > 0) {
                     --_missing_columns_to_read;
                     co_yield this->read_unsigned_vint(*_processing_data);
+                    if (this->_u64 >= _row->_columns.size()) {
+                        throw_malformed_sstable_exception(format("Column index {} out of range, expected below {}",
+                                this->_u64, _row->_columns.size()));
+                    }
+                    // A repeated index would flip the bit back, and the cells that follow
+                    // would be read as other columns.
+                    if (_row->_columns_selector.test(this->_u64) == _listed_columns_present) {
+                        throw_malformed_sstable_exception(format("Column index {} is listed twice", this->_u64));
+                    }
                     _row->_columns_selector.flip(this->_u64);
                 }
                 skip_absent_columns();
