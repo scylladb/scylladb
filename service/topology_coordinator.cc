@@ -4192,6 +4192,22 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         }
 
         sstring reason = fmt::format("prepare vnodes-to-tablets migration for keyspace '{}'", ks_name);
+        if (complete && error.empty()) {
+            // Nodes may switch to tablets once the request is done. Make every coordinator
+            // see the maps first, so that it creates the Paxos state tables (see
+            // paxos_store::ensure_initialized()). Down nodes are covered by the fence.
+            updates.emplace_back(topology_mutation_builder(guard.write_timestamp())
+                                      .set_version(_topo_sm._topology.version + 1)
+                                      .build());
+            co_await update_topology_state(std::move(guard), std::move(updates), reason + ", last part");
+            updates = {};
+            guard = co_await start_operation();
+            auto exclude_nodes = _topo_sm._topology.ignored_nodes;
+            for (const auto& host : get_dead_nodes()) {
+                exclude_nodes.insert(raft::server_id{host.uuid()});
+            }
+            guard = co_await global_token_metadata_barrier(std::move(guard), std::move(exclude_nodes));
+        }
         if (complete) {
             updates.emplace_back(topology_request_tracking_mutation_builder(req_id)
                                       .done(error)
