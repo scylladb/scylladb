@@ -1074,8 +1074,8 @@ future<std::unordered_map<component_type, file>> sstable::readable_file_for_all_
     co_return std::move(files);
 }
 
-future<entry_descriptor> sstable::clone(generation_type new_generation, bool leave_unsealed, bool may_use_reference_sharing) {
-    return _storage->clone(*this, new_generation, leave_unsealed, may_use_reference_sharing);
+future<entry_descriptor> sstable::clone(generation_type new_generation, bool leave_unsealed, bool may_use_reference_sharing, std::optional<int64_t> repaired_at) {
+    return _storage->clone(*this, new_generation, leave_unsealed, may_use_reference_sharing, repaired_at);
 }
 
 future<std::unique_ptr<scylla_metadata>> sstable::copy_scylla_metadata() {
@@ -1735,15 +1735,55 @@ void sstable::set_scrub_time(db_clock::time_point scrub_time) {
 }
 
 int64_t sstable::update_repaired_at(int64_t repaired_at) {
-    const stats_metadata& old_stats = get_stats_metadata();
-    auto old_repaired_at = old_stats.repaired_at;
-    if (old_repaired_at == repaired_at) {
-        return old_repaired_at;
+    // In place: a live sstable may have outstanding references to its stats_metadata.
+    auto& stats = const_cast<stats_metadata&>(get_stats_metadata());
+    return std::exchange(stats.repaired_at, repaired_at);
+}
+
+future<> sstable::persist_repaired_at(int64_t repaired_at, std::optional<service::session_id> being_repaired) {
+    // Serialized with the other on-disk mutations. An sstable marked for deletion is left
+    // alone, so the put cannot recreate the reference that destroy() deletes.
+    auto lock = co_await get_units(_mutate_sem, 1);
+    if (marked_for_deletion()) {
+        co_return;
     }
-    auto stats = std::make_unique<stats_metadata>(old_stats);
-    stats->repaired_at = repaired_at;
-    _components->statistics.contents[metadata_type::Stats] = std::move(stats);
-    return old_repaired_at;
+    std::exception_ptr ex;
+    try {
+        co_await _storage->set_repaired_at(*this, repaired_at);
+        utils::get_local_injector().inject("persist_repaired_at_fail_after_put", [] {
+            throw std::runtime_error("persist_repaired_at_fail_after_put error injection");
+        });
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    if (ex) {
+        // The put may have been applied anyway: keep memory equal to what a restart loads,
+        // since filters that reset stale marks (update_repaired_at_for_merge()) look at memory.
+        try {
+            utils::get_local_injector().inject("persist_repaired_at_fail_reread", [] {
+                throw std::runtime_error("persist_repaired_at_fail_reread error injection");
+            });
+            auto stored = co_await _storage->load_repaired_at(*this);
+            if (stored) {
+                update_repaired_at(*stored);
+            }
+            // No attribute means Statistics rules, which memory may no longer match.
+            _repaired_at_unconfirmed = !stored;
+        } catch (...) {
+            // The stored value is unknown: keep the larger one, which a merge still resets,
+            // and have the next update write again even if it carries the same value.
+            sstlog.warn("Failed to re-read repaired_at of {} after a failed update: {}", get_filename(), std::current_exception());
+            update_repaired_at(std::max(repaired_at, get_stats_metadata().repaired_at));
+            _repaired_at_unconfirmed = true;
+        }
+        std::rethrow_exception(std::move(ex));
+    }
+    // No yield between the two, so the repair classifier never sees one without the other.
+    if (being_repaired) {
+        mark_as_being_repaired(*being_repaired);
+    }
+    update_repaired_at(repaired_at);
+    _repaired_at_unconfirmed = false;
 }
 
 future<> sstable::copy_components(const sstable& src) {
@@ -1753,7 +1793,7 @@ future<> sstable::copy_components(const sstable& src) {
 
 bool sstable::should_update_repaired_at(int64_t repaired_at) const {
     const stats_metadata& stats = get_stats_metadata();
-    return stats.repaired_at != repaired_at;
+    return _repaired_at_unconfirmed || stats.repaired_at != repaired_at;
 }
 
 // Creates a new SSTable generation by hard-linking existing components and rewriting a specific one.
@@ -2358,7 +2398,14 @@ future<> sstable::load_metadata(sstable_open_config cfg) noexcept {
 // This interface is only used during tests, snapshot loading and early initialization.
 // No need to set tunable priorities for it.
 future<> sstable::load(const dht::sharder& sharder, sstable_open_config cfg) noexcept {
-    co_await load_metadata(cfg);
+    // Read even without OBJECT_STORAGE_REPAIRED_AT_IN_REF, as clones always carry the value.
+    // A failed read fails the load: Statistics could wrongly count the sstable as repaired.
+    auto [repaired_at] = co_await coroutine::all(
+            [&] { return load_metadata(cfg); },
+            [&] { return _storage->load_repaired_at(*this); });
+    if (repaired_at) {
+        update_repaired_at(*repaired_at);
+    }
     validate_min_max_metadata();
     validate_max_local_deletion_time();
     validate_partitioner();

@@ -647,6 +647,8 @@ private:
     // a rewrite, not a fresh write. In this case it should ignore schema/config
     // and strictly obey scylla_metadata.
     bool _created_by_component_rewrite = false;
+    // Set when a failed persist_repaired_at() could not tell which value is stored.
+    bool _repaired_at_unconfirmed = false;
 
     db_clock::time_point _now;
 
@@ -1230,7 +1232,9 @@ public:
     // Clones this sstable with a new generation, under the same location as the original one.
     // If leave_unsealed is true, the destination sstable is left unsealed.
     // Implementation is underlying storage specific.
-    future<entry_descriptor> clone(generation_type new_generation, bool leave_unsealed = false, bool may_use_reference_sharing = false);
+    // `repaired_at` is kept by the clone over the value in its Statistics (object storage only).
+    future<entry_descriptor> clone(generation_type new_generation, bool leave_unsealed = false, bool may_use_reference_sharing = false,
+            std::optional<int64_t> repaired_at = std::nullopt);
 
     struct lesser_reclaimed_memory {
         // comparator class to be used by the _reclaimed set in sstables manager
@@ -1278,6 +1282,9 @@ public:
 public:
     void mark_as_being_repaired(const service::session_id& id);
     int64_t update_repaired_at(int64_t repaired_at);
+    // Object storage only: persists repaired_at on this node's reference object, then updates
+    // memory, with being_repaired if given. A no-op on an sstable marked for deletion.
+    future<> persist_repaired_at(int64_t repaired_at, std::optional<service::session_id> being_repaired = std::nullopt);
     future<> copy_components(const sstable& src);
     bool should_update_repaired_at(int64_t repaired_at) const;
 

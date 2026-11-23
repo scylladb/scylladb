@@ -9,6 +9,7 @@
 #include "storage.hh"
 
 #include <cerrno>
+#include <charconv>
 #include <algorithm>
 #include <cctype>
 #include <boost/algorithm/string.hpp>
@@ -95,7 +96,8 @@ public:
     virtual future<> seal(const sstable& sst) override;
     virtual future<> snapshot(const sstable& sst, sstring tag, incremental_backup incremental) const override;
     virtual future<> finalize_snapshot(const sstable& sst, sstring tag) const override;
-    virtual future<entry_descriptor> clone(sstable& sst, generation_type gen, bool leave_unsealed, bool may_use_reference_sharing = false) const override;
+    virtual future<entry_descriptor> clone(sstable& sst, generation_type gen, bool leave_unsealed, bool may_use_reference_sharing = false,
+            std::optional<int64_t> repaired_at = std::nullopt) const override;
     virtual future<entry_descriptor> clone_from(sstable& src, generation_type gen, bool may_use_reference_sharing, std::string_view snapshot_tag) const override;
     virtual future<> change_state(const sstable& sst, sstable_state state, generation_type generation, delayed_commit_changes* delay) override;
     // runs in async context
@@ -115,6 +117,12 @@ public:
     }
     virtual future<> unlink_component(const sstable& sst, component_type) noexcept override;
     future<size_t> num_references(const sstable& sst) const override;
+    future<> set_repaired_at(const sstable& sst, int64_t) const override {
+        on_internal_error(sstlog, fmt::format("Cannot persist repaired_at of {} outside Statistics on filesystem storage", sst.get_filename()));
+    }
+    future<std::optional<int64_t>> load_repaired_at(const sstable&) const override {
+        return make_ready_future<std::optional<int64_t>>();
+    }
 
     virtual std::string_view prefix() const override { return _dir.native(); }
     sstring component_fqn(const sstable& sst, component_type type) const override {
@@ -472,7 +480,7 @@ future<> filesystem_storage::finalize_snapshot(const sstable& sst, sstring tag) 
     return make_ready_future<>();
 }
 
-future<entry_descriptor> filesystem_storage::clone(sstable& sst, generation_type gen, bool leave_unsealed, bool) const {
+future<entry_descriptor> filesystem_storage::clone(sstable& sst, generation_type gen, bool leave_unsealed, bool, std::optional<int64_t>) const {
     sstlog.debug("Cloning {} dir={} generation={} leave_unsealed={}", sst.get_filename(), _dir.path().native(), gen, leave_unsealed);
     co_await create_links_common(sst, _dir.path().native(), gen, leave_unsealed ? link_mode::leave_unsealed : link_mode::default_mode);
     auto desc = sst.get_descriptor(component_type::TOC);
@@ -752,7 +760,8 @@ public:
     future<> seal(const sstable& sst) override;
     future<> snapshot(const sstable& sst, sstring tag, incremental_backup incremental) const override;
     future<> finalize_snapshot(const sstable& sst, sstring tag) const override;
-    future<entry_descriptor> clone(sstable& sst, generation_type gen, bool leave_unsealed, bool may_use_reference_sharing = false) const override;
+    future<entry_descriptor> clone(sstable& sst, generation_type gen, bool leave_unsealed, bool may_use_reference_sharing = false,
+            std::optional<int64_t> repaired_at = std::nullopt) const override;
     future<entry_descriptor> clone_from(sstable& src, generation_type gen, bool may_use_reference_sharing, std::string_view snapshot_tag) const override;
     future<> change_state(const sstable& sst, sstable_state state, generation_type generation, delayed_commit_changes* delay) override;
     // runs in async context
@@ -778,6 +787,8 @@ public:
     future<> copy_components(const sstable& sst, sstable_id sid, const std::unordered_set<component_type>& excluded_components) const;
     future<> unlink_component(const sstable& sst, component_type) noexcept override;
     future<size_t> num_references(const sstable& sst) const override;
+    future<> set_repaired_at(const sstable& sst, int64_t repaired_at) const override;
+    future<std::optional<int64_t>> load_repaired_at(const sstable& sst) const override;
 
     sstable_id get_sstable_identifier(const sstable& sst) const {
         auto sid = sst.sstable_identifier();
@@ -806,7 +817,7 @@ public:
     future<size_t> num_references(sstable_id sid) const;
     // components excludes the TOC, which is deleted last.
     future<> delete_components(std::vector<sstring> components, sstable_id sid, bool log_errors) const;
-    future<> create_reference(sstable_id sid, generation_type gen, locator::host_id node_owner) const;
+    future<> create_reference(sstable_id sid, generation_type gen, locator::host_id node_owner, std::optional<int64_t> repaired_at = std::nullopt) const;
 
     bool is_object_storage() const override { return true; }
 
@@ -920,9 +931,51 @@ future<size_t> object_storage_base::num_references(sstable_id sid) const {
     co_return refs.size();
 }
 
-future<> object_storage_base::create_reference(sstable_id sid, generation_type gen, locator::host_id node_owner) const {
+static object_storage_attributes make_reference_attributes(std::optional<int64_t> repaired_at) {
+    if (!repaired_at) {
+        return {};
+    }
+    return {{sstring(object_storage_repaired_at_attribute), fmt::to_string(*repaired_at)}};
+}
+
+future<> object_storage_base::create_reference(sstable_id sid, generation_type gen, locator::host_id node_owner, std::optional<int64_t> repaired_at) const {
     auto ref_name = make_ref_object_name(sid, gen, node_owner);
-    co_await put_object(ref_name, memory_data_sink_buffers(), object_storage_attributes{});
+    co_await put_object(ref_name, memory_data_sink_buffers(), make_reference_attributes(repaired_at));
+}
+
+future<> object_storage_base::set_repaired_at(const sstable& sst, int64_t repaired_at) const {
+    if (uses_foreign_layout()) {
+        on_internal_error(sstlog, fmt::format("Cannot persist repaired_at of {}: foreign layout", sst.get_filename()));
+    }
+    // Rewrites this node's empty reference object in place, with the value attached.
+    co_await create_reference(get_sstable_identifier(sst), sst.generation(), sst.manager().get_local_host_id(), repaired_at);
+}
+
+future<std::optional<int64_t>> object_storage_base::load_repaired_at(const sstable& sst) const {
+    // Neither has a reference of this node.
+    if (uses_foreign_layout() || sst.state() == sstable_state::upload) {
+        co_return std::nullopt;
+    }
+    auto ref_name = make_ref_object_name(get_sstable_identifier(sst), sst.generation(), sst.manager().get_local_host_id());
+    object_storage_attributes attributes;
+    try {
+        attributes = co_await _client->get_object_metadata(ref_name, abort_source());
+    } catch (const storage_io_error& e) {
+        if (e.code().value() != ENOENT) {
+            throw;
+        }
+        co_return std::nullopt;
+    }
+    auto it = attributes.find(sstring(object_storage_repaired_at_attribute));
+    if (it == attributes.end()) {
+        co_return std::nullopt;
+    }
+    int64_t value;
+    auto [ptr, ec] = std::from_chars(it->second.data(), it->second.data() + it->second.size(), value);
+    if (ec != std::errc() || ptr != it->second.data() + it->second.size()) {
+        throw malformed_sstable_exception(fmt::format("Invalid {} attribute '{}' on {}", object_storage_repaired_at_attribute, it->second, ref_name.str()));
+    }
+    co_return value;
 }
 
 future<size_t> object_storage_base::num_references(const sstable& sst) const {
@@ -1356,7 +1409,8 @@ future<> object_storage_base::link_with_excluded_components(const sstable& sst, 
     co_await copy_components(sst, sid, excluded_components);
 }
 
-future<entry_descriptor> object_storage_base::clone(sstable& sst, generation_type gen, bool leave_unsealed, bool may_use_reference_sharing) const {
+future<entry_descriptor> object_storage_base::clone(sstable& sst, generation_type gen, bool leave_unsealed, bool may_use_reference_sharing,
+        std::optional<int64_t> repaired_at) const {
     sstlog.debug("Cloning {} sstable_id={} generation={}: new_generation={} leave_unsealed={} may_use_reference_sharing={}",
             sst.get_filename(), sst.sstable_identifier(), sst.generation(),
             gen, leave_unsealed, may_use_reference_sharing);
@@ -1367,9 +1421,9 @@ future<entry_descriptor> object_storage_base::clone(sstable& sst, generation_typ
     auto node_owner = sst.manager().get_local_host_id();
     co_await sst.manager().sstables_registry().create_entry(owner(), node_owner, status_creating, sst.state(), desc);
 
-    co_await create_reference(sid, gen, node_owner);
+    co_await create_reference(sid, gen, node_owner, repaired_at);
     auto refs = co_await num_references(sid);
-    sstlog.debug("Cloned {} sstable_id={} num_references={}", sst.get_filename(), sid, refs);
+    sstlog.debug("Cloned {} sstable_id={} num_references={} repaired_at={}", sst.get_filename(), sid, refs, repaired_at);
 
     if (!may_use_reference_sharing) {
         co_await copy_components(sst, sid, {component_type::Scylla});
@@ -1430,7 +1484,9 @@ future<entry_descriptor> object_storage_base::clone_from(sstable& src, generatio
     // runs the restore opens both.
     auto node_owner = src.manager().get_local_host_id();
     co_await src.manager().sstables_registry().create_entry(owner(), node_owner, status_creating, *desc.state, desc);
-    co_await create_reference(sid, gen, node_owner);
+    // Restored sstables are unrepaired: the Statistics of `src` may hold a value its source
+    // node overrode on its reference, and `src` is opened without it (upload state).
+    co_await create_reference(sid, gen, node_owner, 0);
 
     if (share_components) {
         // The snapshot can be dropped before this node reference is created. Then the

@@ -49,6 +49,9 @@ using object_storage_attributes = std::unordered_map<sstring, sstring>;
 
 inline constexpr std::string_view object_storage_sstable_version_attribute = "version";
 inline constexpr std::string_view object_storage_sstable_format_attribute = "format";
+// On a node reference object: overrides the repaired_at in Statistics, which is therefore not
+// authoritative on object storage (offline readers such as scylla-sstable show a stale value).
+inline constexpr std::string_view object_storage_repaired_at_attribute = "repaired-at";
 
 class object_name {
     std::string _name;
