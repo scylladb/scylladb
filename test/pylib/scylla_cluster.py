@@ -787,35 +787,6 @@ class ScyllaCluster:
         await wait_for(process_is_not_stopped, time() + 30)
 
     @cluster_op(timeout=None)
-    async def _server_add(self,
-                          replace_cfg: ReplaceConfig | None = None,
-                          cmdline: list[str] | None = None,
-                          config: dict[str, Any] | None = None,
-                          version: ScyllaVersionDescription | None = None,
-                          property_file: dict[str, Any] | None = None,
-                          start: bool = True,
-                          seeds: list[IPAddress] | None = None,
-                          server_encryption: str = "none",
-                          expected_error: str | None = None,
-                          expected_server_up_state: ServerUpState = ServerUpState.SERVING,
-                          launcher: list[str] | None = None) -> ServerInfo:
-        """Add a new server."""
-
-        return await self.add_server(
-            replace_cfg=replace_cfg,
-            cmdline=cmdline,
-            config=config,
-            version=version,
-            property_file=property_file,
-            start=start,
-            seeds=seeds,
-            server_encryption=server_encryption,
-            expected_error=expected_error,
-            expected_server_up_state=expected_server_up_state,
-            launcher=launcher,
-        )
-
-    @cluster_op(timeout=None)
     async def _servers_add(self,
                            servers_num: int = 1,
                            cmdline: list[str] | None = None,
@@ -825,21 +796,39 @@ class ScyllaCluster:
                            start: bool = True,
                            seeds: list[IPAddress] | None = None,
                            server_encryption: str = "none",
-                           expected_error: str | None = None) -> list[ServerInfo]:
+                           expected_error: str | None = None,
+                           replace_cfg: ReplaceConfig | None = None,
+                           expected_server_up_state: ServerUpState = ServerUpState.SERVING,
+                           launcher: list[str] | None = None) -> list[ServerInfo]:
         """Add new servers concurrently."""
         assert servers_num > 0, f"_servers_add: cannot add {servers_num} servers"
 
         def get_property_file(i) -> dict[str, Any] | None:
             if property_file is None:
                 return None
-            elif type(property_file) is dict:
+            elif isinstance(property_file, dict):
                 return property_file
             else:
                 assert type(property_file) is list and len(property_file) == servers_num
                 return property_file[i]
 
-        return await gather_safely(*(self.add_server(None, cmdline, config, version, get_property_file(i), start, seeds, server_encryption, expected_error)
-                                      for i in range(servers_num)))
+        adds = [
+            self.add_server(
+                replace_cfg=replace_cfg,
+                cmdline=cmdline,
+                config=config,
+                version=version,
+                property_file=get_property_file(i),
+                start=start,
+                seeds=seeds,
+                server_encryption=server_encryption,
+                expected_error=expected_error,
+                expected_server_up_state=expected_server_up_state,
+                launcher=launcher,
+            )
+            for i in range(servers_num)
+        ]
+        return await gather_safely(*adds)
 
     @cluster_op(timeout=None)
     async def _remove_node(self,
@@ -1592,8 +1581,9 @@ class ScyllaCluster:
                          server_encryption: str = "none",
                          expected_server_up_state: ServerUpState = ServerUpState.SERVING,
                          connect_driver: bool = True,
-                         launcher: list[str] | None = None) -> ServerInfo:
-        """Add a new server.
+                         launcher: list[str] | None = None,
+                         driver_connect_opts: dict[str, Any] | None = None) -> ServerInfo:
+        """Add a new server: servers_add() with one server.
 
         When start=True and expected_error is None, waits until Scylla reports
         that all configured listeners (including any non-default ports) are ready
@@ -1601,51 +1591,31 @@ class ScyllaCluster:
         earlier. When start=False or expected_error is set, no readiness wait is
         performed. When connect_driver=False, the effective wait state is capped
         at HOST_ID_QUERIED regardless of expected_server_up_state.
+        driver_connect_opts go to driver_connect() if the driver is not
+        connected yet.
 
         launcher is a command prefix the server's executable is started through
         on every start, e.g. to run it in another namespace. It must exec the
         executable rather than fork it. By default the executable is started
         directly.
         """
-        if expected_error is not None:
-            self.ignore_log_patterns.append(re.escape(expected_error))
-
-        if not connect_driver:
-            expected_server_up_state = min(expected_server_up_state, ServerUpState.HOST_ID_QUERIED)
-
-        try:
-            # We should wait until all running nodes see the node being replaced
-            # and all ignored nodes as dead. Replace could be rejected otherwise.
-            # We make this waiting default and optional to allow testing expected
-            # replace failures.
-            if replace_cfg and replace_cfg.wait_dead:
-                replaced_ip = await self.get_host_ip(replace_cfg.replaced_id)
-                ignored_ips = await self._get_ignored_ip_addresses(replace_cfg.ignore_dead_nodes)
-                dead_ips = [replaced_ip] + ignored_ips
-                await gather_safely(*(self.others_not_see_server(ip) for ip in dead_ips))
-
-            async with asyncio.timeout(timeout):
-                s_info = await self._server_add(
-                    replace_cfg=replace_cfg,
-                    cmdline=cmdline,
-                    config=config,
-                    version=version,
-                    property_file=property_file,
-                    start=start,
-                    seeds=seeds,
-                    server_encryption=server_encryption,
-                    expected_error=expected_error,
-                    expected_server_up_state=expected_server_up_state,
-                    launcher=launcher,
-                )
-        except Exception as exc:
-            raise RuntimeError("Failed to add server") from exc
-        self.logger.debug("ScyllaCluster added %s", s_info)
-        if expected_error is None and connect_driver:
-            if self.cql:
-                self._driver_update()
-            elif start:
-                await self.driver_connect()
+        [s_info] = await self.servers_add(
+            servers_num=1,
+            cmdline=cmdline,
+            config=config,
+            version=version,
+            property_file=property_file,
+            start=start,
+            seeds=seeds,
+            driver_connect_opts=driver_connect_opts,
+            expected_error=expected_error,
+            server_encryption=server_encryption,
+            replace_cfg=replace_cfg,
+            timeout=timeout,
+            expected_server_up_state=expected_server_up_state,
+            connect_driver=connect_driver,
+            launcher=launcher,
+        )
         return s_info
 
     async def servers_add(self,
@@ -1659,7 +1629,12 @@ class ScyllaCluster:
                           driver_connect_opts: dict[str, Any] | None = None,
                           expected_error: str | None = None,
                           server_encryption: str = "none",
-                          auto_rack_dc: str | None = None) -> list[ServerInfo]:
+                          auto_rack_dc: str | None = None,
+                          replace_cfg: ReplaceConfig | None = None,
+                          timeout: float | None = ScyllaServer.TOPOLOGY_TIMEOUT,
+                          expected_server_up_state: ServerUpState = ServerUpState.SERVING,
+                          connect_driver: bool = True,
+                          launcher: list[str] | None = None) -> list[ServerInfo]:
         """Add new servers concurrently.
 
         When start=True and expected_error is None, waits until Scylla reports
@@ -1667,21 +1642,40 @@ class ScyllaCluster:
         (ServerUpState.SERVING). When start=False or expected_error is set, no
         readiness wait is performed.
 
+        replace_cfg, expected_server_up_state, connect_driver and launcher work
+        as in server_add(); replace_cfg needs servers_num=1.  timeout is per
+        server: the whole call may take timeout * servers_num, and None means
+        no limit.
+
         This function can be called only if the cluster uses consistent topology changes, which support
         concurrent bootstraps. If your test does not fulfill this condition, and you want to add multiple
         servers, you should use multiple server_add calls.
         """
         assert servers_num > 0, f"servers_add: cannot add {servers_num} servers, servers_num must be positive"
         assert not (property_file and auto_rack_dc), "Either property_file or auto_rack_dc can be provided, but not both"
+        assert replace_cfg is None or servers_num == 1, "servers_add: replace_cfg works with one server only"
 
         if expected_error is not None:
             self.ignore_log_patterns.append(re.escape(expected_error))
+
+        if not connect_driver:
+            expected_server_up_state = min(expected_server_up_state, ServerUpState.HOST_ID_QUERIED)
 
         if auto_rack_dc:
             property_file = [{"dc":auto_rack_dc, "rack":f"rack{i+1}"} for i in range(servers_num)]
 
         try:
-            async with asyncio.timeout(ScyllaServer.TOPOLOGY_TIMEOUT * servers_num):
+            # We should wait until all running nodes see the node being replaced
+            # and all ignored nodes as dead. Replace could be rejected otherwise.
+            # We make this waiting default and optional to allow testing expected
+            # replace failures.
+            if replace_cfg and replace_cfg.wait_dead:
+                replaced_ip = await self.get_host_ip(replace_cfg.replaced_id)
+                ignored_ips = await self._get_ignored_ip_addresses(replace_cfg.ignore_dead_nodes)
+                dead_ips = [replaced_ip] + ignored_ips
+                await gather_safely(*(self.others_not_see_server(ip) for ip in dead_ips))
+
+            async with asyncio.timeout(None if timeout is None else timeout * servers_num):
                 s_infos = await self._servers_add(
                     servers_num=servers_num,
                     cmdline=cmdline,
@@ -1692,14 +1686,17 @@ class ScyllaCluster:
                     seeds=seeds,
                     server_encryption=server_encryption,
                     expected_error=expected_error,
+                    replace_cfg=replace_cfg,
+                    expected_server_up_state=expected_server_up_state,
+                    launcher=launcher,
                 )
         except Exception as exc:
-            raise RuntimeError("Failed to add servers") from exc
+            raise RuntimeError("Failed to add server" if servers_num == 1 else "Failed to add servers") from exc
 
         assert len(s_infos) == servers_num, f"servers_add requested adding {servers_num} servers but " \
                                     f"got server data about {len(s_infos)} servers: {s_infos}"
         self.logger.debug("ScyllaCluster added %s", s_infos)
-        if expected_error is None:
+        if expected_error is None and connect_driver:
             if self.cql:
                 self._driver_update()
             elif start:
