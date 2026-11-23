@@ -127,6 +127,10 @@ std::vector<column_translation::column_info> column_translation::state::build(
             false
         });
     } else {
+        // Match header columns only to schema columns of the same kind. Then the old cells of a
+        // column re-added as the other kind are treated as dropped instead of landing in another
+        // column. A static compact table has only regular columns; its sstables list them as static.
+        const auto kind = is_static && !s.is_static_compact_table() ? column_kind::static_column : column_kind::regular_column;
         cols.reserve(src.size());
         for (auto&& desc : src) {
             const bytes& type_name = desc.type_name.value;
@@ -138,7 +142,7 @@ std::vector<column_translation::column_info> column_translation::state::build(
             const column_definition* def = s.get_column_definition(desc.name.value);
             std::optional<column_id> id;
             bool schema_mismatch = false;
-            if (def) {
+            if (def && def->kind == kind) {
                 id = def->id;
                 schema_mismatch = def->is_multi_cell() != type->is_multi_cell() ||
                                   def->is_counter() != type->is_counter() ||
