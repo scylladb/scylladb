@@ -1740,6 +1740,125 @@ SEASTAR_THREAD_TEST_CASE(test_client_jumbo_upload_abort_direct_upload_s3) {
     BOOST_REQUIRE_EQUAL(s3_delete_requests() - deletes_before, 1);
 }
 
+struct s3_request_counts {
+    double put, post, del;
+
+    static s3_request_counts now() {
+        return {
+            .put = sum_s3_metric("s3_total_put_requests").value_or(0),
+            .post = sum_s3_metric("s3_total_post_requests").value_or(0),
+            .del = sum_s3_metric("s3_total_delete_requests").value_or(0),
+        };
+    }
+    s3_request_counts operator-(const s3_request_counts& o) const {
+        return {put - o.put, post - o.post, del - o.del};
+    }
+};
+
+// Writes object_size bytes through a jumbo sink with the default piece size and
+// returns the requests the upload took.
+static s3_request_counts jumbo_sink_upload_requests(s3_test_fixture& guard, const sstring& name, size_t object_size) {
+    auto cln = guard.client();
+    const auto before = s3_request_counts::now();
+    auto out = output_stream<char>(cln->make_upload_jumbo_sink(name));
+    const auto content = sstring(object_size, 'x');
+    out.write(content.data(), content.size()).get();
+    out.flush().get();
+    out.close().get();
+    const auto used = s3_request_counts::now() - before;
+    BOOST_REQUIRE_EQUAL(to_sstring(cln->get_object_contiguous(name).get()), content);
+    return used;
+}
+
+// An object smaller than a part is a single plain PUT, as with the plain sink.
+SEASTAR_THREAD_TEST_CASE(test_client_jumbo_sink_small_object_requests_s3) {
+    s3_test_fixture guard(make_s3_client);
+    auto used = jumbo_sink_upload_requests(guard, guard.object_path("testjumbosmall"), 1000);
+    BOOST_REQUIRE_EQUAL(used.put, 1);
+    BOOST_REQUIRE_EQUAL(used.post, 0);
+    BOOST_REQUIRE_EQUAL(used.del, 0);
+}
+
+// Two parts go straight into one multipart upload of the target: create, two parts,
+// complete -- no piece object to copy and remove.
+SEASTAR_THREAD_TEST_CASE(test_client_jumbo_sink_direct_multipart_requests_s3) {
+    s3_test_fixture guard(make_s3_client);
+    auto used = jumbo_sink_upload_requests(guard, guard.object_path("testjumbodirectmultipart"), s3::minimum_part_size + 1000);
+    BOOST_REQUIRE_EQUAL(used.put, 2);
+    BOOST_REQUIRE_EQUAL(used.post, 2);
+    BOOST_REQUIRE_EQUAL(used.del, 0);
+}
+
+// A copy-uploaded object would carry a multipart entity tag ("<md5>-<parts>").
+SEASTAR_THREAD_TEST_CASE(test_client_jumbo_sink_small_object_plain_etag_s3) {
+    s3_test_fixture guard(make_s3_client);
+    const auto name = guard.object_path("testjumbosmalletag");
+    jumbo_sink_upload_requests(guard, name, 1000);
+    const auto etag = guard.client()->get_object_info(name).get().etag;
+    BOOST_REQUIRE_MESSAGE(etag.find('-') == sstring::npos, fmt::format("etag {}", etag));
+}
+
+// A part of the direct upload, then three pieces copied into the target. Nothing is under
+// the target key until the upload completes, and only the three pieces are deleted.
+SEASTAR_THREAD_TEST_CASE(test_client_jumbo_sink_several_pieces_content_s3) {
+    s3_test_fixture guard(make_s3_client);
+    auto cln = guard.client();
+    const auto name = guard.object_path("testjumboseveralpieces");
+    const auto chunk = tests::random::get_sstring(s3::minimum_part_size);
+    auto [sink, etag_f] = cln->make_upload_jumbo_sink_and_get_etag(name, s3::object_metadata{}, 1);
+    auto close_sink = deferred_close(sink);
+    const auto deletes_before = s3_delete_requests();
+    for (int i = 0; i < 3; i++) {
+        sink.put(temporary_buffer<char>(chunk.data(), chunk.size())).get();
+        BOOST_REQUIRE(!cln->object_exists(name).get());
+    }
+    sink.put(temporary_buffer<char>("tail", 4)).get();
+    sink.flush().get();
+    close_sink.close_now();
+    BOOST_REQUIRE_EQUAL(to_sstring(cln->get_object_contiguous(name).get()), chunk + chunk + chunk + "tail");
+    BOOST_REQUIRE_EQUAL(s3_delete_requests() - deletes_before, 3);
+    BOOST_REQUIRE_EQUAL(etag_f.get(), cln->get_object_info(name).get().etag);
+    s3::client::bucket_lister lister(cln, guard.bucket());
+    auto close_lister = deferred_close(lister);
+    std::vector<sstring> objects;
+    while (auto de = lister.get().get()) {
+        objects.push_back(de->name);
+    }
+    BOOST_REQUIRE_EQUAL(objects, std::vector<sstring>{"testjumboseveralpieces"});
+}
+
+// An upload aborted after it moved to pieces leaves nothing behind: no object under the
+// target key, which only the completed upload may create, and no piece.
+SEASTAR_THREAD_TEST_CASE(test_client_jumbo_sink_abort_after_pieces_leaves_nothing_s3) {
+    s3_test_fixture guard(make_s3_client);
+    auto cln = guard.client();
+    const auto name = guard.object_path("testjumboabortedpieces");
+    const auto chunk = tests::random::get_sstring(s3::minimum_part_size);
+    seastar::abort_source as;
+    auto sink = cln->make_upload_jumbo_sink(name, s3::object_metadata{}, 1, &as);
+    auto close_sink = deferred_close(sink);
+    for (int i = 0; i < 2; i++) {
+        sink.put(temporary_buffer<char>(chunk.data(), chunk.size())).get();
+    }
+    as.request_abort_ex(upload_cancelled_marker{});
+    BOOST_REQUIRE_THROW(sink.put(temporary_buffer<char>(chunk.data(), chunk.size())).get(), std::exception);
+    close_sink.close_now();
+
+    BOOST_REQUIRE(!cln->object_exists(name).get());
+    s3::client::bucket_lister lister(cln, guard.bucket());
+    auto close_lister = deferred_close(lister);
+    std::vector<sstring> objects;
+    while (auto de = lister.get().get()) {
+        objects.push_back(de->name);
+    }
+    BOOST_REQUIRE_EQUAL(objects, std::vector<sstring>{});
+}
+
+// The entity tag the sink reports is the object's, also when it was uploaded in several parts.
+SEASTAR_THREAD_TEST_CASE(test_client_upload_jumbo_sink_etag_multipart_s3) {
+    do_test_client_upload_jumbo_sink_etag(make_s3_client, s3::minimum_part_size + 1000);
+}
+
 // An exception leaving the reply handler makes seastar's http client drop the
 // connection, so reporting a missing object must not raise one.
 void do_test_client_object_absent(const client_maker_function& client_maker) {
