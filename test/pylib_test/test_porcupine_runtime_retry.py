@@ -24,6 +24,9 @@ HISTORY = '{"id":0,"client_id":0,"kind":"call","op":"write","key":1,"value":5,"t
 
 FAKE_RUNTIME = """#!/bin/sh
 # "run --rm -i --name <name> ..." and "rm --force --time 0 <name>" both have the name as $5.
+if [ "$1" = container ] && [ "$2" = exists ]; then
+    exit "${FAKE_RUNTIME_EXISTS_EXIT_CODE:-0}"
+fi
 if [ "$1" = rm ]; then
     echo "$5" >> "$FAKE_RUNTIME_CALLS.removed"
     exit "${FAKE_RUNTIME_RM_EXIT_CODE:-0}"
@@ -116,4 +119,17 @@ async def test_no_retry_while_failed_container_may_run(fake_runtime, monkeypatch
     with pytest.raises(RuntimeError, match=r"(?s)exited with code 127.*could not be removed.*attach socket"):
         await run_porcupine_checker(HISTORY)
     assert calls() == 1
+    assert removed_exactly_failed()
+
+
+async def test_retry_when_failed_removal_finds_container_gone(fake_runtime, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A removal that fails while the runtime reports the container gone does not stop the retry."""
+
+    fail, calls, removed_exactly_failed = fake_runtime
+    fail(1, 127)
+    monkeypatch.setenv("FAKE_RUNTIME_RM_EXIT_CODE", "1")
+    monkeypatch.setenv("FAKE_RUNTIME_EXISTS_EXIT_CODE", "1")
+    result = await run_porcupine_checker(HISTORY)
+    assert result["valid"] is True
+    assert calls() == 2
     assert removed_exactly_failed()

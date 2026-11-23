@@ -137,8 +137,10 @@ async def _remove_container(name: str) -> bool:
     With ``--rm`` it is still removed, but only once it exits by itself -- and
     the reason we get here is that it was not going to exit any time soon.
 
-    Returns True if the container is gone: ``rm --force`` succeeds also for a
-    container that no longer exists.
+    Returns True if the container is gone.  ``rm --force`` succeeds also for a
+    container that no longer exists, but a runtime that lost track of the
+    container may fail to remove it for other reasons; then the container
+    counts as gone only if ``container exists`` says so (exit 1).
     """
     proc = await asyncio.create_subprocess_exec(
         CONTAINER_RUNTIME, "rm", "--force", "--time", "0", name,
@@ -146,11 +148,16 @@ async def _remove_container(name: str) -> bool:
         stderr=asyncio.subprocess.PIPE,
     )
     _, stderr = await proc.communicate()
-    if proc.returncode != 0:
-        logger.warning("Failed to remove checker container %s: %s",
-                       name, stderr.decode(errors="replace").strip())
-        return False
-    return True
+    if proc.returncode == 0:
+        return True
+    logger.warning("Failed to remove checker container %s: %s",
+                   name, stderr.decode(errors="replace").strip())
+    proc = await asyncio.create_subprocess_exec(
+        CONTAINER_RUNTIME, "container", "exists", name,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    return await proc.wait() == 1
 
 
 async def _run_checker_once(
