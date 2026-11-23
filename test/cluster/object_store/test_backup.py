@@ -1111,6 +1111,71 @@ async def test_restore_tablets_parallel(build_mode: str, manager: ScyllaClusterM
         await manager.api.quiesce_topology(servers[0].ip_addr)
         await check_mutation_replicas(cql, manager, servers, range(num_keys), topology, logger, ks, 'test')
 
+async def test_restore_tablets_with_truncation_tombstone(build_mode: str, manager: ScyllaClusterManager, s3_storage):
+    '''DELETE ALL DATA deletes the data of a tablet table logically, with a truncation
+    tombstone kept in the tablet metadata, so a snapshot taken before the truncated data is
+    compacted away holds it in its sstables. The snapshot's manifest records the truncation
+    tombstone, and restoring the snapshot applies it to the destination table, so that the
+    truncated data stays deleted there too.
+    See docs/dev/delete-all-data.md.
+
+    This is about the manifest and the topology coordinator, not the storage backend, so it runs on s3 only.
+    '''
+    object_storage = s3_storage
+    topology = topo(rf = 1, nodes = 2, racks = 1, dcs = 1)
+    servers, host_ids = await create_cluster(topology, manager, logger, object_storage)
+
+    cql = manager.get_cql()
+
+    tablet_count = 4
+    truncated_at = 1000
+    truncated_keys = range(100)
+    kept_keys = range(100, 120)
+
+    async def select_pks(table):
+        return {int(row.pk) for row in await cql.run_async(f"SELECT pk FROM {table}")}
+
+    async def data_deleted_at_timestamp(ks):
+        table_id = (await cql.run_async(f"SELECT id FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = 'test'"))[0].id
+        rows = await cql.run_async(f"SELECT data_deleted_at_timestamp FROM system.tablets WHERE table_id = {table_id} LIMIT 1")
+        return rows[0].data_deleted_at_timestamp if rows else None
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test ( pk text primary key, value int ) WITH tablets = {{'min_tablet_count': {tablet_count}}};")
+        # Keep the truncated data in the sstables: compaction would purge it.
+        await asyncio.gather(*(manager.api.disable_autocompaction(s.ip_addr, ks) for s in servers))
+        await asyncio.gather(*(cql.run_async(f"INSERT INTO {ks}.test (pk, value) VALUES ('{i}', {i}) USING TIMESTAMP {truncated_at - 1}") for i in truncated_keys))
+        await asyncio.gather(*(manager.api.flush_keyspace(s.ip_addr, ks) for s in servers))
+        await cql.run_async(f"DELETE ALL DATA FROM {ks}.test USING TIMESTAMP {truncated_at}")
+        await asyncio.gather(*(cql.run_async(f"INSERT INTO {ks}.test (pk, value) VALUES ('{i}', {i}) USING TIMESTAMP {truncated_at + 1}") for i in kept_keys))
+        assert await select_pks(f"{ks}.test") == set(kept_keys)
+
+        snap_name, _ = await take_snapshot(ks, servers, manager, logger)
+        for s in servers:
+            workdir = await manager.server_get_workdir(s.server_id)
+            cf_dir = os.listdir(f'{workdir}/data/{ks}')[0]
+            with open(f'{workdir}/data/{ks}/{cf_dir}/snapshots/{snap_name}/manifest.json') as f:
+                manifest = json.load(f)
+            assert manifest['table'].get('data_deleted_at_timestamp') == truncated_at, f"Unexpected truncation tombstone in the manifest of {s.ip_addr}: {manifest['table']}"
+            assert manifest['table'].get('data_deleted_at_deletion_time'), f"No truncation tombstone deletion time in the manifest of {s.ip_addr}: {manifest['table']}"
+        await asyncio.gather(*(do_backup(s, snap_name, f'{s.server_id}/{snap_name}', ks, 'test', object_storage, manager, logger) for s in servers))
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {topology.rf}}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test ( pk text primary key, value int ) WITH tablets = {{'min_tablet_count': {tablet_count}, 'max_tablet_count': {tablet_count}}};")
+        await asyncio.gather(*(manager.api.disable_autocompaction(s.ip_addr, ks) for s in servers))
+        assert await data_deleted_at_timestamp(ks) is None
+
+        manifests = [f'{s.server_id}/{snap_name}/manifest.json' for s in servers]
+        tid = await manager.api.restore_tablets(servers[0].ip_addr, ks, 'test', snap_name, servers[0].datacenter, object_storage.address, object_storage.bucket_name, manifests)
+        status = await manager.api.wait_task(servers[0].ip_addr, tid)
+        assert (status is not None) and (status['state'] == 'done'), f"Restore failed: {status}"
+        await manager.api.quiesce_topology(servers[0].ip_addr)
+
+        # The restored sstables hold the truncated data, which the restored truncation tombstone keeps deleted.
+        assert await select_pks(f"{ks}.test") == set(kept_keys)
+        assert await data_deleted_at_timestamp(ks) == truncated_at
+
+
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_restore_tablets_vs_migration(build_mode: str, manager: ScyllaClusterManager, object_storage):
     '''Check that restore handles tablets migrating around'''

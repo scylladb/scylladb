@@ -15,6 +15,8 @@
 #include "schema/schema_fwd.hh"
 #include "tracing/tracing_fwd.hh"
 
+struct tombstone;
+
 namespace query {
 
 struct max_result_size;
@@ -144,6 +146,15 @@ public:
 
     const schema_ptr& get_schema() const;
     std::string_view get_op_name() const;
+
+    // Returns the truncation tombstone of the table read, set by DELETE ALL DATA
+    // (see docs/dev/delete-all-data.md), or an empty tombstone if it has none.
+    // It is sampled from schema::truncation_tombstone() by the first call for the table, so that
+    // all the readers of a read, which may be created at different times, apply the same one.
+    tombstone truncation_tombstone(const schema&);
+    // Drops the sample, so that the next call to truncation_tombstone() samples it again.
+    // For recreating the readers of a read from scratch.
+    void resample_truncation_tombstone() noexcept;
     state get_state() const;
 
     bool needs_readmission() const;

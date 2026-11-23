@@ -2308,9 +2308,11 @@ future<> memtable_list::flush() {
 }
 
 lw_shared_ptr<memtable> memtable_list::new_memtable() {
-    return make_lw_shared<memtable>(_current_schema(), *_dirty_memory_manager,
+    auto mt = make_lw_shared<memtable>(_current_schema(), *_dirty_memory_manager,
             _table_shared_data,
             _table_stats, this, _compaction_scheduling_group, _shared_gc_state);
+    mt->set_truncation_tombstone(_truncation_tombstone);
+    return mt;
 }
 
 std::vector<replica::shared_memtable> memtable_list::make_replacement() {
@@ -2403,6 +2405,12 @@ future<> database::apply_counter_update(schema_ptr s, const frozen_mutation& fm,
         co_await utils::get_local_injector().inject("apply_counter_update_wait", utils::wait_for_message(5min));
     }
 
+    // Strip the data covered by the table's truncation tombstone before writing to the commitlog, see do_apply().
+    const auto stripped_with = cf.get_truncation_tombstone();
+    if (const auto t = stripped_with) [[unlikely]] {
+        m.partition().strip_truncated(*m.schema(), t.timestamp);
+    }
+
     tracing::trace(trace_state, "Applying counter update");
     co_await coroutine::try_future(update_write_metrics(seastar::futurize_invoke([&] {
         if (!s->is_synced()) {
@@ -2419,6 +2427,10 @@ future<> database::apply_counter_update(schema_ptr s, const frozen_mutation& fm,
             throw;
         }
     })));
+
+    if (cf.get_truncation_tombstone() > stripped_with) [[unlikely]] {
+        cf.on_write_raced_with_truncation_tombstone();
+    }
 
     if (utils::get_local_injector().enter("apply_counter_update_delay_5s")) {
         co_await seastar::sleep(std::chrono::seconds(5));
@@ -2502,10 +2514,26 @@ future<> database::do_apply_many(const utils::chunked_vector<frozen_mutation>& m
     }
 
     writers.reserve(muts.size());
+    // Mutations stripped of the data covered by their table's truncation tombstone, see do_apply().
+    std::vector<std::optional<frozen_mutation>> stripped_muts(muts.size());
+    auto get_mutation = [&] (size_t i) -> const frozen_mutation& {
+        return stripped_muts[i] ? *stripped_muts[i] : muts[i];
+    };
+    // The truncation tombstone each mutation was stripped with, see do_apply().
+    std::vector<tombstone> stripped_with(muts.size());
 
     for (size_t i = 0; i < muts.size(); ++i) {
         auto s = local_schema_registry().get(muts[i].schema_version());
         auto&& cf = find_column_family(muts[i].column_family_id());
+
+        stripped_with[i] = cf.get_truncation_tombstone();
+        if (const auto t = stripped_with[i]) [[unlikely]] {
+            auto unfrozen = muts[i].unfreeze(s);
+            if (unfrozen.partition().has_truncated(*s, t.timestamp)) {
+                unfrozen.partition().strip_truncated(*s, t.timestamp);
+                stripped_muts[i].emplace(freeze(unfrozen));
+            }
+        }
 
         // Atomicity here comes from writing all the mutations to the commitlog as one batch, which
         // a logstor table cannot take part in, having no commitlog. Skipping it instead would also
@@ -2529,8 +2557,8 @@ future<> database::do_apply_many(const utils::chunked_vector<frozen_mutation>& m
             on_internal_error(dblog, format("Must call apply() on the owning shard ({} not in {})", this_shard_id(), m_shards));
         }
 
-        dblog.trace("apply [{}/{}]: {}", i, muts.size() - 1, muts[i].pretty_printer(s));
-        writers.emplace_back(s, muts[i], commitlog_mutation_entry_writer::force_sync::yes);
+        dblog.trace("apply [{}/{}]: {}", i, muts.size() - 1, get_mutation(i).pretty_printer(s));
+        writers.emplace_back(s, get_mutation(i), commitlog_mutation_entry_writer::force_sync::yes);
     }
 
     if (!cl) {
@@ -2543,7 +2571,12 @@ future<> database::do_apply_many(const utils::chunked_vector<frozen_mutation>& m
     auto noop = db::noop_large_data_guardrail::instance();
     for (size_t i = 0; i < muts.size(); ++i) {
         auto s = local_schema_registry().get(muts[i].schema_version());
-        co_await apply_in_memory(muts[i], s, std::move(handles[i]), timeout, noop);
+        co_await apply_in_memory(get_mutation(i), s, std::move(handles[i]), timeout, noop);
+        // See do_apply().
+        auto&& cf = find_column_family(muts[i].column_family_id());
+        if (cf.get_truncation_tombstone() > stripped_with[i]) [[unlikely]] {
+            cf.on_write_raced_with_truncation_tombstone();
+        }
     }
 }
 
@@ -2592,6 +2625,29 @@ future<db::large_data_violation_type> database::do_apply(schema_ptr s, const fro
         }
     }
 
+    // Strip the data covered by the table's truncation tombstone before generating view updates and
+    // writing to the commitlog, so that no commitlog entry written after the truncation tombstone was
+    // installed holds covered data, which could be resurrected by replaying it after the truncation
+    // tombstone is garbage-collected. See docs/dev/delete-all-data.md.
+    // FIXME: avoid unfreezing the mutation just to check whether it holds covered data.
+    std::optional<frozen_mutation> stripped_m;
+    // The write is written to the commitlog later, possibly after a newer truncation tombstone is
+    // installed, which this strip did not account for. That is checked for once it is applied.
+    const auto stripped_with = cf.get_truncation_tombstone();
+    if (const auto t = stripped_with) [[unlikely]] {
+        auto unfrozen = m.unfreeze(s);
+        if (unfrozen.partition().has_truncated(*s, t.timestamp)) {
+            unfrozen.partition().strip_truncated(*s, t.timestamp);
+            if (unfrozen.partition().empty()) {
+                // Dead on arrival.
+                update_writes_failed.cancel();
+                co_return db::large_data_violation_type::none;
+            }
+            stripped_m.emplace(freeze(unfrozen));
+        }
+    }
+    const frozen_mutation& fm = stripped_m ? *stripped_m : m;
+
     sync = sync || db::commitlog::force_sync(s->wait_for_sync_to_commitlog());
 
     // Signal to view building code that a write is in progress,
@@ -2605,7 +2661,7 @@ future<db::large_data_violation_type> database::do_apply(schema_ptr s, const fro
             co_await coroutine::return_exception(std::runtime_error("view update generator not plugged to push updates"));
         }
 
-        auto unfrozen = m.unfreeze(s);
+        auto unfrozen = fm.unfreeze(s);
         guardrails->check(*s, unfrozen.partition(), unfrozen.key(), &violations);
         guardrails = db::noop_large_data_guardrail::instance();
 
@@ -2627,7 +2683,7 @@ future<db::large_data_violation_type> database::do_apply(schema_ptr s, const fro
     if (cl != nullptr && cf.durable_writes() && !cf.uses_logstor()) {
         std::exception_ptr ex;
         try {
-            commitlog_mutation_entry_writer cew(s, m, sync);
+            commitlog_mutation_entry_writer cew(s, fm, sync);
             auto f_h = co_await coroutine::as_future(cf.commitlog()->add_entry(uuid, cew, timeout));
             if (!f_h.failed()) {
                 h = f_h.get();
@@ -2641,12 +2697,16 @@ future<db::large_data_violation_type> database::do_apply(schema_ptr s, const fro
             if (is_timeout_exception(ex)) {
                 ++_stats->total_writes_timedout;
             }
-            ex = wrap_commitlog_add_error(s, m, std::move(ex));
+            ex = wrap_commitlog_add_error(s, fm, std::move(ex));
             co_await coroutine::exception(std::move(ex));
         }
     }
+    const bool written_to_commitlog = bool(h);
     auto f = co_await coroutine::as_future(
-        this->apply_in_memory(m, s, std::move(h), timeout, std::move(guardrails), &violations));
+        this->apply_in_memory(fm, s, std::move(h), timeout, std::move(guardrails), &violations));
+    if (written_to_commitlog && cf.get_truncation_tombstone() > stripped_with) [[unlikely]] {
+        cf.on_write_raced_with_truncation_tombstone();
+    }
     if (f.failed()) {
       auto ex = f.get_exception();
       if (try_catch<mutation_reordered_with_truncate_exception>(ex)) {

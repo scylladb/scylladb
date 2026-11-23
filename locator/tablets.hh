@@ -21,6 +21,7 @@
 #include "utils/hash.hh"
 #include "utils/UUID.hh"
 #include "raft/raft_fwd.hh"
+#include "mutation/tombstone.hh"
 
 #include <memory>
 #include <ranges>
@@ -938,6 +939,12 @@ private:
     // not mapped to itself.
     std::unordered_map<table_id, table_id> _base_table;
 
+    // Truncation tombstones of tables, set by DELETE ALL DATA.
+    // They are kept per table rather than in the tablet_map, since co-located tables
+    // share the tablet_map of their base table, but not its truncation tombstone.
+    // Unrelated to the truncation records in system.truncated that are used by the legacy TRUNCATE.
+    std::unordered_map<table_id, tombstone> _truncated_at;
+
     // When false, tablet load balancer will not try to rebalance tablets.
     bool _balancing_enabled = true;
 public:
@@ -982,6 +989,9 @@ public:
     // a group of its own.
     table_group_set get_table_group(table_id id) const;
 
+    // Returns the truncation tombstone of the table, or an empty tombstone if it has none.
+    tombstone get_truncated_at(table_id id) const;
+
 public:
     tablet_metadata() = default;
     // No implicit copy, use copy()
@@ -996,6 +1006,8 @@ public:
     void set_tablet_map(table_id, tablet_map);
     future<> set_colocated_table(table_id id, table_id base_id);
     void drop_tablet_map(table_id);
+    // Sets the truncation tombstone of the table. An empty tombstone clears it.
+    void set_truncated_at(table_id, tombstone);
 
     // Allow mutating a tablet_map
     // Uses the copy-modify-swap idiom.

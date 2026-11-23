@@ -74,6 +74,7 @@
 #include "readers/multi_range.hh"
 #include "readers/combined.hh"
 #include "readers/compacting.hh"
+#include "readers/truncation_stripping.hh"
 #include "replica/schema_describe_helper.hh"
 #include "repair/incremental.hh"
 
@@ -267,6 +268,17 @@ table::add_memtables_to_reader_list(std::vector<mutation_reader>& readers,
     }
 }
 
+// The cache is populated from sstable readers, which strip the data covered by the
+// truncation tombstone, and memtables merged into it hold no covered data, but it may
+// still hold covered data while it is being invalidated after a new truncation tombstone
+// was installed, i.e. while the truncation tombstone it is known to be clean of is older.
+static mutation_reader maybe_strip_cache_reader(mutation_reader rd, tombstone truncation_tombstone, tombstone cache_truncation_tombstone) {
+    if (truncation_tombstone && cache_truncation_tombstone < truncation_tombstone) {
+        return make_truncation_stripping_reader(std::move(rd), truncation_tombstone);
+    }
+    return rd;
+}
+
 mutation_reader
 table::make_mutation_reader(schema_ptr s,
                            reader_permit permit,
@@ -313,7 +325,7 @@ table::make_mutation_reader(schema_ptr s,
     if (cache_enabled() && !bypass_cache) {
         if (auto reader_opt = _cache.make_reader_opt(s, permit, range, slice, get_tombstone_gc_state(),
                     get_max_purgeable_fn_for_cache_underlying_reader(), std::move(trace_state), fwd, fwd_mr)) {
-            readers.emplace_back(std::move(*reader_opt));
+            readers.emplace_back(maybe_strip_cache_reader(std::move(*reader_opt), permit.truncation_tombstone(*s), _cache_truncation_tombstone));
         }
     } else {
         readers.emplace_back(make_sstable_reader(s, permit, _sstables, range, slice, std::move(trace_state), fwd, fwd_mr));
@@ -420,7 +432,8 @@ mutation_reader table::make_nonpopulating_cache_reader(schema_ptr schema, reader
     if (!range.is_singular()) {
         throw std::runtime_error("table::make_cache_reader(): only singular ranges are supported");
     }
-    return _cache.make_nonpopulating_reader(std::move(schema), std::move(permit), range, slice, std::move(ts));
+    const auto truncation_tombstone = permit.truncation_tombstone(*schema);
+    return maybe_strip_cache_reader(_cache.make_nonpopulating_reader(std::move(schema), std::move(permit), range, slice, std::move(ts)), truncation_tombstone, _cache_truncation_tombstone);
 }
 
 future<std::vector<locked_cell>> table::lock_counter_cells(const mutation& m, db::timeout_clock::time_point timeout) {
@@ -2029,6 +2042,13 @@ table::update_cache(compaction_group& cg, lw_shared_ptr<memtable> m, std::vector
         try_trigger_compaction(cg);
     });
     if (cache_enabled()) {
+        if (m->truncation_tombstone() < _truncation_tombstone || cache_may_hold_truncated_data()) {
+            // The memtable predates the truncation tombstone and may hold data covered by it,
+            // so it must not be merged into the cache, which holds no covered data.
+            // Nor while the cache is being invalidated and may still hold covered data, which
+            // merging could combine in memory with the memtable's data, e.g. counter shards.
+            co_return co_await _cache.update_invalidating(std::move(adder), *m);
+        }
         co_return co_await _cache.update(std::move(adder), *m);
     } else {
         co_return co_await _cache.invalidate(std::move(adder)).then([m] { return m->clear_gently(); });
@@ -2125,15 +2145,17 @@ public:
 // The function never fails.
 // It either succeeds eventually after retrying or aborts.
 future<>
-table::seal_active_memtable(compaction_group& cg, flush_permit&& flush_permit) noexcept {
-    auto old = cg.memtables()->back();
+table::seal_active_memtable(compaction_group& cg, flush_permit&& flush_permit, shared_memtable sealed) noexcept {
+    auto old = sealed ? sealed : cg.memtables()->back();
     // Reset low marker for CL initiated flush here. As stated above, this function never
     // fails, and even if it did, all we are saying is that the work of moving data from
     // _lowest_rp -> wherever is now on us. In any case, actual segment release will not
     // happen until success and the commitlog callback below
     // If we are being flushed for any other reason, we still change the RP range
     // remaining unflushed in the memtable_list (to none)
-    auto old_low = std::exchange(cg._lowest_rp, db::replay_position::max);
+    // A sealed memtable was switched out of the active position, and the low marker
+    // still covers it until the active memtable is sealed.
+    auto old_low = sealed ? cg._lowest_rp : std::exchange(cg._lowest_rp, db::replay_position::max);
     tlogger.debug("Sealing active memtable of {}.{}, partitions: {}, occupancy: {}, low_rp: {}", _schema->ks_name(), _schema->cf_name(), old->partition_count(), old->occupancy(), old_low);
 
     if (old->empty()) {
@@ -2198,6 +2220,12 @@ table::seal_active_memtable(compaction_group& cg, flush_permit&& flush_permit) n
     };
 
     co_await with_retry([&] {
+        if (sealed) {
+            // Already switched out of the active position, see set_truncation_tombstone().
+            _highest_flushed_rp = std::max(_highest_flushed_rp, old->replay_position());
+            memtable_size = old->occupancy().total_space();
+            return make_ready_future<>();
+        }
         tlogger.debug("seal_active_memtable: adding memtable");
         utils::get_local_injector().inject("table_seal_active_memtable_add_memtable", []() {
             throw std::bad_alloc();
@@ -2269,7 +2297,18 @@ table::seal_active_memtable(compaction_group& cg, flush_permit&& flush_permit) n
     // Flushes of the group run concurrently, and a later sealed memtable may
     // land first. The watermark may only advance once every memtable sealed
     // before this one is in sstables too, which previous_flush waited for.
-    cg._highest_flushed_rp = std::max(cg._highest_flushed_rp, old->replay_position());
+    // A memtable switched out by set_truncation_tombstone() is an exception: it enters
+    // the flush barrier only when its flush starts, so that a memtable sealed after it,
+    // which holds its flush permit, does not wait for it. Such a memtable stays in the
+    // list until it is flushed, so the watermark is held back while one is there.
+    cg._highest_completed_flush_rp = std::max(cg._highest_completed_flush_rp, old->replay_position());
+    const auto& memtables = *cg.memtables();
+    const bool older_unflushed = std::ranges::any_of(memtables, [&] (const shared_memtable& mt) {
+        return mt != memtables.back() && !mt->empty() && mt->replay_position() <= cg._highest_completed_flush_rp;
+    });
+    if (!older_unflushed) {
+        cg._highest_flushed_rp = std::max(cg._highest_flushed_rp, cg._highest_completed_flush_rp);
+    }
 
     // FIXME: release commit log
     // FIXME: provide back-pressure to upper layers
@@ -2306,23 +2345,29 @@ table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtabl
     auto consumer = _compaction_strategy.make_interposer_consumer(metadata, [this, old, permit, &newtabs, estimated_partitions, &cg] (mutation_reader reader) mutable -> future<> {
       std::exception_ptr ex;
       try {
-        sstables::sstable_writer_config cfg = get_sstables_manager().configure_writer("memtable");
-        // FIXME: incremental backups are deprecated; remove support for them in a future release (SCYLLADB-5498).
-        cfg.backup = incremental_backups_enabled();
+        // Nothing is left of a memtable which holds only data covered by the table's truncation
+        // tombstone (see memtable::make_flush_reader()), and an sstable cannot be empty.
+        if (co_await reader.peek()) {
+            sstables::sstable_writer_config cfg = get_sstables_manager().configure_writer("memtable");
+            // FIXME: incremental backups are deprecated; remove support for them in a future release (SCYLLADB-5498).
+            cfg.backup = incremental_backups_enabled();
 
-        auto newtab = make_sstable();
-        newtabs.push_back(newtab);
-        tlogger.debug("Flushing to {}", newtab->get_filename());
+            auto newtab = make_sstable();
+            newtabs.push_back(newtab);
+            tlogger.debug("Flushing to {}", newtab->get_filename());
 
-        auto monitor = database_sstable_write_monitor(permit, newtab, cg,
-            old->get_max_timestamp());
+            auto monitor = database_sstable_write_monitor(permit, newtab, cg,
+                old->get_max_timestamp());
 
-        co_return co_await write_memtable_to_sstable(std::move(reader), *old, newtab, estimated_partitions, monitor, cfg);
+            co_return co_await write_memtable_to_sstable(std::move(reader), *old, newtab, estimated_partitions, monitor, cfg);
+        }
       } catch (...) {
         ex = std::current_exception();
       }
       co_await reader.close();
-      co_await coroutine::return_exception_ptr(std::move(ex));
+      if (ex) {
+          co_await coroutine::return_exception_ptr(std::move(ex));
+      }
     });
 
     auto f = consumer(old->make_flush_reader(
@@ -2354,6 +2399,31 @@ table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtabl
         });
 
         _large_data_guardrail->on_flush();
+
+        // A flush which wrote no sstable leaves nothing which tells the commitlog replay to skip the
+        // memtable's entries. They hold data covered by the truncation tombstone, which would come
+        // back if they were replayed after it is garbage-collected. Save a commitlog cleanup record
+        // for them, before the memtable is removed, since the truncation tombstone is kept while a
+        // memtable which predates it is there. The record covers every entry of the group up to its
+        // replay position, so it waits for the older memtables of the group to be flushed, like
+        // _highest_flushed_rp does, see seal_active_memtable().
+        if (newtabs.empty()) {
+            cg._unrecorded_empty_flush_rp = std::max(cg._unrecorded_empty_flush_rp, old->replay_position());
+        }
+        if (cg._unrecorded_empty_flush_rp.valid()) {
+            const auto& memtables = *cg.memtables();
+            const auto rp = std::max({cg._unrecorded_empty_flush_rp, cg._highest_completed_flush_rp, old->replay_position()});
+            const bool older_unflushed = std::ranges::any_of(memtables, [&] (const shared_memtable& mt) {
+                return mt != old && mt != memtables.back() && !mt->empty() && mt->replay_position() <= rp;
+            });
+            if (!older_unflushed) {
+                if (co_await _compaction_manager.save_commitlog_cleanup_record(_schema->id(), cg.token_range(), rp)) {
+                    if (cg._unrecorded_empty_flush_rp <= rp) {
+                        cg._unrecorded_empty_flush_rp = {};
+                    }
+                }
+            }
+        }
 
         cg.memtables()->erase(old);
         tlogger.debug("Memtable for {}.{} replaced, into {} sstables", old->schema()->ks_name(), old->schema()->cf_name(), newtabs.size());
@@ -2989,6 +3059,12 @@ table::compact_all_sstables(tasks::task_info info, do_flush do_flush, bool consi
         auto lock_holder = co_await _compaction_manager.get_incremental_repair_read_lock(view, "compact_all_sstables");
         co_await _compaction_manager.perform_major_compaction(view, info, consider_only_existing_data, pre_flush_gc_state);
     });
+    // Major compaction drops all the data covered by the truncation tombstone, which can be garbage-collected
+    // once no replica holds any (see docs/dev/delete-all-data.md).
+    if (const auto t = _truncation_tombstone) {
+        tlogger.info("{}.{} {} data covered by its truncation tombstone {} on this shard after major compaction",
+                _schema->ks_name(), _schema->cf_name(), may_hold_truncated_data(t.timestamp) ? "still holds" : "holds no", t);
+    }
 }
 
 void table::start_compaction() {
@@ -3360,8 +3436,12 @@ table::make_memtable_list(compaction_group& cg) {
         co_await seal_active_memtable(cg, std::move(permit));
     };
     auto get_schema = [this] { return schema(); };
-    return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.dirty_memory_manager, _memtable_shared_data, _stats, _config.memory_compaction_scheduling_group,
+    auto memtables = make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.dirty_memory_manager, _memtable_shared_data, _stats, _config.memory_compaction_scheduling_group,
         &get_compaction_manager().get_shared_tombstone_gc_state());
+    // The initial memtable is empty, so it holds no data covered by the current truncation tombstone.
+    memtables->set_truncation_tombstone(_truncation_tombstone);
+    memtables->back()->set_truncation_tombstone(_truncation_tombstone);
+    return memtables;
 }
 
 class compaction_group::compaction_group_view : public compaction::compaction_group_view {
@@ -3564,6 +3644,7 @@ compaction_group::compaction_group(table& t, size_t group_id, dht::token_range t
     , _main_sstables(make_lw_shared<sstables::sstable_set>(make_main_sstable_set()))
     , _maintenance_sstables(make_maintenance_sstable_set())
     , _async_gate(format("[compaction_group {}.{} {}]", t.schema()->ks_name(), t.schema()->cf_name(), group_id))
+    , _sealed_memtables_flushes(format("[compaction_group {}.{} {}] sealed memtables flushes", t.schema()->ks_name(), t.schema()->cf_name(), group_id))
     , _repair_sstable_classifier(std::move(repair_classifier))
     , _logstor_state(t.uses_logstor() ? std::make_unique<compaction_group_logstor_state>(*this) : nullptr)
     , _lowest_rp(db::replay_position::max)
@@ -4224,6 +4305,9 @@ void table::update_effective_replication_map(locator::effective_replication_map_
     };
 
     if (uses_tablets()) {
+        // Installed before the storage groups are updated, so that memtables of new
+        // compaction groups are stamped with it.
+        set_truncation_tombstone(_erm->get_token_metadata().tablets().get_truncated_at(_schema->id()));
         _sg_manager->update_effective_replication_map(old_erm, *_erm, refresh_mutation_source);
     }
     if (old_erm) {
@@ -4233,6 +4317,156 @@ void table::update_effective_replication_map(locator::effective_replication_map_
     recalculate_tablet_count_stats();
 
     update_tombstone_gc_rf_one();
+}
+
+void table::set_truncation_tombstone(tombstone t) {
+    if (t == _truncation_tombstone) {
+        return;
+    }
+    // A newer truncation tombstone is set by a TRUNCATE; otherwise, it was garbage-collected,
+    // after no data covered by it remained, so nothing else changes.
+    const bool newer = t > _truncation_tombstone;
+    tlogger.debug("Setting the truncation tombstone of {}.{} to {} (was {})", _schema->ks_name(), _schema->cf_name(), t, _truncation_tombstone);
+    _truncation_tombstone = t;
+
+    // Held for the background work below. Taken before any memtable is switched, since
+    // nothing else flushes a switched memtable. A table which is being stopped flushes
+    // its active memtables.
+    auto async_gate_holder = newer ? _async_gate.try_hold() : std::nullopt;
+    std::vector<sealed_memtable> sealed;
+    for_each_compaction_group([&] (compaction_group& cg) {
+        auto& memtables = *cg.memtables();
+        memtables.set_truncation_tombstone(t);
+        if (!newer || !async_gate_holder) {
+            return;
+        }
+        auto active = memtables.back();
+        if (active->empty()) {
+            active->set_truncation_tombstone(t);
+            return;
+        }
+        if (!memtables.can_flush() || uses_logstor()) {
+            return;
+        }
+        // Switch to a new active memtable, so that no write applied from now on
+        // is merged in memory with data covered by the truncation tombstone before
+        // it can be stripped (see Counters in docs/dev/delete-all-data.md).
+        // The old memtable is flushed in the background; cg.flush() waits for it.
+        auto flush_gate_holder = cg.flush_gate().try_hold();
+        if (!flush_gate_holder) {
+            // The compaction group is being stopped, which flushes its memtables.
+            return;
+        }
+        try {
+            auto op = cg._sealed_memtables_flushes.start();
+            // Not after the switch: a switched memtable must be flushed.
+            sealed.reserve(sealed.size() + 1);
+            memtables.add_memtable();
+            sealed.push_back(sealed_memtable{cg, std::move(active), std::move(*flush_gate_holder), std::move(op)});
+        } catch (...) {
+            // Not switching only exposes counter updates to the edge case of being merged with
+            // covered data, the same as for those concurrent with the DELETE ALL DATA.
+            tlogger.warn("Failed to switch the active memtable of {}.{} for its truncation tombstone: {}",
+                    _schema->ks_name(), _schema->cf_name(), std::current_exception());
+            return;
+        }
+        _stats.memtable_switch_count++;
+        // Keeps flush_when_needed() off the switched memtable, as seal_active_memtable() does.
+        sealed.back().memtable->region().ground_evictable_occupancy();
+    });
+
+    if (newer && async_gate_holder) {
+        // Synchronized with stop() by the table's async gate, and by the flush gates held
+        // for the switched memtables, which stopping the compaction groups waits for.
+        (void)on_new_truncation_tombstone(t, std::move(sealed)).handle_exception([this] (std::exception_ptr ep) {
+            tlogger.warn("Failed to apply the truncation tombstone of {}.{}: {}", _schema->ks_name(), _schema->cf_name(), ep);
+        }).finally([holder = std::move(*async_gate_holder)] {});
+    } else if (t < _cache_truncation_tombstone) {
+        _cache_truncation_tombstone = t;
+    }
+}
+
+future<> table::on_new_truncation_tombstone(tombstone t, std::vector<sealed_memtable> sealed) {
+    // Invalidate the cache, so that it holds no data covered by the truncation tombstone.
+    // Reads created until it is done strip covered data from the cache's output too.
+    // Population reads started before the invalidation are discarded by it.
+    // If it fails, the cache's output keeps being stripped, and the switched memtables
+    // are flushed regardless, since nothing else flushes them.
+    try {
+        co_await _cache.invalidate(row_cache::external_updater([] {}));
+        if (t > _cache_truncation_tombstone) {
+            _cache_truncation_tombstone = t;
+        }
+    } catch (...) {
+        tlogger.error("Failed to invalidate the cache of {}.{} for its truncation tombstone: {}",
+                _schema->ks_name(), _schema->cf_name(), std::current_exception());
+    }
+
+    // Flush the memtables that were switched out, which may hold covered data.
+    co_await coroutine::parallel_for_each(sealed, [this] (sealed_memtable& s) -> future<> {
+        auto permit = co_await _config.dirty_memory_manager->get_flush_permit();
+        // A memtable dropped meanwhile, e.g. by truncate_tablet_locally(), which takes all
+        // flush permits before dropping memtables, must not be flushed.
+        if (std::ranges::find(*s.cg.memtables(), s.memtable) == s.cg.memtables()->end()) {
+            co_return;
+        }
+        co_await seal_active_memtable(s.cg, std::move(permit), s.memtable);
+    });
+}
+
+bool table::may_hold_truncated_data(api::timestamp_type truncated_at) const {
+    // The cache holds no data covered by the truncation tombstone it was last invalidated for.
+    if (_cache_truncation_tombstone.timestamp < truncated_at) {
+        return true;
+    }
+    if (_commitlog_may_hold_truncated_data) {
+        return true;
+    }
+    bool found = false;
+    // All the compaction groups, also those which are being stopped, which for_each_compaction_group()
+    // skips: a group merged into another holds its sstables until they are moved over.
+    _sg_manager->for_each_storage_group([&] (size_t, storage_group& sg) {
+      sg.for_each_compaction_group([&] (const compaction_group_ptr& cg_ptr) {
+        const compaction_group& cg = *cg_ptr;
+        if (found) {
+            return;
+        }
+        // Writes applied to a memtable are stripped of the data covered by the truncation tombstone it was created with.
+        found = std::ranges::any_of(*cg._memtables, [&] (const shared_memtable& mt) {
+            return !mt->empty() && mt->truncation_tombstone().timestamp < truncated_at && mt->get_min_timestamp() <= truncated_at;
+        });
+        const auto may_hold = [&] (const sstables::shared_sstable& sst) {
+            return sst->get_stats_metadata().min_timestamp <= truncated_at;
+        };
+        // Includes the staging and maintenance sstables.
+        found = found || std::ranges::any_of(cg.all_sstables(), may_hold);
+        // Sstables which were compacted and not deleted yet are loaded again if the node restarts before they are.
+        found = found || std::ranges::any_of(cg.compacted_undeleted_sstables(), may_hold);
+      });
+    });
+    return found;
+}
+
+void table::on_write_raced_with_truncation_tombstone() {
+    const auto generation = ++_commitlog_truncated_data_generation;
+    _commitlog_may_hold_truncated_data = true;
+    auto holder = _async_gate.try_hold();
+    if (!holder) {
+        // The table is being stopped, which flushes its memtables.
+        return;
+    }
+    tlogger.debug("A write to {}.{} raced with its truncation tombstone, flushing", _schema->ks_name(), _schema->cf_name());
+    // Flushing the memtables records their replay positions, in the sstables written or in a
+    // commitlog cleanup record, so the entry is not replayed. Until then, the truncation tombstone
+    // is kept, see may_hold_truncated_data(), so the entry is stripped if it is replayed.
+    (void)flush().then([this, generation] {
+        if (_commitlog_truncated_data_generation == generation) {
+            _commitlog_may_hold_truncated_data = false;
+        }
+    }).handle_exception([this] (std::exception_ptr ex) {
+        // The truncation tombstone is kept until a later raced write, or a restart, clears this.
+        tlogger.warn("Failed to flush {}.{} after a write raced with its truncation tombstone: {}", _schema->ks_name(), _schema->cf_name(), ex);
+    }).finally([holder = std::move(*holder)] {});
 }
 
 void table::update_tombstone_gc_rf_one() {
@@ -4360,7 +4594,8 @@ public:
                                     sstring name, db::snapshot_options opts,
                                     schema_ptr schema,
                                     std::optional<int64_t> tablet_count,
-                                    std::optional<locator::tablet_layout> tablet_layout) = 0;
+                                    std::optional<locator::tablet_layout> tablet_layout,
+                                    tombstone truncation_tombstone) = 0;
     virtual ~snapshot_writer() = default;
 };
 
@@ -4392,7 +4627,8 @@ public:
                             sstring name, db::snapshot_options opts,
                             schema_ptr schema,
                             std::optional<int64_t> tablet_count,
-                            std::optional<locator::tablet_layout> tablet_layout) override;
+                            std::optional<locator::tablet_layout> tablet_layout,
+                            tombstone truncation_tombstone) override;
 };
 
 class noop_snapshot_writer : public snapshot_writer {
@@ -4407,7 +4643,7 @@ public:
         return make_ready_future<>();
     }
     future<> write_manifest(const locator::topology&, const std::vector<snapshot_sstable_set>&, const std::vector<db::snapshot_tablet_entry>&,
-            sstring, db::snapshot_options, schema_ptr, std::optional<int64_t>, std::optional<locator::tablet_layout>) override {
+            sstring, db::snapshot_options, schema_ptr, std::optional<int64_t>, std::optional<locator::tablet_layout>, tombstone) override {
         return make_ready_future<>();
     }
 };
@@ -4418,7 +4654,8 @@ future<> local_snapshot_writer::write_manifest(const locator::topology& topology
                                                sstring name, db::snapshot_options opts,
                                                schema_ptr schema,
                                                std::optional<int64_t> tablet_count,
-                                               std::optional<locator::tablet_layout> tablet_layout) {
+                                               std::optional<locator::tablet_layout> tablet_layout,
+                                               tombstone truncation_tombstone) {
     using namespace db::snapshot;
 
     manifest_json manifest;
@@ -4449,6 +4686,10 @@ future<> local_snapshot_writer::write_manifest(const locator::topology& topology
     table.table_id = to_sstring(schema->id());
     table.tablets_type = tablet_layout ? locator::tablet_layout_to_string(*tablet_layout) : "none";
     table.tablet_count = tablet_count.value_or(0);
+    if (truncation_tombstone) {
+        table.data_deleted_at_timestamp = truncation_tombstone.timestamp;
+        table.data_deleted_at_deletion_time = gc_clock::to_time_t(truncation_tombstone.deletion_time);
+    }
     manifest.table = std::move(table);
 
     for (const auto& fsp : sstable_sets) {
@@ -4559,11 +4800,18 @@ future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, c
         std::vector<snapshot_sstable_set> sstable_sets(this_smp_shard_count());
         using sstable_hold = foreign_ptr<std::unique_ptr<std::vector<sstables::shared_sstable>>>;
         std::vector<sstable_hold> holds(this_smp_shard_count());
+        // The table's truncation tombstone, as each shard sees it when it lists its sstables.
+        // The snapshot's sstables may hold data covered by it, since it deletes data logically,
+        // so it is recorded with them, to be applied again wherever they are restored.
+        // It is sampled together with the sstable list: once it is garbage-collected, no sstable
+        // holds covered data, and a later TRUNCATE covers only data the snapshot may keep.
+        std::vector<tombstone> truncation_tombstones(this_smp_shard_count());
 
         co_await writer->init();
         co_await smp::invoke_on_all([&] -> future<> {
             auto& t = *table_shards;
             auto [tables, permit] = co_await t.snapshot_sstables();
+            truncation_tombstones[this_shard_id()] = t.get_truncation_tombstone();
             auto sstables_metadata = co_await t.get_sstables_manager().take_snapshot(tables, dir_name);
             sstable_sets[this_shard_id()] = make_foreign(std::make_unique<utils::chunked_vector<sstables::sstable_snapshot_metadata>>(std::move(sstables_metadata)));
             holds[this_shard_id()] = make_foreign(std::make_unique<std::vector<sstables::shared_sstable>>(std::move(tables)));
@@ -4613,8 +4861,12 @@ future<> database::snapshot_table_on_all_shards(sharded<database>& sharded_db, c
                 }
             }
         }
+        tombstone truncation_tombstone;
+        for (const auto& shard_truncation_tombstone : truncation_tombstones) {
+            truncation_tombstone.apply(shard_truncation_tombstone);
+        }
         co_await writer->write_manifest(topology, sstable_sets, tablets, dir_name, opts, s,
-                                        tablet_count, tablet_layout).handle_exception([&] (std::exception_ptr ptr) {
+                                        tablet_count, tablet_layout, truncation_tombstone).handle_exception([&] (std::exception_ptr ptr) {
             tlogger.error("Failed to seal snapshot in {}: {}.", name, ptr);
             ex = std::move(ptr);
         });
@@ -4821,7 +5073,11 @@ future<> compaction_group::flush_memtables(std::optional<db::replay_position> po
     // set the flush function, I guess it is ok. Retaining low until then
     // for logging purposes as well.
     try {
-        return _memtables->flush();
+        // Memtables switched out when the truncation tombstone was set are flushed
+        // in the background, so wait for those too.
+        return _memtables->flush().then([this] {
+            return _sealed_memtables_flushes.advance_and_await();
+        });
     } catch (...) {
         return current_exception_as_future<>();
     }
@@ -5418,6 +5674,15 @@ future<> table::apply(const mutation& m, db::rp_handle&& h, db::timeout_clock::t
     }
 
     return run_write_when_memory_available(*m.schema(), dirty_memory_region_group(), [this, &m, h = std::move(h), &cg, holder = std::move(holder), ss_holder = std::move(ss_holder)] () mutable {
+        // Strip the data covered by the truncation tombstone, synchronously with applying the mutation to
+        // the active memtable, which is stamped with the current truncation tombstone, so that it holds no
+        // data covered by it. This covers commitlog replay too, which bypasses database::do_apply().
+        if (_truncation_tombstone && m.partition().has_truncated(*m.schema(), _truncation_tombstone.timestamp)) [[unlikely]] {
+            auto stripped = m;
+            stripped.partition().strip_truncated(*m.schema(), _truncation_tombstone.timestamp);
+            do_apply(cg, std::move(h), stripped, _large_data_guardrail->get_memtable_cache_tracker(*m.schema(), m.key()));
+            return;
+        }
         do_apply(cg, std::move(h), m, _large_data_guardrail->get_memtable_cache_tracker(*m.schema(), m.key()));
     }, timeout);
 }
@@ -5440,6 +5705,16 @@ future<> table::apply(const frozen_mutation& m, schema_ptr m_schema, db::rp_hand
     }
 
     return run_write_when_memory_available(s, dirty_memory_region_group(), [this, &m, m_schema = std::move(m_schema), h = std::move(h), &cg, holder = std::move(holder), ss_holder = std::move(ss_holder), guardrails = std::move(guardrails), violations_out]() mutable {
+        // See apply(const mutation&) above.
+        // FIXME: avoid unfreezing the mutation just to check whether it holds covered data.
+        if (_truncation_tombstone) [[unlikely]] {
+            auto unfrozen = m.unfreeze(m_schema);
+            if (unfrozen.partition().has_truncated(*m_schema, _truncation_tombstone.timestamp)) {
+                unfrozen.partition().strip_truncated(*m_schema, _truncation_tombstone.timestamp);
+                guardrails->check(*m_schema, unfrozen.partition(), m.key(), violations_out);
+                return do_apply(cg, std::move(h), unfrozen, _large_data_guardrail->get_memtable_cache_tracker(*m_schema, m.key()));
+            }
+        }
         return do_apply(cg, std::move(h), m, m_schema, *guardrails, _large_data_guardrail->get_memtable_cache_tracker(*m_schema, m.key()), std::move(violations_out));
     }, timeout);
 }

@@ -97,6 +97,7 @@ target_sources(cql3
     statements/index_target.cc
     statements/create_index_statement.cc
     statements/truncate_statement.cc
+    statements/delete_all_data_statement.cc
     statements/alter_table_statement.cc
     statements/alter_view_statement.cc
     statements/list_users_statement.cc

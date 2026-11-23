@@ -23,6 +23,7 @@
 #include "replica/logstor/segment_types.hh"
 #include "sstables/sstable_set.hh"
 #include "utils/chunked_vector.hh"
+#include "utils/phased_barrier.hh"
 #include "db/commitlog/replay_position.hh"
 #include <absl/container/flat_hash_map.h>
 
@@ -88,6 +89,9 @@ class compaction_group : public compaction::compaction_backlog_source {
     seastar::named_gate _async_gate;
     // Gates flushes.
     seastar::named_gate _flush_gate;
+    // Tracks the flushes of memtables switched out of the active position when the table's
+    // truncation tombstone was set, which flush() waits for too.
+    utils::phased_barrier _sealed_memtables_flushes;
     // Gates sstable being added to the group.
     // This prevents the group from being considered empty when sstables are being added.
     // Crucial for tablet split which ACKs split for a table when all pre-split groups are empty.
@@ -106,6 +110,13 @@ class compaction_group : public compaction::compaction_backlog_source {
     // only once the flushed sstables are on disk and in the sstable set, so a
     // mutation of this group at or below it is in an sstable at any moment.
     db::replay_position _highest_flushed_rp;
+    // The highest replay position of the memtables of this group whose flush completed.
+    // _highest_flushed_rp advances to it once no older memtable is still unflushed.
+    db::replay_position _highest_completed_flush_rp;
+    // The highest replay position of the memtables which were flushed without writing an sstable,
+    // since nothing was left of them (see memtable::make_flush_reader()), and are not covered by a
+    // commitlog cleanup record yet. No sstable tells the commitlog replay to skip their entries.
+    db::replay_position _unrecorded_empty_flush_rp;
     friend class table;
 private:
     std::unique_ptr<compaction_group_view> make_compacting_view();

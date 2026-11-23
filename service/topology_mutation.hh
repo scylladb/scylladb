@@ -198,7 +198,8 @@ public:
     // `tables` maps each table which has no tablet map yet to its tablet count target, 0 for none.
     topology_request_tracking_mutation_builder& set_prepare_migration_data(const sstring& ks_name,
             const std::unordered_map<table_id, size_t>& tables);
-    topology_request_tracking_mutation_builder& set_restore_tablets_data(const table_id& tid, const sstring& snapshot_name);
+    // truncation_tombstone is the table's truncation tombstone when the snapshot was taken, if any.
+    topology_request_tracking_mutation_builder& set_restore_tablets_data(const table_id& tid, const sstring& snapshot_name, tombstone truncation_tombstone);
 
     canonical_mutation build() { return canonical_mutation{std::move(_m)}; }
 };

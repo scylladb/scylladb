@@ -1386,6 +1386,10 @@ In a prepared statement, the timeout can be given as a bind marker::
 
 .. caution:: Do not run any operation on a table that is being truncated. Truncate operation is an administrative operation, and running any other operation on the same table in parallel may cause the truncating table's data to end up in an undefined state.
 
+For tables using tablets, ``TRUNCATE`` also clears the deletion timestamp set by
+:ref:`DELETE ALL DATA <delete-all-data-statement>`, if any: data written or restored into the table after it is
+truncated is kept, also when its write timestamp is at or before that deletion timestamp.
+
 * :doc:`Apache Cassandra Query Language (CQL) Reference </cql/index>`
 
 .. include:: /rst_include/apache-copyrights.rst

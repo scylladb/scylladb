@@ -3297,6 +3297,14 @@ void compaction_manager::plug_system_keyspace(db::system_keyspace& sys_ks) noexc
     _sys_ks.plug(sys_ks.shared_from_this());
 }
 
+future<bool> compaction_manager::save_commitlog_cleanup_record(table_id table, dht::token_range range, db::replay_position rp) {
+    if (auto sys_ks = _sys_ks.get_permit()) {
+        co_await sys_ks->save_commitlog_cleanup_record(table, std::move(range), rp);
+        co_return true;
+    }
+    co_return false;
+}
+
 future<> compaction_manager::unplug_system_keyspace() noexcept {
     co_await _sys_ks.unplug();
 }

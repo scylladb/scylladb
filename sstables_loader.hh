@@ -18,6 +18,7 @@
 #include "tasks/task_manager.hh"
 #include "db/consistency_level_type.hh"
 #include "locator/tablets.hh"
+#include "mutation/tombstone.hh"
 #include "service/topology_guard.hh"
 #include "utils/assert.hh"
 
@@ -130,7 +131,9 @@ private:
 
     // Pins the table at tablet_count tablets, restores them from the snapshot and alters the table back
     // to its original hints. Called on the shard that owns the task.
+    // The snapshot's truncation tombstone, if any, is applied to the table along with the snapshot's data.
     future<> do_restore_tablets(tablet_restore_progress& progress, table_id, const sstring& snap_name, size_t tablet_count,
+            tombstone truncation_tombstone,
             std::optional<size_t> original_min_tablet_count, std::optional<size_t> original_max_tablet_count);
 
     future<seastar::shared_ptr<const locator::effective_replication_map>> await_topology_quiesced_and_get_erm(table_id table_id);
@@ -220,6 +223,9 @@ future<std::vector<tablet_sstable_collection>> get_sstables_for_tablets_for_test
 struct manifest_summary {
     size_t tablet_count;
     size_t nr_sstables;
+    // The table's truncation tombstone when the snapshot was taken, if any.
+    // The latest of the manifests', since each node records it as it sees it.
+    tombstone truncation_tombstone = {};
 };
 
 // Manifests coming from a datacenter other than the expected one are rejected.

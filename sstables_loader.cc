@@ -1266,11 +1266,24 @@ static future<manifest_summary> process_manifest(input_stream<char>& is, sstring
         }
     }
 
+    // The table's truncation tombstone when the snapshot was taken, if any. Manifests written
+    // before it was recorded, or for a table which was not truncated, do not have it.
+    tombstone truncation_tombstone;
+    const auto* data_deleted_at_timestamp = rjson::find(table_obj, "data_deleted_at_timestamp");
+    const auto* data_deleted_at_deletion_time = rjson::find(table_obj, "data_deleted_at_deletion_time");
+    if (bool(data_deleted_at_timestamp) != bool(data_deleted_at_deletion_time)) {
+        throw std::runtime_error(fmt::format("Malformed manifest {}, 'data_deleted_at_timestamp' and 'data_deleted_at_deletion_time' must come together", manifest_prefix));
+    }
+    if (data_deleted_at_timestamp) {
+        truncation_tombstone = tombstone(rjson::get<int64_t>(table_obj, "data_deleted_at_timestamp"),
+                gc_clock::from_time_t(rjson::get<int64_t>(table_obj, "data_deleted_at_deletion_time")));
+    }
+
     // Process each sstable entry in the manifest
     // FIXME: cleanup of the snapshot-related rows is needed in case anything throws in here.
     auto sstables = rjson::find(parsed, "sstables");
     if (!sstables) {
-        co_return manifest_summary{tablet_count, 0};
+        co_return manifest_summary{tablet_count, 0, truncation_tombstone};
     }
     if (!sstables->IsArray()) {
         throw std::runtime_error("Malformed manifest, 'sstables' is not array");
@@ -1360,7 +1373,7 @@ static future<manifest_summary> process_manifest(input_stream<char>& is, sstring
         }
     }
 
-    co_return manifest_summary{tablet_count, sstables->Size()};
+    co_return manifest_summary{tablet_count, sstables->Size(), truncation_tombstone};
 }
 
 future<manifest_summary> populate_snapshot_sstables_from_manifests(sstables::storage_manager& sm, db::system_distributed_keyspace& sys_dist_ks, sstring keyspace, sstring table, sstring endpoint, sstring bucket, sstring prefix, sstring expected_snapshot_name, sstring expected_datacenter, utils::chunked_vector<sstring> manifest_prefixes, db::consistency_level cl) {
@@ -1375,6 +1388,7 @@ future<manifest_summary> populate_snapshot_sstables_from_manifests(sstables::sto
     // tablet_count to be returned by this function, we also validate that all manifests passed contain the same tablet count
     std::optional<size_t> tablet_count;
     size_t nr_sstables = 0;
+    tombstone truncation_tombstone;
 
     co_await seastar::max_concurrent_for_each(manifest_prefixes, 16, [&] (const sstring& manifest_prefix) {
         // Manifest entries are relative to the backup location's prefix, same as start_restore.
@@ -1389,6 +1403,7 @@ future<manifest_summary> populate_snapshot_sstables_from_manifests(sstables::sto
                     throw std::runtime_error(fmt::format("Inconsistent tablet_count values in manifest {}: expected {}, got {}", manifest_prefix, *tablet_count, count));
                 }
                 nr_sstables += ms.nr_sstables;
+                truncation_tombstone.apply(ms.truncation_tombstone);
             });
         });
     });
@@ -1396,6 +1411,7 @@ future<manifest_summary> populate_snapshot_sstables_from_manifests(sstables::sto
     co_return manifest_summary{
         .tablet_count = *tablet_count,
         .nr_sstables = nr_sstables,
+        .truncation_tombstone = truncation_tombstone,
     };
 }
 
@@ -1476,6 +1492,7 @@ public:
 };
 
 future<> sstables_loader::do_restore_tablets(tablet_restore_progress& progress, table_id tid, const sstring& snap_name, size_t tablet_count,
+        tombstone truncation_tombstone,
         std::optional<size_t> original_min_tablet_count, std::optional<size_t> original_max_tablet_count) {
     progress.start();
     std::exception_ptr eptr;
@@ -1483,7 +1500,7 @@ future<> sstables_loader::do_restore_tablets(tablet_restore_progress& progress, 
         co_await _ss.local().alter_table_with_tablet_hints(tid, tablet_count, tablet_count);
 
         try {
-            co_await _ss.local().restore_tablets(tid, snap_name);
+            co_await _ss.local().restore_tablets(tid, snap_name, truncation_tombstone);
         } catch (...) {
             llog.error("Failed to restore tablets for table_id {}. Error: {:t}", tid, std::current_exception());
             eptr = std::current_exception();
@@ -1567,6 +1584,15 @@ future<tasks::task_id> sstables_loader::restore_tablets(table_id tid, sstring ke
 
     db::snapshot_table_helper sth(_sys_dist_ks.qp());
     manifest_summary summary = { .tablet_count = 0, .nr_sstables = 0 };
+    auto check_truncation_tombstone = [&] {
+        // The snapshot's sstables may hold data covered by the truncation tombstone which was in effect
+        // when the snapshot was taken. Without the feature, nothing would keep that data deleted.
+        if (summary.truncation_tombstone && !_db.local().features().eventually_consistent_delete_all_data) {
+            throw std::runtime_error(fmt::format("Cannot restore {}.{} from snapshot {}: the table had data deleted by DELETE ALL DATA, with {}, when the snapshot was taken, "
+                    "and the 'EVENTUALLY_CONSISTENT_DELETE_ALL_DATA' feature, needed to keep the truncated data deleted, is not available in cluster",
+                    keyspace, table, snap_name, summary.truncation_tombstone));
+        }
+    };
 
     for (auto& loc : locations) {
         auto loc_summary = co_await populate_snapshot_sstables_from_manifests(_storage_manager, _sys_dist_ks, keyspace, table, loc.endpoint, loc.bucket, loc.prefix, snap_name, loc.datacenter, std::move(loc.manifests));
@@ -1577,6 +1603,7 @@ future<tasks::task_id> sstables_loader::restore_tablets(table_id tid, sstring ke
                 summary.tablet_count, loc.datacenter, loc_summary.tablet_count));
         }
         summary.nr_sstables += loc_summary.nr_sstables;
+        summary.truncation_tombstone.apply(loc_summary.truncation_tombstone);
 
         // TODO: update state when all restored...
         co_await sth.insert_snapshot_remote_location(snap_name, loc.datacenter, loc.endpoint, loc.bucket, loc.prefix, db::snapshot_state::remote);
@@ -1589,6 +1616,8 @@ future<tasks::task_id> sstables_loader::restore_tablets(table_id tid, sstring ke
     // hints, or restores into the same table the snapshot was taken from; in both
     // cases the original hints are recovered from the persisted schema instead of
     // the live one.
+    check_truncation_tombstone();
+
     auto entries = co_await sth.get_snapshot_tables(snap_name, keyspace, table, db::consistency_level::QUORUM);
     auto t = _db.local().get_tables_metadata().get_table_if_exists(tid);
     if (!t) {
@@ -1638,8 +1667,9 @@ future<tasks::task_id> sstables_loader::restore_tablets(table_id tid, sstring ke
                     });
                 });
     auto task = co_await std::move(task_builder).build([this, progress, tid, snap_name = std::move(snap_name), tablet_count = summary.tablet_count,
+            truncation_tombstone = summary.truncation_tombstone,
             original_min_tablet_count = original_hints.min_tablet_count, original_max_tablet_count = original_hints.max_tablet_count] (tasks::task_manager::task::impl&) {
-        return do_restore_tablets(*progress, tid, snap_name, tablet_count, original_min_tablet_count, original_max_tablet_count);
+        return do_restore_tablets(*progress, tid, snap_name, tablet_count, truncation_tombstone, original_min_tablet_count, original_max_tablet_count);
     });
     co_return task->id();
 }

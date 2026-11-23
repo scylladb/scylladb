@@ -473,9 +473,13 @@ topology_request_tracking_mutation_builder& topology_request_tracking_mutation_b
 }
 
 topology_request_tracking_mutation_builder& topology_request_tracking_mutation_builder::set_restore_tablets_data(
-        const table_id& tid, const sstring& snapshot_name) {
+        const table_id& tid, const sstring& snapshot_name, tombstone truncation_tombstone) {
     apply_atomic("restore_table_id", tid.uuid());
     apply_atomic("restore_snapshot_name", snapshot_name);
+    if (truncation_tombstone) {
+        apply_atomic("restore_data_deleted_at_timestamp", truncation_tombstone.timestamp);
+        apply_atomic("restore_data_deleted_at_deletion_time", db_clock::from_time_t(gc_clock::to_time_t(truncation_tombstone.deletion_time)));
+    }
     return *this;
 }
 
