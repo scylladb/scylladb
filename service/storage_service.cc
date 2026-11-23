@@ -2290,19 +2290,15 @@ future<token_metadata_change> storage_service::prepare_token_metadata_change(mut
                 if (auto pt_rs = rs->maybe_as_per_table()) {
                     erm = pt_rs->make_replication_map(id, tmptr);
                 } else {
-                    const locator::abstract_replication_strategy *old_rs = ss.get_database().column_family_exists(id)
-                            ? &ss.get_database().find_column_family(id).get_effective_replication_map()->get_replication_strategy()
-                            : nullptr;
-                    if (old_rs && old_rs->uses_tablets()) {
+                    auto table_is_migrating = tmptr->tablets().has_tablet_map(id);
+                    if (table_is_migrating && ss.get_database().get_node_storage_mode() == storage_mode::tablets) {
                         // The table is under vnodes-to-tablets migration:
                         // the keyspace uses vnodes, but the table uses a tablet-based ERM.
-                        // Preserve the tablet flavor of the ERM.
                         // The ERM flavor is a node-local setting that expresses
                         // the node's storage organization, which can change only
                         // on startup after resharding (while the node is offline).
-                        // It is determined on startup by the distributed loader.
-                        auto old_tablet_rs = old_rs->maybe_as_tablet_aware();
-                        locator::replication_strategy_params params(rs->get_config_options(), old_tablet_rs->get_initial_tablets(), old_tablet_rs->get_consistency());
+                        // It follows the node's storage mode, as in add_column_family().
+                        locator::replication_strategy_params params(rs->get_config_options(), 0, std::nullopt);
                         auto& ks = ss.get_database().find_keyspace(table_schema->ks_name());
                         auto tablet_rs = locator::abstract_replication_strategy::create_replication_strategy(ks.metadata()->strategy_name(), params, tmptr->get_topology());
                         auto pt_rs = tablet_rs->maybe_as_per_table();
