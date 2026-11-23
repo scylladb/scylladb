@@ -58,7 +58,6 @@ class BlackholeServer:
         logger.info(f"Blackhole server on {self.ip} stopped")
 
 
-@pytest.mark.xfail(reason="SCYLLADB-2127: stale RPC connections not yet invalidated on IP change")
 @pytest.mark.asyncio
 async def test_direct_fd_recovers_after_ip_change(manager: ManagerClient):
     """Reproduces SCYLLADB-2127: when a node restarts with a new IP (e.g. K8s

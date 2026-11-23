@@ -479,6 +479,9 @@ public:
     void remove_error_rpc_client(messaging_verb verb, locator::host_id id);
     void remove_rpc_client_with_ignored_topology(msg_addr id, locator::host_id hid);
     void remove_rpc_client(msg_addr id);
+    // Drops clients to hid whose IP differs from current_ip, so the next RPC to hid
+    // connects to current_ip.
+    void remove_rpc_clients_to_stale_ip(locator::host_id hid, inet_address current_ip);
     connection_drop_registration_t when_connection_drops(connection_drop_slot_t& slot) {
         return _connection_dropped.connect(slot);
     }

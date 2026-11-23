@@ -1008,17 +1008,18 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
         on_internal_error(mlogger, "This node is in maintenance mode, it shouldn't contact other nodes");
     }
     auto idx = get_rpc_client_idx(verb);
-    auto find_existing = [idx, this] (auto& clients, auto hid) -> shared_ptr<rpc_protocol_client_wrapper> {
+    auto find_existing = [idx, id, this] (auto& clients, auto hid) -> shared_ptr<rpc_protocol_client_wrapper> {
         auto it = clients[idx].find(hid);
 
         if (it != clients[idx].end()) {
             auto c = it->second.rpc_client;
-            if (!c->error()) {
+            // A client found by host_id may point at the node's previous IP. This shard
+            // can create one after remove_rpc_clients_to_stale_ip() ran, if its
+            // address map was updated later. Replace such a client.
+            if (!c->error() && it->second.endpoint == id.addr) {
                 return c;
             }
-            // The 'dead_only' it should be true, because we're interested in
-            // dropping the errored socket, but since it's errored anyway (the
-            // above if) it's false to save unneeded second c->error() call
+            // Errored or stale: drop it without checking c->error() again.
             find_and_remove_client(clients[idx], hid, [] (const auto&) { return true; });
         }
         return nullptr;
@@ -1217,6 +1218,18 @@ void messaging_service::remove_rpc_client(msg_addr id) {
                 find_and_remove_client(c, hid, [] (const auto&) { return true; });
             }
         }
+    }
+}
+
+void messaging_service::remove_rpc_clients_to_stale_ip(locator::host_id hid, inet_address current_ip) {
+    for (auto& c : _clients_with_host_id) {
+        find_and_remove_client(c, hid, [hid, current_ip] (const auto& s) {
+            if (s.endpoint == current_ip) {
+                return false;
+            }
+            mlogger.debug("Dropping connection to {} at {}: its IP is now {}", hid, s.endpoint, current_ip);
+            return true;
+        });
     }
 }
 
