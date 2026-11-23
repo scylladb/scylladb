@@ -3,10 +3,14 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
 
 #############################################################################
-# Tests for flushing memtables into sstables, and for finding the sstables
-# which contain a key, with Scylla's REST API (which "nodetool flush" and
-# "nodetool getsstables" use). So these tests are scylla_only.
+# Tests for flushing memtables into sstables, for finding the sstables which
+# contain a key, and for the information about sstables which nodetool prints,
+# with Scylla's REST API (which "nodetool flush", "nodetool getsstables",
+# "nodetool sstableinfo" and "nodetool tablehistograms" use). So these tests
+# are scylla_only.
 #############################################################################
+
+import random
 
 import pytest
 import requests
@@ -52,3 +56,51 @@ def test_sstables_by_key(cql, test_keyspace, scylla_only, key_type, cql_key, key
         [sstable] = sstables_by_key(key)
         assert f'/{ks}/{cf}-' in sstable and sstable.endswith('-Data.db')
         assert sstables_by_key(missing_key) == []
+
+# Test the information about a flushed table's sstables (which "nodetool
+# sstableinfo" prints): it names the keyspace and the table, and has the
+# sstables' data size.
+# Translated from scylla-dtest's nodetool_additional_test.py::TestNodetool::test_sstable_info,
+# which, like this test, flushed all tables and only checked these.
+def test_sstable_info(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, 'col1 int PRIMARY KEY, col2 text') as table:
+        cql.execute(f"INSERT INTO {table} (col1, col2) VALUES (4, 'abc')")
+        nodetool.flush_all(cql)
+        ks, cf = table.split('.')
+        response = requests.get(f'{nodetool.rest_api_url(cql)}/storage_service/sstable_info', params={'keyspace': ks, 'cf': cf})
+        response.raise_for_status()
+        [info] = response.json()
+        assert info['keyspace'] == ks and info['table'] == cf
+        assert info['sstables'] and all(sstable['data_size'] > 0 for sstable in info['sstables'])
+
+# Test the histogram of the number of sstables read per read (the SSTables
+# column of "nodetool tablehistograms"): With autocompaction disabled, rows
+# written and rewritten in ten flushes (of all tables, as in the dtest) are
+# in several sstables, which reads of many partitions, bypassing the cache,
+# read. The histogram doesn't overflow, and some reads read more than one
+# sstable.
+# Translated from scylla-dtest's nodetool_additional_test.py::TestNodetool::test_sstables_in_tablehistograms,
+# which checked that nodetool printed the histogram's minimum and maximum.
+def test_sstables_per_read_histogram(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, 'key text PRIMARY KEY, c1 text, c2 text') as table, \
+         nodetool.no_autocompaction_context(cql, table):
+        ks, cf = table.split('.')
+        insert = cql.prepare(f"INSERT INTO {table} (key, c1, c2) VALUES (?, 'value1', 'value2')")
+        flushes, times, reads = 5, 100, 1000
+        def write(keys):
+            for k in keys:
+                cql.execute(insert, [f'k{k}'])
+            nodetool.flush_all(cql)
+        for i in range(flushes):
+            write(range(times * i + 1, times * (i + 1)))
+        for _ in range(flushes):
+            beg = random.randint(1, times * flushes)
+            write(range(beg, beg + random.randint(1, times)))
+        for _ in range(reads):
+            keys = ', '.join(f"'k{random.randint(1, flushes * times)}'" for _ in range(100))
+            cql.execute(f'SELECT * FROM {table} WHERE key IN ({keys}) BYPASS CACHE')
+        histogram = rest_api.get_request(cql, f'column_family/metrics/sstables_per_read_histogram/{ks}:{cf}')
+        offsets, buckets = histogram['bucket_offsets'], histogram['buckets']
+        assert buckets[-1] == 0, 'Histogram overflows'
+        nonzero = [i for i, b in enumerate(buckets) if b > 0]
+        assert nonzero and offsets[nonzero[-1]] >= 2

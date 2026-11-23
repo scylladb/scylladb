@@ -237,14 +237,14 @@ def save_snapshot(cql, data_dir, table, tag, workdir):
 
 # Load the sstables of a saved snapshot into the given table: Copy them into
 # the table's "upload" directory, and ask Scylla to load them, like
-# "nodetool refresh" does.
-def restore_with_refresh(cql, data_dir, saved, table):
+# "nodetool refresh" does, with the given options of the request.
+def restore_with_refresh(cql, data_dir, saved, table, **params):
     upload_dir = os.path.join(table_dir(cql, data_dir, table), 'upload')
     for f in os.listdir(saved):
         if f not in ['manifest.json', 'schema.cql']:
             shutil.copy(os.path.join(saved, f), upload_dir)
     ks, cf = split_table(table)
-    rest_request(cql, 'POST', f'storage_service/sstables/{ks}', cf=cf)
+    rest_request(cql, 'POST', f'storage_service/sstables/{ks}', cf=cf, **params)
 
 # Test restoring tables from a snapshot: Take a snapshot of a keyspace with
 # two tables, write more rows, drop the tables and create them again, and
