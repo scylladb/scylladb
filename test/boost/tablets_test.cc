@@ -46,6 +46,7 @@
 #include "locator/tablets.hh"
 #include "cql3/query_options.hh"
 #include "service/tablet_allocator.hh"
+#include "service/tablet_load_balancer_engine.hh"
 #include "locator/tablet_replication_strategy.hh"
 #include "locator/tablet_sharder.hh"
 #include "locator/load_sketch.hh"
@@ -5035,6 +5036,193 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_random_load) {
     testlog.info("{}: Starting test case {} for RF={}", std::source_location::current().function_name(), i + 1, rf);
     do_test_case(rf).get();
   }
+}
+
+// Drives the engine directly (sblb::make_plan()), round by round with its moves applied:
+// a rack of nodes with capacities, two shards each, and single-replica tablets.
+namespace {
+
+struct engine_rack {
+    struct tablet {
+        table_id table;
+        tablet_id id;
+        uint64_t size;
+        unsigned node;
+        unsigned shard;
+    };
+    std::vector<host_id> hosts;
+    std::vector<uint64_t> capacity;
+    unsigned shards_per_node = 2;
+    std::vector<tablet> tablets;
+
+    static engine_rack make(std::vector<uint64_t> capacities) {
+        engine_rack r;
+        for (size_t n = 0; n < capacities.size(); ++n) {
+            r.hosts.push_back(host_id(utils::UUID(0, n + 1)));
+        }
+        r.capacity = std::move(capacities);
+        return r;
+    }
+
+    static table_id table(unsigned i) {
+        return table_id(utils::UUID(1, i + 1));
+    }
+
+    std::vector<sblb::node_input> input() const {
+        std::vector<sblb::node_input> out;
+        for (unsigned n = 0; n < hosts.size(); ++n) {
+            sblb::node_input ni{.id = hosts[n], .capacity = capacity[n]};
+            ni.shards.resize(shards_per_node);
+            for (uint32_t i = 0; i < tablets.size(); ++i) {
+                const auto& t = tablets[i];
+                if (t.node != n) {
+                    continue;
+                }
+                auto& si = ni.shards[t.shard];
+                si.used += t.size;
+                ni.used += t.size;
+                si.tablet_count++;
+                auto pt = std::ranges::find(si.tablet_count_per_table, t.table, &std::pair<table_id, uint64_t>::first);
+                if (pt == si.tablet_count_per_table.end()) {
+                    si.tablet_count_per_table.emplace_back(t.table, 1);
+                } else {
+                    pt->second++;
+                }
+                auto ct = std::ranges::find(si.candidates, t.table, &sblb::table_candidates::table);
+                if (ct == si.candidates.end()) {
+                    si.candidates.push_back(sblb::table_candidates{.table = t.table});
+                    ct = std::prev(si.candidates.end());
+                }
+                ct->candidates.push_back(sblb::candidate{.handle = i, .size = t.size, .count = 1,
+                                                         .tablets = {global_tablet_id{t.table, t.id}}});
+            }
+            out.push_back(std::move(ni));
+        }
+        return out;
+    }
+
+    // Plans and applies rounds until the engine plans nothing; the number of moves.
+    size_t converge(const sblb::engine_config& cfg, size_t limit = 100) {
+        sblb::persistent_state st;
+        size_t moves = 0;
+        for (size_t round = 0; round < limit; ++round) {
+            auto plan = sblb::make_plan(cfg, st, input(), [] (uint32_t, tablet_replica, tablet_replica) { return true; }).get();
+            if (plan.empty()) {
+                return moves;
+            }
+            for (const auto& m : plan) {
+                auto& t = tablets[m.handle];
+                BOOST_REQUIRE(hosts[t.node] == m.src.host && t.shard == m.src.shard);
+                t.node = unsigned(std::ranges::find(hosts, m.dst.host) - hosts.begin());
+                t.shard = m.dst.shard;
+                ++moves;
+            }
+        }
+        BOOST_FAIL("the engine did not converge");
+        return moves;
+    }
+
+    // Tablet count per (node, shard), of one table or of all.
+    std::map<std::pair<unsigned, unsigned>, size_t> per_shard(std::optional<table_id> only = std::nullopt) const {
+        std::map<std::pair<unsigned, unsigned>, size_t> out;
+        for (unsigned n = 0; n < hosts.size(); ++n) {
+            for (unsigned s = 0; s < shards_per_node; ++s) {
+                out[{n, s}] = 0;
+            }
+        }
+        for (const auto& t : tablets) {
+            if (!only || t.table == *only) {
+                out[{t.node, t.shard}]++;
+            }
+        }
+        return out;
+    }
+};
+
+using shard_counts = std::map<std::pair<unsigned, unsigned>, size_t>;
+
+} // anonymous namespace
+
+// 3 tables of 16 empty tablets on a 100 GB and a 50 GB node, all on the big one, as in
+// test_size_based_load_balancing::test_balance_empty_tablets. Per table the fair shares
+// are 5.33 and 2.67, bands [5, 6] and [2, 3]. The totals bring the shards to their
+// capacity shares 16/16/8/8.
+SEASTAR_THREAD_TEST_CASE(test_engine_totals_follow_capacity_across_tables) {
+    constexpr uint64_t gib = uint64_t(1) << 30;
+    auto make = [] {
+        auto r = engine_rack::make({100 * gib, 50 * gib});
+        for (unsigned t = 0; t < 3; ++t) {
+            for (unsigned i = 0; i < 16; ++i) {
+                r.tablets.push_back({engine_rack::table(t), tablet_id(i), 0, 0, i % 2});
+            }
+        }
+        return r;
+    };
+    for (auto cmp : {sblb::comparator::ranked, sblb::comparator::pressure}) {
+        sblb::engine_config cfg;
+        cfg.cmp = cmp;
+        auto r = make();
+        auto moves = r.converge(cfg);
+        testlog.info("{}: {} moves, per shard {}", cmp == sblb::comparator::ranked ? "ranked" : "pressure", moves, r.per_shard());
+        BOOST_REQUIRE(r.per_shard() == shard_counts({{{0, 0}, 16}, {{0, 1}, 16}, {{1, 0}, 8}, {{1, 1}, 8}}));
+        for (unsigned t = 0; t < 3; ++t) {
+            auto cells = r.per_shard(engine_rack::table(t));
+            for (unsigned s = 0; s < 2; ++s) {
+                const auto on_big = cells[{0, s}];
+                const auto on_small = cells[{1, s}];
+                BOOST_REQUIRE(on_big >= 5 && on_big <= 6);
+                BOOST_REQUIRE(on_small >= 2 && on_small <= 3);
+            }
+        }
+    }
+}
+
+// 2 tablets and a second node joins, as in test_truncate_with_tablets. Every per-table
+// band is [0, 1] on four shards, so only the node totals (band [1, 1]) move one.
+SEASTAR_THREAD_TEST_CASE(test_engine_totals_spread_two_tablets_over_a_new_node) {
+    constexpr uint64_t gib = uint64_t(1) << 30;
+    auto r = engine_rack::make({100 * gib, 100 * gib});
+    for (unsigned i = 0; i < 2; ++i) {
+        r.tablets.push_back({engine_rack::table(0), tablet_id(i), 0, 0, i});
+    }
+    sblb::engine_config cfg;
+    sblb::persistent_state st;
+    auto plan = sblb::make_plan(cfg, st, r.input(), [] (uint32_t, tablet_replica, tablet_replica) { return true; }).get();
+    BOOST_REQUIRE_EQUAL(plan.size(), 1);
+    BOOST_REQUIRE(plan.front().dst.host == r.hosts[1]);
+}
+
+// Every shard total exactly at its share: a one-tablet cell fix unsettles two totals,
+// and at the default weight it still wins; the totals are then restored by a move of
+// another table. At weight 1 the cell fix would be a wash and nothing is planned.
+SEASTAR_THREAD_TEST_CASE(test_engine_cell_repair_is_not_blocked_by_exact_totals) {
+    constexpr uint64_t gib = uint64_t(1) << 30;
+    auto r = engine_rack::make({100 * gib, 100 * gib});
+    const auto big = engine_rack::table(0);
+    const std::array<unsigned, 4> counts{3, 3, 3, 1}; // of the 10-tablet table, per shard
+    unsigned i = 0;
+    unsigned j = 0;
+    for (unsigned s = 0; s < 4; ++s) {
+        for (unsigned k = 0; k < counts[s]; ++k) {
+            r.tablets.push_back({big, tablet_id(i++), gib, s / 2, s % 2});
+        }
+        for (unsigned k = counts[s]; k < 10; ++k) {
+            r.tablets.push_back({engine_rack::table(1 + j), tablet_id(0), gib, s / 2, s % 2});
+            ++j;
+        }
+    }
+    sblb::engine_config cfg;
+    cfg.tot_weight = 1.0;
+    sblb::persistent_state st;
+    auto none = sblb::make_plan(cfg, st, r.input(), [] (uint32_t, tablet_replica, tablet_replica) { return true; }).get();
+    BOOST_REQUIRE(none.empty());
+    cfg.tot_weight = 0.2;
+    r.converge(cfg);
+    auto cells = r.per_shard(big);
+    for (const auto& [k, c] : cells) {
+        BOOST_REQUIRE_GE(c, size_t(2));
+    }
+    BOOST_REQUIRE(r.per_shard() == shard_counts({{{0, 0}, 10}, {{0, 1}, 10}, {{1, 0}, 10}, {{1, 1}, 10}}));
 }
 
 SEASTAR_THREAD_TEST_CASE(test_balancing_heterogeneous_cluster) {
