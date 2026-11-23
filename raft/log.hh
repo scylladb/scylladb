@@ -128,6 +128,8 @@ public:
     size_t memory_usage() const {
         return _memory_usage;
     }
+    // Returns memory usage of the log entries after the given index in bytes
+    size_t memory_usage_after(index_t idx) const;
 
     // The function returns current snapshot state of the log
     const snapshot_descriptor& get_snapshot() const {

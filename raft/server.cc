@@ -2436,6 +2436,7 @@ void server_impl::drop_trailing_log() {
 server_status server_impl::get_status() const {
     auto status = _fsm->get_status();
     status.applied_idx = _applied_idx;
+    status.unapplied_log_memory_usage = _fsm->log_memory_usage_after(_applied_idx);
     // The entries waiting for their turn to be appended wait for the log
     // memory too, for as long as the entry ahead of them does.
     if (status.log_limiter_waiters) {

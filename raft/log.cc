@@ -146,6 +146,15 @@ std::pair<bool, term_t> log::match_term(index_t idx, term_t term) const {
     return my_term == term ? std::make_pair(true, term_t(0)) : std::make_pair(false, my_term);
 }
 
+size_t log::memory_usage_after(index_t idx) const {
+    // Walk from the back: callers ask about the last few entries.
+    size_t result = 0;
+    for (auto it = _log.rbegin(); it != _log.rend() && (*it)->idx > idx; ++it) {
+        result += memory_usage_of(**it, _max_command_size);
+    }
+    return result;
+}
+
 size_t log::drop_trailing() {
     // The log then starts right after the snapshot, as apply_snapshot()
     // leaves it with no trailing entries, so term_for() still knows the term

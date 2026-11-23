@@ -905,6 +905,8 @@ struct server_status {
     term_t last_term;
     index_t commit_idx;
     index_t applied_idx;
+    // Bytes used by the entries of the in-memory log after applied_idx.
+    size_t unapplied_log_memory_usage = 0;
     index_t last_snapshot_idx;
     term_t last_snapshot_term;
     // Number of entries waiting for the log to shrink below max_log_size.
