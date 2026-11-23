@@ -166,6 +166,21 @@ static std::pair<schema_ptr, std::vector<dht::decorated_key>> create_test_table(
     return {std::move(res.schema), std::move(res.keys)};
 }
 
+// Creates a table without clustering columns, whose partitions have a single
+// row each. (The random schemas' generated partitions have no rows when the
+// schema has no clustering columns.)
+static std::pair<schema_ptr, std::vector<dht::decorated_key>> create_test_table_without_clustering_columns(cql_test_env& env,
+        sstring ks_name, sstring tbl_name, int partition_count) {
+    env.execute_cql(fmt::format("CREATE TABLE {}.{} (pk int PRIMARY KEY, v text)", ks_name, tbl_name)).get();
+    auto s = env.local_db().find_schema(ks_name, tbl_name);
+    std::vector<dht::decorated_key> keys;
+    for (int i = 0; i < partition_count; ++i) {
+        env.execute_cql(fmt::format("INSERT INTO {}.{} (pk, v) VALUES ({}, 'value{}')", ks_name, tbl_name, i, i)).get();
+        keys.push_back(dht::decorate_key(*s, partition_key::from_single_value(*s, int32_type->decompose(i))));
+    }
+    return {std::move(s), std::move(keys)};
+}
+
 static uint64_t aggregate_querier_cache_stat(sharded<replica::database>& db, uint64_t replica::querier_cache::stats::*stat) {
     return map_reduce(std::views::iota(0u, this_smp_shard_count()), [stat, &db] (unsigned shard) {
         return db.invoke_on(shard, [stat] (replica::database& local_db) {
@@ -548,9 +563,11 @@ void check_results_are_equal(utils::chunked_vector<mutation>& results1, utils::c
 
 namespace multishard_query_test {
 
-// Best run with SMP>=2
-SEASTAR_THREAD_TEST_CASE(test_read_all) {
-    do_with_cql_env_thread([] (cql_test_env& env) -> future<> {
+// Reads a whole table, partition by partition, and with paged scans: with
+// reader caching, without any querier dropped from the cache between pages,
+// and without reader caching.
+static void check_read_all(sstring table_name, bool with_clustering_columns) {
+    do_with_cql_env_thread([&] (cql_test_env& env) -> future<> {
         using namespace std::chrono_literals;
 
         env.db().invoke_on_all([] (replica::database& db) {
@@ -559,7 +576,9 @@ SEASTAR_THREAD_TEST_CASE(test_read_all) {
 
         const auto ks = create_vnodes_keyspace(env);
 
-        auto [s, pkeys] = create_test_table(env, ks, get_name());
+        auto [s, pkeys] = with_clustering_columns
+                ? create_test_table(env, ks, table_name)
+                : create_test_table_without_clustering_columns(env, ks, table_name, 10 * this_smp_shard_count());
 
         // First read all partition-by-partition (not paged).
         auto results1 = read_all_partitions_one_by_one(env.db(), s, pkeys);
@@ -603,6 +622,19 @@ SEASTAR_THREAD_TEST_CASE(test_read_all) {
 
         return make_ready_future<>();
     }, cql_config_with_extensions()).get();
+}
+
+// Best run with SMP>=2
+SEASTAR_THREAD_TEST_CASE(test_read_all) {
+    check_read_all(get_name(), true);
+}
+
+// A partition of a table without clustering columns has a single row, so a
+// page which stops at it continues, on the next page, after the partition.
+// The saved querier is reused for that page, like that of any other page.
+// Best run with SMP>=2
+SEASTAR_THREAD_TEST_CASE(test_read_all_without_clustering_columns) {
+    check_read_all(get_name(), false);
 }
 
 // Best run with SMP>=2

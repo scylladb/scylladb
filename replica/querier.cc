@@ -74,6 +74,15 @@ static bool ring_position_matches(const schema& s, const dht::partition_range& r
 }
 
 static bool clustering_position_matches(const schema& s, const query::partition_slice& slice, full_position_view pos) {
+    if (s.clustering_key_size() == 0) {
+        // A partition of a table without clustering columns has at most one
+        // row, so a page which stopped at it has nothing left to read in the
+        // partition. The next page starts after the partition (see
+        // ring_position_matches()), so the partition's row ranges don't
+        // matter.
+        return true;
+    }
+
     const auto& row_ranges = slice.row_ranges(s, pos.partition);
 
     if (row_ranges.empty()) {
