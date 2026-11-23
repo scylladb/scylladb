@@ -683,6 +683,64 @@ SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_list_objects_with_special_characters_
     }
 }
 
+// A listing that keeps getting empty pages fails rather than ending as if it were done.
+SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_list_objects_fails_on_endless_empty_pages, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
+    if (!needs_upload_validator(*this)) {
+        co_return;
+    }
+    auto& env = *this;
+    auto& c = env.client();
+
+    co_await inject(env, "empty_list_pages", 150);
+    std::exception_ptr ex;
+    try {
+        co_await c.list_objects(env.bucket, make_name() + "/");
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    auto left = co_await faults_left(env);
+    co_await disarm_faults(env);
+
+    BOOST_REQUIRE(ex);
+    BOOST_REQUIRE_THROW(std::rethrow_exception(ex), utils::gcp::storage::failed_operation);
+    // It gave up after 100 pages, and did not use all that were armed.
+    BOOST_REQUIRE_EQUAL(left["empty_list_pages"], 50u);
+}
+
+// GCS can answer a listing with an empty page that still has a next one. It must not be
+// taken for the end of the listing, nor lose the pages after it.
+SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_list_objects_past_empty_pages, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
+    if (!needs_upload_validator(*this)) {
+        co_return;
+    }
+    auto& env = *this;
+    auto& c = env.client();
+    auto base = make_name();
+    for (int i = 0; i < 3; ++i) {
+        auto name = fmt::format("{}/x{}", base, i);
+        env.objects_to_delete.emplace_back(name);
+        co_await create_object_of_size(c, env.bucket, name, 16);
+    }
+
+    co_await inject(env, "empty_list_pages", 2);
+    utils::gcp::storage::bucket_paging paging{10};
+    std::exception_ptr ex;
+    utils::chunked_vector<utils::gcp::storage::object_info> infos;
+    try {
+        infos = co_await c.list_objects(env.bucket, base + "/", paging);
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    auto left = co_await faults_left(env);
+    co_await disarm_faults(env);
+    if (ex) {
+        std::rethrow_exception(ex);
+    }
+
+    BOOST_REQUIRE_EQUAL(infos.size(), 3);
+    BOOST_REQUIRE_EQUAL(left["empty_list_pages"], 0u);
+}
+
 SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_delete_object, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
     auto& env = *this;
     auto& c = env.client();
