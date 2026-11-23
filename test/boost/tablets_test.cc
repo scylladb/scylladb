@@ -5038,6 +5038,141 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_random_load) {
   }
 }
 
+// Runs the ranked or pressure engine on two racks with one empty node each, two tables
+// with RF=2 and uneven tablet sizes. With rf_rack_valid the planner works per rack, with
+// one replica per tablet in scope; without it the engine plans the whole DC.
+//
+// Checks that no plan has conflicting migrations, puts two replicas of a tablet on one
+// node or moves one across racks, that intra-node migrations are used exactly for moves
+// within a node, and that the rounds converge to per-shard table balance.
+static void do_test_load_balancing_with_engine(sstring algorithm, bool rf_rack_valid) {
+    testlog.info("Engine {}, rf_rack_valid={}", algorithm, rf_rack_valid);
+    cql_test_config cfg;
+    cfg.db_config->rf_rack_valid_keyspaces(rf_rack_valid);
+    cfg.db_config->tablet_load_balancer_algorithm(algorithm);
+    do_with_cql_env_thread([&] (cql_test_env& e) {
+        topology_builder topo(e);
+        auto& stm = e.shared_token_metadata().local();
+        auto& load_stats = topo.get_shared_load_stats();
+
+        constexpr unsigned shard_count = 2;
+        constexpr uint64_t gib = uint64_t(1) << 30;
+        constexpr uint64_t capacity = 200 * gib;
+        constexpr unsigned nodes_per_rack = 3;
+        const std::vector<endpoint_dc_rack> racks{topo.rack(), topo.start_new_rack()};
+
+        std::vector<host_id> hosts;
+        std::unordered_map<host_id, sstring> rack_of;
+        std::vector<std::vector<host_id>> loaded(racks.size()); // the first two nodes of each rack
+        for (size_t r = 0; r < racks.size(); ++r) {
+            for (unsigned i = 0; i < nodes_per_rack; ++i) {
+                auto h = topo.add_node(node_state::normal, shard_count, racks[r]);
+                load_stats.set_capacity(h, capacity);
+                hosts.push_back(h);
+                rack_of[h] = racks[r].rack;
+                if (i + 1 < nodes_per_rack) {
+                    loaded[r].push_back(h);
+                }
+            }
+        }
+
+        std::vector<table_id> tables;
+        for (int tablet_count : {32, 8}) {
+            auto ks = add_keyspace(e, {{topo.dc(), int(racks.size())}}, tablet_count);
+            auto table = add_table(e, ks).get();
+            tables.push_back(table);
+            mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+                tablet_map tmap = tmeta.get_tablet_map(table).clone();
+                for (auto tid : tmap.tablet_ids()) {
+                    const size_t i = tid.value();
+                    tablet_replica_set replicas;
+                    for (const auto& rack_hosts : loaded) {
+                        replicas.push_back(tablet_replica{rack_hosts[i % rack_hosts.size()], shard_id((i / 2) % shard_count)});
+                    }
+                    const range_based_tablet_id rb_tid{table, tmap.get_token_range(tid)};
+                    for (const auto& r : replicas) {
+                        load_stats.set_tablet_size(r.host, rb_tid, (3 + i % 4) * gib);
+                    }
+                    tmap.set_tablet(tid, tablet_info{std::move(replicas)});
+                }
+                tmeta.set_tablet_map(table, std::move(tmap));
+                co_return;
+            });
+            load_stats.set_size(table, tablet_count * 9 * gib / 2);
+        }
+
+        size_t migrations = 0;
+        size_t rounds = 0;
+        auto check_plan = [&] (const migration_plan& plan) {
+            auto tm = stm.get();
+            std::unordered_set<global_tablet_id> scheduled;
+            for (const auto& mig : plan.migrations()) {
+                BOOST_REQUIRE(scheduled.insert(mig.tablet).second);
+                BOOST_REQUIRE(mig.src && mig.dst);
+                BOOST_REQUIRE_EQUAL(mig.kind == tablet_transition_kind::intranode_migration, mig.src->host == mig.dst->host);
+                if (mig.src->host != mig.dst->host) {
+                    BOOST_REQUIRE_EQUAL(rack_of.at(mig.src->host), rack_of.at(mig.dst->host));
+                    const auto& ti = tm->tablets().get_tablet_map(mig.tablet.table).get_tablet_info(mig.tablet.tablet);
+                    for (const auto& r : ti.replicas) {
+                        BOOST_REQUIRE(r.host != mig.dst->host);
+                    }
+                }
+                ++migrations;
+            }
+            ++rounds;
+            return false;
+        };
+        rebalance_tablets(e, &load_stats, {}, check_plan);
+        testlog.info("Engine {}, rf_rack_valid={}: {} migrations in {} rounds", algorithm, rf_rack_valid, migrations, rounds);
+        BOOST_REQUIRE_GT(migrations, 0);
+
+        auto tm = stm.get();
+        check_tablet_invariants(tm->tablets());
+
+        // Per-shard table balance: each replica counts once, shards have equal capacity.
+        const size_t total_shards = hosts.size() * shard_count;
+        std::unordered_map<host_id, uint64_t> used;
+        for (auto table : tables) {
+            const auto& tmap = tm->tablets().get_tablet_map(table);
+            std::map<tablet_replica, size_t> count;
+            tmap.for_each_tablet([&] (tablet_id tid, const tablet_info& ti) -> future<> {
+                const range_based_tablet_id rb_tid{table, tmap.get_token_range(tid)};
+                for (const auto& r : ti.replicas) {
+                    count[r]++;
+                    used[r.host] += load_stats.stats.get_tablet_size(r.host, rb_tid).value();
+                }
+                return make_ready_future<>();
+            }).get();
+            const size_t replicas = tmap.tablet_count() * racks.size();
+            const size_t lo = replicas / total_shards;
+            const size_t hi = (replicas + total_shards - 1) / total_shards;
+            for (auto h : hosts) {
+                for (shard_id s = 0; s < shard_count; ++s) {
+                    auto c = count[tablet_replica{h, s}];
+                    testlog.info("table {} shard {}:{}: {} tablets, fair share [{}, {}]", table, h, s, c, lo, hi);
+                    BOOST_REQUIRE_GE(c, lo);
+                    BOOST_REQUIRE_LE(c, hi);
+                }
+            }
+        }
+
+        min_max_tracker<double> util;
+        for (auto h : hosts) {
+            util.update(double(used[h]) / capacity);
+        }
+        testlog.info("Node utilization: min {:.4f}, max {:.4f}", util.min(), util.max());
+        BOOST_REQUIRE_LE(util.max() - util.min(), 0.1);
+    }, std::move(cfg)).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_ranked_and_pressure_engines) {
+    for (sstring algorithm : {"ranked", "pressure"}) {
+        for (bool rf_rack_valid : {true, false}) {
+            do_test_load_balancing_with_engine(algorithm, rf_rack_valid);
+        }
+    }
+}
+
 // Drives the engine directly (sblb::make_plan()), round by round with its moves applied:
 // a rack of nodes with capacities, two shards each, and single-replica tablets.
 namespace {
