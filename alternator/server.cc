@@ -114,6 +114,8 @@ static void handle_CORS(const request& req, reply& rep, bool preflight) {
     }
 }
 
+static future<> drain_request_body(input_stream<char>& inp, size_t request_size_limit);
+
 // DynamoDB HTTP error responses are structured as follows
 // https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Programming.Errors.html
 // Our handlers throw an exception to report an error. If the exception
@@ -130,7 +132,8 @@ class api_handler : public handler_base {
     static constexpr std::string_view REPLY_CONTENT_TYPE = "application/x-amz-json-1.0";
 public:
     api_handler(const std::function<future<executor::request_return_type>(std::unique_ptr<request> req)>& _handle,
-                const db::config& config, stats& stats) :
+                const db::config& config, stats& stats, const seastar::gate& pending_requests,
+                const utils::updateable_value<uint32_t>& max_concurrent_requests, size_t request_size_limit) :
             _content_type(config.alternator_http_response_disable_content_type_header()
                           ? std::nullopt
                           : std::optional<std::string_view>(REPLY_CONTENT_TYPE)),
@@ -138,7 +141,9 @@ public:
                 [this](const bool& ct) {
                     _content_type = ct ? std::nullopt : std::optional<std::string_view>(REPLY_CONTENT_TYPE);
                 })),
-            _response_compressor(config), _stats(stats), _f_handle(
+            _response_compressor(config), _stats(stats),
+            _pending_requests(pending_requests), _max_concurrent_requests(max_concurrent_requests),
+            _request_size_limit(request_size_limit), _f_handle(
          [this, _handle](std::unique_ptr<request> req, std::unique_ptr<reply> rep) {
          sstring accept_encoding = _response_compressor.get_accepted_encoding(*req);
          return seastar::futurize_invoke(_handle, std::move(req)).then_wrapped(
@@ -165,6 +170,17 @@ public:
     future<std::unique_ptr<reply>> handle(const sstring& path,
             std::unique_ptr<request> req, std::unique_ptr<reply> rep) override {
         handle_CORS(*req, *rep, false);
+        // Check the concurrency limit before the request body is read and
+        // memory is acquired, as the CQL transport does (transport/server.cc).
+        // Check it before the handler, so that a rejected request costs no
+        // coroutine frame, no X-Amz-Target or Accept-Encoding parse and no
+        // error formatting. A request over the size limit goes on, to get
+        // its own error. Nothing yields between this check and the enter()
+        // in handle_api_request(), so the limit is not exceeded.
+        if (_pending_requests.get_count() >= _max_concurrent_requests()
+                && req->content_length <= _request_size_limit) {
+            return shed(std::move(req), std::move(rep));
+        }
         return _f_handle(std::move(req), std::move(rep));
     }
 
@@ -173,7 +189,37 @@ protected:
     utils::observer<bool> _content_type_observer;
     response_compressor _response_compressor;
     stats& _stats;
+    const seastar::gate& _pending_requests;
+    const utils::updateable_value<uint32_t>& _max_concurrent_requests;
+    size_t _request_size_limit;
     future_handler_function _f_handle;
+
+    // The reply to a request shed by max_concurrent_requests_per_shard.
+    // It is fixed, so it is not built again for every request. Keep it in
+    // the format of generate_error_reply().
+    static constexpr std::string_view SHED_REPLY =
+        R"json({"__type":"com.amazonaws.dynamodb.v20120810#RequestLimitExceeded",)json"
+        R"json("message":"too many in-flight requests (configured via max_concurrent_requests_per_shard)"})json";
+
+    future<std::unique_ptr<reply>> shed(std::unique_ptr<request> req, std::unique_ptr<reply> rep) {
+        _stats.total_operations++;
+        _stats.requests_shed++;
+        // Discard the unread request body before replying, so the connection stays reusable.
+        throwing_assert(req->content_stream);
+        // Keep req until the drain ends: the stream of a chunked body refers to it.
+        return drain_request_body(*req->content_stream, _request_size_limit).then_wrapped(
+                [this, req = std::move(req), rep = std::move(rep)] (future<> f) mutable {
+            if (f.failed()) {
+                generate_error_reply(*rep, convert_exception_ptr_to_api_error(f.get_exception()));
+            } else {
+                // Counted as generate_error_reply() counts a 400 reply.
+                _stats.user_errors++;
+                rep->set_status(http::reply::status_type::bad_request);
+                rep->write_body(_content_type, sstring(SHED_REPLY));
+            }
+            return std::move(rep);
+        });
+    }
     void generate_error_reply(reply& rep, const api_error& err) {
         // Count HTTP 400 errors as UserErrors (matching DynamoDB's UserErrors
         // metric), but exclude ConditionalCheckFailedException which DynamoDB
@@ -788,6 +834,11 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
         // for such a size.
         co_return api_error::payload_too_large(fmt::format("Request content length limit of {} bytes exceeded", request_content_length_limit));
     }
+    // api_handler::handle() rejects a request when the count of entered
+    // requests is at max_concurrent_requests_per_shard. Do not add a
+    // suspension point between the start of this function and the enter()
+    // below. While a request is suspended there, it is not in the count, so
+    // other requests pass the check and the limit is exceeded.
     _pending_requests.enter();
     auto leave = defer([this] () noexcept { _pending_requests.leave(); });
     // JSON parsing can allocate up to roughly 2x the size of the raw
@@ -891,31 +942,10 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
 }
 
 void server::set_routes(routes& r) {
-    api_handler* req_handler = new api_handler([this] (std::unique_ptr<request> req) mutable -> future<executor::request_return_type> {
-        // Check the concurrency limit early, before acquiring memory and
-        // reading the request body, to avoid piling up memory from excess
-        // requests that will be rejected anyway. This mirrors the CQL
-        // transport which also checks concurrency before memory acquisition
-        // (transport/server.cc).
-        // The check is outside handle_api_request(), so a rejected request
-        // does not allocate a coroutine frame. A request over the size limit
-        // goes on to handle_api_request(), to get its own error.
-        if (_pending_requests.get_count() >= _max_concurrent_requests
-                && req->content_length <= request_content_length_limit) {
-            _executor._stats.total_operations++;
-            _executor._stats.requests_shed++;
-            // Build the msg early, before the drain below invalidates the request counter.
-            auto err = api_error::request_limit_exceeded(format("too many in-flight requests (configured via max_concurrent_requests_per_shard): {}", _pending_requests.get_count()));
-            // Discard the unread request body before replying, so the connection stays reusable
-            throwing_assert(req->content_stream);
-            auto& content = *req->content_stream;
-            return drain_request_body(content, request_content_length_limit).then(
-                    [req = std::move(req), err = std::move(err)] () mutable {
-                return executor::request_return_type(std::move(err));
-            });
-        }
+    api_handler* req_handler = new api_handler([this] (std::unique_ptr<request> req) mutable {
         return handle_api_request(std::move(req));
-    }, _proxy.data_dictionary().get_config(), _executor._stats);
+    }, _proxy.data_dictionary().get_config(), _executor._stats, _pending_requests, _max_concurrent_requests,
+            request_content_length_limit);
 
     r.put(operation_type::POST, "/", req_handler);
     r.put(operation_type::GET, "/", new health_handler(_pending_requests));
