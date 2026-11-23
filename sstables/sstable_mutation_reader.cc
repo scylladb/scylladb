@@ -127,6 +127,10 @@ std::vector<column_translation::column_info> column_translation::state::build(
             false
         });
     } else {
+        // A column dropped and added again as the other kind has an id in the other
+        // kind's list, so the data's column is as missing as any dropped column. The
+        // static list of a static compact table holds its regular columns (#4139).
+        const auto kind = is_static && !s.is_static_compact_table() ? column_kind::static_column : column_kind::regular_column;
         cols.reserve(src.size());
         for (auto&& desc : src) {
             const bytes& type_name = desc.type_name.value;
@@ -138,7 +142,7 @@ std::vector<column_translation::column_info> column_translation::state::build(
             const column_definition* def = s.get_column_definition(desc.name.value);
             std::optional<column_id> id;
             bool schema_mismatch = false;
-            if (def) {
+            if (def && def->kind == kind) {
                 id = def->id;
                 schema_mismatch = def->is_multi_cell() != type->is_multi_cell() ||
                                   def->is_counter() != type->is_counter() ||
