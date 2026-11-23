@@ -818,8 +818,10 @@ public:
     future<> put_object(object_name name, ::memory_data_sink_buffers bufs, object_storage_attributes attributes) const {
         return _client->put_object(std::move(name), std::move(bufs), std::move(attributes), abort_source());
     }
-    future<> copy_object(object_name src, object_name dst, object_storage_attributes attributes) const {
-        return _client->copy_object(std::move(src), std::move(dst), std::move(attributes), abort_source());
+    // Large non-Data components are rare, so they skip the size HEAD.
+    static bool skip_size_head(component_type type) { return type != component_type::Data; }
+    future<> copy_object(object_name src, object_name dst, object_storage_attributes attributes, component_type type) const {
+        return _client->copy_object(std::move(src), std::move(dst), std::move(attributes), abort_source(), skip_size_head(type));
     }
     future<> delete_object(object_name name) const {
         return _client->delete_object(std::move(name), abort_source());
@@ -1336,7 +1338,7 @@ future<> object_storage_base::copy_components(const sstable& sst, sstable_id sid
             co_return;
         }
         co_await copy_object(make_object_name(sst, p.second, sst.generation()), object_name(_bucket, prefix, sid, p.second),
-                make_sstable_object_attributes(p.first, sst));
+                make_sstable_object_attributes(p.first, sst), p.first);
     });
 }
 
@@ -1459,7 +1461,7 @@ future<entry_descriptor> object_storage_base::clone_from(sstable& src, generatio
                 co_return;
             }
             co_await _client->copy_object(src_storage->make_object_name(src, p.second, src.generation()),
-                    std::move(dst), make_sstable_object_attributes(p.first, src), as);
+                    std::move(dst), make_sstable_object_attributes(p.first, src), as, skip_size_head(p.first));
         });
     }
 

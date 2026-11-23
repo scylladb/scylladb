@@ -579,8 +579,9 @@ http::client::reply_handler client::wrap_handler(http::request& request,
                 should_retry = utils::http::retryable::yes;
                 co_await authorize(request);
             }
-            co_await coroutine::return_exception_ptr(std::make_exception_ptr(
-                aws::aws_exception(aws_error(possible_error->get_error_type(), possible_error->get_error_message().c_str(), should_retry))));
+            auto failure = aws_error(possible_error->get_error_type(), possible_error->get_error_message().c_str(), should_retry);
+            failure.set_http_status(std::to_underlying(rep._status));
+            co_await coroutine::return_exception_ptr(std::make_exception_ptr(aws::aws_exception(std::move(failure))));
         }
 
         if (!accepted) {
@@ -1172,8 +1173,41 @@ public:
     copy_s3_object(shared_ptr<client> cln, sstring source_object, sstring target_object, object_metadata metadata, std::optional<tag> tag, abort_source* as)
         : copy_s3_object(std::move(cln), std::move(source_object), std::move(target_object), std::move(metadata), _default_copy_part_size, std::move(tag), as) {}
 
-    future<> copy() {
-        auto source_size = co_await _client->get_object_size(_source_object);
+    future<> copy(bool single_request) {
+        std::exception_ptr refused;
+        if (single_request) {
+            try {
+                co_return co_await copy_put(true);
+            } catch (const aws::aws_exception& e) {
+                const auto status = e.error().http_status();
+                if (status < 400 || status >= 500 || status == std::to_underlying(http::reply::status_type::not_found) ||
+                        status == std::to_underlying(http::reply::status_type::unauthorized) ||
+                        status == std::to_underlying(http::reply::status_type::forbidden) ||
+                        e.error().is_retryable() == utils::http::retryable::yes) {
+                    map_s3_client_exception(std::current_exception());
+                }
+                refused = std::current_exception();
+            }
+            // Other 4xx may be a too-large source refusal; ask the size only now. The original error wins if not large.
+            std::optional<uint64_t> size;
+            std::exception_ptr head_error;
+            try {
+                size = co_await _client->get_object_size(_source_object, _as);
+            } catch (...) {
+                head_error = std::current_exception();
+            }
+            if (head_error) {
+                if (_as && _as->abort_requested()) {
+                    std::rethrow_exception(head_error);
+                }
+                s3l.debug("Cannot ask the size of {} after its copy failed: {}", _source_object, head_error);
+            }
+            if (!size || *size <= _max_copy_part_size) {
+                map_s3_client_exception(refused);
+            }
+            co_return co_await copy_multipart(*size);
+        }
+        auto source_size = co_await _client->get_object_size(_source_object, _as);
         if (source_size <= _max_copy_part_size) {
             co_await copy_put();
         } else {
@@ -1182,7 +1216,8 @@ public:
     }
 
 private:
-    future<> copy_put() {
+    // raw_errors: rethrow the aws_exception (with its HTTP status) unmapped.
+    future<> copy_put(bool raw_errors = false) {
         auto req = http::request::make("PUT", _client->_host, _object_name);
         if (_tag) {
             req._headers["x-amz-tagging"] = seastar::format("{}={}", _tag->key, _tag->value);
@@ -1193,12 +1228,26 @@ private:
             add_object_metadata_headers(req, _metadata);
         }
 
-        co_await _client->make_request(std::move(req), [](const http::reply& rep, input_stream<char>&& in) -> future<> {
+        auto handler = [](const http::reply& rep, input_stream<char>&& in) -> future<> {
             auto payload = std::move(in);
             if (auto possible_error = aws::aws_error::parse(co_await util::read_entire_stream_contiguous(payload))) {
                 throw aws::aws_exception(std::move(possible_error.value()));
             }
-        }, http::reply::status_type::ok, _as);
+        };
+        if (raw_errors) {
+            co_await _client->make_request(std::move(req), std::move(handler), *_client->_retry_strategy, [] (std::exception_ptr ex) {
+                // Map what the default handler maps; an abort or a closed gate never gets here, as there.
+                try {
+                    std::rethrow_exception(ex);
+                } catch (const aws::aws_exception&) {
+                    throw;
+                } catch (...) {
+                    map_s3_client_exception(std::move(ex));
+                }
+            }, http::reply::status_type::ok, _as);
+        } else {
+            co_await _client->make_request(std::move(req), std::move(handler), http::reply::status_type::ok, _as);
+        }
     }
 
     future<> copy_multipart(size_t source_size) {
@@ -1267,10 +1316,13 @@ private:
     sstring _source_object;
 };
 
-future<> client::copy_object(sstring source_object, sstring target_object, object_metadata metadata, std::optional<size_t> part_size, std::optional<tag> tag, seastar::abort_source* as) {
+future<> client::copy_object(sstring source_object, sstring target_object, object_metadata metadata, std::optional<size_t> part_size, std::optional<tag> tag, seastar::abort_source* as, bool single_request) {
+    if (single_request && part_size) {
+        throw std::invalid_argument("copy_object: single_request cannot be combined with a part size");
+    }
     if (!part_size)
-        co_return co_await copy_s3_object(shared_from_this(), std::move(source_object), std::move(target_object), std::move(metadata), tag, as).copy();
-    co_return co_await copy_s3_object(shared_from_this(), std::move(source_object), std::move(target_object), std::move(metadata), part_size.value(), tag, as).copy();
+        co_return co_await copy_s3_object(shared_from_this(), std::move(source_object), std::move(target_object), std::move(metadata), tag, as).copy(single_request);
+    co_return co_await copy_s3_object(shared_from_this(), std::move(source_object), std::move(target_object), std::move(metadata), part_size.value(), tag, as).copy(single_request);
 }
 
 class client::upload_sink_base : public multipart_upload, public data_sink_impl {

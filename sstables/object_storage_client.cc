@@ -168,8 +168,8 @@ public:
     future<> put_object(object_name name, ::memory_data_sink_buffers bufs, object_storage_attributes attributes, abort_source* as) override {
         return _client->put_object(name.str(), std::move(bufs), std::move(attributes), as);
     }
-    future<> copy_object(object_name src, object_name dst, object_storage_attributes attributes, abort_source* as) override {
-        return _client->copy_object(src.str(), dst.str(), std::move(attributes), std::nullopt, std::nullopt, as);
+    future<> copy_object(object_name src, object_name dst, object_storage_attributes attributes, abort_source* as, bool single_request) override {
+        return _client->copy_object(src.str(), dst.str(), std::move(attributes), std::nullopt, std::nullopt, as, single_request);
     }
     future<> delete_object(object_name name, abort_source* as) override {
         return _client->delete_object(name.str(), as);
@@ -272,7 +272,7 @@ public:
         co_await sink.flush();
         co_await sink.close();
     }
-    future<> copy_object(object_name src, object_name dst, object_storage_attributes attributes, abort_source* as) override {
+    future<> copy_object(object_name src, object_name dst, object_storage_attributes attributes, abort_source* as, bool) override {
         return _client->copy_object(src.bucket(), src.object(), dst.bucket(), dst.object(), make_gcs_metadata(attributes), as);
     }
     future<> delete_object(object_name name, abort_source* as) override {

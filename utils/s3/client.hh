@@ -299,7 +299,8 @@ public:
     // Resolves with an empty string if the server created the object but reported no tag.
     future<sstring> put_object_and_get_etag(sstring object_name, temporary_buffer<char> buf, object_metadata = {}, seastar::abort_source* = nullptr);
     future<sstring> put_object_and_get_etag(sstring object_name, ::memory_data_sink_buffers bufs, object_metadata = {}, seastar::abort_source* = nullptr);
-    future<> copy_object(sstring source_object, sstring target_object, object_metadata = {}, std::optional<size_t> part_size = {}, std::optional<tag> tag = {}, seastar::abort_source* = nullptr);
+    // single_request: one CopyObject without a size HEAD; falls back to multipart only if refused. Not with part_size.
+    future<> copy_object(sstring source_object, sstring target_object, object_metadata = {}, std::optional<size_t> part_size = {}, std::optional<tag> tag = {}, seastar::abort_source* = nullptr, bool single_request = false);
     future<> delete_object(sstring object_name, seastar::abort_source* = nullptr);
     future<> create_bucket(sstring bucket_name, seastar::abort_source* = nullptr);
     future<> delete_bucket(sstring bucket_name, seastar::abort_source* = nullptr);
