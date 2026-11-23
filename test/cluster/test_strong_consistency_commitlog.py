@@ -126,6 +126,48 @@ async def test_schema_upgrade_during_replay(manager: ScyllaClusterManager):
 
 
 @pytest.mark.asyncio
+async def test_dropped_column_during_replay(manager: ScyllaClusterManager):
+    """Verify that a node boots with unflushed writes to a column dropped since.
+    Replay decodes the writes into the current schema and skips the cells written
+    before the drop. The column is added back before the crash, and its old cells
+    must stay dead."""
+    config = {
+        # Prevent automatic memtable flushes so data stays in the commitlog
+        # and is not persisted to sstables before the crash.
+        'commitlog_total_space_in_mb': 10000,
+    }
+    # The trace level logs the decoding of commands of an older schema version.
+    cmdline = ['--logger-log-level', 'sc_state_machine=trace']
+    server = await manager.server_add(config=config, cmdline=cmdline)
+    (cql, hosts) = await manager.get_ready_cql([server])
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1} AND consistency = 'global'") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int, d int);")
+        for pk in range(5):
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, c, d) VALUES ({pk}, {pk * 10}, {pk})")
+        await cql.run_async(f"ALTER TABLE {ks}.test DROP d;")
+        await cql.run_async(f"ALTER TABLE {ks}.test ADD d int;")
+        await cql.run_async(f"INSERT INTO {ks}.test (pk, c, d) VALUES (5, 50, 5)")
+
+        log = await manager.server_open_log(server.server_id)
+        mark = await log.mark()
+        # Crash the node (non-graceful stop — no flush)
+        await manager.server_stop(server.server_id, convict=False)
+        await manager.server_start(server.server_id)
+        (cql, hosts) = await manager.get_ready_cql([server])
+        # The writes from before the drop came back through replay, not from an sstable.
+        assert await log.grep(r"Decoding commands of table .* written with schema version", from_mark=mark)
+
+        for pk in range(5):
+            rows = await cql.run_async(f"SELECT c, d FROM {ks}.test WHERE pk = {pk};")
+            assert [(r.c, r.d) for r in rows] == [(pk * 10, None)], f"pk={pk}"
+        rows = await cql.run_async(f"SELECT c, d FROM {ks}.test WHERE pk = 5;")
+        assert [(r.c, r.d) for r in rows] == [(50, 5)]
+
+    await manager.server_stop_gracefully(server.server_id)
+
+
+@pytest.mark.asyncio
 async def test_double_crash_recovery(manager: ScyllaClusterManager):
     """Verify that SC table data survives two consecutive crashes.
     Write data, crash, restart (commitlog replay restores data), write more data,
