@@ -7090,7 +7090,9 @@ future<storage_proxy::cas_result> storage_proxy::cas(schema_ptr schema, cas_shar
     // Take the guardrail before the first co_await: a concurrent DROP TABLE can
     // destroy the table while cas() is suspended.
     auto ld_guardrail = bypass_large_data_guardrails ? db::noop_large_data_guardrail::instance() : table.get_large_data_guardrail();
-    if (table.uses_tablets()) {
+    const bool migrating_to_tablets = !table.uses_tablets()
+            && cas_shard.get_erm()->get_token_metadata().tablets().has_tablet_map(schema->id());
+    if (table.uses_tablets() || migrating_to_tablets) {
         if (!_features.lwt_with_tablets) {
             auto msg = format("Cannot use LightWeight Transactions for table {}.{}: LWT is not yet supported with tablets", schema->ks_name(), schema->cf_name());
             co_await coroutine::return_exception(exceptions::invalid_request_exception(msg));
