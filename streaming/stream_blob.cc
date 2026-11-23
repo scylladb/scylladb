@@ -894,6 +894,7 @@ future<stream_files_response> tablet_stream_files_handler(replica::database& db,
                     clone_req.sstable_meta.state = sst_state;
                     clone_req.dst_shard_id = target.shard;
                     clone_req.topo_guard = req.topo_guard;
+                    clone_req.repaired_at = sst->get_stats_metadata().repaired_at;
 
                     // FIXME: to pin the sstable while being cloned, create a temporary reference on behalf
                     // of the target node that would be removed by it once it creates its own reference,
@@ -1004,7 +1005,7 @@ future<stream_files_response> clone_sstable_handler(replica::database& db, db::v
     // clone() creates the registry entry in "creating" state (leave_unsealed=true).
     // The entry is transitioned to "sealed" later by load_sstable_for_tablet()
     // → add_new_sstable_and_update_cache() → on_add callback → seal_sstable().
-    auto desc = co_await orig_sst->clone(new_gen, /*leave_unsealed=*/true, /*may_use_reference_sharing=*/use_reference_sharing);
+    auto desc = co_await orig_sst->clone(new_gen, /*leave_unsealed=*/true, /*may_use_reference_sharing=*/use_reference_sharing, req.repaired_at);
     blogger.debug("stream_sstables[{}] Cloned {} -> {} on destination using {}", req.ops_id, generation, new_gen,
         use_reference_sharing ? "reference sharing" : "server-side copy");
     co_await load_sstable_for_tablet(req.ops_id, db, vbw, req.table, state, std::move(desc), req.dst_shard_id);

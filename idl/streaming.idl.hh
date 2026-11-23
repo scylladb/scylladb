@@ -147,6 +147,7 @@ class clone_sstable_request {
     streaming::stream_sstable_meta sstable_meta;
     seastar::shard_id dst_shard_id;
     service::frozen_topology_guard topo_guard;
+    std::optional<int64_t> repaired_at [[version 2027.1]];
 };
 
 class stream_files_response {

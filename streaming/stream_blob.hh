@@ -189,6 +189,8 @@ public:
     streaming::stream_sstable_meta sstable_meta;
     seastar::shard_id dst_shard_id;
     service::frozen_topology_guard topo_guard;
+    // The source's in-memory value, which its Statistics may not hold.
+    std::optional<int64_t> repaired_at;
 };
 
 class stream_files_response {
