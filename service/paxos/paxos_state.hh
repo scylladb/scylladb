@@ -166,6 +166,8 @@ public:
 
     future<> ensure_initialized(const schema& s, db::timeout_clock::time_point timeout);
     static std::optional<std::string_view> try_get_base_table(std::string_view cf_name);
+    // The name of the table which keeps the Paxos state of `table_name` when it uses tablets.
+    static sstring paxos_state_table_name(std::string_view table_name);
 
     future<column_mapping> get_column_mapping(const schema& query_schema, dht::token token, table_schema_version version, clock_type::time_point timeout);
     future<service::paxos::paxos_state> load_paxos_state(partition_key_view key, schema_ptr s, gc_clock::time_point now,

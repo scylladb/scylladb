@@ -336,7 +336,7 @@ static sstring paxos_state_cf_filter(const schema& s, const schema& state_schema
 
 static const sstring paxos_state_table_suffix = "$paxos";
 
-static sstring paxos_state_table_name(std::string_view table_name) {
+sstring paxos_store::paxos_state_table_name(std::string_view table_name) {
     sstring result(sstring::initialized_later(), table_name.size() + paxos_state_table_suffix.size());
     auto it = result.begin();
     it = std::copy(table_name.begin(), table_name.end(), it);
