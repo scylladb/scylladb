@@ -90,13 +90,14 @@ struct compression {
         };
 
         class accessor {
-            const segmented_offsets& _offsets;
+            const segmented_offsets* _offsets = nullptr;
             mutable state _state;
         public:
-            accessor(const segmented_offsets& offsets) : _offsets(offsets) { }
+            accessor() = default;
+            accessor(const segmented_offsets& offsets) : _offsets(&offsets) { }
 
             uint64_t at(std::size_t i) const {
-                return _offsets.at(i, _state);
+                return _offsets->at(i, _state);
             }
         };
 
@@ -154,7 +155,7 @@ struct compression {
             struct end_tag {};
 
             segmented_offsets::accessor _offsets;
-            std::size_t _index;
+            std::size_t _index = 0;
 
             const_iterator(const segmented_offsets& offsets)
                 : _offsets(offsets.get_accessor())
@@ -167,17 +168,12 @@ struct compression {
             }
 
         public:
-            const_iterator(const const_iterator& other) = default;
-
-            const_iterator& operator=(const const_iterator& other) {
-                SCYLLA_ASSERT(&_offsets == &other._offsets);
-                _index = other._index;
-                return *this;
-            }
+            const_iterator() = default;
 
             const_iterator operator++(int) {
                 const_iterator it{*this};
-                return ++it;
+                ++*this;
+                return it;
             }
 
             const_iterator& operator++() {
@@ -199,7 +195,8 @@ struct compression {
 
             const_iterator operator--(int) {
                 const_iterator it{*this};
-                return --it;
+                --*this;
+                return it;
             }
 
             const_iterator& operator--() {
@@ -216,6 +213,14 @@ struct compression {
             const_iterator& operator-=(ssize_t i) {
                 _index -= i;
                 return *this;
+            }
+
+            difference_type operator-(const const_iterator& other) const {
+                return difference_type(_index) - difference_type(other._index);
+            }
+
+            friend const_iterator operator+(ssize_t i, const const_iterator& it) {
+                return it + i;
             }
 
             value_type operator*() const {
