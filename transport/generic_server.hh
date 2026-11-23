@@ -66,6 +66,8 @@ protected:
     std::optional<sstring> _ssl_protocol = std::nullopt;
 
 private:
+    input_stream<char> make_read_stream();
+    output_stream<char> make_write_stream();
     future<> process_until_tenant_switch();
     bool shutdown_input();
     bool shutdown_output();
@@ -82,6 +84,10 @@ public:
     virtual void on_connection_ready();
 
     virtual void shutdown();
+
+    // Recreate _read_buf and _write_buf from the current _fd.
+    // Must be called after replacing _fd (e.g. after TLS wrapping on unified port).
+    void rewrap_streams();
 
     void switch_tenant(execute_under_tenant_type execute);
 
@@ -147,10 +153,11 @@ public:
         bool is_shard_aware, bool keepalive,
         std::optional<file_permissions> unix_domain_socket_permissions,
         bool proxy_protocol = false,
+        std::optional<seastar::unified_port_options> unified_port = {},
         std::function<server&()> get_shard_instance = {}
         );
 
-    future<> do_accepts(int which, bool keepalive, socket_address server_addr, bool is_tls);
+    future<> do_accepts(int which, bool keepalive, socket_address server_addr, bool is_tls, bool unified_port = false);
 
 protected:
     virtual seastar::shared_ptr<connection> make_connection(socket_address server_addr, connected_socket&& fd, socket_address addr, named_semaphore& sem, semaphore_units<named_semaphore_exception_factory> initial_sem_units) = 0;

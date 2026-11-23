@@ -25,6 +25,8 @@ all_can_run_compaction_groups_except:
     - reusable_buffer_test
 # Custom command line arguments for some of the tests
 custom_args:
+    unified_port_test:
+        - '-c1 -m512M'
     mutation_reader_test:
         - '-c3 -m2G'
     scrub_test:

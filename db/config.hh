@@ -27,6 +27,7 @@
 #include "message/dict_trainer.hh"
 #include "message/advanced_rpc_compressor.hh"
 #include "db/consistency_level_type.hh"
+#include "db/native_transport_config.hh"
 #include "db/tri_mode_restriction.hh"
 #include "sstables/compressor.hh"
 
@@ -365,6 +366,7 @@ public:
     named_value<uint16_t> native_transport_port_ssl_proxy_protocol;
     named_value<uint16_t> native_shard_aware_transport_port_proxy_protocol;
     named_value<uint16_t> native_shard_aware_transport_port_ssl_proxy_protocol;
+    named_value<native_transport_unified_port_config> native_transport_unified_port;
     named_value<uint32_t> native_transport_max_threads;
     named_value<uint32_t> native_transport_max_frame_size_in_mb;
     named_value<sstring> broadcast_rpc_address;
@@ -801,3 +803,4 @@ extern template struct utils::config_file::named_value<std::unordered_map<sstrin
 extern template struct utils::config_file::named_value<std::unordered_map<sstring, unsigned>>;
 extern template struct utils::config_file::named_value<std::vector<db::object_storage_endpoint_param>>;
 extern template struct utils::config_file::named_value<std::vector<audit::audit_rule>>;
+extern template struct utils::config_file::named_value<db::native_transport_unified_port_config>;

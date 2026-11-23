@@ -68,6 +68,12 @@ public:
     using std::runtime_error::runtime_error;
 };
 
+// A malformed value whose transport or trust policy must not be ignored.
+class invalid_config_value_error : public std::invalid_argument {
+public:
+    using std::invalid_argument::invalid_argument;
+};
+
 class config_file {
     static thread_local unsigned s_shard_id;
     struct any_value {
