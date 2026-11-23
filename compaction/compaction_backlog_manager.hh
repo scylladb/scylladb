@@ -9,20 +9,69 @@
 #pragma once
 
 #include <unordered_set>
+#include <limits>
 #include <memory>
 #include "sstables/shared_sstable.hh"
+#include "sstables/types_fwd.hh"
 #include "mutation/timestamp.hh"
 #include "schema/schema_fwd.hh"
-
-class compaction_controller;
+#include "utils/log.hh"
+#include "utils/rate.hh"
 
 namespace sstables {
 class sstable_set;
+class sstable_run;
 }
 
 namespace compaction {
 
 class compaction_backlog_manager;
+
+// Logs what the compaction controller matches compaction to, per compaction group
+// and per shard, at debug level.
+extern logging::logger compaction_rates_logger;
+
+// Rates of a compaction group, which the compaction controller compares to match
+// compaction to ingestion. Each covers its window of minutes, or the time since the
+// group was created while it is younger than that; the flushed rates share one
+// window, the compacted rate is kept over a shorter one of its own and over that one.
+struct rate_stats {
+    utils::rate<utils::units::bytes> flushed_bytes;
+    // The size of the flushed sstables as a weighted average, each weighted by its size:
+    // sum(size^2) / sum(size); or 0 when nothing was flushed in the interval. A storm of
+    // small flushes barely moves it, unlike a plain average.
+    double mean_flush_size = 0;
+    // Bytes compacted by regular compaction, the one the compaction controller drives,
+    // counted from its input sstables. Other kinds run with maintenance shares.
+    utils::rate<utils::units::bytes> compacted_bytes;
+    // The same over the flushed rates' window, so that it covers the interval they do.
+    utils::rate<utils::units::bytes> compacted_bytes_long;
+    // The data the regular compactions that ended within the last two hours read, and the
+    // data they wrote, both counted as each ends: how much a compaction keeps of what it reads,
+    // one version of each row, less what overwrites and deletions dropped.
+    utils::rate<utils::units::bytes> completed_input_bytes;
+    utils::rate<utils::units::bytes> completed_output_bytes;
+};
+
+// Read amplification of the single-partition reads served from a compaction
+// group's sstables, which the compaction controller uses to tell how urgent
+// compaction is. Covers the same interval as the group's compacted_bytes.
+struct read_amplification_stats {
+    utils::rate<sstables::units::reads> point_reads;
+    // The sstables the point reads actually read, after bloom filters.
+    utils::rate<sstables::units::sstables> sstables_read;
+
+    // Mean number of sstables a point read read, or 0 when there were no reads.
+    double mean_sstables_read() const {
+        return sstables_read.per(point_reads);
+    }
+};
+
+// What a compaction group measures for the compaction controller.
+struct compaction_group_stats {
+    rate_stats rates;
+    read_amplification_stats read_amplification;
+};
 
 // What a backlog tracker needs to know about the data it accounts for: the sstables
 // of a compaction group -- all of them, across every repair state -- and the schema
@@ -31,12 +80,63 @@ class compaction_backlog_manager;
 // Deliberately not a compaction_group_view: a view is scoped to one repair state and
 // is the target a compaction runs against, while a backlog is a property of the whole
 // group, which has a single tracker.
+//
+// FIXME: make the backlog tracker aware of the repair sets. Compaction never compacts
+// sstables of different repair states together, but the group's single tracker accounts
+// for them together, so a tier mixing them looks ready although no compaction can take
+// it. Each compaction group view should have a tracker of its own, of its sstables.
+// See https://scylladb.atlassian.net/browse/SCYLLADB-6565. Waiting for
+// https://github.com/scylladb/scylladb/pull/32224, which simplifies it a lot: the
+// trackers will no longer have to be updated on every sstable movement across repair
+// sets.
 class compaction_backlog_source {
 public:
     virtual ~compaction_backlog_source() = default;
     virtual const schema_ptr& schema() const noexcept = 0;
     virtual lw_shared_ptr<const sstables::sstable_set> sstables_for_backlog() const = 0;
+    // What the group measures, for matching compaction to ingestion and telling how
+    // urgent it is.
+    virtual compaction_group_stats stats() const = 0;
+    // Whether regular compaction waits for a tier to hold min_threshold runs, rather than
+    // compacting as few as two.
+    virtual bool compaction_enforce_min_threshold() const noexcept = 0;
 };
+
+// Compaction rates of a compaction group, which the compaction controller compares
+// to set the shares of compaction.
+struct compaction_rates {
+    // TARGET_COMPACTION_RATE: the bytes the group's data has to be compacted at for
+    // the compactions pending in it to end by the time the next ones are due, as the
+    // group's strategy models it. 0 when nothing is pending.
+    utils::rate<utils::units::bytes> target;
+    // The bytes regular compaction compacted, from the group's stats.
+    utils::rate<utils::units::bytes> achieved;
+    // The same over the window of the rates the target is based on.
+    utils::rate<utils::units::bytes> achieved_long;
+
+    // The rates of two groups together, e.g. of all the groups of a shard.
+    friend compaction_rates operator+(const compaction_rates& a, const compaction_rates& b) noexcept {
+        return compaction_rates{.target = a.target + b.target, .achieved = a.achieved + b.achieved,
+                .achieved_long = a.achieved_long + b.achieved_long};
+    }
+};
+
+// The rates of a group whose strategy has no model for the target: the target is the
+// rate the group flushes at, the least compaction has to keep up with.
+inline compaction_rates achieved_compaction_rates(const compaction_backlog_source& src) {
+    auto rates = src.stats().rates;
+    return compaction_rates{.target = rates.flushed_bytes, .achieved = rates.compacted_bytes, .achieved_long = rates.compacted_bytes_long};
+}
+
+// The rates of a group whose tracker failed: the target is unknown, i.e. infinite, for
+// which the controller gives compaction its maximum shares, as the backlog controller
+// does for the unknown backlog of a failed tracker.
+// FIXME: a failed tracker stays disabled, so compaction keeps its maximum shares until
+// the group's tracker is replaced. The backlog controller is affected the same way. Both
+// should recover, by having the tracker's state reset. See https://github.com/scylladb/scylla/issues/10297.
+inline compaction_rates unknown_compaction_rates() noexcept {
+    return compaction_rates{.target = utils::rate<utils::units::bytes>(std::numeric_limits<double>::infinity(), std::chrono::seconds(1))};
+}
 
 // Fixed cost, in bytes, that each sstable adds to the backlog on top of its own size.
 //
@@ -60,6 +160,16 @@ static constexpr uint64_t sstable_backlog_fixed_cost = 1UL * 1024 * 1024;
 static inline uint64_t effective_backlog_size(uint64_t data_size, size_t sstables = 1) {
     return data_size == 0 ? 0 : data_size + sstables * sstable_backlog_fixed_cost;
 }
+
+// The rate at which the data of the given sstables, or of the sstables of the given runs,
+// was ingested: the bytes that came from memtable flushes, over the period they were
+// flushed in, from the sstables' ingestion metadata. Data written otherwise, e.g. by
+// repair, has no ingestion time. The period is no shorter than min_span, which keeps
+// data ingested in a burst from demanding to be compacted at an arbitrary rate.
+utils::rate<utils::units::bytes> ingestion_rate_from_sstables(const std::vector<sstables::shared_sstable>& sstables,
+        std::chrono::duration<double> min_span);
+utils::rate<utils::units::bytes> ingestion_rate_from_sstables(const std::vector<lw_shared_ptr<const sstables::sstable_run>>& runs,
+        std::chrono::duration<double> min_span);
 
 // Read and write progress are provided by structures present in progress_manager.hh
 // However, we don't want to be tied to their lifetimes and for that reason we will not
@@ -106,6 +216,9 @@ public:
         // FIXME: Should provide strong exception safety guarantees
         virtual void replace_sstables(const std::vector<sstables::shared_sstable>& old_ssts, const std::vector<sstables::shared_sstable>& new_ssts) = 0;
         virtual double backlog(const compaction_backlog_source& src, const ongoing_writes& ow, const ongoing_compactions& oc) const = 0;
+        // The compaction rates of the group, from the strategy's model of how much work
+        // ingestion produces.
+        virtual compaction_rates rates(const compaction_backlog_source& src) const = 0;
         virtual ~impl() { }
     };
 
@@ -116,6 +229,9 @@ public:
     ~compaction_backlog_tracker();
 
     double backlog(const compaction_backlog_source& src);
+    // When the rates can't be computed, the tracker is disabled and they are unknown:
+    // unknown_compaction_rates().
+    compaction_rates rates(const compaction_backlog_source& src);
     // FIXME: Should provide strong exception safety guarantees
     void replace_sstables(const std::vector<sstables::shared_sstable>& old_ssts, const std::vector<sstables::shared_sstable>& new_ssts);
     void register_partially_written_sstable(sstables::shared_sstable sst, backlog_write_progress_manager& wp);
@@ -163,12 +279,12 @@ private:
 class compaction_backlog_manager {
     std::unordered_map<compaction_backlog_tracker*, const compaction_backlog_source*> _backlog_trackers;
     void remove_backlog_tracker(compaction_backlog_tracker* tracker);
-    compaction_controller* _compaction_controller;
     friend class compaction_backlog_tracker;
 public:
     ~compaction_backlog_manager();
-    compaction_backlog_manager(compaction_controller& controller) : _compaction_controller(&controller) {}
     double backlog() const;
+    // The compaction rates of all the registered trackers' groups together.
+    compaction_rates rates() const;
     // The tracker's backlog is calculated on the sstables the source it is registered
     // with provides.
     void register_backlog_tracker(compaction_backlog_tracker& tracker, const compaction_backlog_source& src);

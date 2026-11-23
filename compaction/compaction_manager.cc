@@ -16,6 +16,7 @@
 #include "sstables/sstables_manager.hh"
 #include <algorithm>
 #include <array>
+#include <limits>
 #include <memory>
 #include <ranges>
 #include <fmt/ranges.h>
@@ -38,6 +39,7 @@
 #include "utils/labels.hh"
 
 static logging::logger cmlog("compaction_manager");
+logging::logger compaction::compaction_rates_logger("compaction_rates");
 using namespace std::chrono_literals;
 
 namespace compaction {
@@ -327,6 +329,9 @@ private:
     virtual double backlog(const compaction_backlog_source& src, const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const override {
         return _added_backlog * _available_memory;
     }
+    virtual compaction_rates rates(const compaction_backlog_source& src) const override {
+        return achieved_compaction_rates(src);
+    }
     virtual void replace_sstables(const std::vector<sstables::shared_sstable>& old_ssts, const std::vector<sstables::shared_sstable>& new_ssts) override {}
 };
 
@@ -468,6 +473,12 @@ tombstone_gc_state compaction_task_executor::make_gc_state(const compaction_desc
     return t.get_tombstone_gc_state();
 }
 
+// Whether the task runs compactions the compaction controller drives: regular compaction,
+// in the compaction scheduling group, whose shares the controller sets.
+static bool compaction_driven_by_controller(const compaction_manager& cm, const compaction_task_executor& task) noexcept {
+    return task.scheduling_group() == cm.compaction_sg();
+}
+
 future<compaction_result> compaction_task_executor::compact_sstables(compaction_descriptor descriptor, ::compaction::compaction_data& cdata, on_replacement& on_replace, compaction_manager::can_purge_tombstones can_purge,
                                                                                sstables::offstrategy offstrategy) {
     compaction_group_view& t = *_compacting_table;
@@ -557,7 +568,36 @@ future<compaction_result> compaction_task_executor::compact_sstables(compaction_
         }
     }
 
-    co_return co_await ::compaction::compact_sstables(std::move(descriptor), cdata, t, _progress_monitor);
+    _scheduling_group = current_scheduling_group();
+    auto input_data_size = std::ranges::fold_left(descriptor.sstables | std::views::transform(&sstables::sstable::data_size), uint64_t(0), std::plus());
+    auto res = co_await ::compaction::compact_sstables(std::move(descriptor), cdata, t, _progress_monitor);
+    if (compaction_driven_by_controller(_cm, *this)) {
+        // What the progress didn't credit yet, e.g. as nothing credited it since, is credited
+        // now, so that the input counts in full.
+        t.add_compacted_bytes(_progress_monitor.credit_up_to(input_data_size));
+        t.add_completed_compaction(input_data_size,
+                std::ranges::fold_left(res.new_sstables | std::views::transform(&sstables::sstable::data_size), uint64_t(0), std::plus()));
+    }
+    co_return res;
+}
+
+uint64_t compaction_task_executor::credit_compaction_progress() noexcept {
+    if (!_compacting_table) {
+        return 0;
+    }
+    auto credited = _progress_monitor.credit_up_to(_progress_monitor.get_progress());
+    _compacting_table->add_compacted_bytes(credited);
+    return credited;
+}
+
+uint64_t compaction_manager::credit_compaction_progress() noexcept {
+    uint64_t credited = 0;
+    for (auto& task : _tasks) {
+        if (compaction_driven_by_controller(*this, task)) {
+            credited += task.credit_compaction_progress();
+        }
+    }
+    return credited;
 }
 future<> compaction_manager::update_history(compaction_group_view& t, compaction_result&& res, const ::compaction::compaction_data& cdata) {
     auto started_at = std::chrono::duration_cast<std::chrono::milliseconds>(res.stats.started_at.time_since_epoch());
@@ -827,7 +867,10 @@ future<> compaction_manager::run_custom_job(compaction_group_view& t, compaction
 
 future<> compaction_manager::update_static_shares(float static_shares) {
     cmlog.info("Updating static shares to {}", static_shares);
-    return _compaction_controller.update_static_shares(static_shares);
+    if (_shadow_compaction_controller) {
+        co_await _shadow_compaction_controller->update_static_shares(static_shares);
+    }
+    co_await _compaction_controller->update_static_shares(static_shares);
 }
 
 compaction_reenabler::compaction_reenabler(compaction_manager& cm, compaction_group_view& t)
@@ -1004,8 +1047,104 @@ auto fmt::formatter<compaction::compaction_task_executor>::format(const compacti
 
 namespace compaction {
 
-inline compaction_controller make_compaction_controller(const compaction_manager::scheduling_group& csg, uint64_t static_shares, std::optional<float> max_shares, std::function<double()> fn) {
-    return compaction_controller(csg, static_shares, max_shares, 250ms, std::move(fn));
+inline std::unique_ptr<compaction_controller> make_compaction_controller(const compaction_manager::scheduling_group& csg, uint64_t static_shares, std::optional<float> max_shares, float normalization_factor, std::function<double()> fn) {
+    return std::make_unique<backlog_proportional_compaction_controller>(csg, static_shares, max_shares, normalization_factor, 250ms, std::move(fn));
+}
+
+std::unique_ptr<rate_matching_compaction_controller> compaction_manager::make_rate_matching_compaction_controller(rate_matching_compaction_controller::dry_run dry_run) {
+    // Updated every minute: often enough to follow compactions completing, rarely enough
+    // for the rates, averaged over minutes, to respond to the shares.
+    return std::make_unique<rate_matching_compaction_controller>(_cfg.rate_matching_controller, compaction_sg(), static_shares(), max_shares(), 1min,
+            [this] {
+                auto credited = credit_compaction_progress();
+                auto rates = _backlog_manager.rates();
+                // For the backlog metrics, which report the backlog last read, like the backlog
+                // controller does at its every update.
+                _last_backlog = backlog();
+                if (compaction_rates_logger.is_enabled(log_level::debug)) {
+                    std::vector<sstring> running;
+                    for (auto& task : _tasks) {
+                        if (compaction_driven_by_controller(*this, task) && task.compacting_table()) {
+                            running.push_back(format("{}.{} {} bytes in", task.compacting_table()->schema()->ks_name(),
+                                    task.compacting_table()->schema()->cf_name(), task.compaction_progress()));
+                        }
+                    }
+                    compaction_rates_logger.debug("shard: target {:.0f} B/s, achieved {:.0f} B/s over {}s, backlog {:.0f} bytes (normalized {:.2f}), "
+                            "regular compaction busy {}ms in total, credited {} bytes in flight, running [{}]",
+                            rates.target.per_second(), rates.achieved.per_second(), rates.achieved.interval().count(),
+                            _last_backlog, _last_backlog / available_memory(), std::chrono::duration_cast<std::chrono::milliseconds>(regular_compaction_busy_time()).count(),
+                            credited, fmt::join(running, ", "));
+                }
+                return rates;
+            },
+            dry_run);
+}
+
+lowres_clock::duration compaction_manager::regular_compaction_busy_time() const noexcept {
+    auto busy_time = _stats.regular_compaction_busy_time;
+    if (_stats.running_regular_compactions) {
+        busy_time += lowres_clock::now() - _stats.regular_compaction_busy_since;
+    }
+    return busy_time;
+}
+
+const rate_matching_compaction_controller* compaction_manager::get_rate_matching_compaction_controller() const noexcept {
+    if (auto controller = dynamic_cast<const rate_matching_compaction_controller*>(_compaction_controller.get())) {
+        return controller;
+    }
+    return dynamic_cast<const rate_matching_compaction_controller*>(_shadow_compaction_controller.get());
+}
+
+void compaction_manager::stop_compaction_controller(std::unique_ptr<compaction_controller> controller) {
+    // The controller stops right away, and is destroyed once its shutdown completes.
+    auto shutdown = controller->shutdown().finally([controller = std::move(controller)] {});
+    _replaced_compaction_controller_shutdown = _replaced_compaction_controller_shutdown.then([shutdown = std::move(shutdown)] () mutable {
+        return std::move(shutdown);
+    });
+}
+
+std::unique_ptr<compaction_controller> compaction_manager::make_backlog_proportional_compaction_controller() {
+    return make_compaction_controller(compaction_sg(), static_shares(), _cfg.max_shares.get(), _cfg.normalization_factor, [this] () -> float {
+        _last_backlog = backlog();
+        auto b = _last_backlog / available_memory();
+        // This means we are using an unimplemented strategy
+        if (compaction_controller::backlog_disabled(b)) {
+            // returning the normalization factor means that we'll return the maximum
+            // output in the _control_points. We can get rid of this when we implement
+            // all strategies.
+            return _cfg.normalization_factor;
+        }
+        return b;
+    });
+}
+
+void compaction_manager::use_backlog_proportional_compaction_controller() {
+    if (dynamic_cast<backlog_proportional_compaction_controller*>(_compaction_controller.get())) {
+        return;
+    }
+    stop_compaction_controller(std::exchange(_compaction_controller, make_backlog_proportional_compaction_controller()));
+    cmlog.info("Using the backlog-proportional compaction controller");
+}
+
+void compaction_manager::use_rate_matching_compaction_controller() {
+    if (dynamic_cast<rate_matching_compaction_controller*>(_compaction_controller.get())) {
+        return;
+    }
+    // The replaced controller stops right away, so that it doesn't set the shares anymore.
+    // So does the shadow one, if any: there is nothing left to compare it with.
+    stop_compaction_controller(std::exchange(_compaction_controller, make_rate_matching_compaction_controller(rate_matching_compaction_controller::dry_run::no)));
+    if (_shadow_compaction_controller) {
+        stop_compaction_controller(std::move(_shadow_compaction_controller));
+    }
+    cmlog.info("Using the rate-matching compaction controller");
+}
+
+void compaction_manager::shadow_compaction_controller_with_rate_matching() {
+    if (_shadow_compaction_controller || dynamic_cast<rate_matching_compaction_controller*>(_compaction_controller.get())) {
+        return;
+    }
+    _shadow_compaction_controller = make_rate_matching_compaction_controller(rate_matching_compaction_controller::dry_run::yes);
+    cmlog.info("Running the rate-matching compaction controller in a dry run alongside the compaction controller");
 }
 
 compaction::compaction_state::~compaction_state() {
@@ -1093,6 +1232,9 @@ compaction_task_executor::state compaction_task_executor::switch_state(state new
         break;
     case state::active:
         --_cm._stats.active_tasks;
+        if (_type == compaction_type::Compaction && --_cm._stats.running_regular_compactions == 0) {
+            _cm._stats.regular_compaction_busy_time += lowres_clock::now() - _cm._stats.regular_compaction_busy_since;
+        }
         break;
     }
     switch (new_state) {
@@ -1105,6 +1247,9 @@ compaction_task_executor::state compaction_task_executor::switch_state(state new
         break;
     case state::active:
         ++_cm._stats.active_tasks;
+        if (_type == compaction_type::Compaction && _cm._stats.running_regular_compactions++ == 0) {
+            _cm._stats.regular_compaction_busy_since = lowres_clock::now();
+        }
         break;
     case state::done:
         ++_cm._stats.completed_tasks;
@@ -1213,19 +1358,7 @@ compaction_manager::compaction_manager(config cfg, abort_source& as, tasks::task
     , _cfg(std::move(cfg))
     , _compaction_submission_timer(compaction_sg(), compaction_submission_callback())
     , _automatic_scrub_submission_timer(maintenance_sg(), automatic_scrub_submission_callback())
-    , _compaction_controller(make_compaction_controller(compaction_sg(), static_shares(), _cfg.max_shares.get(), [this] () -> float {
-        _last_backlog = backlog();
-        auto b = _last_backlog / available_memory();
-        // This means we are using an unimplemented strategy
-        if (compaction_controller::backlog_disabled(b)) {
-            // returning the normalization factor means that we'll return the maximum
-            // output in the _control_points. We can get rid of this when we implement
-            // all strategies.
-            return compaction_controller::normalization_factor;
-        }
-        return b;
-    }))
-    , _backlog_manager(_compaction_controller)
+    , _compaction_controller(make_backlog_proportional_compaction_controller())
     , _early_abort_subscription(as.subscribe([this] () noexcept {
         do_stop();
     }))
@@ -1233,22 +1366,26 @@ compaction_manager::compaction_manager(config cfg, abort_source& as, tasks::task
     , _compaction_static_shares_observer(_cfg.static_shares.observe(_update_compaction_static_shares_action.make_observer()))
     , _compaction_max_shares_observer(_cfg.max_shares.observe([this] (const float& max_shares) {
         cmlog.info("Updating max shares to {}", max_shares);
-        _compaction_controller.set_max_shares(max_shares);
+        _compaction_controller->set_max_shares(max_shares);
+        if (_shadow_compaction_controller) {
+            _shadow_compaction_controller->set_max_shares(max_shares);
+        }
     }))
     , _strategy_control(std::make_unique<strategy_control>(*this))
 {
+    _cfg.rate_matching_controller.validate();
+    backlog_proportional_compaction_controller::validate_normalization_factor(_cfg.normalization_factor);
     tm.register_module(_task_manager_module->get_name(), _task_manager_module);
     register_metrics();
 }
 
-compaction_manager::compaction_manager(tasks::task_manager& tm)
+compaction_manager::compaction_manager(tasks::task_manager& tm, scheduling_group compaction_sched_group, scheduling_group maintenance_sched_group)
     : _task_manager_module(make_shared<task_manager_module>(tm))
     , _sys_ks("compaction_manager::system_keyspace")
-    , _cfg(config{ .available_memory = 1 })
+    , _cfg(config{ .compaction_sched_group = compaction_sched_group, .maintenance_sched_group = maintenance_sched_group, .available_memory = 1 })
     , _compaction_submission_timer(compaction_sg(), compaction_submission_callback())
     , _automatic_scrub_submission_timer(maintenance_sg(), automatic_scrub_submission_callback())
-    , _compaction_controller(make_compaction_controller(compaction_sg(), 1, std::nullopt, [] () -> float { return 1.0; }))
-    , _backlog_manager(_compaction_controller)
+    , _compaction_controller(make_compaction_controller(compaction_sg(), 1, std::nullopt, backlog_proportional_compaction_controller::normalization_factor, [] () -> float { return 1.0; }))
     , _update_compaction_static_shares_action([] { return make_ready_future<>(); })
     , _compaction_static_shares_observer(_cfg.static_shares.observe(_update_compaction_static_shares_action.make_observer()))
     , _compaction_max_shares_observer(_cfg.max_shares.observe([] (const float& max_shares) {}))
@@ -1285,6 +1422,19 @@ void compaction_manager::register_metrics() {
                        sm::description("Holds the sum of normalized compaction backlog for all tables in the system. Backlog is normalized by dividing backlog by shard's available memory.")),
         sm::make_counter("validation_errors", [this] { return _validation_errors; },
                        sm::description("Holds the number of encountered validation errors.")).set_skip_when_empty(),
+        // Of rate_matching_compaction_controller, whether it sets the shares or runs in a dry run.
+        sm::make_gauge("rate_matching_controller_shares", [this] { auto controller = get_rate_matching_compaction_controller(); return controller ? controller->shares() : 0; },
+                       sm::description("Holds the shares of regular compaction the rate-matching compaction controller set, or would set in shadow mode.")),
+        sm::make_gauge("rate_matching_controller_target_bytes_per_second", [this] {
+                           auto controller = get_rate_matching_compaction_controller();
+                           return controller ? controller->last_rates().target.per_second() : 0;
+                       },
+                       sm::description("Holds the rate regular compaction has to run at, as the rate-matching compaction controller saw it at its last update.")),
+        sm::make_gauge("rate_matching_controller_achieved_bytes_per_second", [this] {
+                           auto controller = get_rate_matching_compaction_controller();
+                           return controller ? controller->last_rates().achieved.per_second() : 0;
+                       },
+                       sm::description("Holds the rate regular compaction achieved, as the rate-matching compaction controller saw it at its last update.")),
     });
 }
 
@@ -1627,7 +1777,11 @@ future<> compaction_manager::really_do_stop() noexcept {
     _weight_tracker.clear();
     _compaction_submission_timer.cancel();
     _automatic_scrub_submission_timer.cancel();
-    co_await _compaction_controller.shutdown();
+    co_await _compaction_controller->shutdown();
+    if (_shadow_compaction_controller) {
+        co_await _shadow_compaction_controller->shutdown();
+    }
+    co_await std::move(_replaced_compaction_controller_shutdown);
     co_await _update_compaction_static_shares_action.join();
     cmlog.info("Stopped");
 }
@@ -3330,6 +3484,16 @@ double compaction_backlog_tracker::backlog(const compaction_backlog_source& src)
     }
 }
 
+compaction_rates compaction_backlog_tracker::rates(const compaction_backlog_source& src) {
+    try {
+        return disabled() ? unknown_compaction_rates() : _impl->rates(src);
+    } catch (...) {
+        cmlog.error("Disabling backlog tracker due to exception during compaction rates computation: {}", std::current_exception());
+        disable();
+        return unknown_compaction_rates();
+    }
+}
+
 void compaction_backlog_tracker::replace_sstables(const std::vector<sstables::shared_sstable>& old_ssts, const std::vector<sstables::shared_sstable>& new_ssts) {
     if (disabled()) {
         return;
@@ -3436,8 +3600,74 @@ double compaction_backlog_manager::backlog() const {
             return backlog;
         }
     } catch (...) {
-        return _compaction_controller->backlog_of_shares(1000);
+        // Like a disabled tracker: the controller gives compaction its maximum shares.
+        return compaction_controller::disable_backlog;
     }
+}
+
+namespace {
+
+// Accumulates the data of sstables that came from memtable flushes, and the period it was
+// flushed in.
+struct ingestion_accumulator {
+    double ingested_bytes = 0;
+    int64_t ingested_from = std::numeric_limits<int64_t>::max();
+    int64_t ingested_until = std::numeric_limits<int64_t>::min();
+
+    void add(const sstables::shared_sstable& sst) {
+        auto ingestion = sst->get_ingestion_metadata();
+        if (!ingestion || ingestion->fraction <= 0) {
+            return;
+        }
+        ingested_bytes += ingestion->fraction * sst->data_size();
+        ingested_from = std::min(ingested_from, ingestion->ingested_from);
+        ingested_until = std::max(ingested_until, ingestion->ingested_until);
+    }
+
+    utils::rate<utils::units::bytes> rate(std::chrono::duration<double> min_span) const {
+        if (ingested_bytes <= 0) {
+            return {};
+        }
+        auto span = std::max<std::chrono::duration<double>>(std::chrono::milliseconds(ingested_until - ingested_from), min_span);
+        return utils::rate<utils::units::bytes>(ingested_bytes, span);
+    }
+};
+
+}
+
+utils::rate<utils::units::bytes> ingestion_rate_from_sstables(const std::vector<sstables::shared_sstable>& sstables,
+        std::chrono::duration<double> min_span) {
+    ingestion_accumulator acc;
+    for (const auto& sst : sstables) {
+        acc.add(sst);
+    }
+    return acc.rate(min_span);
+}
+
+utils::rate<utils::units::bytes> ingestion_rate_from_sstables(const std::vector<sstables::frozen_sstable_run>& runs,
+        std::chrono::duration<double> min_span) {
+    ingestion_accumulator acc;
+    for (const auto& run : runs) {
+        for (const auto& sst : run->all()) {
+            acc.add(sst);
+        }
+    }
+    return acc.rate(min_span);
+}
+
+compaction_rates compaction_backlog_manager::rates() const {
+    compaction_rates rates;
+    for (auto& [tracker, src] : _backlog_trackers) {
+        auto r = tracker->rates(*src);
+        // A group with nothing pending has no say in the shard's shares: its target
+        // would add nothing, and what it achieved lately would only hide what the
+        // groups with pending work are short of.
+        if (r.target.per_second() <= 0) {
+            continue;
+        }
+        rates = rates + r;
+    }
+    return rates;
 }
 
 void compaction_backlog_manager::register_backlog_tracker(compaction_backlog_tracker& tracker, const compaction_backlog_source& src) {

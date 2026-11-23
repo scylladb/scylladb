@@ -1067,6 +1067,7 @@ class scylla_sstable_compaction_group_view : public compaction::compaction_group
     struct dummy_compaction_backlog_tracker : public compaction::compaction_backlog_tracker::impl {
         virtual void replace_sstables(const std::vector<sstables::shared_sstable>& old_ssts, const std::vector<sstables::shared_sstable>& new_ssts) override { }
         virtual double backlog(const compaction::compaction_backlog_source& src, const compaction::compaction_backlog_tracker::ongoing_writes& ow, const compaction::compaction_backlog_tracker::ongoing_compactions& oc) const override { return 0.0; }
+        virtual compaction::compaction_rates rates(const compaction::compaction_backlog_source& src) const override { return compaction::achieved_compaction_rates(src); }
     };
 
 private:
@@ -1144,6 +1145,8 @@ public:
     virtual tombstone_gc_state get_tombstone_gc_state() const noexcept override { return _tombstone_gc_state; }
     virtual compaction::compaction_backlog_tracker& get_backlog_tracker() override { return _backlog_tracker; }
     virtual const std::string get_group_id() const noexcept override { return _group_id; }
+    void add_compacted_bytes(uint64_t) noexcept override {}
+    void add_completed_compaction(uint64_t, uint64_t) noexcept override {}
     virtual seastar::condition_variable& get_staging_done_condition() noexcept override { return _staging_done_condition; }
     dht::token_range get_token_range_after_split(const dht::token& t) const noexcept override { return dht::token_range(); }
     int64_t get_sstables_repaired_at() const noexcept override { return 0; }
@@ -1678,6 +1681,7 @@ const char* to_string(sstables::scylla_metadata_type t) {
         case sstables::scylla_metadata_type::ComponentsDigests: return "components_digests";
         case sstables::scylla_metadata_type::LargeDataRecords: return "large_data_records";
         case sstables::scylla_metadata_type::ScrubTime: return "scrub_time";
+        case sstables::scylla_metadata_type::IngestionMetadata: return "ingestion_metadata";
     }
     std::abort();
 }
@@ -1766,6 +1770,16 @@ public:
     }
     void operator()(const sstables::run_identifier& val) const {
         _writer.AsString(val.id.uuid());
+    }
+    void operator()(const sstables::ingestion_metadata& val) const {
+        _writer.StartObject();
+        _writer.Key("fraction");
+        _writer.Double(val.fraction);
+        _writer.Key("ingested_from");
+        _writer.Int64(val.ingested_from);
+        _writer.Key("ingested_until");
+        _writer.Int64(val.ingested_until);
+        _writer.EndObject();
     }
     void operator()(const sstables::scylla_metadata::large_data_stats& val) const {
         _writer.StartObject();

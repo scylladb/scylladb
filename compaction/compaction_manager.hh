@@ -75,6 +75,12 @@ public:
         int64_t completed_tasks = 0;
         uint64_t active_tasks = 0; // Number of compaction going on.
         int64_t errors = 0;
+        // Number of regular compactions running.
+        uint64_t running_regular_compactions = 0;
+        // Time regular compaction was busy, i.e. at least one ran, until it last became
+        // idle, and since when it is busy, if it is.
+        seastar::lowres_clock::duration regular_compaction_busy_time{};
+        seastar::lowres_clock::time_point regular_compaction_busy_since;
     };
     using scheduling_group = backlog_controller::scheduling_group;
     struct config {
@@ -83,8 +89,10 @@ public:
         size_t available_memory = 0;
         utils::updateable_value<float> static_shares = utils::updateable_value<float>(0);
         utils::updateable_value<float> max_shares = utils::updateable_value<float>(0);
+        float normalization_factor = backlog_proportional_compaction_controller::normalization_factor;
         utils::updateable_value<uint32_t> throughput_mb_per_sec = utils::updateable_value<uint32_t>(0);
         std::chrono::seconds flush_all_tables_before_major = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::days(1));
+        rate_matching_compaction_controller::config rate_matching_controller;
     };
 
 public:
@@ -185,7 +193,20 @@ private:
     timer<lowres_clock> _compaction_submission_timer;
     timer<lowres_clock> _automatic_scrub_submission_timer;
 
-    compaction_controller _compaction_controller;
+    std::unique_ptr<compaction_controller> _compaction_controller;
+    // The shutdown of the controllers that stopped, if any.
+    future<> _replaced_compaction_controller_shutdown = make_ready_future<>();
+    // rate_matching_compaction_controller in a dry run alongside _compaction_controller, if any, for
+    // comparing the shares they would set.
+    std::unique_ptr<compaction_controller> _shadow_compaction_controller;
+
+    std::unique_ptr<compaction_controller> make_backlog_proportional_compaction_controller();
+    std::unique_ptr<rate_matching_compaction_controller> make_rate_matching_compaction_controller(rate_matching_compaction_controller::dry_run dry_run);
+    // rate_matching_compaction_controller, whether it sets the shares or runs in a dry run, if any.
+    const rate_matching_compaction_controller* get_rate_matching_compaction_controller() const noexcept;
+    // The time regular compaction was busy, i.e. at least one ran, so far.
+    seastar::lowres_clock::duration regular_compaction_busy_time() const noexcept;
+    void stop_compaction_controller(std::unique_ptr<compaction_controller> controller);
     compaction_backlog_manager _backlog_manager;
     optimized_optional<abort_source::subscription> _early_abort_subscription;
     future<> update_history(compaction_group_view& t, compaction_result&& res, const compaction_data& cdata);
@@ -318,13 +339,15 @@ private:
 
     // This constructor is supposed to only be used for testing so lets be more explicit
     // about invoking it. Ref #10146
-    compaction_manager(tasks::task_manager& tm);
+    compaction_manager(tasks::task_manager& tm, scheduling_group compaction_sched_group, scheduling_group maintenance_sched_group);
 public:
     compaction_manager(config cfg, abort_source& as, tasks::task_manager& tm);
     ~compaction_manager();
     class for_testing_tag{};
-    // An inline constructor for testing
-    compaction_manager(tasks::task_manager& tm, for_testing_tag) : compaction_manager(tm) {}
+    // An inline constructor for testing. Regular compaction and the other kinds run in the
+    // main scheduling group, unless given groups of their own.
+    compaction_manager(tasks::task_manager& tm, for_testing_tag, scheduling_group compaction_sched_group = {}, scheduling_group maintenance_sched_group = {})
+        : compaction_manager(tm, compaction_sched_group, maintenance_sched_group) {}
 
     compaction::task_manager_module& get_task_manager_module() noexcept {
         return *_task_manager_module;
@@ -338,6 +361,11 @@ public:
         return _cfg.maintenance_sched_group;
     }
 
+    // Credits the groups with what the regular compactions running, those in the compaction
+    // scheduling group, compacted so far, so the rates read next see it.
+    // Returns the bytes credited.
+    uint64_t credit_compaction_progress() noexcept;
+
     size_t available_memory() const noexcept {
         return _cfg.available_memory;
     }
@@ -348,6 +376,27 @@ public:
 
     float max_shares() const noexcept {
         return _cfg.max_shares.get();
+    }
+
+    const rate_matching_compaction_controller::config& rate_matching_controller_config() const noexcept {
+        return _cfg.rate_matching_controller;
+    }
+
+    // Replace the compaction controller with backlog_proportional_compaction_controller or
+    // rate_matching_compaction_controller. The replaced one stops setting the shares at once.
+    void use_backlog_proportional_compaction_controller();
+    void use_rate_matching_compaction_controller();
+    // Runs rate_matching_compaction_controller in a dry run alongside the compaction controller, which
+    // keeps setting the shares, logging the shares it would set and what led to them.
+    // For testing rate_matching_compaction_controller only.
+    void shadow_compaction_controller_with_rate_matching();
+
+    const compaction_controller& get_compaction_controller() const noexcept {
+        return *_compaction_controller;
+    }
+
+    const compaction_controller* get_shadow_compaction_controller() const noexcept {
+        return _shadow_compaction_controller.get();
     }
 
     uint32_t throughput_mbs() const noexcept {
@@ -609,6 +658,8 @@ protected:
     state _state = state::none;
     throw_if_stopping _do_throw_if_stopping;
     compaction_progress_monitor _progress_monitor;
+    // The scheduling group the task runs its compactions in, recorded as each starts.
+    seastar::scheduling_group _scheduling_group;
 
 private:
     shared_future<compaction_manager::compaction_stats_opt> _compaction_done = make_ready_future<compaction_manager::compaction_stats_opt>();
@@ -697,6 +748,20 @@ public:
 
     bool compaction_running() const noexcept {
         return _state == state::active;
+    }
+
+    // The scheduling group the task runs its compactions in: the compaction one for regular
+    // compaction, whose shares the compaction controller sets, the maintenance one for the
+    // other kinds.
+    seastar::scheduling_group scheduling_group() const noexcept {
+        return _scheduling_group;
+    }
+    // Credits the compaction group with the bytes regular compaction compacted since the
+    // last credit, so that its rate follows compaction in flight.
+    uint64_t credit_compaction_progress() noexcept;
+    // Bytes of the input sstables the compaction has processed so far.
+    uint64_t compaction_progress() const noexcept {
+        return _progress_monitor.get_progress();
     }
 
     const ::compaction::compaction_data& compaction_data() const noexcept {

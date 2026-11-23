@@ -742,8 +742,15 @@ private:
                     .available_memory = dbcfg.available_memory,
                     .static_shares = cfg->compaction_static_shares,
                     .max_shares = cfg->compaction_max_shares,
+                    .normalization_factor = cfg->compaction_normalization_factor(),
                     .throughput_mb_per_sec = cfg->compaction_throughput_mb_per_sec,
                     .flush_all_tables_before_major = cfg->compaction_flush_all_tables_before_major_seconds() * 1s,
+                    .rate_matching_controller = {
+                        .rate_window = std::chrono::seconds(cfg->compaction_rate_matching_controller_rate_window_in_seconds()),
+                        .achieved_window = std::chrono::seconds(cfg->compaction_rate_matching_controller_achieved_window_in_seconds()),
+                        .alpha = cfg->compaction_rate_matching_controller_alpha(),
+                        .max_step = cfg->compaction_rate_matching_controller_max_step(),
+                    },
                 };
             });
             _cm.start(std::move(get_cm_cfg), std::ref(abort_sources), std::ref(_task_manager)).get();

@@ -47,6 +47,7 @@
 #include "view_info.hh"
 #include "db/data_listeners.hh"
 #include "memtable-sstable.hh"
+#include "compaction/compaction.hh"
 #include "compaction/compaction_manager.hh"
 #include "compaction/compaction_group_view.hh"
 #include "sstables/sstable_directory.hh"
@@ -115,7 +116,7 @@ table::make_sstable_reader(schema_ptr s,
     // regardless of what the fwd_mr parameter says.
     if (pr.is_singular() && pr.start()->value().has_key()) {
         return sstables->create_single_key_sstable_reader(const_cast<column_family*>(this), std::move(s), std::move(permit),
-                _stats.estimated_sstable_per_read, pr, slice, std::move(trace_state), fwd, fwd_mr, predicate, integrity);
+                sstables::read_stats{_stats.estimated_sstable_per_read}, pr, slice, std::move(trace_state), fwd, fwd_mr, predicate, integrity);
     } else {
         return sstables->make_local_shard_sstable_reader(std::move(s), std::move(permit), pr, slice,
                 std::move(trace_state), fwd, fwd_mr, sstables::default_read_monitor_generator(), predicate, nullptr, integrity);
@@ -627,7 +628,9 @@ const lw_shared_ptr<sstables::sstable_set>& compaction_group::main_sstables() co
 sstables::sstable_set compaction_group::make_main_sstable_set() const {
     // Uses view for unrepaired data, but doesn't really matter since this is only building an empty set,
     // and will get through the view info like group id and token range.
-    return _t._compaction_strategy.make_sstable_set(view_for_unrepaired_data());
+    auto set = _t._compaction_strategy.make_sstable_set(view_for_unrepaired_data());
+    // The reads of keys owned by this group are served from its main set.
+    return sstables::sstable_set(std::move(set), _point_read_amplification);
 }
 
 void compaction_group::set_main_sstables(lw_shared_ptr<sstables::sstable_set> new_main_sstables) {
@@ -2293,6 +2296,12 @@ table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtabl
     co_await utils::get_local_injector().inject("flush_memtable_to_sstable_wait", utils::wait_for_message(60s));
 
     auto permit = make_lw_shared(std::move(permit_));
+    // The flushed data was ingested from the memtable's creation until now.
+    auto ingestion = sstables::ingestion_metadata{
+        .fraction = 1.0,
+        .ingested_from = old->creation_time().time_since_epoch() / 1ms,
+        .ingested_until = db_clock::now().time_since_epoch() / 1ms,
+    };
     co_await coroutine::switch_to(_config.memtable_scheduling_group);
     // Note that due to our sharded architecture, it is possible that
     // in the face of a value change some shards will backup sstables
@@ -2316,12 +2325,13 @@ table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtabl
         co_await _compaction_manager.maybe_wait_for_sstable_count_reduction(cg.view_for_unrepaired_data());
     }
 
-    auto consumer = _compaction_strategy.make_interposer_consumer(metadata, [this, old, permit, &newtabs, estimated_partitions, &cg] (mutation_reader reader) mutable -> future<> {
+    auto consumer = _compaction_strategy.make_interposer_consumer(metadata, [this, old, permit, &newtabs, estimated_partitions, &cg, &ingestion] (mutation_reader reader) mutable -> future<> {
       std::exception_ptr ex;
       try {
         sstables::sstable_writer_config cfg = get_sstables_manager().configure_writer("memtable");
         // FIXME: incremental backups are deprecated; remove support for them in a future release (SCYLLADB-5498).
         cfg.backup = incremental_backups_enabled();
+        cfg.ingestion = ingestion;
 
         auto newtab = make_sstable();
         newtabs.push_back(newtab);
@@ -2355,6 +2365,7 @@ table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtabl
         });
 
         co_await update_cache(cg, old, newtabs);
+        cg.on_memtable_flushed(newtabs);
 
         co_await utils::get_local_injector().inject("replica_post_flush_after_update_cache", [this] (auto& handler) -> future<> {
             const auto this_table_name = format("{}.{}", _schema->ks_name(), _schema->cf_name());
@@ -3420,7 +3431,7 @@ public:
         }
     }
     bool compaction_enforce_min_threshold() const noexcept override {
-        return _t.get_config().compaction_enforce_min_threshold || _t._is_bootstrap_or_replace;
+        return _cg.compaction_enforce_min_threshold();
     }
     future<lw_shared_ptr<const sstables::sstable_set>> main_sstable_set() const override {
         return make_sstable_set_for_this_view(_cg.main_sstables(), [this] { return _cg.make_main_sstable_set(); });
@@ -3529,6 +3540,14 @@ public:
             _cg.trigger_compaction();
         }
     }
+    void add_compacted_bytes(uint64_t bytes) noexcept override {
+        _cg._compacted_bytes.add(bytes);
+        _cg._compacted_bytes_long.add(bytes);
+    }
+    void add_completed_compaction(uint64_t bytes_in, uint64_t bytes_out) noexcept override {
+        _cg._completed_input_bytes.add(bytes_in);
+        _cg._completed_output_bytes.add(bytes_out);
+    }
     bool is_auto_compaction_disabled_by_user() const noexcept override {
         return _t.is_auto_compaction_disabled_by_user();
     }
@@ -3588,13 +3607,16 @@ compaction_group::compaction_group(table& t, size_t group_id, dht::token_range t
     , _token_range(std::move(token_range))
     , _compaction_strategy_state(compaction::compaction_strategy_state::make(_t._compaction_strategy))
     , _memtables(_t._config.enable_disk_writes ? _t.make_memtable_list(*this) : _t.make_memory_only_memtable_list())
-    , _main_sstables(make_lw_shared<sstables::sstable_set>(make_main_sstable_set()))
     , _maintenance_sstables(make_maintenance_sstable_set())
     , _async_gate(format("[compaction_group {}.{} {}]", t.schema()->ks_name(), t.schema()->cf_name(), group_id))
     , _repair_sstable_classifier(std::move(repair_classifier))
     , _logstor_state(t.uses_logstor() ? std::make_unique<compaction_group_logstor_state>(*this) : nullptr)
     , _lowest_rp(db::replay_position::max)
+    , _rate_window(t.get_compaction_manager().rate_matching_controller_config().rate_window)
+    , _achieved_window(t.get_compaction_manager().rate_matching_controller_config().achieved_window)
 {
+    // Once the group's read amplification tracker exists, for the set to report to.
+    _main_sstables = make_lw_shared<sstables::sstable_set>(make_main_sstable_set());
     // Must go through register_backlog_tracker(), otherwise this group's backlog would
     // be tracked but never accounted by the compaction backlog manager. Groups created
     // after the table was started (tablet split, migration or merge) are not covered by
@@ -4882,6 +4904,38 @@ lw_shared_ptr<memtable_list>& compaction_group::memtables() noexcept {
     return _memtables;
 }
 
+void compaction_group::on_memtable_flushed(const std::vector<sstables::shared_sstable>& ssts) noexcept {
+    for (const auto& sst : ssts) {
+        auto size = sst->data_size();
+        if (size == 0) {
+            continue;
+        }
+        _flushed_bytes.add(size);
+        _flushed_squared_bytes.add(double(size) * size);
+    }
+}
+
+compaction::compaction_group_stats compaction_group::stats() const {
+    // Read at the same time, the rates cover the same interval.
+    auto now = lowres_db_clock::now();
+    auto flushed_bytes = _flushed_bytes.rate(now);
+    auto flushed_squared_bytes = _flushed_squared_bytes.rate(now);
+    return {
+        .rates = {
+            .flushed_bytes = flushed_bytes,
+            .mean_flush_size = flushed_bytes.amount() > 0 ? flushed_squared_bytes.per(flushed_bytes) : 0,
+            .compacted_bytes = _compacted_bytes.rate(now),
+            .compacted_bytes_long = _compacted_bytes_long.rate(now),
+            .completed_input_bytes = _completed_input_bytes.rate(now),
+            .completed_output_bytes = _completed_output_bytes.rate(now),
+        },
+        .read_amplification = {
+            .point_reads = _point_read_amplification->reads(now),
+            .sstables_read = _point_read_amplification->sstables_read(now),
+        },
+    };
+}
+
 size_t compaction_group::memtable_count() const noexcept {
     return _memtables->size();
 }
@@ -5960,6 +6014,10 @@ std::vector<mutation_source> table::select_memtables_as_mutation_sources(dht::to
 
 compaction::compaction_backlog_tracker& compaction_group::get_backlog_tracker() {
     return *_backlog_tracker;
+}
+
+bool compaction_group::compaction_enforce_min_threshold() const noexcept {
+    return _t.get_config().compaction_enforce_min_threshold || _t._is_bootstrap_or_replace;
 }
 
 lw_shared_ptr<const sstables::sstable_set> compaction_group::sstables_for_backlog() const {

@@ -87,6 +87,9 @@ public:
     lw_shared_ptr<const sstables::sstable_set> sstables_for_backlog() const override {
         return table().try_get_compaction_group_with_static_sharding()->main_sstables();
     }
+    compaction::compaction_group_stats stats() const override {
+        return table().try_get_compaction_group_with_static_sharding()->stats();
+    }
     bool skip_memtable_for_tombstone_gc(const ::schema&) const noexcept override { return false; }
     std::unordered_set<sstables::shared_sstable> fully_expired_sstables(const std::vector<sstables::shared_sstable>& sstables, gc_clock::time_point query_time) const override {
         return compaction::get_fully_expired_sstables(*this, sstables, query_time);
@@ -144,6 +147,8 @@ public:
     const std::string get_group_id() const noexcept override {
         return _group_id;
     }
+    void add_compacted_bytes(uint64_t) noexcept override {}
+    void add_completed_compaction(uint64_t, uint64_t) noexcept override {}
     seastar::condition_variable& get_staging_done_condition() noexcept override {
         return _staging_condition;
     }
@@ -255,6 +260,8 @@ struct test_env::impl {
     sstables::sstable_generation_generator gen;
     data_dictionary::storage_options storage;
     abort_source abort;
+    seastar::scheduling_group compaction_scheduling_group;
+    seastar::scheduling_group maintenance_scheduling_group;
 
     impl(test_env_config cfg, sstable_compressor_factory&, sstables::storage_manager* sstm, tmpdir* tdir);
     impl(impl&&) = delete;
@@ -297,6 +304,8 @@ test_env::impl::impl(test_env_config cfg, sstable_compressor_factory& scfarg, ss
             sstm)
     , semaphore(reader_concurrency_semaphore::no_limits{}, "sstables::test_env", reader_concurrency_semaphore::register_metrics::no)
     , storage(std::move(cfg.storage))
+    , compaction_scheduling_group(cfg.compaction_scheduling_group)
+    , maintenance_scheduling_group(cfg.maintenance_scheduling_group)
 {
 }
 
@@ -311,7 +320,7 @@ test_env::~test_env() = default;
 
 void test_env::maybe_start_compaction_manager(bool enable) {
     if (!_impl->cmgr) {
-        _impl->cmgr = std::make_unique<test_env_compaction_manager>();
+        _impl->cmgr = std::make_unique<test_env_compaction_manager>(_impl->compaction_scheduling_group, _impl->maintenance_scheduling_group);
         if (enable) {
             _impl->cmgr->get_compaction_manager().enable();
         }

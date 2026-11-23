@@ -121,11 +121,18 @@ struct compaction_result {
 class compaction_progress_monitor {
     std::unique_ptr<sstables::read_monitor_generator> _generator = nullptr;
     uint64_t _progress = 0;
+    // Bytes of the progress already credited to the compaction group's compacted bytes.
+    uint64_t _credited = 0;
 public:
     void set_generator(std::unique_ptr<sstables::read_monitor_generator> generator);
     void reset_generator();
     // Returns number of bytes processed with _generator.
     uint64_t get_progress() const;
+    // Credits the bytes compacted up to `bytes` that weren't credited yet, and returns
+    // them: 0 if `bytes` doesn't exceed what was credited. Credited while the compaction
+    // runs, from its progress, so the compaction rates see it, and once it completes,
+    // from the size of its input, for the remainder.
+    uint64_t credit_up_to(uint64_t bytes) noexcept;
 
     friend class compaction;
     friend future<compaction_result> scrub_sstables_validate_mode(compaction_descriptor, compaction_data&, compaction_group_view&, compaction_progress_monitor&);

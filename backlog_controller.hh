@@ -9,13 +9,18 @@
 #pragma once
 #include <seastar/core/scheduling.hh>
 #include <seastar/core/timer.hh>
+#include <seastar/core/lowres_clock.hh>
 #include <seastar/core/gate.hh>
 #include <seastar/core/file.hh>
+#include <seastar/util/bool_class.hh>
+#include <seastar/util/log.hh>
 #include <chrono>
+#include <optional>
 #include <cmath>
 
 #include "seastarx.hh"
 #include "backlog_controller_fwd.hh"
+#include "compaction/compaction_backlog_manager.hh"
 
 // Simple proportional controller to adjust shares for processes for which a backlog can be clearly
 // defined.
@@ -125,26 +130,145 @@ public:
     {}
 };
 
-class compaction_controller : public backlog_controller {
+// Sets the shares of the compaction scheduling group.
+class compaction_controller {
 public:
-    static constexpr unsigned normalization_factor = 30;
+    // The backlog a tracker reports when it can't compute one, e.g. for a strategy
+    // without a backlog model. A controller then gives compaction its maximum shares.
     static constexpr float disable_backlog = std::numeric_limits<double>::infinity();
     static constexpr float backlog_disabled(float backlog) { return std::isinf(backlog); }
+
+    virtual ~compaction_controller() = default;
+    virtual future<> shutdown() = 0;
+    // Static shares, when positive, replace the controller's own.
+    virtual future<> update_static_shares(float static_shares) = 0;
+    // Caps the shares the controller gives compaction.
+    virtual void set_max_shares(float max_shares) = 0;
+};
+
+// Sets the shares from the backlog, normalized by the available memory, through a
+// piecewise-linear curve.
+class backlog_proportional_compaction_controller final : public compaction_controller, public backlog_controller {
+public:
+    static constexpr unsigned normalization_factor = 30;
     static inline const std::vector<backlog_controller::control_point> default_control_points = {
             backlog_controller::control_point{0.0, 50}, {1.5, 100}, {normalization_factor, default_compaction_maximum_shares}};
-    compaction_controller(backlog_controller::scheduling_group sg, float static_shares, std::optional<float> max_shares,
-        std::chrono::milliseconds interval, std::function<float()> current_backlog)
+    // Throws std::invalid_argument unless the normalization factor, the input of the last
+    // control point, comes after the input of the one before it.
+    static void validate_normalization_factor(float normalization_factor);
+    backlog_proportional_compaction_controller(backlog_controller::scheduling_group sg, float static_shares, std::optional<float> max_shares,
+        float normalization_factor, std::chrono::milliseconds interval, std::function<float()> current_backlog)
         : backlog_controller(std::move(sg), std::move(interval),
           default_control_points,
           std::move(current_backlog),
           static_shares
         )
     {
+        _control_points.back().input = normalization_factor;
         if (max_shares) {
             set_max_shares(*max_shares);
         }
     }
 
+    future<> shutdown() override {
+        return backlog_controller::shutdown();
+    }
+    future<> update_static_shares(float static_shares) override {
+        return backlog_controller::update_static_shares(static_shares);
+    }
     // Updates the maximum output value for control points.
-    void set_max_shares(float max_shares);
+    void set_max_shares(float max_shares) override;
+};
+
+// Sets the shares so that compaction keeps up with the work ingestion produces, by
+// comparing the rate compaction has to run at, the target, with the rate it achieves,
+// both summed over all compaction groups:
+//
+//   shares = shares * (target / achieved)^alpha
+//
+// alpha and the step limit keep each update to a part of the way, as the rates are
+// averaged over minutes and respond slowly to the shares.
+//
+// What compaction achieves is taken over two windows: the achieved window, what it
+// delivers now, and the rate window the target is based on, what it delivered over the
+// same time. The shares are raised only while compaction is behind over both, and
+// lowered only while it is ahead over both. When they disagree, they stay: a pause in
+// compaction after keeping up over the rate window isn't falling behind, and catching
+// up for a few minutes doesn't repay what compaction fell behind by over it.
+class rate_matching_compaction_controller final : public compaction_controller {
+public:
+    using scheduling_group = seastar::scheduling_group;
+    // In a dry run, the controller computes the shares, and logs them and what led to
+    // them, but doesn't set them: another controller does.
+    using dry_run = seastar::bool_class<struct dry_run_tag>;
+
+    static constexpr float min_shares = 50;
+    struct config {
+        // The window the rates are averaged over. It sets how quickly the controller
+        // follows a change in the workload: the rates reflect a new ingestion rate only
+        // once the window covers it, so the shares settle within about a window.
+        std::chrono::seconds rate_window{1800};
+        // The window the achieved rate, what regular compaction compacted, is averaged
+        // over. Shorter than rate_window: the target follows the tree as it changes, and
+        // the comparison needs the rate compaction delivers now, not what it delivered
+        // half an hour ago. Compaction progress is credited at every update, so a few
+        // updates are enough to average over. With the two windows equal, the achieved
+        // rate kept reporting a burst of compaction for the whole window after it ended,
+        // the shares fell to the floor on the strength of it while the tiers filled, and
+        // the next burst followed: a cycle of the window's length.
+        std::chrono::seconds achieved_window{300};
+        double alpha = 0.3;
+        // An update changes the shares by up to this factor, either way.
+        double max_step = 2;
+
+        // Throws std::invalid_argument if a setting is out of its range.
+        void validate() const;
+    };
+
+private:
+    config _config;
+    scheduling_group _scheduling_group;
+    std::function<compaction::compaction_rates()> _current_rates;
+    float _static_shares;
+    // FIXME: the maximum is the backlog controller's by default, but this one doesn't
+    // have to stop there. Lift the default once tested; compaction_max_shares can raise
+    // it meanwhile.
+    float _max_shares = default_compaction_maximum_shares;
+    // Start at the minimum and rise as the rates show compaction falls behind, rather than
+    // from the scheduling group's shares: until a controller sets them, they are the
+    // group's default, the maximum, e.g. when the node switches to this controller, or
+    // starts it in shadow mode, early at startup.
+    float _shares = min_shares;
+    // The rates at the last update.
+    compaction::compaction_rates _last_rates;
+    dry_run _dry_run;
+    // A dry run logs its updates at most this often, so as not to flood the logs.
+    seastar::logger::rate_limit _dry_run_log_limit{std::chrono::seconds(30)};
+    timer<> _update_timer;
+
+    void adjust();
+public:
+    rate_matching_compaction_controller(config cfg, scheduling_group sg, float static_shares, std::optional<float> max_shares, std::chrono::milliseconds interval,
+            std::function<compaction::compaction_rates()> current_rates, dry_run dry_run = dry_run::no);
+
+    future<> shutdown() override;
+    future<> update_static_shares(float static_shares) override;
+    void set_max_shares(float max_shares) override;
+
+    // The shares the controller set, or would set in a dry run.
+    float shares() const noexcept {
+        return _shares;
+    }
+    // The rates at the last update.
+    const compaction::compaction_rates& last_rates() const noexcept {
+        return _last_rates;
+    }
+
+    // The shares after an update from `shares`, given the rates. A target above what
+    // compaction achieves over both windows raises them, by the step to the nearer of the
+    // two; a target below both lowers them, by the step to the nearer. With no target, i.e.
+    // nothing pending, they are lowered whatever compaction achieved lately; with nothing
+    // compacted over the achieved window, i.e. nothing running, they stay. The shares only
+    // matter for compaction that competes for CPU.
+    static float next_shares(const config& cfg, float shares, const compaction::compaction_rates& rates, float max_shares);
 };
