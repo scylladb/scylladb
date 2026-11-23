@@ -19,7 +19,6 @@
 #include <seastar/core/thread.hh>
 #include <seastar/coroutine/as_future.hh>
 #include <seastar/coroutine/maybe_yield.hh>
-#include <seastar/coroutine/try_future.hh>
 #include <seastar/util/defer.hh>
 #include "seastarx.hh"
 #include "error.hh"
@@ -789,20 +788,6 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
         // for such a size.
         co_return api_error::payload_too_large(fmt::format("Request content length limit of {} bytes exceeded", request_content_length_limit));
     }
-    // Check the concurrency limit early, before acquiring memory and
-    // reading the request body, to avoid piling up memory from excess
-    // requests that will be rejected anyway. This mirrors the CQL
-    // transport which also checks concurrency before memory acquisition
-    // (transport/server.cc).
-    if (_pending_requests.get_count() >= _max_concurrent_requests) {
-        _executor._stats.requests_shed++;
-        // Build the msg early, before the co_await below invalidates the request counter.
-        auto err = api_error::request_limit_exceeded(format("too many in-flight requests (configured via max_concurrent_requests_per_shard): {}", _pending_requests.get_count()));
-        // Discard the unread request body before replying, so the connection stays reusable
-        throwing_assert(req->content_stream);
-        co_await coroutine::try_future(drain_request_body(*req->content_stream, request_content_length_limit));
-        co_return std::move(err);
-    }
     _pending_requests.enter();
     auto leave = defer([this] () noexcept { _pending_requests.leave(); });
     // JSON parsing can allocate up to roughly 2x the size of the raw
@@ -906,7 +891,29 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
 }
 
 void server::set_routes(routes& r) {
-    api_handler* req_handler = new api_handler([this] (std::unique_ptr<request> req) mutable {
+    api_handler* req_handler = new api_handler([this] (std::unique_ptr<request> req) mutable -> future<executor::request_return_type> {
+        // Check the concurrency limit early, before acquiring memory and
+        // reading the request body, to avoid piling up memory from excess
+        // requests that will be rejected anyway. This mirrors the CQL
+        // transport which also checks concurrency before memory acquisition
+        // (transport/server.cc).
+        // The check is outside handle_api_request(), so a rejected request
+        // does not allocate a coroutine frame. A request over the size limit
+        // goes on to handle_api_request(), to get its own error.
+        if (_pending_requests.get_count() >= _max_concurrent_requests
+                && req->content_length <= request_content_length_limit) {
+            _executor._stats.total_operations++;
+            _executor._stats.requests_shed++;
+            // Build the msg early, before the drain below invalidates the request counter.
+            auto err = api_error::request_limit_exceeded(format("too many in-flight requests (configured via max_concurrent_requests_per_shard): {}", _pending_requests.get_count()));
+            // Discard the unread request body before replying, so the connection stays reusable
+            throwing_assert(req->content_stream);
+            auto& content = *req->content_stream;
+            return drain_request_body(content, request_content_length_limit).then(
+                    [req = std::move(req), err = std::move(err)] () mutable {
+                return executor::request_return_type(std::move(err));
+            });
+        }
         return handle_api_request(std::move(req));
     }, _proxy.data_dictionary().get_config(), _executor._stats);
 
