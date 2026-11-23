@@ -306,10 +306,3 @@ The example below is for clients using the Java driver. Modify this example to s
           .build();
 
 #. Once the new DC is operational you can remove "withUsedHostsPerRemoteDc(0)" from the configuration and change CL to the previous value.
-
-Additional Resources for Java Clients
-=====================================
-
-* `DCAwareRoundRobinPolicy.Builder <https://java-driver.docs.scylladb.com/scylla-3.10.2.x/api/com/datastax/driver/core/policies/DCAwareRoundRobinPolicy.Builder.html>`_
-* `DCAwareRoundRobinPolicy <https://java-driver.docs.scylladb.com/scylla-3.10.2.x/api/com/datastax/driver/core/policies/DCAwareRoundRobinPolicy.html>`_
-
