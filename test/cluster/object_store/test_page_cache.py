@@ -103,11 +103,11 @@ async def test_disk_cache_rejected(manager: ScyllaClusterManager, s3_storage):
     # the keyspace is created.
     async with new_test_keyspace(manager, keyspace_options(s3_storage)) as ks:
         pages_options = alter_options(s3_storage, disk_cache='pages')
-        with pytest.raises(InvalidRequest, match='Cannot alter storage options'):
+        with pytest.raises(InvalidRequest, match="changing 'disk_cache' from 'none' to 'pages' is not supported"):
             await cql.run_async(f'ALTER KEYSPACE {ks} {pages_options}')
     # Check that ALTER KEYSPACE cannot remove the disk cache either.
     async with new_test_keyspace(manager, keyspace_options(s3_storage, disk_cache='pages')) as ks:
-        with pytest.raises(InvalidRequest, match='Cannot alter storage options'):
+        with pytest.raises(InvalidRequest, match="changing 'disk_cache' from 'pages' to 'none' is not supported"):
             await cql.run_async(f'ALTER KEYSPACE {ks} {alter_options(s3_storage)}')
 
 

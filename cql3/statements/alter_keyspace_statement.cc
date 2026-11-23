@@ -86,8 +86,7 @@ void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, c
             const bool config_only = _attrs->has_keyspace_config_properties(qp.proxy().features())
                     && !_attrs->has_non_keyspace_config_properties(qp.proxy().features());
             if (!config_only && !current_options.can_update_to(new_options)) {
-                throw exceptions::invalid_request_exception(seastar::format("Cannot alter storage options: {} to {} is not supported",
-                        current_options.type_string(), new_options.type_string()));
+                throw exceptions::invalid_request_exception(current_options.cannot_update_message(new_options));
             }
 
             auto new_ks = _attrs->as_ks_metadata_update(ks.metadata(), *qp.proxy().get_token_metadata_ptr(), qp.proxy().features(), qp.db().get_config());

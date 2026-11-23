@@ -89,6 +89,9 @@ struct storage_options {
     std::map<sstring, sstring> to_map() const;
 
     bool can_update_to(const storage_options& new_options);
+    // The error message which explains why can_update_to(new_options) is
+    // false: which options were changed, and how.
+    sstring cannot_update_message(const storage_options& new_options) const;
 
     static value_type from_map(std::string_view type, const std::map<sstring, sstring>& values);
 
