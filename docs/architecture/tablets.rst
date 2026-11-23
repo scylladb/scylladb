@@ -54,6 +54,10 @@ or shards.
 The load-balancing process takes place in the background and is performed
 without any service interruption.
 
+Load balancing, and tablet splits and merges, can be disabled for the whole
+cluster, see
+:doc:`Disabling Tablet Background Operations </operating-scylla/procedures/maintenance/tablet-background-operations>`.
+
 Scaling Out
 =============
 
