@@ -21,6 +21,7 @@
 #include "service/migration_listener.hh"
 #include "service/tablet_allocator.hh"
 #include "service/topology_state_machine.hh"
+#include "service/tablet_load_balancer_engine.hh"
 #include "utils/UUID.hh"
 #include "utils/assert.hh"
 #include "utils/error_injection.hh"
@@ -999,6 +1000,13 @@ class load_balancer {
     // the balancer will use this size instead of the actual tablet size.
     uint64_t _minimal_tablet_size = service::default_target_tablet_size / 100;
 
+    // Engaged when the inter-node and intra-node phases are planned by the ranked/pressure
+    // engine (tablet_load_balancer_algorithm != current).
+    std::optional<sblb::engine_config> _engine_cfg;
+    // Engine state which persists across rounds, per plan-making scope (_location).
+    // Owned by tablet_allocator_impl.
+    std::unordered_map<sstring, sblb::persistent_state>* _engine_state = nullptr;
+
 private:
     tablet_replica_set get_replicas_for_tablet_load(const tablet_info& ti, const tablet_transition_info* trinfo) const {
         // We reflect migrations in the load as if they already happened,
@@ -1205,6 +1213,11 @@ public:
 
     void set_initial_scale(double initial_scale) {
         _initial_scale = initial_scale;
+    }
+
+    void set_engine(std::optional<sblb::engine_config> cfg, std::unordered_map<sstring, sblb::persistent_state>& state) {
+        _engine_cfg = std::move(cfg);
+        _engine_state = &state;
     }
 
     const locator::table_load_stats* load_stats_for_table(table_id id) const {
@@ -4439,6 +4452,149 @@ public:
         }
     }
 
+    // Whether moving `tablet` from src to dst keeps the replication constraints which
+    // check_constraints() enforces: no replica of the tablet on dst, no move across racks
+    // for rack-based replication, no increase of the tablet's maximum per-rack replica
+    // count. Unlike check_constraints(), it has no side effects (stats, logs), because the
+    // engine calls it for every candidate it grades.
+    bool satisfies_constraints(const tablet_map& tmap, const node_load& src_info, const node_load& dst_info, global_tablet_id tablet) {
+        auto rs = get_rs(tablet.table);
+        if (rs == nullptr) {
+            return false;
+        }
+        const auto& replicas = tmap.get_tablet_info(tablet.tablet).replicas;
+        if (std::ranges::any_of(replicas, [&] (const tablet_replica& r) { return r.host == dst_info.id; })) {
+            return false;
+        }
+        if (_rack || dst_info.rack() == src_info.rack()) {
+            return true;
+        }
+        if (rs->is_rack_based(_dc)) {
+            return false;
+        }
+        std::unordered_map<sstring, int> rack_load;
+        for (auto&& r : replicas) {
+            auto* node = _tm->get_topology().find_node(r.host);
+            if (!node) {
+                on_internal_error(lblogger, format("Node {} not found in topology", r.host));
+            }
+            if (node->dc() == src_info.dc()) {
+                rack_load[node->rack()] += 1;
+            }
+        }
+        int max_rack_load = 0;
+        for (auto& [rack, load] : rack_load) {
+            max_rack_load = std::max(max_rack_load, load);
+        }
+        return rack_load[dst_info.rack()] + 1 <= max_rack_load;
+    }
+
+    // Plans the inter-node and intra-node migrations of the non-drain case with the
+    // ranked/pressure engine (service/tablet_load_balancer_engine.cc), on the state built
+    // by make_plan(): node and shard loads, streaming loads and the candidate sets.
+    future<migration_plan> make_engine_plan(node_load_map& nodes) {
+        migration_plan plan;
+        const tablet_metadata& tmeta = _tm->tablets();
+        const locator::topology& topo = _tm->get_topology();
+
+        std::vector<migration_tablet_set> handles;
+        std::vector<sblb::node_input> input;
+        input.reserve(nodes.size());
+        for (auto& [host, node] : nodes) {
+            if (node.drained || !node.dusage) {
+                continue;
+            }
+            sblb::node_input ni{.id = host, .capacity = node.dusage->capacity, .used = node.dusage->used};
+            ni.shards.reserve(node.shards.size());
+            for (const auto& sl : node.shards) {
+                sblb::shard_input si{
+                    .used = sl.dusage ? sl.dusage->used : 0,
+                    .tablet_count = sl.tablet_count,
+                    .streaming_read_load = sl.streaming_read_load,
+                    .streaming_write_load = sl.streaming_write_load,
+                };
+                for (const auto& [table, count] : sl.tablet_count_per_table) {
+                    if (count) {
+                        si.tablet_count_per_table.emplace_back(table, count);
+                    }
+                }
+                for (const auto& [table, sets] : sl.candidates) {
+                    // As in make_intranode_plan(): they stay in the shards' load, which the
+                    // other tablets are balanced around.
+                    sblb::table_candidates tc{.table = table, .no_intranode_moves = is_strongly_consistent(table)};
+                    tc.candidates.reserve(sets.size());
+                    for (const auto& ts : sets) {
+                        auto tablets = ts.tablets();
+                        tc.candidates.push_back(sblb::candidate{
+                            .handle = uint32_t(handles.size()),
+                            .size = ts.tablet_set_disk_size,
+                            .count = uint32_t(tablets.size()),
+                            .tablets = std::move(tablets),
+                        });
+                        handles.push_back(ts);
+                    }
+                    si.candidates.push_back(std::move(tc));
+                }
+                ni.shards.push_back(std::move(si));
+            }
+            input.push_back(std::move(ni));
+            co_await coroutine::maybe_yield();
+        }
+
+        auto cfg = *_engine_cfg;
+        cfg.max_read_streaming_load = max_read_streaming_load;
+        cfg.max_write_streaming_load = max_write_streaming_load;
+
+        auto constraints = [&] (uint32_t handle, tablet_replica src, tablet_replica dst) {
+            const auto& ts = handles[handle];
+            const auto& tmap = tmeta.get_tablet_map(ts.table());
+            auto& src_info = nodes.at(src.host);
+            auto& dst_info = nodes.at(dst.host);
+            return std::ranges::all_of(ts.tablets(), [&] (global_tablet_id tablet) {
+                return satisfies_constraints(tmap, src_info, dst_info, tablet);
+            });
+        };
+
+        auto moves = co_await sblb::make_plan(cfg, (*_engine_state)[_location], std::move(input), constraints);
+
+        for (const auto& m : moves) {
+            const auto& tablets = handles[m.handle];
+            const bool intranode = m.src.host == m.dst.host;
+            auto kind = intranode ? tablet_transition_kind::intranode_migration : tablet_transition_kind::migration;
+            auto mig = get_migration_info(tablets, kind, m.src, m.dst);
+            auto& tmap = tmeta.get_tablet_map(tablets.table());
+            auto mig_streaming_info = get_migration_streaming_infos(topo, tmap, mig);
+            if (!can_accept_load(nodes, mig_streaming_info)) {
+                // The engine tracks the streaming slots with the same rules, so this is not expected.
+                lblogger.warn("Engine migration {} rejected by the streaming limits", mig);
+                _current_stats->migrations_skipped++;
+                continue;
+            }
+            apply_load(nodes, mig_streaming_info);
+            lblogger.debug("Adding migration: {} size: {}", mig, tablets.tablet_set_disk_size);
+            _current_stats->migrations_produced++;
+            if (intranode) {
+                _current_stats->intranode_migrations_produced++;
+            }
+            mark_as_scheduled(mig);
+            plan.add(std::move(mig));
+
+            erase_candidates(nodes, tmap, tablets);
+            if (intranode) {
+                update_node_load_on_migration(nodes[m.src.host], m.src.host, m.src.shard, m.dst.shard, tablets);
+            } else {
+                update_node_load_on_migration(nodes, m.src, m.dst, tablets);
+            }
+            pick(*_load_sketch, m.dst.host, m.dst.shard, tablets);
+            unload(*_load_sketch, m.src.host, m.src.shard, tablets);
+        }
+
+        if (plan.empty()) {
+            _current_stats->stop_balance++;
+        }
+        co_return plan;
+    }
+
     future<migration_plan> make_plan(dc_name dc, std::optional<sstring> rack = std::nullopt, std::vector<rf_change_action> rf_change_actions = {}) {
         migration_plan plan;
 
@@ -4775,16 +4931,26 @@ public:
 
         print_node_stats(nodes, only_active::yes);
 
-        if (has_dest_nodes && (!nodes_to_drain.empty() || (_tm->tablets().balancing_enabled() && (shuffle || !is_balanced(min_load, max_load)))) && !nodes.empty()) {
-            host_id target = *min_load_node;
-            lblogger.info("target node: {}, avg_load: {}, max: {}", target, min_load, max_load);
-            plan.merge(co_await make_internode_plan(nodes, nodes_to_drain, target));
+        // Drains, shuffle mode and the non-table-aware mode stay with the current planner.
+        const bool use_engine = _engine_cfg && _engine_state && nodes_to_drain.empty() && !shuffle && _use_table_aware_balancing;
+        if (use_engine) {
+            if (has_dest_nodes && _tm->tablets().balancing_enabled() && !nodes.empty()) {
+                plan.merge(co_await make_engine_plan(nodes));
+            } else {
+                _current_stats->stop_balance++;
+            }
         } else {
-            _current_stats->stop_balance++;
-        }
+            if (has_dest_nodes && (!nodes_to_drain.empty() || (_tm->tablets().balancing_enabled() && (shuffle || !is_balanced(min_load, max_load)))) && !nodes.empty()) {
+                host_id target = *min_load_node;
+                lblogger.info("target node: {}, avg_load: {}, max: {}", target, min_load, max_load);
+                plan.merge(co_await make_internode_plan(nodes, nodes_to_drain, target));
+            } else {
+                _current_stats->stop_balance++;
+            }
 
-        if (_tm->tablets().balancing_enabled()) {
-            plan.merge(co_await make_intranode_plan(nodes, nodes_to_drain));
+            if (_tm->tablets().balancing_enabled()) {
+                plan.merge(co_await make_intranode_plan(nodes, nodes_to_drain));
+            }
         }
 
         if (!rf_change_actions.empty() && rack.has_value()) {
@@ -4813,7 +4979,59 @@ class tablet_allocator_impl : public tablet_allocator::impl
     bool _stopped = false;
     bool _use_tablet_aware_balancing = true;
     locator::load_stats_ptr _load_stats;
+    // Persistent state of the ranked/pressure engine, per plan-making scope, valid for
+    // _engine_state_comparator. Reset on leadership loss and when the algorithm changes.
+    std::unordered_map<sstring, sblb::persistent_state> _engine_state;
+    std::optional<sblb::comparator> _engine_state_comparator;
 private:
+    std::optional<sblb::engine_config> engine_config_from_db_config() {
+        const auto& cfg = _db.get_config();
+        const auto algorithm = cfg.tablet_load_balancer_algorithm();
+        sblb::engine_config ec;
+        if (algorithm == "ranked") {
+            ec.cmp = sblb::comparator::ranked;
+        } else if (algorithm == "pressure") {
+            ec.cmp = sblb::comparator::pressure;
+        } else {
+            if (algorithm != "current") {
+                lblogger.warn("Unknown tablet_load_balancer_algorithm '{}', using 'current'", algorithm);
+            }
+            _engine_state.clear();
+            _engine_state_comparator.reset();
+            return std::nullopt;
+        }
+        ec.u_high = cfg.tablet_load_balancer_u_high();
+        ec.critical = cfg.critical_disk_utilization_level();
+        ec.disk_high = cfg.tablet_load_balancer_disk_high();
+        ec.gamma = cfg.tablet_load_balancer_pressure_gamma();
+        ec.u_safe = cfg.tablet_load_balancer_pressure_u_safe();
+        ec.kappa = cfg.tablet_load_balancer_pressure_kappa();
+        ec.u_knee = cfg.tablet_load_balancer_pressure_u_knee();
+        ec.node_unit = cfg.tablet_load_balancer_pressure_node_unit();
+        const sstring weights = cfg.tablet_load_balancer_pressure_weights();
+        try {
+            std::array<double, 3> w;
+            size_t i = 0;
+            for (auto part : weights | std::views::split(',')) {
+                if (i == w.size()) {
+                    throw std::invalid_argument("too many weights");
+                }
+                w[i++] = std::stod(std::string(part.begin(), part.end()));
+            }
+            if (i != w.size()) {
+                throw std::invalid_argument("too few weights");
+            }
+            ec.weights = w;
+        } catch (...) {
+            lblogger.warn("Invalid tablet_load_balancer_pressure_weights '{}', using the defaults: {}", weights, std::current_exception());
+        }
+        if (_engine_state_comparator != ec.cmp) {
+            _engine_state.clear();
+            _engine_state_comparator = ec.cmp;
+        }
+        return ec;
+    }
+
     load_balancer make_load_balancer(token_metadata_ptr tm,
             service::topology* topology,
             db::system_keyspace* sys_ks,
@@ -4825,6 +5043,7 @@ private:
             std::move(skiplist));
         lb.set_use_table_aware_balancing(_use_tablet_aware_balancing);
         lb.set_initial_scale(_db.get_config().tablets_initial_scale_factor());
+        lb.set_engine(engine_config_from_db_config(), _engine_state);
         return lb;
     }
 public:
@@ -5013,6 +5232,8 @@ public:
     void on_leadership_lost() {
         _load_balancer_stats.unregister();
         _load_stats = {};
+        _engine_state.clear();
+        _engine_state_comparator.reset();
     }
 
     load_balancer_stats_manager& stats() {
