@@ -59,6 +59,7 @@ Syntax
    nodetool [(-h <host> | --host <host>)] [(-p <port> | --port <port>)] cluster backup
                [--keyspaces <keyspace>]...
                [--table <table>[,<table>...]]
+               [--tables <keyspace>[:<table>[,<table>...]]]...
                [(-s <snapshot> | --snapshot <snapshot>)]
                (-l | --location) <dc>,<endpoint>,<bucket>[,<prefix>]
                [(-l | --location) <dc2>,<endpoint2>,<bucket2>[,<prefix2>]]...
@@ -72,12 +73,20 @@ Example
 
     nodetool cluster backup --location mydc,s3.us-east-2.amazonaws.com,bucket-foo,foo/bar/baz --keyspaces ks --table table --snapshot ss --move-files
 
+Back up two tables of ``ks1`` and all tables of ``ks2`` from one snapshot:
+
+.. code-block:: console
+
+    nodetool cluster backup --location mydc,s3.us-east-2.amazonaws.com,bucket-foo,foo/bar/baz --tables ks1:table1,table2 --tables ks2 --snapshot ss
+
 Options
 -------
 
 * ``-h <host>`` or ``--host <host>`` - Node hostname or IP address.
 * ``--keyspaces`` - Keyspace to back up. Repeat for each keyspace. If omitted, all keyspaces are backed up.
 * ``--table`` - Table(s) to back up, multiple ones can be joined with ``,``. Requires exactly one keyspace to be specified.
+* ``--tables`` - Tables to back up, from any number of keyspaces, as ``<keyspace>[:<table>[,<table>...]]``. Repeat for each keyspace.
+  A keyspace given without tables selects all of its tables. Cannot be combined with ``--keyspaces`` or ``--table``.
 * ``-s`` or ``--snapshot`` - Name of the snapshot to back up. It is created if it does not exist. If omitted, a new snapshot, named after the current timestamp, is taken.
 * ``-l`` or ``--location`` - Tuple of <dc>,<endpoint>,<bucket> and optional <prefix> which to write the backup to. Required; repeat it for each DC.
   Endpoints should be configured as per :ref:`the object storage configuration instructions <object-storage-configuration>`.
