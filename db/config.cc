@@ -1885,6 +1885,27 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "drops its tablets from the repair request without reporting them as failed. Cancelling a transition which was "
         "adding a replica leaves that tablet below its replication factor until balancing is enabled again. Callers of the "
         "API can pass their own grace period, which overrides this. 0, the default, cancels nothing.")
+    , tablet_load_balancer_algorithm(this, "tablet_load_balancer_algorithm", liveness::LiveUpdate, value_status::Used, "current",
+        "Tablet load balancing algorithm for the inter-node and intra-node balancing phases. Can be set to the following values:\n"
+        "\tcurrent: the existing balancer (default).\n"
+        "\tranked: candidates graded by three imbalance measures compared in rank order (experimental).\n"
+        "\tpressure: candidates graded by a weighted sum of the same three measures (experimental).")
+    , tablet_load_balancer_u_high(this, "tablet_load_balancer_u_high", liveness::LiveUpdate, value_status::Used, 0.90,
+        "ranked/pressure balancer: node utilization above which the ranked safety measure counts.")
+    , tablet_load_balancer_disk_high(this, "tablet_load_balancer_disk_high", liveness::LiveUpdate, value_status::Used, 0.05,
+        "ranked/pressure balancer: tolerance of a node's utilization around the mean, beyond which node-disk balancing starts (scaled down as the cluster fills).")
+    , tablet_load_balancer_pressure_gamma(this, "tablet_load_balancer_pressure_gamma", liveness::LiveUpdate, value_status::Used, 0.02,
+        "pressure balancer: minimal pressure relief per migration for a candidate to be accepted.")
+    , tablet_load_balancer_pressure_weights(this, "tablet_load_balancer_pressure_weights", liveness::LiveUpdate, value_status::Used, "1,1,1",
+        "pressure balancer: comma-separated weights of the safety, table and node-disk terms.")
+    , tablet_load_balancer_pressure_u_safe(this, "tablet_load_balancer_pressure_u_safe", liveness::LiveUpdate, value_status::Used, 0.85,
+        "pressure balancer: node utilization above which the safety term counts.")
+    , tablet_load_balancer_pressure_kappa(this, "tablet_load_balancer_pressure_kappa", liveness::LiveUpdate, value_status::Used, 25.0,
+        "pressure balancer: scale of the safety term.")
+    , tablet_load_balancer_pressure_u_knee(this, "tablet_load_balancer_pressure_u_knee", liveness::LiveUpdate, value_status::Used, 0.97,
+        "pressure balancer: node utilization above which the safety term continues linearly.")
+    , tablet_load_balancer_pressure_node_unit(this, "tablet_load_balancer_pressure_node_unit", liveness::LiveUpdate, value_status::Used, 0.02,
+        "pressure balancer: node utilization deviation counted as one unit of node-disk pressure.")
     /**
     * @Group Ungrouped properties
     */

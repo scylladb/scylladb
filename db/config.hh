@@ -676,6 +676,15 @@ public:
     named_value<float> size_based_balance_threshold_percentage;
     named_value<uint64_t> minimal_tablet_size_for_balancing;
     named_value<uint32_t> tablet_transition_abort_grace_period_in_seconds;
+    named_value<sstring> tablet_load_balancer_algorithm;
+    named_value<double> tablet_load_balancer_u_high;
+    named_value<double> tablet_load_balancer_disk_high;
+    named_value<double> tablet_load_balancer_pressure_gamma;
+    named_value<sstring> tablet_load_balancer_pressure_weights;
+    named_value<double> tablet_load_balancer_pressure_u_safe;
+    named_value<double> tablet_load_balancer_pressure_kappa;
+    named_value<double> tablet_load_balancer_pressure_u_knee;
+    named_value<double> tablet_load_balancer_pressure_node_unit;
 
     named_value<double> background_writer_scheduling_quota;
     named_value<bool> auto_adjust_flush_quota;
