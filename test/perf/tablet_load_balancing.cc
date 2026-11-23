@@ -47,9 +47,13 @@ static seastar::abort_source aborted;
 
 static const sstring dc = "dc1";
 
+// The tablet_load_balancer_algorithm to run with (--algorithm).
+static sstring algorithm = "current";
+
 static
 cql_test_config tablet_cql_test_config() {
     cql_test_config c;
+    c.db_config->tablet_load_balancer_algorithm(algorithm);
     return c;
 }
 
@@ -715,7 +719,9 @@ void run_add_dec(const bpo::variables_map& opts) {
 
 using operation_func = std::function<void(const bpo::variables_map&)>;
 
-const std::vector<operation_option> global_options {};
+const std::vector<operation_option> global_options {
+    typed_option<std::string>("algorithm", "current", "Tablet load balancing algorithm: current, ranked or pressure."),
+};
 const std::vector<operation_option> global_positional_options{};
 
 const std::map<operation, operation_func> operations_with_func{
@@ -770,6 +776,12 @@ int scylla_tablet_load_balancing_main(int argc, char** argv) {
         auto stop_test = defer([] noexcept {
             aborted.request_abort();
         });
+        algorithm = app_config["algorithm"].as<std::string>();
+        if (algorithm != "current" && algorithm != "ranked" && algorithm != "pressure") {
+            testlog.error("Unknown --algorithm {}, expected current, ranked or pressure", algorithm);
+            return 1;
+        }
+        testlog.info("Load balancing algorithm: {}", algorithm);
         try {
             operations_with_func.at(operation)(app_config);
             return 0;
