@@ -198,6 +198,11 @@ async def _run_checker_once(
     if stderr_text:
         logger.info("Porcupine checker stderr:\n%s", stderr_text)
 
+    # The runtime failed, and its --rm cleanup may have failed with it: make
+    # sure the container is gone before the caller starts another one.
+    if USE_CONTAINER_CHECKER and proc.returncode in RUNTIME_FAILURE_CODES:
+        await _remove_container(container_name)
+
     return proc.returncode, stdout, stderr_text
 
 
