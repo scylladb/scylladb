@@ -434,6 +434,14 @@ future<> paxos_store::create_paxos_state_table(const schema& s, db::timeout_cloc
 
                 break;
             }
+            if (!_db.find_keyspace(s.ks_name()).uses_tablets()
+                    && !_mm.get_storage_proxy().get_token_metadata_ptr()->tablets().has_tablet_map(s.id())) {
+                // The migration of the keyspace was rolled back meanwhile, so the nodes
+                // keep the Paxos state of the table in system.paxos again.
+                paxos_state::logger.info("Not creating paxos state table for \"{}.{}\": the keyspace rolled back to vnodes",
+                        s.ks_name(), s.cf_name());
+                break;
+            }
             const auto state_schema = create_paxos_state_schema(s);
             auto muts = co_await prepare_new_column_family_announcement(_mm.get_storage_proxy(), 
                 std::move(state_schema),

@@ -24,6 +24,7 @@
 #include <seastar/core/on_internal_error.hh>
 #include "service/storage_proxy.hh"
 #include "service/raft/group0_state_machine.hh"
+#include "service/paxos/paxos_state.hh"
 
 #include "service/migration_listener.hh"
 #include "message/messaging_service.hh"
@@ -581,7 +582,17 @@ static future<utils::chunked_vector<mutation>> do_prepare_new_column_families_an
                 throw exceptions::invalid_request_exception(format("Table with ID {} already exists: {}", cfm->id(), db.find_schema(cfm->id())));
             }
         }
-        validate_no_tablets_migration(sp, ksm, "create table");
+        // The Paxos state table of a table under migration shares its tablet map. LWT
+        // coordinators create it on demand.
+        const auto& tablets = sp.get_token_metadata_ptr()->tablets();
+        const bool paxos_state_tables_of_migrating_tables = std::ranges::all_of(cfms, [&] (const schema_ptr& cfm) {
+            const auto base = paxos::paxos_store::try_get_base_table(cfm->cf_name());
+            return base && db.has_schema(cfm->ks_name(), sstring(*base))
+                    && tablets.has_tablet_map(db.find_schema(cfm->ks_name(), sstring(*base))->id());
+        });
+        if (!paxos_state_tables_of_migrating_tables) {
+            validate_no_tablets_migration(sp, ksm, "create table");
+        }
 
         for (auto cfm : cfms) {
             mlogger.info("Create new ColumnFamily: {}", cfm);
