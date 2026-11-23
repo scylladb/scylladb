@@ -1820,4 +1820,35 @@ SEASTAR_THREAD_TEST_CASE(test_apply_keeps_replay_position_on_allocation_failure)
     }
 }
 
+// A memtable that is being cleared gently no longer contains its partitions,
+// while readers may still hold snapshots of their data. It must keep blocking
+// the purging of tombstones which may shadow that data for as long as it is
+// in the memtable list.
+SEASTAR_THREAD_TEST_CASE(test_clear_gently_keeps_blocking_tombstone_gc) {
+    simple_schema ss;
+    auto s = ss.schema();
+    replica::dirty_memory_manager mgr;
+    replica::memtable_table_shared_data shared_data;
+    replica::table_stats stats;
+    replica::memtable_list memtables([s] { return s; }, &mgr, shared_data, stats);
+
+    auto pk = ss.make_pkey(0);
+    mutation m(s, pk);
+    ss.add_row(m, ss.make_ckey(0), "v1");
+    auto& mt = memtables.active_memtable();
+    mt.apply(m);
+
+    auto get_max_purgeable = [&] {
+        return memtables.get_max_purgeable(pk, is_shadowable::no, api::max_timestamp);
+    };
+    BOOST_REQUIRE(get_max_purgeable());
+    BOOST_REQUIRE_EQUAL(get_max_purgeable().timestamp(), mt.get_min_live_timestamp());
+
+    mt.clear_gently().get();
+
+    BOOST_REQUIRE(!mt.contains_partition(pk));
+    BOOST_REQUIRE(get_max_purgeable());
+    BOOST_REQUIRE_EQUAL(get_max_purgeable().timestamp(), mt.get_min_live_timestamp());
+}
+
 BOOST_AUTO_TEST_SUITE_END()
