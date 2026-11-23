@@ -687,6 +687,14 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
     _topology_state_machine.reload_count++;
     auto& topology = _topology_state_machine._topology;
 
+    if (_db.local().get_node_storage_mode()) {
+        const auto* rs = topology.find(raft::server_id{get_token_metadata().get_my_id().uuid()});
+        if (!rs || !rs->second.intended_storage_mode) {
+            rtlogger.info("topology_state_load: no vnodes-to-tablets migration in progress, clearing the node's storage mode");
+            co_await _db.invoke_on_all(&replica::database::clear_node_storage_mode);
+        }
+    }
+
     co_await _feature_service.container().invoke_on_all([&] (gms::feature_service& fs) {
         return fs.enable(topology.enabled_features | std::ranges::to<std::set<std::string_view>>());
     });
@@ -1495,7 +1503,7 @@ future<> storage_service::update_topology_with_local_metadata(raft::server& raft
     // either way, and that is what the node has to report.
     storage_mode local_storage_mode = storage_mode::vnodes;
     if (report_storage_mode) {
-        local_storage_mode = _db.local().get_boot_storage_mode().value_or(storage_mode::vnodes);
+        local_storage_mode = _db.local().get_node_storage_mode().value_or(storage_mode::vnodes);
     }
 
     // Reconcile only while the row still records an intent, or a node booting after

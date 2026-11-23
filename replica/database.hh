@@ -1899,9 +1899,11 @@ private:
 
     service::migration_notifier& _mnotifier;
     gms::feature_service& _feat;
-    // The mode this node applied when it built its tables at boot, i.e. the one it is
-    // actually running in. A change of intent only takes effect on the next restart.
-    std::optional<service::storage_mode> _boot_storage_mode;
+    // The storage mode in which this node runs the tables under vnodes-to-tablets migration.
+    // Set at boot from the node's intended mode: a change of intent only takes effect on the
+    // next restart. Cleared once the node has no intended mode any more, i.e. no migration
+    // is in progress.
+    std::optional<service::storage_mode> _node_storage_mode;
     std::vector<std::any> _listeners;
     locator::shared_token_metadata& _shared_token_metadata;
     lang::manager& _lang_manager;
@@ -2055,7 +2057,8 @@ public:
         return _compaction_manager;
     }
 
-    std::optional<service::storage_mode> get_boot_storage_mode() const noexcept { return _boot_storage_mode; }
+    std::optional<service::storage_mode> get_node_storage_mode() const noexcept { return _node_storage_mode; }
+    void clear_node_storage_mode() noexcept { _node_storage_mode = std::nullopt; }
 
     locator::shared_token_metadata& get_shared_token_metadata() const { return _shared_token_metadata; }
     locator::token_metadata_ptr get_token_metadata_ptr() const { return _shared_token_metadata.get(); }

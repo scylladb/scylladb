@@ -880,7 +880,7 @@ bool database::is_in_critical_disk_utilization_mode() const {
 
 future<> database::parse_system_tables(sharded<service::storage_proxy>& proxy, sharded<db::system_keyspace>& sys_ks, std::optional<service::storage_mode> storage_mode) {
     using namespace db::schema_tables;
-    _boot_storage_mode = storage_mode;
+    _node_storage_mode = storage_mode;
     co_await do_parse_schema_tables(proxy, db::schema_tables::KEYSPACES, coroutine::lambda([&] (schema_result_value_type &v) -> future<> {
         auto scylla_specific_rs = co_await extract_scylla_specific_keyspace_info(proxy, v);
         auto ksm = co_await create_keyspace_metadata(v, scylla_specific_rs);
@@ -1288,7 +1288,7 @@ void database::add_column_family(keyspace& ks, schema_ptr schema, column_family:
     } else {
         auto metadata_ptr = not_commited_new_metadata ? not_commited_new_metadata : _shared_token_metadata.get();
         auto table_is_migrating = metadata_ptr->tablets().has_tablet_map(schema->id());
-        if (table_is_migrating && _boot_storage_mode == service::storage_mode::tablets) {
+        if (table_is_migrating && _node_storage_mode == service::storage_mode::tablets) {
             // Table under vnode-to-tablet migration: the keyspace uses vnode-based
             // replication but this table already has a tablet map persisted in group0.
             // Build a tablet-aware RS with the same replication options so the table
