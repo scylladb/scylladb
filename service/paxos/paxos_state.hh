@@ -13,13 +13,17 @@
 #include <seastar/core/timer.hh>
 #include <seastar/util/noncopyable_function.hh>
 #include "service/paxos/proposal.hh"
+#include "mutation/mutation.hh"
+#include "utils/chunked_vector.hh"
 #include "utils/log.hh"
 #include "utils/digest_algorithm.hh"
 #include "utils/hash.hh"
 #include "db/timeout_clock.hh"
 #include <unordered_map>
+#include <unordered_set>
 #include "utils/UUID_gen.hh"
 #include "service/paxos/prepare_response.hh"
+#include "service/topology_state_machine_fwd.hh"
 #include "service/migration_listener.hh"
 #include "cql3/statements/prepared_statement.hh"
 
@@ -36,6 +40,7 @@ namespace service {
 class storage_proxy;
 }
 namespace db { class system_keyspace; }
+namespace replica { class database; }
 
 namespace service::paxos {
 
@@ -119,6 +124,16 @@ public:
             tracing::trace_state_ptr tr_state);
 };
 
+// The Paxos state a node copies on the restart which switches its storage mode during a
+// vnodes-to-tablets migration.
+struct paxos_state_copy {
+    // Whether the copy goes from system.paxos into <table>$paxos (a switch to tablets),
+    // or back into system.paxos (a switch to vnodes, i.e., a rollback).
+    bool to_tablets;
+    // The migrating tables whose Paxos state is copied.
+    std::unordered_set<table_id> tables;
+};
+
 class paxos_store:
     public seastar::peering_sharded_service<paxos_store>, 
     public seastar::async_sharded_service<paxos_store>,
@@ -130,6 +145,9 @@ class paxos_store:
     migration_manager& _mm;
     bool _stopped = false;
     key_lock_map<table_id> _table_lock_map{false};
+    // Context for Paxos state copy this node has to make on startup. Set on every shard
+    // before the node serves Paxos, and cleared once the copy is done.
+    std::optional<paxos_state_copy> _pending_copy;
 
     enum class paxos_state_query {
         load,
@@ -156,7 +174,6 @@ class paxos_store:
             std::vector<data_value_or_unset> values);
     future<schema_ptr> get_paxos_state_schema(const schema& s, db::timeout_clock::time_point timeout) const;
     future<> create_paxos_state_table(const schema& s, db::timeout_clock::time_point timeout);
-    static schema_ptr create_paxos_state_schema(const schema& s);
     schema_ptr try_get_paxos_state_schema(const schema& s) const;
     void prune_invalid_prepared_statements();
 public:
@@ -168,6 +185,16 @@ public:
     static std::optional<std::string_view> try_get_base_table(std::string_view cf_name);
     // The name of the table which keeps the Paxos state of `table_name` when it uses tablets.
     static sstring paxos_state_table_name(std::string_view table_name);
+    // The schema of the Paxos state table of `s`, with a newly generated id.
+    static schema_ptr create_paxos_state_schema(const schema& s);
+
+    void set_pending_copy(std::optional<paxos_state_copy> copy) noexcept { _pending_copy = std::move(copy); }
+    bool has_pending_copy() const noexcept { return _pending_copy.has_value(); }
+    // Makes the pending copy: copies the Paxos state of the migrating tables to the store this
+    // node uses after switching storage mode, then clears the pending copy on every shard.
+    // Creates the Paxos state table of a table with state to copy if it has none yet, through
+    // group0. Runs after the commitlog replay, so that the source is complete.
+    future<> copy_pending_state();
 
     future<column_mapping> get_column_mapping(const schema& query_schema, dht::token token, table_schema_version version, clock_type::time_point timeout);
     future<service::paxos::paxos_state> load_paxos_state(partition_key_view key, schema_ptr s, gc_clock::time_point now,
@@ -183,6 +210,29 @@ public:
     const prepared_statement_cache& get_prepared_statements_cache() const;
     void set_prepared_statements_prune_period(seastar::lowres_clock::duration period);
 };
+
+// Exposed for testing.
+namespace internal {
+
+// The live Paxos state kept in a partition of system.paxos, converted to mutations of the
+// Paxos state tables in `state_schemas`, keyed by their base table. Rows of the other
+// tables, dead cells and tombstones are skipped. Live cells and row markers keep their
+// timestamps and expiry.
+utils::chunked_vector<mutation> system_paxos_to_paxos_state_tables(const mutation& system_paxos_mutation,
+        const std::unordered_map<table_id, schema_ptr>& state_schemas, gc_clock::time_point now);
+
+// The inverse of system_paxos_to_paxos_state_tables(): the live Paxos state of table
+// `base` kept in a partition of its Paxos state table, converted to a mutation of
+// system.paxos, or nullopt if nothing in it is live.
+std::optional<mutation> paxos_state_table_to_system_paxos(const mutation& state_table_mutation, table_id base,
+        gc_clock::time_point now);
+
+} // namespace internal
+
+// What this node has to copy on this restart, or nullopt if it doesn't switch storage mode
+// or has nothing to copy. `current_storage_mode` is the mode this node last published in
+// the topology, if any. Needs the tablet metadata, loaded at startup.
+std::optional<paxos_state_copy> plan_paxos_state_copy(replica::database& db, std::optional<storage_mode> current_storage_mode);
 
 } // end of namespace "service::paxos"
 
