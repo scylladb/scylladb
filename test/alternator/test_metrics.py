@@ -42,6 +42,7 @@ from test.alternator.util import random_string, new_test_table, is_aws, scylla_c
 from test.pylib.skip_types import skip_env
 from test.alternator.test_streams import wait_for_active_stream
 from test.alternator.test_export import accepted_export_row, export_metadata, unstarted_export_arn
+from test.alternator.test_manual_requests import retrying_config_value_context
 
 @lru_cache
 def histogram_bucket_offsets(size, ratio=1.2):
@@ -1573,6 +1574,15 @@ def test_unauthorized_operation_counted(dynamodb, cql, dynamodbstreams, metrics)
                                 else:
                                     run()
 
+# Test that a request rejected by max_concurrent_requests_per_shard increments
+# requests_shed, and user_errors as any other HTTP 400 reply does.
+def test_requests_shed(dynamodb, cql, metrics):
+    req = get_signed_request(dynamodb, 'DescribeTable', '{"TableName": "no_such_table"}')
+    with check_increases_metric(metrics, ['scylla_alternator_requests_shed', 'scylla_alternator_user_errors']):
+        with retrying_config_value_context(cql, 'max_concurrent_requests_per_shard', '0'):
+            response = requests.post(req.url, headers=req.headers, data=req.body, verify=False, cert=req.cert)
+            assert response.status_code == 400 and 'RequestLimitExceeded' in response.text, response.text
+
 # TODO: there are additional metrics which we don't yet test here. At the
 # time of this writing they are:
-# requests_blocked_memory, requests_shed
+# requests_blocked_memory

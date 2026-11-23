@@ -673,8 +673,10 @@ class retrying_config_value_context(config_value_context):
 # surprising disconnect.
 # The test uses http.client directly to hold exactly one connection with no
 # automatic reconnection or retry, and sets max_concurrent_requests_per_shard
-# to 0 (it's live-updatable) so every request is rejected.
-def test_request_limit_exceeded_connection_reuse(dynamodb, cql):
+# to 0 (it's live-updatable) so every request is rejected. The chunked
+# variant also checks the drain of a body with chunked encoding.
+@pytest.mark.parametrize('chunked', [False, True])
+def test_request_limit_exceeded_connection_reuse(dynamodb, cql, chunked):
     url = urllib.parse.urlsplit(dynamodb.meta.client._endpoint.host)
     if url.scheme == 'https':
         conn = http.client.HTTPSConnection(url.hostname, url.port, context=client_ssl_context(dynamodb), timeout=60)
@@ -683,14 +685,15 @@ def test_request_limit_exceeded_connection_reuse(dynamodb, cql):
 
     def do_request():
         req = get_signed_request(dynamodb, 'DescribeTable', '{"TableName": "no_such_table"}')
-        conn.request('POST', '/', body=req.body, headers=req.headers)
+        # http.client sends an iterable body with chunked encoding.
+        conn.request('POST', '/', body=iter([req.body]) if chunked else req.body, headers=req.headers)
         response = conn.getresponse()
-        return response.status, response.read().decode('utf-8')
+        return response.status, response.getheader('Content-Type'), response.read().decode('utf-8')
 
     try:
         # Sanity check - a normal request on this connection works (the
         # table doesn't exist, so we expect ResourceNotFoundException):
-        status, body = do_request()
+        status, _, body = do_request()
         assert 'ResourceNotFoundException' in body, body
         # config_value_context() returns after the new value has been applied
         # on all shards, so the next request is already rejected.
@@ -707,12 +710,32 @@ def test_request_limit_exceeded_connection_reuse(dynamodb, cql):
             # first one, so the next do_request() raised an exception
             # (http.client.RemoteDisconnected or similar).
             for _ in range(2):
-                status, body = do_request()
+                status, content_type, body = do_request()
                 assert status == 400 and 'RequestLimitExceeded' in body, body
+                assert content_type == 'application/x-amz-json-1.0'
         # After the original limit is restored, the same connection must
         # still work for normal request processing:
-        status, body = do_request()
+        status, _, body = do_request()
         assert 'ResourceNotFoundException' in body, body
+    finally:
+        conn.close()
+
+# A request over the 16 MB size limit gets PayloadTooLarge (413) also when
+# max_concurrent_requests_per_shard rejects every request: the size check comes
+# first. The request has only its headers. A server that waits for the body
+# before it replies fails this test with a timeout.
+def test_too_large_request_over_request_limit(dynamodb, cql):
+    url = urllib.parse.urlsplit(dynamodb.meta.client._endpoint.host)
+    if url.scheme == 'https':
+        conn = http.client.HTTPSConnection(url.hostname, url.port, context=client_ssl_context(dynamodb), timeout=10)
+    else:
+        conn = http.client.HTTPConnection(url.hostname, url.port, timeout=10)
+    try:
+        with retrying_config_value_context(cql, 'max_concurrent_requests_per_shard', '0'):
+            conn.putrequest('POST', '/')
+            conn.putheader('Content-Length', str(17 * 1024 * 1024))
+            conn.endheaders()
+            assert conn.getresponse().status == 413
     finally:
         conn.close()
 
