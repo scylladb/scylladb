@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
+#include <cstdlib>
 #include <iterator>
 #include <random>
 #include <seastar/core/thread.hh>
@@ -131,6 +132,11 @@ cql_test_config::cql_test_config(shared_ptr<db::config> cfg)
     db_config->commitlog_use_o_dsync(false);
 
     db_config->rf_rack_valid_keyspaces(true);
+
+    // Runs the tests with a tablet balancing engine: SCYLLA_TABLET_LB_ALGORITHM=ranked|pressure.
+    if (const char* algo = std::getenv("SCYLLA_TABLET_LB_ALGORITHM"); algo && *algo) {
+        db_config->tablet_load_balancer_algorithm(algo);
+    }
 
     // Preallocating and zero-filling logstor files wastes disk space and I/O
     // for data that is thrown away when the test ends.

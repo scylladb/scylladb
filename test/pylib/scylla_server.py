@@ -104,6 +104,10 @@ def make_scylla_conf(mode: str, host_addr: str, seed_addrs: List[str], cluster_n
         'flush_schema_tables_after_modification': False,
         'auto_snapshot': False,
 
+        # Runs the tests with a tablet balancing engine: SCYLLA_TABLET_LB_ALGORITHM=ranked|pressure.
+        **({'tablet_load_balancer_algorithm': os.environ['SCYLLA_TABLET_LB_ALGORITHM']}
+           if os.environ.get('SCYLLA_TABLET_LB_ALGORITHM') else {}),
+
         'range_request_timeout_in_ms': request_timeout_in_ms,
         'read_request_timeout_in_ms': request_timeout_in_ms,
         'counter_write_request_timeout_in_ms': request_timeout_in_ms,
