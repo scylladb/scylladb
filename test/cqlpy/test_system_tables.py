@@ -34,8 +34,8 @@ from cassandra.query import SimpleStatement
 # Utility function creating a temporary table, writing N partitions into
 # it and then returning the total size_estimates.partitions_count for this
 # table:
-def write_table_and_estimate_partitions(cql, test_keyspace, N):
-    with new_test_table(cql, test_keyspace, 'k int PRIMARY KEY') as table:
+def write_table_and_estimate_partitions(cql, test_keyspace, storage_engine, N):
+    with new_test_table(cql, test_keyspace, 'k int PRIMARY KEY', storage_engine.table_options) as table:
         write = cql.prepare(f"INSERT INTO {table} (k) VALUES (?)")
         for i in range(N):
             cql.execute(write, [i])
@@ -65,11 +65,15 @@ def write_table_and_estimate_partitions(cql, test_keyspace, N):
 # up to 14%. So just to be generous let's allow a 25% inaccuracy for this
 # small test. In issue #9083 we noted that Scylla had much larger errors -
 # reporting as much as 10880 (!) partitions when we have just 1000.
+# A logstor table counts the keys of a range in its index when the range
+# holds few keys, so its estimate is exact for this small table.
 @pytest.mark.parametrize("test_keyspace", ["tablets", "vnodes"], indirect=True)
-def test_partitions_estimate_simple_small(cql, test_keyspace):
+def test_partitions_estimate_simple_small(cql, test_keyspace, storage_engine):
     N = 1000
-    count = write_table_and_estimate_partitions(cql, test_keyspace, N)
+    count = write_table_and_estimate_partitions(cql, test_keyspace, storage_engine, N)
     assert count > N/1.25 and count < N*1.25
+    if storage_engine.name == 'logstor':
+        assert count == N
 
 # For a larger test, the estimation accuracy should be better:
 # Experimentally, for 10,000 rows, Cassandra's estimation error goes
@@ -79,9 +83,9 @@ def test_partitions_estimate_simple_small(cql, test_keyspace):
 # so we skip this test.
 @pytest.mark.tier2
 @pytest.mark.parametrize("test_keyspace", ["tablets", "vnodes"], indirect=True)
-def test_partitions_estimate_simple_large(cql, test_keyspace):
+def test_partitions_estimate_simple_large(cql, test_keyspace, storage_engine):
     N = 10000
-    count = write_table_and_estimate_partitions(cql, test_keyspace, N)
+    count = write_table_and_estimate_partitions(cql, test_keyspace, storage_engine, N)
     assert count > N/1.05 and count < N*1.05
 
 # If we write the *same* 1000 partitions to two sstables (by flushing twice,
@@ -92,10 +96,13 @@ def test_partitions_estimate_simple_large(cql, test_keyspace):
 # Currently both Cassandra and Scylla fail this test. They are simply not
 # meant to provide accurate partition-count estimates when faced with high
 # space amplification.
-@pytest.mark.xfail(reason="partition count estimator does not use cardinality estimator")
-def test_partitions_estimate_full_overlap(cassandra_bug, cql, test_keyspace):
+# A logstor table passes this test, because its index keeps one entry for
+# each key, and the second write of a key replaces the entry of the key.
+def test_partitions_estimate_full_overlap(cassandra_bug, request, cql, test_keyspace, storage_engine):
+    if storage_engine.name != 'logstor':
+        request.applymarker(pytest.mark.xfail(reason="partition count estimator does not use cardinality estimator"))
     N = 500
-    with new_test_table(cql, test_keyspace, 'k int PRIMARY KEY') as table:
+    with new_test_table(cql, test_keyspace, 'k int PRIMARY KEY', storage_engine.table_options) as table:
         # Disable autocompaction to prevent the two sstables from being
         # compacted together before we read the size estimates.
         with nodetool.no_autocompaction_context(cql, table):
@@ -115,6 +122,43 @@ def test_partitions_estimate_full_overlap(cassandra_bug, cql, test_keyspace):
             print(counts)
             print(count)
             assert count > N/1.5 and count < N*1.5
+
+# Test that system.size_estimates reports the mean partition size of a
+# table, and that both the partition count and the mean partition size of
+# an empty table are 0.
+def test_size_estimates_mean_partition_size(cql, test_keyspace, storage_engine):
+    N = 100
+    value_size = 1000
+    with new_test_table(cql, test_keyspace, 'k int PRIMARY KEY, v text', storage_engine.table_options) as table:
+        table_name = table[len(test_keyspace)+1:]
+        # Returns the rows of the table in system.size_estimates, one row for
+        # each token range that the node reports.
+        def get_rows():
+            nodetool.flush(cql, table)
+            nodetool.refreshsizeestimates(cql)
+            return list(cql.execute(
+                "SELECT partitions_count, mean_partition_size FROM system.size_estimates "
+                f"WHERE keyspace_name = '{test_keyspace}' AND table_name = '{table_name}'"))
+
+        rows = get_rows()
+        assert rows
+        assert all(r.partitions_count == 0 and r.mean_partition_size == 0 for r in rows)
+
+        write = cql.prepare(f"INSERT INTO {table} (k, v) VALUES (?, ?)")
+        value = 'x' * value_size
+        for i in range(N):
+            cql.execute(write, [i, value])
+
+        # The size of a partition adds the size of its key and of its row
+        # header to the size of its value.
+        rows = get_rows()
+        print(rows)
+        assert any(r.partitions_count > 0 for r in rows)
+        for r in rows:
+            if r.partitions_count > 0:
+                assert value_size < r.mean_partition_size < 2 * value_size
+            else:
+                assert r.mean_partition_size == 0
 
 # A tablet table reports one row per tablet, and clustering restrictions on
 # table_name and range_start select the same rows as filtering the full list.
@@ -170,10 +214,12 @@ def test_size_estimates_reversed(scylla_only, request, cql, test_keyspace):
 # (there are no insertions at all), so the database has no live partitions
 # at all, just tombstones - yet the count returns the number of these
 # tombstones.
+# A logstor table fails this test too, because its index keeps an entry for
+# the tombstone of each deleted key.
 @pytest.mark.xfail(reason="partition count estimator doesn't handle deletions")
-def test_partitions_estimate_only_deletions(cassandra_bug, cql, test_keyspace):
+def test_partitions_estimate_only_deletions(cassandra_bug, cql, test_keyspace, storage_engine):
     N = 1000
-    with new_test_table(cql, test_keyspace, 'k int PRIMARY KEY') as table:
+    with new_test_table(cql, test_keyspace, 'k int PRIMARY KEY', storage_engine.table_options) as table:
         delete = cql.prepare(f"DELETE FROM {table} WHERE k=?")
         for i in range(N):
             cql.execute(delete, [i])

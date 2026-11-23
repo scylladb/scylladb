@@ -1609,3 +1609,49 @@ async def test_cache(manager: ScyllaClusterManager):
             for i in range(num_keys):
                 rows = await cql.run_async(f"SELECT pk, v FROM {ks}.test_no_cache WHERE pk = {i}")
                 assert rows[0].v == i * 10, f"unexpected value for pk={i}"
+
+async def test_size_estimates_of_large_ranges(manager: ScyllaClusterManager):
+    """
+    Test the partition count of a logstor table in system.size_estimates for token ranges that
+    hold more keys than the index counts. The estimate of such a range scales the key count of a
+    shard by the part of the tablets of the shard that the range covers.
+    system.size_estimates reports one range for each tablet. The table has four tablets on two
+    shards, so at least one shard holds two tablets or more, and the estimate of each range of that
+    shard scales the key count of the shard by one half or less.
+    """
+    key_count = 6000
+    # The index counts the keys of a range only up to this limit, which is exact_count_limit in the
+    # estimate.
+    exact_count_limit = 1024
+    await manager.servers_add(1, cmdline=['--smp=2'])
+    # Keep the tablets on their shards.
+    await manager.disable_tablet_balancing()
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, "WITH tablets = {'initial': 4}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v int) WITH storage_engine = 'logstor'")
+        insert = cql.prepare(f"INSERT INTO {ks}.test (pk, v) VALUES (?, ?)")
+        batch_size = 500
+        for start in range(0, key_count, batch_size):
+            await asyncio.gather(*[cql.run_async(insert, [pk, pk]) for pk in range(start, min(start + batch_size, key_count))])
+
+        tokens = [r.t for r in await cql.run_async(f"SELECT token(pk) AS t FROM {ks}.test")]
+        assert len(tokens) == key_count
+
+        # Returns the number of tokens in the range (start, end].
+        def exact_count(start, end):
+            return sum(1 for t in tokens if start < t <= end)
+
+        rows = await cql.run_async("SELECT range_start, range_end, partitions_count FROM system.size_estimates "
+                                   f"WHERE keyspace_name = '{ks}' AND table_name = 'test'")
+        assert len(rows) == 4
+        for r in rows:
+            exact = exact_count(int(r.range_start), int(r.range_end))
+            logger.info(f"Range ({r.range_start}, {r.range_end}]: estimate {r.partitions_count}, exact {exact}")
+            # The range holds enough keys for a scaled estimate.
+            assert exact > exact_count_limit
+            assert abs(r.partitions_count - exact) <= 0.15 * exact
+        # The estimates of the ranges of a shard add up to the key count of the shard, less the
+        # rounding of each estimate, so the estimates of all the ranges add up to the key count of
+        # the table.
+        assert abs(sum(r.partitions_count for r in rows) - key_count) <= len(rows)
