@@ -22,6 +22,16 @@ Log into one of the nodes in the cluster to collect the following information:
 
     .. include:: /operating-scylla/procedures/cluster-management/_common/prereq.rst
 
+Disable Tablet Splits and Merges
+================================
+
+In keyspaces which use tablets, adding nodes often triggers tablet splits,
+because the added capacity allows more tablets per table. The splits slow down
+the tablet migrations which balance the load onto the new nodes. Consider
+disabling tablet splits and merges before adding the nodes, and enabling them
+again after the cluster is balanced. See
+:doc:`Disabling Tablet Background Operations </operating-scylla/procedures/maintenance/tablet-background-operations>`.
+
 
 .. _add-node-to-cluster-procedure:
 
