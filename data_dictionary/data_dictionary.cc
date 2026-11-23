@@ -443,6 +443,32 @@ bool storage_options::can_update_to(const storage_options& new_options) {
     return value == new_options.value;
 }
 
+static std::string_view disk_cache_mode_name(storage_options::disk_cache_mode mode) {
+    return mode == storage_options::disk_cache_mode::pages ? disk_cache_pages : disk_cache_none;
+}
+
+sstring storage_options::cannot_update_message(const storage_options& new_options) const {
+    auto old_storage = std::get_if<object_storage>(&value);
+    auto new_storage = std::get_if<object_storage>(&new_options.value);
+    if (old_storage && new_storage && old_storage->type == new_storage->type) {
+        // Name the options which changed: the type, which didn't, doesn't
+        // say what can't be changed.
+        std::vector<sstring> changes;
+        auto check = [&] (std::string_view option, std::string_view from, std::string_view to) {
+            if (from != to) {
+                changes.push_back(fmt::format("'{}' from '{}' to '{}'", option, from, to));
+            }
+        };
+        check("bucket", old_storage->bucket, new_storage->bucket);
+        check("endpoint", old_storage->endpoint, new_storage->endpoint);
+        check(disk_cache_option, disk_cache_mode_name(old_storage->disk_cache), disk_cache_mode_name(new_storage->disk_cache));
+        if (!changes.empty()) {
+            return fmt::format("Cannot alter storage options: changing {} is not supported", fmt::join(changes, " and "));
+        }
+    }
+    return fmt::format("Cannot alter storage options: {} to {} is not supported", type_string(), new_options.type_string());
+}
+
 storage_options storage_options::append_to_object_storage_prefix(const sstring& s) const {
     // when restoring from object storage, the API of /storage_service/restore
     // provides:
