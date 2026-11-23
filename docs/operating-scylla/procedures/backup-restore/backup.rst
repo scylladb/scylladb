@@ -121,6 +121,11 @@ so that it can be recreated before the data is restored.
 Cluster-wide backup
 -------------------
 
+.. note::
+
+   Cluster-wide backup is a **Preview** feature: it is available for evaluation,
+   but is not generally available and is not recommended for production workloads.
+
 The whole cluster can be snapshotted and backed up from one node, with
 :doc:`nodetool cluster snapshot </operating-scylla/nodetool-commands/snapshot>` and :doc:`nodetool cluster backup </operating-scylla/nodetool-commands/backup>`.
 The cluster snapshot is taken on all nodes and recorded in the ``system_distributed`` keyspace, and the backup then has each node upload its own SSTables
