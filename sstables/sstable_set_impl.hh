@@ -36,7 +36,7 @@ private:
     schema_ptr _schema;
     interval_index_type _sstables;
     lw_shared_ptr<sstable_list> _all;
-    std::unordered_map<run_id, shared_sstable_run> _all_runs;
+    sstable_runs_by_id _all_runs;
     // Change counter on the interval index, which is used by the incremental
     // selector to determine whether or not to reposition its cursor.
     uint64_t _change_cnt = 0;
@@ -47,6 +47,7 @@ private:
     // at which the set of sstables covering the position next changes, if any.
     static dht::partition_range to_partition_range(const dht::ring_position_view& pos, std::optional<unbiased_token> change);
     static dht::ring_position_ext to_next_position(std::optional<unbiased_token> change);
+    void erase_from_runs(const shared_sstable& sst) noexcept;
 public:
 
     partitioned_sstable_set(const partitioned_sstable_set&) = delete;
@@ -56,7 +57,7 @@ public:
         schema_ptr schema,
         const interval_index_type& sstables,
         const lw_shared_ptr<sstable_list>& all,
-        const std::unordered_map<run_id, shared_sstable_run>& all_runs,
+        const sstable_runs_by_id& all_runs,
         utils::file_size_stats bytes_on_disk);
 
     virtual std::unique_ptr<sstable_set_impl> clone() const override;

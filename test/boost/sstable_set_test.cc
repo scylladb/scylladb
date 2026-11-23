@@ -181,6 +181,44 @@ SEASTAR_TEST_CASE(test_partitioned_sstable_set_bytes_on_disk) {
     });
 }
 
+// Sstables which share a run identifier but overlap are kept in separate runs, and inserting
+// them into one set mustn't change their run identifier, by which other sets index them.
+SEASTAR_TEST_CASE(test_partitioned_sstable_set_overlapping_sstables_of_one_run) {
+    return test_env::do_with_async([] (test_env& env) {
+        simple_schema ss;
+        auto s = ss.schema();
+
+        auto pk = tests::generate_partition_key(s);
+        auto mut = mutation(s, pk);
+        ss.add_row(mut, ss.make_ckey(0), "val");
+        sstable_writer_config cfg = env.manager().configure_writer("");
+        auto sst1 = make_sstable_easy(env, make_mutation_reader_from_mutations(s, env.make_reader_permit(), mut), cfg);
+        auto sst2 = make_sstable_easy(env, make_mutation_reader_from_mutations(s, env.make_reader_permit(), mut), cfg);
+        auto run = run_id::create_random_id();
+        sstables::test(sst1).set_run_identifier(run);
+        sstables::test(sst2).set_run_identifier(run);
+
+        auto set1 = make_sstable_set(s, make_lw_shared<sstable_list>({sst2}));
+        auto set2 = make_sstable_set(s, make_lw_shared<sstable_list>({sst1, sst2}));
+        BOOST_REQUIRE_EQUAL(sst1->run_identifier(), run);
+        BOOST_REQUIRE_EQUAL(sst2->run_identifier(), run);
+        auto runs = set2.all_sstable_runs();
+        BOOST_REQUIRE_EQUAL(runs.size(), 2);
+        for (auto& r : runs) {
+            BOOST_REQUIRE_EQUAL(r->all().size(), 1);
+            BOOST_REQUIRE_EQUAL(r->run_identifier(), run);
+        }
+
+        set1.erase(sst2);
+        BOOST_REQUIRE(set1.all_sstable_runs().empty());
+
+        set2.erase(sst2);
+        runs = set2.all_sstable_runs();
+        BOOST_REQUIRE_EQUAL(runs.size(), 1);
+        BOOST_REQUIRE(runs.front()->contains(sst1));
+    });
+}
+
 SEASTAR_TEST_CASE(test_tablet_sstable_set_copy_ctor) {
     // enable tablets, to get access to tablet_storage_group_manager
     cql_test_config cfg;

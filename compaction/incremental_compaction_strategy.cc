@@ -456,13 +456,11 @@ incremental_compaction_strategy::runs_to_sstables(std::vector<sstables::frozen_s
 
 std::vector<sstables::frozen_sstable_run>
 incremental_compaction_strategy::sstables_to_runs(std::vector<sstables::shared_sstable> sstables) {
-    std::unordered_map<sstables::run_id, sstables::sstable_run> runs;
+    sstables::sstable_runs_by_id runs;
     for (auto&& sst : sstables) {
-        // okay to ignore duplicates
-        (void)runs[sst->run_identifier()].insert(std::move(sst));
+        sstables::insert_into_runs(runs, std::move(sst));
     }
-    auto freeze = [] (const sstables::sstable_run& run) { return make_lw_shared<const sstables::sstable_run>(run); };
-    return runs | std::views::values | std::views::transform(freeze) | std::ranges::to<std::vector>();
+    return runs | std::views::values | std::views::join | std::ranges::to<std::vector<sstables::frozen_sstable_run>>();
 }
 
 void incremental_compaction_strategy::sort_run_bucket_by_first_key(size_bucket_t& bucket, size_t max_elements, const schema_ptr& schema) {
