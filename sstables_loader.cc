@@ -52,6 +52,9 @@
 
 static logging::logger llog("sstables_loader");
 
+// How many sstables a restore downloads at once on a shard.
+static constexpr size_t restore_download_concurrency = 16;
+
 namespace {
 
 // Helper for conversion to dht::token
@@ -299,12 +302,35 @@ private:
 
     future<sst_classification_info> download_fully_contained_sstables(std::vector<sstables::shared_sstable> sstables) const {
         sst_classification_info downloaded_sstables(this_smp_shard_count());
-        for (const auto& sstable : sstables) {
-            // For now, tablet-aware restore doesn't need to mutate sstable level to 0
-            // since we support only restoring to empty tables and so we can keep the sstable levels on backup.
-            // Once we support restoring onto live tables we may want to mutate the ingested sstables' level to 0.
-            auto min_info = co_await download_sstable(_table, sstable, llog);
-            downloaded_sstables[min_info.shard].emplace_back(min_info);
+        std::vector<std::pair<sstables::shared_sstable, sstables::generation_type>> completed;
+        // max_concurrent_for_each keeps starting downloads after a failure, so the first one aborts
+        // them all. No stream_in_progress(): load_and_stream() holds one for the whole stream.
+        seastar::abort_source failure_as;
+        std::exception_ptr ex;
+        try {
+            co_await max_concurrent_for_each(sstables, restore_download_concurrency, [&] (const sstables::shared_sstable& sstable) -> future<> {
+                failure_as.check();
+                try {
+                    // For now, tablet-aware restore doesn't need to mutate sstable level to 0
+                    // since we support only restoring to empty tables and so we can keep the sstable levels on backup.
+                    // Once we support restoring onto live tables we may want to mutate the ingested sstables' level to 0.
+                    auto min_info = co_await download_sstable(_table, sstable, llog, &failure_as);
+                    completed.emplace_back(sstable, min_info.generation);
+                    downloaded_sstables[min_info.shard].emplace_back(min_info);
+                } catch (...) {
+                    failure_as.request_abort();
+                    throw;
+                }
+            });
+        } catch (...) {
+            ex = std::current_exception();
+        }
+        if (ex) {
+            // The downloads that finished are unsealed and nothing will attach them.
+            for (auto& [sst, gen] : completed) {
+                co_await remove_downloaded_sstable(_table, sst, gen, llog);
+            }
+            std::rethrow_exception(ex);
         }
         co_return downloaded_sstables;
     }
@@ -1151,7 +1177,7 @@ future<> sstables_loader::download_tablet_sstables(locator::global_tablet_id tid
                     }
                 }
                 std::vector<std::vector<minimal_sst_info>> local_min_infos(this_smp_shard_count());
-                co_await max_concurrent_for_each(sst_chunk, 16, [&loader, tid, &local_min_infos, &snapshot_name](const auto& sst) -> future<> {
+                co_await max_concurrent_for_each(sst_chunk, restore_download_concurrency, [&loader, tid, &local_min_infos, &snapshot_name](const auto& sst) -> future<> {
                     auto& table = loader._db.local().find_column_family(tid.table);
                     auto stream_guard = table.stream_in_progress();
                     auto min_info = table.get_storage_options().is_object_storage_type()

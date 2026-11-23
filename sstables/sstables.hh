@@ -742,7 +742,7 @@ private:
 
     future<file> new_sstable_component_file(const io_error_handler& error_handler, component_type f, open_flags flags, file_open_options options = {}) const noexcept;
 
-    future<> unlink_component(component_type type) noexcept;
+    future<bool> unlink_component(component_type type) noexcept;
 
     future<file_writer> make_component_file_writer(component_type c, file_output_stream_options options,
             open_flags oflags = sstable_write_open_flags) noexcept;
@@ -1443,7 +1443,8 @@ public:
     // the table on disk will be sealed.
     // Returns sealed sstable if last, or nullptr otherwise.
     virtual future<shared_sstable> close() = 0;
-    virtual future<> abort() = 0;
+    // Removes the component file, if any. Returns whether it is gone: a missing file counts, a failed removal does not.
+    virtual future<bool> abort() = 0;
 };
 
 struct sstable_stream_sink_cfg {

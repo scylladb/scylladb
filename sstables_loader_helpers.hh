@@ -41,7 +41,10 @@ struct minimal_sst_info {
     sstables::sstable_id source_sid;
 };
 
-future<minimal_sst_info> download_sstable(replica::table& table, sstables::shared_sstable sstable, logging::logger& logger);
+// An abort of `as` stops the download and removes what it wrote.
+future<minimal_sst_info> download_sstable(replica::table& table, sstables::shared_sstable sstable, logging::logger& logger, seastar::abort_source* as = nullptr);
+// Removes the components download_sstable() wrote for `source` as generation `gen`.
+future<> remove_downloaded_sstable(replica::table& table, const sstables::shared_sstable& source, sstables::generation_type gen, logging::logger& logger);
 future<minimal_sst_info> clone_backup_sstable(replica::table& table, const sstables::shared_sstable& sstable, std::string_view snapshot_tag, logging::logger& logger);
 
 template <std::ranges::input_range Range, typename T = std::ranges::range_value_t<Range>>

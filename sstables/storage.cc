@@ -113,7 +113,7 @@ public:
     virtual future<uint64_t> free_space() const override {
         return seastar::fs_avail(prefix());
     }
-    virtual future<> unlink_component(const sstable& sst, component_type) noexcept override;
+    virtual future<bool> unlink_component(const sstable& sst, component_type) noexcept override;
     future<size_t> num_references(const sstable& sst) const override;
 
     virtual std::string_view prefix() const override { return _dir.native(); }
@@ -675,19 +675,30 @@ future<size_t> filesystem_storage::num_references(const sstable& sst) const {
     co_return has_toc ? 1 : 0;
 }
 
-future<> filesystem_storage::unlink_component(const sstable& sst, component_type type) noexcept {
+future<bool> filesystem_storage::unlink_component(const sstable& sst, component_type type) noexcept {
     std::string name;
     try {
         name = fmt::to_string(sst.filename(type));
+        co_await utils::get_local_injector().inject("filesystem_unlink_component_failure", [&] (auto& handler) -> future<> {
+            if (handler.template get<std::string_view>("component") == fmt::to_string(type)) {
+                throw std::runtime_error("Failing component removal");
+            }
+            co_return;
+        });
         co_await sst.sstable_write_io_check(remove_file, name);
     } catch (...) {
+        if (is_system_error_errno(ENOENT)) {
+            co_return true;
+        }
         // Log and ignore the failure since there is nothing much we can do about it at this point.
         // a. Compaction will retry deleting the sstable in the next pass, and
         // b. in the future sstables_manager is planned to handle sstables deletion.
         // c. Eventually we may want to record these failures in a system table
         //    and notify the administrator about that for manual handling (rather than aborting).
         sstlog.warn("Failed to delete {}: {:t}. Ignoring.", name, std::current_exception());
+        co_return false;
     }
+    co_return true;
 }
 
 // The name of a node reference relative to "{prefix}/{sid}/refs/". Single
@@ -776,7 +787,7 @@ public:
             const std::unordered_set<component_type>& excluded_components,
             sstable_id new_sid) const override;
     future<> copy_components(const sstable& sst, sstable_id sid, const std::unordered_set<component_type>& excluded_components) const;
-    future<> unlink_component(const sstable& sst, component_type) noexcept override;
+    future<bool> unlink_component(const sstable& sst, component_type) noexcept override;
     future<size_t> num_references(const sstable& sst) const override;
 
     sstable_id get_sstable_identifier(const sstable& sst) const {
@@ -1300,13 +1311,15 @@ future<> object_storage_base::remove_by_registry_entry(entry_descriptor desc, lo
     sstlog.debug("Reference {}: remaining_refs=0", ref_name.str());
 }
 
-future<> object_storage_base::unlink_component(const sstable& sst, component_type type) noexcept {
+future<bool> object_storage_base::unlink_component(const sstable& sst, component_type type) noexcept {
     auto name = make_object_name(sst, type);
     try {
         co_await _client->delete_object(name);
     } catch (...) {
         sstlog.warn("Failed to delete {}: {:t}. Ignoring.", name, std::current_exception());
+        co_return false;
     }
+    co_return true;
 }
 
 future<> object_storage_base::snapshot(const sstable& sst, sstring tag, incremental_backup incremental) const {

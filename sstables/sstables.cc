@@ -287,7 +287,7 @@ future<file> sstable::new_sstable_component_file(const io_error_handler& error_h
   }
 }
 
-future<> sstable::unlink_component(component_type type) noexcept {
+future<bool> sstable::unlink_component(component_type type) noexcept {
     return _storage->unlink_component(*this, type);
 }
 
@@ -4841,6 +4841,12 @@ public:
         // object storage (S3) backends only support writing through upload sinks, not through
         // file::write_dma (readable_file is read-only).
         auto sink = co_await _sst->_storage->make_component_sink(*_sst, _type, open_flags::wo | open_flags::create, stream_options);
+        co_await utils::get_local_injector().inject("sstable_stream_sink_output_failure", [this] (auto& handler) -> future<> {
+            if (handler.template get<std::string_view>("component") == fmt::to_string(_type)) {
+                throw std::runtime_error("Failing sstable stream sink output");
+            }
+            co_return;
+        });
 
         // Save back to disk.
         if (load_save_meta) {
@@ -4870,13 +4876,13 @@ public:
         _sst = {};
         co_return nullptr;
     }
-    future<> abort() override {
+    future<bool> abort() override {
         if (!_sst) {
-            co_return;
+            co_return true;
         }
         // TODO: if we are the last component (or really always), should we remove all component files?
         // For now, this remains the responsibility of calling code (see handle_tablet_migration etc)
-        co_await _sst->_storage->unlink_component(*_sst, _type);
+        co_return co_await _sst->_storage->unlink_component(*_sst, _type);
     }
     future<> validate_integrity() override {
         if (_type == component_type::TemporaryTOC || _type == component_type::Scylla) {
