@@ -9,8 +9,11 @@
 #pragma once
 
 #include "service/raft/raft_state_machine.hh"
-#include "mutation/frozen_mutation.hh"
+#include "mutation/mutation.hh"
 #include "mutation/timestamp.hh"
+#include "reader_permit.hh"
+#include "sstables/mx/partition_codec.hh"
+#include <fmt/ranges.h>
 #include <functional>
 #include <stdexcept>
 #include <unordered_map>
@@ -18,6 +21,7 @@
 #include "locator/tablets.hh"
 #include "service/strong_consistency/raft_groups_storage.hh"
 #include "utils/loading_cache.hh"
+#include "utils/hash.hh"
 #include "utils/estimated_histogram.hh"
 #include "utils/UUID.hh"
 
@@ -38,9 +42,16 @@ struct state_machine_stats {
     uint64_t schema_barrier_waits = 0;
 };
 
-// A write to the table of the tablet this Raft group serves.
-struct write_mutation {
-    frozen_mutation mutation;
+// Index 1 of raft_command::change held a frozen_mutation write. Never written;
+// deserialize_raft_command() refuses it with retired_raft_command_error.
+struct retired_write_mutation {
+};
+
+// A write to the table of the tablet this Raft group serves. `data` is laid out by
+// encode_write_mutation(). The table is the group's tablet's, so it is not carried.
+struct write_mutation_v2 {
+    table_schema_version schema_version;
+    bytes_ostream data;
 };
 
 // The phase of a tablet resize a resize_marker entry announces.
@@ -76,8 +87,42 @@ struct truncate_command {
 struct raft_command {
     // Note: needs to be default-constructible to use with ser::deserialize, which is why the
     // marker, and not the write, comes first.
-    std::variant<resize_marker, write_mutation, truncate_command> change;
+    std::variant<resize_marker, retired_write_mutation, truncate_command, write_mutation_v2> change;
 };
+
+// The variant index is the wire format, so the alternatives never move.
+static_assert(std::is_same_v<std::variant_alternative_t<1, decltype(raft_command::change)>, retired_write_mutation>);
+static_assert(std::is_same_v<std::variant_alternative_t<3, decltype(raft_command::change)>, write_mutation_v2>);
+
+// Shard-wide cache of the codec_schemas write_mutation_v2 payloads are encoded and
+// decoded with, keyed by the writer's and the reader's schema version. Building one
+// copies the type name of every column, too costly to repeat per write.
+class codec_schema_cache {
+    // The writer's and the reader's schema version.
+    using key = std::pair<table_schema_version, table_schema_version>;
+    using cache_type = utils::loading_cache<key, sstables::mx::codec_schema, 0, utils::loading_cache_reload_enabled::no,
+            utils::simple_entry_size<sstables::mx::codec_schema>, utils::tuple_hash>;
+    cache_type _cache;
+public:
+    codec_schema_cache();
+    // Encodes and decodes with s.
+    future<sstables::mx::codec_schema> get(const schema_ptr& s);
+    // Decodes data written with `writer` into `reader`.
+    future<sstables::mx::codec_schema> get(const schema_ptr& writer, const schema_ptr& reader);
+    // Decodes data written with schema version `writer`, known by its column mapping
+    // and clustering key fixed lengths, into `reader`.
+    future<sstables::mx::codec_schema> get(table_schema_version writer, const column_mapping& writer_columns,
+            const std::vector<std::optional<uint32_t>>& ck_fixed_lengths, const schema_ptr& reader);
+};
+
+// The codec_schema encode_write_mutation() takes for mutations of schema s.
+sstables::mx::codec_schema make_write_codec_schema(const schema& s);
+
+// Encodes m as a write_mutation_v2. base_timestamp is the delta base of the cell
+// timestamps: the write's timestamp makes each delta one byte. cs is
+// make_write_codec_schema(*m.schema()), or a cached copy of it.
+write_mutation_v2 encode_write_mutation(const mutation& m, api::timestamp_type base_timestamp,
+        const sstables::mx::codec_schema& cs);
 
 // Builds the mutation which records `marker` in the system.raft_groups row of the group `gid`
 // hosted on `shard`.
@@ -90,6 +135,7 @@ std::unique_ptr<raft_state_machine> make_state_machine(locator::global_tablet_id
     db::system_keyspace& sys_ks,
     raft_groups_storage& storage,
     raft_resize_tracker& resize_tracker,
+    codec_schema_cache& codecs,
     lw_shared_ptr<state_machine_stats> stats);
 
 // Applies the truncate_command `tc`, committed at `idx` in the log of the group `gid`, which
@@ -98,41 +144,50 @@ std::unique_ptr<raft_state_machine> make_state_machine(locator::global_tablet_id
 future<> apply_truncate_command(replica::database& db, locator::global_tablet_id tablet, raft::group_id gid,
         raft::index_t idx, const truncate_command& tc, truncate_record& record);
 
-// Resolves schemas for frozen mutations and upgrades them to the current schema if needed.
+// Resolves the schemas of write_mutation_v2 commands and decodes them.
 //
-// One instance is meant to serve a batch of mutations: schemas resolved for a given
-// schema version are remembered, so mutations sharing a version are resolved only once.
+// One instance is meant to serve a batch of commands: schemas resolved for a given
+// schema version are remembered, so commands sharing a version are resolved only once.
 class schema_store {
-    using column_mappings_cache = utils::loading_cache<table_schema_version, column_mapping>;
-    // Schema to apply a mutation with, plus the column mapping needed to upgrade
-    // the mutation to that schema. The mapping is null when the mutation was
-    // written with exactly that schema and thus needs no upgrade.
+    // Keyed by table and schema version, as system.scylla_table_schema_history is. One
+    // cache serves every group of the shard, and the version alone would hand a group
+    // the mapping of another table's version.
+    using column_mappings_cache = utils::loading_cache<std::pair<table_id, table_schema_version>, column_mapping, 0,
+            utils::loading_cache_reload_enabled::no, utils::simple_entry_size<column_mapping>, utils::tuple_hash>;
+    // Schema to decode a command with, plus the column mapping of the schema version
+    // it was written with. The mapping is null when the schema is that version.
     using schema_entry = std::pair<schema_ptr, column_mappings_cache::value_ptr>;
+    // Schema to decode a command into, and the codec_schema to decode it with.
+    using codec_entry = std::pair<schema_ptr, sstables::mx::codec_schema>;
 
     // Cache of column mappings, shared by all instances on this shard, so that
-    // `system.scylla_table_schema_history` isn't queried for the same version repeatedly.
+    // `system.scylla_table_schema_history` isn't queried for the same table and version repeatedly.
     static thread_local column_mappings_cache _column_mapping_cache;
 
     replica::database& _db;
     db::system_keyspace& _sys_ks;
+    // Null during commitlog replay, which builds each codec_schema once per instance.
+    codec_schema_cache* _codecs;
     // Called as a last resort when a schema version cannot be resolved locally.
     // During normal operation this triggers a group0 barrier to wait for schema
     // propagation; during commitlog replay it is null, since group0 isn't started yet.
     std::function<future<>()> _barrier_trigger;
 
-    // Resolved schemas, keyed by the schema version found in the mutations.
-    std::unordered_map<table_schema_version, schema_entry> _schema_mappings;
+    // Resolved schemas, keyed by the schema version found in the commands.
+    std::unordered_map<table_schema_version, codec_entry> _schema_mappings;
 
     future<schema_entry> get_schema(table_id table, table_schema_version schema_version);
+    future<codec_entry> resolve_codec(table_id table, table_schema_version schema_version,
+            const std::vector<std::optional<uint32_t>>& ck_fixed_lengths);
 
 public:
-    schema_store(replica::database& db, db::system_keyspace& sys_ks,
+    schema_store(replica::database& db, db::system_keyspace& sys_ks, codec_schema_cache* codecs,
         std::function<future<>()> barrier_trigger = nullptr);
 
-    // Returns the schema that `m` should be applied with. If `m` was written with an
-    // older schema, it is upgraded in place to the returned schema, using the column
-    // mapping fetched from `system.scylla_table_schema_history`.
-    future<schema_ptr> resolve_and_upgrade(frozen_mutation& m);
+    // Decodes `w`, a write to `table`, into the table's current schema. Data at or
+    // before its column's drop is skipped. Other data the current schema cannot take
+    // throws sstables::mx::column_mismatch_error.
+    future<mutation> decode(table_id table, const write_mutation_v2& w, reader_permit permit);
 };
 
 // Thrown when a command's raft_command::change index is past the alternatives this
@@ -142,9 +197,17 @@ public:
     using std::runtime_error::runtime_error;
 };
 
+// Thrown for a retired_write_mutation command, written by an older version in a
+// format this version no longer decodes.
+class retired_raft_command_error : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
+
 namespace detail {
 // The log entry must contain a raft::command in its data variant.
-// Throws unknown_raft_command_error on a command kind this version does not know.
+// Throws unknown_raft_command_error on a command kind this version does not know, and
+// retired_raft_command_error on retired_write_mutation.
 raft_command deserialize_raft_command(const raft::log_entry_ptr& entry);
 } // namespace detail
 } // namespace service::strong_consistency

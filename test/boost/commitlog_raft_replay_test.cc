@@ -7,6 +7,7 @@
  */
 
 #include <algorithm>
+#include <map>
 #include <unordered_set>
 #include <boost/test/unit_test.hpp>
 #include <fmt/ranges.h>
@@ -56,6 +57,8 @@
 #include "schema/schema_builder.hh"
 #include "transport/messages/result_message.hh"
 #include "utils/exceptions.hh"
+#include "readers/mutation_reader.hh"
+#include <seastar/util/closeable.hh>
 
 // A seam into raft_commitlog_replay_buffer's parked records: finish_replay()
 // needs a database, a query processor and tablet metadata.
@@ -1644,7 +1647,7 @@ cql_test_config sc_replay_config_starting_on_damage() {
 
 
 // A COMMAND entry carrying one real mutation, encoded as the coordinator does: a
-// raft_command holding a frozen_mutation in raft::command. Dummies do not work
+// raft_command holding a write_mutation_v2 in raft::command. Dummies do not work
 // for the stale-copy test below: dropped or applied, a dummy leaves no trace.
 raft::log_entry_ptr make_mutation_entry(const schema_ptr& schema, raft::term_t term, raft::index_t idx,
         int32_t pk, int32_t v, api::timestamp_type ts) {
@@ -1655,7 +1658,8 @@ raft::log_entry_ptr make_mutation_entry(const schema_ptr& schema, raft::term_t t
     m.partition().clustered_row(*schema, ck).apply(row_marker(ts));
     raft::command cmd;
     ser::serialize(cmd, service::strong_consistency::raft_command{
-            .change = service::strong_consistency::write_mutation{.mutation = freeze(m)}});
+            .change = service::strong_consistency::encode_write_mutation(
+                    m, ts, service::strong_consistency::make_write_codec_schema(*schema))});
     return make_lw_shared<raft::log_entry>(raft::log_entry{
             .term = term, .idx = idx, .data = std::move(cmd)});
 }
@@ -2307,25 +2311,13 @@ SEASTAR_TEST_CASE(test_second_replay_recovers_the_rewritten_tail) {
 // the truncation_record loop in add_batch() fails the first pass's assertion.
 SEASTAR_TEST_CASE(test_second_replay_drops_the_copies_the_first_one_superseded) {
     return do_with_cql_env_thread([] (cql_test_env& env) {
-        // Two tables: `d` carries the mutations and is read back through the
-        // ordinary path, `g` only makes the group id resolve and takes the
-        // rewritten tablet map, leaving `d`'s metadata as CQL made it.
         env.execute_cql("create table ks.d (pk int primary key, v int)").get();
-        env.execute_cql("create table ks.g (pk int primary key)").get();
         const auto schema = env.local_db().find_schema("ks", "d");
         const auto gid = make_group_id();
-        set_sc_tablet_metadata(env, env.local_db().find_schema("ks", "g")->id(), gid,
+        // The group's tablet must be `d`'s: replay refuses a write of another table.
+        set_sc_tablet_metadata(env, schema->id(), gid,
                 locator::tablet_replica_set{
                         {env.local_db().get_token_metadata().get_my_id(), this_shard_id()}}).get();
-
-        // `d`'s tablet must have a replica on this shard: apply_committed() writes
-        // to the memtable of the shard replay runs on. Only the first tablet table
-        // created here is sure of a replica on this shard, so `d` is created first.
-        // Asserted, so reordering the CREATEs fails here, not in table::apply().
-        const auto token_metadata = env.local_db().get_shared_token_metadata().get();
-        const auto& tablets = token_metadata->tablets().get_tablet_map(schema->id());
-        BOOST_REQUIRE(tablets.has_replica(*tablets.tablet_ids().begin(),
-                locator::tablet_replica{.host = token_metadata->get_my_id(), .shard = this_shard_id()}));
 
         constexpr db::segment_id_type seg_term1 = 1;
         constexpr db::segment_id_type seg_term2 = 2;
@@ -2375,16 +2367,32 @@ SEASTAR_TEST_CASE(test_second_replay_drops_the_copies_the_first_one_superseded) 
                     env.local_qp(), gid, this_shard_id()).get();
         };
 
-        // 1..5 stay the term-1 copies, 6..10 the term-2 ones. 11 is uncommitted:
-        // with_rows_ignore_order() rejects extra rows, so its absence is checked too.
-        std::vector<std::vector<bytes_opt>> committed_rows;
-        for (int i = 1; i <= 10; ++i) {
-            committed_rows.push_back({int32_type->decompose(i),
-                    int32_type->decompose(i <= 5 ? term1_value_base + i : term2_value_base + i)});
+        // 1..5 stay the term-1 copies, 6..10 the term-2 ones, each as
+        // make_mutation_entry() wrote it. 11 is uncommitted, so its absence is
+        // checked too. Read from the table, not over CQL, since its tablet map is
+        // the one installed above.
+        std::map<int32_t, mutation> committed;
+        for (int32_t i = 1; i <= 10; ++i) {
+            const auto [value_base, timestamp] = i <= 5
+                    ? std::pair(term1_value_base, ts_term1)
+                    : std::pair(term2_value_base, ts_term2);
+            mutation m(schema, partition_key::from_single_value(*schema, int32_type->decompose(i)));
+            m.set_clustered_cell(clustering_key::make_empty(), to_bytes("v"), data_value(value_base + i), timestamp);
+            m.partition().clustered_row(*schema, clustering_key::make_empty()).apply(row_marker(timestamp));
+            committed.emplace(i, std::move(m));
         }
         const auto require_committed_rows = [&] {
-            assert_that(env.execute_cql("select pk, v from ks.d").get())
-                    .is_rows().with_rows_ignore_order(committed_rows);
+            auto expected = committed;
+            auto reader = env.local_db().find_column_family(schema).make_mutation_reader(schema, make_reader_permit(env));
+            auto close_reader = deferred_close(reader);
+            while (auto applied = read_mutation_from_mutation_reader(reader).get()) {
+                const auto pk = value_cast<int32_t>(int32_type->deserialize(applied->key().explode(*schema).front()));
+                auto it = expected.find(pk);
+                BOOST_REQUIRE_MESSAGE(it != expected.end(), fmt::format("unexpected partition {}", *applied));
+                BOOST_REQUIRE_MESSAGE(*applied == it->second, fmt::format("applied {}, expected {}", *applied, it->second));
+                expected.erase(it);
+            }
+            BOOST_REQUIRE_MESSAGE(expected.empty(), fmt::format("{} partitions missing", expected.size()));
         };
         // The uncommitted tail, as the group must get it back from either pass.
         const auto expected_tail = sstring("2:11");
@@ -2582,11 +2590,13 @@ SEASTAR_TEST_CASE(test_apply_keeps_segments_of_unapplied_entries) {
         auto& db = env.local_db();
         const auto schema = db.find_schema("test_ks", "tbl");
         mutation m(schema, partition_key::from_singular(*schema, 1));
-        m.set_cell(clustering_key::make_empty(), "c", data_value(10), api::new_timestamp());
+        const auto ts = api::new_timestamp();
+        m.set_cell(clustering_key::make_empty(), "c", data_value(10), ts);
 
         raft::command cmd;
         ser::serialize(cmd, service::strong_consistency::raft_command{
-                .change = service::strong_consistency::write_mutation{.mutation = freeze(m)}});
+                .change = service::strong_consistency::encode_write_mutation(
+                        m, ts, service::strong_consistency::make_write_codec_schema(*schema))});
 
         auto entry = make_lw_shared<raft::log_entry>(raft::log_entry{
             .term = raft::term_t(1),
@@ -2612,10 +2622,11 @@ SEASTAR_TEST_CASE(test_apply_keeps_segments_of_unapplied_entries) {
                 BOOST_REQUIRE(!segments_before.empty());
 
                 service::strong_consistency::raft_resize_tracker resize_tracker(env.get_system_keyspace().local());
+                service::strong_consistency::codec_schema_cache codecs;
                 auto state_machine = service::strong_consistency::make_state_machine(
                         locator::global_tablet_id{schema->id(), locator::tablet_id(0)}, gid, db,
                         env.migration_manager().local(), env.get_system_keyspace().local(), storage, resize_tracker,
-                        make_lw_shared<service::strong_consistency::state_machine_stats>());
+                        codecs, make_lw_shared<service::strong_consistency::state_machine_stats>());
                 auto stop_sm = defer([&] noexcept { state_machine->abort().get(); });
 
                 // Abort the apply after the pin is taken and before the entry reaches a memtable.
@@ -2780,10 +2791,12 @@ SEASTAR_TEST_CASE(test_apply_counts_database_writes) {
                 raft::log_entry_ptr_list entries;
                 for (int pk = 1; pk <= 3; ++pk) {
                     mutation m(schema, partition_key::from_singular(*schema, pk));
-                    m.set_cell(clustering_key::make_empty(), "c", data_value(pk), api::new_timestamp());
+                    const auto ts = api::new_timestamp();
+                    m.set_cell(clustering_key::make_empty(), "c", data_value(pk), ts);
                     raft::command cmd;
                     ser::serialize(cmd, service::strong_consistency::raft_command{
-                            .change = service::strong_consistency::write_mutation{.mutation = freeze(m)}});
+                            .change = service::strong_consistency::encode_write_mutation(
+                                    m, ts, service::strong_consistency::make_write_codec_schema(*schema))});
                     entries.push_back(make_lw_shared<raft::log_entry>(raft::log_entry{
                         .term = raft::term_t(1),
                         .idx = raft::index_t(pk),
@@ -2802,10 +2815,11 @@ SEASTAR_TEST_CASE(test_apply_counts_database_writes) {
 
                 // The tablet's state machine, with no raft server around it.
                 service::strong_consistency::raft_resize_tracker resize_tracker(env.get_system_keyspace().local());
+                service::strong_consistency::codec_schema_cache codecs;
                 auto state_machine = service::strong_consistency::make_state_machine(
                         locator::global_tablet_id{table, locator::tablet_id(0)}, gid, db,
                         env.migration_manager().local(), env.get_system_keyspace().local(), storage, resize_tracker,
-                        make_lw_shared<service::strong_consistency::state_machine_stats>());
+                        codecs, make_lw_shared<service::strong_consistency::state_machine_stats>());
                 auto stop_sm = defer([&] noexcept { state_machine->abort().get(); });
 
                 const auto writes_before = db.get_stats().total_writes;
@@ -2868,7 +2882,7 @@ SEASTAR_THREAD_TEST_CASE(test_deserialize_refuses_an_unknown_command_kind) {
             .build();
     const auto write = sc::detail::deserialize_raft_command(
             make_mutation_entry(schema, raft::term_t(1), raft::index_t(3), 1, 7, 100));
-    BOOST_REQUIRE(std::holds_alternative<sc::write_mutation>(write.change));
+    BOOST_REQUIRE(std::holds_alternative<sc::write_mutation_v2>(write.change));
 }
 
 // Test: replay refuses a committed command of an unknown kind instead of applying it,
@@ -2933,10 +2947,11 @@ SEASTAR_TEST_CASE(test_apply_refuses_an_unknown_command_kind) {
                 storage.store_log_entries(entries).get();
 
                 sc::raft_resize_tracker resize_tracker(env.get_system_keyspace().local());
+                sc::codec_schema_cache codecs;
                 auto state_machine = sc::make_state_machine(
                         locator::global_tablet_id{table, locator::tablet_id(0)}, gid, db,
                         env.migration_manager().local(), env.get_system_keyspace().local(), storage, resize_tracker,
-                        make_lw_shared<sc::state_machine_stats>());
+                        codecs, make_lw_shared<sc::state_machine_stats>());
                 auto stop_sm = defer([&] noexcept { state_machine->abort().get(); });
 
                 auto f = state_machine->apply(entries);

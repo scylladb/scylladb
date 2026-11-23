@@ -176,6 +176,8 @@ class groups_manager : public peering_sharded_service<groups_manager> {
     gms::gossiper& _gossiper;
     db::raft_commitlog_replay_buffer& _raft_replay_buffer;
     raft_resize_tracker& _resize_tracker;
+    // Declared ahead of _raft_groups, so it outlives the state machines using it.
+    codec_schema_cache _codec_schemas;
     std::unordered_map<raft::group_id, raft_group_state> _raft_groups = {};
     // Keyed by keyspace and table name, which is what the series are labelled
     // with, so that two entries can never register colliding series.
@@ -327,6 +329,9 @@ public:
     // Note that the method is synchronous: it only initiates these operations
     // and does not wait for their completion.
     void update(locator::token_metadata_ptr new_tm);
+
+    // Encodes and decodes the writes of this shard's groups.
+    codec_schema_cache& codec_schemas() { return _codec_schemas; }
 
     // The raft_server instance is used to submit write commands and perform read_barrier() before reads.
     future<raft_server> acquire_server(table_id table_id, raft::group_id group_id, abort_source& as);

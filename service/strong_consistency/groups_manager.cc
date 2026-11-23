@@ -263,7 +263,7 @@ future<> groups_manager::start_raft_group(global_tablet_id tablet,
         *commitlog, tablet.table, std::move(replayed_data),
         [this](db::cf_id_type id, db::replay_position pos) { request_flush(id, pos); });
 
-    auto state_machine = make_state_machine(tablet, group_id, _db, _mm, _sys_ks, *storage, _resize_tracker, std::move(apply_stats));
+    auto state_machine = make_state_machine(tablet, group_id, _db, _mm, _sys_ks, *storage, _resize_tracker, _codec_schemas, std::move(apply_stats));
 
     auto& state_machine_ref = *state_machine;
     auto rpc = std::make_unique<rpc_impl>(state_machine_ref, _ms, _raft_gr.failure_detector(), group_id, my_id,

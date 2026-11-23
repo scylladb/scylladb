@@ -14,7 +14,6 @@
 #include "db/timeout_clock.hh"
 #include "cql3/query_processor.hh"
 #include "service/strong_consistency/raft_groups_storage.hh"
-#include "mutation/frozen_mutation.hh"
 #include "schema/schema_registry.hh"
 #include "db/system_keyspace.hh"
 #include "service/strong_consistency/state_machine.hh"
@@ -228,13 +227,15 @@ future<> raft_commitlog_replay_buffer::apply_committed(replica::database& db, db
         ++group.dropped_by_truncate;
         co_return;
     }
-    if (auto* write = std::get_if<sc::write_mutation>(&cmd.change)) {
+    if (auto* write = std::get_if<sc::write_mutation_v2>(&cmd.change)) {
         if (!_schemas) {
-            _schemas.emplace(db, sys_ks);
+            _schemas.emplace(db, sys_ks, nullptr);
         }
-        auto schema = co_await _schemas->resolve_and_upgrade(write->mutation);
-        co_await db.apply_in_memory(write->mutation, std::move(schema), db::rp_handle(), db::no_timeout,
-                db::noop_large_data_guardrail::instance());
+        // One per entry, so no permit outlives the replay: the buffer itself does.
+        auto permit = db.get_reader_concurrency_semaphore().make_tracking_only_permit(
+                nullptr, "sc_commitlog_replay", db::no_timeout, {});
+        auto m = co_await _schemas->decode(group.tablet.table, *write, std::move(permit));
+        co_await db.apply_in_memory(m, db.find_column_family(group.tablet.table), db::rp_handle(), db::no_timeout);
     } else {
         // The same code the state machine runs. It drops the entries applied above, like
         // the truncate did before the crash, and advances the record the entries after it

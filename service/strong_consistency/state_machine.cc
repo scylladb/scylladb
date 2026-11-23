@@ -11,8 +11,9 @@
 #include <seastar/core/on_internal_error.hh>
 #include "state_machine.hh"
 #include "db/schema_tables.hh"
-#include "mutation/frozen_mutation.hh"
 #include "schema/schema_registry.hh"
+#include "sstables/mx/partition_codec.hh"
+#include "vint-serialization.hh"
 #include "serializer_impl.hh"
 #include "idl/strong_consistency/state_machine.dist.hh"
 #include "idl/strong_consistency/state_machine.dist.impl.hh"
@@ -30,6 +31,150 @@ using namespace std::chrono_literals;
 namespace service::strong_consistency {
 
 static logging::logger logger("sc_state_machine");
+
+namespace {
+
+// The first byte of write_mutation_v2::data. 1 is the mx data-file encoding as the
+// `me` SSTable version writes it.
+constexpr uint8_t write_format_mx = 1;
+constexpr sstables::mx::codec_params write_codec_params{sstables::sstable_version_types::me};
+
+void write_vint(bytes_ostream& out, uint64_t value) {
+    std::array<bytes::value_type, max_vint_length> buf;
+    const auto size = unsigned_vint::serialize(value, buf.data());
+    out.write(bytes_view(buf.data(), size));
+}
+
+// Reads the payload header of write_mutation_v2::data byte by byte, since the
+// bytes_ostream may split it across fragments.
+class payload_reader {
+    bytes_ostream::fragment_iterator _it;
+    bytes_ostream::fragment_iterator _end;
+    bytes_view _current;
+public:
+    explicit payload_reader(const bytes_ostream& data) : _it(data.begin()), _end(data.end()) {}
+
+    bytes::value_type read_byte() {
+        while (_current.empty()) {
+            if (_it == _end) {
+                throw std::runtime_error("write_mutation_v2 payload ends inside its header");
+            }
+            _current = *_it++;
+        }
+        const auto b = _current.front();
+        _current.remove_prefix(1);
+        return b;
+    }
+
+    uint64_t read_vint() {
+        std::array<bytes::value_type, max_vint_length> buf;
+        buf[0] = read_byte();
+        const auto size = unsigned_vint::serialized_size_from_first_byte(buf[0]);
+        for (vint_size_type i = 1; i < size; ++i) {
+            buf[i] = read_byte();
+        }
+        return unsigned_vint::deserialize(bytes_view(buf.data(), size));
+    }
+
+    // The bytes after the header.
+    bytes_ostream rest() && {
+        bytes_ostream out;
+        out.write(_current);
+        for (; _it != _end; ++_it) {
+            out.write(*_it);
+        }
+        return out;
+    }
+};
+
+struct write_payload {
+    encoding_stats bases;
+    std::vector<std::optional<uint32_t>> ck_fixed_lengths;
+    bytes_ostream partition;
+};
+
+write_payload parse_write_payload(const bytes_ostream& data) {
+    payload_reader in(data);
+    const auto format = uint8_t(in.read_byte());
+    if (format != write_format_mx) {
+        throw std::runtime_error(fmt::format("write_mutation_v2 payload has unknown format {}", format));
+    }
+    write_payload ret;
+    // Unsigned wrap-around, as the SSTable serialization header stores its minimums.
+    ret.bases.min_timestamp = api::timestamp_type(in.read_vint() + encoding_stats::timestamp_epoch);
+    ret.bases.min_local_deletion_time = gc_clock::time_point(gc_clock::duration(
+            int64_t(in.read_vint() + encoding_stats::deletion_time_epoch)));
+    ret.bases.min_ttl = gc_clock::duration(int64_t(in.read_vint() + encoding_stats::ttl_epoch));
+    const auto ck_count = in.read_vint();
+    for (uint64_t i = 0; i < ck_count; ++i) {
+        const auto len = in.read_vint();
+        // Narrowed below: 2^32 + 1 would pass as fixed length 1.
+        if (len > uint64_t(std::numeric_limits<uint32_t>::max()) + 1) {
+            throw std::runtime_error(fmt::format("write_mutation_v2 payload lists a clustering key length {} above the 32-bit range", len - 1));
+        }
+        ret.ck_fixed_lengths.push_back(len ? std::optional<uint32_t>(len - 1) : std::nullopt);
+    }
+    ret.partition = std::move(in).rest();
+    return ret;
+}
+
+} // anonymous namespace
+
+sstables::mx::codec_schema make_write_codec_schema(const schema& s) {
+    return sstables::mx::make_codec_schema(s, s, write_codec_params);
+}
+
+write_mutation_v2 encode_write_mutation(const mutation& m, api::timestamp_type base_timestamp,
+        const sstables::mx::codec_schema& cs) {
+    // The local deletion time and TTL bases stay at their defaults: computing them
+    // would take a pass over the mutation, and an SC write rarely has either.
+    encoding_stats bases;
+    bases.min_timestamp = base_timestamp;
+    bytes_ostream data;
+    data.write(bytes_view(reinterpret_cast<const bytes::value_type*>(&write_format_mx), 1));
+    write_vint(data, uint64_t(bases.min_timestamp) - encoding_stats::timestamp_epoch);
+    write_vint(data, uint64_t(bases.min_local_deletion_time.time_since_epoch().count()) - encoding_stats::deletion_time_epoch);
+    write_vint(data, uint64_t(bases.min_ttl.count()) - encoding_stats::ttl_epoch);
+    // The decoder needs the writer's clustering key value lengths, and a column
+    // mapping holds no key types. 0 is variable length, n + 1 is fixed length n.
+    const auto& s = *m.schema();
+    write_vint(data, s.clustering_key_size());
+    for (const auto& ck : s.clustering_key_columns()) {
+        const auto len = ck.type->value_length_if_fixed();
+        write_vint(data, len ? uint64_t(*len) + 1 : 0);
+    }
+    sstables::mx::encode_partition(m, bases, cs, data);
+    return write_mutation_v2{.schema_version = s.version(), .data = std::move(data)};
+}
+
+codec_schema_cache::codec_schema_cache()
+    : _cache(std::numeric_limits<size_t>::max(), 1h, logger)
+{
+}
+
+future<sstables::mx::codec_schema> codec_schema_cache::get(const schema_ptr& s) {
+    auto ptr = co_await _cache.get_ptr(key(s->version(), s->version()), [&s] (const key&) {
+        return futurize_invoke([&s] { return make_write_codec_schema(*s); });
+    });
+    co_return *ptr;
+}
+
+future<sstables::mx::codec_schema> codec_schema_cache::get(const schema_ptr& writer, const schema_ptr& reader) {
+    auto ptr = co_await _cache.get_ptr(key(writer->version(), reader->version()), [&] (const key&) {
+        return futurize_invoke([&] { return sstables::mx::make_codec_schema(*writer, *reader, write_codec_params); });
+    });
+    co_return *ptr;
+}
+
+future<sstables::mx::codec_schema> codec_schema_cache::get(table_schema_version writer, const column_mapping& writer_columns,
+        const std::vector<std::optional<uint32_t>>& ck_fixed_lengths, const schema_ptr& reader) {
+    auto ptr = co_await _cache.get_ptr(key(writer, reader->version()), [&] (const key&) {
+        return futurize_invoke([&] {
+            return sstables::mx::make_codec_schema(writer_columns, ck_fixed_lengths, *reader, write_codec_params);
+        });
+    });
+    co_return *ptr;
+}
 
 mutation make_resize_marker_mutation(raft::group_id gid, shard_id shard, const resize_marker& marker) {
     auto s = db::system_keyspace::raft_groups();
@@ -51,6 +196,7 @@ class state_machine : public raft_state_machine {
     db::system_keyspace& _sys_ks;
     raft_groups_storage& _persistence;
     raft_resize_tracker& _resize_tracker;
+    codec_schema_cache& _codecs;
     lw_shared_ptr<state_machine_stats> _stats;
 
     abort_source _as;
@@ -63,6 +209,7 @@ public:
         db::system_keyspace& sys_ks,
         raft_groups_storage& persistence,
         raft_resize_tracker& resize_tracker,
+        codec_schema_cache& codecs,
         lw_shared_ptr<state_machine_stats> stats)
         : _tablet(tablet)
         , _group_id(gid)
@@ -71,6 +218,7 @@ public:
         , _sys_ks(sys_ks)
         , _persistence(persistence)
         , _resize_tracker(resize_tracker)
+        , _codecs(codecs)
         , _stats(std::move(stats))
     {
     }
@@ -94,7 +242,7 @@ public:
                 _tablet, _group_id, command.size(), command.front()->idx, command.back()->idx);
             // One store for the whole batch, so that commands written with the same
             // schema version resolve their schema only once.
-            schema_store schemas(_db, _sys_ks, [this]() -> future<> {
+            schema_store schemas(_db, _sys_ks, &_codecs, [this]() -> future<> {
                 ++_stats->schema_barrier_waits;
                 if (utils::get_local_injector().enter("disable_raft_drop_append_entries_for_specified_group")) {
                     utils::get_local_injector().disable("raft_drop_incoming_append_entries_for_specified_group");
@@ -102,6 +250,9 @@ public:
                 logger.debug("apply(): waiting for the group0 barrier for tablet {}, group_id={}", _tablet, _group_id);
                 co_await _mm.get_group0_barrier().trigger(false, &_as);
             });
+            // Decoding takes a permit for memory accounting only; one serves the batch.
+            auto permit = _db.get_reader_concurrency_semaphore().make_tracking_only_permit(
+                    nullptr, "sc_state_machine_apply", db::no_timeout, {});
             // Apply the commands sequentially to preserve linearizability.
             // E.g., for writes A-B-C-D, a reader must observe
             // them in that order and never see A-C or A-D skipping intermediate values.
@@ -130,8 +281,9 @@ public:
                     _persistence.note_applied(command[i]->idx);
                     continue;
                 }
-                auto& mut = std::get<write_mutation>(cmd.change).mutation;
-                auto schema = co_await schemas.resolve_and_upgrade(mut);
+                const auto& write = std::get<write_mutation_v2>(cmd.change);
+                auto mut = co_await schemas.decode(_tablet.table, write, permit);
+                auto& table = _db.find_column_family(_tablet.table);
                 // Taken after the schema resolution, which may yield on the
                 // group0 barrier.
                 auto commitlog_pin = _persistence.pin_target_table_for_apply(command[i]->idx);
@@ -143,7 +295,7 @@ public:
                 // Therefore we must await each apply_in_memory() sequentially to preserve Raft log order.
                 // apply_in_memory() skips the write counters of database::apply(), so count here.
                 try {
-                    co_await _db.apply_in_memory(mut, std::move(schema), std::move(commitlog_pin), db::no_timeout, db::noop_large_data_guardrail::instance());
+                    co_await _db.apply_in_memory(mut, table, std::move(commitlog_pin), db::no_timeout);
                 } catch (...) {
                     ++_db.get_stats().total_writes_failed;
                     throw;
@@ -162,7 +314,7 @@ public:
             note_batch_discarded(command);
         } catch (replica::no_such_keyspace&) {
             // Thrown when DROP KEYSPACE races with the raft applier fiber.
-            // The path: schema_store::resolve_and_upgrade() calls
+            // The path: schema_store::decode() calls
             // local_schema_registry().get_or_null(schema_version), which may
             // trigger lazy unfreezing of a cached frozen_schema. Unfreezing
             // re-parses column types via cql_type_parser::parse(), which
@@ -174,7 +326,7 @@ public:
             logger.log(log_level::warn, rate_limit, "apply(): keyspace for table {} was already dropped, ignoring mutations", _tablet.table);
             note_batch_discarded(command);
         } catch (const abort_requested_exception& ex) {
-            // The exception can be thrown by schema_store::resolve_and_upgrade.
+            // The exception can be thrown by schema_store::decode().
             // It means that the Raft group is being removed.
             //
             // No note_batch_discarded() here, unlike the two arms above. abort() is
@@ -254,7 +406,8 @@ future<schema_store::schema_entry> schema_store::get_schema(table_id table, tabl
     // `db.find_schema()` may throw `replica::no_such_column_family` if the table was already dropped.
     schema = _db.find_schema(table);
     // The column mapping may be already present in the cache from another call
-    auto cm_ptr = _column_mapping_cache.find(schema_version);
+    const auto key = std::pair(table, schema_version);
+    auto cm_ptr = _column_mapping_cache.find(key);
     if (cm_ptr) {
         co_return schema_entry{std::move(schema), std::move(cm_ptr)};
     }
@@ -266,25 +419,34 @@ future<schema_store::schema_entry> schema_store::get_schema(table_id table, tabl
         co_return schema_entry{nullptr, nullptr};
     }
 
-    cm_ptr = co_await _column_mapping_cache.get_ptr(schema_version, [cm = std::move(*cm_opt)](auto schema_version) -> future<column_mapping> {
+    cm_ptr = co_await _column_mapping_cache.get_ptr(key, [cm = std::move(*cm_opt)](const auto&) -> future<column_mapping> {
         co_return std::move(cm);
     });
     co_return schema_entry{std::move(schema), std::move(cm_ptr)};
 }
 
-schema_store::schema_store(replica::database& db, db::system_keyspace& sys_ks, std::function<future<>()> barrier_trigger)
+schema_store::schema_store(replica::database& db, db::system_keyspace& sys_ks, codec_schema_cache* codecs,
+        std::function<future<>()> barrier_trigger)
     : _db(db)
     , _sys_ks(sys_ks)
+    , _codecs(codecs)
     , _barrier_trigger(std::move(barrier_trigger))
 {
 }
 
-future<schema_ptr> schema_store::resolve_and_upgrade(frozen_mutation& m) {
-    const auto schema_version = m.schema_version();
-
+future<schema_store::codec_entry> schema_store::resolve_codec(table_id table, table_schema_version schema_version,
+        const std::vector<std::optional<uint32_t>>& ck_fixed_lengths) {
+    // The registry and _schema_mappings resolve a version by itself, and one store serves
+    // every group of a replay. A version of another table would decode the write into
+    // that table's schema and apply it to the group's table.
+    const auto refuse_other_table = [&] (const schema& s) {
+        if (s.id() != table) {
+            on_internal_error(logger, fmt::format("schema version {} is of table {}, the group's table is {}",
+                    schema_version, s.id(), table));
+        }
+    };
     auto it = _schema_mappings.find(schema_version);
     if (it == _schema_mappings.end()) {
-        const auto table = m.column_family_id();
         auto [schema, cm_ptr] = co_await get_schema(table, schema_version);
         if (!schema) {
             if (const auto trigger = std::exchange(_barrier_trigger, nullptr)) {
@@ -306,18 +468,58 @@ future<schema_ptr> schema_store::resolve_and_upgrade(frozen_mutation& m) {
             on_internal_error(logger, fmt::format("couldn't find schema for table {} and mutation schema version {}",
                     table, schema_version));
         }
+        std::optional<sstables::mx::codec_schema> cs;
         if (cm_ptr) {
-            logger.trace("Upgrading mutations of table {} from schema version {} to {}.",
+            logger.trace("Decoding commands of table {} written with schema version {} into {}.",
                 table, schema_version, schema->version());
+            // Checked here, so that a corrupt payload is a decode error and not an
+            // internal error of make_codec_schema().
+            if (ck_fixed_lengths.size() != schema->clustering_key_size()) {
+                throw std::runtime_error(fmt::format("write_mutation_v2 payload lists {} clustering key lengths, table {} has {} clustering columns",
+                        ck_fixed_lengths.size(), table, schema->clustering_key_size()));
+            }
+            if (_codecs) {
+                cs = co_await _codecs->get(schema_version, *cm_ptr, ck_fixed_lengths, schema);
+            } else {
+                cs = sstables::mx::make_codec_schema(*cm_ptr, ck_fixed_lengths, *schema, write_codec_params);
+            }
+        } else {
+            // Before the lookup: the no_such_column_family of a dropped other table would
+            // pass for a drop of the group's table, and apply() would discard the batch.
+            refuse_other_table(*schema);
+            // The current schema, so that a column dropped since the write is resolved
+            // the same way as on the column mapping path.
+            auto current = _db.find_schema(schema->id());
+            if (current->version() != schema_version) {
+                logger.trace("Decoding commands of table {} written with schema version {} into {}.",
+                    table, schema_version, current->version());
+            }
+            if (_codecs) {
+                cs = co_await _codecs->get(schema, current);
+            } else {
+                cs = sstables::mx::make_codec_schema(*schema, *current, write_codec_params);
+            }
+            schema = std::move(current);
         }
-        it = _schema_mappings.insert({schema_version, {std::move(schema), cm_ptr}}).first;
+        it = _schema_mappings.emplace(schema_version, codec_entry{std::move(schema), std::move(*cs)}).first;
+    } else {
+        refuse_other_table(*it->second.first);
     }
+    // _schema_mappings and codec_schema_cache are keyed by schema versions, not by the
+    // lengths, so a payload is refused when its lengths differ from the ones the cached
+    // codec was built with. Otherwise it would be read with another payload's lengths.
+    if (it->second.second.clustering_key_fixed_lengths() != ck_fixed_lengths) {
+        throw std::runtime_error(fmt::format("write_mutation_v2 payload of table {} lists other clustering key lengths than the codec of schema version {} was built with",
+                table, schema_version));
+    }
+    co_return it->second;
+}
 
-    const auto& [schema, cm_ptr] = it->second;
-    if (cm_ptr) {
-        m = freeze(m.unfreeze_upgrading(schema, *cm_ptr));
-    }
-    co_return schema;
+future<mutation> schema_store::decode(table_id table, const write_mutation_v2& w, reader_permit permit) {
+    auto payload = parse_write_payload(w.data);
+    auto [schema, cs] = co_await resolve_codec(table, w.schema_version, payload.ck_fixed_lengths);
+    co_return co_await sstables::mx::decode_partition(std::move(schema), payload.bases, cs,
+            std::move(payload.partition), std::move(permit));
 }
 
 std::unique_ptr<raft_state_machine> make_state_machine(locator::global_tablet_id tablet,
@@ -327,9 +529,10 @@ std::unique_ptr<raft_state_machine> make_state_machine(locator::global_tablet_id
     db::system_keyspace& sys_ks,
     raft_groups_storage& persistence,
     raft_resize_tracker& resize_tracker,
+    codec_schema_cache& codecs,
     lw_shared_ptr<state_machine_stats> stats)
 {
-    return std::make_unique<state_machine>(tablet, gid, db, mm, sys_ks, persistence, resize_tracker, std::move(stats));
+    return std::make_unique<state_machine>(tablet, gid, db, mm, sys_ks, persistence, resize_tracker, codecs, std::move(stats));
 }
 
 future<> apply_truncate_command(replica::database& db, locator::global_tablet_id tablet, raft::group_id gid,
@@ -366,6 +569,13 @@ raft_command deserialize_raft_command(const raft::log_entry_ptr& entry) {
         throw unknown_raft_command_error(fmt::format(
                 "raft entry {} holds a command of kind {}, but this version knows only kinds below {}. "
                 "A newer version wrote it.", entry->idx, kind, known_kinds));
+    }
+    // Refused before the alternative is decoded: retired_write_mutation keeps none of its bytes.
+    constexpr uint8_t retired_write_mutation_kind = 1;
+    if (kind == retired_write_mutation_kind) {
+        throw retired_raft_command_error(fmt::format(
+                "raft entry {} holds a write in the frozen_mutation format, written by an older version. "
+                "This version no longer supports it.", entry->idx));
     }
     auto is = ser::as_input_stream(cmd);
     return ser::deserialize(is, std::type_identity<raft_command>());

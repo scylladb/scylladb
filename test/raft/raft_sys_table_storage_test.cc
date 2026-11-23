@@ -241,7 +241,8 @@ static raft::log_entry_ptr make_mutation_entry(const schema_ptr& s, raft::term_t
     m.partition().clustered_row(*s, ck).apply(row_marker(ts));
     raft::command cmd;
     ser::serialize(cmd, service::strong_consistency::raft_command{
-            .change = service::strong_consistency::write_mutation{.mutation = freeze(m)}});
+            .change = service::strong_consistency::encode_write_mutation(
+                    m, ts, service::strong_consistency::make_write_codec_schema(*s))});
     return make_lw_shared<raft::log_entry>(
             raft::log_entry{.term = term, .idx = idx, .data = std::move(cmd)});
 }
@@ -1892,10 +1893,11 @@ SEASTAR_TEST_CASE(test_groups_dropped_table_batch_is_reported_as_applied) {
         co_await storage.bootstrap(raft::configuration({srv}), false);
 
         service::strong_consistency::raft_resize_tracker resize_tracker(env.get_system_keyspace().local());
+        service::strong_consistency::codec_schema_cache codecs;
         auto state_machine = service::strong_consistency::make_state_machine(
                 locator::global_tablet_id{.table = schema->id(), .tablet = locator::tablet_id(0)},
                 gid, env.local_db(), env.migration_manager().local(),
-                env.get_system_keyspace().local(), storage, resize_tracker,
+                env.get_system_keyspace().local(), storage, resize_tracker, codecs,
                 make_lw_shared<service::strong_consistency::state_machine_stats>());
 
         std::vector<raft::log_entry_ptr> batch = {
