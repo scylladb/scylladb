@@ -435,13 +435,17 @@ public:
     // more than once per sstable, so it must be free of side effects.
     //
     // Returns a map from each old sstable to its rewritten replacement.
+    //
+    // If `in_place_modifier` is set, it replaces the rewrite and each sstable maps to itself.
+    // An updated sstable can move to a view visited later, so `filter` must reject it.
     future<std::unordered_map<sstables::shared_sstable, sstables::shared_sstable>> perform_component_rewrite(
             compaction::compaction_group_view& t,
             tasks::task_info info,
             std::function<bool(const sstables::shared_sstable&)> filter,
             sstables::component_type component,
             std::function<void(sstables::sstable&)> modifier,
-            sstables::update_sstable_id update_id = sstables::update_sstable_id::yes);
+            sstables::update_sstable_id update_id = sstables::update_sstable_id::yes,
+            std::function<future<>(sstables::sstable&)> in_place_modifier = {});
 
     // Submit a table for major compaction.
     // pre_flush_gc_state is engaged if the caller flushed the table's memtables before calling, and

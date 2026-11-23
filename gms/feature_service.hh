@@ -208,6 +208,8 @@ public:
     gms::feature cluster_config { *this, "CLUSTER_CONFIG"sv };
     // Restore persists tablet transitions and a topology request that older nodes fail to parse.
     gms::feature tablet_aware_restore { *this, "TABLET_AWARE_RESTORE"sv };
+    // Object storage keeps repaired_at on node references, which older nodes ignore on load.
+    gms::feature object_storage_repaired_at_in_ref { *this, "OBJECT_STORAGE_REPAIRED_AT_IN_REF"sv };
 
     // Features created at run time rather than declared above: one per cluster config
     // option, from the registry at construction, plus any a test adds. Node-based, so a

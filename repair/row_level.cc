@@ -2449,6 +2449,13 @@ public:
             new_sst.update_repaired_at(repaired_at);
             new_sst.mark_as_being_repaired(session);
         };
+        // Object storage would copy every component of a rewritten sstable to a new sstable_id.
+        std::function<future<>(sstables::sstable&)> in_place_modifier;
+        if (table.can_persist_repaired_at_in_place()) {
+            in_place_modifier = [repaired_at, session = _frozen_topology_guard] (sstables::sstable& sst) {
+                return sst.persist_repaired_at(repaired_at, session);
+            };
+        }
 
         // Build the candidate set of sstables we want to mark as repaired.
         // The actual capture of these sstables (and the membership check
@@ -2486,8 +2493,9 @@ public:
             co_return;
         }
 
-        auto filter = [&repair_set] (const sstables::shared_sstable& sst) {
-            return repair_set.contains(sst);
+        // An sstable updated in place stays in repair_set, so also check its value.
+        auto filter = [&repair_set, repaired_at] (const sstables::shared_sstable& sst) {
+            return repair_set.contains(sst) && sst->should_update_repaired_at(repaired_at);
         };
 
         co_await utils::get_local_injector().inject("repair_before_component_rewrite",
@@ -2499,7 +2507,7 @@ public:
         // is disabled on the target view.
         auto rewritten_sstables = co_await table.perform_component_rewrite(
                 _range, tasks::make_empty_task_info(), filter,
-                sstables::component_type::Statistics, modifier);
+                sstables::component_type::Statistics, modifier, sstables::update_sstable_id::yes, std::move(in_place_modifier));
         // FIXME: indent.
             // remove the old sstables from incremental repair meta and add the new ones
             for (auto& ss : rewritten_sstables) {

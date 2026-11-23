@@ -814,18 +814,23 @@ private:
             std::function<bool(const sstables::shared_sstable&)> filter,
             sstables::component_type component,
             std::function<void(sstables::sstable&)> modifier,
-            sstables::update_sstable_id update_id = sstables::update_sstable_id::yes);
+            sstables::update_sstable_id update_id = sstables::update_sstable_id::yes,
+            std::function<future<>(sstables::sstable&)> in_place_modifier = {});
 public:
     // Rewrite a component (e.g., Statistics) on all sstables matching `filter`
     // in every view of every compaction group in every storage group that
     // overlaps `range`.  Returns a map from each old sstable to its replacement.
+    // See compaction_manager::perform_component_rewrite() for `in_place_modifier`.
     future<std::unordered_map<sstables::shared_sstable, sstables::shared_sstable>> perform_component_rewrite(
             dht::token_range range,
             tasks::task_info info,
             std::function<bool(const sstables::shared_sstable&)> filter,
             sstables::component_type component,
             std::function<void(sstables::sstable&)> modifier,
-            sstables::update_sstable_id update_id = sstables::update_sstable_id::yes);
+            sstables::update_sstable_id update_id = sstables::update_sstable_id::yes,
+            std::function<future<>(sstables::sstable&)> in_place_modifier = {});
+    // Whether repaired_at can be persisted in place (sstable::persist_repaired_at()).
+    bool can_persist_repaired_at_in_place() const;
 private:
     // Returns a sstable set that can be safely used for purging any expired tombstone in a compaction group.
     // Only the sstables in the compaction group is not sufficient, since there might be other compaction

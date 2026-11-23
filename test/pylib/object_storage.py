@@ -97,6 +97,8 @@ class S3Server:
             aws_access_key_id=self.acc_key,
             aws_secret_access_key=self.secret_key,
             aws_session_token=None,
+            # HEAD gets a bare 400 when signed for another region.
+            region_name=self.region,
             config=boto3.session.Config(signature_version='s3v4'),
             verify=False
         )

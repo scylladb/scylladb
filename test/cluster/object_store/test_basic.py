@@ -14,7 +14,7 @@ from test.pylib.s3mock_server import create_conf
 from botocore.exceptions import ClientError
 from cassandra.protocol import ConfigurationException, InvalidRequest
 from cassandra.query import SimpleStatement, ConsistencyLevel
-from test.pylib.rest_client import ScyllaMetricsClient
+from test.pylib.rest_client import HTTPError, ScyllaMetricsClient
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
 from test.pylib.object_storage import format_tuples, keyspace_options
@@ -669,9 +669,7 @@ async def test_repair_creates_registry_entries(manager: ScyllaClusterManager, s3
     on dst, which must appear in dst's registry *without any flush*. If repair
     were a no-op, dst's registry would stay empty.
 
-    FIXME: incremental repair is not supported on object-storage keyspaces
-    because object_storage_base does not implement link_with_excluded_components().
-    Regular tablet repair uses streaming which works correctly.
+    Incremental repair is covered by test_incremental_repair_keeps_sstables.
 
     S3-only: the fake-gcs-server mock breaks tablet
     streaming over object storage (ifGenerationMatch ignored, SCYLLADB-2044).
@@ -756,6 +754,159 @@ async def test_repair_creates_registry_entries(manager: ScyllaClusterManager, s3
         # Verify data consistency
         rows = await cql.run_async(f"SELECT * FROM {ks}.t1")
         assert len(rows) == 10, f"Expected 10 rows, got {len(rows)}"
+
+
+def bucket_objects(storage):
+    """Returns the component objects and the node reference objects in the bucket."""
+    keys = [o.key for o in storage.get_resource().Bucket(storage.bucket_name).objects.all()]
+    return {k for k in keys if '/refs/' not in k}, {k for k in keys if '/refs/nodes/' in k}
+
+
+def assert_refs_repaired_at(storage, refs, expected):
+    """Checks the repaired-at attribute of the given reference objects that still exist."""
+    client = storage.get_resource().meta.client
+    values = {}
+    for k in refs:
+        try:
+            values[k] = client.head_object(Bucket=storage.bucket_name, Key=k)['Metadata'].get('repaired-at')
+        except ClientError as e:
+            # A migrated-away replica drops its reference asynchronously.
+            if e.response['Error']['Code'] not in ('404', 'NoSuchKey'):
+                raise
+    assert set(values.values()) == {expected}, values
+
+
+async def sealed_sstable_ids(cql, hosts, table_id):
+    ids = set()
+    for h in hosts:
+        rows = await cql.run_async(
+            SimpleStatement(f"SELECT sstable_id, status FROM system.sstables WHERE table_id = {table_id} ALLOW FILTERING",
+                            consistency_level=ConsistencyLevel.ONE), host=h)
+        ids |= {r.sstable_id for r in rows if r.status == 'sealed'}
+    return ids
+
+
+async def create_repair_test_table(manager, cql, servers, ks, options=""):
+    """Creates ks.t with an identical, flushed sstable on every replica."""
+    await cql.run_async(f"CREATE TABLE {ks}.t (pk int PRIMARY KEY, v int) WITH tombstone_gc = {{'mode': 'repair'}}{options}")
+    await asyncio.gather(*[cql.run_async(SimpleStatement(f"INSERT INTO {ks}.t (pk, v) VALUES ({k}, {k})",
+                                                         consistency_level=ConsistencyLevel.ALL)) for k in range(10)])
+    for s in servers:
+        await manager.api.flush_keyspace(s.ip_addr, ks)
+    return await get_table_id(cql, ks, 't')
+
+
+async def repair_marks_nothing(manager, servers, ks):
+    """Runs incremental repair and checks that no sstable needed marking, i.e. none lost its repaired_at."""
+    logs = [await manager.server_open_log(s.server_id) for s in servers]
+    marks = [await log.mark() for log in logs]
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "t", "all", incremental_mode='incremental')
+    for log, mark in zip(logs, marks):
+        assert not await log.grep("Marking sstable=", from_mark=mark)
+
+
+async def move_tablet(manager, server, ks, tablet, src, dst):
+    """Moves a tablet replica once repair has finished its end_repair stage, which may follow the repair call."""
+    async def try_move():
+        try:
+            await manager.api.move_tablet(server.ip_addr, ks, 't', *src, *dst, tablet.last_token)
+            return True
+        except HTTPError as e:
+            if 'is in transition' not in str(e):
+                raise
+            return None
+    await wait_for(try_move, time.time() + 60)
+
+
+async def test_incremental_repair_keeps_sstables(manager: ScyllaClusterManager, s3_storage):
+    """Incremental repair marks object-storage sstables repaired in place (SCYLLADB-6576);
+    the marks survive a restart and tablet migrations."""
+    cfg = {
+        'object_storage_endpoints': s3_storage.create_endpoint_conf(),
+        'rf_rack_valid_keyspaces': False,
+    }
+    servers = await manager.servers_add(3, config=cfg)
+    await manager.disable_tablet_balancing()
+    cql = manager.get_cql()
+    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
+    async with new_test_keyspace(manager, keyspace_options(s3_storage, rf=2) + " AND tablets = {'initial': 1}") as ks:
+        table_id = await create_repair_test_table(manager, cql, servers, ks)
+        components, _ = bucket_objects(s3_storage)
+        ids = await sealed_sstable_ids(cql, hosts, table_id)
+
+        await manager.api.tablet_repair(servers[0].ip_addr, ks, "t", "all", incremental_mode='incremental')
+        components_after, refs = bucket_objects(s3_storage)
+        assert components_after == components
+        assert await sealed_sstable_ids(cql, hosts, table_id) == ids
+        assert_refs_repaired_at(s3_storage, refs, '1')
+
+        for s in servers:
+            await manager.server_restart(s.server_id)
+        hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+        await repair_marks_nothing(manager, servers, ks)
+
+        tablet = (await get_all_tablet_replicas(manager, servers[0], ks, 't'))[0]
+        host, shard = tablet.replicas[0]
+        await move_tablet(manager, servers[0], ks, tablet, (host, shard), (host, 1 - shard))
+        await repair_marks_nothing(manager, servers, ks)
+
+        tablet = (await get_all_tablet_replicas(manager, servers[0], ks, 't'))[0]
+        holders = {h for h, _ in tablet.replicas}
+        host_ids = [await manager.get_host_id(s.server_id) for s in servers]
+        dst = next(h for h in host_ids if h not in holders)
+        await move_tablet(manager, servers[0], ks, tablet, tablet.replicas[0], (dst, 0))
+        await repair_marks_nothing(manager, servers, ks)
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_tablet_merge_resets_repaired_at_in_place(manager: ScyllaClusterManager, s3_storage):
+    """A tablet merge resets repaired_at above sstables_repaired_at to 0 on the node references,
+    in place; components aren't compared, as co-locating the siblings may copy them."""
+    cfg = {
+        'object_storage_endpoints': s3_storage.create_endpoint_conf(),
+        'rf_rack_valid_keyspaces': False,
+    }
+    # Balancing stays enabled: it makes the merge decision.
+    servers = await manager.servers_add(2, config=cfg)
+    cql = manager.get_cql()
+    await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
+    async with new_test_keyspace(manager, keyspace_options(s3_storage, rf=2) + " AND tablets = {'initial': 2}") as ks:
+        # Compaction would replace the merged sstables with ones holding repaired_at in Statistics.
+        await create_repair_test_table(manager, cql, servers, ks,
+                                       " AND compaction = {'class': 'SizeTieredCompactionStrategy', 'enabled': false}")
+
+        # Marks the sstables repaired_at=1 but keeps sstables_repaired_at=0.
+        await asyncio.gather(*[manager.api.enable_injection(s.ip_addr, "repair_tablet_no_update_sstables_repair_at", False) for s in servers])
+        await manager.api.tablet_repair(servers[0].ip_addr, ks, "t", "all", incremental_mode='incremental')
+        await asyncio.gather(*[manager.api.disable_injection(s.ip_addr, "repair_tablet_no_update_sstables_repair_at") for s in servers])
+        _, refs = bucket_objects(s3_storage)
+        assert_refs_repaired_at(s3_storage, refs, '1')
+
+        # The balancer splits the merged tablet back to 'initial'. Hold the split
+        # rewrite, whose output has repaired_at in Statistics.
+        await asyncio.gather(*[manager.api.enable_injection(s.ip_addr, "split_sstable_rewrite", False) for s in servers])
+        logs = [await manager.server_open_log(s.server_id) for s in servers]
+        marks = [await log.mark() for log in logs]
+        await asyncio.gather(*[manager.api.enable_injection(s.ip_addr, "tablet_force_tablet_count_decrease", False) for s in servers])
+        await logs[0].wait_for('Detected tablet merge for table', from_mark=marks[0])
+        await asyncio.gather(*[manager.api.disable_injection(s.ip_addr, "tablet_force_tablet_count_decrease") for s in servers])
+        for log, mark in zip(logs, marks):
+            await log.wait_for('Completed updating repaired_at=0 for tablet merge', from_mark=mark)
+
+        # A reference of a co-location move's source is deleted asynchronously and may still say '1'.
+        async def refs_reset():
+            _, refs = bucket_objects(s3_storage)
+            try:
+                assert_refs_repaired_at(s3_storage, refs, '0')
+                return True
+            except AssertionError:
+                return None
+        await wait_for(refs_reset, time.time() + 60)
+        for s in servers:
+            await manager.api.message_injection(s.ip_addr, "split_sstable_rewrite")
+            await manager.api.disable_injection(s.ip_addr, "split_sstable_rewrite")
 
 
 @pytest.mark.parametrize('operation', ['truncate', 'drop_table', 'drop_keyspace'])
