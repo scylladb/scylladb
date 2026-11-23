@@ -15,6 +15,10 @@ function(enable_lto name)
     if(type MATCHES "SHARED_LIBRARY|EXECUTABLE")
       target_link_options(${name}
         PRIVATE $<$<CONFIG:RelWithDebInfo>:-ffat-lto-objects>)
+      if(_slp_vectorize_supported)
+        target_link_options(${name}
+          PRIVATE $<$<CONFIG:RelWithDebInfo>:LINKER:-mllvm,-vectorize-slp=false>)
+      endif()
     endif()
   elseif(type STREQUAL "INTERFACE_LIBRARY")
     if (name MATCHES "^scylla_(.*)$")
