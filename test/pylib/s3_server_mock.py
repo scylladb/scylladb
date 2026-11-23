@@ -26,6 +26,8 @@ class Policy(Enum):
     RETRYABLE_FAILURE = 1
     NONRETRYABLE_FAILURE = 2
     NEVERENDING_RETRYABLE_FAILURE = 3
+    # CreateMultipartUpload of the object gets no upload id.
+    INITIATE_FAILURE = 4
 
 
 class LRUCache:
@@ -208,6 +210,9 @@ class InjectingHandler(BaseHTTPRequestHandler):
     </ResponseMetadata>
 </AssumeRoleResponse>"""
         if 'uploads' in query:
+            if self.policies.get(path) == Policy.INITIATE_FAILURE:
+                return """<?xml version="1.0" encoding="UTF-8"?>
+<Error><Code>InvalidAction</Code><Message>Cannot initiate</Message></Error>"""
             req_uuid = str(uuid.uuid4())
             return f"""<InitiateMultipartUploadResult>
                             <Bucket>bucket</Bucket>

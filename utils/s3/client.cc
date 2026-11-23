@@ -1118,6 +1118,9 @@ protected:
     std::optional<tag> _tag;
     object_metadata _metadata;
     seastar::abort_source* _as;
+    // Set when starting the upload fails: the buffers of the part that triggered it are gone,
+    // so the sink stays failed rather than let a later flush write the rest as the object.
+    std::exception_ptr _start_error;
     // Set once this sink has produced its object, either with a plain PUT or with
     // a completed multipart upload. finalize_upload() clears _upload_id and
     // output_stream::close() flushes a second time, so upload_started() alone
@@ -1139,6 +1142,7 @@ protected:
     sstring _produced_etag;
 
     future<> start_upload();
+    future<> do_start_upload();
     future<> finalize_upload();
     future<> upload_part(memory_data_sink_buffers bufs);
     future<> upload_part(std::unique_ptr<upload_sink> source);
@@ -1355,6 +1359,18 @@ future<> dump_multipart_upload_parts(output_stream<char> out, const utils::chunk
 }
 
 future<> client::multipart_upload::start_upload() {
+    if (_start_error) {
+        co_await coroutine::return_exception_ptr(_start_error);
+    }
+    try {
+        co_await do_start_upload();
+    } catch (...) {
+        _start_error = std::current_exception();
+        throw;
+    }
+}
+
+future<> client::multipart_upload::do_start_upload() {
     s3l.trace("POST uploads {} (tag {})", _object_name, seastar::value_of([this] { return _tag ? _tag->key + "=" + _tag->value : "none"; }));
     auto rep = http::request::make("POST", _client->_host, _object_name);
     rep.set_query_param("uploads", "");
@@ -1546,14 +1562,15 @@ future<> client::multipart_upload::finalize_upload() {
 }
 
 future<> client::upload_sink_base::flush() {
+    auto flushed = _start_error ? make_exception_future<>(_start_error) : do_flush();
     if (!_etag) {
-        return do_flush();
+        return flushed;
     }
     // The first flush produces the object, or fails trying, so it is the one that
     // resolves the etag future, either way. Failing it with the flush's exception
     // tells the caller why there is no tag better than the broken_promise it would
     // otherwise get when the sink is destroyed.
-    return do_flush().then_wrapped([this] (future<> f) {
+    return flushed.then_wrapped([this] (future<> f) {
         auto etag = std::exchange(_etag, std::nullopt);
         if (f.failed()) {
             auto ex = f.get_exception();
@@ -1608,9 +1625,10 @@ public:
     {}
 
     // True while nothing has been written into the sink, so it has no object to
-    // copy-upload from. Used by upload_jumbo_sink to skip such a piece.
+    // copy-upload from. Used by upload_jumbo_sink to skip such a piece. A sink whose
+    // start failed lost its buffers, so it is not empty: its flush must fail.
     bool empty() const noexcept {
-        return _bufs.size() == 0 && !upload_started();
+        return _bufs.size() == 0 && !upload_started() && !_start_error;
     }
 
     // The number of bytes put into the sink, i.e. the size of the object it produces.
