@@ -123,6 +123,60 @@ changes far less often.
 └─────────────────────────┴───────────────────────────────┘
 ```
 
+### Write command format
+
+A write is the `write_mutation_v2` alternative of `raft_command`: the schema version the
+coordinator wrote it with, then `data`, laid out by `encode_write_mutation()`:
+
+```
+u8      format: 1 is the mx data-file encoding of the `me` SSTable version
+vint    base timestamp - encoding_stats::timestamp_epoch
+vint    base local deletion time - encoding_stats::deletion_time_epoch
+vint    base TTL - encoding_stats::ttl_epoch
+vint    clustering column count, then per column vint(fixed length + 1), 0 for variable length
+bytes   the partition as an SSTable Data.db holds it: key, deletion time, static row,
+        rows, end of partition (sstables/mx/partition_codec.hh)
+```
+
+- The table is not carried: every write of a group goes to the group's tablet's table.
+- The base timestamp is the write's timestamp, so each cell's timestamp delta is one byte.
+  The deletion time and TTL bases are the format's defaults.
+- The clustering key lengths are carried because the column mapping of an older schema
+  version has no key types. After `ALTER TABLE ... ALTER ck TYPE`, e.g. `int` to
+  `varint`, the decoder still needs the writer's 4-byte fixed length.
+- The bases, the key lengths and the column lists are the parts of an SSTable's
+  serialization header a command needs. The codec schema built from the key lengths and
+  the column lists is cached per shard, by the writer's and the reader's schema version
+  (`codec_schema_cache`). A payload whose key lengths differ from the ones the cached
+  codec schema was built with is refused.
+
+`schema_store::decode()` resolves the writer's schema version the same way on apply and on
+replay, and decodes the partition straight into the table's current schema. The writer's
+columns come from the local schema registry, or else from the version's column mapping in
+`system.scylla_table_schema_history`. On apply, a version neither knows waits for a group0
+read barrier, then fails as an internal error. Replay runs before group0 starts, so it fails
+at once.
+
+Columns the current schema cannot take follow the rule of the SSTable reader:
+
+- A cell, counter cell or collection tombstone at or before its column's drop timestamp
+  is dead and skipped, also for a column added back since. A node with unflushed writes to
+  a dropped column so boots, as with data in an SSTable.
+- Data newer than the drop of a column the current schema lacks, data of a column with no
+  drop record, and data whose type the column can no longer hold throw
+  `column_mismatch_error`. The group's applier stops, and replay refuses the boot.
+
+The decoded mutation is applied with `database::apply_in_memory(const mutation&, ...)`,
+which does not call `data_listeners().on_write()`, so toppartitions does not sample
+strongly consistent writes.
+
+Index 1 of `raft_command` held `write_mutation`, a `frozen_mutation`. The index is retired,
+not reused, so an older version can never decode the new format as a `frozen_mutation`.
+The change is a hard cut with no cluster feature, since strongly consistent tables are
+experimental: a node refuses an index-1 command with `retired_raft_command_error`, both on
+apply and on replay. Mixed-version groups and commitlog entries written by older versions
+are unsupported across it.
+
 ### Write path
 
 Raft hands the io fiber a batch of entries to persist. The batch becomes one commitlog
@@ -283,7 +337,7 @@ is recovered by replay.
 ### Truncate
 
 `TRUNCATE TABLE` on a strongly consistent table is serialized in each tablet's Raft log as
-a `truncate_command`, the alternative of `raft_command` next to `write_mutation`. The
+a `truncate_command`, the alternative of `raft_command` next to `write_mutation_v2`. The
 group's leader stamps it with a write timestamp from the same generator as the writes
 (`truncated_at`). The entry's position in the log is the linearization point: applying it
 drops every write ordered before it and keeps every write ordered after it, which `apply()`
@@ -544,7 +598,7 @@ log order like any write. They are *not* carried as mutations, though: each mark
 as a column of the group's own row in `system.raft_groups`, whose partition key contains
 the shard hosting the group, and replicas may host the same group on different shards. A single
 mutation could therefore not serve all of them, so `raft_command` is a variant
-(`write_mutation`, `resize_marker`) and every replica builds its own mutation when it applies
+(`write_mutation_v2`, `resize_marker`, `truncate_command`) and every replica builds its own mutation when it applies
 the entry. The marker carries the timestamp of its cell, taken by the leader which appended it,
 so every replica and every replay writes the same cell. The kind of resize in progress comes from
 the tablet metadata, not from the markers.
