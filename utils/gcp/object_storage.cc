@@ -1505,9 +1505,18 @@ future<utils::chunked_vector<utils::gcp::storage::object_info>> utils::gcp::stor
     co_return result;
 }
 
-future<utils::chunked_vector<utils::gcp::storage::object_info>> utils::gcp::storage::client::list_objects(std::string_view bucket, std::string_view prefix, seastar::abort_source* as) {
-    bucket_paging dummy(0);
-    co_return co_await list_objects(bucket, prefix, dummy, as);
+future<utils::chunked_vector<utils::gcp::storage::object_info>> utils::gcp::storage::client::list_objects(std::string_view bucket_in, std::string_view prefix_in, seastar::abort_source* as) {
+    // Own them: the views may not outlive the first suspension.
+    std::string bucket(bucket_in), prefix(prefix_in);
+    // Lists every page into memory: for bounded listings. Use the pager overload for a wide prefix.
+    bucket_paging pager(0);
+    utils::chunked_vector<object_info> all;
+    while (!pager.done) {
+        for (auto& info : co_await list_objects(bucket, prefix, pager, as)) {
+            all.emplace_back(std::move(info));
+        }
+    }
+    co_return all;
 }
 
 // See https://cloud.google.com/storage/docs/deleting-objects
