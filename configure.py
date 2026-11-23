@@ -3430,6 +3430,7 @@ def write_build_file(f,
 
             if do_lto:
                 local_libs += ' -flto=thin -ffat-lto-objects'
+                local_libs += ' -Wl,-mllvm,-vectorize-slp=false'
             else:
                 local_libs += ' -fno-lto'
             use_pch = use_precompiled_header and binary == 'scylla'
