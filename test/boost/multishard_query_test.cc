@@ -322,7 +322,11 @@ read_partitions_with_generic_paged_scan(sharded<replica::database>& db, schema_p
         }
         SCYLLA_ASSERT(!ranges->empty());
 
-        const auto pkrange_begin_inclusive = res_builder.last_ckey() && res_builder.last_pkey_rows() < slice.partition_row_limit();
+        // If we have no clustering keys, it should mean we only have one row
+        // per PK. Thus we can just bypass the last one - as the CQL pager does
+        // (query_pager::do_fetch_page()).
+        const auto* last_ckey = s->clustering_key_size() > 0 ? res_builder.last_ckey() : nullptr;
+        const auto pkrange_begin_inclusive = last_ckey && res_builder.last_pkey_rows() < slice.partition_row_limit();
 
         auto range_opt = ranges->front().trim_front(dht::partition_range::bound(res_builder.last_pkey(), pkrange_begin_inclusive), dht::ring_position_comparator(*s));
         if (range_opt) {
@@ -334,9 +338,9 @@ read_partitions_with_generic_paged_scan(sharded<replica::database>& db, schema_p
             }
         }
 
-        if (res_builder.last_ckey()) {
+        if (last_ckey) {
             auto ckranges = cmd.slice.default_row_ranges();
-            query::trim_clustering_row_ranges_to(*s, ckranges, *res_builder.last_ckey());
+            query::trim_clustering_row_ranges_to(*s, ckranges, *last_ckey);
             cmd.slice.clear_range(*s, res_builder.last_pkey().key());
             cmd.slice.clear_ranges();
             cmd.slice.set_range(*s, res_builder.last_pkey().key(), std::move(ckranges));
