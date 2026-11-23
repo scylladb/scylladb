@@ -12,7 +12,7 @@ import sys
 import asyncio
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, unquote
 import uuid
 from enum import Enum
 from functools import partial
@@ -26,6 +26,28 @@ class Policy(Enum):
     RETRYABLE_FAILURE = 1
     NONRETRYABLE_FAILURE = 2
     NEVERENDING_RETRYABLE_FAILURE = 3
+    # Set on a copy source: a whole-object copy of it is answered with a 400 and an error code
+    # the client does not know, and HEAD reports it as 6 GiB, above what one copy takes.
+    COPY_SOURCE_REFUSED_LARGE = 5
+    # As above, but HEAD reports a small size, so the 400 is not a refusal of a large source.
+    COPY_SOURCE_REFUSED_SMALL = 6
+    # Set on a copy source: a whole-object copy of it is answered with a 404.
+    COPY_SOURCE_NOT_FOUND = 7
+    # As COPY_SOURCE_REFUSED_LARGE, but the refusal is a 413 EntityTooLarge.
+    COPY_SOURCE_PAYLOAD_TOO_LARGE = 8
+    # Set on a copy source: a whole-object copy of it is answered with a 403, and so is HEAD.
+    COPY_SOURCE_FORBIDDEN = 9
+
+
+# The answer to a whole-object copy of a source with each policy, and the size HEAD reports for it.
+COPY_SOURCE_ERRORS = {
+    Policy.COPY_SOURCE_REFUSED_LARGE: (400, 'SourceTooBigForCopy'),
+    Policy.COPY_SOURCE_REFUSED_SMALL: (400, 'SourceTooBigForCopy'),
+    Policy.COPY_SOURCE_NOT_FOUND: (404, 'NoSuchKey'),
+    Policy.COPY_SOURCE_PAYLOAD_TOO_LARGE: (413, 'EntityTooLarge'),
+    Policy.COPY_SOURCE_FORBIDDEN: (403, 'AccessDenied'),
+}
+COPY_SOURCE_LARGE = (Policy.COPY_SOURCE_REFUSED_LARGE, Policy.COPY_SOURCE_PAYLOAD_TOO_LARGE)
 
 
 class LRUCache:
@@ -126,12 +148,36 @@ class InjectingHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(response)
 
+    # Processes HEAD method, only for a copy source: reports 6 GiB if its policy says it is too large to copy at once
+    def do_HEAD(self):
+        policy = self.policies.get(urlparse(self.path).path)
+        if policy not in COPY_SOURCE_ERRORS:
+            self.send_error(501, "Unsupported method ('HEAD')")
+            return
+        self.send_response(403 if policy == Policy.COPY_SOURCE_FORBIDDEN else 200)
+        self.send_header('Content-Length', str(6 * 1024**3 if policy in COPY_SOURCE_LARGE else 1024))
+        self.send_header('Connection', 'keep-alive')
+        self.end_headers()
+
     # Processes PUT method, at this moment it serves for providing response for S3 upload part method, also it used to
     # set values to the LRU cache entries by calling PUT with Key and Policy on the query string
     def do_PUT(self):
         content_length = self.headers['Content-Length']
         if content_length:
             put_data = self.rfile.read(int(content_length))
+        copy_source = self.headers['x-amz-copy-source']
+        refusal = self.policies.get(unquote(copy_source)) if copy_source else None
+        if refusal in COPY_SOURCE_ERRORS and 'uploadId' not in self.parsed_qs():
+            status, code = COPY_SOURCE_ERRORS[refusal]
+            response_body = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Error><Code>{code}</Code><Message>Cannot copy the source</Message><RequestId>656c76696e6727732072657175657374</RequestId></Error>""".encode('utf-8')
+            self.send_response(status)
+            self.send_header('Content-Type', 'application/xml')
+            self.send_header('Connection', 'keep-alive')
+            self.send_header('Content-Length', str(len(response_body)))
+            self.end_headers()
+            self.wfile.write(response_body)
+            return
         self.send_response(200)
         self.send_header('Content-Type', 'text/plain; charset=utf-8')
         self.send_header('Connection', 'keep-alive')

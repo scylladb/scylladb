@@ -15,6 +15,7 @@
 #include "utils/s3/client.hh"
 #include <cstdlib>
 #include <seastar/core/fstream.hh>
+#include <seastar/core/metrics_api.hh>
 #include <seastar/core/units.hh>
 #include <seastar/http/httpd.hh>
 #include <seastar/util/closeable.hh>
@@ -27,6 +28,11 @@ enum class failure_policy : uint8_t {
     RETRYABLE_FAILURE = 1,
     NONRETRYABLE_FAILURE = 2,
     NEVERENDING_RETRYABLE_FAILURE = 3,
+    COPY_SOURCE_REFUSED_LARGE = 5,
+    COPY_SOURCE_REFUSED_SMALL = 6,
+    COPY_SOURCE_NOT_FOUND = 7,
+    COPY_SOURCE_PAYLOAD_TOO_LARGE = 8,
+    COPY_SOURCE_FORBIDDEN = 9,
 };
 
 static uint16_t get_port() {
@@ -204,4 +210,99 @@ SEASTAR_THREAD_TEST_CASE(test_multipart_upload_jumbo_sink_failure_2) {
     BOOST_REQUIRE_EXCEPTION(do_test_client_multipart_upload(failure_policy::NONRETRYABLE_FAILURE, true), storage_io_error, [](const storage_io_error& e) {
         return e.code().value() == EIO && e.what() == "S3 request failed. Code: 2. Reason: Something went terribly wrong"sv;
     });
+}
+
+static std::optional<double> sum_s3_metric(const sstring& metric_name) {
+    const auto& value_map = seastar::metrics::impl::get_value_map();
+    auto fam_it = value_map.find(metric_name);
+    if (fam_it == value_map.end()) {
+        return std::nullopt;
+    }
+    std::optional<double> total;
+    for (const auto& [holder, reg] : fam_it->second) {
+        if (reg && reg->is_enabled()) {
+            total = total.value_or(0.0) + (*reg)().d();
+        }
+    }
+    return total;
+}
+
+static double s3_requests(const sstring& metric_name) {
+    return sum_s3_metric(metric_name).value_or(0);
+}
+
+struct copy_requests {
+    double heads, posts, puts;
+};
+
+// Copies a source with the policy as a single request and returns the requests it took, or the failure.
+static std::pair<copy_requests, std::exception_ptr> single_request_copy(const char* test_name, failure_policy policy) {
+    const auto source = fmt::format("/test/copysource-{}-{}", test_name, ::getpid());
+    const auto target = fmt::format("/test/copytarget-{}-{}", test_name, ::getpid());
+    register_policy(source, policy);
+
+    auto cln = s3::client::make(get_address(), make_mock_config());
+    auto close_client = deferred_close(*cln);
+    const copy_requests before{s3_requests("s3_total_head_requests"), s3_requests("s3_total_post_requests"), s3_requests("s3_total_put_requests")};
+    std::exception_ptr ex;
+    try {
+        cln->copy_object(source, target, {}, {}, {}, nullptr, true).get();
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    return {{s3_requests("s3_total_head_requests") - before.heads, s3_requests("s3_total_post_requests") - before.posts,
+             s3_requests("s3_total_put_requests") - before.puts}, ex};
+}
+
+// A source above what one CopyObject takes is refused with a 400, whatever its error code is
+// (this one is unknown to the client). The client then asks its size and copies it in parts.
+SEASTAR_THREAD_TEST_CASE(test_copy_object_single_request_falls_back_to_multipart_on_400) {
+    auto [used, ex] = single_request_copy("refused-large", failure_policy::COPY_SOURCE_REFUSED_LARGE);
+    BOOST_REQUIRE(!ex);
+    BOOST_REQUIRE_EQUAL(used.heads, 1);
+    // Create and complete of the multipart upload.
+    BOOST_REQUIRE_EQUAL(used.posts, 2);
+    // The refused CopyObject and the two UploadPartCopy of the 6 GiB source.
+    BOOST_REQUIRE_EQUAL(used.puts, 3);
+}
+
+// So is a 413 EntityTooLarge, which S3-compatible servers may answer.
+SEASTAR_THREAD_TEST_CASE(test_copy_object_single_request_falls_back_to_multipart_on_413) {
+    auto [used, ex] = single_request_copy("payload-too-large", failure_policy::COPY_SOURCE_PAYLOAD_TOO_LARGE);
+    BOOST_REQUIRE(!ex);
+    BOOST_REQUIRE_EQUAL(used.heads, 1);
+    BOOST_REQUIRE_EQUAL(used.posts, 2);
+    BOOST_REQUIRE_EQUAL(used.puts, 3);
+}
+
+// A 403 is no refusal of a large source: the copy fails with its own error, without a size HEAD.
+SEASTAR_THREAD_TEST_CASE(test_copy_object_single_request_does_not_ask_size_on_403) {
+    auto [used, ex] = single_request_copy("forbidden", failure_policy::COPY_SOURCE_FORBIDDEN);
+    BOOST_REQUIRE(ex);
+    BOOST_REQUIRE_EXCEPTION(std::rethrow_exception(ex), storage_io_error, [] (const storage_io_error& e) {
+        return e.code().value() == EACCES && std::string_view(e.what()).contains("Cannot copy the source");
+    });
+    BOOST_REQUIRE_EQUAL(used.heads, 0);
+    BOOST_REQUIRE_EQUAL(used.posts, 0);
+}
+
+// A 400 of a source that is not large is a real error, and is reported as it was.
+SEASTAR_THREAD_TEST_CASE(test_copy_object_single_request_rethrows_400_of_small_source) {
+    auto [used, ex] = single_request_copy("refused-small", failure_policy::COPY_SOURCE_REFUSED_SMALL);
+    BOOST_REQUIRE(ex);
+    BOOST_REQUIRE_EXCEPTION(std::rethrow_exception(ex), storage_io_error, [] (const storage_io_error& e) {
+        return std::string_view(e.what()).contains("Cannot copy the source");
+    });
+    BOOST_REQUIRE_EQUAL(used.heads, 1);
+    BOOST_REQUIRE_EQUAL(used.posts, 0);
+}
+
+// Anything but a 400 is not a refusal: the copy fails without asking the size.
+SEASTAR_THREAD_TEST_CASE(test_copy_object_single_request_does_not_ask_size_on_404) {
+    auto [used, ex] = single_request_copy("not-found", failure_policy::COPY_SOURCE_NOT_FOUND);
+    BOOST_REQUIRE(ex);
+    BOOST_REQUIRE_EXCEPTION(std::rethrow_exception(ex), storage_io_error, [] (const storage_io_error& e) {
+        return e.code().value() == ENOENT;
+    });
+    BOOST_REQUIRE_EQUAL(used.heads, 0);
 }
