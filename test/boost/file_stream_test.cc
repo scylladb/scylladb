@@ -36,6 +36,7 @@
 #include <seastar/core/fstream.hh>
 #include <cstdio>
 #include <sstream>
+#include <unordered_set>
 #include <cryptopp/sha.h>
 #include "utils/io-wrappers.hh"
 #include "db/config.hh"
@@ -721,6 +722,34 @@ SEASTAR_THREAD_TEST_CASE(test_stream_sink_stamps_scrub_time_on_completion) {
         auto scrub_time = reopened->get_scrub_time();
         BOOST_REQUIRE(scrub_time);
         BOOST_REQUIRE_GT(*scrub_time, *scylla_component_received);
+    }).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_storage_sstables_snapshot) {
+    do_with_cql_env_thread([] (cql_test_env& env) {
+        auto& db = env.local_db();
+        env.execute_cql("CREATE KEYSPACE ks_snap WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};").get();
+        env.execute_cql("CREATE TABLE ks_snap.cf (pk text PRIMARY KEY, v int);").get();
+        for (int i = 0; i < 10; i++) {
+            env.execute_cql(format("INSERT INTO ks_snap.cf (pk, v) VALUES ('key_{}', {});", i, i * 10)).get();
+        }
+
+        auto& table = db.find_column_family("ks_snap", "cf");
+        table.flush().get();
+
+        auto with_files = table.take_storage_snapshot(dht::token_range::make_open_ended_both_sides()).get();
+        BOOST_REQUIRE_GT(with_files.size(), 0);
+        std::unordered_set<sstables::shared_sstable> expected;
+        for (auto& snap : with_files) {
+            BOOST_REQUIRE(!snap.files.empty());
+            expected.insert(snap.sst);
+        }
+
+        auto ssts = table.take_storage_sstables_snapshot(dht::token_range::make_open_ended_both_sides()).get();
+        BOOST_REQUIRE_EQUAL(ssts.size(), expected.size());
+        for (auto& sst : ssts) {
+            BOOST_REQUIRE(expected.contains(sst));
+        }
     }).get();
 }
 

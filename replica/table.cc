@@ -6,6 +6,8 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
  */
 
+#include <array>
+
 #include <seastar/core/seastar.hh>
 #include <seastar/core/shard_id.hh>
 #include <seastar/core/coroutine.hh>
@@ -1778,9 +1780,7 @@ const storage_group_map& table::storage_groups() const {
     return _sg_manager->storage_groups();
 }
 
-future<utils::chunked_vector<sstables::sstable_files_snapshot>> table::take_storage_snapshot(dht::token_range tr) {
-    utils::chunked_vector<sstables::sstable_files_snapshot> ret;
-
+future<> table::for_each_sstable_in_storage_snapshot(dht::token_range tr, noncopyable_function<future<>(const sstables::shared_sstable&)> func) {
     for (auto& sg : storage_groups_for_token_range(tr)) {
         co_await utils::get_local_injector().inject("take_storage_snapshot", utils::wait_for_message(60s));
 
@@ -1798,14 +1798,27 @@ future<utils::chunked_vector<sstables::sstable_files_snapshot>> table::take_stor
         auto deletion_guard = co_await get_sstable_list_permit();
         // It's vital that we build a set on the storage group level, since sstables
         // might move across compaction groups in the background.
-        co_await sg->make_sstable_set()->for_each_sstable_gently([&] (const sstables::shared_sstable& sst) -> future<> {
-           ret.push_back({
-               .sst = sst,
-               .files = co_await sst->readable_file_for_all_components(),
-           });
-        });
+        co_await sg->make_sstable_set()->for_each_sstable_gently([&func] (const sstables::shared_sstable& sst) { return func(sst); });
     }
+}
 
+future<utils::chunked_vector<sstables::sstable_files_snapshot>> table::take_storage_snapshot(dht::token_range tr) {
+    utils::chunked_vector<sstables::sstable_files_snapshot> ret;
+    co_await for_each_sstable_in_storage_snapshot(tr, [&] (const sstables::shared_sstable& sst) -> future<> {
+        ret.push_back({
+            .sst = sst,
+            .files = co_await sst->readable_file_for_all_components(),
+        });
+    });
+    co_return std::move(ret);
+}
+
+future<utils::chunked_vector<sstables::shared_sstable>> table::take_storage_sstables_snapshot(dht::token_range tr) {
+    utils::chunked_vector<sstables::shared_sstable> ret;
+    co_await for_each_sstable_in_storage_snapshot(tr, [&] (const sstables::shared_sstable& sst) -> future<> {
+        ret.push_back(sst);
+        return make_ready_future<>();
+    });
     co_return std::move(ret);
 }
 
@@ -3414,6 +3427,20 @@ public:
     }
     future<lw_shared_ptr<const sstables::sstable_set>> maintenance_sstable_set() const override {
         return make_sstable_set_for_this_view(_cg.maintenance_sstables(), [this] { return *_cg.make_maintenance_sstable_set(); });
+    }
+    future<bool> has_sstable(std::function<bool(const sstables::shared_sstable&)> pred) const override {
+        // Both snapshots taken before the first yield, so the scan doesn't depend on move direction.
+        // Relies on the group replacing its sets rather than mutating them in place.
+        std::array lists{_cg.maintenance_sstables()->all(), _cg.main_sstables()->all()};
+        for (auto& list : lists) {
+            for (auto& sst : *list) {
+                if (belongs_to_this_view(sst) && pred(sst)) {
+                    co_return true;
+                }
+                co_await coroutine::maybe_yield();
+            }
+        }
+        co_return false;
     }
 private:
     // Returns true when tombstone GC is restricted to the repaired set:
