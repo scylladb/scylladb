@@ -1282,6 +1282,185 @@ async def test_restore_tablets_abort(build_mode: str, manager: ScyllaClusterMana
         assert downloaded == 0, f"Expected no downloads to complete after abort, but {downloaded} of {total} sstables were downloaded"
 
 
+async def backup_several_sstables(manager: ScyllaClusterManager, object_storage, ks: str, num_sstables: int):
+    '''Writes num_sstables sstables into a single tablet of ks.test, backs them up and truncates
+       the table. Returns the server, the backup prefix and the TOC names.'''
+    objconf = object_storage.create_endpoint_conf()
+    # One shard, so that the sstables are downloaded by one shard whatever the machine.
+    server = await manager.server_add(config={'object_storage_endpoints': objconf, 'task_ttl_in_seconds': 300}, cmdline=['--smp', '1'])
+    cql = manager.get_cql()
+    await cql.run_async(f"CREATE KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}}")
+    # One tablet, so every sstable is fully contained in it and is downloaded rather than streamed.
+    await cql.run_async(f"CREATE TABLE {ks}.test (pk text primary key, value int) WITH tablets = {{'min_tablet_count': 1, 'max_tablet_count': 1}}")
+    await manager.api.disable_autocompaction(server.ip_addr, ks, 'test')
+    for i in range(num_sstables):
+        await cql.run_async(f"INSERT INTO {ks}.test (pk, value) VALUES ('{i}', {i})")
+        await manager.api.flush_keyspace(server.ip_addr, ks)
+    snap_name, toc_names = await take_snapshot_on_one_server(ks, server, manager, logger)
+    assert len(toc_names) == num_sstables
+    prefix = f'test/{snap_name}'
+    tid = await manager.api.backup(server.ip_addr, ks, 'test', snap_name, object_storage.address, object_storage.bucket_name, prefix)
+    status = await manager.api.wait_task(server.ip_addr, tid)
+    assert status is not None and status['state'] == 'done'
+    await cql.run_async(f"TRUNCATE TABLE {ks}.test")
+    return server, prefix, toc_names
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_restore_node_scope_downloads_sstables_concurrently(manager: ScyllaClusterManager, object_storage):
+    '''A restore with the node scope downloads the fully contained sstables concurrently, not one after another'''
+    num_sstables = 6
+    ks = unique_name('ks_')
+    server, prefix, toc_names = await backup_several_sstables(manager, object_storage, ks, num_sstables)
+
+    await manager.api.enable_injection(server.ip_addr, "pause_download_sstable", one_shot=False)
+    tid = await manager.api.restore(server.ip_addr, ks, 'test', object_storage.address, object_storage.bucket_name, prefix, toc_names, 'node')
+    # Each download parks at the pause, so all of them are in flight at once only if they run concurrently.
+    try:
+        await manager.api.wait_for_injection_enter(server.ip_addr, "pause_download_sstable", threshold=num_sstables, deadline=time.time() + 30)
+    finally:
+        await manager.api.disable_injection(server.ip_addr, "pause_download_sstable")
+    status = await manager.api.wait_task(server.ip_addr, tid)
+    assert status is not None and status['state'] == 'done'
+
+
+async def test_restore_node_scope_restores_every_sstable(manager: ScyllaClusterManager, object_storage):
+    num_sstables = 6
+    ks = unique_name('ks_')
+    server, prefix, toc_names = await backup_several_sstables(manager, object_storage, ks, num_sstables)
+    tid = await manager.api.restore(server.ip_addr, ks, 'test', object_storage.address, object_storage.bucket_name, prefix, toc_names, 'node')
+    status = await manager.api.wait_task(server.ip_addr, tid)
+    assert status is not None and status['state'] == 'done'
+    rows = {r.pk: r.value for r in await manager.get_cql().run_async(f"SELECT * FROM {ks}.test")}
+    assert rows == {str(i): i for i in range(num_sstables)}
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_restore_node_scope_aborts_downloads_when_one_fails(manager: ScyllaClusterManager, object_storage):
+    '''A failed download fails the restore, aborts the downloads in flight and leaves no sstable behind'''
+    num_sstables = 6
+    ks = unique_name('ks_')
+    server, prefix, toc_names = await backup_several_sstables(manager, object_storage, ks, num_sstables)
+    workdir = await manager.server_get_workdir(server.server_id)
+    table_dir = f"{workdir}/data/{ks}/{os.listdir(f'{workdir}/data/{ks}')[0]}"
+
+    # All the downloads park at the pause, in flight. The first to go on then fails.
+    await manager.api.enable_injection(server.ip_addr, "pause_download_sstable", one_shot=False)
+    tid = await manager.api.restore(server.ip_addr, ks, 'test', object_storage.address, object_storage.bucket_name, prefix, toc_names, 'node')
+    try:
+        await manager.api.wait_for_injection_enter(server.ip_addr, "pause_download_sstable", threshold=num_sstables, deadline=time.time() + 30)
+        await manager.api.enable_injection(server.ip_addr, "fail_download_sstable", one_shot=True)
+    finally:
+        await manager.api.disable_injection(server.ip_addr, "pause_download_sstable")
+    status = await manager.api.wait_task(server.ip_addr, tid)
+    assert status is not None and status['state'] == 'failed'
+    assert 'Failing sstable download' in status['error']
+
+    # Neither the downloads that were aborted nor the ones that finished left anything in the table directory.
+    leftovers = [f.name for f in os.scandir(table_dir) if f.is_file()]
+    assert leftovers == [], f"partial sstables left behind: {leftovers}"
+    rows = await manager.get_cql().run_async(f"SELECT * FROM {ks}.test")
+    assert len(list(rows)) == 0
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_restore_node_scope_removes_a_finished_download_when_another_fails(manager: ScyllaClusterManager, object_storage):
+    '''A download failing mid-way removes the sstables already downloaded, and the restore can be retried'''
+    num_sstables = 2
+    ks = unique_name('ks_')
+    server, prefix, toc_names = await backup_several_sstables(manager, object_storage, ks, num_sstables)
+    workdir = await manager.server_get_workdir(server.server_id)
+    table_dir = f"{workdir}/data/{ks}/{os.listdir(f'{workdir}/data/{ks}')[0]}"
+    await manager.api.set_logger_level(server.ip_addr, 'sstables_loader', 'debug')
+    log = await manager.server_open_log(server.server_id)
+    mark = await log.mark()
+
+    # One-shot: the first download parks, the other one runs to completion.
+    await manager.api.enable_injection(server.ip_addr, "pause_download_sstable", one_shot=True)
+    tid = await manager.api.restore(server.ip_addr, ks, 'test', object_storage.address, object_storage.bucket_name, prefix, toc_names, 'node')
+    await manager.api.wait_for_injection_enter(server.ip_addr, "pause_download_sstable", deadline=time.time() + 30)
+    await log.wait_for(r'sstables_loader - SSTable gen=\S+ sid=.*: shards', from_mark=mark, timeout=60)
+    # The parked download then fails at its Data component, after writing the ones before it.
+    await manager.api.enable_injection(server.ip_addr, "sstable_stream_sink_output_failure", one_shot=False, parameters={'component': 'Data'})
+    await manager.api.message_injection(server.ip_addr, "pause_download_sstable")
+    status = await manager.api.wait_task(server.ip_addr, tid)
+    assert status is not None and status['state'] == 'failed'
+    assert 'Failing sstable stream sink output' in status['error']
+
+    leftovers = [f.name for f in os.scandir(table_dir) if f.is_file()]
+    assert leftovers == [], f"downloaded sstables left behind: {leftovers}"
+
+    await manager.api.disable_injection(server.ip_addr, "sstable_stream_sink_output_failure")
+    tid = await manager.api.restore(server.ip_addr, ks, 'test', object_storage.address, object_storage.bucket_name, prefix, toc_names, 'node')
+    status = await manager.api.wait_task(server.ip_addr, tid)
+    assert status is not None and status['state'] == 'done'
+    rows = {r.pk: r.value for r in await manager.get_cql().run_async(f"SELECT * FROM {ks}.test")}
+    assert rows == {str(i): i for i in range(num_sstables)}
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_restore_node_scope_removes_the_components_of_a_failed_download(manager: ScyllaClusterManager, object_storage):
+    '''A download failing after it wrote some components of an sstable leaves none of them behind'''
+    num_sstables = 3
+    ks = unique_name('ks_')
+    server, prefix, toc_names = await backup_several_sstables(manager, object_storage, ks, num_sstables)
+    workdir = await manager.server_get_workdir(server.server_id)
+    table_dir = f"{workdir}/data/{ks}/{os.listdir(f'{workdir}/data/{ks}')[0]}"
+
+    await manager.api.enable_injection(server.ip_addr, "fail_download_sstable_after_first_component", one_shot=False)
+    tid = await manager.api.restore(server.ip_addr, ks, 'test', object_storage.address, object_storage.bucket_name, prefix, toc_names, 'node')
+    status = await manager.api.wait_task(server.ip_addr, tid)
+    assert status is not None and status['state'] == 'failed'
+    assert 'Failing sstable download' in status['error']
+
+    leftovers = [f.name for f in os.scandir(table_dir) if f.is_file()]
+    assert leftovers == [], f"partial sstables left behind: {leftovers}"
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_restore_node_scope_removes_a_component_whose_output_failed(manager: ScyllaClusterManager, object_storage):
+    '''A component whose output() failed after it created the file is removed too'''
+    ks = unique_name('ks_')
+    server, prefix, toc_names = await backup_several_sstables(manager, object_storage, ks, 3)
+    workdir = await manager.server_get_workdir(server.server_id)
+    table_dir = f"{workdir}/data/{ks}/{os.listdir(f'{workdir}/data/{ks}')[0]}"
+
+    await manager.api.enable_injection(server.ip_addr, "sstable_stream_sink_output_failure", one_shot=False, parameters={'component': 'Scylla'})
+    tid = await manager.api.restore(server.ip_addr, ks, 'test', object_storage.address, object_storage.bucket_name, prefix, toc_names, 'node')
+    status = await manager.api.wait_task(server.ip_addr, tid)
+    assert status is not None and status['state'] == 'failed'
+    assert 'Failing sstable stream sink output' in status['error']
+
+    leftovers = [f.name for f in os.scandir(table_dir) if f.is_file()]
+    assert leftovers == [], f"partial sstables left behind: {leftovers}"
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_restore_node_scope_keeps_the_temporary_toc_of_a_component_it_could_not_remove(manager: ScyllaClusterManager, object_storage):
+    '''When a component of a failed download cannot be removed, the TemporaryTOC stays, so no orphan is left behind'''
+    ks = unique_name('ks_')
+    server, prefix, toc_names = await backup_several_sstables(manager, object_storage, ks, 3)
+    workdir = await manager.server_get_workdir(server.server_id)
+    table_dir = f"{workdir}/data/{ks}/{os.listdir(f'{workdir}/data/{ks}')[0]}"
+
+    # The download fails at its Data component, and the removal of the Scylla one, written before it, fails.
+    await manager.api.enable_injection(server.ip_addr, "sstable_stream_sink_output_failure", one_shot=False, parameters={'component': 'Data'})
+    await manager.api.enable_injection(server.ip_addr, "filesystem_unlink_component_failure", one_shot=False, parameters={'component': 'Scylla'})
+    tid = await manager.api.restore(server.ip_addr, ks, 'test', object_storage.address, object_storage.bucket_name, prefix, toc_names, 'node')
+    status = await manager.api.wait_task(server.ip_addr, tid)
+    assert status is not None and status['state'] == 'failed'
+    assert 'Failing sstable stream sink output' in status['error']
+
+    sstables = defaultdict(set)
+    for f in os.scandir(table_dir):
+        if f.is_file():
+            prefix_name, _, component = f.name.rpartition('-')
+            sstables[prefix_name].add(component)
+    assert any('Scylla.db' in components for components in sstables.values()), f"no component was left: {dict(sstables)}"
+    orphans = {name: components for name, components in sstables.items() if 'TOC.txt.tmp' not in components}
+    assert orphans == {}, f"components left without a TemporaryTOC: {orphans}"
+
+
 @pytest.mark.parametrize("target", ['coordinator', 'replica', 'api'])
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_restore_tablets_node_loss_resiliency(build_mode: str, manager: ScyllaClusterManager, object_storage, target):
