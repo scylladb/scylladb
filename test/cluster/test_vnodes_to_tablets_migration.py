@@ -24,7 +24,7 @@ from cassandra.pool import Host
 
 from test.pylib.tablets import get_tablet_count, get_all_tablet_replicas, get_tablet_replicas, get_base_table
 from test.pylib.rest_client import HTTPError, inject_error, read_barrier
-from test.pylib.internal_types import ServerInfo
+from test.pylib.internal_types import ServerInfo, ServerUpState
 from test.pylib.util import get_enabled_features, wait_for, wait_for_feature, wait_for_cql_and_get_hosts, wait_for_view
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
@@ -872,6 +872,38 @@ async def test_migration_multidc(manager: ScyllaClusterManager, scale_timeout):
         await wait_for_pow2_convergence(manager, servers[0], ks, 'test', timeout=scale_timeout(120))
 
 
+SERVICES_NOT_READY_STATE = 24  # gms::application_state::SERVICES_NOT_READY
+
+
+async def is_paxos_ready(manager: ScyllaClusterManager, observer: ServerInfo, target: ServerInfo) -> bool:
+    """Whether `observer` sees `target` ready for Paxos, i.e. not listing it in SERVICES_NOT_READY."""
+    eps = await manager.api.client.get_json("/failure_detector/endpoints/", host=observer.ip_addr)
+    for ep in eps:
+        if ep["addrs"] == target.ip_addr:
+            for st in ep.get("application_state", []):
+                if int(st["application_state"]) == SERVICES_NOT_READY_STATE:
+                    return "paxos" not in st["value"].split(",")
+    return True
+
+
+async def wait_for_paxos_ready(manager: ScyllaClusterManager, servers: list[ServerInfo], target: ServerInfo) -> None:
+    """Wait until every other server sees `target` alive and taking part in Paxos.
+
+    A node which copies its Paxos state after a storage mode switch lists Paxos in its
+    SERVICES_NOT_READY meanwhile, and coordinators leave it out of LWT until they see it ready.
+    """
+    async def ready():
+        for o in servers:
+            if o.server_id == target.server_id:
+                continue
+            if target.ip_addr not in await manager.api.get_alive_endpoints(o.ip_addr):
+                return None
+            if not await is_paxos_ready(manager, o, target):
+                return None
+        return True
+    await wait_for(ready, time.time() + 60)
+
+
 async def restart_node_into(manager: ScyllaClusterManager, servers: list[ServerInfo], idx: int,
                             mode: str) -> tuple[Session, list[Host]]:
     """Mark servers[idx] for the storage mode, 'tablets' or 'vnodes', and restart it into it.
@@ -885,6 +917,7 @@ async def restart_node_into(manager: ScyllaClusterManager, servers: list[ServerI
     else:
         await manager.api.downgrade_node_to_vnodes(s.ip_addr)
     await manager.server_restart(s.server_id)
+    await wait_for_paxos_ready(manager, servers, s)
     await reconnect_driver(manager)
     return await manager.get_ready_cql(servers)
 
@@ -1178,6 +1211,394 @@ async def setup_single_node(manager: ScyllaClusterManager):
     server = await manager.server_add(cmdline=['--smp', '2'], config=cfg)
     cql, _ = await manager.get_ready_cql([server])
     return server, cql
+
+
+async def leave_accepted_proposal(manager: ScyllaClusterManager, servers: list[ServerInfo], cql: Session,
+                                  ks: str, pk: int, value: int) -> None:
+    """Make every replica accept an LWT setting `v` of `pk` from `value - 1` to `value`, without learning it.
+
+    The proposal is in the Paxos state of the replicas only, until a Paxos read or write
+    of the key repairs it.
+    """
+    logger.info(f"Leaving an accepted, unlearned proposal v={value} for pk={pk}")
+    for s in servers:
+        await manager.api.enable_injection(s.ip_addr, "paxos_error_before_learn", one_shot=False)
+    try:
+        with pytest.raises(RequestExecutionException):
+            await cql.run_async(f"UPDATE {ks}.t SET v = {value} WHERE pk = {pk} IF v = {value - 1}")
+    finally:
+        for s in servers:
+            await manager.api.disable_injection(s.ip_addr, "paxos_error_before_learn")
+    rows = await cql.run_async(SimpleStatement(f"SELECT v FROM {ks}.t WHERE pk = {pk}",
+                                               consistency_level=ConsistencyLevel.ALL))
+    assert rows[0].v == value - 1, f"The proposal for pk={pk} reached the table: {rows}"
+
+
+async def serial_read(cql: Session, ks: str, pk: int) -> int:
+    rows = await cql.run_async(SimpleStatement(f"SELECT v FROM {ks}.t WHERE pk = {pk}",
+                                               consistency_level=ConsistencyLevel.SERIAL))
+    return rows[0].v
+
+
+class LwtCounter:
+    """Advances `v` of a key by one with an LWT, checking that each one applies."""
+
+    def __init__(self, ks: str, pk: int):
+        self.ks = ks
+        self.pk = pk
+        self.value = 0
+
+    async def step(self, cql: Session) -> None:
+        rows = await cql.run_async(
+            f"UPDATE {self.ks}.t SET v = {self.value + 1} WHERE pk = {self.pk} IF v = {self.value}")
+        assert rows[0].applied, f"LWT on pk={self.pk} did not apply on v={self.value}: {rows}"
+        self.value += 1
+
+
+PAXOS_STATE_COPY_LOG = "Copied the Paxos state of"
+
+
+async def restart_and_count_copies(manager: ScyllaClusterManager, servers: list[ServerInfo], idx: int,
+                                   mode: str) -> tuple[Session, int]:
+    """Restart servers[idx] into `mode` and return a new session and how many times it copied its Paxos state."""
+    s = servers[idx]
+    mark = await (await manager.server_open_log(s.server_id)).mark()
+    cql, _ = await restart_node_into(manager, servers, idx, mode)
+    return cql, await count_paxos_state_copies(manager, s, mark)
+
+
+async def count_paxos_state_copies(manager: ScyllaClusterManager, server: ServerInfo, mark: int) -> int:
+    log = await manager.server_open_log(server.server_id)
+    return len(await log.grep(PAXOS_STATE_COPY_LOG, from_mark=mark))
+
+
+async def get_table_id(manager: ScyllaClusterManager, servers: list[ServerInfo], cql: Session,
+                       ks: str, table: str) -> UUID | None:
+    # The query may go to any node: make every node see the schema changes made so far.
+    for s in servers:
+        await read_barrier(manager.api, s.ip_addr)
+    rows = await cql.run_async(f"SELECT id FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = '{table}'")
+    return rows[0].id if rows else None
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_migration_with_lwt(manager: ScyllaClusterManager):
+    """Verify that a vnodes-to-tablets migration keeps the Paxos state of a table (SCYLLADB-1168).
+
+    A node keeps the Paxos state of a table in system.paxos while it stores the table in
+    vnodes, and in <table>$paxos once it stores it in tablets. Losing it on the switch
+    lets Paxos forget accepted proposals.
+
+    Steps:
+    1. Start 3 nodes, one per rack, and create a table with RF=3.
+    2. Start the migration. It creates no Paxos state table.
+    3. Make every replica accept a proposal for pk=0 without learning it. The LWT
+       coordinator creates the Paxos state table, sharing the table's map.
+    4. Restart the nodes into tablets one at a time, running an LWT on pk=1 after each
+       restart, while the nodes use different stores. Each node copies its Paxos state
+       on that restart.
+    5. Restart the first node again. It must not copy again: its storage mode did not
+       change.
+    6. Switch the first node back to vnodes and to tablets again, running an LWT after
+       each restart, so that it copies state into stores which already hold some.
+    7. A SERIAL read of pk=0 must repair the proposal, which every node now keeps in
+       <table>$paxos only.
+    8. Finalize, check that the Paxos state table shares the table's tablet map, and run
+       another LWT.
+    """
+    servers = await manager.servers_add(3, cmdline=['--smp', '2'], config={'num_tokens': 16},
+                                        property_file=[{'dc': 'dc1', 'rack': f'rack{i}'} for i in range(1, 4)])
+    cql, _ = await manager.get_ready_cql(servers)
+
+    ks_opts = "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'enabled': false}"
+    async with new_test_keyspace(manager, ks_opts) as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.t (pk int PRIMARY KEY, v int)")
+        for pk in (0, 1):
+            await cql.run_async(f"INSERT INTO {ks}.t (pk, v) VALUES ({pk}, 0) IF NOT EXISTS")
+
+        logger.info("Starting vnodes-to-tablets migration (creating tablet maps)")
+        await manager.api.create_vnode_tablet_migration(servers[0].ip_addr, ks)
+        base_id = await get_table_id(manager, servers, cql, ks, 't')
+        assert await get_table_id(manager, servers, cql, ks, 't$paxos') is None, \
+            "Preparing the migration created the Paxos state table"
+
+        await leave_accepted_proposal(manager, servers, cql, ks, pk=0, value=1)
+        state_id = await get_table_id(manager, servers, cql, ks, 't$paxos')
+        assert state_id is not None, "An LWT during the migration did not create the Paxos state table"
+        assert await get_base_table(manager, state_id) == base_id, \
+            "The Paxos state table does not share the tablet map of its base table"
+
+        counter = LwtCounter(ks, pk=1)
+        await counter.step(cql)
+        for idx, s in enumerate(servers):
+            cql, copies = await restart_and_count_copies(manager, servers, idx, 'tablets')
+            assert copies == 1, f"Node {s.server_id} did not copy its Paxos state when switching to tablets"
+            await counter.step(cql)
+
+        logger.info("Restarting a node which already switched")
+        s = servers[0]
+        mark = await (await manager.server_open_log(s.server_id)).mark()
+        await manager.server_restart(s.server_id)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+        assert await count_paxos_state_copies(manager, s, mark) == 0, \
+            f"Node {s.server_id} copied its Paxos state again without switching"
+        await counter.step(cql)
+
+        logger.info("Switching a node back to vnodes and to tablets again")
+        for mode in ('vnodes', 'tablets'):
+            cql, copies = await restart_and_count_copies(manager, servers, 0, mode)
+            assert copies == 1, f"Node {s.server_id} did not copy its Paxos state when switching to {mode}"
+            await counter.step(cql)
+
+        assert await serial_read(cql, ks, 0) == 1, "The migration lost the accepted proposal for pk=0"
+
+        logger.info("Finalizing the migration")
+        await manager.api.finalize_vnode_tablet_migration(servers[0].ip_addr, ks)
+        await verify_migration_status(manager, servers[0], ks, expected_status='tablets', expected_node_statuses={})
+        for s in servers:
+            await read_barrier(manager.api, s.ip_addr)
+        assert await get_base_table(manager, state_id) == base_id, \
+            "The Paxos state table does not share the tablet map of its base table after finalization"
+        await counter.step(cql)
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_migration_rollback_with_lwt(manager: ScyllaClusterManager):
+    """Verify that rolling back a vnodes-to-tablets migration keeps the Paxos state of a table (SCYLLADB-1168).
+
+    Steps:
+    1. Start 3 nodes, one per rack, create a table with RF=3 and start the migration.
+    2. Restart every node into tablets, and make every replica accept a proposal for
+       pk=0 without learning it, so that the nodes keep it in <table>$paxos only.
+    3. Restart every node back into vnodes, running an LWT on pk=1 after each restart.
+    4. A SERIAL read of pk=0 must repair the proposal.
+    5. Finalize the rollback, check that the Paxos state table is gone, and run another LWT.
+    """
+    servers = await manager.servers_add(3, cmdline=['--smp', '2'], config={'num_tokens': 16},
+                                        property_file=[{'dc': 'dc1', 'rack': f'rack{i}'} for i in range(1, 4)])
+    cql, _ = await manager.get_ready_cql(servers)
+
+    ks_opts = "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'enabled': false}"
+    async with new_test_keyspace(manager, ks_opts) as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.t (pk int PRIMARY KEY, v int)")
+        for pk in (0, 1):
+            await cql.run_async(f"INSERT INTO {ks}.t (pk, v) VALUES ({pk}, 0) IF NOT EXISTS")
+
+        logger.info("Starting vnodes-to-tablets migration (creating tablet maps)")
+        await manager.api.create_vnode_tablet_migration(servers[0].ip_addr, ks)
+        for idx in range(len(servers)):
+            cql, _ = await restart_node_into(manager, servers, idx, 'tablets')
+
+        await leave_accepted_proposal(manager, servers, cql, ks, pk=0, value=1)
+
+        counter = LwtCounter(ks, pk=1)
+        await counter.step(cql)
+        for idx in range(len(servers)):
+            cql, _ = await restart_node_into(manager, servers, idx, 'vnodes')
+            await counter.step(cql)
+
+        assert await serial_read(cql, ks, 0) == 1, "The rollback lost the accepted proposal for pk=0"
+
+        logger.info("Finalizing the migration (rollback)")
+        await manager.api.finalize_vnode_tablet_migration(servers[0].ip_addr, ks)
+        await verify_migration_status(manager, servers[0], ks, expected_status='vnodes', expected_node_statuses={})
+        assert await get_table_id(manager, servers, cql, ks, 't$paxos') is None, "The rollback did not drop the Paxos state table"
+        await counter.step(cql)
+
+
+async def test_migration_with_lwt_state_of_moved_ranges(manager: ScyllaClusterManager):
+    """Verify that nodes switch to tablets while keeping the Paxos state of ranges they lost (SCYLLADB-1168).
+
+    system.paxos keeps the Paxos state of the ranges a node replicated once: nothing removes
+    it when a new node takes them over. The tablet maps mirror the current ring, so that
+    state has no place in the node's <table>$paxos, and copying it there must not fail
+    the restart.
+
+    Steps:
+    1. Start 2 nodes, create a table with RF=1 and run an LWT on every key.
+    2. Add a third node, which takes over some of the ranges, with their Paxos state left
+       on their old owners.
+    3. Start the migration and restart every node into tablets.
+    4. The old owners must have skipped the state of the moved ranges, and an LWT on
+       every key must still apply.
+    5. Finalize the migration.
+    """
+    num_keys = 64
+    cfg = {'num_tokens': 16}
+    servers = await manager.servers_add(2, cmdline=['--smp', '2'], config=cfg,
+                                        property_file={'dc': 'dc1', 'rack': 'rack1'})
+    cql, _ = await manager.get_ready_cql(servers)
+
+    ks_opts = "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}"
+    async with new_test_keyspace(manager, ks_opts) as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.t (pk int PRIMARY KEY, v int)")
+        insert = cql.prepare(f"INSERT INTO {ks}.t (pk, v) VALUES (?, 0) IF NOT EXISTS")
+        for pk in range(num_keys):
+            await cql.run_async(insert, [pk])
+
+        logger.info("Adding a node, which takes over some ranges of the others")
+        servers.append(await manager.server_add(cmdline=['--smp', '2'], config=cfg,
+                                                property_file={'dc': 'dc1', 'rack': 'rack1'}))
+        cql, _ = await manager.get_ready_cql(servers)
+        # Cleanup drops the moved data of the table, but not its Paxos state, which is in a
+        # system table.
+        for s in servers[:2]:
+            await manager.api.cleanup_keyspace(s.ip_addr, ks)
+
+        logger.info("Starting vnodes-to-tablets migration (creating tablet maps)")
+        await manager.api.create_vnode_tablet_migration(servers[0].ip_addr, ks)
+        marks = {}
+        for idx, s in enumerate(servers):
+            log = await manager.server_open_log(s.server_id)
+            marks[s.server_id] = (log, await log.mark())
+            cql, _ = await restart_node_into(manager, servers, idx, 'tablets')
+
+        skipped = 0
+        for log, mark in marks.values():
+            for _, match in await log.grep(PAXOS_STATE_COPY_LOG + r" .* skipped (\d+) row\(s\)", from_mark=mark):
+                skipped += int(match.group(1))
+        assert skipped > 0, "No node skipped the Paxos state of a range it no longer replicates"
+
+        update = cql.prepare(f"UPDATE {ks}.t SET v = 1 WHERE pk = ? IF v = 0")
+        for pk in range(num_keys):
+            rows = await cql.run_async(update, [pk])
+            assert rows[0].applied, f"LWT on pk={pk} did not apply: {rows}"
+
+        await manager.api.finalize_vnode_tablet_migration(servers[0].ip_addr, ks)
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_migration_with_lwt_creates_paxos_state_table_on_copy(manager: ScyllaClusterManager):
+    """Verify that a node creates the Paxos state table of a table that saw no LWT during the migration (SCYLLADB-1168).
+
+    LWT coordinators create the Paxos state table of a migrating table only when they run an
+    LWT on it. A table whose Paxos state dates from before the migration has none, and the
+    node which switches it to tablets has to create it to copy the state into.
+
+    Steps:
+    1. Start 3 nodes, one per rack, and create a table with RF=3.
+    2. Make every replica accept a proposal for pk=0 without learning it, before the migration.
+    3. Start the migration and restart every node into tablets, with no LWT in between.
+    4. The Paxos state table must exist and share the table's tablet map, and a SERIAL read
+       of pk=0 must repair the proposal.
+    """
+    servers = await manager.servers_add(3, cmdline=['--smp', '2'], config={'num_tokens': 16},
+                                        property_file=[{'dc': 'dc1', 'rack': f'rack{i}'} for i in range(1, 4)])
+    cql, _ = await manager.get_ready_cql(servers)
+
+    ks_opts = "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'enabled': false}"
+    async with new_test_keyspace(manager, ks_opts) as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.t (pk int PRIMARY KEY, v int)")
+        await cql.run_async(f"INSERT INTO {ks}.t (pk, v) VALUES (0, 0) IF NOT EXISTS")
+        await leave_accepted_proposal(manager, servers, cql, ks, pk=0, value=1)
+
+        logger.info("Starting vnodes-to-tablets migration (creating tablet maps)")
+        await manager.api.create_vnode_tablet_migration(servers[0].ip_addr, ks)
+        for idx in range(len(servers)):
+            cql, _ = await restart_node_into(manager, servers, idx, 'tablets')
+
+        base_id = await get_table_id(manager, servers, cql, ks, 't')
+        state_id = await get_table_id(manager, servers, cql, ks, 't$paxos')
+        assert state_id is not None, "Copying the Paxos state did not create the Paxos state table"
+        assert await get_base_table(manager, state_id) == base_id, \
+            "The Paxos state table does not share the tablet map of its base table"
+        assert await serial_read(cql, ks, 0) == 1, "The migration lost the accepted proposal for pk=0"
+
+        await manager.api.finalize_vnode_tablet_migration(servers[0].ip_addr, ks)
+        await verify_migration_status(manager, servers[0], ks, expected_status='tablets', expected_node_statuses={})
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_migration_with_lwt_during_paxos_state_copy(manager: ScyllaClusterManager):
+    """Verify that a node keeps out of Paxos while it copies its Paxos state, and copies again after a crash (SCYLLADB-1168).
+
+    Steps:
+    1. Start 3 nodes, one per rack, create a table with RF=3 and start the migration.
+    2. Make every replica accept a proposal for pk=0 without learning it.
+    3. Restart the first node into tablets, pausing its Paxos state copy. It must report
+       the copy as a running task, at 0%.
+    4. The other nodes must see it not ready for Paxos, and LWTs must keep applying.
+    5. Kill the node in the middle of the copy and start it again. It must copy again,
+       report the copy as a done task, at 100%, and publish that it is ready for Paxos.
+    6. Restart the other nodes into tablets. A SERIAL read of pk=0 must repair the proposal,
+       and the migration must finalize.
+    """
+    servers = await manager.servers_add(3, cmdline=['--smp', '2'], config={'num_tokens': 16},
+                                        property_file=[{'dc': 'dc1', 'rack': f'rack{i}'} for i in range(1, 4)])
+    cql, _ = await manager.get_ready_cql(servers)
+
+    ks_opts = "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'enabled': false}"
+    async with new_test_keyspace(manager, ks_opts) as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.t (pk int PRIMARY KEY, v int)")
+        for pk in (0, 1):
+            await cql.run_async(f"INSERT INTO {ks}.t (pk, v) VALUES ({pk}, 0) IF NOT EXISTS")
+
+        logger.info("Starting vnodes-to-tablets migration (creating tablet maps)")
+        await manager.api.create_vnode_tablet_migration(servers[0].ip_addr, ks)
+        await leave_accepted_proposal(manager, servers, cql, ks, pk=0, value=1)
+
+        s, others = servers[0], servers[1:]
+        logger.info(f"Restarting node {s.server_id} into tablets, pausing its Paxos state copy")
+        await manager.api.upgrade_node_to_tablets(s.ip_addr)
+        await manager.server_stop_gracefully(s.server_id)
+        await manager.server_update_config(s.server_id, "error_injections_at_startup", ["pause_paxos_state_copy"])
+        log = await manager.server_open_log(s.server_id)
+        mark = await log.mark()
+        await manager.server_start(s.server_id, expected_server_up_state=ServerUpState.HOST_ID_QUERIED,
+                                   connect_driver=False)
+        await log.wait_for("pause_paxos_state_copy: waiting for message", from_mark=mark)
+        tm = TaskManagerClient(manager.api)
+        tasks = [t for t in await tm.list_tasks(s.ip_addr, "vnodes_to_tablets_migration")
+                 if t.type == "paxos_state_copy"]
+        logger.info(f"Paxos state copy tasks: {tasks}")
+        assert len(tasks) == 1 and tasks[0].state == "running", \
+            f"Node {s.server_id} does not report its Paxos state copy as a running task: {tasks}"
+        status = await tm.get_task_status(s.ip_addr, tasks[0].task_id)
+        assert (status.progress_units, status.progress_total, status.progress_completed) == ("percent", 100, 0), \
+            f"Unexpected progress of the paused Paxos state copy: {status}"
+
+        async def paxos_ready_seen_by_others(ready: bool):
+            for o in others:
+                if await is_paxos_ready(manager, o, s) != ready:
+                    return None
+            return True
+        await wait_for(lambda: paxos_ready_seen_by_others(False), time.time() + 60)
+
+        cql = await reconnect_driver(manager)
+        await wait_for_cql_and_get_hosts(cql, others, time.time() + 60)
+        counter = LwtCounter(ks, pk=1)
+        for _ in range(5):
+            await counter.step(cql)
+
+        logger.info(f"Killing node {s.server_id} in the middle of its Paxos state copy")
+        await manager.server_stop(s.server_id, convict=True)
+        await manager.server_update_config(s.server_id, "error_injections_at_startup", [])
+        # Keep the finished task, to check its progress.
+        await manager.server_update_config(s.server_id, "task_ttl_in_seconds", 3600)
+        mark = await log.mark()
+        await manager.server_start(s.server_id)
+        assert await count_paxos_state_copies(manager, s, mark) == 1, \
+            f"Node {s.server_id} did not copy its Paxos state again after a crash during the copy"
+        tasks = [t for t in await tm.list_tasks(s.ip_addr, "vnodes_to_tablets_migration")
+                 if t.type == "paxos_state_copy"]
+        assert len(tasks) == 1 and tasks[0].state == "done", \
+            f"Node {s.server_id} does not report its Paxos state copy as a done task: {tasks}"
+        status = await tm.get_task_status(s.ip_addr, tasks[0].task_id)
+        assert status.progress_completed == 100, f"Unexpected progress of the finished Paxos state copy: {status}"
+        await wait_for(lambda: paxos_ready_seen_by_others(True), time.time() + 60)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+        await counter.step(cql)
+
+        for idx in range(1, len(servers)):
+            cql, _ = await restart_node_into(manager, servers, idx, 'tablets')
+            await counter.step(cql)
+        assert await serial_read(cql, ks, 0) == 1, "The migration lost the accepted proposal for pk=0"
+
+        await manager.api.finalize_vnode_tablet_migration(servers[0].ip_addr, ks)
+        await verify_migration_status(manager, servers[0], ks, expected_status='tablets', expected_node_statuses={})
+        await counter.step(cql)
 
 
 async def test_migration_nonexistent_keyspace(manager: ScyllaClusterManager):
@@ -2142,8 +2563,8 @@ async def test_no_tablet_routing_before_finalization(manager: ScyllaClusterManag
     where check_locality() returns routing info whatever shard they land on. Tablet balancing
     is off, so the key's tablet neither moves nor resizes.
 
-    The LWT site is not covered: the first LWT creates a <table>$paxos table, which has no
-    tablet map and makes finalization refuse (SCYLLADB-1158). Nor is TABLETS_ROUTING_V2: the
+    The LWT site is not covered here; test_migration_with_lwt covers LWT during the
+    migration. Nor is TABLETS_ROUTING_V2: the
     servers run without experimental features, strongly-consistent-tables among them, so that
     they do not offer it and the driver negotiates V1.
     """
@@ -2647,6 +3068,10 @@ async def test_replace_during_migration(manager: ScyllaClusterManager, rbno_enab
         insert_stmt = cql.prepare(f"INSERT INTO {ks}.{table_name} (pk, c) VALUES (?, ?)")
         insert_stmt.consistency_level = ConsistencyLevel.ALL
         await asyncio.gather(*(cql.run_async(insert_stmt, [k, k]) for k in range(num_keys)))
+        # LWT must keep working across a replace during the migration (SCYLLADB-1168).
+        await cql.run_async(f"CREATE TABLE {ks}.t (pk int PRIMARY KEY, v int)")
+        await cql.run_async(f"INSERT INTO {ks}.t (pk, v) VALUES (1, 0) IF NOT EXISTS")
+        counter = LwtCounter(ks, pk=1)
 
         logger.info("Starting vnodes-to-tablets migration (creating tablet map)")
         await manager.api.create_vnode_tablet_migration(servers[0].ip_addr, ks)
@@ -2656,6 +3081,9 @@ async def test_replace_during_migration(manager: ScyllaClusterManager, rbno_enab
         nonupgraded_servers = servers[2:]
         for s in upgraded_servers:
             await upgrade_and_restart_node(s)
+        await reconnect_driver(manager)
+        cql, _ = await manager.get_ready_cql(servers)
+        await counter.step(cql)
 
         # Pick one of the upgraded servers to replace mid-migration.
         replaced_server = upgraded_servers[0]
@@ -2677,6 +3105,8 @@ async def test_replace_during_migration(manager: ScyllaClusterManager, rbno_enab
         await reconnect_driver(manager)
         surviving_servers = [s for s in servers if s.server_id != replaced_server.server_id] + [new_server]
         cql, _ = await manager.get_ready_cql(surviving_servers)
+
+        await counter.step(cql)
 
         logger.info("Verifying node statuses after replacement")
         # The replace ends when the new node applied its end, and the other
