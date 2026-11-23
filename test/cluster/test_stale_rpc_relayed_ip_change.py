@@ -29,7 +29,6 @@ async def wait_until(pred, timeout: float, what: str):
     raise TimeoutError(f"timed out waiting for {what}")
 
 
-@pytest.mark.xfail(reason="SCYLLADB-6568: stale host_id clients survive a relayed IP change")
 @pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 @pytest.mark.asyncio
 async def test_direct_fd_recovers_after_relayed_ip_change(manager: ScyllaClusterManager):

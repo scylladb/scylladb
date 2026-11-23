@@ -235,9 +235,10 @@ size_t msg_addr::hash::operator()(const msg_addr& id) const noexcept {
     return std::hash<bytes_view>()(id.addr.bytes());
 }
 
-messaging_service::shard_info::shard_info(shared_ptr<rpc_protocol_client_wrapper>&& client, bool topo_ignored)
+messaging_service::shard_info::shard_info(shared_ptr<rpc_protocol_client_wrapper>&& client, bool topo_ignored, inet_address ip)
     : rpc_client(std::move(client))
     , topology_ignored(topo_ignored)
+    , endpoint(ip)
 {
 }
 
@@ -1271,12 +1272,12 @@ shared_ptr<messaging_service::rpc_protocol_client_wrapper> messaging_service::ge
     // the topology (so we always set `topology_ignored` to `false` in that case).
     bool topology_ignored = idx != TOPOLOGY_INDEPENDENT_IDX && topology_status.has_value() && *topology_status == false;
     if (host_id) {
-        auto res = _clients_with_host_id[idx].emplace(*host_id, shard_info(std::move(client), topology_ignored));
+        auto res = _clients_with_host_id[idx].emplace(*host_id, shard_info(std::move(client), topology_ignored, id.addr));
         SCYLLA_ASSERT(res.second);
         auto it = res.first;
         client = it->second.rpc_client;
     } else {
-        auto res = _clients[idx].emplace(id, shard_info(std::move(client), topology_ignored));
+        auto res = _clients[idx].emplace(id, shard_info(std::move(client), topology_ignored, id.addr));
         SCYLLA_ASSERT(res.second);
         auto it = res.first;
         client = it->second.rpc_client;
@@ -1354,6 +1355,18 @@ void messaging_service::remove_rpc_client(msg_addr id, std::optional<locator::ho
     }
     for (auto& c : _clients_with_host_id) {
         find_and_remove_client(c, *hid, [] (const auto&) { return true; });
+    }
+}
+
+void messaging_service::remove_rpc_clients_to_stale_ip(locator::host_id hid, inet_address current_ip) {
+    for (auto& c : _clients_with_host_id) {
+        find_and_remove_client(c, hid, [hid, current_ip] (const auto& s) {
+            if (s.endpoint == current_ip) {
+                return false;
+            }
+            mlogger.debug("Dropping connection to {} at {}: its IP is now {}", hid, s.endpoint, current_ip);
+            return true;
+        });
     }
 }
 

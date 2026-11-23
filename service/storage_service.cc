@@ -987,6 +987,12 @@ class storage_service::ip_address_updater: public gms::i_endpoint_state_change_s
             co_return;
         }
 
+        // Clients cached by host_id may still point at the old IP. The CLIENT_ID handler
+        // misses them when this node learned the new IP through gossip first.
+        co_await _ss._messaging.invoke_on_all([id, endpoint] (netw::messaging_service& ms) {
+            ms.remove_rpc_clients_to_stale_ip(id, endpoint);
+        });
+
         // If the host_id <-> IP mapping has changed, we need to update system tables, token_metadat and erm.
         rslog.debug("ip_address_updater::on_endpoint_change({}), host_id {}, "
                     "old ip [{}], new ip [{}], "
