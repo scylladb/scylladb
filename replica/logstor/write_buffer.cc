@@ -134,7 +134,7 @@ bytes_view chunk_builder::seal(segment_sequence segment_seq, table_id table) {
 
 bytes_view chunk_builder::do_seal(segment_sequence segment_seq, std::optional<table_id> table) {
     if (_sealed) {
-        throw std::runtime_error("Cannot seal a chunk more than once");
+        on_internal_error(logstor_logger, "Cannot seal a chunk more than once");
     }
     finish();
 
@@ -165,8 +165,9 @@ bytes_view chunk_builder::do_seal(segment_sequence segment_seq, std::optional<ta
 }
 
 bool chunk_builder::fits_frame(size_t frame_size) const noexcept {
-    // The frame is followed by the padding to record_alignment.
-    return align_up(frame_size, ondisk::record_alignment) <= _stream.size();
+    // A finished chunk takes no more frames, also when the padding of finish() leaves room in the
+    // buffer. The frame is followed by the padding to record_alignment.
+    return !_finished_body && align_up(frame_size, ondisk::record_alignment) <= _stream.size();
 }
 
 void chunk_builder::pad_to_alignment(size_t alignment) {

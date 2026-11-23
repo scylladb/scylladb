@@ -17,6 +17,7 @@
 #include <vector>
 #include <fmt/format.h>
 #include <seastar/core/abort_source.hh>
+#include <seastar/core/on_internal_error.hh>
 #include <seastar/core/reactor.hh>
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/simple-stream.hh>
@@ -253,6 +254,26 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_chunk_builder_finish_returns_the_final_chu
     auto chunk = copy_chunk(wb.seal(segment_sequence{3}));
     BOOST_REQUIRE_EQUAL(chunk.size(), size);
     BOOST_REQUIRE_EQUAL(read_chunk_header(chunk).value().segment.segment_seq.value, 3u);
+}
+
+// Checks that a finished chunk takes no more records, although the padding of finish() leaves room
+// in the buffer, and that an append to a finished chunk and a second seal are internal errors.
+SEASTAR_THREAD_TEST_CASE(test_logstor_chunk_builder_misuse_after_finish_is_an_internal_error) {
+    const auto do_abort = set_abort_on_internal_error(false);
+    auto reset_abort = defer([do_abort] noexcept {
+        set_abort_on_internal_error(do_abort);
+    });
+    auto schema = make_kv_schema();
+
+    chunk_builder wb(4 * ondisk::block_alignment, segment_kind::mixed);
+    const auto writer = log_record_writer(make_log_record(schema, "pk0", "value0", api::timestamp_type(1)));
+    wb.append(writer);
+    BOOST_REQUIRE_EQUAL(wb.finish(), ondisk::block_alignment);
+
+    BOOST_REQUIRE(!wb.fits(writer));
+    BOOST_REQUIRE_THROW(wb.append(writer), std::runtime_error);
+
+    wb.seal(segment_sequence{3});
     BOOST_REQUIRE_THROW(wb.seal(segment_sequence{3}), std::runtime_error);
 }
 
