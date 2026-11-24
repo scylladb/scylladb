@@ -608,8 +608,9 @@ both are listed if they are in the rack. Raft takes the first of them which can 
 
 `groups_manager::update()` recomputes the list on every token metadata change and passes
 it to the group's server when it changes, so migrations, topology changes and an altered
-`preferred_rack` are picked up without restarting the group. Keyspaces without a preferred
-rack have empty lists, and Raft spreads the leadership over all replicas as usual.
+`preferred_rack` are picked up without restarting the group. Until its resize is finalized, the
+list of a child of a resize holds the leader of its parent instead. Keyspaces without a
+preferred rack have empty lists, and Raft spreads the leadership over all replicas as usual.
 
 ## Bootstrapping a fresh group
 
@@ -667,3 +668,36 @@ first, then the one the list ranks best.
 
 If `stepdown()` is called while a handover is in progress, for example on shutdown, the
 stepdown replaces the handover and uses its own target and timeout.
+
+## The children of a tablet resize
+
+While a resize is in progress, the leaders of the children are kept on the node which leads
+their parent. Requests will be handed off from the parent to its children, and a handed-off
+write will be timestamped by the leader of the child. Its timestamp has to come from the clock
+which timestamped the writes already in the parent's log.
+
+For as long as the resize is in progress, the list of preferred leaders of a child therefore
+holds a single server, which is the leader of its parent as this replica knows it. The list is
+empty while the replica knows no such leader. `groups_manager::colocate_leader()` builds it.
+
+No tablet migration runs during a resize, so a child has the replicas of its parent, and the
+parent's leader can always lead the child. In a keyspace with a preferred rack, the child gets
+to the replica in that rack by following its parent there.
+
+`groups_manager::update()` sets the list before it starts a child, because a fresh child starts
+its preferred leader as a candidate right away. From then on a fiber per shard,
+`groups_manager::leader_colocator()`, updates the list whenever the Raft state of the child or
+of its parent changes on this replica, and sleeps otherwise.
+
+The fiber also updates the list on every tick while one of the following holds, because no
+change of the Raft state is certain to follow:
+
+- This replica knows no leader of the parent, so the list is empty.
+- This replica leads the child without leading the parent. It is the one which hands the child
+  over, and Raft does not tell a follower that its leader changed, so the list has to be kept
+  at the parent's current leader.
+- The Raft server of the child or of the parent is still starting on this replica.
+
+A replica which only follows both groups gets no update until the token metadata changes, so
+its list can hold an earlier leader of the parent. That list only decides which election slot
+the replica itself takes, never where the leadership goes.
