@@ -374,6 +374,15 @@ future<> paxos_store::stop() {
     return stopped.then([this] { _stopped = true; });
 }
 
+future<double> paxos_store::get_copy_progress() {
+    const auto [completed, total] = co_await container().map_reduce0([] (const paxos_store& store) {
+        return std::pair(store._copy_progress.completed, store._copy_progress.total);
+    }, std::pair(0.0, 0.0), [] (std::pair<double, double> a, std::pair<double, double> b) {
+        return std::pair(a.first + b.first, a.second + b.second);
+    });
+    co_return total ? 100 * completed / total : 0;
+}
+
 void paxos_store::prune_invalid_prepared_statements() {
     std::erase_if(_prepared_statements, [] (const auto& entry) {
         return !entry.second;
@@ -864,9 +873,12 @@ struct copy_stats {
 } // anonymous namespace
 
 // Applies `convert` to every partition of the table `source_id` stored on this shard and
-// writes what it returns to the memtables of this node, skipping the commitlog.
+// writes what it returns to the memtables of this node, skipping the commitlog. Counts the
+// table in `progress` as it goes: the reader returns the partitions in token order.
 template <typename Convert>
-static future<copy_stats> copy_local_partitions(replica::database& db, table_id source_id, Convert convert) {
+static future<copy_stats> copy_local_partitions(replica::database& db, table_id source_id,
+        paxos_state_copy_progress& progress, Convert convert) {
+    const auto tables_done = progress.completed;
     auto& table = db.find_column_family(source_id);
     auto s = table.schema();
     auto permit = co_await db.obtain_reader_permit(table, "paxos_state_migration", db::no_timeout, {});
@@ -880,6 +892,7 @@ static future<copy_stats> copy_local_partitions(replica::database& db, table_id 
     std::exception_ptr ex;
     try {
         while (auto mo = co_await read_mutation_from_mutation_reader(reader)) {
+            progress.completed = tables_done + double(dht::unbias(mo->token())) / 0x1p64;
             for (auto& m : co_await convert(*mo)) {
                 // system.paxos is in a local keyspace, which cleanup skips, so it keeps the state of
                 // ranges this node no longer replicates, e.g. after another node bootstrapped, until
@@ -926,6 +939,7 @@ static future<copy_stats> copy_local_partitions(replica::database& db, table_id 
     if (ex) {
         co_await coroutine::return_exception_ptr(std::move(ex));
     }
+    progress.completed = tables_done + 1;
     co_return stats;
 }
 
@@ -1016,7 +1030,9 @@ future<> paxos_store::copy_pending_state() {
     const auto stats = co_await container().map_reduce0([&] (paxos_store& store) -> future<copy_stats> {
         auto& db = store._db;
         copy_stats stats;
+        auto& progress = store._copy_progress;
         if (copy.to_tablets) {
+            progress = {.total = 1};
             auto state_schemas = get_paxos_state_schemas(db, copy);
             std::unordered_map<table_id, schema_ptr> missing_state_schemas;
             std::unordered_map<table_id, table_id> base_of_missing;
@@ -1027,7 +1043,7 @@ future<> paxos_store::copy_pending_state() {
                     missing_state_schemas.emplace(base, std::move(s));
                 }
             }
-            stats += co_await copy_local_partitions(db, db::system_keyspace::paxos()->id(),
+            stats += co_await copy_local_partitions(db, db::system_keyspace::paxos()->id(), progress,
                     [&] (const mutation& m) -> future<utils::chunked_vector<mutation>> {
                 // A table that saw no LWT since the migration started has no $paxos table yet. Create it
                 // once a partition has live state of the table, which a conversion into its missing
@@ -1043,8 +1059,10 @@ future<> paxos_store::copy_pending_state() {
                 co_return internal::system_paxos_to_paxos_state_tables(m, state_schemas, now);
             });
         } else {
-            for (const auto& [base, state_schema] : get_paxos_state_schemas(db, copy)) {
-                stats += co_await copy_local_partitions(db, state_schema->id(),
+            const auto state_schemas = get_paxos_state_schemas(db, copy);
+            progress = {.total = double(state_schemas.size())};
+            for (const auto& [base, state_schema] : state_schemas) {
+                stats += co_await copy_local_partitions(db, state_schema->id(), progress,
                         [base, now] (const mutation& m) -> future<utils::chunked_vector<mutation>> {
                     utils::chunked_vector<mutation> result;
                     if (auto converted = internal::paxos_state_table_to_system_paxos(m, base, now)) {

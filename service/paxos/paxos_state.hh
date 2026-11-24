@@ -134,6 +134,15 @@ struct paxos_state_copy {
     std::unordered_set<table_id> tables;
 };
 
+// The progress of the Paxos state copy on one shard.
+struct paxos_state_copy_progress {
+    // The source tables the shard scanned, plus the fraction of the token ring it passed in
+    // the table it scans.
+    double completed = 0;
+    // The source tables the shard scans.
+    double total = 0;
+};
+
 class paxos_store:
     public seastar::peering_sharded_service<paxos_store>, 
     public seastar::async_sharded_service<paxos_store>,
@@ -145,6 +154,7 @@ class paxos_store:
     migration_manager& _mm;
     bool _stopped = false;
     key_lock_map<table_id> _table_lock_map{false};
+    paxos_state_copy_progress _copy_progress;
     // Context for Paxos state copy this node has to make on startup. Set on every shard
     // before the node serves Paxos, and cleared once the copy is done.
     std::optional<paxos_state_copy> _pending_copy;
@@ -187,6 +197,9 @@ public:
     static sstring paxos_state_table_name(std::string_view table_name);
     // The schema of the Paxos state table of `s`, with a newly generated id.
     static schema_ptr create_paxos_state_schema(const schema& s);
+
+    // The percentage of the Paxos state copy done, over all shards.
+    future<double> get_copy_progress();
 
     void set_pending_copy(std::optional<paxos_state_copy> copy) noexcept { _pending_copy = std::move(copy); }
     bool has_pending_copy() const noexcept { return _pending_copy.has_value(); }
