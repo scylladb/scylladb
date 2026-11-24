@@ -342,11 +342,11 @@ future<> audit::log(const audit_info& audit_info, const service::client_state& c
         role = *client_state.user()->name;
     }
     thread_local static sstring no_username("undefined");
-    const sstring& username = client_state.user() ? client_state.user()->name.value_or(auth::anonymous_username) : no_username;
+    sstring username = client_state.user() ? client_state.user()->name.value_or(auth::anonymous_username) : no_username;
     socket_address client_ip = client_state.get_client_address().addr();
     socket_address node_ip = _token_metadata.get()->get_topology().my_address().addr();
     if (audit_info.alternator_batch_tables()) {
-        return log_alternator_batch(audit_info, role, node_ip, client_ip, cl, username, error);
+        return log_alternator_batch(audit_info, role, node_ip, client_ip, cl, std::move(username), error);
     }
     auto sinks = sinks_for(audit_info, role);
     if (!sinks) {
@@ -443,7 +443,7 @@ void add_alternator_batch_sink_tables(std::vector<std::pair<audit_sink, audit_ta
 }
 
 future<> audit::log_alternator_batch(const audit_info& ai, std::string_view role, socket_address node_ip, socket_address client_ip,
-        std::optional<db::consistency_level> cl, const sstring& username, bool error) {
+        std::optional<db::consistency_level> cl, sstring username, bool error) {
     std::vector<std::pair<audit_sink, audit_table_set>> sink_tables;
     for (const auto& table : *ai.alternator_batch_tables()) {
         auto sinks = sinks_for_table(ai.category(), table.first, table.second, role);
@@ -452,7 +452,10 @@ future<> audit::log_alternator_batch(const audit_info& ai, std::string_view role
         }
     }
 
-    return do_with(std::move(sink_tables), [this, &ai, node_ip, client_ip, cl, &username, error] (auto& sink_tables) {
+    // The sinks are logged one after another, and a sink's write may not
+    // complete immediately, so do_with() must keep the user name alive until
+    // the entire batch has been logged.
+    return do_with(std::move(sink_tables), std::move(username), [this, &ai, node_ip, client_ip, cl, error] (auto& sink_tables, const sstring& username) {
         return do_for_each(sink_tables, [this, &ai, node_ip, client_ip, cl, &username, error] (const auto& entry) {
             return do_with(::audit::audit_info(ai.category(), sstring(ai.keyspace()), print_alternator_table_names(entry.second), false),
                     [this, &ai, node_ip, client_ip, cl, &username, error, &entry] (::audit::audit_info& filtered_info) {

@@ -39,7 +39,7 @@ from test.cluster.dtest.dtest_class import create_ks, wait_for
 from test.cluster.dtest.tools.assertions import assert_invalid
 from test.cluster.dtest.tools.data import rows_to_list, run_in_parallel
 
-from test.cluster.test_alternator import alternator_config, get_alternator, unique_table_name
+from test.cluster.test_alternator import alternator_config, get_alternator, get_secret_key, unique_table_name
 from test.pylib.driver_utils import safe_driver_shutdown
 from test.pylib.scylla_cluster_manager import ScyllaClusterManager
 from test.pylib.rest_client import read_barrier
@@ -2913,3 +2913,44 @@ async def test_alternator_basic_ops_audit_disabled(manager: ScyllaClusterManager
             client.delete_table(TableName=table_name)
         except ClientError:
             pass
+
+
+async def test_alternator_batch_audit_username_table_and_syslog(manager: ScyllaClusterManager):
+    """Reproduces #33351: when an Alternator batch request is audited to both
+    the table and the syslog sinks, both audit entries must carry the name of
+    the authenticated user. The table entry is written first, asynchronously,
+    so the syslog entry is written after audit::log() has returned, and it
+    used to read the user name from a temporary already destroyed by then.
+    """
+    syslog = AuditBackendSyslog(socket_path=syslog_socket_path)
+    config = alternator_config | AUTH_CONFIG | {
+        'alternator_enforce_authorization': True,
+        'audit': 'table,syslog',
+        'audit_unix_socket_path': syslog_socket_path,
+        'audit_categories': '',
+        'audit_keyspaces': '',
+        'audit_tables': '',
+        'audit_rules': [{'sinks': ['table', 'syslog'], 'categories': ['DML'],
+                         'qualified_table_names': ['alternator_*.*'], 'roles': ['*']}],
+    }
+    servers = await manager.servers_add(1, config=config,
+        driver_connect_opts={'auth_provider': PlainTextAuthProvider(username='cassandra', password='cassandra')})
+    cql = manager.get_cql()
+    user = 'alternator_audit_batch_user'
+    cql.execute(f"CREATE ROLE {user} WITH PASSWORD = '{user}' AND LOGIN = true AND SUPERUSER = true")
+    alternator = get_alternator(servers[0].ip_addr, user, await get_secret_key(cql, user))
+    table = alternator.create_table(TableName=unique_table_name(), BillingMode='PAY_PER_REQUEST',
+        KeySchema=[{'AttributeName': 'p', 'KeyType': 'HASH'}],
+        AttributeDefinitions=[{'AttributeName': 'p', 'AttributeType': 'S'}])
+    syslog.clear_audit_logs()
+
+    # The request returns only after both audit entries were written.
+    table.meta.client.batch_write_item(RequestItems={table.name: [{'PutRequest': {'Item': {'p': 'batch_item'}}}]})
+
+    # Check that the table entry of the batch has the user's name.
+    audit_log = cql.execute(SimpleStatement('SELECT * FROM audit.audit_log', consistency_level=ConsistencyLevel.ONE))
+    table_rows = [row for row in audit_log if 'BatchWriteItem' in row.operation]
+    assert [row.username for row in table_rows] == [user]
+    # Check that the syslog entry of the batch has the user's name.
+    syslog_rows = [row for row in syslog.get_audit_log_dict(None, None)['syslog'] if 'BatchWriteItem' in row.operation]
+    assert [row.username for row in syslog_rows] == [user]
