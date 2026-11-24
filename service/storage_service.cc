@@ -1930,6 +1930,12 @@ future<> storage_service::on_change(gms::inet_address endpoint, locator::host_id
             slogger.debug("Got application_state::RPC_READY for node {}, is_cql_ready={}", endpoint, ep_state->is_cql_ready());
             co_await notify_cql_change(endpoint, host_id, ep_state->is_cql_ready());
         }
+        if (auto it = states.find(application_state::SERVICES_NOT_READY); it != states.end()) {
+            const auto services = it->second.value().linearize();
+            slogger.info("Node {}/{} {}", endpoint, host_id, services.empty()
+                    ? std::string("is ready for replica traffic")
+                    : fmt::format("is not ready for {}", services));
+        }
         if (auto it = states.find(application_state::INTERNAL_IP); it != states.end()) {
             co_await maybe_reconnect_to_preferred_ip(endpoint, inet_address(it->second.value().linearize()), host_id);
         }
