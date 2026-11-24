@@ -876,6 +876,15 @@ arg_parser.add_argument('--date-stamp', dest='date_stamp', type=str,
                         help='Set datestamp for SCYLLA-VERSION-GEN')
 add_tristate(arg_parser, name='lto', dest='lto', default=True,
                         help='link-time optimization.')
+arg_parser.add_argument('--thinlto-cache-dir', dest='thinlto_cache_dir', action='store',
+                        default=os.path.join(os.environ.get('XDG_CACHE_HOME') or os.path.expanduser('~/.cache'), 'scylladb', 'thinlto'),
+                        help='Directory where ThinLTO links (lld only) keep the code generated for each module, so a link '
+                             'after a small change reuses it for the unchanged modules. Shared by all build directories; '
+                             'an empty value disables it. Default: $XDG_CACHE_HOME/scylladb/thinlto.')
+arg_parser.add_argument('--thinlto-cache-policy', dest='thinlto_cache_policy', action='store',
+                        default='cache_size_bytes=20g:prune_after=72h',
+                        help='lld --thinlto-cache-policy for --thinlto-cache-dir. A full set of modules of release/scylla '
+                             'with debug info takes about 3.2GB.')
 arg_parser.add_argument('--use-profile', dest='use_profile', action='store',
                         help='Path to the (optional) profile file to be used in the build. Meant to be used with the profile file (build/release/profiles/merged.profdata) generated during a previous build of build/release/scylla with --pgo (--cspgo).')
 arg_parser.add_argument('--pgo', dest='pgo', action='store_true', default=False,
@@ -1998,6 +2007,31 @@ for mode_level in args.mode_o_levels:
     modes[mode]['optimization-level'] = level
 
 linker_flags = linker_flags(compiler=args.cxx)
+
+# A ThinLTO link spends most of its time generating code for every module; lld
+# can keep that per module and reuse it when the module, what it imports and
+# the options are unchanged, which cuts the link of release/scylla after a
+# small change from minutes to seconds.
+thinlto_cache_flags = ''
+has_lto_mode = args.lto and any(modes[mode]['advanced_optimizations']
+                                for mode in (args.selected_modes or modes.keys()))
+if args.thinlto_cache_dir and has_lto_mode and '-fuse-ld=lld' in linker_flags:
+    if ',' in args.thinlto_cache_dir:
+        # -Wl, (and CMake's LINKER:) would split the path at the comma.
+        sys.exit(f'error: --thinlto-cache-dir must not contain a comma: {args.thinlto_cache_dir}')
+    try:
+        os.makedirs(args.thinlto_cache_dir, exist_ok=True)
+        # lld fails the link when it cannot write a cache entry.
+        if not os.access(args.thinlto_cache_dir, os.W_OK | os.X_OK):
+            raise PermissionError(f'{args.thinlto_cache_dir} is not writable')
+    except OSError as e:
+        print(f'Warning: cannot use the ThinLTO cache directory, linking without it: {e}')
+    else:
+        # The flags end up in build.ninja, where '$' starts a variable.
+        cache_dir = shlex.quote(args.thinlto_cache_dir).replace('$', '$$')
+        thinlto_cache_flags = (f'-Wl,--thinlto-cache-dir={cache_dir}'
+                               f' -Wl,--thinlto-cache-policy={args.thinlto_cache_policy}')
+        print(f'Note: ThinLTO cache in {args.thinlto_cache_dir}')
 
 tests_link_rule = 'link' if args.tests_debuginfo else 'link_stripped'
 perf_tests_link_rule = 'link' if args.perf_tests_debuginfo else 'link_stripped'
@@ -3431,6 +3465,8 @@ def write_build_file(f,
             if do_lto:
                 local_libs += ' -flto=thin -ffat-lto-objects'
                 local_libs += ' -Wl,-mllvm,-vectorize-slp=false'
+                if thinlto_cache_flags:
+                    local_libs += f' {thinlto_cache_flags}'
             else:
                 local_libs += ' -fno-lto'
             use_pch = use_precompiled_header and binary == 'scylla'
@@ -3973,6 +4009,8 @@ def configure_using_cmake(args):
 
     if args.date_stamp:
         settings['Scylla_DATE_STAMP'] = args.date_stamp
+    settings['Scylla_THINLTO_CACHE_DIR'] = args.thinlto_cache_dir
+    settings['Scylla_THINLTO_CACHE_POLICY'] = args.thinlto_cache_policy
     if args.staticboost:
         settings['Boost_USE_STATIC_LIBS'] = 'ON'
     if args.clang_inline_threshold != -1:
