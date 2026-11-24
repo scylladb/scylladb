@@ -16,6 +16,7 @@
 
 #include <seastar/core/align.hh>
 #include <seastar/core/posix.hh>
+#include <seastar/core/thread_impl.hh>
 
 #include <sys/mman.h>
 #include <ucontext.h>
@@ -142,11 +143,25 @@ static void thunk(int p1, int p2) {
     auto& san = args->sanitizer_state;
     // Complete stack switch started in do_with_parser_impl()
     __sanitizer_finish_switch_fiber(nullptr, &san.stack_bottom, &san.stack_size);
+    // The stall detector's signal handler can't take a backtrace in the
+    // middle of a stack switch, because the unwind information of glibc's
+    // swapcontext() and setcontext() is wrong after they load the new stack
+    // pointer, and following it can crash. So tell Seastar when a switch is
+    // in progress, and the stall detector will omit the backtrace, as it does
+    // during seastar::thread switches.
+    seastar::thread_impl::end_context_switch();
     try {
         do_with_parser_impl_impl(args->cql, args->d, std::move(args->func));
     } catch (...) {
         args->ex = std::current_exception();
     }
+    // The stall detector's signal handler can't take a backtrace in the
+    // middle of a stack switch, because the unwind information of glibc's
+    // swapcontext() and setcontext() is wrong after they load the new stack
+    // pointer, and following it can crash. So tell Seastar when a switch is
+    // in progress, and the stall detector will omit the backtrace, as it does
+    // during seastar::thread switches.
+    seastar::thread_impl::begin_context_switch();
     // Switch back to original stack
     __sanitizer_start_switch_fiber(nullptr, san.stack_bottom, san.stack_size);
     setcontext(&args->caller_stack);
@@ -173,11 +188,19 @@ void do_with_parser_impl(utils::chunked_string_view cql, dialect d, noncopyable_
     auto q = reinterpret_cast<uint64_t>(reinterpret_cast<uintptr_t>(&args));
     makecontext(&uc, reinterpret_cast<void (*)()>(thunk), 2, int(q), int(q >> 32));
     auto& san = args.sanitizer_state;
+    // The stall detector's signal handler can't take a backtrace in the
+    // middle of a stack switch, because the unwind information of glibc's
+    // swapcontext() and setcontext() is wrong after they load the new stack
+    // pointer, and following it can crash. So tell Seastar when a switch is
+    // in progress, and the stall detector will omit the backtrace, as it does
+    // during seastar::thread switches.
+    seastar::thread_impl::begin_context_switch();
     // Tell Address Sanitizer we are switching to another stack
     __sanitizer_start_switch_fiber(&san.fake_stack, stack.bottom(), stack.size());
     swapcontext(&args.caller_stack, &uc);
     // Completes stack switch started in thunk()
     __sanitizer_finish_switch_fiber(san.fake_stack, nullptr, 0);
+    seastar::thread_impl::end_context_switch();
     if (args.ex) {
         std::rethrow_exception(std::move(args.ex));
     }
