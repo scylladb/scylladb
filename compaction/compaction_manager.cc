@@ -1543,6 +1543,20 @@ compaction_manager::do_stop_ongoing_compactions(sstring reason, std::function<bo
         }
         cmlog.log(level, "Stopping {} tasks for {} ongoing compactions{} due to {}", tasks.size(), ongoing_compactions, scope, reason);
     }
+    // A cleanup waiting for staging sstables has no task to stop, see perform_cleanup().
+    // Wake it up so it can notice that the compaction manager is disabled or the table
+    // is being removed, and tell it to stop if Cleanup compactions were asked to stop.
+    // A request that doesn't name the compaction types is not enough for that: it is
+    // also how run_with_compaction_disabled() stops the tasks of a table, which
+    // perform_cleanup() itself uses.
+    for (auto& [t, cs] : _compaction_state) {
+        if (cs.cleanup_in_progress && filter(t)) {
+            if (types_opt && types_opt->contains(compaction_type::Cleanup)) {
+                cs.cleanup_stop_requested = reason;
+            }
+            t->get_staging_done_condition().broadcast();
+        }
+    }
     stop_tasks(tasks, std::move(reason));
     return tasks;
 }
@@ -2833,6 +2847,11 @@ public:
         // will have more space available released by previous jobs.
         std::ranges::sort(_pending_cleanup_jobs, std::ranges::greater(), std::mem_fn(&compaction_descriptor::sstables_size));
         _cm._stats.pending_tasks += _pending_cleanup_jobs.size();
+        // A request to stop Cleanup compactions that arrived before this task
+        // was created found no task to stop, see perform_cleanup().  Apply it now.
+        if (const auto& reason = _compaction_state.cleanup_stop_requested) {
+            stop_compaction(*reason);
+        }
     }
 
     virtual ~cleanup_sstables_compaction_task_executor() = default;
@@ -3006,7 +3025,36 @@ future<> compaction_manager::perform_cleanup(owned_ranges_ptr sorted_owned_range
         throw std::runtime_error(format("cleanup request failed: there is an ongoing cleanup on {}", t));
     }
     cs.cleanup_in_progress = true;
-    auto clear_cleanup_in_progress = defer([&cs] noexcept { cs.cleanup_in_progress = false; });
+    auto clear_cleanup_in_progress = defer([&cs] noexcept {
+        cs.cleanup_in_progress = false;
+        cs.cleanup_stop_requested.reset();
+    });
+
+    // Between its compaction tasks, the cleanup has no task that could be
+    // stopped, so check here whether it has to stop: when asked to stop Cleanup
+    // compactions, when the compaction manager is disabled (drained or
+    // stopped), or when the table is being removed.
+    // A cleanup task created after a request to stop Cleanup compactions was
+    // recorded stops itself, see cleanup_sstables_compaction_task_executor.
+    auto stop_reason = [&] () -> std::optional<sstring> {
+        if (cs.cleanup_stop_requested) {
+            return cs.cleanup_stop_requested;
+        }
+        if (is_disabled()) {
+            return "compaction manager is disabled";
+        }
+        if (cs.gate.is_closed()) {
+            return "table removal";
+        }
+        return std::nullopt;
+    };
+    auto check_stop = [&] {
+        if (auto reason = stop_reason()) {
+            auto s = t.schema();
+            cmlog.info("Stopping cleanup of {} due to {}", t, *reason);
+            throw compaction_stopped_exception(s->ks_name(), s->cf_name(), std::move(*reason));
+        }
+    };
 
     // A quarantined sstable is never eligible for compaction, so a cleanup
     // that samples one can only wait for the idle timeout and fail.  Fail
@@ -3030,10 +3078,12 @@ future<> compaction_manager::perform_cleanup(owned_ranges_ptr sorted_owned_range
     // with vnodes.  If that ever changes, the replacement sstable must
     // inherit the cleanup state of the sstable it replaces.
     co_await calculate_sstables_cleanup_state(sorted_owned_ranges, t);
+    check_stop();
     co_await try_perform_cleanup(sorted_owned_ranges, t, info);
     auto last_idle = seastar::lowres_clock::now();
 
     while (cs.has_sstables_requiring_cleanup()) {
+        check_stop();
         auto idle = seastar::lowres_clock::now() - last_idle;
         if (idle >= max_idle_duration) {
             auto msg = ::format("Cleanup timed out after {} seconds of no progress", std::chrono::duration_cast<std::chrono::seconds>(idle).count());
@@ -3052,11 +3102,12 @@ future<> compaction_manager::perform_cleanup(owned_ranges_ptr sorted_owned_range
 
         cmlog.debug("perform_cleanup: waiting for sstables to become eligible for cleanup");
         try {
-            co_await t.get_staging_done_condition().when(sleep_duration, [&] { return has_sstables_eligible_for_compaction(); });
+            co_await t.get_staging_done_condition().when(sleep_duration, [&] { return has_sstables_eligible_for_compaction() || stop_reason(); });
         } catch (const seastar::condition_variable_timed_out&) {
             // Ignored.  Keep retrying for max_idle_duration
         }
 
+        check_stop();
         if (!has_sstables_eligible_for_compaction()) {
             continue;
         }
