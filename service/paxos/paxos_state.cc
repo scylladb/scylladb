@@ -126,6 +126,7 @@ future<token_guard> paxos_state::get_cas_lock(const dht::token& key, clock_type:
 future<prepare_response> paxos_state::prepare(storage_proxy& sp, paxos_store& paxos_store, tracing::trace_state_ptr tr_state, schema_ptr schema,
         const query::read_command& cmd, const partition_key& key, utils::UUID ballot,
         bool only_digest, query::digest_algorithm da, clock_type::time_point timeout) {
+    paxos_store.check_paxos_ready();
     dht::token token = dht::get_token(*schema, key);
     utils::latency_counter lc;
     lc.start();
@@ -217,6 +218,7 @@ future<prepare_response> paxos_state::prepare(storage_proxy& sp, paxos_store& pa
 future<bool> paxos_state::accept(storage_proxy& sp, paxos_store& paxos_store, tracing::trace_state_ptr tr_state, schema_ptr schema, dht::token token, const proposal& proposal,
         clock_type::time_point timeout) {
     co_await utils::get_local_injector().inject("paxos_accept_proposal_wait", utils::wait_for_message(std::chrono::minutes(2)));
+    paxos_store.check_paxos_ready();
     utils::latency_counter lc;
     lc.start();
 
@@ -495,6 +497,12 @@ void paxos_store::on_before_drop_column_family(const schema& schema, utils::chun
             drop_views::yes,
             true).get();
         mutations.insert(mutations.end(), std::make_move_iterator(muts.begin()), std::make_move_iterator(muts.end()));
+    }
+}
+
+void paxos_store::check_paxos_ready() const {
+    if (has_pending_copy()) {
+        throw std::runtime_error("This node is not ready for Paxos: it copies its Paxos state after a storage mode switch");
     }
 }
 

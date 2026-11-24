@@ -203,6 +203,8 @@ public:
 
     void set_pending_copy(std::optional<paxos_state_copy> copy) noexcept { _pending_copy = std::move(copy); }
     bool has_pending_copy() const noexcept { return _pending_copy.has_value(); }
+    // Throws if this node still has to copy its Paxos state.
+    void check_paxos_ready() const;
     // Makes the pending copy: copies the Paxos state of the migrating tables to the store this
     // node uses after switching storage mode, then clears the pending copy on every shard.
     // Creates the Paxos state table of a table with state to copy if it has none yet, through
