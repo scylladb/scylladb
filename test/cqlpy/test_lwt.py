@@ -575,6 +575,6 @@ def test_lwt_non_deterministic_function_in_partition_key(cql, test_keyspace):
 # paxos_grace_seconds is a Scylla-only table option.
 # Translated from scylla-dtest's lwt_test.py::TestLWTPaxos::test_paxos_grace_seconds_negative.
 def test_negative_paxos_grace_seconds(cql, test_keyspace, scylla_only):
-    with pytest.raises(ConfigurationException, match=r'paxos_grace_seconds cannot be smaller than 0'):
+    with pytest.raises(ConfigurationException, match=r'paxos_grace_seconds cannot be smaller than 0, \(default 864000\)'):
         with new_test_table(cql, test_keyspace, 'k int PRIMARY KEY, v int', 'WITH paxos_grace_seconds = -1'):
             pass

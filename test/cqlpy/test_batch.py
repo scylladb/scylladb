@@ -196,9 +196,12 @@ def test_batch_accepts_regular_mutations(cql, users, batch_type):
 # its name doesn't begin with "test").
 @pytest.mark.parametrize('batch_type,message', [
     ('COUNTER', 'Cannot include non-counter statement in a counter batch'),
-    ('', 'Cannot include a counter statement in a logged batch|Counter and non-counter mutations cannot exist in the same batch'),
+    ('', None),
     ('UNLOGGED', 'Counter and non-counter mutations cannot exist in the same batch')])
 def test_batch_rejects_mixed_mutations(cql, clicks, users, batch_type, message):
+    if message is None:
+        message = ('Cannot include a counter statement in a logged batch' if is_scylla(cql)
+                   else 'Counter and non-counter mutations cannot exist in the same batch')
     with pytest.raises(InvalidRequest, match=message):
         cql.execute(f"""
             BEGIN {batch_type} BATCH
