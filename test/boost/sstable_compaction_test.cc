@@ -13,6 +13,7 @@
 #include <seastar/core/align.hh>
 #include <seastar/core/condition-variable.hh>
 #include <seastar/core/sleep.hh>
+#include <seastar/core/with_timeout.hh>
 #include <seastar/core/loop.hh>
 #include <seastar/util/closeable.hh>
 #include <seastar/util/short_streams.hh>
@@ -6566,6 +6567,83 @@ SEASTAR_TEST_CASE(cleanup_rejects_concurrent_cleanup_while_waiting_test) {
         t->perform_cleanup_compaction(owned_ranges, tasks::make_empty_task_info()).get();
         auto sstables = t->get_sstables();
         BOOST_REQUIRE(std::ranges::find(*sstables, staging_sst) == sstables->end());
+        assert_that(t->as_mutation_source().make_mutation_reader(s, env.make_reader_permit(), query::full_partition_range))
+                .produces(owned_mut)
+                .produces_end_of_stream();
+    });
+}
+
+// While perform_cleanup() waits for staging sstables between its compaction
+// tasks there is no cleanup task to stop, yet a request to stop Cleanup
+// compactions must still stop it. Otherwise the cleanup, which rejects any
+// other cleanup request on the table while it is in progress, can only be
+// waited for.
+SEASTAR_TEST_CASE(cleanup_waiting_for_staging_sstables_can_be_stopped_test) {
+    return test_env::do_with_async([] (test_env& env) {
+        simple_schema ss;
+        auto s = ss.schema();
+        auto pks = ss.make_pkeys(2); // in ring order
+
+        auto make_mut = [&] (const dht::decorated_key& pk) {
+            auto m = mutation(s, pk);
+            m.partition().apply_insert(*s, ss.make_ckey(0), ss.new_timestamp());
+            return m;
+        };
+
+        auto t = env.make_table_for_tests(s);
+        auto close_t = deferred_stop(t);
+        t->disable_auto_compaction().get();
+        auto& cm = t->get_compaction_manager();
+        auto& view = t->try_get_compaction_group_view_with_static_sharding();
+        auto sst_gen = env.make_sst_factory(s);
+
+        // Only pks[0] is owned.
+        auto owned_ranges = make_lw_shared<const dht::token_range_vector>(dht::token_range_vector{
+            dht::token_range::make_singular(pks[0].token())
+        });
+
+        // A staging sstable requires cleanup but is not eligible for compaction
+        // until it is moved out of staging, so perform_cleanup() has to wait for it.
+        auto owned_mut = make_mut(pks[0]);
+        auto staging_sst = make_sstable_containing(sst_gen, {owned_mut, make_mut(pks[1])}).get();
+        staging_sst->change_state(sstable_state::staging).get();
+        t->add_sstable_and_update_cache(staging_sst).get();
+
+        auto start_cleanup_and_wait_until_it_waits = [&] {
+            auto cleanup = t->perform_cleanup_compaction(owned_ranges, tasks::make_empty_task_info());
+            while (!cm.requires_cleanup(view, staging_sst)) {
+                BOOST_REQUIRE(!cleanup.available());
+                yield().get();
+            }
+            return cleanup;
+        };
+        auto cleanup = start_cleanup_and_wait_until_it_waits();
+
+        // Stopping compactions of another type leaves the cleanup alone.
+        cm.stop_ongoing_compactions("test", compaction::compaction_type_set::of<compaction::compaction_type::Scrub>()).get();
+        for (int i = 0; i < 10; i++) {
+            yield().get();
+        }
+        BOOST_REQUIRE(!cleanup.available());
+
+        // Stopping Cleanup compactions stops it right away, well before its idle timeout.
+        cm.stop_ongoing_compactions("test", compaction::compaction_type_set::of<compaction::compaction_type::Cleanup>()).get();
+        BOOST_REQUIRE_EXCEPTION(with_timeout(lowres_clock::now() + std::chrono::seconds(5), std::move(cleanup)).get(), compaction::compaction_stopped_exception, [] (const compaction::compaction_stopped_exception& e) {
+            return std::string_view(e.what()).contains("test");
+        });
+        // The stopped cleanup keeps its state: the sstable still requires cleanup.
+        BOOST_REQUIRE(cm.requires_cleanup(view, staging_sst));
+
+        // A new cleanup is accepted, is not affected by the earlier stop request,
+        // and completes once the staging sstable becomes eligible.
+        cleanup = start_cleanup_and_wait_until_it_waits();
+        for (int i = 0; i < 10; i++) {
+            yield().get();
+        }
+        BOOST_REQUIRE(!cleanup.available());
+        t->move_sstables_from_staging({staging_sst}).get();
+        cleanup.get();
+        BOOST_REQUIRE(cm.sstables_requiring_cleanup(view).empty());
         assert_that(t->as_mutation_source().make_mutation_reader(s, env.make_reader_permit(), query::full_partition_range))
                 .produces(owned_mut)
                 .produces_end_of_stream();
