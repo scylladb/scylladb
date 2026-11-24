@@ -372,7 +372,8 @@ async def test_tombstone_gc_rf_one(manager: ScyllaClusterManager, tablets: bool)
                 log0 = await manager.server_open_log(servers[0].server_id)
                 m = await log0.mark()
 
-                await asyncio.gather(*[manager.api.enable_injection(s.ip_addr, f"block_tablet_streaming", False, parameters={'keyspace': keyspace, 'table': table}) for s in servers])
+                # The injection takes the table's name without the keyspace
+                await asyncio.gather(*[manager.api.enable_injection(s.ip_addr, f"block_tablet_streaming", False, parameters={'keyspace': keyspace, 'table': table.split('.')[1]}) for s in servers])
 
             rf_change_fut = cql.run_async(f"ALTER KEYSPACE {keyspace} WITH replication = {{ 'class': 'NetworkTopologyStrategy', 'dc1': {rf2_replication}}}")
 
