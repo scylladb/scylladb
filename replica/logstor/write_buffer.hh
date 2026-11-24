@@ -98,6 +98,11 @@ concept log_record_writer_concept = requires(const T& w, seastar::simple_memory_
     { w.write_frame(out) };
 };
 
+template <log_record_writer_concept Writer>
+size_t record_frame_size(const Writer& writer) noexcept {
+    return ondisk::record_frame_size(writer.header_size(), writer.value_size());
+}
+
 using record_location_with_holder = std::tuple<record_location, seastar::gate::holder>;
 
 // Holds the offset of a record frame in a chunk and the frame_size of the frame, as record_location
@@ -194,7 +199,7 @@ public:
 
     template <log_record_writer_concept Writer>
     bool fits(const Writer& writer) const noexcept {
-        return fits_frame(ondisk::record_frame_size(writer.header_size(), writer.value_size()));
+        return fits_frame(record_frame_size(writer));
     }
 
     bool has_data() const noexcept { return _record_count > 0; }
@@ -238,6 +243,13 @@ private:
     };
     std::optional<finished_body> _finished_body;
     bool _sealed{false};
+
+    // Fails with an internal error if the chunk is finished, or if a record frame header cannot
+    // describe the record header of `writer`.
+    // Throws std::runtime_error if the buffer has no room for the record frame of `writer` and its
+    // padding.
+    template <log_record_writer_concept Writer>
+    void validate_append(const Writer& writer) const;
 
     bool fits_frame(size_t frame_size) const noexcept;
 

@@ -53,28 +53,25 @@ void chunk_builder::reset() {
 }
 
 template <log_record_writer_concept Writer>
-frame_extent chunk_builder::append(const Writer& writer) {
-    const auto& header = writer.header();
-    const size_t header_size = writer.header_size();
-    const size_t value_size = writer.value_size();
-
-    if (header_size < ondisk::record_header_fixed_size) {
-        on_internal_error(logstor_logger, fmt::format("Record header size {} is below its fixed size {}", header_size, ondisk::record_header_fixed_size));
-    }
-    if (const size_t key_size = header_size - ondisk::record_header_fixed_size; key_size > ondisk::max_key_size) {
-        on_internal_error(logstor_logger, fmt::format("Partition key size {} exceeds the maximum {}", key_size, ondisk::max_key_size));
-    }
-
+void chunk_builder::validate_append(const Writer& writer) const {
     if (_finished_body) {
         on_internal_error(logstor_logger, "Cannot append a record to a finished chunk");
     }
-
-    const size_t frame_size = ondisk::record_frame_size(header_size, value_size);
-    if (!fits_frame(frame_size)) {
+    if (const size_t header_size = writer.header_size(); !ondisk::validate_record_header_size(header_size)) {
+        on_internal_error(logstor_logger, fmt::format("Record header size {} is outside the range [{}, {}]",
+                header_size, ondisk::record_header_fixed_size, ondisk::max_record_header_size));
+    }
+    if (const size_t frame_size = record_frame_size(writer); !fits_frame(frame_size)) {
         throw std::runtime_error(fmt::format("Record frame of {} bytes, {} with its padding, does not fit the {} bytes left in the buffer",
                 frame_size, align_up(frame_size, ondisk::record_alignment), _stream.size()));
     }
+}
 
+template <log_record_writer_concept Writer>
+frame_extent chunk_builder::append(const Writer& writer) {
+    validate_append(writer);
+
+    const size_t frame_size = record_frame_size(writer);
     const size_t padded_size = align_up(frame_size, ondisk::record_alignment);
     const size_t frame_offset = serialized_size();
 
@@ -90,10 +87,11 @@ frame_extent chunk_builder::append(const Writer& writer) {
     out.fill('\0', out.size());
     _stream.skip(padded_size);
 
+    const auto token = writer.header().key.token();
     _record_bytes += frame_size;
     _record_count++;
-    _min_token = _min_token ? std::min(*_min_token, header.key.token()) : header.key.token();
-    _max_token = _max_token ? std::max(*_max_token, header.key.token()) : header.key.token();
+    _min_token = _min_token ? std::min(*_min_token, token) : token;
+    _max_token = _max_token ? std::max(*_max_token, token) : token;
 
     return frame_extent {
         .offset = static_cast<uint32_t>(frame_offset),
@@ -681,7 +679,7 @@ future<buffered_write_result> write_buffer_ring::write_to_buffer(log_record_writ
         return make_exception_future<buffered_write_result>(std::runtime_error(
                 fmt::format("Write size {} exceeds the maximum record size {}", writer.record_size(), max_size)));
     }
-    const size_t key_size = writer.header_size() - ondisk::record_header_fixed_size;
+    const size_t key_size = ondisk::record_key_size(writer.header_size());
     if (key_size > ondisk::max_key_size) [[unlikely]] {
         return make_exception_future<buffered_write_result>(std::runtime_error(
                 fmt::format("Partition key size {} exceeds the maximum {}", key_size, ondisk::max_key_size)));

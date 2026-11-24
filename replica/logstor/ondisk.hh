@@ -365,6 +365,21 @@ constexpr size_t record_header_size(const record_frame_header& frame_header) noe
     return record_header_size(frame_header.key_size);
 }
 
+// Returns the size of the partition key in a record header of `header_size` bytes.
+// The caller must make sure that `header_size` is at least record_header_fixed_size.
+constexpr size_t record_key_size(size_t header_size) noexcept {
+    return header_size - record_header_fixed_size;
+}
+
+// The size of the largest record header, whose partition key has max_key_size bytes.
+inline constexpr size_t max_record_header_size = record_header_size(max_key_size);
+
+// Returns true if a record frame header can describe a record header of `header_size` bytes: the
+// record header holds the fixed part, and its key fits in record_frame_header::key_size.
+constexpr bool validate_record_header_size(size_t header_size) noexcept {
+    return header_size >= record_header_fixed_size && header_size <= max_record_header_size;
+}
+
 template <typename Output>
 void write_record_header(Output& out, const record_header& h) {
     ser::serializer<record_header_fixed>::write(out, record_header_fixed {
@@ -414,7 +429,7 @@ template <typename Output>
 void write_record_frame(Output& out, const record_header& header, const record_value& value) {
     const size_t header_size = record_header_size(header);
     ser::serializer<record_frame_header>::write(out, record_frame_header {
-        .key_size = static_cast<uint16_t>(header_size - record_header_fixed_size),
+        .key_size = static_cast<uint16_t>(record_key_size(header_size)),
         .flags = 0,
         .value_size = static_cast<uint32_t>(value.size()),
     });
@@ -429,7 +444,7 @@ template <typename Output>
 void write_record_frame(Output& out, log_record_bytes_view record_view) {
     static_assert(known_record_flags == 0, "A copied record must carry its flags before a record flag is defined");
     ser::serializer<record_frame_header>::write(out, record_frame_header {
-        .key_size = static_cast<uint16_t>(record_view.header.size() - record_header_fixed_size),
+        .key_size = static_cast<uint16_t>(record_key_size(record_view.header.size())),
         .flags = 0,
         .value_size = static_cast<uint32_t>(record_view.value.size()),
     });
