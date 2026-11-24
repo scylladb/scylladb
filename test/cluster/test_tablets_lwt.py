@@ -14,7 +14,7 @@ from cassandra import Unauthorized
 from test.cluster.lwt.lwt_common import wait_for_tablet_count
 from test.cluster.util import new_test_keyspace, unique_name, reconnect_driver
 from test.pylib.manager_client import ManagerClient
-from test.pylib.util import wait_for_cql_and_get_hosts
+from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
 from test.pylib.internal_types import ServerInfo
 from test.pylib.tablets import get_all_tablet_replicas
 from test.pylib.scylla_cluster import ReplaceConfig
@@ -450,6 +450,46 @@ async def test_lwt_concurrent_base_table_recreation(manager: ManagerClient):
 
         with pytest.raises(WriteFailure):
             await lwt_task
+
+
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
+async def test_lwt_base_table_dropped_while_waiting_for_cas_lock(manager: ManagerClient):
+    # Reproduces SCYLLADB-6302. An LWT that waited for the coordinator's lock on its key
+    # while the table was dropped read the freed table once it got the lock.
+
+    server = await manager.server_add()
+    cql = manager.get_cql()
+
+    logger.info("Create a keyspace")
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
+        logger.info(f"Create table {ks}.test")
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+
+        logger.info("Inject paxos_accept_proposal_wait")
+        handler = await inject_error_one_shot(manager.api, server.ip_addr, "paxos_accept_proposal_wait")
+
+        logger.info("Start the first LWT, which stops in accept holding the lock on its key")
+        lwt1 = cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES (1, 1) IF NOT EXISTS")
+        await manager.api.wait_for_injection_enter(server.ip_addr, "paxos_accept_proposal_wait")
+
+        logger.info("Start the second LWT on the same key and wait until it queues for the lock")
+        lwt2 = cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES (1, 2) IF NOT EXISTS")
+
+        async def both_lwts_running():
+            metrics = await manager.metrics.query(server.ip_addr)
+            return True if metrics.get("scylla_storage_proxy_coordinator_cas_foreground") == 2 else None
+        await wait_for(both_lwts_running, time.time() + 60)
+
+        logger.info(f"Drop table {ks}.test")
+        await cql.run_async(f"DROP TABLE {ks}.test;")
+
+        logger.info("Release the first LWT")
+        await handler.message()
+
+        with pytest.raises(WriteFailure):
+            await lwt1
+        with pytest.raises(WriteFailure):
+            await lwt2
 
 
 @pytest.mark.skip_mode(mode='debug', reason='aarch64/debug is unpredictably slow', platform_key='aarch64')
