@@ -2663,9 +2663,24 @@ void logstor_group::switch_active_separator_buffer() {
     _separator_flush = shared_future(logstor_compaction_manager().flush_separator_buffer(_flushing_buffer, *this));
 }
 
+future<> logstor_group::wait_for_active_separator_buffer() {
+    if (_active_buffer_allocation.available()) {
+        _active_buffer_allocation = shared_future(allocate_active_separator_buffer());
+    }
+    return _active_buffer_allocation.get_future();
+}
+
 future<> logstor_group::allocate_active_separator_buffer() {
     auto buf = co_await logstor_compaction_manager().allocate_separator_buffer();
-    if (_separator_enabled && !_active_buffer.allocated()) {
+    co_await utils::get_local_injector().inject("logstor_separator_buffer_allocated",
+            utils::wait_for_message(std::chrono::seconds{60}));
+    // The other writers of the group wait for this allocation and do not allocate a buffer.
+    // A switch needs an active buffer that holds records, so no switch happens during the wait.
+    if (_active_buffer.allocated()) {
+        on_internal_error(logstor_logger, fmt::format(
+                "The active separator buffer of table {} got a second pool buffer", table_id()));
+    }
+    if (_separator_enabled) {
         _active_buffer.buf = std::move(buf);
     }
 }
@@ -2678,7 +2693,7 @@ future<> logstor_group::write_to_separator(Writer writer, segment_ref seg_ref, s
         }
 
         if (!_active_buffer.allocated()) {
-            co_await allocate_active_separator_buffer();
+            co_await wait_for_active_separator_buffer();
             continue;
         }
 

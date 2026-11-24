@@ -440,12 +440,16 @@ class logstor_group {
     separator_buffer _flushing_buffer;
     uint64_t _separator_generation{1};
     shared_future<> _separator_flush{make_ready_future<>()};
+    shared_future<> _active_buffer_allocation{make_ready_future<>()};
     // Whether the separator may write to this group. The group must be registered with the compaction
     // manager in order for it to be enabled.
     bool _separator_enabled{false};
 
     void switch_active_separator_buffer();
 
+    // Waits for the allocation of the active buffer, and starts the allocation if none is in
+    // progress.
+    future<> wait_for_active_separator_buffer();
     future<> allocate_active_separator_buffer();
 
 protected:

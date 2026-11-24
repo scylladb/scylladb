@@ -2815,6 +2815,88 @@ SEASTAR_THREAD_TEST_CASE(test_logstor_closed_group_takes_no_separator_writes) {
     assert_that(*actual).is_equal_to(expected);
 }
 
+#ifdef SCYLLA_ENABLE_ERROR_INJECTION
+
+// Checks that two separator writers of one group that find no active buffer wait for one pool
+// buffer, and that the group keeps that buffer for the records of both writers.
+SEASTAR_THREAD_TEST_CASE(test_logstor_separator_writers_of_a_group_share_one_buffer_allocation) {
+    auto schema = make_kv_schema();
+    tmpdir dir;
+
+    shared_logstor_cache cache;
+    logstor ls(make_test_logstor_config(dir.path()), cache.shared_tracker);
+    test_recovery_catalog no_tables;
+    ls.do_recovery(no_tables).get();
+    ls.start().get();
+    auto stop_store = seastar::defer([&ls] noexcept { ls.stop().get(); });
+
+    test_logstor_group cg(schema, ls);
+
+    // Put two records in a full segment of the group, and then separate them again from that
+    // segment.
+    const sstring value = "separator-value";
+    const auto keys = std::array<sstring, 2>{"pk0", "pk1"};
+    for (const auto& pk : keys) {
+        ls.write(make_kv_mutation(schema, pk, value), write_target(&cg, {}), db::no_timeout).get();
+    }
+    ls.flush_to_separator().get();
+    cg.flush_separator().get();
+    auto snapshot = ls.get_segment_manager().make_snapshot(cg).get();
+    BOOST_REQUIRE_EQUAL(snapshot.size(), 1u);
+
+    constexpr std::string_view allocated = "logstor_separator_buffer_allocated";
+    auto& injector = utils::get_local_injector();
+    injector.enable(allocated);
+    auto disable = seastar::defer([&injector, allocated] noexcept { injector.disable(allocated); });
+
+    auto separate = [&] (const sstring& pk) {
+        auto record = make_log_record(schema, pk, value);
+        auto key = record.header.index_key();
+        auto entry = lookup_location(cg.logstor_index(), key, *schema);
+        BOOST_REQUIRE(entry);
+        auto update = separator_index_update{
+            .index = &cg.logstor_index(),
+            .key = key,
+            .prev_location = *entry,
+        };
+        return cg.write_to_separator(log_record_writer(std::move(record)), snapshot.front().seg_ref,
+                std::nullopt, std::move(update));
+    };
+
+    auto first = separate(keys[0]);
+    BOOST_REQUIRE(eventually_true([&] { return injector.waiters(allocated) == 1; }));
+
+    // The pool has a buffer for each group and a reserve, so a second allocation would get a buffer
+    // at once and wait at the injection too.
+    auto second = separate(keys[1]);
+    for (int i = 0; i < 10; ++i) {
+        seastar::thread::yield();
+    }
+    BOOST_REQUIRE_EQUAL(injector.waiters(allocated), 1u);
+
+    injector.receive_message(allocated);
+    first.get();
+    second.get();
+
+    // Both records are in the buffer that the group kept.
+    BOOST_REQUIRE(cg.separator_has_data());
+    BOOST_REQUIRE_EQUAL(cg.separator_held_segment_count(), 1u);
+    cg.flush_separator().get();
+    BOOST_REQUIRE(!cg.separator_has_data());
+
+    for (const auto& pk : keys) {
+        auto m = make_kv_mutation(schema, pk, value);
+        auto entry = lookup_location(cg.logstor_index(), make_index_key(*schema, m.decorated_key()), *schema);
+        BOOST_REQUIRE(entry);
+        BOOST_REQUIRE(entry->segment != snapshot.front().segment_id);
+        auto actual = read_mutation(ls, schema, cg.logstor_index(), m.decorated_key(), schema->full_slice()).get();
+        BOOST_REQUIRE(actual);
+        assert_that(*actual).is_equal_to(m);
+    }
+}
+
+#endif // SCYLLA_ENABLE_ERROR_INJECTION
+
 // The live bytes of a segment set are maintained as segments are linked, freed from and unlinked,
 // rather than computed by walking it, so every one of those paths has to keep them in step with the
 // segments the set actually holds.
