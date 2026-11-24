@@ -91,6 +91,9 @@ public:
         SCYLLA_ASSERT(is_leader());
         return bool(leader_state().stepdown);
     }
+    ssize_t log_limiter_available() const {
+        return leader_state().log_limiter_semaphore->available_units();
+    }
 };
 
 // NOTE: it doesn't compare data contents, just the data type
@@ -141,6 +144,9 @@ raft::server_id id();
 raft::server_address_set address_set(std::vector<raft::server_id> ids);
 raft::config_member_set config_set(std::vector<raft::server_id> ids);
 fsm_debug create_follower(raft::server_id id, raft::log log,
+        raft::failure_detector& fd = trivial_failure_detector);
+fsm_debug create_follower(raft::server_id id, raft::log log,
+        std::vector<raft::server_id> priority_members,
         raft::failure_detector& fd = trivial_failure_detector);
 
 

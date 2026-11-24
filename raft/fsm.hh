@@ -142,8 +142,9 @@ struct fsm_config {
     // ascending server_id order. Callers that manage many groups (e.g. one per
     // tablet) can derive the seed from the group id so that leadership is spread
     // across nodes instead of always landing on the smallest-id one; a seed of 0
-    // selects the smallest-id voter. When unset (the default), fast bootstrap is
-    // disabled and a bare fsm starts as a follower; raft::server sets it.
+    // selects the smallest-id voter, and the preferred leader, if there is one,
+    // takes precedence over the seed. When unset (the default), fast bootstrap is disabled and
+    // a bare fsm starts as a follower; raft::server sets it.
     std::optional<uint64_t> fast_bootstrap_seed;
     // LeaseGuard leader-lease parameters. Absent unless leases are enabled for
     // this server. When present, the leader records `clock.interval_now()` in
@@ -159,6 +160,14 @@ struct fsm_config {
         lease_clock::duration delta;
     };
     std::optional<leaseguard_config> leaseguard;
+    // Servers to prefer as leader, best first. The first one which can vote and is
+    // alive gets the earliest election timeout slot - unless its own clock is unusable
+    // while leases are on - and everybody else randomizes after it. A bias, not a
+    // guarantee. A leader hands the leadership over to a server ahead of it on the
+    // list once that one keeps up with its log. Read whenever the election timer is
+    // armed or the leader ticks, and replaced by fsm::set_priority_members(). Empty =>
+    // ordinary Raft.
+    std::vector<server_id> priority_members;
 };
 
 class fsm;
@@ -195,6 +204,10 @@ struct leader {
     // contains a time point in the future the transfer will be aborted at
     // unless completes successfully till then.
     std::optional<logical_clock::time_point> stepdown;
+    // No automatic transfer is started before this; see maybe_transfer_leadership().
+    logical_clock::time_point transfer_retry_not_before;
+    // _log.last_idx() as of the previous tick; see handover_target().
+    index_t last_idx_at_prev_tick;
     // If timeout_now was already sent to one of the followers contains the id of the follower
     // it was sent to
     std::optional<server_id> timeout_now_sent;
@@ -248,17 +261,6 @@ struct leader {
     // commit is deferred, so the warning is emitted once per leadership term
     // rather than once per tick.
     bool clock_unavailable_warned = false;
-    // LeaseGuard: elapsed-time reading at which our clock last became unusable,
-    // or empty while it is usable. A leader with no clock can serve no local
-    // reads, stamp nothing and renew nothing, so once this has persisted we hand
-    // leadership to a replica whose clock works. Measured on the monotonic clock
-    // precisely because the clock being judged is the one that failed.
-    std::optional<mono_clock::time_point> clock_unusable_since;
-    // LeaseGuard: per-group delay added to that wait. Scylla runs one raft group
-    // per strongly-consistent tablet, so without it a single node's clock
-    // failure would transfer every group it leads at the same instant -- and
-    // again in reverse when the clock recovers. Drawn once per leadership term.
-    mono_clock::duration clock_stepdown_jitter{0};
 
     leader(size_t max_log_size, const class fsm& fsm_) : fsm(fsm_), log_limiter_semaphore(make_lw_shared<seastar::semaphore>(max_log_size)) {}
     leader(leader&&) = default;
@@ -330,6 +332,8 @@ class fsm {
     // Set if we want to actively search for a leader.
     // Can be true only if the leader is not known
     bool _ping_leader = false;
+    // See decline_leadership().
+    bool _declines_leadership = false;
     // LeaseGuard: whether our bounded clock was usable at the last tick, i.e.
     // whether we could hold a lease. Reported to the leader in
     // append_reply::clock_ok so it can hand leadership to a node that still can.
@@ -340,6 +344,13 @@ class fsm {
     // only feeds a leadership decision gated on the failure persisting for
     // multiples of delta -- a tick of staleness cannot matter.
     bool _clock_ok = false;
+    // LeaseGuard: elapsed-time reading at which our clock last became unusable,
+    // or empty while it is usable. A leader with no clock can serve no local
+    // reads, stamp nothing and renew nothing, so once this has persisted we hand
+    // leadership to a replica whose clock works. Measured on the monotonic clock
+    // precisely because the clock being judged is the one that failed. Never set
+    // while leases are off.
+    std::optional<mono_clock::time_point> _clock_unusable_since;
     // memory_usage_of() the first entry the last append_request that carried
     // entries had no room for, or 0 if it had room for all of them. The log is
     // contiguous, so it is the entry a leader has to send us next.
@@ -441,10 +452,33 @@ private:
     // delta old. When true the leader may serve a linearizable read locally
     // without a quorum round-trip. Precondition: is_leader().
     bool can_serve_lease_read();
-    // LeaseGuard: hand leadership to a replica whose clock still works, if ours
-    // has been unusable long enough and such a replica exists. A no-op unless
-    // leases are enabled. Precondition: is_leader(), not already stepping down.
-    void maybe_transfer_leadership_on_clock_loss();
+    // LeaseGuard: samples the clock into _clock_ok and _clock_unusable_since. A
+    // no-op unless leases are enabled.
+    void sample_clock();
+    // LeaseGuard: whether our clock has been unusable long enough to hand the
+    // leadership away. False unless leases are enabled.
+    bool clock_lost() const;
+    // The first of the priority members which can vote and, if `skip_dead`, is not
+    // reported dead by the failure detector; nullopt if there is none.
+    std::optional<server_id> preferred_leader(bool skip_dead) const;
+    // A server's position in the priority list. Servers outside the list share the
+    // position past its end.
+    size_t priority_of(server_id id) const;
+    // Among the other voters matching pred, the one which would lead best, or null.
+    // Precondition: is_leader().
+    template <typename Pred>
+    const follower_progress* best_leader(Pred pred) const;
+    struct handover {
+        server_id target;
+        // Why the leadership moves; logged.
+        const char* reason;
+    };
+    // Whether to start handing the leadership over now, and to whom.
+    // Precondition: is_leader().
+    std::optional<handover> handover_target() const;
+    // Acts on handover_target(), unless backing off after a previous attempt.
+    // Precondition: is_leader(), not already stepping down.
+    void maybe_transfer_leadership();
     // Check if the randomized election timeout has expired.
     bool is_past_election_timeout() const {
         return election_elapsed() >= _randomized_election_timeout;
@@ -736,6 +770,11 @@ public:
     // transfer with no one to hand leadership to. It then waits out `timeout` with the log limiter
     // consumed - the group takes no writes for that whole time - before tick_leader() cancels it.
     void transfer_leadership(logical_clock::duration timeout = logical_clock::duration(0), server_id target = {});
+    // Replaces fsm_config::priority_members. A leader acts on the new list at once.
+    void set_priority_members(std::vector<server_id> members);
+    // From now on this server starts no election, not even when a leader asks it to
+    // with timeout_now.
+    void decline_leadership();
 
     void stop();
 
