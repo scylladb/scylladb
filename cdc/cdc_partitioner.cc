@@ -41,7 +41,7 @@ cdc_partitioner::get_token(const sstables::key_view& key) const {
 }
 
 dht::token
-cdc_partitioner::get_token(const schema& s, partition_key_view key) const {
+cdc_partitioner::get_token(const schema& s, const partition_key_view& key) const {
     auto exploded_key = key.explode(s);
     return to_token(exploded_key[0]);
 }

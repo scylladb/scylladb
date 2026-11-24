@@ -54,7 +54,7 @@ static uint16_t compute_shard(managed_bytes_view mb) {
     return shard_value;
 }
 
-dht::token fixed_shard_partitioner::get_token(const schema& s, partition_key_view key) const {
+dht::token fixed_shard_partitioner::get_token(const schema& s, const partition_key_view& key) const {
     uint16_t shard_value = compute_shard(*key.begin());
     std::array<uint64_t, 2> hash;
     auto&& legacy = key.legacy_form(s);

@@ -42,7 +42,7 @@ murmur3_partitioner::get_token(const sstables::key_view& key) const {
 }
 
 token
-murmur3_partitioner::get_token(const schema& s, partition_key_view key) const {
+murmur3_partitioner::get_token(const schema& s, const partition_key_view& key) const {
     std::array<uint64_t, 2> hash;
     // A key has one component only when its schema has one partition key
     // column, and the legacy form of such a key is the component itself.

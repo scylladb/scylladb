@@ -35,7 +35,7 @@ public:
         _partition.apply(t);
     }
 
-    virtual void accept_static_cell(column_id id, atomic_cell_view cell) override {
+    virtual void accept_static_cell(column_id id, const atomic_cell_view& cell) override {
         auto& cdef = _schema.static_column_at(id);
         accept_static_cell(id, atomic_cell(*cdef.type, cell));
     }
@@ -65,7 +65,7 @@ public:
         _current_row = &r;
     }
 
-    virtual void accept_row_cell(column_id id, atomic_cell_view cell) override {
+    virtual void accept_row_cell(column_id id, const atomic_cell_view& cell) override {
         auto& cdef = _schema.regular_column_at(id);
         accept_row_cell(id, atomic_cell(*cdef.type, cell));
     }
@@ -124,7 +124,7 @@ public:
         _partition->apply(t);
     }
 
-    virtual void accept_static_cell(column_id id, atomic_cell_view cell) override {
+    virtual void accept_static_cell(column_id id, const atomic_cell_view& cell) override {
         auto& cdef = _schema->static_column_at(id);
         accept_static_cell(id, atomic_cell(*cdef.type, cell));
     }
@@ -154,7 +154,7 @@ public:
         ++_current_rows;
     }
 
-    virtual void accept_row_cell(column_id id, atomic_cell_view cell) override {
+    virtual void accept_row_cell(column_id id, const atomic_cell_view& cell) override {
         auto& cdef = _schema->regular_column_at(id);
         accept_row_cell(id, atomic_cell(*cdef.type, cell));
     }

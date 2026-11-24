@@ -266,7 +266,7 @@ inline void write(sstable_version_types v, W& out, bytes_view s) {
 
 template <typename W>
 requires Writer<W>
-inline void write(sstable_version_types v, W& out, managed_bytes_view s) {
+inline void write(sstable_version_types v, W& out, const managed_bytes_view& s) {
     for (bytes_view fragment : fragment_range(s)) {
         write(v, out, fragment);
     }
@@ -521,7 +521,7 @@ void write_column_name(sstable_version_types v, Writer& out, const schema& s, co
 
 template <typename W>
 requires Writer<W>
-void write_cell_value(sstable_version_types v, W& out, const abstract_type& type, managed_bytes_view value) {
+void write_cell_value(sstable_version_types v, W& out, const abstract_type& type, const managed_bytes_view& value) {
     if (!value.empty()) {
         if (type.value_length_if_fixed()) {
             write(v, out, value);

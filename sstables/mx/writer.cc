@@ -812,14 +812,14 @@ private:
     void record_corrupt_row(clustering_row&& clustered_row);
 
     // Writes single atomic cell
-    void write_cell(bytes_ostream& writer, const clustering_key_prefix* clustering_key, atomic_cell_view cell, const column_definition& cdef,
+    void write_cell(bytes_ostream& writer, const clustering_key_prefix* clustering_key, const atomic_cell_view& cell, const column_definition& cdef,
         const row_time_properties& properties, std::optional<bytes_view> cell_path = {});
 
     // Writes information about row liveness (formerly 'row marker')
     void write_liveness_info(bytes_ostream& writer, const row_marker& marker);
 
     // Writes a collection of cells, representing either a CQL collection or fields of a non-frozen user type
-    void write_collection(bytes_ostream& writer, const clustering_key_prefix* clustering_key, const column_definition& cdef, collection_mutation_view collection,
+    void write_collection(bytes_ostream& writer, const clustering_key_prefix* clustering_key, const column_definition& cdef, const collection_mutation_view& collection,
         const row_time_properties& properties, bool has_complex_deletion);
 
     void write_cells(bytes_ostream& writer, const clustering_key_prefix* clustering_key, column_kind kind,
@@ -1327,7 +1327,7 @@ void writer::maybe_record_large_cells(const sstables::sstable& sst, const sstabl
     }
 }
 
-void writer::write_cell(bytes_ostream& writer, const clustering_key_prefix* clustering_key, atomic_cell_view cell,
+void writer::write_cell(bytes_ostream& writer, const clustering_key_prefix* clustering_key, const atomic_cell_view& cell,
          const column_definition& cdef, const row_time_properties& properties, std::optional<bytes_view> cell_path) {
 
     uint64_t current_pos = writer.size();
@@ -1454,7 +1454,7 @@ void writer::write_liveness_info(bytes_ostream& writer, const row_marker& marker
 }
 
 void writer::write_collection(bytes_ostream& writer, const clustering_key_prefix* clustering_key,
-        const column_definition& cdef, collection_mutation_view collection, const row_time_properties& properties,
+        const column_definition& cdef, const collection_mutation_view& collection, const row_time_properties& properties,
         bool has_complex_deletion) {
     uint64_t current_pos = writer.size();
     uint64_t collection_elements = 0;

@@ -54,7 +54,7 @@ public:
      * (This is NOT a method to create a token from its string representation;
      * for that, use tokenFactory.fromString.)
      */
-    virtual token get_token(const schema& s, partition_key_view key) const = 0;
+    virtual token get_token(const schema& s, const partition_key_view& key) const = 0;
     virtual token get_token(const sstables::key_view& key) const = 0;
 
     // FIXME: token.tokenFactory
@@ -86,7 +86,7 @@ inline decorated_key decorate_key(const schema& s, partition_key&& key) {
     return s.get_partitioner().decorate_key(s, std::move(key));
 }
 
-inline token get_token(const schema& s, partition_key_view key) {
+inline token get_token(const schema& s, const partition_key_view& key) {
     return s.get_partitioner().get_token(s, key);
 }
 

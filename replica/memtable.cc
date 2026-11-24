@@ -40,7 +40,7 @@ memtable::memtable_encoding_stats_collector::memtable_encoding_stats_collector()
     , min_live_row_marker_timestamp(api::max_timestamp)
 {}
 
-void memtable::memtable_encoding_stats_collector::update(atomic_cell_view cell) noexcept {
+void memtable::memtable_encoding_stats_collector::update(const atomic_cell_view& cell) noexcept {
     is_live is_live = ::is_live(cell.is_live());
     update_timestamp(cell.timestamp(), is_live);
     if (cell.is_live_and_has_ttl()) {

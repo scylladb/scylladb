@@ -422,7 +422,7 @@ struct fmt::formatter<atomic_cell::printer> {
 
 class column_definition;
 
-std::strong_ordering compare_atomic_cell_for_merge(atomic_cell_view left, atomic_cell_view right);
+std::strong_ordering compare_atomic_cell_for_merge(const atomic_cell_view& left, const atomic_cell_view& right);
 void merge_column(const abstract_type& def,
         atomic_cell_or_collection& old,
         const atomic_cell_or_collection& neww);

@@ -31,7 +31,7 @@ public:
         feed_hash(_h, t);
     }
 
-    virtual void accept_static_cell(column_id id, atomic_cell_view cell) override {
+    virtual void accept_static_cell(column_id id, const atomic_cell_view& cell) override {
         auto&& col = _s.static_column_at(id);
         feed_hash(_h, col.name());
         feed_hash(_h, col.type->name());
@@ -58,7 +58,7 @@ public:
         feed_hash(_h, rm);
     }
 
-    virtual void accept_row_cell(column_id id, atomic_cell_view cell) override {
+    virtual void accept_row_cell(column_id id, const atomic_cell_view& cell) override {
         auto&& col = _s.regular_column_at(id);
         feed_hash(_h, col.name());
         feed_hash(_h, col.type->name());

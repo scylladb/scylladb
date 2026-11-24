@@ -632,7 +632,7 @@ using managed_bytes_view_opt = std::optional<managed_bytes_view>;
 inline bytes to_bytes(const managed_bytes& v) {
     return linearized(managed_bytes_view(v));
 }
-inline bytes to_bytes(managed_bytes_view v) {
+inline bytes to_bytes(const managed_bytes_view& v) {
     return linearized(v);
 }
 
@@ -727,7 +727,7 @@ void write_fragmented(managed_bytes_mutable_view& out, std::string_view val) {
 template<>
 struct appending_hash<managed_bytes_view> {
     template<Hasher Hasher>
-    void operator()(Hasher& h, managed_bytes_view v) const {
+    void operator()(Hasher& h, const managed_bytes_view& v) const {
         feed_hash(h, v.size_bytes());
         for (bytes_view frag : fragment_range(v)) {
             h.update(reinterpret_cast<const char*>(frag.data()), frag.size());
@@ -738,7 +738,7 @@ struct appending_hash<managed_bytes_view> {
 namespace std {
 template <>
 struct hash<managed_bytes_view> {
-    size_t operator()(managed_bytes_view v) const {
+    size_t operator()(const managed_bytes_view& v) const {
         if (v.is_linearized()) [[likely]] {
             return std::hash<bytes_view>{}(v.current_fragment());
         }
@@ -746,7 +746,7 @@ struct hash<managed_bytes_view> {
     }
 private:
     // Out of line so the hasher state's large aligned frame stays off the hot path.
-    [[gnu::noinline]] static size_t hash_fragmented(managed_bytes_view v) {
+    [[gnu::noinline]] static size_t hash_fragmented(const managed_bytes_view& v) {
         XXH3_state_t st;
         XXH3_64bits_reset(&st);
         for (bytes_view frag : fragment_range(v)) {

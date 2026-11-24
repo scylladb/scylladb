@@ -111,7 +111,7 @@ converting_mutation_partition_applier::accept_static_cell(column_id id, atomic_c
 }
 
 void
-converting_mutation_partition_applier::accept_static_cell(column_id id, atomic_cell_view cell) {
+converting_mutation_partition_applier::accept_static_cell(column_id id, const atomic_cell_view& cell) {
     const column_mapping_entry& col = _visited_column_mapping.static_column_at(id);
     const column_definition* def = _p_schema.get_column_definition(col.name());
     if (def) {
@@ -147,7 +147,7 @@ converting_mutation_partition_applier::accept_row_cell(column_id id, atomic_cell
 }
 
 void
-converting_mutation_partition_applier::accept_row_cell(column_id id, atomic_cell_view cell) {
+converting_mutation_partition_applier::accept_row_cell(column_id id, const atomic_cell_view& cell) {
     const column_mapping_entry& col = _visited_column_mapping.regular_column_at(id);
     const column_definition* def = _p_schema.get_column_definition(col.name());
     if (def) {

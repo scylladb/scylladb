@@ -142,7 +142,7 @@ static const char* empty_type_name     = "org.apache.cassandra.db.marshal.EmptyT
 template<typename T>
 struct simple_type_traits {
     static constexpr size_t serialized_size = sizeof(T);
-    static T read_nonempty(managed_bytes_view v) {
+    static T read_nonempty(const managed_bytes_view& v) {
         return read_simple_exactly<T>(v);
     }
 };
@@ -150,7 +150,7 @@ struct simple_type_traits {
 template<>
 struct simple_type_traits<bool> {
     static constexpr size_t serialized_size = 1;
-    static bool read_nonempty(managed_bytes_view v) {
+    static bool read_nonempty(const managed_bytes_view& v) {
         return read_simple_exactly<int8_t>(v) != 0;
     }
 };
@@ -158,7 +158,7 @@ struct simple_type_traits<bool> {
 template<>
 struct simple_type_traits<db_clock::time_point> {
     static constexpr size_t serialized_size = sizeof(uint64_t);
-    static db_clock::time_point read_nonempty(managed_bytes_view v) {
+    static db_clock::time_point read_nonempty(const managed_bytes_view& v) {
         return db_clock::time_point(db_clock::duration(read_simple_exactly<int64_t>(v)));
     }
 };
@@ -460,7 +460,7 @@ template <> struct int_of_size<float> :
 template <typename T>
 struct float_type_traits {
     static constexpr size_t serialized_size = sizeof(typename int_of_size<T>::itype);
-    static double read_nonempty(managed_bytes_view v) {
+    static double read_nonempty(const managed_bytes_view& v) {
         return std::bit_cast<T>(read_simple_exactly<typename int_of_size<T>::itype>(v));
     }
 };
@@ -2792,7 +2792,7 @@ std::strong_ordering abstract_type::compare(bytes_view v1, bytes_view v2) const 
     return compare(managed_bytes_view(v1), managed_bytes_view(v2));
 }
 
-std::strong_ordering abstract_type::compare(managed_bytes_view v1, managed_bytes_view v2) const {
+std::strong_ordering abstract_type::compare(const managed_bytes_view& v1, const managed_bytes_view& v2) const {
     try {
         return visit(*this, compare_visitor{v1, v2});
     } catch (const marshal_exception&) {
@@ -2800,11 +2800,11 @@ std::strong_ordering abstract_type::compare(managed_bytes_view v1, managed_bytes
     }
 }
 
-std::strong_ordering abstract_type::compare(managed_bytes_view v1, bytes_view v2) const {
+std::strong_ordering abstract_type::compare(const managed_bytes_view& v1, bytes_view v2) const {
     return compare(v1, managed_bytes_view(v2));
 }
 
-std::strong_ordering abstract_type::compare(bytes_view v1, managed_bytes_view v2) const {
+std::strong_ordering abstract_type::compare(bytes_view v1, const managed_bytes_view& v2) const {
     return compare(managed_bytes_view(v1), v2);
 }
 
@@ -2817,7 +2817,7 @@ bool abstract_type::equal(bytes_view v1, bytes_view v2) const {
     });
 }
 
-bool abstract_type::equal(managed_bytes_view v1, managed_bytes_view v2) const {
+bool abstract_type::equal(const managed_bytes_view& v1, const managed_bytes_view& v2) const {
     return ::visit(*this, [&](const auto& t) {
         if (is_byte_order_equal_visitor{}(t)) {
             return compare_unsigned(v1, v2) == 0;
@@ -2826,11 +2826,11 @@ bool abstract_type::equal(managed_bytes_view v1, managed_bytes_view v2) const {
     });
 }
 
-bool abstract_type::equal(managed_bytes_view v1, bytes_view v2) const {
+bool abstract_type::equal(const managed_bytes_view& v1, bytes_view v2) const {
     return equal(v1, managed_bytes_view(v2));
 }
 
-bool abstract_type::equal(bytes_view v1, managed_bytes_view v2) const {
+bool abstract_type::equal(bytes_view v1, const managed_bytes_view& v2) const {
     return equal(managed_bytes_view(v1), v2);
 }
 
@@ -2912,9 +2912,9 @@ size_t abstract_type::hash(bytes_view v) const {
     return hash(managed_bytes_view(v));
 }
 
-size_t abstract_type::hash(managed_bytes_view v) const {
+size_t abstract_type::hash(const managed_bytes_view& v) const {
     struct visitor {
-        managed_bytes_view v;
+        const managed_bytes_view& v;
         size_t operator()(const reversed_type_impl& t) { return t.underlying_type()->hash(v); }
         size_t operator()(const counter_type_impl&) { return long_type->hash(v); }
         size_t operator()(const abstract_type& t) { return std::hash<managed_bytes_view>()(v); }

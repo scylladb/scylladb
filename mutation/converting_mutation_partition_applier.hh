@@ -46,12 +46,12 @@ public:
             mutation_partition& target);
     virtual void accept_partition_tombstone(tombstone t) override;
     void accept_static_cell(column_id id, atomic_cell cell);
-    virtual void accept_static_cell(column_id id, atomic_cell_view cell) override;
+    virtual void accept_static_cell(column_id id, const atomic_cell_view& cell) override;
     virtual void accept_static_cell(column_id id, collection_mutation_view collection) override;
     virtual void accept_row_tombstone(const range_tombstone& rt) override;
     virtual void accept_row(position_in_partition_view key, const row_tombstone& deleted_at, const row_marker& rm, is_dummy dummy, is_continuous continuous) override;
     void accept_row_cell(column_id id, atomic_cell cell);
-    virtual void accept_row_cell(column_id id, atomic_cell_view cell) override;
+    virtual void accept_row_cell(column_id id, const atomic_cell_view& cell) override;
     virtual void accept_row_cell(column_id id, collection_mutation_view collection) override;
 
     // Appends the cell to dst upgrading it to the new schema.

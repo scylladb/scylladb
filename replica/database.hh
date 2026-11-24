@@ -787,7 +787,7 @@ private:
     // Select a compaction group from a given token.
     compaction_group& compaction_group_for_token(dht::token token) const;
     // Select a compaction group from a given key.
-    compaction_group& compaction_group_for_key(partition_key_view key, const schema_ptr& s) const;
+    compaction_group& compaction_group_for_key(const partition_key_view& key, const schema_ptr& s) const;
     // Select a compaction group from a given sstable based on its token range.
     compaction_group& compaction_group_for_sstable(const sstables::shared_sstable& sst) const;
     // Select a compaction group from a given logstor segment based on its token range.

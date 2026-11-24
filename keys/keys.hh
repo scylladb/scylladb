@@ -537,7 +537,7 @@ public:
     // This does not produce ring order! Ring order first compares the key's
     // tokens and only falls back to legacy-tri-compare if the tokens are equal.
     // Only use this for partitions which map to the same token.
-    std::strong_ordering legacy_tri_compare(const schema& s, partition_key_view o) const;
+    std::strong_ordering legacy_tri_compare(const schema& s, const partition_key_view& o) const;
 
     // Checks if keys are equal in a way which is compatible with Origin.
     bool legacy_equal(const schema& s, partition_key_view o) const {
@@ -545,7 +545,7 @@ public:
     }
 
     // A trichotomic comparator which orders keys according to their ordering on the ring.
-    std::strong_ordering ring_order_tri_compare(const schema& s, partition_key_view o) const;
+    std::strong_ordering ring_order_tri_compare(const schema& s, const partition_key_view& o) const;
 
     void validate(const schema& s) const {
         return s.partition_key_type()->validate(representation());
