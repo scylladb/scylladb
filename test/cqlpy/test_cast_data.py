@@ -294,4 +294,15 @@ def test_cast_nan_and_infinity_to_varint(cql, table3, column):
         cql.execute(f'INSERT INTO {table3} (p, {column}) VALUES ({p}, {value})')
         assert [(expected,)] == list(cql.execute(f'SELECT CAST({column} AS varint) FROM {table3} WHERE p={p}')), value
 
+# NaN and infinities have no decimal value, so casting them to decimal fails.
+# Scylla used to fail with a server error, from parsing the text "nan" as a
+# decimal; Cassandra still does (a NumberFormatException).
+@pytest.mark.parametrize('column', ['f', 'db'])
+def test_cast_nan_and_infinity_to_decimal(cql, table3, column, cassandra_bug):
+    p = unique_key_int()
+    for value in ['NaN', 'Infinity', '-Infinity']:
+        cql.execute(f'INSERT INTO {table3} (p, {column}) VALUES ({p}, {value})')
+        with pytest.raises(InvalidRequest, match='cannot be cast to decimal'):
+            cql.execute(f'SELECT CAST({column} AS decimal) FROM {table3} WHERE p={p}')
+
 # TODO: test casts from more types.

@@ -154,6 +154,9 @@ static data_value castas_fctn_from_integer_to_decimal(data_value from) {
 template<typename FromType>
 static data_value castas_fctn_from_float_to_decimal(data_value from) {
     auto val_from = value_cast<FromType>(from);
+    if (!std::isfinite(val_from)) {
+        throw exceptions::invalid_request_exception(format("{} cannot be cast to decimal", val_from));
+    }
     return big_decimal(fmt::to_string(val_from));
 }
 
