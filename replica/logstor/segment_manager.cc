@@ -2682,6 +2682,9 @@ future<> logstor_group::allocate_active_separator_buffer() {
     }
     if (_separator_enabled) {
         _active_buffer.buf = std::move(buf);
+    } else {
+        // The group closed during the wait, and the pool takes back only a closed buffer.
+        co_await buf->close();
     }
 }
 
@@ -2760,9 +2763,9 @@ future<> logstor_group::flush_separator(std::optional<segment_sequence> seq_num)
 }
 
 future<> logstor_group::close_separator() {
-    // Before anything that can wait: a separator write that is parked on the pool or on the flush
-    // below resumes into write_to_separator()'s check and fails there, rather than buffering a record
-    // into a group whose buffers are on their way back to the pool.
+    // Clear the flag before the first wait, so that a separator write that waits for the pool or
+    // for a flush fails when it resumes, and does not put a record into a buffer that goes back to
+    // the pool.
     _separator_enabled = false;
 
     // A flush in progress owns the buffer it is writing out, and releases it when it is done, so let
