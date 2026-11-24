@@ -52,6 +52,34 @@ def test_select_duplicate_column(cql, test_keyspace):
         # with other columns
         assert list(cql.execute(f'SELECT v, c, v, v FROM {table}')) == [(42, 'a', 42, 42), (24, 'b', 24, 24)]
 
+# Test that unquoted uuid and timeuuid literals can be used in the WHERE
+# clause of an UPDATE, a SELECT and a DELETE.
+# Added to the translations of scylla-dtest's cql_additional_tests.py::TestCQL
+# tests test_timeuuid, test_select_key_in, test_static_cf and others, which
+# had such literals in WHERE, while their translations bind the values.
+def test_uuid_literals_in_where(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'k uuid, t timeuuid, v int, PRIMARY KEY (k, t)') as table:
+        k, t = uuid.uuid4(), uuid.uuid1()
+        cql.execute(f'UPDATE {table} SET v = 1 WHERE k = {k} AND t = {t}')
+        assert list(cql.execute(f'SELECT k, t, v FROM {table} WHERE k = {k} AND t = {t}')) == [(k, t, 1)]
+        assert list(cql.execute(f'SELECT v FROM {table} WHERE k = {k} AND t >= {t}')) == [(1,)]
+        cql.execute(f'DELETE FROM {table} WHERE k = {k} AND t = {t}')
+        assert list(cql.execute(f'SELECT v FROM {table} WHERE k = {k}')) == []
+
+# Test that a full scan of a table which has only primary-key columns
+# returns the partitions in token order. With the Murmur3 partitioner,
+# which both Scylla and Cassandra use by default, partition 1 comes before
+# partition 0.
+# Translated from scylla-dtest's cql_additional_tests.py::TestCQL::test_only_pk,
+# whose other translation, cassandra_tests' testPrimaryKeyOnly, ignores the
+# order.
+def test_only_pk_scan_order(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'k int, c int, PRIMARY KEY (k, c)') as table:
+        for k in range(2):
+            for c in range(2):
+                cql.execute(f'INSERT INTO {table} (k, c) VALUES ({k}, {c})')
+        assert list(cql.execute(f'SELECT * FROM {table}')) == [(1, 0), (1, 1), (0, 0), (0, 1)]
+
 # Test LIMIT on a range scan - a SELECT whose WHERE restricts only the
 # token of the partition key - when partitions have more than one row.
 # LIMIT counts rows, not partitions, so "LIMIT 1" returns just the first row
