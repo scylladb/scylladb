@@ -1099,6 +1099,30 @@ async def test_auto_rf_shrinks_a_dc_no_eligible_keyspace_uses_to_one_rack(manage
 
 
 @pytest.mark.asyncio
+async def test_auto_rf_keyspace_creation_skips_a_dc_without_token_owners(manager: ScyllaClusterManager):
+    """
+    A DC made of zero-token nodes only (an arbiter DC) cannot host replicas, and a
+    tablets keyspace which names it cannot be created. The audit keyspace is created
+    while the node that enables auditing starts, so a failure would stop the node.
+    The creation has to leave such a DC out.
+    """
+    no_audit = RACK_LIST_CFG | {"audit": "none"}
+    await manager.server_add(config=no_audit, property_file={"dc": "dc1", "rack": "r1"})
+    await manager.server_add(config=no_audit | {"join_ring": False}, property_file={"dc": "dc2", "rack": "r1"})
+    cql = manager.get_cql()
+    rows = await cql.run_async(f"SELECT keyspace_name FROM system_schema.keyspaces WHERE keyspace_name = '{AUDIT_KS}'")
+    assert not rows, "the audit keyspace must not exist before auditing is enabled"
+
+    logger.info("Enable auditing on a new node: it creates the audit keyspace while starting")
+    await manager.server_add(config=AUDIT_CFG, property_file={"dc": "dc1", "rack": "r2"})
+
+    replication = await _replication(cql, AUDIT_KS)
+    logger.info(f"audit replication: {replication}")
+    assert set(replication) == {"dc1"}, f"dc2 has no token owners and must not be named: {replication}"
+    assert len(replication["dc1"]) == 1, replication
+
+
+@pytest.mark.asyncio
 async def test_auto_rf_keyspaces_stay_on_vnodes_without_enforce_rack_list(manager: ScyllaClusterManager):
     """
     Without enforce_rack_list the auto-RF keyspaces are created on vnodes, with a fixed
