@@ -1758,6 +1758,7 @@ public:
 
         // write lock is needed during adding or removing table
         future<rwlock::holder> hold_write_lock();
+        future<rwlock::holder> hold_read_lock();
         void add_table(database& db, keyspace& ks, table& cf, schema_ptr s);
         void remove_table(database& db, table& cf) noexcept;
 

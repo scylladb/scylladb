@@ -3679,6 +3679,12 @@ future<> database::clear_snapshot(sstring tag, std::vector<sstring> keyspace_nam
                     // zap the table directory if the table is dropped
                     // and has no remaining snapshots
                     if (!has_snapshots) {
+                        // A table being created gets its directory before it is
+                        // registered, and registering takes the write lock. Keep
+                        // the check and the removal under the read lock, so the
+                        // removal cannot outlive the check and hit a directory
+                        // that has become a live table's.
+                        auto lock = _tables_metadata.hold_read_lock().get();
                         auto [cf_name, cf_uuid] = parse_table_directory_name(table_ent->name);
                         auto id_opt = _tables_metadata.get_table_id_if_exists(std::make_pair(ks_name, cf_name));
                         auto dropped = !id_opt || (cf_uuid != id_opt);
@@ -3822,6 +3828,10 @@ size_t database::tables_metadata::size() const noexcept {
 
 future<rwlock::holder> database::tables_metadata::hold_write_lock() {
     co_return co_await _cf_lock.hold_write_lock();
+}
+
+future<rwlock::holder> database::tables_metadata::hold_read_lock() {
+    co_return co_await _cf_lock.hold_read_lock();
 }
 
 void database::tables_metadata::add_table(database& db, keyspace& ks, table& cf, schema_ptr s) {
